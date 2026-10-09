@@ -30,6 +30,17 @@ spaces, free text around them kept verbatim (`parse_reason`).
 cleared only when every named card is in `prose_blockers.TERMINAL`, and a card
 with no state is `unread`, never terminal.
 
+## The sweep's read (DRE-6436)
+
+    python3 scripts/switch_reason.py
+
+prints `switches: <reading line>` for every row of the catalog, in its order,
+then the `linear-budget:` trailer — the sweep's `Read the switches` step runs it
+on every full pass. A switch's cards are read in ONE Linear request
+(`read_states`), and in none when the switch is on or its companion names no
+card. A read that fails leaves every card of that switch `unread`, so its
+reason never reads as cleared, and the pass still exits 0.
+
 ## The check
 
     python3 scripts/switch_reason.py check [--root DIR]
@@ -41,7 +52,8 @@ are DISCOVERED, never listed: every `vars.<NAME>_LIVE` under
 `reader` does not read `vars.<name>` inside its `step` fails by the row's.
 
 Import-safe and pure: no I/O at import, and every function but `load`,
-`discover` and `problems` reads only its arguments.
+`discover`, `problems` and `main` reads only its arguments; `read_states`
+reaches Linear only through the `gql` it is handed.
 """
 
 from __future__ import annotations
@@ -51,6 +63,7 @@ import json
 import os
 import re
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Mapping, NamedTuple
 
@@ -278,16 +291,91 @@ def problems(doc: dict | None = None, root: str | None = None) -> list:
 
 
 # --------------------------------------------------------------------------- #
+# the sweep's read                                                             #
+# --------------------------------------------------------------------------- #
+
+PREFIX = "switches:"
+
+#: The named cards' states, by number — the `issues(filter: …)` shape
+#: `linear_ops.find_open_prefix` uses, so a switch naming any number of cards
+#: costs one request.
+_STATES_QUERY = """query($numbers: [Float!]) {
+           issues(first: 50, filter: {
+             team: {key: {eq: "DRE"}},
+             number: {in: $numbers}
+           }) { nodes { identifier state { name } } } }"""
+
+
+def read_states(cards, *, gql) -> dict:
+    """Each named card's Linear state name, keyed by id, in ONE `gql` request.
+
+    No cards is no request. A card Linear does not answer for is absent, which
+    `reading` prints as unread. A refusal raises — `gql`'s own exception.
+    """
+    cards = tuple(cards)
+    if not cards:
+        return {}
+    data = gql(_STATES_QUERY,
+               {"numbers": [int(card.split("-")[1]) for card in cards]})
+    states = {}
+    for node in (data.get("issues") or {}).get("nodes") or []:
+        ident = node.get("identifier")
+        if ident in cards:
+            states[ident] = (node.get("state") or {}).get("name")
+    return states
+
+
+def _one_line(text: str) -> str:
+    return " ".join(str(text).split())
+
+
+def read_switches(env: Mapping, *, gql, now, catalog: dict | None = None) -> list:
+    """The `switches:` line of every catalog switch, in the catalog's order."""
+    doc = catalog if catalog is not None else load()
+    lines = []
+    for row in doc.get("switches") or []:
+        name = row["name"]
+        reason = parse_reason(env.get(companion(name)))
+        states, error = {}, None
+        if not is_on(name, env) and reason and reason.cards:
+            try:
+                states = read_states(reason.cards, gql=gql)
+            except Exception as exc:  # noqa: BLE001 — every refusal is unread
+                states, error = {}, exc
+        line = reading(name, env, states, now).line
+        if error is not None:
+            line = f"{line} — the read failed: {_one_line(error) or type(error).__name__}"
+        lines.append(f"{PREFIX} {line}")
+    return lines
+
+
+def _read_pass(env: Mapping | None, gql, now) -> int:
+    import linear_ops  # noqa: PLC0415 — the import stays off the pure path
+
+    try:
+        for line in read_switches(os.environ if env is None else env,
+                                  gql=gql or linear_ops.gql,
+                                  now=now or datetime.now(timezone.utc)):
+            print(line, flush=True)
+        return 0
+    finally:
+        print(linear_ops.budget_line(), flush=True)
+
+
+# --------------------------------------------------------------------------- #
 # CLI                                                                          #
 # --------------------------------------------------------------------------- #
 
 
-def main(argv=None) -> int:
+def main(argv=None, *, env: Mapping | None = None, gql=None, now=None) -> int:
+    """No command: the sweep's read. `check`: the catalog against the tree."""
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    sub = parser.add_subparsers(dest="command", required=True)
+    sub = parser.add_subparsers(dest="command")
     p_check = sub.add_parser("check")
     p_check.add_argument("--root", default=ROOT)
     args = parser.parse_args(argv)
+    if args.command is None:
+        return _read_pass(env, gql, now)
 
     doc = load(os.path.join(args.root, CATALOG))
     found = problems(doc, root=args.root)

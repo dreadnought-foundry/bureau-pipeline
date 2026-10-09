@@ -7000,13 +7000,21 @@ def promote_ready(
                 "promoted by humans, never by the sweep; skipping"
             )
             continue
-        if HOLD_LABEL in labels:
+        # The hold's REASON decides, not the bare label (DRE-6182, DRE-6427):
+        # the registry's answer, asked the way `live_promotion_refusal` asks
+        # it. A card held as an operator step is one the sweep does not stand
+        # down for — it goes on through the gates below, and is lifted just
+        # before the move. Asked of `hold` directly and never through the
+        # module-level `held()`: this function binds a local `held` (the
+        # blockers message below), so that name here is UnboundLocalError.
+        if hold.respects(labels, bodies, "sweep"):
             # A deliberately held card is exactly what "why is this not moving"
             # is asking about, so it says so (DRE-1403 held it, DRE-2918 made
             # the hold legible).
             print(
                 f"promotion: {card['identifier']} is held for a human "
-                f"('{HOLD_LABEL}' label) — never auto-promoted; skipping"
+                f"('{HOLD_LABEL}' label, reason={hold.reason_of(labels, bodies)}) "
+                "— never auto-promoted; skipping"
             )
             continue
         parent = card.get("parent")
@@ -7295,6 +7303,19 @@ def promote_ready(
         # OPERATOR. The lane is never spelled here — a person's card landing in
         # Todo is what made Todo read as a stuck build queue (DRE-5240).
         destination = routing_verdict.destination(verdict)
+        # A card still wearing the hold here is held as an operator step —
+        # every other reason stood the sweep down above (DRE-6427). It is
+        # lifted only on its way to where an operator step lands (Hand-work,
+        # read off the vocabulary): routed anywhere else (a FLEET verdict on a
+        # held card), the hold and the verdict disagree about whose turn it
+        # is, and a person reads that, not the sweep.
+        lift_hold = HOLD_LABEL in labels
+        if lift_hold and destination != routing_verdict.destination("OPERATOR"):
+            print(
+                f"promotion: {card['identifier']} is held as an operator step "
+                f"but routed {verdict} → {destination}; a person reads it — skipping"
+            )
+            continue
         try:
             # MARKS FIRST, then the move (DRE-3385). The nudge loop leaves a
             # hand-built card alone BECAUSE of the label, so a card that lands
@@ -7306,6 +7327,14 @@ def promote_ready(
                 for label in routing_verdict.card_marks(verdict, card.get("title")):
                     if label.lower() not in labels:
                         linear_ops.add_label(card["identifier"], label)
+            # Then the lift, before the move (DRE-6427): the label off and the
+            # lift line on. Decided by the blockers gate above, so `lift_due`
+            # — which answers None for this reason by design — is not asked.
+            # A run that dies after this leaves an unheld OPERATOR card in
+            # Backlog, which the next sweep carries like any other.
+            if lift_hold:
+                hold.lift(card["identifier"], hold.BLOCKERS_TERMINAL, "reconcile.py",
+                          reason=hold.OPERATOR_STEP_REASON)
             linear_ops.cmd_advance(card["identifier"], destination, "Backlog")
             # The receipt names what actually approved this card, and — for the
             # two verdicts nothing is dispatched for — whose turn it now is.
@@ -7316,6 +7345,11 @@ def promote_ready(
                 if parent
                 else "no parent epic, a FLEET verdict, and all blockers Done."
             )
+            if lift_hold:
+                reason += (
+                    f" Its `{HOLD_LABEL}` hold (reason={hold.OPERATOR_STEP_REASON}) "
+                    "was lifted: every blocker is terminal."
+                )
             linear_ops.cmd_comment(
                 card["identifier"],
                 f"🧹 Auto-promoted Backlog → {destination}: {reason}",

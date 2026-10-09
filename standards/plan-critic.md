@@ -290,7 +290,14 @@ it goes to the planner, not to the CEO.
   does not finish parks the card in `Triage` with the findings.
 * **`QUESTION`** is a decision only the CEO owns — a price, a policy, what to
   make public, a choice between two defensible options. The decision is
-  `escalate`, and the card parks in `Green Light` with the question.
+  `escalate`, and the card parks in `Green Light` with the question. The
+  finding is classified first (`scripts/send_back_class.py`, read off the
+  `FINDING:` line, else the question). A `QUESTION` whose finding names
+  something the card must say goes back to the planner's rewrite, like a
+  `SEND_BACK`, and nothing is written to `Green Light` (DRE-6359). A
+  `QUESTION` whose finding is a decision, or that the classifier cannot place,
+  goes to the CEO. The round is recorded as the `SEND_BACK` it was decided as,
+  with the finding as its reason, and the note beside it quotes the question.
 
 The rule the critic is given: if the repository and the card could settle it,
 it is a `SEND_BACK`. A card holding both is a `QUESTION` first. `QUESTION` is
@@ -335,7 +342,8 @@ revision loop did not converge — and **the card parks in `Triage`**, the
 operator's defect queue, with every finding raised so far named in one place so
 one rewrite can answer all of them. Never in `Green Light`: a loop that does not
 converge is a defect, not a decision, the same rule the lane contract states
-for a plan at either critic's bound. A `QUESTION` spends nothing — it is a
+for a plan at either critic's bound. A `QUESTION` read as a revision spends a
+round like a `SEND_BACK`, and one left with the CEO spends nothing — it is a
 decision, not a failed revision. A crash still escalates and still spends
 nothing — a round the critic never decided is not a failed round — and a PASS
 still moves the card whatever the count is, because a rewritten card that now

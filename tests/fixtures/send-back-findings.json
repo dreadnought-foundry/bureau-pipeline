@@ -1,0 +1,68 @@
+[
+  {
+    "card": "DRE-3879",
+    "round": 1,
+    "finding": "The card offers two different fixes for the same problem without picking one, and choosing between them is a security policy call, not a coding task.",
+    "expected": "decision"
+  },
+  {
+    "card": "DRE-3879",
+    "round": 2,
+    "finding": "DRE-3879 claims the CEO already decided how to fix this, but that decision doesn't show up anywhere we can actually verify he said it.",
+    "expected": "revision"
+  },
+  {
+    "card": "DRE-3879",
+    "round": 3,
+    "finding": "Making the new pull request merge itself without a person watching needs widening the pipeline's own trusted-branch list, and that list is deliberately narrow and was never meant to grow just by picking a matching name — nobody has made that call.",
+    "expected": "decision"
+  },
+  {
+    "card": "DRE-3879",
+    "round": 4,
+    "finding": "The card doesn't say which two branches are now allowed to merge automatically, even though that was already decided, so the fix still can't land without a person watching it.",
+    "expected": "revision"
+  },
+  {
+    "card": "DRE-3879",
+    "round": 5,
+    "finding": "the card never decides whether the weekly model-update job gets let off our \"write the test before the fix\" check, and without that decision its pull request can never pass on its own.",
+    "expected": "decision"
+  },
+  {
+    "card": "DRE-3879",
+    "round": 6,
+    "finding": "The CEO's newest decision, letting one specific file skip our \"write the test first\" rule, was given in a reply but never written into the card's own checklist, so whoever builds this still can't find it there.",
+    "expected": "revision"
+  },
+  {
+    "card": "DRE-3880",
+    "round": 1,
+    "finding": "The switch to the newer model is still an open decision, not a settled one: the only record of anyone approving it is a comment that is explicitly not confirmed to be from the CEO.",
+    "expected": "revision"
+  },
+  {
+    "card": "DRE-3880",
+    "round": 2,
+    "finding": "Putting the new model onto the everyday work ladder breaks a standing safety rule that keeps our \"reviews the work\" model and our \"does the work\" model separate, so this change cannot actually be built as written.",
+    "expected": "decision"
+  },
+  {
+    "card": "DRE-3880",
+    "round": 3,
+    "finding": "the card still tells the builder to retire the older model, but the CEO's newest, verified answer says to keep that older model in its safety-net spot and not retire it, so building from this card would undo the CEO's own latest instruction.",
+    "expected": "revision"
+  },
+  {
+    "card": "DRE-4109",
+    "round": null,
+    "finding": "the card states no acceptance criteria, so there is no exit condition to route on",
+    "expected": "revision"
+  },
+  {
+    "card": null,
+    "round": null,
+    "finding": "This card asks for a decision rather than for work: there is nothing to build until somebody chooses, so no amount of planning moves it.",
+    "expected": "decision"
+  }
+]

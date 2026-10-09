@@ -1,0 +1,6 @@
+sweep	Sweep	2026-10-09T17:00:02.1234567Z Run python3 .bureau-pipeline/scripts/reconcile.py
+sweep	Sweep	2026-10-09T17:00:31.2234567Z ERROR: DRE-4101: a prose blocker declaring DRE-4099 with no blockedBy relation has stood for 2.6h
+sweep	Sweep	2026-10-09T17:00:32.3234567Z ERROR: DRE-4150: a prose blocker declaring DRE-4120, DRE-4121 with no blockedBy relation has stood for 3.3h
+sweep	Sweep	2026-10-09T17:00:40.4234567Z ERROR: failed to move DRE-4188 to Todo: linear error: issueUpdate returned success=false
+sweep	Sweep	2026-10-09T17:00:51.5234567Z reconcile: 1 write / 0 read failure(s), 2 unfixed card defect(s) — see ERROR lines above
+sweep	Sweep	2026-10-09T17:00:51.6234567Z ##[error]Process completed with exit code 1.

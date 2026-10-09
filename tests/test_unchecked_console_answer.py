@@ -422,7 +422,11 @@ def test_the_new_kind_is_distinct_from_every_other():
 #: `planning_escalation.py` says on every park whether the CEO answered on the
 #: card before, and an unchecked answer with none of his after it says the
 #: check could not run — never that he did not answer (DRE-6358).
+#: `answer_into_card.py` copies the CEO's answers into the card, and an
+#: unchecked one is never copied and writes nothing (DRE-6357).
 OTHER_READERS = {
+    "answer_into_card.py": "tests/test_answer_into_card.py::"
+    "test_an_unchecked_receipt_is_never_transcribed_and_says_could_not_check",
     "epic_growth.py": "tests/test_epic_growth.py::"
     "test_a_withheld_console_answer_is_left_for_a_person",
     "green_light_reply.py": "tests/test_green_light_reply.py::"
