@@ -2344,6 +2344,24 @@ def merged_not_closed_comment(
 # does it read the card's thread, and it refuses while a hold stands that
 # nothing discharged (`proof_record.open_holds`). A read that fails is a
 # refusal, never a pass.
+#
+# A hold the merged record overtook does not stand (DRE-6489). A hold says an
+# observation cannot be made yet, and a record that merged on the card's own
+# branch, approved at the merged head with every judged row met, is that
+# observation made and read. On 2026-10-09 DRE-6353's record (#834) merged at
+# 14:11 PT that way, and the card stayed open on the proof dispatcher's re-run
+# budget hold from 23:30 PT the night before, which nothing had discharged. So
+# a `🔬 proof-waiting` hold that does not name the CEO's press, posted before
+# the pull request's `mergedAt`, is overridden by the approved, all-met record:
+# the dispatcher's three operator holds and one an operator typed. A hold
+# naming the CEO's press still stands until his signed console answer, and a
+# hold posted after the merge still stands — it is new information. A time
+# that cannot be read is never before the merge. DRE-5798's shape stays
+# refused: its rows read `Not observed.`, and the record reading catches that
+# on its own.
+#
+# A refused PROOF card's left-open comment names the ruling's gap rather than
+# the `no-code` sentence, which sent DRE-6353 chasing the wrong cause.
 
 #: What `read_merged_pr` asks GitHub for, and all `proof_evidence_gap` reads.
 #: `files` names the record the pull request added (DRE-6141).
@@ -2401,7 +2419,8 @@ def proof_evidence_gap(
     (a quote is inert), its token APPROVE and its sha the merged head exactly.
     No content carry: an APPROVE at an earlier sha is not one at the head.
     Then the record — every judged row met — and then the thread: no
-    `🔬 proof-waiting` hold that nothing discharged.
+    `🔬 proof-waiting` hold standing that nothing discharged and the merged
+    record did not overtake (DRE-6489).
     """
     gap = _merge_evidence_gap(identifier, pr)
     if gap is not None:
@@ -2409,7 +2428,7 @@ def proof_evidence_gap(
     gap = _record_gap(record)
     if gap is not None:
         return gap
-    return _holds_gap(voices)
+    return _holds_gap(voices, pr.get("mergedAt"))
 
 
 def _record_gap(record) -> str | None:
@@ -2424,17 +2443,43 @@ def _record_gap(record) -> str | None:
     return f"its proof record is not proven: {merge_gate.without_verdict_markers(why)}"
 
 
-def _holds_gap(voices: list | None) -> str | None:
+def _holds_gap(voices: list | None, merged_at: str | None = None) -> str | None:
+    """The holds standing once the merged record has overtaken every hold
+    it can (DRE-6489): an operator's hold posted strictly before `merged_at`.
+    One naming the CEO's press, one posted after the merge, or one whose time
+    — or the merge's — cannot be read still stands."""
     import proof_record  # lazy: the leaf the merge gate reads too
 
     if voices is None:
         return ("the card's thread could not be read, so an open "
                 f"{PROOF_MARK} {PROOF_WAITING_TAG} hold cannot be ruled out")
-    held = proof_record.open_holds(voices)
+    merged = _instant(merged_at)
+    held = []
+    for line, at in proof_record.open_holds_at(voices):
+        posted = _instant(at)
+        if proof_record.CEO_PRESS in line:
+            held.append((line, "names the CEO's press, which only his signed "
+                               "console answer discharges"))
+        elif merged is None or posted is None:
+            held.append((line, "carries a time that cannot be read against "
+                               "the merge's"))
+        elif posted >= merged:
+            held.append((line, "was posted after the pull request merged"))
     if not held:
         return None
+    line, why = held[-1]
     return (f"the card carries {len(held)} {PROOF_MARK} {PROOF_WAITING_TAG} "
-            f"hold(s) nothing discharged, the newest: {held[-1]}")
+            "hold(s) its approved record does not override — the newest "
+            f"{why}: {line.rstrip('.')}")
+
+
+def _instant(iso: str | None) -> datetime | None:
+    """An ISO time as an aware instant, or None when it cannot be read."""
+    try:
+        moment = datetime.fromisoformat(str(iso or "").replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return moment if moment.tzinfo is not None else None
 
 
 def _merge_evidence_gap(identifier: str, pr: dict | None) -> str | None:
@@ -2511,10 +2556,12 @@ def merge_close_ruling(
     """`(skip reason, Done comment)` for a merged card's own pull request —
     the ONE ruling both auto-Done paths make.
 
-    `(reason, None)`: leave the card open, with today's comment. `(None,
-    note)`: close it with `note` — a PROOF card on its evidence. `(None,
-    None)`: close it with the caller's ordinary receipt. GitHub is asked
-    only for a `PROOF:` card the guard refused, and never for an epic.
+    `(reason, None)`: leave the card open, with today's comment — for a
+    `PROOF:` card the reason is the ruling's own gap, never the `no-code`
+    sentence (DRE-6489). `(None, note)`: close it with `note` — a PROOF card
+    on its evidence. `(None, None)`: close it with the caller's ordinary
+    receipt. GitHub is asked only for a `PROOF:` card the guard refused, and
+    never for an epic.
     """
     reason = auto_done_skip_reason(title, labels, has_children)
     if (
@@ -2535,11 +2582,11 @@ def merge_close_ruling(
         voices = read_card_voices(identifier)
     note = proof_close_note(identifier, title, pr_url, pr, record, voices)
     if note is None:
-        print(
-            f"PROOF card {identifier} stays open: "
-            f"{proof_evidence_gap(identifier, pr, record, voices)}."
-        )
-        return reason, None
+        import merge_gate  # lazy: code_owner_hold, which merge_gate loads, imports this module
+        gap = proof_evidence_gap(identifier, pr, record, voices)
+        print(f"PROOF card {identifier} stays open: {gap}.")
+        # The hold and the branch name are untrusted text, posted on the card.
+        return merge_gate.without_verdict_markers(gap), None
     return None, note
 
 
@@ -3022,6 +3069,45 @@ def _create_card(team_id: str, title: str, description: str, labels: list[str],
     return issue
 
 
+def _file_operator_hold(issue: dict, labels) -> None:
+    """File a card the planner created as an operator step HELD, under a
+    reason the sweep lifts (DRE-6428).
+
+    The planner files an operator step as `needs-human` + `no-code`
+    (`briefs/planner.md`). The labels alone are a hold with no stamp, which
+    reads `manual`, and nothing lifts a `manual` hold — the card sat in Backlog
+    forever (DRE-6408). So a card carrying the pair is marked `operator-step`
+    and its hold stamped `operator-step`: the sweep lifts it once every blocker
+    is terminal and carries the card to Hand-work (DRE-6426, DRE-6427).
+
+    `cmd_subissue` and `cmd_oneoff` only. Never `create_card`: the model
+    adoption question card is created through it already held, under its own
+    `manual` row in `config/holds.json`, and is a decision, not a step.
+
+    Never raises. The card exists by now, so a failure here must not read as
+    the create failing — a retry would file it twice. It says so on stderr
+    instead, and the card reads `manual` until somebody stamps it."""
+    import hold
+    import routing_verdict
+
+    low = {str(label).strip().lower() for label in labels or ()}
+    if hold.HOLD_LABEL not in low or NO_CODE_LABEL not in low:
+        return
+    card = issue["identifier"]
+    stamp = hold.stamp_line(hold.OPERATOR_STEP_REASON, None, "linear_ops.py")
+    try:
+        if routing_verdict.OPERATOR_STEP_LABEL not in low:
+            add_label(card, routing_verdict.OPERATOR_STEP_LABEL)
+        hold.apply(card, hold.OPERATOR_STEP_REASON, None, "linear_ops.py")
+    except Exception as exc:  # noqa: BLE001 — the card is filed; say what is missing
+        print(f"{card}: filed, but NOT held as an operator step ({exc}) — its "
+              f"hold reads manual until stamped: python3 scripts/hold.py apply "
+              f"{card} --reason {hold.OPERATOR_STEP_REASON} --by linear_ops.py",
+              file=sys.stderr)
+        return
+    print(f"{card}: filed as an operator step — {stamp}")
+
+
 def cmd_subissue(parent_identifier: str, title: str, description_file: str, *flags) -> dict:
     # Extra flags: --label <name> (repeatable), --blocked-by DRE-N,DRE-M, and
     # --epic (DRE-4698) — the child is itself an epic, owned by the planner.
@@ -3105,8 +3191,12 @@ def cmd_subissue(parent_identifier: str, title: str, description_file: str, *fla
     # just created so it can record the growth on the epic in the same motion
     # (DRE-2739, consumed at mid_epic.py:483). The CLI path ignores the value,
     # so behaviour there is unchanged.
-    return _create_card(parent["team"]["id"], title, description, child_labels,
-                        blockers, parent_id=parent["id"], lane="Backlog")
+    issue = _create_card(parent["team"]["id"], title, description, child_labels,
+                         blockers, parent_id=parent["id"], lane="Backlog")
+    # 6 — AN OPERATOR STEP IS FILED HELD, under a reason the sweep lifts
+    # (DRE-6428).
+    _file_operator_hold(issue, child_labels)
+    return issue
 
 
 def cmd_oneoff(title: str, description_file: str, *flags) -> None:
@@ -3147,8 +3237,9 @@ def cmd_oneoff(title: str, description_file: str, *flags) -> None:
     )
 
     teams = gql('{ teams(filter: {key: {eq: "DRE"}}) { nodes { id } } }')
-    _create_card(teams["teams"]["nodes"][0]["id"], title, description, labels,
-                 blockers)
+    issue = _create_card(teams["teams"]["nodes"][0]["id"], title, description,
+                         labels, blockers)
+    _file_operator_hold(issue, labels)
 
 
 def _parse_flags(flags) -> tuple[list[str], list[str]]:

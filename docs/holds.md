@@ -102,8 +102,9 @@ Done or Canceled — none of its callers passes the card's blockers — and the
 hygiene lane does not ask about it (`hygiene_holds.OPEN_LIFTS`). A sweep that
 lifts a hold is no reader of it, so `hold.py check` refuses a row carrying
 `operator-step` that names `sweep` among its readers (`hold.LIFTERS`). Its
-rows name `fix-dispatch`, `medic` and `limit-recovery`; the writers, and their
-rows, land with their own cards.
+rows name `fix-dispatch`, `medic` and `limit-recovery`. The create seam is its
+writer: `linear_ops.py subissue` and `oneoff` mark a card filed `needs-human` +
+`no-code` with `operator-step` and stamp it `by=linear_ops.py` (DRE-6428).
 
 ### `stranded-no-run` waits on a person's re-send
 
@@ -368,8 +369,10 @@ the code: a call to `add_label` with the hold label, a call to `dead_run.park`
 and a `hold.apply` call. In `.github/workflows/*.yml` and `scripts/*.sh` it
 reads the text: `add-label <card> needs-human`, `--label needs-human` and
 `hold.py apply`. `linear_ops.py`'s create commands take the label as an argument
-from their caller, so they are not a site. A card they create already held reads
-`manual`.
+from their caller, so the label write at creation is not a site. A card
+`create` makes already held reads `manual`. `subissue` and `oneoff` stamp a card
+the planner files `needs-human` + `no-code` as an operator step, and that stamp
+is a site, `_file_operator_hold` (DRE-6428).
 
 ## Every writer, and what is tried first
 
@@ -394,6 +397,7 @@ without a person before it holds.
 | `.github/workflows/agent-fix.yml` · Escalate checks the loop structurally cannot fix | `unfixable-check-hold` | `unfixable-check` | `new-head` | sweep, fix-dispatch, medic, limit-recovery | The fix run itself, which read the check |
 | `.github/workflows/agent-fix.yml` · Report (`park_for_human` in `scripts/report_fix_result.sh`) | `park_for_human` | `fix-dispute` | `new-head` | sweep, fix-dispatch, medic, limit-recovery | The fix loop's rounds, up to its budget |
 | `scripts/model_adoption_actions.py` · `<module>` (`QUESTION_LABELS`) | `The question card` | `manual` | `manual` | sweep, fix-dispatch, medic, limit-recovery | None — a person, or a writer creating a card already held, chose it |
+| `scripts/linear_ops.py` · `_file_operator_hold` (`subissue`, `oneoff`) | `filed as an operator step` | `operator-step` | `blockers-terminal` | fix-dispatch, medic, limit-recovery | None — the card is filed held by design; the sweep lifts it when every blocker is terminal |
 
 `scripts/dead_run.py`'s site is `dead_run.py park`, which the build run's Report
 step (`scripts/report_agent_result.sh`) calls when either budget is spent.

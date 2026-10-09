@@ -22,7 +22,11 @@ or read the hold. Both now do, through this module:
    request comment (`row_accepted`). Only the link's shape is read; nothing
    here fetches it. An accepted row with no link is not met, and `unmet_row`
    says so. `summary` renders the reading as both PROOF closes post it.
-3. **The hold-discharge reader** — `open_holds`, moved from `proof_dispatch`.
+   `row_waiting` (DRE-6488) names the event a `Not observed. waiting for …`
+   row waits on, which the proof dispatch holds on instead of a re-run.
+3. **The hold-discharge reader** — `open_holds`, moved from `proof_dispatch`;
+   `open_holds_at` is the same reading with each hold's time, for the PROOF
+   close (DRE-6489).
 4. **The record finder**, new: the ONE `.md` file the pull request ADDS under
    `docs/` or `architecture/` (`find_record`, over `gh pr view --json files`),
    read at a given sha through the contents API (`fetch`). No match, or two, is
@@ -88,6 +92,10 @@ HEDGES = ("but", "only", "except", "partly", "partially", "with caveats?", "and 
 ACCEPTED_OPENING = "accepted by operator decision"
 #: What an accepted row with no linked decision is held for.
 UNLINKED = "accepted without a linked decision"
+#: A result cell opening with this, then the event, is a row waiting on
+#: something no one on the card has to cause (DRE-6488): a release not yet
+#: cut, a date not yet reached, a scheduled run that has not fired.
+WAITING_OPENING = "Not observed. waiting for"
 
 _FENCE = re.compile(r"^\s*(```|~~~)")
 _SEPARATOR_CELL = re.compile(r":?-+:?")
@@ -95,6 +103,7 @@ _UNESCAPED_PIPE = re.compile(r"(?<!\\)\|")
 _MET = re.compile(rf"(?:{'|'.join(MET_WORDS)})\b")
 _HEDGED = re.compile(rf"(?:{'|'.join(MET_WORDS)})\b[\s,;:—–-]*(?:{'|'.join(HEDGES)})\b")
 _ACCEPTED = re.compile(rf"{ACCEPTED_OPENING}\b")
+_WAITING = re.compile(r"not observed\.\s+waiting for\s+(\S.*)", re.IGNORECASE | re.DOTALL)
 #: The written decision, bare or inside a markdown link: a Linear comment on a
 #: card or a GitHub comment on a pull request. Its SHAPE is all that is read —
 #: nothing fetches it, so nothing here says the comment exists, who wrote it,
@@ -190,6 +199,18 @@ def row_accepted(result: str) -> bool:
     return _opens_accepted(result) and _DECISION_LINK.search(result or "") is not None
 
 
+def row_waiting(result: str) -> str | None:
+    """The event a `Not observed.` row waits on, or None (DRE-6488).
+
+    Only a cell that opens `Not observed.` and straight after it the two
+    words `waiting for` (any case, markup stripped as `_plain` strips it) is
+    a waiting row, and the text after them names the event. Every other
+    reason after `Not observed.`, and every `Not met.`, is a row a re-run may
+    re-observe. Only the cell's opening is read."""
+    found = _WAITING.match(_plain(result))
+    return " ".join(found.group(1).split()) if found else None
+
+
 def reading(text: str) -> Reading:
     rows = criterion_rows(text)
     judged = [r for r in rows or [] if not is_closing_row(r[0])]
@@ -248,18 +269,25 @@ def open_holds(voices: list) -> list:
     operator's holds; only his signed answer discharges one naming the CEO's
     press. An unsigned claim to be his answer discharges nothing, and nor does
     one whose signature could not be checked (DRE-4153)."""
+    return [line for line, _ in open_holds_at(voices)]
+
+
+def open_holds_at(voices: list) -> list:
+    """`open_holds`, each as `(first line, createdAt)` — the PROOF close
+    weighs a hold against the merge's time (DRE-6489); the dispatcher reads
+    `open_holds` and never the time."""
     held: list = []
     for voice in voices:
         body = (voice.body or "").lstrip()
         if body.startswith(HOLD_MARK):
-            held.append(_first_line(body))
+            held.append((_first_line(body), voice.created_at))
         elif voice.kind == spoken_thread.UNCHECKED:
             continue  # neither his answer nor a refused one: it discharges nothing
         elif voice.kind == spoken_thread.CEO_VIA_CONSOLE:
-            held = [h for h in held if CEO_PRESS not in h]
+            held = [h for h in held if CEO_PRESS not in h[0]]
         elif (body.startswith(OBSERVED_MARK)
               and voice.kind in (spoken_thread.PIPELINE, spoken_thread.PERSON)):
-            held = [h for h in held if CEO_PRESS in h]
+            held = [h for h in held if CEO_PRESS in h[0]]
     return held
 
 
