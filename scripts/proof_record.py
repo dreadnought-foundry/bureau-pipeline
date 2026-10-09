@@ -22,6 +22,8 @@ or read the hold. Both now do, through this module:
    request comment (`row_accepted`). Only the link's shape is read; nothing
    here fetches it. An accepted row with no link is not met, and `unmet_row`
    says so. `summary` renders the reading as both PROOF closes post it.
+   `row_waiting` (DRE-6488) names the event a `Not observed. waiting for …`
+   row waits on, which the proof dispatch holds on instead of a re-run.
 3. **The hold-discharge reader** — `open_holds`, moved from `proof_dispatch`.
 4. **The record finder**, new: the ONE `.md` file the pull request ADDS under
    `docs/` or `architecture/` (`find_record`, over `gh pr view --json files`),
@@ -88,6 +90,10 @@ HEDGES = ("but", "only", "except", "partly", "partially", "with caveats?", "and 
 ACCEPTED_OPENING = "accepted by operator decision"
 #: What an accepted row with no linked decision is held for.
 UNLINKED = "accepted without a linked decision"
+#: A result cell opening with this, then the event, is a row waiting on
+#: something no one on the card has to cause (DRE-6488): a release not yet
+#: cut, a date not yet reached, a scheduled run that has not fired.
+WAITING_OPENING = "Not observed. waiting for"
 
 _FENCE = re.compile(r"^\s*(```|~~~)")
 _SEPARATOR_CELL = re.compile(r":?-+:?")
@@ -95,6 +101,7 @@ _UNESCAPED_PIPE = re.compile(r"(?<!\\)\|")
 _MET = re.compile(rf"(?:{'|'.join(MET_WORDS)})\b")
 _HEDGED = re.compile(rf"(?:{'|'.join(MET_WORDS)})\b[\s,;:—–-]*(?:{'|'.join(HEDGES)})\b")
 _ACCEPTED = re.compile(rf"{ACCEPTED_OPENING}\b")
+_WAITING = re.compile(r"not observed\.\s+waiting for\s+(\S.*)", re.IGNORECASE | re.DOTALL)
 #: The written decision, bare or inside a markdown link: a Linear comment on a
 #: card or a GitHub comment on a pull request. Its SHAPE is all that is read —
 #: nothing fetches it, so nothing here says the comment exists, who wrote it,
@@ -188,6 +195,18 @@ def row_accepted(result: str) -> bool:
     """Does the result cell open with `ACCEPTED_OPENING` and link the written
     decision in the same cell? `HEDGES` are not read: the link is the test."""
     return _opens_accepted(result) and _DECISION_LINK.search(result or "") is not None
+
+
+def row_waiting(result: str) -> str | None:
+    """The event a `Not observed.` row waits on, or None (DRE-6488).
+
+    Only a cell that opens `Not observed.` and straight after it the two
+    words `waiting for` (any case, markup stripped as `_plain` strips it) is
+    a waiting row, and the text after them names the event. Every other
+    reason after `Not observed.`, and every `Not met.`, is a row a re-run may
+    re-observe. Only the cell's opening is read."""
+    found = _WAITING.match(_plain(result))
+    return " ".join(found.group(1).split()) if found else None
 
 
 def reading(text: str) -> Reading:

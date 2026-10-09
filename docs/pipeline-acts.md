@@ -335,16 +335,27 @@ receipt is newer than that verdict or the newer one's run reads `dead` or
 `never-started` — at most twice per pull request, then held with
 `🔬 proof-waiting` for an operator (DRE-5931). A newer run that reads
 `finished` while the verdict still stands at the head is held the same way at
-once, since it amended nothing the critic could read. It is read after the first runs, under the same one-per-pass cap,
-and moves nothing.
+once, since it amended nothing the critic could read. A record the critic
+approved and the merge gate then declined at the same head (`⏸️ Merge gate:
+declined @<head> — proof record not proven: …`) is dispatched again the same
+way, `re-run after the gate's decline at <sha7>`, reading the unmet rows off the
+record at the head and never off the note (DRE-6488). The two triggers share
+one budget of two re-runs per record pull request; after it, or after a re-run
+that finished with the decline still at the head, one `🔬 proof-waiting` hold
+for an operator. A row whose Result reads `Not observed. waiting for <the
+event>` — and nothing else — is waiting on something no one on the card has to
+cause: the card is held with `🔬 proof-waiting: <the waiting criteria> — needs
+<their events>` instead of a re-run, and is re-run once the operator posts
+`proof-observed`. It is read after the first runs, under the same one-per-pass
+cap, and moves nothing.
 
 The receipt is posted only after `plan_run.fire` confirms the dispatch:
 
     🔬 proof-run: dispatched a proof run at <PT time> — <reason> (<count>)
 
 The reasons open `first proof run`, `second dispatch — no run started after`,
-`second dispatch — run`, `re-run after the CEO's answer at` and `re-run after
-the critic's findings at`; the counts are
+`second dispatch — run`, `re-run after the CEO's answer at`, `re-run after
+the critic's findings at` and `re-run after the gate's decline at`; the counts are
 `dispatch <n> of 2`, `re-run <n> of 2` (DRE-5931, through the same composer) and
 `after the CEO's answer`. **The tag is a live key**: `proof_run_state.reading`
 (DRE-5922) anchors on the newest receipt to read what became of the run, and
