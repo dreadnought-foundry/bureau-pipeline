@@ -183,9 +183,13 @@ class _Sweeps:
     read the comments back, as the real board read would.
     """
 
-    def __init__(self, *cards, first_seen_error=None):
+    def __init__(self, *cards, first_seen_error=None, moves=None, live_refusal=None):
         self.cards = list(cards)
         self.first_seen_error = first_seen_error
+        # Lane history per card (the stale-verdict gate), and the live
+        # re-check's answer when the pass ran on the read door.
+        self.moves = moves or {}
+        self.live_refusal = live_refusal
         self.posted: list[tuple[str, str, str]] = []   # (identifier, body, createdAt)
         self.advanced: list[tuple[str, str]] = []
         self.defects: dict[int, list[str]] = {}
@@ -246,7 +250,11 @@ class _Sweeps:
                 patch.object(reconcile, "epic_blockers_unmet", return_value=False), \
                 patch.object(reconcile.mid_epic, "last_green_light", side_effect=green_light), \
                 patch.object(reconcile.linear_ops, "comment_records", side_effect=epic_thread), \
-                patch.object(reconcile.routing_verdict, "lane_moves", return_value=[]), \
+                patch.object(reconcile.routing_verdict, "lane_moves",
+                             side_effect=lambda i: self.moves.get(i, [])), \
+                patch.object(reconcile, "_door_wip", [self.live_refusal is not None]), \
+                patch.object(reconcile, "live_promotion_refusal",
+                             return_value=(None, self.live_refusal)), \
                 patch.object(reconcile, "card_state", return_value="Done"), \
                 patch.object(reconcile.linear_ops, "add_label"), \
                 patch.object(reconcile.linear_ops, "cmd_advance",
@@ -426,6 +434,34 @@ def test_a_card_held_as_an_operator_step_but_routed_fleet_is_a_needs_human_recor
     assert len(board.defects[0]) == 1
     assert board.defects[0][0].startswith(_idle_entry())
     assert f"on {OP}" in board.defects[0][0]
+
+
+def test_a_stale_verdict_is_a_held_record_dated_by_its_receipt(capsys):
+    """The stale-verdict refusal: posted once, counted for the idle board from
+    its receipt's time, never clocked per card."""
+    card = _card(F, comments=[_comment(FLEET, -600)])
+    moves = {F: [{"from": "Backlog", "to": "Green Light", "at": at(-500)},
+                 {"from": "Green Light", "to": "Backlog", "at": at(-400)}]}
+    board = _Sweeps(card, moves=moves).run(capsys, sweeps=(0, 60, 135))
+    stale = board.posted_on(F, routing_verdict.STALE_VERDICT_NEEDLE)
+    assert [t for _, t in stale] == [T0.isoformat()]
+    assert board.posted_on(F, promotion_stall.STALL_MARK) == []
+    assert board.defects[0] == []
+    for minutes in (60, 135):
+        assert len(board.defects[minutes]) == 1, board.defects[minutes]
+        assert board.defects[minutes][0].startswith(_idle_entry())
+        assert f"on {F}" in board.defects[minutes][0]
+
+
+def test_a_live_recheck_refusal_counts_toward_the_line_and_is_never_dated(capsys):
+    card = _card(F, comments=[_comment(FLEET, -600)])
+    board = _Sweeps(card, live_refusal="a blocker was reopened").run(capsys)
+    for minutes in SWEEPS:
+        assert "the live re-check refused it" in board.out[minutes]
+        line = board.idle_line(minutes)
+        assert line is not None and F in line, board.out[minutes]
+        assert board.defects[minutes] == [], minutes
+    assert board.posted == []
 
 
 # --------------------------------------------------------------------------- #

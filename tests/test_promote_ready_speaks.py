@@ -49,6 +49,7 @@ os.environ.setdefault("REPO", "dreadnought-foundry/agent-bureau")
 os.environ.setdefault("REPO_SLUG", "agent-bureau")
 
 import planning_shape  # noqa: E402
+import promotion_stall  # noqa: E402
 import reconcile  # noqa: E402
 import routing_verdict  # noqa: E402
 
@@ -224,7 +225,11 @@ def _sweep(cards, active_count=0, card_state="Done"):
 
 
 def _lines_naming(captured, identifier):
-    return [ln for ln in captured.out.splitlines() if identifier in ln]
+    """The exit's own lines. The idle-board line (DRE-4210) is the sweep's,
+    said once after the loop and naming the lowest card standing, so it is
+    not one of them."""
+    return [ln for ln in captured.out.splitlines() if identifier in ln
+            and not ln.startswith(promotion_stall.IDLE_LINE_OPENER)]
 
 
 def test_unmet_formal_blocker_names_the_blocker_its_state_and_the_relation(capsys):

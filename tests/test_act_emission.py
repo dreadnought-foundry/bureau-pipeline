@@ -603,6 +603,38 @@ def _drive_proof_run_dispatched(mp):
         now=datetime(2026, 10, 6, 17, 0, tzinfo=UTC))
 
 
+@site("promotion-stalled", "promotion-stalled")
+def _drive_promotion_stalled(mp):
+    """The promotion stall clock (DRE-4210): a parentless card refused for
+    carrying no verdict, its refusal receipt three hours old at a fixed
+    clock. The refusal is already on the card, so the first comment the sweep
+    posts is the stall receipt. Frozen from its first render, like the proof
+    hold above: there was no earlier wording to read it off."""
+    frozen = datetime(2026, 10, 9, 18, 0, tzinfo=UTC)
+
+    class _Clock:
+        @staticmethod
+        def now(_tz=None):
+            return frozen
+
+    card = {"id": "uuid-1", "identifier": "DRE-1", "title": "a one-off",
+            "description": "work", "createdAt": "2026-10-01T00:00:00Z",
+            "parent": None,
+            "labels": {"nodes": [{"name": "repo:bureau-pipeline"}]},
+            "comments": {"nodes": []},
+            "inverseRelations": {"nodes": []}}
+    mp.setattr(reconcile, "datetime", _Clock)
+    mp.setattr(reconcile, "REPO_SLUG", "bureau-pipeline")
+    mp.setattr(reconcile, "MAX_WIP", 8)  # the body names the cap
+    mp.setattr(reconcile, "backlog_children", lambda *_a, **_k: [card])
+    mp.setattr(reconcile.linear_ops, "count_comments",
+               lambda _i, needle, **_k: 0 if needle == "promotion-stalled" else 1)
+    mp.setattr(reconcile.linear_ops, "first_comment_at",
+               lambda *_a: "2026-10-09T15:00:00.000Z")
+    _card_recorder(mp)
+    reconcile.promote_ready(active_count=0)
+
+
 #: The hygiene agent's thirteen acts (DRE-5368, DRE-6180). The core composes every one of
 #: them through `hygiene.receipt` and posts it through its one comment seam,
 #: `hygiene.send`; WHICH act a pass takes is a lane module's decision, and the
