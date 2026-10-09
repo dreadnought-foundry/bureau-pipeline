@@ -417,7 +417,11 @@ def test_the_new_kind_is_distinct_from_every_other():
 #: `green_light_reply.py` sends a Green Light plan back on the CEO's comment,
 #: and an unchecked answer after his newest counted one holds the dispatch
 #: and says so (DRE-6138).
+#: `epic_growth.py` reads the CEO's answer to the sweep's growth question, and
+#: an unchecked one is left for a person and settles nothing (DRE-6414).
 OTHER_READERS = {
+    "epic_growth.py": "tests/test_epic_growth.py::"
+    "test_a_withheld_console_answer_is_left_for_a_person",
     "green_light_reply.py": "tests/test_green_light_reply.py::"
     "test_an_unchecked_answer_after_his_holds_the_dispatch_and_says_why",
     "groom_verify_agent.py": "tests/test_groom_verify_agent.py::"
