@@ -5177,6 +5177,34 @@ def gate_hold_note_line(pr: dict) -> str | None:
     return None
 
 
+def proof_record_sent_back(card: dict, pr: dict, critic: str) -> bool:
+    """Is this a proof record the critic sent back at its head (DRE-6406)?
+    When it is, say so in one line and answer True: the review lane writes
+    nothing on it — no nudge, no receipt, no hold, no question, no park.
+
+    `critic` is `review_standing`'s reading, and only its exact
+    `REQUEST_CHANGES` counts — the same reading `proof_dispatch.rerunning`
+    makes. No gate re-trigger can change a record nothing has amended, the
+    fix agent is kept off it (`fix_dispatch_blocked`), and the proof run's
+    re-run branch is what amends it. A record with no verdict at its head
+    still reaches a person at the cap: that is how a critic that never
+    answers is found. Imported here, not at the top: proof_dispatch imports
+    this module, and the branch rule lives in its leaf."""
+    import proof_record  # noqa: PLC0415 — see fix_dispatch_blocked
+
+    if critic != "REQUEST_CHANGES" or not proof_record.proof_record_branch(
+        pr.get("headRefName")
+    ):
+        return False
+    head = pr.get("headRefOid") or ""
+    print(
+        f"review-nudge: {card['identifier']} PR #{pr['number']} is a proof record "
+        f"the critic sent back at {head[:7]} — the proof run's re-run branch owns "
+        "it (proof_dispatch.py); no nudge, no hold, no park"
+    )
+    return True
+
+
 def hand_review_nudge_to_person(
     card: dict, pr: dict, tag: str, critic: str, verifier: str
 ) -> None:
@@ -5211,7 +5239,13 @@ def hand_review_nudge_to_person(
     missing. So a blocker that did not post parks nothing: the card waits
     held In Review for the next sweep to post it, rather than leaving the
     review lane with a question no Operator decision could answer.
+
+    Never on a proof record the critic sent back at its head
+    (`proof_record_sent_back`, DRE-6406): the loop does not come here for
+    one, and neither does the held-card path finishing an older park.
     """
+    if proof_record_sent_back(card, pr, critic):
+        return
     ident = card["identifier"]
     number = pr["number"]
     head = pr.get("headRefOid") or ""
@@ -13286,6 +13320,11 @@ def main(
                 # can read off the thread and that no merge followed.
                 head = pr.get("headRefOid") or ""
                 tag, critic, verifier = review_standing(pr)
+                if proof_record_sent_back(card, pr, critic):
+                    # DRE-6406: the proof run's re-run branch amends it; a
+                    # gate re-trigger cannot, and the park would put a
+                    # question in front of the CEO that is not his.
+                    continue
                 bound = tag == GATE_NUDGE_KEY
                 spent = review_nudges_spent(card, tag, head)
                 if spent >= REVIEW_NUDGE_CAP:
