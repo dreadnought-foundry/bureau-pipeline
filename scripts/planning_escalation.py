@@ -62,8 +62,11 @@ DERIVED from data the pipeline already carries and each one can be made to fail:
   * **lane, again** — the escalation's own destination must sit in the planning
     segment. An escalation parked in the build queue would BE the bypass.
   * **label** — the census is discovered from the pipeline's own label
-    constants, and exactly one of them may be operator-only: `break-glass`. A
-    second label no agent may apply is a second sanctioned bypass.
+    constants, and exactly one of them may be operator-only as a bypass:
+    `break-glass`. A second label no agent may apply is a second sanctioned
+    bypass — except the CEO's own `hand-built` (DRE-6361), refused to agents
+    by his rule of 2026-10-07, which takes a card away from the fleet and
+    past no gate.
   * **flag** — the planner workflow declares no input that skips planning, and
     the routing step is gated on the card gate and nothing else. A route behind
     an `inputs.` condition is a flag that skips Planning.
@@ -332,6 +335,12 @@ _LABEL_CONST = re.compile(
 #: nothing in front, and a census that missed it would count zero operator-only
 #: labels and call that a clean bill of health.
 _LABEL_SUFFIXES = ("LABEL", "LABELS", "MARKER")
+
+#: The labels the census may find operator-only, and nothing else. The one
+#: sanctioned bypass, and the CEO's own mark (DRE-6361): his rule of 2026-10-07
+#: is that `hand-built` comes from him and nobody else, and it bypasses
+#: nothing — it takes a card away from the fleet rather than past a gate.
+OPERATOR_ONLY = (break_glass.MARKER, routing_verdict.HAND_BUILT_LABEL)
 
 
 class EscalationError(RuntimeError):
@@ -1492,8 +1501,9 @@ def bypass_problems(
                 "one is a lane that skips Planning"
             )
 
-    # The label half: exactly one label may be operator-only, and it is the one
-    # sanctioned bypass.
+    # The label half: exactly one label may be operator-only BECAUSE it is a
+    # bypass, and it is the one sanctioned bypass. The CEO's own mark is the
+    # only other (DRE-6361): it takes a card away from the fleet, past no gate.
     try:
         import linear_ops
 
@@ -1507,10 +1517,11 @@ def bypass_problems(
             f"checked against it: {e}"
         )
         operator_only = None
-    if operator_only is not None and operator_only != [break_glass.MARKER]:
+    if operator_only is not None and sorted(operator_only) != sorted(OPERATOR_ONLY):
         problems.append(
-            "exactly one label may be operator-only — the one sanctioned "
-            f"bypass, {break_glass.MARKER!r}. These are: "
+            "exactly one label may be operator-only as a bypass — the one "
+            f"sanctioned bypass, {break_glass.MARKER!r} — beside the CEO's own "
+            f"mark, {routing_verdict.HAND_BUILT_LABEL!r}. These are: "
             f"{', '.join(operator_only) or 'none'}. A second label no agent may "
             "apply is a second way past the front door, with nobody accountable "
             "for it"
