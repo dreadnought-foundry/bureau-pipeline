@@ -113,8 +113,9 @@ hidden for security"), so a list that exists only inside the turn cannot be
 checked against the verdict that followed.
 
 **The same list checks each footprint against the deaths already on the board**
-(DRE-3079). `config/split-ledger.json` records every card that did not fit one
-run — what it declared, what its split pieces actually touched, how many
+(DRE-3079). The split ledger — derived from the console's record at the start
+of each plan run (DRE-6055), no longer a committed file (DRE-6056) — records
+every card that did not fit one run — what it declared, what its split pieces actually touched, how many
 turn-cap deaths it cost, which of DRE-2893's tells applied. A child sharing
 **two or more** files with a row that DIED is a finding naming that row; a
 child carrying a tell the ledger has watched kill cards is another, quoting the
@@ -122,7 +123,8 @@ ledger's own rate and the phrase that fired the tell. One shared file is the
 ordinary state of this repo, so it is not a match — a check that fires on every
 card is the five false findings above wearing a new name.
 
-A ledger that **could not be read is its own finding**, never an empty list:
+A ledger that **could not be read is its own finding**, never an empty list —
+and a run whose derive failed has no ledger at all, so it gets that finding:
 "checked against nine death rows and matched none" and "never opened the
 ledger" are different facts, and only the first clears a plan
 (`standards/console-honesty.md` rule 1). The posted note carries the row count

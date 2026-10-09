@@ -65,16 +65,6 @@ SHIM_MARKER = "lane-rename-shim"
 #: the guard reads the file rather than carrying its own copy of the rules.
 SHIM_FILES = ["config/lane-contract.json", "tests/test_lane_scope.py"]
 
-#: The generated files that may NAME the retired lane without citing it
-#: (DRE-3356). The split ledger records each oversized card it discovers under
-#: that card's own Linear title, and DRE-2771 is the card that asked for this
-#: very rename — so its title quotes the retired name and the record repeats
-#: it. That is history, not a live citation: it tells a reader what a card once
-#: said, it does not send anyone to a lane that no longer exists. A line-level
-#: marker cannot reach these — both are written by
-#: `scripts/split_ledger.py derive` and regenerated daily since DRE-3357, so
-#: the mention returns on every run and cannot be edited out.
-GENERATED_HISTORY = ("config/split-ledger.json", "docs/split-ledger.md")
 
 
 def src(name: str) -> str:
@@ -128,7 +118,6 @@ class NoStaleLaneNameTest(unittest.TestCase):
         offenders = [
             f"{rel}:{i}" for rel, i, line in retired_lane_mentions()
             if SHIM_MARKER not in line
-            and rel not in GENERATED_HISTORY
         ]
         self.assertEqual(
             [], offenders,
@@ -139,20 +128,11 @@ class NoStaleLaneNameTest(unittest.TestCase):
 
     def test_the_only_survivors_are_the_declared_transitional_shim(self):
         # The exemptions above are holes in the sweep, so pin their size: the
-        # alias and its own tests, plus the two generated ledger files, nowhere
-        # else. Anything that widens it has to widen one of these lists too, in
-        # the open.
-        #
-        # The generated pair is subtracted rather than listed as a survivor: the
-        # ledger only carries the retired name while DRE-2771 sits inside its
-        # rolling window, so requiring the mention would turn this guard red on
-        # the derive that ages that card out.
+        # alias and its own tests, nowhere else. Anything that widens it has to
+        # widen this list too, in the open. The two generated ledger files that
+        # were subtracted here are no longer committed (DRE-6056).
         survivors = sorted({rel for rel, _, _ in retired_lane_mentions()})
-        self.assertEqual(
-            SHIM_FILES,
-            [rel for rel in survivors
-             if rel not in GENERATED_HISTORY],
-        )
+        self.assertEqual(SHIM_FILES, survivors)
 
     def test_the_alias_is_declared_exactly_once(self):
         # One literal, so the board rename is one deletion and cannot leave half
