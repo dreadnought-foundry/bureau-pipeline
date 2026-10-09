@@ -2990,7 +2990,11 @@ def _create_card(team_id: str, title: str, description: str, labels: list[str],
     is `cmd_subissue` — see the note there.
 
     Never an epic in Todo (DRE-5316): a new card can be an epic only by an
-    `[EPIC]` title, and one is refused before anything is written."""
+    `[EPIC]` title, and one is refused before anything is written. Nor with a
+    label no agent may apply (DRE-6361) — `cmd_oneoff` asks first and
+    `child_labels_from` drops one, so this is the backstop for a caller that
+    did neither."""
+    refuse_agent_labels("create", title, labels)
     refused = epic_todo_gate.refusal("new card", lane, title, False, (), None)
     if refused is not None:
         raise LinearError(f"create REFUSED ({title!r}): {refused}")
@@ -3125,6 +3129,9 @@ def cmd_oneoff(title: str, description_file: str, *flags) -> None:
     """
     description = _card_body(description_file)
     labels, cli_blockers = _parse_flags(flags)
+    # A one-off inherits nothing, so its labels are exactly what the caller
+    # named — refused here, before the blocker reads (DRE-6361).
+    refuse_agent_labels("oneoff", title, labels)
 
     # ORDERING → relations: union of the body's **Blocked by:** line and the
     # flag. No parent epic to strip out — a one-off has none.
@@ -3312,7 +3319,9 @@ def create_card(title: str, description: str, *, repo_slug: str,
     in the order given, deduplicated by `_team_label_ids`.
 
     Never an epic in Todo (DRE-5316), refused as `_create_card` refuses it.
+    Never a label no agent may apply (DRE-6361), refused before any request.
     """
+    refuse_agent_labels("create", title, labels)
     refused = epic_todo_gate.refusal("new card", lane, title, False, (), None)
     if refused is not None:
         raise LinearError(f"create REFUSED ({title!r}): {refused}")
@@ -3946,7 +3955,14 @@ def _team_label_id(team_id: str, name: str) -> str | None:
 def agent_label_refusal(label_name: str) -> str | None:
     """Why the pipeline must never write this label itself, or None.
 
-    Exactly one label qualifies: `break-glass` (DRE-2737). It is an OPERATOR
+    Two labels qualify. `hand-built` (DRE-6361) is the CEO's own mark, and his
+    rule of 2026-10-07 is that it comes from him and nobody else — so it is
+    refused here, where a writer added tomorrow meets it before any request,
+    rather than discovered on the board. Taking it OFF is not refused:
+    `remove_label` never asks, because clearing a stale mark is the
+    migration's job.
+
+    `break-glass` (DRE-2737) is an OPERATOR
     action — an agent that could bypass the intake gate would eventually
     bypass it for a reason that seemed good at the time, which is the entire
     failure class the intake wave addresses. Actor identity cannot enforce
@@ -3959,14 +3975,36 @@ def agent_label_refusal(label_name: str) -> str | None:
     gate has to be able to record a bypass.
     """
     import break_glass  # local: keeps the label constants in one module
+    import routing_verdict  # local, the same way
 
-    if (label_name or "").strip().lower() == break_glass.MARKER:
+    name = (label_name or "").strip().lower()
+    if name == break_glass.MARKER:
         return (
             f"'{break_glass.MARKER}' is an operator action and no agent may "
             "apply it — the marker must be applied by hand, in Linear, by a "
             "person (DRE-2737)"
         )
+    if name == routing_verdict.HAND_BUILT_LABEL:
+        return (
+            f"'{routing_verdict.HAND_BUILT_LABEL}' is the CEO's own mark and "
+            "nothing in the pipeline may apply it — his rule of 2026-10-07: "
+            "\"It shouldn't come from anybody else.\" Mark a person's card "
+            f"'{routing_verdict.OPERATOR_STEP_LABEL}' instead (DRE-6361)"
+        )
     return None
+
+
+def refuse_agent_labels(kind: str, title: str, labels) -> None:
+    """Raise before any request if `labels` names one no agent may apply.
+
+    The create paths' half of the seam (DRE-6361): `add_label` refuses one
+    label, and a card minted with an explicit `--label` resolves its names into
+    `labelIds` without passing through it, so `create_card` and `cmd_oneoff`
+    ask here first, in the same words."""
+    for label in labels or ():
+        refusal = agent_label_refusal(label)
+        if refusal is not None:
+            raise LinearError(f"{kind} REFUSED ({title!r}): {refusal}")
 
 
 def child_labels_from(parent_labels: list[str], extra_labels: list[str],
@@ -3975,7 +4013,9 @@ def child_labels_from(parent_labels: list[str], extra_labels: list[str],
     its parent epic plus any explicit --label, minus anything no agent may
     apply. One operator action must not open the gate for a whole epic's worth
     of cards nobody looked at, so the marker is dropped here (loudly) rather
-    than inherited or passed through.
+    than inherited or passed through — and so is the CEO's `hand-built`
+    (DRE-6361): his mark on an epic is his word about that epic, never about
+    the children a planner cuts under it.
 
     For a child EPIC (`epic=True`, DRE-4698) an explicit `repo:` label
     REPLACES the inherited one rather than joining it: a child epic's files may
@@ -3991,6 +4031,13 @@ def child_labels_from(parent_labels: list[str], extra_labels: list[str],
         # The role is already inherited; `--label agent:planner` beside the
         # flag is the same fact twice, not a second label.
         extra = [l for l in extra if l not in repos and l.lower() != EPIC_CHILD_ROLE]
+    # The parent's own copy is never inherited (parent_inherited_labels keeps
+    # only repo, initiative and role), but it is said out loud, not silently.
+    for label in parent_labels or []:
+        refusal = agent_label_refusal(label)
+        if refusal is not None:
+            print(f"  ! not inheriting label {label!r} from the parent: {refusal}",
+                  file=sys.stderr)
     out: list[str] = []
     for label in inherited + extra:
         refusal = agent_label_refusal(label)
@@ -4009,9 +4056,11 @@ def add_label(identifier: str, label_name: str) -> None:
     reconcile sweep and the promotion gate recognise a card a human must look
     at and leave it untouched until the label is removed.
 
-    Refuses the one label no agent may apply (agent_label_refusal) BEFORE any
-    API call — this function is the fleet's single label-writing path, which
-    is what makes the refusal an enforcement rather than a convention.
+    Refuses every label no agent may apply (agent_label_refusal) BEFORE any
+    API call — this function is the fleet's single label-writing path on an
+    existing card, which is what makes the refusal an enforcement rather than
+    a convention. The create paths ask the same question
+    (`refuse_agent_labels`).
     """
     refusal = agent_label_refusal(label_name)
     if refusal is not None:

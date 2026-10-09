@@ -997,12 +997,17 @@ class TestNoLabelFlagOrLaneSkipsPlanning:
         assert "hand-built" in census
         assert len(census) > 5
 
-    def test_exactly_one_label_is_operator_only(self):
+    def test_exactly_the_bypass_and_the_ceos_mark_are_operator_only(self):
+        """`break-glass` is the one sanctioned bypass; `hand-built` is the
+        CEO's own mark (his rule of 2026-10-07, DRE-6361) and bypasses
+        nothing — it takes a card away from the fleet, past no gate."""
         operator_only = [
             label for label in planning_escalation.label_census()
             if linear_ops.agent_label_refusal(label) is not None
         ]
-        assert operator_only == [break_glass.MARKER]
+        assert sorted(operator_only) == sorted(
+            [break_glass.MARKER, routing_verdict.HAND_BUILT_LABEL])
+        assert planning_escalation.bypass_problems() == []
 
     def test_a_second_operator_only_marker_is_a_problem(self):
         """A new label the agents may not apply is a new sanctioned bypass, and
