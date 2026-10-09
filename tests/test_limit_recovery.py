@@ -1021,3 +1021,435 @@ def test_a_third_assumed_review_death_in_review_keeps_the_rerun_way_back():
     assert body.startswith(limit_recovery.HANDOFF_MARK)
     assert "Re-run failed jobs for a fix, review or sync run" in body
     assert "re-review watcher" not in body
+
+
+# --------------------------------------------------------------------------
+# every limit-death marker has a clock (DRE-4208)
+# --------------------------------------------------------------------------
+# DRE-3682 stood five days on a `kind=linear stage=classify` marker with no
+# recovery receipt under it. "Not a strike" had come to mean "not tracked at
+# all": a waiting marker printed `is waiting until …` forever, a held card was
+# skipped silently, and a Planning review death was left to a watcher nothing
+# checked had come. Every marker now has a clock, read off its own comment
+# node's `createdAt`: past LIMIT_DEATH_CLOCK_MINUTES the card is handed to a
+# person out loud — held, hand-built and planner cards included — and the
+# sweep goes red on a standing defect, never on a write failure.
+STOOD = 7          # hours: past the six-hour window
+FRESH = 2          # hours: inside it
+
+
+def _clock_card(body, hours_ago, *, ident="DRE-4208", lane="In Progress", labels=()):
+    return dated_card(ident=ident, lane=lane, nodes=[(body, hours_ago)],
+                      labels=("repo:agent-bureau", *labels))
+
+
+def _errors(lines):
+    return [line for line in lines if line.startswith("ERROR:")]
+
+
+def _stood_error(ident="DRE-4208"):
+    return f"ERROR: limit-recovery {ident}: {limit_recovery.STOOD_PHRASE}"
+
+
+def test_the_clock_contract_constants():
+    assert dead_run.LIMIT_DEATH_CLOCK_MINUTES == 360
+    assert limit_recovery.LIMIT_DEATH_CLOCK_MINUTES == dead_run.LIMIT_DEATH_CLOCK_MINUTES
+    assert limit_recovery.STOOD_PHRASE == "the limit-death marker has stood"
+
+
+# ---- marker_node agrees with waiting --------------------------------------
+def _window(c):
+    import linear_ops
+    return linear_ops.window_nodes(c["comments"])
+
+
+def test_marker_node_is_the_marker_s_node_under_an_ordinary_comment():
+    c = dated_card(nodes=[(marker(), 3), ("Looking at this now — Sid", 1)])
+    node = limit_recovery.marker_node(c)
+    assert node is _window(c)[0]
+    assert limit_recovery.waiting(limit_recovery._bodies(c)) is not None
+
+
+def test_marker_node_is_none_under_a_receipt_as_waiting_is():
+    c = dated_card(nodes=[(marker(), 3), ("🧹 Reconcile: re-dispatched.", 1)])
+    assert limit_recovery.marker_node(c) is None
+    assert limit_recovery.waiting(limit_recovery._bodies(c)) is None
+
+
+def test_marker_node_is_the_newer_of_two_markers():
+    c = dated_card(nodes=[(marker(run="1"), 9), (marker(run="2"), 3)])
+    node = limit_recovery.marker_node(c)
+    assert node is _window(c)[1]
+    assert limit_recovery.waiting(limit_recovery._bodies(c))["run"] == "2"
+
+
+def test_marker_age_reads_that_node_s_created_at():
+    c = dated_card(nodes=[(marker(run="1"), 9), (marker(run="2"), 3), ("a reply", 1)])
+    node = limit_recovery.marker_node(c)
+    assert limit_recovery.marker_age_minutes(node, NOW) == pytest.approx(180)
+    assert limit_recovery.marker_age_minutes(None, NOW) is None
+    assert limit_recovery.marker_age_minutes({"body": marker()}, NOW) is None
+    assert limit_recovery.marker_age_minutes({"body": marker(), "createdAt": "soon"}, NOW) is None
+
+
+# ---- the table, row by row ------------------------------------------------
+def _waiting_on_switch():
+    """No trigger yet: a Claude marker waiting for its recorded account."""
+    return marker(reset=None, account="main")
+
+
+def _due():
+    """A trigger has fired: the reset passed an hour ago."""
+    return marker(reset=NOW - timedelta(hours=1))
+
+
+def _rows():
+    """(row, card at a given age, recover kwargs) — one per table row."""
+    return {
+        "handoff": (lambda age: _clock_card(marker(reset=None), age), {}),
+        "held": (lambda age: _clock_card(marker(kind="linear", reset=None), age,
+                                         labels=(dead_run.HOLD_LABEL,)), {}),
+        # The watcher's clock runs from its reset, so the row's reset passed a
+        # whole clock ago: the watcher has had its turn.
+        "watcher": (lambda age: _clock_card(_review_death(minutes_ago=STOOD * 60), age,
+                                            lane="Planning"), {}),
+        "room": (lambda age: _clock_card(_due(), age), {}),
+        "no-room": (lambda age: _clock_card(_due(), age), {"wip_room": 0}),
+        "no-trigger": (lambda age: _clock_card(_waiting_on_switch(), age), {}),
+        "terminal": (lambda age: _clock_card(_waiting_on_switch(), age, lane="Done"), {}),
+    }
+
+
+def _run(row, age, *, now=NOW):
+    build, kwargs = _rows()[row]
+    s = Seams()
+    lines = s.recover([build(age)], now=now, **kwargs)
+    return s, lines
+
+
+@pytest.mark.parametrize("row", list(_rows()))
+def test_under_the_window_every_row_is_today_s_behavior_line_for_line(row):
+    """A marker inside the window behaves exactly as a marker of unknown age
+    — which is to say exactly as it did before the clock existed."""
+    young, young_lines = _run(row, FRESH)
+    unknown, unknown_lines = _run(row, None)
+    assert young_lines == unknown_lines
+    assert young.comments == unknown.comments
+    assert (young.moves, young.reruns, young.dispatched) == (
+        unknown.moves, unknown.reruns, unknown.dispatched)
+    assert not any(limit_recovery.STOOD_PHRASE in line for line in young_lines)
+    assert not any(limit_recovery.STOOD_PHRASE in body for _, body in young.comments)
+
+
+def test_row_handoff_reason_is_the_clock_answered_early_at_any_age():
+    for age in (FRESH, STOOD):
+        s, lines = _run("handoff", age)
+        assert len(s.comments) == 1, age
+        body = s.comments[0][1]
+        assert body.startswith(limit_recovery.HANDOFF_MARK)
+        assert "names no reset time and no account" in body
+        assert limit_recovery.STOOD_PHRASE not in body
+        assert _errors(lines) == [], age
+
+
+def test_row_held_under_the_window_is_skipped_silently():
+    s, lines = _run("held", FRESH)
+    assert lines == [] and s.comments == []
+    assert s.moves == [] and s.reruns == [] and s.dispatched == []
+
+
+def test_row_held_past_the_window_is_handed_to_a_person_out_loud():
+    s, lines = _run("held", 6)
+    assert len(s.comments) == 1
+    ident, body = s.comments[0]
+    assert ident == "DRE-4208"
+    assert body.startswith(limit_recovery.HANDOFF_MARK)
+    assert limit_recovery.STOOD_PHRASE in body
+    assert limit_recovery.is_receipt(body), "the hand-off must close the marker"
+    errors = _errors(lines)
+    assert len(errors) == 1 and errors[0].startswith(_stood_error())
+    # Never a re-entry, never a label or lane change: the comment is the
+    # only write the pass made.
+    assert s.moves == [] and s.reruns == [] and s.dispatched == []
+    assert [c[0] for c in s.lops.method_calls] == ["cmd_comment"]
+
+
+def test_row_held_with_a_trigger_and_room_is_still_never_reentered():
+    s = Seams()
+    lines = s.recover([_clock_card(_due(), STOOD, labels=(dead_run.HOLD_LABEL,))], now=NOW)
+    assert s.moves == [] and s.dispatched == [] and s.reruns == []
+    assert len(s.comments) == 1 and limit_recovery.STOOD_PHRASE in s.comments[0][1]
+    assert len(_errors(lines)) == 1
+
+
+@pytest.mark.parametrize("age", [FRESH, STOOD, 120, None])
+def test_a_held_card_s_sync_death_is_reentered_as_today_at_any_age(age):
+    s = Seams()
+    s.recover([_clock_card(marker(kind="linear", stage="sync", reset=None), age,
+                           lane="In Review", labels=(dead_run.HOLD_LABEL,))], now=NOW)
+    assert s.reruns == [RUN]
+    assert len(s.comments) == 1
+    assert s.comments[0][1].startswith(limit_recovery.RECOVERY_MARK)
+
+
+def test_row_watcher_under_the_window_keeps_today_s_line():
+    s, lines = _run("watcher", FRESH)
+    assert s.comments == []
+    assert lines == [
+        "limit-recovery: DRE-4208 review death (claude limit) is the re-review "
+        "watcher's — it waits out the marker's reset, then asks for the review again"
+    ]
+
+
+def test_row_watcher_past_the_window_says_the_watcher_did_not_come():
+    s, lines = _run("watcher", STOOD)
+    assert s.reruns == [] and s.moves == [] and s.dispatched == []
+    assert len(s.comments) == 1
+    body = s.comments[0][1]
+    assert body.startswith(limit_recovery.HANDOFF_MARK)
+    assert limit_recovery.STOOD_PHRASE in body
+    import review_rerun
+    assert f"`{review_rerun.RERUN_REVIEW_ACT}`" in body, "the way back is a fresh review"
+    errors = _errors(lines)
+    assert len(errors) == 1 and errors[0].startswith(_stood_error())
+
+
+@pytest.mark.parametrize("age", [FRESH, STOOD])
+def test_row_trigger_with_room_reenters_as_today(age):
+    s, lines = _run("room", age)
+    assert s.moves == [("DRE-4208", "Todo")]
+    assert len(s.comments) == 1 and s.comments[0][1].startswith(limit_recovery.RECOVERY_MARK)
+    assert _errors(lines) == []
+
+
+def test_row_trigger_without_room_under_the_window_is_today_s_line():
+    s, lines = _run("no-room", FRESH)
+    assert s.comments == [] and s.moves == []
+    assert len(lines) == 1 and "WIP room is spent this pass — next sweep" in lines[0]
+
+
+def test_row_trigger_without_room_past_the_window_errors_and_posts_nothing():
+    """A hand-off would close the marker and stop the recovery, so the ready
+    line stands and an ERROR line names the age beside it."""
+    s, lines = _run("no-room", STOOD)
+    assert s.comments == [] and s.moves == []
+    assert any("WIP room is spent this pass — next sweep" in line for line in lines)
+    errors = _errors(lines)
+    assert len(errors) == 1
+    assert errors[0].startswith(f"{_stood_error()} 7.0 hours")
+
+
+def test_row_no_trigger_under_the_window_keeps_waiting():
+    s, lines = _run("no-trigger", FRESH)
+    assert s.comments == []
+    assert lines == ["limit-recovery: DRE-4208 is waiting until the account switches "
+                     "away from main (claude limit, build stage)"]
+
+
+def test_row_no_trigger_past_the_window_is_handed_to_a_person_once():
+    s, lines = _run("no-trigger", STOOD)
+    assert s.moves == [] and s.reruns == [] and s.dispatched == []
+    assert len(s.comments) == 1
+    body = s.comments[0][1]
+    assert body.startswith(limit_recovery.HANDOFF_MARK)
+    assert f"{limit_recovery.STOOD_PHRASE} 7.0 hours" in body
+    errors = _errors(lines)
+    assert len(errors) == 1 and errors[0].startswith(f"{_stood_error()} 7.0 hours")
+
+
+@pytest.mark.parametrize("age", [FRESH, STOOD])
+def test_row_terminal_is_skipped(age):
+    s, lines = _run("terminal", age)
+    assert lines == [] and s.comments == [] and s.moves == []
+
+
+def test_the_clock_hand_off_is_posted_at_most_once():
+    s, _ = _run("held", STOOD)
+    receipt = s.comments[0][1]
+    after = dated_card(ident="DRE-4208", lane="In Progress",
+                       nodes=[(marker(kind="linear", reset=None), STOOD), (receipt, 0.1)],
+                       labels=("repo:agent-bureau", dead_run.HOLD_LABEL))
+    assert limit_recovery.waiting(limit_recovery._bodies(after)) is None
+    assert limit_recovery.marker_node(after) is None
+    again = Seams()
+    lines = again.recover([after], now=NOW + timedelta(hours=30))
+    assert again.comments == [] and lines == []
+
+
+# ---- a stated reset still to come is a real wait ----------------------------
+# A Claude run can name a reset up to a day out (a weekly cap). Past the clock
+# but before that reset, the card is still waiting on a trigger the sweep WILL
+# answer: handing it off would close the marker, and nothing would bring it
+# back when the reset arrives.
+LATER = NOW + timedelta(hours=9)     # the reset, still ahead at NOW
+
+
+def _waiting_on_a_later_reset(**kw):
+    return _clock_card(marker(reset=LATER), STOOD, **kw)
+
+
+def test_a_stated_reset_still_ahead_past_the_window_keeps_waiting():
+    s = Seams()
+    lines = s.recover([_waiting_on_a_later_reset()], now=NOW)
+    assert s.comments == [] and s.moves == []
+    assert _errors(lines) == []
+    assert lines == [f"limit-recovery: DRE-4208 is waiting until "
+                     f"{dead_run.pacific(LATER)} (claude limit, build stage)"]
+
+
+def test_a_stated_reset_still_ahead_is_reentered_when_it_arrives():
+    card = _waiting_on_a_later_reset()
+    s = Seams()
+    s.recover([card], now=NOW)
+    assert limit_recovery.waiting(limit_recovery._bodies(card)) is not None
+    s.recover([card], now=LATER + timedelta(minutes=5))
+    assert s.moves == [("DRE-4208", "Todo")]
+    assert len(s.comments) == 1 and s.comments[0][1].startswith(limit_recovery.RECOVERY_MARK)
+
+
+def test_a_watcher_s_review_death_with_its_reset_still_ahead_is_not_handed_off():
+    """The watcher waits out the marker's reset, so before it the watcher has
+    not failed to come."""
+    s = Seams()
+    late = (f"🪦 limit-death: kind=claude stage=review "
+            f"reset={LATER.strftime('%Y-%m-%dT%H:%M:%SZ')} run=777")
+    lines = s.recover([_clock_card(late, STOOD, lane="Planning")], now=NOW)
+    assert s.comments == [] and _errors(lines) == []
+    assert "is the re-review watcher's" in lines[0]
+
+
+def _just_reset(minutes_ago=5):
+    reset = (NOW - timedelta(minutes=minutes_ago)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    return f"🪦 limit-death: kind=claude stage=review reset={reset} run=777"
+
+
+def test_a_watcher_s_review_death_just_past_its_reset_is_not_handed_off():
+    """A stated reset more than the clock after the marker: the first sweep
+    after it is the first the watcher could act on, so the watcher has not
+    failed to come — its clock runs from the reset."""
+    s = Seams()
+    lines = s.recover([_clock_card(_just_reset(), 16, lane="Planning")], now=NOW)
+    assert s.comments == [] and _errors(lines) == []
+    assert s.reruns == [] and s.moves == [] and s.dispatched == []
+    assert "is the re-review watcher's" in lines[0]
+
+
+def test_a_watcher_s_review_death_is_handed_off_a_clock_after_its_reset():
+    card = _clock_card(_just_reset(), 16, lane="Planning")
+    s = Seams()
+    hours = limit_recovery.LIMIT_DEATH_CLOCK_MINUTES / 60
+    s.recover([card], now=NOW + timedelta(hours=hours) - timedelta(minutes=10))
+    assert s.comments == []
+    lines = s.recover([card], now=NOW + timedelta(hours=hours))
+    assert len(s.comments) == 1
+    body = s.comments[0][1]
+    assert body.startswith(limit_recovery.HANDOFF_MARK)
+    assert f"{limit_recovery.STOOD_PHRASE} 22.0 hours" in body, "the age is the marker's own"
+    errors = _errors(lines)
+    assert len(errors) == 1 and errors[0].startswith(_stood_error())
+
+
+def test_a_held_watcher_s_review_death_keeps_the_marker_s_own_clock():
+    """Nothing re-enters a held card, so its clock is the marker's age."""
+    s = Seams()
+    lines = s.recover([_clock_card(_just_reset(), 16, lane="Planning",
+                                   labels=(dead_run.HOLD_LABEL,))], now=NOW)
+    assert len(s.comments) == 1 and limit_recovery.STOOD_PHRASE in s.comments[0][1]
+    assert len(_errors(lines)) == 1
+
+
+def test_the_review_marker_says_the_plan_review_clock_runs_from_the_reset():
+    for kwargs in ({}, {"reset_assumed": True}):
+        body = dead_run.limit_marker("claude", "review", RESET, RUN, **kwargs)
+        assert "of the reset, for an epic's plan review" in body
+        assert body.rstrip().endswith("a person must act.")
+    assert "of the reset" not in dead_run.limit_marker("claude", "build", RESET, RUN)
+
+
+def test_a_reason_s_closing_period_is_not_printed_in_the_handed_off_line(monkeypatch):
+    monkeypatch.setattr(limit_recovery, "handoff_reason",
+                        lambda *a, **kw: "the run named nothing.")
+    s = Seams()
+    lines = s.recover([_clock_card(marker(reset=None), FRESH)], now=NOW)
+    assert lines == ["limit-recovery: DRE-4208 handed to a human — the run named nothing"]
+
+
+def test_a_held_card_waiting_on_a_later_reset_is_still_noticed():
+    """Nothing here re-enters a held card, whenever its reset comes."""
+    s = Seams()
+    lines = s.recover([_waiting_on_a_later_reset(labels=(dead_run.HOLD_LABEL,))], now=NOW)
+    assert len(s.comments) == 1 and limit_recovery.STOOD_PHRASE in s.comments[0][1]
+    assert len(_errors(lines)) == 1
+
+
+def test_the_stated_reset_marker_does_not_promise_a_hand_off_before_its_reset():
+    body = dead_run.limit_marker("claude", "build", RESET, RUN)
+    assert "once the reset has passed" in body
+    assumed = dead_run.limit_marker("claude", "build", RESET, RUN, reset_assumed=True)
+    assert "once the reset has passed" not in assumed
+    linear = dead_run.limit_marker("linear", "classify", None, RUN)
+    assert "once the reset has passed" not in linear
+
+
+@pytest.mark.parametrize("row", ["held", "watcher", "no-room", "no-trigger"])
+def test_a_marker_of_unknown_age_is_never_stale(row):
+    s, lines = _run(row, None, now=NOW + timedelta(days=1000))
+    assert _errors(lines) == []
+    assert not any(limit_recovery.STOOD_PHRASE in body for _, body in s.comments)
+
+
+def test_the_clock_reads_the_constant(monkeypatch):
+    monkeypatch.setattr(limit_recovery, "LIMIT_DEATH_CLOCK_MINUTES", 60)
+    s, lines = _run("no-trigger", FRESH)
+    assert len(s.comments) == 1 and limit_recovery.STOOD_PHRASE in s.comments[0][1]
+    assert _errors(lines)[0].startswith(f"{_stood_error()} 2.0 hours")
+
+
+# ---- the marker names the clock -------------------------------------------
+_MARKER_CASES = {
+    "stated": (("claude", "build", RESET, RUN), {},
+               "🪦 limit-death: kind=claude stage=build reset=2026-09-05T20:30:00Z run=33912345678"),
+    "assumed": (("claude", "plan", RESET, RUN), {"reset_assumed": True},
+                "🪦 limit-death: kind=claude stage=plan reset=2026-09-05T20:30:00Z "
+                "run=33912345678 assumed=yes"),
+    "linear": (("linear", "classify", None, RUN), {},
+               "🪦 limit-death: kind=linear stage=classify reset=unknown run=33912345678"),
+    "linear-account": (("linear", "sync", RESET, RUN, "main"), {},
+                       "🪦 limit-death: kind=linear stage=sync reset=2026-09-05T20:30:00Z "
+                       "run=33912345678 account=main"),
+}
+
+
+@pytest.mark.parametrize("case", list(_MARKER_CASES))
+def test_a_marker_that_promises_a_reentry_ends_on_the_clock(case):
+    args, kwargs, _ = _MARKER_CASES[case]
+    body = dead_run.limit_marker(*args, **kwargs)
+    last = body.rstrip().rsplit(". ", 1)[-1]
+    assert "6 hours" in last, last
+    assert "a person must act" in last, last
+
+
+def test_the_clock_in_the_marker_is_rendered_from_the_constant(monkeypatch):
+    monkeypatch.setattr(dead_run, "LIMIT_DEATH_CLOCK_MINUTES", 120)
+    body = dead_run.limit_marker("claude", "build", RESET, RUN)
+    assert "within 2 hours of this marker" in body
+    assert "6 hours" not in body
+
+
+def test_the_marker_that_already_hands_off_gains_nothing():
+    body = dead_run.limit_marker("claude", "build", None, RUN)
+    assert body.endswith("when the wall comes down, and it hands the card to a person.")
+    assert "a person must act" not in body
+    assert "hours of this marker" not in body
+
+
+@pytest.mark.parametrize("case", list(_MARKER_CASES))
+def test_the_marker_s_first_line_is_byte_identical(case):
+    args, kwargs, first = _MARKER_CASES[case]
+    body = dead_run.limit_marker(*args, **kwargs)
+    assert body.split("\n", 1)[0] == first
+    parsed = dead_run.parse_limit_marker(body)
+    kind, stage, reset, run = args[:4]
+    assert parsed == {"kind": kind, "stage": stage, "reset": reset, "run": run,
+                      "account": args[4] if len(args) > 4 else None,
+                      "assumed": bool(kwargs.get("reset_assumed"))}
