@@ -141,6 +141,9 @@ CLI:
                                      CEO-facing reason, written only on
                                      `escalate` — the critic's QUESTION, or a
                                      critic that decided nothing (DRE-5376).
+                                     A QUESTION whose finding names card text
+                                     is `revise`, recorded as SEND_BACK with
+                                     the finding as its reason (DRE-6359).
                                      A send-back is `revise` (the planner) or,
                                      at the bound, `park` (Triage), and writes
                                      no reason for the CEO.
@@ -176,6 +179,10 @@ CLI:
                                      and (--record) the boundary line itself —
                                      again two comments, never one
   rate --stage S                     comment thread on stdin
+  send-back-classes <CARD>           every one-off round on the card's WHOLE
+                                     thread, read from Linear as strings:
+                                     `round N<TAB>class<TAB>why<TAB>finding`.
+                                     A report, never a credential (DRE-6359).
   collisions                         comment thread on stdin
   late-collision --epic E --with E2 --detail "…"   print the marker line
   review-turns --execution-file F --ceiling M --children K --model X
@@ -209,6 +216,7 @@ import console_escalation
 import design_parity
 import execution_result
 import plan_footprint
+import send_back_class
 
 # `scripts/design_parity.py already implements part of this ... Reuse it; do
 # not reinvent it.` Re-exported by NAME, not re-implemented: a surface is
@@ -1181,18 +1189,45 @@ def further_findings(text: str) -> list[str]:
     return out
 
 
-def all_findings(text: str) -> list[str]:
+def all_findings(text: str, *, decided: str | None = None) -> list[str]:
     """Every finding of one round, ranked, worst first.
 
     The first line is the worst gap — the one the marker carries and the one
     the CEO reads in the headline — and the numbered list under it is the rest.
     A PASS and a crash have no findings: only a send-back is a round that found
     something, and `read_result` is the one place that decides which is which.
+
+    `decided` is the result the one-off exit DECIDED on, when that is not the
+    critic's header word (DRE-6359). A `QUESTION` whose finding reads as a
+    revision is answered by the planner's rewrite, and a rewrite handed "0 in
+    total" rewrites blind — so with `decided=SEND_BACK` a `QUESTION` header
+    lists its classified text first (`one_off_finding`: the `FINDING:` line,
+    else the question), then the numbered body. A PASS and a missing header
+    still have none. Left `None`, the header word decides, as it always did.
     """
-    result, reason = read_result(text)
-    if result != SEND_BACK or not reason:
+    if decided == SEND_BACK:
+        result, reason = read_result(text, STAGE_ONE_OFF)
+        if result == QUESTION:
+            reason = one_off_finding(read_finding(text), reason)
+        elif result != SEND_BACK:
+            return []
+    else:
+        result, reason = read_result(text)
+        if result != SEND_BACK:
+            return []
+    if not reason:
         return []
     return [reason] + [f for f in further_findings(text) if f != reason]
+
+
+def one_off_finding(finding: str, reason: str) -> str:
+    """The text a one-off `QUESTION` is classified by, and what a reclassified
+    round records and lists first (DRE-6359): the critic's `FINDING:` line when
+    it wrote one, the header reason otherwise. Under the one-off charter that
+    reason is the question itself, and `send_back_class`'s vocabulary is
+    phrased for findings — so the question is the fallback, never the first
+    choice."""
+    return one_line(finding or "") or one_line(reason or "")
 
 
 def findings_block(items: list[str]) -> str:
@@ -2770,7 +2805,8 @@ def one_off_ran_out_request(ran_out) -> str:
 
 
 def one_off_decide(result: str, reason: str = "",
-                   prior_send_backs: int = 0, ran_out=None) -> tuple[str, str]:
+                   prior_send_backs: int = 0, ran_out=None, *,
+                   finding: str = "") -> tuple[str, str]:
     """`(action, note)` for a one-off exit — `proceed` moves it, `revise` hands
     it back to the planner, `escalate` asks the CEO a question, `park` sends it
     to the operator.
@@ -2795,6 +2831,15 @@ def one_off_decide(result: str, reason: str = "",
     ceiling (DRE-4381), and it changes ONE thing: what the no-result says. The
     action is the same escalate it always was, and it still spends nothing —
     a read that was cut off decided nothing either.
+
+    `finding` is the critic's `FINDING:` line (DRE-6359). A QUESTION is
+    classified before it is routed — by that line, else by the question
+    (`one_off_finding`) — and one that names something the card must SAY
+    (`send_back_class.route_class` reads `revision`) is answered by the
+    planner's rewrite instead, spending a round exactly as a SEND_BACK does.
+    A decision, or a finding the classifier cannot place, still goes to the
+    CEO: under-asking a real decision is the worse failure. A SEND_BACK is
+    never re-read here — the critic already said it is the planner's.
     """
     if result == PASS:
         return PROCEED, (
@@ -2802,7 +2847,22 @@ def one_off_decide(result: str, reason: str = "",
             "agent can build unattended"
         )
     if result == QUESTION and one_line(reason):
-        return ESCALATE, one_line(reason)
+        classified = one_off_finding(finding, reason)
+        if send_back_class.route_class(classified) != send_back_class.REVISION:
+            return ESCALATE, one_line(reason)
+        failed = int(prior_send_backs) + 1
+        read_as = (
+            f"the critic asked the CEO: {one_line(reason)} — it wrote "
+            f"{QUESTION} — but what it found names something the card must "
+            f"say ({send_back_class.why(classified)}) rather than a choice "
+            "only he can make, so it is read as a revision"
+        )
+        if not _bound_spent(prior_send_backs):
+            return REVISE, (
+                f"{read_as}: round {failed} of {MAX_ROUNDS}. The planner "
+                "rewrites the card and the critic reads it again."
+            )
+        return PARK, f"{read_as}. " + _one_off_park_note(failed)
     if result == SEND_BACK and one_line(reason):
         failed = int(prior_send_backs) + 1
         if not _bound_spent(prior_send_backs):
@@ -2811,16 +2871,23 @@ def one_off_decide(result: str, reason: str = "",
                 "here is a defect in the card an agent can fix, so the planner "
                 "revises the card in place and the critic reads it again."
             )
-        return PARK, (
-            f"{_count_word(failed)} send-backs on this card — the bound. The "
-            "planner's revision did not satisfy the critic, so the card parks "
-            f"in {BOUND_PARK_LANE} for the operator with every finding raised "
-            "so far named below. A revision loop that does not converge is a "
-            "defect in the card, not a decision, so it is not put to the CEO."
-        )
+        return PARK, _one_off_park_note(failed)
     if _ran_out_of_turns(result, reason, ran_out):
         return ESCALATE, one_off_ran_out_note(ran_out)
     return ESCALATE, NO_CRITIC_NOTE
+
+
+def _one_off_park_note(failed: int) -> str:
+    """The one-off bound park's note — one sentence set for a SEND_BACK and
+    for a QUESTION read as a revision (DRE-6359), which spend the same bound.
+    """
+    return (
+        f"{_count_word(failed)} send-backs on this card — the bound. The "
+        "planner's revision did not satisfy the critic, so the card parks "
+        f"in {BOUND_PARK_LANE} for the operator with every finding raised "
+        "so far named below. A revision loop that does not converge is a "
+        "defect in the card, not a decision, so it is not put to the CEO."
+    )
 
 
 def every_finding_so_far(prior_findings, this_round) -> list[str]:
@@ -3780,7 +3847,19 @@ def _cmd_decide(args) -> int:
         # `items` is this round's ranked list; every finding the CARD has
         # collected is that plus the spine of the markers, and the Triage park
         # is the only note that needs the whole of it.
-        action, note = one_off_decide(result, reason, prior, ran_out)
+        #
+        # A QUESTION is classified by its FINDING line first (DRE-6359), and
+        # one read as a revision is decided as a send-back: the planner is
+        # handed its finding as item 1 (`all_findings(decided=SEND_BACK)`),
+        # and the record below says SEND_BACK, so the bound counts it.
+        # `prior` is recomputed on the one line directly before the call on
+        # purpose — DRE-6454 rewrites exactly that line for this route.
+        finding = read_finding(result_text)
+        prior = send_backs(cycle, args.stage)
+        action, note = one_off_decide(result, reason, prior, ran_out,
+                                      finding=finding)
+        if action in (REVISE, PARK):
+            items = all_findings(result_text, decided=SEND_BACK)
         if action == PARK:
             items = every_finding_so_far(
                 send_back_findings(cycle, args.stage), items)
@@ -3903,15 +3982,28 @@ def _cmd_decide(args) -> int:
     # that says so rather than claiming one round found it all.
     section = (findings_so_far_section(items) if action == PARK
                else findings_section(items))
+    # The record says what this gate DECIDED (DRE-6359). A QUESTION read as a
+    # revision is recorded `result=SEND_BACK`, so `send_backs` spends the bound
+    # on it, and its reason is the classified text — the finding, never the
+    # question: every reader of the record (`send_back_findings`, the bound
+    # park, `send-back-classes`) reads that reason AS the finding. The critic's
+    # own word and question stay in the note's prose, and in the `result` and
+    # `reason` step outputs above.
+    recorded, recorded_reason = result, reason
+    if (args.stage == STAGE_ONE_OFF and result == QUESTION
+            and action in (REVISE, PARK)):
+        recorded = SEND_BACK
+        recorded_reason = one_off_finding(finding, reason)
     body = "\n\n".join([
         headline,
-        *( [f"Reason: {reason}"] if reason and reason != note else [] ),
+        *( [f"Reason: {recorded_reason}"]
+           if recorded_reason and recorded_reason != note else [] ),
         *( [section] if section else [] ),
         closing,
     ])
     # The post record carries the reading (DRE-4115) so the sweep's gate reads
     # the round the way this step decided it; the other stages have none.
-    record = marker(args.stage, round_n, result, reason, collisions,
+    record = marker(args.stage, round_n, recorded, recorded_reason, collisions,
                     open_count=open_count if args.stage == STAGE_POST else None)
     if args.note_file:
         with open(args.note_file, "w", encoding="utf-8") as f:
@@ -4063,6 +4155,53 @@ def _cmd_sight(args) -> int:
 
 def _cmd_rate(args) -> int:
     print(json.dumps(rate(_stdin_json([]), args.stage)))
+    return 0
+
+
+def send_back_class_rows(bodies: list) -> list[str]:
+    """Every one-off round on a thread, classified by its recorded reason
+    (DRE-6359): `round N<TAB>class<TAB>why<TAB>finding`, oldest first.
+
+    A SEND_BACK or a QUESTION round is a finding that went somewhere, so it
+    is classified — `revision`, `decision`, or `uncertain` where the
+    vocabulary cannot place it (`send_back_class.classify`; the route sends
+    that one to the CEO). A PASS is printed as `pass` and a round the critic
+    never decided as `no-result`, both with `—` for a why and neither
+    classified: a pass's sentence is not a finding, and a crash found nothing.
+    """
+    rows = []
+    for r in parse_markers(bodies):
+        if r["stage"] != STAGE_ONE_OFF:
+            continue
+        reason = r["reason"]
+        if r["result"] in (SEND_BACK, QUESTION):
+            cls = send_back_class.classify(reason) or "uncertain"
+            why = send_back_class.why(reason)
+        else:
+            cls = "pass" if r["result"] == PASS else "no-result"
+            why = "—"
+        rows.append(f"round {r['round']}\t{cls}\t{why}\t{reason}")
+    return rows
+
+
+def _cmd_send_back_classes(args) -> int:
+    """The live re-run of the classifier over one card's thread (DRE-6359).
+
+    A REPORT a person reads — never a credential anything routes on, and
+    nothing reads its output to count a round or move a card. So it reads the
+    thread as plain strings (`comment_bodies`), the read `planning_route`
+    makes, and not `comment_records`: that one marks a comment as the
+    pipeline's only when the running key is the fleet user, so on the
+    operator's machine every fleet-written record would read as somebody
+    else's and print nothing. And it reads the WHOLE thread: the fifty-newest
+    window drops a long thread's oldest rounds, which are the ones this is
+    for — DRE-3879's held 41 comments on 2026-10-09 and grows with every run.
+    """
+    import linear_ops
+
+    for row in send_back_class_rows(
+            linear_ops.comment_bodies(args.card, whole_thread=True)):
+        print(row)
     return 0
 
 
@@ -4270,6 +4409,10 @@ def main(argv: list[str]) -> int:
     r = sub.add_parser("rate", help="send-back rate; comment thread on stdin")
     r.add_argument("--stage", required=True, choices=sorted(STAGES))
     r.set_defaults(fn=_cmd_rate)
+    k = sub.add_parser("send-back-classes",
+                       help="classify a card's one-off rounds (DRE-6359)")
+    k.add_argument("card")
+    k.set_defaults(fn=_cmd_send_back_classes)
 
     y = sub.add_parser("cycle-start", help="the note that opens a planning attempt")
     y.add_argument("--epic", required=True)

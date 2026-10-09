@@ -364,10 +364,13 @@ class CriticWalk(unittest.TestCase):
         # plan_seam_gate.py: the seam gate both pre-stage decision steps now run
         # before `decide` (DRE-3398) — the real module, because what these walks
         # check is that a round with no seam decides exactly as it always did.
+        # send_back_class.py: the finding classifier the one-off exit asks
+        # before it routes a QUESTION (DRE-6359), imported at the top.
         for name in ("plan_critic.py", "design_parity.py", "plan_footprint.py",
                      "checkbox_marks.py", "execution_result.py",
                      "review_rerun.py", "plan_run.py", "sanitize_untrusted.py",
-                     "plan_seam_gate.py", "console_escalation.py"):
+                     "plan_seam_gate.py", "console_escalation.py",
+                     "send_back_class.py"):
             shutil.copy(os.path.join(SCRIPTS, name),
                         os.path.join(self.pipeline, "scripts", name))
         self._stub("linear_ops.py", LINEAR_STUB)
