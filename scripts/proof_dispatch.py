@@ -26,9 +26,11 @@ re-derived here.
 A first-run candidate is in `Hand-work`, and it stays there for the whole run
 (DRE-5924): what keeps this phase from dispatching twice at a running card is
 the run-state reading (condition 5), not a lane. A card in `Green Light` is
-read only by the return branch. A card in `In Review` has an open record pull
-request and is read only by the re-run branch, which moves nothing: the card
-stays in `In Review` while its record is amended.
+read by the return branch when it is parked on the CEO's press, and by the
+re-run branch when its hold is the sweep's review-cap park (DRE-6406) — never
+by both: the return is taken first. A card in `In Review` has an open record
+pull request and is read only by the re-run branch. The re-run branch moves
+nothing: the card stays in the lane it is in while its record is amended.
 
 ## A first run — every condition read, in order; the first that fails is named
 
@@ -76,12 +78,24 @@ one hold, and the card is left for an operator.
 Conditions 2, 3 and 7 are not read for it: the record is open on the release
 its first run read.
 
+A `Green Light` PROOF card is read the same way when its live hold is the
+sweep's review-cap park — `needs-human` with a `🔒 hold: reason=review-cap-spent`
+stamp, read off the lane read's window, the whole thread when the window is
+partial (DRE-6406). A record parked there before the sweep stood down on a
+sent-back record waits on nothing else. One more refusal is named for it: the
+stamp's `at` must be the record's head, because on a newer head the holds lane
+lifts the stamp and returns the card to `In Review` itself. Nothing here moves
+the card, lifts the stamp or touches the label: the re-run's amended record is
+the new head, and the holds lane does the rest. A label over a spent stamp, or
+over none, is a person's hold and is not read.
+
 ## The bound
 
 At most one dispatch per pass — the return first, then first runs oldest
 first, then re-runs — and at most `PROOF_CANDIDATES_PER_PASS` candidates read:
 two Linear reads for the three lanes (the sweep's board read serves
-`Hand-work` and `In Review` together), then at most two per candidate (the
+`Hand-work` and `In Review` together, and one `Green Light` read serves the
+return and the re-run), then at most two per candidate (the
 card's epic and relations, and its thread; a re-run reads only its thread).
 Three candidates is 2 + 2 × 3 = 8 requests however many proofs wait. Its
 `linear-budget:` trailer is its own, lifted into the step summary.
@@ -109,6 +123,7 @@ from typing import Callable
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import card_pr  # noqa: E402
+import hold  # noqa: E402 — the sweep's review-cap stamp, read as the holds lane reads it
 import linear_ops  # noqa: E402
 import merge_gate  # noqa: E402 — the critic's marker for `standing_verdict`
 import pipeline_act  # noqa: E402
@@ -175,6 +190,9 @@ RERUN_COUNT = "re-run {n} of 2"
 RERUN_BUDGET = 2
 #: What the critic's newest verdict at the head must say for a re-run.
 SENT_BACK = "REQUEST_CHANGES"
+#: The one hold a `Green Light` re-run candidate carries: the sweep's park at
+#: its review cap (DRE-6406). A person's label, or any other reason, is not it.
+REVIEW_CAP = "review-cap-spent"
 
 #: The hold after two first-run dispatches that did not finish.
 EXHAUSTED_OBSERVED = "the proof run did not finish after two dispatches"
@@ -566,9 +584,46 @@ class _Pass:
     # -- the re-run after the critic's findings (DRE-5931) ------------------ #
 
     def is_rerun(self, card: dict) -> bool:
-        """A PROOF card of this repo in `In Review`, at no request."""
-        return (_ours(card, self.slug)
-                and (card.get("state") or {}).get("name") == RERUN_LANE)
+        """A PROOF card of this repo in `In Review` — or in `Green Light`
+        under the sweep's review-cap park (DRE-6406) — at no request.
+
+        The park is read off the lane read's own comment window: the label
+        with a live `review-cap-spent` stamp. A label over a spent stamp, or
+        over none, is a person's hold and is not read — unless the window is
+        partial and the stamp may lie beyond it, when the whole thread
+        decides (`rerunning`), as it does for `is_return`."""
+        if not _ours(card, self.slug):
+            return False
+        lane = (card.get("state") or {}).get("name")
+        if lane == RERUN_LANE:
+            return True
+        if lane != RETURN_LANE:
+            return False
+        window = linear_ops.window_nodes(card.get("comments"))
+        reason = hold.reason_of((card.get("labels") or {}).get("nodes") or [],
+                                [c.get("body") or "" for c in window])
+        return reason == REVIEW_CAP or (
+            reason == "manual" and linear_ops.window_is_partial(card.get("comments")))
+
+    def _parked_on(self, card: dict, comments: list, number, head: str) -> None:
+        """For a `Green Light` card, the one refusal an `In Review` card does
+        not have: the sweep's review-cap stamp, read off the whole thread,
+        must be on the record's current head. On an older head the holds lane
+        lifts it and returns the card to `In Review` (`hygiene_holds.RETURNS`)
+        — that card is its, and nothing is dispatched here."""
+        if (card.get("state") or {}).get("name") != RETURN_LANE:
+            return
+        bodies = [c.get("body") or "" for c in comments]
+        labels = (card.get("labels") or {}).get("nodes") or []
+        if hold.reason_of(labels, bodies) != REVIEW_CAP:
+            raise _Refused("re-run: its Green Light hold is not the sweep's "
+                           "review-cap park — a person's, not read here")
+        at = (hold.read_stamp(bodies) or {}).get("at") or ""
+        if at != head:
+            raise _Refused(f"re-run: the review-cap park is on {at[:7]}, and "
+                           f"#{number}'s head is now {head[:7]} — the holds lane "
+                           "lifts it on that new head and returns the card to "
+                           f"{RERUN_LANE}; nothing dispatched", "held")
 
     def rerunning(self, card: dict) -> tuple:
         """`(reason, count)` for a record the critic sent back, or raises
@@ -599,6 +654,7 @@ class _Pass:
                            "time to read the receipts against")
 
         comments, viewer, voices = self._thread(card)
+        self._parked_on(card, comments, number, head)
         holds = _open_holds(voices)
         if holds:
             note = f"; {UNCHECKED_NOTE}" if _unchecked_after_hold(voices) else ""
@@ -689,7 +745,11 @@ def sweep(repo: str, slug: str, *, live: bool, linear=None,
                 find_record=find_record or (lambda ident: record_pr(ident, repo)))
     tally = one.tally
 
-    returns = [c for c in one.linear.lane(RETURN_LANE) if one.is_return(c)]
+    # One Green Light read serves both branches; a card the return takes is
+    # never also a re-run candidate (DRE-6406).
+    green = one.linear.lane(RETURN_LANE)
+    returns = [c for c in green if one.is_return(c)]
+    returning = {c["identifier"] for c in returns}
     first = []
     for card in one.linear.lane(FIRST_RUN_LANE):
         if not proof_and_demo.is_proof(card.get("title") or ""):
@@ -702,7 +762,9 @@ def sweep(repo: str, slug: str, *, live: bool, linear=None,
             continue
         first.append(card)
     first.sort(key=lambda c: (_entered(c), _number(c)))
-    reruns = sorted((c for c in one.linear.lane(RERUN_LANE) if one.is_rerun(c)),
+    reruns = sorted((c for c in one.linear.lane(RERUN_LANE) + [
+                        c for c in green if c["identifier"] not in returning]
+                     if one.is_rerun(c)),
                     key=_number)
 
     queue = ([(c, one.returning) for c in returns]
