@@ -371,9 +371,13 @@ class ProofBriefTest(unittest.TestCase):
         self.assertIn("GH_TOKEN=$GH_READ_TOKEN gh api", self.text)
         self.assertIn("aws: none", self.text)
         self.assertIn("## Identities", self.text)
-        self.assertIn("no card yet", self.flat)
-        self.assertIn("a dispatched run that signs in is outside this epic and "
-                      "has no card yet", self.flat.lower())
+        # DRE-6043: a hosted sign-in is admitted where the product's own
+        # script keeps the ration off the machine, and that ration's counter
+        # is the run's one live write. The retired "no card yet" is gone.
+        self.assertIn("kept somewhere other than the machine", self.flat)
+        self.assertIn("hosted sign-in ration:", self.flat)
+        self.assertIn("one live write", self.flat)
+        self.assertNotIn("no card yet", self.flat)
 
     def test_the_linear_reads_and_their_request_cap(self):
         """DRE-6143: the run reads any card, never writes one, and counts
