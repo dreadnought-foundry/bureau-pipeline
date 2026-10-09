@@ -144,3 +144,44 @@ def test_promote_only_write_failures_exit_nonzero():
                 reconcile.main(promote_only=True)
     finally:
         reconcile._write_failures.clear()
+
+
+def _backlog_card(identifier, *, epic):
+    return {
+        "identifier": identifier,
+        "title": f"[EPIC] {identifier}" if epic else "work",
+        "description": "**Repo:** agent-bureau\nwork",
+        "children": {"nodes": [{"id": "kid-1"}] if epic else []},
+        "labels": {"nodes": []},
+        "parent": None,
+    }
+
+
+def test_full_sweep_closes_backlog_epics_off_the_one_backlog_read(monkeypatch):
+    """DRE-6410: the promotion phase reads Backlog ONCE, closes this repo's
+    finished epics off that list, and hands the rest of the same list to
+    promote_ready — never a second read of the lane."""
+    monkeypatch.setattr(reconcile, "REPO_SLUG", "agent-bureau")
+    epic, one_off = _backlog_card("DRE-5", epic=True), _backlog_card("DRE-6", epic=False)
+    mocks = _phase_mocks()
+    mocks["backlog_children"] = MagicMock(return_value=[epic, one_off])
+    mocks["close_finished_epics"] = MagicMock(
+        side_effect=lambda epics: set(epics) & {"DRE-5"})
+    with patch.multiple(reconcile, **mocks):
+        reconcile.main()
+    mocks["backlog_children"].assert_called_once_with()
+    mocks["close_finished_epics"].assert_any_call({"DRE-5"})
+    mocks["promote_ready"].assert_called_once()
+    assert mocks["promote_ready"].call_args.kwargs["candidates"] == [one_off]
+
+
+def test_promote_only_closes_no_backlog_epic(monkeypatch):
+    """The event-driven gate is promotion alone: it closes nothing, Backlog
+    epics included — the full sweep and `--close-only` are the closers."""
+    monkeypatch.setattr(reconcile, "REPO_SLUG", "agent-bureau")
+    mocks = _phase_mocks()
+    mocks["backlog_children"] = MagicMock(
+        return_value=[_backlog_card("DRE-5", epic=True)])
+    with patch.multiple(reconcile, **mocks):
+        reconcile.main(promote_only=True)
+    mocks["close_finished_epics"].assert_not_called()
