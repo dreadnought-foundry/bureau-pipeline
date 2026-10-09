@@ -730,7 +730,8 @@ def test_a_refused_plan_dispatch_writes_no_lane_and_says_so_once(
 
 
 # The lane-writing commands `plan.yml` names at `main` 5c15fea, matched as
-# substrings of a step's `run` text.
+# whole commands in a step's `run` text or in the `prompt` it hands an agent
+# — `linear_ops.py state` and not the read-only `linear_ops.py state-of`.
 LANE_WRITING_COMMANDS = (
     "linear_ops.py state",
     "planning_route.py exit",
@@ -743,61 +744,212 @@ LANE_WRITING_COMMANDS = (
     # failure: it is listed so the writer is inside this gate the day it lands.
     "plan_bound.py exit",
 )
+_LANE_WRITER = re.compile(
+    "(?:" + "|".join(re.escape(c) for c in LANE_WRITING_COMMANDS)
+    + r")(?![\w-])"
+)
 
 _SKIP_CLAUSE = re.compile(r"steps\.dedupe\.outputs\.skip\s*!=\s*'true'")
-_STEP_REF = re.compile(r"steps\.([A-Za-z0-9_-]+)\.(?:outputs|outcome|conclusion)\b")
+
+# A small evaluator for the `if:` expressions in plan.yml, in three-valued
+# logic: True, False, or _UNKNOWN when the answer depends on something a
+# refused dispatch does not fix (a step before the guard, `env`, `vars`,
+# `success()`). Anything it cannot parse is _UNKNOWN as a whole, so a step
+# it cannot read counts as one that may run.
+_UNKNOWN = object()
+_TOKEN = re.compile(
+    r"\s*(?:(&&|\|\||==|!=|!|\(|\))|('(?:[^']|'')*')|([A-Za-z_][\w.-]*))"
+)
+
+
+class _Unreadable(Exception):
+    pass
+
+
+def _tokens(expr):
+    out, pos, expr = [], 0, expr.rstrip()
+    while pos < len(expr):
+        m = _TOKEN.match(expr, pos)
+        if not m:
+            raise _Unreadable(expr[pos:])
+        op, lit, name = m.groups()
+        out.append(("op", op) if op else
+                   ("lit", lit[1:-1].replace("''", "'")) if lit else
+                   ("name", name))
+        pos = m.end()
+    return out
+
+
+def _evaluate(expr, lookup):
+    """`expr` under `lookup`, which maps a context path to its value."""
+    try:
+        toks = _tokens(expr)
+    except _Unreadable:
+        return _UNKNOWN
+    pos = 0
+
+    def peek():
+        return toks[pos] if pos < len(toks) else (None, None)
+
+    def take(kind=None, value=None):
+        nonlocal pos
+        tok = peek()
+        if tok[0] is None or (kind and tok[0] != kind) or (
+                value and tok[1] != value):
+            raise _Unreadable(f"{tok} at {pos}")
+        pos += 1
+        return tok
+
+    def truth(v):
+        return v if v is _UNKNOWN or isinstance(v, bool) else v != ""
+
+    def either(a, b):
+        a, b = truth(a), truth(b)
+        if a is True or b is True:
+            return True
+        return _UNKNOWN if _UNKNOWN in (a, b) else False
+
+    def both(a, b):
+        a, b = truth(a), truth(b)
+        if a is False or b is False:
+            return False
+        return _UNKNOWN if _UNKNOWN in (a, b) else True
+
+    def disjunction():
+        v = conjunction()
+        while peek() == ("op", "||"):
+            take()
+            v = either(v, conjunction())
+        return v
+
+    def conjunction():
+        v = comparison()
+        while peek() == ("op", "&&"):
+            take()
+            v = both(v, comparison())
+        return v
+
+    def comparison():
+        v = unary()
+        if peek() in (("op", "=="), ("op", "!=")):
+            op = take()[1]
+            w = unary()
+            if _UNKNOWN in (v, w) or type(v) is not type(w):
+                return _UNKNOWN
+            same = (v.casefold() == w.casefold()) if isinstance(v, str) else v == w
+            return same if op == "==" else not same
+        return v
+
+    def unary():
+        if peek() == ("op", "!"):
+            take()
+            v = truth(unary())
+            return _UNKNOWN if v is _UNKNOWN else not v
+        return primary()
+
+    def primary():
+        kind, value = take()
+        if (kind, value) == ("op", "("):
+            v = disjunction()
+            take("op", ")")
+            return v
+        if kind == "lit":
+            return value
+        if kind != "name":
+            raise _Unreadable(value)
+        if peek() == ("op", "("):
+            take()
+            take("op", ")")
+            if value == "always":
+                return True
+            if value in ("success", "failure", "cancelled"):
+                return _UNKNOWN
+            raise _Unreadable(value)  # contains(), format(), ... — unread
+        if value in ("true", "false"):
+            return value == "true"
+        return lookup(value)
+
+    try:
+        v = disjunction()
+        if pos != len(toks):
+            raise _Unreadable(toks[pos:])
+        return truth(v)
+    except _Unreadable:
+        return _UNKNOWN
+
+
+def _may_run_on_a_refused_dispatch(step, lookup):
+    cond = step.get("if")
+    if cond is None:
+        return True  # the implicit `success()`
+    if isinstance(cond, bool):
+        return cond
+    cond = str(cond).strip()
+    if cond.startswith("${{") and cond.endswith("}}"):
+        cond = cond[3:-2]
+    return _evaluate(cond, lookup) is not False
 
 
 def _ungated_lane_writers(steps):
-    """Names of the steps after the guard whose `run` names a lane-writing
-    command and that could run on a refused dispatch. A step is gated when
-    its `if:` carries the skip clause, or when every step it references is
-    itself gated. No `if:`, no reference, a cycle, or an id that is not a
-    step after the guard (the guard's own, one before it, an unknown one)
-    is not gated."""
+    """Names of the steps after the guard whose `run` or `prompt` names a
+    lane-writing command and that could run on a refused dispatch.
+
+    The steps after the guard are walked in order with the guard's
+    `skip == 'true'`. A step whose `if:` is then false is skipped, and its
+    outputs read as empty and its outcome as `skipped` for every step after
+    it — which is what GitHub does. Every other step may run, so its outputs
+    are unknown; so are the guard's other outputs, a step before the guard,
+    an id not yet reached, `env` and `vars`. A writer is gated only when its
+    `if:` is false whatever the unknowns hold."""
     guard = [s.get("id") for s in steps].index("dedupe")
     after = steps[guard + 1:]
-    by_id = {s["id"]: s for s in after if s.get("id")}
+    skipped = set()
 
-    def gated(step, seen):
-        if "if" not in step:
-            return False
-        cond = str(step["if"])
-        if _SKIP_CLAUSE.search(cond):
-            return True
-        refs = _STEP_REF.findall(cond)
-        return bool(refs) and all(
-            ref not in seen and ref in by_id
-            and gated(by_id[ref], seen | {ref})
-            for ref in refs
-        )
+    def lookup(path):
+        parts = path.split(".")
+        if parts[0] != "steps" or len(parts) < 3:
+            return _UNKNOWN
+        sid, rest = parts[1], parts[2:]
+        if sid == "dedupe":
+            return "true" if rest == ["outputs", "skip"] else _UNKNOWN
+        if sid not in skipped:
+            return _UNKNOWN
+        if rest[0] == "outputs" and len(rest) == 2:
+            return ""
+        if rest in (["outcome"], ["conclusion"]):
+            return "skipped"
+        return _UNKNOWN
 
-    writers = [s for s in after
-               if any(c in (s.get("run") or "") for c in LANE_WRITING_COMMANDS)]
+    writers, ungated = 0, []
+    for s in after:
+        runs = _may_run_on_a_refused_dispatch(s, lookup)
+        if not runs and s.get("id"):
+            skipped.add(s["id"])
+        text = (s.get("run") or "") + str((s.get("with") or {}).get("prompt") or "")
+        if _LANE_WRITER.search(text):
+            writers += 1
+            if runs:
+                ungated.append(s.get("name"))
     assert writers, "no lane-writing step found — the walk read nothing"
-    return [s.get("name") for s in writers
-            if not gated(s, frozenset({s.get("id")}) - {None})]
+    return ungated
 
 
 def test_every_lane_writer_in_the_planner_runs_behind_the_skip():
-    """No step that can write a lane runs on a refused dispatch: each one
-    carries the skip condition itself, or hangs off steps that do. The
-    guard and the steps before it are excluded by position, as in
-    test_no_step_after_the_guard_runs_unconditionally."""
-    assert "plan_bound.py exit" in LANE_WRITING_COMMANDS, (
-        "the Green Light writer DRE-6455/DRE-6456 add must stay in the gate"
-    )
+    """No step that can write a lane — by its own shell or by the prompt it
+    hands an agent — runs on a refused dispatch: its `if:` is false once the
+    guard says skip. The guard and the steps before it are excluded by
+    position, as in test_no_step_after_the_guard_runs_unconditionally."""
     ungated = _ungated_lane_writers(_steps())
     assert ungated == [], (
         f"lane writers that would run on a refused dispatch: {ungated}"
     )
 
 
-def _strip_skip(steps, name):
-    step = next(s for s in steps if s.get("name") == name)
-    stripped = re.sub(r"\s*&&\s*" + _SKIP_CLAUSE.pattern, "", step["if"])
-    assert stripped != step["if"], f"{name!r} carries no skip clause to strip"
-    step["if"] = stripped
+def _strip_skip_everywhere(steps):
+    for step in steps:
+        if isinstance(step.get("if"), str):
+            step["if"] = re.sub(r"\s*&&\s*" + _SKIP_CLAUSE.pattern, "",
+                                step["if"])
     return steps
 
 
@@ -808,23 +960,42 @@ def _add_unconditional_bound_park(steps):
     return steps
 
 
-def _if_true(steps, name):
+def _set_if(steps, name, cond):
     step = next(s for s in steps if s.get("name") == name)
-    step["if"] = True
+    step["if"] = cond
     return steps
+
+
+_ROUTE = "Route — plan or activate"
 
 
 @pytest.mark.parametrize(
     "mutate,leaked",
     [
-        (lambda s: _strip_skip(s, "Route — plan or activate"),
-         "Route — plan or activate"),
+        (_strip_skip_everywhere, _ROUTE),
         (_add_unconditional_bound_park, "Park — the bound, unconditionally"),
-        (lambda s: _if_true(s, "Epic → Green Light — both critics passed"),
+        (lambda s: _set_if(s, "Epic → Green Light — both critics passed", True),
          "Epic → Green Light — both critics passed"),
+        # A skipped step's outputs are empty, so `!= 'true'` on one is true.
+        (lambda s: _set_if(s, _ROUTE, "steps.classify.outputs.escalate != 'true'"),
+         _ROUTE),
+        # The skip clause is in the expression but not a conjunct of it.
+        (lambda s: _set_if(s, _ROUTE, "steps.gate.outputs.bounced != 'true' "
+                                      "|| steps.dedupe.outputs.skip != 'true'"),
+         _ROUTE),
+        # A function the walk cannot read: `contains('', 'true')` is false.
+        (lambda s: _set_if(s, _ROUTE, "${{ !contains("
+                                      "steps.classify.outputs.escalate, 'true') }}"),
+         _ROUTE),
+        # The skip clause written into a writer's `if:` it does not govern.
+        (lambda s: _set_if(s, _ROUTE, "always() || steps.dedupe.outputs.skip "
+                                      "!= 'true'"),
+         _ROUTE),
     ],
-    ids=["route-loses-the-skip", "plan-bound-exit-with-no-if",
-         "a-writer-if-replaced-by-true"],
+    ids=["every-step-loses-the-skip", "plan-bound-exit-with-no-if",
+         "a-writer-if-replaced-by-true", "keyed-on-a-skipped-steps-empty-output",
+         "skip-clause-ored-not-anded", "a-function-the-walk-cannot-read",
+         "always-ored-past-the-skip"],
 )
 def test_the_walk_names_a_lane_writer_that_leaks_past_the_skip(mutate, leaked):
     """The walk above, proved against copies of the workflow that leak: it
