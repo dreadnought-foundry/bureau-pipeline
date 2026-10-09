@@ -244,6 +244,11 @@ class LinearReads:
         issue = (linear_ops.gql(CARD_QUERY, {"id": identifier}) or {}).get("issue")
         if not issue:
             raise LookupError(f"Linear answered no card for {identifier}")
+        # A proof is blocked by every other card in its epic, so a big epic's
+        # fills the first page: read it to the end, as the sweep does
+        # (DRE-6416). A failed read leaves it UNKNOWN, and condition 3 refuses.
+        issue.setdefault("identifier", identifier)
+        reconcile.complete_inverse_relations([issue])
         return issue
 
     def thread(self, identifier: str):
