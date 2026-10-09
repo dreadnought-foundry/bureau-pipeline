@@ -1745,7 +1745,7 @@
       "anchor": "was not delivered: the branch moved to",
       "step": "Report",
       "kind": "not-an-act",
-      "means": "A fix run committed its fix, but the branch moved by another hand while it worked, so the commit was not delivered (DRE-6351).",
+      "means": "A fix run committed its fix, but the branch moved to a head that differs from its commit while it worked, so the commit was not delivered (DRE-6351).",
       "why": "A stand-down, not something the pipeline did. It creates no obligation and hands the work to nobody: the review of the new head is already the next step, and the three questions a trailer answers all read 'not applicable'. The line names the run's commit, the new head and the artifact the commit is preserved in, and nothing reads it back."
     },
     {
@@ -1762,7 +1762,7 @@
       "step": "Report",
       "kind": "undeclared-act",
       "means": "A fix run finished its fix and GitHub refused the push: the work went to the `deliver-rescue` follow-up, nobody is parked, and no fix attempt is spent (DRE-6351).",
-      "why": "Act-shaped, and deliberately given no row: a new act name needs the console in agent-bureau to carry it first (`scripts/check_act_consumers.py`), so DRE-6351 posts it the way the `pushed no new commit` body is posted. Its first line opens with `fix_dead_run.COMMITTED_NOT_PUSHED_TAG` and carries `head still at <sha8>`, which the Report counts for the cap and the reconcile sweep reads (DRE-6352). The body is written by scripts/fix_budget.py, so converting it also moves a seam this card does not own."
+      "why": "Act-shaped, and deliberately given no row: a new act name needs the console in agent-bureau to carry it first (`scripts/check_act_consumers.py`), so DRE-6351 posts it the way the `pushed no new commit` body is posted. Its first line opens with `fix_dead_run.COMMITTED_NOT_PUSHED_TAG` and carries `head still at <sha8>`, which the Report counts for the cap and the reconcile sweep is to read once DRE-6352 lands — until then the body tells a person to restart the loop by hand. The body is written by scripts/fix_budget.py, so converting it also moves a seam this card does not own."
     },
     {
       "file": ".github/workflows/agent-fix.yml",

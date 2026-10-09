@@ -90,11 +90,12 @@ OUTAGE_TAG = "fix-run-model-death"
 TURN_CAP_TAG = "fix-run-turn-exhaustion"
 # A fix run that finished its fix and had the push refused (DRE-6351): the
 # commit is on the runner and the branch is where the run started. The
-# Report posts it with `head still at <sha8>` on its first line, and both
-# the Report and the reconcile sweep (DRE-6352) count it per head. The sweep
-# re-dispatches the fix loop once when the branch has not moved for
-# COMMITTED_NOT_PUSHED_WAIT_MINUTES, and a second refusal on the same head is
-# the cap (COMMITTED_NOT_PUSHED_RESTARTS) — a hold for a person.
+# Report posts it with `head still at <sha8>` on its first line and counts it
+# per head; a second refusal on the same head is the cap
+# (COMMITTED_NOT_PUSHED_RESTARTS) — a hold for a person. The reconcile sweep
+# is to read the same marker once DRE-6352 lands, re-dispatching the fix loop
+# once when the branch has not moved for COMMITTED_NOT_PUSHED_WAIT_MINUTES;
+# until then nothing restarts it, and the marker says so.
 COMMITTED_NOT_PUSHED_TAG = "fix-run-committed-not-pushed"
 COMMITTED_NOT_PUSHED_WAIT_MINUTES = 30
 COMMITTED_NOT_PUSHED_RESTARTS = 1

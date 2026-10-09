@@ -241,7 +241,10 @@ set -e
 #   reads a park as the end of the loop. So the runner's head is read before
 #   the files. The marker is not a `RETRY_MARKERS` tag, because the sweep
 #   would re-dispatch a fresh agent while the delivery replays the patch.
-#   DRE-6352's sweep reads it after 30 minutes instead, once per head.
+#   DRE-6352's sweep is to read it after 30 minutes instead, once per head;
+#   until that lands the marker tells a person to restart the loop by hand.
+#   The overtaken line says only that the branch differs from the run's
+#   commit, never who moved it: the run's own earlier push looks the same.
 
 # Every read and comment belongs to this (repo, PR, head) or nothing posts (DRE-3951).
 handoff() { CMD=$1; shift; python3 .bureau-pipeline/scripts/fix_handoff.py \
@@ -364,8 +367,8 @@ if [ "$ROUTE" = "delivered" ]; then
 fi
 
 if [ "$ROUTE" = "overtaken" ]; then
-  # Another hand moved the branch; the review of the new head owns the next word.
-  OVERTAKEN="🔕 Fix attempt $ATTEMPT's commit \`${LOCAL:0:8}\` was not delivered: the branch moved to \`${POST_SHA:0:8}\` by another hand while this run worked, so the review of that head has the next word."
+  # The branch moved, to a head that is not the run's; the review of that head owns the next word.
+  OVERTAKEN="🔕 Fix attempt $ATTEMPT's commit \`${LOCAL:0:8}\` was not delivered: the branch moved to \`${POST_SHA:0:8}\` while this run worked, and that head differs from this run's commit, so the review of that head has the next word."
   [ -n "$RESCUE_PATCH" ] && OVERTAKEN="$OVERTAKEN The commit is preserved in artifact \`$RESCUE_ARTIFACT\` on $RUN_URL."
   gh pr comment "$PR" --repo "$REPO" --body "$OVERTAKEN
 

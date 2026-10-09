@@ -21,7 +21,8 @@ the runner's own `HEAD` beside the pull request's live head:
      have it: the artifact goes to `deliver-rescue`, one tagged marker goes on
      the pull request, and nobody is parked. A second time on the same head
      is the cap: a `fix-attempt-disputed` hold and a park.
-  3. Overtaken — the branch moved by another hand: one quiet line.
+  3. Overtaken — the branch moved to a head that is not the run's: one quiet
+     line, which never says who moved it.
 
 With no commit on the runner the script routes exactly as before.
 
@@ -316,19 +317,29 @@ class TheWordingTest(unittest.TestCase):
         for fact in ("2", "cccccccc", STATUS, ERROR, ARTIFACT, RUN_URL):
             self.assertIn(fact, body)
 
-    def test_the_mechanisms_are_the_four_that_exist(self):
+    def test_the_mechanisms_are_the_three_that_exist(self):
         # GitHub's own words are quoted data, not a mechanism the body names.
+        # No sweep reads the marker until DRE-6352 lands, so none is named.
         body = self.body(error="")
-        for named in ("`Push rescue`", ARTIFACT, "`deliver-rescue`", "reconcile sweep"):
+        for named in ("`Push rescue`", ARTIFACT, "`deliver-rescue`"):
             self.assertIn(named, body)
         for claimed in ("re-mint", "delivers a committed branch", "medic",
-                        "token", "Report", "hook", "push_rescue", "agent-fix"):
+                        "token", "Report", "hook", "push_rescue", "agent-fix",
+                        "sweep", "re-dispatches"):
             self.assertNotIn(claimed, body)
 
-    def test_the_sweep_sentence_needs_an_open_pull_request(self):
+    def test_no_wording_promises_a_restart(self):
+        """Whatever became of the delivery, nothing restarts the loop on its own."""
+        for delivery in fix_budget.DELIVERIES:
+            body = self.body(delivery=delivery, delivery_reason="HTTP 403")
+            self.assertIn("Nothing restarts the fix loop on its own yet", body)
+            self.assertIn("by hand", body)
+            self.assertNotIn("sweep", body)
+
+    def test_the_restart_sentence_needs_an_open_pull_request(self):
         self.assertIn("30 minutes", self.body(pr_open=True))
         closed = self.body(pr_open=False)
-        self.assertNotIn("reconcile sweep", closed)
+        self.assertNotIn("by hand", closed)
         self.assertNotIn("30 minutes", closed)
 
     def test_the_delivery_is_said_as_it_went(self):
@@ -394,6 +405,9 @@ class CommittedNotPushedTest(unittest.TestCase):
         self.assertIn(TAG, line)
         self.assertIn(f"head still at {r.pre[:8]}", line)
         self.assertIn(r.local[:8], r.comments[0])
+        # No sweep restarts the loop until DRE-6352 lands, and the comment says so.
+        self.assertIn("re-dispatch the fix loop by hand", r.comments[0])
+        self.assertNotIn("sweep", r.comments[0])
         self.assertTrue(r.comments[0].endswith(r.trailer + "\n"))
         self.assertEqual(1, len(r.dispatches), r.dispatches)
         self.assertEqual(["workflow", "run", "self-deliver-rescue.yml"],
@@ -434,10 +448,11 @@ class CommittedNotPushedTest(unittest.TestCase):
         self.assertIn("nothing to hand over", r.comments[0])
         self.assertEqual([], r.parks)
 
-    def test_a_closed_pull_request_gets_no_sweep_sentence(self):
+    def test_a_closed_pull_request_gets_no_restart_sentence(self):
         r = report(state="CLOSED")
         self.assertEqual(1, len(markers_in(r)), r.comments)
-        self.assertNotIn("reconcile sweep", r.comments[0])
+        self.assertNotIn("by hand", r.comments[0])
+        self.assertNotIn("30 minutes", r.comments[0])
 
 
 class TheCapTest(unittest.TestCase):
@@ -531,6 +546,9 @@ class OvertakenTest(unittest.TestCase):
         self.assertIn(r.local[:8], line)
         self.assertIn(OTHER[:8], line)
         self.assertIn(ARTIFACT, line)
+        self.assertIn("differs from this run's commit", line)
+        # The run's own earlier push looks the same, so no hand is blamed.
+        self.assertNotIn("another hand", line)
         self.assertNotIn(fix_dead_run.PUSH_MARKER, line)
         self.assertFalse(line.startswith("🛑"))
         self.assertEqual([], r.dispatches)

@@ -366,11 +366,16 @@ def committed_not_pushed_body(attempt, head: str, commit: str, *, status: str = 
     had a commit. Both were final, because the sweep reads a park as the end.
 
     The first line opens with the tag and carries `head still at <sha8>`: the
-    Report and the reconcile sweep count the cap off it, and the sweep compares
-    it against the pull request's head. It names only the four mechanisms that
-    exist — the `Push rescue` step, the artifact, the `deliver-rescue` follow-up
-    and the sweep — and the agent's own words as its note, never as an
+    Report counts the cap off it, and DRE-6352's reconcile sweep is to compare
+    it against the pull request's head. It names only the three mechanisms
+    that exist — the `Push rescue` step, the artifact and the `deliver-rescue`
+    follow-up — and the agent's own words as its note, never as an
     escalation. It is no `🔧 Fix attempt` marker, so no attempt is spent.
+
+    No sweep restarts the loop off this marker until DRE-6352 lands, so on an
+    open pull request the closing says a person restarts it if the branch
+    does not move, rather than promising a restart nothing performs
+    (standards/console-honesty.md rule 1). DRE-6352 replaces that sentence.
     """
     parts = [
         f"{fix_dead_run.COMMITTED_NOT_PUSHED_TAG}: fix attempt {attempt} finished "
@@ -396,9 +401,10 @@ def committed_not_pushed_body(attempt, head: str, commit: str, *, status: str = 
     closing = "No fix attempt is spent and nothing is parked."
     if pr_open:
         closing += (
-            " If the branch has not moved in "
-            f"{fix_dead_run.COMMITTED_NOT_PUSHED_WAIT_MINUTES} minutes, the "
-            "reconcile sweep re-dispatches the fix loop once.")
+            " Nothing restarts the fix loop on its own yet: if this pull "
+            "request's branch has not moved in "
+            f"{fix_dead_run.COMMITTED_NOT_PUSHED_WAIT_MINUTES} minutes, "
+            "re-dispatch the fix loop by hand.")
     parts.append(closing)
     return "\n\n".join(parts)
 
