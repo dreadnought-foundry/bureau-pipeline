@@ -8,7 +8,7 @@ mechanical defects the standard already names, returning the card to
      sentence true, and a card carrying a routing verdict returns to Backlog;
   2. a dependency loop a Done card already broke — the card returns to
      Backlog with the loop named;
-  3. a retired-repo card — marked `hand-built` and parked in Backlog;
+  3. a retired-repo card — marked `operator-step` and parked in Backlog;
   4. a proof with an open pull request — moved to In Review;
   5. a card whose parent epic is Canceled or Duplicate — canceled;
   6. a card held `no-route` (DRE-6190) — its newest `🔒 hold:` stamp says so,
@@ -45,6 +45,7 @@ os.environ.setdefault("REPO", "dreadnought-foundry/bureau-pipeline")
 import hygiene  # noqa: E402
 import linear_ops  # noqa: E402
 import reconcile  # noqa: E402
+import routing_verdict  # noqa: E402
 
 MODULE_PATH = ROOT / "scripts" / "hygiene_triage.py"
 FIXTURE = ROOT / "tests" / "fixtures" / "hygiene-triage-2026-09-30.json"
@@ -340,15 +341,19 @@ class TestARetiredRepo:
         ("DRE-4421", "retired repo legacy-site"),
         ("DRE-4422", "archived repo dreadnought-foundry/agent-bureau-demo"),
     ])
-    def test_it_is_marked_hand_built_and_parked(self, ident, cause):
+    def test_it_is_marked_operator_step_and_parked(self, ident, cause):
         items, ctx, _gh, _linear = plan()
         action = the_action(items, ident)
         assert action.act == "hygiene-triage-return"
         assert action.cause == cause
         assert kinds(action) == ["linear_label", "linear_comment", "linear_state"]
         label, note, state = action.writes
-        assert (label.label, label.add) == (reconcile.HAND_BUILT_LABEL, True)
-        assert label.label == "hand-built"
+        # DRE-6228: a repo that is gone is the operator's to re-point — an
+        # operator step. `hand-built` is the CEO's mark, never a writer's.
+        assert (label.label, label.add) == (routing_verdict.OPERATOR_STEP_LABEL, True)
+        assert label.label == "operator-step"
+        assert all(getattr(w, "label", None) != routing_verdict.HAND_BUILT_LABEL
+                   for w in action.writes)
         assert note.body.splitlines()[0].startswith(f"🧹 hygiene: hyg-triage-returned — {cause}")
         assert (state.lane, state.park) == ("Backlog", True)
         for write in action.writes:
@@ -468,7 +473,7 @@ class TestAHeldNoRouteCard:
         action = the_action(items, ident)
         assert action.act == "hygiene-triage-return"
         assert kinds(action) == ["linear_label", "linear_comment", "linear_state"]
-        assert action.writes[0].label == "hand-built"
+        assert action.writes[0].label == "operator-step"
         assert (action.writes[2].lane, action.writes[2].park) == ("Backlog", True)
 
     def test_a_newer_stamp_of_another_reason_decides_and_the_card_is_retired(self):

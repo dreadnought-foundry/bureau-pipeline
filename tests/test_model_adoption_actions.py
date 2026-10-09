@@ -48,6 +48,7 @@ import yaml
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
+import dependabot_card  # noqa: E402
 import model_adoption as ma  # noqa: E402
 import model_catalog as mc  # noqa: E402
 import model_fallback as mf  # noqa: E402
@@ -592,8 +593,12 @@ class TestOpenRecordCard:
         assert made["repo_slug"] == "bureau-pipeline"
         assert made["title"] == maa.record_title(adopt_sonnet6)
         for want in ("repo:bureau-pipeline", "agent:devops", "initiative:bureau",
-                     "hand-built"):
+                     "automation"):
             assert want in made["labels"]
+        # DRE-6228: automation filed this card; `hand-built` is the CEO's mark.
+        assert dependabot_card.LABEL in maa.RECORD_LABELS
+        assert routing_verdict.HAND_BUILT_LABEL not in maa.RECORD_LABELS
+        assert routing_verdict.HAND_BUILT_LABEL not in made["labels"]
         assert ops.stamped and ops.stamped[0][:2] == (CARD, "WORKBENCH")
         assert "WORKBENCH" in routing_verdict.verdicts()
         assert RUN_URL in ops.stamped[0][2]
