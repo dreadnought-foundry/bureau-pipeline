@@ -419,7 +419,11 @@ def test_the_new_kind_is_distinct_from_every_other():
 #: and says so (DRE-6138).
 #: `epic_growth.py` reads the CEO's answer to the sweep's growth question, and
 #: an unchecked one is left for a person and settles nothing (DRE-6414).
+#: `answer_into_card.py` copies the CEO's answers into the card, and an
+#: unchecked one is never copied and writes nothing (DRE-6357).
 OTHER_READERS = {
+    "answer_into_card.py": "tests/test_answer_into_card.py::"
+    "test_an_unchecked_receipt_is_never_transcribed_and_says_could_not_check",
     "epic_growth.py": "tests/test_epic_growth.py::"
     "test_a_withheld_console_answer_is_left_for_a_person",
     "green_light_reply.py": "tests/test_green_light_reply.py::"

@@ -173,7 +173,7 @@ def test_a_new_answer_replaces_the_block_in_place_and_leaves_the_rest_alone():
     first = A.transcribe(above + below, DRE_3879[:1])
     # The block was appended after the criteria; move it above them, as a
     # person would, so the replacement has text on both sides.
-    block = first[len(above + below):]
+    block = first[len(above + below):].lstrip("\n")
     moved = above + block.rstrip("\n") + "\n\n" + below
     second = A.transcribe(moved, DRE_3879[:2])
     assert block_lines(second) == [A.HEADING]
