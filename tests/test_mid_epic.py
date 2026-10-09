@@ -644,3 +644,197 @@ class _patch_all:
         for p in reversed(self._patches):
             p.__exit__(*exc)
         return False
+
+
+# =========================================================================== #
+# DRE-6414: the growth record names every card, carries the question's marker #
+# and reads the approved size                                                 #
+# =========================================================================== #
+#
+# DRE-5577's record read **Green-lit at: 17 · Now running: 41** with "(none)"
+# under "Added since green light": 24 cards joined that the record could not
+# name, because `render_artifact` listed only the additions the discovery
+# route filed. The record now lists every joined card, carries one line per
+# growth question the sweep asked (the marker that keeps it from asking
+# twice), and answers what size the CEO last approved.
+
+GROWTH_GREEN_LIGHT = "2026-10-01T17:00:00.000Z"
+GROWTH_BEFORE = "2026-10-01T16:00:00.000Z"
+GROWTH_JOINED = "2026-10-03T18:30:00.000Z"
+GROWTH_ASKED = "2026-10-05T17:00:00Z"
+GROWTH_SETTLED = "2026-10-06T17:00:00Z"
+
+
+class _GrowthEpic:
+    """The `linear_ops` module for one epic's growth record: `gql` answers the
+    epic read, `set_description` stores what was written."""
+
+    def __init__(self, description, before, after, *, joined_at=GROWTH_JOINED,
+                 green_lit_at=GROWTH_GREEN_LIGHT, state="In Progress"):
+        self.description = description
+        self.children = (
+            [{"identifier": f"DRE-{100 + n}", "createdAt": GROWTH_BEFORE}
+             for n in range(before)]
+            + [{"identifier": f"DRE-{900 + n}", "createdAt": joined_at}
+               for n in range(after)]
+        )
+        self.green_lit_at = green_lit_at
+        self.state = state
+        self.writes: list[str] = []
+        self.comments: list[tuple[str, str]] = []
+
+    def gql(self, query, variables=None):
+        history = ([{"createdAt": self.green_lit_at, "toState": {"name": "In Progress"}}]
+                   if self.green_lit_at else [])
+        return {"issue": {
+            "identifier": "DRE-5577", "description": self.description,
+            "state": {"name": self.state},
+            "children": {"nodes": list(self.children)},
+            "history": {"nodes": history},
+            "comments": {"nodes": [], "pageInfo": {"hasNextPage": False}},
+        }}
+
+    def set_description(self, identifier, body):
+        self.writes.append(body)
+        self.description = body
+
+    def cmd_comment(self, identifier, body):
+        self.comments.append((identifier, body))
+
+    def count_comments(self, identifier, needle, **kw):
+        return sum(1 for i, b in self.comments if i == identifier and needle in b)
+
+
+class TestEveryJoinedCardIsListed:
+    def test_a_count_that_rose_with_none_listed_lists_each_card_as_unrecorded(self):
+        # DRE-5577's shape: green-lit at 17, running 41, nothing named.
+        ops = _GrowthEpic("The plan.", 17, 24)
+        report = mid_epic.refresh_epic_growth(ops, "DRE-5577")
+        assert report["unrecorded"] == [f"DRE-{900 + n}" for n in range(24)]
+        additions = mid_epic.parse_artifact(ops.description)["additions"]
+        assert [a["id"] for a in additions] == [f"DRE-{900 + n}" for n in range(24)]
+        when = linear_ops_pacific(GROWTH_JOINED)
+        for a in additions:
+            assert a["because"] == f"unrecorded: joined {when} with no discovery record"
+
+    def test_the_unrecorded_notice_on_the_epic_is_unchanged(self):
+        ops = _GrowthEpic("The plan.", 3, 1)
+        mid_epic.refresh_epic_growth(ops, "DRE-5577")
+        assert [b for _, b in ops.comments
+                if f"{mid_epic.UNRECORDED_TAG}: DRE-900" in b], ops.comments
+
+    def test_once_listed_the_record_converges(self):
+        ops = _GrowthEpic("The plan.", 3, 2)
+        mid_epic.refresh_epic_growth(ops, "DRE-5577")
+        written = len(ops.writes)
+        report = mid_epic.refresh_epic_growth(ops, "DRE-5577")
+        assert len(ops.writes) == written
+        assert report["unrecorded"] == []
+
+    def test_the_route_of_each_joined_card_is_read_off_the_record(self):
+        ops = _GrowthEpic("The plan.", 3, 2)
+        mid_epic.refresh_epic_growth(
+            ops, "DRE-5577", add={"id": "DRE-900", "because": "a second call site"})
+        report = mid_epic.refresh_epic_growth(ops, "DRE-5577")
+        assert [(j["id"], j["route"]) for j in report["joined"]] == [
+            ("DRE-900", "addition"), ("DRE-901", "unrecorded")]
+        assert report["joined"][0]["because"] == "a second call site"
+
+    def test_an_unreadable_green_light_lists_nothing(self):
+        ops = _GrowthEpic("The plan.", 3, 2, green_lit_at=None)
+        report = mid_epic.refresh_epic_growth(ops, "DRE-5577")
+        assert report["unrecorded"] == []
+        assert mid_epic.parse_artifact(ops.description)["additions"] == []
+
+
+def linear_ops_pacific(iso: str) -> str:
+    """The Pacific time the record writes for a child's creation time."""
+    import dead_run
+
+    return dead_run.pacific(mid_epic._ts(iso))
+
+
+class TestTheGrowthQuestionLine:
+    def _record(self, *lines):
+        return mid_epic.render_artifact(
+            10, 25, [], [], questions=[mid_epic.parse_question_line(line)
+                                       for line in lines])
+
+    def test_none_when_no_question_was_asked(self):
+        block = mid_epic.render_artifact(10, 12, [], [])
+        assert f"{mid_epic.QUESTION_HEADING}\n- (none)" in block
+        assert mid_epic.parse_artifact(block)["questions"] == []
+
+    @pytest.mark.parametrize("bullet", ["-", "*"])
+    def test_an_open_question_round_trips(self, bullet):
+        line = f"{bullet} DRE-7001 — asked {GROWTH_ASKED} at 25 cards — open"
+        parsed = mid_epic.parse_artifact(self._record(line))["questions"]
+        assert parsed == [{"id": "DRE-7001", "asked": GROWTH_ASKED, "at": 25,
+                           "status": "open", "settled": None}]
+
+    @pytest.mark.parametrize("status", ["re-approved", "withdrawn", "split"])
+    def test_a_settled_question_round_trips(self, status):
+        line = f"- DRE-7001 — asked {GROWTH_ASKED} at 25 cards — {status} {GROWTH_SETTLED}"
+        parsed = mid_epic.parse_artifact(self._record(line))["questions"]
+        assert parsed == [{"id": "DRE-7001", "asked": GROWTH_ASKED, "at": 25,
+                           "status": status, "settled": GROWTH_SETTLED}]
+
+    def test_a_question_motion_is_recorded_and_then_settled_in_place(self):
+        ops = _GrowthEpic("The plan.", 10, 15)
+        asked = {"id": "DRE-7001", "asked": GROWTH_ASKED, "at": 25,
+                 "status": "open", "settled": None}
+        mid_epic.refresh_epic_growth(ops, "DRE-5577", question=asked)
+        assert mid_epic.parse_artifact(ops.description)["questions"] == [asked]
+        settled = dict(asked, status="re-approved", settled=GROWTH_SETTLED)
+        report = mid_epic.refresh_epic_growth(ops, "DRE-5577", question=settled)
+        assert mid_epic.parse_artifact(ops.description)["questions"] == [settled]
+        assert report["questions"] == [settled]
+
+    def test_a_question_older_than_the_newest_green_light_is_retired(self):
+        old = f"- DRE-7001 — asked {GROWTH_BEFORE} at 25 cards — re-approved {GROWTH_BEFORE}"
+        record = mid_epic.render_artifact(10, 25, [], [], questions=[
+            mid_epic.parse_question_line(old)])
+        ops = _GrowthEpic("The plan.\n\n" + record + "\n", 10, 15)
+        report = mid_epic.refresh_epic_growth(ops, "DRE-5577")
+        assert report["questions"] == []
+        assert mid_epic.parse_artifact(ops.description)["questions"] == []
+
+
+class TestTheApprovedSize:
+    def _q(self, status, at, asked=GROWTH_ASKED, settled=GROWTH_SETTLED):
+        return {"id": "DRE-7001", "asked": asked, "at": at, "status": status,
+                "settled": None if status == "open" else settled}
+
+    def test_the_green_lit_count_when_nothing_was_settled(self):
+        assert mid_epic.approved_size({"questions": []}, 10, GROWTH_GREEN_LIGHT) == 10
+        assert mid_epic.approved_size(
+            {"questions": [self._q("open", 25)]}, 10, GROWTH_GREEN_LIGHT) == 10
+
+    @pytest.mark.parametrize("status", ["re-approved", "withdrawn"])
+    def test_a_settled_line_newer_than_the_green_light_is_the_approved_size(self, status):
+        assert mid_epic.approved_size(
+            {"questions": [self._q(status, 25)]}, 10, GROWTH_GREEN_LIGHT) == 25
+
+    def test_a_split_is_not_an_approval(self):
+        assert mid_epic.approved_size(
+            {"questions": [self._q("split", 25)]}, 10, GROWTH_GREEN_LIGHT) == 10
+
+    def test_the_newest_settled_line_wins(self):
+        first = self._q("re-approved", 25)
+        second = dict(self._q("withdrawn", 51), id="DRE-7002",
+                      asked="2026-10-07T17:00:00Z", settled="2026-10-08T17:00:00Z")
+        assert mid_epic.approved_size(
+            {"questions": [second, first]}, 10, GROWTH_GREEN_LIGHT) == 51
+
+    def test_a_line_older_than_the_green_light_does_not_count(self):
+        stale = self._q("re-approved", 25, asked=GROWTH_BEFORE, settled=GROWTH_BEFORE)
+        assert mid_epic.approved_size({"questions": [stale]}, 10, GROWTH_GREEN_LIGHT) == 10
+
+    def test_an_unreadable_green_light_has_no_approved_size(self):
+        assert mid_epic.approved_size({"questions": []}, None, None) is None
+
+    def test_the_refresh_reports_the_approved_size(self):
+        ops = _GrowthEpic("The plan.", 10, 15)
+        mid_epic.refresh_epic_growth(ops, "DRE-5577", question=self._q("re-approved", 25))
+        report = mid_epic.refresh_epic_growth(ops, "DRE-5577")
+        assert (report["green_lit"], report["approved"], report["current"]) == (10, 25, 25)

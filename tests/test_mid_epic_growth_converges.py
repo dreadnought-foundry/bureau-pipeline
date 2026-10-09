@@ -192,26 +192,39 @@ class TestTheLiveShapeConverges:
         assert parsed["additions"] == [] and parsed["amendments"] == []
         assert "\n\n* (none)\n" in live_description()
 
+    # The capture is itself a record gap (DRE-6414): green-lit at 7, running
+    # 9, and "(none)" where the two cards that joined should be named. The
+    # first refresh names them, once, as `unrecorded:`; from then on the
+    # record Linear re-renders is the record it states.
+
     def test_the_region_linear_re_rendered_is_not_rewritten(self):
         ops = _Epic(live_description(), seven_then_two())
         report = mid_epic.refresh_epic_growth(ops, EPIC)
         assert (report["green_lit"], report["current"]) == (7, 9)
-        assert ops.writes == [], (
-            "the record says green-lit at 7, running 9, nothing added, nothing "
+        assert len(ops.writes) == 1, "the record gap is filled once"
+        assert [a["id"] for a in mid_epic.parse_artifact(ops.description)["additions"]] \
+            == ["DRE-3301", "DRE-3302"]
+        mid_epic.refresh_epic_growth(ops, EPIC)
+        assert len(ops.writes) == 1, (
+            "the record says green-lit at 7, running 9, two joined, nothing "
             "amended — and so does Linear's copy of it; rewriting it only "
             "changes `-` back to `*` and spends two requests doing so"
         )
 
     def test_a_steady_epic_costs_no_write_on_any_sweep(self):
         ops = _Epic(live_description(), seven_then_two())
+        mid_epic.refresh_epic_growth(ops, EPIC)
+        written = len(ops.writes)
         for _ in range(4):
             mid_epic.refresh_epic_growth(ops, EPIC)
-        assert ops.writes == []
+        assert len(ops.writes) == written
 
     def test_the_epic_body_is_left_exactly_as_linear_has_it(self):
         ops = _Epic(live_description(), seven_then_two())
         mid_epic.refresh_epic_growth(ops, EPIC)
-        assert ops.description == live_description()
+        settled = ops.description
+        mid_epic.refresh_epic_growth(ops, EPIC)
+        assert ops.description == settled
 
     def test_a_record_written_once_converges_after_linear_re_renders_it(self):
         """The first sweep of a new epic writes its record; Linear re-renders
@@ -246,7 +259,8 @@ class TestAGenuineChangeStillWrites:
             ops, EPIC, add={"id": "DRE-3301", "because": "a second call site"}
         )
         assert len(ops.writes) == 1
-        assert mid_epic.parse_artifact(ops.description)["additions"] == [
+        additions = mid_epic.parse_artifact(ops.description)["additions"]
+        assert [a for a in additions if a["id"] == "DRE-3301"] == [
             {"id": "DRE-3301", "because": "a second call site"}
         ]
 
