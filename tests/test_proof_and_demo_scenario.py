@@ -127,6 +127,17 @@ def add_label(identifier, label):
     _log("add-label", identifier, label)
 
 
+# The one label `routing_verdict.card_marks` keeps on a proof card (DRE-6225).
+NO_CODE_LABEL = "no-code"
+
+
+def get_issue(identifier, **_):
+    """The card read `stamp_card` makes for the title its marks depend on
+    (DRE-6225) — answered off the fixture `children-detail` serves."""
+    cards = json.load(open(os.environ["STUB_CHILDREN"]))
+    return next(c for c in cards if c["identifier"] == identifier)
+
+
 if __name__ == "__main__":
     cmd, *args = sys.argv[1:]
     if cmd == "children-detail":
@@ -218,11 +229,12 @@ class GateWalkTest(unittest.TestCase):
                     if w[0] == "comment" and w[1] == PROOF_ID]
         self.assertEqual(len(comments), 1, f"{PROOF_ID}: {writes}")
         self.assertIn("🧭 routing-verdict: **OPERATOR**", comments[0][2])
-        # ...and the marks the verdict declares, which is what stops the
-        # sweep dispatching a competing run.
+        # ...and the marks the card receives, which is what stops the sweep
+        # dispatching a competing run: `no-code` alone on a proof card, which
+        # the proof run and not the operator takes (DRE-6225).
         marks = [w[2] for w in writes
                  if w[0] == "add-label" and w[1] == PROOF_ID]
-        self.assertIn("hand-built", marks)
+        self.assertEqual(marks, ["no-code"])
 
     def test_a_bounced_plan_stamps_nothing(self):
         """An epic on its way back to Planning is not an epic whose cards get a

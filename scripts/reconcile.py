@@ -697,7 +697,12 @@ GROOM_CARD_ENV = groom_schedule_gate.CARD_VARIABLE
 # measures what hand-built work actually owes — _flag_hand_built_idle, plus the
 # branch half beside it — and the suppression above is legitimate only for as
 # long as that counterpart exists.
-HAND_BUILT_LABEL = "hand-built"
+#
+# ONE SPELLING (DRE-6225). The label is the routing vocabulary's, aliased here
+# and never spelled again, and `hand_built` reads every one of the
+# vocabulary's person marks (`routing_verdict.person_marks`), so the OPERATOR
+# marker moving to `operator-step` is a data change.
+HAND_BUILT_LABEL = routing_verdict.HAND_BUILT_LABEL
 
 # The sweep's own Todo-redispatch receipt (posted in main() below). It bumps
 # updatedAt every ~15-minute cycle, so a silently-failing dispatch loop never
@@ -733,7 +738,10 @@ def held(card: dict) -> bool:
 
 
 def hand_built(card: dict) -> bool:
-    """True if the card carries HAND_BUILT_LABEL (DRE-2524).
+    """True if the card carries a person mark (DRE-2524) — any of
+    `routing_verdict.person_marks()`, compared lower-cased (DRE-6225):
+    HAND_BUILT_LABEL, and every mark the vocabulary gives a verdict a person
+    acts on.
 
     The work is done by a human or a local agent rather than a dispatched
     pipeline agent, so "no run receipt", "no dispatch route" and "no PR yet"
@@ -753,8 +761,9 @@ def hand_built(card: dict) -> bool:
     spelling — tests/test_hand_built_not_stranded.py names every owner, so a
     reader added later is a finding at the diff.
     """
+    marked = {m.lower() for m in routing_verdict.person_marks()}
     return any(
-        lbl["name"].lower() == HAND_BUILT_LABEL
+        lbl["name"].lower() in marked
         for lbl in (card.get("labels") or {}).get("nodes", [])
     )
 
@@ -2394,6 +2403,8 @@ def flag_stranded() -> set[str]:
                 "off-rail repo are both normal here, not a strand"
             )
             continue
+        if automation_card(card):
+            continue  # filed by automation — no run is coming, and it is no person's (DRE-6225)
         slug = card_repo(card)
         routable = slug is not None and slug in validate_card.VALID_SLUGS
         if routable and slug != REPO_SLUG:
@@ -2538,7 +2549,7 @@ def flag_stranded() -> set[str]:
             # A write in three parts — the receipt, the hold, the lane — so a
             # card the door's read put here is read live once first: one that
             # left its lane since gets none of them (item 33).
-            if not _door_lane_still(card, labels_absent=(HOLD_LABEL, HAND_BUILT_LABEL)):
+            if not _door_lane_still(card, labels_absent=(HOLD_LABEL, *routing_verdict.person_marks())):
                 continue
         linear_ops.cmd_comment(ident, pipeline_act.receipt(
             "card-stranded", f"🚨 {WATCHDOG_TAG}: {reason}"))
@@ -6847,7 +6858,7 @@ def promote_ready(active_count: int, candidates: list[dict] | None = None) -> in
         # carries none — and it decides both halves of this move: whether the
         # marks go on, and what the receipt says.
         verdict = routing_verdict.verdict_on(bodies)
-        by_hand_note = routing_verdict.hand_built_promotion(verdict)
+        by_hand_note = routing_verdict.hand_built_promotion(verdict, title=card.get("title"))
         # WHERE the card goes is the verdict's own destination (DRE-5322), read
         # off the vocabulary: Todo for FLEET, Hand-work for WORKBENCH and
         # OPERATOR. The lane is never spelled here — a person's card landing in
@@ -6861,7 +6872,7 @@ def promote_ready(active_count: int, candidates: list[dict] | None = None) -> in
             # free with the candidates query; `add_label` is idempotent but
             # costs a Linear read to find that out.
             if by_hand_note is not None:
-                for label in routing_verdict.marks(verdict):
+                for label in routing_verdict.card_marks(verdict, card.get("title")):
                     if label.lower() not in labels:
                         linear_ops.add_label(card["identifier"], label)
             linear_ops.cmd_advance(card["identifier"], destination, "Backlog")
@@ -13045,7 +13056,7 @@ def main(
                         # 33): requeued only if still In Progress and still
                         # neither held nor hand-built — no receipt otherwise.
                         if linear_ops.cmd_state(ident, "Todo", **_door_guard(
-                            card, labels_absent=(HOLD_LABEL, HAND_BUILT_LABEL)
+                            card, labels_absent=(HOLD_LABEL, *routing_verdict.person_marks())
                         )) is False and _door_guard(card):
                             continue
                         linear_ops.cmd_comment(
@@ -13109,7 +13120,7 @@ def main(
                         continue
                 else:
                     if linear_ops.cmd_state(ident, "Todo", **_door_guard(
-                        card, labels_absent=(HOLD_LABEL, HAND_BUILT_LABEL)
+                        card, labels_absent=(HOLD_LABEL, *routing_verdict.person_marks())
                     )) is False and _door_guard(card):
                         continue
                     linear_ops.cmd_comment(

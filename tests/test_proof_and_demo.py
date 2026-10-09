@@ -667,6 +667,8 @@ class TestTheStampIsWritten:
     def test_the_check_stamps_by_default_and_no_stamp_holds_the_pen(self):
         """Nothing in plan.yml has to opt in: the check that computes the
         verdict is the thing that writes it."""
+        # The stamp reads the card's title itself (DRE-6225).
+        titles = {c["identifier"]: c["title"] for c in _plan()}
         for args, expected in ((["check", "--epic", EPIC], 1),
                                (["check", "--epic", EPIC, "--no-stamp"], 0)):
             posted: list[tuple[str, str]] = []
@@ -674,7 +676,9 @@ class TestTheStampIsWritten:
                     patch.object(linear_ops, "comment_bodies", return_value=[]), \
                     patch.object(linear_ops, "cmd_comment",
                                  side_effect=lambda i, b: posted.append((i, b))), \
-                    patch.object(linear_ops, "add_label"):
+                    patch.object(linear_ops, "add_label"), \
+                    patch.object(linear_ops, "get_issue",
+                                 side_effect=lambda i, **_: {"title": titles[i]}):
                 assert proof_and_demo.main(args) == 0
             assert len(posted) == expected, args
 

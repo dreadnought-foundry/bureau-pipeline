@@ -99,7 +99,25 @@ PROOF_BODY = (
 NO_CRITERIA_BODY = "Make the epic feel better.\n\nWe will know it when we see it.\n"
 
 
+#: Every card's title, by identifier: `routing_verdict.stamp_card` reads the
+#: title itself when its caller passes three arguments (DRE-6225), so the
+#: module's `linear_ops.get_issue` stand-in answers from here.
+_TITLES: dict[str, str] = {}
+_GET_ISSUE = patch.object(linear_ops, "get_issue",
+                          side_effect=lambda i, **_: {"identifier": i,
+                                                      "title": _TITLES.get(i, "")})
+
+
+def setUpModule():
+    _GET_ISSUE.start()
+
+
+def tearDownModule():
+    _GET_ISSUE.stop()
+
+
 def _card(identifier, title, body=WORK_BODY, labels=LABELS, blocked_by=()):
+    _TITLES[identifier] = title
     return {
         "identifier": identifier,
         "title": title,

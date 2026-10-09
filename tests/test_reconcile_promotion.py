@@ -347,7 +347,10 @@ class TestTheGateStillPromotesWork:
         assert board.labels_on(WORK[0]) == []
         for identifier in (PROOF, DEMO):
             assert board.lane_of(identifier) == routing_verdict.destination("OPERATOR")
-            assert reconcile.HAND_BUILT_LABEL in board.labels_on(identifier)
+            # A person mark, not necessarily `hand-built`: the proof card
+            # receives `no-code` alone (DRE-6225).
+            assert reconcile.hand_built({"labels": {"nodes": [
+                {"name": n} for n in board.labels_on(identifier)]}})
 
 
 # --------------------------------------------------------------------------- #
