@@ -314,7 +314,6 @@ def test_roll_up_in_backlog_is_never_promoted(monkeypatch, capsys):
 # closes from are declared once, `EPIC_CLOSE_LANES`, and read at both sites.
 # ---------------------------------------------------------------------------
 import ast  # noqa: E402
-import contextlib  # noqa: E402
 import inspect  # noqa: E402
 
 import pytest  # noqa: E402

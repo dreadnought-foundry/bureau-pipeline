@@ -1620,6 +1620,19 @@ DOOR_LINEAR_LANES = tuple(lane for lane in SWEPT_LANES if lane in INTAKE_LANE + 
 DOOR_WORK_LANES = tuple(lane for lane in SWEPT_LANES if lane not in DOOR_LINEAR_LANES)
 BACKLOG_LANE = "Backlog"
 
+# The lanes a finished epic closes FROM, declared once and read by both close
+# sites — the full sweep and the merge path's `--close-only` (DRE-6410). The
+# work lanes the sweep has always closed from, and Backlog: an epic there is
+# blocked on another epic, dropped there, or dragged, and one whose every child
+# is closed with at least one Done is finished whichever it is (DRE-4819 sat
+# there with six of six Done). NOT SWEPT_LANES, which is what the sweep READS:
+# Intake, Planning and Green Light hold an epic whose plan is still being
+# written, reviewed or approved — a re-plan may be about to add children — and
+# Hand-work is a person's lane the sweep never puts an epic in. Triage and Green
+# Light are not read at all, and reading either for this would be one more
+# request per pass for a lane that holds no finished epic by design.
+EPIC_CLOSE_LANES = SWEEP_STATES + (BACKLOG_LANE,)
+
 # The lanes `move_hand_built_to_review` reads a hand-built card OUT of
 # (DRE-4356): every flow lane strictly upstream of the review lane that the
 # sweep already reads. Derived from the contract's own order — the file lists
@@ -6494,7 +6507,9 @@ def takes_no_slot(bodies) -> bool:
     )
 
 
-def promote_ready(active_count: int, candidates: list[dict] | None = None) -> int:
+def promote_ready(
+    active_count: int, candidates: list[dict] | None = None, *, close_epics: bool = False,
+) -> int:
     """Auto-promote Backlog cards whose blockers are all Done.
 
     Two gates, because there are two ways a card can have been approved
@@ -6508,6 +6523,13 @@ def promote_ready(active_count: int, candidates: list[dict] | None = None) -> in
     `candidates` — Backlog cards in `backlog_children`'s shape — replaces the
     whole-Backlog read when the caller already knows which cards a moment can
     have changed (the merge path, DRE-3236). Every gate below is the same.
+
+    `close_epics` — the full sweep's — closes this repo's finished epics among
+    the candidates first, off the same list (DRE-6410): Backlog is one of
+    `EPIC_CLOSE_LANES`, and this is the pass's one read of it, made after
+    `carry_epics_out_of_todo` (DRE-5347). Their children come off the pass's
+    epic record, one paged request for them all, and an epic it closes is no
+    longer a candidate.
 
     THREE verdicts leave this lane, not one (DRE-3385). FLEET is promoted and
     dispatched; WORKBENCH and OPERATOR are promoted and NOT dispatched — the
@@ -6558,6 +6580,11 @@ def promote_ready(active_count: int, candidates: list[dict] | None = None) -> in
         backlog_children() if candidates is None else candidates,
         key=lambda c: int(c["identifier"].split("-")[1]),
     )
+    if close_epics:
+        closed = set(
+            close_finished_epics(closable_epics(candidates, BACKLOG_LANE)) or ()
+        )
+        candidates = [c for c in candidates if c["identifier"] not in closed]
     # ONE read for every epic this gate will ask about (DRE-3642), before the
     # loop rather than inside it: `epic_gate` above already made it one read
     # per EPIC per sweep, and on a board with nine active epics that was still
@@ -6985,9 +7012,14 @@ def promote_ready(active_count: int, candidates: list[dict] | None = None) -> in
 
 
 def close_finished_epics(epic_identifiers: set[str]) -> set[str]:
-    """An In Progress epic whose children are all terminal closes itself.
-    Returns the epics it closed: on the merge path a close is the moment a
-    slot in the epic cap opens, and the next waiting epic starts (DRE-5152).
+    """An epic whose children are all terminal closes itself — from Todo,
+    In Progress, In Review or Backlog, the lanes `EPIC_CLOSE_LANES` declares,
+    and from no other (DRE-6410). The callers choose the epics by lane: the
+    full sweep hands over the work lanes' epics off its board read and
+    Backlog's off the promotion phase's read, the merge path its parent when
+    it sits in one of them. Returns the epics it closed: on the merge path a
+    close is the moment a slot in the epic cap opens, and the next waiting
+    epic starts (DRE-5152).
 
     Per-epic isolation (DRE-3148): this was the one Linear call in the sweep
     with no guard, so a single `TimeoutError` from Linear killed the whole
@@ -7022,7 +7054,12 @@ def close_finished_epics(epic_identifiers: set[str]) -> set[str]:
 
 def _close_epic_if_finished(epic: str) -> bool:
     """Close `epic` if every child is closed and one is Done; True when it
-    closed."""
+    closed. Every child Canceled and none Done is not a completion, in any
+    lane.
+
+    The test is the same whichever lane the epic sits in, and the lanes it is
+    asked about are `EPIC_CLOSE_LANES` — Todo, In Progress, In Review and
+    Backlog — chosen by the callers of `close_finished_epics` (DRE-6410)."""
     record = epic_records([epic]).get(epic)
     if record is None:
         # The same skip an unreadable children read has always taken: raised so
@@ -11775,6 +11812,15 @@ def repo_epics(active: list[dict]) -> set[str]:
     return {c["identifier"] for c in mine if card_is_epic(c)}
 
 
+def closable_epics(cards: list[dict], lane: str) -> set[str]:
+    """This repo's epics among `cards`, all read from `lane`, when that lane is
+    one an epic closes from (`EPIC_CLOSE_LANES`, DRE-6410) — otherwise none.
+
+    The lane is the read's, not the card's: `backlog_children`' Linear query
+    selects no lane, because every row it returns is in Backlog."""
+    return repo_epics(cards) if lane in EPIC_CLOSE_LANES else set()
+
+
 def rereview_watch_scope(epics) -> tuple[set[str], Callable[[str], str | None]]:
     """The epics the re-review watcher is handed, and the lane reader handed
     beside them (DRE-5286).
@@ -12707,12 +12753,14 @@ def main(
             # (DRE-3236): that is the only epic this merge can have finished,
             # and the gate that chose this pass already read that it has. The
             # parent is closed wherever it is labelled — the same close its own
-            # repo's cron would make — and only from a lane the cron sweeps.
+            # repo's cron would make — and only from a lane the cron closes
+            # from: `EPIC_CLOSE_LANES`, the one constant both sites read
+            # (DRE-6410). Backlog among them, and Planning not.
             scope = merged_card_scope()
             if scope is not None:
                 epics = (
                     {scope.parent}
-                    if scope.parent and scope.parent_state in SWEPT_LANES
+                    if scope.parent and scope.parent_state in EPIC_CLOSE_LANES
                     else set()
                 )
                 closed = set(close_finished_epics(epics) or ())
@@ -13035,8 +13083,15 @@ def main(
                 active_count=wip_count(mine),
                 candidates=backlog_children(only=scope.dependents),
             )
-        else:
+        elif promote_only:
             promote_ready(active_count=wip_count(mine))
+        else:
+            # A finished epic in Backlog closes off the Backlog read promotion
+            # makes anyway (DRE-6410) — the full sweep's alone, so the gate
+            # path stays the gate. The active epics closed above, before
+            # `start_queued_epics`; a Backlog close opens its slot in the cap
+            # for the next pass to fill.
+            promote_ready(active_count=wip_count(mine), close_epics=True)
     if promote_only:
         print(f"promote-only: gate evaluated (WIP base {wip_count(mine)})")
         _report_degraded()
