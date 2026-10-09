@@ -197,6 +197,7 @@ def declared_callers(monkeypatch):
 ESCALATE = ("scripts/planning_escalation.py", "escalate")
 CMD_EXIT = ("scripts/planning_route.py", "_cmd_exit")
 PARK = ("scripts/code_owner_hold.py", "park")
+REVIEW_CAP = ("scripts/reconcile.py", "hand_review_nudge_to_person")
 
 
 # --------------------------------------------------------------------------- #
@@ -257,8 +258,8 @@ class TestTheRepositoryPasses:
     def test_the_callers_found_are_exactly_the_ones_declared(self):
         contract = _contract()
         declared = _declared(contract)
-        assert set(declared) == {ESCALATE, CMD_EXIT, PARK}
-        counts = {ESCALATE: 6, CMD_EXIT: 2, PARK: 2}
+        assert set(declared) == {ESCALATE, CMD_EXIT, PARK, REVIEW_CAP}
+        counts = {ESCALATE: 6, CMD_EXIT: 2, PARK: 2, REVIEW_CAP: 1}
         for (module, function), callers in declared.items():
             report = lane_callers.callers_of(module, function, str(ROOT))
             assert report.unread == frozenset(), (module, report.unread)
@@ -569,6 +570,14 @@ class TestTheAgentEscalationGate:
         found = grl.problems(str(root))
         assert _named(found, "agent-task.yml#Report result to Linear",
                       "agent-escalation"), found
+
+    def test_the_sweeps_review_cap_park_is_an_agent_escalation_site(self):
+        # DRE-6181: the sweep parks a card whose review budget is spent, with
+        # the question in the one Green Light format, like the code-owner park.
+        assert grl.REVIEW_CAP_SITE == "reconcile.py#hand_review_nudge_to_person"
+        record = next(r for r in grl.arrivals() if r["where"] == grl.REVIEW_CAP_SITE)
+        assert record["kind"] == "agent-escalation"
+        assert grl._gate_problems(record, [], str(ROOT), grl.lane_name()) == []
 
     def test_an_agent_escalation_anywhere_else_fails_by_word(self, tmp_path):
         root = _copy_repo(tmp_path)

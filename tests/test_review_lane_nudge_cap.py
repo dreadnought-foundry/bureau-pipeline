@@ -277,7 +277,10 @@ class TestAVerdictCarriedByContentIsNamed:
         notice = _cap_notices(posted)[0]
         assert f"critic APPROVE from earlier head {OLD_HEAD[:7]}" in notice
         assert "none" not in notice
-        assert "bound to this head" not in notice
+        # The question itself is the composer's (DRE-6181, DRE-6189): it reads
+        # a verdict written about an earlier head as none bound to this one,
+        # and asks a person to read the pull request — so its Recommendation
+        # says "bound to this head" truthfully, by sha.
 
 
 class TestTheReviewNudgeIsCapped:

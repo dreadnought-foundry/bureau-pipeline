@@ -697,6 +697,88 @@ class AnUnknownMapForm(unittest.TestCase):
         self.assertFalse([c for c in report.callers if c.startswith(".github/")])
 
 
+class AProgramIsItsOwnMain(unittest.TestCase):
+    """A module with no subcommand map at all — no `add_parser`, no dict map,
+    no chain branch that hands off to a handler, no step running it with a
+    literal subcommand — is a program, not a dispatcher (DRE-6181). The sweep
+    is one: `reconcile.py`'s `main` is the whole pass, run on flags. There is
+    no subcommand to name, so a call its `main` makes is `main`'s, the way
+    another module's `main` is reported."""
+
+    PROGRAM = '''
+        import argparse
+        import sys
+
+
+        def target(card):
+            return card
+
+
+        def helper(card):
+            return target(card)
+
+
+        def main(argv=None):
+            parser = argparse.ArgumentParser()
+            parser.add_argument("--dry-run", action="store_true")
+            args = parser.parse_args(argv)
+            for state in ("Todo", "In Review"):
+                if state == "Todo":
+                    print(state)
+                elif args.dry_run:
+                    continue
+                else:
+                    {call}
+            return 0
+
+
+        if __name__ == "__main__":
+            sys.exit(main())
+    '''
+
+    def _report(self, call, function="target", step_args='--dry-run'):
+        with _Copy() as root:
+            _write(root / "scripts" / "zz_program.py",
+                   self.PROGRAM.replace("{call}", call))
+            _write(root / ".github" / "workflows" / "zz-program.yml", f'''
+                name: probe
+                on: workflow_dispatch
+                jobs:
+                  probe:
+                    runs-on: ubuntu-latest
+                    steps:
+                      - name: Program step
+                        run: python3 .bureau-pipeline/scripts/zz_program.py {step_args}
+            ''')
+            return lane_callers.callers_of("scripts/zz_program.py", function,
+                                           root=str(root))
+
+    def test_a_programs_main_calling_the_function_is_its_caller(self):
+        report = self._report("target(state)")
+        self.assertEqual(report.unread, frozenset())
+        # `helper` calls the target too, wherever `main` reaches.
+        self.assertEqual(report.callers, frozenset({"scripts/zz_program.py#main",
+                                                    "scripts/zz_program.py#helper"}))
+
+    def test_through_a_helper_the_helper_is_the_caller_and_main_is_not(self):
+        # Discovery stays DIRECT: `main` calls the helper, not the target.
+        report = self._report("helper(state)")
+        self.assertEqual(report.unread, frozenset())
+        self.assertEqual(report.callers, frozenset({"scripts/zz_program.py#helper"}))
+
+    def test_a_step_naming_a_literal_subcommand_makes_it_a_dispatcher(self):
+        # Then which subcommand reaches the call is exactly what cannot be read.
+        report = self._report("target(state)", step_args='go "$CARD"')
+        self.assertEqual(report.unread, frozenset({"scripts/zz_program.py"}))
+        self.assertNotIn("scripts/zz_program.py#main", report.callers)
+
+    def test_the_sweep_is_the_review_cap_parks_one_caller(self):
+        report = lane_callers.callers_of(
+            "scripts/reconcile.py", "hand_review_nudge_to_person", root=str(ROOT))
+        self.assertEqual(report.unread, frozenset())
+        self.assertEqual(report.callers, frozenset({"scripts/reconcile.py#main"}))
+
+
 class WhatCouldNotBeRead(unittest.TestCase):
     """A file discovery needed and could not read is reported, never passed:
     a script that does not parse hides whatever calls it makes, and a workflow
