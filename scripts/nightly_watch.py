@@ -74,6 +74,23 @@ are true, because it is the actionable one, but the unknown is still named in
 the body — an alarm that quietly shrinks the world to what it happened to be
 able to read is the failure this file is about.
 
+A THROTTLE IS NOT AN UNKNOWN, AND IT STOPS THE READING (DRE-6461)
+-----------------------------------------------------------------
+An installation's hourly request budget is shared by everything the fleet does
+on it, and once the fleet has spent it GitHub refuses every read until the
+window resets: watch run 37974687752 was refused eight workflow files in a row
+with `API rate limit exceeded for installation ID 123249480`. That is not a
+token that cannot see a repo, so it is its own reading, THROTTLED, and never
+UNKNOWN. After the first throttled refusal the watcher makes no further read
+for that owner and reports every subject not yet read as THROTTLED: the read
+seam's minute of backoff, paid once per refused file, would time the job out,
+and a job that times out says nothing at all. A throttle never passes and has
+its own block, but it has a known end and nothing for anybody to do, so a
+throttle alone is said only on the daily re-confirm hour — one that persists
+is said once a day on the UNKNOWN card, and an ordinary hour's throttle is in
+the step summary and nowhere else. A missing nightly or a genuine UNKNOWN
+beside it still alarms on any hour.
+
 KNOWN LIMIT, STATED SO IT IS NOT MISTAKEN FOR COVERAGE
 ------------------------------------------------------
 The 2026-09-22 outside-read audit (DRE-4655..4665) found that production has no
@@ -152,6 +169,14 @@ UNKNOWN = "unknown"
 #: A nightly with no schedule run yet whose file changed on the default branch
 #: inside the grace. Neither an alarm nor a run: it has run nothing.
 WAITING = "waiting"
+#: GitHub refused a read because the installation's hourly request budget was
+#: spent, or the watcher stopped asking after such a refusal (DRE-6461). Not a
+#: permission failure, and never a pass.
+THROTTLED = "throttled"
+
+#: The heading throttled readings are listed under, never under `Ran:`.
+THROTTLED_HEADING = ("Not read this hour (GitHub's hourly request budget for "
+                     "this installation was spent):")
 
 #: The verdict states. LATE/STUCK/NEVER all mean one thing to a reader — the
 #: nightly did not run — so they share a title and a card.
@@ -187,7 +212,12 @@ DERIVATION = (
     f"default branch triggers on BOTH `pull_request` and `schedule`, read from "
     f"the file itself — no list of repos or workflows is kept anywhere; a "
     f"workflow whose file GitHub reports is not on the default branch is not "
-    f"a nightly on main and is not read."
+    f"a nightly on main and is not read. A read GitHub refuses because this "
+    f"installation's hourly request budget is spent stops the run's reading "
+    f"and leaves every subject not yet read as not read this hour — never as "
+    f"ran and never as unknown — and a throttle alone alarms only on the "
+    f"daily re-confirm hour, while a missing nightly or any other unreadable "
+    f"subject alarms on any hour."
 )
 
 
@@ -197,11 +227,17 @@ class Unreadable(RuntimeError):
     `not_found` is True only for GitHub's 404 — the one refusal that is an
     answer ("there is no such thing here"). Every other refusal, a throttle
     included, leaves it False.
+
+    `throttled` is True only when GitHub refused for the installation's hourly
+    request budget (`GhReadError.rate_limited`, DRE-6461): a refusal with a
+    known end, not one a person must fix.
     """
 
-    def __init__(self, message: str = "", *, not_found: bool = False):
+    def __init__(self, message: str = "", *, not_found: bool = False,
+                 throttled: bool = False):
         super().__init__(message)
         self.not_found = not_found
+        self.throttled = throttled
 
 
 @dataclass(frozen=True)
@@ -331,13 +367,24 @@ def collect(api: Callable[[str], object], *, roster: dict,
     about. Every refusal becomes an UNKNOWN reading at the narrowest subject it
     can name (the repo, or the one workflow), and nothing is ever skipped
     quietly.
+
+    A throttle is the exception that stops the reading (DRE-6461): after the
+    first throttled refusal `api` is not called again, and every subject not
+    yet read — each remaining listed workflow of this repo, each repo after it
+    — is THROTTLED by name. An empty hourly bucket refuses every read, and
+    paying the read seam's backoff on each one times the job out.
     """
     readings: list = []
+    throttled = False
     for _slug, repo in sorted(roster.items(), key=lambda item: item[1]):
+        if throttled:
+            readings.append(Reading(repo, THROTTLED, _not_asked(repo)))
+            continue
         try:
             branch = str((api(f"repos/{repo}") or {}).get("default_branch") or "")
         except Unreadable as refusal:
-            readings.append(Reading(repo, UNKNOWN, _unreadable_repo(repo, refusal)))
+            readings.append(_refused(repo, refusal, _unreadable_repo(repo, refusal)))
+            throttled = refusal.throttled
             continue
         if not branch:
             readings.append(Reading(repo, UNKNOWN, _unreadable_repo(
@@ -346,7 +393,8 @@ def collect(api: Callable[[str], object], *, roster: dict,
         try:
             listing = api(f"repos/{repo}/actions/workflows?per_page=100") or {}
         except Unreadable as refusal:
-            readings.append(Reading(repo, UNKNOWN, _unreadable_repo(repo, refusal)))
+            readings.append(_refused(repo, refusal, _unreadable_repo(repo, refusal)))
+            throttled = refusal.throttled
             continue
         workflows = listing.get("workflows") or []
         # GitHub pages this list. A repo with more workflows than one page
@@ -360,10 +408,38 @@ def collect(api: Callable[[str], object], *, roster: dict,
                       f"back in one page, so the list was read in part")))
             continue
         for workflow in workflows:
-            readings.extend(
-                _read_workflow(api, repo, branch, workflow, now)
-            )
+            if throttled:
+                subject = _subject(repo, workflow)
+                if subject:
+                    readings.append(Reading(subject, THROTTLED, _not_asked(subject)))
+                continue
+            found = _read_workflow(api, repo, branch, workflow, now)
+            readings.extend(found)
+            throttled = any(r.state == THROTTLED for r in found)
     return readings
+
+
+def _refused(subject: str, refusal: Unreadable, unknown: str) -> Reading:
+    """A refused read: THROTTLED when GitHub's hourly budget was spent,
+    otherwise UNKNOWN in the sentence the caller wrote for that read."""
+    if refusal.throttled:
+        return Reading(subject, THROTTLED, _throttled(subject, refusal))
+    return Reading(subject, UNKNOWN, unknown)
+
+
+def _throttled(subject: str, why) -> str:
+    return (f"{subject}: not read this hour — GitHub's hourly request budget "
+            f"for this installation was spent, so whether it has a nightly, "
+            f"and whether that nightly ran, are unanswered until the window "
+            f"resets. Not reported as ok, and read again next hour. GitHub "
+            f"said: {why}")
+
+
+def _not_asked(subject: str) -> str:
+    return (f"{subject}: not read this hour — GitHub's hourly request budget "
+            f"for this installation was spent on an earlier read in this run, "
+            f"so the watcher stopped asking rather than wait out a refusal "
+            f"per read. Not reported as ok, and read again next hour.")
 
 
 def _unreadable_repo(repo: str, why) -> str:
@@ -374,15 +450,23 @@ def _unreadable_repo(repo: str, why) -> str:
             f"with Actions read. GitHub said: {why}")
 
 
+def _subject(repo: str, workflow: dict) -> str:
+    """"owner/repo · Workflow name", or "" for a listed workflow that is not a
+    file in the tree. A run can name one (a deleted workflow still has runs),
+    and there is nothing to read the triggers from."""
+    path = str(workflow.get("path") or "")
+    if not path.startswith(".github/workflows/"):
+        return ""
+    return f"{repo} · {workflow.get('name') or path}"
+
+
 def _read_workflow(api, repo: str, branch: str, workflow: dict,
                    now: str | None) -> list:
     """The readings one workflow file produces: none, or exactly one."""
-    path = str(workflow.get("path") or "")
-    if not path.startswith(".github/workflows/"):
-        # A run can name a workflow that is not a file in the tree (a deleted
-        # one still has runs). There is nothing to read the triggers from.
+    subject = _subject(repo, workflow)
+    if not subject:
         return []
-    subject = f"{repo} · {workflow.get('name') or path}"
+    path = str(workflow.get("path") or "")
     try:
         blob = api(f"repos/{repo}/contents/{path}?ref={branch}")
     except Unreadable as refusal:
@@ -394,7 +478,8 @@ def _read_workflow(api, repo: str, branch: str, workflow: dict,
             # The repository itself answered a moment ago, so this 404 is
             # about the file, not about a token that cannot see the repo.
             return []
-        return [Reading(subject, UNKNOWN, _unreadable_file(subject, path, refusal))]
+        return [_refused(subject, refusal,
+                         _unreadable_file(subject, path, refusal))]
     text = _decode(blob)
     nightly = is_nightly(text) if text is not None else None
     if nightly is None:
@@ -413,7 +498,7 @@ def _read_workflow(api, repo: str, branch: str, workflow: dict,
             f"?event=schedule&per_page={RUNS_PAGE}"
         )
     except Unreadable as refusal:
-        return [Reading(subject, UNKNOWN, _unanswered_runs(subject, refusal))]
+        return [_refused(subject, refusal, _unanswered_runs(subject, refusal))]
     listed = runs.get("workflow_runs") if isinstance(runs, dict) else None
     if not isinstance(listed, list):
         # Only a real, empty list is "no schedule run yet". An answer with no
@@ -449,7 +534,7 @@ def _first_night(api, repo: str, branch: str, path: str, subject: str,
     try:
         commits = api(f"repos/{repo}/commits?path={path}&sha={branch}&per_page=1")
     except Unreadable as refusal:
-        return Reading(subject, UNKNOWN, _undated_file(subject, path, refusal))
+        return _refused(subject, refusal, _undated_file(subject, path, refusal))
     newest = (commits[0] if isinstance(commits, list) and commits
               and isinstance(commits[0], dict) else None)
     committer = ((newest or {}).get("commit") or {}).get("committer") or {}
@@ -511,20 +596,27 @@ def title_for(base: str, owner: str) -> str:
     return f"{base} — {owner}" if owner else base
 
 
-def evaluate(readings: list, *, owner: str = "") -> Verdict:
+def evaluate(readings: list, *, owner: str = "",
+             speak_throttled: bool = False) -> Verdict:
     """What to say, and whether to say it. Pure.
 
     Order, and every step of it is load-bearing:
       1. a nightly that did not run is the actionable finding and takes the
          card, however many repos we also could not read;
       2. what we could not read is UNKNOWN, never a reassuring silence;
-      3. otherwise every nightly we can see has run, and nobody is told
+      3. what GitHub's hourly budget kept us from reading is THROTTLED, never
+         a pass. It alarms, under the UNKNOWN title, only when
+         `speak_throttled` — the daily re-confirm hour (DRE-6461). Any other
+         hour it is said in the step summary and files no card: the window
+         resets within the hour and there is nothing for anybody to do;
+      4. otherwise every nightly we can see has run, and nobody is told
          anything. Silence is the ordinary outcome. A new nightly still
          waiting for its first run is silent too, and named apart from the
          ones that ran — it has run nothing.
     """
     missing = [r for r in readings if r.state in ALARMING]
     unknown = [r for r in readings if r.state == UNKNOWN]
+    throttled = [r for r in readings if r.state == THROTTLED]
     fine = [r for r in readings if r.state == OK]
     waiting = [r for r in readings if r.state == WAITING]
 
@@ -533,6 +625,7 @@ def evaluate(readings: list, *, owner: str = "") -> Verdict:
         for block, lines in (
             ("Did not run:", missing),
             ("Could not be read:", unknown),
+            (THROTTLED_HEADING, throttled),
             ("Ran:", fine),
             ("Waiting for a first run:", waiting),
         ):
@@ -569,6 +662,9 @@ def evaluate(readings: list, *, owner: str = "") -> Verdict:
             f"{len(readings)} subject(s), so it cannot say whether their "
             f"nightly ran."
         )
+        if throttled:
+            head += (f" {len(throttled)} more were not read this hour: GitHub's "
+                     f"hourly request budget for this installation was spent.")
         return Verdict(
             state=UNKNOWN,
             alarm=True,
@@ -580,6 +676,31 @@ def evaluate(readings: list, *, owner: str = "") -> Verdict:
                 "reported as one. The usual cause is an App installation that "
                 "cannot read the repository's Actions — the Nightly Watch run "
                 "log carries GitHub's own answer for each one.",
+            ),
+        )
+
+    if throttled:
+        head = (
+            f"Not read this hour: GitHub's hourly request budget for this "
+            f"installation was spent, so {len(throttled)} of {len(readings)} "
+            f"subject(s) were not read and whether their nightly ran is "
+            f"unanswered."
+        )
+        return Verdict(
+            state=THROTTLED,
+            alarm=speak_throttled,
+            title=title_for(UNKNOWN_TITLE, owner) if speak_throttled else "",
+            headline=head,
+            detail=_detail(
+                head,
+                "This is a throttle — not a healthy nightly, and not a missing "
+                "one. The budget is shared by everything the fleet does on "
+                "this installation and resets within the hour, so there is "
+                "nothing for anybody to do: the watcher stopped asking at the "
+                "first refusal and reads everything again next hour. A "
+                "throttle alone is said once a day, on the re-confirm hour, "
+                "while it lasts — on any other hour it is in the run's summary "
+                "and nowhere else.",
             ),
         )
 
@@ -612,8 +733,10 @@ def _gh_api(path: str):
 
     Every refusal — a throttle that outlasted its retries, a 404, a token that
     cannot see the repository — arrives here as `Unreadable`, which `collect`
-    renders as UNKNOWN. Nothing is ever substituted for an answer, and an empty
-    answer is not read as an empty record.
+    renders as UNKNOWN, or THROTTLED when the read seam says GitHub refused
+    for the hourly budget (`rate_limited`, carried as `throttled`, DRE-6461).
+    Nothing is ever substituted for an answer, and an empty answer is not read
+    as an empty record.
 
     A 404 is marked `not_found`, because for a file it IS an answer (DRE-4851).
     `GhReadError` carries no HTTP status, and `gh` says it only on stderr, as
@@ -627,6 +750,7 @@ def _gh_api(path: str):
             str(refusal),
             not_found=(not refusal.rate_limited
                        and bool(NOT_FOUND_STATUS.search(refusal.stderr or ""))),
+            throttled=bool(refusal.rate_limited),
         ) from refusal
     if not answer:
         raise Unreadable(f"the answer to {path} was empty")
@@ -652,9 +776,13 @@ def _cmd_owners(args) -> int:
 
 def _cmd_watch(args) -> int:
     fleet = roster(args.map or None, args.owner or None)
+    reconfirm = should_reconfirm(args.now or None)
+    # A throttle alone is said on the one hour a day the watcher already
+    # speaks about standing conditions (DRE-6461).
     verdict = evaluate(
         collect(_gh_api, roster=fleet, now=args.now or None),
         owner=args.owner or "",
+        speak_throttled=reconfirm,
     )
 
     print(verdict.detail)
@@ -673,7 +801,7 @@ def _cmd_watch(args) -> int:
             fh.write(f"state={verdict.state}\n")
             fh.write(f"headline={verdict.headline}\n")
             fh.write(
-                f"reconfirm={'true' if should_reconfirm(args.now or None) else 'false'}\n"
+                f"reconfirm={'true' if reconfirm else 'false'}\n"
             )
     # A fleet whose nightlies all ran is the ordinary outcome, not a failure:
     # the caller branches on `alarm`, never on an exit code (promote_channel's
