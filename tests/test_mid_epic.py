@@ -575,7 +575,9 @@ class TestEveryRouteCallerIsWalked:
         verdict, _ = proof_and_demo._verdict({
             "identifier": "DRE-3019", "title": "PROOF: the front door holds",
             "body": "## Acceptance criteria\n- [ ] observed in production\n",
-            "labels": ["agent:planner", "repo:agent-bureau"],
+            # `agent:ops`, the role a proof card wears (rule 4): since DRE-6227
+            # no criterion routes a card to a person, so the label decides.
+            "labels": ["agent:planner", "agent:ops", "repo:agent-bureau"],
         })
         assert verdict in proof_and_demo.confirming_verdicts()
 

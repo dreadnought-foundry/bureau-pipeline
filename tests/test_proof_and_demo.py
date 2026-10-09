@@ -583,11 +583,15 @@ class TestTheStamp:
         ]
 
     def test_the_stamped_verdict_is_the_card_s_own_routing_decision(self):
-        """Not a constant: strip the role label and the criteria decide."""
+        """Not a constant: the card's own routing decides. With `agent:ops` the
+        proof routes OPERATOR. Strip the role label and its criteria decide —
+        and since DRE-6227 "observed ... in production" no longer routes a card
+        to a person, so the proof fails rule 3 and nothing is stamped."""
         plan = _plan()
+        assert [v for _, v, _ in proof_and_demo.stamps(plan)] == ["OPERATOR"]
         proof = next(c for c in plan if c["identifier"] == "DRE-9091")
         proof["labels"] = list(NO_ROLE_LABELS)
-        assert [v for _, v, _ in proof_and_demo.stamps(plan)] == ["WORKBENCH"]
+        assert proof_and_demo.stamps(plan) == ()
 
     def test_a_stamped_verdict_is_never_fleet(self):
         for _, verdict, _ in proof_and_demo.stamps(_plan()):

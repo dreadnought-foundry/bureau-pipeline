@@ -119,6 +119,20 @@ def _with_the_old_signal() -> dict:
     return doc
 
 
+def vocabulary_before_dre_6227() -> dict:
+    """The vocabulary as it shipped before this card: the retired signal back
+    in place, WORKBENCH marking `hand-built` and OPERATOR `hand-built` +
+    `no-code`. For suites that replay a card routed under it (DRE-4724's
+    retirement, `tests/test_verdict_retirement.py`)."""
+    doc = _with_the_old_signal()
+    for entry in doc["verdicts"]:
+        if entry["name"] == "WORKBENCH":
+            entry["marks"] = [HAND_BUILT]
+        if entry["name"] == "OPERATOR":
+            entry["marks"] = [HAND_BUILT, NO_CODE]
+    return doc
+
+
 # ===========================================================================
 # the fixture is what the card says it is
 # ===========================================================================

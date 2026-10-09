@@ -114,9 +114,12 @@ class TestTheFileExists:
         # (tests/test_no_unplanned_ready_lane_writer.py). `hygiene.py` joined
         # it on DRE-5368: the hygiene agent returns a Triage card whose
         # mechanical defect it fixed, never to Todo (tests/test_hygiene.py).
+        # `hand_work_migration.py` joined it on DRE-6227: the migration returns
+        # a code card with a critic pass from Hand-work here, carrying a fresh
+        # FLEET verdict, for the sweep to promote (DRE-6230).
         assert lane_contract.lane_writers("Backlog") == (
             "plan.yml", "mid_epic.py", "reconcile.py", "dead_run.py",
-            "linear_ops.py", "agent-task.yml", "hygiene.py",
+            "linear_ops.py", "agent-task.yml", "hygiene.py", "hand_work_migration.py",
         )
         # `reconcile.py` joined Canceled on DRE-3665: it cancels the card it
         # filed for a dependabot pull request when that pull request closes

@@ -749,30 +749,33 @@ class TestBornWithItsRoutingVerdict:
 
     def test_a_non_promotable_verdict_brings_its_marks_with_it(self):
         """`--verdict` implies the labels the verdict declares, via `marks()`,
-        so the caller cannot half-stamp the card."""
+        so the caller cannot half-stamp the card. OPERATOR's since DRE-6227:
+        `operator-step` and `no-code`, never the CEO's `hand-built`."""
         ops = _FakeOps(epic_description="The epic.")
         with _stamping_into(ops):
-            ident = self._file(ops, verdict="WORKBENCH")
-        assert ops.labels_on(ident) == list(routing_verdict.marks("WORKBENCH"))
-        assert "hand-built" in ops.labels_on(ident)
+            ident = self._file(ops, verdict="OPERATOR")
+        assert ops.labels_on(ident) == list(routing_verdict.marks("OPERATOR"))
+        assert "operator-step" in ops.labels_on(ident)
+        assert "hand-built" not in ops.labels_on(ident)
 
     def test_a_workbench_discovery_still_lands_in_backlog_marked(self):
         """DRE-5321 re-points WORKBENCH at Hand-work, which is where the SWEEP
         carries it. Filing is unchanged: the card is born in Backlog, carrying
-        the marks, and no state write moves it anywhere at creation."""
+        the marks its verdict declares — none since DRE-6227 — and no state
+        write moves it anywhere at creation."""
         ops = _FakeOps(epic_description="The epic.")
         with _stamping_into(ops):
             ident = self._file(ops, verdict="WORKBENCH")
         created = next(c for c in ops.created if c["identifier"] == ident)
         assert created["state"] == "Backlog"
         assert [s for s in ops.states if s[0] == ident] == []
-        assert "hand-built" in ops.labels_on(ident)
+        assert ops.labels_on(ident) == list(routing_verdict.marks("WORKBENCH")) == []
 
-    def test_an_operator_card_is_born_hand_built_and_no_code(self):
+    def test_an_operator_card_is_born_operator_step_and_no_code(self):
         ops = _FakeOps(epic_description="The epic.")
         with _stamping_into(ops):
             ident = self._file(ops, verdict="OPERATOR")
-        assert ops.labels_on(ident) == ["hand-built", "no-code"]
+        assert ops.labels_on(ident) == ["operator-step", "no-code"]
 
     def test_a_fleet_card_is_stamped_and_marked_with_nothing(self):
         """Guard the guard: the marks come from the verdict, not from the flag

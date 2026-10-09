@@ -305,13 +305,14 @@ class TestTheOneOffExit:
         assert "FLEET" in exit_plan.reason
 
     def test_the_mechanical_check_overrides_the_shape(self):
-        """The check has to be able to say no. A criterion naming an
-        interactive flow, an explicit role label, and a card with no exit
-        condition at all each route somewhere other than the fleet — and the
-        shape does not talk over them."""
-        interactive = "## Acceptance criteria\n\n- [ ] I can sign in and see the board\n"
+        """The check has to be able to say no. A title convention, an explicit
+        role label, and a card with no exit condition at all each route
+        somewhere other than the fleet — and the shape does not talk over them.
+        (A criterion naming an interactive flow was the first of these until
+        DRE-6227 retired that signal; the `DEMO:` title is how a card reaches
+        WORKBENCH now.)"""
         assert planning_route.exit_plan(
-            _read_card(description=interactive), [_stamp("one-off")]
+            _read_card(title="DEMO: walk the board end to end"), [_stamp("one-off")]
         ).verdict == "WORKBENCH"
 
         assert planning_route.exit_plan(
@@ -821,20 +822,19 @@ class TestTheOneOffVerdictIsReadFromTheCard:
         assert plan.verdict == planning_route.fleet_verdict()
         assert plan.escalation is None
 
-    def test_a_criterion_naming_live_state_routes_to_a_person(self):
+    def test_a_criterion_naming_live_state_routes_to_the_fleet(self):
         """The card's own example: a one-off whose criteria say "observed in
-        production" or "by hand" was routed FLEET the same way. It routes to a
-        human now — and the vocabulary's answer for live state is WORKBENCH
-        ("needs an interactive flow or live system state"), not OPERATOR
-        ("not code — a deploy, a migration, a secret"). Both are a person; the
-        phrase lives on the `interactive` signal in
-        `config/routing-verdicts.json`, which this card does not touch."""
+        production" or "by hand". It routed WORKBENCH on the `interactive`
+        signal until DRE-6227 retired it — six code cards in a week went to a
+        lane where nobody builds them on a phrase like these. A criterion met
+        only by watching the change run after it ships is a proof observation
+        or a follow-up card, never a reason to hold the build, so the one-off
+        is read like any other and goes to the fleet."""
         for criterion in ("the new README line is observed in production",
                           "the date is checked by hand against the last run"):
             plan = planning_route.exit_plan(_fd4b(criterion), [_stamp("one-off")])
-            assert not routing_verdict.is_promotable(plan.verdict), criterion
-            assert routing_verdict.actor(plan.verdict) in planning_route.HUMAN_ACTORS
-            assert plan.verdict == "WORKBENCH", criterion
+            assert plan.verdict == "FLEET", criterion
+            assert routing_verdict.is_promotable(plan.verdict), criterion
 
     def test_an_explicit_role_label_still_wins_over_the_criteria(self):
         """Precedence 1, on a card wearing `agent:planner` — the leg that never
