@@ -170,6 +170,41 @@ class TestTheWords:
         assert epic_growth.read_words(text) == outcome
 
 
+#: The console's comment box writes this heading, not the Answer box's — the
+#: shape of the 15:21 PT comment on DRE-6480 (DRE-6503).
+COMMENT_HEAD = "Comment from Sid Conklin (signed in to the console), 2026-10-09 15:21 PT:"
+RECEIPT = ("🔏 console-answer: v1 card=DRE-6480 sha256=" + "0" * 64
+           + " user=sid at=2026-10-09T22:21:58Z kid=" + "0" * 16 + " sig=" + "A" * 86)
+
+
+def _commented(words):
+    return f"{COMMENT_HEAD}\n\n{words}\n\n{RECEIPT}"
+
+
+class TestTheCommentBox:
+    def test_re_approve_under_a_comment_heading_is_a_re_approval(self):
+        assert epic_growth.read_words(_commented("re-approve")) == epic_growth.RE_APPROVE
+
+    def test_split_under_a_comment_heading_is_a_split(self):
+        assert epic_growth.read_words(_commented("split")) == epic_growth.SPLIT
+
+    def test_neither_word_under_a_comment_heading_is_unreadable(self):
+        assert epic_growth.read_words(_commented("let me look tomorrow")) is None
+        assert _answer(_voice(spoken_thread.CEO_VIA_CONSOLE, LATER,
+                              _commented("let me look tomorrow"))) == epic_growth.UNREADABLE
+
+    def test_his_signed_comment_is_his_answer(self):
+        assert _answer(_voice(spoken_thread.CEO_VIA_CONSOLE, LATER,
+                              _commented("re-approve"))) == epic_growth.RE_APPROVE
+
+    def test_the_answer_box_heading_still_reads(self):
+        assert epic_growth.read_words(
+            f"{CONSOLE_HEAD}\n\nre-approve\n\n{RECEIPT}") == epic_growth.RE_APPROVE
+
+    def test_only_a_heading_on_the_first_line_is_stripped(self):
+        assert epic_growth.read_words(f"not sure\n{COMMENT_HEAD}\nre-approve") is None
+
+
 def _voice(kind, at, body="", author=None):
     node = {"body": body, "createdAt": at, "user": {"id": author} if author else None}
     return node, spoken_thread.Voice(kind, kind, at, body)
