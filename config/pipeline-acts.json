@@ -1360,6 +1360,13 @@
     },
     {
       "file": "scripts/reconcile.py",
+      "anchor": "linear_ops.cmd_comment(card, _record_red_note(pr, red))",
+      "kind": "undeclared-act",
+      "means": "A proof record the critic approved is red on a check, and the gate has not declined it as unproven, so the sweep sent the fix agent for the check and tells the card once per head (DRE-6571).",
+      "why": "Act-shaped — it reports a recovery — and the registry has no row for it. Giving it a row is a REGISTRY change that would have to ship console-first (docs/pipeline-acts.md), not an emission change. The `🔧 proof-record-red #<n> @<sha8>` mark it opens with is the idempotency key the next sweep reads back before it would dispatch the fix agent at that head again, so a trailer is a change to that key; the card that declares the act owns both."
+    },
+    {
+      "file": "scripts/reconcile.py",
       "anchor": "head_desync.unresolved_notice(number, head, tip, \"after\")",
       "kind": "undeclared-act",
       "means": "The pull request is still behind its branch after the sweep's one close and reopen for that commit, so the sweep hands it to a person, once, and stops (DRE-6217).",
