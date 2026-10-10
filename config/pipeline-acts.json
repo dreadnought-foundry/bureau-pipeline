@@ -1025,6 +1025,24 @@
       }
     },
     {
+      "name": "plan-bound-rewrite",
+      "tag": "bound-rewrite",
+      "adopted": true,
+      "kind": "recovery",
+      "means": "The plan critics held this card at their bound, and before anything parked it the bound exit granted the planner one more rewrite with the worst finding of every round in front of it and dispatched a fresh planning run. Once per card, ever; the card stays in Planning.",
+      "state": "dispatched",
+      "next_actor": "plan.yml",
+      "discharges": null,
+      "subscriber": "plan.yml",
+      "cadence_s": 6900,
+      "cadence_why": "Copied from the epic-queue-started row, which is the measurement: the same plan.yml run follows both, and .github/workflows/plan.yml gives its plan job timeout-minutes: 115, so 6900 seconds after the receipt the planning run it dispatched is over, whatever it did.",
+      "why": "DRE-6452, the try-without-a-person step of DRE-6172 applied to the plan-critic bound. `scripts/plan_bound.py exit` reads the worst finding of every send-back round, classifies each with `send_back_class` (DRE-6356), and when none is a decision and the card has had no rewrite yet, dispatches a planning run through `review_rerun._cmd_dispatch` (`--route plan --trigger-state planning --reason bound-rewrite`) and posts this receipt only on the confirmed dispatch (DRE-2034): `🔁 bound-rewrite: …`, every finding numbered with its class word. The tag IS a live key, which is why it is adopted: a pipeline-authored comment opening `🔁 bound-rewrite:` anywhere on the card is the grant, so the next bound parks rather than rewriting again, `plan_bound.py context` reads the findings back off the newest one for the planner, and the one-off critic counts its send-backs from it (DRE-6454). Nothing is discharged: the planning run it starts reports through the critics' own records. The console learned the tag first (DRE-6481).",
+      "emits": {
+        "file": "scripts/plan_bound.py",
+        "anchor": "pipeline_act.receipt(\"plan-bound-rewrite\""
+      }
+    },
+    {
       "name": "proof-run-dispatched",
       "tag": "proof-run",
       "adopted": true,
