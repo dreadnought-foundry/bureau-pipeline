@@ -794,10 +794,48 @@ jobs:
                workflow posts it to the card and parks the card in Green Light,
                the CEO's "needs you" queue. The CEO answers and moves the card
                back to Todo to proceed.
-            7. If the card is instead IMPOSSIBLE as specified (cannot be built as
-               written, no human decision would unblock it), open no PR and write
-               your blocker reason to /tmp/agent-blocker.txt instead (this parks
-               the card in Backlog).
+            7. BLOCKER: a blocker is for a fact the pipeline can act on, and its
+               first line names which. Open no PR, and write the note to
+               /tmp/agent-blocker.txt with its class stamped on the first line —
+               `blocker-class: <class>`, one of the four classes
+               .bureau-pipeline/config/blocker-classes.json names:
+               - `blocker-class: nothing-to-change` when every acceptance
+                 criterion already holds on the default branch and there is no
+                 diff to open. The lines after the stamp are the card's
+                 acceptance criteria, one
+                 `- [x] <criterion> — <what on the default branch satisfies it>`
+                 line per criterion, every criterion, because the sweep counts
+                 those lines against the card: a note that attests every
+                 criterion is canceled with the lines quoted, and a note that
+                 attests fewer is sent to the planner to be re-read, never
+                 canceled.
+               - `blocker-class: wrong-repo` when the files the card names do
+                 not live in this repository. Name the repository that holds
+                 them on the second line as `repo: <slug>`, using a slug from
+                 .bureau-pipeline/config/repo-map.json, and change no label
+                 yourself.
+               - `blocker-class: branch-without-pr` when the work is committed
+                 and pushed on this card's `agent/<CARD>-…` branch and the pull
+                 request could not be opened — name the branch. The sweep opens
+                 a pull request for every note of this class, so a branch you
+                 pushed and are HOLDING on purpose (waiting on a number, a
+                 decision or another card) is `blocker-class: question`, never
+                 this class.
+               - `blocker-class: question` when the card cannot be built as
+                 written and none of the three classes above fits. That note is
+                 asked in Green Light with the plain-English Finding / Question /
+                 Recommendation lines, and is never parked silently. A decision
+                 between ways to build the card is still item 6's escalation.
+               A mechanical class (the first three) parks the card in Backlog,
+               and the sweep acts on it within one pass.
+               Two things are NOT blockers. A card that is really several cards
+               is a hand-back (/tmp/agent-handback.txt). A card whose work is
+               partly on the default branch is ordinary work — build what is
+               missing and open the pull request. Write `nothing-to-change`
+               only when there is no diff to open, and attest only the criteria
+               you verified: `- [x]` for each that holds, a `- [ ] <criterion>`
+               line for each you could not show — the sweep cancels only a note
+               that attests every criterion and sends any other to the planner.
             8. HAND BACK (the third exit): if this card was dispatched as one
                piece of work and is really an epic's worth — several
                independently shippable PRs, contracts between them — do NOT
@@ -1001,10 +1039,48 @@ jobs:
                workflow posts it to the card and parks the card in Green Light,
                the CEO's "needs you" queue. The CEO answers and moves the card
                back to Todo to proceed.
-            7. If the card is instead IMPOSSIBLE as specified (cannot be built as
-               written, no human decision would unblock it), open no PR and write
-               your blocker reason to /tmp/agent-blocker.txt instead (this parks
-               the card in Backlog).
+            7. BLOCKER: a blocker is for a fact the pipeline can act on, and its
+               first line names which. Open no PR, and write the note to
+               /tmp/agent-blocker.txt with its class stamped on the first line —
+               `blocker-class: <class>`, one of the four classes
+               .bureau-pipeline/config/blocker-classes.json names:
+               - `blocker-class: nothing-to-change` when every acceptance
+                 criterion already holds on the default branch and there is no
+                 diff to open. The lines after the stamp are the card's
+                 acceptance criteria, one
+                 `- [x] <criterion> — <what on the default branch satisfies it>`
+                 line per criterion, every criterion, because the sweep counts
+                 those lines against the card: a note that attests every
+                 criterion is canceled with the lines quoted, and a note that
+                 attests fewer is sent to the planner to be re-read, never
+                 canceled.
+               - `blocker-class: wrong-repo` when the files the card names do
+                 not live in this repository. Name the repository that holds
+                 them on the second line as `repo: <slug>`, using a slug from
+                 .bureau-pipeline/config/repo-map.json, and change no label
+                 yourself.
+               - `blocker-class: branch-without-pr` when the work is committed
+                 and pushed on this card's `agent/<CARD>-…` branch and the pull
+                 request could not be opened — name the branch. The sweep opens
+                 a pull request for every note of this class, so a branch you
+                 pushed and are HOLDING on purpose (waiting on a number, a
+                 decision or another card) is `blocker-class: question`, never
+                 this class.
+               - `blocker-class: question` when the card cannot be built as
+                 written and none of the three classes above fits. That note is
+                 asked in Green Light with the plain-English Finding / Question /
+                 Recommendation lines, and is never parked silently. A decision
+                 between ways to build the card is still item 6's escalation.
+               A mechanical class (the first three) parks the card in Backlog,
+               and the sweep acts on it within one pass.
+               Two things are NOT blockers. A card that is really several cards
+               is a hand-back (/tmp/agent-handback.txt). A card whose work is
+               partly on the default branch is ordinary work — build what is
+               missing and open the pull request. Write `nothing-to-change`
+               only when there is no diff to open, and attest only the criteria
+               you verified: `- [x]` for each that holds, a `- [ ] <criterion>`
+               line for each you could not show — the sweep cancels only a note
+               that attests every criterion and sends any other to the planner.
             8. HAND BACK (the third exit): if this card was dispatched as one
                piece of work and is really an epic's worth — several
                independently shippable PRs, contracts between them — do NOT
@@ -1205,10 +1281,48 @@ jobs:
                workflow posts it to the card and parks the card in Green Light,
                the CEO's "needs you" queue. The CEO answers and moves the card
                back to Todo to proceed.
-            7. If the card is instead IMPOSSIBLE as specified (cannot be built as
-               written, no human decision would unblock it), open no PR and write
-               your blocker reason to /tmp/agent-blocker.txt instead (this parks
-               the card in Backlog).
+            7. BLOCKER: a blocker is for a fact the pipeline can act on, and its
+               first line names which. Open no PR, and write the note to
+               /tmp/agent-blocker.txt with its class stamped on the first line —
+               `blocker-class: <class>`, one of the four classes
+               .bureau-pipeline/config/blocker-classes.json names:
+               - `blocker-class: nothing-to-change` when every acceptance
+                 criterion already holds on the default branch and there is no
+                 diff to open. The lines after the stamp are the card's
+                 acceptance criteria, one
+                 `- [x] <criterion> — <what on the default branch satisfies it>`
+                 line per criterion, every criterion, because the sweep counts
+                 those lines against the card: a note that attests every
+                 criterion is canceled with the lines quoted, and a note that
+                 attests fewer is sent to the planner to be re-read, never
+                 canceled.
+               - `blocker-class: wrong-repo` when the files the card names do
+                 not live in this repository. Name the repository that holds
+                 them on the second line as `repo: <slug>`, using a slug from
+                 .bureau-pipeline/config/repo-map.json, and change no label
+                 yourself.
+               - `blocker-class: branch-without-pr` when the work is committed
+                 and pushed on this card's `agent/<CARD>-…` branch and the pull
+                 request could not be opened — name the branch. The sweep opens
+                 a pull request for every note of this class, so a branch you
+                 pushed and are HOLDING on purpose (waiting on a number, a
+                 decision or another card) is `blocker-class: question`, never
+                 this class.
+               - `blocker-class: question` when the card cannot be built as
+                 written and none of the three classes above fits. That note is
+                 asked in Green Light with the plain-English Finding / Question /
+                 Recommendation lines, and is never parked silently. A decision
+                 between ways to build the card is still item 6's escalation.
+               A mechanical class (the first three) parks the card in Backlog,
+               and the sweep acts on it within one pass.
+               Two things are NOT blockers. A card that is really several cards
+               is a hand-back (/tmp/agent-handback.txt). A card whose work is
+               partly on the default branch is ordinary work — build what is
+               missing and open the pull request. Write `nothing-to-change`
+               only when there is no diff to open, and attest only the criteria
+               you verified: `- [x]` for each that holds, a `- [ ] <criterion>`
+               line for each you could not show — the sweep cancels only a note
+               that attests every criterion and sends any other to the planner.
             8. HAND BACK (the third exit): if this card was dispatched as one
                piece of work and is really an epic's worth — several
                independently shippable PRs, contracts between them — do NOT

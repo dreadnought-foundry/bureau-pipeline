@@ -120,6 +120,20 @@ class BlockerParksInBacklogTest(unittest.TestCase):
     def test_blocker_branch_never_returns_to_todo(self):
         self.assertNotIn('"Todo"', blocker_branch())
 
+    def test_blocker_branch_posts_one_marker_carrying_the_class(self):
+        # DRE-6444: one posting command whose own text carries the act
+        # registry's anchor, so `check_act_receipts.py` matches one site.
+        branch = re.split(r"\n\s*elif\b", blocker_branch(), 1)[0]
+        self.assertEqual(1, branch.count("linear_ops.py comment"))
+        self.assertIn('"🛑 Agent blocked: class=$BLOCKER_CLASS · ', branch)
+
+    def test_the_class_comes_from_the_one_reader(self):
+        # The script restates no phrase list and no stamp grammar (DRE-6438).
+        src = report_step()
+        self.assertIn("blocker_class.py classify /tmp/agent-blocker.txt", src)
+        self.assertIn("blocker_class.py reason /tmp/agent-blocker.txt", src)
+        self.assertNotIn("blocker-class:", src)
+
     def test_dead_run_branch_still_requeues_to_todo(self):
         # The dead-run path is nondeterministic (timeouts, turn limits) — a
         # fresh agent CAN succeed there, so its capped Todo requeue stays.

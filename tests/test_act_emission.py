@@ -641,6 +641,32 @@ def _drive_switch_reason_cleared(mp):
         linear=switch_reason.LinearWrites(reconcile.linear_ops), live=True)
 
 
+@site("plan-bound-rewrite", "plan-bound-rewrite")
+def _drive_plan_bound_rewrite(mp):
+    """The plan-critic bound's one rewrite (DRE-6452): two second-critic
+    send-backs on the current attempt, no rewrite granted yet, a confirmed
+    dispatch, and the receipt posted after it. Frozen from its first render:
+    there was no earlier wording to read it off."""
+    import plan_bound  # noqa: PLC0415 — only this driver needs it
+    import plan_critic  # noqa: PLC0415
+
+    def record(body):
+        return {"body": body, "authored_by_pipeline": True,
+                "created_at": "2026-10-09T03:22:00Z"}
+
+    thread = [record(plan_critic.cycle_marker("DRE-1"))] + [
+        record(plan_critic.marker("post", n, plan_critic.SEND_BACK, finding))
+        for n, finding in enumerate((
+            "The card doesn't say which of the two lanes the card lands in.",
+            "The plan names a step that nothing in the repository runs.",
+        ), 1)]
+    mp.setattr(plan_bound.linear_ops, "comment_records",
+               lambda *_a, **_k: thread)
+    mp.setattr(plan_bound.review_rerun, "_cmd_dispatch", lambda _args: 0)
+    _card_recorder(mp)
+    plan_bound.run_exit("DRE-1", "post", "dreadnought-foundry/bureau-pipeline")
+
+
 @site("promotion-stalled", "promotion-stalled")
 def _drive_promotion_stalled(mp):
     """The promotion stall clock (DRE-4210): a parentless card refused for

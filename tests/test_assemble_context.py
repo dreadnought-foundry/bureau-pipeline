@@ -379,6 +379,67 @@ class ProofBriefTest(unittest.TestCase):
         self.assertIn("one live write", self.flat)
         self.assertNotIn("no card yet", self.flat)
 
+    def _section(self, heading):
+        return " ".join(self.text.split(f"\n## {heading}", 1)[1]
+                        .split("\n## ", 1)[0].split())
+
+    def test_a_local_screen_row_is_observed_in_a_browser(self):
+        """DRE-6027: the workflow stands the declared local run up, so the
+        brief says how a `Local screen:` row is observed and recorded."""
+        half = self._section("The two halves of an on-screen step")
+        for needle in ("proof local run:", "## How this was recorded",
+                       ".github/bureau/proof-local.json",
+                       "python3 .bureau-pipeline/scripts/proof_session.py login",
+                       "screenshot --page <key> --out <png> --signed-in",
+                       "proof-screenshot: no login file at <path> — run "
+                       "proof_session.py login first",
+                       '"$PROOF_PYTHON" <script>', "playwright.sync_api",
+                       "docs/evidence/DRE-<n>/", "<page key>.png",
+                       "Met. <what was seen> — local run of <sha7> (<tag>), "
+                       "page <key>, screenshot <png>",
+                       "Not observed. no local run declared",
+                       "Not observed. the local run did not start: <note>",
+                       "Not observed. needs a browser on a local run of the "
+                       "released commit",
+                       "<method> <origin and path> <status>",
+                       "no query string, fragment, header or body",
+                       "never committed"):
+            self.assertIn(needle, half, needle)
+        # `login` once, then the signed-in screenshot — never the other order.
+        self.assertLess(half.index("proof_session.py login"),
+                        half.index("--signed-in"))
+        self.assertIn("Neither half is ever marked `Met.` on the strength of "
+                      "the other", half)
+        self.assertNotIn("Nothing hands a dispatched run a browser yet", self.flat)
+
+    def test_the_browser_route_is_the_products_script_not_the_run_typing(self):
+        """DRE-6027 beside DRE-6043: exactly two sign-in routes, each the
+        product's own script, and the login file is read by two commands."""
+        identities = self._section("Identities")
+        for needle in ("never a person's account, never the CEO's account, "
+                       "never a sign-in typed into a web page by the run itself",
+                       "the browser route is not the run typing a sign-in",
+                       "declared `login.command`",
+                       "proof-reader.ts mcp-token",
+                       "proof-browser-login.ts",
+                       "proof-login: <identity> — <the last line of the "
+                       "command's standard output",
+                       "last line of the command's standard output",
+                       "proof-login: refused —",
+                       "$PROOF_LOGIN_FILE",
+                       "never opens, prints, copies or quotes",
+                       "never puts a password in the record, the pull request "
+                       "or a comment"):
+            self.assertIn(needle, identities, needle)
+        self.assertEqual(1, self.text.count("never by any other route"))
+        self.assertIn("only through the product's own scripts", identities)
+
+    def test_both_scripts_reserves_are_the_one_live_write(self):
+        touch = self._section("What you may touch")
+        self.assertIn("one live write", touch)
+        self.assertIn("declared `login.command`", touch)
+        self.assertIn("proof_session.py login", touch)
+
     def test_the_linear_reads_and_their_request_cap(self):
         """DRE-6143: the run reads any card, never writes one, and counts
         every Linear request its own invocations make against one cap."""

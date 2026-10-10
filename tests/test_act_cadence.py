@@ -124,8 +124,9 @@ class TestEveryActDeclaresItsCadence:
         since DRE-6437 added the receipt a cleared switch posts; fifty-one
         since DRE-6451 added the alarm on a planning hold aged in Triage;
         fifty-two since DRE-6409 added the alarm on a person's card overdue
-        in Hand-work."""
-        assert len(pipeline_act.acts()) == 52
+        in Hand-work; fifty-three since DRE-6452 added the receipt of the one
+        planner rewrite the plan-critic bound grants."""
+        assert len(pipeline_act.acts()) == 53
 
     def test_every_act_carries_a_cadence_and_a_reason(self):
         for name in pipeline_act.acts():
