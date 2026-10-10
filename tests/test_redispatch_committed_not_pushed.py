@@ -117,14 +117,20 @@ def as_rest(c: dict) -> dict:
     }
 
 
-#: The DRE-4883 thread: a fix attempt that landed, the critic's
-#: REQUEST_CHANGES bound to the head, then the worker-bot marker naming that
-#: head, 45 minutes old. The head has not moved: the delivery never landed.
-DRE_4883 = [
-    comment(WORKER_BOT, "🔧 Fix attempt 1 pushed — CI and critic review re-running.", 120),
-    comment(QA_BOT, verdict_body(), 70),
-    comment(WORKER_BOT, marker_body(), 45),
-]
+def dre_4883() -> list[dict]:
+    """The DRE-4883 thread: a fix attempt that landed, the critic's
+    REQUEST_CHANGES bound to the head, then the worker-bot marker naming that
+    head, 45 minutes old. The head has not moved: the delivery never landed.
+
+    Built per test, never once at import: the ages are read off the clock,
+    and a module-level thread stamped at collection was ~61 minutes old by
+    the time CI reached `test_the_wait_is_read_off_fix_dead_run` sixteen
+    minutes later — past that test's 60-minute wait (DRE-6580)."""
+    return [
+        comment(WORKER_BOT, "🔧 Fix attempt 1 pushed — CI and critic review re-running.", 120),
+        comment(QA_BOT, verdict_body(), 70),
+        comment(WORKER_BOT, marker_body(), 45),
+    ]
 
 
 def pr_payload(comments, *, head: str = HEAD, merge_state: str = "BLOCKED",
@@ -195,7 +201,7 @@ class CommittedNotPushedSweepTest(unittest.TestCase):
     # ---------------------------------------------------------------- the act
 
     def test_the_dre_4883_thread_dispatches_the_fix_agent_once(self):
-        calls, notes, _ = self.sweep([pr_payload(DRE_4883)])
+        calls, notes, _ = self.sweep([pr_payload(dre_4883())])
         self.assertEqual(len(calls), 1, f"expected one dispatch, got {calls}")
         self.assertIn(reconcile.fix_workflow(), calls[0])
         self.assertIn(f"pr_number={PR}", " ".join(calls[0]))
@@ -203,14 +209,14 @@ class CommittedNotPushedSweepTest(unittest.TestCase):
         self.assertEqual(notes[0][0], PR)
 
     def test_the_receipt_is_the_existing_fix_loop_restarted_act(self):
-        _, notes, _ = self.sweep([pr_payload(DRE_4883)])
+        _, notes, _ = self.sweep([pr_payload(dre_4883())])
         fields = pipeline_act.read_trailer(notes[0][1])
         self.assertIsNotNone(fields, f"the receipt carries no trailer: {notes[0][1]}")
         self.assertEqual(fields["act"], "fix-loop-restarted")
         self.assertEqual(fields["kind"], "recovery")
 
     def test_the_receipt_names_the_lost_push_the_wait_and_the_one_restart(self):
-        _, notes, _ = self.sweep([pr_payload(DRE_4883)])
+        _, notes, _ = self.sweep([pr_payload(dre_4883())])
         body = notes[0][1]
         self.assertIn("DRE-6352", body)
         self.assertIn("push never reached the branch", body)
@@ -224,25 +230,25 @@ class CommittedNotPushedSweepTest(unittest.TestCase):
         self.assertNotIn(TAG, body.splitlines()[0])
 
     def test_the_summary_line_counts_the_dispatch(self):
-        _, _, log = self.sweep([pr_payload(DRE_4883)])
+        _, _, log = self.sweep([pr_payload(dre_4883())])
         self.assertEqual(summary(log), (1, 0, 0, 1), log)
         self.assertEqual(len(SUMMARY.findall(log)), 1, "one summary line a sweep")
 
     def test_the_log_names_the_pr_and_the_head(self):
-        _, _, log = self.sweep([pr_payload(DRE_4883)])
+        _, _, log = self.sweep([pr_payload(dre_4883())])
         self.assertIn(f"PR #{PR}", log)
         self.assertIn(HEAD[:8], log)
 
     def test_only_one_pr_is_dispatched_per_sweep(self):
-        other = pr_payload(DRE_4883, number=PR + 1, branch="agent/DRE-4884-x")
-        calls, notes, _ = self.sweep([pr_payload(DRE_4883), other])
+        other = pr_payload(dre_4883(), number=PR + 1, branch="agent/DRE-4884-x")
+        calls, notes, _ = self.sweep([pr_payload(dre_4883()), other])
         self.assertEqual(len(calls), 1)
         self.assertEqual(len(notes), 1)
 
     # ---------------------------------------------------------- the three waits
 
     def test_a_ten_minute_old_marker_waits_on_the_delivery(self):
-        fresh = DRE_4883[:2] + [comment(WORKER_BOT, marker_body(), 10)]
+        fresh = dre_4883()[:2] + [comment(WORKER_BOT, marker_body(), 10)]
         calls, notes, log = self.sweep([pr_payload(fresh)])
         self.assertEqual(calls, [])
         self.assertEqual(notes, [])
@@ -252,19 +258,19 @@ class CommittedNotPushedSweepTest(unittest.TestCase):
         # Non-vacuous twin of the 45-minute dispatch: raise the shared constant
         # past the marker's age and the same thread waits.
         with mock.patch.object(fix_dead_run, "COMMITTED_NOT_PUSHED_WAIT_MINUTES", 60):
-            calls, _, log = self.sweep([pr_payload(DRE_4883)])
+            calls, _, log = self.sweep([pr_payload(dre_4883())])
         self.assertEqual(calls, [])
         self.assertEqual(summary(log), (1, 1, 0, 0), log)
 
     def test_a_moved_head_means_the_delivery_landed(self):
-        calls, notes, _ = self.sweep([pr_payload(DRE_4883, head=MOVED_HEAD)])
+        calls, notes, _ = self.sweep([pr_payload(dre_4883(), head=MOVED_HEAD)])
         self.assertEqual(calls, [])
         self.assertEqual(notes, [])
 
     # -------------------------------------------------------------------- the cap
 
     def test_two_markers_for_the_head_are_at_the_restart_cap(self):
-        capped = DRE_4883[:2] + [
+        capped = dre_4883()[:2] + [
             comment(WORKER_BOT, marker_body(attempt=2), 120),
             comment(WORKER_BOT, marker_body(attempt=3), 45),
         ]
@@ -274,7 +280,7 @@ class CommittedNotPushedSweepTest(unittest.TestCase):
         self.assertEqual(summary(log), (1, 0, 1, 0), log)
 
     def test_the_cap_is_read_off_fix_dead_run(self):
-        capped = DRE_4883[:2] + [
+        capped = dre_4883()[:2] + [
             comment(WORKER_BOT, marker_body(attempt=2), 120),
             comment(WORKER_BOT, marker_body(attempt=3), 45),
         ]
@@ -283,7 +289,7 @@ class CommittedNotPushedSweepTest(unittest.TestCase):
         self.assertEqual(len(calls), 1)
 
     def test_a_marker_for_another_head_does_not_count_toward_the_cap(self):
-        mixed = DRE_4883[:2] + [
+        mixed = dre_4883()[:2] + [
             comment(WORKER_BOT, marker_body(head=OTHER_HEAD, attempt=1), 200),
             comment(WORKER_BOT, marker_body(attempt=2), 45),
         ]
@@ -295,8 +301,8 @@ class CommittedNotPushedSweepTest(unittest.TestCase):
     # ------------------------------------------------------------- the disarm
 
     def test_the_receipt_disarms_the_route(self):
-        _, notes, _ = self.sweep([pr_payload(DRE_4883)])
-        after = DRE_4883 + [comment(WORKER_BOT, notes[0][1], 0)]
+        _, notes, _ = self.sweep([pr_payload(dre_4883())])
+        after = dre_4883() + [comment(WORKER_BOT, notes[0][1], 0)]
         calls, again, log = self.sweep([pr_payload(after)])
         self.assertEqual(calls, [], "the same marker was dispatched twice")
         self.assertEqual(again, [])
@@ -304,7 +310,7 @@ class CommittedNotPushedSweepTest(unittest.TestCase):
 
     def test_a_newer_worker_bot_comment_means_the_loop_moved(self):
         # The Report's own hold, a fix attempt, a retry marker — any of them.
-        moved = DRE_4883 + [
+        moved = dre_4883() + [
             comment(WORKER_BOT, "🔧 Fix attempt 3 pushed — CI re-running.", 5)]
         self.assertEqual(self.sweep([pr_payload(moved)])[0], [])
 
@@ -312,15 +318,15 @@ class CommittedNotPushedSweepTest(unittest.TestCase):
 
     def test_a_dirty_pr_does_not_dispatch(self):
         # unstick_conflicts owns conflicted pull requests.
-        calls, _, _ = self.sweep([pr_payload(DRE_4883, merge_state="DIRTY")])
+        calls, _, _ = self.sweep([pr_payload(dre_4883(), merge_state="DIRTY")])
         self.assertEqual(calls, [])
 
     def test_a_human_parked_card_does_not_dispatch(self):
         # DRE-2024: the loop is over until a person acts.
-        self.assertEqual(self.sweep([pr_payload(DRE_4883)], parked=True)[0], [])
+        self.assertEqual(self.sweep([pr_payload(dre_4883())], parked=True)[0], [])
 
     def test_a_busy_fix_lane_does_not_dispatch(self):
-        calls, notes, log = self.sweep([pr_payload(DRE_4883)], busy=True)
+        calls, notes, log = self.sweep([pr_payload(dre_4883())], busy=True)
         self.assertEqual(calls, [])
         self.assertEqual(notes, [])
         self.assertIsNotNone(summary(log), "a busy lane still prints the line")
@@ -328,17 +334,17 @@ class CommittedNotPushedSweepTest(unittest.TestCase):
     def test_an_exhausted_fix_budget_does_not_dispatch(self):
         marker, cap = fix_budget.BUDGETS["fix"]
         spent = [as_rest(comment(WORKER_BOT, f"{marker} {n}", 300)) for n in range(cap)]
-        spent += [as_rest(c) for c in DRE_4883]
-        self.assertEqual(self.sweep([pr_payload(DRE_4883)], thread=spent)[0], [])
+        spent += [as_rest(c) for c in dre_4883()]
+        self.assertEqual(self.sweep([pr_payload(dre_4883())], thread=spent)[0], [])
 
     def test_an_unreadable_thread_does_not_dispatch(self):
         # The GraphQL listing already showed comments, so an empty REST read is
         # unreadable, never empty (DRE-2034) — and the cap cannot be counted.
-        self.assertEqual(self.sweep([pr_payload(DRE_4883)], thread=[])[0], [])
+        self.assertEqual(self.sweep([pr_payload(dre_4883())], thread=[])[0], [])
 
     def test_a_marker_not_authored_by_the_worker_bot_does_not_dispatch(self):
         # DRE-1995: a planted marker must not spawn fix runs.
-        forged = DRE_4883[:2] + [comment("some-human", marker_body(), 45)]
+        forged = dre_4883()[:2] + [comment("some-human", marker_body(), 45)]
         calls, _, log = self.sweep([pr_payload(forged)])
         self.assertEqual(calls, [])
         self.assertEqual(summary(log), (0, 0, 0, 0), log)
@@ -346,17 +352,17 @@ class CommittedNotPushedSweepTest(unittest.TestCase):
     # ------------------------------------------------- the rest of the gates
 
     def test_a_marker_quoted_below_the_first_line_is_not_one(self):
-        quoted = DRE_4883[:2] + [comment(
+        quoted = dre_4883()[:2] + [comment(
             WORKER_BOT, f"Some other note\n\n> {marker_body()}", 45)]
         self.assertEqual(self.sweep([pr_payload(quoted)])[0], [])
 
     def test_a_repo_with_no_fix_agent_does_not_dispatch(self):
-        calls, _, log = self.sweep([pr_payload(DRE_4883)], absent=True)
+        calls, _, log = self.sweep([pr_payload(dre_4883())], absent=True)
         self.assertEqual(calls, [])
         self.assertIsNotNone(summary(log))
 
     def test_a_non_card_branch_does_not_dispatch(self):
-        calls, _, _ = self.sweep([pr_payload(DRE_4883, branch="dependabot/pip/x")])
+        calls, _, _ = self.sweep([pr_payload(dre_4883(), branch="dependabot/pip/x")])
         self.assertEqual(calls, [])
 
     def test_an_unreadable_listing_dispatches_nothing_and_still_prints(self):
