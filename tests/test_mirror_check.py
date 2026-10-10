@@ -49,6 +49,11 @@ import validate_card  # noqa: E402
 ROOT = Path(__file__).resolve().parents[1]
 FIXTURES = ROOT / "tests" / "fixtures" / "mirror-check"
 
+#: The stand-in agent-bureau's pytest settings, with its coverage floor
+#: (DRE-6622). Kept beside the tree rather than in it — see the file — and
+#: written into every throwaway copy as `pyproject.toml`.
+PYTEST_SETTINGS = FIXTURES / "agent-bureau.pyproject.toml"
+
 ROUTING_TEST = "console/backend/tests/test_routing_verdicts_mirror.py"
 RELAY_TEST = "cloud/relay/test_lane_guard_mirror.py"
 UNRELATED_TEST = "console/backend/tests/test_unrelated.py"
@@ -71,6 +76,7 @@ class _Trees:
         base = Path(self._tmp.name)
         self.agent_bureau = base / "agent-bureau"
         shutil.copytree(FIXTURES / "agent-bureau", self.agent_bureau)
+        shutil.copyfile(PYTEST_SETTINGS, self.agent_bureau / "pyproject.toml")
         self.candidate = self.agent_bureau / mirror_check.PIPELINE_DIRNAME
         shutil.copytree(FIXTURES / candidate, self.candidate)
         self.stable = base / "bureau-pipeline-stable"
@@ -605,7 +611,8 @@ class CheckCanRunTest(unittest.TestCase):
     with no pytest and a `pyproject.toml` with the floor."""
 
     def test_the_stand_in_carries_the_floor_and_no_pytest(self):
-        settings = (FIXTURES / "agent-bureau" / "pyproject.toml").read_text()
+        trees = _Trees(self)
+        settings = (trees.agent_bureau / "pyproject.toml").read_text()
         self.assertIn("--cov=console/backend", settings)
         self.assertIn("--cov-fail-under=90", settings)
         requirements = (FIXTURES / "agent-bureau" / "console/backend/requirements.txt")
@@ -685,6 +692,17 @@ class SelfHostingFixtureTest(unittest.TestCase):
         for rel in (ROUTING_TEST, RELAY_TEST):
             text = (FIXTURES / "agent-bureau" / rel).read_text()
             self.assertTrue(re.search(r"skipif", text), rel)
+
+    def test_no_pytest_settings_sit_where_this_repos_pytest_would_read_them(self):
+        """pytest's rootdir search walks up from every file it is handed. CI
+        hands each part its test files by name, so a settings file inside the
+        stand-in became this repo's own config for any part naming one of the
+        stand-in's tests — and its coverage floor failed that part (DRE-6622,
+        the first CI run of this change)."""
+        names = ("pytest.ini", ".pytest.ini", "pyproject.toml", "tox.ini", "setup.cfg")
+        found = [p.relative_to(FIXTURES).as_posix() for p in FIXTURES.rglob("*")
+                 if p.name in names]
+        self.assertEqual(found, [])
 
 
 if __name__ == "__main__":

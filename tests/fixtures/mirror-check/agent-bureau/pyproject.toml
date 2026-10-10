@@ -1,6 +1,0 @@
-# Stand-in for agent-bureau's pytest settings (DRE-6622 fixture). agent-bureau
-# enforces a coverage floor through `addopts`, so a run of its mirror tests
-# alone reads far under 90% and pytest exits 1 with no failing test. The mirror
-# check passes `--no-cov`, which switches coverage, and with it the floor, off.
-[tool.pytest.ini_options]
-addopts = "--cov=console/backend --cov-fail-under=90"
