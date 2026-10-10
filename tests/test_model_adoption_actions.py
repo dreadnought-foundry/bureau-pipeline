@@ -417,6 +417,82 @@ class TestApply:
         # The old id is still on the advisory ladder, so it is NOT retired.
         assert old not in [r["model"] for r in after["retired"]]
 
+    # ----------------------------------------------------------------------- #
+    # A project exception follows the rung it names (DRE-6633)                #
+    # ----------------------------------------------------------------------- #
+
+    @staticmethod
+    def _with_projects(block: str) -> str:
+        text = CONFIG_PATH.read_text()
+        assert "\nprojects: {}\n" in text
+        return text.replace("\nprojects: {}\n", f"\nprojects:\n{block}")
+
+    @staticmethod
+    def _narrowed(decision, *ladders):
+        narrowed = copy.deepcopy(decision)
+        narrowed["replaces"] = [r for r in narrowed["replaces"]
+                                if r["ladder"] in ladders]
+        return narrowed
+
+    def test_an_exception_moves_with_its_rung_and_the_result_validates(
+            self, adopt_sonnet6):
+        # The Sonnet 5 rungs only: the judgement ladder is one this Decision
+        # does not touch, so an exception naming its rung is left alone.
+        decision = self._narrowed(adopt_sonnet6, "workhorse", "advisory")
+        (old,) = {r["model"] for r in decision["replaces"]}
+        judgement = f"    judgement: {SONNET46}\n"
+        text = self._with_projects(f"  atlas:\n    workhorse: {old}\n{judgement}")
+        assert mf.policy_errors(yaml.safe_load(text)) == []
+        result = maa.apply_text(text, decision, "2026-11-02")
+        assert yaml.safe_load(result)["projects"] == {
+            "atlas": {"workhorse": SONNET6, "judgement": SONNET46}}
+        assert judgement in result
+        # The only line that differs from the same edit with `projects: {}`
+        # is the exception that moved.
+        plain = maa.apply_text(CONFIG_PATH.read_text(), decision, "2026-11-02")
+        removed = [l for l in difflib.unified_diff(
+            plain.splitlines(), result.splitlines(), lineterm="", n=0)
+            if l[:1] in "+-" and l[:3] not in ("+++", "---")]
+        assert removed == ["-projects: {}", "+projects:", "+  atlas:",
+                           f"+    workhorse: {SONNET6}", f"+{judgement.rstrip()}"]
+        prices = ma.load_prices()
+        prices[SONNET6] = {"input": 2.0, "output": 10.0}
+        assert mf.policy_errors(yaml.safe_load(result), prices,
+                                repo_slugs=mf.declared_repo_slugs()) == []
+
+    def test_every_exception_on_a_replaced_rung_moves(self, adopt_sonnet6):
+        olds = {r["ladder"]: r["model"] for r in adopt_sonnet6["replaces"]}
+        assert olds["judgement"] == SONNET46
+        text = self._with_projects(
+            f"  atlas:\n    workhorse: {olds['workhorse']}\n"
+            f"    judgement: {olds['judgement']}\n"
+            f"  portico:\n    advisory: {olds['advisory']}\n")
+        result = maa.apply_text(text, adopt_sonnet6, "2026-11-02")
+        assert yaml.safe_load(result)["projects"] == {
+            "atlas": {"workhorse": SONNET6, "judgement": SONNET6},
+            "portico": {"advisory": SONNET6}}
+
+    def test_the_same_id_on_a_ladder_the_decision_leaves_alone_stays(
+            self, adopt_sonnet6):
+        decision = self._narrowed(adopt_sonnet6, "workhorse")
+        (old,) = {r["model"] for r in decision["replaces"]}
+        text = self._with_projects(
+            f"  atlas:\n    workhorse: {old}  # the CEO's pick\n"
+            f"    advisory: {old}\n")
+        result = maa.apply_text(text, decision, "2026-11-02")
+        assert f"    workhorse: {SONNET6}  # the CEO's pick\n" in result
+        assert f"    advisory: {old}\n" in result
+        assert old in [r["model"] for r in yaml.safe_load(result)["ladders"]["advisory"]]
+
+    def test_a_projects_edit_the_text_pass_missed_is_refused(self, adopt_sonnet6,
+                                                            monkeypatch):
+        decision = self._narrowed(adopt_sonnet6, "workhorse", "advisory")
+        (old,) = {r["model"] for r in decision["replaces"]}
+        text = self._with_projects(f"  atlas:\n    workhorse: {old}\n")
+        monkeypatch.setattr(maa, "_move_projects", lambda lines, *a: lines)
+        with pytest.raises(maa.Refused):
+            maa.apply_text(text, decision, "2026-11-02")
+
 
 # --------------------------------------------------------------------------- #
 # render — titles and bodies                                                   #
