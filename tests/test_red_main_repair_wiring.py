@@ -33,6 +33,11 @@ import unittest
 import yaml
 
 REPO = os.path.join(os.path.dirname(__file__), "..")
+sys.path.insert(0, os.path.join(REPO, "scripts"))
+
+import repair_finish  # noqa: E402
+import step_shell  # noqa: E402
+
 WF_DIR = os.path.join(REPO, ".github", "workflows")
 REUSABLE = "red-main-repair.yml"
 STUB = "self-red-main-repair.yml"
@@ -354,7 +359,10 @@ class FinishUnlandedWiringTest(unittest.TestCase):
 
     @classmethod
     def _gather(cls):
-        return cls._steps()[cls._index("/tmp/repair-compares.json")]
+        # -1 would index the LAST step and test an unrelated `run` body.
+        found = cls._index("/tmp/repair-compares.json")
+        assert found > -1, "no step writes /tmp/repair-compares.json"
+        return cls._steps()[found]
 
     @classmethod
     def finish_step(cls):
@@ -393,7 +401,9 @@ class FinishUnlandedWiringTest(unittest.TestCase):
         self.assertNotIn("${{", step["run"])
 
     def test_the_decision_reads_the_comparisons(self):
-        run = self._steps()[self._index("red_main_repair.py decide")]["run"]
+        decide = self._index("red_main_repair.py decide")
+        self.assertGreater(decide, -1, "no decide step")
+        run = self._steps()[decide]["run"]
         self.assertIn("--compares-file /tmp/repair-compares.json", run)
 
     def test_the_finish_step_runs_the_helper_on_the_decided_branch(self):
@@ -463,9 +473,6 @@ class FinishStepShellTest(unittest.TestCase):
     (`bash -e`), with the helper stubbed."""
 
     def run_step(self, *, rc, finish):
-        sys.path.insert(0, os.path.join(REPO, "scripts"))
-        import step_shell
-
         with tempfile.TemporaryDirectory() as tmp:
             scripts = os.path.join(tmp, ".bureau-pipeline", "scripts")
             os.makedirs(scripts)
@@ -525,9 +532,6 @@ class AlreadyOpenIsSafeToRepeatTest(unittest.TestCase):
     `already-open`, and nothing is created."""
 
     def test_a_second_finish_creates_nothing(self):
-        sys.path.insert(0, os.path.join(REPO, "scripts"))
-        import repair_finish
-
         created = []
 
         class Ops:

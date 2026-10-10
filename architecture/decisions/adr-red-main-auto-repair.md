@@ -213,6 +213,18 @@ two agents converging on the same target destroy each other's work):
   failing head SHA (matrix jobs, re-runs) collapse into one repair — a
   repair branch for that SHA already existing makes the duplicate event
   a no-op.
+- **Finish what was pushed and left (DRE-6526):** the one exception to the
+  debounce. A repair branch for that SHA that is ahead of the default branch,
+  with no pull request of any state on it, is a fix the agent pushed before
+  it ended without opening the pull request. The decision answers
+  `finish-unlanded` (no agent), and the workflow opens that pull request
+  through the Report step's helper, `scripts/repair_finish.py` (DRE-6525).
+  The evidence: on 2026-10-09 the agent of Red-Main Repair run 38003951327
+  pushed `repair/DRE-6511-bcb36adf6037`, one commit ahead of `main`, and
+  stopped; the medic's 16:24 PT retry (attempt 2) answered `duplicate-event`
+  and opened nothing, and the branch would have counted as one attempt
+  forever. A comparison that cannot be read keeps the debounce: nothing is
+  opened on a branch nobody could compare.
 
 ## Guardrail 4 — quota isolation
 
