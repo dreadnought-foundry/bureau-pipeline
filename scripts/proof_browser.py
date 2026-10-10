@@ -379,7 +379,7 @@ def stop(*, pid_file=None, login_file=None, browser_state=None, out=print) -> in
     except OSError as exc:
         out(f"{SUMMARY}: could not read {pid_file}: {exc.strerror or exc}")
     else:
-        if not raw.isdigit() or int(raw) <= 1:
+        if not raw.isdigit() or int(raw) <= 1 or int(raw) == os.getpgrp():
             out(f"{SUMMARY}: {pid_file} names no process ({raw[:40]!r})")
         else:
             pgid = int(raw)

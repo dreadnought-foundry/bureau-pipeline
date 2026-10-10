@@ -516,6 +516,14 @@ class StopTest(unittest.TestCase):
         self.assertIn(f"no file at {self.state}", text)
         self.assertNotIn("Traceback", text)
 
+    def test_a_pid_file_naming_no_process_signals_nothing(self):
+        for raw in ("abc", "0", "1", "-5", ""):
+            with self.subTest(raw=raw):
+                self.lines.clear()
+                self.pid_file.write_text(raw)
+                self.assertEqual(self.stop(), 0)
+                self.assertIn("names no process", "\n".join(self.lines))
+
     def test_a_group_already_gone_is_a_plain_line(self):
         gone = subprocess.Popen([sys.executable, "-c", "pass"], start_new_session=True)
         gone.wait()
