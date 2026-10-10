@@ -823,7 +823,9 @@ def test_off_and_shadow_make_no_fleet_read_and_spend_what_they_spent(monkeypatch
         reconcile.recover_limit_deaths()
         reconcile.serve_planner_line()
     assert _fleet_asks(door) == []
-    assert _lane_reads(linear) == [list(reconcile.SWEPT_LANES), ["Green Light"]]
+    # The one board read is of BOARD_READ_LANES: SWEPT_LANES plus the outage
+    # alarm's lane (DRE-6576).
+    assert _lane_reads(linear) == [list(reconcile.BOARD_READ_LANES), ["Green Light"]]
     assert reconcile._door_sourced == set()
 
 

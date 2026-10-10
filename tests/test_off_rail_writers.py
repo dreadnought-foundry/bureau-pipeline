@@ -77,6 +77,7 @@ from test_reconcile_epic_carry import _board  # noqa: E402
 from test_reconcile_epic_carry import _card as epic_card  # noqa: E402
 from test_reconcile_reviewer_down import (  # noqa: E402
     ATLAS_RUN_URL,
+    _alarm_card,
     _environment_note,
     _iso,
     _ledger_for,
@@ -142,6 +143,12 @@ def _open_outage_card():
     ], filed_minutes_ago=13)
 
 
+def _open_outage_row():
+    """The same card as the board read returns it: the sweep finds its open
+    card in the snapshot, in Triage (DRE-6576)."""
+    return _alarm_card(_open_outage_card())
+
+
 def _stalled_planning_card():
     """An unlabelled Planning card past its stall window."""
     return intake_card(identifier="DRE-2736", state="Planning",
@@ -205,7 +212,8 @@ def _waiting_epic():
 TRIGGERS = {
     "drain_retiring_lanes": ((_drain_card,), "cmd_advance", "DRE-9999"),
     "recover_limit_deaths": ((_limit_card,), "cmd_state", "DRE-3171"),
-    "report_fleet_reviewer_outage": ((_outage_witness,), "set_title", "DRE-9500"),
+    "report_fleet_reviewer_outage": ((_outage_witness, _open_outage_row),
+                                     "set_title", "DRE-9500"),
     # The stall exit parks in Triage through cmd_state itself (DRE-5286).
     "flag_stranded": ((_stalled_planning_card,), "cmd_state", "DRE-2736"),
     "advance_urgent_intake": ((_urgent_card,), "cmd_advance", "DRE-4150"),

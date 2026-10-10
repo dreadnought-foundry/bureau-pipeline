@@ -564,8 +564,9 @@ def test_active_cards_takes_a_states_filter():
     assert [c["identifier"] for c in nudge] == ["DRE-1", "DRE-2", "DRE-3"]
     # `after: None` is the first page's cursor — it survives pagination
     # unchanged. The one read covers the union of every lane set the sweep asks
-    # for, which is what makes serving all three from it correct.
-    assert seen == [{"states": list(reconcile.SWEPT_LANES), "after": None}]
+    # for, which is what makes serving all three from it correct — plus the
+    # outage alarm's lane since DRE-6576 (BOARD_READ_LANES).
+    assert seen == [{"states": list(reconcile.BOARD_READ_LANES), "after": None}]
 
 
 # --------------------------------------------------------------------------

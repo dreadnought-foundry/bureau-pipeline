@@ -436,6 +436,9 @@ def test_the_board_is_read_once_per_sweep():
     In Review first. That read is its own paged query, it is the only one, and
     it is of Green Light and nothing else.
 
+    The one read is of BOARD_READ_LANES since DRE-6576 — SWEPT_LANES plus the
+    outage alarm's Triage lane, so the alarm finds its own open card in it.
+
     And the idle check (CEO, 2026-10-02): `reconcile.IDLE_QUERY` asks whether
     ONE card of this repo is in motion or in Backlog — `first: 1`, ids only,
     filtered by the repo label. It is not a board read and serves no reader;
@@ -449,11 +452,11 @@ def test_the_board_is_read_once_per_sweep():
     active, backlog = _fixed_board()
     fake = _run_sweep(FakeLinear(active=active, backlog=backlog))
     lanes = [tuple(v["states"]) for v in fake.board_variables]
-    swept = [s for s in lanes if s == tuple(reconcile.SWEPT_LANES)]
-    others = [s for s in lanes if s != tuple(reconcile.SWEPT_LANES)]
+    swept = [s for s in lanes if s == tuple(reconcile.BOARD_READ_LANES)]
+    others = [s for s in lanes if s != tuple(reconcile.BOARD_READ_LANES)]
     assert len(swept) == 1, (
-        f"{len(swept)} reads of SWEPT_LANES in one sweep — active_cards() must "
-        "be read once and shared"
+        f"{len(swept)} reads of BOARD_READ_LANES in one sweep — active_cards() "
+        "must be read once and shared"
     )
     assert others == [tuple(reconcile.IDLE_LANES),
                       tuple(reconcile.INTAKE_BLOCKED_LANES), ("Green Light",)], (
