@@ -898,3 +898,54 @@ class TestTheUnconvertedBlockIsHonest:
             for path, anchor in anchors:
                 if path == emits["file"]:
                     assert anchor != emits["anchor"], name
+
+
+class TestTheSweepsAskIsDeclared:
+    """DRE-6459: `scripts/blocker_ask.py` posts the sweep's question for a
+    blocker it cannot act on. A question is not an act — the resolver's receipt
+    posted after it is — so the site is declared `not-an-act`, anchored on the
+    poster call's own source text."""
+
+    FILE = "scripts/blocker_ask.py"
+    ANCHOR = 'cmd_comment(card["identifier"], ask)'
+
+    def _row(self):
+        return next(d for d in guard.declarations()
+                    if d["file"] == self.FILE and d["anchor"] == self.ANCHOR)
+
+    def test_the_row_is_declared_not_an_act_with_its_reason(self):
+        row = self._row()
+        assert row["kind"] == "not-an-act"
+        assert row["means"].strip() and row["why"].strip()
+
+    def test_the_row_matches_exactly_one_site(self):
+        row = self._row()
+        hits = [s for s in guard.sites() if guard._matches(row, s)]
+        assert len(hits) == 1, hits
+        assert hits[0].path == self.FILE
+        assert hits[0].composed_as is None
+
+    def test_removing_the_row_makes_the_guard_name_the_module(self):
+        doc = pipeline_act.load()
+        assert guard.problems(doc) == []
+        without = json.loads(json.dumps(doc))
+        without["unconverted"] = [
+            d for d in without["unconverted"]
+            if not (d["file"] == self.FILE and d["anchor"] == self.ANCHOR)]
+        assert len(without["unconverted"]) == len(doc["unconverted"]) - 1
+        found = guard.problems(without)
+        assert len(found) == 1, found
+        assert found[0].startswith(f"{self.FILE}:"), found
+        assert "is not composed through" in found[0]
+
+    def test_an_anchor_on_the_comments_words_matches_no_site(self):
+        # The guard tests the anchor against the call and the lines above it,
+        # never the comment the call posts.
+        doc = pipeline_act.load()
+        moved = json.loads(json.dumps(doc))
+        for d in moved["unconverted"]:
+            if d["file"] == self.FILE and d["anchor"] == self.ANCHOR:
+                d["anchor"] = "The build agent stopped on this card"
+        found = guard.problems(moved)
+        assert any("matches 0 receipt site(s)" in p for p in found), found
+        assert any(p.startswith(f"{self.FILE}:") for p in found), found
