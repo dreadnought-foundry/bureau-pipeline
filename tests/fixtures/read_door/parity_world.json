@@ -43,6 +43,7 @@
         "title": "Document the widget",
         "description": "Explain it.",
         "createdAt": "2026-09-30T10:00:00.000Z",
+        "priority": 0,
         "parent": {"identifier": "DRE-1000", "state": {"name": "In Progress"}},
         "children": {"nodes": []},
         "labels": {"nodes": [{"name": "repo:portico"}]},

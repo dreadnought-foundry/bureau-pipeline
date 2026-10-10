@@ -5952,6 +5952,9 @@ def backlog_children(
     field the query never fetched would report "no children" for every epic on
     the board.
 
+    `priority` is selected for the promotion order (DRE-6567): `promote_ready`
+    takes Urgent cards first, and this read is where it learns which those are.
+
     `only` — identifiers — narrows the read to those cards, still in Backlog,
     in one request (DRE-3236): the merge path asks for the merged card's own
     dependents and nothing else. Same node shape, so the gate that reads them
@@ -5999,7 +6002,7 @@ def backlog_children(
              %s
              state: {name: {eq: "Backlog"}}
            }) { nodes {
-             id identifier title description createdAt%s
+             id identifier title description createdAt priority%s
              parent { identifier state { name } }
              children(first: 1) { nodes { id } }
              labels { nodes { name } }
@@ -7042,7 +7045,7 @@ def promote_ready(
     because "a hand-built card needs no room" (the lane contract's words). An
     early return at the cap starved a person's card on every ordinary busy day
     (PR #430's review); so did breaking out of the loop once the budget was
-    spent, since the candidates are read lowest number first.
+    spent, since a person's card can stand anywhere in the order.
 
     And a refusal is read back as a clock (DRE-4210). Every exit that leaves a
     card of this repo in Backlog for a reason that is NOT a declared wait —
@@ -7116,9 +7119,16 @@ def promote_ready(
     # The same thread whole, for the epic cap's hold (DRE-6493) — read past
     # the window only for an epic whose window is full, once per sweep.
     cap_thread: dict[str, list | None] = {}
+    # THE ORDER, and the only rule that decides it (DRE-6567): Urgent first,
+    # then card number ascending within each. Every gate below decides
+    # WHETHER a card goes, never in what order. By number alone, an Urgent
+    # fix filed today waited behind every older ready card — on 2026-10-09
+    # DRE-6560 was the 31st of 31 at a full cap, and the fix the cap was
+    # waiting on. A card read with no `priority` sorts among the rest.
     candidates = sorted(
         backlog_children() if candidates is None else candidates,
-        key=lambda c: int(c["identifier"].split("-")[1]),
+        key=lambda c: (c.get("priority") != URGENT_PRIORITY,
+                       int(c["identifier"].split("-")[1])),
     )
     if close_epics:
         closed = set(
@@ -7173,21 +7183,37 @@ def promote_ready(
             # Backlog must not print 200 lines. Said at the FIRST card held —
             # the count is already exact there, because `spent` never falls and
             # a hand-built promotion never raises it, so every later card of
-            # this repo's that needs a slot is held too. `candidates` is sorted
-            # ascending by card number, so the cards left waiting are always
-            # the newest, every sweep.
+            # this repo's that needs a slot is held too. `candidates` is in
+            # promotion order — Urgent first, then by number (DRE-6567) — so
+            # the first card left waiting is not always the lowest-numbered,
+            # and the line asks for that by number rather than by position.
             if not waiting_reported:
                 waiting_reported = True
                 unconsidered = [
-                    c["identifier"] for c in candidates[index:]
+                    c for c in candidates[index:]
                     if card_repo(c) == REPO_SLUG
                     and not takes_no_slot(card_comment_bodies(c))
                 ]
+                lowest = min(
+                    unconsidered, key=lambda c: int(c["identifier"].split("-")[1]))
                 print(
                     f"promotion: WIP budget spent ({spent}/{max(budget, 0)} "
                     f"dispatched) — {len(unconsidered)} candidate(s) not "
-                    f"considered this sweep, lowest-numbered {unconsidered[0]}"
+                    f"considered this sweep, lowest-numbered {lowest['identifier']}"
                 )
+                # A waiting Urgent card is named in the sweep's own log
+                # (DRE-6567), so a person can see it and decide — whether one
+                # may take a slot over the cap is theirs, not this line's.
+                # Every Urgent card the cap held, not only the ready ones: the
+                # cap stops a card before any gate below is asked, and asking
+                # them here would spend reads on a sweep with no room to act.
+                urgent = [c["identifier"] for c in unconsidered
+                          if c.get("priority") == URGENT_PRIORITY]
+                if urgent:
+                    print(
+                        "promotion: Urgent card(s) held at the cap, gates not "
+                        f"yet asked: {', '.join(urgent)}"
+                    )
             continue
         if card_is_epic(card, bodies):
             print(
