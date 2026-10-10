@@ -38,6 +38,7 @@ import ast
 import contextlib
 import json
 import os
+import re
 import subprocess
 import sys
 from datetime import UTC, datetime, timedelta
@@ -131,21 +132,40 @@ def _released(pid: str, *, released=(), left=(), unqueued=(),
             "authored_by_pipeline": True, "created_at": _iso(minutes_ago)}
 
 
+#: The freshness bound (DRE-6640), read off the sweep and never restated:
+#: every time below that depends on it is built from it.
+BOUND = reconcile.GROOM_LABEL_FRESH_MINUTES
+INSIDE = BOUND / 2          # a queued record younger than the bound
+PAST = BOUND * 2            # one older than it
+
+
 class Queue:
     """Linear behind the release: the standing card's thread, the board read,
-    and every write the phase makes, recorded in order."""
+    and every write the phase makes, recorded in order. `direct` is what a
+    direct read of one card answers for its label (DRE-6640): True labelled,
+    False not; a card it does not name was never expected to be read."""
 
-    def __init__(self, thread, cards, *, open_card=None, fail_state=()):
+    def __init__(self, thread, cards, *, open_card=None, fail_state=(),
+                 direct=None):
         self.thread = list(thread)
         self.board = Board(cards)
         self.open_card = open_card
         self.fail_state = set(fail_state)
+        self.direct = dict(direct or {})
         self.writes: list[tuple] = []
         self.thread_reads: list[tuple] = []
+        self.direct_reads: list[tuple] = []
 
     def comment_records(self, identifier, *, whole_thread=False):
         self.thread_reads.append((identifier, whole_thread))
         return list(self.thread)
+
+    def get_issue(self, identifier, *, fresh=False):
+        self.direct_reads.append((identifier, fresh))
+        assert identifier in self.direct, f"{identifier} was read directly"
+        card = _card(identifier, queued=self.direct[identifier])
+        return {"id": card["id"], "identifier": identifier,
+                "state": card["state"], "labels": card["labels"]}
 
     def cmd_state(self, identifier, state_name, *flags):
         if identifier in self.fail_state:
@@ -194,6 +214,8 @@ def _linear(queue: Queue):
                               side_effect=queue.cmd_comment), \
             mock.patch.object(linear_ops, "find_open",
                               side_effect=queue.find_open), \
+            mock.patch.object(linear_ops, "get_issue",
+                              side_effect=queue.get_issue), \
             mock.patch.object(linear_ops, "create_card",
                               side_effect=queue.create_card):
         yield
@@ -289,12 +311,15 @@ def test_a_card_that_left_with_no_label_gets_no_label_write():
 
 
 def test_a_card_whose_label_a_person_removed_is_never_released():
-    queue = Queue([_queued(OLDER, ["DRE-11", "DRE-12"])],
+    """Past the freshness bound a missing label is a person's act, read off
+    the board alone (DRE-6640): no direct read is made."""
+    queue = Queue([_queued(OLDER, ["DRE-11", "DRE-12"], minutes_ago=PAST)],
                   [_card("DRE-11", queued=False), _card("DRE-12")])
     assert _release(queue, 1) == ["DRE-12"]
     assert ("DRE-11", "Planning") not in queue.of("state")
     assert queue.rows() == [{"id": OLDER, "released": ["DRE-12"], "left": [],
                              "unqueued": ["DRE-11"]}]
+    assert queue.direct_reads == []
 
 
 def test_the_standing_is_readable_off_the_thread_alone():
@@ -310,6 +335,297 @@ def test_a_record_a_person_wrote_is_not_the_queue():
     one, from any other account, releases nothing."""
     forged = dict(_queued(OLDER, ["DRE-11"]), authored_by_pipeline=False)
     assert groomer.queue_standing([forged]) == []
+
+
+# --------------------------------------------------------------------------- #
+# a label not yet readable is not a person's act (DRE-6640)                    #
+# --------------------------------------------------------------------------- #
+#
+# 2026-10-09, batch 467bdb8ee5f7: the drain queued twelve cards at 09:06:36 PT
+# and the sweep read the board at 09:06:46, before their `groom-queued` label
+# was readable, and recorded all twelve as taken out by hand. Nobody had
+# touched them; eleven are still in Intake carrying the label, and DRE-4224
+# has since gone Done by another route.
+
+BATCH_1009 = "467bdb8ee5f7"
+TWELVE = ["DRE-4915", "DRE-4597", "DRE-4406", "DRE-4405", "DRE-4397",
+          "DRE-4337", "DRE-4224", "DRE-4162", "DRE-4127", "DRE-4125",
+          "DRE-4105", "DRE-4101"]
+ELEVEN = [i for i in TWELVE if i != "DRE-4224"]
+#: The lag seen on 2026-10-09, in minutes: the board read came ten seconds
+#: after the queued record. A fact of the incident, not the bound.
+LAG = 10 / 60
+#: How long ago the 10-09 row was written, seen from the first pass after
+#: this lands — a day, far past the bound whatever it is.
+DAY = 24 * 60
+
+
+def _standing_after(standing, posted=()) -> list[str]:
+    return [s["identifier"] for s in groomer.queue_standing(
+        [*standing, *({"body": b, "authored_by_pipeline": True,
+                       "created_at": _iso(0)} for b in posted)])]
+
+
+def test_the_bound_is_one_constant_between_the_lag_and_the_sweep_interval():
+    workflow = (ROOT / ".github" / "workflows" / "self-reconcile.yml").read_text(
+        encoding="utf-8")
+    interval = int(re.search(r'cron:\s*"\*/(\d+) ', workflow).group(1))
+    assert LAG < BOUND <= interval
+    # Written once, as a module constant, with the comment that says why.
+    source = (ROOT / "scripts" / "reconcile.py").read_text(encoding="utf-8")
+    tree = ast.parse(source)
+    assigned = [n for n in tree.body if isinstance(n, ast.Assign)
+                and any(isinstance(t, ast.Name)
+                        and t.id == "GROOM_LABEL_FRESH_MINUTES"
+                        for t in n.targets)]
+    assert len(assigned) == 1
+    above = source.splitlines()[assigned[0].lineno - 2]
+    assert above.startswith("#:"), above
+    assert source.count("GROOM_LABEL_FRESH_MINUTES =") == 1
+
+
+_WORDS = dict(enumerate(
+    "zero one two three four five six seven eight nine ten eleven twelve "
+    "thirteen fourteen fifteen".split()))
+
+
+def _bound_literals(text: str) -> list[str]:
+    digits = re.escape(f"{BOUND:g}")
+    found = re.findall(rf"\b{digits}(?:\.0+)?\s*-?\s*min", text, re.I)
+    found += re.findall(rf"minutes(?:_ago)?\s*=\s*{digits}(?:\.0+)?\b", text)
+    return found
+
+
+def test_no_literal_number_of_minutes_for_the_bound_in_the_tests_or_the_doc():
+    tests = Path(__file__).read_text(encoding="utf-8")
+    doc = (ROOT / "docs" / "groomer.md").read_text(encoding="utf-8")
+    assert _bound_literals(tests) == [] and _bound_literals(doc) == []
+    word = _WORDS.get(BOUND)
+    queue_section = doc.split("**Every card past the free slots is queued")[1] \
+        .split("### What the drain wrote down")[0]
+    assert "GROOM_LABEL_FRESH_MINUTES" in queue_section
+    if word:
+        assert not re.search(rf"\b{word}[ -]minute", tests, re.I)
+        assert not re.search(rf"\b{word}[ -]minute", queue_section, re.I)
+
+
+def test_inside_the_bound_a_missing_label_is_read_directly_and_released():
+    queue = Queue([_queued(OLDER, ["DRE-11"], minutes_ago=INSIDE)],
+                  [_card("DRE-11", queued=False)], direct={"DRE-11": True})
+    assert _release(queue, 1) == ["DRE-11"]
+    assert queue.direct_reads == [("DRE-11", True)]
+    assert queue.of("state") == [("DRE-11", "Planning")]
+    assert queue.rows() == [{"id": OLDER, "released": ["DRE-11"], "left": [],
+                             "unqueued": []}]
+
+
+def test_the_same_card_inside_the_bound_is_held_not_taken_out():
+    """`test_a_card_whose_label_a_person_removed_is_never_released`, with its
+    queued record inside the bound and the direct read showing no label
+    either: the card keeps its place and nothing is written about it."""
+    queue = Queue([_queued(OLDER, ["DRE-11", "DRE-12"], minutes_ago=INSIDE)],
+                  [_card("DRE-11", queued=False), _card("DRE-12")],
+                  direct={"DRE-11": False})
+    assert _release(queue, 1) == ["DRE-12"]
+    assert ("DRE-11", "Planning") not in queue.of("state")
+    assert queue.rows() == [{"id": OLDER, "released": ["DRE-12"], "left": [],
+                             "unqueued": []}]
+    assert queue.direct_reads == [("DRE-11", True)]
+    posted = [b for i, b in queue.of("comment") if i == STANDING]
+    assert _standing_after(queue.thread, posted) == ["DRE-11"]
+
+
+def test_inside_the_bound_with_a_label_in_neither_read_nothing_is_written():
+    queue = Queue([_queued(OLDER, ["DRE-11"], minutes_ago=INSIDE)],
+                  [_card("DRE-11", queued=False)], direct={"DRE-11": False})
+    assert _release(queue, 2) == []
+    assert queue.writes == []
+
+
+def test_the_direct_read_is_made_only_for_an_unlabelled_card_inside_the_bound():
+    queue = Queue([_queued(OLDER, ["DRE-11"], minutes_ago=PAST),
+                   _queued(NEWER, ["DRE-21", "DRE-22"], minutes_ago=INSIDE)],
+                  [_card("DRE-11", queued=False), _card("DRE-21"),
+                   _card("DRE-22", queued=False)],
+                  direct={"DRE-22": True})
+    assert _release(queue, 3) == ["DRE-21", "DRE-22"]
+    assert queue.direct_reads == [("DRE-22", True)]
+    assert queue.rows() == [
+        {"id": OLDER, "released": [], "left": [], "unqueued": ["DRE-11"]},
+        {"id": NEWER, "released": ["DRE-21", "DRE-22"], "left": [],
+         "unqueued": []}]
+
+
+def test_the_age_is_the_newest_queued_record_naming_the_card():
+    """A batch queued again (its first drain died before the drained record)
+    is as young as its newest record."""
+    queue = Queue([_queued(OLDER, ["DRE-11"], minutes_ago=PAST),
+                   _queued(OLDER, ["DRE-11"], minutes_ago=INSIDE)],
+                  [_card("DRE-11", queued=False)], direct={"DRE-11": False})
+    assert _release(queue, 1) == []
+    assert queue.writes == [] and queue.direct_reads == [("DRE-11", True)]
+
+
+@pytest.mark.parametrize("shown", [True, False])
+def test_the_2026_10_09_batch_replayed(shown):
+    """Twelve queued, a sweep ten seconds later whose board read shows no
+    label, two free slots."""
+    queue = Queue([_queued(BATCH_1009, TWELVE, minutes_ago=LAG)],
+                  [_card(i, queued=False) for i in TWELVE],
+                  direct={i: shown for i in TWELVE})
+    released = _release(queue, 2)
+    posted = [b for i, b in queue.of("comment") if i == STANDING]
+    assert "taken out by hand" not in "".join(posted)
+    if shown:
+        assert released == TWELVE[:2]
+        assert queue.of("state") == [(i, "Planning") for i in TWELVE[:2]]
+        assert queue.rows() == [{"id": BATCH_1009, "released": TWELVE[:2],
+                                 "left": [], "unqueued": []}]
+        assert _standing_after(queue.thread, posted) == TWELVE[2:]
+    else:
+        assert released == [] and queue.writes == []
+        assert _standing_after(queue.thread) == TWELVE
+
+
+# --------------------------------------------------------------------------- #
+# a wrongly dropped card is put back in the line (DRE-6640)                    #
+# --------------------------------------------------------------------------- #
+
+
+def _incident_thread() -> list[dict]:
+    return [_queued(BATCH_1009, TWELVE, minutes_ago=DAY + LAG),
+            _released(BATCH_1009, unqueued=TWELVE, minutes_ago=DAY)]
+
+
+def _incident_board() -> list[dict]:
+    return [_card(i, lane="Done" if i == "DRE-4224" else "Intake")
+            for i in TWELVE]
+
+
+def _repair(thread, cards, free=0) -> tuple[Queue, list[str]]:
+    queue = Queue(thread, cards)
+    _release(queue, free)
+    return queue, [b for i, b in queue.of("comment") if i == STANDING]
+
+
+def test_the_eleven_are_put_back_by_one_record_and_only_once():
+    thread = _incident_thread()
+    queue, posted = _repair(thread, _incident_board())
+    assert len(posted) == 1 and queue.writes == [("comment", STANDING, posted[0])]
+    record = groomer.parse_queued_record(posted[0])
+    assert posted[0].startswith(f"{groomer.MARK} {groomer.QUEUED_TAG}: {BATCH_1009}\n")
+    assert record["id"] == BATCH_1009
+    assert [c["identifier"] for c in record["cards"]] == ELEVEN
+    # Their original places: DRE-4224's seventh is not taken by another.
+    assert [c["place"] for c in record["cards"]] == [
+        TWELVE.index(i) + 1 for i in ELEVEN]
+    # The receipt: the row it corrects, by its date, and what was wrong.
+    row_day = thread[1]["created_at"][:10]
+    assert row_day in posted[0]
+    assert f"{groomer.MARK} {groomer.RELEASED_TAG}" in posted[0]
+    assert "taken out by hand" in posted[0]
+    assert "nobody" in posted[0].lower()
+    # The queue reads the cards again, by its one grammar.
+    assert _standing_after(thread, posted) == ELEVEN
+    # A second pass over the thread with that record on it writes nothing.
+    again = [*thread, {"body": posted[0], "authored_by_pipeline": True,
+                       "created_at": _iso(INSIDE)}]
+    queue, more = _repair(again, _incident_board())
+    assert more == [] and queue.writes == []
+
+
+def test_a_card_that_left_intake_or_lost_its_label_is_not_put_back():
+    thread = [_queued(OLDER, ["DRE-11", "DRE-12", "DRE-13"], minutes_ago=DAY),
+              _released(OLDER, unqueued=["DRE-11", "DRE-12", "DRE-13"],
+                        minutes_ago=DAY)]
+    queue, posted = _repair(thread, [_card("DRE-11", queued=False),
+                                     _card("DRE-12", lane="Planning"),
+                                     _card("DRE-13")])
+    record = groomer.parse_queued_record(posted[0])
+    assert [c["identifier"] for c in record["cards"]] == ["DRE-13"]
+    assert queue.direct_reads == []
+
+
+def test_a_card_released_by_a_row_is_not_put_back():
+    thread = [_queued(OLDER, ["DRE-11"], minutes_ago=DAY),
+              _released(OLDER, released=["DRE-11"], minutes_ago=DAY)]
+    queue, posted = _repair(thread, [_card("DRE-11")])
+    assert posted == [] and queue.writes == []
+
+
+def _dropped_then(record: dict) -> list[dict]:
+    return [_queued(OLDER, ["DRE-11"], minutes_ago=DAY),
+            _released(OLDER, unqueued=["DRE-11"], minutes_ago=DAY),
+            record]
+
+
+def test_a_pipeline_record_after_the_row_naming_the_card_means_done():
+    queue, posted = _repair(
+        _dropped_then(_queued(OLDER, ["DRE-11"], minutes_ago=INSIDE)),
+        [_card("DRE-11")])
+    assert posted == [] and queue.writes == []
+
+
+def test_a_record_a_person_wrote_after_the_row_does_not_count():
+    forged = dict(_queued(OLDER, ["DRE-11"], minutes_ago=INSIDE),
+                  authored_by_pipeline=False)
+    _queue, posted = _repair(_dropped_then(forged), [_card("DRE-11")])
+    assert len(posted) == 1
+    assert [c["identifier"] for c in
+            groomer.parse_queued_record(posted[0])["cards"]] == ["DRE-11"]
+
+
+def test_a_record_written_before_the_row_does_not_count():
+    """A batch queued twice before the row named its card: both records are
+    older than the row, so neither is the repair."""
+    thread = [_queued(OLDER, ["DRE-11"], minutes_ago=DAY + 1),
+              _queued(OLDER, ["DRE-11"], minutes_ago=DAY),
+              _released(OLDER, unqueued=["DRE-11"], minutes_ago=DAY)]
+    _queue, posted = _repair(thread, [_card("DRE-11")])
+    assert len(posted) == 1
+
+
+def test_one_record_per_batch_in_place_order():
+    thread = [_queued(OLDER, ["DRE-13", "DRE-11"], minutes_ago=DAY),
+              _queued(NEWER, ["DRE-21"], minutes_ago=DAY),
+              _released(OLDER, unqueued=["DRE-11", "DRE-13"], minutes_ago=DAY),
+              _released(NEWER, unqueued=["DRE-21"], minutes_ago=DAY)]
+    _queue, posted = _repair(thread, [_card(i) for i in
+                                      ("DRE-11", "DRE-13", "DRE-21")])
+    records = [groomer.parse_queued_record(b) for b in posted]
+    assert [(r["id"], [c["identifier"] for c in r["cards"]]) for r in records] \
+        == [(OLDER, ["DRE-13", "DRE-11"]), (NEWER, ["DRE-21"])]
+
+
+def test_a_repaired_card_is_released_on_a_later_pass_like_any_queued_card():
+    thread = [_queued(OLDER, ["DRE-11", "DRE-12"], minutes_ago=DAY),
+              _released(OLDER, unqueued=["DRE-11", "DRE-12"], minutes_ago=DAY)]
+    _queue, posted = _repair(thread, [_card("DRE-11"), _card("DRE-12")])
+    later = [*thread, {"body": posted[0], "authored_by_pipeline": True,
+                       "created_at": _iso(PAST)}]
+    queue = Queue(later, [_card("DRE-11"), _card("DRE-12")])
+    assert _release(queue, 1) == ["DRE-11"]
+    notes = [groomer.parse_moved_note(b) for i, b in queue.of("comment")
+             if i == "DRE-11"]
+    assert len(notes) == 1 and notes[0]["id"] == OLDER
+    assert queue.of("state") == [("DRE-11", "Planning")]
+    assert queue.of("unlabel") == [("DRE-11", groomer.QUEUED_LABEL)]
+    assert queue.rows() == [{"id": OLDER, "released": ["DRE-11"], "left": [],
+                             "unqueued": []}]
+
+
+def test_a_repaired_card_is_protected_by_the_bound_on_the_pass_that_releases_it():
+    """Its record is fresh: a board read that has not caught up with the
+    label reads it directly rather than taking it out again."""
+    thread = [_queued(OLDER, ["DRE-11"], minutes_ago=DAY),
+              _released(OLDER, unqueued=["DRE-11"], minutes_ago=DAY)]
+    _queue, posted = _repair(thread, [_card("DRE-11")])
+    later = [*thread, {"body": posted[0], "authored_by_pipeline": True,
+                       "created_at": _iso(INSIDE)}]
+    queue = Queue(later, [_card("DRE-11", queued=False)],
+                  direct={"DRE-11": True})
+    assert _release(queue, 1) == ["DRE-11"]
+    assert "taken out by hand" not in "".join(b for _i, b in queue.of("comment"))
 
 
 def test_only_the_bureau_pipeline_sweep_releases(monkeypatch):
@@ -491,6 +807,7 @@ def _registry() -> dict:
 @pytest.mark.parametrize("path, anchor", [
     ("scripts/groomer.py", "queued_record("),
     ("scripts/reconcile.py", "released_record("),
+    ("scripts/reconcile.py", "requeued_record("),
 ])
 def test_the_two_new_comment_sites_are_declared_not_an_act(path, anchor):
     registry = _registry()
@@ -524,3 +841,13 @@ def test_the_groomer_doc_names_the_queue():
     assert f"`{groomer.MARK} {groomer.RELEASED_TAG}: <id>" in doc
     assert "Nine refusals" in doc and "Ten refusals" not in doc
     assert "NoFreeSlot" not in doc
+
+
+def test_the_groomer_doc_names_the_bound_and_the_repair():
+    doc = (ROOT / "docs" / "groomer.md").read_text(encoding="utf-8")
+    queue_section = doc.split("**Every card past the free slots is queued")[1] \
+        .split("### What the drain wrote down")[0]
+    assert "`GROOM_LABEL_FRESH_MINUTES`" in queue_section
+    assert "taken out by hand" in queue_section
+    assert "put back" in queue_section
+    assert "DRE-6640" in queue_section
