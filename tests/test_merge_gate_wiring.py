@@ -92,7 +92,8 @@ class ScriptInvocationTest(unittest.TestCase):
         self.assertIn("issues/$PR/comments", self.run_block)
         m = re.search(r"--check-runs-file (\S+)", self.run_block)
         self.assertIsNotNone(m)
-        self.assertIn(f"check-runs\" > {m.group(1)}", self.run_block)
+        # Every page (DRE-6532).
+        self.assertIn(f"check-runs?per_page=100\" > {m.group(1)}", self.run_block)
         m = re.search(r"--comments-file (\S+)", self.run_block)
         self.assertIsNotNone(m)
         # DRE-4139: the comment record is fetched PAGINATED, so the redirect

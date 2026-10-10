@@ -76,6 +76,19 @@ SIGNATURE = renv.SIGNATURES[0]  # native-binary-missing, DRE-3416's own
 CRASHED = '[["completed", "failure"]]'
 NO_REVIEW_CHECKS = "[]"
 
+
+def _paged(rows: str) -> str:
+    """The jq'd `[status, conclusion(, name)]` rows a test names, served as
+    the `gh api --paginate --slurp` pages the head read asks for (DRE-6532).
+    A row with no name is the run-attributed `call / review`. An empty
+    answer stays empty: the read failed."""
+    if not rows:
+        return rows
+    runs = [{"status": r[0], "conclusion": r[1] or None,
+             "name": r[2] if len(r) > 2 else "call / review"}
+            for r in json.loads(rows)]
+    return json.dumps([{"total_count": len(runs), "check_runs": runs}])
+
 _BASE = datetime(2026, 9, 11, 6, 0, tzinfo=UTC)
 
 
@@ -199,11 +212,12 @@ class _World:
         self.gh_calls.append(tuple(argv[1:]))
         if argv[1:3] == ["pr", "list"]:
             return _ok(json.dumps(self.prs))
-        if argv[1] == "api" and "/check-runs" in argv[2]:
+        if argv[1] == "api" and any("/check-runs" in a for a in argv[2:]):
             if isinstance(self.checks, dict):
-                sha = argv[2].split("/commits/")[1].split("/")[0]
-                return _ok(self.checks.get(sha, CRASHED))
-            return _ok(self.checks)
+                path = next(a for a in argv[2:] if "/check-runs" in a)
+                sha = path.split("/commits/")[1].split("/")[0]
+                return _ok(_paged(self.checks.get(sha, CRASHED)))
+            return _ok(_paged(self.checks))
         if argv[1:3] == ["run", "list"]:
             return _ok(json.dumps(self.runs))
         if argv[1:3] == ["pr", "comment"]:

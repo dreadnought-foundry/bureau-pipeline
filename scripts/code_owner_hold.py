@@ -65,6 +65,9 @@ import console_escalation
 # an exception — the same one stacked_prs.py gathers through.
 from stranded_fix import SELF_HOST_REPO, _gh  # noqa: F401  (patched in tests)
 
+# The check-runs record in every shape the gate writes it (DRE-6532).
+from unfixable_checks import _check_runs
+
 MET = "met"
 UNMET = "unmet"
 NOT_REQUIRED = "not_required"
@@ -592,9 +595,11 @@ def _cmd_release(args) -> int:
 
 
 def _cmd_explain(args) -> int:
-    check_runs = _load(args.check_runs_file)
-    if isinstance(check_runs, dict):
-        check_runs = check_runs.get("check_runs")
+    # Every page the gate's read wrote (DRE-6532); unreadable is no runs.
+    try:
+        check_runs = _check_runs(_load(args.check_runs_file))
+    except ValueError:
+        check_runs = None
     for line in explain(_load(args.owners_file), check_runs, args.author):
         print(f"requirement: {line}")
     return 0

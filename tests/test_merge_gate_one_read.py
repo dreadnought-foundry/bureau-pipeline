@@ -46,8 +46,10 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "scripts" / "evaluate_and_merge.sh"
 sys.path.insert(0, str(ROOT / "scripts"))
+sys.path.insert(0, str(ROOT / "tests"))
 
 import merge_gate  # noqa: E402
+from test_check_runs_read_is_whole import pages, runs_143  # noqa: E402
 
 PR = 4242
 HEAD = "1f" * 20
@@ -154,7 +156,13 @@ if args[0] == "api":
         json.dump(rows, open(os.environ["COMMENTS"], "w"))
         emit(row)
     if "check-runs" in path:
-        emit({"check_runs": fx["check_runs"]})
+        if fx.get("check_runs_fail"):
+            fail("HTTP 502: Bad Gateway")
+        # Every page for `--paginate --slurp`, GitHub's first page for any
+        # other read (DRE-6532).
+        pages = fx.get("check_run_pages") or [
+            {"total_count": len(fx["check_runs"]), "check_runs": fx["check_runs"]}]
+        emit(pages if "--slurp" in args else pages[0])
     if "/compare/" in path:
         emit(fx.get("compare", {"status": "ahead", "files": [{"filename": "a.py"}],
                                 "commits": [{"sha": fx["view"]["headRefOid"]}]}))
@@ -840,6 +848,49 @@ class TheGateStopsEarlyWhileCiRunsTest(unittest.TestCase):
                         "workflow_runs": "unreadable"})
         self.assertEqual(run.decision(), "wait", run.explain())
         self.assertEqual(len(run.calls), 3, run.explain())
+
+
+# --------------------------------------------------------------------------
+# The check runs are read whole (DRE-6532)
+# --------------------------------------------------------------------------
+class TheCheckRunsAreReadWholeTest(unittest.TestCase):
+    """GitHub pages a commit's check runs 30 at a time, newest first, so an
+    unpaged read drops the oldest — the CI jobs. The gate's one read takes
+    every page of 100, and a read that fails on any page stops the step."""
+
+    @staticmethod
+    def check_run_reads(run: Run) -> list:
+        return [c for c in run.calls
+                if c[:1] == ["api"] and any("check-runs" in a for a in c)]
+
+    def test_it_is_one_call_for_every_page_of_100(self):
+        run = run_gate(green_fixture())
+        self.assertEqual(run.decision(), "merge", run.explain())
+        reads = self.check_run_reads(run)
+        self.assertEqual(len(reads), 1, run.explain())
+        self.assertIn("--paginate", reads[0])
+        self.assertIn("--slurp", reads[0])
+        self.assertIn(f"repos/{REPO}/commits/{HEAD}/check-runs?per_page=100", reads[0])
+
+    def test_a_red_job_on_the_second_page_is_not_merged(self):
+        fx = green_fixture()
+        fx["check_run_pages"] = pages(runs_143())
+        run = run_gate(fx)
+        self.assertEqual(run.proc.returncode, 0, run.explain())
+        self.assertEqual(run.decision(), "wait", run.explain())
+        self.assertIn("1 of 143 check runs not green", run.proc.stdout)
+        self.assertEqual(run.merges, [])
+
+    def test_a_failed_read_stops_the_step_with_no_merge(self):
+        fx = green_fixture()
+        fx["check_runs_fail"] = True
+        run = run_gate(fx)
+        self.assertNotEqual(run.proc.returncode, 0, run.explain())
+        self.assertEqual(run.decision(), "", run.explain())
+        self.assertEqual(run.merges, [])
+        # Nothing is read or written after it.
+        self.assertEqual(run.calls[-1], self.check_run_reads(run)[0], run.explain())
+        self.assertEqual(len(run.comments), 1)
 
 
 class TheEarlyAnswerNeverChangesADecisionTest(unittest.TestCase):

@@ -196,6 +196,15 @@ class TheFileRunsAsAFileTest(unittest.TestCase):
     def test_it_never_calls_the_merge_command(self):
         self.assertEqual([c for c in self.calls if c[:2] == ["pr", "merge"]], [], self.explain())
 
+    def test_it_reads_every_page_of_the_check_runs(self):
+        """DRE-6532: one call, every page of 100 — an unpaged read stops at 30."""
+        reads = [c for c in self.calls
+                 if c[:1] == ["api"] and any("/check-runs" in a for a in c)]
+        self.assertEqual(len(reads), 1, self.calls)
+        for flag in ("--paginate", "--slurp"):
+            self.assertIn(flag, reads[0])
+        self.assertTrue(any(a.endswith("/check-runs?per_page=100") for a in reads[0]), reads[0])
+
     def test_it_leaves_one_note_on_the_pull_request(self):
         notes = [c["body"] for c in self.comments if HUMAN_MARK in c["body"]]
         self.assertEqual(len(notes), 1, self.comments)

@@ -43,8 +43,9 @@ set -e
 #     `bureau-card` line when the branch names a card.
 #  2. Gathers the records the decision reads, each from GitHub's own answer.
 #     From the one read: mergeability, the draft flag, the head sha, the
-#     author, the body and creation time, and the files it changes. Then the
-#     head's check runs and workflow runs, and `merge_gate.py precheck` asks
+#     author, the body and creation time, and the files it changes. Then
+#     every page of the head's check runs and its workflow runs, and
+#     `merge_gate.py precheck` asks
 #     whether condition 1 waits on those two alone; if it does, the step says
 #     `decision=wait` and stops before reading anything else. Otherwise: the
 #     three-dot compare of base against head, every page of the comments, the
@@ -329,6 +330,15 @@ set -e
 #   head after MERGE_RETRY_SECONDS (15 by default). It is a merge only if
 #   GitHub accepts it; a second refusal is read by the arms below exactly as
 #   a first one was, and a second server error is a real failure.
+# DRE-6532 (2026-10-10). The check runs were read one page at a time and the
+#   gate stopped after the first, which is 30. GitHub answers newest first,
+#   so the runs that fall off are the oldest: the CI jobs. On 2026-10-09
+#   agent-bureau's `main` commit 21ca627e carried 143, and no pull request
+#   head carried more than 23, seven short of the cut. A red job off the
+#   page was not in the file, so the gate could read a red head as green.
+#   The read now takes every page of 100 in one `gh api --paginate --slurp`
+#   call, merge_gate.py and `code_owner_hold.py explain` read the array of
+#   pages it writes, and a read that fails on any page still stops the step.
 
 set -euo pipefail
 
@@ -363,7 +373,8 @@ AUTHOR=$(jq -r '.author as $a | ($a.login // empty) | if startswith("app/") then
 PR_URL=$(jq -r '.url // ""' /tmp/pr-view.json 2>/dev/null || true)
 
 # REST check runs, not `gh pr checks`, which needs actions:read (DRE-1992).
-gh api "repos/$REPO_FULL/commits/$SHA/check-runs" > /tmp/check-runs.json
+# Every page; a failed read on any page stops the step (DRE-6532).
+gh api --paginate --slurp "repos/$REPO_FULL/commits/$SHA/check-runs?per_page=100" > /tmp/check-runs.json
 # The workflow's own token; a blip is the unreadable marker (DRE-1994, DRE-5045).
 GH_TOKEN="$WORKFLOW_TOKEN" gh api "repos/$REPO_FULL/actions/runs?head_sha=$SHA&per_page=100" > /tmp/workflow-runs.json 2>/dev/null \
   || echo '{"readable":false}' > /tmp/workflow-runs.json

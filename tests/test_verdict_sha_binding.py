@@ -59,6 +59,14 @@ import step_shell  # noqa: E402
 SHA_REVIEWED = "aa11" * 10  # the commit the critic actually reviewed
 SHA_NEWER = "bb22" * 10  # a commit pushed AFTER the verdict landed
 
+
+def _failed_pages(count: int) -> str:
+    """`count` failed CI runs on the head, as the `gh api --paginate --slurp`
+    read of its check runs answers them (DRE-6532)."""
+    runs = [{"name": f"ci job {i}", "status": "completed", "conclusion": "failure"}
+            for i in range(count)]
+    return json.dumps([{"total_count": count, "check_runs": runs}])
+
 QA_LOGIN = "agent-bureau-qa-bot[bot]"
 WORKER_LOGIN = "agent-bureau-bot[bot]"  # authors PRs — must never count
 
@@ -632,8 +640,8 @@ class ApprovedButRedAuthorshipTest(unittest.TestCase):
                 return "[]"
             if args[:2] == ("pr", "list"):
                 return json.dumps([pr])
-            if args[0] == "api" and args[1].endswith("/check-runs"):
-                return "1"
+            if args[0] == "api" and args[-1].endswith("/check-runs?per_page=100"):
+                return _failed_pages(1)
             if args[0] == "api" and "/git/commits/" in args[1]:
                 return json.dumps({"committer": {"date": self.OLD_DATE}})
             if args[0] == "api" and args[1].endswith("/contents/.github/workflows"):
