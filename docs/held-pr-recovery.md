@@ -125,7 +125,7 @@ conflict sweep, and dispatches at most once per sweep.
 | Route | Fires when | Log line |
 | -- | -- | -- |
 | approved-but-red | The critic APPROVEd and a CI check is failing, so nothing event-driven will fix it | `approved-but-red: …` |
-| dead-fix-run | The last fix run died of a model/API error or ran out of turns, and its trigger was consumed | `dead fix run: …` |
+| dead-fix-run | The last fix run died of a model/API error, ran out of turns, or lost its machine (the worker bot's `fix-run-runner-lost` comment, DRE-6572, dispatched only once it is 10 minutes old so the runner's own retry goes first), and its trigger was consumed | `dead fix run: …` |
 | answered-blocker | An operator decision landed after the loop's last 🛑 blocker | `answered blocker: …` |
 | standing-verdict | A blocking verdict — the critic's REQUEST_CHANGES or, since DRE-5230, the Verifier's FAIL — binds the current head, is over 20 minutes old, and no worker-bot comment is newer than it — the fix run it should have started never arrived | `evicted-verdict: …` |
 | committed-not-pushed | The last fix run finished its fix and GitHub refused the push (the worker bot's `fix-run-committed-not-pushed` comment, DRE-6351), the branch is still at the head that comment names, 30 minutes have passed, and no more than one such comment stands for that head — the delivery of the saved commits never landed | `committed-not-pushed: …` |
@@ -199,6 +199,7 @@ verdict on an OLDER commit, which is a different fault.
 | ⚠️ `operator-decision-near-miss` notice | Your comment did not parse — re-post it in the format above |
 | 🔁 re-dispatch receipt on a blocking verdict | Nothing. The sweep started the fix run the verdict never got. |
 | `fix-run-committed-not-pushed` comment | Nothing. The saved fix is being delivered; if the branch has not moved in 30 minutes the sweep restarts the fix loop once. |
+| ⚡ `fix-run-runner-lost` comment | Nothing. The fix run's machine was taken away before the agent finished, which is not a failed fix; the pipeline retries once on that commit. A second lost machine on the same commit holds for you with a 🛑 line instead. |
 | 🔄 `head-desync` notice | GitHub left the pull request on an older commit than its branch holds (DRE-6217, bp #780), so every check, the review and the merge gate were reading a commit the branch had already left. The sweep closed and reopened it once for that branch commit, which makes GitHub move the head. Nothing to do. If it is still behind on the next sweep, the sweep posts `head-desync-unresolved` once and stops: close and reopen it by hand, or push a new commit. |
 
 Related: `scripts/fix_budget.py` (the decision), `scripts/fix_convergence.py`

@@ -43,6 +43,11 @@ for "escalate" — the workflow keeps its own escalation text):
              shows it to any later fix run as an unanswered blocker.
   retry-turns / hold-turns — the same two shapes for a run that RAN OUT OF
              TURNS (DRE-2312), on their own marker and their own budget.
+  retry-runner-lost / hold-runner-lost — the same two shapes for a run whose
+             MACHINE WAS TAKEN AWAY before the agent finished (DRE-6572): no
+             result record, an agent step that ended failure or cancelled,
+             and the job's annotations naming it (RUNNER_LOST_WORDINGS). One
+             retry per head, then a hold. Short of all three facts, escalate.
 
 TURN EXHAUSTION IS NOT AN OUTAGE (DRE-2312). Until this card, every is_error
 death routed through the outage path above: portico PR #170 spent 16 minutes,
@@ -100,12 +105,38 @@ TURN_CAP_TAG = "fix-run-turn-exhaustion"
 COMMITTED_NOT_PUSHED_TAG = "fix-run-committed-not-pushed"
 COMMITTED_NOT_PUSHED_WAIT_MINUTES = 30
 COMMITTED_NOT_PUSHED_RESTARTS = 1
-# Both retry markers, for the reconcile sweep: the newest worker-bot comment
-# carrying either one is a promised retry nothing else will fire. The
+# A fix run whose machine was taken away before the agent finished (DRE-6572):
+# no result record, an agent step that did not finish, and the job's own
+# annotations saying the machine went. Its own marker and its own budget, like
+# the two above — one retry per head, counted off `fix-run-runner-lost
+# @<sha8>` first lines (runner_lost_markers), and a hold for a person on the
+# second in a row. The sweep waits RUNNER_LOST_WAIT_MINUTES on it: RunsOn
+# starts its own retry of the same run a few minutes after the attempt ends,
+# and the sweep's busy guard cannot see a retry that has not started yet.
+RUNNER_LOST_TAG = "fix-run-runner-lost"
+RUNNER_LOST_WAIT_MINUTES = 10
+RUNNER_LOST_RETRIES = 1
+# The job's words for a machine taken mid-run, matched case-insensitively
+# against its annotations. "Process completed with exit code 137" is NOT one:
+# it is also what the memory kill scripts/out_of_memory.py reads looks like.
+RUNNER_LOST_WORDINGS = (
+    # RunsOn's, copied from job 114135785854 (2026-10-09).
+    "AWS interrupted the EC2 Spot instance running this job",
+    # GitHub's, for a runner that went away (red_main_repair.py matches it too).
+    "lost communication with the server",
+    # GitHub's, for a runner stopped under the job.
+    "The runner has received a shutdown signal",
+)
+# The agent step's outcomes that mean it did not finish. `skipped` is GitHub
+# saying the step never ran — a setup death (DRE-2931), not a machine taken
+# mid-run — and `success` means it finished.
+RUNNER_LOST_OUTCOMES = ("failure", "cancelled")
+# Every retry marker, for the reconcile sweep: the newest worker-bot comment
+# carrying any one is a promised retry nothing else will fire. The
 # committed-not-pushed tag is deliberately NOT one: retry_dead_fix_runs would
 # re-dispatch a fresh agent on the next sweep while the delivery is still
 # replaying the patch.
-RETRY_MARKERS = (OUTAGE_TAG, TURN_CAP_TAG)
+RETRY_MARKERS = (OUTAGE_TAG, TURN_CAP_TAG, RUNNER_LOST_TAG)
 # Substring shared by BOTH worker-bot push markers ("🔧 Fix attempt N pushed…"
 # and "🔀 Conflict resolution round N pushed…"). A push means the branch moved
 # forward — it clears the current run of consecutive deaths.
@@ -188,6 +219,70 @@ def committed_not_pushed_markers(
     return count
 
 
+def runner_lost_markers(
+    comments: list | None, head: str, *, worker_login: str = WORKER_LOGIN
+) -> int:
+    """Worker-bot lost-machine markers for `head` (DRE-6572).
+
+    Read the way committed_not_pushed_markers reads its own: the first line
+    only — the tag and `@<head[:8]>` — and the worker bot's alone (DRE-1995).
+    Per head, so a new commit re-arms the one retry."""
+    if not head:
+        return 0
+    key = f"{RUNNER_LOST_TAG} @{head[:8]}"
+    count = 0
+    for comment in comments or []:
+        if _comment_login(comment).removesuffix("[bot]") != worker_login:
+            continue
+        first = ((comment.get("body") or "").splitlines() or [""])[0]
+        if key in first:
+            count += 1
+    return count
+
+
+def _quoted(message: str, at: int, length: int) -> str:
+    """The sentence of `message` holding the wording at `at`, one line, with
+    nothing in it that can close the quote it is put in."""
+    start = message.rfind(". ", 0, at)
+    start = 0 if start < 0 else start + 2
+    end = message.find(".", at + length)
+    end = len(message) if end < 0 else end + 1
+    sentence = " ".join(message[start:end].split()).replace('"', "'")
+    return sentence[:200]
+
+
+def runner_lost(
+    execution: dict | None, agent_step_outcome: str, annotations: list | None
+) -> tuple[str, str]:
+    """Was this fix run's machine taken away? `(quote, "")` when all three
+    facts hold — the job's own sentence naming it — and `("", why)` naming the
+    first fact that is missing when they do not. Fail closed: a fact that
+    could not be read is a fact that does not hold (DRE-6572)."""
+    if execution is not None:
+        return "", "a result record exists, so the agent finished"
+    outcome = (agent_step_outcome or "").strip()
+    if outcome not in RUNNER_LOST_OUTCOMES:
+        return "", (f"the agent step's outcome was {outcome or 'not given'!r}, "
+                    "not failure or cancelled")
+    if annotations is None:
+        return "", "the job's annotations could not be read"
+    for note in annotations:
+        if not isinstance(note, dict):
+            continue
+        for field in ("message", "title"):
+            text = note.get(field)
+            if not isinstance(text, str):
+                continue
+            lowered = text.lower()
+            for wording in RUNNER_LOST_WORDINGS:
+                at = lowered.find(wording.lower())
+                if at >= 0:
+                    return _quoted(text, at, len(wording)), ""
+    if not annotations:
+        return "", "the job's annotations came back empty — no lost machine named"
+    return "", "the job's annotations name no lost machine"
+
+
 def _load_comments(path: str) -> list:
     """Read the REST issues/comments record; [] on any read/parse error.
 
@@ -205,6 +300,21 @@ def _load_comments(path: str) -> list:
         return merge_gate.flatten_pages(data)
     except ValueError:
         return []
+
+
+def _load_annotations(path: str) -> list | None:
+    """The job's Checks API annotations, or None when they could not be read.
+
+    A missing, empty or unparseable file, or GitHub's error object in place
+    of the list, is None — never [], which would say the job had none."""
+    if not path:
+        return None
+    try:
+        with open(path) as f:
+            data = json.load(f)
+    except (OSError, ValueError):
+        return None
+    return data if isinstance(data, list) else None
 
 
 class Decision:
@@ -230,6 +340,35 @@ class Decision:
         return f"Decision({self.action!r}, {self.comment!r})"
 
 
+def _runner_lost_decision(
+    quote: str, prior_lost: int, head: str, lost_cap: int, run_suffix: str
+) -> Decision:
+    """The retry, or the hold on the second lost machine in a row on `head`.
+
+    Neither line may carry fix_convergence.NO_PROGRESS or PUSH_MARKER, or open
+    with 🔧: a lost machine is not a run that ended with nothing to show, and
+    not a fix attempt. The retry opens with ⚡, never 🛑. The hold opens with 🛑
+    so fix_context.py shows it as a blocker, and carries no marker, so the
+    sweep stops on it as it does on `hold` and `hold-turns`."""
+    if prior_lost >= lost_cap:
+        runs = {2: "Two", 3: "Three"}.get(prior_lost + 1, str(prior_lost + 1))
+        another = "a third" if prior_lost + 1 == 2 else "another"
+        return Decision(
+            "hold-runner-lost",
+            f"🛑 {runs} fix runs in a row on this commit lost their machine "
+            f"before the agent finished (the job says: \"{quote}\"). The work "
+            f"itself has not failed. Holding for a person rather than starting "
+            f"{another} run on the same commit.{run_suffix}",
+        )
+    return Decision(
+        "retry-runner-lost",
+        f"⚡ {RUNNER_LOST_TAG} @{head[:8]}: the fix run's machine was taken "
+        f"away before the agent finished — not a failed fix. The job says: "
+        f"\"{quote}\" No fix attempt was used; the pipeline retries once "
+        f"(lost machine {prior_lost + 1}/{lost_cap + 1}).{run_suffix}",
+    )
+
+
 def decide(
     execution: dict | None,
     prior_deaths: int,
@@ -238,6 +377,11 @@ def decide(
     run_url: str = "",
     cap: int = RETRY_CAP,
     turn_cap: int = TURN_RETRY_CAP,
+    agent_step_outcome: str = "",
+    annotations: list | None = None,
+    head: str = "",
+    prior_lost: int = 0,
+    lost_cap: int = RUNNER_LOST_RETRIES,
 ) -> Decision:
     """Decide escalate/retry/hold for a no-progress fix run, given the
     execution result and the prior worker-bot marker counts.
@@ -246,13 +390,21 @@ def decide(
     TURN_CAP_TAG markers — separate budgets, because an outage and a turn
     ceiling are different failures with different remedies (DRE-2312). A PR
     that survived two outages last week must not have its first turn
-    exhaustion escalated on that exhausted budget, and vice versa."""
+    exhaustion escalated on that exhausted budget, and vice versa.
+
+    `agent_step_outcome` and `annotations` (None: could not be read) are the
+    two facts beside a missing result record that say the machine was taken
+    away (DRE-6572); `prior_lost` counts RUNNER_LOST_TAG markers on `head`."""
     death = check_agent_result.classify_death(execution)
+    run_suffix = f" Run: {run_url}" if run_url else ""
     if death == check_agent_result.DEATH_NONE:
+        quote, _ = runner_lost(execution, agent_step_outcome, annotations)
+        if quote:
+            return _runner_lost_decision(quote, prior_lost, head, lost_cap,
+                                         run_suffix)
         # The model ran and still pushed nothing (or there is no result file
         # to prove otherwise) — keep today's escalation, unchanged.
         return Decision("escalate", "")
-    run_suffix = f" Run: {run_url}" if run_url else ""
     if death == check_agent_result.DEATH_TURN_EXHAUSTION:
         facts = check_agent_result.turn_exhaustion_facts(execution)
         if prior_exhaustions >= turn_cap:
@@ -324,49 +476,75 @@ def main(argv: list[str]) -> int:
     """CLI for the workflow:
 
       decide <execution-json-path> [<prior_deaths>] \
-          [--comments-json PATH] [--run-url U]
+          [--comments-json PATH] [--run-url U] [--head SHA] \
+          [--agent-step-outcome O] [--annotations-json PATH]
+      has-record <execution-json-path>
 
     With --comments-json (the workflow's path), BOTH prior counts — outage
     deaths and turn exhaustions — are DERIVED from the PR's comment list,
     each scoped to consecutive worker-bot markers since the last push, and any
     positional <prior_deaths> is ignored. Without it, the positional integer is
     used for whichever class this execution result belongs to (kept for the
-    unit tests).
+    unit tests). The lost-machine count (DRE-6572) is read off the same
+    thread for --head. A decide with no result record prints, on stderr for
+    the job log, whether the machine was lost and which fact said it was not.
+    `has-record` prints `yes` or `no`: the Report reads the job's annotations
+    only for a run with no record, so a run with one pays nothing.
 
     Prints the action on line 1, then a blank line, then the comment body.
     """
     if argv and argv[0] == "committed-not-pushed":
         return _committed_not_pushed(argv[1:])
+    if argv and argv[0] == "has-record":
+        path = argv[1] if len(argv) > 1 else ""
+        print("no" if check_agent_result._load_execution(path) is None else "yes")
+        return 0
     if not argv or argv[0] != "decide":
         print("usage: fix_dead_run.py decide <execution-json-path> "
-              "[<prior_deaths>] [--comments-json PATH] [--run-url U]")
+              "[<prior_deaths>] [--comments-json PATH] [--run-url U] "
+              "[--head SHA] [--agent-step-outcome O] [--annotations-json PATH]")
         return 2
     rest = argv[1:]
-    run_url = ""
-    if "--run-url" in rest:
-        i = rest.index("--run-url")
-        if i + 1 < len(rest):
-            run_url = rest[i + 1]
-        del rest[i : i + 2]
-    comments_path = ""
-    if "--comments-json" in rest:
-        i = rest.index("--comments-json")
-        if i + 1 < len(rest):
-            comments_path = rest[i + 1]
-        del rest[i : i + 2]
+
+    def take(flag: str) -> str:
+        value = ""
+        if flag in rest:
+            i = rest.index(flag)
+            if i + 1 < len(rest):
+                value = rest[i + 1]
+            del rest[i : i + 2]
+        return value
+
+    run_url = take("--run-url")
+    comments_path = take("--comments-json")
+    head = take("--head")
+    outcome = take("--agent-step-outcome")
+    annotations_path = take("--annotations-json")
     exec_path = rest[0] if rest else ""
+    prior_lost = 0
     if comments_path:
         comments = _load_comments(comments_path)
         prior = consecutive_prior_markers(comments, OUTAGE_TAG)
         prior_exhaustions = consecutive_prior_markers(comments, TURN_CAP_TAG)
+        prior_lost = runner_lost_markers(comments, head)
     else:
         prior = int(rest[1]) if len(rest) > 1 and rest[1].isdigit() else 0
         prior_exhaustions = prior
+    execution = check_agent_result._load_execution(exec_path)
+    annotations = _load_annotations(annotations_path)
+    if execution is None:
+        quote, why = runner_lost(execution, outcome, annotations)
+        print(f"lost machine: yes — the job says \"{quote}\"" if quote
+              else f"lost machine: no — {why}", file=sys.stderr)
     d = decide(
-        check_agent_result._load_execution(exec_path),
+        execution,
         prior,
         prior_exhaustions=prior_exhaustions,
         run_url=run_url,
+        agent_step_outcome=outcome,
+        annotations=annotations,
+        head=head,
+        prior_lost=prior_lost,
     )
     print(d.action)
     print()
