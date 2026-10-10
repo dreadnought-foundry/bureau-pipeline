@@ -193,9 +193,13 @@ def _sweep(fake, children=None):
     children = children if children is not None else [
         _child(FREE), _child(TIED, blocked_by=((TIE, "In Review"),)),
     ]
+    # W was activated: its thread carries the activate route's note, the start
+    # the epic cap's promotion hold reads (DRE-6493).
+    activated = [{"body": f"{epic_cap.ACTIVATED_NOTE} (2 children)",
+                  "authored_by_pipeline": True, "created_at": None}]
     with patch.object(linear_ops, "gql", side_effect=fake.gql), \
             patch.object(reconcile, "backlog_children", return_value=children), \
-            patch.object(reconcile, "epic_thread", return_value=[]), \
+            patch.object(reconcile, "epic_thread", return_value=activated), \
             patch.object(linear_ops, "cmd_advance") as advance, \
             patch.object(linear_ops, "cmd_comment"), \
             patch.object(routing_verdict, "lane_moves", return_value=[]):
