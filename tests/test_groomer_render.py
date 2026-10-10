@@ -28,6 +28,8 @@ import os
 import sys
 from pathlib import Path
 
+import pytest
+
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "scripts"))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -396,6 +398,110 @@ def test_a_proposal_written_before_the_budget_keys_invents_no_number():
     assert "cut short" not in text
     assert "token" not in text.lower()
     assert "Ranked by test-model" in text, "the rest of the receipt still reads"
+
+
+# --------------------------------------------------------------------------
+# a capped context section says both numbers (DRE-6641)
+# --------------------------------------------------------------------------
+def _merged(n: int) -> list:
+    return [{"title": f"DRE-{i} does a thing", "url": f"https://x/{i}",
+             "merged_at": "2026-09-04T09:00:00Z"} for i in range(n)]
+
+
+def _receipt_over(pack: dict) -> str:
+    cards = [card(f"DRE-{n}", days=n) for n in range(1, 4)]
+    proposal = groomer.propose(
+        cards, cycles=CYCLES, capacity=5, now=NOW,
+        judgement=with_pack(cards, ranked(["DRE-1", "DRE-2", "DRE-3"]),
+                            pack=pack))
+    return next(l for l in groomer.render_proposal(proposal).splitlines()
+                if l.startswith("Ranked by"))
+
+
+# The pack of 2026-10-10's proposal: the search said 2,539 merged and the
+# ranking was handed the titles of the newest 40.
+CUT_PRS = groom_context.pack(
+    epics=[{"identifier": f"DRE-9{n}", "title": f"epic {n}"} for n in range(3)],
+    merged_prs=_merged(40), counts={"merged_prs": 2539},
+    closed_cards=[{"identifier": "DRE-3", "title": "closed",
+                   "completedAt": "2026-09-02T09:00:00Z"}],
+    now=NOW)
+
+
+def test_a_capped_merged_pr_section_says_how_many_the_ranking_read():
+    assert CUT_PRS["truncated"]["merged_prs"] == {"kept": 40, "of": 2539}
+    receipt = _receipt_over(CUT_PRS)
+    assert "the newest 40 of 2,539 merged PRs (titles only)" in receipt
+    assert "against 2539 merged PRs" not in receipt
+    assert "2539" not in receipt, "the whole is printed with its separator"
+
+
+def test_capped_epics_and_closed_cards_say_both_numbers_in_their_phrases():
+    pack = groom_context.pack(
+        epics=[{"identifier": f"DRE-9{n:02d}", "title": f"epic {n}"}
+               for n in range(24)],
+        merged_prs=_merged(2),
+        closed_cards=[{"identifier": f"DRE-{n}", "title": "closed",
+                       "completedAt": "2026-09-02T09:00:00Z"}
+                      for n in range(64)],
+        now=NOW)
+    receipt = _receipt_over(pack)
+    assert ("against 20 of 24 epics in flight (title and plan summary), "
+            "2 merged PRs and "
+            "the newest 60 of 64 closed cards (titles and reason lines)"
+            ) in receipt, receipt
+
+
+def test_a_cut_section_that_could_not_be_read_still_says_unknown():
+    """Unread is decided first: a section named in `unread` says UNKNOWN even
+    where a `cuts` entry stands beside it."""
+    cards = [card(f"DRE-{n}", days=n) for n in range(1, 4)]
+    proposal = groomer.propose(
+        cards, cycles=CYCLES, capacity=5, now=NOW,
+        judgement=with_pack(cards, ranked(["DRE-1", "DRE-2", "DRE-3"]),
+                            pack=CUT_PRS))
+    pack = proposal["judgement"]["pack"]
+    pack["merged_prs"] = None
+    pack["unread"] = ["merged_prs"]
+    receipt = next(l for l in groomer.render_proposal(proposal).splitlines()
+                   if l.startswith("Ranked by"))
+    assert "UNKNOWN merged PRs (could not be read this run)" in receipt
+    assert "2,539" not in receipt and "newest 40" not in receipt
+
+
+def test_a_proposal_written_before_cuts_renders_its_line_as_it_did():
+    """A proposal JSON from before DRE-6641 carries no `cuts`: the line says
+    the one count it always said, and invents no kept number."""
+    cards = [card(f"DRE-{n}", days=n) for n in range(1, 4)]
+    proposal = groomer.propose(
+        cards, cycles=CYCLES, capacity=5, now=NOW,
+        judgement=with_pack(cards, ranked(["DRE-1", "DRE-2", "DRE-3"]),
+                            pack=CUT_PRS))
+    proposal["judgement"]["pack"].pop("cuts")
+    receipt = next(l for l in groomer.render_proposal(proposal).splitlines()
+                   if l.startswith("Ranked by"))
+    assert ("against 3 epics in flight, 2539 merged PRs and 1 closed card "
+            "— 3 of 3 cards ranked") in receipt, receipt
+    assert "newest" not in receipt and " of 2" not in receipt
+    assert "titles only" not in receipt
+
+
+@pytest.mark.parametrize("pack, sections", [
+    (CUT_PRS, ("3 epics in flight",
+               "the newest 40 of 2,539 merged PRs (titles only)",
+               "1 closed card")),
+    (PACK, ("3 epics in flight", "2 merged PRs", "1 closed card")),
+], ids=["one-cut-section", "no-cut-section"])
+def test_the_line_around_the_three_sections_is_unchanged(pack, sections):
+    """The console's reader in agent-bureau was written against this shape:
+    the opening, the three sections in order joined by `, ` and ` and `, then
+    the ranked clause. Only the sections' own words may move."""
+    receipt = _receipt_over(pack)
+    epics, prs, closed = sections
+    assert receipt.startswith(
+        "Ranked by test-model (asked) / test-model (answered) in 1 call over "
+        f"3 cards, against {epics}, {prs} and {closed} — 3 of 3 cards ranked"
+    ), receipt
 
 
 # --------------------------------------------------------------------------
