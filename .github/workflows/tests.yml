@@ -236,8 +236,16 @@ jobs:
       # production. A floating major also gives Dependabot nothing to bump:
       # patch releases move the tag silently. `dreadnought-foundry/*` is exempt
       # by name — our own workflows ride our own harness-proven channel.
+      # `--resolve` (DRE-4337) reads each `# v<version>` tag from GitHub and
+      # fails when its commit is not the pinned sha — on #452 the comment kept
+      # naming v1.0.217 under v1.0.226's sha and the offline check passed. A
+      # tag it cannot read is UNKNOWN and fails the step, never a pass. Every
+      # pinned repository is public, so the run's own read token is enough,
+      # including the read-only one a Dependabot-triggered run holds.
       - name: Third-party actions are pinned to a sha
-        run: python3 scripts/check_action_pins.py
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 scripts/check_action_pins.py --resolve
       # One WIP cap (DRE-2529): every path that promotes cards must take the
       # caller's `max_wip`, never a literal. A hardcoded cap makes a repo's
       # deliberate override inert on that path — silently, and only inside

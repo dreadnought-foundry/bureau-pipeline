@@ -26,6 +26,10 @@ name: those are our OWN reusable workflows riding our own `@stable`/`@main`
 release channel (docs/self-hosting.md), which the harness already proves.
 """
 
+import contextlib
+import io
+import json
+import os
 import subprocess
 import sys
 import tempfile
@@ -111,8 +115,11 @@ class ScanTest(unittest.TestCase):
         self.assertEqual(len(check_action_pins.check_paths([path])), 1)
 
     def test_a_version_comment_may_carry_trailing_prose(self):
-        """The live claude-code-action pin explains itself after the version
-        (DRE-3416); Dependabot reads the leading version and ignores the rest."""
+        """Offline, the checker reads only the leading version, so prose after
+        it passes here. That is not a claim the prose is safe: Dependabot
+        rewrites the comment only when nothing follows the version (#452), and
+        it is `--resolve` (ResolveTest) that catches the disagreement left
+        behind."""
         path = write_workflow(self.tmp, "w.yml", f"""
             jobs:
               a:
@@ -225,6 +232,323 @@ class CliTest(unittest.TestCase):
         self.assertIn("no third-party", proc.stdout.lower())
 
 
+# The #452 shape (DRE-4337): the sha of one claude-code-action release under the
+# version comment of another. v1.0.217 and v1.0.236 are real releases; v1.0.236
+# is an ANNOTATED tag, so its ref names a tag object that names the commit.
+OLD_SHA = "9c5ddab2e6d17b83ea679153b31f1d5f023cf636"   # v1.0.217
+NEW_SHA = "8ce9314fa9a404564fa7e954cd84f25bcba2b829"   # v1.0.236
+TAG_OBJECT = "20f0b248c5003db4b9ca43c45e17949bcdc36d2d"  # v1.0.236's tag object
+VENDOR = "anthropics/claude-code-action"
+
+
+def lightweight(tag, sha):
+    """A `git/ref/tags/<tag>` body for a tag that names its commit directly."""
+    return {"ref": f"refs/tags/{tag}", "object": {"type": "commit", "sha": sha}}
+
+
+class StubRead:
+    """The tag read, stubbed: `api path -> parsed JSON`, or a raised failure.
+    Records every path asked, so a test can say what was read and how often."""
+
+    def __init__(self, bodies=None, fail=None):
+        self.bodies = bodies or {}
+        self.fail = fail
+        self.asked = []
+
+    def __call__(self, path):
+        self.asked.append(path)
+        if self.fail is not None:
+            raise check_action_pins.Unresolved(self.fail)
+        if path not in self.bodies:
+            raise check_action_pins.Unresolved(f"gh: Not Found (HTTP 404) {path}")
+        return self.bodies[path]
+
+
+class ResolveTest(unittest.TestCase):
+    """DRE-4337 — `--resolve`: the version comment must name the release the
+    sha IS, not merely some release.
+
+    On #452 (2026-09-19) Dependabot moved the launcher's sha to v1.0.226 in 22
+    places and left every comment saying v1.0.217, and the offline check — which
+    asks only that SOME `v<x>.<y>` lead the comment — reported all clear. The
+    comment is what an operator reads during an outage to decide whether a
+    vendor release is the cause.
+    """
+
+    def setUp(self):
+        self.tmp = Path(self.enterContext(tempfile.TemporaryDirectory()))
+
+    def _pin(self, sha, version, action=VENDOR, name="w.yml"):
+        return write_workflow(self.tmp, name, f"""
+            jobs:
+              a:
+                steps:
+                  - uses: {action}@{sha} # {version}
+        """)
+
+    def _main(self, *args, read):
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            code = check_action_pins.main(["check_action_pins.py", *args], read=read)
+        return code, out.getvalue()
+
+    def test_a_sha_that_is_not_the_release_its_comment_names_fails(self):
+        """The #452 shape: v1.0.217's sha under `# v1.0.236`. The tag names
+        another commit, so the line fails, naming its file and line and both
+        shas — the operator needs to know which half moved."""
+        path = self._pin(OLD_SHA, "v1.0.236")
+        read = StubRead({
+            f"repos/{VENDOR}/git/ref/tags/v1.0.236": lightweight("v1.0.236", NEW_SHA),
+        })
+        code, out = self._main("--resolve", str(path), read=read)
+        self.assertEqual(code, 1, out)
+        fails = [line for line in out.splitlines() if line.startswith("FAIL ")]
+        self.assertEqual(len(fails), 1, out)
+        self.assertIn("w.yml:4", fails[0])
+        self.assertIn("v1.0.236", fails[0])
+        self.assertIn(OLD_SHA, fails[0])
+        self.assertIn(NEW_SHA, fails[0])
+        self.assertNotIn("UNKNOWN", out)
+
+    def test_a_sha_that_is_the_release_its_comment_names_passes(self):
+        path = self._pin(NEW_SHA, "v1.0.236")
+        read = StubRead({
+            f"repos/{VENDOR}/git/ref/tags/v1.0.236": lightweight("v1.0.236", NEW_SHA),
+        })
+        code, out = self._main("--resolve", str(path), read=read)
+        self.assertEqual(code, 0, out)
+        self.assertNotIn("FAIL", out)
+        self.assertNotIn("UNKNOWN", out)
+        self.assertIn("1 agree", out)
+
+    def test_an_annotated_tag_is_dereferenced_to_its_commit(self):
+        """v1.0.236 is annotated: its ref names a tag OBJECT, whose sha is not
+        the commit. Comparing that sha to the pin would fail every annotated
+        release; the checker follows it to the commit."""
+        path = self._pin(NEW_SHA, "v1.0.236")
+        read = StubRead({
+            f"repos/{VENDOR}/git/ref/tags/v1.0.236": {
+                "ref": "refs/tags/v1.0.236",
+                "object": {"type": "tag", "sha": TAG_OBJECT},
+            },
+            f"repos/{VENDOR}/git/tags/{TAG_OBJECT}": {
+                "sha": TAG_OBJECT,
+                "object": {"type": "commit", "sha": NEW_SHA},
+            },
+        })
+        code, out = self._main("--resolve", str(path), read=read)
+        self.assertEqual(code, 0, out)
+        self.assertEqual(len(read.asked), 2, read.asked)
+
+    def test_a_tag_read_that_fails_is_unknown_never_a_pass(self):
+        """No token, no network, a 404, a body that will not parse: each one
+        leaves the line UNKNOWN — printed, not counted as agreeing, and the run
+        exits non-zero. A check that cannot see must not read as green."""
+        failures = {
+            "no token": "gh: To use GitHub CLI in a GitHub Actions workflow, set the GH_TOKEN environment variable",
+            "no network": "error connecting to api.github.com",
+            "404": "gh: Not Found (HTTP 404)",
+            "unparseable": "gh api returned a body that is not JSON",
+        }
+        path = self._pin(NEW_SHA, "v1.0.236")
+        for label, reason in failures.items():
+            with self.subTest(label):
+                code, out = self._main("--resolve", str(path), read=StubRead(fail=reason))
+                self.assertNotEqual(code, 0, out)
+                self.assertEqual(code, 2, out)
+                unknown = [line for line in out.splitlines() if line.startswith("UNKNOWN ")]
+                self.assertEqual(len(unknown), 1, out)
+                self.assertIn("w.yml:4", unknown[0])
+                self.assertIn(reason, unknown[0])
+                self.assertIn("0 agree", out)
+                self.assertNotIn("ok:", out)
+
+    def test_a_body_of_the_wrong_shape_is_unknown(self):
+        """A list (the plural refs endpoint's prefix match), a ref for another
+        tag, an object that is neither commit nor tag, a sha that is not one —
+        none of them is an answer, so none of them may agree or disagree."""
+        tag_path = f"repos/{VENDOR}/git/ref/tags/v1.0.236"
+        bodies = {
+            "list": [lightweight("v1.0.236", NEW_SHA)],
+            "another tag": lightweight("v1.0.2366", NEW_SHA),
+            "a tree": {"ref": "refs/tags/v1.0.236",
+                       "object": {"type": "tree", "sha": NEW_SHA}},
+            "short sha": lightweight("v1.0.236", NEW_SHA[:7]),
+            "no object": {"ref": "refs/tags/v1.0.236"},
+        }
+        path = self._pin(NEW_SHA, "v1.0.236")
+        for label, body in bodies.items():
+            with self.subTest(label):
+                code, out = self._main(
+                    "--resolve", str(path), read=StubRead({tag_path: body}))
+                self.assertEqual(code, 2, out)
+                self.assertIn("UNKNOWN ", out)
+                self.assertNotIn("FAIL ", out)
+
+    def test_a_tag_loop_is_unknown_not_a_hang(self):
+        path = self._pin(NEW_SHA, "v1.0.236")
+        loop = {"sha": TAG_OBJECT, "object": {"type": "tag", "sha": TAG_OBJECT}}
+        read = StubRead({
+            f"repos/{VENDOR}/git/ref/tags/v1.0.236": {
+                "ref": "refs/tags/v1.0.236", "object": loop["object"]},
+            f"repos/{VENDOR}/git/tags/{TAG_OBJECT}": loop,
+        })
+        code, out = self._main("--resolve", str(path), read=read)
+        self.assertEqual(code, 2, out)
+        self.assertIn("UNKNOWN ", out)
+
+    def test_a_disagreement_outranks_an_unknown_in_the_exit_code(self):
+        """Exit 1 says a comment is wrong; exit 2 says only that some could
+        not be read. A run with both is a run with a wrong comment."""
+        path = write_workflow(self.tmp, "w.yml", f"""
+            jobs:
+              a:
+                steps:
+                  - uses: {VENDOR}@{OLD_SHA} # v1.0.236
+                  - uses: actions/checkout@{SHA} # v7.0.1
+        """)
+        read = StubRead({
+            f"repos/{VENDOR}/git/ref/tags/v1.0.236": lightweight("v1.0.236", NEW_SHA),
+        })
+        code, out = self._main("--resolve", str(path), read=read)
+        self.assertEqual(code, 1, out)
+        self.assertIn("FAIL w.yml:4", out)
+        self.assertIn("UNKNOWN w.yml:5", out)
+
+    def test_one_read_per_release_however_many_lines_pin_it(self):
+        """The live tree pins the launcher in 28 places; that is one release
+        and one question. A subpath action is read at its repository."""
+        path = write_workflow(self.tmp, "w.yml", f"""
+            jobs:
+              a:
+                steps:
+                  - uses: {VENDOR}@{NEW_SHA} # v1.0.236
+                  - uses: {VENDOR}@{NEW_SHA} # v1.0.236
+                  - uses: {VENDOR}@{NEW_SHA} # v1.0.236
+                  - uses: actions/cache/restore@{SHA} # v6.1.0
+                  - uses: actions/cache/save@{SHA} # v6.1.0
+        """)
+        read = StubRead({
+            f"repos/{VENDOR}/git/ref/tags/v1.0.236": lightweight("v1.0.236", NEW_SHA),
+            "repos/actions/cache/git/ref/tags/v6.1.0": lightweight("v6.1.0", SHA),
+        })
+        code, out = self._main("--resolve", str(path), read=read)
+        self.assertEqual(code, 0, out)
+        self.assertEqual(sorted(read.asked), sorted(set(read.asked)), read.asked)
+        self.assertEqual(len(read.asked), 2, read.asked)
+        self.assertIn("5 agree", out)
+
+    def test_a_line_that_already_fails_offline_is_not_resolved(self):
+        """A floating tag or a missing comment is already a FAIL with its own
+        message; there is no version to resolve, and asking would be noise."""
+        path = write_workflow(self.tmp, "w.yml", f"""
+            jobs:
+              a:
+                steps:
+                  - uses: actions/checkout@v7
+                  - uses: actions/checkout@{SHA}
+        """)
+        read = StubRead()
+        code, out = self._main("--resolve", str(path), read=read)
+        self.assertEqual(code, 1, out)
+        self.assertEqual(read.asked, [])
+
+    def test_offline_the_checker_never_reads_and_says_what_it_said_before(self):
+        """No flag, no read, and the same two lines today's checker prints —
+        even over a sha/version disagreement, which only `--resolve` can see."""
+        path = self._pin(OLD_SHA, "v1.0.236")
+        read = StubRead(fail="offline must not read")
+        code, out = self._main(str(path), read=read)
+        self.assertEqual(code, 0, out)
+        self.assertEqual(read.asked, [])
+        self.assertEqual(out, (
+            "checked 1 files: 1 third-party action references, 0 "
+            "dreadnought-foundry/* (exempt — our own release channel), 0 local "
+            "paths\n"
+            "ok: every third-party action is pinned to a commit sha with its "
+            "version in a comment\n"
+        ))
+
+
+class ResolveCliTest(unittest.TestCase):
+    """`--resolve` end to end, through the real `gh api` boundary.
+
+    A fake `gh` on PATH stands in for GitHub, so the subprocess call, its exit
+    code and its JSON are all exercised without the network.
+    """
+
+    def setUp(self):
+        self.tmp = Path(self.enterContext(tempfile.TemporaryDirectory()))
+        self.bin = self.tmp / "bin"
+        self.bin.mkdir()
+
+    def _fake_gh(self, script):
+        gh = self.bin / "gh"
+        gh.write_text("#!/bin/sh\n" + textwrap.dedent(script))
+        gh.chmod(0o755)
+
+    def _run(self, *args):
+        env = {k: v for k, v in os.environ.items() if k not in ("GH_TOKEN", "GITHUB_TOKEN")}
+        env["PATH"] = str(self.bin)
+        return subprocess.run(
+            [sys.executable, str(CHECKER), *args],
+            capture_output=True, text=True, env=env,
+        )
+
+    def _workflow(self, sha):
+        return write_workflow(self.tmp, "w.yml", f"""
+            jobs:
+              a:
+                steps:
+                  - uses: {VENDOR}@{sha} # v1.0.236
+        """)
+
+    def test_a_disagreement_read_through_gh_fails_naming_the_line(self):
+        body = json.dumps(lightweight("v1.0.236", NEW_SHA))
+        self._fake_gh(f"""
+            [ "$1" = api ] && [ "$2" = "repos/{VENDOR}/git/ref/tags/v1.0.236" ] \\
+              && echo '{body}' && exit 0
+            echo "gh: Not Found (HTTP 404)" >&2; exit 1
+        """)
+        proc = self._run("--resolve", str(self._workflow(OLD_SHA)))
+        self.assertEqual(proc.returncode, 1, proc.stdout + proc.stderr)
+        self.assertIn("FAIL w.yml:4", proc.stdout)
+
+    def test_an_agreement_read_through_gh_passes(self):
+        body = json.dumps(lightweight("v1.0.236", NEW_SHA))
+        self._fake_gh(f"""
+            [ "$1" = api ] && [ "$2" = "repos/{VENDOR}/git/ref/tags/v1.0.236" ] \\
+              && echo '{body}' && exit 0
+            exit 1
+        """)
+        proc = self._run("--resolve", str(self._workflow(NEW_SHA)))
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+
+    def test_no_token_is_unknown_and_exits_non_zero(self):
+        self._fake_gh("""
+            echo "gh: To use GitHub CLI in a GitHub Actions workflow, set the GH_TOKEN environment variable." >&2
+            exit 4
+        """)
+        proc = self._run("--resolve", str(self._workflow(NEW_SHA)))
+        self.assertEqual(proc.returncode, 2, proc.stdout + proc.stderr)
+        self.assertIn("UNKNOWN w.yml:4", proc.stdout)
+        self.assertIn("GH_TOKEN", proc.stdout)
+
+    def test_a_body_that_is_not_json_is_unknown(self):
+        self._fake_gh("""
+            echo "<html>rate limited</html>"; exit 0
+        """)
+        proc = self._run("--resolve", str(self._workflow(NEW_SHA)))
+        self.assertEqual(proc.returncode, 2, proc.stdout + proc.stderr)
+        self.assertIn("UNKNOWN w.yml:4", proc.stdout)
+
+    def test_no_gh_at_all_is_unknown_not_a_crash(self):
+        proc = self._run("--resolve", str(self._workflow(NEW_SHA)))
+        self.assertEqual(proc.returncode, 2, proc.stdout + proc.stderr)
+        self.assertIn("UNKNOWN w.yml:4", proc.stdout)
+        self.assertNotIn("Traceback", proc.stderr)
+
+
 class LiveTreeTest(unittest.TestCase):
     """The tree itself — the acceptance criteria, read off the real files."""
 
@@ -316,6 +640,57 @@ class LiveTreeTest(unittest.TestCase):
             any("check_action_pins.py" in r for r in runs),
             "tests.yml runs no action-pin check",
         )
+
+    def test_tests_yml_resolves_every_pin_with_the_run_token(self):
+        """DRE-4337: CI runs the online mode, so a sha that is not the release
+        its comment names turns the required check red. Every pinned repository
+        is public, so the default read token — read-only on a
+        Dependabot-triggered run — is all the read needs."""
+        doc = yaml.safe_load(TESTS_WORKFLOW.read_text())
+        steps = [
+            step
+            for job in doc["jobs"].values()
+            for step in (job.get("steps") or [])
+            if "check_action_pins.py" in step.get("run", "")
+        ]
+        self.assertEqual(len(steps), 1, steps)
+        (step,) = steps
+        self.assertIn("--resolve", step["run"].split())
+        self.assertEqual((step.get("env") or {}).get("GH_TOKEN"), "${{ github.token }}")
+
+
+class DependabotBehaviorWordingTest(unittest.TestCase):
+    """DRE-4337: what Dependabot was observed to do on #452, said once.
+
+    It moves the sha always, and rewrites the version comment only when nothing
+    follows the version. Both the dependabot.yml comment and the checker said
+    otherwise — "rewrites both", "trailing prose is fine" — and the comment
+    pointed at this card as unbuilt.
+    """
+
+    def _github_actions_comment(self):
+        lines = DEPENDABOT.read_text().splitlines()
+        end = next(i for i, line in enumerate(lines)
+                   if 'package-ecosystem: "github-actions"' in line)
+        start = end
+        while start > 0 and lines[start - 1].lstrip().startswith("#"):
+            start -= 1
+        return " ".join(line.strip().lstrip("#").strip() for line in lines[start:end])
+
+    def test_the_dependabot_comment_states_the_observed_behavior_once(self):
+        comment = self._github_actions_comment()
+        self.assertNotIn("rewrites both", comment)
+        self.assertNotIn("carded as DRE-4337", comment)
+        self.assertNotIn("does not catch", comment)
+        self.assertIn("--resolve", comment)
+
+    def test_the_checker_no_longer_calls_trailing_prose_fine(self):
+        source = " ".join(CHECKER.read_text().split())
+        for stale in ("Trailing prose is fine",
+                      "and rewrites when it proposes the next one"):
+            self.assertFalse(stale in source, f"the checker still says {stale!r}")
+        self.assertTrue("only when nothing follows the version" in source,
+                        "the checker does not state when Dependabot rewrites the comment")
 
     def test_the_checker_is_referenced_in_the_release_channel_doc(self):
         """A change that contradicts a document updates that document: the
