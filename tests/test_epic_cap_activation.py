@@ -556,7 +556,10 @@ class TheArrivalRecord(unittest.TestCase):
 
     def test_the_record_is_declared_verbatim(self):
         contract = json.loads((ROOT / CONTRACT_REL).read_text(encoding="utf-8"))
-        mine = [a for a in _arrivals(contract) if a.get("kind") == "queued-epic"]
+        # The sweep writes the same kind of row since DRE-6618; this card's
+        # record is the planner's.
+        mine = [a for a in _arrivals(contract)
+                if a.get("kind") == "queued-epic" and a.get("writer") == RECORD["writer"]]
         self.assertEqual(mine, [RECORD])
 
     def test_the_contract_changed_by_that_record_and_nothing_else(self):
