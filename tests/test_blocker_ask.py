@@ -135,6 +135,19 @@ def stub(monkeypatch):
     return install
 
 
+def _code() -> str:
+    """The module's code with its docstrings dropped: what it runs, not what
+    it says about its neighbors."""
+    tree = ast.parse(SCRIPT.read_text(encoding="utf-8"))
+    for node in ast.walk(tree):
+        body = getattr(node, "body", None)
+        if (isinstance(body, list) and body and isinstance(body[0], ast.Expr)
+                and isinstance(body[0].value, ast.Constant)
+                and isinstance(body[0].value.value, str)):
+            node.body = body[1:] or [ast.Pass()]
+    return ast.unparse(tree)
+
+
 def _line(body, prefix):
     return next(line for line in body.split("\n") if line.startswith(prefix))
 
@@ -287,7 +300,7 @@ class TestTheMarkerIsReadOffTheLiveThread:
     def test_the_prefix_comes_from_the_vocabulary(self):
         source = SCRIPT.read_text(encoding="utf-8")
         assert 'blocker_class.load()["marker"]' in source
-        assert "🛑" not in source
+        assert "🛑" not in _code()
 
     def test_the_thread_is_walked_newest_to_oldest_off_window_nodes(self):
         source = SCRIPT.read_text(encoding="utf-8")
@@ -310,8 +323,7 @@ class TestTheModuleShape:
                 '"Backlog", held=True)') in source
 
     def test_the_module_does_not_borrow_the_planners_escalation(self):
-        source = SCRIPT.read_text(encoding="utf-8")
-        assert "planning_escalation" not in source
+        assert "planning_escalation" not in _code()
 
     def test_resolve_has_the_contracts_signature(self):
         tree = ast.parse(SCRIPT.read_text(encoding="utf-8"))
