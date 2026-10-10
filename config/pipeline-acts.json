@@ -2698,6 +2698,22 @@
     },
     {
       "file": ".github/workflows/plan.yml",
+      "anchor": "\"$(cat \"$BOUNCE_FILE\")\"",
+      "step": "Epic → Green Light — both critics passed",
+      "kind": "not-an-act",
+      "means": "The proof-and-demo send-back from the Green Light backstop: the check that writes a re-filed proof card's verdict refused the epic's cards, so the epic does not reach Green Light (DRE-6604).",
+      "why": "A VERDICT, not an act. It is a judgement about the WORK, where an act is something the pipeline did about the work on its own. It has its own writer, its own vocabulary and its own readers, and a second grammar on the same comment would give them two keys to disagree over. Its body belongs to scripts/proof_and_demo.py, which owns the bounce."
+    },
+    {
+      "file": ".github/workflows/plan.yml",
+      "anchor": "\"$(cat \"$BOUNCE_FILE\")\"",
+      "step": "Activate the approved epic",
+      "kind": "not-an-act",
+      "means": "The proof-and-demo send-back from the activation backstop: the check refused the epic's cards, so the epic is not activated and nothing is promoted (DRE-6604).",
+      "why": "A VERDICT, not an act. It is a judgement about the WORK, where an act is something the pipeline did about the work on its own. It has its own writer, its own vocabulary and its own readers, and a second grammar on the same comment would give them two keys to disagree over. Its body belongs to scripts/proof_and_demo.py, which owns the bounce; the one line the step adds says only that the epic did not move, because the bounce is written for the plan route, where it goes back to Planning."
+    },
+    {
+      "file": ".github/workflows/plan.yml",
       "anchor": "🛑 Parked in Triage with needs-human for an operator. The second critic sent this plan back and the planner revised it",
       "step": "Re-check the revised plan — review mode",
       "kind": "undeclared-act",

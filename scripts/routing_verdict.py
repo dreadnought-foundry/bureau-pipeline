@@ -897,17 +897,48 @@ def _destination_refusal(
     )
 
 
-def _no_verdict_refusal(identifier: str, inherits: str) -> str:
+_STAMP_REPAIR = (
+    "**To let it through:** stamp the routing decision —\n"
+    "`python3 scripts/routing_verdict.py stamp <CARD> FLEET "
+    '--why "<one line>"`'
+)
+
+
+def _proof_repair(epic: str | None) -> str:
+    """The repair for an epic's proof card with no verdict (DRE-6604).
+
+    Its verdict is the proof check's to write, and FLEET on a proof card is
+    the one answer that check exists to refuse — so the stamp line every other
+    receipt carries would tell a person to do exactly the wrong thing. DRE-6048
+    carried that line for three and a half hours; what cleared it was this
+    command, run by hand.
+    """
+    epic = epic or "<EPIC>"
+    return (
+        "**To let it through:** this is the epic's proof card, and its verdict "
+        "is the proof-and-demo check's to write. Run the check over the epic's "
+        "children —\n"
+        f"`python3 scripts/linear_ops.py children-detail {epic} | "
+        f"python3 scripts/proof_and_demo.py check --epic {epic}`\n\n"
+        "It writes this card's own verdict and `no-code`, and a legacy `DEMO:` "
+        "child's verdict where that verdict is one a person acts on. It refuses "
+        "any card already carrying a verdict, so the build children are never "
+        "touched. Where it refuses the proof card itself, it prints what the "
+        "card is missing and writes nothing."
+    )
+
+
+def _no_verdict_refusal(identifier: str, inherits: str,
+                        repair: str = _STAMP_REPAIR) -> str:
     """The refusal for a card nothing has routed. `inherits` is the paragraph
     that says what this card's approval WOULD have been — the one thing that
-    differs between a child and a one-off."""
+    differs between a child and a one-off. `repair` is the paragraph that says
+    how to let it through, which differs for an epic's proof card."""
     return (
         f"🚨 {NO_VERDICT_TAG}: {identifier} carries no routing verdict, so "
         "nothing has said who builds it — the sweep is not promoting it.\n\n"
         f"{inherits}\n\n"
-        "**To let it through:** stamp the routing decision —\n"
-        "`python3 scripts/routing_verdict.py stamp <CARD> FLEET "
-        '--why "<one line>"`\n\n'
+        f"{repair}\n\n"
         "This refusal is only about carrying NO verdict. A verdict routes the "
         "card on purpose and says where — "
         + ", ".join(f"{name} reaches {destination(name)}"
@@ -916,7 +947,9 @@ def _no_verdict_refusal(identifier: str, inherits: str) -> str:
     )
 
 
-def promotion_refusal(identifier: str, comment_bodies, doc: dict | None = None) -> str | None:
+def promotion_refusal(identifier: str, comment_bodies, doc: dict | None = None,
+                      *, title: str | None = None,
+                      epic: str | None = None) -> str | None:
     """Why the sweep must not promote `identifier` — a CHILD of an epic — or
     None to let it through.
 
@@ -933,12 +966,21 @@ def promotion_refusal(identifier: str, comment_bodies, doc: dict | None = None) 
     The epic's approval is evidence for a child, and it is evidence about the
     PLAN: it says the set of work was approved, never who builds this piece of
     it. The verdict is that second fact, and the refusal says so.
+
+    `title` and `epic` change one paragraph of the no-verdict receipt
+    (DRE-6604): on a `PROOF:` card — `proof_and_demo.is_proof`, the one reader
+    of that title — the repair is the proof check over `epic`'s children,
+    never a FLEET stamp. Every other card's receipt is unchanged.
     """
+    import proof_and_demo
+
     refusal = _destination_refusal(identifier, comment_bodies, doc)
     if refusal is not None:
         return refusal
     if verdict_on(comment_bodies, doc) is not None:
         return None
+    repair = (_proof_repair(epic) if proof_and_demo.is_proof(title or "")
+              else _STAMP_REPAIR)
     return _no_verdict_refusal(
         identifier,
         "This card is a child of an epic, and that epic's approval is evidence "
@@ -946,6 +988,7 @@ def promotion_refusal(identifier: str, comment_bodies, doc: dict | None = None) 
         "approved, and the verdict says who builds THIS piece and how. Promoting "
         "without one would pick the answer on the card's behalf — and the answer "
         "the pipeline picks is `FLEET`, which dispatches an agent.",
+        repair,
     )
 
 

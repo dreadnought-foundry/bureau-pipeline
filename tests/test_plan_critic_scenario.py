@@ -269,6 +269,17 @@ with open(os.environ["STUB_LOG"], "a") as f:
     f.write("stamp-verdicts " + " ".join(sys.argv[1:]) + "\\n")
 '''
 
+# The proof card's own verdict writer, which the Green Light and activation
+# backstops run before the child stamp since DRE-6604. Stubbed as a pass for
+# the same reason: tests/test_refiled_proof_card_stamp.py walks those two steps
+# against the real check, and these walks only need it to have run.
+PROOF_CHECK_STUB = '''#!/usr/bin/env python3
+import os, sys
+sys.stdin.read()
+with open(os.environ["STUB_LOG"], "a") as f:
+    f.write("proof-check " + " ".join(sys.argv[1:]) + "\\n")
+'''
+
 # `gh`, on PATH, for the ONE vendor call this walk makes: the
 # `repos/<owner>/<name>/dispatches` POST `plan_run.fire` shells out to. It
 # records the payload verbatim so the walk can read the two keys the ACTIVATE
@@ -378,6 +389,7 @@ class CriticWalk(unittest.TestCase):
         self._stub("reconcile.py", RECONCILE_STUB)
         self._stub("epic_cap.py", EPIC_CAP_STUB)
         self._stub("plan_child_verdicts.py", CHILD_VERDICT_STUB)
+        self._stub("proof_and_demo.py", PROOF_CHECK_STUB)
         self.bin = os.path.join(self.tmp, "bin")
         os.makedirs(self.bin)
         gh = os.path.join(self.bin, "gh")

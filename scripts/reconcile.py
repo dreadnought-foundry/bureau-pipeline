@@ -7544,7 +7544,10 @@ def promote_ready(
             # different sentence — and the sentence is what a person acts on.
             if refusal is None:
                 refusal = (
-                    routing_verdict.promotion_refusal(card["identifier"], bodies)
+                    routing_verdict.promotion_refusal(
+                        card["identifier"], bodies,
+                        title=card.get("title"), epic=epic_id,
+                    )
                     if epic_id is not None
                     else routing_verdict.parentless_promotion_refusal(
                         card["identifier"], bodies

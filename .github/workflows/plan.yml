@@ -4159,12 +4159,22 @@ jobs:
       # `pre_passed` takes — so a first critic that produced no result is never
       # called a pass.
       #
-      # The routing-verdict stamp is the backstop the activation step has run
-      # since DRE-4593: the review-mode re-plan re-runs no proof gate, so a
-      # card the second critic's send-back added would reach the promoter
-      # carrying no verdict. Stamped BEFORE the move, through a FILE rather
-      # than a pipe (this workflow sets no `shell:`, so it is `bash -e`
-      # without `pipefail`, and a pipe would hand the stamper an empty read).
+      # The routing-verdict stamps are the backstop the activation step has run
+      # since DRE-4593: a revision made at the second critic's bound skips
+      # `Re-check the revised plan — review mode`, so a card that revision
+      # added would reach the promoter carrying no verdict. The backstop is
+      # TWO writers, because `plan_child_verdicts.py stamp` leaves a `PROOF:`
+      # child to `proof_and_demo.py check` by title: run alone it stamped every
+      # build child and left a re-filed proof card bare, and the sweep refused
+      # DRE-6048 for good on `routing-no-verdict` (DRE-6604). So the proof
+      # check runs first, with its stamp, as it does in `Re-check the revised
+      # plan`; each writer refuses a card already carrying a verdict, so a
+      # second pass writes nothing. A refused check posts its bounce note and
+      # stops the step before any lane is written — on this route the epic is
+      # already in Planning, where the note says it is. Both read one FILE
+      # rather than a pipe (this workflow sets no `shell:`, so it is `bash -e`
+      # without `pipefail`, and a pipe would hand the stamper an empty read),
+      # and both run BEFORE the move.
       - name: Epic → Green Light — both critics passed
         if: steps.route.outputs.mode == 'review' && steps.post1.outputs.result == 'PASS' && steps.post1.outputs.pre_passed == 'true'
         env:
@@ -4174,9 +4184,18 @@ jobs:
           EPIC="${{ github.event.client_payload.identifier }}"
           CHILDREN="${{ runner.temp }}/green-light-children.json"
           HELD="${{ runner.temp }}/green-light-children-held.md"
+          BOUNCE_FILE="${{ runner.temp }}/green-light-bounce.md"
           THREAD="${{ runner.temp }}/green-light-thread.json"
-          rm -f "$HELD"
+          rm -f "$HELD" "$BOUNCE_FILE"
           python3 .bureau-pipeline/scripts/linear_ops.py children-detail "$EPIC" > "$CHILDREN"
+          if ! python3 .bureau-pipeline/scripts/proof_and_demo.py check \
+                 --epic "$EPIC" --comment-file "$BOUNCE_FILE" < "$CHILDREN"; then
+            if [ -s "$BOUNCE_FILE" ]; then
+              python3 .bureau-pipeline/scripts/linear_ops.py comment "$EPIC" \
+                "$(cat "$BOUNCE_FILE")"
+            fi
+            exit 1
+          fi
           python3 .bureau-pipeline/scripts/plan_child_verdicts.py stamp \
             --epic "$EPIC" --comment-file "$HELD" < "$CHILDREN"
           if [ -s "$HELD" ]; then
@@ -4968,9 +4987,11 @@ jobs:
       #
       # POST_RELEASED — the newest post round on this attempt is a PASS, and
       # only that: exactly the activation this step has always run. The
-      # routing-verdict stamp is the backstop (DRE-4593: a plan approved under
+      # routing-verdict stamps are the backstop (DRE-4593: a plan approved under
       # the old rule may carry a card its send-back re-plan added with no
-      # verdict), stamped BEFORE the move so a cron sweep landing in between
+      # verdict) — the proof check's first, because the child stamp leaves a
+      # `PROOF:` card to it by title (DRE-6604), and a refused check activates
+      # nothing — stamped BEFORE the move so a cron sweep landing in between
       # finds the verdicts already written; then In Progress, the ▶️ note, and
       # the sweep's own `promote_ready()` (NOT A SECOND PROMOTER, DRE-3059) at
       # the caller's cap (DRE-2529, DRE-3994).
@@ -5017,8 +5038,23 @@ jobs:
             KIDS=$(python3 .bureau-pipeline/scripts/linear_ops.py children "$EPIC")
             CHILDREN="${{ runner.temp }}/activate-children.json"
             HELD="${{ runner.temp }}/activate-children-held.md"
-            rm -f "$HELD"
+            BOUNCE_FILE="${{ runner.temp }}/activate-bounce.md"
+            rm -f "$HELD" "$BOUNCE_FILE"
             python3 .bureau-pipeline/scripts/linear_ops.py children-detail "$EPIC" > "$CHILDREN"
+            # The proof card's verdict first, from its own writer — the child
+            # stamp below leaves a `PROOF:` card alone by title (DRE-6604). A
+            # refusal activates nothing: no lane, no note, no promotion. The
+            # proof check's note is written for the plan route, where a bounce
+            # goes back to Planning, so the line after it says which is true.
+            if ! python3 .bureau-pipeline/scripts/proof_and_demo.py check \
+                   --epic "$EPIC" --comment-file "$BOUNCE_FILE" < "$CHILDREN"; then
+              if [ -s "$BOUNCE_FILE" ]; then
+                printf '\n%s\n' "That says this epic is back in Planning, but it has not moved: the activation stopped here, before it wrote a lane or promoted a child, and this run is red." >> "$BOUNCE_FILE"
+                python3 .bureau-pipeline/scripts/linear_ops.py comment "$EPIC" \
+                  "$(cat "$BOUNCE_FILE")"
+              fi
+              exit 1
+            fi
             python3 .bureau-pipeline/scripts/plan_child_verdicts.py stamp \
               --epic "$EPIC" --comment-file "$HELD" < "$CHILDREN"
             # A child nothing will ever stamp freezes in Backlog. Say so on the

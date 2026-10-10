@@ -1215,5 +1215,80 @@ class _StaleBoard:
         return len([b for i, b in self.posted if needle in b]) == 1
 
 
+# ===========================================================================
+# A proof card's no-verdict receipt names the repair that works (DRE-6604)
+# ===========================================================================
+#: The repair line every no-verdict receipt carried, which on a proof card is
+#: the one verdict the proof check exists to refuse.
+FLEET_REPAIR = "routing_verdict.py stamp <CARD> FLEET"
+PROOF_REPAIR = (
+    "python3 scripts/linear_ops.py children-detail DRE-6022 | "
+    "python3 scripts/proof_and_demo.py check --epic DRE-6022"
+)
+
+
+class TestAProofCardSReceiptNamesTheProofCheck:
+    """DRE-6048, 2026-10-09 23:54 PT: the sweep refused the epic's proof card
+    on `routing-no-verdict`, and the receipt told a person to stamp it FLEET.
+    What cleared it at 03:43 was the proof check, run by hand over the epic's
+    children."""
+
+    def _receipt(self, title, epic="DRE-6022"):
+        return routing_verdict.promotion_refusal(
+            "DRE-6048", [], title=title, epic=epic)
+
+    def test_it_carries_the_proof_check_with_the_epic_s_real_id(self):
+        receipt = self._receipt(
+            "PROOF: a Portico proof the sweep dispatched sees both halves")
+        assert receipt.startswith(f"🚨 {routing_verdict.NO_VERDICT_TAG}: DRE-6048")
+        assert PROOF_REPAIR in receipt
+        assert "<EPIC>" not in receipt
+
+    def test_it_says_what_the_command_writes(self):
+        receipt = self._receipt("PROOF: the record")
+        assert "no-code" in receipt
+        assert "DEMO:" in receipt
+        assert "already carrying" in receipt
+        assert "build children are never touched" in receipt
+
+    def test_it_does_not_tell_a_person_to_stamp_it_fleet(self):
+        assert FLEET_REPAIR not in self._receipt("PROOF: the record")
+
+    def test_the_title_is_read_by_the_proof_check_s_own_reader(self):
+        """Anchored, case-insensitive — `proof_and_demo.is_proof` and nothing
+        restated. A title that only mentions a proof is a build card."""
+        assert PROOF_REPAIR in self._receipt("  proof: lowercase still opens it")
+        assert FLEET_REPAIR in self._receipt("bureau-pipeline: the PROOF: record")
+
+    def test_a_build_child_s_receipt_is_unchanged(self):
+        before = routing_verdict.promotion_refusal("DRE-6048", [])
+        assert self._receipt("bureau-pipeline: proof_session.py login") == before
+        assert FLEET_REPAIR in before
+        assert "proof_and_demo.py check" not in before
+
+    def test_a_proof_card_carrying_a_verdict_is_not_refused(self):
+        operator = routing_verdict.verdict_comment("OPERATOR", "a proof card")
+        assert routing_verdict.promotion_refusal(
+            "DRE-6048", [operator], title="PROOF: the record",
+            epic="DRE-6022") is None
+
+    def test_the_promoter_passes_the_title_and_the_epic(self):
+        """The one caller, `reconcile.promote_ready`, has both in hand."""
+        board = _PromotionBoard([])
+        board.card["title"] = "PROOF: a Portico proof the sweep dispatched"
+        assert board.promote() == 0
+        assert board.surfaced_once(routing_verdict.NO_VERDICT_TAG)
+        receipt = "\n".join(b for _, b in board.posted)
+        assert ("python3 scripts/linear_ops.py children-detail DRE-2700 | "
+                "python3 scripts/proof_and_demo.py check --epic DRE-2700") in receipt
+        assert FLEET_REPAIR not in receipt
+
+    def test_the_promoter_s_receipt_on_a_build_child_is_unchanged(self):
+        board = _PromotionBoard([])
+        board.promote()
+        receipt = "\n".join(b for _, b in board.posted)
+        assert receipt == routing_verdict.promotion_refusal("DRE-2799", [])
+
+
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__, "-q"]))
