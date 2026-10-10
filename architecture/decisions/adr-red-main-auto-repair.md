@@ -154,6 +154,19 @@ the bot's GitHub quota burned twice). Repair must not rebuild it:
     PT, each retried once, every time on *The action 'Test' has timed out
     after 12 minutes*; the loop read all eight runs as infrastructure, started
     nothing, and the red main surfaced ~12 hours later when a person asked.
+  - **A test's name is not an infra fingerprint (DRE-6522).** The signatures
+    are matched only against the lines the run itself said —
+    `reviewer_environment.message_lines`, the filter DRE-5272 wrote, which
+    drops quotations and every line a test runner wrote about a test (a
+    `path.py::name PASSED` line, a `FAILED path.py::name - …` summary, an
+    `E   …` explanation). A parametrized test id carries a whole rate-limit
+    line in its brackets: on 2026-10-09 five passing ids in Pipeline Tests
+    run 38000926514 read as infrastructure, the medic read a sixth as a
+    Linear rate limit, and `main` sat red for 36 minutes with nothing
+    working on it. The medic's three line readers read through the same
+    filter. An `infra-backoff` now prints the signature that matched and the
+    line it matched on, cut to 200 characters, so a backoff is explained by
+    its own run.
 - **A failure main has already moved past is superseded (DRE-5069).** When
   a run of the same workflow on the default branch — created after the
   failed run, on another commit — concluded `success`, the fault is gone

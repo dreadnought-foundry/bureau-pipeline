@@ -72,6 +72,14 @@ same reason as the class above: DRE-2923's own card body quotes the
 RATELIMITED payload, so an agent-task log that merely repeats it must NOT
 classify, or a genuine failure would be silently swallowed.
 
+A LINE IS NOT ENOUGH ON ITS OWN (DRE-6522). A parametrized test id carries a
+whole client error line in its brackets, and `pytest -v` prints it beside
+`PASSED`. On 2026-10-09 a red `main` whose only failure was one plain test
+read here as `linear_ratelimited`, on such an id. So the three line readers
+(the critic's signatures, upstream 5xx, the Linear rate limit) read only the
+lines the run itself said — `run_lines`, which is `reviewer_environment`'s
+DRE-5272 filter and never a copy of it.
+
 FOURTH CLASS — THE RUNNER CANNOT RUN CLAUDE (DRE-3428). On 2026-09-08
 (DRE-3416) the floating `claude-code-action@v1` tag moved and all six kinds of
 Claude-running job in the fleet died about thirteen seconds in with `Claude
@@ -186,6 +194,19 @@ _INFRA_SIGNATURES = (
 )
 
 
+def run_lines(log_text: str) -> list[str]:
+    """The lines the failed run itself SAID, never what its test suite printed
+    about its own tests (DRE-6522).
+
+    On 2026-10-09 a red `main` read as a Linear rate limit here and as
+    infrastructure in the red-main repair, because pytest prints a
+    parametrized test's id beside `PASSED`, and those ids carried whole
+    rate-limit lines in their brackets. Every signature below is matched
+    against these lines, through DRE-5272's filter rather than a copy of it.
+    """
+    return reviewer_environment.message_lines(log_text)
+
+
 # ── upstream 5xx (DRE-2488) ──────────────────────────────────────────────────
 # GitHub's own host. A GitHub API error line always names it; prose quoting a
 # 503 does not. Requiring it ON THE SAME LINE as the status is what keeps a
@@ -216,7 +237,7 @@ def is_upstream_5xx(log_text: str) -> bool:
     UPSTREAM OUTAGE the medic must back off from (no retry, no diagnosis), not
     a pipeline failure. Line-anchored on purpose: see the module docstring.
     """
-    for line in (log_text or "").splitlines():
+    for line in run_lines(log_text):
         if _GH_CLI_STATUS_LINE.search(line):
             return True
         if _GH_API_HOST in line and any(s.search(line) for s in _UPSTREAM_5XX_SHAPES):
@@ -248,7 +269,7 @@ def is_linear_rate_limited(log_text: str) -> bool:
     diagnosis), not a defect in the estate. Line-anchored on purpose: see the
     module docstring.
     """
-    for line in (log_text or "").splitlines():
+    for line in run_lines(log_text):
         if _LINEAR_API_HOST in line and any(
             s.search(line) for s in _LINEAR_RATELIMIT_SHAPES
         ):
@@ -344,14 +365,18 @@ def _is_qa_review(workflow_name: str) -> bool:
 def is_critic_infra_crash(workflow_name: str, log_text: str) -> bool:
     """True iff this failed run is a QA-critic infra-crash the medic must NOT
     rerun/diagnose. Requires (a) it is the QA-Review workflow AND (b) the logs
-    carry the neutral critic marker OR a rate-limit/auth signature.
+    carry the neutral critic marker OR a rate-limit/auth signature on a line
+    the run itself said (`run_lines`, DRE-6522). The marker is the critic's
+    own receipt and is read in the whole log, as it always was.
     """
     if not _is_qa_review(workflow_name):
         return False
-    text = log_text or ""
-    if CRITIC_NEUTRAL_MARKER in text:
+    if CRITIC_NEUTRAL_MARKER in (log_text or ""):
         return True
-    return any(sig.search(text) for sig in _INFRA_SIGNATURES)
+    return any(
+        sig.search(line) for line in run_lines(log_text)
+        for sig in _INFRA_SIGNATURES
+    )
 
 
 def _read(path: str) -> str:
