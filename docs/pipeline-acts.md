@@ -268,7 +268,7 @@ beside `release-live` as a terminal progress act in `tests/test_act_cadence.py`.
 It ships console-first like every other row. The console's `ACTS` has to carry
 `roll-up-split` before this row can merge.
 
-## The hygiene agent's thirteen rows — `🧹 hyg-*` (DRE-5368)
+## The hygiene agent's fourteen rows — `🧹 hyg-*` (DRE-5368)
 
 | Act name | Tag | Kind | Next actor |
 | -- | -- | -- | -- |
@@ -285,6 +285,7 @@ It ships console-first like every other row. The console's `ACTS` has to carry
 | `hygiene-card-cancel` | `hyg-card-canceled` | recovery | `operator` |
 | `hygiene-cause-name` | `hyg-cause-named` | hold | `operator` |
 | `hygiene-hold-clear` | `hyg-hold-cleared` | recovery | `reconcile.py` |
+| `hygiene-triage-alarm` | `hyg-triage-aged` | hold | `operator` |
 
 The hourly hygiene pass (`scripts/hygiene.py`) clears the mechanical rows a
 person clears by hand today. Every row is emitted from that one file, whose
@@ -292,15 +293,15 @@ table of tags is each row's anchor, and every receipt opens
 `🧹 hygiene: <tag> — <cause> · <HH:MM PT>`, names its evidence, and ends in the
 trailer. **Which** act a pass takes is decided by a lane module
 (`scripts/hygiene_<lane>.py`, a sibling card each); the core composes and posts
-all thirteen through one seam, which is why `tests/test_check_act_receipts.py`
+all fourteen through one seam, which is why `tests/test_check_act_receipts.py`
 counts a site composing a computed act name as composing the acts its own file
 declares.
 
 Every row declares a `null` cadence and none is `dispatched`: what follows a
 gate re-dispatch is the gate's own run, timed by its own acts, and every other
 row hands the work to a person, the planner or the sweep. The kinds are copied
-from the console's `ACTS` (agent-bureau PR #3023, DRE-5367) — two holds and ten
-recoveries — so they agree tag by tag. The idempotency key is the pair (tag,
+from the console's `ACTS` (agent-bureau PR #3023, DRE-5367) — three holds and
+eleven recoveries — so they agree tag by tag. The idempotency key is the pair (tag,
 cause), applied by the core's write seam and never restated by a lane.
 
 The hourly **summary** the pass posts to its standing card is not one of these:

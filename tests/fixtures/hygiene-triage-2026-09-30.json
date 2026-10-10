@@ -696,6 +696,162 @@
         }
       },
       {
+        "id": "00000000-0000-4000-8000-000000004424",
+        "identifier": "DRE-4424",
+        "title": "[EPIC] bureau-pipeline: a plan parked at the critic's bound, its hold stamped",
+        "description": "Synthetic card text.",
+        "createdAt": "2026-09-20T16:00:00.000Z",
+        "updatedAt": "2026-09-30T06:00:10.000Z",
+        "state": {
+          "name": "Triage"
+        },
+        "labels": {
+          "nodes": [
+            {
+              "name": "repo:bureau-pipeline"
+            },
+            {
+              "name": "agent:planner"
+            },
+            {
+              "name": "needs-human"
+            }
+          ]
+        },
+        "parent": null,
+        "children": {
+          "nodes": []
+        },
+        "comments": {
+          "pageInfo": {
+            "hasNextPage": false,
+            "endCursor": null
+          },
+          "nodes": [
+            {
+              "body": "🛑 Parked in Triage with needs-human for an operator — the plan goes on to neither the second critic nor Green Light until a person settles it. The first critic sent this plan back three times on this planning attempt and its last finding is still open. When it is settled, clear needs-human and move the card to Planning.",
+              "createdAt": "2026-09-30T06:00:05.000Z",
+              "user": {
+                "id": "u-synthetic"
+              }
+            },
+            {
+              "body": "🔒 hold: reason=plan-critic-bound at=none lifts=manual by=plan.yml",
+              "createdAt": "2026-09-30T06:00:10.000Z",
+              "user": {
+                "id": "u-synthetic"
+              }
+            }
+          ]
+        },
+        "relations": {
+          "pageInfo": {
+            "hasNextPage": false
+          },
+          "nodes": []
+        },
+        "inverseRelations": {
+          "pageInfo": {
+            "hasNextPage": false
+          },
+          "nodes": []
+        },
+        "history": {
+          "nodes": [
+            {
+              "createdAt": "2026-09-29T17:00:00.000Z",
+              "toState": {
+                "name": "Planning"
+              }
+            },
+            {
+              "createdAt": "2026-09-30T06:00:00.000Z",
+              "toState": {
+                "name": "Triage"
+              }
+            }
+          ]
+        }
+      },
+      {
+        "id": "00000000-0000-4000-8000-000000004425",
+        "identifier": "DRE-4425",
+        "title": "[EPIC] bureau-pipeline: an epic the re-review watcher parked twice",
+        "description": "Synthetic card text.",
+        "createdAt": "2026-09-20T16:00:00.000Z",
+        "updatedAt": "2026-09-30T19:00:10.000Z",
+        "state": {
+          "name": "Triage"
+        },
+        "labels": {
+          "nodes": [
+            {
+              "name": "repo:bureau-pipeline"
+            },
+            {
+              "name": "agent:planner"
+            },
+            {
+              "name": "needs-human"
+            }
+          ]
+        },
+        "parent": null,
+        "children": {
+          "nodes": []
+        },
+        "comments": {
+          "pageInfo": {
+            "hasNextPage": false,
+            "endCursor": null
+          },
+          "nodes": [
+            {
+              "body": "🛑 Parked in Triage with needs-human for an operator — the approved plan was re-reviewed twice and each review sent it back.\n\nIt does not go to Green Light again by itself. When it is settled, clear needs-human and move the card to Planning.",
+              "createdAt": "2026-09-30T19:00:05.000Z",
+              "user": {
+                "id": "u-synthetic"
+              }
+            },
+            {
+              "body": "🔒 hold: reason=epic-rereview-twice at=none lifts=manual by=rereview_watch.py",
+              "createdAt": "2026-09-30T19:00:10.000Z",
+              "user": {
+                "id": "u-synthetic"
+              }
+            }
+          ]
+        },
+        "relations": {
+          "pageInfo": {
+            "hasNextPage": false
+          },
+          "nodes": []
+        },
+        "inverseRelations": {
+          "pageInfo": {
+            "hasNextPage": false
+          },
+          "nodes": []
+        },
+        "history": {
+          "nodes": [
+            {
+              "createdAt": "2026-09-29T17:00:00.000Z",
+              "toState": {
+                "name": "Planning"
+              }
+            },
+            {
+              "createdAt": "2026-09-30T19:00:00.000Z",
+              "toState": {
+                "name": "Triage"
+              }
+            }
+          ]
+        }
+      },
+      {
         "id": "00000000-0000-4000-8000-000000004431",
         "identifier": "DRE-4431",
         "title": "PROOF: the widget is observed live",
