@@ -54,7 +54,10 @@ in <repo-slug>`, so each repository posts its own and none repeats. A receipt
 already standing is when the reason cleared: once it is `alarm_after_hours`
 old (`config/switches.json`) and the switch is still off, the pass files one
 card titled `Switch <SWITCH> in <repo-slug> is still off after its reason
-cleared`, after `find_open` finds none open under that title. The receipt is
+cleared`, after `find_open` finds none open under that title. The alarm is an
+operator step (DRE-6652): it carries `agent:devops` and `no-code` beside its
+repo label (`alarm_labels`), and its body ends with the step's two-item
+`## Acceptance criteria`. The receipt is
 written first and the alarm reads only the receipt, so a pass that dies
 between the two loses nothing: the next one finds the receipt and times the
 alarm from it.
@@ -447,27 +450,69 @@ def _hours(seconds: float) -> str:
     return f"{whole} hour" if whole == 1 else f"{whole} hours"
 
 
+#: The alarm's role label (DRE-6652). Its other label is
+#: `linear_ops.NO_CODE_LABEL`, read through `alarm_labels`.
+ALARM_ROLE = "agent:devops"
+
+
+def alarm_labels() -> tuple:
+    """The labels the alarm is filed with beside `repo:<slug>` (DRE-6652).
+
+    The alarm is an operator step, so it carries `no-code`, which
+    `config/routing-verdicts.json` reads as OPERATOR at precedence 1: Planning
+    moves it to the operator's queue on the label and never asks a model. Never
+    `needs-human` — that label is a hold with a writer registry
+    (`scripts/hold.py`), and the alarm holds nothing.
+    """
+    import linear_ops  # noqa: PLC0415 — the import stays off the pure path
+
+    return (ALARM_ROLE, linear_ops.NO_CODE_LABEL)
+
+
 def alarm_body(name: str, slug: str, repo: str, states: Mapping, cards,
                first: str, posted: datetime, now) -> str:
+    """The alarm card's body: the facts, the operator's step, and its checklist.
+
+    A step, never a question (DRE-6652): a body that asks "if it should come
+    on…" reads as a decision, and the planning classifier sent DRE-6636 to the
+    CEO with no recommendation.
+    """
     named = ", ".join(f"{card} {states[card]}" for card in cards)
     since = _hours((now - posted).total_seconds())
+    reason = companion(name)
     return "\n".join([
         f"The switch `{name}` in {slug} is still off {since} after its reason "
         f"cleared. The sweep posted its receipt on {first} at {_pt(posted)}: "
         f"every card the switch waited on is terminal — {named}.",
         "",
-        "The sweep never sets the variable: turning a production behavior on "
-        "is a person's act. If it should come on, this is the one command:",
+        "This is an operator step. The sweep never sets the variable: turning "
+        "a production behavior on is a person's act. Do one of these two, then "
+        "close this card.",
         "",
-        f"    gh variable set {name} --body true -R {repo}",
+        "**Turn the switch on** and delete its reason:",
         "",
-        f"then delete its reason with `gh variable delete {companion(name)} -R "
-        f"{repo}`. If it should stay off, give it a new reason naming the cards "
-        f"it now waits on (`gh variable set {companion(name)} --body \"DRE-<n>\" "
-        f"-R {repo}`), and close this card.",
+        "```",
+        f"gh variable set {name} --body true -R {repo}",
+        f"gh variable delete {reason} -R {repo}",
+        "```",
+        "",
+        "**Or give it a new reason** naming the cards it now waits on:",
+        "",
+        "```",
+        f"gh variable set {reason} --body \"DRE-<n>\" -R {repo}",
+        "```",
+        "",
+        "In both cases close this card — Done when the switch is on, Canceled "
+        "when it has a new reason — with a comment saying which.",
         "",
         "Filed by the sweep's `Read the switches` step (scripts/switch_reason.py, "
         "DRE-6437); docs/switches.md describes it.",
+        "",
+        "## Acceptance criteria",
+        "",
+        f"- [ ] `{name}` on {repo} reads `true` and `{reason}` is deleted, or "
+        f"`{reason}` names at least one open card.",
+        "- [ ] This card is Canceled or Done, with a comment saying which.",
     ])
 
 
@@ -530,7 +575,8 @@ def receipt_phase(name: str, read: Reading, states: Mapping, env: Mapping, *,
     if not live:
         return [f"{WOULD} alarm — {title}"]
     try:
-        issue = linear.create_card(title, body, repo_slug=slug)
+        issue = linear.create_card(title, body, repo_slug=slug,
+                                   labels=alarm_labels())
     except Exception as exc:  # noqa: BLE001 — reported, never fatal
         return [f"{PREFIX} {name} — still off {_hours(age)} after its reason "
                 f"cleared, and the alarm was not filed: "
@@ -558,8 +604,9 @@ class LinearWrites:
     def find_open(self, title: str):
         return self._ops.find_open(title)
 
-    def create_card(self, title: str, body: str, *, repo_slug: str):
-        return self._ops.create_card(title, body, repo_slug=repo_slug)
+    def create_card(self, title: str, body: str, *, repo_slug: str, labels=()):
+        return self._ops.create_card(title, body, repo_slug=repo_slug,
+                                     labels=labels)
 
 
 def _read_pass(env: Mapping | None, gql, now, linear=None, dry: bool = False) -> int:
