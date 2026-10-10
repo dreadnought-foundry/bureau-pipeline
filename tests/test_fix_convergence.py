@@ -949,6 +949,13 @@ class LinearHoldNoteTest(unittest.TestCase):
             "This card needs a human decision. See PR for the full review "
             "trail.")
 
+    def test_the_conflict_stop_keeps_its_words(self):
+        # Conflict mode's stop is `budget`; the reordered arms still reach it.
+        self.assertEqual(
+            linear_hold_note("budget", mode="conflict"),
+            "🛑 Five conflict-resolution rounds couldn't keep this PR "
+            "mergeable — main keeps moving under it. Needs a human decision.")
+
     def test_the_ceiling_keeps_todays_words(self):
         self.assertEqual(
             linear_hold_note("ceiling"),
