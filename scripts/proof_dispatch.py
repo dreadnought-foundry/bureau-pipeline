@@ -204,6 +204,7 @@ import prose_blockers  # noqa: E402
 import reconcile  # noqa: E402 — the lane read, the repo label, the GitHub read seam
 import spoken_thread  # noqa: E402
 import switch_reason  # noqa: E402 — the dry run's off line (DRE-6439)
+import unfixable_checks  # noqa: E402 — what a failed check run is (DRE-6571)
 
 #: Opens every line this phase prints.
 PREFIX = "proof-dispatch:"
@@ -303,8 +304,10 @@ PROMOTED_MARK = f"🧹 Auto-promoted Backlog → {FIRST_RUN_LANE}"
 PR_FIELDS = "number,url,headRefName,state,mergeCommit"
 #: The fields the re-run reads off the record pull request: its head, when it
 #: opened, the comments the critic's verdict and the gate's note are read
-#: from, and the files the record is found among (DRE-6488).
-RECORD_FIELDS = "number,url,headRefName,state,headRefOid,createdAt,comments,files"
+#: from, the files the record is found among (DRE-6488), and the head's checks
+#: a record red on one is read off (DRE-6571).
+RECORD_FIELDS = ("number,url,headRefName,state,headRefOid,createdAt,comments,"
+                 "files,statusCheckRollup")
 
 #: The card's epic, its siblings and its blocking relations, in one read.
 CARD_QUERY = """query($id: String!) { issue(id: $id) {
@@ -467,6 +470,106 @@ def _gate_hold_note(pr: dict) -> dict | None:
                 comment.get("body") or "", reconcile.GATE_HOLD_NOTE_MARKER)):
             return comment
     return None
+
+
+# --------------------------------------------------------------------------- #
+# A record red on a check (DRE-6571)                                           #
+# --------------------------------------------------------------------------- #
+
+
+def _by_qa_bot(comment: dict) -> bool:
+    """`reconcile.is_qa_bot_comment` for either shape: `gh pr list`'s
+    `author.login`, or the REST thread's `user.login` the Resolve step reads."""
+    return reconcile.is_qa_bot_comment(
+        {"author": comment.get("author") or comment.get("user")})
+
+
+def _not_proven_at(pr: dict, head: str) -> bool:
+    """Has the gate declined the record AT `head` as not proven — any qa-bot
+    hold note whose first line says so, newest or not?"""
+    for comment in pr.get("comments") or []:
+        body = comment.get("body") or ""
+        if not (_by_qa_bot(comment) and merge_gate.opens_with_marker(
+                body, reconcile.GATE_HOLD_NOTE_MARKER)):
+            continue
+        found = _DECLINED.search(merge_gate.first_line(body))
+        if found and found.group("sha") == head \
+                and found.group("reason").startswith(NOT_PROVEN):
+            return True
+    return False
+
+
+def record_red_checks(pr: dict, runs) -> list:
+    """The checks a proof record is red on, in the head's order — or [] when
+    it is not a record, or none is red, or the gate has declined it at the
+    head as not proven.
+
+    THE one rule (DRE-6571) the approved-but-red sweep and agent-fix's
+    Resolve step both read. A record's rows are the proof run's to observe
+    again (DRE-5927), and the gate's `proof record not proven` decline at the
+    head says the rows are what holds it (DRE-6488). A failed check is a
+    different defect, and the proof run never changes code: a non-review
+    check run at the head whose conclusion is in
+    `unfixable_checks.FAILED_CONCLUSIONS` — so `cancelled` is not red — is
+    the fix agent's, for that check only. `runs` are REST check runs or
+    `statusCheckRollup` nodes; the conclusion is read in either case."""
+    if not proof_record_branch(pr.get("headRefName")):
+        return []
+    if _not_proven_at(pr, pr.get("headRefOid") or ""):
+        return []
+    red = []
+    for run in runs or ():
+        name = str(run.get("name") or "")
+        conclusion = str(run.get("conclusion") or "").lower()
+        if (name and not name.endswith("review") and name not in red
+                and conclusion in unfixable_checks.FAILED_CONCLUSIONS):
+            red.append(name)
+    return red
+
+
+def _pages(path: str) -> list:
+    """A `gh api --paginate --slurp` file flattened: a list of pages, or one."""
+    with open(path, encoding="utf-8") as fh:
+        payload = json.load(fh)
+    if isinstance(payload, list) and all(isinstance(p, list) for p in payload):
+        return [item for page in payload for item in page]
+    return payload
+
+
+def record_red_checks_read(branch: str, head: str, checks_path: str,
+                           thread_path: str) -> list:
+    """`record_red_checks` off the files the Resolve step read: the head's
+    check runs and the pull request's REST comment thread, every page of
+    each. An unreadable file raises, and the step stops on it."""
+    runs = unfixable_checks._check_runs(_pages(checks_path))
+    pr = {"headRefName": branch, "headRefOid": head, "comments": _pages(thread_path)}
+    return record_red_checks(pr, runs)
+
+
+def _plain_line(text: str) -> str:
+    """One line of plain text: a file name or a check name reaches the run's
+    prompt and the Report step's comment, and neither may break a line."""
+    return " ".join(str(text).split())
+
+
+def admit_record_fix(red: list, files, told_path: str) -> str:
+    """What the Resolve step tells a fix run it admits on a record red on
+    `red` (DRE-6571): the one line the run's prompt opens with. The record's
+    path goes to `told_path`, one line, for the Report step to read."""
+    record, _ = proof_record.find_record(files)
+    checks = ", ".join(_plain_line(name) for name in red)
+    if record:
+        record = _plain_line(record)
+        with open(told_path, "w", encoding="utf-8") as fh:
+            fh.write(record + "\n")
+        named = f"The record, {record}, is not your file"
+    else:
+        named = "The record this pull request adds is not your file"
+    return (f"PROOF RECORD: this pull request is a proof record, and it is red "
+            f"on {checks}. Fix those checks and nothing else. {named} — its "
+            "rows are the proof run's to observe, so do not edit it. If the "
+            "fix cannot be made without changing it, say so in the blocker "
+            "file named in step 6 below instead.")
 
 
 @dataclass(frozen=True)
@@ -902,7 +1005,17 @@ class _Pass:
         """The gate's trigger (DRE-6488): with the critic's `APPROVE` at the
         head, the gate's newest hold note declines the record AT that head
         as not proven. A note on an earlier head is already answered — the
-        gate reads every new head itself — and any other reason is not this."""
+        gate reads every new head itself — and any other reason is not this.
+
+        A record red on a check with no such decline at the head is not this
+        phase's either (DRE-6571): the approved-but-red sweep sends the fix
+        agent, and the line names the check and says so."""
+        red = record_red_checks(pr, pr.get("statusCheckRollup"))
+        if red:
+            raise _Refused(f"re-run: #{number} at {head[:7]} is red on "
+                           f"{', '.join(red)}, a check and not a row of the "
+                           "record — the fix agent has it, for the check "
+                           "only (DRE-6571)", "someone_else")
         note = _gate_hold_note(pr)
         if note is None:
             raise _Refused(f"re-run: the critic's newest verdict on #{number} at "

@@ -245,6 +245,11 @@ set -e
 #   once per head; the marker says so rather than asking for a hand restart.
 #   The overtaken line says only that the branch differs from the run's
 #   commit, never who moved it: the run's own earlier push looks the same.
+# 2026-10-10, DRE-6571. A proof record red on a check gets one fix run, told
+#   the record is not its file; the Resolve step names the record in
+#   proof-record-fix.txt. A pushed commit that changes that file anyway
+#   carries one `proof-record-changed:` line after the trailer, so the
+#   critic's next review reads it. A run told no record says nothing of one.
 
 # Every read and comment belongs to this (repo, PR, head) or nothing posts (DRE-3951).
 handoff() { CMD=$1; shift; python3 .bureau-pipeline/scripts/fix_handoff.py \
@@ -332,6 +337,17 @@ $CLASSIFICATION"
     || printf '%s' "$BODY" > /tmp/act-fix-pushed.md
   # Who made the push, after the trailer like the cause (DRE-6351).
   [ -n "${RESCUE_LINE:-}" ] && printf '\n\n%s' "$RESCUE_LINE" >> /tmp/act-fix-pushed.md
+  # A proof record's fix run was told the record is not its file (DRE-6571):
+  # a commit that changes it anyway is named, so the critic's next review reads it.
+  # Exit 1 is "differs"; an unreadable diff (128) names nothing.
+  RECORD_TOLD=$(head -1 "$RUNNER_TEMP/proof-record-fix.txt" 2>/dev/null || true)
+  RECORD_RC=0
+  if [ -n "$RECORD_TOLD" ] && [ -n "$PRE_SHA" ]; then
+    git --literal-pathspecs diff --quiet "$PRE_SHA" "${LOCAL:-HEAD}" -- "$RECORD_TOLD" 2>/dev/null || RECORD_RC=$?
+  fi
+  if [ "$RECORD_RC" -eq 1 ]; then
+    printf '\n\n%s' "proof-record-changed: this fix commit changed the proof record $RECORD_TOLD, which the fix run was told is the proof run's file and not its own — the critic's next review should read that change." >> /tmp/act-fix-pushed.md
+  fi
   printf '\n\n%s\n' "$ANSWERS" >> /tmp/act-fix-pushed.md
   gh pr comment "$PR" --repo $REPO --body-file /tmp/act-fix-pushed.md
 }

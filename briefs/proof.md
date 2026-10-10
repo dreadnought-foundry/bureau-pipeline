@@ -386,7 +386,11 @@ words, and the table read the way the hygiene sweep reads it —
 ## The pull request
 - **Branch `agent/DRE-<n>-proof-record`.** The `agent/` prefix is what
   `linear-sync`, the merge gate and the hygiene agent read as the card's own
-  branch; the `-proof-record` suffix is what keeps the fix agent off it.
+  branch; the `-proof-record` suffix is what keeps the fix agent off it. The
+  one exception is a record red on a check — a failed test, not a row — with
+  no `proof record not proven` decline from the gate at its head: that is the
+  fix agent's, for the check only, and it is told the record is not its file
+  (DRE-6571). You do not answer a red check; you never change code.
 - **Title `PROOF record: <card title>`.**
 - **Body:** the first line is `Proof record for DRE-<n>`, the next is
   `What's new: none`, then the card URL and the criterion table copied in.

@@ -4752,23 +4752,33 @@ def card_parked_for_human(identifier: str) -> bool:
     )
 
 
-def fix_dispatch_blocked(pr: dict) -> bool:
+def fix_dispatch_blocked(pr: dict, *, red_checks=()) -> bool:
     """True when the PR's card is human-parked and the caller must NOT
     dispatch agent-fix for it. A ref with no card (repair/*, experiments)
     has no park state to consult and never blocks.
 
-    A proof record (`agent/DRE-<n>-proof-record`) is always blocked, before
-    any Linear read (DRE-5927): its defects are rows only the proof run can
+    A proof record (`agent/DRE-<n>-proof-record`) is blocked, before any
+    Linear read (DRE-5927): its defects are rows only the proof run can
     observe again, and a fix agent sent at one can only establish that.
-    Imported here, not at the top: proof_dispatch imports this module."""
+    The one exception is `red_checks`, which only the approved-but-red sweep
+    passes: the checks `proof_dispatch.record_red_checks` says the record is
+    red on (DRE-6571). A failed check is the fix agent's, for the check
+    only, so the record refusal lifts and the human park is read as for any
+    card. Imported here, not at the top: proof_dispatch imports this module."""
     import proof_dispatch  # noqa: PLC0415 — the import cycle above
 
     if proof_dispatch.proof_record_branch(pr.get("headRefName")):
+        if not red_checks:
+            print(
+                f"park-gate: PR #{pr['number']} is a proof record — the proof run "
+                "re-observes it, not the fix agent"
+            )
+            return True
         print(
-            f"park-gate: PR #{pr['number']} is a proof record — the proof run "
-            "re-observes it, not the fix agent"
+            f"park-gate: PR #{pr['number']} is a proof record red on "
+            f"{', '.join(red_checks)} — the fix agent has it, for the check only "
+            "(DRE-6571)"
         )
-        return True
     card = branch_card(pr.get("headRefName") or "")
     if card and card_parked_for_human(card):
         print(
@@ -9854,6 +9864,79 @@ def _head_check_runs(sha: str) -> list[dict] | None:
         return None
 
 
+def _approved_but_red_failed(runs: list) -> int:
+    """How many of the head's non-review check runs failed, as the
+    approved-but-red sweep has always counted them — `cancelled` included,
+    which DRE-3072 owns. A proof record is held to the stricter rule in
+    `proof_dispatch.record_red_checks`."""
+    return sum(
+        1 for r in runs
+        if not str(r.get("name") or "").endswith("review")
+        and (r.get("conclusion") or "") in ("failure", "timed_out", "cancelled")
+    )
+
+
+#: The card note's mark: a proof record red on a check went to the fix agent.
+#: Not yet a declared act — the registry names the note in its `unconverted`
+#: block, since a row ships console-first (docs/pipeline-acts.md).
+PROOF_RECORD_RED_MARK = "🔧 proof-record-red"
+
+
+def _record_red_marker(pr: dict) -> str:
+    """Binds the card note to the pull request and its head. `" @"` ends the
+    number, so #89's marker never substring-matches #896's."""
+    return f"{PROOF_RECORD_RED_MARK} #{pr['number']} @{(pr.get('headRefOid') or '')[:8]}"
+
+
+def _record_red_untold(pr: dict, red: list) -> bool:
+    """True when the card has not yet been told about this head (DRE-6571).
+    The note is the once-per-head key for the dispatch too, so an
+    unreadable thread dispatches nothing: a second fix run at one head is
+    the waste the busy-guard alone cannot rule out."""
+    card = branch_card(pr.get("headRefName") or "")
+    marker = _record_red_marker(pr)
+    try:
+        told = linear_ops.count_comments(card, marker)
+    except Exception as error:  # noqa: BLE001 — unread is never "untold"
+        print(f"approved-but-red: PR #{pr['number']} is a proof record red on "
+              f"{', '.join(red)}, and {card}'s thread could not be read "
+              f"({error}) — dispatching nothing this sweep")
+        return False
+    if told:
+        print(f"approved-but-red: PR #{pr['number']} is a proof record red at "
+              f"{(pr.get('headRefOid') or '')[:8]}, and {card} was told already "
+              "— the fix agent was sent for this head, nothing dispatched")
+        return False
+    return True
+
+
+def _record_red_note(pr: dict, red: list) -> str:
+    """The card note (DRE-6571): in plain English, the record's pull request
+    is red on a check, which one, and that the fix agent has it."""
+    checks = " and ".join(red) if len(red) < 3 else (
+        ", ".join(red[:-1]) + f" and {red[-1]}")
+    return (
+        f"{_record_red_marker(pr)}: the proof record's pull request #{pr['number']} "
+        "is red on a check, and the fix agent has it.\n\n"
+        f"The failed {'check is' if len(red) == 1 else 'checks are'} {checks}. "
+        "The critic approved the record and the merge gate has not declined it "
+        "as unproven, so this is a check to repair, not a row to observe again. "
+        "The fix agent is sent for the failing checks only and is told the "
+        "record is not its file. Said once per commit — a new commit says it again."
+    )
+
+
+def _tell_record_red(pr: dict, red: list) -> None:
+    """The card note, once per head. A note that does not land is said in the
+    log, never raised: the dispatch it reports has already been made."""
+    card = branch_card(pr.get("headRefName") or "")
+    try:
+        linear_ops.cmd_comment(card, _record_red_note(pr, red))
+    except Exception as error:  # noqa: BLE001 — the dispatch is already made
+        print(f"approved-but-red: could not tell {card} that PR #{pr['number']} "
+              f"went to the fix agent: {error}")
+
+
 def fix_approved_but_red() -> None:
     """Dead-zone repair: a PR with critic APPROVE but a failed CI check has
     no automatic fixer — agent-fix's trigger is a REQUEST_CHANGES comment,
@@ -9861,7 +9944,14 @@ def fix_approved_but_red() -> None:
     open agent PR in that state whose head is >20 min old (gives medic's
     auto-retry time to clear transient flakes first). Origin: PR #46 sat
     approved-but-red with nothing coming. Skips when a fix run is already
-    queued/in_progress (same busy-guard as the conflict sweep)."""
+    queued/in_progress (same busy-guard as the conflict sweep).
+
+    A proof record is the proof run's, except when it is red on a check
+    (DRE-6571): `proof_dispatch.record_red_checks` is the one rule, and the
+    sweep holds no copy of it. Such a record is dispatched once per head,
+    and the card is told so, once per head."""
+    import proof_dispatch  # noqa: PLC0415 — proof_dispatch imports this module
+
     # Unreadable answers BUSY (gh_actions_read): the App token 403s on this
     # API, and the old `or "[]"` turned that into "nothing running" — the
     # backoff failed OPEN at every one of these sites.
@@ -9884,24 +9974,27 @@ def fix_approved_but_red() -> None:
         runs = _head_check_runs(sha)
         if runs is None:
             continue  # unreadable: skip this PR, as an empty read always did
-        failed = sum(
-            1 for r in runs
-            if not str(r.get("name") or "").endswith("review")
-            and (r.get("conclusion") or "") in ("failure", "timed_out", "cancelled")
-        )
+        failed = _approved_but_red_failed(runs)
         if not failed:
             continue
         commit = json.loads(gh("api", f"repos/{REPO}/git/commits/{sha}") or "{}")
         when = (commit.get("committer") or {}).get("date")
         if not when or age_minutes(when) < 20:
             continue
-        if fix_dispatch_blocked(pr):
+        # A proof record red on a check is the fix agent's (DRE-6571); on
+        # any other branch this is [] and nothing below changes.
+        red = proof_dispatch.record_red_checks(pr, runs)
+        if fix_dispatch_blocked(pr, red_checks=red):
             continue  # human-parked card (DRE-2024) — the loop is over
         if fix_agent_absent_hold(pr):
             return  # no fix agent in this repo — a person is told once (DRE-4378)
+        if red and not _record_red_untold(pr, red):
+            continue
         print(f"approved-but-red: PR #{pr['number']} has APPROVE + {failed} failed check(s) — dispatching fix agent")
         gh_dispatch("workflow", "run", fix_workflow(), "--repo", REPO,
                     "-f", f"pr_number={pr['number']}")
+        if red:
+            _tell_record_red(pr, red)
         return  # one dispatch per sweep; the busy-guard handles the rest
 
 

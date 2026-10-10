@@ -417,7 +417,12 @@ class TheReplayOf896Test(unittest.TestCase):
         body = sweep.thread[0][1]
         self.assertIn("#896", body)
         self.assertIn("scripts unit tests", body)
-        self.assertNotIn(";", body.split("\n\n")[0])
+        first = body.split("\n\n")[0]
+        self.assertNotIn(";", first)
+        # standards/comms.md: no code, no file paths in what a person reads first.
+        self.assertNotIn("`", first)
+        self.assertNotIn(REPLAY_RECORD, body)
+        self.assertNotIn(".py", first)
 
     def test_an_unreadable_card_thread_dispatches_nothing(self):
         sweep = _Sweep()

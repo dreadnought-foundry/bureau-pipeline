@@ -24,7 +24,12 @@ set -e
 #  1b. Refuses a proof record, a head ref `proof_dispatch.proof_record_branch`
 #      reads as `agent/DRE-<n>-proof-record`, with go=false, no_work=true
 #      and a `fix-refused:` line, in every mode and on every leg, before
-#      the thread is read or a mode or budget is resolved.
+#      the thread is read or a mode or budget is resolved. One start is
+#      admitted (DRE-6571): a workflow_dispatch on a clean head at a record
+#      `proof_dispatch.record_red_checks` reads as red on a check. It reads
+#      the head's check runs and the thread into record-checks.json and
+#      record-thread.json, writes the record's path to proof-record-fix.txt
+#      for the Report step, and carries the run's note in `escalation`.
 #   2. Refuses anything that is not an `agent/*` or `repair/*` branch, and
 #      any pull request that is not OPEN, with go=false.
 #   3. Derives the card from the branch name, the first DRE-<n> in any
@@ -95,7 +100,8 @@ set -e
 # From the runner: GITHUB_OUTPUT and RUNNER_TEMP ($TMPD, /tmp without it).
 # Files it leaves in $TMPD: thread.json, halt.env, fix-budget.env,
 # fix-no-work-note.md, fix-classification.txt, and fix-no-work.txt, which
-# the job's no-work report step reads.
+# the job's no-work report step reads; on a proof record's admitted dispatch,
+# record-checks.json, record-thread.json and proof-record-fix.txt too.
 #
 # Incident history
 # ────────────────
@@ -253,8 +259,23 @@ set -e
 #   that run ends here with one no-work notice. The branch is the signal:
 #   a record opened by hand on an ordinary card branch keeps today's path.
 #
+# 2026-10-10 · DRE-6571. A record red on a check gets one fix run. On
+#   bureau-pipeline #896 (2026-10-09) the critic approved a record at
+#   a89e0ba1 and a unit test failed on it for two hours. The fix agent was
+#   kept off it, the proof dispatcher found no decline note and said there
+#   was nothing to answer, and a person pushed the one-file test fix by
+#   hand. A failed check is not a row, and the proof run never changes code.
+#   So step 1b admits a workflow_dispatch on a clean head when
+#   `proof_dispatch.record_red_checks` — the rule the approved-but-red sweep
+#   reads too, never a copy — names a failed non-review check and the gate
+#   has not declined the record at that head as not proven. The run is told
+#   the record's path and that the record is not its file, and the Report
+#   step names a commit that changes it anyway. A critic send-back (the
+#   comment leg) and a conflict are still refused: those are the proof
+#   run's.
+#
 PR=${PR_NUMBER}
-INFO=$(gh pr view "$PR" --repo ${REPO} --json state,headRefName,headRefOid,mergeStateStatus,baseRefName,isDraft)
+INFO=$(gh pr view "$PR" --repo ${REPO} --json state,headRefName,headRefOid,mergeStateStatus,baseRefName,isDraft,files)
 STATE=$(echo "$INFO" | python3 -c "import json,sys; print(json.load(sys.stdin)['state'])")
 BRANCH=$(echo "$INFO" | python3 -c "import json,sys; print(json.load(sys.stdin)['headRefName'])")
 MSTATE=$(echo "$INFO" | python3 -c "import json,sys; print(json.load(sys.stdin)['mergeStateStatus'])")
@@ -270,12 +291,32 @@ echo "base_ref=$BASE_REF" >> "$GITHUB_OUTPUT"
 # patch (step 1b, DRE-5927). The head ref reaches the predicate as argv, and
 # a predicate that cannot run stops the step (bash -e) rather than read as no.
 IS_RECORD=$(python3 -c 'import sys; sys.path.insert(0, ".bureau-pipeline/scripts"); import proof_dispatch; print(str(proof_dispatch.proof_record_branch(sys.argv[1])).lower())' "$BRANCH")
+RECORD_NOTE=""
 if [ "$IS_RECORD" = "true" ]; then
-  echo "fix-refused: #$PR is a proof record ($BRANCH) — the proof run re-observes it, the fix agent does not patch it" \
-    | tee "${RUNNER_TEMP:-/tmp}/fix-no-work.txt"
-  echo "go=false" >> "$GITHUB_OUTPUT"
-  echo "no_work=true" >> "$GITHUB_OUTPUT"
-  exit 0
+  # The one exception (DRE-6571): a dispatch on a clean head, at a record
+  # proof_dispatch.record_red_checks reads as red on a check, is the
+  # approved-but-red sweep's and runs — for the check only. The rule is read
+  # off the head's check runs and the thread, never restated here, and an
+  # unreadable read stops the step (bash -e) rather than admit or refuse.
+  if [ "$EVENT_NAME" = "workflow_dispatch" ] && [ "$MSTATE" != "DIRTY" ]; then
+    python3 .bureau-pipeline/scripts/gh_read_retry.py --out "${RUNNER_TEMP:-/tmp}/record-checks.json" \
+      gh api --paginate --slurp \
+      "repos/${REPO}/commits/$HEAD_SHA/check-runs?per_page=100"
+    python3 .bureau-pipeline/scripts/gh_read_retry.py --out "${RUNNER_TEMP:-/tmp}/record-thread.json" \
+      gh api --paginate --slurp \
+      "repos/${REPO}/issues/$PR/comments?per_page=100"
+    RECORD_NOTE=$(echo "$INFO" | python3 -c 'import json, sys; sys.path.insert(0, ".bureau-pipeline/scripts"); import proof_dispatch; red = proof_dispatch.record_red_checks_read(*sys.argv[1:5]); print(proof_dispatch.admit_record_fix(red, json.load(sys.stdin).get("files"), sys.argv[5]) if red else "")' \
+      "$BRANCH" "$HEAD_SHA" "${RUNNER_TEMP:-/tmp}/record-checks.json" \
+      "${RUNNER_TEMP:-/tmp}/record-thread.json" "${RUNNER_TEMP:-/tmp}/proof-record-fix.txt")
+  fi
+  if [ -z "$RECORD_NOTE" ]; then
+    echo "fix-refused: #$PR is a proof record ($BRANCH) — the proof run re-observes it, the fix agent does not patch it" \
+      | tee "${RUNNER_TEMP:-/tmp}/fix-no-work.txt"
+    echo "go=false" >> "$GITHUB_OUTPUT"
+    echo "no_work=true" >> "$GITHUB_OUTPUT"
+    exit 0
+  fi
+  echo "proof record #$PR is red on a check — the fix agent has it, for the check only (DRE-6571)"
 fi
 # agent/* and repair/* only (DRE-1927); a repair branch has no card.
 case "$BRANCH" in agent/*|repair/*) ;; *) echo "not an agent branch"; echo "go=false" >> "$GITHUB_OUTPUT"; exit 0;; esac
@@ -380,9 +421,10 @@ if [ "$MODE" = "conflict" ]; then
   } >> "$GITHUB_OUTPUT"
 # The model id is not pinned here (DRE-2316).
 elif [ "$FRESH_EYES" = "true" ]; then
-  echo "escalation=ESCALATION CONTEXT: the last review round did not read as progress — the reviewer re-found something an earlier round already named, reported that an earlier fix came undone, or said nothing about it either way. One more round like that stops this loop. Do NOT assume the previous attempt's approach was right — re-read the card, the spec, the critic's full review history on this PR, and the current diff, then re-derive the correct fix from scratch. If you conclude the critic is wrong or the card itself is flawed, say so in the blocker file named in step 6 below rather than forcing a bad fix." >> "$GITHUB_OUTPUT"
+  echo "escalation=${RECORD_NOTE:+$RECORD_NOTE }ESCALATION CONTEXT: the last review round did not read as progress — the reviewer re-found something an earlier round already named, reported that an earlier fix came undone, or said nothing about it either way. One more round like that stops this loop. Do NOT assume the previous attempt's approach was right — re-read the card, the spec, the critic's full review history on this PR, and the current diff, then re-derive the correct fix from scratch. If you conclude the critic is wrong or the card itself is flawed, say so in the blocker file named in step 6 below rather than forcing a bad fix." >> "$GITHUB_OUTPUT"
 else
-  echo "escalation=" >> "$GITHUB_OUTPUT"
+  # A proof record admitted at step 1b is told what it may touch (DRE-6571).
+  echo "escalation=$RECORD_NOTE" >> "$GITHUB_OUTPUT"
 fi
 
 if [ "$ACTION" = "run" ]; then
