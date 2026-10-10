@@ -782,3 +782,33 @@ jobs:
               echo "\`${CHANNEL_RECEIPT:-pipeline-channel receipt not read}\`"
             } >> "$GITHUB_STEP_SUMMARY"
           fi
+
+      # A BLOCKED CHECK FAILS THE RUN (DRE-6622). From 02:26 to 08:45 PT on
+      # 2026-10-10 the mirror check could not run — no pytest in its
+      # environment, then agent-bureau's coverage floor — and every run held
+      # `stable` as `mirror-check-blocked` while finishing green, thirteen
+      # merges behind, until a person forced it. Nothing in this repository
+      # alarms on a quiet channel (the daily staleness job was retired by
+      # DRE-6053), so the red run is the signal.
+      #
+      # LAST, so every receipt above is written first: the summary, the
+      # decision record and the warning. One held run, no count and no
+      # history: nothing here reads a previous run's outcome, and the decision
+      # record is best-effort and read by nothing, so a bound built on it
+      # could be silently wrong. A transient block costs one red run, which
+      # the next merge's run clears. The same runs the loud block speaks for —
+      # main and dispatch, never a PR head. A forced promote ends
+      # `by-hand-forced-promoting`, and a run that never reached the check has
+      # no such outcome, so neither is failed here. The Pipeline Medic may
+      # re-run a red run once; a re-run repeats the refusal and moves nothing,
+      # the exemption self-medic.yml already records for this workflow.
+      - name: Fail a run the blocked check held
+        if: >-
+          steps.decide.outputs.outcome == 'mirror-check-blocked' &&
+          (github.event_name == 'workflow_dispatch' ||
+           github.event.workflow_run.head_branch == 'main')
+        env:
+          REASON: ${{ steps.decide.outputs.reason }}
+        run: |
+          echo "::error title=Mirror check blocked::${REASON}"
+          exit 1

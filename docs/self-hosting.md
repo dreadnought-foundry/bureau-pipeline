@@ -220,7 +220,7 @@ strings instead of the same silence:
 | `by-hand-force-needs-reason` | `force` with no reason | dispatch again with the reason that makes it safe |
 | `by-hand-force-not-operator` | `force` asked for by a bot login | forcing is operator-only; a person dispatches it |
 | `mirror-tests-failed` | agent-bureau's mirror tests pass on `stable` and fail on the candidate (DRE-6496); the reason names each test and the file it mirrors | agent-bureau's mirror follows first — the run filed one card there (`card owed` if Linear refused it); the next run re-evaluates |
-| `mirror-check-blocked` | the mirror check could not run — a token, clone or install that failed, a run past its time limit, or no result at all | nothing proven either way; the next run re-checks, and `force` is the way past it |
+| `mirror-check-blocked` | the mirror check could not run — a token, clone or install that failed, pytest that would not start, a run past its time limit, or no result at all | nothing proven either way; on a `main` or by-hand run the run fails so the hold is seen (DRE-6622) — read its reason, and `force` is the way past it |
 
 Before this, those runs concluded `skipped` with nothing else on them: on
 2026-09-03 four consecutive PR-head runs each produced one, and learning that
@@ -364,6 +364,22 @@ promotion never clones agent-bureau. `scripts/mirror_check.py` does the work:
   both ways a test finds the pipeline read it. agent-bureau's own
   dependencies come in through `setup-python-cached`, from its root
   `requirements*.txt` and those in the directories that hold the tests.
+- **The check's test tools** come from this repository's own
+  `requirements-dev.txt`, installed beside agent-bureau's requirements
+  (DRE-6622). agent-bureau's requirements declare no pytest — its CI installs
+  its test tools inline — and nothing is read out of agent-bureau's CI: a
+  build run here cannot read that repository at all, and pytest is the tool
+  this check invokes, so its pin is the check's own. Before any test runs the
+  check proves `pytest --version` starts; when it does not, the check is
+  blocked with a reason that opens `pytest does not start in the check's
+  environment`. A pin here that conflicts with one of agent-bureau's fails the
+  install, which blocks the check by name.
+- **Both pytest runs carry `--no-cov`** (DRE-6622). agent-bureau's pytest
+  settings enforce a coverage floor that its mirror tests alone cannot meet,
+  so pytest exited 1 with no failing test and the check could only say
+  `blocked`. `--no-cov` is pytest-cov's switch, pinned beside pytest for that
+  reason; agent-bureau's other pytest settings stay in force. A run in which
+  every mirror test passes is a pass.
 - **A failure is re-read against `stable`** before it counts. A test red on
   both is agent-bureau's own red: the receipt names it `already red on stable`
   and it refuses nothing. Only a test that passes on `stable` and fails on the
@@ -376,6 +392,16 @@ promotion never clones agent-bureau. `scripts/mirror_check.py` does the work:
   `mirror-check-blocked`, never a failing candidate. The step writes `⏱ mirror
   check: Nm (N tests, agent-bureau <sha>)` to the run summary, so the real
   budget is measured on live runs.
+- **A `mirror-check-blocked` decision on a `main` or by-hand run fails the
+  run** (DRE-6622), in the job's last step, after the summary, the decision
+  record and the release record are written. From 02:26 to 08:45 PT on
+  2026-10-10 the check could not run at all, and every run held `stable`
+  thirteen merges behind while finishing green, until a person forced it.
+  Nothing in this repository alarms on a quiet channel, so the red run is the
+  signal. One held run fails, with no count: nothing here reads a previous
+  run's outcome. A forced promote ends `by-hand-forced-promoting` and is not
+  failed; neither is a run refused before the check. The Pipeline Medic may
+  re-run the red run once, which repeats the refusal and moves nothing.
 
 **The card a refusal files.** One, in agent-bureau, through `linear_ops.py
 oneoff`: titled `agent-bureau: mirrors of <files> must follow bureau-pipeline`

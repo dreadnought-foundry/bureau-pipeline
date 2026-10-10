@@ -21,7 +21,9 @@ WHAT THIS MODULE DOES
 `promote-channel.yml` calls it only where the existing decision would promote,
 so a refused run never clones agent-bureau. Three subcommands:
 
-  discover  names the requirement files the install step needs, and the count.
+  discover  names the requirement files the install step needs, and the count:
+            agent-bureau's own, then this repository's `requirements-dev.txt`,
+            which pins the test tools the check runs (DRE-6622).
   run       the check itself — writes the result file `promote_channel.py`
             reads, and the `⏱ mirror check` line to the run summary.
   card      files the one card a refusal owes in agent-bureau, or comments on
@@ -34,7 +36,9 @@ The check, step by step:
      the day — on 2026-10-09 that was 103 files — and kept nowhere.
   2. The candidate sits at `<agent-bureau>/.bureau-pipeline` AND is exported as
      `BUREAU_PIPELINE_DIR`, so both ways a test finds the pipeline read it.
-  3. pytest from agent-bureau's root over exactly those files.
+  3. pytest from agent-bureau's root over exactly those files, once it is
+     proven to start, and with `--no-cov`: agent-bureau's coverage floor
+     cannot be met by its mirror tests alone (DRE-6622).
   4. Every failure is re-read against `stable`: the failing files run once more
      with `stable` in the candidate's place. A test red on both is agent-bureau's
      own red, named `already red on stable`, and refuses nothing. Only a test
@@ -87,6 +91,22 @@ SKIP_DIRS = (PIPELINE_DIRNAME, ".git", "node_modules", ".venv", "venv",
 #: The requirement files the install reads, at agent-bureau's root and in every
 #: directory between it and a discovered test.
 REQUIREMENTS = "requirements*.txt"
+
+#: The check's own test tools (DRE-6622): this repository's pinned manifest,
+#: at the workspace root, installed after agent-bureau's files. agent-bureau's
+#: requirements declare no pytest — its CI installs its test tools inline, in
+#: its own workflow jobs — and a build run here cannot read agent-bureau at
+#: all. pytest is the tool this check invokes, so its pin is this check's own,
+#: and pytest-cov beside it is what makes `--no-cov` a switch pytest accepts.
+TOOLS_MANIFEST = "requirements-dev.txt"
+
+#: Appended to both pytest runs (DRE-6622). agent-bureau's pytest settings
+#: enforce a coverage floor, and a run of the mirror tests alone reads ~16%
+#: against it, so pytest exits 1 with no failing test and the check could only
+#: ever say `blocked`. `--no-cov` switches coverage, and the floor with it,
+#: off; every other setting agent-bureau keeps in `addopts` stays in force,
+#: which is why it is not `-o addopts=`.
+NO_COVERAGE = "--no-cov"
 
 #: What a failing test that names no candidate file reads in place of a file.
 NOT_READ = "not read from the test"
@@ -276,6 +296,30 @@ class _Blocked(Exception):
     """The check could not run. Never a failing candidate."""
 
 
+def pytest_starts(python: str, *, timeout: float) -> None:
+    """Prove pytest starts before any test runs (DRE-6622): `<python> -m
+    pytest --version`, from a directory of its own so agent-bureau's settings
+    are not read. Raises `_Blocked` quoting the interpreter's last line —
+    `No module named pytest` was the whole cause on 2026-10-10, and it read
+    as `pytest wrote no report`."""
+    with tempfile.TemporaryDirectory(prefix="mirror-check-") as tmp:
+        try:
+            proc = subprocess.run([python, "-m", "pytest", "--version"],
+                                  cwd=tmp, timeout=timeout,
+                                  capture_output=True, text=True)
+        except subprocess.TimeoutExpired:
+            raise _Blocked(f"pytest does not start in the check's environment: "
+                           f"`pytest --version` ran past {int(timeout)}s")
+        except OSError as exc:
+            raise _Blocked(f"pytest does not start in the check's environment: "
+                           f"{exc}")
+    if proc.returncode != 0:
+        lines = (proc.stderr + proc.stdout).strip().splitlines()
+        last = lines[-1].strip() if lines else f"exit {proc.returncode}"
+        raise _Blocked(f"pytest does not start in the check's environment: "
+                       f"{last[:400]}")
+
+
 def run_pytest(root: Path, targets: list[str], *, python: str,
                timeout: float) -> dict:
     """pytest from agent-bureau's root over `targets`, with the checkout at
@@ -294,7 +338,8 @@ def run_pytest(root: Path, targets: list[str], *, python: str,
             p for p in (str(plugin_dir), env.get("PYTHONPATH", "")) if p)
         env["PYTHONDONTWRITEBYTECODE"] = "1"
         command = [python, "-m", "pytest", "-p", _PLUGIN, "-p", "no:cacheprovider",
-                   "--continue-on-collection-errors", "-q", *targets]
+                   "--continue-on-collection-errors", "-q", NO_COVERAGE,
+                   *targets]
         try:
             proc = subprocess.run(command, cwd=root, env=env, timeout=timeout,
                                   capture_output=True, text=True)
@@ -389,6 +434,7 @@ def check(root: Path, stable: Path, *, candidate: str, stable_sha: str,
             raise _Blocked(f"no test in the agent-bureau checkout names "
                            f"{PIPELINE_ENV} or {PIPELINE_DIRNAME} — nothing "
                            f"was checked, so nothing is proven")
+        pytest_starts(python, timeout=min(120.0, budget_seconds))
         results = run_pytest(root, discovered, python=python,
                              timeout=budget_seconds)
         failing = _failed(results)
@@ -600,10 +646,14 @@ def _cmd_discover(args) -> int:
     if version_file.is_file():
         version = version_file.read_text().strip().splitlines()[0].strip() or version
     print(f"mirror check: {len(tests)} tests read bureau-pipeline; "
-          f"{len(requirements)} requirement file(s)")
+          f"{len(requirements)} requirement file(s), and the check's own "
+          f"{TOOLS_MANIFEST}")
+    # agent-bureau's files first, under the checkout's prefix; then this
+    # repository's pinned test tools, at the workspace root (DRE-6622).
+    manifests = [prefix + r for r in requirements] + [TOOLS_MANIFEST]
     _output({
         "count": str(len(tests)),
-        "requirements": "\n".join(prefix + r for r in requirements),
+        "requirements": "\n".join(manifests),
         "python_version": version,
     })
     return 0
