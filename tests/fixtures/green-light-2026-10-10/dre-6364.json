@@ -1,0 +1,255 @@
+{
+  "card": "DRE-6364",
+  "arrival": "review-cap",
+  "for": "proof-run",
+  "as_of": "2026-10-10T09:28:22Z",
+  "lane": "In Review",
+  "labels": [
+    "repo:bureau-pipeline",
+    "initiative:bureau",
+    "agent:ops",
+    "no-code"
+  ],
+  "comments": [
+    {
+      "body": "🧭 routing-verdict: **OPERATOR** — Not code — a deploy, a migration run, a secret.\n\n**Why:** the epic's proof card, routed by the proof-and-demo check off the card itself: the card carries an explicit role label, which says where it goes — no judgement, and no model asked An epic is confirmed by something other than its builder, so the fleet is never sent at this card.\n\n**Where it goes:** Hand-work. **Who handles it there:** operator.\n**Marked:** `hand-built`, `no-code` — so the sweep neither dispatches a run nor reports the card as stalled.\nThis card is **not** dispatched to the fleet: the promoter reads this verdict and leaves it where a person will find it.",
+      "authored_by_pipeline": true,
+      "created_at": "2026-10-09T02:05:06.154Z"
+    },
+    {
+      "body": "🧳 hand-built-migration: label removed (`hand-built`).\n\n**What it read:** `hand-built` was put on this card automatically — applied by Agent-Bureau (set at creation) — and the card is a proof in Backlog.\n\n**The rule it followed:** a proof keeps `no-code` and its lane; the proof dispatch takes it from Hand-work, and nothing about it needs the CEO's mark.\n\nThe CEO's rule of 2026-10-07: \"Build it and let everyone know when i say built it, I'm saying this is a hand built card.\" The mark is his alone, so the one-time hand-built migration takes off every one the pipeline applied.",
+      "authored_by_pipeline": false,
+      "created_at": "2026-10-09T17:36:43.198Z"
+    },
+    {
+      "body": "🧹 Auto-promoted Backlog → Hand-work: routed **OPERATOR** — Not code — a deploy, a migration run, a secret. operator, your turn in Hand-work — a person builds this; nothing was dispatched. Marked `no-code`.",
+      "authored_by_pipeline": true,
+      "created_at": "2026-10-09T17:40:06.707Z"
+    },
+    {
+      "body": "🔬 proof-run: dispatched a proof run at 2026-10-09 10:50 PT — first proof run (dispatch 1 of 2)\n\n📎 pipeline-act: proof-run-dispatched · kind: recovery · state: dispatched · next: proof-task.yml · discharges: nothing · subscriber: reconcile.yml · tag: proof-run",
+      "authored_by_pipeline": true,
+      "created_at": "2026-10-09T17:51:02.559Z"
+    },
+    {
+      "body": "🧠 model-attempt: claude-opus-5-5 — proof agent starting (turns=400). model-policy: claude-opus-5-5 chosen for proof (workhorse kind) — top of the ladder, nothing above it was skipped Run: https://github.com/dreadnought-foundry/bureau-pipeline/actions/runs/37969165906",
+      "authored_by_pipeline": true,
+      "created_at": "2026-10-09T17:51:25.977Z"
+    },
+    {
+      "body": "⏳ 1/5 read",
+      "authored_by_pipeline": true,
+      "created_at": "2026-10-09T17:52:01.381Z"
+    },
+    {
+      "body": "⏳ 2/5 observing",
+      "authored_by_pipeline": true,
+      "created_at": "2026-10-09T17:52:06.235Z"
+    },
+    {
+      "body": "⏳ 3/5 record written",
+      "authored_by_pipeline": true,
+      "created_at": "2026-10-09T17:59:10.590Z"
+    },
+    {
+      "body": "⏳ 4/5 local checks",
+      "authored_by_pipeline": true,
+      "created_at": "2026-10-09T18:00:35.135Z"
+    },
+    {
+      "body": "⏳ 5/5 PR opened",
+      "authored_by_pipeline": true,
+      "created_at": "2026-10-09T18:01:02.443Z"
+    },
+    {
+      "body": "🤖 agent-actor: proof · run https://github.com/dreadnought-foundry/bureau-pipeline/actions/runs/37969165906",
+      "authored_by_pipeline": true,
+      "created_at": "2026-10-09T18:01:02.905Z"
+    },
+    {
+      "body": "🤖 PR opened: https://github.com/dreadnought-foundry/bureau-pipeline/pull/844 — CI + critic review running. Run: https://github.com/dreadnought-foundry/bureau-pipeline/actions/runs/37969165906",
+      "authored_by_pipeline": true,
+      "created_at": "2026-10-09T18:01:25.334Z"
+    },
+    {
+      "body": "🔎 QA Critic — VERDICT: APPROVE @d66b2571225a93965d1746321f2509d566147b70 content:34ce993dedd5fbd0e28b96c298929947f0367b5ca3b30e232098a51dba7f87be\n\n## Summary\nThis change adds a written record that checks whether the board still tags cards as \"hand-built\" automatically. The record's honest finding is that the main goal held: no open card carries the tag now, down from 68 before the cleanup.\n\nIt delivers what the card asked for: one document, with a separate judged answer for each requirement, and the final close left to you. The record reports an overall failure. Two requirements were not met: the run that promoted this card skipped a follow-up step, and one older proof card never received its \"no-code\" mark. Three more are not yet observable, including the 48-hour watch window. These are real findings about the board, not defects in this document. I spot-checked one of them (the skipped step) against the run history and it matches.\n\nNothing in this change affects the product or any user. Risk of shipping is nil. The recommendation is to merge it, read the record, and decide whether the two unmet items need follow-up cards.\n\n🕰️ PR description read at 2026-10-09T18:01:22Z.\n\n\n🧠 model: claude-sonnet-5-5 — model-policy: claude-sonnet-5-5 chosen for critic (advisory kind) — top of the ladder, nothing above it was skipped",
+      "authored_by_pipeline": true,
+      "created_at": "2026-10-09T18:02:24.729Z"
+    },
+    {
+      "body": "🧹 Reconcile: gate-nudge @d66b2571225a93965d1746321f2509d566147b70 (1/3) — critic APPROVE, verifier none, and the gate has not merged it; merge gate re-triggered.",
+      "authored_by_pipeline": true,
+      "created_at": "2026-10-09T20:06:28.719Z"
+    },
+    {
+      "body": "🔎 QA Critic — VERDICT: APPROVE @89f489a882516c36b140c81e3831de6bd260391c content:59973da93ba98b94e45395610a4adfb8c73dbc6cc85c8599cbd957af2a24dbce\n\n\n## Summary\nThis change adds one written record that checks whether the board still tags cards as \"hand-built\" automatically. It does not touch the product or any user.\n\nIt delivers what the card asked for: one document, a separate judged answer for each requirement, and the final close left to you. The record's overall result is FAIL, and that is an honest finding about the board, not a defect in the document. The main goal held, with no open card tagged \"hand-built\" (68 before the cleanup, 0 after). Two requirements were not met: the run that promoted this card skipped a follow-up step, and one older proof card never received its \"no-code\" mark. The \"operator card\" and 48-hour-window requirements could not yet be observed. The later correction also found one card tagged by the operator's tools account, which the record reports as a miss on the 48-hour rule.\n\nRisk of shipping is nil. Risk of not shipping is that the record of these findings stays unwritten. I recommend you read the record and decide whether the two unmet items need follow-up cards. The merge gate will keep holding this change while rows read \"not met\", so merging it needs your decision.\n\nNote: the description of this change still shows the earlier, pre-correction wording for two rows. The document is the corrected version and is the one to read.\n\n🕰️ PR description read at 2026-10-09T21:32:51Z.\n\n\n🧠 model: claude-sonnet-5-5 — model-policy: claude-sonnet-5-5 chosen for critic (advisory kind) — top of the ladder, nothing above it was skipped",
+      "authored_by_pipeline": true,
+      "created_at": "2026-10-09T21:34:04.258Z"
+    },
+    {
+      "body": "🔎 QA Critic — VERDICT: APPROVE @a13567f1f5c04c043ec0706666709babdab8790b content:fc2f6f428ae4ca2c15c218e6683e2d7977518a4b0ea89c1f04d26646ae76f994\n\n## Summary\nThis change adds one written record that checks whether the board still tags cards as \"hand-built\" automatically. It does not touch the product or any user.\n\nIt delivers what the card asked for: one document, a separate judged answer for each requirement, and the final close left to you. The record's overall result is FAIL, and that is an honest finding about the board, not a defect in the document. The main goal held, with no open card tagged \"hand-built\" (68 before the cleanup, 0 after). Three requirements are reported as not met after the later correction: the run that promoted this card skipped a follow-up step, one older proof card never received its \"no-code\" mark, and one card was tagged by the operator's tools account inside the 48-hour window. One requirement, the operator-card check, could not yet be observed.\n\nRisk of shipping is nil, since it is a document. The merge gate holds records that report unmet rows, so merging needs your decision. I recommend you read the record and decide whether the unmet items need follow-up cards.\n\nNote: the description of this change still shows the earlier wording for two rows and says two rows are unmet. The document is the corrected version and is the one to read. The \"What's new: none\" line is right, since nothing a person sees changes. The description was last read at 2026-10-09T21:37Z.\n\n🕰️ PR description read at 2026-10-09T21:36:18Z.\n\n\n🧠 model: claude-sonnet-5-5 — model-policy: claude-sonnet-5-5 chosen for critic (advisory kind) — top of the ladder, nothing above it was skipped",
+      "authored_by_pipeline": true,
+      "created_at": "2026-10-09T21:37:21.774Z"
+    },
+    {
+      "body": "🔬 proof-run: dispatched a proof run at 2026-10-09 15:51 PT — re-run after the gate's decline at a13567f (re-run 1 of 2)\n\n📎 pipeline-act: proof-run-dispatched · kind: recovery · state: dispatched · next: proof-task.yml · discharges: nothing · subscriber: reconcile.yml · tag: proof-run",
+      "authored_by_pipeline": true,
+      "created_at": "2026-10-09T22:51:43.950Z"
+    },
+    {
+      "body": "🧠 model-attempt: claude-opus-5-5 — proof agent starting (turns=400). model-policy: claude-opus-5-5 chosen for proof (workhorse kind) — top of the ladder, nothing above it was skipped Run: https://github.com/dreadnought-foundry/bureau-pipeline/actions/runs/38001467320",
+      "authored_by_pipeline": true,
+      "created_at": "2026-10-09T22:52:03.021Z"
+    },
+    {
+      "body": "⏳ 1/5 read",
+      "authored_by_pipeline": true,
+      "created_at": "2026-10-09T22:52:36.641Z"
+    },
+    {
+      "body": "⏳ 2/5 observing",
+      "authored_by_pipeline": true,
+      "created_at": "2026-10-09T22:59:17.088Z"
+    },
+    {
+      "body": "⏳ 3/5 record written",
+      "authored_by_pipeline": true,
+      "created_at": "2026-10-09T23:02:04.543Z"
+    },
+    {
+      "body": "⏳ 4/5 local checks",
+      "authored_by_pipeline": true,
+      "created_at": "2026-10-09T23:02:05.620Z"
+    },
+    {
+      "body": "⏳ 5/5 PR opened",
+      "authored_by_pipeline": true,
+      "created_at": "2026-10-09T23:02:11.274Z"
+    },
+    {
+      "body": "🤖 agent-actor: proof · run https://github.com/dreadnought-foundry/bureau-pipeline/actions/runs/38001467320",
+      "authored_by_pipeline": true,
+      "created_at": "2026-10-09T23:02:11.762Z"
+    },
+    {
+      "body": "🤖 PR opened: https://github.com/dreadnought-foundry/bureau-pipeline/pull/844 — CI + critic review running. Run: https://github.com/dreadnought-foundry/bureau-pipeline/actions/runs/38001467320",
+      "authored_by_pipeline": true,
+      "created_at": "2026-10-09T23:02:29.160Z"
+    },
+    {
+      "body": "🔎 QA Critic — VERDICT: APPROVE @2ae86ef4977171b2be52ae4125bf87eafbcb6159 content:3ded90c85929a87b1c78c4bcd5408bb9c3cfd85807f82d636b0596fd3be7c7be\n\n\n## Summary\nThis change adds one written record that checks whether the board still tags cards as \"hand-built\" automatically. It does not touch the product or any user.\n\nIt delivers what the card asked for: one document, a separate judged answer for each requirement, and the final close left to you. The record's overall result is FAIL, and that is an honest finding about the board, not a defect in the document. The main goal held: no open card is tagged \"hand-built\" (68 before the cleanup, 0 after). Three requirements are reported as not met. The run that promoted this card skipped a follow-up step. Four large planning cards lost their \"operator-step\" mark after the cleanup. Two cards were tagged \"hand-built\" by the operator's tools account inside the 48-hour window. One requirement, the first operator card being promoted, has not happened yet.\n\nI spot-checked the record against the run history. The skipped follow-up step in the promoting run and the timing of the latest re-check both match. The counts in the tables add up (31 proof cards, 26 operator cards, 11 code cards, 68 in all).\n\nRisk of shipping is nil, since it is a document. Risk of not shipping is that these findings stay unwritten. The merge gate holds records that report unmet rows, so merging needs your decision. I recommend you read the record and decide whether the unmet items need follow-up cards.\n\nNote: the description of this change still carries the first-pass wording. It lists two unmet rows, says one older proof card lacks its \"no-code\" mark (since fixed), and says the restamped cards were still waiting. The document is the corrected version and is the one to read. The \"What's new: none\" line is right, since nothing a person sees changes.\n\n🕰️ PR description read at 2026-10-09T23:02:33Z.\n\n\n🧠 model: claude-sonnet-5-5 — model-policy: claude-sonnet-5-5 chosen for critic (advisory kind) — top of the ladder, nothing above it was skipped",
+      "authored_by_pipeline": true,
+      "created_at": "2026-10-09T23:03:39.835Z"
+    },
+    {
+      "body": "The test run on this card's pull request failed twice because one automated test is broken on `main` — not because of anything this card changed.\n\nThis card's pull request adds a single written record (`docs/hand-built-proof-2026-10.md`) and touches no code. The failing test belongs to the planning-escalation feature, which checks that a retried escalation does not post its note a second time. The test fails, and it fails the same way on the last three `main` runs (starting at c0e68f6, 2026-10-09 about 22:45 UTC), so the card's work did not cause it and a rerun will not clear it. The cause is bad code that reached `main` from another change. The code now asks the card tracker where a card has been, and the test's stand-in tracker cannot answer. The code treats that as \"ask again,\" so the note is posted twice and the test fails.\n\nThe fix needs a small code change on `main`: update the test's stand-in tracker, or the code's handling of a missing answer. A card should be cut for it, and this card's pull request can merge once `main` is green again. Until then, `main` stays red on every pull request. One earlier `main` run (c0e68f6) also failed a second test, `test_split_ledger.py::test_the_door_is_asked_for_the_window_start`. It passed on the two later runs, so it looks like a one-off.\n\nTechnical detail: `tests/test_planning_escalation_prior_answer.py::TestTheBlockReadsTheWholeThread::test_a_retry_whose_note_is_on_the_card_never_reads_it` fails with `assert outcome.parked and not outcome.posted`, because `scripts/planning_escalation.py` (about line 1274) calls `linear_ops.lane_history(identifier)` and the test's `_Lops` stub has no `lane_history` attribute (log: \"could not read where the card has been ... asking again\"). Run 38002376674 was job \"scripts unit tests (part 4)\" at head 2ae86ef; the result was 1 failed, 5215 passed.\n\n📎 pipeline-act: run-failure-diagnosed · kind: hold · state: unchanged · next: operator · discharges: nothing · subscriber: reconcile.yml · tag: medic-diagnosis",
+      "authored_by_pipeline": true,
+      "created_at": "2026-10-09T23:25:50.221Z"
+    },
+    {
+      "body": "🧹 Reconcile: gate-nudge @5e558c8cce360f851862841d829595c6bd5a2bb4 (1/3) — critic APPROVE from earlier head 2ae86ef, verifier none, and the gate has not merged it; merge gate re-triggered.",
+      "authored_by_pipeline": true,
+      "created_at": "2026-10-10T01:33:30.520Z"
+    },
+    {
+      "body": "🧹 Reconcile: gate-nudge @5e558c8cce360f851862841d829595c6bd5a2bb4 (2/3) — critic APPROVE from earlier head 2ae86ef, verifier none, and the gate has not merged it; merge gate re-triggered.",
+      "authored_by_pipeline": true,
+      "created_at": "2026-10-10T03:55:45.198Z"
+    },
+    {
+      "body": "🧹 Reconcile: gate-nudge @5e558c8cce360f851862841d829595c6bd5a2bb4 (3/3) — critic APPROVE from earlier head 2ae86ef, verifier none, and the gate has not merged it; merge gate re-triggered.",
+      "authored_by_pipeline": true,
+      "created_at": "2026-10-10T06:09:50.075Z"
+    },
+    {
+      "body": "Operator session, 2026-10-10 00:20 PT. **The observation row 2 was waiting for has now happened.** The sweep promoted an OPERATOR card out of Backlog by itself: **DRE-6095**. Its last blocker, DRE-6090, closed at 00:14:06 PT (PR #3497 merged 00:12:55 PT). Seven seconds later, at 00:14:13 PT, the card got `🔓 hold lifted: reason=operator-step because=blockers-terminal by=reconcile.py`, and at 00:14:14 PT `🧹 Auto-promoted Backlog → Hand-work: routed OPERATOR …`. Read from our database at 00:19 PT: lane Hand-work; labels `repo:agent-bureau`, `initiative:bureau`, `agent:devops`, `no-code`, `operator-step`; no `hand-built`, and `needs-human` is gone. The next proof run can read the receipt and the reconcile run's own promotion line for the row. For the record: six other operator cards reached Hand-work at 21:27 PT on 10-09, but by the one-time pass (`by=hand_work_migration.py`, DRE-6430), not by the sweep, so they are not this row's card.",
+      "authored_by_pipeline": false,
+      "created_at": "2026-10-10T07:20:24.279Z"
+    }
+  ],
+  "pr": {
+    "number": 844,
+    "url": "https://github.com/dreadnought-foundry/bureau-pipeline/pull/844",
+    "headRefName": "agent/DRE-6364-proof-record",
+    "headRefOid": "5e558c8cce360f851862841d829595c6bd5a2bb4",
+    "createdAt": "2026-10-09T18:00:54Z",
+    "isDraft": false,
+    "state": "OPEN",
+    "comments": [
+      {
+        "author": {
+          "login": "agent-bureau-qa-bot"
+        },
+        "body": "🔎 QA Critic — VERDICT: APPROVE @d66b2571225a93965d1746321f2509d566147b70 content:34ce993dedd5fbd0e28b96c298929947f0367b5ca3b30e232098a51dba7f87be\n\n## Summary\nThis change adds a written record that checks whether the board still tags cards as \"hand-built\" automatically. The record's honest finding is that the main goal held: no open card carries the tag now, down from 68 before the cleanup.\n\nIt delivers what the card asked for: one document, with a separate judged answer for each requirement, and the final close left to you. The record reports an overall failure. Two requirements were not met: the run that promoted this card skipped a follow-up step, and one older proof card never received its \"no-code\" mark. Three more are not yet observable, including the 48-hour watch window. These are real findings about the board, not defects in this document. I spot-checked one of them (the skipped step) against the run history and it matches.\n\nNothing in this change affects the product or any user. Risk of shipping is nil. The recommendation is to merge it, read the record, and decide whether the two unmet items need follow-up cards.\n\n🕰️ PR description read at 2026-10-09T18:01:22Z.\n",
+        "createdAt": "2026-10-09T18:02:23Z"
+      },
+      {
+        "author": {
+          "login": "agent-bureau-qa-bot"
+        },
+        "body": "⏸️ Merge gate: declined @d66b2571225a93965d1746321f2509d566147b70 — proof record not proven: docs/hand-built-proof-2026-10.md has 4 row(s) not met: “Live fact: as the proof-reader identity, the first `PROOF:` card the…” reads “Not met. The first `PROOF:` card promoted after t…”; “Live fact: the first OPERATOR card the sweep promoted after the relea…” reads “Not observed. The sweep has promoted no OPERATOR…”; “Live fact: the migration's before and after, read off the operator ca…” reads “Not met. The table is under \"Migration, before an…”; “Live fact: over the 48 hours of sweeps following the release, the lab…” reads “Not observed. The window runs from 05:07 PT on 20…” (DRE-6141)\n\nNot merged. The gate looks again on the next CI completion, review or sweep, and merges once nothing holds it.\n",
+        "createdAt": "2026-10-09T18:15:38Z"
+      },
+      {
+        "author": {
+          "login": "agent-bureau-qa-bot"
+        },
+        "body": "🔎 QA Critic — VERDICT: APPROVE @89f489a882516c36b140c81e3831de6bd260391c content:59973da93ba98b94e45395610a4adfb8c73dbc6cc85c8599cbd957af2a24dbce\n\n\n## Summary\nThis change adds one written record that checks whether the board still tags cards as \"hand-built\" automatically. It does not touch the product or any user.\n\nIt delivers what the card asked for: one document, a separate judged answer for each requirement, and the final close left to you. The record's overall result is FAIL, and that is an honest finding about the board, not a defect in the document. The main goal held, with no open card tagged \"hand-built\" (68 before the cleanup, 0 after). Two requirements were not met: the run that promoted this card skipped a follow-up step, and one older proof card never received its \"no-code\" mark. The \"operator card\" and 48-hour-window requirements could not yet be observed. The later correction also found one card tagged by the operator's tools account, which the record reports as a miss on the 48-hour rule.\n\nRisk of shipping is nil. Risk of not shipping is that the record of these findings stays unwritten. I recommend you read the record and decide whether the two unmet items need follow-up cards. The merge gate will keep holding this change while rows read \"not met\", so merging it needs your decision.\n\nNote: the description of this change still shows the earlier, pre-correction wording for two rows. The document is the corrected version and is the one to read.\n\n🕰️ PR description read at 2026-10-09T21:32:51Z.\n",
+        "createdAt": "2026-10-09T21:34:03Z"
+      },
+      {
+        "author": {
+          "login": "agent-bureau-qa-bot"
+        },
+        "body": "🔎 QA Critic — VERDICT: APPROVE @a13567f1f5c04c043ec0706666709babdab8790b content:fc2f6f428ae4ca2c15c218e6683e2d7977518a4b0ea89c1f04d26646ae76f994\n\n## Summary\nThis change adds one written record that checks whether the board still tags cards as \"hand-built\" automatically. It does not touch the product or any user.\n\nIt delivers what the card asked for: one document, a separate judged answer for each requirement, and the final close left to you. The record's overall result is FAIL, and that is an honest finding about the board, not a defect in the document. The main goal held, with no open card tagged \"hand-built\" (68 before the cleanup, 0 after). Three requirements are reported as not met after the later correction: the run that promoted this card skipped a follow-up step, one older proof card never received its \"no-code\" mark, and one card was tagged by the operator's tools account inside the 48-hour window. One requirement, the operator-card check, could not yet be observed.\n\nRisk of shipping is nil, since it is a document. The merge gate holds records that report unmet rows, so merging needs your decision. I recommend you read the record and decide whether the unmet items need follow-up cards.\n\nNote: the description of this change still shows the earlier wording for two rows and says two rows are unmet. The document is the corrected version and is the one to read. The \"What's new: none\" line is right, since nothing a person sees changes. The description was last read at 2026-10-09T21:37Z.\n\n🕰️ PR description read at 2026-10-09T21:36:18Z.\n",
+        "createdAt": "2026-10-09T21:37:20Z"
+      },
+      {
+        "author": {
+          "login": "agent-bureau-qa-bot"
+        },
+        "body": "⏸️ Merge gate: declined @a13567f1f5c04c043ec0706666709babdab8790b — proof record not proven: docs/hand-built-proof-2026-10.md has 4 row(s) not met: “Live fact: as the proof-reader identity, the first `PROOF:` card the…” reads “Not met. The first `PROOF:` card promoted after t…”; “Live fact: the first OPERATOR card the sweep promoted after the relea…” reads “Not observed. The sweep has promoted no OPERATOR…”; “Live fact: the migration's before and after, read off the operator ca…” reads “Not met. The table is under \"Migration, before an…”; “Live fact: over the 48 hours of sweeps following the release, the lab…” reads “Not met. On the actor test as written (amended 14…” (DRE-6141)\n\nNot merged. The gate looks again on the next CI completion, review or sweep, and merges once nothing holds it.\n",
+        "createdAt": "2026-10-09T21:51:15Z"
+      },
+      {
+        "author": {
+          "login": "agent-bureau-qa-bot"
+        },
+        "body": "🔎 QA Critic — VERDICT: APPROVE @2ae86ef4977171b2be52ae4125bf87eafbcb6159 content:3ded90c85929a87b1c78c4bcd5408bb9c3cfd85807f82d636b0596fd3be7c7be\n\n\n## Summary\nThis change adds one written record that checks whether the board still tags cards as \"hand-built\" automatically. It does not touch the product or any user.\n\nIt delivers what the card asked for: one document, a separate judged answer for each requirement, and the final close left to you. The record's overall result is FAIL, and that is an honest finding about the board, not a defect in the document. The main goal held: no open card is tagged \"hand-built\" (68 before the cleanup, 0 after). Three requirements are reported as not met. The run that promoted this card skipped a follow-up step. Four large planning cards lost their \"operator-step\" mark after the cleanup. Two cards were tagged \"hand-built\" by the operator's tools account inside the 48-hour window. One requirement, the first operator card being promoted, has not happened yet.\n\nI spot-checked the record against the run history. The skipped follow-up step in the promoting run and the timing of the latest re-check both match. The counts in the tables add up (31 proof cards, 26 operator cards, 11 code cards, 68 in all).\n\nRisk of shipping is nil, since it is a document. Risk of not shipping is that these findings stay unwritten. The merge gate holds records that report unmet rows, so merging needs your decision. I recommend you read the record and decide whether the unmet items need follow-up cards.\n\nNote: the description of this change still carries the first-pass wording. It lists two unmet rows, says one older proof card lacks its \"no-code\" mark (since fixed), and says the restamped cards were still waiting. The document is the corrected version and is the one to read. The \"What's new: none\" line is right, since nothing a person sees changes.\n\n🕰️ PR description read at 2026-10-09T23:02:33Z.\n",
+        "createdAt": "2026-10-09T23:03:38Z"
+      },
+      {
+        "author": {
+          "login": "agent-bureau-qa-bot"
+        },
+        "body": "♻️ Merge gate: carried verdict content:3ded90c85929a87b1c78c4bcd5408bb9c3cfd85807f82d636b0596fd3be7c7be — the standing review verdict was carried across a branch update.\n\nReviewed at critic@2ae86ef4977171b2be52ae4125bf87eafbcb6159; current head 5e558c8cce360f851862841d829595c6bd5a2bb4. This branch's own changes are byte-identical to what was reviewed: the head moved only because main was merged in, and that merge touched nothing this pull request changes.\n\nAny change to this pull request's own diff changes the fingerprint above and the verdict dies (DRE-2340). CI still re-runs on the merged result.\n",
+        "createdAt": "2026-10-10T01:09:04Z"
+      },
+      {
+        "author": {
+          "login": "agent-bureau-qa-bot"
+        },
+        "body": "⏸️ Merge gate: declined @5e558c8cce360f851862841d829595c6bd5a2bb4 — proof record not proven: docs/hand-built-proof-2026-10.md has 4 row(s) not met: “Live fact: as the proof-reader identity, the first `PROOF:` card the…” reads “Not met. The first `PROOF:` card promoted after t…”; “Live fact: the first OPERATOR card the sweep promoted after the relea…” reads “Not observed. waiting for the sweep to promote an…”; “Live fact: the migration's before and after, read off the operator ca…” reads “Not met. The tables are under \"Migration, before…”; “Live fact: over the 48 hours of sweeps following the release, the lab…” reads “Not met. Window: 05:07 PT on 2026-10-09 to 05:07…” (DRE-6141)\n\nNot merged. The gate looks again on the next CI completion, review or sweep, and merges once nothing holds it.\n",
+        "createdAt": "2026-10-10T01:09:06Z"
+      }
+    ],
+    "statusCheckRollup": [
+      {
+        "name": "tests",
+        "status": "COMPLETED",
+        "conclusion": "SUCCESS"
+      }
+    ],
+    "files": [
+      {
+        "path": "docs/hand-built-proof-2026-10.md"
+      }
+    ]
+  },
+  "rebuilt": [
+    "headRefOid",
+    "state",
+    "isDraft",
+    "statusCheckRollup"
+  ]
+}

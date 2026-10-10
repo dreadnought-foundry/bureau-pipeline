@@ -32,6 +32,7 @@ from __future__ import annotations
 import dataclasses
 import json
 import os
+import re
 import stat
 import subprocess
 import sys
@@ -2298,3 +2299,138 @@ def test_red_a_decline_on_an_earlier_head_with_a_red_check_is_the_fix_agents(
     lines = _about(_lines(capsys), "DRE-5930")
     assert h.fired == []
     assert any(RED_CHECK in line and "the fix agent has it" in line for line in lines), lines
+
+
+# --------------------------------------------------------------------------- #
+# DRE-6650: an APPROVE carried to the head is the gate's trigger too —         #
+# DRE-6364 replayed as the sweep parked it                                     #
+# --------------------------------------------------------------------------- #
+GREEN_LIGHT_FIXTURES = ROOT / "tests" / "fixtures" / "green-light-2026-10-10"
+#: A row the gate's note quotes: “criterion…” reads “result…”.
+QUOTED_ROW = re.compile(r"“([^”]*)” reads “([^”]*)”")
+
+
+def _replayed(card: str) -> dict:
+    return json.loads((GREEN_LIGHT_FIXTURES / f"{card.lower()}.json")
+                      .read_text(encoding="utf-8"))
+
+
+def _rows_the_note_names(pr: dict) -> list:
+    """The rows the gate's newest decline note at the head quotes as not met,
+    as (criterion, result) — the record the gate held on, as far as the note
+    shows it."""
+    note = f"⏸️ Merge gate: declined @{pr['headRefOid']} — "
+    body = next(c["body"] for c in reversed(pr["comments"])
+                if c["body"].startswith(note))
+    return QUOTED_ROW.findall(body.split("\n", 1)[0])
+
+
+def _rerun_replay(monkeypatch, doc: dict, rows: list):
+    """`rerunning` on the fixture's card at its `as_of`: `find_record` answers
+    its pull request, `verdict_bound` is stubbed True (the carry is
+    DRE-2340's), and `proof_record.fetch` answers a record of `rows` at the
+    head. The thread is the card's own, as the fixture recorded it."""
+    import reconcile
+
+    pr = doc["pr"]
+    repo = "/".join(pr["url"].split("/")[3:5])
+    fetched: list = []
+
+    def fetch(repo_, files, ref, gh=None):
+        fetched.append((repo_, ref))
+        return proof_record.Record(files[0]["path"], record_md(*rows), None)
+
+    def voices(nodes, viewer, *, card):
+        return [spoken_thread.Voice(
+            spoken_thread.PIPELINE if n["authored_by_pipeline"] else spoken_thread.PERSON,
+            "fixture", n["created_at"], n["body"]) for n in nodes]
+
+    class Thread:
+        def thread(self, ident):
+            assert ident == doc["card"]
+            return list(doc["comments"]), VIEWER
+
+    holds: list = []
+    monkeypatch.setattr(proof_record, "fetch", fetch)
+    monkeypatch.setattr(reconcile, "verdict_bound", lambda pr_: True)
+    monkeypatch.setattr(linear_ops, "cmd_proof_waiting",
+                        lambda *args: holds.append(args))
+    one = proof_dispatch._Pass(
+        repo, repo.split("/")[1], live=True, linear=Thread(),
+        read=lambda path: None, find_pr=None,
+        run_state=lambda *a, **k: state("finished", dispatches=1),
+        release=None, fire=None, voices=voices,
+        now=datetime.fromisoformat(doc["as_of"].replace("Z", "+00:00")),
+        find_record=lambda ident: pr,
+        read_record=lambda pr_, head: proof_dispatch.record_at(repo, pr_, head))
+    card = {"identifier": doc["card"], "state": {"name": doc["lane"]},
+            "labels": {"nodes": [{"name": n} for n in doc["labels"]]}}
+    return one, card, fetched, holds
+
+
+def test_carried_the_dre_6364_approve_carried_to_the_head_takes_the_gates_trigger(
+        monkeypatch):
+    doc = _replayed("DRE-6364")
+    head = doc["pr"]["headRefOid"]
+    # The rows the note quotes as `Not met.` — the ones a re-run re-observes.
+    rows = [r for r in _rows_the_note_names(doc["pr"]) if r[1].startswith("Not met.")]
+    assert len(rows) == 3
+    one, card, fetched, holds = _rerun_replay(monkeypatch, doc, rows)
+    reason, count = one.rerunning(card)
+    assert reason == proof_dispatch.GATE_RERUN_REASON.format(sha7=head[:7])
+    assert reason == "re-run after the gate's decline at 5e558c8"
+    # One gate re-run was spent at a13567f, after the pull request opened.
+    assert count == "re-run 2 of 2"
+    assert fetched == [("dreadnought-foundry/bureau-pipeline", head)]
+    assert holds == []
+
+
+def test_carried_the_dre_6364_record_as_the_note_reads_it_waits_on_its_event(
+        monkeypatch):
+    """Every row the note names, the second still `Not observed. waiting for`
+    its event: the carried APPROVE reaches DRE-6488's wait, never "nothing to
+    answer"."""
+    doc = _replayed("DRE-6364")
+    rows = _rows_the_note_names(doc["pr"])
+    assert len(rows) == 4 and proof_record.row_waiting(rows[1][1])
+    one, card, _, holds = _rerun_replay(monkeypatch, doc, rows)
+    with pytest.raises(proof_dispatch._Refused) as refused:
+        one.rerunning(card)
+    assert refused.value.bucket == "held"
+    assert "wait on an event" in str(refused.value)
+    assert len(holds) == 1 and holds[0][0] == "DRE-6364"
+
+
+def test_carried_an_approve_carried_with_no_decline_at_the_head_is_still_refused(
+        monkeypatch):
+    doc = _replayed("DRE-6364")
+    note = f"⏸️ Merge gate: declined @{doc['pr']['headRefOid']}"
+    doc["pr"]["comments"] = [c for c in doc["pr"]["comments"]
+                             if not c["body"].startswith(note)]
+    one, card, fetched, holds = _rerun_replay(monkeypatch, doc, [NOT_MET_ROW])
+    with pytest.raises(proof_dispatch._Refused) as refused:
+        one.rerunning(card)
+    assert "nothing to answer" in str(refused.value)
+    assert fetched == [] and holds == []
+
+
+def test_carried_an_approve_the_carry_refuses_is_refused_as_before(monkeypatch):
+    doc = _replayed("DRE-6364")
+    one, card, fetched, _ = _rerun_replay(monkeypatch, doc, [NOT_MET_ROW])
+    import reconcile
+
+    monkeypatch.setattr(reconcile, "verdict_bound", lambda pr_: False)
+    with pytest.raises(proof_dispatch._Refused) as refused:
+        one.rerunning(card)
+    assert "APPROVE from earlier head 2ae86ef" in str(refused.value)
+    assert "nothing to answer" in str(refused.value)
+    assert fetched == []
+
+
+def test_carried_the_not_proven_reader_is_public_and_the_sweeps():
+    assert callable(proof_dispatch.not_proven_at)
+    assert not hasattr(proof_dispatch, "_not_proven_at")
+    doc = _replayed("DRE-6364")
+    pr = doc["pr"]
+    assert proof_dispatch.not_proven_at(pr, pr["headRefOid"])
+    assert not proof_dispatch.not_proven_at(pr, "2ae86ef4977171b2be52ae4125bf87eafbcb6159")
