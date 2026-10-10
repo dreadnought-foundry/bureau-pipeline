@@ -137,7 +137,9 @@ asked = []
 def call(model, prompt, **kwargs):
     asked.append(model)
     return planning_classify.Answer(text="not json", model=model)
-card = {"identifier": "DRE-1", "title": "t", "description": "d"}
+# The tree carries scripts/ and config/ only; the prompt's brief is not in it.
+planning_classify.prompt_for = lambda card, doc=None: "p"
+card ={"identifier": "DRE-1", "title": "t", "description": "d"}
 a = planning_classify.classify(card, call=call, repo="atlas")
 b = planning_classify.classify(card, call=call)
 print(json.dumps([a.asked, b.asked, asked]))

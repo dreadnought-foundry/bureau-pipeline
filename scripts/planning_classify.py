@@ -1507,7 +1507,8 @@ def turn_limit_without_answer(error: TransportError) -> bool:
     return turns is None or (isinstance(turns, int) and turns <= 2)
 
 
-def call_with_capacity_fallback(call, model: str, prompt: str, **kwargs):
+def call_with_capacity_fallback(call, model: str, prompt: str, *,
+                                repo: str | None = None, **kwargs):
     """Make one call; if `model` refuses for CAPACITY, make the same call once on
     the next rung of the planner's ladder (DRE-3970). A call that ended at the
     turn limit with no answer falls the same way (DRE-5979).
@@ -1522,6 +1523,9 @@ def call_with_capacity_fallback(call, model: str, prompt: str, **kwargs):
     `fell_from` is set ONLY for capacity: plan.yml's Select model reads it to
     skip that rung for the planner, and a model that gave the classifier no
     answer has not been shown to be out of capacity for planning.
+
+    `repo` (DRE-6634) reads the next rung off that project's walk — the walk
+    `_pick_model(repo)` chose from — and is never handed to `call`.
     """
     try:
         return _answer_of(call(model, prompt, **kwargs)), model, None, None, 1
@@ -1530,7 +1534,7 @@ def call_with_capacity_fallback(call, model: str, prompt: str, **kwargs):
         fell_from = model if because else None
         if not because and turn_limit_without_answer(e):
             because = NO_ANSWER
-        below = model_fallback.fallback_for(ROLE, model) if because else None
+        below = model_fallback.fallback_for(ROLE, model, repo=repo) if because else None
         if not below:
             raise
         why = NO_ANSWER if because == NO_ANSWER else f"is out of capacity ({because})"
@@ -1548,7 +1552,7 @@ def call_with_capacity_fallback(call, model: str, prompt: str, **kwargs):
         return answer, below, fell_from, because, 2
 
 
-def _pick_model() -> str:
+def _pick_model(repo: str | None = None) -> str:
     """The model this classification runs on.
 
     `select()` walks the ladder probing each rung with a raw `/v1/messages`
@@ -1559,10 +1563,16 @@ def _pick_model() -> str:
     read directly: same answer, no raw call, and the promise this card makes —
     that the classifier issues none — stays true of the whole step rather than
     of one function in it.
+
+    `repo` (DRE-6634) is a slug or an `owner/name`: a `judgement` exception for
+    that project leads the walk, so the top rung read here is the project's.
+    The groomer calls this with no repo, and that is a decision, not a gap: its
+    one ranking call serves cards from every repo in its census at once, so
+    there is no project to honor and it walks the fleet ladder by design.
     """
     if api_key_mode():
-        return model_fallback.select(ROLE)
-    ladder = model_fallback.ladder_for(ROLE)
+        return model_fallback.select(ROLE, repo=repo)
+    ladder = model_fallback.ladder_for(ROLE, repo=repo)
     if not ladder:
         raise ClassifyError(f"the {ROLE!r} ladder is empty, so no model can run")
     return ladder[0]
@@ -1575,13 +1585,14 @@ def _answer_of(result) -> Answer:
 
 
 def classify(card: dict, *, call=None, model: str | None = None,
-             doc: dict | None = None) -> Decision:
+             doc: dict | None = None, repo: str | None = None) -> Decision:
     """Classify one card. One call per rung, a second rung only when the first
     is out of capacity (DRE-3970) or ends its one turn with no answer
-    (DRE-5979), and never a silent stamp."""
+    (DRE-5979), and never a silent stamp. `repo` picks and falls on that
+    project's walk (DRE-6634)."""
     if not model:
         try:
-            model = _pick_model()
+            model = _pick_model(repo=repo)
         except Exception as e:  # noqa: BLE001 — an unpicked model is a refusal
             return Decision(refusal=_unreachable(e))
     try:
@@ -1593,7 +1604,8 @@ def classify(card: dict, *, call=None, model: str | None = None,
         # next — the same call, in this step, rather than a failed run. DRE-5979:
         # so is a turn-limit end with no answer.
         answer, answered_on, fell_from, because, _calls = \
-            call_with_capacity_fallback(call or _call_real, model, prompt)
+            call_with_capacity_fallback(call or _call_real, model, prompt,
+                                        repo=repo)
     except TransportError as e:
         # DRE-3074's split: nothing read the card, so there is nothing here for
         # a human to decide. `run()` spends the budget; this only names the fact.
@@ -1709,7 +1721,7 @@ def _transport(error: TransportError) -> str:
 
 
 def run(lops, identifier: str, *, call=None, model: str | None = None,
-        doc: dict | None = None) -> Decision:
+        doc: dict | None = None, repo: str | None = None) -> Decision:
     """Classify `identifier` and stamp the answer, or return the escalation.
 
     A card that already carries a shape is left alone and NOT re-read: a hand
@@ -1750,7 +1762,7 @@ def run(lops, identifier: str, *, call=None, model: str | None = None,
     parent = roll_up_parent(lops, identifier, doc=doc)
     if parent is not None:
         card = dict(card, roll_up_parent=parent)
-    decision = classify(card, call=call, model=model, doc=doc)
+    decision = classify(card, call=call, model=model, doc=doc, repo=repo)
     if decision.transport:
         # DRE-3074. A call that never reached a model buys one more run, off the
         # count already on the card — the receipt IS the budget, so it survives
@@ -1910,10 +1922,13 @@ def _model_pairs(decision: Decision) -> list:
 
 def _cmd_classify(identifier: str, github_output: str | None,
                   escalation_file: str | None,
-                  transport_file: str | None = None) -> int:
+                  transport_file: str | None = None,
+                  repo: str | None = None) -> int:
     import linear_ops
 
-    decision = run(linear_ops, identifier)
+    # `repo` only when one was given: with none the call is the one it always
+    # was, which is also the shape the suite's `run` stubs take.
+    decision = run(linear_ops, identifier, **({"repo": repo} if repo else {}))
     answered = "true" if decision.answered else "false"
     if decision.requeue:
         # Not the CEO's queue and not a shape: the workflow records this and
@@ -1965,6 +1980,9 @@ def main(argv=None) -> int:
     run_cmd.add_argument("--github-output", default=None)
     run_cmd.add_argument("--escalation-file", dest="escalation_file", default=None)
     run_cmd.add_argument("--transport-file", dest="transport_file", default=None)
+    # DRE-6634: a repo-map slug or an `owner/name` ($GITHUB_REPOSITORY) — that
+    # project's `judgement` exception leads the walk the classifier picks from.
+    run_cmd.add_argument("--repo", default=None)
 
     args = parser.parse_args(argv)
     command = args.command or "check"
@@ -1983,7 +2001,8 @@ def main(argv=None) -> int:
 
     if command == "classify":
         return _cmd_classify(args.identifier, args.github_output,
-                             args.escalation_file, args.transport_file)
+                             args.escalation_file, args.transport_file,
+                             repo=args.repo)
 
     parser.print_usage(sys.stderr)
     return 2

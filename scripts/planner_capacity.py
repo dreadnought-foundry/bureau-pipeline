@@ -8,14 +8,15 @@ steps in plan.yml are claude-code-action steps, so the same guarantee is built
 from steps, and this module is their two decisions:
 
     python3 planner_capacity.py decide <execution-file> --model <m> \\
-        [--role planner] [--github-output <path>]
+        [--role planner] [--repo <slug-or-owner/name>] [--github-output <path>]
 
 writes `retry=true|false`, `model=<next rung>`, `effort_arg=<--effort level>`
 (empty when that rung declares none, DRE-4836) and `because=<signature>`. It
 says `true` only for a model refused for CAPACITY — read by the one detector,
 `model_fallback.capacity_refusal`, which a run that did real work (turn cap,
 more than one turn, any spend) never satisfies — and only when the ladder has a
-rung below.
+rung below. `--repo` reads that rung off the project's walk (DRE-6634), the walk
+the planner's model was chosen from.
 
     python3 planner_capacity.py finish --first-outcome <o> --second-outcome <o> \\
         --first-execution-file <f> --second-execution-file <f> --asked <m> \\
@@ -59,19 +60,23 @@ def _text(record: dict) -> str:
     return "\n".join(parts)
 
 
-def decide(record, model: str, role: str = ROLE) -> dict:
+def decide(record, model: str, role: str = ROLE, repo: str | None = None) -> dict:
     """`retry`/`model`/`effort_arg`/`because` for one failed planner attempt.
 
     `effort_arg` is the `--effort` argument for the rung being retried ON, or
     empty when that rung declares no level (DRE-4836). The retry is a fresh
     claude-code-action step with its own `claude_args`, so it needs the level
     of the model IT runs, not of the one that just refused.
+
+    `repo` is a slug or an `owner/name`: the rung below is read off that
+    project's walk (DRE-6634), so a `judgement` exception that leads with the
+    fleet's last rung still has somewhere to fall.
     """
     no = {"retry": "false", "model": "", "effort_arg": "", "because": ""}
     if not isinstance(record, dict) or record.get("is_error") is not True:
         return no
     because = model_fallback.capacity_refusal(_text(record), record=record)
-    below = model_fallback.fallback_for(role, model) if because else None
+    below = model_fallback.fallback_for(role, model, repo=repo) if because else None
     if not below:
         return no
     level = model_fallback.effort_for(below)
@@ -155,6 +160,7 @@ def main(argv=None) -> int:
     d.add_argument("execution_file")
     d.add_argument("--model", required=True)
     d.add_argument("--role", default=ROLE)
+    d.add_argument("--repo", default=None)
     d.add_argument("--github-output", default=None)
 
     f = sub.add_parser("finish")
@@ -170,7 +176,8 @@ def main(argv=None) -> int:
 
     args = parser.parse_args(argv)
     if args.command == "decide":
-        got = decide(load_execution(args.execution_file), args.model, args.role)
+        got = decide(load_execution(args.execution_file), args.model, args.role,
+                     repo=args.repo)
         _write(args.github_output, got)
         if got["retry"] == "true":
             print(f"::warning::{args.model} is out of capacity ({got['because']}) — "
