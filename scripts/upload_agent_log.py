@@ -5,7 +5,19 @@ DRE-4269, epic DRE-4267 (stdlib only, like the scrub it calls). Every agent run
 writes a transcript; the runs worth keeping are the ones that DIED — the turn
 cap, a 429, a timeout — so the step that calls this runs `always()`.
 
-    printf '%s' "$SECRETS_JSON" | python3 upload_agent_log.py --log-file "$EXEC_FILE"
+    python3 upload_agent_log.py --secrets-env-prefix SCRUB_ --log-file "$EXEC_FILE"
+
+THE SECRETS ARRIVE BY NAME, one environment variable each (DRE-4391). The
+calling step writes `SCRUB_<NAME>: ${{ secrets.<NAME> }}` for every secret its
+workflow file references, and this script strips the prefix, builds the
+`{"NAME": "value"}` object and hands it to the scrub on stdin exactly as a
+caller piping JSON would. It is never `toJSON(secrets)`: GitHub masks a value
+in the step's printed `env:` group but not the keys of a JSON value, so that
+one line printed the name of every secret the repo holds into public logs.
+Named one by one, the group prints only names the workflow file already shows.
+NO VARIABLE CARRYING THE PREFIX IS A LOUD GAP, never "this job held no
+secrets": in a workflow that references secrets it means the step is miswired.
+Without `--secrets-env-prefix` the JSON is read from stdin, as before.
 
 THE ONE RULE ABOVE ALL OTHERS: this never fails the agent's own run. Every
 path returns 0. A log-keeping step that turns a healthy build red is a step
@@ -369,7 +381,8 @@ def _summary(line: str) -> None:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Scrub one agent working log and put it in the agent-log "
-                    "store. Secret values are read from stdin as a JSON object, "
+                    "store. Secret values come from the --secrets-env-prefix "
+                    "variables or, without it, from stdin as a JSON object, "
                     "exactly as scrub_agent_log.py takes them.")
     parser.add_argument(
         "--log-file", default="",
@@ -381,7 +394,33 @@ def build_parser() -> argparse.ArgumentParser:
         help="The effort level this run was given (`claude --effort`). "
              "Recorded as the object's `effort` metadata; omitted, or not one "
              "of model_fallback.EFFORT_LEVELS, means no key.")
+    parser.add_argument(
+        "--secrets-env-prefix", default=None,
+        help="Read the secrets from every environment variable carrying this "
+             "prefix (`SCRUB_` in the workflows) instead of from stdin. The "
+             "prefix is stripped, so `SCRUB_LINEAR_API_KEY` is redacted as "
+             "LINEAR_API_KEY. None carrying it is a recorded gap.")
     return parser
+
+
+def secrets_from_env(prefix: str, environ=None) -> str:
+    """The scrub's stdin, as JSON, built from every variable named `<prefix>NAME`.
+
+    The values travel from this process's environment to the scrub's stdin and
+    nowhere else — never onto a command line, which would reach the process
+    table. An empty prefix would sweep in the whole environment, and an empty
+    set is a miswired step; both are loud gaps, so nothing is uploaded."""
+    if not prefix:
+        raise Gap("--secrets-env-prefix was given an empty prefix, which would "
+                  "read the whole environment as secrets", loud=True)
+    environ = os.environ if environ is None else environ
+    secrets = {name[len(prefix):]: value for name, value in environ.items()
+               if name.startswith(prefix)}
+    if not secrets:
+        raise Gap(f"no environment variable carries the {prefix} prefix, so the "
+                  f"scrub has no secrets to redact — the step is miswired, and "
+                  f"that is not the same as a job holding none", loud=True)
+    return json.dumps(secrets)
 
 
 def upload(args, secrets: str) -> None:
@@ -465,10 +504,13 @@ def upload(args, secrets: str) -> None:
 def main(argv=None, stdin=None) -> int:
     args = build_parser().parse_args(argv)
     try:
-        secrets = (sys.stdin if stdin is None else stdin).read()
-    except Exception:  # a step that piped nothing at all
-        secrets = ""
-    try:
+        if args.secrets_env_prefix is not None:
+            secrets = secrets_from_env(args.secrets_env_prefix)
+        else:
+            try:
+                secrets = (sys.stdin if stdin is None else stdin).read()
+            except Exception:  # a step that piped nothing at all
+                secrets = ""
         upload(args, secrets)
     except Gap as gap:
         line = f"agent log NOT kept (gap): {gap}"
