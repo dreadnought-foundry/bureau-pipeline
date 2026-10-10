@@ -534,8 +534,12 @@ other repo and kind walks the fleet ladder.
 (`model_fallback.resolve_repo_slug`). No flag, an empty value or an unknown
 repo walks the fleet ladder, review separation is applied to the project walk
 exactly as to the fleet's, and the selection note names the project and its
-exception. No workflow passes `--repo` yet — that wiring is DRE-6637 — so until
-it lands every run still walks the fleet ladder.
+exception. Every workflow step that runs one of the three passes `--repo
+"$GITHUB_REPOSITORY"`, the repo whose stub called it (DRE-6637). The groomer's
+verifier is the one exception: a groomer run serves cards from many repos, so
+that step passes the card's own repo off its matrix row as `--repo
+"$REPOSITORY"`. `tests/test_select_passes_repo.py` finds every site by regex and
+holds each to its flag.
 
 **The own-kind reading.** The exception must already be a rung of **that kind's
 own ladder** — the one `kinds.<kind>.ladder` names. An exception reorders a
