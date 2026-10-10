@@ -30,6 +30,8 @@ Run: cd bureau-pipeline && python3 -m pytest tests/test_act_emission.py -v
 """
 from __future__ import annotations
 
+import contextlib
+import io
 import json
 import os
 import subprocess
@@ -526,6 +528,37 @@ def _drive_roll_up_split(mp):
         cmd_comment=posted,
         cmd_advance=lambda *_a, **_k: None,
     ), "DRE-1")
+
+
+@site("epic-waits-on-blocker", "epic-waits-on-blocker")
+def _drive_epic_waits(mp):
+    """The epic wait's hold (DRE-6671). Drives `epic_wait.hold` on an epic in
+    Planning blocked by an epic In Progress, with the `linear_ops` module it
+    is handed standing in for Linear. Frozen from the first render of the
+    receipt, like the roll-up's split record above."""
+    import epic_wait  # noqa: PLC0415 — only this driver needs it
+
+    def node(identifier, lane):
+        return {"identifier": identifier, "title": f"[EPIC] {identifier}",
+                "state": {"name": lane}, "children": {"nodes": []}}
+
+    issue = node("DRE-2", "Planning")
+    issue["parent"] = None
+    issue["inverseRelations"] = {
+        "nodes": [{"type": "blocks", "issue": node("DRE-1", "In Progress")}],
+        "pageInfo": {"hasNextPage": False},
+    }
+
+    def posted(_identifier, text, *_flags):
+        raise _Posted(text)
+
+    with contextlib.redirect_stdout(io.StringIO()):
+        epic_wait.hold(SimpleNamespace(
+            gql=lambda _q, _v: {"issue": issue},
+            comment_bodies=lambda *_a, **_k: [],
+            cmd_comment=posted,
+            cmd_advance=lambda *_a, **_k: None,
+        ), "DRE-2")
 
 
 def _queued_epic(state: str) -> dict:
