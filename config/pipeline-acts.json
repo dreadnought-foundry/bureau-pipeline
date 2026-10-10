@@ -1065,6 +1065,24 @@
         "file": "scripts/reviewer_down.py",
         "anchor": "def outage_receipt("
       }
+    },
+    {
+      "name": "promotion-stalled",
+      "tag": "promotion-stalled",
+      "adopted": true,
+      "kind": "hold",
+      "means": "A Backlog card the sweep has refused promotion for the same reason on sweep after sweep for two hours or more — a refusal nothing can clear on its own, which until now was indistinguishable from a card waiting its turn.",
+      "state": "unchanged",
+      "next_actor": "operator",
+      "discharges": null,
+      "subscriber": "reconcile.yml",
+      "cadence_s": null,
+      "cadence_why": "Null: the hold names a card a person must act on, and scripts/reconcile.py declares no bound on how long an operator takes — the same null the holds that end with a human carry.",
+      "why": "DRE-4198 found five Backlog cards refused promotion for the same reason across thirty hours, and found them only by reading a sweep log: the refusal was posted once and never read again, so from outside each looked exactly like a card waiting its turn. The clock is the refusal receipt's own age — the oldest comment carrying its tag, never a count of sweeps kept somewhere — the rule DRE-2676 already runs on an epic's prose defect, generalized (scripts/promotion_stall.py, DRE-4207). Only the refusals no sweep can clear are clocked: a PARKED card is never clocked, and neither is a wave epic waiting its turn or any other declared wait, because each already says what it waits for and that thing is scheduled. The receipt is posted once; the run stays red on every sweep the card still stands, so it is a hold that ends with a person.",
+      "emits": {
+        "file": "scripts/reconcile.py",
+        "anchor": "promotion_stall.notice("
+      }
     }
   ],
   "console": {

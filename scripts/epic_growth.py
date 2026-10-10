@@ -79,6 +79,11 @@ _WITHHELD = (spoken_thread.REFUSED, spoken_thread.UNCHECKED)
 #: The console's heading above his words (`console_receipt.ANSWER_SPEC`).
 _ANSWER_HEAD = re.compile(r"^Answer from .* PT:\s*$")
 
+#: The console's comment box heading above his words, which no file here
+#: declares: agent-bureau `console/backend/card_comment.py` writes
+#: `Comment from <name> (signed in to the console), <YYYY-MM-DD HH:MM> PT:`.
+_COMMENT_HEAD = re.compile(r"^Comment from .* PT:\s*$")
+
 #: The two words, at the start of a word — `disapprove` is not `approve`.
 _APPROVE = re.compile(r"(?<![a-z])(?:re-?)?approve")
 _SPLIT = re.compile(r"(?<![a-z])split")
@@ -191,12 +196,12 @@ def read_words(text: str | None) -> str | None:
     """RE_APPROVE, SPLIT or None, off the first line of his words, lower-cased:
     an approve word and no split is a re-approval, a split and no approve word
     is a split, and anything else is neither. A console answer is read below
-    its `Answer from …` heading and above its receipt."""
+    its `Answer from …` or `Comment from …` heading and above its receipt."""
     text = text or ""
     if console_receipt.has_answer_trailer(text):
         text = console_receipt.answer_text(text)
     lines = [line.strip() for line in text.split("\n")]
-    if lines and _ANSWER_HEAD.match(lines[0]):
+    if lines and (_ANSWER_HEAD.match(lines[0]) or _COMMENT_HEAD.match(lines[0])):
         lines = lines[1:]
     first = next((line for line in lines if line), "").lower()
     approve, split = bool(_APPROVE.search(first)), bool(_SPLIT.search(first))

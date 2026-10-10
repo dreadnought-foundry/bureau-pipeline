@@ -417,6 +417,24 @@
         "medic",
         "limit-recovery"
       ]
+    },
+    {
+      "file": "scripts/hand_work_migration.py",
+      "scope": "_convert_one",
+      "anchor": "one card of the operator-backlog pass",
+      "note": "The one-time operator-backlog pass: a Backlog card held `needs-human` + `no-code` with no stamp — filed before the create seam stamped it — is marked `operator-step` and stamped, then lifted and moved to Hand-work when nothing is left to wait on, so the sweep lifts the rest (DRE-6429).",
+      "reasons": [
+        {
+          "reason": "operator-step",
+          "lifts": "blockers-terminal",
+          "tried_first": "none — the card already wears the hold; the pass names the reason a person's label left unsaid, and the sweep lifts it when every blocker is terminal"
+        }
+      ],
+      "readers": [
+        "fix-dispatch",
+        "medic",
+        "limit-recovery"
+      ]
     }
   ]
 }

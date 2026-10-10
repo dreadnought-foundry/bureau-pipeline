@@ -114,3 +114,38 @@ and the rule it followed, quoting the CEO's rule of 2026-10-07.
 
 The census and the dry run print every card grouped by action, with its lane,
 origin, class and what happens to it, followed by the count for each action.
+
+## The operator-backlog pass (DRE-6429)
+
+A second one-time pass lives in the same script. Operator cards filed before
+DRE-6428 sit in Backlog wearing `needs-human` + `no-code` with no hold stamp.
+Their hold reads `manual`, and the sweep leaves a `manual` hold alone by
+design, so nothing ever moves them. This pass converts them.
+
+```
+python3 scripts/hand_work_migration.py operator-backlog           # the dry run: lists, writes nothing
+python3 scripts/hand_work_migration.py operator-backlog --apply   # makes the writes
+```
+
+It reads every Backlog card wearing both labels that is not an epic and not a
+proof, and whose hold is `manual` or already `operator-step`. Each card is
+listed with its repo, title and reason under one of four headings:
+
+- **unblocked** — a `manual` hold, every blocker Done, Canceled or Duplicate,
+  and no parent epic or one In Progress. It gains `operator-step`, the
+  `🔒 hold: reason=operator-step` stamp, an OPERATOR routing verdict if it
+  carries none, then the `🔓 hold lifted:` line, and moves Backlog → Hand-work.
+- **waiting** — a `manual` hold with an open blocker or a parent epic not In
+  Progress. It gains `operator-step` and the stamp, nothing else. The sweep
+  lifts it when that clears.
+- **due** — already stamped `operator-step`, with nothing left to wait on. It
+  is lifted and moved, as the sweep would.
+- **not touched** — already stamped and still waiting, or carrying a routing
+  verdict that sends it anywhere but Hand-work. Nothing is written to it.
+
+The card carries only those lines and the verdict; there is no
+`🧳 hand-built-migration:` note. If Linear cannot be read the pass stops before
+any write and exits non-zero. With `--apply` it re-reads each card's lane and
+refuses one that left Backlog since the read, and the move itself is
+conditional on Backlog. Running it a second time writes nothing: the moved
+cards have left Backlog and the waiting ones now read `operator-step`.

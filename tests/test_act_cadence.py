@@ -120,8 +120,9 @@ class TestEveryActDeclaresItsCadence:
         the one re-dispatch of a start the relay never activated;
         forty-seven since DRE-5926 added the sweep's dispatch of a proof run;
         forty-eight since DRE-6180 added the hygiene agent's lift of a hold;
-        forty-nine since DRE-6437 added the receipt a cleared switch posts."""
-        assert len(pipeline_act.acts()) == 49
+        forty-nine since DRE-4210 added the promotion stall receipt;
+        fifty since DRE-6437 added the receipt a cleared switch posts."""
+        assert len(pipeline_act.acts()) == 50
 
     def test_every_act_carries_a_cadence_and_a_reason(self):
         for name in pipeline_act.acts():

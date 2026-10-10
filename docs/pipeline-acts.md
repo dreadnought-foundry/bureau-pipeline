@@ -403,6 +403,43 @@ sets the variable: turning a production behavior on is a person's act, which
 is why the next actor is the operator. Outside Actions, or with `--dry-run`,
 the step prints `would: post <card> — <line>` and `would: alarm — <title>` and
 writes nothing.
+## The row that names a stalled refusal — `🚨 promotion-stalled` (DRE-4210)
+
+| Field | Value |
+| -- | -- |
+| tag | `promotion-stalled` |
+| act name | `promotion-stalled` |
+| kind · state · next actor | `hold` · `unchanged` · `operator` |
+| discharges | nothing |
+| cadence | null — the hold ends with a person, and nothing bounds how long one takes |
+| emitted by | `scripts/reconcile.py`, at the `promotion_stall.notice(` call in `promote_ready` |
+
+DRE-4198 found five Backlog cards refused promotion for the same reason across
+thirty hours, and found them only by reading a sweep log: the refusal was
+posted once and never read again, so each looked exactly like a card waiting
+its turn. `promote_ready` now records every card it leaves in Backlog for a
+reason that is not a declared wait, dated by the oldest comment carrying that
+refusal's receipt — never by a count of sweeps kept somewhere
+(`scripts/promotion_stall.py`, DRE-4207).
+
+Only the refusals no sweep can clear are clocked (`CLOCKED_TAGS`). Once one has
+stood `PROMOTION_STALL_MINUTES` (120), the card gets the receipt ONCE:
+
+    🚨 promotion-stalled: <card> is still refused promotion as <tag> — first refused at <PT time>, <h> hours ago.
+
+and a `promotion-stalled <card>: …` entry joins the red-run ledger on every
+sweep it still stands, so the run stays red until a person acts. A PARKED card,
+an epic, a card with an unresolved `blockedBy`, a card sent to Planning and any
+card waiting on the WIP budget are never clocked: each already says what it
+waits for, and that thing is scheduled.
+
+The holds (`HELD_TAGS` — the hold label, an open agent-blocker, a stale
+verdict, a refused live re-check) are never clocked per card, but they count
+toward the **idle board**: a sweep at WIP 0 that dispatched nothing while cards
+stand refused or held prints `promotion: idle board — WIP 0/<cap>: …`, and
+adds an `idle board — WIP 0/<cap>: …` ledger entry once the oldest dated
+receipt is `IDLE_BOARD_MINUTES` (60) old. An undated record counts toward the
+line and never toward the red.
 
 ## Why this exists
 

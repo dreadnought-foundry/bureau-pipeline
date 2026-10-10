@@ -6719,6 +6719,20 @@ def post_critic_hold_is_overdue(tag: str | None, green_lit_at: str | None,
         return True
 
 
+def undecided_hold_is_overdue(green_lit_at: str | None) -> bool:
+    """Should the epic cap's hold (DRE-6493) be posted to the card, or only
+    logged? The activate route asks the cap and writes its note within
+    minutes of the approval, so inside `POST_CRITIC_GRACE_MINUTES` the hold
+    is the race this gate exists for and says nothing on the card. An
+    unreadable green light speaks — unknown must not silence a refusal."""
+    if not green_lit_at:
+        return True
+    try:
+        return age_minutes(green_lit_at) >= POST_CRITIC_GRACE_MINUTES
+    except ValueError:
+        return True
+
+
 def epic_thread(epic: str) -> list | None:
     """The epic's comment thread WITH authorship, or None when Linear cannot
     say (DRE-3059).
@@ -6751,6 +6765,31 @@ def epic_thread(epic: str) -> list | None:
         print(
             f"plan-critic: could not read {epic}'s review thread ({exc}) — "
             "the second-critic gate abstains on this epic this sweep",
+            file=sys.stderr,
+        )
+        return None
+
+
+def whole_epic_thread(epic: str, window: list | None) -> list | None:
+    """The epic's thread for the epic cap's promotion hold (DRE-6493): the
+    whole of it, never the fifty-comment window `epic_thread` may have read.
+
+    The hold looks for ONE start note, written once, on an epic that has not
+    moved a child — so markers pile up on top of it, and once fifty follow
+    it a windowed read would hold every child for good (the window cost two
+    approved epics on 2026-10-02, DRE-5639). A window shorter than fifty is
+    the whole thread already, and inside a pass the whole read is the
+    cache's. None when the window was unreadable or the whole read fails —
+    the hold abstains on it, as `epic_thread` explains.
+    """
+    if window is None or len(window) < linear_ops.COMMENT_WINDOW:
+        return window
+    try:
+        return linear_ops.comment_records(epic, whole_thread=True)
+    except Exception as exc:  # noqa: BLE001 — an unreadable thread is unknown
+        print(
+            f"epic-cap: could not read {epic}'s whole thread ({exc}) — "
+            "the cap's promotion hold abstains on this epic this sweep",
             file=sys.stderr,
         )
         return None
@@ -6892,7 +6931,48 @@ def promote_ready(
     early return at the cap starved a person's card on every ordinary busy day
     (PR #430's review); so did breaking out of the loop once the budget was
     spent, since the candidates are read lowest number first.
+
+    And a refusal is read back as a clock (DRE-4210). Every exit that leaves a
+    card of this repo in Backlog for a reason that is NOT a declared wait —
+    a refusal no sweep can clear, or a hold a person must lift — is recorded,
+    dated by its receipt. After the loop a clocked refusal standing two hours
+    is named on the card ONCE and on the red-run ledger every sweep, and a
+    board at WIP 0 with nothing dispatched and cards standing refused or held
+    says so, and goes red once the oldest receipt is an hour old
+    (`promotion_stall`, DRE-4207). The red is `_stale_defects`, which `main`
+    already exits on; the medic reads it as a standing defect (DRE-6467).
     """
+    # The clock is the pure half (DRE-4207); imported here because this pass is
+    # its only caller.
+    import promotion_stall  # noqa: PLC0415 — the stall clock's one caller (DRE-4210)
+
+    # ONE time for the whole pass, so every record is aged against the same
+    # instant — and a test pins it by patching the module's clock.
+    now = datetime.now(UTC).isoformat()
+    # Every card this pass left in Backlog refused or held (DRE-4210) — never
+    # a declared wait: a `blockedBy`, an inactive epic, the WIP budget, a PARKED
+    # verdict, an epic, another repo's card, or a card the pass moved.
+    refused: list = []
+
+    def stand(identifier: str, tag: str, needle: str | None) -> None:
+        """Record `identifier` as standing refused or held under `tag`, dated
+        by the oldest comment carrying `needle` — the receipt the refusal or
+        the hold left. No needle, no receipt: unknown, which is never stale.
+        Served from the pass's board read inside a sweep; a read that fails
+        is said once and the card stays undated, never the sweep's end."""
+        first_seen = None
+        if needle is not None:
+            try:
+                first_seen = linear_ops.first_comment_at(identifier, needle)
+            except linear_ops.LinearError as e:
+                print(
+                    f"ERROR: could not read when {identifier}'s {tag} receipt was "
+                    f"first posted — its age is unknown, so it is not clocked "
+                    f"this sweep: {e}",
+                    file=sys.stderr,
+                )
+        refused.append(promotion_stall.Refused(identifier, tag, first_seen))
+
     # Which cap, and from where (DRE-3994): a run that holds or promotes must
     # say what it was holding to, or a repo at "0" promoting at 8 reads exactly
     # like a repo at 8.
@@ -6921,6 +7001,9 @@ def promote_ready(
     # per epic per sweep. `None` means the read FAILED, which is not the same
     # fact as an epic with no comments and must not be cached as one.
     post_critic: dict[str, list | None] = {}
+    # The same thread whole, for the epic cap's hold (DRE-6493) — read past
+    # the window only for an epic whose window is full, once per sweep.
+    cap_thread: dict[str, list | None] = {}
     candidates = sorted(
         backlog_children() if candidates is None else candidates,
         key=lambda c: int(c["identifier"].split("-")[1]),
@@ -7016,6 +7099,9 @@ def promote_ready(
                 f"('{HOLD_LABEL}' label, reason={hold.reason_of(labels, bodies)}) "
                 "— never auto-promoted; skipping"
             )
+            # Left in Backlog wearing the label (DRE-4210): dated by the stamp a
+            # pipeline park writes; a label applied by hand has none.
+            stand(card["identifier"], HOLD_LABEL, hold.STAMP_PREFIX)
             continue
         parent = card.get("parent")
         if parent and parent["state"]["name"] not in EPIC_ACTIVE_STATES:
@@ -7140,6 +7226,8 @@ def promote_ready(
             # and the card leaves Backlog).
             if has_unresolved_blocker(card):
                 print(f"promotion: {card['identifier']} has an unresolved agent-blocker — skipping")
+                # Left in Backlog with its marker open (DRE-4210).
+                stand(card["identifier"], "agent-blocker", BLOCKER_MARKER)
                 continue
             # Mid-epic discovery (DRE-2739): a card added to an epic AFTER it was
             # green-lit dispatches an agent on this very sweep — within fifteen
@@ -7184,6 +7272,25 @@ def promote_ready(
                         refusal_tag, green_light[epic_id],
                         [r.get("body") or "" for r in post_critic[epic_id] or []])
                 else:
+                    # The cap's decision, asked before any child moves
+                    # (DRE-6493): the relay sends this sweep and `plan.yml` at
+                    # once, and a child promoted first made rule 1 start the
+                    # epic past the cap. Logged at once; said on the card after
+                    # the activate route's window, as the second critic's is.
+                    if epic_id not in cap_thread:
+                        cap_thread[epic_id] = whole_epic_thread(
+                            epic_id, post_critic[epic_id])
+                    refusal = epic_cap.promotion_refusal(
+                        card["identifier"],
+                        epic_id,
+                        epic_records([epic_id]).get(epic_id),
+                        cap_thread[epic_id],
+                        green_light[epic_id],
+                    )
+                    if refusal is not None:
+                        refusal_tag = epic_cap.UNDECIDED_TAG
+                        surface_refusal = undecided_hold_is_overdue(green_light[epic_id])
+                if refusal is None:
                     refusal = mid_epic.promotion_refusal(
                         card["identifier"],
                         card.get("createdAt"),
@@ -7239,6 +7346,12 @@ def promote_ready(
             # that gives it one. Both are writes, outside the read-guard.
             if to_planning:
                 _send_to_planning(card["identifier"])
+            # Read back as a clock (DRE-4210): only the refusals no sweep can
+            # clear, and never one this pass moved to Planning. A refusal
+            # logged and not posted has no receipt yet: undated, by design.
+            elif promotion_stall.clocked(refusal_tag):
+                stand(card["identifier"], refusal_tag,
+                      refusal_tag if surface_refusal else None)
             continue
         # Stale verdict (DRE-4962), asked LAST: it is the one gate that buys a
         # read per card — the lane history, on the quota every sweep shares —
@@ -7269,6 +7382,7 @@ def promote_ready(
                     f"{stale.splitlines()[0]}"
                 )
                 _surface_once(card["identifier"], routing_verdict.STALE_VERDICT_NEEDLE, stale)
+                stand(card["identifier"], "stale-verdict", routing_verdict.STALE_VERDICT_NEEDLE)
                 continue
         # THE LIVE RE-CHECK (Stage 2 items 32 and 37, review C2/C3). When any
         # input to this promotion came from the read door — the candidate, or
@@ -7286,6 +7400,7 @@ def promote_ready(
             if why is not None:
                 print(f"promotion: {card['identifier']} is not being promoted — "
                       f"the live re-check refused it: {why}")
+                stand(card["identifier"], "live-recheck", None)
                 continue
             labels = [lbl["name"].lower() for lbl in live["labels"]["nodes"]]
             bodies = card_comment_bodies(live)
@@ -7315,6 +7430,8 @@ def promote_ready(
                 f"promotion: {card['identifier']} is held as an operator step "
                 f"but routed {verdict} → {destination}; a person reads it — skipping"
             )
+            # Left in Backlog wearing the label, like the stand-down above.
+            stand(card["identifier"], HOLD_LABEL, hold.STAMP_PREFIX)
             continue
         try:
             # MARKS FIRST, then the move (DRE-3385). The nudge loop leaves a
@@ -7379,6 +7496,33 @@ def promote_ready(
         f"one-off(s), {by_hand} hand-built (nothing dispatched) "
         f"(WIP {active_count}+{spent}/{MAX_WIP})"
     )
+    # The stall clock (DRE-4210), the shape `_report_epic_prose_defect` runs on
+    # an epic: a clocked refusal two hours old is named on the card ONCE, and
+    # its ledger entry and ERROR line recur on every sweep it still stands —
+    # which is what keeps the run red until a person acts.
+    for record in refused:
+        age = promotion_stall.stalled(record, now)
+        if age is not None:
+            _surface_once(
+                record.identifier,
+                promotion_stall.STALL_TAG,
+                pipeline_act.receipt(
+                    "promotion-stalled",
+                    promotion_stall.notice(record, age, active_count, MAX_WIP),
+                ),
+            )
+            entry = promotion_stall.ledger_line(record, age)
+            _stale_defects.append(entry)
+            print(f"ERROR: {entry}", file=sys.stderr)
+    # The idle board: WIP 0 with nothing dispatched this pass, and cards
+    # standing refused or held. `spent` as it stands after the loop, so a pass
+    # that dispatched is not idle. Which records count for what is the clock's.
+    line, entry = promotion_stall.idle_board(active_count, spent, MAX_WIP, refused, now)
+    if line is not None:
+        print(line)
+    if entry is not None:
+        _stale_defects.append(entry)
+        print(f"ERROR: {entry}", file=sys.stderr)
     if _card_skips:
         # A red pattern the run log can't miss (DRE-2035) — pairs with the
         # per-card ERROR lines above; the sweep itself stays alive and green.
