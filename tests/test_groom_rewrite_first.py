@@ -608,6 +608,33 @@ def test_a_dry_run_posts_no_draft(tmp_path, capsys):
     assert groomer.REWRITE_HEADING in capsys.readouterr().out
 
 
+def test_an_empty_proposal_posts_no_draft_and_reads_no_rewrite_card(tmp_path):
+    # Every Planning card went to Rewrite first or left unverified: the batch
+    # is empty and nothing died, so the page is never posted — nor any draft.
+    _, path = _record(tmp_path)
+    doc = json.loads(path.read_text(encoding="utf-8"))
+    doc["batch"]["cards"] = []
+    doc["outcomes"]["dead"] = []
+    assert doc["outcomes"]["rewrite"]
+    path.write_text(json.dumps(doc), encoding="utf-8")
+    reads: list[str] = []
+
+    class Watched(Board):
+        def comment_records(self, identifier, *, whole_thread=False):
+            reads.append(identifier)
+            return super().comment_records(identifier,
+                                           whole_thread=whole_thread)
+
+        def gql(self, query, variables=None):
+            reads.append((variables or {}).get("id"))
+            return super().gql(query, variables)
+
+    board = Watched({i: _body(i) for i in REWRITE})
+    groomer.post_record(board, PROPOSAL_CARD, str(path))
+    assert board.posted == []
+    assert not set(reads) & set(REWRITE)
+
+
 def test_a_rerun_posts_no_duplicate(tmp_path):
     _, path = _record(tmp_path)
     board = _board()

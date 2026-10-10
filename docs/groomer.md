@@ -781,7 +781,8 @@ drafts by the same rule. A card whose body changed since gets a new draft, and
 the newer comment supersedes the older. So a card that stays in Intake across
 many mornings carries one draft, not one per morning; a dry run posts none, a
 re-run posts no duplicate, and an empty proposal, never posted, posts no draft
-either. The draft is rendered by `groomer.rewrite_draft_comment` and posted
+either — a morning whose every Planning card went to Rewrite first or left
+unverified shows the CEO neither the page nor the drafts. The draft is rendered by `groomer.rewrite_draft_comment` and posted
 from one call site in `post_record`, declared `not-an-act` in
 `config/pipeline-acts.json` beside the groomer's other rows: a draft is a
 proposal, not something the pipeline did on its own.
