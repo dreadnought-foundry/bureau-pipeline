@@ -487,15 +487,27 @@ def test_a_console_answers_poster_id_is_never_read(monkeypatch):
     assert len(h.fired) == 1
 
 
-def test_the_shipped_config_declares_no_ids_and_no_person_qualifies(monkeypatch):
+#: The one id the shipped config declares (DRE-6498): the CEO's own Linear
+#: account, the author of his `re-approve` on DRE-6480 on 2026-10-09 15:22 PT,
+#: which nothing read while the list was empty.
+SHIPPED_CEO_ID = "112b0e08-9fa6-4999-b747-e0220d39b672"
+
+
+def test_the_shipped_config_declares_the_ceo_and_nobody_else_qualifies(monkeypatch):
     doc = json.loads((ROOT / "config" / "green-light-reply.json").read_text())
-    assert doc["ceo_linear_user_ids"] == []
-    assert glr.ceo_user_ids() == frozenset()
-    board = Board([lane_card("DRE-7001", window=[said(20)])])
-    fired: list = []
-    glr.sweep(REPO, SLUG, live=True, linear=board, voices=fake_voices,
-              fire=lambda *a, **k: fired.append(a) or (True, ""))
-    assert fired == []
+    assert doc["ceo_linear_user_ids"] == [SHIPPED_CEO_ID]
+    assert glr.ceo_user_ids() == frozenset({SHIPPED_CEO_ID})
+    monkeypatch.setattr(linear_ops, "cmd_comment", lambda *a, **k: None)
+
+    def fired_for(user: str) -> list:
+        board = Board([lane_card("DRE-7001", window=[said(20, user)])])
+        fired: list = []
+        glr.sweep(REPO, SLUG, live=True, linear=board, voices=fake_voices,
+                  fire=lambda *a, **k: fired.append(a) or (True, ""))
+        return fired
+
+    assert fired_for(SOMEONE) == []
+    assert len(fired_for(SHIPPED_CEO_ID)) == 1
 
 
 def test_a_config_with_ids_is_read_as_a_set(tmp_path):

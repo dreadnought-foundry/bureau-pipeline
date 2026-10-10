@@ -207,7 +207,9 @@ class SanitizerStepWiringTest(unittest.TestCase):
         # fence; the raw description must therefore never be interpolated
         # anywhere except the sanitizer's env.
         for wf in FENCED:
-            self.assert_raw_only_in_env(wf, RAW_DESC_EXPR, "RAW_DESCRIPTION")
+            self.assert_raw_only_in_env(
+                wf, "github.event.client_payload.description", "RAW_DESCRIPTION"
+            )
 
     def test_card_title_flows_through_the_sanitizer(self):
         # The title rides the single "Card:"/"Epic:" prompt line — but Linear
@@ -271,6 +273,7 @@ class InterpolationPinTest(unittest.TestCase):
         "github.event.workflow_run.head_branch",
         "steps.pr.outputs.escalation",
         "steps.pr.outputs.branch",
+        "steps.answer.outputs.description",
     ]
 
     @staticmethod

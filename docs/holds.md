@@ -321,7 +321,11 @@ for a label with no live stamp); and `limit_recovery._held` as
 a label a person put back by hand after a lift is read as `manual`, never as
 the old stamped reason. The medic's and limit recovery's exception for a
 Linear Sync or Merge Gate rerun (`medic_retry.park_rule_applies`) is by
-workflow and stays where it is.
+workflow and stays where it is. A hold stops limit recovery re-entering a
+card, never noticing it: a held card whose limit-death marker has stood past
+`dead_run.LIMIT_DEATH_CLOCK_MINUTES` gets one `⚠️ limit-recovery:` hand-off
+receipt and turns the sweep red as a standing defect, with no label or lane
+change (DRE-4208).
 
 Every row names all four readers today, so no reader's answer changed when
 they moved onto the registry. A later card that lets a reader through for one
