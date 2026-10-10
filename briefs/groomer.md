@@ -113,7 +113,11 @@ one **labelled**, each one a single plain-English clause:
 * **value** — what we get when it lands, in outcomes rather than mechanism;
 * **effort** — how big it is, in plain terms (an afternoon, a day, a fortnight);
 * **if skipped** — what happens if it waits;
-* **depends on** — what has to be true or done first, or `nothing`.
+* **depends on** — when the card should wait for work in flight, the card id
+  of that work, written as `DRE-N` (`depends on: DRE-6057`); otherwise the
+  word `nothing`. The readiness rules read the card ids on this line and hold
+  the card until each named card is Done, or, for an epic, built out — so a
+  wait you give only in prose is a wait the rules cannot see.
 
 Write them **by label, in any order**, and write only the ones you can answer:
 a label you leave out is simply absent from the page, and nothing is invented
@@ -152,6 +156,10 @@ shape it whatever you answered:
   card, and inside it the oldest child goes first;
 * the batch is capped, so a card past the cap is `not-now` with a trigger
   naming the cycle it is reconsidered in, whatever you ranked it.
+* a card that is not ready to plan takes no slot, whatever you ranked it: a
+  card your `depends on` line names is still open, a file it names is named
+  by a card already in flight, its epic has not started, it carries an open
+  "decide before building" question, or its children are epics of their own.
 
 The one thing your answer removes from the batch is a card you mark
 `unranked`. Everything else you say is carried to the page as the reason.

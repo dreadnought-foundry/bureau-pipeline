@@ -18,7 +18,7 @@ compares everything below this comment byte for byte.
 
 5 cards of 5 in Intake are proposed for cycle 12, in the order below. Of those, 3 for Planning and 2 for Cancel. Nothing moves until you approve it.
 
-Ranked by test-model (asked) / test-model (answered) in 1 call over 5 cards, against 0 epics in flight, 0 merged PRs and 0 closed cards — 5 of 5 cards ranked.
+Ranked by test-model (asked) / test-model (answered) in 1 call over 5 cards, against 0 epics in flight, 0 merged PRs and 0 closed cards — 5 of 5 cards ranked; 4 ranked now without a depends-on line.
 
 **To approve:** comment `🧺 groom-approved: 3734d5abc032` on this card. Approval moves the Planning list to Planning and the Cancel list to Canceled. Anything else — including a comment that mentions the marker — leaves both lists where they are.
 
