@@ -1,0 +1,58 @@
+[
+  {
+    "identifier": "DRE-6024",
+    "title": "bureau-pipeline: a repo declares how its released commit runs locally",
+    "body": "A repository declares, in one file, how its released commit runs on a proof runner.\n\n## Acceptance criteria\n\n- [ ] a repository's declaration is read and validated by the pipeline\n",
+    "labels": ["repo:bureau-pipeline", "initiative:bureau", "agent:devops"],
+    "blocked_by": [],
+    "created_at": "2026-10-06T23:47:22Z"
+  },
+  {
+    "identifier": "DRE-6025",
+    "title": "bureau-pipeline: the proof run's browser, first half",
+    "body": "The proof run opens a browser against the declared local run.\n\n## Acceptance criteria\n\n- [ ] the proof run opens a browser on the local run it stood up\n",
+    "labels": ["repo:bureau-pipeline", "initiative:bureau", "agent:devops"],
+    "blocked_by": ["DRE-6024"],
+    "created_at": "2026-10-06T23:47:33Z"
+  },
+  {
+    "identifier": "DRE-6026",
+    "title": "portico: the portal's proof-local.json",
+    "body": "The portal declares how its released commit runs locally.\n\n## Acceptance criteria\n\n- [ ] the portal's declaration passes the pipeline's validator\n",
+    "labels": ["initiative:bureau", "repo:portico", "agent:engineer"],
+    "blocked_by": ["DRE-6536", "DRE-5928", "DRE-6024"],
+    "created_at": "2026-10-06T23:47:37Z"
+  },
+  {
+    "identifier": "DRE-6027",
+    "title": "bureau-pipeline: proof-task.yml stands up the declared local run",
+    "body": "The proof workflow stands up the run a repository declared.\n\n## Acceptance criteria\n\n- [ ] the proof workflow starts the declared local run before the proof agent\n",
+    "labels": ["repo:bureau-pipeline", "initiative:bureau", "agent:devops"],
+    "blocked_by": ["DRE-6174", "DRE-6047", "DRE-6025", "DRE-6024"],
+    "created_at": "2026-10-06T23:47:49Z"
+  },
+  {
+    "identifier": "DRE-6028",
+    "title": "Canceled, re-filed as DRE-6048: a Portico proof the sweep dispatched",
+    "body": "Canceled in the planner's third revision and re-filed as DRE-6048.\n\n## Acceptance criteria\n\n- [ ] nothing; this card is canceled\n",
+    "labels": ["initiative:bureau", "repo:portico", "agent:ops", "no-code"],
+    "blocked_by": ["DRE-6047", "DRE-6027", "DRE-6026", "DRE-6025", "DRE-6024"],
+    "created_at": "2026-10-06T23:48:46Z"
+  },
+  {
+    "identifier": "DRE-6047",
+    "title": "bureau-pipeline: proof_session.py login and screenshot",
+    "body": "The proof session logs in and takes the screenshot the record cites.\n\n## Acceptance criteria\n\n- [ ] the proof session logs in and saves a screenshot of the named screen\n",
+    "labels": ["repo:bureau-pipeline", "initiative:bureau", "agent:devops"],
+    "blocked_by": ["DRE-6025"],
+    "created_at": "2026-10-07T00:39:44Z"
+  },
+  {
+    "identifier": "DRE-6048",
+    "title": "PROOF: a Portico proof the sweep dispatched sees both halves of one on-screen step",
+    "body": "Record a Portico proof run the sweep dispatched, what it saw on screen and when.\n\nThe CEO reads this record and closes this card; there is no demo sitting.\n- [ ] a Portico proof run the sweep dispatched records both halves of one on-screen step\n",
+    "labels": ["initiative:bureau", "agent:ops", "repo:portico"],
+    "blocked_by": ["DRE-6028", "DRE-6047", "DRE-6027", "DRE-6026", "DRE-6025", "DRE-6024"],
+    "created_at": "2026-10-07T00:45:44Z"
+  }
+]
