@@ -559,13 +559,16 @@ through the scripted proof-reader identity. Write every on-screen step as two
 observations, one criterion each — the screen on a local run of the released
 commit, and the request it makes, live:
 
-    - [ ] Local screen: on a local run of the released commit, clicking
-          Add document shows the upload land in the list.
+    - [ ] Local screen: on the `home` page of a local run of the released
+          commit, clicking Add document shows the upload land in the list.
     - [ ] Live request: the request that click sends is observed succeeding
           against the live system, as the proof-reader identity.
 
 The step counts as proven only when both are checked; either alone proves
-nothing. `standards/card-quality.md` states the rule.
+nothing. `standards/card-quality.md` states the rule. Name the page by the key
+the repo's `.github/bureau/proof-local.json` declares (`docs/proof-local-run.md`);
+a `Local screen:` criterion that names no declared page is `Not observed.` by
+the run.
 
 **The pipeline dispatches the proof run itself (DRE-5920)** once the last
 build card is Done and its release is live, so write the card for that run.
