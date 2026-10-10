@@ -1,0 +1,43 @@
+[
+  {
+    "_note": "Built by hand from DRE-6533's account of agent-bureau PR #3481 (DRE-6487, 2026-10-09 PT); the thread was not fetched. Three reviews, three DIFFERENT findings, every one fixed in the description with an empty commit, and no convergence line on any verdict. The shas are the real prefixes padded with zeros to forty hex, because merge_gate.verdict_sha reads forty. The live loop stopped this at 18:08 PT with stopped_by=non-convergence after two attempts; under DRE-6533 it runs a third.",
+    "user": {
+      "login": "agent-bureau-qa-bot[bot]",
+      "type": "Bot"
+    },
+    "created_at": "2026-10-10T00:52:00Z",
+    "body": "🔎 QA Critic — VERDICT: REQUEST_CHANGES cause:unmet-criteria @2ee4d94200000000000000000000000000000000 content:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n\n## Summary\nThe pull request description has no What's new: line, so the release note cannot be built from it.\n\n## For the fixing agent\nFinding 1: the description has no `What's new:` line. Add one to the description and push one empty commit."
+  },
+  {
+    "user": {
+      "login": "agent-bureau-bot[bot]",
+      "type": "Bot"
+    },
+    "created_at": "2026-10-10T00:55:00Z",
+    "body": "🔧 Fix attempt 1 pushed — CI and critic review re-running."
+  },
+  {
+    "user": {
+      "login": "agent-bureau-qa-bot[bot]",
+      "type": "Bot"
+    },
+    "created_at": "2026-10-10T01:00:00Z",
+    "body": "🔎 QA Critic — VERDICT: REQUEST_CHANGES cause:unmet-criteria @8fdfd29100000000000000000000000000000000 content:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\n\n## Summary\nThe What's new: line is there now, but its wording is wrong: this change is internal, so it should say none.\n\n## For the fixing agent\nFinding 2: the `What's new:` line should say `none`. Change it in the description and push one empty commit.\n\nconvergence line omitted: this is a first review."
+  },
+  {
+    "user": {
+      "login": "agent-bureau-bot[bot]",
+      "type": "Bot"
+    },
+    "created_at": "2026-10-10T01:04:00Z",
+    "body": "🔧 Fix attempt 2 pushed — CI and critic review re-running."
+  },
+  {
+    "user": {
+      "login": "agent-bureau-qa-bot[bot]",
+      "type": "Bot"
+    },
+    "created_at": "2026-10-10T01:07:00Z",
+    "body": "🔎 QA Critic — VERDICT: REQUEST_CHANGES cause:unmet-criteria @735e4c7500000000000000000000000000000000 content:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc\n\n## Summary\nThe card's last criterion asks the description to quote a test run and the stable commit it ran against, and it quotes neither.\n\n## For the fixing agent\nFinding 3: the description must quote a test run and the `stable` commit it ran against."
+  }
+]

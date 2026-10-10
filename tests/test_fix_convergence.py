@@ -487,6 +487,211 @@ class CirclingStopsAtTwoTest(unittest.TestCase):
             fix_budget.count_markers(self.thread, WORKER, "🔧 Fix attempt"), 2)
 
 
+# ── 4b. a silent round spends a budget of its own (DRE-6533) ───────────────
+
+REPEAT = "repeat-finding prior-fixes-held in-scope"
+SILENT_3481 = "fix-rounds-silent-3481-2026-10-09.json"
+
+
+class SilenceBudgetTest(unittest.TestCase):
+    """A re-review with no readable line is still `unclassified` and still
+    not converging — but a streak made ONLY of such rounds stops at
+    SILENCE_BUDGET under its own name, while a streak holding one round that
+    declared circling stops at STOP_BUDGET as before. Every row of the
+    card's worked-examples table, in order."""
+
+    def decide(self, comments):
+        return fix_budget.decide(comments, WORKER, mode="fix", pr=3481)
+
+    def test_the_constants_are_contracts(self):
+        self.assertEqual(fc.SILENCE_BUDGET, 3)
+        self.assertEqual(fc.SILENCE, "silence")
+        self.assertEqual(fc.STOP_BUDGET, 2)
+        self.assertEqual(fc.CEILING, 6)
+        self.assertEqual(fc.NON_CONVERGENCE, "non-convergence")
+        self.assertEqual(fc.RUNAWAY, "ceiling")
+
+    def test_classify_is_unchanged(self):
+        # Silence is never read as progress, and it never stops being
+        # unclassified — only the budget it spends changed.
+        self.assertEqual(fc.classify(verdict(None), first=False),
+                         (False, fc.UNCLASSIFIED))
+
+    def test_f_u_u_runs_attempt_three(self):
+        # PR #3481 at 18:08 PT. Today: hold, non-convergence.
+        out = self.decide(thread(None, None, None))
+        self.assertEqual(out.streak, 2)
+        self.assertEqual(out.action, "run")
+        self.assertEqual(out.attempt, 3)
+        self.assertIsNone(out.stopped_by)
+
+    def test_f_u_u_u_holds_on_silence(self):
+        out = self.decide(thread(None, None, None, None))
+        self.assertEqual(out.action, "hold")
+        self.assertEqual(out.attempts, 3)
+        self.assertEqual(out.stopped_by, "silence")
+
+    def test_f_r_r_holds_on_non_convergence(self):
+        out = self.decide(thread(None, REPEAT, REPEAT))
+        self.assertEqual(out.action, "hold")
+        self.assertEqual(out.stopped_by, "non-convergence")
+
+    def test_f_u_r_holds_on_non_convergence(self):
+        out = self.decide(thread(None, None, REPEAT))
+        self.assertEqual(out.action, "hold")
+        self.assertEqual(out.attempts, 2)
+        self.assertEqual(out.stopped_by, "non-convergence")
+
+    def test_f_r_u_holds_on_non_convergence(self):
+        out = self.decide(thread(None, REPEAT, None))
+        self.assertEqual(out.action, "hold")
+        self.assertEqual(out.attempts, 2)
+        self.assertEqual(out.stopped_by, "non-convergence")
+
+    def test_every_declared_circling_token_spends_the_stop_budget(self):
+        for line in (REPEAT, "new-finding prior-fix-regressed in-scope",
+                     "new-finding prior-fixes-held scope-creep"):
+            with self.subTest(line=line):
+                out = self.decide(thread(None, None, line))
+                self.assertEqual(out.stopped_by, "non-convergence")
+
+    def test_f_u_p_u_u_runs_attempt_five(self):
+        out = self.decide(thread(None, None, CONVERGING, None, None))
+        self.assertEqual(out.streak, 2)
+        self.assertEqual(out.action, "run")
+        self.assertEqual(out.attempt, 5)
+        self.assertIsNone(out.stopped_by)
+
+    def test_three_markers_and_no_verdict_hold_on_silence(self):
+        # Padded rounds are unclassified too, and spend the silence budget.
+        out = self.decide(thread(attempts=3))
+        self.assertEqual(out.streak, 3)
+        self.assertEqual(out.action, "hold")
+        self.assertEqual(out.stopped_by, "silence")
+
+    def test_two_markers_and_no_verdict_still_run(self):
+        # Non-vacuous twin of the row above.
+        out = self.decide(thread(attempts=2))
+        self.assertEqual(out.action, "run")
+
+    def test_the_ceiling_is_read_first_even_on_silence(self):
+        out = self.decide(thread(*([None] * (fc.CEILING + 1))))
+        self.assertEqual(out.attempts, fc.CEILING)
+        self.assertEqual(out.stopped_by, "ceiling")
+
+    def test_the_env_names_the_silence_stop(self):
+        out = self.decide(thread(None, None, None, None))
+        self.assertIn("STOPPED_BY=silence\n", out.env())
+
+
+class Pr3481WouldHaveRunAThirdAttemptTest(unittest.TestCase):
+    """The incident, replayed through the shipped decision."""
+
+    def setUp(self):
+        self.thread = fixture(SILENT_3481)
+
+    def test_the_rounds_are_first_then_two_silent(self):
+        self.assertEqual([r.reason for r in fc.rounds(self.thread)],
+                         [fc.FIRST_REVIEW, fc.UNCLASSIFIED, fc.UNCLASSIFIED])
+
+    def test_the_loop_runs_attempt_three(self):
+        out = fix_budget.decide(self.thread, WORKER, mode="fix", pr=3481)
+        self.assertEqual(out.action, "run")
+        self.assertEqual(out.attempt, 3)
+        self.assertIsNone(out.stopped_by)
+
+    def test_the_fixture_is_the_incident_and_not_a_vacuous_thread(self):
+        # Twin: two markers is exactly what stopped it, and the critic's own
+        # sentence on its second review ties the fixture to #3481.
+        self.assertEqual(
+            fix_budget.count_markers(self.thread, WORKER, "🔧 Fix attempt"), 2)
+        blob = json.dumps(self.thread, ensure_ascii=False)
+        self.assertIn("convergence line omitted: this is a first review.", blob)
+        bodies = fc.round_bodies(self.thread)
+        self.assertEqual(len(bodies), 3)
+        self.assertEqual([fc.verdict_sha(b.splitlines()[0]) for b in bodies],
+                         [p.ljust(40, "0") for p in
+                          ("2ee4d942", "8fdfd291", "735e4c75")])
+        for body in bodies:
+            self.assertIsNone(fc.read(body))
+            self.assertNotIn(EXPECTED_MARKER, body)
+            self.assertIn("## Summary", body)
+            self.assertIn("## For the fixing agent", body)
+        self.assertIn("What's new:", bodies[0])
+        self.assertIn("`none`", bodies[1])
+        self.assertIn("`stable` commit", bodies[2])
+
+    def test_a_fourth_silent_round_stops_on_silence(self):
+        extended = self.thread + [
+            rest(WORKER, ATTEMPT.format(n=3)),
+            rest(QA, verdict(None, cause="unmet-criteria", sha=head(4))),
+        ]
+        out = fix_budget.decide(extended, WORKER, mode="fix", pr=3481)
+        self.assertEqual(out.action, "hold")
+        self.assertEqual(out.attempts, 3)
+        self.assertEqual(out.stopped_by, "silence")
+
+
+class MixedStreakStopsLikeCirclingTest(unittest.TestCase):
+    """A real circling loop still stops at two (the circling fixture is
+    CirclingStopsAtTwoTest); one silent round beside one declared round stops
+    the same way."""
+
+    def test_silent_then_declared(self):
+        comments = fixture("fix-rounds-circling.json")
+        # Round 2's line removed: silent, then declared.
+        comments[2] = dict(comments[2], body=comments[2]["body"].replace(
+            "convergence: repeat-finding prior-fixes-held in-scope\n\n", ""))
+        self.assertEqual([r.reason for r in fc.rounds(comments)],
+                         [fc.FIRST_REVIEW, fc.UNCLASSIFIED, "repeat-finding"])
+        out = fix_budget.decide(comments, WORKER, mode="fix", pr=42)
+        self.assertEqual(out.action, "hold")
+        self.assertEqual(out.attempts, 2)
+        self.assertEqual(out.stopped_by, "non-convergence")
+
+
+#: Today's wording for the two stops this card does not change, word for
+#: word (the hold_reason text, with the stop budget and ceiling filled in).
+NON_CONVERGENCE_REASON = (
+    "2 review rounds in a row made no progress (the stop budget is 2). A "
+    "round that finds something new, leaves the earlier fixes working and "
+    "stays in scope does not spend that budget; this one did")
+CEILING_REASON = (
+    "it reached the hard ceiling of 6 fix attempts. That is the runaway "
+    "backstop, not a judgement that the loop stopped making progress — it "
+    "kept finding new work and never finished")
+
+
+class HoldReasonArmsTest(unittest.TestCase):
+    """Three stops, three wordings: the person is asked a different thing
+    by each."""
+
+    def test_silence_says_the_reviews_did_not_say(self):
+        why = fc.state(thread(None, None, None, None), 3).hold_reason()
+        self.assertIn("did not say whether", why)
+        self.assertIn("new ground", why)
+        self.assertNotIn("same ground", why)
+        self.assertNotIn("made no progress", why)
+        for ch in ("`", "$", '"', "\\"):
+            self.assertNotIn(ch, why)
+
+    def test_non_convergence_keeps_todays_words(self):
+        st = fc.state(thread(None, REPEAT, REPEAT), 2)
+        self.assertEqual(st.stopped_by, "non-convergence")
+        self.assertEqual(st.hold_reason(), NON_CONVERGENCE_REASON)
+
+    def test_the_ceiling_keeps_todays_words(self):
+        st = fc.state(thread(*([None] + [CONVERGING] * fc.CEILING)), fc.CEILING)
+        self.assertEqual(st.stopped_by, "ceiling")
+        self.assertEqual(st.hold_reason(), CEILING_REASON)
+
+    def test_the_receipt_names_the_silence_budget(self):
+        line = fc.state(thread(None, None), 1).receipt()
+        self.assertIn(str(fc.SILENCE_BUDGET), line)
+        self.assertIn(str(fc.STOP_BUDGET), line)
+        self.assertEqual(len(line.splitlines()), 1)
+
+
 # ── 5. the classification lands on the PR ──────────────────────────────────
 
 class ReceiptTest(unittest.TestCase):
@@ -694,6 +899,73 @@ class WorkflowWiringTest(unittest.TestCase):
         self.assertIn("STOPPED_BY", m.group(1))
 
 
+def linear_hold_note(stopped_by, mode="fix"):
+    """Run the `Notify hold on Linear` step's shell VERBATIM against a stub
+    linear_ops.py, and return the message it would post on the card."""
+    import subprocess
+    import tempfile
+    steps = yaml.safe_load(wf_src())["jobs"]["fix"]["steps"]
+    found = [s for s in steps if "STOPPED_BY" in (s.get("env") or {})]
+    assert len(found) == 1, f"{len(found)} steps read STOPPED_BY"
+    run = found[0]["run"]
+    run = run.replace("${{ steps.pr.outputs.mode }}", mode)
+    run = run.replace("${{ steps.pr.outputs.card }}", "DRE-6533")
+    assert "${{" not in run, run
+    with tempfile.TemporaryDirectory() as td:
+        scripts = os.path.join(td, ".bureau-pipeline", "scripts")
+        os.makedirs(scripts)
+        out = os.path.join(td, "posted.json")
+        with open(os.path.join(scripts, "linear_ops.py"), "w") as fh:
+            fh.write("import json, sys\n"
+                     f"json.dump(sys.argv[1:], open({out!r}, 'w'))\n")
+        proc = subprocess.run(["bash", "-c", run], cwd=td,
+                              env=dict(os.environ, STOPPED_BY=stopped_by),
+                              capture_output=True, text=True)
+        assert proc.returncode == 0, proc.stderr
+        with open(out, encoding="utf-8") as fh:
+            argv = json.load(fh)
+    assert argv[:2] == ["comment", "DRE-6533"], argv
+    return argv[2]
+
+
+class LinearHoldNoteTest(unittest.TestCase):
+    """(DRE-6533) The card's note has a third arm, and the other two keep
+    today's wording word for word."""
+
+    def test_silence_says_the_reviews_did_not_say(self):
+        msg = linear_hold_note("silence")
+        self.assertIn("did not say whether", msg)
+        self.assertIn("new ground", msg)
+        self.assertNotIn("same ground", msg)
+        self.assertNotIn("made no progress", msg)
+        self.assertTrue(msg.startswith("🛑 "))
+
+    def test_non_convergence_keeps_todays_words(self):
+        self.assertEqual(
+            linear_hold_note("non-convergence"),
+            "🛑 The last few review rounds stopped making progress — the "
+            "reviewer kept landing on the same ground rather than new ground "
+            "— so the fix loop stopped rather than spend another round on it. "
+            "This card needs a human decision. See PR for the full review "
+            "trail.")
+
+    def test_the_conflict_stop_keeps_its_words(self):
+        # Conflict mode's stop is `budget`; the reordered arms still reach it.
+        self.assertEqual(
+            linear_hold_note("budget", mode="conflict"),
+            "🛑 Five conflict-resolution rounds couldn't keep this PR "
+            "mergeable — main keeps moving under it. Needs a human decision.")
+
+    def test_the_ceiling_keeps_todays_words(self):
+        self.assertEqual(
+            linear_hold_note("ceiling"),
+            "🛑 The review kept finding new, real problems on this change and "
+            "the fix loop ran out of runway after several rounds. Nothing "
+            "here says the work is going backwards — it just never finished. "
+            "This card needs a human decision. See PR for the full review "
+            "trail.")
+
+
 class CriticPromptTest(unittest.TestCase):
     """qa-review.yml runs the critic twice from two duplicated prompt blocks
     GitHub Actions cannot DRY. A vocabulary added to one and not the other
@@ -731,6 +1003,36 @@ class CriticPromptTest(unittest.TestCase):
         self.assertEqual(re.sub(r"\s+", " ", blocks[0]),
                          re.sub(r"\s+", " ", blocks[1]))
 
+    @staticmethod
+    def whole_block(prompt):
+        """The whole CONVERGENCE section, heading paragraph included."""
+        text = re.sub(r"\s+", " ", prompt)
+        start = text.index("CONVERGENCE (mandatory)")
+        return text[start:text.index("WRITE THE VERDICT FILE FIRST", start)]
+
+    def test_both_whole_blocks_are_the_same_contract(self):
+        blocks = [self.whole_block(p) for _sid, p in critic_prompts()]
+        self.assertEqual(blocks[0], blocks[1])
+
+    def test_the_round_is_read_off_the_review_round_lead(self):
+        # (DRE-6533) The critic is TOLD which round it is on; it no longer
+        # has to discover it from the comments.
+        for sid, prompt in critic_prompts():
+            block = self.whole_block(prompt)
+            with self.subTest(step=sid):
+                self.assertIn("REVIEW ROUND", block)
+                self.assertNotIn(
+                    "if earlier QA Critic verdicts exist on this PR, you are "
+                    "RE-reviewing", block)
+
+    def test_the_budget_sentence_says_what_the_code_does(self):
+        for sid, prompt in critic_prompts():
+            block = self.whole_block(prompt)
+            with self.subTest(step=sid):
+                self.assertIn("spends a stop budget of two rounds", block)
+                self.assertIn("cannot be read as progress", block)
+                self.assertIn("three such rounds in a row stop the loop", block)
+
 
 class DocTest(unittest.TestCase):
     """A change that contradicts a document updates it in the same PR."""
@@ -747,6 +1049,20 @@ class DocTest(unittest.TestCase):
         self.assertIn("converg", body)
         self.assertIn("ceiling", body)
         self.assertIn("dre-2817", body)
+
+    def test_the_stop_table_has_three_rows(self):
+        # (DRE-6533) "Which stop was it?" names the silence stop too.
+        section = self.doc().split("## Which stop was it?", 1)[1].split("\n## ", 1)[0]
+        rows = [line for line in section.splitlines()
+                if line.startswith("| *")]
+        self.assertEqual(len(rows), 3, rows)
+        self.assertTrue(any("did not say whether" in row for row in rows))
+        self.assertIn("dre-6533", section.lower())
+
+    def test_the_docstrings_name_three_stops(self):
+        self.assertIn("SILENCE_BUDGET", fc.__doc__)
+        self.assertIn("`silence`", fc.__doc__)
+        self.assertIn("silence", fix_budget.__doc__)
 
 
 if __name__ == "__main__":

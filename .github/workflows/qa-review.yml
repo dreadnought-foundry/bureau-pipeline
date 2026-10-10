@@ -1104,6 +1104,10 @@ jobs:
           # DRE-3084: the commit this review is about to judge, so a
           # refutation is read back for THIS head and never for an older one.
           HEAD_SHA: ${{ steps.pr.outputs.sha }}
+          # DRE-6533: the critic's own live identity, the way Decide review
+          # carries it, so the REVIEW ROUND counts only this reviewer's
+          # verdicts — never a typed login (DRE-1988).
+          QA_LOGIN: ${{ steps.app.outputs.app-slug }}[bot]
         run: |
           # The branch and the thread: the job's one read of each (fix #21).
           # The body stays a live read: it is what the critic is handed.
@@ -1132,7 +1136,12 @@ jobs:
           python3 "$PIPELINE_DIR"/scripts/read_once.py once "issue-comments-$PR" -- gh api --paginate --slurp \
             "repos/$GITHUB_REPOSITORY/issues/$PR/comments?per_page=100" \
             > /tmp/cardctx-comments.json 2>/dev/null \
-            || echo '[]' > /tmp/cardctx-comments.json
+            || : > /tmp/cardctx-comments.json
+          # A failed read leaves the file EMPTY, never `[]` (DRE-6533): an
+          # empty thread reads as a first review, and that is the claim the
+          # REVIEW ROUND exists to stop the critic making by mistake. Empty
+          # is unreadable — the round says unknown, and the refutation read
+          # below finds nothing, exactly as before.
           # `// empty` and not `// ""`: a no-match must leave a ZERO-byte file,
           # or the `-s` test below reads jq's trailing newline as a refutation
           # and every ordinary review claims to be a re-review.
@@ -1159,7 +1168,10 @@ jobs:
             --branch "$BRANCH" \
             --pr-body-file /tmp/cardctx-pr-body.txt \
             --refutation-file /tmp/cardctx-refutation.txt \
-            --acts-consumer-file /tmp/cardctx-acts.txt
+            --acts-consumer-file /tmp/cardctx-acts.txt \
+            --comments-file /tmp/cardctx-comments.json \
+            --critic-login "$QA_LOGIN" \
+            --head-sha "$HEAD_SHA"
 
       # Model selection for the critic (DRE-2316 / DRE-2317). This step exists
       # because the critic used to carry a pinned Sonnet id twice in this file:
@@ -1464,11 +1476,16 @@ jobs:
             judgement findings — scope, design, risk, test quality — need no
             citation and are untouched: there you are meant to be believed.
 
-            CONVERGENCE (mandatory): if earlier QA Critic verdicts exist on
-            this PR, you are RE-reviewing: verify the prior findings are
-            resolved, review what changed since, and raise a NEW finding
-            only if (a) the latest changes introduced it, or (b) it is
-            data-loss/security severity.
+            CONVERGENCE (mandatory): the REVIEW ROUND line in the CARD
+            CONTEXT block above tells you which round this is (DRE-6533) —
+            read it there; do not work it out from the comments. When it
+            says you are RE-reviewing: verify the prior findings it quotes
+            are resolved, review what changed since, and raise a NEW
+            finding only if (a) the latest changes introduced it, or (b) it
+            is data-loss/security severity. Only if the block carries no
+            REVIEW ROUND line, or says the round is unknown, decide from
+            the comments: earlier blocking verdicts by this reviewer on
+            this PR mean you are RE-reviewing.
 
             AND SAY IT MACHINE-READABLY (DRE-2817). On a RE-review that
             blocks, put ONE line of its own immediately after the VERDICT
@@ -1487,12 +1504,15 @@ jobs:
 
             This line IS the fix budget. `new-finding prior-fixes-held
             in-scope` says the loop is closing in and buys it another round;
-            anything else says it is circling and spends a stop budget of
-            two rounds. Write it from what you VERIFIED yourself, never from
-            what the fixing agent claims — that claim is the thing you exist
-            to check, and a fix loop was killed mid-convergence for four
-            rounds because nothing here was written down. Omit the line on a
-            first review (nothing earlier to repeat) and on an APPROVE
+            any other line says it is circling and spends a stop budget of
+            two rounds. A re-review that leaves the line out cannot be read
+            as progress, and three such rounds in a row stop the loop — a
+            loop that was finding something new each time, stopped because
+            nobody said so. Write it from what you VERIFIED yourself, never
+            from what the fixing agent claims — that claim is the thing you
+            exist to check, and a fix loop was killed mid-convergence for
+            four rounds because nothing here was written down. Omit the line
+            on a first review (nothing earlier to repeat) and on an APPROVE
             (nothing is blocking).
 
             WRITE THE VERDICT FILE FIRST (DRE-2466). Before you read any
@@ -1855,11 +1875,16 @@ jobs:
             judgement findings — scope, design, risk, test quality — need no
             citation and are untouched: there you are meant to be believed.
 
-            CONVERGENCE (mandatory): if earlier QA Critic verdicts exist on
-            this PR, you are RE-reviewing: verify the prior findings are
-            resolved, review what changed since, and raise a NEW finding
-            only if (a) the latest changes introduced it, or (b) it is
-            data-loss/security severity.
+            CONVERGENCE (mandatory): the REVIEW ROUND line in the CARD
+            CONTEXT block above tells you which round this is (DRE-6533) —
+            read it there; do not work it out from the comments. When it
+            says you are RE-reviewing: verify the prior findings it quotes
+            are resolved, review what changed since, and raise a NEW
+            finding only if (a) the latest changes introduced it, or (b) it
+            is data-loss/security severity. Only if the block carries no
+            REVIEW ROUND line, or says the round is unknown, decide from
+            the comments: earlier blocking verdicts by this reviewer on
+            this PR mean you are RE-reviewing.
 
             AND SAY IT MACHINE-READABLY (DRE-2817). On a RE-review that
             blocks, put ONE line of its own immediately after the VERDICT
@@ -1878,12 +1903,15 @@ jobs:
 
             This line IS the fix budget. `new-finding prior-fixes-held
             in-scope` says the loop is closing in and buys it another round;
-            anything else says it is circling and spends a stop budget of
-            two rounds. Write it from what you VERIFIED yourself, never from
-            what the fixing agent claims — that claim is the thing you exist
-            to check, and a fix loop was killed mid-convergence for four
-            rounds because nothing here was written down. Omit the line on a
-            first review (nothing earlier to repeat) and on an APPROVE
+            any other line says it is circling and spends a stop budget of
+            two rounds. A re-review that leaves the line out cannot be read
+            as progress, and three such rounds in a row stop the loop — a
+            loop that was finding something new each time, stopped because
+            nobody said so. Write it from what you VERIFIED yourself, never
+            from what the fixing agent claims — that claim is the thing you
+            exist to check, and a fix loop was killed mid-convergence for
+            four rounds because nothing here was written down. Omit the line
+            on a first review (nothing earlier to repeat) and on an APPROVE
             (nothing is blocking).
 
             WRITE THE VERDICT FILE FIRST (DRE-2466). Before you read any
