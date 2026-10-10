@@ -131,6 +131,15 @@ moved out of Green Light unanswered is withdrawn, and the next one is measured
 from its count. That is still not policing: nothing stops, and the answer is
 his.
 
+**What crosses is the cards still to build (DRE-6501).** The threshold is
+measured on the epic's children not in Done, Canceled or Duplicate, never on
+every card it has. DRE-4721 was asked at 50 cards and told to split with 48 of
+them finished and two left, so the question put 40 finished cards in front of
+the CEO to approve. The finding now names both numbers, the cards joined and
+the cards still open, and the recommendation is `split` only when the cards
+still open are at least three times the approved size. The record in the
+region keeps counting every card.
+
 **Two writers refresh that region, so the write is guarded (DRE-6162).** A
 discovery and the sweep both rewrite the whole description, and the sweep works
 from a record read at the top of its pass. On 2026-10-07 reconcile read

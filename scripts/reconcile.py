@@ -5541,8 +5541,10 @@ def ask_epic_growth_question(epic: str, report: dict) -> str:
     fleet-outage card is created in Triage (DRE-5292): `no-code` and no
     `agent:*` role, so no run is ever dispatched for it, and no parent — a
     child of the epic would be one more card in it, and would be promoted.
-    Its description is `epic_growth.body`, the three declared lines. The epic
-    stays In Progress and keeps promoting: nothing is paused, labeled or held.
+    Its description is `epic_growth.body`, the three declared lines, which
+    name every card it has and the cards still open (DRE-6501) — the count it
+    crossed on. The epic stays In Progress and keeps promoting: nothing is
+    paused, labeled or held.
 
     The marker is the `open` line on the epic's growth record, and while it
     stands nothing is asked again. A card created on a pass that died, or
@@ -5550,7 +5552,7 @@ def ask_epic_growth_question(epic: str, report: dict) -> str:
     by this epic's title prefix that no line names is that card, and is
     recorded rather than asked twice. Returns the question card.
     """
-    approved, running = report["approved"], report["current"]
+    approved, running, still_open = report["approved"], report["current"], report["open"]
     asked = mid_epic._now()
     named = {q["id"] for q in report.get("questions") or []}
     found = linear_ops.find_open_prefix(epic_growth.title_prefix(epic))
@@ -5561,7 +5563,8 @@ def ask_epic_growth_question(epic: str, report: dict) -> str:
     else:
         issue = linear_ops.create_card(
             epic_growth.title(epic, approved, running),
-            epic_growth.body(epic, approved, running, report.get("joined") or []),
+            epic_growth.body(epic, approved, running, report.get("joined") or [],
+                             still_open=still_open),
             repo_slug=REPO_SLUG,
             labels=(linear_ops.NO_CODE_LABEL,),
             lane=EPIC_GROWTH_LANE,
@@ -5575,8 +5578,8 @@ def ask_epic_growth_question(epic: str, report: dict) -> str:
         print(f"epic-growth: {epic} question {question} not recorded on the "
               f"epic — {recorded['contended']}; the next sweep records it")
     print(f"epic-growth: {epic} grew past its green light — approved at "
-          f"{approved} cards, running {running}; asked {question} in "
-          f"{EPIC_GROWTH_LANE}")
+          f"{approved} cards, running {running}, {still_open} still open; "
+          f"asked {question} in {EPIC_GROWTH_LANE}")
     return question
 
 
@@ -12540,7 +12543,8 @@ def report_epic_growth(epics: set[str]) -> list[tuple[str, int]]:
     unapproved one with no single decision being wrong. Riding the sweep that
     already runs is what makes it visible without anyone remembering to look.
 
-    Far past the approval the CEO is asked (DRE-6414): an epic past the
+    Far past the approval the CEO is asked (DRE-6414): an epic whose cards
+    still open (DRE-6501 — not Done, Canceled or Duplicate) are past the
     threshold in `config/epic-growth.json` with no growth question open gets
     one (`ask_epic_growth_question`), and an open one is settled on his
     answer (`settle_epic_growth_question`) — after the refresh, never on an
@@ -12587,9 +12591,11 @@ def report_epic_growth(epics: set[str]) -> list[tuple[str, int]]:
             # took the whole phase down with it.
             print(f"epic-growth: {epic} took no comment — {report['capped']}")
         # The growth question (DRE-6414): an open one is settled on his answer,
-        # and an epic past the threshold with none open is asked. Never on an
-        # idle pass, and never off a contended refresh — its numbers came from
-        # a read already known to be stale.
+        # and an epic past the threshold with none open is asked. What crosses
+        # is the cards still open, never every card (DRE-6501): DRE-4721 was
+        # asked at 50 with 48 finished. Never on an idle pass, and never off a
+        # contended refresh — its numbers came from a read already known to be
+        # stale.
         if not _idle_pass and not report.get("contended"):
             try:
                 open_question = next(
@@ -12597,7 +12603,7 @@ def report_epic_growth(epics: set[str]) -> list[tuple[str, int]]:
                      if q.get("status") == mid_epic.QUESTION_OPEN), None)
                 if open_question is not None:
                     settle_epic_growth_question(epic, open_question, report.get("approved"))
-                elif epic_growth.crossed(report.get("approved"), report.get("current")):
+                elif epic_growth.crossed(report.get("approved"), report.get("open")):
                     ask_epic_growth_question(epic, report)
             except Exception as exc:  # noqa: BLE001 — one epic's question never ends the phase
                 _write_failures.append(f"epic-growth question on {epic}: {exc}")
