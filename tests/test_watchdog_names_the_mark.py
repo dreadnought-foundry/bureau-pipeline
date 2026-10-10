@@ -157,11 +157,13 @@ class TestTheWatchdogLine:
         assert HAND_BUILT not in line
 
     def test_the_rest_of_the_line_is_unchanged(self, capsys):
+        """DRE-6409 appends a Hand-work age tail after this text (`; in
+        Hand-work …`, tests/test_hand_work_age.py); the text itself stands."""
         (line,) = _watchdog_lines(_proof_card(), capsys)
-        assert line.endswith(
+        assert (
             "— no dispatched run is expected, so a missing run receipt and an "
             "off-rail repo are both normal here, not a strand"
-        )
+        ) in line
 
 
 class TestThePlanningWatchdogLine:

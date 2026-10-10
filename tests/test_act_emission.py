@@ -207,6 +207,22 @@ def _drive_unlanded_no_branch(mp):
     reconcile._flag_hand_built_idle([], set())
 
 
+@site("hand-work-overdue", "hand-work-overdue")
+def _drive_hand_work_overdue(mp):
+    card = _watchdog_card("Hand-work")
+    card["labels"]["nodes"].append({"name": "operator-step"})
+    card["comments"] = {"nodes": [{
+        "body": "🧹 Auto-promoted Backlog → Hand-work: routed **OPERATOR**",
+        "createdAt": "2026-01-01T00:00:00Z",
+    }]}
+    mp.setattr(reconcile, "active_cards", lambda *_a, **_k: [card])
+    mp.setattr(reconcile, "held", lambda _c: False)
+    mp.setattr(reconcile, "card_repo", lambda _c: reconcile.REPO_SLUG)
+    mp.setattr(reconcile, "age_minutes", lambda *_a, **_k: 1530.0)
+    _card_recorder(mp)
+    reconcile.flag_stranded()
+
+
 def _restart_driver(mp, merge_state: str):
     mp.setattr(reconcile, "_actions_runs_busy", lambda _w: False)
     # This repo has its fix stub: the no-fix-agent hold (DRE-4378) is a
