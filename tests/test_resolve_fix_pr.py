@@ -166,5 +166,122 @@ class TheFileRunsAsAFileTest(unittest.TestCase):
         self.assertEqual(posted, "")
 
 
+def _resolve(thread):
+    """Run the file by path against `thread`; (step outputs, posted bodies)."""
+    with tempfile.TemporaryDirectory() as raw:
+        td = Path(raw)
+        (td / "bin").mkdir()
+        stub = td / "bin" / "gh"
+        stub.write_text(GH_STUB)
+        stub.chmod(0o755)
+        (td / ".bureau-pipeline").symlink_to(ROOT)
+        info = td / "pr-info.json"
+        info.write_text(json.dumps({
+            "state": "OPEN", "headRefName": "agent/DRE-6487-x",
+            "headRefOid": "735e4c75" + "0" * 32, "mergeStateStatus": "CLEAN",
+        }))
+        comments = td / "comments.json"
+        comments.write_text(json.dumps(thread))
+        out_file = td / "step-output"
+        out_file.write_text("")
+        log = td / "gh-writes.jsonl"
+        proc = subprocess.run(
+            ["bash", str(SCRIPT)], cwd=td,
+            env=dict(
+                os.environ,
+                PATH=f"{td}/bin:{os.environ['PATH']}",
+                GITHUB_OUTPUT=str(out_file), RUNNER_TEMP=str(td),
+                GH_PR_INFO=str(info), GH_COMMENTS=str(comments), GH_LOG=str(log),
+                GH_TOKEN="test", WRITER_TOKEN="test-writer",
+                WORKER_LOGIN=WORKER, EVENT_NAME="issue_comment",
+                TRIGGERING_ACTOR="agent-bureau-qa-bot[bot]",
+                PR_NUMBER="3481", REPO="dreadnought-foundry/agent-bureau",
+            ),
+            capture_output=True, text=True, timeout=60,
+        )
+        if proc.returncode != 0:
+            raise AssertionError(proc.stderr)
+        outputs = dict(
+            line.partition("=")[::2]
+            for line in out_file.read_text().splitlines() if "=" in line
+        )
+        posted = ([json.loads(line) for line in log.read_text().splitlines()]
+                  if log.exists() else [])
+    return outputs, posted
+
+
+def _hold(thread):
+    outputs, posted = _resolve(thread)
+    holds = [body for body in posted if body.startswith("🛑 Fix budget exhausted")]
+    if len(holds) != 1:
+        raise AssertionError(f"expected one hold, got {posted!r}")
+    return outputs, holds[0].split("\n", 1)[0]
+
+
+QA = "agent-bureau-qa-bot[bot]"
+REPEAT = "repeat-finding prior-fixes-held in-scope"
+CONVERGING = "new-finding prior-fixes-held in-scope"
+
+
+def _verdict(n, line=None):
+    body = (f"🔎 QA Critic — VERDICT: REQUEST_CHANGES cause:defect @{n:040x} "
+            "content:" + "c" * 64 + "\n\n")
+    if line:
+        body += f"convergence: {line}\n\n"
+    return body + "## Summary\nNot yet.\n\n## For the fixing agent\nfoo.py:1 — fix it."
+
+
+def _thread(*lines):
+    out = []
+    for i, line in enumerate(lines, start=1):
+        if i > 1:
+            out.append(rest(WORKER, ATTEMPT.format(n=i - 1)))
+        out.append(rest(QA, _verdict(i, line)))
+    return out
+
+
+class TheHoldNamesWhichStopItWasTest(unittest.TestCase):
+    """(DRE-6533) The pull-request hold has three arms. It still opens
+    `🛑 Fix budget exhausted`, which linear_ops.CONSOLE_HOLD_MARKERS and the
+    act registry key on; the non-convergence and ceiling wordings are today's,
+    word for word."""
+
+    def test_silence(self):
+        outputs, first = _hold(_thread(None, None, None, None))
+        self.assertEqual(outputs["stopped_by"], "silence")
+        self.assertIn("did not say whether", first)
+        self.assertIn("new ground", first)
+        self.assertNotIn("same ground", first)
+        self.assertNotIn("made no progress", first)
+
+    def test_the_3481_thread_is_not_held(self):
+        # The incident: two silent re-reviews now buy attempt 3.
+        outputs, posted = _resolve(_thread(None, None, None))
+        self.assertEqual(outputs["go"], "true")
+        self.assertEqual(outputs["attempt"], "3")
+        self.assertEqual(outputs["stopped_by"], "none")
+        self.assertEqual(posted, [])
+
+    def test_non_convergence_keeps_todays_words(self):
+        outputs, first = _hold(_thread(None, REPEAT, REPEAT))
+        self.assertEqual(outputs["stopped_by"], "non-convergence")
+        self.assertEqual(
+            first,
+            "🛑 Fix budget exhausted — 2 review rounds in a row made no "
+            "progress (the stop budget is 2). A round that finds something "
+            "new, leaves the earlier fixes working and stays in scope does "
+            "not spend that budget. Holding for a human decision.")
+
+    def test_the_ceiling_keeps_todays_words(self):
+        outputs, first = _hold(_thread(*([None] + [CONVERGING] * 6)))
+        self.assertEqual(outputs["stopped_by"], "ceiling")
+        self.assertEqual(
+            first,
+            "🛑 Fix budget exhausted — it reached the hard ceiling of 6 fix "
+            "attempts. That is the runaway backstop, not a judgement that the "
+            "loop stopped making progress — it kept finding new work and "
+            "never finished. Holding for a human decision.")
+
+
 if __name__ == "__main__":
     unittest.main()
