@@ -501,8 +501,8 @@ its model.
 
 ## The console's keys and the per-project exception (DRE-6633)
 
-The console's Settings › Agents & models page reads five more keys. None of
-them changes what any run selects today: `projects` ships empty.
+The console's Settings › Agents & models page reads five more keys. Only
+`projects` reaches selection (DRE-6634, below), and it ships empty.
 
 - **`kinds.<kind>.label`** and **`kinds.<kind>.purpose`** — the group's name on
   the page and the one line under it. `label` defaults to the key title-cased
@@ -526,6 +526,16 @@ is the fleet ladders with each named kind's ladder replaced that way. So
 `projects: {atlas: {workhorse: claude-sonnet-5-5}}` has atlas's builders walk
 `claude-sonnet-5-5, claude-opus-5-5, claude-opus-5, claude-sonnet-5`, and every
 other repo and kind walks the fleet ladder.
+
+**Selection honors it (DRE-6634).** `model_fallback.py select <role> --repo
+<value>` walks that project's walk, and so do `planning_classify.py classify
+--repo` and `planner_capacity.py decide --repo`. The value is a slug of
+`config/repo-map.json` or an `owner/name` such as `$GITHUB_REPOSITORY`
+(`model_fallback.resolve_repo_slug`). No flag, an empty value or an unknown
+repo walks the fleet ladder, review separation is applied to the project walk
+exactly as to the fleet's, and the selection note names the project and its
+exception. No workflow passes `--repo` yet — that wiring is DRE-6637 — so until
+it lands every run still walks the fleet ladder.
 
 **The own-kind reading.** The exception must already be a rung of **that kind's
 own ladder** — the one `kinds.<kind>.ladder` names. An exception reorders a
