@@ -142,6 +142,7 @@ from typing import NamedTuple
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import break_glass  # noqa: E402 — ONE source for the sanctioned gate bypass (DRE-2737)
 import bureau_read  # noqa: E402 — the read door: the board from our database (Stage 2 #5/#6a)
+import canceled_check  # noqa: E402 — DRE-3072: a canceled check is re-run once, never sent a fix agent
 import card_pr  # noqa: E402 — ONE source for "does this card have a PR?" (DRE-2316)
 import console_receipt  # noqa: E402 — an unchecked receipt is not a refused one (DRE-4153)
 # DRE-2687: ONE source for the critic's own alert tag — the aged-Intake
@@ -9887,7 +9888,11 @@ def fix_approved_but_red() -> None:
     open agent PR in that state whose head is >20 min old (gives medic's
     auto-retry time to clear transient flakes first). Origin: PR #46 sat
     approved-but-red with nothing coming. Skips when a fix run is already
-    queued/in_progress (same busy-guard as the conflict sweep)."""
+    queued/in_progress (same busy-guard as the conflict sweep).
+
+    A canceled check is not red (DRE-3072): a workflow run holding one is
+    re-run once, or told once on a later attempt, and never counted toward a
+    fix dispatch — the rule is `canceled_check`'s."""
     # Unreadable answers BUSY (gh_actions_read): the App token 403s on this
     # API, and the old `or "[]"` turned that into "nothing running" — the
     # backoff failed OPEN at every one of these sites.
@@ -9910,11 +9915,65 @@ def fix_approved_but_red() -> None:
         runs = _head_check_runs(sha)
         if runs is None:
             continue  # unreadable: skip this PR, as an empty read always did
-        failed = sum(
-            1 for r in runs
-            if not str(r.get("name") or "").endswith("review")
-            and (r.get("conclusion") or "") in ("failure", "timed_out", "cancelled")
-        )
+        # DRE-3072: a workflow run holding a `cancelled` check is UNKNOWN, not
+        # red — a `failure` beside it included, because a canceled shard turns
+        # its summary job red (agent-bureau #3502, 2026-10-09). It is re-run
+        # once, or told once on a later attempt, and never sent a fix agent.
+        # The rule is canceled_check's; the reads and writes are here.
+        split = canceled_check.split(runs)
+        worker = [c.get("body") or "" for c in pr.get("comments", [])
+                  if is_worker_bot_comment(c)]
+        refused = False
+        for run_id, checks in split.unknown.items():
+            run = None
+            if run_id is not None:
+                out, detail = _actions_read(("api", f"repos/{REPO}/actions/runs/{run_id}"))
+                try:
+                    run = json.loads(out) if detail is None and out else None
+                except ValueError:
+                    run = None
+                if run is None:
+                    _degrade("canceled-check", f"run {run_id} on PR #{pr['number']}",
+                             detail or "the Actions read answered nothing",
+                             then="re-running nothing for it this sweep")
+            jobs = canceled_check.canceled_jobs(checks)
+            step = canceled_check.decide(run_id, run, sha, worker)
+            print(f"canceled-check: PR #{pr['number']} {step.action} — {step.why} "
+                  f"({', '.join(jobs)}); no fix agent for it")
+            if step.action == "rerun":
+                limit = None
+                for check in checks:
+                    if check.get("conclusion") != canceled_check.CANCELLED:
+                        continue
+                    notes = gh("api", f"repos/{REPO}/check-runs/{check.get('id')}"
+                               "/annotations?per_page=100")
+                    try:
+                        limit = canceled_check.limit(json.loads(notes or "[]"))
+                    except (ValueError, AttributeError):
+                        limit = None  # unreadable: the receipt names no limit
+                    if limit:
+                        break
+                try:
+                    gh_dispatch("run", "rerun", str(run_id), "--failed", "--repo", REPO)
+                except ReconcileWriteError as e:
+                    refused = True
+                    _write_failures.append(
+                        f"canceled-check: re-running run {run_id} on PR "
+                        f"#{pr['number']} was refused: {e}")
+                    print(f"ERROR: canceled-check: re-running run {run_id} on PR "
+                          f"#{pr['number']} was refused ({e}) — tried again next "
+                          "sweep, and no fix agent", file=sys.stderr)
+                    continue
+                _post_pr_note(pr["number"], pipeline_act.receipt(
+                    canceled_check.RERUN_ACT,
+                    canceled_check.rerun_receipt(pr["number"], sha, run_id, jobs, limit)))
+            elif step.action == "tell":
+                _post_pr_note(pr["number"], pipeline_act.receipt(
+                    canceled_check.AGAIN_ACT,
+                    canceled_check.again_receipt(pr["number"], sha, run, jobs)))
+        if refused:
+            continue  # a refused re-run never falls through to a fix dispatch
+        failed = len(split.red)
         if not failed:
             continue
         commit = json.loads(gh("api", f"repos/{REPO}/git/commits/{sha}") or "{}")
