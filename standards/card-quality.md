@@ -125,7 +125,11 @@ the guidance) or to `Backlog` to drop it.
 
 **NOT `Triage`, and the distinction is the point.** Triage is the *broken-card*
 lane: an unroutable `repo:` label, an archived repo, a card the readiness guard
-has returned three times — mechanically wrong, usually an agent or operator fix.
+has returned three times, a plan still sent back at either critic's bound once
+that bound was first tried without a person (a business choice among the
+findings goes to the CEO as one question when it is in words he reads, and
+otherwise the planner gets one more rewrite, once) — mechanically wrong, usually
+an agent or operator fix.
 An escalated card is **not broken**. It is correct, and waiting on a judgement
 only the CEO can make. Triage became a dead end once by mixing the two — 17
 cards, all machine-created, none ever moved — and a real decision sitting in a
