@@ -53,8 +53,9 @@ card that names no scratch space gets no scratch state: a criterion that would
 need some is `Not observed.` with that reason.
 
 The second exception is **the product's own hosted sign-in ration counter**,
-written only through the product's script, as the reservation that script makes
-before a sign-in (the `Never:` rule under Identities, below). Never by hand,
+written only through the product's own scripts — the API sign-in's, or the
+declared `login.command`'s, run by `proof_session.py login` — as the
+reservation made before a sign-in (the `Never:` rule under Identities, below). Never by hand,
 never reset, never read or deleted directly — its rows expire on their own. It
 is the one live write a proof run may make, and the record names it as such.
 
@@ -139,9 +140,31 @@ for, and the one write it refused.
   `infra/scripts/proof-reader.ts mcp-token` reserves one of the day's three
   with a conditional write to a counter row in the product's own table
   (`ration#<project>`), prints how many were spent and how many remain, and
-  refuses the fourth (DRE-6033). You sign in only through that script, never
-  by any other route. A spent ration is `Not observed.` with the script's
-  refusal line as the reason; you never wait for the next Pacific day.
+  refuses the fourth (DRE-6033). You sign in only through the product's own
+  scripts — the one that signs in for API reads (Portico's
+  `proof-reader.ts mcp-token`), and the one the repo declares as
+  `login.command` for the browser, run once per run by `proof_session.py
+  login` (Portico's `proof-browser-login.ts`, DRE-6026) — both reserving
+  against the same counter, and never by any other route. A spent ration is
+  `Not observed.` with the script's refusal line as the reason; you never wait
+  for the next Pacific day.
+
+  Beside that rule, the browser route is not the run typing a sign-in:
+  `screenshot --signed-in`
+  fills the form from the file the repo's declared `login.command` wrote after
+  that command reserved the sign-in. You never read, hold or type the
+  password, and the sign-in the record counts is the one `login` made. Copy
+  the line `login` printed into `## Identities` beside the identity —
+  `proof-login: <identity> — <the last line of the command's standard output,
+  which is the product's ration status line>`, for Portico DRE-6033's
+  `hosted sign-in ration: …` line. A refused reserve is `Not observed.` with
+  the `proof-login: refused — …` line.
+
+  The login file at `$PROOF_LOGIN_FILE` and the browser's state file are read
+  by `login` and `screenshot --signed-in` and by nothing else. A run never
+  opens, prints, copies or quotes either, diagnoses a failed sign-in from the
+  printed lines alone, and never puts a password in the record, the pull
+  request or a comment.
 
 ## The lanes, which you never write
 The board is `Intake` → `Planning` → `Green Light` → `Backlog` → `Todo` →
@@ -162,11 +185,46 @@ seen: the request it makes succeeding live, and its screen behavior on a local
 run of the released commit. The planner writes them as two criteria.
 
 - **`Live request:`** — observed as the scripted identity, like any live fact.
-- **`Local screen:`** — a browser on a local run of the released commit. This
-  epic's run has no browser, so the row reads
-  `Not observed. needs a browser on a local run of the released commit` —
-  never inferred from the live half. Nothing hands a dispatched run a browser
-  yet, so the row stays `Not observed.` with that reason.
+- **`Local screen:`** — a browser on a local run of the released commit,
+  never inferred from the live half. The workflow stands that run up before
+  you start, from the repo's `.github/bureau/proof-local.json`, and its step
+  summary carries one `proof local run:` line, which you copy into the
+  record's `## How this was recorded`. The criterion names a page by its key
+  in that file.
+
+  **A signed-in page is observed in two commands, in this order and never
+  the other.** First `python3 .bureau-pipeline/scripts/proof_session.py login`,
+  once: it runs the repo's declared `login.command` and is the run's one
+  sign-in. Then
+  `python3 .bureau-pipeline/scripts/proof_session.py screenshot --page <key> --out <png> --signed-in`,
+  which signs the browser in from the file that step wrote and then deletes
+  that file. `screenshot --signed-in` never signs in by itself. With no login
+  file it exits naming it —
+  `proof-screenshot: no login file at <path> — run proof_session.py login first`
+  — which is the line a run that skipped the first command sees. A page that
+  needs no sign-in drops `--signed-in`. A click flow is a short Python script
+  against `playwright.sync_api`, run as `"$PROOF_PYTHON" <script>` after the
+  same `login`, with its actions quoted in the row.
+
+  The PNG is committed in the record's own directory, `docs/evidence/DRE-<n>/`,
+  as `<page key>.png`. The row reads
+  `Met. <what was seen> — local run of <sha7> (<tag>), page <key>, screenshot <png>`,
+  or `Not met.` likewise, or `Not observed.` with one of three fixed reasons:
+
+      Not observed. no local run declared
+      Not observed. the local run did not start: <note>
+      Not observed. needs a browser on a local run of the released commit
+
+  The first is a repo with no `proof-local.json`, the second a run whose
+  `proof local run:` line reads `failed`, and the third a run on a pipeline
+  ref that predates this step.
+
+The `Live request:` half seen from the same browser session is quoted off the
+request sidecar the `proof-screenshot:` line names, one row per request as
+`<method> <origin and path> <status>`. The sidecar carries no query string,
+fragment, header or body, so a hosted sign-in's `code=` and `state=` never
+reach a record. Quote rows as the sidecar gives them, never a URL you saw
+elsewhere. The sidecar lives in the runner's temp and is never committed.
 
 Neither half is ever marked `Met.` on the strength of the other. A request that
 succeeds live says nothing about the screen that sends it.
