@@ -199,6 +199,7 @@ CMD_EXIT = ("scripts/planning_route.py", "_cmd_exit")
 PARK = ("scripts/code_owner_hold.py", "park")
 REVIEW_CAP = ("scripts/reconcile.py", "hand_review_nudge_to_person")
 EPIC_GROWTH = ("scripts/reconcile.py", "ask_epic_growth_question")
+BLOCKER_ASK = ("scripts/blocker_ask.py", "resolve")
 
 
 # --------------------------------------------------------------------------- #
@@ -259,8 +260,10 @@ class TestTheRepositoryPasses:
     def test_the_callers_found_are_exactly_the_ones_declared(self):
         contract = _contract()
         declared = _declared(contract)
-        assert set(declared) == {ESCALATE, CMD_EXIT, PARK, REVIEW_CAP, EPIC_GROWTH}
-        counts = {ESCALATE: 7, CMD_EXIT: 2, PARK: 2, REVIEW_CAP: 1, EPIC_GROWTH: 1}
+        assert set(declared) == {ESCALATE, CMD_EXIT, PARK, REVIEW_CAP, EPIC_GROWTH,
+                                 BLOCKER_ASK}
+        counts = {ESCALATE: 7, CMD_EXIT: 2, PARK: 2, REVIEW_CAP: 1, EPIC_GROWTH: 1,
+                  BLOCKER_ASK: 1}
         for (module, function), callers in declared.items():
             report = lane_callers.callers_of(module, function, str(ROOT))
             assert report.unread == frozenset(), (module, report.unread)
@@ -579,6 +582,34 @@ class TestTheAgentEscalationGate:
         record = next(r for r in grl.arrivals() if r["where"] == grl.REVIEW_CAP_SITE)
         assert record["kind"] == "agent-escalation"
         assert grl._gate_problems(record, [], str(ROOT), grl.lane_name()) == []
+
+    def test_the_sweeps_blocker_ask_is_an_agent_escalation_site(self):
+        # DRE-6459: the sweep asks, in the one Green Light format, a blocker it
+        # cannot act on — reached from the resolver and nowhere else.
+        assert grl.BLOCKER_ASK_SITE == "blocker_ask.py#resolve"
+        record = next(r for r in grl.arrivals() if r["where"] == grl.BLOCKER_ASK_SITE)
+        assert record["kind"] == "agent-escalation"
+        assert record["writer"] == "reconcile.py"
+        assert record["callers"] == ["blocker_resolve.py#resolve_blocker"]
+        assert grl.BLOCKER_ASK_SITE in {unit for _, unit in grl.green_light_writes()}
+        assert grl._gate_problems(record, [], str(ROOT), grl.lane_name()) == []
+
+    def test_the_blocker_ask_with_no_record_fails_by_location(self):
+        contract = _contract()
+        _entrance(contract)["arrivals"] = [
+            r for r in _entrance(contract)["arrivals"]
+            if r["where"] != grl.BLOCKER_ASK_SITE]
+        found = grl.problems(contract=contract)
+        assert _named(found, grl.BLOCKER_ASK_SITE,
+                      "no arrival on its entrance declares it"), found
+
+    def test_the_blocker_ask_with_a_second_caller_fails_by_caller(self, monkeypatch):
+        contract = _contract()
+        _stub_callers(monkeypatch, contract, extra={
+            BLOCKER_ASK: ["scripts/reconcile.py#promote_ready"]})
+        found = grl.problems(contract=contract)
+        assert _named(found, "reconcile.py#promote_ready", grl.BLOCKER_ASK_SITE,
+                      "does not declare"), found
 
     def test_an_agent_escalation_anywhere_else_fails_by_word(self, tmp_path):
         root = _copy_repo(tmp_path)

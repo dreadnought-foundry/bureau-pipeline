@@ -67,7 +67,9 @@ DRE-5275 wrote on Green Light's `entrance` in `config/lane-contract.json`.
      question the same way AND runs `linear_ops.py proof-waiting` first, the
      hold that keeps the dispatcher off the card — or `code_owner_hold.py#park`,
      or the sweep's park on a spent review budget,
-     `reconcile.py#hand_review_nudge_to_person` (DRE-6181).
+     `reconcile.py#hand_review_nudge_to_person` (DRE-6181), or the sweep's ask
+     for a build agent's blocker it cannot act on, `blocker_ask.py#resolve`
+     (DRE-6459), reached from the resolver alone and reconciled by rule 6.
    * `epic-growth`: the unit is `reconcile.py#ask_epic_growth_question` and
      no other (DRE-6414) — the sweep's question about an epic grown past the
      size the CEO approved, created in the lane on a card of its own. Its
@@ -175,6 +177,11 @@ CODE_OWNER_SITE = _unit_of_function(code_owner_hold.park)
 #: `agent-escalation` site. A literal: importing the sweep here would read its
 #: environment at import, and a renamed function fails rule 2 by name.
 REVIEW_CAP_SITE = "reconcile.py#hand_review_nudge_to_person"
+
+#: The sweep's ask for a build agent's blocker it cannot act on (DRE-6459) — a
+#: python `agent-escalation` site, reached through the resolver. A literal, for
+#: the reason REVIEW_CAP_SITE is one: the module imports the pipeline's writers.
+BLOCKER_ASK_SITE = "blocker_ask.py#resolve"
 
 #: The sweep's question about an epic grown past the size the CEO approved
 #: (DRE-6414) — the only unit an `epic-growth` row comes from. A literal, for
@@ -526,12 +533,12 @@ def _gate_problems(record: dict, writes_here: list, root: str, lane: str) -> lis
                         "parked proof card with no hold on it is one the "
                         "dispatcher could chase"
                     )
-        elif where not in (CODE_OWNER_SITE, REVIEW_CAP_SITE):
+        elif where not in (CODE_OWNER_SITE, REVIEW_CAP_SITE, BLOCKER_ASK_SITE):
             out.append(
                 f"{where} is declared an 'agent-escalation' arrival, and the "
                 f"only agent-escalation sites are "
-                f"{', '.join(AGENT_ESCALATION_STEPS)}, {CODE_OWNER_SITE} and "
-                f"{REVIEW_CAP_SITE}"
+                f"{', '.join(AGENT_ESCALATION_STEPS)}, {CODE_OWNER_SITE}, "
+                f"{REVIEW_CAP_SITE} and {BLOCKER_ASK_SITE}"
             )
     return out
 

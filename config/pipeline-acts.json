@@ -2843,6 +2843,13 @@
       "kind": "not-an-act",
       "means": "The lift line — `🔓 hold lifted: reason=<code> because=<lift-kind, card-closed or operator> by=<writer-file>` — posted by hold.lift after the `needs-human` label comes off (DRE-6173).",
       "why": "The label's removal RECEIPT, not an act of its own: it records that a caller took the label off and spends every stamp older than it (`hold.read_stamp`). The caller's own act, where it has one, carries its own receipt — the hygiene agent's lift is its own `hygiene-hold-clear` act and never posts this line. It is read by its opening words, and it may carry no tag a reader counts."
+    },
+    {
+      "file": "scripts/blocker_ask.py",
+      "anchor": "cmd_comment(card[\"identifier\"], ask)",
+      "kind": "not-an-act",
+      "means": "A build agent's blocker the sweep cannot act on — the `question` class, or a mechanical class whose action module handed it back as a person's call — is asked on the card once, `blocker_ask.compose`: the 🙋 first line, the agent's reason with the Finding, Question and Recommendation lines `console_escalation.complete` renders, and the agent's run, before the card is moved Backlog → Green Light (DRE-6459).",
+      "why": "A question is not an act: it asks a person to decide rather than announcing something the pipeline did, the same reason the planner's escalation note and the sweep's review-cap question ask rather than announce. The act this ask is part of is said by the resolver's receipt, posted after the ask and the move have both landed. That receipt's tag is the once-per-marker key, read by `blocker_class.open_blocker`; a standing ask whose move did not land is found again by its 🙋 first line, newer than the open marker, and never posted twice."
     }
   ]
 }
