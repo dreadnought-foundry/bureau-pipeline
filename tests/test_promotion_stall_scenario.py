@@ -28,9 +28,11 @@ What it pins, case by case:
 
 Sites, as `promote_ready` stood when this was built: DRE-6427 had merged, so
 `needs-human` is recorded at the stand-down skip (`is held for a human`) and
-at the operator-step exit (`is held as an operator step but routed`); DRE-6448
-had not, so `agent-blocker` is recorded at the `has an unresolved
-agent-blocker — skipping` line.
+at the operator-step exit (`is held as an operator step but routed`). Since
+DRE-6448 `agent-blocker` is recorded in the blocker block, on every branch
+that leaves the card in Backlog with its marker open: not the full sweep (the
+harness's pass, unless it hands a resolver), the resolver returned None, the
+card could not be read live, or a module raised.
 
 There is no `wave-not-green-lit` refusal in `promote_ready` on `main` today:
 card D — the epic the card describes as waiting in an approved wave — is
@@ -42,6 +44,7 @@ Run: cd bureau-pipeline && python3 -m pytest tests/test_promotion_stall_scenario
 """
 from __future__ import annotations
 
+import contextlib
 import os
 import sys
 from datetime import UTC, datetime, timedelta
@@ -55,6 +58,7 @@ os.environ.setdefault("LINEAR_API_KEY", "test-key")
 os.environ.setdefault("REPO", "dreadnought-foundry/bureau-pipeline")
 os.environ.setdefault("REPO_SLUG", "bureau-pipeline")
 
+import blocker_resolve  # noqa: E402
 import dead_run  # noqa: E402
 import hold  # noqa: E402
 import plan_critic  # noqa: E402
@@ -183,8 +187,13 @@ class _Sweeps:
     read the comments back, as the real board read would.
     """
 
-    def __init__(self, *cards, first_seen_error=None, moves=None, live_refusal=None):
+    def __init__(self, *cards, first_seen_error=None, moves=None, live_refusal=None,
+                 resolver=None):
         self.cards = list(cards)
+        # The full sweep's pass (DRE-6448) when set: the stub that stands in
+        # for `blocker_resolve.resolve_blocker`, and the live re-read answers
+        # the board's own cards.
+        self.resolver = resolver
         self.first_seen_error = first_seen_error
         # Lane history per card (the stale-verdict gate), and the live
         # re-check's answer when the pass ran on the read door.
@@ -261,9 +270,20 @@ class _Sweeps:
                              side_effect=lambda i, to, frm: self.advanced.append((i, to))), \
                 patch.object(reconcile.linear_ops, "cmd_comment", side_effect=post), \
                 patch.object(reconcile.linear_ops, "count_comments", side_effect=count), \
-                patch.object(reconcile.linear_ops, "first_comment_at", side_effect=first_at):
+                patch.object(reconcile.linear_ops, "first_comment_at", side_effect=first_at), \
+                contextlib.ExitStack() as stack:
             capsys.readouterr()
-            promoted = reconcile.promote_ready(active_count=active_count)
+            kwargs = {}
+            if self.resolver is not None:
+                kwargs["resolve_blockers"] = True
+                board = self._board()
+                stack.enter_context(patch.object(
+                    reconcile, "_fetch_backlog_linear",
+                    side_effect=lambda only, **_k: [c for c in board
+                                                    if c["identifier"] in only]))
+                stack.enter_context(patch.object(
+                    blocker_resolve, "resolve_blocker", side_effect=self.resolver))
+            promoted = reconcile.promote_ready(active_count=active_count, **kwargs)
             captured = capsys.readouterr()
         self.defects[minutes] = list(reconcile._stale_defects)
         self.out[minutes] = captured.out
@@ -375,9 +395,9 @@ class TestCase1ThePerCardClock:
 
 
 class TestCase2HeldCardsAreTheAlarm:
-    """H is held at the `has an unresolved agent-blocker — skipping` site:
-    DRE-6448 had not merged when this was built, so that is the site that
-    exists. G is held at the `is held for a human` stand-down skip."""
+    """H is held in the blocker block (DRE-6448) — on this harness's pass,
+    which is not the full sweep, at its `resolved by the full sweep` line.
+    G is held at the `is held for a human` stand-down skip."""
 
     @pytest.fixture
     def board(self, capsys):
@@ -387,7 +407,8 @@ class TestCase2HeldCardsAreTheAlarm:
         for minutes in SWEEPS:
             out = board.out[minutes]
             assert f"promotion: {G} is held for a human" in out
-            assert f"promotion: {H} has an unresolved agent-blocker — skipping" in out
+            assert (f"promotion: {H} agent-blocker class=question — not resolved this "
+                    "pass: blockers are resolved by the full sweep") in out
 
     def test_neither_is_ever_receipted(self, board):
         assert board.posted_on(G) == []
@@ -420,6 +441,27 @@ class TestCase2HeldCardsAreTheAlarm:
         assert len(board.defects[30]) == 1
         assert f"on {H}" in board.defects[30][0]
         assert "is 1.0h old" in board.defects[30][0]
+
+
+def test_a_blocker_the_resolver_left_open_is_still_an_agent_blocker_record(capsys):
+    """The full sweep's pass (DRE-6448): the resolver answered None — it
+    printed its own line and the marker is open — so H stands, dated by its
+    marker, exactly as the old skip recorded it."""
+    board = _Sweeps(card_h(), resolver=lambda card, blocker, *, repo: None).run(
+        capsys, sweeps=(0, 30))
+    assert board.defects[0] == []
+    assert len(board.defects[30]) == 1
+    assert f"on {H}" in board.defects[30][0]
+    assert "is 1.0h old" in board.defects[30][0]
+
+
+def test_a_blocker_the_resolver_resolved_is_no_record(capsys):
+    """Non-vacuity for the case above: a pair back is a resolved blocker,
+    never a card standing refused."""
+    board = _Sweeps(card_h(), resolver=lambda card, blocker, *, repo: (
+        "asked", "asked in Green Light")).run(capsys, sweeps=(0, 30))
+    assert board.defects[30] == []
+    assert board.idle_line(30) is None
 
 
 def test_a_card_held_as_an_operator_step_but_routed_fleet_is_a_needs_human_record(capsys):
