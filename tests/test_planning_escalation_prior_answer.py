@@ -182,6 +182,13 @@ class _Lops:
         self.states.append((identifier, lane))
         self.lane = lane
 
+    def lane_history(self, identifier, **kw):
+        """The moves `cmd_state` made, newest first, as `lane_history` answers
+        them (DRE-6490) — a park's own move into its lane is no return to
+        Planning, so a retry still finds its note this attempt's."""
+        return [{"toState": {"name": lane}, "createdAt": "2026-10-09T17:00:00.000Z"}
+                for _, lane in reversed(self.states)]
+
     def whole_reads(self) -> int:
         return sum(1 for whole in self.timeline_calls if whole)
 
