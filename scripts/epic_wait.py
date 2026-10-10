@@ -4,9 +4,9 @@
 The second epic of an observation-gated seam is "planned in detail only when
 the first is Done" (`standards/card-quality.md`, the DRE-3164 / DRE-3245
 shape). DRE-6591 closed one door to planning it early: a roll-up's activation
-leaves a child an open sibling blocks in Backlog, and the sweep's auto-advance
-(`reconcile.advance_unblocked_epics`, DRE-6407) carries it on once every
-blocker epic is Done. The Planning entrance itself stayed open. On 2026-10-10
+leaves a child an open sibling blocks in Backlog for the sweep's auto-advance
+(`reconcile.advance_unblocked_epics`, DRE-6407). The Planning entrance itself
+stayed open. On 2026-10-10
 the planner on DRE-6589 (blocked by DRE-6587, In Progress, none of its seven
 children Done) could only escalate "wait for the reading"; the CEO agreed, the
 console's answer press put the card back in Planning — every decision outcome
@@ -35,7 +35,8 @@ inline), and HOLDS the card only when all of these are true:
 
 A blocker whose lane cannot be read — or a relation the board could not name
 at all — HOLDS the card and says so: planning an epic early costs a planner
-run nobody needed, and waiting costs nothing the auto-advance does not repair.
+run nobody needed, and waiting costs nothing the release below does not repair
+on its next read.
 A card that could not be read at all passes with a `::warning::`: nothing is
 known about its blockers, not even that it has any, and a hold on no evidence
 would strand a card nothing is coming for.
@@ -44,9 +45,10 @@ When it holds it writes `held=true` first, then, in this order:
 
   1. ONE receipt on the card, `⏸️ epic-waits:`, composed through
      `pipeline_act.receipt()` — every open blocker epic and its lane, that the
-     card waits in Backlog, and that the auto-advance carries it on once every
-     blocker epic is Done. A receipt already on the card for the same set of
-     blockers is not posted again; a different set is a new receipt;
+     card waits in Backlog, and that the sweep carries it on once every
+     blocker epic is closed. A receipt already on the card for the same set
+     of blockers since it was last carried on is not posted again; a
+     different set is a new receipt;
   2. `linear_ops.cmd_advance(<card>, "Backlog", "Planning")` — only from
      Planning. A card already in Backlog is not moved again.
 
@@ -56,6 +58,25 @@ answers `held=false`, and the run continues unchanged.
 
 The step exits 0 on every path: a write that fails after the decision is a
 `::warning::` and the card is still held — this run must not plan it.
+
+## The release — the sweep reads the hold again on every pass
+
+The auto-advance `reconcile.advance_unblocked_epics` is an EDGE: it runs only
+when the sweep itself closes a blocker epic Done, and only for a dependent
+still in Backlog at that moment. A blocker Canceled or made a Duplicate, one a
+person closed, one closed between this gate's read and its move, or one whose
+lane this gate could not read, would each leave the held card in Backlog with
+nothing coming for it — and the lane contract says an epic is never promoted
+out of Backlog, so nothing would say so either.
+
+So the release is a LEVEL check (`reconcile.release_waiting_epics`, run off
+the Backlog read promotion already makes): every Backlog epic whose newest word
+from either half is this gate's receipt (`waiting`) is read again live, and
+`still_waits` answers with the hold's own rule — the same `open_blockers`, so
+the release is exactly the hold's inverse. Nothing open: the sweep carries it
+on through the auto-advance's own move and note, whose opening `RELEASED` ends
+the wait on the record. Still open, or a read that failed: it waits, and the
+next pass reads it again.
 
 CLI:
 
@@ -88,6 +109,10 @@ WAIT_LANE = "Backlog"
 
 # What a blocker whose lane could not be read is called on the receipt.
 UNREAD = "could not be read"
+
+# The opening of the auto-advance's note (`reconcile._auto_advance_epic`) —
+# the record that a wait ended. A hold receipt older than it is spent.
+RELEASED = "🧹 Auto-advanced Backlog → Triage:"
 
 # One card, its parent, and its `blocks` inverse relations with each blocker's
 # lane, title and first child inline — so deciding costs one request, plus a
@@ -168,7 +193,8 @@ def open_blockers(lops, card: dict) -> list:
     return out
 
 
-def _named(waits: list) -> str:
+def named(waits: list) -> str:
+    """Every blocker in `waits` with its lane, as the receipt names them."""
     return ", ".join(f"{ident} ({lane or UNREAD})" for ident, lane in waits)
 
 
@@ -176,31 +202,76 @@ def receipt_detail(card: str, waits: list) -> str:
     """The receipt's body; its first line names every blocker and its lane."""
     return (
         f"{OPENING} {card} waits in {WAIT_LANE} — blocker epic(s) still open: "
-        f"{_named(waits)}.\n\n"
+        f"{named(waits)}.\n\n"
         "An epic is planned only once every epic it is blocked by is Done: "
         "the second epic of a seam is planned on what the first one observed "
         "(`standards/card-quality.md`). So this planning run claimed no "
         "planner slot and called no model.\n\n"
-        f"It waits in {WAIT_LANE}. When every blocker epic is Done, the sweep's "
-        "auto-advance carries it on to be planned — nobody needs to move it. "
-        "A blocker whose lane could not be read holds it too, until a later "
-        "read says otherwise."
+        f"It waits in {WAIT_LANE}. The sweep reads its blockers again on every "
+        "pass, and once every blocker epic is closed — Done, Canceled or "
+        "Duplicate — its auto-advance carries it on to be planned; nobody "
+        "needs to move it. A blocker whose lane could not be read holds it "
+        "too, until the next pass reads it."
     )
 
 
 def _blocker_set(line: str) -> frozenset:
-    _, _, named = line.partition("still open:")
-    return frozenset(_ID.findall(named))
+    _, _, listed = line.partition("still open:")
+    return frozenset(_ID.findall(listed))
+
+
+def _first_line(body: str) -> str:
+    lines = (body or "").lstrip().splitlines()
+    return lines[0] if lines else ""
+
+
+def _since_released(bodies: list) -> list:
+    """The bodies after the newest note that carried the card on, oldest first."""
+    out: list = []
+    for body in bodies:
+        if _first_line(body).startswith(RELEASED):
+            out = []
+        else:
+            out.append(body)
+    return out
 
 
 def already_said(bodies: list, waits: list) -> bool:
-    """Does the card already carry a receipt for exactly these blockers?"""
+    """Does the card already carry a receipt for exactly these blockers, since
+    it was last carried on?"""
     wanted = frozenset(ident for ident, _ in waits if _ID.fullmatch(ident))
-    for body in bodies:
-        first = (body or "").lstrip().splitlines()[:1]
-        if first and first[0].startswith(OPENING) and _blocker_set(first[0]) == wanted:
+    for body in _since_released(bodies):
+        first = _first_line(body)
+        if first.startswith(OPENING) and _blocker_set(first) == wanted:
             return True
     return False
+
+
+def waiting(bodies: list) -> bool:
+    """Is the card held by this gate and not carried on since? `bodies` is
+    oldest first; a hold receipt newer than the newest `RELEASED` note is a
+    wait still standing."""
+    return any(_first_line(b).startswith(OPENING) for b in _since_released(bodies))
+
+
+def still_waits(lops, card: str) -> list | None:
+    """The open blocker epics that still hold `card`, read live — `[]` when
+    nothing does and the card may be carried on, `None` when the card or its
+    whole relation page could not be read, which is never a release.
+
+    The hold's own rule (`open_blockers`), so a blocker Canceled or Duplicate
+    releases exactly as one Done does, and a blocker whose lane could not be
+    read keeps the card waiting until a read that can. A read that raises
+    raises: the caller says so and asks again next pass."""
+    issue = (lops.gql(CARD_QUERY, {"id": card}) or {}).get("issue")
+    if not issue:
+        return None
+    if (((issue.get("inverseRelations") or {}).get("pageInfo") or {})
+            .get("hasNextPage")):
+        print(f"epic-wait: {card}'s relation page is full — the blockers past "
+              "it were not read, so it is not released on half a page")
+        return None
+    return open_blockers(lops, issue)
 
 
 def _answer(github_output: str | None, held: bool) -> None:
@@ -250,7 +321,7 @@ def hold(lops, card: str, *, github_output: str | None = None) -> int:
         return 0
 
     _answer(github_output, True)
-    print(f"epic-wait: {card} HELD — blocker epic(s) still open: {_named(waits)}")
+    print(f"epic-wait: {card} HELD — blocker epic(s) still open: {named(waits)}")
     try:
         if already_said(bodies, waits):
             print(f"epic-wait: {card} — receipt for these blockers already on the card")

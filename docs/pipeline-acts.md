@@ -288,7 +288,7 @@ It ships console-first like every other row. The console's `ACTS` has to carry
 | act name | `epic-waits-on-blocker` |
 | kind · state · next actor | `hold` · `held` · `reconcile.py` |
 | discharges | nothing |
-| cadence | `null` — the wait ends when the last blocker epic is Done, and nothing declares when that is |
+| cadence | `null` — the wait ends when the last blocker epic is closed, and nothing declares when that is |
 | emitted by | `scripts/epic_wait.py`, `hold()` |
 
 The roll-up's activation above keeps a blocked child in Backlog (DRE-6591), but
@@ -307,13 +307,25 @@ the card's own parent; a blocker whose lane could not be read holds the card
 and is named as such. When it holds, it posts this receipt, naming each open
 blocker epic and its lane, moves the card Planning → Backlog, and answers
 `held=true`, on which every later step of the run is skipped — no planner slot
-is claimed and no model is called. The sweep's auto-advance
-(`reconcile.advance_unblocked_epics`) carries the card on once every blocker
-epic is Done.
+is claimed and no model is called.
+
+**The release is a level, not an edge.** The auto-advance
+(`reconcile.advance_unblocked_epics`) fires only when the sweep itself closes a
+blocker epic Done, so on its own it would strand a card whose blocker was
+Canceled or made a Duplicate, closed by a person, closed between the gate's
+read and its move, or whose lane the gate could not read. So every full sweep
+also runs `reconcile.release_waiting_epics` off the Backlog read promotion
+already makes: an epic whose newest word is this receipt is read again live and
+asked the hold's own question (`epic_wait.still_waits`). When every blocker
+epic is closed — Done, Canceled or Duplicate — it takes the auto-advance's own
+move to Triage and its `🧹 Auto-advanced Backlog → Triage:` note, which ends the
+wait on the record; while one is open, or a read fails, it waits for the next
+pass.
 
 **The tag is a live key.** The gate reads the card's receipts before it posts,
-and a receipt for the same set of blockers is never posted twice; a run that
-finds the card already in Backlog holds it again and moves nothing.
+and a receipt for the same set of blockers is never posted twice while the
+card waits; a run that finds the card already in Backlog holds it again and
+moves nothing.
 
 The console learned the act first (DRE-6672): the `act registry consumers` job
 refuses a row the console does not carry.

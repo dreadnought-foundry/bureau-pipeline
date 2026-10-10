@@ -159,6 +159,7 @@ import dependabot_card  # noqa: E402 — ONE join between a dependabot PR and it
 import deliver_rescue  # noqa: E402
 import epic_growth  # noqa: E402 — DRE-6414: the question an epic grown past its green light asks
 import epic_todo_gate  # noqa: E402 — ONE rule for an epic in Todo (DRE-5316, DRE-5347)
+import epic_wait  # noqa: E402 — DRE-6671: the epic wait's own rule, read again to release it
 import fix_budget  # noqa: E402 — ONE reading of what a fix run may still do
 import fix_concurrency  # noqa: E402 — ONE source for the fix loop's grouping (DRE-2810)
 import fix_context  # noqa: E402 — ONE parser for what an operator decision is
@@ -6761,13 +6762,78 @@ def advance_unblocked_epics(done_epic: str) -> None:
         # planned, so an In Progress blocker holds it whatever is left to build.
         if epic_blockers_unmet(dep, release_at_build_done=False):
             continue  # another blocker epic isn't Done yet — hold
-        linear_ops.cmd_advance(dep, "Triage", "Backlog")
-        linear_ops.cmd_comment(
+        _auto_advance_epic(
             dep,
-            f"🧹 Auto-advanced Backlog → Triage: blocker epic {done_epic} is Done "
-            "and all blocker epics are now complete. The planner will take it from "
-            "here; a human still approves the plan (→ In Progress).",
+            f"blocker epic {done_epic} is Done and all blocker epics are now complete.",
         )
+
+
+def _auto_advance_epic(identifier: str, why: str) -> None:
+    """The auto-advance's one move and its one note: Backlog → Triage, which
+    triggers the planner, never further. Both releases take it — the edge when
+    the sweep closes a blocker epic, and the level check below (DRE-6671) — so
+    a released epic reads the same whichever found it, and the note's opening
+    is `epic_wait.RELEASED`, the record that the epic wait ended."""
+    linear_ops.cmd_advance(identifier, "Triage", "Backlog")
+    linear_ops.cmd_comment(
+        identifier,
+        f"🧹 Auto-advanced Backlog → Triage: {why} The planner will take it from "
+        "here; a human still approves the plan (→ In Progress).",
+    )
+
+
+def release_waiting_epics(candidates: list[dict]) -> set[str]:
+    """Carry on every epic `plan.yml`'s epic wait held in Backlog once nothing
+    holds it any more (DRE-6671). Returns the epics it carried on.
+
+    `advance_unblocked_epics` is an edge — it fires only when the sweep itself
+    closes a blocker epic Done, and only for a dependent in Backlog at that
+    instant — so a blocker Canceled or made a Duplicate, one a person closed,
+    one closed between the gate's read and its move, and one whose lane the
+    gate could not read would each strand the held epic, and the lane contract
+    promotes no epic out of Backlog, so nothing would say so. This is the
+    level: off the Backlog read promotion already makes, every epic of this
+    repo whose newest word is an `epic-waits` receipt (`epic_wait.waiting`) is
+    read again live and asked the hold's own question (`epic_wait.still_waits`).
+    Nothing open — the blockers Done, Canceled or Duplicate — and it takes the
+    auto-advance's own move. Anything open, or a read that failed, and it
+    waits for the next pass, which asks again.
+    """
+    released: set[str] = set()
+    for card in candidates:
+        if card_repo(card) != REPO_SLUG:
+            continue  # another repo's card: its own sweep reads it
+        if not epic_wait.waiting(card_comment_bodies(card)):
+            continue
+        identifier = card["identifier"]
+        try:
+            waits = epic_wait.still_waits(linear_ops, identifier)
+        except Exception as e:  # noqa: BLE001 — unread is never released
+            print(f"epic-wait: {identifier}'s blockers could not be read ({e}) — "
+                  "it waits, and the next sweep reads them again")
+            continue
+        if waits is None:
+            print(f"epic-wait: {identifier} could not be read whole — it waits, "
+                  "and the next sweep reads it again")
+            continue
+        if waits:
+            print(f"epic-wait: {identifier} still waits — blocker epic(s) open: "
+                  f"{epic_wait.named(waits)}")
+            continue
+        try:
+            _auto_advance_epic(
+                identifier,
+                "every blocker epic it waited on is closed (Done, Canceled or "
+                "Duplicate).",
+            )
+        except linear_ops.LinearError as e:
+            _write_failures.append(f"{identifier} epic-wait release: {e}")
+            print(f"ERROR: could not carry {identifier} on out of its epic wait: {e}",
+                  file=sys.stderr)
+            continue
+        print(f"epic-wait: {identifier} released — no blocker epic is open")
+        released.add(identifier)
+    return released
 
 
 def open_agent_blocker(card: dict) -> blocker_class.Blocker | None:
@@ -7246,7 +7312,7 @@ def takes_no_slot(bodies) -> bool:
 
 def promote_ready(
     active_count: int, candidates: list[dict] | None = None, *, close_epics: bool = False,
-    resolve_blockers: bool = False, ask_cap: bool = False,
+    resolve_blockers: bool = False, ask_cap: bool = False, release_waits: bool = False,
 ) -> int:
     """Auto-promote Backlog cards whose blockers are all Done.
 
@@ -7305,6 +7371,11 @@ def promote_ready(
     its children meet the cap's hold (`ask_cap_for_released_epic`, DRE-6618).
     Never on a `--promote-only` pass: the activate route runs one right after
     asking the cap itself.
+
+    `release_waits` — the full sweep's alone as well — carries on, off the same
+    candidates, every epic `plan.yml`'s epic wait held whose blockers are now
+    all closed (`release_waiting_epics`, DRE-6671), before the cap is asked of
+    anything: an epic is never promoted here, so it needs no slot.
     """
     # The clock is the pure half (DRE-4207); imported here because this pass is
     # its only caller.
@@ -7389,6 +7460,9 @@ def promote_ready(
             close_finished_epics(closable_epics(candidates, BACKLOG_LANE)) or ()
         )
         candidates = [c for c in candidates if c["identifier"] not in closed]
+    if release_waits:
+        released = release_waiting_epics(candidates)
+        candidates = [c for c in candidates if c["identifier"] not in released]
     # ONE read for every epic this gate will ask about (DRE-3642), before the
     # loop rather than inside it: `epic_gate` above already made it one read
     # per EPIC per sweep, and on a board with nine active epics that was still
@@ -14476,8 +14550,11 @@ def main(
             # path stays the gate. The active epics closed above, before
             # `start_queued_epics`; a Backlog close opens its slot in the cap
             # for the next pass to fill.
+            # And an epic the epic wait held is carried on off the same read
+            # once its blockers are closed (DRE-6671) — a level, so a blocker
+            # Canceled, or one the sweep did not close, still releases it.
             promote_ready(active_count=wip_count(mine), close_epics=True,
-                          resolve_blockers=True, ask_cap=True)
+                          resolve_blockers=True, ask_cap=True, release_waits=True)
     if promote_only:
         print(f"promote-only: gate evaluated (WIP base {wip_count(mine)})")
         _report_degraded()
