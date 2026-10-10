@@ -74,12 +74,18 @@ def compare(behind_by=3, base_sha=BASE_SHA, main_sha=MAIN_SHA):
     }
 
 
+def tip(payload, sha=MAIN_SHA):
+    """A one-commit window: the `main` tip alone, which answers exactly as
+    the tip-only rule did before DRE-6513."""
+    return [(sha, payload)]
+
+
 def decide(**overrides):
     kwargs = {
         "compare": compare(),
         "head_checks": runs((PYTEST, "failure")),
         "base_checks": runs((PYTEST, "failure")),
-        "main_checks": runs((PYTEST, "success")),
+        "main_window": tip(runs((PYTEST, "success"))),
         "receipts": [],
         "cap": 2,
     }
@@ -104,7 +110,7 @@ class ContractTest(unittest.TestCase):
         decision = decide()
         self.assertEqual(
             ["action", "reason", "inherited", "base_sha", "main_sha",
-             "behind_by"],
+             "behind_by", "evidence"],
             [f.name for f in fields(decision)],
         )
         with self.assertRaises(FrozenInstanceError):
@@ -150,7 +156,8 @@ class RefreshTest(unittest.TestCase):
             head_checks=runs(("Web unit tests", "failure"), (PYTEST, "failure")),
             base_checks=runs((PYTEST.lower(), "failure"),
                              ("web  unit tests", "failure")),
-            main_checks=runs((PYTEST, "success"), ("Web unit tests", "success")),
+            main_window=tip(runs((PYTEST, "success"),
+                                 ("Web unit tests", "success"))),
         )
         self.assertEqual("refresh", decision.action)
         self.assertEqual(["Web unit tests", PYTEST], decision.inherited)
@@ -166,7 +173,8 @@ class OwnDefectTest(unittest.TestCase):
             compare=compare(behind_by=42),
             head_checks=runs((PYTEST, "failure"), ("Web unit tests", "failure")),
             base_checks=runs((PYTEST, "failure")),
-            main_checks=runs((PYTEST, "success"), ("Web unit tests", "success")),
+            main_window=tip(runs((PYTEST, "success"),
+                                 ("Web unit tests", "success"))),
         )
         self.assertEqual("own", decision.action,
                          "one uninherited failure is enough — the fix loop owns it")
@@ -180,28 +188,28 @@ class OwnDefectTest(unittest.TestCase):
 
 class MainStillRedTest(unittest.TestCase):
     def test_still_failing_on_the_main_tip_is_the_repair_loops_job(self):
-        decision = decide(main_checks=runs((PYTEST, "failure")))
+        decision = decide(main_window=tip(runs((PYTEST, "failure"))))
         self.assertEqual("main-still-red", decision.action)
         self.assertIn(PYTEST, decision.reason)
 
     def test_no_completed_run_on_main_yet_is_unevaluated(self):
-        decision = decide(main_checks=runs((PYTEST, None)))
+        decision = decide(main_window=tip(runs((PYTEST, None))))
         self.assertEqual("unevaluated", decision.action,
                          "main's CI is still running — try again next sweep")
 
     def test_absent_from_main_entirely_is_unevaluated_never_a_refresh(self):
-        decision = decide(main_checks=runs(("Web unit tests", "success")))
+        decision = decide(main_window=tip(runs(("Web unit tests", "success"))))
         self.assertEqual("unevaluated", decision.action)
 
     def test_a_completed_run_that_is_neither_green_nor_red_is_unevaluated(self):
-        decision = decide(main_checks=runs((PYTEST, "skipped")))
+        decision = decide(main_window=tip(runs((PYTEST, "skipped"))))
         self.assertEqual("unevaluated", decision.action)
 
     def test_one_red_and_one_unfinished_reports_the_red(self):
         decision = decide(
             head_checks=runs((PYTEST, "failure"), ("Web unit tests", "failure")),
             base_checks=runs((PYTEST, "failure"), ("Web unit tests", "failure")),
-            main_checks=runs((PYTEST, "failure"), ("Web unit tests", None)),
+            main_window=tip(runs((PYTEST, "failure"), ("Web unit tests", None))),
         )
         self.assertEqual("main-still-red", decision.action,
                          "a definite red on main beats an unfinished run")
@@ -211,7 +219,7 @@ class NothingToDoTest(unittest.TestCase):
     def test_behind_by_zero_is_current_regardless_of_check_state(self):
         decision = decide(
             compare=compare(behind_by=0),
-            main_checks=runs((PYTEST, "failure")),
+            main_window=tip(runs((PYTEST, "failure"))),
         )
         self.assertEqual("current", decision.action)
         self.assertEqual(0, decision.behind_by)
@@ -231,7 +239,7 @@ class NothingToDoTest(unittest.TestCase):
         decision = decide(
             head_checks=runs((PYTEST, "failure"), ("agent-bureau review", "failure")),
             base_checks=runs((PYTEST, "failure")),
-            main_checks=runs((PYTEST, "success")),
+            main_window=tip(runs((PYTEST, "success"))),
         )
         self.assertEqual("refresh", decision.action)
         self.assertEqual([PYTEST], decision.inherited,
@@ -282,7 +290,7 @@ class UnreadableInputTest(unittest.TestCase):
         self.assertEqual("unevaluated", decide(base_checks=["nope"]).action)
 
     def test_an_unreadable_main_payload(self):
-        self.assertEqual("unevaluated", decide(main_checks=42).action)
+        self.assertEqual("unevaluated", decide(main_window=tip(42)).action)
 
     def test_unreadable_receipts(self):
         self.assertEqual("unevaluated", decide(receipts=None).action,
@@ -340,6 +348,432 @@ class ReceiptDetailTest(unittest.TestCase):
         source = MODULE.read_text(encoding="utf-8")
         for forbidden in ("VERDICT:", "QA Critic", "QA Verifier"):
             self.assertNotIn(forbidden, source)
+
+
+# --------------------------------------------------------------------------- #
+# DRE-6513 — `main`'s own first-parent commits since the merge base            #
+# --------------------------------------------------------------------------- #
+
+S1 = "Console backend shard 1"
+S2 = "Console backend shard 2"
+OLD_SHA = "d" * 40    # a `main` merge older than the tip
+OLDER_SHA = "e" * 40  # older still
+
+
+def window(*pairs):
+    """A `main_window`, tip first: each pair is (sha, check-runs payload)."""
+    return list(pairs)
+
+
+def commit(sha, *parents):
+    """One entry of `GET repos/{repo}/commits?sha=…`, in the shape GitHub
+    returns it: the sha and the parents, first parent first."""
+    return {"sha": sha, "parents": [{"sha": p} for p in parents]}
+
+
+class FirstParentWindowTest(unittest.TestCase):
+    """The pure cut of the commit listing into `main`'s own merges."""
+
+    def setUp(self):
+        # m0 (tip) <- m1 <- m2 <- m3 (the merge base) <- m4, first parents.
+        # Each merge brought in a pull request's commits through its SECOND
+        # parent, and the listing (newest first, by date) holds those too.
+        self.m = [f"{i:x}" * 40 for i in range(1, 6)]
+        self.pr = [f"{i:x}" * 40 for i in range(10, 15)]
+        m, pr = self.m, self.pr
+        self.listing = [
+            commit(m[0], m[1], pr[0]),
+            commit(pr[0], pr[1]),
+            commit(pr[1], m[2]),
+            commit(m[1], m[2], pr[2]),
+            commit(pr[2], m[3]),
+            commit(m[2], m[3], pr[3]),
+            commit(pr[3], pr[4]),
+            commit(pr[4], m[3]),
+            commit(m[3], m[4]),
+            commit(m[4], "f" * 40),
+        ]
+
+    def test_only_first_parent_shas_tip_first_stopping_before_the_merge_base(self):
+        got = smr.first_parent_window(self.listing, tip_sha=self.m[0],
+                                      base_sha=self.m[3])
+        self.assertEqual(self.m[:3], got)
+        for sha in self.pr:
+            self.assertNotIn(sha, got, "a pull request's own commit is never "
+                                       "`main` itself")
+
+    def test_it_stops_at_the_limit(self):
+        got = smr.first_parent_window(self.listing, tip_sha=self.m[0],
+                                      base_sha="9" * 40, limit=2)
+        self.assertEqual(self.m[:2], got)
+
+    def test_the_default_limit_is_main_window(self):
+        self.assertEqual(12, smr.MAIN_WINDOW)
+        chain = [f"{i:040x}" for i in range(1, 30)]
+        listing = [commit(sha, nxt) for sha, nxt in zip(chain, chain[1:])]
+        got = smr.first_parent_window(listing, tip_sha=chain[0],
+                                      base_sha="9" * 40)
+        self.assertEqual(chain[:smr.MAIN_WINDOW], got)
+
+    def test_it_stops_when_the_next_first_parent_is_not_listed(self):
+        # A merge base off the walk: the window runs until the listing ends.
+        got = smr.first_parent_window(self.listing, tip_sha=self.m[0],
+                                      base_sha="9" * 40)
+        self.assertEqual(self.m, got, "m4's first parent is not in the listing")
+
+    def test_a_tip_not_in_the_listing_is_an_empty_window(self):
+        self.assertEqual([], smr.first_parent_window(
+            self.listing, tip_sha="9" * 40, base_sha=self.m[3]))
+
+    def test_a_listing_that_is_not_a_list_is_an_empty_window(self):
+        for listing in ({"message": "Not Found"}, None, "nope", 42):
+            with self.subTest(listing=listing):
+                self.assertEqual([], smr.first_parent_window(
+                    listing, tip_sha=self.m[0], base_sha=self.m[3]))
+
+
+class WindowRuleTest(unittest.TestCase):
+    """The table in DRE-6513: a check not red on the merge base is still
+    `main`'s fault when `main` went red on it since and is green again."""
+
+    def test_green_base_older_red_newer_green_is_a_refresh(self):
+        decision = decide(
+            base_checks=runs((PYTEST, "success")),
+            main_window=window((MAIN_SHA, runs((PYTEST, "success"))),
+                               (OLD_SHA, runs((PYTEST, "failure")))),
+        )
+        self.assertEqual("refresh", decision.action, decision.reason)
+        self.assertEqual([PYTEST], decision.inherited)
+        self.assertEqual(
+            [{"check": PYTEST, "base_red": False, "red_sha": OLD_SHA,
+              "green_sha": MAIN_SHA}],
+            decision.evidence,
+        )
+
+    def test_a_merge_base_with_no_run_at_all_is_the_same(self):
+        decision = decide(
+            base_checks=runs(("Web unit tests", "success")),
+            main_window=window((MAIN_SHA, runs((PYTEST, "success"))),
+                               (OLD_SHA, runs((PYTEST, "failure")))),
+        )
+        self.assertEqual("refresh", decision.action, decision.reason)
+        self.assertEqual(OLD_SHA, decision.evidence[0]["red_sha"])
+        self.assertEqual(MAIN_SHA, decision.evidence[0]["green_sha"])
+
+    def test_the_newest_red_and_the_newest_green_are_the_evidence(self):
+        decision = decide(
+            base_checks=runs(),
+            main_window=window((MAIN_SHA, runs()),
+                               (OLD_SHA, runs((PYTEST, "success"))),
+                               (OLDER_SHA, runs((PYTEST, "failure"))),
+                               ("f" * 40, runs((PYTEST, "failure")))),
+        )
+        self.assertEqual("refresh", decision.action, decision.reason)
+        self.assertEqual(
+            [{"check": PYTEST, "base_red": False, "red_sha": OLDER_SHA,
+              "green_sha": OLD_SHA}],
+            decision.evidence,
+        )
+
+    def test_a_red_base_names_the_merge_base_as_the_red(self):
+        decision = decide()
+        self.assertEqual("refresh", decision.action)
+        self.assertEqual(
+            [{"check": PYTEST, "base_red": True, "red_sha": BASE_SHA,
+              "green_sha": MAIN_SHA}],
+            decision.evidence,
+        )
+
+    def test_evidence_is_empty_on_every_answer_but_refresh(self):
+        for overrides in ({"base_checks": runs((PYTEST, "success"))},
+                          {"main_window": tip(runs((PYTEST, "failure")))},
+                          {"main_window": tip(runs((PYTEST, None)))}):
+            with self.subTest(overrides=overrides):
+                decision = decide(**overrides)
+                self.assertNotEqual("refresh", decision.action)
+                self.assertEqual([], decision.evidence)
+
+    def test_never_red_in_the_window_is_own(self):
+        for label, commits in (
+            ("green", window((MAIN_SHA, runs((PYTEST, "success"))),
+                             (OLD_SHA, runs((PYTEST, "success"))))),
+            ("silent", window((MAIN_SHA, runs()), (OLD_SHA, runs()))),
+            ("cancelled", window((MAIN_SHA, runs((PYTEST, "success"))),
+                                 (OLD_SHA, runs((PYTEST, "cancelled"))))),
+        ):
+            for base in (runs((PYTEST, "success")), runs()):
+                with self.subTest(window=label, base=base):
+                    decision = decide(base_checks=base, main_window=commits)
+                    self.assertEqual("own", decision.action, decision.reason)
+                    self.assertNotIn("green on the merge base", decision.reason)
+
+    def test_the_own_reason_says_what_was_read(self):
+        decision = decide(
+            base_checks=runs((PYTEST, "success")),
+            main_window=window((MAIN_SHA, runs((PYTEST, "success"))),
+                               (OLD_SHA, runs((PYTEST, "success")))),
+        )
+        self.assertEqual("own", decision.action)
+        self.assertIn(PYTEST, decision.reason)
+        self.assertIn(f"not red on merge base `{BASE_SHA[:8]}`", decision.reason)
+        self.assertIn("never red on the 2 `main` commits since", decision.reason)
+        self.assertEqual(1, len(decision.reason.splitlines()))
+
+    def test_newest_non_silent_red_is_main_still_red(self):
+        commits = window((MAIN_SHA, runs((PYTEST, None))),
+                         (OLD_SHA, runs((PYTEST, "failure"))),
+                         (OLDER_SHA, runs((PYTEST, "success"))))
+        for base in (runs((PYTEST, "failure")), runs((PYTEST, "success"))):
+            with self.subTest(base=base):
+                decision = decide(base_checks=base, main_window=commits)
+                self.assertEqual("main-still-red", decision.action,
+                                 decision.reason)
+                self.assertIn(PYTEST, decision.reason)
+
+    def test_an_in_flight_tip_reads_the_commit_behind_it(self):
+        commits = window((MAIN_SHA, runs((PYTEST, None))),
+                         (OLD_SHA, runs((PYTEST, "success"))))
+        decision = decide(base_checks=runs((PYTEST, "failure")),
+                          main_window=commits)
+        self.assertEqual("refresh", decision.action, decision.reason)
+        self.assertEqual(OLD_SHA, decision.evidence[0]["green_sha"])
+
+        decision = decide(
+            base_checks=runs((PYTEST, "success")),
+            main_window=commits + [(OLDER_SHA, runs((PYTEST, "failure")))],
+        )
+        self.assertEqual("refresh", decision.action, decision.reason)
+        self.assertEqual(OLDER_SHA, decision.evidence[0]["red_sha"])
+        self.assertEqual(OLD_SHA, decision.evidence[0]["green_sha"])
+
+    def test_a_red_base_and_a_silent_window_is_unevaluated(self):
+        decision = decide(main_window=window((MAIN_SHA, runs((PYTEST, None))),
+                                             (OLD_SHA, runs())))
+        self.assertEqual("unevaluated", decision.action)
+
+
+class CombinedChecksTest(unittest.TestCase):
+    """Per-check answers combine in today's order: own, main-still-red,
+    unevaluated, and refresh only when every check is fixed."""
+
+    OWN_X, RED_X, OPEN_X, FIXED_X = "own x", "red x", "open x", "fixed x"
+
+    def _decide(self, names):
+        head = runs(*[(n, "failure") for n in names])
+        base = runs((self.OWN_X, "success"), (self.RED_X, "failure"),
+                    (self.OPEN_X, "failure"), (self.FIXED_X, "failure"))
+        tip_runs = runs((self.OWN_X, "success"), (self.RED_X, "failure"),
+                        (self.OPEN_X, None), (self.FIXED_X, "success"))
+        return decide(head_checks=head, base_checks=base,
+                      main_window=tip(tip_runs))
+
+    def test_one_own_check_makes_the_pull_request_own(self):
+        decision = self._decide([self.OPEN_X, self.RED_X, self.OWN_X])
+        self.assertEqual("own", decision.action)
+
+    def test_without_it_main_still_red_wins(self):
+        decision = self._decide([self.OPEN_X, self.RED_X])
+        self.assertEqual("main-still-red", decision.action)
+
+    def test_an_unevaluated_check_stops_a_fixed_one(self):
+        decision = self._decide([self.FIXED_X, self.OPEN_X])
+        self.assertEqual("unevaluated", decision.action)
+
+    def test_every_check_fixed_is_a_refresh(self):
+        decision = self._decide([self.FIXED_X])
+        self.assertEqual("refresh", decision.action)
+
+
+class UnusableWindowTest(unittest.TestCase):
+    def test_an_unusable_window_is_unevaluated(self):
+        for label, commits in (
+            ("not a list", 42),
+            ("a dict", {MAIN_SHA: runs((PYTEST, "success"))}),
+            ("empty", []),
+            ("unreadable payload", window((MAIN_SHA, runs((PYTEST, None))),
+                                          (OLD_SHA, "nope"))),
+            ("not a pair", [MAIN_SHA]),
+            ("wrong first sha", window((OLD_SHA, runs((PYTEST, "success"))))),
+        ):
+            with self.subTest(window=label):
+                decision = decide(main_window=commits)
+                self.assertEqual("unevaluated", decision.action,
+                                 decision.reason)
+
+    def test_an_unreadable_merge_base_comes_before_the_window(self):
+        decision = decide(base_checks=["nope"], main_window=42)
+        self.assertEqual("unevaluated", decision.action)
+        self.assertIn("merge base", decision.reason)
+
+    def test_the_answers_before_the_payloads_keep_their_order(self):
+        self.assertEqual("current", decide(compare=compare(behind_by=0),
+                                           main_window=42).action)
+        self.assertEqual("no-failure", decide(head_checks=runs(),
+                                              main_window=[]).action)
+
+
+class ReceiptEvidenceTest(unittest.TestCase):
+    def setUp(self):
+        self.evidence = [
+            {"check": PYTEST, "base_red": True, "red_sha": BASE_SHA,
+             "green_sha": MAIN_SHA},
+            {"check": S1, "base_red": False, "red_sha": OLDER_SHA,
+             "green_sha": OLD_SHA},
+        ]
+        self.kwargs = dict(pr_number=3457, head_sha=HEAD_SHA, main_sha=MAIN_SHA,
+                           base_sha=BASE_SHA, inherited=[PYTEST, S1], used=1,
+                           cap=3)
+        self.detail = smr.receipt_detail(**self.kwargs, evidence=self.evidence)
+
+    def test_it_opens_with_the_marker(self):
+        self.assertEqual(smr.marker(MAIN_SHA), self.detail.splitlines()[0])
+
+    def test_the_anchor_phrase_appears_once(self):
+        self.assertEqual(1, self.detail.count(smr.ANCHOR_PHRASE))
+
+    def test_it_emits_no_verdict_marker(self):
+        for forbidden in ("VERDICT:", "QA Critic", "QA Verifier"):
+            self.assertNotIn(forbidden, self.detail)
+
+    def test_the_opening_sentence_says_main_was_red_too(self):
+        self.assertIn(
+            "red on 2 check(s) that `main` was red on too and is green on now",
+            self.detail)
+
+    def test_one_bullet_per_check_naming_what_was_read(self):
+        bullets = [ln for ln in self.detail.splitlines() if ln.startswith("- ")]
+        self.assertEqual(2, len(bullets))
+        self.assertIn(PYTEST, bullets[0])
+        self.assertIn(f"red on the merge base `{BASE_SHA[:8]}`, green on `main` "
+                      f"at `{MAIN_SHA[:8]}`", bullets[0])
+        self.assertIn(S1, bullets[1])
+        self.assertIn(f"not red on the merge base `{BASE_SHA[:8]}`, but `main` "
+                      f"went red on it at `{OLDER_SHA[:8]}` and is green on it "
+                      f"at `{OLD_SHA[:8]}`", bullets[1])
+
+    def test_the_anchor_and_cost_paragraphs_do_not_change(self):
+        plain = smr.receipt_detail(**self.kwargs)
+        tail = plain.split("\n\n")[-2:]
+        self.assertEqual(tail, self.detail.split("\n\n")[-2:])
+
+    def test_without_evidence_the_body_is_todays_text(self):
+        plain = smr.receipt_detail(**self.kwargs)
+        self.assertEqual(plain, smr.receipt_detail(**self.kwargs, evidence=None))
+        self.assertIn("that were red on its merge base", plain)
+
+
+# --------------------------------------------------------------------------- #
+# The four agent-bureau pull requests of 2026-10-09, from the card's tables    #
+# --------------------------------------------------------------------------- #
+
+def _sha(prefix):
+    return prefix + "0" * (40 - len(prefix))
+
+
+#: `main`'s merges at the 16:04 PT sweep, newest first: (sha, pytest, s1, s2).
+#: None is no run, "…" is a run still going.
+MAIN_ROWS = [
+    ("21ca627e", None, "…", "…"),
+    ("60f9cb2a", "success", "success", "success"),
+    ("c4290653", None, None, None),
+    ("f3cb2096", "success", "success", "success"),
+    ("3d8e7550", "success", "success", "success"),
+    ("b62cc42a", "success", "success", "success"),
+    ("2ee5fbd5", "success", None, None),
+    ("9ee21f36", "failure", "failure", "success"),
+    ("66529000", "failure", "success", "failure"),
+    ("7406667f", "success", "success", "success"),
+    ("d8dd87ce", "success", "success", "success"),
+    ("1832a23d", "success", "success", "success"),
+]
+
+
+def _row_runs(row):
+    _sha_, *conclusions = row
+    pairs = []
+    for name, conclusion in zip((PYTEST, S1, S2), conclusions):
+        if conclusion == "…":
+            pairs.append((name, None))
+        elif conclusion:
+            pairs.append((name, conclusion))
+    return runs(*pairs)
+
+
+def _listing():
+    """The `commits?sha=<tip>` listing: every row's first parent is the next
+    row, its second parent a pull request commit that is also listed, and
+    the chain runs on past row 11 into commits the listing still holds."""
+    shas = [_sha(row[0]) for row in MAIN_ROWS] + [_sha(f"f{i:02d}")
+                                                  for i in range(3)]
+    listing = []
+    for i, sha in enumerate(shas[:-1]):
+        side = _sha(f"ad{i:02d}")
+        listing.append(commit(sha, shas[i + 1], side))
+        listing.append(commit(side, shas[i + 1]))
+    listing.append(commit(shas[-1], _sha("ffff")))
+    return listing
+
+
+#: PR -> (head failing set, merge-base sha, merge-base check runs)
+OCTOBER_9 = {
+    3457: ([PYTEST, S1], _sha("66529000"), _row_runs(MAIN_ROWS[8])),
+    3444: ([PYTEST, S2], _sha("66529000"), _row_runs(MAIN_ROWS[8])),
+    3428: ([PYTEST, S1], _sha("95c94b8d"), runs()),
+    3397: ([PYTEST, S2], _sha("9e950995"),
+           runs((PYTEST, "success"), (PYTEST, "failure"), (S2, "success"))),
+}
+
+
+class October9Test(unittest.TestCase):
+    """#3444, #3457, #3397 and #3428 sat red on failures `main` had fixed,
+    and the sweep called three of them their own. Each one is a refresh."""
+
+    def _decide(self, number):
+        failing, base_sha, base = OCTOBER_9[number]
+        tip_sha = _sha(MAIN_ROWS[0][0])
+        shas = smr.first_parent_window(_listing(), tip_sha=tip_sha,
+                                       base_sha=base_sha)
+        rows = {_sha(row[0]): row for row in MAIN_ROWS}
+        return shas, smr.decide(
+            compare=compare(behind_by=40, base_sha=base_sha, main_sha=tip_sha),
+            head_checks=runs(*[(n, "failure") for n in failing]),
+            base_checks=base,
+            main_window=[(sha, _row_runs(rows[sha])) for sha in shas],
+            receipts=[],
+            cap=3,
+        )
+
+    def test_the_windows_are_the_rows_the_card_names(self):
+        rows = [_sha(row[0]) for row in MAIN_ROWS]
+        self.assertEqual(rows[:8], self._decide(3457)[0])
+        self.assertEqual(rows[:8], self._decide(3444)[0])
+        self.assertEqual(rows[:12], self._decide(3428)[0])
+        self.assertEqual(rows[:12], self._decide(3397)[0])
+
+    def test_all_four_are_refreshed(self):
+        for number in OCTOBER_9:
+            with self.subTest(pr=number):
+                _shas, decision = self._decide(number)
+                self.assertEqual("refresh", decision.action, decision.reason)
+                self.assertEqual(OCTOBER_9[number][0], decision.inherited)
+
+    def test_the_evidence_names_what_was_read(self):
+        red, green = _sha("9ee21f36"), _sha("60f9cb2a")
+        merge = _sha("66529000")
+        expect = {
+            3457: [(PYTEST, True, merge), (S1, False, red)],
+            3444: [(PYTEST, True, merge), (S2, True, merge)],
+            3428: [(PYTEST, False, red), (S1, False, red)],
+            3397: [(PYTEST, True, _sha("9e950995")), (S2, False, merge)],
+        }
+        for number, rows in expect.items():
+            with self.subTest(pr=number):
+                _shas, decision = self._decide(number)
+                self.assertEqual(
+                    [{"check": c, "base_red": b, "red_sha": r,
+                      "green_sha": green} for c, b, r in rows],
+                    decision.evidence,
+                )
 
 
 class CliTest(unittest.TestCase):
@@ -409,6 +843,67 @@ class CliTest(unittest.TestCase):
         code, lines, _ = self._run(extra=["--receipts-file", receipts])
         self.assertEqual(0, code)
         self.assertEqual("unevaluated", lines[0])
+
+
+    def test_a_window_file_is_read_tip_first(self):
+        window_file = self._file("window.json", [
+            {"sha": MAIN_SHA, "check_runs": runs((PYTEST, "success"))["check_runs"]},
+            {"sha": OLD_SHA, "check_runs": runs((PYTEST, "failure"))["check_runs"]},
+        ])
+        argv = [
+            "decide",
+            "--compare-file", self._file("compare.json", compare()),
+            "--checks-file", self._file("head.json", runs((PYTEST, "failure"))),
+            "--base-checks-file", self._file("base.json",
+                                             runs((PYTEST, "success"))),
+            "--main-window-file", window_file,
+        ]
+        out, err = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            code = smr.main(argv)
+        self.assertEqual(0, code)
+        self.assertEqual("refresh", out.getvalue().splitlines()[0],
+                         err.getvalue())
+
+    def test_an_unreadable_window_file_is_unevaluated(self):
+        for raw in ("{not json", '{"sha": "x"}', '[{"sha": "x"}]', "[42]"):
+            with self.subTest(raw=raw):
+                argv = [
+                    "decide",
+                    "--compare-file", self._file("compare.json", compare()),
+                    "--checks-file", self._file("head.json",
+                                                runs((PYTEST, "failure"))),
+                    "--base-checks-file", self._file("base.json",
+                                                     runs((PYTEST, "failure"))),
+                    "--main-window-file", self._file("w.json", None, raw=raw),
+                ]
+                out = io.StringIO()
+                with contextlib.redirect_stdout(out), \
+                        contextlib.redirect_stderr(io.StringIO()):
+                    code = smr.main(argv)
+                self.assertEqual(0, code)
+                self.assertEqual("unevaluated", out.getvalue().splitlines()[0])
+
+    def test_both_main_flags_together_are_refused(self):
+        window_file = self._file("window.json", [
+            {"sha": MAIN_SHA, "check_runs": []}])
+        with self.assertRaises(SystemExit) as raised, \
+                contextlib.redirect_stderr(io.StringIO()):
+            self._run(extra=["--main-window-file", window_file])
+        self.assertEqual(2, raised.exception.code)
+
+    def test_neither_main_flag_is_refused(self):
+        argv = [
+            "decide",
+            "--compare-file", self._file("compare.json", compare()),
+            "--checks-file", self._file("head.json", runs((PYTEST, "failure"))),
+            "--base-checks-file", self._file("base.json",
+                                             runs((PYTEST, "failure"))),
+        ]
+        with self.assertRaises(SystemExit) as raised, \
+                contextlib.redirect_stderr(io.StringIO()):
+            smr.main(argv)
+        self.assertEqual(2, raised.exception.code)
 
 
 class NoIoTest(unittest.TestCase):
