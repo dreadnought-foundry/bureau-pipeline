@@ -52,6 +52,7 @@ os.environ.setdefault("REPO", "dreadnought-foundry/bureau-pipeline")
 os.environ.setdefault("REPO_SLUG", "bureau-pipeline")
 os.environ.setdefault("GH_TOKEN", "x")
 
+import blocker_ask  # noqa: E402
 import code_owner_hold  # noqa: E402
 import console_escalation  # noqa: E402
 import epic_growth  # noqa: E402
@@ -263,6 +264,22 @@ def _epic_growth_question() -> None:
         assert esc.recommendation in (epic_growth.RE_APPROVE, epic_growth.SPLIT)
 
 
+def _blocker_ask_question() -> None:
+    """`blocker_ask.py#resolve` (DRE-6459): the sweep's ask for a blocker it
+    cannot act on is `blocker_ask.compose` over the marker's reason — on a
+    free-prose reason, recommending nothing, with and without the agent's run;
+    and on a reason that already declares the lines, which come back unchanged."""
+    for run_url in ("https://github.com/o/r/actions/runs/1", None):
+        esc = assert_declares_the_lines(blocker_ask.compose(FREE_PROSE, run_url))
+        assert esc.recommendation is None
+        assert _recommendation_line(blocker_ask.compose(FREE_PROSE, run_url)) == (
+            _none_given_line(esc))
+    declared = f"{PREAMBLE}\n\n" + console_escalation.render(_fixture_escalation())
+    esc = assert_declares_the_lines(blocker_ask.compose(declared, None))
+    assert esc.question == _fixture_escalation().question
+    assert esc.recommendation == _fixture_escalation().recommendation
+
+
 def _step_lines(write) -> list:
     """The write's own step, from its first line up to the write line, read
     through `step_shell.workflow_source` and then as the shell reads it."""
@@ -322,6 +339,7 @@ CASES = {
     "code_owner_hold.py#park": _code_owner_note,
     "reconcile.py#hand_review_nudge_to_person": _review_cap_question,
     "reconcile.py#ask_epic_growth_question": _epic_growth_question,
+    "blocker_ask.py#resolve": _blocker_ask_question,
     "agent-task.yml#Report result to Linear":
         _workflow_case("agent-task.yml#Report result to Linear"),
     "proof-task.yml#Report proof result to Linear":
@@ -372,6 +390,17 @@ class TestEveryDiscoveredDecisionWriterHasACase:
     @pytest.mark.parametrize("unit", sorted(CASES))
     def test_the_case_exercises_its_writers_three_lines(self, unit):
         CASES[unit]()
+
+    def test_the_blocker_ask_without_its_case_fails_by_name(self, monkeypatch):
+        # DRE-6459's writer is held by its case; take the case away and the
+        # check names the unit, kind and all.
+        assert "blocker_ask.py#resolve" in _held()
+        monkeypatch.delitem(CASES, "blocker_ask.py#resolve")
+        named = uncased(_held())
+        assert [p for p in named if p.startswith("blocker_ask.py#resolve ")] == [
+            "blocker_ask.py#resolve writes Green Light as kind agent-escalation and "
+            "has no case in CASES — add one under its unit name that exercises its "
+            "three lines"], named
 
     def test_a_staged_python_writer_with_no_case_fails_by_name(self):
         rogue = "zz_rogue_green_light_park.py"

@@ -1,0 +1,10 @@
+{
+  "_readme": "Stand-in for bureau-pipeline's routing vocabulary AFTER the 2026-10-09 operator-step change (DRE-6227/DRE-6228): OPERATOR carries operator-step + no-code and WORKBENCH carries no mark. tests/test_mirror_check.py reads it as the candidate.",
+  "verdicts": [
+    {"name": "FLEET", "destination": "Todo", "marks": []},
+    {"name": "WORKBENCH", "destination": "Hand-work", "marks": []},
+    {"name": "OPERATOR", "destination": "Hand-work", "marks": ["operator-step", "no-code"]},
+    {"name": "PARKED", "destination": "Backlog", "marks": []},
+    {"name": "NEEDS WORK", "destination": "Planning", "marks": []}
+  ]
+}

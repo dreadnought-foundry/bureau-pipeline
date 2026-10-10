@@ -71,9 +71,43 @@
 #      move is idempotent. A crash before it leaves the channel where it was,
 #      which the next dispatch or harness run reads and advances.
 #
+# THE MIRROR CHECK (DRE-6496). On 2026-10-09 the `operator-step` vocabulary
+# reached `stable` around 03:00 PT and broke agent-bureau's CI three separate
+# times that day — the read door's e2e, the relay's lane guard (live behavior
+# in the deployed relay too) and the open-holds report — each one holding
+# every agent-bureau pull request until someone fixed it by hand. agent-bureau
+# mirrors several vocabularies of this repo, and each mirror's drift test reads
+# bureau-pipeline at `stable`, so a change here was found only AFTER it was
+# promoted.
+#
+# So agent-bureau's mirror tests are now part of the proof. The decision runs
+# twice: once on the proof alone (`proof`), and — only where that would move
+# the channel — the check runs agent-bureau's bureau-pipeline-reading tests
+# against the candidate before the second, final decision (`decide`) weighs
+# them. The order this buys is the consumer-first one: the change merges to
+# main as today, agent-bureau's mirror catches up, and only then does `stable`
+# move onto it. A refusal files one card in agent-bureau naming the mirror.
+#
+#   Q1 WHO INITIATES. The same promote run, initiated as today. The clone uses
+#      the bureau App, installed on every fleet repo.
+#   Q2 WHICH SECRETS STORE. The store the tag move already reads
+#      (`BUREAU_APP_ID`, `BUREAU_APP_PRIVATE_KEY`, `LINEAR_API_KEY`); a
+#      `workflow_run` and a dispatch both read it.
+#   Q3 RETRY / RE-RUN. A re-run re-clones and re-runs; the card is found again
+#      by its exact title, so filing is idempotent.
+#   Q4 COMMAND LIMITS. `create-github-app-token` scopes the token to the named
+#      repository — it can read agent-bureau and push nothing — and the
+#      checkout does not persist it, so agent-bureau's tests never see it.
+#      `find_open` matches an exact title, so the title is deterministic:
+#      sorted files, no sha.
+#   Q5 CRASH MID-FLOW. A crash before the ref move leaves the channel where it
+#      was, and the next run re-evaluates; a crash after filing the card and
+#      before the move leaves a true card and an unmoved channel.
+#
 # The decision lives in scripts/promote_channel.py (unit-tested red and green
-# in tests/test_promote_channel.py and tests/test_promote_channel_by_hand.py);
-# this file only gathers GitHub's records and acts on the verdict — the
+# in tests/test_promote_channel.py and tests/test_promote_channel_by_hand.py)
+# and the check in scripts/mirror_check.py (tests/test_mirror_check.py); this
+# file only gathers GitHub's records and acts on the verdict — the
 # merge-gate.yml thin-caller shape.
 name: Promote Channel
 
@@ -155,7 +189,10 @@ jobs:
     # the shape changes — the dispatch reaches the same decision, spends the
     # same reads, and is refused by the same rails.
     runs-on: ${{ fromJSON(vars.BUREAU_SHORT_RUNS_ON || vars.BUREAU_RUNS_ON || '["ubuntu-latest"]') }}
-    timeout-minutes: 10
+    # 10 until DRE-6496. The mirror check's own step is capped at 15, and the
+    # clone and the install before it take minutes of their own; the rest of
+    # the job is the ten it always had.
+    timeout-minutes: 35
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -290,8 +327,14 @@ jobs:
           echo "status=${STATUS}" >> "$GITHUB_OUTPUT"
           echo "${DEFAULT_BRANCH}...${CANDIDATE:-<none>} = ${STATUS:-<unreadable>}"
 
-      - name: Decide
-        id: decide
+      # THE PROOF ALONE (DRE-6496). The decision as it always was, and the
+      # question the mirror check below is gated on: would this run move the
+      # channel? A refusal here is the run's answer — `decide` replays the same
+      # arguments and returns it unchanged — so a PR-head, displaced, held or
+      # already-current run never clones agent-bureau. The arguments are saved
+      # NUL-separated, because the reason is somebody's typing.
+      - name: Decide on the proof
+        id: proof
         env:
           # `steps.resolve` did not run on a PR-head harness run, and that run
           # still reaches the decision (DRE-3070) — so fall back to the run's
@@ -336,14 +379,164 @@ jobs:
               ARGS+=(--force)
             fi
           fi
-          python3 scripts/promote_channel.py \
-            --sha "$CANDIDATE" \
+          ARGS=(--sha "$CANDIDATE" \
             --statuses-file combined_status.json \
             --ancestry "$ANCESTRY" \
             --hold "$HOLD" \
             --conclusion "$CONCLUSION" \
             --branch "$BRANCH" \
-            "${ARGS[@]}"
+            "${ARGS[@]}")
+          printf '%s\0' "${ARGS[@]}" > "$RUNNER_TEMP/decide-args"
+          python3 scripts/promote_channel.py "${ARGS[@]}"
+
+      # ---- The agent-bureau mirror check (DRE-6496) ----------------------
+      # Every step here runs only where the proof would promote, and every
+      # setup step is `continue-on-error`: a token that does not mint, a
+      # checkout or an install that fails is a check that COULD NOT RUN —
+      # `mirror-check-blocked`, never a failing candidate (the DRE-3076
+      # distinction). Their outcomes reach the check, which says which one.
+      #
+      # The mint shape is harness.yml's for `bureau-harness`: the bureau App,
+      # scoped to the one repository it reads.
+      - name: Mint agent-bureau read token
+        id: ab_token
+        if: >-
+          steps.proof.outputs.promote == 'true' &&
+          (github.event_name == 'workflow_dispatch' ||
+           github.event.workflow_run.head_branch == 'main')
+        continue-on-error: true
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: ${{ secrets.BUREAU_APP_ID }}
+          private-key: ${{ secrets.BUREAU_APP_PRIVATE_KEY }}
+          owner: dreadnought-foundry
+          repositories: agent-bureau
+
+      # The head of agent-bureau's DEFAULT branch at the moment of the run —
+      # no `ref`, so nothing else is ever tested: not a branch, not a tag, not
+      # an open pull request. Credentials are not left in the checkout, where
+      # agent-bureau's tests could read them.
+      - name: Check out agent-bureau
+        id: ab_checkout
+        if: steps.proof.outputs.promote == 'true'
+        continue-on-error: true
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: dreadnought-foundry/agent-bureau
+          token: ${{ steps.ab_token.outputs.token }}
+          path: agent-bureau
+          persist-credentials: false
+
+      # The candidate, where agent-bureau's tests look for bureau-pipeline:
+      # `.bureau-pipeline` under its root. The check also exports it as
+      # `BUREAU_PIPELINE_DIR`, so both ways a test finds the pipeline read it.
+      - name: Check out the candidate inside agent-bureau
+        id: candidate_checkout
+        if: steps.proof.outputs.promote == 'true'
+        continue-on-error: true
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ steps.resolve.outputs.candidate }}
+          path: agent-bureau/.bureau-pipeline
+          persist-credentials: false
+
+      # Where `stable` stands now — what a failing test is re-read against
+      # before it counts. None on the first ever promotion; the check then
+      # blocks on a failure rather than lay it at the candidate.
+      - name: Check out stable beside it
+        id: stable_checkout
+        if: >-
+          steps.proof.outputs.promote == 'true' &&
+          steps.ancestry.outputs.head != ''
+        continue-on-error: true
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ steps.ancestry.outputs.head }}
+          path: bureau-pipeline-stable
+          persist-credentials: false
+
+      # Discovered, never typed: the tests whose text names
+      # BUREAU_PIPELINE_DIR or .bureau-pipeline, and the requirement files at
+      # agent-bureau's root and in the directories that hold them.
+      - name: Find agent-bureau's mirror tests
+        id: discover
+        if: steps.proof.outputs.promote == 'true'
+        continue-on-error: true
+        run: |
+          python3 scripts/mirror_check.py discover \
+            --agent-bureau agent-bureau --prefix agent-bureau
+
+      - name: Install agent-bureau's dependencies
+        id: ab_install
+        if: steps.proof.outputs.promote == 'true'
+        continue-on-error: true
+        uses: ./.github/actions/setup-python-cached
+        with:
+          python-version: ${{ steps.discover.outputs.python_version || '3.12' }}
+          venv-path: .mirror-venv
+          requirements: ${{ steps.discover.outputs.requirements }}
+
+      # Its own time limit, and the check stops itself a minute inside it so a
+      # slow run still writes `blocked` rather than nothing — though nothing
+      # is read as blocked too. The run summary gets the `⏱ mirror check`
+      # line, the harness's duration shape, so the budget is measured on live
+      # runs rather than assumed. The App token is deliberately not in this
+      # step's environment.
+      - name: Run agent-bureau's mirror tests against the candidate
+        id: mirror
+        if: steps.proof.outputs.promote == 'true'
+        continue-on-error: true
+        timeout-minutes: 15
+        env:
+          CANDIDATE: ${{ steps.resolve.outputs.candidate }}
+          CHANNEL_HEAD: ${{ steps.ancestry.outputs.head }}
+          TOKEN: ${{ steps.ab_token.outcome }}
+          AB_CHECKOUT: ${{ steps.ab_checkout.outcome }}
+          CANDIDATE_CHECKOUT: ${{ steps.candidate_checkout.outcome }}
+          DISCOVER: ${{ steps.discover.outcome }}
+          INSTALL: ${{ steps.ab_install.outcome }}
+        run: |
+          python3 scripts/mirror_check.py run \
+            --agent-bureau agent-bureau --stable bureau-pipeline-stable \
+            --candidate "$CANDIDATE" --stable-sha "$CHANNEL_HEAD" \
+            --out mirror_result.json \
+            --setup "token=$TOKEN" \
+            --setup "agent-bureau checkout=$AB_CHECKOUT" \
+            --setup "candidate checkout=$CANDIDATE_CHECKOUT" \
+            --setup "discovery=$DISCOVER" \
+            --setup "install=$INSTALL"
+
+      # THE VERDICT: the proof's arguments replayed, plus the mirror check's
+      # result. A refusal above comes back unchanged; a promotion is weighed
+      # against the result, and an ABSENT result — the check timed out or
+      # never ran — is a blocked check unless a person forced the promote.
+      - name: Decide
+        id: decide
+        run: |
+          ARGS=()
+          if [ -s "$RUNNER_TEMP/decide-args" ]; then
+            mapfile -d '' ARGS < "$RUNNER_TEMP/decide-args"
+          fi
+          python3 scripts/promote_channel.py "${ARGS[@]}" \
+            --mirror-result mirror_result.json
+
+      # The card a refusal owes (DRE-6496): ONE in agent-bureau per breakage,
+      # filed through `linear_ops.py oneoff` so it lands in Planning and is
+      # classified like any one-off. An open card with the same title — the
+      # sorted mirrored files — gets one comment naming the new candidate
+      # instead, and none if it already names it. Linear never changes the
+      # verdict: a card that cannot be filed is one warning line and `card
+      # owed` in the receipt below, and the refusal stands.
+      - name: File the mirror card
+        id: mirror_card
+        if: steps.decide.outputs.outcome == 'mirror-tests-failed'
+        continue-on-error: true
+        env:
+          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          python3 scripts/mirror_check.py card \
+            --result mirror_result.json --run-url "$RUN_URL"
 
       # Force, because the channel is a MOVING ref by design — that is what
       # makes it a staged deploy rather than a frozen pin.
@@ -529,7 +722,15 @@ jobs:
           EVENT: ${{ github.event_name }}
           MOVER: ${{ github.actor }}
           REASON_GIVEN: ${{ github.event.inputs.reason }}
+          # DRE-6496: the mirror check's one-line result (empty where the
+          # proof refused and the check never ran), and the card a refusal
+          # filed — `card owed` when Linear would not take it.
+          MIRROR: ${{ steps.decide.outputs.mirror }}
+          MIRROR_CARD: ${{ steps.mirror_card.outputs.card }}
         run: |
+          if [ "$OUTCOME" = "mirror-tests-failed" ] && [ -z "$MIRROR_CARD" ]; then
+            MIRROR_CARD="card owed"
+          fi
           if [ "$PROMOTED" = "true" ]; then
             HEADLINE="moved stable to ${CANDIDATE:0:7}"
           else
@@ -554,11 +755,12 @@ jobs:
               echo "- mover: ${MOVER} (${EVENT})"
               echo "- at: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
               echo "- reason given: ${REASON_GIVEN:-n/a — the harness moved it}"
+              echo "- mirror check: ${MIRROR:-not run}"
               echo ""
               echo "${REASON}"
             } >> "$GITHUB_STEP_SUMMARY"
             if [ "$OUTCOME" = "by-hand-forced-promoting" ]; then
-              echo "::warning title=Forced channel promotion::${MOVER} moved stable to ${CANDIDATE:0:7} PAST the integration-harness status: ${REASON_GIVEN}"
+              echo "::warning title=Forced channel promotion::${MOVER} moved stable to ${CANDIDATE:0:7} PAST the integration-harness status and the mirror check (mirror: ${MIRROR:-not run}): ${REASON_GIVEN}"
             fi
           elif [ "$BRANCH" = "main" ] || [ "$EVENT" = "workflow_dispatch" ]; then
             echo "::warning title=Did not promote::${OUTCOME} — candidate ${CANDIDATE:0:7}, gating run ${HARNESS_RUN:-none}, scenarios ${SCENARIOS:-none}: ${REASON}"
@@ -570,6 +772,10 @@ jobs:
               echo "- stable is still at: \`${CHANNEL_HEAD:-unknown}\`"
               echo "- gating run: ${HARNESS_RUN:-none — this was a by-hand dispatch}"
               echo "- failing scenarios: ${SCENARIOS:-none}"
+              echo "- mirror check: ${MIRROR:-not run}"
+              if [ "$OUTCOME" = "mirror-tests-failed" ]; then
+                echo "- mirror card: ${MIRROR_CARD}"
+              fi
               echo ""
               echo "${REASON}"
               echo ""

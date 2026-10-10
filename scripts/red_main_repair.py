@@ -31,8 +31,18 @@ gathers the inputs from GitHub's own records and acts on the output:
     a new failure event a no-op — the in-flight repair's merge re-runs CI
     on main and either clears the newer failure or produces a fresh event.
   * Debounce by SHA (guardrail 3). A repair branch for this SHA already
-    existing (agent still building, or died pre-PR) makes a duplicate event
-    a no-op.
+    existing, with no pull request on it, makes a duplicate event a no-op
+    while the agent may still be building it…
+  * …unless the branch is AHEAD of the default branch (DRE-6526). Then the
+    agent pushed its fix and ended before opening the pull request, and the
+    answer is `finish-unlanded`: no agent, and the workflow opens the pull
+    request through `repair_finish.py`. On 2026-10-09 the agent of Red-Main
+    Repair run 38003951327 pushed `repair/DRE-6511-bcb36adf6037`, one commit
+    ahead of `main`, and stopped; the medic's 16:24 PT retry (attempt 2) read
+    `duplicate-event` and opened nothing, and every later failure event at
+    that commit would have read the same. `--compares-file` carries the
+    comparison of each record branch with the default branch; one that cannot
+    be read answers `duplicate-event`, as before.
   * Superseded (DRE-5069). A LATER run of the same workflow on the default
     branch — created after the failed run, on another commit, concluded
     `success` — means `main` has already moved past the fault, and the
@@ -57,7 +67,10 @@ CLI (stdout appends verbatim to $GITHUB_OUTPUT; humans read stderr):
     red_main_repair.py decide \
         --conclusion <c> --head-branch <b> --default-branch <d> \
         --head-sha <sha> --log-file <f> --refs-file <f> --pulls-file <f> \
-        [--workflow-name <name>] [--history-file <f>]
+        [--workflow-name <name>] [--history-file <f>] \
+        [--compares-file <f>]
+
+    red_main_repair.py record-refs --refs-file <f> --head-sha <sha>
 
   --refs-file  raw REST payload of GET git/matching-refs/heads/repair/
   --pulls-file raw REST payload of GET pulls?state=all&per_page=100
@@ -69,6 +82,16 @@ CLI (stdout appends verbatim to $GITHUB_OUTPUT; humans read stderr):
                    Optional, and a file that is missing, marker-filled or
                    malformed reads as "no history" — today's behaviour. It
                    is never read as "repeated" (DRE-4674).
+  --compares-file  `{"<ref name>": <GET compare/<default>...<ref> payload |
+                   null>}` for each record branch, or the FETCH-FAILED
+                   marker. Optional, and anything unreadable for the one
+                   record branch reads as "nothing known about it" —
+                   `duplicate-event`, never `finish-unlanded` (DRE-6526).
+
+`record-refs` prints the ref names in a `--refs-file` payload that ARE an
+attempt at `--head-sha` (`_sha_record_re`), one per line, so the workflow's
+comparison gather never restates the rule. A bad sha or an unreadable file
+prints nothing; exit 0 either way.
 
 Emits go=, branch=, attempt=, escalate=, reason=, the timeout_* detail
 (job / step / limit / commits) and superseded_by= (the green run's id, empty
@@ -87,6 +110,7 @@ import re
 import sys
 from datetime import datetime
 
+import fix_dead_run
 import github_output
 import medic_classify
 import promote_channel
@@ -102,6 +126,10 @@ INFRA_SIGNATURES = medic_classify._INFRA_SIGNATURES + (
     re.compile(r"lost communication with the server", re.I),
     re.compile(r"runner has received a shutdown signal", re.I),
     re.compile(r"no space left on device", re.I),
+    # DRE-6575: AWS took back the Spot machine under the job. Twice in three
+    # days (DRE-6262, DRE-6563) an agent was sent at a `main` whose re-run
+    # went green with nobody touching it. DRE-6572's sentence, not a copy.
+    re.compile(fix_dead_run.SPOT_INTERRUPTED, re.I),
 )
 
 # The harness's own "the SANDBOX blocked this run" receipt (DRE-3076), written
@@ -482,12 +510,15 @@ def decide(
     pulls,
     workflow_name: str = "",
     history=None,
+    compares=None,
 ) -> dict:
     """The whole trigger decision. `refs` is an iterable of existing branch
     names (plain, e.g. "repair/<sha>"); `pulls` an iterable of dicts with
     head_ref / state ("open"|"closed") / merged (bool) covering repair PRs
     of ANY state; `history` the document `repair_history.py` gathers, or None
-    for "nothing is known about earlier runs". Returns go / branch / attempt /
+    for "nothing is known about earlier runs"; `compares` the comparison of
+    each record branch with the default branch keyed by branch name, or None
+    for "nothing is known about the branches". Returns go / branch / attempt /
     escalate / reason plus the timeout_* detail and superseded_by."""
 
     # Every decision answers these, so the workflow can read them without
@@ -495,7 +526,8 @@ def decide(
     # interpolate an empty expression into a card or a prompt.
     detail = {"timeout_job": "", "timeout_step": "", "timeout_limit": "",
               "timeout_commits": "", "superseded_by": "",
-              "infra_signature": "", "infra_line": ""}
+              "infra_signature": "", "infra_line": "",
+              "compare_unreadable": ""}
 
     def noop(reason: str, escalate: bool = False) -> dict:
         return {"go": False, "branch": "", "attempt": 0,
@@ -560,13 +592,44 @@ def decide(
             for p in pulls if record_re.match(p["head_ref"])
         )
         branch = repair_branch(head_sha, 2)
-        if not closed_unmerged or branch in records:
-            # Branch exists with no definitively-failed PR: the first agent
-            # is still building (concurrency queues us behind it) or died
-            # pre-PR (its run failed loudly; the medic owns that).
-            return noop("duplicate-event")
-        return _dispatch(branch, 2, repeat, detail)
+        if closed_unmerged and branch not in records:
+            return _dispatch(branch, 2, repeat, detail)
+        if not closed_unmerged:
+            # No pull request of any state on the one record: an open one
+            # is `repair-in-flight` above and a merged one `already-repaired`.
+            # A branch ahead of the default branch is a fix the agent pushed
+            # and left (DRE-6526) — the workflow opens its pull request.
+            (record,) = records
+            ahead = _ahead(compares, record)
+            if ahead:
+                return {"go": False, "branch": record, "attempt": 0,
+                        "escalate": False, "reason": "finish-unlanded",
+                        **detail}
+            if ahead is None:
+                detail = {**detail, "compare_unreadable": record}
+        # The agent may still be building (concurrency queues us behind it),
+        # or nothing is known about its branch: no second agent, and nothing
+        # opened on a comparison nobody could read.
+        return noop("duplicate-event")
     return _dispatch(repair_branch(head_sha, 1), 1, repeat, detail)
+
+
+def _ahead(compares, branch: str):
+    """True when `branch` is ahead of the default branch, False when it is
+    not, None when its comparison cannot be read.
+
+    Readable means GitHub's compare payload with an integer `ahead_by` — a
+    bool, float or string is not one. A branch `ahead` or `diverged` with
+    commits of its own has something to open; `repair_finish.py` asks the
+    same question of the same field before it opens anything.
+    """
+    compare = compares.get(branch) if isinstance(compares, dict) else None
+    if not isinstance(compare, dict):
+        return None
+    ahead_by = compare.get("ahead_by")
+    if not isinstance(ahead_by, int) or isinstance(ahead_by, bool):
+        return None
+    return ahead_by > 0
 
 
 def _dispatch(branch: str, attempt: int, repeat, detail: dict) -> dict:
@@ -614,6 +677,40 @@ def _load_records(refs_file: str, pulls_file: str):
     return refs, pulls
 
 
+def load_compares(path: str):
+    """The gathered comparisons, `{ref name: payload | None}`, or None.
+
+    None is the fail-closed answer: a missing file, the FETCH-FAILED marker
+    or malformed JSON is "nothing known about the branches", which `decide`
+    reads as `duplicate-event` — never as a branch to open (DRE-6526).
+    """
+    if not path:
+        return None
+    try:
+        with open(path, encoding="utf-8") as f:
+            doc = json.load(f)
+    except (OSError, ValueError):
+        return None
+    return doc if isinstance(doc, dict) else None
+
+
+def record_refs(refs_file: str, head_sha: str) -> list[str]:
+    """The ref names in a `matching-refs` payload that ARE an attempt at
+    `head_sha` — `_sha_record_re`, the rule `decide` counts — in payload
+    order. A bad sha or an unreadable payload is no refs at all."""
+    if not _SHA_RE.match(head_sha or ""):
+        return []
+    try:
+        with open(refs_file) as f:
+            raw_refs = json.load(f)
+        names = [(r.get("ref") or "").removeprefix("refs/heads/")
+                 for r in raw_refs]
+    except (OSError, ValueError, AttributeError, TypeError):
+        return []
+    rule = _sha_record_re(head_sha)
+    return [name for name in names if rule.match(name)]
+
+
 def outputs(decision: dict) -> str:
     """The block the workflow appends to `$GITHUB_OUTPUT` for `decision`.
 
@@ -659,7 +756,18 @@ def main(argv: list[str]) -> int:
     # Optional: the runs this one may be compared against (DRE-4674). Absent,
     # unreadable or marker-filled ⇒ "no history" ⇒ today's behaviour.
     d.add_argument("--history-file", default="")
+    # Optional: each record branch compared with the default branch
+    # (DRE-6526). Absent or unreadable ⇒ "nothing known" ⇒ duplicate-event.
+    d.add_argument("--compares-file", default="")
+    r = sub.add_parser("record-refs")
+    r.add_argument("--refs-file", required=True)
+    r.add_argument("--head-sha", required=True)
     args = parser.parse_args(argv)
+
+    if args.cmd == "record-refs":
+        for name in record_refs(args.refs_file, args.head_sha):
+            print(name)
+        return 0
 
     # Stdout is the output FILE for this step, so the decision is made with
     # that channel shut: anything this module or anything it imports prints
@@ -672,7 +780,7 @@ def main(argv: list[str]) -> int:
                         "timeout_job": "", "timeout_step": "",
                         "timeout_limit": "", "timeout_commits": "",
                         "superseded_by": "", "infra_signature": "",
-                        "infra_line": ""}
+                        "infra_line": "", "compare_unreadable": ""}
             print("repair decide: attempt records unreadable — fail-closed, no "
                   "dispatch (the next failure event retries with fresh records)",
                   file=sys.stderr)
@@ -694,10 +802,19 @@ def main(argv: list[str]) -> int:
                 pulls=pulls,
                 workflow_name=args.workflow_name,
                 history=history,
+                compares=load_compares(args.compares_file),
             )
+            # The branch a go dispatches to, or the one `finish-unlanded`
+            # opens; every other decision names none.
             print(f"repair decide: {decision['reason']}"
-                  + (f" → {decision['branch']}" if decision["go"] else ""),
+                  + (f" → {decision['branch']}" if decision["branch"] else ""),
                   file=sys.stderr)
+            if decision["compare_unreadable"]:
+                print(f"repair decide: the comparison of "
+                      f"{decision['compare_unreadable']} with "
+                      f"{args.default_branch} could not be read — fail-closed, "
+                      f"nothing opened (the next failure event retries with a "
+                      f"fresh comparison)", file=sys.stderr)
             if decision["infra_signature"]:
                 # DRE-6522: the 16:07 PT backoff of 2026-10-09 could not be
                 # explained from its own run. This line is the explanation.

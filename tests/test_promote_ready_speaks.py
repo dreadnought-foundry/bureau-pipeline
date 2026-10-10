@@ -27,8 +27,11 @@ What this module pins down:
      candidates went unconsidered and the lowest-numbered one — a 200-card
      Backlog must not produce 200 lines.
   4. The hold-label and epic skips speak.
-  5. The agent-blocker branch still prints its existing line — asserted, not
-     assumed, because this card must not regress the one exit that was right.
+  5. The agent-blocker block prints ONE line per outcome the gate decides,
+     every one opening `promotion: <card> agent-blocker class=` (DRE-6448) —
+     asserted, not assumed, because this card must not regress the one exit
+     that was right — and the legacy `has an unresolved agent-blocker —
+     skipping` line is gone from the gate.
 
 Run: cd bureau-pipeline && python3 -m pytest tests/test_promote_ready_speaks.py -v
 """
@@ -36,6 +39,7 @@ from __future__ import annotations
 
 import ast
 import os
+import subprocess  # nosec B404 — a fixed-arg grep over the checkout
 import sys
 from pathlib import Path
 from unittest.mock import patch
@@ -48,6 +52,8 @@ os.environ.setdefault("LINEAR_API_KEY", "test-key")
 os.environ.setdefault("REPO", "dreadnought-foundry/agent-bureau")
 os.environ.setdefault("REPO_SLUG", "agent-bureau")
 
+import blocker_resolve  # noqa: E402
+import linear_ops  # noqa: E402
 import planning_shape  # noqa: E402
 import promotion_stall  # noqa: E402
 import reconcile  # noqa: E402
@@ -210,7 +216,7 @@ def _card(identifier="DRE-2826", *, labels=("repo:agent-bureau",), relations=(),
     }
 
 
-def _sweep(cards, active_count=0, card_state="Done"):
+def _sweep(cards, active_count=0, card_state="Done", **kwargs):
     """Run promote_ready over `cards` with every Linear read stubbed."""
     reconcile._write_failures.clear()
     reconcile._card_skips.clear()
@@ -221,7 +227,7 @@ def _sweep(cards, active_count=0, card_state="Done"):
     ), patch.object(reconcile.linear_ops, "cmd_advance"), patch.object(
         reconcile.linear_ops, "cmd_comment"
     ), patch.object(reconcile.linear_ops, "count_comments", return_value=0):
-        return reconcile.promote_ready(active_count=active_count)
+        return reconcile.promote_ready(active_count=active_count, **kwargs)
 
 
 def _lines_naming(captured, identifier):
@@ -303,13 +309,56 @@ def test_repo_mismatch_skip_stays_silent(capsys):
     assert _lines_naming(capsys.readouterr(), "DRE-2903") == []
 
 
-def test_agent_blocker_branch_still_prints_its_line(capsys):
-    """Do not regress the one exit that already spoke (DRE-1585)."""
-    blocked = _card(
-        "DRE-2904",
-        comments=["🛑 Agent blocked: the upstream endpoint does not exist. Run: https://x"],
-    )
-    assert _sweep([blocked]) == 0
+CLASS_MARKER = (
+    "🛑 Agent blocked: class=wrong-repo · This card was sent to the wrong "
+    "repository. — parked in Backlog until the blocker is resolved. Run: https://x"
+)
+
+
+def _blocker_pass(*, live=None, answer=("relabeled", "repo:bureau-pipeline"), **kwargs):
+    """One pass over a card carrying a class marker, with the resolver — the
+    one function of the epic this file stubs — answering `answer`, and the
+    live re-read answering `live` (the board's card by default, or an error)."""
+    board = _card("DRE-2904", comments=[CLASS_MARKER])
+
+    def fetch(only, *, stamped=False):
+        if isinstance(live, BaseException):
+            raise live
+        return [board] if live is None else live
+
+    with patch.object(reconcile, "_fetch_backlog_linear", side_effect=fetch), \
+            patch.object(blocker_resolve, "resolve_blocker", return_value=answer) as stub:
+        promoted = _sweep([board], **kwargs)
+    return promoted, stub
+
+
+@pytest.mark.parametrize("outcome, kwargs, tail", [
+    ("resolved", {"resolve_blockers": True},
+     " resolved — relabeled: repo:bureau-pipeline"),
+    ("not the full sweep", {},
+     " — not resolved this pass: blockers are resolved by the full sweep"),
+    ("unreadable live", {"resolve_blockers": True,
+                         "live": linear_ops.LinearError("HTTP 502")},
+     " — not resolved this pass: it could not be read live (HTTP 502)"),
+    ("no longer in Backlog", {"resolve_blockers": True, "live": []},
+     " — no longer in Backlog since the board was read — skipping"),
+    ("resolved since", {"resolve_blockers": True, "live": [_card(
+        "DRE-2904", comments=["Moved the label myself.", CLASS_MARKER])]},
+     " — resolved since the board was read — skipping"),
+])
+def test_the_agent_blocker_block_prints_one_line_per_outcome(outcome, kwargs, tail, capsys):
+    """Do not regress the one exit that already spoke (DRE-1585): every
+    outcome the gate decides for a blocker card is ONE line, naming its
+    class (DRE-6448)."""
+    promoted, _stub = _blocker_pass(**kwargs)
+    assert promoted == 0
     held = _lines_naming(capsys.readouterr(), "DRE-2904")
-    assert len(held) == 1, f"expected exactly one line, got {held}"
-    assert "unresolved agent-blocker" in held[0]
+    assert held == ["promotion: DRE-2904 agent-blocker class=wrong-repo" + tail], outcome
+
+
+def test_the_legacy_agent_blocker_line_is_gone_from_scripts():
+    found = subprocess.run(
+        ["grep", "-rnI", "--include=*.py", "has an unresolved agent-blocker — skipping",
+         str(_SCRIPTS)],
+        capture_output=True, text=True, check=False)
+    assert found.returncode == 1, found.stdout

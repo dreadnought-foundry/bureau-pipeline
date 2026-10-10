@@ -546,6 +546,256 @@ class SupersededReceiptTest(unittest.TestCase):
         self.assertTrue(triage)
 
 
+# --------------------------------------------------------------------------- #
+# A pushed, abandoned repair branch (DRE-6526)                                 #
+# --------------------------------------------------------------------------- #
+
+# 2026-10-09, from the run records. The repair agent for DRE-6511 pushed its
+# fix to this branch, one commit ahead of main, and ended before opening the
+# pull request. The medic's 16:24 PT retry of Red-Main Repair run 38003951327
+# (attempt 2) printed `repair decide: duplicate-event` and opened nothing.
+REPLAY_SHA = "bcb36adf60370d0e8052c5a3f81021900f93165b"
+REPLAY_BRANCH = "repair/DRE-6511-bcb36adf6037"
+REPLAY_LOG = """
+=== FAILURES ===
+____ test_the_repair_run_waits_for_nothing ____
+E       AssertionError: 'run_in_background' unexpectedly found in prompt
+=== 1 failed, 5210 passed ===
+"""
+AHEAD = {"status": "ahead", "ahead_by": 1}
+
+
+def _replay(**overrides):
+    kwargs = dict(
+        head_sha=REPLAY_SHA,
+        log_text=REPLAY_LOG,
+        refs=[REPLAY_BRANCH],
+        # Pull requests on OTHER heads, none on the repair branch.
+        pulls=[_pull("agent/DRE-6511-repair-agent", state="closed",
+                     merged=True),
+               _pull(f"repair/{OTHER_SHA}", state="closed", merged=True)],
+        compares={REPLAY_BRANCH: AHEAD},
+    )
+    kwargs.update(overrides)
+    return _decide(**kwargs)
+
+
+class FinishUnlandedTest(unittest.TestCase):
+    """One record branch, ahead of main, with no pull request of any state on
+    it: the agent pushed and left, and the workflow opens the pull request."""
+
+    def test_the_2026_10_09_replay_answers_finish_unlanded(self):
+        d = _replay()
+        self.assertEqual(d["reason"], "finish-unlanded")
+        self.assertFalse(d["go"])
+        self.assertFalse(d["escalate"])
+        self.assertEqual(d["branch"], REPLAY_BRANCH)
+        self.assertEqual(d["attempt"], 0)
+
+    def test_the_same_inputs_without_a_comparison_answer_duplicate_event(self):
+        # The answer before DRE-6526, pinned beside it: no comparison handed
+        # in is nothing known about the branch, and nothing is opened.
+        d = _replay(compares=None)
+        self.assertEqual(d["reason"], "duplicate-event")
+        self.assertFalse(d["go"])
+        self.assertEqual(d["branch"], "")
+
+    def test_the_cardless_branch_shape_finishes_too(self):
+        branch = f"repair/{REPLAY_SHA}"
+        d = _replay(refs=[branch], compares={branch: AHEAD})
+        self.assertEqual(d["reason"], "finish-unlanded")
+        self.assertEqual(d["branch"], branch)
+
+    def test_an_open_repair_pull_request_is_still_in_flight(self):
+        d = _replay(pulls=[_pull(f"repair/{OTHER_SHA}")])
+        self.assertEqual(d["reason"], "repair-in-flight")
+        self.assertFalse(d["go"])
+
+    def test_a_merged_repair_for_this_sha_is_still_already_repaired(self):
+        d = _replay(pulls=[_pull(REPLAY_BRANCH, state="closed", merged=True)])
+        self.assertEqual(d["reason"], "already-repaired")
+
+    def test_a_branch_nothing_ahead_is_a_duplicate_event(self):
+        for compare in ({"status": "identical", "ahead_by": 0},
+                        {"status": "behind", "ahead_by": 0, "behind_by": 3}):
+            with self.subTest(compare=compare):
+                d = _replay(compares={REPLAY_BRANCH: compare})
+                self.assertEqual(d["reason"], "duplicate-event")
+                self.assertFalse(d["go"])
+
+    def test_a_closed_unmerged_pull_request_still_earns_attempt_2(self):
+        d = _replay(pulls=[_pull(REPLAY_BRANCH, state="closed")])
+        self.assertTrue(d["go"])
+        self.assertEqual(d["reason"], "dispatch")
+        self.assertEqual(d["attempt"], 2)
+        # The decide step's cardless `-2` branch; the card step names it.
+        self.assertEqual(d["branch"], f"repair/{REPLAY_SHA}-2")
+
+    def test_two_records_are_still_budget_exhausted(self):
+        second = f"{REPLAY_BRANCH}-2"
+        d = _replay(refs=[REPLAY_BRANCH, second],
+                    compares={REPLAY_BRANCH: AHEAD, second: AHEAD})
+        self.assertEqual(d["reason"], "budget-exhausted")
+        self.assertTrue(d["escalate"])
+        self.assertFalse(d["go"])
+
+    def test_an_unreadable_comparison_is_a_duplicate_event(self):
+        # Fail closed, as unreadable attempt records do: nothing dispatched,
+        # nothing opened.
+        for compares in ({REPLAY_BRANCH: None},
+                         {},
+                         {"repair/DRE-1-000000000000": AHEAD},
+                         {REPLAY_BRANCH: {"status": "ahead"}},
+                         {REPLAY_BRANCH: {"status": "ahead", "ahead_by": "1"}},
+                         {REPLAY_BRANCH: {"status": "ahead", "ahead_by": True}},
+                         {REPLAY_BRANCH: {"status": "ahead", "ahead_by": 1.0}},
+                         {REPLAY_BRANCH: "ahead"}):
+            with self.subTest(compares=compares):
+                d = _replay(compares=compares)
+                self.assertEqual(d["reason"], "duplicate-event")
+                self.assertFalse(d["go"])
+                self.assertEqual(d["branch"], "")
+
+    def test_the_next_failure_event_after_the_open_is_in_flight(self):
+        # Opening is safe to repeat: once the pull request is open, the next
+        # failure event at the same sha sees it and answers repair-in-flight.
+        d = _replay(pulls=[_pull(REPLAY_BRANCH, state="open")])
+        self.assertEqual(d["reason"], "repair-in-flight")
+        self.assertFalse(d["go"])
+
+    def test_superseded_still_outranks_it(self):
+        d = _decide(
+            head_sha=FORK_SHA, refs=[f"repair/{FORK_SHA}"],
+            compares={f"repair/{FORK_SHA}": AHEAD},
+            history=_superseding_history(_branch_run()),
+        )
+        self.assertEqual(d["reason"], "superseded")
+
+    def test_the_old_comment_is_gone(self):
+        with open(os.path.join(SCRIPTS, "red_main_repair.py"),
+                  encoding="utf-8") as fh:
+            self.assertNotIn("died pre-PR", fh.read())
+
+
+class FinishUnlandedCliTest(unittest.TestCase):
+    """`--compares-file`, keyed by ref name, and the stderr it says."""
+
+    def _cli(self, compares_payload):
+        with tempfile.TemporaryDirectory() as td:
+            paths = {name: os.path.join(td, name)
+                     for name in ("log", "refs", "pulls", "compares")}
+            open(paths["log"], "w").write(REPLAY_LOG)
+            open(paths["refs"], "w").write(json.dumps(
+                [{"ref": f"refs/heads/{REPLAY_BRANCH}"}]))
+            open(paths["pulls"], "w").write("[]")
+            argv = [sys.executable, os.path.join(SCRIPTS, "red_main_repair.py"),
+                    "decide", "--conclusion", "failure",
+                    "--head-branch", "main", "--default-branch", "main",
+                    "--head-sha", REPLAY_SHA, "--log-file", paths["log"],
+                    "--refs-file", paths["refs"], "--pulls-file", paths["pulls"]]
+            if compares_payload is not None:
+                open(paths["compares"], "w").write(compares_payload)
+                argv += ["--compares-file", paths["compares"]]
+            return subprocess.run(argv, capture_output=True, text=True)
+
+    def test_the_replay_through_the_cli(self):
+        res = self._cli(json.dumps({REPLAY_BRANCH: AHEAD}))
+        self.assertEqual(res.returncode, 0, res.stderr)
+        out = CliTest._outputs(res.stdout)
+        self.assertEqual(out["reason"], "finish-unlanded")
+        self.assertEqual(out["go"], "false")
+        self.assertEqual(out["escalate"], "false")
+        self.assertEqual(out["branch"], REPLAY_BRANCH)
+        self.assertIn(f"repair decide: finish-unlanded → {REPLAY_BRANCH}",
+                      res.stderr)
+        self.assertNotIn("could not be read", res.stderr)
+
+    def test_outputs_add_no_key(self):
+        res = self._cli(json.dumps({REPLAY_BRANCH: AHEAD}))
+        self.assertEqual(
+            set(CliTest._outputs(res.stdout)),
+            set(CliTest._outputs(self._cli(None).stdout)))
+
+    def test_a_fetch_failed_compares_file_is_unreadable(self):
+        res = self._cli("FETCH-FAILED\n")
+        self.assertEqual(res.returncode, 0, res.stderr)
+        out = CliTest._outputs(res.stdout)
+        self.assertEqual(out["reason"], "duplicate-event")
+        self.assertEqual(out["go"], "false")
+        self.assertEqual(out["branch"], "")
+        lines = [line for line in res.stderr.splitlines()
+                 if "could not be read" in line]
+        self.assertEqual(len(lines), 1, res.stderr)
+        self.assertIn(REPLAY_BRANCH, lines[0])
+        self.assertIn("comparison", lines[0])
+
+    def test_a_null_entry_and_a_missing_file_are_unreadable(self):
+        for payload in (json.dumps({REPLAY_BRANCH: None}), "{}", None):
+            with self.subTest(payload=payload):
+                res = self._cli(payload)
+                self.assertEqual(
+                    CliTest._outputs(res.stdout)["reason"], "duplicate-event")
+                self.assertIn("could not be read", res.stderr)
+
+    def test_a_branch_nothing_ahead_says_nothing_unreadable(self):
+        res = self._cli(json.dumps(
+            {REPLAY_BRANCH: {"status": "identical", "ahead_by": 0}}))
+        self.assertEqual(CliTest._outputs(res.stdout)["reason"],
+                         "duplicate-event")
+        self.assertNotIn("could not be read", res.stderr)
+
+
+class RecordRefsCliTest(unittest.TestCase):
+    """`record-refs` prints the refs that ARE an attempt at the sha, so the
+    workflow's shell loop never restates `_sha_record_re`."""
+
+    REFS = [
+        REPLAY_BRANCH,
+        f"{REPLAY_BRANCH}-2",
+        f"repair/{REPLAY_SHA}",
+        f"repair/{REPLAY_SHA}-2",
+        # Not attempts at this commit:
+        "repair/DRE-6511-aaaaaaaaaaaa",
+        f"repair/{OTHER_SHA}",
+        f"{REPLAY_BRANCH}-x",
+        f"repair/DRE-6511-{REPLAY_SHA}",
+        "agent/DRE-6526-finish-unlanded",
+    ]
+    MATCHING = REFS[:4]
+
+    def _run(self, payload, sha=REPLAY_SHA):
+        with tempfile.TemporaryDirectory() as td:
+            refs = os.path.join(td, "refs.json")
+            open(refs, "w").write(payload)
+            return subprocess.run(
+                [sys.executable, os.path.join(SCRIPTS, "red_main_repair.py"),
+                 "record-refs", "--refs-file", refs, "--head-sha", sha],
+                capture_output=True, text=True)
+
+    def test_prints_exactly_the_matching_refs(self):
+        res = self._run(json.dumps(
+            [{"ref": f"refs/heads/{name}"} for name in self.REFS]))
+        self.assertEqual(res.returncode, 0, res.stderr)
+        self.assertEqual(res.stdout.splitlines(), self.MATCHING)
+
+    def test_the_same_rule_decide_counts(self):
+        rule = red_main_repair._sha_record_re(REPLAY_SHA)
+        self.assertEqual([r for r in self.REFS if rule.match(r)],
+                         self.MATCHING)
+
+    def test_a_fetch_failed_refs_file_prints_nothing(self):
+        res = self._run("FETCH-FAILED\n")
+        self.assertEqual(res.returncode, 0, res.stderr)
+        self.assertEqual(res.stdout, "")
+
+    def test_a_bad_sha_prints_nothing(self):
+        res = self._run(json.dumps(
+            [{"ref": f"refs/heads/{name}"} for name in self.REFS]),
+            sha="main; rm -rf /")
+        self.assertEqual(res.returncode, 0, res.stderr)
+        self.assertEqual(res.stdout, "")
+
+
 class CliTest(unittest.TestCase):
     """The workflow contract: stdout carries only key=value lines appended
     verbatim to $GITHUB_OUTPUT."""

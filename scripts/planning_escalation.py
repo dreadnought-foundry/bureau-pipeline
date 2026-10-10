@@ -701,16 +701,16 @@ def _unchecked_prior_answer(why: str) -> str:
 
 def _first_line_of_answer(body: str) -> str:
     """The first line of his words: the answer text with the console's
-    "Answer from …" heading removed (and the blank line after it), cut to
+    "Answer from …" or "Comment from …" heading removed
+    (`console_receipt.HEADING_LINE`, and the blank line after it), cut to
     one line and defanged — the only words in the note the pipeline did not
     write."""
     import console_receipt
     import sanitize_untrusted
-    import spoken_thread
 
     lines = [line.strip() for line in
              console_receipt.answer_text(body).split("\n")]
-    if lines and spoken_thread._ANSWER_HEAD.match(lines[0]):
+    if lines and console_receipt.HEADING_LINE.match(lines[0]):
         lines = lines[1:]
         if lines and not lines[0]:
             lines = lines[1:]

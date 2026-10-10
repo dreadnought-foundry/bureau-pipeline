@@ -351,5 +351,307 @@ class WorkflowWiringTest(unittest.TestCase):
         )
 
 
+# --------------------------------------------------------------------------- #
+# DRE-6496 — agent-bureau's mirror tests are part of the proof                 #
+# --------------------------------------------------------------------------- #
+
+OPERATOR = "sidmohan"
+MIRROR_TEST = ("console/backend/tests/test_routing_verdicts_mirror.py"
+               "::test_the_mirror_matches_bureau_pipeline")
+RED_TEST = "cloud/relay/test_old.py::test_red"
+AB_SHA = "a" * 40
+
+
+def _mirror(status, *, failing=(), already_red=(), why=""):
+    return {
+        "status": status, "why": why, "candidate": SHA, "stable": "5" * 40,
+        "agent_bureau_sha": AB_SHA, "tests": 103, "seconds": 300,
+        "failing": [{"test": t, "mirrors": ["config/routing-verdicts.json"]}
+                    for t in failing],
+        "already_red": [{"test": t, "mirrors": []} for t in already_red],
+    }
+
+
+MIRROR_PASSED = _mirror("passed")
+MIRROR_FAILED = _mirror("failed", failing=[MIRROR_TEST])
+MIRROR_BLOCKED = _mirror("blocked", why="the install step concluded failure")
+
+
+def _with_mirror(mirror, *, manual=False, force=False, combined=None, **kw):
+    if manual:
+        kw.setdefault("trunk", "behind")
+        kw.setdefault("actor", OPERATOR)
+        kw.setdefault("reason", "who=sid testing")
+    base = promote_channel.evaluate(
+        _combined(_status("success")) if combined is None else combined,
+        SHA, ancestry=kw.pop("ancestry", "ahead"), manual=manual, force=force,
+        **kw)
+    return promote_channel.with_mirror(base, mirror, sha=SHA,
+                                       force=manual and force,
+                                       actor=kw.get("actor"),
+                                       reason=kw.get("reason"))
+
+
+class MirrorDecisionTest(unittest.TestCase):
+    def test_a_green_check_promotes_exactly_as_before(self):
+        d = _with_mirror(MIRROR_PASSED)
+        self.assertTrue(d.promote)
+        self.assertEqual(d.outcome, promote_channel.OUTCOME_PROMOTING)
+        self.assertIn(AB_SHA[:7], d.reason)
+
+    def test_a_candidate_that_breaks_a_mirror_does_not_become_stable(self):
+        d = _with_mirror(MIRROR_FAILED)
+        self.assertFalse(d.promote)
+        self.assertEqual(d.outcome, promote_channel.OUTCOME_MIRROR_FAILED)
+        self.assertIn(MIRROR_TEST, d.reason)
+        self.assertIn("config/routing-verdicts.json", d.reason)
+        self.assertIn(AB_SHA[:7], d.reason)
+
+    def test_a_test_already_red_on_stable_is_named_and_does_not_refuse(self):
+        d = _with_mirror(_mirror("passed", already_red=[RED_TEST]))
+        self.assertTrue(d.promote)
+        self.assertIn("already red on stable", d.reason)
+        self.assertIn(RED_TEST, d.reason)
+
+    def test_a_check_that_could_not_run_moves_nothing_and_blames_nobody(self):
+        d = _with_mirror(MIRROR_BLOCKED)
+        self.assertFalse(d.promote)
+        self.assertEqual(d.outcome, promote_channel.OUTCOME_MIRROR_BLOCKED)
+        self.assertIn("install", d.reason)
+        self.assertNotIn("fail on the candidate", d.reason)
+
+    def test_an_absent_result_on_a_promoting_route_is_a_blocked_check(self):
+        """Absent means the check did not run — legal only on a route that
+        never reaches promotion, or on a forced promote."""
+        d = _with_mirror(None)
+        self.assertFalse(d.promote)
+        self.assertEqual(d.outcome, promote_channel.OUTCOME_MIRROR_BLOCKED)
+
+    def test_a_refusal_before_the_check_is_unchanged_by_it(self):
+        for kw, outcome in (
+            ({"hold": "who=Ada paused"}, promote_channel.OUTCOME_HELD),
+            ({"conclusion": "cancelled"}, promote_channel.OUTCOME_CANCELLED),
+            ({"branch": "agent/x"}, promote_channel.OUTCOME_NOT_MAIN),
+            ({"ancestry": "identical"}, promote_channel.OUTCOME_NOT_AHEAD),
+        ):
+            for mirror in (None, MIRROR_FAILED):
+                with self.subTest(kw=kw, mirror=bool(mirror)):
+                    self.assertEqual(_with_mirror(mirror, **kw).outcome, outcome)
+
+    def test_an_ordinary_by_hand_promote_still_runs_the_check(self):
+        d = _with_mirror(MIRROR_FAILED, manual=True)
+        self.assertFalse(d.promote)
+        self.assertEqual(d.outcome, promote_channel.OUTCOME_MIRROR_FAILED)
+        self.assertEqual(_with_mirror(MIRROR_PASSED, manual=True).outcome,
+                         promote_channel.OUTCOME_BY_HAND)
+
+    def test_force_promotes_past_a_failed_or_blocked_check_and_names_it(self):
+        for mirror, word in ((MIRROR_FAILED, promote_channel.OUTCOME_MIRROR_FAILED),
+                             (MIRROR_BLOCKED, promote_channel.OUTCOME_MIRROR_BLOCKED)):
+            with self.subTest(word=word):
+                d = _with_mirror(mirror, manual=True, force=True)
+                self.assertTrue(d.promote)
+                self.assertEqual(d.outcome, promote_channel.OUTCOME_BY_HAND_FORCED)
+                self.assertIn(word, d.reason)
+                self.assertIn(OPERATOR, d.reason)
+
+    def test_force_past_a_red_harness_also_names_the_mirror_it_overrode(self):
+        d = _with_mirror(MIRROR_FAILED, manual=True, force=True,
+                         combined=_combined(_status("failure")))
+        self.assertTrue(d.promote)
+        self.assertEqual(d.outcome, promote_channel.OUTCOME_BY_HAND_FORCED)
+        self.assertIn("failure", d.reason)
+        self.assertIn(promote_channel.OUTCOME_MIRROR_FAILED, d.reason)
+
+    def test_force_overrides_the_mirror_and_nothing_else(self):
+        held = _with_mirror(MIRROR_FAILED, manual=True, force=True,
+                            hold="who=Ada paused")
+        self.assertEqual(held.outcome, promote_channel.OUTCOME_HELD)
+        bot = _with_mirror(MIRROR_FAILED, manual=True, force=True,
+                           actor="agent-bureau-bot[bot]")
+        self.assertEqual(bot.outcome, promote_channel.OUTCOME_FORCE_NOT_OPERATOR)
+        off = _with_mirror(MIRROR_FAILED, manual=True, force=True, trunk="diverged")
+        self.assertEqual(off.outcome, promote_channel.OUTCOME_NOT_ON_TRUNK)
+        back = _with_mirror(MIRROR_FAILED, manual=True, force=True, ancestry="behind")
+        self.assertFalse(back.promote)
+
+    def test_a_stray_force_on_a_harness_run_overrides_nothing(self):
+        d = _with_mirror(MIRROR_FAILED, force=True)
+        self.assertFalse(d.promote)
+        self.assertEqual(d.outcome, promote_channel.OUTCOME_MIRROR_FAILED)
+
+
+class MirrorCliTest(unittest.TestCase):
+    def setUp(self):
+        import tempfile
+
+        self._tmp = tempfile.TemporaryDirectory()
+        self.tmp = Path(self._tmp.name)
+        self.addCleanup(self._tmp.cleanup)
+
+    def _run(self, mirror, extra=()):
+        import contextlib
+        import io
+        import json
+
+        statuses = self.tmp / "s.json"
+        statuses.write_text(json.dumps(_combined(_status("success"))))
+        result = self.tmp / "mirror_result.json"
+        if mirror is not None:
+            result.write_text(json.dumps(mirror))
+        out = self.tmp / "gh_output"
+        out.write_text("")
+        os.environ["GITHUB_OUTPUT"] = str(out)
+        try:
+            with contextlib.redirect_stdout(io.StringIO()):
+                rc = promote_channel.main(
+                    ["--sha", SHA, "--statuses-file", str(statuses),
+                     "--ancestry", "ahead", "--mirror-result", str(result),
+                     *extra])
+        finally:
+            os.environ.pop("GITHUB_OUTPUT", None)
+        self.assertEqual(rc, 0)
+        return out.read_text()
+
+    def test_a_failed_check_writes_the_refusal(self):
+        written = self._run(MIRROR_FAILED)
+        self.assertIn("promote=false", written)
+        self.assertIn(f"outcome={promote_channel.OUTCOME_MIRROR_FAILED}", written)
+        self.assertIn("mirror=", written)
+
+    def test_a_missing_result_file_is_a_blocked_check(self):
+        written = self._run(None)
+        self.assertIn("promote=false", written)
+        self.assertIn(f"outcome={promote_channel.OUTCOME_MIRROR_BLOCKED}", written)
+
+    def test_a_green_check_writes_the_promotion(self):
+        written = self._run(MIRROR_PASSED)
+        self.assertIn("promote=true", written)
+        self.assertIn(f"outcome={promote_channel.OUTCOME_PROMOTING}", written)
+
+    def test_a_run_the_proof_refused_says_nothing_about_the_check(self):
+        """It never ran there, and that is the ordinary case — not a blocked
+        check for the receipt to report."""
+        written = self._run(MIRROR_FAILED, extra=["--hold", "who=Ada paused"])
+        self.assertIn(f"outcome={promote_channel.OUTCOME_HELD}", written)
+        self.assertNotIn("mirror=", written)
+
+    def test_every_output_is_one_line(self):
+        written = self._run(MIRROR_FAILED)
+        keys = [l.split("=", 1)[0] for l in written.strip().splitlines()]
+        self.assertEqual(sorted(keys), ["mirror", "outcome", "promote", "reason"])
+
+
+class MirrorWorkflowTest(unittest.TestCase):
+    def setUp(self):
+        self.wf = yaml.safe_load(WORKFLOW.read_text())
+        self.steps = self.wf["jobs"]["promote"]["steps"]
+
+    def _index(self, pred):
+        for i, step in enumerate(self.steps):
+            if pred(step):
+                return i
+        self.fail("no such step")
+
+    def _mirror_steps(self):
+        return [s for s in self.steps
+                if "agent-bureau" in str(s) and "mirror_check.py card" not in str(s)]
+
+    def test_the_proof_is_decided_before_the_check_and_the_verdict_after(self):
+        proof = self._index(lambda s: s.get("id") == "proof")
+        run = self._index(lambda s: "mirror_check.py run" in str(s.get("run", "")))
+        decide = self._index(lambda s: s.get("id") == "decide")
+        move = self._index(lambda s: s.get("name") == "Move the channel")
+        self.assertLess(proof, run)
+        self.assertLess(run, decide)
+        self.assertLess(decide, move)
+        self.assertIn("--mirror-result", self.steps[decide]["run"])
+
+    def test_a_run_that_does_not_reach_promotion_never_clones_agent_bureau(self):
+        steps = self._mirror_steps()
+        self.assertTrue(steps)
+        for step in steps:
+            self.assertIn("steps.proof.outputs.promote == 'true'",
+                          str(step.get("if", "")), step.get("name"))
+
+    def test_agent_bureau_is_read_with_the_bureau_app_scoped_to_it(self):
+        mint = [s for s in self.steps
+                if "create-github-app-token" in str(s.get("uses", ""))
+                and s.get("with", {}).get("repositories") == "agent-bureau"]
+        self.assertEqual(len(mint), 1)
+        self.assertEqual(mint[0]["with"]["owner"], "dreadnought-foundry")
+        self.assertIn("BUREAU_APP_ID", str(mint[0]["with"]))
+        checkout = [s for s in self.steps
+                    if s.get("with", {}).get("repository")
+                    == "dreadnought-foundry/agent-bureau"]
+        self.assertEqual(len(checkout), 1)
+        self.assertNotIn("ref", checkout[0]["with"],
+                         "the head of agent-bureau's default branch, nothing else")
+        self.assertIs(checkout[0]["with"].get("persist-credentials"), False)
+
+    def test_the_candidate_sits_where_agent_bureaus_tests_look(self):
+        paths = [s.get("with", {}).get("path") for s in self.steps]
+        self.assertIn("agent-bureau/.bureau-pipeline", paths)
+
+    def test_the_install_uses_the_shared_action_and_the_discovered_files(self):
+        install = [s for s in self.steps
+                   if "setup-python-cached" in str(s.get("uses", ""))]
+        self.assertEqual(len(install), 1)
+        self.assertIn("steps.discover.outputs.requirements",
+                      str(install[0]["with"]["requirements"]))
+
+    def test_the_check_has_its_own_time_limit_and_the_job_room_for_it(self):
+        run = self.steps[self._index(
+            lambda s: "mirror_check.py run" in str(s.get("run", "")))]
+        self.assertEqual(run.get("timeout-minutes"), 15)
+        self.assertGreater(self.wf["jobs"]["promote"]["timeout-minutes"], 15 + 10)
+
+    def test_a_setup_failure_reaches_the_check_as_blocked(self):
+        for step in self._mirror_steps():
+            if "mirror_check.py run" in str(step.get("run", "")):
+                continue
+            self.assertTrue(step.get("continue-on-error"), step.get("name"))
+        run = self.steps[self._index(
+            lambda s: "mirror_check.py run" in str(s.get("run", "")))]
+        self.assertIn("--setup", run["run"])
+        self.assertTrue(run.get("continue-on-error"))
+
+    def test_the_refusal_files_its_card_with_this_repos_linear_key(self):
+        card = self.steps[self._index(
+            lambda s: "mirror_check.py card" in str(s.get("run", "")))]
+        self.assertIn(promote_channel.OUTCOME_MIRROR_FAILED, str(card.get("if", "")))
+        self.assertIn("secrets.LINEAR_API_KEY", str(card.get("env", {})))
+        self.assertTrue(card.get("continue-on-error"))
+
+    def test_the_receipt_says_card_owed_and_the_forced_warning_names_the_mirror(self):
+        say = self.steps[self._index(lambda s: s.get("name") == "Say what happened")]
+        env = str(say.get("env", {}))
+        self.assertIn("steps.decide.outputs.mirror", env)
+        self.assertIn("steps.mirror_card.outputs.card", env)
+        forced = [l for l in say["run"].splitlines()
+                  if "::warning title=Forced channel promotion" in l]
+        self.assertEqual(len(forced), 1)
+        self.assertIn("MIRROR", forced[0])
+
+
+class MirrorDocsTest(unittest.TestCase):
+    def test_the_receipt_table_carries_both_outcomes(self):
+        doc = (ROOT / "docs" / "self-hosting.md").read_text()
+        for outcome in (promote_channel.OUTCOME_MIRROR_FAILED,
+                        promote_channel.OUTCOME_MIRROR_BLOCKED):
+            self.assertIn(f"| `{outcome}` |", doc)
+        self.assertIn("DRE-6496", doc)
+
+    def test_the_docs_say_what_force_now_overrides(self):
+        doc = (ROOT / "docs" / "self-hosting.md").read_text()
+        row = [l for l in doc.splitlines()
+               if l.startswith(f"| `{promote_channel.OUTCOME_BY_HAND_FORCED}`")]
+        self.assertEqual(len(row), 1)
+        self.assertIn("mirror", row[0])
+        readme = (ROOT / "README.md").read_text()
+        self.assertIn("DRE-6496", readme)
+        self.assertIn("mirror", readme)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -59,7 +59,6 @@ from __future__ import annotations
 
 import argparse
 import os
-import re
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -71,10 +70,6 @@ import spoken_thread  # noqa: E402 — ONE reader of who said what
 HEADING = "## Decisions from the CEO"
 #: Opens the CLI's one status line.
 PREFIX = "answer-into-card:"
-#: The console's heading above his words (`console_receipt.ANSWER_SPEC`) —
-#: the same pattern `spoken_thread.newest_answer` strips, pinned equal by a
-#: test so the two readers cannot drift.
-ANSWER_HEAD = re.compile(r"^Answer from .* PT:$")
 #: The block's first line, under the heading.
 PROVENANCE = ("Copied from his signed console answers; the signature stays on "
               "the comment and this copy proves nothing on its own.")
@@ -93,7 +88,7 @@ def words(answer_text: str) -> str:
     the first line, stripped, is one, and the line after it too only when that
     line is blank. Nothing else is read or removed."""
     lines = answer_text.split("\n")
-    if not ANSWER_HEAD.match(lines[0].strip()):
+    if not console_receipt.HEADING_LINE.match(lines[0].strip()):
         return answer_text
     rest = lines[1:]
     if rest and not rest[0].strip():

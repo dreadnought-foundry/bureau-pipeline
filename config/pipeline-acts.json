@@ -394,6 +394,42 @@
       }
     },
     {
+      "name": "canceled-check-rerun",
+      "tag": "canceled-check-rerun",
+      "adopted": true,
+      "kind": "recovery",
+      "means": "An approved pull request's head holds a workflow run with a canceled check in it, on its first attempt, so the sweep re-ran that run's failed and canceled jobs once instead of sending a fix agent — a canceled check has not failed, and a fix agent cannot fix a cancellation.",
+      "state": "unchanged",
+      "next_actor": "reconcile.py",
+      "discharges": null,
+      "subscriber": "reconcile.yml",
+      "cadence_s": null,
+      "cadence_why": "Null, and declared rather than omitted: what follows is the product repository's own CI run on its second attempt, whose job timeouts live in that repository and not here; scripts/reconcile.py reads the result on a later pass and nothing speaks on this receipt's behalf.",
+      "why": "DRE-3072, the CEO's decision of 2026-09-05 11:30 PT: a cancelled CI check is UNKNOWN, not red. portico #415 (2026-09-03) and agent-bureau #3502 (2026-10-09, head a3fa0c44, run 38023358661) each got a fix agent for a check canceled at its own time limit; on #3502 the canceled shard made its summary job read failure, so the rule is per workflow run, read off each check's details_url. Re-run once, failed and canceled jobs only, as runner-lost does on main (DRE-5901): once is the run's own attempt number and this receipt, bound to the head sha and the run id — scripts/canceled_check.py's marker `canceled-check-rerun @<sha> run <id>`. The first line reads 'canceled at its <N>-minute limit, re-running' when the canceled job's annotation names its limit. A re-run GitHub refuses is a write failure and never a fix dispatch. State unchanged: the pull request is where it was, and the re-run leaves no obligation of its own — a failure on attempt 2 is red and dispatches as before.",
+      "emits": {
+        "file": "scripts/canceled_check.py",
+        "anchor": "def rerun_receipt("
+      }
+    },
+    {
+      "name": "canceled-check-again",
+      "tag": "canceled-check-again",
+      "adopted": true,
+      "kind": "hold",
+      "means": "A workflow run on an approved pull request's head holds a canceled check again on a later attempt, so the sweep neither re-runs it nor sends a fix agent, and tells a person once, naming the job.",
+      "state": "unchanged",
+      "next_actor": "operator",
+      "discharges": null,
+      "subscriber": "reconcile.yml",
+      "cadence_s": null,
+      "cadence_why": "Null: nothing is re-run and nothing is dispatched past this point, so scripts/reconcile.py hands the canceled job to a person and declares no bound on how long a person takes.",
+      "why": "DRE-3072, rule 4. A check canceled on attempt 2 or later — after this sweep's own re-run, the hygiene agent's or a person's — is not re-run again, because a job that stops twice is usually stopping at its own time limit and looping on it only spends runners. It is never sent a fix agent either: a cancellation is not a failure. Said once per (pull request, head sha, run id) — scripts/canceled_check.py's marker `canceled-check-again @<sha> run <id>` — so a further pass over the same head posts nothing. A hold and not a refusal: nothing else is coming until a person acts. It discharges nothing: the re-run's act carries the same name as its tag, so naming it here would put that live key into this receipt's trailer.",
+      "emits": {
+        "file": "scripts/canceled_check.py",
+        "anchor": "def again_receipt("
+      }
+    },
+    {
       "name": "conflict-agent-dispatched",
       "tag": "conflict-resolution-dispatch",
       "adopted": false,
@@ -1582,11 +1618,25 @@
       "why": "It reports an OUTCOME of the work — a flake that passed on its re-run, or somebody else's merge turning main green — rather than a refusal, a recovery, a hold or a progress act the pipeline chose for itself. The same class as the dependabot card's `cancel_note` two rows on, and as the merge→Done seam's `✅ Merged` line from the other end: its only reader is a person looking at the card, and the state change beside it is the machine-readable half. It carries its own idempotency key (repair_card.SETTLE_MARKER), read back off the card's own comments so a second sweep over a card whose cancel landed and whose comment did not writes nothing; a trailer beside that key would be a second grammar over a comment whose presence is load-bearing."
     },
     {
+      "file": "scripts/mirror_check.py",
+      "anchor": "comment_note(result, run_url)",
+      "kind": "not-an-act",
+      "means": "The open agent-bureau card for a set of mirrored bureau-pipeline files is told that the channel promotion refused another candidate on the same mirrors — naming the candidate, the agent-bureau sha tested, where stable stands and the run (DRE-6496).",
+      "why": "Progress on a card, not an act: nothing downstream reads it, nothing budgets off it, it changes no lane and it discharges nothing — the card stays where Planning put it, and the refusal itself is the promote-channel run's receipt. The same class as repair_card's `attempt_note`. It carries its own idempotency key, the full candidate sha, read back off the card's own comments so a re-run for the same candidate writes nothing; a trailer beside that key would be a second grammar over a comment whose presence is load-bearing."
+    },
+    {
       "file": "scripts/repair_card.py",
       "anchor": "unlanded_note(branch, at, base)",
       "kind": "not-an-act",
       "means": "A repair card whose main is still red is told that a repair branch for its commit is on the remote, ahead of the default branch, with no pull request of any state on it — naming the branch and its head, and that the repair loop's own run or a person opens the pull request (DRE-6524).",
       "why": "It reports a fact about a branch to a person, not an act: nothing downstream reads it, nothing budgets off it, it changes no lane and it discharges nothing — the card stays where rule 3 leaves it, and the repair loop's own run is still what opens the pull request. The same class as `settle_note` one row up. It carries its own idempotency key (repair_card.UNLANDED_MARKER), read back off the card's own comments beside the branch and its head sha, so a later sweep over the same head writes nothing and a head that moved gets one new comment; a trailer beside that key would be a second grammar over a comment whose presence is load-bearing."
+    },
+    {
+      "file": "scripts/repair_finish.py",
+      "anchor": "finish_note(pr_url, branch, workflow_name)",
+      "kind": "not-an-act",
+      "means": "A repair card is told which pull request the Red-Main Repair workflow opened from its branch, after the repair agent pushed the fix and stopped before opening one itself (DRE-6525).",
+      "why": "Progress on a card, not an act — the same class as `attempt_note` above: it tells a person which pull request the workflow opened, nothing downstream reads it, nothing budgets off it, and it discharges nothing. The pull request itself is the machine-readable half: its head ref carries the card id that closes the card on merge, and a re-run finds it through `gh pr list --state all` and answers `already-open` before any comment is composed, so the pull request is also the comment's idempotency key. An act row would declare a state, a next actor and a subscriber for a line that changes none of the three."
     },
     {
       "file": "scripts/planning_route.py",
@@ -2843,6 +2893,13 @@
       "kind": "not-an-act",
       "means": "The lift line — `🔓 hold lifted: reason=<code> because=<lift-kind, card-closed or operator> by=<writer-file>` — posted by hold.lift after the `needs-human` label comes off (DRE-6173).",
       "why": "The label's removal RECEIPT, not an act of its own: it records that a caller took the label off and spends every stamp older than it (`hold.read_stamp`). The caller's own act, where it has one, carries its own receipt — the hygiene agent's lift is its own `hygiene-hold-clear` act and never posts this line. It is read by its opening words, and it may carry no tag a reader counts."
+    },
+    {
+      "file": "scripts/blocker_ask.py",
+      "anchor": "cmd_comment(card[\"identifier\"], ask)",
+      "kind": "not-an-act",
+      "means": "A build agent's blocker the sweep cannot act on — the `question` class, or a mechanical class whose action module handed it back as a person's call — is asked on the card once, `blocker_ask.compose`: the 🙋 first line, the agent's reason with the Finding, Question and Recommendation lines `console_escalation.complete` renders, and the agent's run, before the card is moved Backlog → Green Light (DRE-6459).",
+      "why": "A question is not an act: it asks a person to decide rather than announcing something the pipeline did, the same reason the planner's escalation note and the sweep's review-cap question ask rather than announce. The act this ask is part of is said by the resolver's receipt, posted after the ask and the move have both landed. That receipt's tag is the once-per-marker key, read by `blocker_class.open_blocker`; a standing ask whose move did not land is found again by its 🙋 first line, newer than the open marker, and never posted twice."
     }
   ]
 }

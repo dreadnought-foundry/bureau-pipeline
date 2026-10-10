@@ -1302,6 +1302,22 @@ token on this route too, so `release-gate.yml` fires and validates it. The
 full record, the receipt vocabulary and the incident are in
 `docs/self-hosting.md`, "Moving the channel by hand".
 
+**agent-bureau's mirror tests are part of the proof (DRE-6496).** On
+2026-10-09 the `operator-step` vocabulary reached `stable` and broke
+agent-bureau's CI three times in one day, because each of its mirrors of this
+repo's vocabularies is proven against `stable` — after the promotion. Now,
+wherever a run would promote (the ordinary by-hand promote included), it first
+runs every agent-bureau test that names `BUREAU_PIPELINE_DIR` or
+`.bureau-pipeline` against the candidate, with agent-bureau at the head of its
+default branch. A test that passes on `stable` and fails on the candidate
+refuses the move as `mirror-tests-failed` and files one card in agent-bureau
+naming the mirror that must follow; a test red on both is named `already red
+on stable` and refuses nothing; a check that could not run is
+`mirror-check-blocked` and proves nothing either way. `force` overrides both,
+as it overrides a red harness stamp, and the forced warning names the mirror
+result it overrode. The record is in `docs/self-hosting.md`, "agent-bureau's
+mirror tests are part of the proof".
+
 **"Not proven yet" is a third answer, and the receipt says so (DRE-3076).**
 A harness run can end without judging the commit at all: on 2026-09-03 the
 SANDBOX's own reconcile sweep was rate-limited by Linear at 20:27 PT, and the

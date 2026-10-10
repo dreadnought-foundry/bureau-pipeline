@@ -125,9 +125,11 @@ class TestEveryActDeclaresItsCadence:
         since DRE-6451 added the alarm on a planning hold aged in Triage;
         fifty-two since DRE-6409 added the alarm on a person's card overdue
         in Hand-work; fifty-three since DRE-6452 added the receipt of the one
-        planner rewrite the plan-critic bound grants; fifty-four since
-        DRE-6508 added the receipt the blocker resolver posts."""
-        assert len(pipeline_act.acts()) == 54
+        planner rewrite the plan-critic bound grants; fifty-five since
+        DRE-6508 added the receipt the blocker resolver posts; fifty-six since
+        DRE-3072 added the one re-run of a canceled check on an approved pull
+        request and the hold a check canceled again is told once under."""
+        assert len(pipeline_act.acts()) == 56
 
     def test_every_act_carries_a_cadence_and_a_reason(self):
         for name in pipeline_act.acts():

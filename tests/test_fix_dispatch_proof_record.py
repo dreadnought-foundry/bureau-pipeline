@@ -463,7 +463,8 @@ class WhatStaysTheProofRunsTest(unittest.TestCase):
         log = sweep.run()
         self.assertEqual(sweep.dispatched, [])
         self.assertEqual(sweep.thread, [])
-        self.assertIn("the proof run re-observes it, not the fix agent", log)
+        # DRE-3072: a canceled check is canceled_check's, never a fix dispatch.
+        self.assertIn("no fix agent for it", log)
 
     def test_a_failed_review_check_is_not_a_red_check(self):
         sweep = _Sweep(runs=_green_runs() + [

@@ -3216,7 +3216,7 @@ def cmd_subissue(parent_identifier: str, title: str, description_file: str, *fla
     return issue
 
 
-def cmd_oneoff(title: str, description_file: str, *flags) -> None:
+def cmd_oneoff(title: str, description_file: str, *flags) -> dict:
     """Create a PARENTLESS card in Planning — the one-off route's producer.
 
     `cmd_subissue` requires a parent and takes the child's `repo:` label from
@@ -3257,6 +3257,9 @@ def cmd_oneoff(title: str, description_file: str, *flags) -> None:
     issue = _create_card(teams["teams"]["nodes"][0]["id"], title, description,
                          labels, blockers)
     _file_operator_hold(issue, labels)
+    # RETURNED, as `cmd_subissue` returns its child: the mirror check's
+    # refusal (DRE-6496) names the card it filed on the promote-channel run.
+    return issue
 
 
 def _parse_flags(flags) -> tuple[list[str], list[str]]:
