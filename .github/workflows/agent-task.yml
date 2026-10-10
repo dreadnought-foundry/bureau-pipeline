@@ -475,6 +475,7 @@ jobs:
           WHY_FILE="$RUNNER_TEMP/model-why.txt"
           EFFORT_FILE="$RUNNER_TEMP/model-effort.txt"
           MODEL=$(python3 .bureau-pipeline/scripts/model_fallback.py select "$ROLE" \
+            --repo "$GITHUB_REPOSITORY" \
             --explain-file "$WHY_FILE" --effort-file "$EFFORT_FILE")
           WHY=$(cat "$WHY_FILE")
           # DRE-4836: the effort level the CHOSEN model runs at, declared in
