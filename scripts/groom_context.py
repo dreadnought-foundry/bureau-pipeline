@@ -375,13 +375,21 @@ def summary(built: dict) -> dict:
     past the search's 1,000-result ceiling (DRE-4964). An owner the read
     could not see is listed in `unread` as `merged_prs:<owner>`: the count is
     the owners that WERE read, and the list says which were not.
+
+    `cuts` is each capped section's `{"kept", "of"}`, copied from the pack's
+    own record, so the page can say how many rows the ranking was handed
+    beside how many there were (DRE-6641). `truncated` stays the sorted list
+    of the same names.
     """
     unread = sorted(built.get("unread") or ())
     counts = built.get("counts") or {}
     out = {name: (None if name in unread
                   else counts.get(name, len(built.get(name) or ())))
            for name in SECTIONS}
-    out["truncated"] = sorted(built.get("truncated") or {})
+    cuts = built.get("truncated") or {}
+    out["truncated"] = sorted(cuts)
+    out["cuts"] = {name: {"kept": int(cut["kept"]), "of": int(cut["of"])}
+                   for name, cut in sorted(cuts.items())}
     out["unread"] = unread + [f"merged_prs:{owner}" for owner in
                               sorted(built.get("unread_owners") or {})
                               if "merged_prs" not in unread]

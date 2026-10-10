@@ -1952,6 +1952,7 @@ def _EMPTY_PACK() -> dict:
     """
     out = {name: None for name in groom_context.SECTIONS}
     out["truncated"] = []
+    out["cuts"] = {}
     out["unread"] = sorted(groom_context.SECTIONS)
     return out
 
@@ -2666,6 +2667,33 @@ def _pack_count(pack: dict, name: str, noun: str) -> str:
     return _plural(int(pack.get(name) or 0), noun)
 
 
+# What the ranking reads of each row of a capped section, said where the line
+# names the cut (DRE-6641). "Newest" only where the pack sorts by date
+# (`groom_context._newest_first`): epics come in the order Linear returns them.
+_CUT_PHRASES = {
+    "epics_in_progress": "{kept} of {of} epics in flight (title and plan summary)",
+    "merged_prs": "the newest {kept} of {of} merged PRs (titles only)",
+    "closed_cards": "the newest {kept} of {of} closed cards (titles and reason lines)",
+}
+
+
+def _pack_section(pack: dict, name: str, noun: str, after: str = "") -> str:
+    """One section of the receipt line: UNKNOWN, the cut, or the count.
+
+    A section the pack cut to its cap says both numbers, read from
+    `pack['cuts']` and never from the section's own count, which is the
+    whole: "2539 merged PRs" over a ranking that saw the titles of 40 is a
+    label on what the proposal rests on that is not true (DRE-6641). A
+    proposal written before `cuts` existed says its one count as it did.
+    """
+    unread = name in set(pack.get("unread") or ()) or pack.get(name) is None
+    cut = (pack.get("cuts") or {}).get(name)
+    if cut and not unread:
+        return _CUT_PHRASES[name].format(kept=f"{int(cut['kept']):,}",
+                                         of=f"{int(cut['of']):,}")
+    return _pack_count(pack, name, noun) + after
+
+
 def _receipt_line(proposal: dict) -> str:
     """What ranked this batch, over how much, against what — in one line.
 
@@ -2684,9 +2712,9 @@ def _receipt_line(proposal: dict) -> str:
     line = (f"Ranked by {block.get('receipt')} in "
             f"{_plural(int(block.get('calls') or 0), 'call')} over "
             f"{_plural(proposal['population'], 'card')}, against "
-            f"{_pack_count(pack, 'epics_in_progress', 'epic')} in "
-            f"flight, {_pack_count(pack, 'merged_prs', 'merged PR')}"
-            f" and {_pack_count(pack, 'closed_cards', 'closed card')}")
+            f"{_pack_section(pack, 'epics_in_progress', 'epic', ' in flight')}"
+            f", {_pack_section(pack, 'merged_prs', 'merged PR')}"
+            f" and {_pack_section(pack, 'closed_cards', 'closed card')}")
     # `judgement.truncated` is the ANSWER being cut at the budget — never
     # `pack['truncated']`, which is the list of context sections that were
     # capped. A proposal written before DRE-3259 carries neither key, and this
