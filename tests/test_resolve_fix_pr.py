@@ -210,12 +210,12 @@ def _resolve(thread):
     return outputs, posted
 
 
-def _hold(thread):
+def _hold(thread, whole=False):
     outputs, posted = _resolve(thread)
     holds = [body for body in posted if body.startswith("🛑 Fix budget exhausted")]
     if len(holds) != 1:
         raise AssertionError(f"expected one hold, got {posted!r}")
-    return outputs, holds[0].split("\n", 1)[0]
+    return outputs, holds[0] if whole else holds[0].split("\n", 1)[0]
 
 
 QA = "agent-bureau-qa-bot[bot]"
@@ -253,6 +253,13 @@ class TheHoldNamesWhichStopItWasTest(unittest.TestCase):
         self.assertIn("new ground", first)
         self.assertNotIn("same ground", first)
         self.assertNotIn("made no progress", first)
+
+    def test_no_part_of_the_silence_hold_says_circling(self):
+        # The whole comment — the receipt and the release instructions too.
+        _, body = _hold(_thread(None, None, None, None), whole=True)
+        self.assertIn("📊 fix-convergence", body)
+        self.assertNotIn("same ground", body)
+        self.assertNotIn("made no progress", body)
 
     def test_the_3481_thread_is_not_held(self):
         # The incident: two silent re-reviews now buy attempt 3.
