@@ -203,11 +203,22 @@ def test_the_agents_own_step_holds_the_planners_key_and_the_fallback(name):
             assert env.get("LINEAR_API_KEY_FALLBACK") == FALLBACK_EXPR, (name, step.get("name"))
 
 
+# The one other place the token's VALUE may go: the agent-log upload step,
+# which redacts every secret its file references by value (DRE-4391,
+# tests/test_agent_log_upload.py). It spends nothing, so it is no reader.
+SCRUB_LINE = "SCRUB_LINEAR_PLANNER_KEY: ${{ secrets.LINEAR_PLANNER_KEY }}"
+
+
 @pytest.mark.parametrize("name", sorted(AGENT_WORKFLOWS))
 def test_no_step_reads_the_planner_key_under_any_other_name(name):
     """The planner key reaches a process only as the primary; anywhere else it
-    would be a copy nothing falls back from."""
-    uses = sum(line.count("secrets.LINEAR_PLANNER_KEY") for line in _code_lines(name))
+    would be a copy nothing falls back from. The scrub's line is the one
+    exception, held to exactly one."""
+    lines = _code_lines(name)
+    scrubs = [line for line in lines if line.strip() == SCRUB_LINE]
+    assert len(scrubs) == 1, (name, len(scrubs))
+    uses = sum(line.count("secrets.LINEAR_PLANNER_KEY") for line in lines
+               if line.strip() != SCRUB_LINE)
     assert uses == len(_key_steps(_doc(name))), (name, uses)
 
 
