@@ -100,6 +100,12 @@ class TeamBoard:
         if 'state: {name: {eq: "Backlog"}}' in q:
             nodes = [c for c in self.cards if c["state"]["name"] == "Backlog"]
             return {"issues": {"nodes": nodes, "pageInfo": {"hasNextPage": False}}}
+        if "title: {startsWith: $prefix}" in q:
+            # The outage alarm's open-card lookup under `BUREAU_READ=on`
+            # (DRE-6576): the door's board does not hold its lane.
+            nodes = [c for c in self.cards
+                     if c.get("title", "").startswith(v["prefix"])]
+            return {"issues": {"nodes": nodes}}
         raise AssertionError(f"a Linear read on an idle pass: {q[:160]}")
 
 
@@ -270,9 +276,11 @@ def test_with_the_door_on_the_idle_check_costs_no_linear_request(monkeypatch, ca
     # the fleet to no repo while the console's PIPELINE_READ_UNROUTED is off
     # (DRE-5848) — Planning and Intake and the planner line's Green Light, and
     # the NO-ROUTE watchdog's Todo and In Progress, which the door cannot serve
-    # for cards no repo owns (the PR #687 critic's item 2).
+    # for cards no repo owns (the PR #687 critic's item 2) — and the outage
+    # alarm's one open-card lookup, which the door's board does not hold the
+    # lane for, made on every pass (DRE-6576).
     assert reconcile.IDLE_QUERY not in board.queries
-    assert board.requests == 3
+    assert board.requests == 4
     assert "idle: agent-bureau-demo — no card of this repo is in motion" in capsys.readouterr().out
 
 

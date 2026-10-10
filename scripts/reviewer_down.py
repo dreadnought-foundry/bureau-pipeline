@@ -76,11 +76,17 @@ already seen, so counting it would count one outage twice.
 Close comes first because a reviewer that is back makes every other answer
 wrong — and "back" means a verdict in a repository the card counted a crash
 in, posted after that repository's last counted crash (DRE-5291), because a
-healthy repository's verdict says nothing about the one that is down. A card
-whose ledger names no repository has none to be wrong about, so a verdict
-anywhere after its last counted crash closes it; append
-before file because a second card for one outage is the noise this module
-exists to remove; and `file` only once the threshold is met.
+healthy repository's verdict says nothing about the one that is down. When
+the card was filed is not part of it (DRE-6576): DRE-6568 was filed ten
+minutes after both of its repositories' reviews had passed, and a rule that
+waited for a verdict after filing kept it open on a reviewer that was already
+back. The ledger is read whole, however old its crashes, so the card closes
+on the sweep that sees that verdict whenever it comes. A card whose ledger
+names no repository has none to be wrong about, so a verdict anywhere after
+its last counted crash closes it; append before file because a second card
+for one outage is the noise this module exists to remove; and `file` only
+once the threshold is met — which a repository whose newest crash already has
+a later verdict here does not help meet.
 
 CLI:
 
@@ -243,7 +249,8 @@ class OpenCard:
     """The outage card already open, if there is one.
 
     `text` is the description plus every comment body, because a ledger line
-    may have been appended as either.
+    may have been appended as either. `filed_at` is a record of the card, and
+    the close rule does not read it (DRE-6576).
     """
 
     identifier: str
@@ -490,27 +497,27 @@ def _counts(outcomes) -> tuple:
     return len(unique), len(_repos(unique)), unique[0].at
 
 
-def _first_verdict_after(local, filed_at: str, crashes,
-                         anywhere: bool = False) -> Outcome | None:
+def _first_verdict_after(local, crashes, anywhere: bool = False) -> Outcome | None:
     """The earliest LOCAL verdict that says a crashed repository is back.
 
     Local only: a verdict is proof the reviewer ran HERE, and a witness outcome
     is a note about somewhere else. And only in a repository the card's ledger
-    counts a crash in, posted after that repository's last counted crash and
-    after the card was filed (DRE-5291): DRE-5273 was closed 22 seconds after
-    filing by a verdict in bureau-pipeline, whose reviewer was never down, while
-    the sandbox's was still dead. Earliest, because the card should record the
-    moment the reviewer came back, not the most recent time it was seen up.
+    counts a crash in, posted after that repository's last counted crash
+    (DRE-5291): DRE-5273 was closed 22 seconds after filing by a verdict in
+    bureau-pipeline, whose reviewer was never down, while the sandbox's was
+    still dead. The repository rule is what stopped that close — the verdict
+    came after filing — so it is the whole rule, and when the card was filed is
+    not part of it (DRE-6576): every verdict that said DRE-6568's reviewer was
+    back had landed before that card was filed. Earliest, because the card
+    should record the moment the reviewer came back, not the most recent time
+    it was seen up.
 
     `anywhere` is the card whose ledger names no repository — three generic
     medic notes with no run link meet the run rule alone. There is no
-    repository to be wrong about, so any local verdict after the card was
-    filed and after the last counted crash closes it; without that, the card
-    could never close itself and no later outage could file its own.
+    repository to be wrong about, so any local verdict after the last counted
+    crash closes it; without that, the card could never close itself and no
+    later outage could file its own.
     """
-    filed = _dt(filed_at)
-    if filed is None:
-        return None
     last = {}
     for crash in crashes:
         key = UNKNOWN_REPO if anywhere else crash.repo
@@ -518,12 +525,15 @@ def _first_verdict_after(local, filed_at: str, crashes,
         if when is not None and (key not in last or when > last[key]):
             last[key] = when
 
-    def edge(repo):
-        return max(filed, last.get(UNKNOWN_REPO if anywhere else repo, filed))
+    def back(outcome):
+        when = _dt(outcome.at)
+        if outcome.kind != VERDICT or when is None:
+            return False
+        if anywhere:
+            return UNKNOWN_REPO not in last or when > last[UNKNOWN_REPO]
+        return outcome.repo in last and when > last[outcome.repo]
 
-    candidates = [o for o in local
-                  if o.kind == VERDICT and (anywhere or o.repo in last)
-                  and (_dt(o.at) or filed) > edge(o.repo)]
+    candidates = [o for o in local if back(o)]
     return min(candidates, key=_sort_key) if candidates else None
 
 
@@ -535,9 +545,26 @@ def _threshold_met(window, threshold: Threshold) -> bool:
     places at once is not a flake. The RUN rule (three in a row since the last
     verdict) catches a break confined to one repository, where the only
     evidence is that nothing has succeeded since.
+
+    The spread rule counts a repository only while its newest crash has no
+    later verdict in the same repository (DRE-6576). Verdicts are LOCAL — the
+    witness carries crashes only — so a repository this sweep reads through a
+    medic note always counts: its verdicts are not something it can see. On
+    2026-10-09 agent-bureau's sweep filed DRE-6568 over one crash there and one
+    in bureau-pipeline, with six agent-bureau verdicts newer than its own crash
+    already in the listing it had just read.
     """
     crashes = [o for o in window if o.kind == COULD_NOT_RUN]
-    if len(_repos(crashes)) >= threshold.repos:
+    newest = {}
+    for crash in crashes:
+        when = _dt(crash.at)
+        if when is not None and (crash.repo not in newest or when > newest[crash.repo]):
+            newest[crash.repo] = when
+    recovered = {o.repo for o in window
+                 if o.kind == VERDICT and o.repo in newest
+                 and (_dt(o.at) or newest[o.repo]) > newest[o.repo]}
+    down = [o for o in crashes if o.repo not in recovered]
+    if len(_repos(down)) >= threshold.repos:
         return True
     last_verdict = None
     for outcome in window:
@@ -575,8 +602,7 @@ def decide(local, witness, open_card, now, threshold, first_run=None) -> Decisio
             counted = [o for o in ledger + new if o.repo in crashed]
         else:
             counted = ledger + new
-        back = _first_verdict_after(local, open_card.filed_at, counted,
-                                    anywhere=not crashed)
+        back = _first_verdict_after(local, counted, anywhere=not crashed)
         if back is not None:
             # First, and before anything else: a reviewer that is back makes
             # every other answer on this card wrong.
@@ -587,7 +613,7 @@ def decide(local, witness, open_card, now, threshold, first_run=None) -> Decisio
                 resolve_note=(
                     f"reviewer back at {pt(back.at)} — first successful "
                     f"verdict in {back.repo} after {whose} last counted crash "
-                    f"and after this card was filed ({back.src})"
+                    f"({back.src})"
                 ),
             )
         if new_lines:
@@ -666,10 +692,14 @@ def card_body(first_run, lines) -> str:
     body.extend([
         "",
         "The sweep closes this card by itself on the first successful verdict "
-        "posted after it was filed in a repository listed above, once that "
-        "repository's last crash is behind it — or, when no line names a "
-        "repository, in any repository once the last crash is behind it. "
-        "Nothing else needs to happen here.",
+        "it can see on an open pull request in a repository listed above, "
+        "posted after that repository's last counted crash — or, when no line "
+        "names a repository, in any repository after the last counted crash. "
+        "It reads this card on every sweep for as long as the card is open in "
+        "Triage or in another lane the sweep reads, however long ago the "
+        "crashes were. It cannot see a verdict on a pull request that has "
+        "since merged or closed, and it does not read Backlog or Green Light; "
+        "in those cases a person closes this card.",
     ])
     return "\n".join(body)
 
@@ -700,8 +730,9 @@ def outage_receipt(decision) -> str:
         "\n\n"
         "The card names the first failed run, the exact error line, the action "
         "reference those runs used and the three checks that tell the causes "
-        "apart. The sweep closes it on the first successful verdict posted "
-        "after it was filed."
+        "apart. The sweep closes it on the first successful verdict it can see "
+        "in a repository it counted, after that repository's last counted "
+        "crash."
     )
 
 

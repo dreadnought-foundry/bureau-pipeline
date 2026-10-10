@@ -15,8 +15,13 @@ Walks, each on its own fixture:
 
   clean      three `[EPIC]` children, the second and third blocked by the
              first — the check passes and prints them in order; activate
-             posts one receipt, moves each child Backlog → Planning in that
-             order, then the parent Planning → In Progress, and nothing else.
+             posts one receipt, moves the first child Backlog → Planning,
+             leaves the two it blocks in Backlog for the sweep's auto-advance
+             (DRE-6591), then moves the parent Planning → In Progress, and
+             nothing else.
+  DRE-6585   three children, the third blocked by the first — the first two
+             go to Planning, the third waits in Backlog, and the receipt says
+             which and on what; with the first already Done, the third goes.
   retry      the receipt already on the parent — no second receipt, and a
              child already in Planning is not moved again.
   one child  bounced naming `too-few-children`; activate moves nothing.
@@ -331,7 +336,7 @@ class RollUpWalkTest(unittest.TestCase):
         a = self._run(ACTIVATE)
         self.assertEqual(a.returncode, 0, a.stdout + a.stderr)
         writes = self._writes()
-        self.assertEqual(len(writes), 5, writes)
+        self.assertEqual(len(writes), 3, writes)
 
         kind, on, receipt = writes[0]
         self.assertEqual((kind, on), ("comment", PARENT), writes[0])
@@ -343,8 +348,6 @@ class RollUpWalkTest(unittest.TestCase):
 
         self.assertEqual(writes[1:], [
             ["advance", C1, "Backlog", "Planning"],
-            ["advance", C2, "Backlog", "Planning"],
-            ["advance", C3, "Backlog", "Planning"],
             ["advance", PARENT, "Planning", "In Progress"],
         ])
 
@@ -373,6 +376,49 @@ class RollUpWalkTest(unittest.TestCase):
         a = self._run(ACTIVATE)
         self.assertEqual(a.returncode, 0, a.stdout + a.stderr)
         self.assertEqual(self._writes(), [
+            ["advance", PARENT, "Planning", "In Progress"],
+        ])
+
+    def test_a_retry_after_the_parent_moved_writes_nothing(self):
+        """The run that died after every write landed: the parent is In
+        Progress, the first child in Planning, the two it blocks in Backlog.
+        A retry posts nothing and moves nothing — the waiting children keep
+        waiting for the auto-advance."""
+        receipt = epic_split.receipt_detail(PARENT, clean())
+        self._board(clean(), states={C1: "Planning", PARENT: "In Progress"},
+                    comments={PARENT: [receipt]})
+        a = self._run(ACTIVATE)
+        self.assertEqual(a.returncode, 0, a.stdout + a.stderr)
+        self.assertEqual(self._writes(), [])
+        states = json.load(open(self.states))
+        self.assertEqual((states[C2], states[C3]), ("Backlog", "Backlog"))
+
+    # --- 2b. DRE-6585 -----------------------------------------------------
+    def test_a_child_blocked_by_an_open_sibling_waits_in_backlog(self):
+        kids = [_card(C1, 1), _card(C2, 2), _card(C3, 3, blocked_by=[C1])]
+        self._board(kids)
+        self.assertEqual(self._run(CHECK).returncode, 0)
+        a = self._run(ACTIVATE)
+        self.assertEqual(a.returncode, 0, a.stdout + a.stderr)
+        writes = self._writes()
+        self.assertEqual(self._lane_writes(writes), [
+            ["advance", C1, "Backlog", "Planning"],
+            ["advance", C2, "Backlog", "Planning"],
+            ["advance", PARENT, "Planning", "In Progress"],
+        ])
+        receipt = [w[2] for w in writes if w[0] == "comment"][0]
+        line = next(l for l in receipt.splitlines() if f"**{C3}**" in l)
+        self.assertIn(f"waits in `Backlog` on {C1}", line)
+        for c in (C1, C2):
+            line = next(l for l in receipt.splitlines() if f"**{c}**" in l)
+            self.assertIn("sent to `Planning`", line)
+
+    def test_a_child_whose_sibling_is_done_is_sent(self):
+        kids = [_card(C1, 1), _card(C2, 2), _card(C3, 3, blocked_by=[C1])]
+        self._board(kids, states={C1: "Done"})
+        a = self._run(ACTIVATE)
+        self.assertEqual(a.returncode, 0, a.stdout + a.stderr)
+        self.assertEqual(self._lane_writes(), [
             ["advance", C2, "Backlog", "Planning"],
             ["advance", C3, "Backlog", "Planning"],
             ["advance", PARENT, "Planning", "In Progress"],

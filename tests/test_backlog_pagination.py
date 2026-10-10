@@ -140,8 +140,10 @@ def test_active_cards_still_filters_by_the_states_it_was_asked_for():
     and the caller must still get its own lane set back.
 
     Since DRE-2929 the read is of SWEPT_LANES — the union of every lane set the
-    sweep asks for, read once and filtered per caller — so the states on the
-    wire are the union's and the states in the ANSWER are the caller's. Both
+    sweep asks for, read once and filtered per caller — and since DRE-6576 of
+    BOARD_READ_LANES, which adds the outage alarm's Triage lane to it, so the
+    states on the wire are the read's and the states in the ANSWER are the
+    caller's. Both
     halves matter: drop the variables on page 2 and the second hundred rows
     come back from the wrong lanes."""
     sent: list[dict] = []
@@ -156,7 +158,7 @@ def test_active_cards_still_filters_by_the_states_it_was_asked_for():
     with patch.object(linear_ops, "gql", spy):
         cards = reconcile.active_cards(("Todo", "Planning"))
     assert len(sent) == 2
-    assert all(v["states"] == list(reconcile.SWEPT_LANES) for v in sent)
+    assert all(v["states"] == list(reconcile.BOARD_READ_LANES) for v in sent)
     assert {c["state"]["name"] for c in cards} == {"Todo"}
     assert len(cards) == 149
     assert cards[-1]["identifier"] == THE_150TH

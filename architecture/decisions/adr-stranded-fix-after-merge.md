@@ -144,6 +144,20 @@ events and on reconcile's ~15-minute nudge, so nothing is stranded by the
 wait. There is no starvation across pull requests: the lane is read per PR,
 the DRE-2908 reading, so a fix run on #612 says nothing about #611.
 
+Those wakes did not cover one window, and bureau-pipeline #904 sat approved
+and green for 100 minutes on 2026-10-09 in it (DRE-6577). An approval wakes
+the gate and an Agent Fix run in the same second. The fix run skips itself
+about ten seconds later, and a run that skips itself emits no event the gate
+acts on, so a gate that read the lane inside those seconds waited with
+nothing left to wake it. `scripts/evaluate_and_merge.sh` now closes that
+window inside the same run: before a condition F wait stands, it re-reads the
+Agent Fix lane up to four times, 15 seconds apart and 60 seconds in all
+(`FIX_LANE_RECHECK_SECONDS`, `FIX_LANE_RECHECK_CEILING_SECONDS`), and decides
+again with the fresh lane. Condition F itself is unchanged — a fix run still
+queued or running at the ceiling, or a lane still unreadable, is the same
+wait as before. Past the ceiling, the fix run's own events and reconcile's
+nudge remain the backstop.
+
 [DRE-4183]: https://linear.app/dreadnoughtfoundry/issue/DRE-4183
 [DRE-4460]: https://linear.app/dreadnoughtfoundry/issue/DRE-4460
 [DRE-2637]: https://linear.app/dreadnoughtfoundry/issue/DRE-2637

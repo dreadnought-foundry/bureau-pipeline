@@ -14,7 +14,11 @@ cards` every pass, and nothing compared the two numbers. Now:
     a second one;
   * the CEO's signed answer settles it: `re-approve` closes the card and moves
     the approved size to the count he answered at, `split` files a mid-epic
-    amendment, and a card that left Green Light unanswered is withdrawn.
+    amendment, and a card that left Green Light unanswered is withdrawn;
+  * what crosses is the cards still to build (DRE-6501): children not in
+    Done, Canceled or Duplicate. DRE-4721 was asked at 50 cards with 48 of
+    them finished, and told to split; the growth record keeps counting every
+    card, and only the question's rule reads the open ones.
 
 The pure module is tested directly; the sweep is driven through
 `reconcile.report_epic_growth` over a fake Linear that holds one epic, its
@@ -113,35 +117,50 @@ class TestTheQuestion:
         assert epic_growth.title(EPIC, 10, 25).startswith(epic_growth.title_prefix(EPIC))
 
     def test_the_body_is_the_three_lines_and_nothing_else(self):
-        body = epic_growth.body(EPIC, 10, 25, JOINED_CARDS)
+        body = epic_growth.body(EPIC, 10, 25, JOINED_CARDS, still_open=25)
         assert console_escalation.problems(body) == []
         assert body == console_escalation.render(console_escalation.parse(body))
         assert len(body.split("\n")) == 3
         assert "```" not in body, "no escalation-choices block: the answer is his words"
 
     def test_the_finding_names_both_numbers_and_every_joined_card_with_its_route(self):
-        esc = console_escalation.parse(epic_growth.body(EPIC, 10, 25, JOINED_CARDS))
+        esc = console_escalation.parse(epic_growth.body(EPIC, 10, 25, JOINED_CARDS, still_open=25))
         for needle in (EPIC, "10 cards", "running 25",
                        "DRE-900 (addition: a second call site)",
                        "DRE-901 (unrecorded: joined 2026-10-03 11:30 PT with no "
                        "discovery record)"):
             assert needle in esc.finding, needle
 
+    def test_the_finding_names_the_cards_joined_and_the_cards_still_open(self):
+        # DRE-6501: 40 joined, 25 of the 50 still open — both numbers, each
+        # its own, so finished work is never read as work still to approve.
+        joined = [{"id": f"DRE-{900 + n}", "route": "addition", "because": "more"}
+                  for n in range(40)]
+        esc = console_escalation.parse(
+            epic_growth.body(EPIC, 10, 50, joined, still_open=25))
+        assert "40 cards joined since its green light" in esc.finding
+        assert "25 of its 50 cards are still open" in esc.finding
+
     def test_the_question_asks_for_one_of_two_words(self):
-        esc = console_escalation.parse(epic_growth.body(EPIC, 10, 25, JOINED_CARDS))
+        esc = console_escalation.parse(epic_growth.body(EPIC, 10, 25, JOINED_CARDS, still_open=25))
         assert "re-approve" in esc.question and "split" in esc.question
 
-    @pytest.mark.parametrize("approved, running, pick", [
-        (10, 25, "re-approve"), (10, 29, "re-approve"),
-        (10, 30, "split"), (10, 50, "split"),
+    @pytest.mark.parametrize("approved, running, still_open, pick", [
+        (10, 25, 25, "re-approve"), (10, 29, 29, "re-approve"),
+        (10, 30, 30, "split"), (10, 50, 50, "split"),
+        # DRE-6501: the cards still open decide, never every card it has.
+        (10, 50, 29, "re-approve"), (10, 50, 30, "split"), (10, 60, 21, "re-approve"),
     ])
-    def test_the_recommendation_is_split_at_three_times(self, approved, running, pick):
-        esc = console_escalation.parse(epic_growth.body(EPIC, approved, running, []))
+    def test_the_recommendation_is_split_at_three_times_the_cards_still_open(
+            self, approved, running, still_open, pick):
+        esc = console_escalation.parse(
+            epic_growth.body(EPIC, approved, running, [], still_open=still_open))
         assert esc.recommendation == pick
         assert esc.why.strip()
+        assert f"{still_open} of its cards are still open" in esc.why
 
     def test_the_question_is_written_without_code(self):
-        body = epic_growth.body(EPIC, 10, 25, JOINED_CARDS)
+        body = epic_growth.body(EPIC, 10, 25, JOINED_CARDS, still_open=25)
         for word in ("`", ".py", "reconcile", "mid_epic", "sweep"):
             assert word not in body, word
 
@@ -287,7 +306,8 @@ class Board:
                  description="The plan."):
         self.description = description
         self.green_lit_at = green_lit_at
-        self.children = [{"identifier": f"DRE-{100 + n}", "createdAt": BEFORE}
+        self.children = [{"identifier": f"DRE-{100 + n}", "createdAt": BEFORE,
+                          "state": {"name": "Todo"}}
                          for n in range(approved)]
         self.states = {EPIC: "In Progress"}
         self.titles: dict[str, str] = {}
@@ -302,7 +322,12 @@ class Board:
     def grow_to(self, running: int) -> None:
         while len(self.children) < running:
             self.children.append({"identifier": f"DRE-{900 + len(self.children)}",
-                                  "createdAt": JOINED})
+                                  "createdAt": JOINED, "state": {"name": "Todo"}})
+
+    def finish(self, count: int, lanes=("Done", "Canceled", "Duplicate")) -> None:
+        """Close the first `count` children, taking turns over `lanes`."""
+        for n, child in enumerate(self.children[:count]):
+            child["state"] = {"name": lanes[n % len(lanes)]}
 
     def say(self, card: str, body: str, author: str = CEO) -> None:
         self.threads[card].append({"body": body, "createdAt": _now_plus(1),
@@ -471,6 +496,57 @@ class TestAnEpicPastTheThresholdIsAsked:
         assert board.questions()[0]["id"] == board.creates[0]["identifier"]
 
 
+class TestOnlyTheCardsStillToBuildCross:
+    """DRE-6501. DRE-4721 was asked at 50 cards and told to split, with 48 of
+    them finished and two left; what crosses is the cards still open."""
+
+    def test_an_epic_whose_added_cards_finished_asks_nothing(self, sweep):
+        board = Board(10, 50)
+        board.finish(48, lanes=("Done", "Canceled"))
+        sweep(board)
+        assert board.creates == []
+        assert board.questions() == []
+        # The growth record still counts every card.
+        record = board.record()
+        assert (record["green_lit"], record["current"]) == (10, 50)
+
+    def test_twenty_five_still_open_is_asked_with_both_numbers(self, sweep):
+        board = Board(10, 40)
+        board.finish(15)
+        sweep(board)
+        [card] = board.creates
+        esc = console_escalation.parse(card["body"])
+        assert "30 cards joined since its green light" in esc.finding
+        assert "25 of its 40 cards are still open" in esc.finding
+        assert esc.recommendation == "re-approve"
+        [line] = board.questions()
+        assert line["at"] == 40, "the question is recorded at every card it has"
+
+    @pytest.mark.parametrize("closed, pick", [(30, "split"), (31, "re-approve")])
+    def test_split_only_at_three_times_the_cards_still_open(self, sweep, closed, pick):
+        board = Board(10, 60)
+        board.finish(closed)
+        sweep(board)
+        [card] = board.creates
+        assert console_escalation.parse(card["body"]).recommendation == pick
+
+    def test_a_child_whose_lane_cannot_be_read_asks_nothing(self, sweep):
+        board = Board(10, 40)
+        del board.children[-1]["state"]
+        sweep(board)
+        assert board.creates == []
+
+    def test_the_epic_read_alone_carries_each_childs_lane(self):
+        query = " ".join(mid_epic._EPIC_QUERY.split())
+        assert "children(first: 250) { nodes { identifier createdAt state { name } } }" in query
+
+    def test_the_report_carries_the_open_count(self):
+        board = Board(10, 40)
+        board.finish(15)
+        report = mid_epic.refresh_epic_growth(board, EPIC, issue=board.epic_record())
+        assert (report["current"], report["open"]) == (40, 25)
+
+
 class TestUnderTheThresholdNothingIsAsked:
     @pytest.mark.parametrize("approved, running", [(10, 20), (4, 9)])
     def test_under_the_threshold(self, sweep, approved, running):
@@ -483,6 +559,14 @@ class TestUnderTheThresholdNothingIsAsked:
         board = Board(10, 40, green_lit_at=None)
         sweep(board)
         assert board.creates == []
+
+    def test_an_unreadable_green_light_with_cards_open_asks_nothing(self, sweep):
+        # DRE-6501's fourth criterion: the open count is no approval.
+        board = Board(10, 60, green_lit_at=None)
+        board.finish(10)
+        sweep(board)
+        assert board.creates == []
+        assert epic_growth.crossed(None, 50) is False
 
     def test_an_idle_pass_asks_nothing(self, sweep):
         board = Board(10, 25)

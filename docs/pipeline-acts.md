@@ -192,9 +192,16 @@ run is dispatched at it (DRE-5292). Its first crashed run is the head's own
 failed review workflow run, or "no run found" when none can be read — never a
 check run's `details_url`. It appends one comment per newly counted
 run and rewrites the title's counts, and closes the card on the first
-successful verdict posted after it was filed. Every one of those comments
-composes through this act, so the console's alert per open card is unchanged by
-the trailer. `FLEET_OUTAGE_SWEEP_CAP=0` is the off switch: it stops the sweep
+successful verdict it can see in a repository the card counted, posted after
+that repository's last counted crash — whenever that verdict was posted
+(DRE-6576). It finds its open card in the board read it already makes, which
+carries `Triage`, so it reads the card on every sweep for as long as the card
+is open, however long ago the crashes were. Under `BUREAU_READ=on` that lookup
+is one Linear request per sweep. A repository whose newest crash already has a
+later verdict there does not count toward the two-repository rule, so the
+alarm stays quiet when the reviewer is back before it files. Every comment it
+posts composes through this act, so the console's alert per open card is
+unchanged by the trailer. `FLEET_OUTAGE_SWEEP_CAP=0` is the off switch: it stops the sweep
 FILING fleet-wide, and deliberately leaves appends and closes running, so an
 outage card that is already open is never orphaned by the switch.
 
@@ -252,10 +259,15 @@ A card too big for one epic is a roll-up: the planner splits it into child
 epics under itself, and each child is planned and green-lit on its own
 (`standards/card-quality.md`). `python3 scripts/epic_split.py check` refuses a
 split that is not one. `activate` then posts this receipt ONCE on the parent,
-naming every child in `blockedBy` order with its slice's first sentence and
-what blocks it. After that it sends each child still in Backlog to Planning,
+naming every child in `blockedBy` order with its slice's first sentence, what
+blocks it, and whether it is sent to Planning or waits in Backlog. After that
+it sends to Planning each child still in Backlog that no open sibling blocks,
 where the relay starts that child's planner run, and moves the parent to
-In Progress, where the sweep's ordinary epic close finds it.
+In Progress, where the sweep's ordinary epic close finds it. Meanwhile, a
+child blocked by an open sibling waits in Backlog for the sweep's auto-advance
+(DRE-6591): the seam rule plans it only on what that sibling observed, so it
+is carried on to its planner run once every sibling it waits on is Done. A
+sibling already Done, Canceled or Duplicate holds nothing.
 
 **It is a `progress` act whose tag IS a live key**, and that is the one way it
 differs from the heartbeats above. Nothing is held and nothing is repaired: the

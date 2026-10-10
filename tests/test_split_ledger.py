@@ -47,6 +47,7 @@ Run: cd bureau-pipeline && python3 -m pytest tests/test_split_ledger.py -v
 
 from __future__ import annotations
 
+import datetime
 import json
 import os
 import sys
@@ -908,11 +909,15 @@ def test_one_derive_makes_exactly_one_door_call(door, github, tmp_path):
 
 
 def test_the_door_is_asked_for_the_window_start(door, github, tmp_path):
+    # The clock is read on both sides of the call: one read after it can land
+    # a second past the derive's own, and 30 days plus a second is not wrong.
+    before = split_ledger._moment(split_ledger.now_iso())
     _derive(tmp_path, "--window-days", "30")
+    after = split_ledger._moment(split_ledger.now_iso())
     since = door.asked("/split-history")[0]["query"]["since"]
     assert split_ledger._moment(since) is not None
-    age = split_ledger._moment(split_ledger.now_iso()) - split_ledger._moment(since)
-    assert 29.9 < age.total_seconds() / 86400 <= 30.0
+    month = datetime.timedelta(days=30)
+    assert before - month <= split_ledger._moment(since) <= after - month
 
 
 def test_piece_files_are_read_from_github_through_the_served_repos(door, github,

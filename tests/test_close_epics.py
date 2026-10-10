@@ -419,9 +419,9 @@ def test_a_finished_epic_in_a_sweep_lane_still_closes(board_pins, lane):
     "lane", ["Intake", "Planning", "Green Light", "Triage", "Hand-work"])
 def test_a_finished_epic_outside_the_close_lanes_is_left_alone(board_pins, lane):
     """Intake, Planning and Green Light hold an epic whose plan is in motion;
-    Triage and Green Light are not read by the sweep at all, and Hand-work is
-    a person's. None is closed — and closing from Backlog buys no read of
-    Green Light or Triage."""
+    Green Light is not read by the sweep at all, Triage only for the outage
+    alarm (DRE-6576), and Hand-work is a person's. None is closed — and
+    closing from Backlog buys no read of Green Light or Triage."""
     state, _, advance = _sweep(_board(lane))
     assert not _closed(state)
     advance.assert_not_called()
@@ -432,7 +432,9 @@ def test_a_finished_epic_outside_the_close_lanes_is_left_alone(board_pins, lane)
     _sweep(with_epic)
     lanes_read = lambda f: [tuple(v["states"]) for v in f.board_variables]  # noqa: E731
     assert lanes_read(with_epic) == lanes_read(without)
-    assert not any("Triage" in lanes for lanes in lanes_read(with_epic))
+    assert sum("Triage" in lanes for lanes in lanes_read(with_epic)) == 1, (
+        "the one board read carries the outage card's lane (DRE-6576), and "
+        "closing from Backlog buys no other read of it")
     assert sum("Green Light" in lanes for lanes in lanes_read(with_epic)) == 1, (
         "the planner line's Green Light read is the only one")
 
