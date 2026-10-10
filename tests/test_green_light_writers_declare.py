@@ -258,9 +258,10 @@ def _epic_growth_question() -> None:
         {"id": "DRE-901", "route": "unrecorded",
          "because": "unrecorded: joined 2026-10-03 11:30 PT with no discovery record"},
     ]
-    for approved, running, cards in ((10, 25, joined), (10, 50, joined), (17, 41, [])):
+    for approved, running, still_open, cards in (
+            (10, 25, 25, joined), (10, 50, 30, joined), (17, 41, 41, [])):
         esc = assert_declares_the_lines(
-            epic_growth.body("DRE-4721", approved, running, cards))
+            epic_growth.body("DRE-4721", approved, running, cards, still_open=still_open))
         assert esc.recommendation in (epic_growth.RE_APPROVE, epic_growth.SPLIT)
 
 
