@@ -25,6 +25,9 @@ diagnosed by the medic — repair never watches itself).
 """
 
 import os
+import subprocess
+import sys
+import tempfile
 import unittest
 
 import yaml
@@ -100,9 +103,9 @@ class DecideBeforeDispatchTest(unittest.TestCase):
         self.assertIn("--workflow-name \"$WF_NAME\"", body)
         step = [
             s for s in doc(REUSABLE)["jobs"]["repair"]["steps"]
-            if "red_main_repair.py" in (s.get("run") or "")
+            if "red_main_repair.py decide" in (s.get("run") or "")
         ]
-        self.assertTrue(step, "no decide step runs red_main_repair.py")
+        self.assertTrue(step, "no decide step runs red_main_repair.py decide")
         self.assertEqual(
             (step[0].get("env") or {}).get("WF_NAME"),
             "${{ github.event.workflow_run.name }}",
@@ -148,7 +151,7 @@ class RepeatedTimeoutHistoryTest(unittest.TestCase):
     def test_the_history_is_gathered_before_the_decision(self):
         steps = self._steps()
         gather = self._index(steps, "repair_history.py")
-        decide = self._index(steps, "red_main_repair.py")
+        decide = self._index(steps, "red_main_repair.py decide")
         self.assertGreater(gather, -1, "no step gathers the repair history")
         self.assertGreater(decide, -1, "no decide step")
         self.assertLess(gather, decide,
@@ -329,6 +332,230 @@ class ReportFinishesTheRepairTest(unittest.TestCase):
         self.assertEqual(env.get("DEFAULT_BRANCH"),
                          "${{ github.event.repository.default_branch }}")
         self.assertEqual(env.get("GH_TOKEN"), "${{ steps.worker.outputs.token }}")
+
+
+class FinishUnlandedWiringTest(unittest.TestCase):
+    """DRE-6526: the workflow hands `decide` the comparison of each record
+    branch with the default branch, and acts on `finish-unlanded` by opening
+    the pull request through the Report step's own helper."""
+
+    REASON = "steps.decide.outputs.reason == 'finish-unlanded'"
+
+    @staticmethod
+    def _steps():
+        return doc(REUSABLE)["jobs"]["repair"]["steps"]
+
+    @classmethod
+    def _index(cls, needle, key="run"):
+        for i, step in enumerate(cls._steps()):
+            if needle in (step.get(key) or ""):
+                return i
+        return -1
+
+    @classmethod
+    def _gather(cls):
+        return cls._steps()[cls._index("/tmp/repair-compares.json")]
+
+    @classmethod
+    def finish_step(cls):
+        found = [s for s in cls._steps() if s.get("if") == cls.REASON]
+        assert len(found) == 1, "exactly one step acts on finish-unlanded"
+        return found[0]
+
+    def test_the_comparisons_are_gathered_between_the_records_and_the_decision(self):
+        records = self._index("git/matching-refs/heads/repair/")
+        gather = self._index("/tmp/repair-compares.json")
+        decide = self._index("red_main_repair.py decide")
+        self.assertGreater(records, -1)
+        self.assertGreater(gather, -1, "no step writes /tmp/repair-compares.json")
+        self.assertNotEqual(gather, decide)
+        self.assertLess(records, gather)
+        self.assertLess(gather, decide)
+
+    def test_the_gather_matches_refs_through_record_refs(self):
+        run = self._gather()["run"]
+        self.assertIn("red_main_repair.py record-refs", run)
+        self.assertIn("--refs-file /tmp/repair-refs.json", run)
+        self.assertIn('--head-sha "$HEAD_SHA"', run)
+        self.assertIn("/compare/", run)
+        self.assertIn("FETCH-FAILED", run)
+        # The regex lives once, in the script.
+        self.assertNotIn("DRE-[0-9]", run)
+
+    def test_the_gather_runs_on_the_boot_token_with_event_fields_in_env(self):
+        step = self._gather()
+        env = step.get("env") or {}
+        self.assertEqual(env.get("GH_TOKEN"), "${{ steps.app.outputs.token }}")
+        self.assertEqual(env.get("HEAD_SHA"),
+                         "${{ github.event.workflow_run.head_sha }}")
+        self.assertEqual(env.get("DEFAULT_BRANCH"),
+                         "${{ github.event.repository.default_branch }}")
+        self.assertNotIn("${{", step["run"])
+
+    def test_the_decision_reads_the_comparisons(self):
+        run = self._steps()[self._index("red_main_repair.py decide")]["run"]
+        self.assertIn("--compares-file /tmp/repair-compares.json", run)
+
+    def test_the_finish_step_runs_the_helper_on_the_decided_branch(self):
+        step = self.finish_step()
+        run = step["run"]
+        self.assertIn("repair_finish.py finish", run)
+        for flag in ('--repo "$GITHUB_REPOSITORY"', '--branch "$BRANCH"',
+                     '--default-branch "$DEFAULT_BRANCH"',
+                     '--failed-run-url "$RUN_URL"',
+                     '--workflow-name "$WF_NAME"'):
+            self.assertIn(flag, run)
+        # The card step did not run; the helper names the card off the branch.
+        self.assertNotIn("--card-url", run)
+        # DRE-1996: values ride env, never interpolated into the script.
+        self.assertNotIn("${{", run)
+        env = step.get("env") or {}
+        self.assertEqual(env.get("BRANCH"), "${{ steps.decide.outputs.branch }}")
+        self.assertEqual(env.get("GH_TOKEN"), "${{ steps.app.outputs.token }}")
+        self.assertEqual(env.get("LINEAR_API_KEY"),
+                         "${{ secrets.LINEAR_API_KEY }}")
+        self.assertEqual(env.get("RUN_URL"),
+                         "${{ github.event.workflow_run.html_url }}")
+        self.assertEqual(env.get("WF_NAME"),
+                         "${{ github.event.workflow_run.name }}")
+        self.assertEqual(env.get("DEFAULT_BRANCH"),
+                         "${{ github.event.repository.default_branch }}")
+
+    def test_the_finish_step_follows_the_superseded_report(self):
+        superseded = self._index("steps.decide.outputs.reason == 'superseded'",
+                                 key="if")
+        finish = self._index(self.REASON, key="if")
+        self.assertGreater(superseded, -1)
+        self.assertEqual(finish, superseded + 1)
+        self.assertEqual(
+            self.finish_step()["name"],
+            "Finish — open the pull request the agent pushed and left")
+
+    def test_the_agent_the_card_the_pool_and_the_report_skip_it(self):
+        # finish-unlanded is go=false, and each of these is gated on go.
+        by_id = {s.get("id"): s for s in self._steps() if s.get("id")}
+        for step_id in ("card", "claude", "pool", "worker"):
+            self.assertIn("steps.decide.outputs.go == 'true'",
+                          by_id[step_id].get("if") or "", step_id)
+        report = [s for s in self._steps() if s.get("name") == "Report"][0]
+        self.assertIn("steps.decide.outputs.go == 'true'", report.get("if"))
+
+    def test_the_concurrency_comment_names_the_ending(self):
+        self.assertIn("finish-unlanded", src(REUSABLE).split("concurrency:")[0])
+
+
+_FINISH_STUB = """\
+import os, sys
+open(os.environ["CALLS"], "a").write("repair_finish " + " ".join(sys.argv[1:]) + "\\n")
+code = int(os.environ["FAKE_FINISH_RC"])
+finish = os.environ["FAKE_FINISH"]
+url = os.environ.get("FAKE_FINISH_URL", "") if code == 0 else ""
+sys.stdout.write(f"finish={finish}\\npr_url={url}\\ncard=DRE-6511\\n")
+sys.exit(code)
+"""
+
+BRANCH = "repair/DRE-6511-bcb36adf6037"
+PR_URL = "https://github.com/dreadnought-foundry/bureau-pipeline/pull/883"
+
+
+class FinishStepShellTest(unittest.TestCase):
+    """The finish step's `run:` body, executed as GitHub executes it
+    (`bash -e`), with the helper stubbed."""
+
+    def run_step(self, *, rc, finish):
+        sys.path.insert(0, os.path.join(REPO, "scripts"))
+        import step_shell
+
+        with tempfile.TemporaryDirectory() as tmp:
+            scripts = os.path.join(tmp, ".bureau-pipeline", "scripts")
+            os.makedirs(scripts)
+            with open(os.path.join(scripts, "repair_finish.py"), "w") as fh:
+                fh.write(_FINISH_STUB)
+            calls = os.path.join(tmp, "calls.txt")
+            summary = os.path.join(tmp, "summary.md")
+            open(calls, "w").close()
+            open(summary, "w").close()
+            env = {
+                **os.environ,
+                "CALLS": calls,
+                "FAKE_FINISH_RC": str(rc),
+                "FAKE_FINISH": finish,
+                "FAKE_FINISH_URL": PR_URL,
+                "BRANCH": BRANCH,
+                "RUN_URL": "https://github.com/x/y/actions/runs/38003951327",
+                "WF_NAME": "Pipeline Tests",
+                "DEFAULT_BRANCH": "main",
+                "GITHUB_REPOSITORY": "dreadnought-foundry/bureau-pipeline",
+                "GITHUB_STEP_SUMMARY": summary,
+            }
+            body = step_shell.step_shell(FinishUnlandedWiringTest.finish_step())
+            done = subprocess.run(["bash", "-e", "-c", body], cwd=tmp, env=env,
+                                  capture_output=True, text=True, check=False)
+            with open(calls) as fh, open(summary) as sh:
+                return done, fh.read(), sh.read()
+
+    def test_exit_0_ends_the_step_green_with_the_url(self):
+        done, calls, summary = self.run_step(rc=0, finish="opened")
+        self.assertEqual(done.returncode, 0, done.stderr + done.stdout)
+        self.assertIn(PR_URL, done.stdout)
+        self.assertIn(PR_URL, summary)
+        self.assertNotIn("::error::", done.stdout)
+        self.assertIn(f"--branch {BRANCH}", calls)
+        self.assertNotIn("--card-url", calls)
+
+    def test_already_open_ends_green_with_one_call_and_no_second_create(self):
+        done, calls, summary = self.run_step(rc=0, finish="already-open")
+        self.assertEqual(done.returncode, 0, done.stderr + done.stdout)
+        self.assertIn(PR_URL, done.stdout)
+        self.assertIn("already-open", done.stdout)
+        self.assertEqual(calls.count("repair_finish finish"), 1)
+        self.assertNotIn("gh pr create", done.stdout + done.stderr)
+
+    def test_exit_2_fails_the_step_for_the_medic(self):
+        done, calls, _ = self.run_step(rc=2, finish="unreadable")
+        self.assertNotEqual(done.returncode, 0)
+        self.assertIn(
+            f"::error::finish-unlanded: the pull request could not be opened "
+            f"for {BRANCH} (finish=unreadable)", done.stdout)
+        self.assertIn("repair_finish finish", calls)
+
+
+class AlreadyOpenIsSafeToRepeatTest(unittest.TestCase):
+    """The helper's half of a repeat: a pull request already on the branch is
+    `already-open`, and nothing is created."""
+
+    def test_a_second_finish_creates_nothing(self):
+        sys.path.insert(0, os.path.join(REPO, "scripts"))
+        import repair_finish
+
+        created = []
+
+        class Ops:
+            def branch_ref(self, repo, branch):
+                return {"ref": f"refs/heads/{branch}"}
+
+            def compare(self, repo, base, head):
+                return {"status": "ahead", "ahead_by": 1,
+                        "commits": [{"sha": "c" * 40,
+                                     "commit": {"message": "fix"}}]}
+
+            def pulls_for_head(self, repo, branch):
+                return [{"number": 883, "url": PR_URL, "state": "OPEN"}]
+
+            def create_pr(self, *a, **kw):
+                created.append(kw)
+                return "unexpected"
+
+            def cmd_comment(self, *a):
+                created.append(a)
+
+        result = repair_finish.finish(
+            repo="dreadnought-foundry/bureau-pipeline", branch=BRANCH,
+            default_branch="main", failed_run_url="u",
+            workflow_name="Pipeline Tests", ops=Ops())
+        self.assertEqual(result["finish"], "already-open")
+        self.assertEqual(result["pr_url"], PR_URL)
+        self.assertEqual(created, [])
 
 
 class RegistryTest(unittest.TestCase):
