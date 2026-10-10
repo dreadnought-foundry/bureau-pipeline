@@ -2052,7 +2052,7 @@ jobs:
       - name: Upload the usage reading
         if: always() && !cancelled() && steps.decide.outputs.review == 'true' && steps.size.outputs.strategy != 'oversized' && steps.usage.outputs.path != ''
         continue-on-error: true
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: claude-usage-reading-${{ github.job }}-attempt${{ github.run_attempt }}
           path: ${{ steps.usage.outputs.path }}
@@ -2100,7 +2100,7 @@ jobs:
       - name: Upload the death-cause receipt
         if: always() && steps.death.outputs.path != ''
         continue-on-error: true
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: death-receipt-${{ github.job }}-attempt${{ github.run_attempt }}
           path: ${{ steps.death.outputs.path }}
@@ -2223,6 +2223,19 @@ jobs:
           # file is never consulted.
           A1_CAUSE_TEXT: ${{ steps.gate1.outputs.cause_text }}
           A2_CAUSE_TEXT: ${{ steps.gate2.outputs.cause_text }}
+          # DRE-6701: WHICH wall a crashed attempt hit, as death_cause.py
+          # read its record — `throttled`, `capped` or `revoked` — plus a
+          # capped record's stated reset and the API error status it carried.
+          # The crash notice blamed a stale credential over a rate limit that
+          # cleared in eleven minutes (run 37713749781). Each value is a fixed
+          # word, a time built from digits, or three digits, written by the
+          # gate — never a byte of the record's prose.
+          A1_WALL: ${{ steps.gate1.outputs.wall }}
+          A2_WALL: ${{ steps.gate2.outputs.wall }}
+          A1_WALL_RESET: ${{ steps.gate1.outputs.wall_reset }}
+          A2_WALL_RESET: ${{ steps.gate2.outputs.wall_reset }}
+          A1_API_STATUS: ${{ steps.gate1.outputs.api_status }}
+          A2_API_STATUS: ${{ steps.gate2.outputs.api_status }}
           # DRE-3005: `ok` or `defective` — did the finished verdict carry
           # the evidence for the runs it asserts? One word each, written by
           # verdict_evidence.py's own --github-output, so a hostile
@@ -2507,6 +2520,13 @@ jobs:
           A1_EVIDENCE_RULES: ${{ steps.gate1.outputs.evidence_rules }}
           A2_EVIDENCE: ${{ steps.gate2.outputs.evidence }}
           A2_EVIDENCE_RULES: ${{ steps.gate2.outputs.evidence_rules }}
+          # DRE-6701: the wall death_cause.py read off each crashed attempt,
+          # and a capped one's reset — the same gate outputs the comment is
+          # worded by, so the red line names the same wall.
+          A1_WALL: ${{ steps.gate1.outputs.wall }}
+          A2_WALL: ${{ steps.gate2.outputs.wall }}
+          A1_WALL_RESET: ${{ steps.gate1.outputs.wall_reset }}
+          A2_WALL_RESET: ${{ steps.gate2.outputs.wall_reset }}
           # Named, because "both attempts" is only findable if the reader
           # knows which run held them, and a run log outlives nothing else.
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
@@ -2586,6 +2606,26 @@ jobs:
               CLEAN=" The reviewer authenticated, did real work and exited cleanly both times, so no credential needs rotating on the strength of this line."
             fi
             echo "::error::QA critic finished without writing a verdict.${CLEAN} ${DESC}. Run: ${RUN_URL:-unknown}. Posted neutral status; failing job for medic visibility."
+          elif [ "${A1_OUTCOME:-}" = "crash" ] || [ "${A2_OUTCOME:-}" = "crash" ]; then
+            # DRE-6701. The wall death_cause.py read, chosen exactly as the
+            # comment's branch 9 chooses it — the retry's answer wins — so
+            # the red line and the notice name the same one.
+            if [ -n "${A2_WALL:-}" ]; then
+              WALL="$A2_WALL"; RESET="${A2_WALL_RESET:-}"
+            else
+              WALL="${A1_WALL:-}"; RESET="${A1_WALL_RESET:-}"
+            fi
+            case "$WALL" in
+              throttled)
+                echo "::error::QA critic hit a rate limit (throttled) — it clears by itself and the review will be retried; no credential action is needed. Run: ${RUN_URL:-unknown}. Posted neutral status; failing job for medic visibility." ;;
+              capped)
+                if [ -n "$RESET" ]; then WHEN="it resets at $RESET"; else WHEN="the record does not say when it resets"; fi
+                echo "::error::QA critic hit the account's usage limit (capped) — $WHEN; no credential action is needed. Run: ${RUN_URL:-unknown}. Posted neutral status; failing job for medic visibility." ;;
+              revoked)
+                echo "::error::QA critic crashed on both attempts — its credential was refused (revoked), the stale-credential signature; a new credential is the only remedy (DRE-2924). Run: ${RUN_URL:-unknown}. Posted neutral status; failing job for medic visibility." ;;
+              *)
+                echo "::error::QA critic stopped before it could review and the cause could not be read — death_cause.py found no rate limit, usage limit or refusal in the execution records, so this line will not guess. Run: ${RUN_URL:-unknown}. Posted neutral status; failing job for medic visibility." ;;
+            esac
           else
             echo "::error::QA critic crashed on both attempts — no real verdict. Posted neutral status; failing job for medic visibility."
           fi

@@ -102,6 +102,9 @@ AUTH_DEATH = {
     "duration_ms": 634,
     "num_turns": 1,
     "total_cost_usd": 0,
+    # DRE-6701: the status a refused credential records, which is what
+    # death_cause.py reads `revoked` — the one wall that keeps this wording.
+    "api_error_status": 401,
     "result": "API Error: 401 authentication_error",
 }
 

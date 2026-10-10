@@ -76,22 +76,35 @@ red line can say it too, and deliberately EMPTY on a crash — where the verdict
 file is never consulted, so naming a cause for it would be the same error in a
 new direction.
 
+DRE-6701: and a CRASH says which wall it hit. `crash` is every is_error that
+is not turn exhaustion, and the notice for it blamed a stale credential —
+over agent-bureau PR #3363's run 37713749781, whose first attempt logged
+`api_error_status: 429` and whose retry reviewed eleven minutes later.
+death_cause.py (DRE-4129) already reads that record and answers `throttled`,
+`capped` or `revoked`; `wall=` carries its answer, `wall_reset=` the reset a
+`capped` record states, and `api_status=` the status the record carried, so a
+death no wall explains can still say what was read. All three only on
+`crash`, all three a fixed word, a time built from digits, or digits.
+
 Exit 0 when a real verdict exists (post it). Exit 1 on crash/no-verdict
 (retry, then neutral + loud fail). With --github-output, appends
 `outcome=ok|turn_exhaustion|crash|completed_no_verdict|unknown`, `cause=` /
-`cause_text=` (only when the verdict FILE is why there is nothing) plus
-`turns=` and `cost=` (numbers only, whenever the execution record carries
-them) to that file. The flag is optional: verify.yml calls this gate without
-it.
+`cause_text=` (only when the verdict FILE is why there is nothing), `wall=` /
+`wall_reset=` / `api_status=` (only on a crash, and only what the record
+carries) plus `turns=` and `cost=` (numbers only, whenever the execution
+record carries them) to that file. The flag is optional: verify.yml calls
+this gate without it.
 """
 
 from __future__ import annotations
 
 import os
 import sys
+from datetime import UTC, datetime
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+import death_cause  # noqa: E402 — which wall a crash hit (DRE-6701)
 from execution_result import (  # noqa: E402
     load_execution as _load_execution,
     print_completion_detail,
@@ -416,6 +429,30 @@ def cause_text(cause: str) -> str:
     return _NO_VERDICT_CAUSES.get(cause, UNKNOWN_CAUSE_TEXT)
 
 
+def wall_outputs(execution: dict | None, now: datetime) -> list[str]:
+    """`wall=` / `wall_reset=` / `api_status=` lines for a crashed attempt.
+
+    DRE-6701. The wall is death_cause's answer, verbatim — this gate holds no
+    signature of its own, so the notice and the red line read the walls the
+    way every other reader of a dead run does. Nothing here is free text:
+    the wall is one of death_cause's three words, the reset is formatted
+    from a datetime, and the status is kept only when it is three digits.
+    """
+    if outcome(execution, False) != "crash":
+        return []
+    lines = []
+    wall = death_cause.cause(execution)
+    if wall:
+        lines.append(f"wall={wall}")
+        when = death_cause.reset(execution, now) if wall == death_cause.CAPPED else None
+        if when is not None:
+            lines.append(f"wall_reset={when.astimezone(UTC):%Y-%m-%d %H:%M} UTC")
+    status = str(execution.get("api_error_status") or "").strip()
+    if len(status) == 3 and status.isdigit():
+        lines.append(f"api_status={status}")
+    return lines
+
+
 def write_step_outputs(
     path: str, execution: dict | None, real: bool, verdict_path: str = ""
 ) -> None:
@@ -444,6 +481,8 @@ def write_step_outputs(
     if cause:
         lines.append(f"cause={cause}")
         lines.append(f"cause_text={cause_text(cause).replace(chr(10), ' ')}")
+    if not real:
+        lines.extend(wall_outputs(execution, datetime.now(UTC)))
     scalars = spend_scalars(execution)
     turns = scalars.get("num_turns")
     cost = scalars.get("total_cost_usd")

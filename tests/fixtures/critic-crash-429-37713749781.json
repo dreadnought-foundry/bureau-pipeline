@@ -1,0 +1,7 @@
+{
+  "type": "result",
+  "is_error": true,
+  "num_turns": 1,
+  "total_cost_usd": 0,
+  "api_error_status": 429
+}
