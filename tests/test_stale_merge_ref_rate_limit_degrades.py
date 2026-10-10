@@ -131,7 +131,23 @@ def _checks(conclusion):
 
 
 #: head red, merge base red, `main` tip green — the one shape that refreshes.
-_REFRESHABLE = {"head": "failure", "base": "failure", "main": "success"}
+_REFRESHABLE = {"head": "failure", "base": "failure", "window": "success"}
+
+
+def _listing(tip):
+    """`commits?sha=<tip>`: the tip, whose first parent is the merge base."""
+    return [{"sha": tip, "parents": [{"sha": BASE}]},
+            {"sha": BASE, "parents": [{"sha": "0" * 40}]}]
+
+
+def _check_runs_side(path, head_sha=HEAD):
+    """Which of the check's check-runs reads `path` is: the head is read
+    whole, every other read names its check (DRE-6513)."""
+    sha = path.split("/commits/")[1].split("/")[0]
+    if "check_name=" not in path:
+        assert sha == head_sha, path
+        return "head"
+    return "base" if sha == BASE else "window"
 
 BRANCH_LISTING = json.dumps({"name": BRANCH, "sha": HEAD})
 
@@ -140,8 +156,9 @@ def _gh_answers(prs, refuse=(), stderr=RATE_LIMITED):
     """`answer_for(argv)` -> (rc, stdout, stderr) for the whole sweep.
 
     `refuse` names the reads GitHub declines with `stderr` on every attempt —
-    `compare`, `head`/`base`/`main` (the three check-runs payloads) and
-    `branches`. Everything else answers a refreshable pull request.
+    `compare`, `head`/`base`/`window` (the check-runs payloads), `listing`
+    (`main`'s commits) and `branches`. Everything else answers a refreshable
+    pull request.
     """
     refuse = set(refuse)
 
@@ -160,11 +177,14 @@ def _gh_answers(prs, refuse=(), stderr=RATE_LIMITED):
                 return 1, "", stderr
             return 0, json.dumps(_compare()), ""
         if "/check-runs" in path:
-            sha = path.split("/commits/")[1].split("/")[0]
-            side = {HEAD: "head", BASE: "base"}.get(sha, "main")
+            side = _check_runs_side(path)
             if side in refuse:
                 return 1, "", stderr
             return 0, json.dumps(_checks(_REFRESHABLE[side])), ""
+        if "/commits?" in path:
+            if "listing" in refuse:
+                return 1, "", stderr
+            return 0, json.dumps(_listing(MAIN)), ""
         return 0, "{}", ""
 
     return answer
@@ -277,9 +297,10 @@ def test_the_rest_of_the_pass_still_runs():
                 return 1, "", RATE_LIMITED
             return 0, json.dumps(_compare()), ""
         if "/check-runs" in path:
-            sha = path.split("/commits/")[1].split("/")[0]
-            side = {second_head: "head", BASE: "base"}.get(sha, "main")
+            side = _check_runs_side(path, head_sha=second_head)
             return 0, json.dumps(_checks(_REFRESHABLE[side])), ""
+        if "/commits?" in path:
+            return 0, json.dumps(_listing(MAIN)), ""
         return 0, "{}", ""
 
     state = _state()
@@ -310,12 +331,13 @@ def test_the_rest_of_the_pass_still_runs():
 # --------------------------------------------------------------------------
 # 2. the same refusal in the check's other reads, and in the branch listing
 # --------------------------------------------------------------------------
-@pytest.mark.parametrize("side", ["head", "base", "main"])
+@pytest.mark.parametrize("side", ["head", "base", "listing", "window"])
 def test_a_rate_limited_check_runs_read_degrades_the_same_way(side):
     """ACCEPTANCE: the compare is not the only read this check makes for a
-    pull request — it addresses three `check-runs` payloads off it, drawn from
-    the same bucket. All four degrade identically or the incident simply moves
-    one read along."""
+    pull request — it addresses the head's check runs, the merge base's,
+    `main`'s commit listing and each window commit's off it, drawn from the
+    same bucket. All of them degrade identically or the incident simply
+    moves one read along (DRE-6513 added the listing and the window)."""
     state = _check(_state(), refuse=[side])
 
     assert reconcile._read_failures == [], f"the {side} check-runs read"

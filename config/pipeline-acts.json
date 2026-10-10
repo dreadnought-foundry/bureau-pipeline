@@ -308,7 +308,7 @@
       "tag": "stale-merge-ref-refresh",
       "adopted": true,
       "kind": "recovery",
-      "means": "This pull request was red only on checks that were red on its merge base too and are green on `main` now, so the sweep merged `main` into the branch to get it a fresh merge ref.",
+      "means": "This pull request was red only on checks `main` was red on too — red on its merge base, or on a `main` merge after it — and is green on now, so the sweep merged `main` into the branch to get it a fresh merge ref.",
       "state": "dispatched",
       "next_actor": "qa-review.yml",
       "discharges": null,

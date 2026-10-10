@@ -8284,10 +8284,26 @@ def refresh_stale_merge_refs() -> None:
 
     The DECISION is not made here. `stale_merge_ref.decide()` owns the three
     facts that make a refresh safe (`main` has moved · every failing check
-    also fails on the merge base · every one of them is green on the `main`
-    tip), the per-`main`-commit marker and the lifetime cap; this function
-    reads the payloads it needs, makes the write, and posts the body it
-    composed. Every answer other than `refresh` is one line of log.
+    was red on `main` too, on the merge base or on one of `main`'s own merges
+    after it · every one of them is green on `main` again), the
+    per-`main`-commit marker and the lifetime cap; this function reads the
+    payloads it needs, makes the write, and posts the body it composed. Every
+    answer other than `refresh` is one line of log.
+
+    THE READS (DRE-6513), in order and all through `gh_read`: the compare;
+    the head's check runs; and only when the head has a failing check and
+    `main` has moved, the merge base's runs of each failing check BY NAME,
+    `main`'s commit listing at the compared tip, and each first-parent
+    commit's runs of each failing check by name. By name and paged because a
+    `main` commit collects the runs of every workflow that fired while it was
+    the tip — 143 to 789 of them on 2026-10-09 — and an unpaged read sees the
+    newest 30, from which the CI checks had fallen: the sweep printed
+    `Console backend (pytest)` as green on #3397's merge base, which held a
+    red run of it. The listing and the by-name reads are cached for this
+    sweep, keyed by what was read — the listing per tip sha, a by-name read
+    per `(sha, check name)` — so pull requests behind one tip share them and
+    pull requests compared against two tips each get their own. Nothing here
+    reads `actions/`: the App token cannot, and check runs answer it.
 
     FULL SWEEPS ONLY, and never `--conflicts-only`: at merge time `main`'s CI
     on the fixing commit has not finished, so the decision would read
@@ -8331,13 +8347,31 @@ def refresh_stale_merge_refs() -> None:
         print(f"ERROR: stale-merge-ref: PR listing failed: {e}", file=sys.stderr)
         return
 
+    listings: dict = {}  # main sha -> `commits?sha=` listing, this sweep only
+    named_runs: dict = {}  # (sha, check name) -> that check's runs on sha
+
+    def runs_named(sha: str, name: str) -> list:
+        """Every run of one check on one commit, paged, read once a sweep."""
+        key = (sha, name)
+        if key not in named_runs:
+            payload = json.loads(gh_read(
+                "api", f"repos/{REPO}/commits/{sha}/check-runs"
+                f"?check_name={urllib.parse.quote(name, safe='')}"
+                "&per_page=100") or "{}")
+            named_runs[key] = stale_merge_ref._check_runs(payload)
+        return named_runs[key]
+
+    def runs_for(sha: str, names: list) -> dict:
+        return {"check_runs": [run for name in names
+                               for run in runs_named(sha, name)]}
+
     eligible = []  # (pr, decision) — refreshed paced below, oldest PR first
     for pr in prs:
         number = pr.get("number")
         try:
-            # Every skip below comes BEFORE the four API reads: a PR this
-            # rule may not act on must not cost a compare and three
-            # check-run payloads to find that out.
+            # Every skip below comes BEFORE the API reads: a PR this rule
+            # may not act on must not cost a compare and the check-run
+            # payloads to find that out.
             if not card_branch(pr.get("headRefName")) or pr.get("isDraft"):
                 continue
             if pr.get("mergeStateStatus") == "DIRTY":
@@ -8362,17 +8396,35 @@ def refresh_stale_merge_refs() -> None:
                     "carries no merge base or no `main` tip; unevaluated"
                 )
                 continue
-            _behind, base_sha, main_sha = read
-            checks = {}
-            for label, sha in (("head", head), ("base", base_sha),
-                               ("main", main_sha)):
-                checks[label] = json.loads(gh_read(
-                    "api", f"repos/{REPO}/commits/{sha}/check-runs") or "{}")
+            behind, base_sha, main_sha = read
+            head_checks = json.loads(gh_read(
+                "api", f"repos/{REPO}/commits/{head}/check-runs?per_page=100")
+                or "{}")
+            try:
+                names = stale_merge_ref.failing_set(head_checks)
+            except ValueError:
+                names = []  # decide() reads the head again and says so
+            base_checks: dict = {"check_runs": []}
+            main_window: list = []
+            # Nothing more is read when nothing could come of it: decide()
+            # answers `current` or `no-failure` before it looks at either.
+            if names and behind > 0:
+                base_checks = runs_for(base_sha, names)
+                if main_sha not in listings:
+                    listings[main_sha] = json.loads(gh_read(
+                        "api", f"repos/{REPO}/commits?sha={main_sha}"
+                        "&per_page=100") or "[]")
+                main_window = [
+                    (sha, runs_for(sha, names))
+                    for sha in stale_merge_ref.first_parent_window(
+                        listings[main_sha], tip_sha=main_sha,
+                        base_sha=base_sha)
+                ]
             decision = stale_merge_ref.decide(
                 compare=compare,
-                head_checks=checks["head"],
-                base_checks=checks["base"],
-                main_checks=checks["main"],
+                head_checks=head_checks,
+                base_checks=base_checks,
+                main_window=main_window,
                 # Only the worker bot's own receipts are read back: a forged
                 # comment must not be able to freeze a branch (DRE-1998).
                 receipts=[c.get("body") or "" for c in pr.get("comments") or []
@@ -8473,6 +8525,7 @@ def _refresh_one_merge_ref(pr: dict, decision) -> None:
         inherited=decision.inherited,
         used=spent + 1,
         cap=STALE_MERGE_REFRESH_CAP,
+        evidence=decision.evidence,
     ))
     # The PR carries the idempotency key the next sweep reads back; the card
     # carries the same body because the console reads the card.
