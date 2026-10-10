@@ -55,7 +55,8 @@ anything".
 ONE ANSWER, FOR THE PROOF RUN'S RETURN (DRE-5925). `answer <CARD>` prints the
 newest answer that verifies AND was posted after the proof run's newest park
 as `<signed time, PT>\t<the first line of his words>` — the console's "Answer
-from" heading is not his words. The park is the newest `🔬 proof-waiting` hold
+from" or "Comment from" heading (`console_receipt.HEADING_LINE`, DRE-6500) is
+not his words. The park is the newest `🔬 proof-waiting` hold
 or the `🙋` question that follows it, whichever is later, so an answer he gave
 to an earlier question is never read as this one's. It exits 1, printing
 nothing, when no answer follows a park, and 3 when the thread cannot be read —
@@ -384,16 +385,12 @@ def newest_answer(all_voices: list[Voice]) -> tuple[str, str] | None:
         receipt = console_receipt.parse_answer(voice.body)
         words = [line.strip() for line in
                  console_receipt.answer_text(voice.body).split("\n")]
-        if words and _ANSWER_HEAD.match(words[0]):
+        if words and console_receipt.HEADING_LINE.match(words[0]):
             words = words[1:]
         first = next((line for line in words if line), "")
         if receipt is not None and first:
             found = pacific_label(receipt.at), first
     return None
-
-
-#: The console's heading above the CEO's words (`console_receipt.ANSWER_SPEC`).
-_ANSWER_HEAD = re.compile(r"^Answer from .* PT:$")
 
 
 #: `answer`'s exit when the thread could not be read — never 1, "none".

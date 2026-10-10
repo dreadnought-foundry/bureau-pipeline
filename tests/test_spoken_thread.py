@@ -378,6 +378,17 @@ def test_answer_prints_his_signed_time_and_the_first_line_of_his_words():
                    "export for one more month.\n")
 
 
+def test_answer_reads_his_words_under_the_comment_box_heading():
+    """The card panel's comment box writes `Comment from` over the same receipt
+    (DRE-6500): the heading is the console's, not his words."""
+    commented = answer("Comment from Test Owner (signed in to the console), "
+                       f"2026-09-13 09:52 PT:\n\n{V.ANSWER_WORDS}")
+    code, out = _answer(node(HOLD), node(PARK), node(commented))
+    assert code == 0
+    assert out == ("2026-09-13 09:52 PT\tGo with option B — keep the old "
+                   "export for one more month.\n")
+
+
 def test_answer_reads_the_newest_signed_answer():
     later = answer("Answer from Test Owner (signed in to the console), "
                    "2026-09-13 09:53 PT:\n\nDrop the criterion.",

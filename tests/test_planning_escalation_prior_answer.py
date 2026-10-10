@@ -109,10 +109,11 @@ BLOCK = {
 
 
 def _answer(words: str = ANSWER_WORDS, *, signed: str = ANSWER_SIGNED,
-            heading_at: str = ANSWER_PT, card: str = CARD) -> str:
+            heading_at: str = ANSWER_PT, card: str = CARD,
+            lead: str = "Answer from") -> str:
     """A console answer comment: the console's heading, his words, and a
     valid-LOOKING trailer. Whether it verifies is the injected verifier's say."""
-    text = (f"Answer from Sid Conklin (signed in to the console), "
+    text = (f"{lead} Sid Conklin (signed in to the console), "
             f"{heading_at}:\n\n{words}")
     digest = console_receipt.answer_sha256(text)
     return text + "\n\n" + console_receipt.answer_trailer(
@@ -239,6 +240,14 @@ class TestTheFormsTheBlockTakes:
             [_rec("🙋 planning-escalation: an earlier question"),
              _rec(_answer(), ANSWER_POSTED)],
             None, card=CARD, verifier=ACCEPT)
+        assert block == FIRST_FORM
+
+    def test_a_verified_comment_box_answer_quotes_his_first_line(self):
+        """The card panel's comment box writes `Comment from` over the same
+        receipt (DRE-6500) — the heading is the console's, not his words."""
+        commented = _answer(lead="Comment from")
+        block = planning_escalation.prior_answer_block(
+            [_rec(commented, ANSWER_POSTED)], None, card=CARD, verifier=ACCEPT)
         assert block == FIRST_FORM
 
     def test_two_verified_answers_are_the_plural_form_quoting_the_newest(self):

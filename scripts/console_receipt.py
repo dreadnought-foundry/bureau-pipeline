@@ -195,6 +195,19 @@ ANSWER_VERSION = "v1"
 ANSWER_TAG = "console-answer"
 ANSWER_DOMAIN = "bureau-console-answer/v1"
 
+#: The console's two headings above the CEO's signed words, and the one place
+#: a reader learns them (DRE-6500). The Answer button writes
+#: `Answer from <name> (signed in to the console), <YYYY-MM-DD HH:MM> PT:`
+#: (ANSWER_SPEC); the card panel's "Write on this card" box writes
+#: `Comment from …` over the same receipt (agent-bureau
+#: `console/backend/card_comment.py`, DRE-3804). A reader-side declaration —
+#: ANSWER_SPEC does not change by a byte. `HEADING_LINE` matches a stripped
+#: first line, so the pattern reads `Answer from .* PT:` or
+#: `Comment from .* PT:`; a line further down that opens the same way is his.
+HEADING_LEADS = ("Answer from", "Comment from")
+HEADING_LINE = re.compile(
+    rf"^(?:{'|'.join(re.escape(lead) for lead in HEADING_LEADS)}) .* PT:\s*$")
+
 #: The console's published key. A constant, not a variable — see the module
 #: docstring for why no variable may move it.
 KEY_URL = "https://app.agent-bureau.com/api/v1/receipt-key"
