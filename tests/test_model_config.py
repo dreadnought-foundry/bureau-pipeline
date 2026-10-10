@@ -89,6 +89,9 @@ _TREE_FILES = (
     # Schema validation reads the DECLARED price of a rung sitting below the
     # workhorse fallback (DRE-3880), so the throwaway tree carries it too.
     "config/model-prices.yaml",
+    # A `projects:` key must be a repo the routing snapshot names (DRE-6633),
+    # so the throwaway tree carries the map to validate one against.
+    "config/repo-map.json",
     "agents.yaml",
 )
 
@@ -404,6 +407,18 @@ class GeneratedMirrorTest(unittest.TestCase):
         self.assertEqual(
             mirror["discovery"]["on_new_model"], cfg["discovery"]["on_new_model"]
         )
+        # The console's four keys (DRE-6633): a degrade that dropped them would
+        # lose the page's groups and every per-project exception at once.
+        self.assertEqual(
+            mirror["groups"],
+            {
+                k: {"label": v["label"], "purpose": v["purpose"]}
+                for k, v in cfg["kinds"].items()
+            },
+        )
+        self.assertEqual(mirror["ungrouped"], cfg["ungrouped"])
+        self.assertEqual(mirror["about"], cfg["about"])
+        self.assertEqual(mirror["projects"], cfg["projects"])
 
     def test_regeneration_of_todays_config_is_a_noop(self):
         with tempfile.TemporaryDirectory() as td:
@@ -421,6 +436,41 @@ class GeneratedMirrorTest(unittest.TestCase):
                     data, (tree / rel).read_bytes(),
                     f"regenerating an in-sync {rel} must be a no-op diff",
                 )
+
+    def test_the_plain_run_writes_only_the_two_mirrors(self):
+        # DRE-6633 adds no target: the daily adoption workflow stages exactly
+        # these two files, and a third would be left out of its commit.
+        with tempfile.TemporaryDirectory() as td:
+            tree = _copy_tree(Path(td))
+            proc = _run_sync(tree)
+            self.assertEqual(proc.returncode, 0, proc.stderr)
+            self.assertEqual(
+                sorted(proc.stdout.split("\n")[:-1]),
+                ["ok:    agents.yaml", "ok:    scripts/model_fallback.py"],
+            )
+
+    def test_a_project_exception_validates_and_mirrors_in_the_tree(self):
+        # The tree carries config/repo-map.json, so a real slug validates and
+        # rides into the mirror; a slug the map does not name fails the check.
+        with tempfile.TemporaryDirectory() as td:
+            tree = _copy_tree(Path(td))
+            path = tree / "config" / "models.yaml"
+            text = path.read_text()
+            self.assertIn("\nprojects: {}\n", text)
+            path.write_text(text.replace(
+                "\nprojects: {}\n",
+                f"\nprojects:\n  atlas:\n    workhorse: {SONNET55}\n",
+            ))
+            self.assertEqual(_run_sync(tree).returncode, 0)
+            self.assertIn(
+                f'"atlas": {{"workhorse": "{SONNET55}"}},',
+                (tree / "scripts" / "model_fallback.py").read_text(),
+            )
+            self.assertEqual(_run_sync(tree, "--check").returncode, 0)
+            path.write_text(path.read_text().replace("  atlas:", "  nowhere:"))
+            check = _run_sync(tree, "--check")
+            self.assertNotEqual(check.returncode, 0)
+            self.assertIn("projects.nowhere: ", check.stdout + check.stderr)
 
     def test_check_mode_passes_on_todays_tree(self):
         # The CI invocation: the working tree must be in sync.

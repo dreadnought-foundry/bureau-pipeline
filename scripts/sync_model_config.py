@@ -30,6 +30,7 @@ failure message that names the one repair command.
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 from pathlib import Path
 
@@ -38,6 +39,7 @@ from pathlib import Path
 # drift the day one side gains a rule, and the whole point of DRE-2317 is that
 # the rule cannot be edited away by accident.
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+from model_fallback import _normalize_config  # noqa: E402
 from model_fallback import _normalize_separation  # noqa: E402
 from model_fallback import policy_errors as _policy_errors  # noqa: E402
 
@@ -108,6 +110,10 @@ def load_config(path: Path = CONFIG) -> dict:
         if kind not in kinds:
             raise SystemExit(f"{path}: agent {name!r} names unknown kind {kind!r}")
     discovery = raw.get("discovery") or {}
+    # The console's four keys (DRE-6633), through the one normalizer, so the
+    # mirror gives the console the same groups, roster and per-project
+    # exceptions a healthy checkout reads.
+    console = _normalize_config(raw)
     return {
         "default_ladder": default,
         "kinds": kinds,
@@ -130,6 +136,10 @@ def load_config(path: Path = CONFIG) -> dict:
         # healthy checkout reads. A degrade that dropped it would review a
         # Sonnet-5 build on Sonnet 5 and look exactly like a healthy run.
         "review_separation": _normalize_separation(raw.get("review_separation")),
+        "groups": console["groups"],
+        "ungrouped": console["ungrouped"],
+        "about": console["about"],
+        "projects": console["projects"],
         "retired": ids(raw.get("retired")),
         "excluded": ids(raw.get("excluded")),
     }
@@ -179,11 +189,40 @@ def render_literal(cfg: dict) -> str:
         lines.append(f'            "{built_on}": "{use}",')
     lines.append("        },")
     lines.append("    },")
+    # The console's keys (DRE-6633), after the fence and in a fixed order.
+    # Free text goes out through `_text`, so a line with a quote in it is still
+    # a Python string literal.
+    lines.append('    "groups": {')
+    for kind, group in cfg["groups"].items():
+        lines.append(
+            f'        "{kind}": {{"label": {_text(group["label"])}, '
+            f'"purpose": {_text(group["purpose"])}}},'
+        )
+    lines.append("    },")
+    rendered = ", ".join(f'"{name}"' for name in cfg["ungrouped"])
+    lines.append(f'    "ungrouped": [{rendered}],')
+    lines.append('    "about": {')
+    for name, line in cfg["about"].items():
+        lines.append(f'        "{name}": {_text(line)},')
+    lines.append("    },")
+    if cfg["projects"]:
+        lines.append('    "projects": {')
+        for slug, entry in cfg["projects"].items():
+            rendered = ", ".join(f'"{kind}": "{model}"' for kind, model in entry.items())
+            lines.append(f'        "{slug}": {{{rendered}}},')
+        lines.append("    },")
+    else:
+        lines.append('    "projects": {},')
     for key in ("retired", "excluded"):
         rendered = ", ".join(f'"{m}"' for m in cfg[key])
         lines.append(f'    "{key}": [{rendered}],')
     lines.append("}")
     return "\n".join(lines)
+
+
+def _text(value: str) -> str:
+    """A double-quoted Python string literal for one line of free text."""
+    return json.dumps(value, ensure_ascii=False)
 
 
 def render_registry_model(cfg: dict, agent: str) -> str:

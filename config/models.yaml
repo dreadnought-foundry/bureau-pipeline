@@ -83,6 +83,11 @@
 #                                every downstream run is shaped by: the planner,
 #                                once per epic. The STRONGEST model, and never
 #                                on the hot path.
+#                  Each kind may also carry `label` (the group's name on the
+#                  console's Settings › Agents & models page; default the key
+#                  title-cased) and `purpose` (one line under it; default
+#                  empty). Both are words for a person and select nothing
+#                  (DRE-6633).
 #   ladders        named, ordered preference ladders, best → worst. Selection
 #                  (scripts/model_fallback.py `select`) walks a ladder top→bottom
 #                  and returns the first AVAILABLE model. A model that is not on
@@ -95,6 +100,23 @@
 #                  entries; the four label-routed roles
 #                  (engineer/frontend/devops/planner) are also the role strings
 #                  the workflows pass to `model_fallback.py select`.
+#                  `judgement` is the planner's kind and no other role's
+#                  (rule 10, DRE-6633): a role that runs per card on the
+#                  strongest model is the 2026-08-09 incident.
+#   ungrouped      agent names that exist but are in no group — the console's
+#                  interactive agents. A roster the console reads, not a
+#                  dispatch table: none runs on a pipeline workflow, and a name
+#                  may not be in both `agents` and here (DRE-6633).
+#   about          agent name → one line saying what it does, for every name
+#                  in `agents` and `ungrouped`. A line for a name that is in
+#                  neither is refused.
+#   projects       repo slug → `{ <kind>: <model id> }`, the per-project
+#                  exception: that repo's runs of that kind try the named model
+#                  FIRST and then walk the kind's ladder with it removed. The
+#                  model must already be a rung of THAT KIND'S OWN ladder — an
+#                  exception reorders a ladder and never adds a model to one —
+#                  and the slug must be a key of config/repo-map.json. The walk
+#                  is held to the same policy rules as the fleet's (DRE-6633).
 #   review_separation
 #                  the build/review fence, bought at SELECTION time rather than
 #                  by keeping the ladders disjoint (DRE-3880). `roles` names the
@@ -148,6 +170,8 @@ kinds:
   # advisory or the judgement ladder here.
   workhorse:
     ladder: workhorse
+    label: Builders
+    purpose: Do the work on every card.
     roles: >-
       build agents — engineer, frontend, devops, database-architect, fixer,
       repairer
@@ -158,6 +182,8 @@ kinds:
   # diff, so a shallow review is a silent failure. It gets the strongest model.
   advisory:
     ladder: advisory
+    label: Reviewers
+    purpose: Judge a pull request, a plan or a failed run.
     roles: critic, verifier, medic, plan-critic-pre, plan-critic-post
 
   # THE DECISION POINT. One run per epic, and the plan it writes is the
@@ -168,6 +194,8 @@ kinds:
   # it thinks, because volume is what drains the subscription.
   judgement:
     ladder: judgement
+    label: Planners
+    purpose: Turn an epic into the cards the fleet builds.
     roles: planner
 
 ladders:
@@ -358,6 +386,68 @@ agents:
   # are capped at two rounds per epic, so the volume stays bounded by design.
   plan-critic-pre: advisory
   plan-critic-post: advisory
+
+# THE CONSOLE'S ROSTER (DRE-6633)
+# -------------------------------
+# The console's Settings › Agents & models page shows one group per kind (its
+# `label` and `purpose` above) and, under it, the agents assigned that kind.
+# `ungrouped` names the agents that exist but are in no group: the console's
+# interactive agents. None of them runs on a pipeline workflow or has an
+# agents.yaml entry in this repo, and that is fine — this list is a roster the
+# console reads, not a dispatch table, and `sync_model_config.py` generates
+# nothing for a name it does not hold in `agents`.
+ungrouped:
+  - designer
+  - ux-ui-engineer
+  - fullstack-engineer
+  - mobile
+  - product-lead
+
+# One line per agent, in `agents` or `ungrouped`, for the page to show beside
+# its name. A line for a name in neither is refused.
+about:
+  engineer: Builds a card and opens the PR
+  frontend: Builds the screens a card asks for and opens the PR
+  database-architect: Designs the schema and writes the migrations a card needs
+  devops: Writes the infrastructure, CI and deploy code a card needs
+  fixer: Answers a review's requested changes on an open PR
+  repairer: Repairs the main branch when its tests go red
+  proof: Runs a proof card's checks and records what it saw
+  planner: Turns an epic into the cards the fleet builds
+  critic: Reviews every pull request before it merges
+  verifier: Tries a UI or multi-system change the way a person would
+  medic: Diagnoses a failed run and says what went wrong
+  plan-critic-pre: Checks a plan's cards before they reach the CEO
+  plan-critic-post: Reads a passed plan as the spec agents will build from
+  designer: Designs screens and systems
+  ux-ui-engineer: Turns a design into working screens
+  fullstack-engineer: Builds across the front and back end
+  mobile: Builds the mobile apps
+  product-lead: Decides what to build next and writes the cards
+
+# THE PER-PROJECT EXCEPTION (DRE-6633)
+# ------------------------------------
+# A repo's runs of one kind may try a different rung FIRST. The shape, with the
+# repo slug a key of config/repo-map.json:
+#
+#   projects:
+#     atlas:
+#       workhorse: claude-sonnet-5-5
+#
+# The walk rule: that repo's builders walk [the exception] + the workhorse
+# ladder with the exception removed — here claude-sonnet-5-5, claude-opus-5-5,
+# claude-opus-5, claude-sonnet-5. Every other repo, and every other kind in
+# atlas, walks the fleet ladder above unchanged.
+#
+# The model must already be a rung of THAT KIND'S OWN ladder. An exception
+# reorders a ladder and never adds a model to one: a model joins a ladder only
+# through a reviewed pull request to this file (availability is not permission,
+# 2026-08-09). So `workhorse: claude-sonnet-4-6` is refused — it sits only on
+# the judgement ladder, and the 2026-09-16 decision took it off the build one.
+# The walk an exception makes is then held to the same rules as the fleet's
+# ladders (`model_fallback.policy_errors`), and the daily adoption moves an
+# exception with the rung it names when a same-family successor replaces it.
+projects: {}
 
 # THE BUILD/REVIEW FENCE, DECLARED (DRE-3880, CEO decision 2026-09-16)
 # --------------------------------------------------------------------
