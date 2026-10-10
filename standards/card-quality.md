@@ -366,8 +366,8 @@ it, such as the standing hold or the unmet row.
 **A row shown working but not as the card words it is accepted, not met
 (DRE-6244, DRE-6773).** The CEO decided on 2026-10-07 that a record may carry a
 row the operator accepted, provided the record links the written reason. The
-CEO decided on 2026-10-10 which rows those are, choosing between accepting
-every such row and accepting none:
+CEO decided on 2026-10-10 which rows those are, and rejected both accepting
+every unmet row and accepting none:
 
 - A row may be accepted by operator decision only where the mechanism was
   actually observed working and just the card's wording, quoted text, timing,
