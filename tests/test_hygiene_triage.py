@@ -711,7 +711,8 @@ CRITIC_STAMP = "🔒 hold: reason=plan-critic-bound at=none lifts=manual by=plan
 REREVIEW_STAMP = ("🔒 hold: reason=epic-rereview-twice at=none lifts=manual "
                   "by=rereview_watch.py")
 PARKED = "🛑 Parked in Triage with needs-human for an operator — "
-ALARM_CAUSE = "held plan-critic-bound past the 8-hour bound in Triage"
+ALARM_CAUSE = ("held plan-critic-bound in Triage since 2026-09-30T06:00:00Z past the "
+               "8-hour bound")
 WAY_BACK = ("read the park note's own way back — clear needs-human and move the card to "
             "Planning for a fresh planning attempt, or answer the Green Light question "
             "when the exit asked one")
@@ -799,11 +800,12 @@ class TestAPlanningHeldCard:
         items, _ctx, _gh, _linear = plan()
         action = the_action(items, "DRE-4425")
         assert action.act == "hygiene-triage-alarm"
-        assert action.cause == "held epic-rereview-twice past the 1-hour bound in Triage"
+        assert action.cause == ("held epic-rereview-twice in Triage since "
+                                "2026-09-30T19:00:00Z past the 1-hour bound")
         assert action.evidence == [REREVIEW_STAMP, "entered Triage 2026-09-30T19:00:00Z"]
         assert kinds(action) == ["linear_comment"]
         assert the_action(items, "DRE-4424").cause == (
-            "held plan-critic-bound past the 1-hour bound in Triage")
+            "held plan-critic-bound in Triage since 2026-09-30T06:00:00Z past the 1-hour bound")
 
     @pytest.mark.parametrize("value", ["0", "abc", "-3"])
     def test_a_bound_that_is_not_a_positive_number_raises(self, monkeypatch, value):
@@ -823,7 +825,8 @@ class TestAPlanningHeldCard:
         assert lefts(items, "DRE-4424")[0].why.startswith(
             "held plan-critic-bound for 11 hours in Triage — ")
         action = the_action(items, "DRE-4424")
-        assert action.cause == ALARM_CAUSE
+        assert action.cause == ("held plan-critic-bound in Triage since 2026-09-30T10:00:00Z "
+                                "past the 8-hour bound")
         assert action.evidence == [CRITIC_STAMP, "stamped 2026-09-30T10:00:00Z"]
 
     def test_neither_read_is_age_unknown_and_never_an_alarm(self):
@@ -914,6 +917,42 @@ class TestTheAlarmIsSaidOnce:
         add_receipts(doc, sent)
         sent2, _ledger2 = run(doc, monkeypatch)
         assert [w for w in sent2 if w.card == "DRE-4424"] == []
+
+    def test_a_card_parked_again_after_a_lift_is_alarmed_again(self, monkeypatch):
+        doc = fixture()
+        held = card(doc, "DRE-4424")
+        park, stamp = copy.deepcopy(held["comments"]["nodes"][-2:])
+        # The first hold: parked on the 28th, alarmed that day by the lane itself.
+        held["history"]["nodes"] = [
+            {"createdAt": "2026-09-28T02:00:00.000Z", "toState": {"name": "Triage"}}]
+        held["comments"]["nodes"] = [comment(park["body"], at="2026-09-28T02:00:05.000Z"),
+                                     comment(stamp["body"], at="2026-09-28T02:00:10.000Z")]
+        sent, _ledger = run(doc, monkeypatch)
+        first = [w for w in sent if w.card == "DRE-4424"]
+        assert [w.kind for w in first] == ["linear_comment"]
+        held["comments"]["nodes"].append(comment(first[0].body, at="2026-09-28T10:05:00.000Z"))
+        # Lifted, back through Planning, and parked again for the same reason.
+        held["comments"]["nodes"] += [
+            comment("🔓 hold lifted: reason=plan-critic-bound because=operator by=hold.py",
+                    at="2026-09-29T09:00:00.000Z"),
+            comment(park["body"], at="2026-09-30T06:00:05.000Z"),
+            comment(stamp["body"], at="2026-09-30T06:00:10.000Z")]
+        held["history"]["nodes"] += [
+            {"createdAt": "2026-09-29T09:00:00.000Z", "toState": {"name": "Planning"}},
+            {"createdAt": "2026-09-30T06:00:00.000Z", "toState": {"name": "Triage"}}]
+
+        sent2, ledger2 = run(doc, monkeypatch)
+        mine = [a for a in ledger2["actions"] if a["target"] == "DRE-4424"]
+        assert [(a["act"], a["cause"], a["outcome"]) for a in mine] == [
+            ("hygiene-triage-alarm", ALARM_CAUSE, "executed")]
+        again = [w for w in sent2 if w.card == "DRE-4424"]
+        assert [w.kind for w in again] == ["linear_comment"]
+        assert hygiene.read_receipt(again[0].body)["cause"] != (
+            hygiene.read_receipt(first[0].body)["cause"])
+
+        add_receipts(doc, sent2)
+        sent3, _ledger3 = run(doc, monkeypatch)
+        assert [w for w in sent3 if w.card == "DRE-4424"] == []
 
 
 # --------------------------------------------------------------------------- #

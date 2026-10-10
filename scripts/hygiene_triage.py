@@ -31,9 +31,11 @@ cause named. One action per card, the first of these that applies:
    wait reaches `HYGIENE_TRIAGE_ALARM_HOURS` (default `DEFAULT_ALARM_HOURS`; a
    value that is not a positive number stops the lane), a
    `hygiene-triage-alarm` receipt says so on the card. Cause: `held <reason>
-   past the <N>-hour bound in Triage`, which carries no age, so the core's key
-   says it once. A newer stamp of another reason, a spent stamp, or the stamp
-   without the label is no such hold, as in (2).
+   in Triage since <ts> past the <N>-hour bound`, where `<ts>` is when the
+   wait began — the same on every pass over one hold, and new each time the
+   card is parked again — and no age, so the core's key says it once per
+   hold. A newer stamp of another reason, a spent stamp, or the stamp without
+   the label is no such hold, as in (2).
 4. **A retired-repo card.** Its `repo:<slug>` label names a slug that is not a
    key of `config/repo-map.json` (cause `retired repo <slug>`), or a repo that
    answers `archived: true` to `gh api repos/<owner>/<repo>` (cause `archived
@@ -321,8 +323,9 @@ def _park_note(card: dict) -> str:
 def held_planning(card: dict, ctx: hygiene.Context, bound) -> list | None:
     """One row for a card a planning exit parked, naming the reason, its age
     in Triage and the park note — and, once that age reaches `bound` hours,
-    an alarm receipt. The core's (tag, cause) key says the alarm once; an age
-    neither read gives is a row and never an alarm."""
+    an alarm receipt. The cause names when the wait began, so the core's
+    (tag, cause) key says the alarm once per hold, and again when the card is
+    parked anew; an age neither read gives is a row and never an alarm."""
     stamp = hold.read_stamp(_bodies(card))
     if (NEEDS_HUMAN not in _labels(card) or stamp is None
             or stamp["reason"] not in PLANNING_REASONS):
@@ -338,7 +341,7 @@ def held_planning(card: dict, ctx: hygiene.Context, bound) -> list | None:
                       f"Triage — {note}", PLANNING_WAY_BACK)
     if ctx.now - since < timedelta(hours=bound):
         return [row]
-    cause = f"held {reason} past the {bound:g}-hour bound in Triage"
+    cause = f"held {reason} in Triage since {_iso(since)} past the {bound:g}-hour bound"
     return [_action(card, ALARM_ACT, cause, [stamp["line"], when], ctx, [], []), row]
 
 
