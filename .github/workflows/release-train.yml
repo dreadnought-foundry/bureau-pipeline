@@ -531,3 +531,30 @@ jobs:
           python3 .bureau-pipeline/scripts/release_train.py \
             --repo "$GITHUB_REPOSITORY" release \
             --sha "$PLAN_SHA" --surface "$SURFACE" --re-arm "${args[@]}"
+
+      # The surface's run log (DRE-6574). A surface script may leave one file
+      # at `<runner temp>/release-artifacts/<surface>/release-runs.jsonl` when
+      # the lap ends — Portico's does since DRE-6507, and its runbook names
+      # this artifact — and without this step it goes with the runner. The
+      # train's proof (DRE-5377) reads it after a release.
+      #
+      # always(), so a failed or refused lap still keeps its log. `ignore`,
+      # so a surface that writes none — every one but Portico's today —
+      # uploads nothing and stays green. Named per attempt, or a re-run's
+      # upload is refused as a duplicate name. continue-on-error, because the
+      # tag is already cut when this runs: a storage failure is a marked
+      # step, never a red release (DRE-3263).
+      #
+      # The file holds partner domains, so nothing here prints it; the
+      # artifact is private to the caller's repository. Uploading needs no
+      # token permission, so no `permissions:` block (the header says why a
+      # called job must not ask for one).
+      - name: Keep the surface's run log
+        if: always()
+        continue-on-error: true
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: release-${{ matrix.surface }}-run${{ github.run_id }}-attempt${{ github.run_attempt }}
+          path: ${{ runner.temp }}/release-artifacts/${{ matrix.surface }}/release-runs.jsonl
+          if-no-files-found: ignore
+          retention-days: 90
