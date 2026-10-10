@@ -11922,15 +11922,9 @@ def _fleet_outage_open_card() -> dict | None:
     whose title opens with the prefix is an open alarm — in Triage where it was
     filed, or in any lane the sweep reads that a person moved it to. Oldest
     `createdAt` first: the oldest is the card, and the rest are the
-    `duplicates` the cross-repo filing race leaves. No Linear request.
-
-    Under `BUREAU_READ=on` the snapshot is the door's, and the door is asked
-    for DOOR_WORK_LANES, which does not hold the alarm lane — so on that path,
-    and only there, this is the one `find_open_prefix` request, on every pass.
-    Folding the lane into the door's read is the console's to do.
+    `duplicates` the cross-repo filing race leaves. No Linear request beyond
+    that read, which the witness below needs anyway.
     """
-    if bureau_read.mode() == "on":
-        return linear_ops.find_open_prefix(reviewer_down.TITLE_PREFIX)
     alarms = sorted(
         (card for card in active_cards(BOARD_READ_LANES)
          if (card.get("title") or "").startswith(reviewer_down.TITLE_PREFIX)),
@@ -11989,13 +11983,20 @@ def report_fleet_reviewer_outage() -> None:
     prs = _open_pr_listing()
     if prs is None:
         return  # unreadable listing — recorded there, never acted on here
-    try:
+    if bureau_read.mode() == "on":
+        # The door's snapshot is DOOR_WORK_LANES, which does not hold the
+        # alarm lane — so on this path, and only on it, the open card costs the
+        # one `find_open_prefix` request, on every pass (DRE-6576). Folding the
+        # lane into the door's read is the console's to do.
+        try:
+            found = linear_ops.find_open_prefix(reviewer_down.TITLE_PREFIX)
+        except Exception as e:  # noqa: BLE001 — an unreadable board is not an empty one
+            _read_failures.append(f"fleet-reviewer-outage: open-card lookup failed: {e}")
+            print(f"ERROR: fleet-reviewer-outage: open-card lookup failed: {e}",
+                  file=sys.stderr)
+            return
+    else:
         found = _fleet_outage_open_card()
-    except Exception as e:  # noqa: BLE001 — an unreadable board is not an empty one
-        _read_failures.append(f"fleet-reviewer-outage: open-card lookup failed: {e}")
-        print(f"ERROR: fleet-reviewer-outage: open-card lookup failed: {e}",
-              file=sys.stderr)
-        return
     open_card = None
     if found:
         bodies = [node.get("body") or ""
