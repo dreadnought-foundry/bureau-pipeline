@@ -640,6 +640,74 @@ jobs:
           fi
           echo "$LINE" | tee -a "$GITHUB_STEP_SUMMARY"
 
+      # ---- THE LOCAL RUN OF THE RELEASED COMMIT (DRE-6027) ----
+      # A `Local screen:` row is observed in a browser on a local run of the
+      # released commit (docs/proof-local-run.md). These four steps stand it
+      # up before the agent — after the AWS session above, so the run holds
+      # it, and before the install, so the agent finds it ready — and
+      # `Stop the local run` tears it down after. The logic is the sibling
+      # modules' (proof_local.py, proof_browser.py); every step runs the
+      # runner's own python3, and the browser's interpreter is the venv
+      # `prepare` creates, handed to the agent as PROOF_PYTHON. None of the
+      # four can fail the run: a repo with no declaration, or one whose run
+      # will not start, costs its `Local screen:` rows, never the run.
+      #
+      # An invalid declaration exits 1 and writes nothing; `prepare` still
+      # runs on that outcome and names the reason as `status=failed`.
+      - name: Read the local-run declaration
+        id: local_decl
+        continue-on-error: true
+        run: python3 .bureau-pipeline/scripts/proof_local.py read --github-output "$GITHUB_OUTPUT"
+
+      # qa-review.yml's node pair, copied: the version is read from the
+      # consumer's `node_dir`, never written here.
+      - name: Resolve the consumer's node for the local run
+        id: local_node
+        if: steps.local_decl.outputs.declared == 'true' && steps.local_decl.outputs.node_dir != ''
+        continue-on-error: true
+        env:
+          NODE_DIR: ${{ steps.local_decl.outputs.node_dir }}
+          # In-tree on purpose (DRE-3226): the file the `uses: ./…` below loads.
+          NODE_ACTION: .bureau-pipeline/.github/actions/setup-node-cached/action.yml
+        run: |
+          set +e
+          python3 .bureau-pipeline/scripts/consumer_node.py "$NODE_DIR" \
+            > "$RUNNER_TEMP/proof-node.txt" 2> "$RUNNER_TEMP/proof-node.err"
+          RC=$?
+          cat "$RUNNER_TEMP/proof-node.txt"
+          cat "$RUNNER_TEMP/proof-node.err"
+          if [ "$RC" -ne 0 ]; then
+            echo "setup=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if [ ! -f "$NODE_ACTION" ]; then
+            echo "setup=false" >> "$GITHUB_OUTPUT"
+            echo "the pipeline checkout at this ref carries no shared node action"
+            exit 0
+          fi
+          # Only the keys the script declares reach the step outputs — a
+          # consumer file cannot add a line of its own choosing here.
+          grep -E '^(setup|version|source|node-version|node-version-file)=' \
+            "$RUNNER_TEMP/proof-node.txt" >> "$GITHUB_OUTPUT"
+
+      - name: Set up the consumer's node for the local run
+        id: local_node_setup
+        if: steps.local_decl.outputs.declared == 'true' && steps.local_decl.outputs.node_dir != '' && steps.local_node.outputs.setup == 'true'
+        continue-on-error: true
+        uses: ./.bureau-pipeline/.github/actions/setup-node-cached
+        with:
+          working-directory: ${{ steps.local_decl.outputs.node_dir }}
+          node-version: ${{ steps.local_node.outputs.node-version }}
+          node-version-file: ${{ steps.local_node.outputs.node-version-file }}
+
+      # Skipped (no declaration) leaves every output empty, which the agent's
+      # env reads as PROOF_LOCAL_STATUS=none.
+      - name: Stand up a local run of the released commit
+        id: local
+        if: steps.local_decl.outputs.declared == 'true' || steps.local_decl.outcome == 'failure'
+        continue-on-error: true
+        run: python3 .bureau-pipeline/scripts/proof_browser.py prepare --github-output "$GITHUB_OUTPUT" --summary "$GITHUB_STEP_SUMMARY"
+
       # Claude Code, installed ONCE and proved, before the model step below
       # (DRE-3414). DRE-3416: the vendor's own installer exited clean, left no
       # launcher, and every Claude-running job in the fleet died minutes later
@@ -703,6 +771,16 @@ jobs:
           # every other run, and 40 is one run's share of it when a sweep, a
           # build and a review run in the same hour.
           PROOF_LINEAR_REQUESTS: "40"
+          # The local run of the released commit (DRE-6027): `prepare`'s
+          # outputs, read as `none` when it was skipped. PROOF_LOGIN_FILE is
+          # proof_browser.py's own default, so `Stop the local run` finds it.
+          PROOF_LOCAL_STATUS: ${{ steps.local.outputs.status || 'none' }}
+          PROOF_LOCAL_NOTE: ${{ steps.local.outputs.note }}
+          PROOF_LOCAL_URL: ${{ steps.local.outputs.url }}
+          PROOF_LOCAL_COMMIT: ${{ steps.local.outputs.commit }}
+          PROOF_LOCAL_TAG: ${{ steps.local.outputs.tag }}
+          PROOF_PYTHON: ${{ steps.local.outputs.python || '' }}
+          PROOF_LOGIN_FILE: ${{ runner.temp }}/proof-login.json
         with:
           path_to_claude_code_executable: ${{ steps.install_claude.outputs.executable }}
           anthropic_api_key: ${{ vars.CLAUDE_AUTH_MODE != 'subscription' && secrets.ANTHROPIC_API_KEY || '' }}
@@ -755,6 +833,26 @@ jobs:
             - An AWS session, only when the calling repo provides a proof role.
               With none, every row that needs one is `Not observed.` with that
               reason.
+            - A local run of the released commit, read off PROOF_LOCAL_STATUS.
+              `up` means PROOF_LOCAL_URL serves PROOF_LOCAL_COMMIT
+              (PROOF_LOCAL_TAG) and PROOF_PYTHON is the interpreter that holds
+              the browser — `proof_session.py screenshot` finds it by itself,
+              and a click-flow script runs as `"$PROOF_PYTHON" <script>`;
+              `none` means every `Local screen:` row is
+              `Not observed. no local run declared`; `failed` means every such
+              row is `Not observed. the local run did not start: $PROOF_LOCAL_NOTE`.
+              A `Local screen:` row is never inferred from a `Live request:` row.
+              To sign in, run `python3 .bureau-pipeline/scripts/proof_session.py login`
+              once, then `screenshot --signed-in`; never open, print, copy or
+              quote the login file at $PROOF_LOGIN_FILE, the browser state file
+              or anything under $RUNNER_TEMP/proof-venv — the two commands are
+              their only readers, a failed sign-in is diagnosed from the
+              `proof-login:` and `proof-screenshot:` lines alone and recorded
+              `Not observed.` with that line, and the password is never in the
+              record, the pull request or a comment. The `Live request:` half
+              is quoted off the request sidecar the `proof-screenshot:` line
+              names, row for row as `<method> <origin and path> <status>`, and
+              the sidecar itself is never committed.
 
             Process (mandatory):
             1. Post `⏳ 1/5 read`. If the branch
@@ -875,6 +973,16 @@ jobs:
           # every other run, and 40 is one run's share of it when a sweep, a
           # build and a review run in the same hour.
           PROOF_LINEAR_REQUESTS: "40"
+          # The local run of the released commit (DRE-6027): `prepare`'s
+          # outputs, read as `none` when it was skipped. PROOF_LOGIN_FILE is
+          # proof_browser.py's own default, so `Stop the local run` finds it.
+          PROOF_LOCAL_STATUS: ${{ steps.local.outputs.status || 'none' }}
+          PROOF_LOCAL_NOTE: ${{ steps.local.outputs.note }}
+          PROOF_LOCAL_URL: ${{ steps.local.outputs.url }}
+          PROOF_LOCAL_COMMIT: ${{ steps.local.outputs.commit }}
+          PROOF_LOCAL_TAG: ${{ steps.local.outputs.tag }}
+          PROOF_PYTHON: ${{ steps.local.outputs.python || '' }}
+          PROOF_LOGIN_FILE: ${{ runner.temp }}/proof-login.json
         with:
           path_to_claude_code_executable: ${{ steps.install_claude.outputs.executable }}
           anthropic_api_key: ${{ vars.CLAUDE_AUTH_MODE != 'subscription' && secrets.ANTHROPIC_API_KEY || '' }}
@@ -927,6 +1035,26 @@ jobs:
             - An AWS session, only when the calling repo provides a proof role.
               With none, every row that needs one is `Not observed.` with that
               reason.
+            - A local run of the released commit, read off PROOF_LOCAL_STATUS.
+              `up` means PROOF_LOCAL_URL serves PROOF_LOCAL_COMMIT
+              (PROOF_LOCAL_TAG) and PROOF_PYTHON is the interpreter that holds
+              the browser — `proof_session.py screenshot` finds it by itself,
+              and a click-flow script runs as `"$PROOF_PYTHON" <script>`;
+              `none` means every `Local screen:` row is
+              `Not observed. no local run declared`; `failed` means every such
+              row is `Not observed. the local run did not start: $PROOF_LOCAL_NOTE`.
+              A `Local screen:` row is never inferred from a `Live request:` row.
+              To sign in, run `python3 .bureau-pipeline/scripts/proof_session.py login`
+              once, then `screenshot --signed-in`; never open, print, copy or
+              quote the login file at $PROOF_LOGIN_FILE, the browser state file
+              or anything under $RUNNER_TEMP/proof-venv — the two commands are
+              their only readers, a failed sign-in is diagnosed from the
+              `proof-login:` and `proof-screenshot:` lines alone and recorded
+              `Not observed.` with that line, and the password is never in the
+              record, the pull request or a comment. The `Live request:` half
+              is quoted off the request sidecar the `proof-screenshot:` line
+              names, row for row as `<method> <origin and path> <status>`, and
+              the sidecar itself is never committed.
 
             Process (mandatory):
             1. Post `⏳ 1/5 read`. If the branch
@@ -1045,6 +1173,16 @@ jobs:
           # every other run, and 40 is one run's share of it when a sweep, a
           # build and a review run in the same hour.
           PROOF_LINEAR_REQUESTS: "40"
+          # The local run of the released commit (DRE-6027): `prepare`'s
+          # outputs, read as `none` when it was skipped. PROOF_LOGIN_FILE is
+          # proof_browser.py's own default, so `Stop the local run` finds it.
+          PROOF_LOCAL_STATUS: ${{ steps.local.outputs.status || 'none' }}
+          PROOF_LOCAL_NOTE: ${{ steps.local.outputs.note }}
+          PROOF_LOCAL_URL: ${{ steps.local.outputs.url }}
+          PROOF_LOCAL_COMMIT: ${{ steps.local.outputs.commit }}
+          PROOF_LOCAL_TAG: ${{ steps.local.outputs.tag }}
+          PROOF_PYTHON: ${{ steps.local.outputs.python || '' }}
+          PROOF_LOGIN_FILE: ${{ runner.temp }}/proof-login.json
         with:
           path_to_claude_code_executable: ${{ steps.install_claude.outputs.executable }}
           anthropic_api_key: ${{ vars.CLAUDE_AUTH_MODE != 'subscription' && secrets.ANTHROPIC_API_KEY || '' }}
@@ -1097,6 +1235,26 @@ jobs:
             - An AWS session, only when the calling repo provides a proof role.
               With none, every row that needs one is `Not observed.` with that
               reason.
+            - A local run of the released commit, read off PROOF_LOCAL_STATUS.
+              `up` means PROOF_LOCAL_URL serves PROOF_LOCAL_COMMIT
+              (PROOF_LOCAL_TAG) and PROOF_PYTHON is the interpreter that holds
+              the browser — `proof_session.py screenshot` finds it by itself,
+              and a click-flow script runs as `"$PROOF_PYTHON" <script>`;
+              `none` means every `Local screen:` row is
+              `Not observed. no local run declared`; `failed` means every such
+              row is `Not observed. the local run did not start: $PROOF_LOCAL_NOTE`.
+              A `Local screen:` row is never inferred from a `Live request:` row.
+              To sign in, run `python3 .bureau-pipeline/scripts/proof_session.py login`
+              once, then `screenshot --signed-in`; never open, print, copy or
+              quote the login file at $PROOF_LOGIN_FILE, the browser state file
+              or anything under $RUNNER_TEMP/proof-venv — the two commands are
+              their only readers, a failed sign-in is diagnosed from the
+              `proof-login:` and `proof-screenshot:` lines alone and recorded
+              `Not observed.` with that line, and the password is never in the
+              record, the pull request or a comment. The `Live request:` half
+              is quoted off the request sidecar the `proof-screenshot:` line
+              names, row for row as `<method> <origin and path> <status>`, and
+              the sidecar itself is never committed.
 
             Process (mandatory):
             1. Post `⏳ 1/5 read`. If the branch
@@ -1594,6 +1752,16 @@ jobs:
               "🤖 proof run ended with no record — the dispatcher reads this run off the card and decides whether to dispatch again.$UNREAD Run: $RUN_URL"
           fi
           echo "proof result: $TOOK" | tee -a "$GITHUB_STEP_SUMMARY"
+
+      # The local run's teardown (DRE-6027), on every outcome: it ends the
+      # process group `prepare` started and overwrites then deletes the
+      # browser's state file and any login file left, so a run that died
+      # mid-proof leaves no credential on the runner. No env of its own —
+      # the agent's PROOF_LOGIN_FILE is the module's own default path.
+      - name: Stop the local run
+        id: local_stop
+        if: always()
+        run: python3 .bureau-pipeline/scripts/proof_browser.py stop
 
       # THE JOB'S RED LIGHT (DRE-4108). It used to be the agent step itself:
       # the step failed, the job failed, and every `always()` step below still
