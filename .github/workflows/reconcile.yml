@@ -415,6 +415,10 @@ jobs:
       #
       # `PROOF_DISPATCH_LIVE` is the caller's variable. Anything but `true` is
       # the dry run: `would:` lines, no dispatch, no receipt, no hold.
+      #
+      # The step summary lifts the switch, the tally, the `would:` lines and
+      # the `proof-release:` lines — the release reading of the card a pass
+      # dispatches, the line its proof record quotes (DRE-6516).
       - name: Dispatch proof runs
         if: inputs.sweep_reason == ''
         env:
@@ -445,7 +449,7 @@ jobs:
           STATUS=0
           python3 .bureau-pipeline/scripts/proof_dispatch.py 2>&1 | tee proof-dispatch.log || STATUS=$?
           BUDGET=$(grep '^linear-budget:' proof-dispatch.log || true)
-          SUMMARY=$(grep -E '^(proof-dispatch: (PROOF_DISPATCH_LIVE|eligible)|would:)' proof-dispatch.log || true)
+          SUMMARY=$(grep -E '^(proof-dispatch: (PROOF_DISPATCH_LIVE|eligible)|proof-release:|would:)' proof-dispatch.log || true)
           {
             echo "### Proof-run dispatch — spend"
             echo
