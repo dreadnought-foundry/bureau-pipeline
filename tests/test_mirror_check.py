@@ -15,8 +15,9 @@ agent-bureau PR at once, and fixed by hand each time.
     whose text names `BUREAU_PIPELINE_DIR` or `.bureau-pipeline`; never a list;
   * the run — pytest from agent-bureau's root with the candidate at
     `<agent-bureau>/.bureau-pipeline` AND in `BUREAU_PIPELINE_DIR`;
-  * the re-read — each failure run again against the current `stable`, so a
-    test red on both is agent-bureau's own red and refuses nothing;
+  * the re-read — the whole discovered set run again against the current
+    `stable` (DRE-6657), so a test red on both is agent-bureau's own red, or
+    the run's own doing, and refuses nothing;
   * the mirror map — the bureau-pipeline file a failing test mirrors, read off
     the test's own string literals, never guessed;
   * the card — one per breakage, found again by its exact title.
