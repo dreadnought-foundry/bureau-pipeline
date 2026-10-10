@@ -47,7 +47,7 @@ ENV_KEYS = (
     "PRE_AGENT_LOG", "RESCUE_PUSH_STATUS", "RESCUE_PATCH", "RESCUE_ARTIFACT",
     "RESCUE_PUSHED", "RESCUE_ERROR", "GH_DISPATCH_TOKEN", "BUREAU_SERVER_URL",
     "BUREAU_REPOSITORY", "BUREAU_RUN_ID", "CLAUDE_EXECUTION_FILE",
-    "RESCUE_LOCAL_WORK",
+    "RESCUE_LOCAL_WORK", "RESCUE_PR_OPENED", "RESCUE_PR_URL",
 )
 
 #: The 27 card references the block carried on `main`; `verify` requires
@@ -177,8 +177,12 @@ def _checkout(td: str) -> None:
     _executable(os.path.join(base, "scripts", "card_pr.py"), CARD_PR_STUB)
 
 
-def run_pr_opened(tc, command: list[str], *, card_pr: str = CARD_PR_STUB):
-    """Run `command` from a runner-shaped directory; return `(proc, journal)`."""
+def run_pr_opened(tc, command: list[str], *, card_pr: str = CARD_PR_STUB,
+                  env_extra=None):
+    """Run `command` from a runner-shaped directory; return `(proc, journal)`.
+
+    `env_extra` is the Push rescue step's outputs, as the step's `env:` hands
+    them over (tests/test_push_rescue_branch_without_pr.py, DRE-6719)."""
     td = tempfile.mkdtemp()
     tc.addCleanup(shutil.rmtree, td, ignore_errors=True)
     _checkout(td)
@@ -215,6 +219,7 @@ def run_pr_opened(tc, command: list[str], *, card_pr: str = CARD_PR_STUB):
         LINEAR_STUB_LOG=log,
         CARD_PR_STUB_URL=PR_URL,
     )
+    env.update(env_extra or {})
     proc = subprocess.run(command, cwd=td, env=env,
                           capture_output=True, text=True)
     journal = []
