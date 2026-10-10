@@ -79,7 +79,9 @@ fast path shipped, which the sweep moves straight to Planning (DRE-4150, point
      `unverified` (DRE-5304). Every answer but `unverified` needs a
      `file:line` proof from the code, or it is recorded `unverified` with
      the reason `no proof`. `done-elsewhere`, `obsolete` and `not-worth-it`
-     put the card on the Cancel list; `partly-solved` keeps it in the batch.
+     put the card on the Cancel list; `partly-solved` puts a Planning card on
+     the Rewrite first list, with the agent's drafted body, and `unverified`
+     takes a Planning card out of the batch and leaves it in Intake (DRE-6666).
      `excluded` is the runner's word, never the agent's. A
      card whose repo is not in `config/repo-map.json` is `excluded`, naming
      the slug (DRE-5746), and on its leg no code is read and no model is
@@ -89,7 +91,9 @@ fast path shipped, which the sweep moves straight to Planning (DRE-4150, point
      (`groom_verify_agent.py apply`) and runs
      `post --card DRE-N --proposal proposal-verified.json`, which posts it —
      so nothing reaches the card until the matrix has finished. A failed
-     verify job does not stop the post; its cards are `unverified`.
+     verify job does not stop the post; its cards are `unverified`, and so
+     not in the batch. After the proposal, `post` puts the drafted rewrite
+     of each Rewrite first card on that card, once per body (DRE-6666).
 
    On a drain only `groom` runs, exactly as before. The page carries a
    `## Verified against main` section after the Cancel list, and its
@@ -602,7 +606,8 @@ When the record carries a `verify` block — written by
 the Cancel list: one line per verdict count (`still-needed`, `partly-solved`,
 `done-elsewhere`, `obsolete`, `not-worth-it`, `unverified`, `excluded`), each
 card excluded without judgement by id with its reason, one line `Verify step: <N> cards, $<X.XX>, <M> min
-<S> s wall clock`, and each unverified card by id with its reason. A Cancel
+<S> s wall clock`, and each unverified card by id with its reason, under
+`Not verified — not in the batch, each stays in Intake:`. A Cancel
 row the verify step wrote (`source: verify-agent`) carries its `file:line`
 proof whole in the Reason cell, and a batch card's verdict is under its entry
 in `## Why each card is in the batch`.
@@ -700,6 +705,101 @@ proposal" step and a warning on the run's summary page, it is
 `verify.not_posted_why` in the kept `proposal-verified.json`, and on a real
 morning the judgement receipt still lands on the standing card carrying the
 not-posted clause, while a dry run posts nothing at all.
+
+### Rewrite first (DRE-6666)
+
+On 2026-10-10 the verify step left DRE-4072, DRE-3919, DRE-4204 and DRE-4206
+on the Planning list as written although the agent had just answered each
+`partly-solved` — its text no longer matched the code — and left DRE-4417 in
+the batch `unverified`, although nobody had checked it. A person removed all
+five by hand. Two verdicts now take a card off the Planning list, with the
+agent call that already runs and no new one.
+
+**`unverified` leaves the batch.** A Planning card nobody could check leaves
+the list by the same walk an excluded card takes: it goes on no other list,
+the next still-needed spare takes its slot, and it waits in `not-now` with the
+reason `not verified: <reason>` and nothing scheduled, so it stays in Intake
+and is read again the next morning. The page names it under
+`Not verified — not in the batch, each stays in Intake:` as `DRE-N — <reason>`.
+`verify.unverified` lists it as before, and `slots_unfilled` keeps its meaning:
+the slots a Cancel emptied that no spare could fill. An `unverified` spare was
+never in the batch and stays where it was. A morning on which every leg died
+therefore posts the cards it could check, and nothing it could not.
+
+**`partly-solved` means rewrite first, bounded to the morning's set.** Only a
+`partly-solved` card that holds a slot on the Planning list goes on
+`proposal["outcomes"]["rewrite"]`, in the rules' order and numbered from 1, and
+the slot it empties is filled by the next still-needed spare, like a Cancel's.
+A `partly-solved` spare is not listed, gets no draft, and stays a `not-now`
+row exactly as it was — `apply` only ever promotes a `still-needed` spare. Each
+row is `{"identifier", "title", "repo", "epic", "band", "position", "summary",
+"draft", "body_digest", "verify"}`. On a `partly-solved` answer only the agent
+also writes `rewrite`, the card's updated body (`briefs/groom-verify.md` says
+how); a missing or non-string `rewrite` is `draft: None`, and the verdict still
+stands. `body_digest` is `groomer.body_digest` — the first twelve hex
+characters of the SHA-256 — of the description `targets` read for the agent; a
+draft bound to no digest is no draft. The proposal id does not digest the list,
+as it does not digest the Not ready list: an approval moves neither, and a
+rewrite row that reads differently on a re-run retires no approval.
+
+On the page, after the Cancel list and before the Not ready list:
+
+```
+## Rewrite first
+
+| # | Card | Pri | Repo | Epic | Title | What remains |
+```
+
+"What remains" is the agent's summary, defanged, ending `(draft posted on the
+card)` when this run posted the draft, `(draft of <PT date> stands on the
+card)` when an earlier one still matches the card, or `(no draft — the agent
+wrote none)`. The section is absent on a morning with none, so that page
+renders byte for byte as before, and `parse_proposal_comment` reads it back as
+`rewrite`, the first two cells load-bearing. The line telling the CEO how to
+accept a draft, and the `groom-rewrite-accepted` marker it names, are
+DRE-6667's.
+
+**One draft per body, not one per morning.** After the proposal comment,
+`post` puts one comment on each Rewrite first card whose draft exists:
+
+```
+🧺 groom-rewrite-draft: <proposal id> body=<digest>
+
+<the draft, verbatim through sanitize_untrusted.sanitize_body>
+```
+
+`<digest>` is the digest of the description the verify read saw. Before
+posting anything `post` reads each card's description and thread, and when a
+`groom-rewrite-draft` comment already stands whose `body=` digest equals the
+digest of the card's current description, no new draft is posted, whatever
+proposal id that comment names: the draft was written against the body it
+would replace, and the body has not changed. A draft counts as standing only
+when the pipeline's own identity wrote it (`authored_by_pipeline` on the
+records `comment_records` returns) — a draft-shaped comment from any other
+account neither stands nor stops one being posted — and DRE-6667's drain reads
+drafts by the same rule. A card whose body changed since gets a new draft, and
+the newer comment supersedes the older. So a card that stays in Intake across
+many mornings carries one draft, not one per morning; a dry run posts none, a
+re-run posts no duplicate, and an empty proposal, never posted, posts no draft
+either. The draft is rendered by `groomer.rewrite_draft_comment` and posted
+from one call site in `post_record`, declared `not-an-act` in
+`config/pipeline-acts.json` beside the groomer's other rows: a draft is a
+proposal, not something the pipeline did on its own.
+
+**Where the replay's facts come from.**
+`tests/fixtures/groom-rewrite-first-a4f198411b02.json` is the recorded
+`a4f198411b02` proposal, `proposal-verified.json` from the
+`groom-proposal-verified` artifact of run 38054243567 (the scheduled 2026-10-10
+morning on `self-groomer.yml`), with every verdict, summary and position as
+the step recorded them. Its one addition is a hand-written draft for each of
+the five `partly-solved` cards holding a Planning slot — DRE-5656, DRE-4206,
+DRE-4204, DRE-4072 and DRE-3919 — because the `rewrite` field did not exist
+that morning; its `_note` says so. Replayed through `apply`, all five go on
+Rewrite first, DRE-4417 leaves the batch, and the `partly-solved` spares
+DRE-3751 and DRE-3603 stay `not-now` rows. DRE-4072 is proven twice: here, on a
+record from before any readiness rule existed, and on the Not ready list in
+DRE-6665's replay, because a card the readiness rules hold is never a verify
+target.
 
 `propose` writes nothing but a comment carrying the proposal, and it writes that
 one at most once: before posting it reads the card and skips a proposal already

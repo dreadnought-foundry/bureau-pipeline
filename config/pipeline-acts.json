@@ -1471,6 +1471,13 @@
       "why": "The CEO decided this, not the pipeline. The cards are queued only because the CEO approved the batch they are in, so the record is bookkeeping of that approval rather than something the pipeline chose — the same reason the drained record beside it is not an act. A trailer would name a next actor nobody chose: the next actor is the sweep, and it reads this record by its own grammar (`parse_queued_record`). One record per drain, never one per card."
     },
     {
+      "file": "scripts/groomer.py",
+      "anchor": "rewrite_draft_comment(",
+      "kind": "not-an-act",
+      "means": "The groomer's drafted rewrite of a card's body, posted on the card itself for the CEO to accept or ignore: the verify agent found part of what the card describes already on main, and the draft drops that part, names the proof, and keeps what remains to build (DRE-6666).",
+      "why": "A draft is a proposal, not something the pipeline did on its own — the same reading the proposal_comment(proposal) row above gives the proposal itself. Nothing was refused, recovered or held and no state moved, so a trailer would announce a recovery that has not happened and name a next actor the pipeline has not chosen. One renderer at one call site in post_record, so a draft carries one shape."
+    },
+    {
       "file": "scripts/reconcile.py",
       "anchor": "groomer.released_record(list(changes.values()))",
       "kind": "not-an-act",

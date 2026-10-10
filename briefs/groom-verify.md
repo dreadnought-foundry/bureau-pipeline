@@ -102,8 +102,10 @@ Answer exactly one of five, or `unverified`:
 - `still-needed` — the problem the card describes is observable in `target/`
   today, whole. Proof: the lines where it shows.
 - `partly-solved` — part of the problem is gone and part can still be seen.
-  The card stays on the Planning list, so say in the summary which part
-  remains. Proof: the lines that show the part that remains.
+  The card's text no longer matches the code, so a card on the Planning list
+  leaves it for the Rewrite first list, and the CEO reads your summary of
+  which part remains there. Proof: the lines that show the part that remains.
+  Write the card's updated body in `rewrite` (below).
 - `done-elsewhere` — the problem is no longer observable because other work
   solved it, whether or not any pull request names this card. Proof: the
   lines that solve it.
@@ -153,7 +155,8 @@ Write exactly one file, `verify-verdict.json`, at the workspace root:
   "proof": [
     {"file": "src/example.py", "line": 42, "quote": "the line, exactly"},
     {"source": "the PR #431 body", "quote": "the words, exactly"}
-  ]
+  ],
+  "rewrite": "Only on partly-solved: the card's updated body, markdown."
 }
 ```
 
@@ -164,6 +167,20 @@ Write exactly one file, `verify-verdict.json`, at the workspace root:
   reads, so write it for him: what the code shows, not how you searched.
 - `proof` is a list of the items above. `file` is relative to `target/`;
   `line` is a whole number, counted from 1.
+- `rewrite` — on a `partly-solved` answer only, and nowhere else: the card's
+  updated body, as markdown. It is posted on the card as a draft the CEO
+  accepts or ignores, so write it as the card it should now be:
+  - keeping the card's own headings;
+  - dropping what the proof shows is solved, and naming the proof where it
+    was;
+  - stating what remains as the thing to build;
+  - keeping only the acceptance criteria that still apply;
+  - ending with one line,
+    `Rewritten from the groom verify read of <date>: <summary>`;
+  - and no longer than the original body.
+
+  Leave it out when you cannot write it: the answer still stands, with no
+  draft.
 
 Nothing else in the file, and no other file. A file the runner cannot read,
 whose `card` is not yours, or whose `verdict` is not one of the six is
