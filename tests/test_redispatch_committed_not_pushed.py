@@ -250,9 +250,13 @@ class CommittedNotPushedSweepTest(unittest.TestCase):
 
     def test_the_wait_is_read_off_fix_dead_run(self):
         # Non-vacuous twin of the 45-minute dispatch: raise the shared constant
-        # past the marker's age and the same thread waits.
+        # past the marker's age and the same thread waits. The marker is
+        # stamped here, not taken from DRE_4883: that one was stamped at
+        # import, and in a CI part that reaches this test fifteen minutes
+        # after collection it is already sixty minutes old (DRE-6630).
+        thread = DRE_4883[:2] + [comment(WORKER_BOT, marker_body(), 45)]
         with mock.patch.object(fix_dead_run, "COMMITTED_NOT_PUSHED_WAIT_MINUTES", 60):
-            calls, _, log = self.sweep([pr_payload(DRE_4883)])
+            calls, _, log = self.sweep([pr_payload(thread)])
         self.assertEqual(calls, [])
         self.assertEqual(summary(log), (1, 1, 0, 0), log)
 
