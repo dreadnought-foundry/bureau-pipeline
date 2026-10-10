@@ -55,6 +55,10 @@ FORM = {"username": "input[name=user]", "password": "input[name=pass]",
 USERNAME = "proof-bot-user-7f3a"
 PASSWORD = "pw-never-printed-91c2"
 IDENTITY = "proof-bot"
+#: The `session` kind (DRE-6536): the declared entries, and the one value the
+#: stub's session file carries for them.
+SESSION = {"local_storage": [{"key": "app_id_token", "from": "id_token"}]}
+TOKEN = "tok-never-printed-4d1e"
 STATUS = "hosted sign-in ration: 1 of 5 spent today (2026-10-10 PT), 4 remaining"
 REFUSAL = "hosted sign-in ration: 5 of 5 spent today (2026-10-10 PT), 0 remaining"
 NOISE = ("added 212 packages, and audited 213 packages in 3s",
@@ -81,6 +85,11 @@ if mode == "refuse":
 data = {"username": %(username)r, "password": %(password)r,
         "identity": %(identity)r,
         "ration": {"spent": 1, "cap": 5, "remaining": 4, "date": "2026-10-10"}}
+if mode.startswith("session"):
+    del data["username"], data["password"]
+    data["session"] = {"id_token": %(token)r}
+    if mode.startswith("session-number"):
+        data["session"]["id_token"] = 7
 for key in mode.split(",")[1:]:
     data.pop(key)
 file_mode = 0o644 if mode.startswith("wide") else 0o600
@@ -92,7 +101,7 @@ print(%(status)r)
 print("")
 """ % {"noise": NOISE, "stderr": STDERR_LINE, "refusal": REFUSAL,
        "username": USERNAME, "password": PASSWORD, "identity": IDENTITY,
-       "status": STATUS}
+       "status": STATUS, "token": TOKEN}
 
 #: Stands in for the venv's interpreter: records the argv it was handed.
 REEXEC_STUB = """\
@@ -239,11 +248,12 @@ class Run:
         self.url = url
         self.declare()
 
-    def declare(self, mode: str = "ok", **overrides) -> None:
+    def declare(self, mode: str = "ok", kind: str = "form", **overrides) -> None:
         command = (f"{sys.executable} {self.stub} {self.login_record} {mode}")
         data = {"surface": "web", "start": "true",
                 "ready_url": f"{self.url}/", "pages": PAGES,
-                "login": {"command": command, "form": FORM}}
+                "login": {"command": command,
+                          kind: FORM if kind == "form" else SESSION}}
         data.update(overrides)
         bureau = self.checkout / ".github" / "bureau"
         (bureau / "proof-local.json").write_text(json.dumps(data), encoding="utf-8")
@@ -379,6 +389,42 @@ def test_login_refuses_a_second_call_in_the_same_run(tmp_path):
     assert again.stdout.startswith("proof-login: ")
     assert len(run.login_calls()) == 1, "the second call ran the command"
     assert not run.login_file.exists()
+
+
+# The `session` kind (DRE-6536): its file carries `session` in place of the
+# username and password, and `identity` and `ration` keep their meaning.
+
+def test_login_accepts_a_session_kind_file_with_no_username_or_password(tmp_path):
+    run = Run(tmp_path)
+    run.declare(mode="session", kind="session")
+    done = run.run("login")
+
+    assert done.returncode == 0, done.stdout + done.stderr
+    assert done.stdout == f"proof-login: {IDENTITY} — {STATUS}\n"
+    assert TOKEN not in done.stdout + done.stderr
+    assert len(run.login_calls()) == 1
+
+
+@pytest.mark.parametrize("missing", ["identity", "ration", "session"])
+def test_login_exits_1_when_a_session_kind_file_is_short_a_key(tmp_path, missing):
+    run = Run(tmp_path)
+    run.declare(mode=f"session,{missing}", kind="session")
+    done = run.run("login")
+
+    assert done.returncode == 1, done.stdout
+    assert missing in done.stdout
+    assert not done.stdout.startswith(f"proof-login: {IDENTITY} — ")
+    assert TOKEN not in done.stdout + done.stderr
+
+
+def test_login_exits_1_when_a_session_value_is_not_a_string(tmp_path):
+    run = Run(tmp_path)
+    run.declare(mode="session-number", kind="session")
+    done = run.run("login")
+
+    assert done.returncode == 1, done.stdout
+    assert "session" in done.stdout
+    assert not done.stdout.startswith(f"proof-login: {IDENTITY} — ")
 
 
 # ---------------------------------------------------------------------------
@@ -531,6 +577,25 @@ def test_signed_in_with_no_login_file_and_no_state_never_signs_in_by_itself(
     assert not png.exists()
     assert not sidecar.exists()
     assert not run.state.exists()
+
+
+def test_signed_in_with_a_session_declaration_refuses_before_any_page(site, tmp_path):
+    # Planting a declared session is the follow-up to DRE-6536; until it
+    # lands the step names the kind and opens nothing, never a KeyError.
+    run = Run(tmp_path, url=site.url)
+    run.declare(mode="session", kind="session")
+    assert run.run("login").returncode == 0
+
+    done, png, sidecar = run.screenshot("home", "--signed-in")
+
+    assert done.returncode == 1
+    assert done.stdout.startswith("proof-screenshot: "), done.stdout
+    assert "`session`" in done.stdout
+    assert "Traceback" not in done.stderr
+    assert TOKEN not in done.stdout + done.stderr
+    assert site.requests == [], "a page was opened"
+    assert not png.exists()
+    assert run.login_file.exists()
 
 
 # ---------------------------------------------------------------------------
