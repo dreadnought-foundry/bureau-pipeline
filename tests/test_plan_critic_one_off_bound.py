@@ -544,5 +544,192 @@ class TheStandardSaysTheRouteIsBounded(unittest.TestCase):
             self.assertNotIn(stale, source)
 
 
+# --- The granted rewrite runs (DRE-6454) ---------------------------------------
+#
+# The bound exit (DRE-6452) grants a one-off card one more rewrite: it posts a
+# `🔁 bound-rewrite:` receipt and dispatches a fresh planning run. Counted over
+# the card's whole history that run's first send-back is already past the
+# bound, so it parked before the planner's revision ever ran. The COUNT starts
+# over at the newest receipt; the FINDINGS never do.
+
+RECEIPT = ("🔁 bound-rewrite: DRE-6454 granted one more rewrite after the "
+           "one-off critic's bound")
+EARLIER = ["the card names no file the fix lands in",
+           "the criteria say 'works' and nothing checks that",
+           "the card is two pull requests of work"]
+AFTER = "the rewrite still names no file the fix lands in"
+FRESH = "the second rewrite still names no file"
+NO_CRITERIA_BODY = ("The plan run for DRE-4100 failed at the critic step.\n\n"
+                    "Run: https://github.com/dreadnought-foundry/"
+                    "bureau-pipeline/actions/runs/1\n")
+
+
+def _ours(body: str) -> dict:
+    return {"body": body, "authored_by_pipeline": True}
+
+
+def _theirs(body: str) -> dict:
+    return {"body": body, "authored_by_pipeline": False}
+
+
+def spent() -> list[dict]:
+    """Three send-back rounds, as `dump-comments --with-authors` prints them."""
+    return [_ours(pc.marker(pc.STAGE_ONE_OFF, n, pc.SEND_BACK, reason))
+            for n, reason in enumerate(EARLIER, 1)]
+
+
+def granted() -> list[dict]:
+    return spent() + [_ours(RECEIPT)]
+
+
+def resent() -> list[dict]:
+    """The granted rewrite, sent back once more on its new budget."""
+    return granted() + [_ours(pc.marker(pc.STAGE_ONE_OFF, 4, pc.SEND_BACK,
+                                        AFTER))]
+
+
+class TheCountStartsOverAtTheReceipt(unittest.TestCase):
+
+    def test_the_mark_is_the_contract_with_the_bound_exit(self):
+        self.assertEqual("🔁 bound-rewrite:", pc.BOUND_REWRITE_MARK)
+
+    def test_the_receipt_restarts_the_count_and_not_the_findings(self):
+        bodies = granted()
+        self.assertEqual(3, pc.send_backs(bodies, pc.STAGE_ONE_OFF))
+        self.assertEqual(
+            0, pc.send_backs(pc.since_bound_rewrite(bodies), pc.STAGE_ONE_OFF))
+        self.assertEqual(EARLIER,
+                         pc.send_back_findings(bodies, pc.STAGE_ONE_OFF))
+
+    def test_it_keeps_what_comes_after_the_newest_receipt(self):
+        bodies = resent()
+        self.assertEqual(
+            1, pc.send_backs(pc.since_bound_rewrite(bodies), pc.STAGE_ONE_OFF))
+        twice = resent() + [_ours(RECEIPT)]
+        self.assertEqual([], pc.since_bound_rewrite(twice))
+
+    def test_strings_and_records_read_the_same(self):
+        """`_cmd_decide` hands it `cycle`, bodies already through the trust
+        filter; a caller holding the records gets the same answer."""
+        records = resent()
+        self.assertEqual(pc.since_bound_rewrite(records),
+                         pc.since_bound_rewrite([r["body"] for r in records]))
+
+
+class NoReceiptCountsAsBefore(unittest.TestCase):
+
+    def test_a_thread_with_no_receipt_is_the_whole_thread(self):
+        bodies = pc.trusted_bodies(thread())
+        self.assertEqual(bodies, pc.since_bound_rewrite(bodies))
+        self.assertEqual(5, pc.send_backs(pc.since_bound_rewrite(bodies),
+                                          pc.STAGE_ONE_OFF))
+
+    def test_a_quoted_or_fenced_receipt_restarts_nothing(self):
+        quoted = f"> {RECEIPT}\n\nI think this card deserves another go."
+        fenced = f"```\n{RECEIPT}\n```\nthe exit would post this"
+        midline = f"The exit said {RECEIPT} on the last card."
+        for body in (quoted, fenced, midline):
+            for entry in (_theirs(body), _ours(body), body):
+                bodies = spent() + [entry]
+                self.assertEqual(3, pc.send_backs(
+                    pc.since_bound_rewrite(bodies), pc.STAGE_ONE_OFF),
+                    (body, entry))
+
+    def test_a_receipt_from_another_author_restarts_nothing(self):
+        bodies = spent() + [_theirs(RECEIPT)]
+        self.assertEqual(3, pc.send_backs(pc.since_bound_rewrite(bodies),
+                                          pc.STAGE_ONE_OFF))
+
+
+class TheGrantedRewriteRunsEndToEnd(unittest.TestCase):
+    """`plan_critic.py decide --stage one-off` on the granted thread: the fresh
+    run's first send-back is round 1 of a new budget, the second is the bound
+    again, and the park names every finding the card ever had. Run once on the
+    critic's word and once with the precheck deciding — one `prior`, both
+    paths."""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.n = 0
+
+    def _decide(self, records, result_text, card_file=None) -> dict:
+        self.n += 1
+        p = lambda name: os.path.join(self.tmp, f"{self.n}-{name}.txt")
+        with open(p("result"), "w", encoding="utf-8") as f:
+            f.write(result_text)
+        argv = [sys.executable, os.path.join(SCRIPTS, "plan_critic.py"),
+                "decide", "--stage", pc.STAGE_ONE_OFF, "--epic", "DRE-6454",
+                "--result-file", p("result"), "--github-output", p("out"),
+                "--note-file", p("note"), "--record-file", p("record")]
+        if card_file is not None:
+            with open(p("body"), "w", encoding="utf-8") as f:
+                f.write(card_file)
+            argv += ["--card-file", p("body"), "--card-title",
+                     "Pipeline failure: plan run for DRE-4100"]
+        out = subprocess.run(argv, input=json.dumps(records),
+                             capture_output=True, text=True)
+        self.assertEqual(0, out.returncode, out.stderr)
+        outputs = {}
+        for line in open(p("out"), encoding="utf-8"):
+            if "=" in line and "<<" not in line.split("=", 1)[0]:
+                key, value = line.rstrip("\n").split("=", 1)
+                outputs.setdefault(key, value)
+        return {"outputs": outputs,
+                "note": open(p("note"), encoding="utf-8").read(),
+                "record": open(p("record"), encoding="utf-8").read().strip()}
+
+    def _paths(self):
+        yield "the critic's word", pc.result_line(pc.SEND_BACK, FRESH), None
+        yield ("the precheck",
+               pc.result_line(pc.PASS, "one pull request an agent can build"),
+               NO_CRITERIA_BODY)
+
+    def test_without_the_receipt_the_fresh_run_parks(self):
+        """The defect, pinned so the fix is shown to be the receipt: the same
+        thread with no receipt is already past the bound."""
+        for path, result_text, body in self._paths():
+            run = self._decide(spent(), result_text, body)
+            self.assertEqual(pc.PARK, run["outputs"]["action"], path)
+
+    def test_the_first_send_back_after_the_receipt_is_revised(self):
+        for path, result_text, body in self._paths():
+            run = self._decide(granted(), result_text, body)
+            self.assertEqual(pc.REVISE, run["outputs"]["action"], path)
+            self.assertEqual("false", run["outputs"]["bound"], path)
+            # The round NUMBER still counts the card's whole history.
+            self.assertEqual("4", run["outputs"]["round"], path)
+            self.assertIn(pc.SEND_BACK, run["record"], path)
+
+    def test_a_second_send_back_on_the_new_budget_parks_naming_all_four(self):
+        for path, result_text, body in self._paths():
+            run = self._decide(resent(), result_text, body)
+            self.assertEqual(pc.PARK, run["outputs"]["action"], path)
+            self.assertEqual("true", run["outputs"]["bound"], path)
+            for finding in EARLIER + [AFTER]:
+                self.assertIn(finding, run["note"], (path, finding))
+
+    def test_a_forged_receipt_grants_nothing(self):
+        for path, result_text, body in self._paths():
+            run = self._decide(spent() + [_theirs(RECEIPT)], result_text, body)
+            self.assertEqual(pc.PARK, run["outputs"]["action"], path)
+
+
+class TheSeamIsTheOnePriorLine(unittest.TestCase):
+
+    def test_the_one_off_count_reads_from_the_receipt(self):
+        src = [ln.strip() for ln in
+               inspect.getsource(pc._cmd_decide).splitlines()]
+        call = next(i for i, ln in enumerate(src) if "= one_off_decide(" in ln)
+        self.assertEqual(
+            "prior = send_backs(since_bound_rewrite(cycle), args.stage)",
+            src[call - 1])
+
+    def test_the_epic_stages_still_count_the_attempt(self):
+        src = [ln.strip() for ln in
+               inspect.getsource(pc._cmd_decide).splitlines()]
+        self.assertEqual("prior = send_backs(cycle, args.stage)",
+                         next(ln for ln in src if ln.startswith("prior =")))
+
+
 if __name__ == "__main__":
     unittest.main()

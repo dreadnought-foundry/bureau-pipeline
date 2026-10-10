@@ -457,7 +457,7 @@ class TheSeams(unittest.TestCase):
         src = [ln.strip() for ln in
                inspect.getsource(pc._cmd_decide).splitlines()]
         priors = [i for i, ln in enumerate(src)
-                  if ln == "prior = send_backs(cycle, args.stage)"]
+                  if ln == "prior = send_backs(since_bound_rewrite(cycle), args.stage)"]
         calls = [i for i, ln in enumerate(src) if "= one_off_decide(" in ln]
         self.assertEqual(1, len(calls), calls)
         self.assertIn(calls[0] - 1, priors)

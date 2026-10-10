@@ -345,7 +345,10 @@ nothing limited the classifications: DRE-3879 made the round trip through the
 CEO five times — five real, different findings, two signed answers, rounds 4
 and 5 six minutes apart — and DRE-3880 three times. So the same `MAX_ROUNDS`
 the epic route spends is spent here over the CARD's whole history, counted from
-the markers earlier runs posted. Since DRE-5376 each send-back is answered by
+the markers earlier runs posted — from the newest `🔁 bound-rewrite:` receipt
+when the bound exit granted the card one more rewrite (DRE-6454), so that
+rewrite gets a fresh budget of its own while the findings it must answer are
+still every one ever raised. Since DRE-5376 each send-back is answered by
 the planner's revision rather than by the CEO, so reaching the bound means the
 revision loop did not converge — and **the card parks in `Triage`**, the
 operator's defect queue, with every finding raised so far named in one place so

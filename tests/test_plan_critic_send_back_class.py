@@ -332,7 +332,9 @@ class TheSeamDre6454RewritesStaysOneLine(unittest.TestCase):
                  if "= one_off_decide(" in ln]
         self.assertEqual(1, len(calls), calls)
         i = calls[0]
-        self.assertEqual("prior = send_backs(cycle, args.stage)", src[i - 1])
+        self.assertEqual(
+            "prior = send_backs(since_bound_rewrite(cycle), args.stage)",
+            src[i - 1])
         self.assertRegex(src[i], r"one_off_decide\(result, reason, prior\b")
 
 
