@@ -861,6 +861,12 @@ def hand_built(card: dict) -> bool:
     return hand_built_reason(card) is not None
 
 
+#: `hand_built_reason`'s answer for an unmarked `PROOF:` card. Named so the
+#: unlanded watchdog's notice can say the proof run takes it (DRE-6777) by
+#: comparing the answer, never by reading the title a second time.
+_PROOF_REASON = "a PROOF: card"
+
+
 def hand_built_reason(card: dict) -> str | None:
     """Why `hand_built` answers true, in the words the watchdog prints after
     "<card> is" — or None when it answers false (DRE-6424).
@@ -880,7 +886,7 @@ def hand_built_reason(card: dict) -> str | None:
         if lbl["name"].lower() in marked:
             return f"labeled '{lbl['name']}'"
     if proof_and_demo.is_proof(card.get("title")):
-        return "a PROOF: card"
+        return _PROOF_REASON
     lane = (card.get("state") or {}).get("name")
     persons = {
         name for name in routing_verdict.verdicts()
@@ -9885,13 +9891,19 @@ def _flag_hand_built_idle(branches: list[dict], pr_refs: set[str]) -> None:
     gap), a card with a PR belongs to the PR-level backstops, and a card
     without the label belongs to flag_stranded — one alarm per card, always
     the one that knows what is wrong.
+
+    The notice names why the card is a person's in `hand_built_reason`'s
+    words (DRE-6777). It used to say "labelled 'hand-built'" for every card
+    `hand_built` answers true for, so an operator step was told it wore the
+    one mark only the CEO applies.
     """
     with_branch = {branch_card(b["name"]) for b in branches}
     with_pr = {branch_card(ref) for ref in pr_refs if branch_card(ref)}
     for card in active_cards(WATCHDOG_LANES):
         ident = card["identifier"]
         try:
-            if not hand_built(card):
+            reason = hand_built_reason(card)
+            if reason is None:
                 continue  # a dispatched card with no run is flag_stranded's case
             if held(card):
                 continue  # already in a human's queue — never spam
@@ -9905,11 +9917,15 @@ def _flag_hand_built_idle(branches: list[dict], pr_refs: set[str]) -> None:
             if any(marker in b for b in linear_ops.comment_bodies(ident)):
                 continue  # reported once already — idempotent forever
             state, idle = card["state"]["name"], age_minutes(card["updatedAt"])
+            who = (
+                "which the proof run takes, so no build run is dispatched for it"
+                if reason == _PROOF_REASON
+                else "a person's card, so no dispatched run is coming by design"
+            )
             linear_ops.cmd_comment(ident, pipeline_act.receipt("work-never-landed", (
                 f"🚨 {marker} this card has sat in {state} for {idle:.0f} "
                 f"minutes with nothing to point at: no branch, no pull "
-                f"request. It is labelled '{HAND_BUILT_LABEL}', so no "
-                f"dispatched run is coming by design — which also means the "
+                f"request. It is {reason}, {who} — which also means the "
                 f"stranded-card watchdog stays silent on it (DRE-2524). This "
                 f"notice is what stands in its place.\n\n"
                 f"What is missing, in order: a branch named "
@@ -9922,7 +9938,7 @@ def _flag_hand_built_idle(branches: list[dict], pr_refs: set[str]) -> None:
                 f"_Posted once per card._"
             )))
             print(
-                f"unlanded: {ident} is hand-built, in {state} {idle:.0f}m with "
+                f"unlanded: {ident} is {reason}, in {state} {idle:.0f}m with "
                 f"no branch and no PR — reported"
             )
         except Exception as e:  # noqa: BLE001 — isolate one card, sweep the rest
