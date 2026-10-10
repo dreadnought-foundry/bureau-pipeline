@@ -343,9 +343,12 @@ _HAND_BUILT_OWNERS = _WATCHDOG_OWNERS | {
 }
 
 #: The readers that need the REASON, not just the answer (DRE-6424): the two
-#: watchdog lines, which name the mark the card really carries, and
+#: watchdog lines, which name the mark the card really carries; the unlanded
+#: watchdog's no-branch notice, which does the same (DRE-6777); and
 #: `hand_built` itself, which is that reason's boolean.
-_HAND_BUILT_REASON_OWNERS = {"hand_built", "flag_stranded", "flag_stalled_planning"}
+_HAND_BUILT_REASON_OWNERS = {
+    "hand_built", "flag_stranded", "flag_stalled_planning", "_flag_hand_built_idle",
+}
 
 
 def test_only_the_watchdog_and_the_sweeps_own_dispatch_consult_the_label():
