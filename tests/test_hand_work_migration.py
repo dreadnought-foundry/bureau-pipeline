@@ -648,10 +648,11 @@ class TestDeclared:
         assert '"hand-built"' not in SOURCE and '"operator-step"' not in SOURCE
         assert hwm.HAND_BUILT == HAND_BUILT and hwm.OPERATOR_STEP == OPERATOR_STEP
 
-    def test_its_writes_are_backlog_and_planning_and_never_todo(self):
+    def test_its_writes_are_backlog_planning_and_hand_work_and_never_todo(self):
+        # Hand-work is the operator-backlog pass's move (DRE-6429).
         mine = [w for w in ready_lane_writers.writes()
                 if w.writer == "hand_work_migration.py"]
-        assert {w.lane for w in mine} == {"Backlog", "Planning"}
+        assert {w.lane for w in mine} == {"Backlog", "Planning", "Hand-work"}
         assert ready_lane_writers.writer_problems() == []
 
     def test_its_comment_sites_are_in_the_act_registry(self):

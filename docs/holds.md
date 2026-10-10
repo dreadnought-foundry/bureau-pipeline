@@ -105,6 +105,10 @@ lifts a hold is no reader of it, so `hold.py check` refuses a row carrying
 rows name `fix-dispatch`, `medic` and `limit-recovery`. The create seam is its
 writer: `linear_ops.py subissue` and `oneoff` mark a card filed `needs-human` +
 `no-code` with `operator-step` and stamp it `by=linear_ops.py` (DRE-6428).
+The one-time pass over the cards filed before that,
+`hand_work_migration.py operator-backlog`, is its second writer: it stamps a `manual`
+operator hold `by=hand_work_migration.py`, and lifts and moves the ones with
+nothing left to wait on (DRE-6429).
 
 ### `stranded-no-run` waits on a person's re-send
 
@@ -402,6 +406,7 @@ without a person before it holds.
 | `.github/workflows/agent-fix.yml` · Report (`park_for_human` in `scripts/report_fix_result.sh`) | `park_for_human` | `fix-dispute` | `new-head` | sweep, fix-dispatch, medic, limit-recovery | The fix loop's rounds, up to its budget |
 | `scripts/model_adoption_actions.py` · `<module>` (`QUESTION_LABELS`) | `The question card` | `manual` | `manual` | sweep, fix-dispatch, medic, limit-recovery | None — a person, or a writer creating a card already held, chose it |
 | `scripts/linear_ops.py` · `_file_operator_hold` (`subissue`, `oneoff`) | `filed as an operator step` | `operator-step` | `blockers-terminal` | fix-dispatch, medic, limit-recovery | None — the card is filed held by design; the sweep lifts it when every blocker is terminal |
+| `scripts/hand_work_migration.py` · `_convert_one` (`operator-backlog`) | `one card of the operator-backlog pass` | `operator-step` | `blockers-terminal` | fix-dispatch, medic, limit-recovery | None — the card already wears the hold; the pass names the reason a person's label left unsaid |
 
 `scripts/dead_run.py`'s site is `dead_run.py park`, which the build run's Report
 step (`scripts/report_agent_result.sh`) calls when either budget is spent.
