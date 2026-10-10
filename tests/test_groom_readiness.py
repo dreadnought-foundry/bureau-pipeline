@@ -665,7 +665,10 @@ class Reads:
         if self.fail & set(variables.values()):
             raise RuntimeError("linear error: the light read failed")
         out = {}
-        for alias, identifier in variables.items():
+        for variable, identifier in variables.items():
+            # `$iN` is the id of alias `nN`, and Linear answers by alias.
+            alias = re.search(rf"\b(n\d+): issue\(id: \${variable}\)",
+                              query).group(1)
             out[alias] = (None if identifier in self.missing else
                           self.records.get(identifier,
                                            _light(identifier, "Done")))
@@ -1122,3 +1125,28 @@ def test_the_doc_states_the_rules_and_their_precedence():
 def test_the_population_read_carries_child_titles_for_the_roll_up_rule():
     assert ("children(first: 50) { nodes { identifier title state { name } } }"
             in " ".join(groomer.POPULATION_QUERY.split()))
+
+
+def test_build_reads_each_in_flight_lane_once_and_the_named_cards():
+    class Board(Reads):
+        def __init__(self):
+            super().__init__({"DRE-60": _light("DRE-60", "Todo")})
+            self.lanes = []
+
+        def gql_paged(self, query, variables=None, **_):
+            self.lanes.append((variables or {}).get("lane"))
+            return ([_lane_card("DRE-80", ["shared.py"])]
+                    if variables["lane"] == "In Progress" else [])
+
+    lops = Board()
+    cards = [card("DRE-1", description="Edits `shared.py`."), card("DRE-2")]
+    facts = groomer._readiness(lops, cards, {"DRE-2": _waits("DRE-60")})
+    assert lops.lanes == list(groom_readiness.IN_FLIGHT_LANES)
+    assert len(lops.light) == 1 and lops.heavy == []
+    proposal = _propose(cards, readiness=facts,
+                        judgement={"DRE-1": V("now", "fine"),
+                                   "DRE-2": _waits("DRE-60")})
+    assert [(r["identifier"], r["rule"]) for r in
+            proposal["outcomes"]["not-ready"]] == [
+        ("DRE-1", "file-named-by-in-flight-card"),
+        ("DRE-2", "read-waits-on-open-card")]
