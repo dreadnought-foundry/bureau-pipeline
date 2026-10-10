@@ -5553,30 +5553,68 @@ def gate_hold_note_line(pr: dict) -> str | None:
     return None
 
 
-def proof_record_sent_back(card: dict, pr: dict, critic: str) -> bool:
-    """Is this a proof record the critic sent back at its head (DRE-6406)?
-    When it is, say so in one line and answer True: the review lane writes
-    nothing on it — no nudge, no receipt, no hold, no question, no park.
+def critic_token(pr: dict) -> str | None:
+    """The newest critic verdict's token — APPROVE, REQUEST_CHANGES — whatever
+    commit it names, or None (DRE-6650). Whether it binds the head is
+    verdict_bound's call; standing_verdict's `APPROVE from earlier head` is a
+    receipt string, never a reading to test by prefix."""
+    verdicts = critic_comments(pr)
+    if not verdicts:
+        return None
+    return merge_gate.verdict_token(
+        merge_gate.first_line(verdicts[-1].get("body") or ""),
+        merge_gate.CRITIC_MARKER)
 
-    `critic` is `review_standing`'s reading, and only its exact
-    `REQUEST_CHANGES` counts — the same reading `proof_dispatch.rerunning`
-    makes. No gate re-trigger can change a record nothing has amended, the
-    fix agent is kept off it (`fix_dispatch_blocked`), and the proof run's
-    re-run branch is what amends it. A record with no verdict at its head
-    still reaches a person at the cap: that is how a critic that never
-    answers is found. Imported here, not at the top: proof_dispatch imports
-    this module, and the branch rule lives in its leaf."""
+
+def proof_record_owned_by_proof_run(card: dict, pr: dict, tag: str,
+                                    critic: str) -> bool:
+    """Is this a proof record the proof run's re-run branch owns (DRE-6406,
+    DRE-6650)? When it is, say so in one line and answer True: the review
+    lane writes nothing on it — no nudge, no receipt, no hold, no question,
+    no park.
+
+    The contract with `proof_dispatch.rerunning`, in both files: a proof
+    record the critic sent back at its head, or one whose `APPROVE` is bound
+    to the head and which the gate's note declines at that head as not
+    proven, is the proof run's.
+
+      * Sent back: `critic` is `review_standing`'s reading, and only its
+        exact `REQUEST_CHANGES` counts. No gate re-trigger can change a
+        record nothing has amended, and the fix agent is kept off it
+        (`fix_dispatch_blocked`).
+      * Declined as not proven: `tag` is GATE_NUDGE_KEY — verdict_bound
+        holds, written at the head or carried to it (DRE-2340) — the newest
+        critic verdict's token is `APPROVE`, and `proof_dispatch.not_proven_at`
+        reads the gate's decline at the head: the dispatcher's own reader, so
+        the two halves cannot read the note differently.
+
+    Every other record keeps the nudge and the cap: an `APPROVE` with no
+    gate note at the head, a decline for another reason, a conflict, a red
+    check (DRE-6571's approved-but-red sweep sends the fix agent) and a
+    record with no verdict at its head, which still reaches a person at the
+    cap — that is how a critic that never answers is found. Imported here,
+    not at the top: proof_dispatch imports this module, and the branch rule
+    lives in its leaf."""
     import proof_record  # noqa: PLC0415 — see fix_dispatch_blocked
 
-    if critic != "REQUEST_CHANGES" or not proof_record.proof_record_branch(
-        pr.get("headRefName")
-    ):
+    if not proof_record.proof_record_branch(pr.get("headRefName")):
         return False
     head = pr.get("headRefOid") or ""
+    if critic == "REQUEST_CHANGES":
+        trigger = f"the critic sent back at {head[:7]}"
+    elif tag == GATE_NUDGE_KEY and critic_token(pr) == "APPROVE":
+        import proof_dispatch  # noqa: PLC0415 — proof_dispatch imports this module
+
+        if not proof_dispatch.not_proven_at(pr, head):
+            return False
+        trigger = f"the critic approved and the gate declined as not proven at {head[:7]}"
+    else:
+        return False
     print(
         f"review-nudge: {card['identifier']} PR #{pr['number']} is a proof record "
-        f"the critic sent back at {head[:7]} — the proof run's re-run branch owns "
-        "it (proof_dispatch.py); no nudge, no hold, no park"
+        f"{trigger} — the proof run's re-run branch owns it (proof_dispatch.py) "
+        "on the critic's send-back or the gate's not-proven decline; no nudge, "
+        "no hold, no park"
     )
     return True
 
@@ -5616,11 +5654,13 @@ def hand_review_nudge_to_person(
     held In Review for the next sweep to post it, rather than leaving the
     review lane with a question no Operator decision could answer.
 
-    Never on a proof record the critic sent back at its head
-    (`proof_record_sent_back`, DRE-6406): the loop does not come here for
-    one, and neither does the held-card path finishing an older park.
+    Never on a proof record the proof run's re-run branch owns — sent back
+    by the critic at its head, or approved and declined by the gate there as
+    not proven (`proof_record_owned_by_proof_run`, DRE-6406, DRE-6650): the
+    loop does not come here for one, and neither does the held-card path
+    finishing an older park.
     """
-    if proof_record_sent_back(card, pr, critic):
+    if proof_record_owned_by_proof_run(card, pr, tag, critic):
         return
     ident = card["identifier"]
     number = pr["number"]
@@ -14800,10 +14840,10 @@ def main(
                         )
                     continue
                 tag, critic, verifier = review_standing(pr)
-                if proof_record_sent_back(card, pr, critic):
-                    # DRE-6406: the proof run's re-run branch amends it; a
-                    # gate re-trigger cannot, and the park would put a
-                    # question in front of the CEO that is not his.
+                if proof_record_owned_by_proof_run(card, pr, tag, critic):
+                    # DRE-6406, DRE-6650: the proof run's re-run branch
+                    # amends it; a gate re-trigger cannot, and the park would
+                    # put a question in front of the CEO that is not his.
                     continue
                 bound = tag == GATE_NUDGE_KEY
                 spent = review_nudges_spent(card, tag, head)

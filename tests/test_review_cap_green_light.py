@@ -35,6 +35,11 @@ WHAT THIS PINS, one section per acceptance criterion of the card:
   6. A proof record the critic sent back at its head is the proof run's
      (DRE-6406): the sweep nudges nothing, holds nothing and parks nothing on
      it, in the loop and in the park itself.
+  7. So is one whose critic `APPROVE` is bound to the head and which the
+     gate declines at that head as not proven (DRE-6650): DRE-6042 and
+     DRE-6364, replayed from tests/fixtures/green-light-2026-10-10/ as the
+     sweep parked them, write nothing; the same records without the
+     decline are still nudged and capped.
 
 Run: cd bureau-pipeline && python3 -m pytest tests/test_review_cap_green_light.py -v
 """
