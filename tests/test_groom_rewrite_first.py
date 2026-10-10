@@ -573,6 +573,20 @@ def test_post_puts_one_draft_on_each_card_after_the_proposal(tmp_path, capsys):
     assert board.posted[0][1].count(POSTED) == len(REWRITE)
 
 
+def test_the_post_command_posts_the_drafts_and_a_dry_run_posts_none(
+        tmp_path, monkeypatch):
+    _, path = _record(tmp_path)
+    board = _board()
+    monkeypatch.setattr(groomer, "linear_ops", board)
+    argv = ["post", "--card", PROPOSAL_CARD, "--proposal", str(path)]
+    assert groomer.main([*argv, "--dry-run"]) == 0
+    assert board.posted == []
+    assert groomer.main(argv) == 0
+    assert [card for card, _ in board.posted] == [PROPOSAL_CARD, *REWRITE]
+    assert all(body.startswith(f"🧺 {groomer.REWRITE_DRAFT_TAG}: ")
+               for _, body in board.posted[1:])
+
+
 def test_post_posts_no_draft_for_a_row_with_none(tmp_path):
     _, path = _record(tmp_path)
     doc = json.loads(path.read_text(encoding="utf-8"))
