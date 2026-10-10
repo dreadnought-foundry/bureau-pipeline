@@ -12926,7 +12926,7 @@ _SETTLE_DEGRADE_THEN = "the card is left exactly as it is and re-read next sweep
 
 
 class _RepairSettleOps:
-    """The two seams `repair_card.settle` reads, wired to this sweep's own.
+    """The seams `repair_card.settle` reads, wired to this sweep's own.
 
     Every read here is one this pass has already paid for, or pays for once.
     `active_cards()` is the ONE board read (DRE-2929) and costs nothing extra.
@@ -12949,6 +12949,11 @@ class _RepairSettleOps:
     whole of what an UNKNOWN owes, and six red sweeps an hour over a bucket
     that refills on its own said nothing a `DEGRADED:` line does not
     (DRE-4214).
+
+    Rule 3's three branch reads (DRE-6524) — `branch_heads`, `pulls_for_head`
+    and `compare` — follow the same two rules: lazy, because `settle` makes
+    them only after a red reading, and memoised for the pass, failures
+    included, for the reason `workflow_runs` gives below.
     """
 
     def __init__(self) -> None:
@@ -12956,6 +12961,10 @@ class _RepairSettleOps:
         self._refs_read = False
         self._runs: dict = {}
         self._cards: dict = {}
+        self._heads: dict | None = None
+        self._heads_read = False
+        self._pulls: dict = {}
+        self._compared: dict = {}
 
     def repair_cards(self) -> list:
         """This sweep's repair cards, normalised — discovered by the title
@@ -13038,6 +13047,58 @@ class _RepairSettleOps:
         self._runs[workflow_name] = runs
         return runs
 
+    def _settle_json(self, what: str, *args: str):
+        """One `gh_read` parsed, or None with a `DEGRADED:` line saying so."""
+        try:
+            return json.loads(gh_read(*args) or "null")
+        except Exception as e:  # noqa: BLE001 — an unreadable answer is UNKNOWN
+            _degrade("repair settle", what, e, then=_SETTLE_DEGRADE_THEN)
+            return None
+
+    def branch_heads(self):
+        """Every `repair/` branch on the remote → its head sha, read once per
+        pass, or None."""
+        if self._heads_read:
+            return self._heads
+        self._heads_read = True
+        listing = self._settle_json(
+            "the repair branches",
+            "api", f"repos/{REPO}/git/matching-refs/heads/repair/")
+        if isinstance(listing, list):
+            self._heads = {
+                (ref.get("ref") or "").removeprefix("refs/heads/"):
+                    (ref.get("object") or {}).get("sha") or ""
+                for ref in listing if isinstance(ref, dict)
+            }
+        return self._heads
+
+    def pulls_for_head(self, branch: str):
+        """The state of every pull request of ANY state whose head is
+        `branch`, or None. A closed one counts: somebody already looked."""
+        if branch not in self._pulls:
+            listing = self._settle_json(
+                f"the pull requests on {branch!r}",
+                "pr", "list", "--repo", REPO, "--head", branch,
+                "--state", "all", "--json", "state")
+            self._pulls[branch] = (
+                [pr.get("state") or "" for pr in listing if isinstance(pr, dict)]
+                if isinstance(listing, list) else None)
+        return self._pulls[branch]
+
+    def compare(self, base: str, head: str):
+        """GitHub's compare payload for `base...head` (`status`, `ahead_by`),
+        or None."""
+        key = (base, head)
+        if key not in self._compared:
+            payload = self._settle_json(
+                f"how far {head!r} is ahead of {base!r}",
+                "api", f"repos/{REPO}/compare/"
+                       f"{urllib.parse.quote(base, safe='/')}..."
+                       f"{urllib.parse.quote(head, safe='/')}",
+                "--jq", "{status: .status, ahead_by: .ahead_by}")
+            self._compared[key] = payload if isinstance(payload, dict) else None
+        return self._compared[key]
+
     def cancel(self, identifier: str) -> None:
         # From-lane-conditional on the door's reading (item 33). Refused, it
         # raises: `settle` then records it rather than posting a cancel note
@@ -13067,6 +13128,7 @@ def settle_repair_cards() -> None:
     report = repair_card.settle(
         repo_slug=REPO_SLUG, ops=_RepairSettleOps(),
         fatal=(linear_ops.LinearRateLimited, BoardNotRead),
+        base=default_branch(),
     )
     for failure in report.failures:
         _write_failures.append(failure)

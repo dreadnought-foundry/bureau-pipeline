@@ -62,11 +62,23 @@ name and the failing sha back off the card and decides, IN THIS ORDER:
      one plain-English comment naming the run that proves it. Canceled, never
      Done: nothing was delivered under the card, and a blocker clears at
      Canceled;
-  3. main is still red and no pull request is open → leave it. That is the
-     existing "the repair budget is spent, a human needs to look" path in
-     `red-main-repair.yml`, and this does not touch it;
+  3. main is still red and no pull request is open → leave the card's lane
+     alone. That is the existing "the repair budget is spent, a human needs to
+     look" path in `red-main-repair.yml`, and this does not touch it. One
+     thing IS said (DRE-6524): a repair branch for this card and commit
+     (`repair_refs`) that is on the remote, has no pull request of ANY state
+     on it, and is ahead of the default branch is a finished fix nobody
+     opened. The card gets ONE comment opening with `UNLANDED_MARKER` that
+     names the branch and its head, and the decision is
+     `SETTLED_RED_UNLANDED`. The comment is the record — it dispatches
+     nothing, and the repair loop's own run or a person opens the pull
+     request. A comment already carrying that branch and head means a later
+     pass says nothing; a head that moved gets one new comment. The three
+     reads behind it are made only here, after the red reading, so a card
+     that settles at rule 1 or 2 pays for none of them;
   4. GitHub or Linear could not be read → **UNKNOWN**: do nothing, and say so
-     with the card id. An unreadable answer is never "green".
+     with the card id. An unreadable answer is never "green" — and an
+     unreadable branch read in rule 3 is never "unlanded" either.
 
 Both seams arrive as `ops`, so the sweep hands in its own board snapshot and
 its own `gh` helpers and a test hands in a fake. The decision is here; nothing
@@ -331,6 +343,9 @@ SETTLED_PR_OPEN = "pull-request-open"
 SETTLED_GREEN = "main-green"
 SETTLED_RED = "main-still-red"
 SETTLED_UNKNOWN = "unknown"
+#: Rule 3 with something to say: main is red and a repair branch holds a
+#: pushed fix under no pull request, and the card was told so THIS pass.
+SETTLED_RED_UNLANDED = "main-still-red-unlanded"
 
 #: States a card is already finished in. A card in one of them is nobody's to
 #: settle — and since the sweep's board read covers the working lanes only, a
@@ -342,6 +357,10 @@ TERMINAL_STATES = ("Done", "Canceled", "Duplicate")
 #: finds this on the card writes nothing — belt to the terminal-state brace
 #: above, for the case where the cancel landed and the comment did not.
 SETTLE_MARKER = "🧹 Canceled: main is green again"
+
+#: The first words of rule 3's unlanded-branch comment (DRE-6524), and — read
+#: back with the branch and its head — its idempotency key.
+UNLANDED_MARKER = "📌 Repair branch pushed, no pull request"
 
 
 class Settled(NamedTuple):
@@ -415,7 +434,61 @@ def settle_note(workflow_name: str, run: dict) -> str:
     )
 
 
-def _settle_one(card: dict, repo_slug: str, ops, log) -> Settled | None:
+def unlanded_note(branch: str, head_sha: str, base: str) -> str:
+    """The comment rule 3 posts when a repair branch holds a pushed fix that
+    no pull request was ever opened on (DRE-6524). It reports a fact to a
+    person; nothing downstream reads it."""
+    at = head_sha[:red_main_repair.SHA_CHARS]
+    return (
+        f"{UNLANDED_MARKER}: `{branch}` is on the remote at commit `{at}`, "
+        f"ahead of `{base}`. The repair agent pushed a fix there and no pull "
+        "request was opened on it, so the fix has not landed and main is "
+        "still red.\n\n"
+        "The repair loop's own run opens that pull request, or a person opens "
+        f"it by hand from `{branch}` into `{base}`."
+    )
+
+
+def _said_unlanded(comments, branch: str, head_sha: str) -> bool:
+    """Has the card already been told this branch is unlanded at this head?"""
+    at = head_sha[:red_main_repair.SHA_CHARS]
+    return any(
+        UNLANDED_MARKER in body and f"`{branch}`" in body and f"`{at}`" in body
+        for body in comments or ()
+    )
+
+
+def _unlanded_branches(identifier: str, head_sha: str, ops, base: str):
+    """Every repair branch for this card and commit that is pushed, under no
+    pull request of any state, and ahead of `base` — `[(branch, head)]` — or
+    a string naming what could not be read. Unreadable is never a yes."""
+    try:
+        heads = ops.branch_heads()
+        if heads is None:
+            return "the repair branches on the remote could not be read"
+        found = []
+        for branch in sorted(repair_refs(identifier, head_sha)):
+            at = heads.get(branch)
+            if not at:
+                continue
+            pulls = ops.pulls_for_head(branch)
+            if pulls is None:
+                return f"the pull requests on {branch} could not be read"
+            if pulls:
+                continue
+            compared = ops.compare(base, branch)
+            ahead = compared.get("ahead_by") if isinstance(compared, dict) else None
+            if not isinstance(ahead, int) or isinstance(ahead, bool):
+                return f"how far {branch} is ahead of {base} could not be read"
+            if ahead > 0:
+                found.append((branch, at))
+    except Exception as exc:  # noqa: BLE001 — an unreadable read is an UNKNOWN
+        return f"the repair branches could not be read ({exc})"
+    return found
+
+
+def _settle_one(card: dict, repo_slug: str, ops, log,
+                base: str = "main") -> Settled | None:
     """Decide one card, and act. None when the card is not this pass's."""
     identifier = card.get("identifier") or ""
 
@@ -468,6 +541,29 @@ def _settle_one(card: dict, repo_slug: str, ops, log) -> Settled | None:
             f"({run.get('url') or 'no url'}) — main is still red, and the "
             "repair budget path in red-main-repair.yml owns what happens next"
         )
+        unlanded = _unlanded_branches(identifier, head_sha, ops, base)
+        if isinstance(unlanded, str):
+            return _unknown(identifier, unlanded, log)
+        comments = card.get("comments") or ()
+        unsaid = [(branch, at) for branch, at in unlanded
+                  if not _said_unlanded(comments, branch, at)]
+        for branch, at in unsaid:
+            ops.cmd_comment(identifier, unlanded_note(branch, at, base))
+        if unsaid:
+            named = ", ".join(
+                f"{branch} at {at[:red_main_repair.SHA_CHARS]}"
+                for branch, at in unsaid)
+            said = (f"{why}; said on the card that the repair branch {named} "
+                    "is pushed, ahead of the default branch and under no pull "
+                    "request")
+            log(f"repair settle: {identifier} left alone — {said}")
+            return Settled(identifier, SETTLED_RED_UNLANDED, said)
+        if unlanded:
+            named = ", ".join(
+                f"{branch} at {at[:red_main_repair.SHA_CHARS]}"
+                for branch, at in unlanded)
+            why += (f"; the unlanded repair branch {named} was already said "
+                    "on the card")
         log(f"repair settle: {identifier} left alone — {why}")
         return Settled(identifier, SETTLED_RED, why)
 
@@ -489,7 +585,8 @@ def _unknown(identifier: str, why: str, log) -> Settled:
     return Settled(identifier, SETTLED_UNKNOWN, why)
 
 
-def settle(*, repo_slug: str, ops, log=print, fatal=()) -> SettleReport:
+def settle(*, repo_slug: str, ops, log=print, fatal=(),
+           base: str = "main") -> SettleReport:
     """Close every repair card whose repair is over by other means.
 
     One pass over the cards `ops.repair_cards()` hands back — the sweep's own
@@ -501,6 +598,8 @@ def settle(*, repo_slug: str, ops, log=print, fatal=()) -> SettleReport:
     one card's problem (DRE-2923). Everything else Linear refuses is recorded
     in `failures` and the pass carries on to the next card: one card the board
     would not write must not cost the others their reading.
+
+    `base` is the default branch rule 3 compares a repair branch against.
     """
     try:
         cards = list(ops.repair_cards())
@@ -519,7 +618,7 @@ def settle(*, repo_slug: str, ops, log=print, fatal=()) -> SettleReport:
     for card in cards:
         identifier = card.get("identifier") or "?"
         try:
-            settled = _settle_one(card, repo_slug, ops, log)
+            settled = _settle_one(card, repo_slug, ops, log, base)
         except Exception as exc:  # noqa: BLE001
             if fatal and isinstance(exc, tuple(fatal)):
                 raise
@@ -611,6 +710,33 @@ class _SettleOps:
             args += ["--branch", self.branch]
         return self._json(*args)
 
+    def branch_heads(self):
+        """Every `repair/` branch on the remote → its head sha, or None."""
+        listing = self._json_or_none(
+            "api", f"repos/{self.github_repo}/git/matching-refs/heads/repair/")
+        if not isinstance(listing, list):
+            return None
+        return {
+            (ref.get("ref") or "")[len("refs/heads/"):]:
+                (ref.get("object") or {}).get("sha") or ""
+            for ref in listing if isinstance(ref, dict)
+        }
+
+    def pulls_for_head(self, branch: str):
+        """The state of every pull request of ANY state on `branch`, or None."""
+        listing = self._json_or_none(
+            "pr", "list", "--repo", self.github_repo, "--head", branch,
+            "--state", "all", "--json", "state")
+        if not isinstance(listing, list):
+            return None
+        return [pr.get("state") or "" for pr in listing if isinstance(pr, dict)]
+
+    def compare(self, base: str, head: str):
+        """GitHub's compare payload for `base...head`, or None."""
+        payload = self._json_or_none(
+            "api", f"repos/{self.github_repo}/compare/{base}...{head}")
+        return payload if isinstance(payload, dict) else None
+
     def cancel(self, identifier: str) -> None:
         import linear_ops
 
@@ -636,6 +762,15 @@ class _SettleOps:
                 f"gh {' '.join(args)} failed rc={done.returncode}: "
                 f"{done.stderr.strip()[:300]}")
         return json.loads(done.stdout or "[]")
+
+    @classmethod
+    def _json_or_none(cls, *args: str):
+        # None, never [] or {}: the rule-3 reads must tell "GitHub said no"
+        # from "GitHub would not answer".
+        try:
+            return cls._json(*args)
+        except (RuntimeError, ValueError, OSError):
+            return None
 
 
 def outputs(result: dict) -> str:
@@ -665,6 +800,7 @@ def _settle_cli(args) -> int:
     report = settle(
         repo_slug=args.repo,
         ops=_SettleOps(args.github_repo, args.branch),
+        base=args.branch or "main",
     )
     for failure in report.failures:
         print(f"ERROR: {failure}", file=sys.stderr)
