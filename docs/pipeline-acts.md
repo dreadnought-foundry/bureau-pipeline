@@ -443,6 +443,41 @@ adds an `idle board — WIP 0/<cap>: …` ledger entry once the oldest dated
 receipt is `IDLE_BOARD_MINUTES` (60) old. An undated record counts toward the
 line and never toward the red.
 
+## The row that resolves an agent's blocker — `🧹 agent-blocker-resolved` (DRE-6508)
+
+| Field | Value |
+| -- | -- |
+| tag | `agent-blocker-resolved` |
+| act name | `agent-blocker-resolved` |
+| kind · state · next actor | `recovery` · `unchanged` · `reconcile.py` |
+| discharges | nothing |
+| cadence | null — one sweep act, and nothing is dispatched back whose run could be late |
+| emitted by | `scripts/blocker_resolve.py`, at the one f-string that composes the receipt |
+
+A build agent that cannot build its card writes a blocker, and the poster
+stamps its class on the `🛑 Agent blocked:` marker (`docs/blocker-classes.md`).
+`resolve_blocker` reads the class's action module off
+`config/blocker-classes.json`, calls it, and posts the receipt only after the
+module's own write, its first line
+`🧹 agent-blocker-resolved: class=<class> action=<action> — <note>`.
+
+The action is one of six: `canceled` (every criterion attested),
+`replanned` (fewer attested, sent to the planner), `relabeled` (dispatched at
+the wrong repo), `pr-opened` or `pr-found` (work left on a branch), and
+`asked` — a `question`, or any class whose module answered that the blocker is
+a person's call, asked once in Green Light by `blocker_ask`. **The tag is a
+live key**: `blocker_class.open_blocker` is handed it as `resolved_tag`, and a
+comment carrying it newer than the marker resolves the marker for every later
+sweep. A module that could not read a fact this pass raises
+`blocker_class.NotNow`, so the resolver prints `promotion: <card>
+agent-blocker class=<class> — not resolved this pass: <why>`, posts nothing,
+and the next sweep tries again. While a sibling card's module is not on the
+checkout it prints `… — action module <name> is not on this checkout —
+skipping` instead.
+
+The console learned the act first (DRE-6440): the `act registry consumers`
+job refuses a row the console does not carry.
+
 ## Why this exists
 
 The console has always checked this. Its
