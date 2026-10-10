@@ -519,6 +519,11 @@ WALKED_ROUTE = {
     # DRE-6380: the one-off exit's own precheck. It is only ever handed a card
     # that already left as a one-off, so it passes that shape outright.
     ("plan_critic", "one_off_precheck"),
+    # DRE-6654: the classifier's precedence-1 read. `planning_classify.run`
+    # returns before it on a card that carries any stamp, so there is never one
+    # to pass — title and children are the whole answer, and a card they call
+    # an epic goes to the model as it always did.
+    ("planning_classify", "label_routed"),
 }
 
 
@@ -597,6 +602,33 @@ class TestEveryRouteCallerIsWalked:
             "labels": ["agent:planner", "repo:agent-bureau"],
             "has_children": True,
         })
+
+    def test_the_label_routed_read_does_not_take_the_planner_label_for_an_epic(self):
+        """`planning_classify.label_routed` reads a card nothing has stamped
+        yet. The planner label every Planning card wears is not an epic, so the
+        role label beside it still routes the card."""
+        import planning_classify
+
+        decision = planning_classify.label_routed({
+            "identifier": "DRE-6654", "title": "switch the alarm off",
+            "description": "## Acceptance criteria\n- [ ] the alarm is off\n",
+            "labels": ["agent:planner", "agent:ops", "repo:agent-bureau"],
+            "has_children": False,
+        })
+        assert decision is not None
+        assert decision.shape == "one-off"
+
+    def test_the_label_routed_read_leaves_a_card_with_children_to_the_model(self):
+        """With no stamp to read, children are what say epic — and an epic is
+        not answered on its label."""
+        import planning_classify
+
+        assert planning_classify.label_routed({
+            "identifier": "DRE-6654", "title": "switch the alarm off",
+            "description": "## Acceptance criteria\n- [ ] the alarm is off\n",
+            "labels": ["agent:planner", "agent:ops", "repo:agent-bureau"],
+            "has_children": True,
+        }) is None
 
     def test_the_classify_command_can_be_given_the_stamp(self, capsys):
         """The CLI is a caller too, and it read `--has-children` but had no way
