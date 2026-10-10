@@ -1,0 +1,5 @@
+# Stand-in for agent-bureau's console backend requirements (DRE-6622 fixture).
+# Like the real one it declares no pytest: agent-bureau's CI installs its test
+# tools inline, so the mirror check brings its own from bureau-pipeline's
+# requirements-dev.txt.
+PyYAML==6.0.3

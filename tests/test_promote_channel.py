@@ -420,6 +420,13 @@ class MirrorDecisionTest(unittest.TestCase):
         self.assertIn("install", d.reason)
         self.assertNotIn("fail on the candidate", d.reason)
 
+    def test_a_blocked_check_says_the_run_fails_rather_than_waits(self):
+        """DRE-6622: `the next run re-checks` held `stable` six hours behind a
+        row of green runs. The run now fails so the hold is seen."""
+        d = _with_mirror(MIRROR_BLOCKED)
+        self.assertNotIn("the next run re-checks", d.reason)
+        self.assertIn("this run fails so the hold is seen", d.reason)
+
     def test_an_absent_result_on_a_promoting_route_is_a_blocked_check(self):
         """Absent means the check did not run — legal only on a route that
         never reaches promotion, or on a forced promote."""
@@ -633,8 +640,52 @@ class MirrorWorkflowTest(unittest.TestCase):
         self.assertEqual(len(forced), 1)
         self.assertIn("MIRROR", forced[0])
 
+    def test_a_blocked_check_fails_the_run_after_every_receipt(self):
+        """DRE-6622: from 02:26 PT on 2026-10-10 every run held `stable` as
+        `mirror-check-blocked` and finished green, and nothing in this
+        repository alarms on a quiet channel. So a blocked check fails the run
+        — as its LAST step, so the receipts are all written first."""
+        blocked = f"steps.decide.outputs.outcome == '{promote_channel.OUTCOME_MIRROR_BLOCKED}'"
+        last = self.steps[-1]
+        gate = " ".join(str(last.get("if", "")).split())
+        self.assertIn(blocked, gate)
+        self.assertIn("github.event_name == 'workflow_dispatch'", gate)
+        self.assertIn("github.event.workflow_run.head_branch == 'main'", gate)
+        self.assertNotIn("continue-on-error", last)
+        self.assertIn("::error title=Mirror check blocked::", last["run"])
+        self.assertIn("steps.decide.outputs.reason", str(last.get("env", {})))
+        self.assertRegex(last["run"], r"(?m)^\s*exit 1\s*$")
+        names = [s.get("name") for s in self.steps]
+        for receipt in ("Say what happened", "Record the decision",
+                        "Record the release"):
+            self.assertLess(names.index(receipt), len(self.steps) - 1, receipt)
+        for step in self.steps[:-1]:
+            text = f"{step.get('if', '')} {step.get('run', '')}"
+            self.assertFalse(
+                promote_channel.OUTCOME_MIRROR_BLOCKED in text and "exit 1" in text,
+                f"{step.get('name')} turns the blocked outcome into a failure "
+                f"before the receipts are written")
+
 
 class MirrorDocsTest(unittest.TestCase):
+    def test_the_docs_say_how_the_check_runs_and_that_a_block_fails_the_run(self):
+        """DRE-6622: the check's tools, its `--no-cov`, and the red run."""
+        doc = (ROOT / "docs" / "self-hosting.md").read_text()
+        readme = (ROOT / "README.md").read_text()
+        for name, text in (("docs/self-hosting.md", doc), ("README.md", readme)):
+            with self.subTest(doc=name):
+                flat = " ".join(text.split())
+                self.assertIn("requirements-dev.txt", flat)
+                self.assertIn("--no-cov", flat)
+                self.assertIn("DRE-6622", flat)
+                self.assertIn(f"`{promote_channel.OUTCOME_MIRROR_BLOCKED}` decision "
+                              f"on a `main` or by-hand run fails the run", flat)
+        row = [l for l in doc.splitlines()
+               if l.startswith(f"| `{promote_channel.OUTCOME_MIRROR_BLOCKED}`")]
+        self.assertEqual(len(row), 1)
+        self.assertNotIn("re-checks", row[0])
+        self.assertIn("fails", row[0])
+
     def test_the_receipt_table_carries_both_outcomes(self):
         doc = (ROOT / "docs" / "self-hosting.md").read_text()
         for outcome in (promote_channel.OUTCOME_MIRROR_FAILED,

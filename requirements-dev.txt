@@ -4,6 +4,11 @@
 # (.github/dependabot.yml). CI installs from this file (tests.yml), so a
 # bump here is what the suite actually runs against.
 pytest==9.1.1
+# The mirror check's own test tools come from this file too (DRE-6622):
+# `scripts/mirror_check.py discover` names it after agent-bureau's
+# requirements, and the check runs pytest with `--no-cov`, which is
+# pytest-cov's switch — without the plugin pytest refuses it.
+pytest-cov==7.1.0
 PyYAML==6.0.3
 # The proof run's browser (DRE-6025): `scripts/proof_browser.py prepare` reads
 # this line and installs exactly this version into a venv of its own, so the

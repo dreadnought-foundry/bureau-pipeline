@@ -23,7 +23,9 @@ agent-bureau PR at once, and fixed by hand each time.
 
 The stand-in trees under tests/fixtures/mirror-check/ are modeled on the
 2026-10-09 change, because the real agent-bureau as it stood that day is not
-readable from a pull request.
+readable from a pull request. Since DRE-6622 the stand-in agent-bureau has the
+real shape around those tests too: a coverage floor in its pytest settings and
+requirements that declare no pytest, so every check below runs through both.
 """
 
 import contextlib
@@ -32,6 +34,7 @@ import json
 import os
 import re
 import shutil
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -45,6 +48,11 @@ import validate_card  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
 FIXTURES = ROOT / "tests" / "fixtures" / "mirror-check"
+
+#: The stand-in agent-bureau's pytest settings, with its coverage floor
+#: (DRE-6622). Kept beside the tree rather than in it — see the file — and
+#: written into every throwaway copy as `pyproject.toml`.
+PYTEST_SETTINGS = FIXTURES / "agent-bureau.pyproject.toml"
 
 ROUTING_TEST = "console/backend/tests/test_routing_verdicts_mirror.py"
 RELAY_TEST = "cloud/relay/test_lane_guard_mirror.py"
@@ -68,6 +76,7 @@ class _Trees:
         base = Path(self._tmp.name)
         self.agent_bureau = base / "agent-bureau"
         shutil.copytree(FIXTURES / "agent-bureau", self.agent_bureau)
+        shutil.copyfile(PYTEST_SETTINGS, self.agent_bureau / "pyproject.toml")
         self.candidate = self.agent_bureau / mirror_check.PIPELINE_DIRNAME
         shutil.copytree(FIXTURES / candidate, self.candidate)
         self.stable = base / "bureau-pipeline-stable"
@@ -575,6 +584,105 @@ class CardTest(unittest.TestCase):
             self.assertEqual(ops.created, [])
 
 
+# --------------------------------------------------------------------------- #
+# 6. The check can actually run (DRE-6622)                                    #
+# --------------------------------------------------------------------------- #
+
+
+def _gh_output(name, written):
+    """One `name<<EOF … EOF` or `name=value` block of a GITHUB_OUTPUT file."""
+    lines = written.splitlines()
+    for i, line in enumerate(lines):
+        if line.startswith(f"{name}<<"):
+            end = line.partition("<<")[2]
+            return lines[i + 1:lines.index(end, i + 1)]
+        if line.startswith(f"{name}="):
+            return [line.partition("=")[2]]
+    return []
+
+
+class CheckCanRunTest(unittest.TestCase):
+    """From 02:26 PT on 2026-10-10 every Promote Channel run held `stable` as
+    `mirror-check-blocked` and finished green. Two causes, one behind the
+    other: the check's environment had no pytest, because agent-bureau's
+    requirements declare none, and with pytest a run of the mirror tests alone
+    fell under agent-bureau's coverage floor, so pytest exited 1 with no
+    failing test. The stand-in agent-bureau carries both: a requirements file
+    with no pytest and a `pyproject.toml` with the floor."""
+
+    def test_the_stand_in_carries_the_floor_and_no_pytest(self):
+        trees = _Trees(self)
+        settings = (trees.agent_bureau / "pyproject.toml").read_text()
+        self.assertIn("--cov=console/backend", settings)
+        self.assertIn("--cov-fail-under=90", settings)
+        requirements = (FIXTURES / "agent-bureau" / "console/backend/requirements.txt")
+        declared = [l for l in requirements.read_text().lower().splitlines()
+                    if l.strip() and not l.lstrip().startswith("#")]
+        self.assertTrue(declared)
+        self.assertFalse([l for l in declared if "pytest" in l], declared)
+
+    # --- cause 1: the check's test tools ---------------------------------- #
+
+    def test_discover_adds_this_repos_pinned_test_tools_after_agent_bureaus(self):
+        trees = _Trees(self)
+        out = trees.agent_bureau.parent / "gh_output"
+        out.write_text("")
+        os.environ["GITHUB_OUTPUT"] = str(out)
+        try:
+            with contextlib.redirect_stdout(io.StringIO()):
+                rc = mirror_check.main([
+                    "discover", "--agent-bureau", str(trees.agent_bureau),
+                    "--prefix", "agent-bureau"])
+        finally:
+            os.environ.pop("GITHUB_OUTPUT", None)
+        self.assertEqual(rc, 0)
+        self.assertEqual(_gh_output("requirements", out.read_text()), [
+            "agent-bureau/console/backend/requirements.txt",
+            "requirements-dev.txt",
+        ])
+        pins = (ROOT / "requirements-dev.txt").read_text().splitlines()
+        for tool in ("pytest", "pytest-cov"):
+            with self.subTest(tool=tool):
+                self.assertTrue(
+                    [p for p in pins if re.fullmatch(rf"{tool}==\d+(\.\d+)*", p)],
+                    f"requirements-dev.txt holds no exact pin for {tool}")
+
+    def test_an_interpreter_with_no_pytest_blocks_and_says_so(self):
+        trees = _Trees(self)
+        venv = trees.agent_bureau.parent / "no-pytest-venv"
+        subprocess.run([sys.executable, "-m", "venv", "--without-pip", str(venv)],
+                       check=True, capture_output=True)
+        python = venv / "bin" / "python3"
+        result = trees.check(python=str(python))
+        self.assertEqual(result["status"], mirror_check.MIRROR_BLOCKED)
+        self.assertEqual(result["failing"], [])
+        self.assertTrue(result["why"].startswith(
+            "pytest does not start in the check's environment"), result["why"])
+        self.assertIn("No module named pytest", result["why"])
+
+    # --- cause 2: agent-bureau's coverage floor --------------------------- #
+
+    def test_every_mirror_test_passing_is_a_pass_under_the_floor(self):
+        trees = _Trees(self, candidate="bureau-pipeline-old")
+        result = trees.check()
+        self.assertEqual(result["why"], "")
+        self.assertEqual(result["status"], mirror_check.MIRROR_PASSED)
+        self.assertEqual(result["failing"], [])
+        self.assertEqual(result["tests"], 2)
+
+    def test_a_candidate_breaking_a_mirror_still_refuses_under_the_floor(self):
+        """Both runs carry `--no-cov`: the candidate run, and the re-read
+        against `stable`, where every test passes and the floor alone would
+        otherwise answer `blocked`."""
+        trees = _Trees(self)
+        result = trees.check()
+        self.assertEqual(result["why"], "")
+        self.assertEqual(result["status"], mirror_check.MIRROR_FAILED)
+        failing = {f["test"].split("::")[0]: f["mirrors"] for f in result["failing"]}
+        self.assertEqual(failing, {ROUTING_TEST: [VERDICTS], RELAY_TEST: [VERDICTS]})
+        self.assertEqual(result["already_red"], [])
+
+
 class SelfHostingFixtureTest(unittest.TestCase):
     """The stand-in is bureau-pipeline's own test tree too: collected by this
     repo's suite, every mirror stand-in must SKIP rather than fail, because no
@@ -584,6 +692,17 @@ class SelfHostingFixtureTest(unittest.TestCase):
         for rel in (ROUTING_TEST, RELAY_TEST):
             text = (FIXTURES / "agent-bureau" / rel).read_text()
             self.assertTrue(re.search(r"skipif", text), rel)
+
+    def test_no_pytest_settings_sit_where_this_repos_pytest_would_read_them(self):
+        """pytest's rootdir search walks up from every file it is handed. CI
+        hands each part its test files by name, so a settings file inside the
+        stand-in became this repo's own config for any part naming one of the
+        stand-in's tests — and its coverage floor failed that part (DRE-6622,
+        the first CI run of this change)."""
+        names = ("pytest.ini", ".pytest.ini", "pyproject.toml", "tox.ini", "setup.cfg")
+        found = [p.relative_to(FIXTURES).as_posix() for p in FIXTURES.rglob("*")
+                 if p.name in names]
+        self.assertEqual(found, [])
 
 
 if __name__ == "__main__":

@@ -1,0 +1,13 @@
+# Stand-in for agent-bureau's pytest settings (DRE-6622 fixture). agent-bureau
+# enforces a coverage floor through `addopts`, so a run of its mirror tests
+# alone reads far under 90% and pytest exits 1 with no failing test. The mirror
+# check passes `--no-cov`, which switches coverage, and with it the floor, off.
+#
+# Kept OUTSIDE the stand-in tree, and under a name pytest never reads: a
+# `pyproject.toml` inside tests/fixtures/mirror-check/agent-bureau/ is found by
+# pytest's rootdir search whenever this repo's own CI part names one of the
+# stand-in's test files, and its floor then governs that whole part.
+# tests/test_mirror_check.py writes it into each throwaway copy as
+# `pyproject.toml`, where agent-bureau keeps its own.
+[tool.pytest.ini_options]
+addopts = "--cov=console/backend --cov-fail-under=90"

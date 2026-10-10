@@ -1315,8 +1315,14 @@ naming the mirror that must follow; a test red on both is named `already red
 on stable` and refuses nothing; a check that could not run is
 `mirror-check-blocked` and proves nothing either way. `force` overrides both,
 as it overrides a red harness stamp, and the forced warning names the mirror
-result it overrode. The record is in `docs/self-hosting.md`, "agent-bureau's
-mirror tests are part of the proof".
+result it overrode. Since DRE-6622 the check's test tools come from this
+repository's `requirements-dev.txt`, installed beside agent-bureau's
+requirements (which declare no pytest), and both of its pytest runs carry
+`--no-cov`, because agent-bureau's coverage floor cannot be met by its mirror
+tests alone. A `mirror-check-blocked` decision on a `main` or by-hand run fails
+the run, after every receipt is written: on 2026-10-10 the check could not run
+for six hours and every run held `stable` while finishing green. The record is
+in `docs/self-hosting.md`, "agent-bureau's mirror tests are part of the proof".
 
 **"Not proven yet" is a third answer, and the receipt says so (DRE-3076).**
 A harness run can end without judging the commit at all: on 2026-09-03 the

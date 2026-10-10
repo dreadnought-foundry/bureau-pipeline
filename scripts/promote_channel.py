@@ -96,6 +96,12 @@ candidate, `mirror-check-blocked` when the check could not run — and a person'
 `force` overrides both, as it overrides a red harness stamp. The workflow runs
 the decision twice: on the proof alone, to learn whether the check runs at all,
 and then with `--mirror-result`.
+
+Since DRE-6622 a `mirror-check-blocked` decision on a `main` or by-hand run
+fails the run, after every receipt is written. From 02:26 to 08:45 PT on
+2026-10-10 the check could not run at all, and every run held `stable` behind
+thirteen merges while finishing green — and nothing in this repository alarms
+on a quiet channel, so the red run is the signal.
 """
 
 from __future__ import annotations
@@ -627,8 +633,8 @@ def with_mirror(
         ), OUTCOME_MIRROR_FAILED)
     return Decision(False, (
         f"not promoting {sha}: the agent-bureau mirror check could not run — "
-        f"{summary}. Nothing is proven either way; the next run re-checks, and "
-        f"a person's force is the way past it."
+        f"{summary}. Nothing is proven either way; this run fails so the hold "
+        f"is seen, and a person's force is the way past it."
     ), OUTCOME_MIRROR_BLOCKED)
 
 
