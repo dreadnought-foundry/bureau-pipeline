@@ -100,11 +100,18 @@ CLI:
     python3 medic_retry.py post --card <DRE-N> --rule <rule> --detail <text> \
         [--run-url <url>]
     python3 medic_retry.py diagnosis-target --branch <head-ref> \
-        --workflow <failed workflow's name> --snapshot <file>
+        --workflow <failed workflow's name> --snapshot <file> \
+        [--head-sha <sha>] [--default-branch <name>]
+    python3 medic_retry.py repair-card --workflow <name> --head-sha <sha> \
+        --branch <head-ref> --default-branch <name>
+    python3 medic_retry.py failure-card-body --report <file> --workflow <name> \
+        --branch <head-ref> --head-sha <sha> --run-url <url>
 
 `diagnosis-target` prints `kind`, `target` and `title` for the diagnosis job
 and leaves the target card's facts in the snapshot file the agent reads (see
-`diagnosis_target`).
+`diagnosis_target`). `repair-card` prints the open red-main repair card for the
+run, or nothing, and exits 1 when the search did not answer; `failure-card-body`
+prints a new failure card's description (DRE-6521, `failure_card_body`).
 
 `decide` prints four `key=value` lines for `$GITHUB_OUTPUT` — `retry`, `rule`,
 `card`, `detail` — one line each, and exits 0 whatever it decides. `post`
@@ -753,7 +760,39 @@ def failure_card_title(workflow) -> str:
     return "Pipeline failure: " + " ".join(str(workflow or "").split())
 
 
-def diagnosis_target(branch: str, workflow: str, snapshot_path: str = "") -> dict:
+def repair_card_title(branch: str, workflow: str, head_sha: str,
+                      default_branch: str) -> str:
+    """The title of the red-main repair card for this run, or "" when the run
+    is not one the repair loop files for.
+
+    DRE-6521. A failed run on the default branch wakes the medic and Red-Main
+    Repair together, and the repair loop files its card under
+    `repair_card.card_title(workflow, head_sha)`. On 2026-10-09 the medic did
+    not know that title, and one failed Pipeline Tests run became DRE-6511 and
+    DRE-6512. Any other branch, or a run with no sha or no known default
+    branch, gets "" — and no read.
+    """
+    if not (branch and head_sha and default_branch) or branch != default_branch:
+        return ""
+    import repair_card  # local: its own imports are the repair loop's, not ours
+
+    return repair_card.card_title(workflow, head_sha)
+
+
+def open_repair_card(branch: str, workflow: str, head_sha: str,
+                     default_branch: str) -> str | None:
+    """The open repair card for this workflow and commit, or None. Raises when
+    the search does not answer — the callers decide what that costs."""
+    title = repair_card_title(branch, workflow, head_sha, default_branch)
+    if not title:
+        return None
+    import linear_ops  # local: only the Linear seam needs it
+
+    return linear_ops.find_open(title)
+
+
+def diagnosis_target(branch: str, workflow: str, snapshot_path: str = "", *,
+                     head_sha: str = "", default_branch: str = "") -> dict:
     """Which card the diagnosis goes to, and that card as the agent will see it.
 
     Before Stage 2 fix #23 the diagnosis agent held the fleet's Linear key and
@@ -762,6 +801,10 @@ def diagnosis_target(branch: str, workflow: str, snapshot_path: str = "") -> dic
     card for this workflow (`linear_ops.find_open`, by title and open-ness, so
     every lane), or none yet. One read for a branch card, two for a failure
     card found by title, one when there is none.
+
+    On the default branch the red-main repair card comes first (DRE-6521): an
+    open one is the target, as `card`, and the diagnosis is a comment there.
+    That costs one more read, and only on the default branch.
 
     A search that FAILED is `unknown`, never `new`: `new` creates a card, and
     a search that did not answer is not a search that found nothing. A card
@@ -776,16 +819,27 @@ def diagnosis_target(branch: str, workflow: str, snapshot_path: str = "") -> dic
     if card:
         kind, target = TARGET_CARD, card
     else:
-        try:
-            import linear_ops  # local: only the Linear seam needs it
+        kind, target = TARGET_NEW, ""
+        searches = (
+            (repair_card_title(branch, workflow, head_sha, default_branch), TARGET_CARD),
+            (title, TARGET_FAILURE_CARD),
+        )
+        for searched, answer in searches:
+            if not searched:
+                continue
+            try:
+                import linear_ops  # local: only the Linear seam needs it
 
-            found = linear_ops.find_open(title)
-        except Exception as e:  # noqa: BLE001 — any Linear/transport failure
-            print(f"::warning::medic diagnosis: could not search for '{title}' "
-                  f"({e}) — the delivery step will search again.", file=sys.stderr)
-            kind, target = TARGET_UNKNOWN, ""
-        else:
-            kind, target = (TARGET_FAILURE_CARD, found) if found else (TARGET_NEW, "")
+                found = linear_ops.find_open(searched)
+            except Exception as e:  # noqa: BLE001 — any Linear/transport failure
+                print(f"::warning::medic diagnosis: could not search for "
+                      f"'{searched}' ({e}) — the delivery step will search "
+                      f"again.", file=sys.stderr)
+                kind, target = TARGET_UNKNOWN, ""
+                break
+            if found:
+                kind, target = answer, found
+                break
     snapshot.update(kind=kind, target=target)
     if target:
         try:
@@ -800,6 +854,44 @@ def diagnosis_target(branch: str, workflow: str, snapshot_path: str = "") -> dic
             print(f"::warning::medic diagnosis: snapshot not written ({e})",
                   file=sys.stderr)
     return snapshot
+
+
+#: The heading the planning exit reads a card's criteria under
+#: (`routing_verdict.acceptance_criteria` reads the `- [ ]` items beneath it).
+CRITERIA_HEADING = "## Acceptance criteria"
+
+
+def _one_line(text) -> str:
+    """Run-supplied text as one line that cannot close a code span: the
+    workflow name and the branch are agent-influenced (DRE-1996)."""
+    return " ".join(str(text or "").split()).replace("`", "'")
+
+
+def failure_card_body(report: str, *, workflow: str, branch: str,
+                      head_sha: str, run_url: str) -> str:
+    """The description of a failure card the medic creates: the agent's report,
+    byte for byte, then an acceptance-criteria section this script writes.
+
+    DRE-6521. `linear_ops.py create` lands the card in Planning as new work
+    owing a classification, and on 2026-10-09 the planning exit refused
+    DRE-6512 because the report stated no exit condition: "the card states no
+    acceptance criteria". The agent is never asked for the section. It is
+    written here from the run's own facts, as checks a reviewer can make on
+    the fixing pull request before it merges. A report posted as a comment on
+    a card that already exists gets none of this.
+    """
+    import red_main_repair  # local: only the short sha needs it
+
+    sha = _one_line(head_sha)[:red_main_repair.SHA_CHARS]
+    criteria = (
+        f"- [ ] The check that failed in `{_one_line(workflow)}` (run "
+        f"`{_one_line(run_url)}`, commit `{sha}` on `{_one_line(branch)}`) "
+        f"passes on the fixing pull request.",
+        "- [ ] The pull request names this card and says what was wrong and "
+        "what changed.",
+    )
+    gap = "\n" if report.endswith("\n") else "\n\n"
+    return report + gap + CRITERIA_HEADING + "\n\n" + "\n".join(criteria) + "\n"
 
 
 def post_declined(identifier: str, decision: Decision, run_url: str = "") -> None:
@@ -957,6 +1049,26 @@ def main(argv=None) -> int:
     target.add_argument("--branch", default="")
     target.add_argument("--workflow", default="")
     target.add_argument("--snapshot", default="")
+    # DRE-6521: on the default branch the red-main repair card is looked for
+    # first, by the title the repair loop files it under.
+    target.add_argument("--head-sha", default="")
+    target.add_argument("--default-branch", default="")
+
+    # DRE-6521: the same repair-card lookup, asked again by the delivery step
+    # immediately before it creates a card.
+    repair = sub.add_parser("repair-card")
+    repair.add_argument("--workflow", default="")
+    repair.add_argument("--head-sha", default="")
+    repair.add_argument("--branch", default="")
+    repair.add_argument("--default-branch", default="")
+
+    # DRE-6521: a new failure card's description, criteria appended.
+    body = sub.add_parser("failure-card-body")
+    body.add_argument("--report", required=True)
+    body.add_argument("--workflow", default="")
+    body.add_argument("--branch", default="")
+    body.add_argument("--head-sha", default="")
+    body.add_argument("--run-url", default="")
 
     note = sub.add_parser("post")
     note.add_argument("--card", required=True)
@@ -968,11 +1080,33 @@ def main(argv=None) -> int:
     if args.command == "decide":
         return _decide_cli(args)
     if args.command == "diagnosis-target":
-        found = diagnosis_target(args.branch, args.workflow, args.snapshot)
+        found = diagnosis_target(args.branch, args.workflow, args.snapshot,
+                                 head_sha=args.head_sha,
+                                 default_branch=args.default_branch)
         # Three `key=value` lines for $GITHUB_OUTPUT, each one line.
         print(f"kind={found['kind']}")
         print(f"target={found['target']}")
         print(f"title={found['failure_title']}")
+        return 0
+    if args.command == "repair-card":
+        # Prints the open repair card's identifier or nothing; exit 1 when the
+        # search did not answer, so the step creates nothing on it.
+        try:
+            found = open_repair_card(args.branch, args.workflow, args.head_sha,
+                                     args.default_branch)
+        except Exception as e:  # noqa: BLE001 — any Linear/transport failure
+            print(f"::warning::medic diagnosis: could not search for the "
+                  f"red-main repair card ({e}).", file=sys.stderr)
+            return 1
+        if found:
+            print(found)
+        return 0
+    if args.command == "failure-card-body":
+        with open(args.report, encoding="utf-8") as f:
+            report = f.read()
+        sys.stdout.write(failure_card_body(
+            report, workflow=args.workflow, branch=args.branch,
+            head_sha=args.head_sha, run_url=args.run_url))
         return 0
     if args.command == "post":
         decision = Decision(DECLINE, args.rule, args.detail)
