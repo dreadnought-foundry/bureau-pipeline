@@ -391,6 +391,8 @@ validation in `model_fallback.policy_errors()` rather than by convention:
 - an `excluded` id must not appear on **any** ladder, enforced on its own terms
   rather than as a side effect of the rule above;
 - the critic and verifier must stay `advisory`;
+- only the planner may be `judgement` — **rule 10** (DRE-6633), see *The
+  console's keys* below;
 - `default_ladder` must be the workhorse ladder, so an unrecognized role lands on
   the cheap side of the fence;
 - `discovery.on_new_model` may be `advisory` or `none`, and `advisory` now
@@ -497,6 +499,74 @@ and never carries the `DEGRADED` prefix. A `::warning::` on every Sonnet build
 would teach the fleet to ignore the warning that means a reviewer did not get
 its model.
 
+## The console's keys and the per-project exception (DRE-6633)
+
+The console's Settings › Agents & models page reads five more keys. None of
+them changes what any run selects today: `projects` ships empty.
+
+- **`kinds.<kind>.label`** and **`kinds.<kind>.purpose`** — the group's name on
+  the page and the one line under it. `label` defaults to the key title-cased
+  (`Workhorse`) and `purpose` to empty. Today: Builders, Reviewers, Planners.
+- **`ungrouped`** — agents that exist but are in no group: the console's
+  interactive agents (`designer`, `ux-ui-engineer`, `fullstack-engineer`,
+  `mobile`, `product-lead`). It is a roster the console reads, not a dispatch
+  table — none of them runs on a pipeline workflow or has an `agents.yaml`
+  entry here, and `sync_model_config.py` generates nothing for them. A name may
+  not be in both `agents` and `ungrouped`.
+- **`about`** — agent name → one line, for every name in `agents` and
+  `ungrouped`. A line for a name in neither is refused.
+- **`projects`** — repo slug → `{ <kind>: <model id> }`, the per-project
+  exception. The slug must be a key of `config/repo-map.json`; when that file
+  cannot be read every entry is refused, naming it (fail closed).
+
+**The walk rule.** A project's runs of that kind walk `[the exception]` followed
+by the kind's ladder with the exception removed
+(`model_fallback.project_walk`); `model_fallback.effective_ladders(cfg, slug)`
+is the fleet ladders with each named kind's ladder replaced that way. So
+`projects: {atlas: {workhorse: claude-sonnet-5-5}}` has atlas's builders walk
+`claude-sonnet-5-5, claude-opus-5-5, claude-opus-5, claude-sonnet-5`, and every
+other repo and kind walks the fleet ladder.
+
+**The own-kind reading.** The exception must already be a rung of **that kind's
+own ladder** — the one `kinds.<kind>.ladder` names. An exception reorders a
+kind's own ladder and never adds a model to it: a model joins a ladder only
+through a reviewed pull request to `models.yaml` (availability is not
+permission). The wider "on any ladder" reading is rejected because one console
+press would then put `claude-sonnet-4-6`, which sits only on the judgement
+ladder, at the head of a project's every build — undoing the 2026-09-16
+decision that took it off the build ladder with no ladder pull request. The
+refusal says where the model does sit, and is the entry's only reason:
+
+```
+projects.atlas.workhorse: claude-sonnet-4-6 is not on the workhorse ladder (it sits on the judgement ladder) — …
+```
+
+An exception that passes is then held to rules 4, 4b, 7 and 8 on the walk it
+makes, and every finding the fleet's own ladders do not already carry is
+reported as `projects.<slug>.<kind>: breaks rule <n> …` — the prefix the
+console filters on. A workhorse exception is a reorder of the build ladder and
+no rule reads that order, so it always passes. `judgement: claude-opus-5-5` is
+refused (a build model tops the planner's walk, and Fable sits dearer beneath
+it); `advisory: claude-opus-5-5` is refused (a bare overlap on top of the
+reviewers' walk); `judgement: claude-sonnet-4-6` is admitted.
+
+The daily adoption carries an exception with its rung
+(`model_adoption_actions._move_projects`): when a same-family successor
+replaces a rung, every `projects.<slug>.<kind>` naming that rung of that kind's
+ladder moves to the successor too, as a text edit. An exception for a kind
+whose ladder the adoption does not touch is left alone. The edit reads the
+block shape shown in `models.yaml`'s comment; anything it could not move is
+caught by the edit's own closing comparison, and nothing is written.
+
+**Rule 10 — `judgement` is the planner's kind.** `JUDGEMENT_ROLES` in
+`scripts/model_fallback.py` is `("planner",)`, and any other role assigned `judgement` is refused:
+`agents.engineer: judgement` would put Fable 5.1 on every build card, which is
+volume on the strongest model — the 2026-08-09 incident. The `kinds.judgement`
+comment said "ONE role, deliberately" from DRE-3015 on and nothing enforced it.
+The rule is one-directional: the planner moving to `advisory` or `workhorse` is
+a spend decrease and stays admissible. `agents.critic: judgement` is refused by
+rule 3 and rule 10, each with its own reason.
+
 ## Every run says which model it used, and why anything above it was skipped
 
 `model_fallback.py select <agent> --explain-file <path>` writes a one-line note
@@ -558,7 +628,9 @@ changes what the fleet selects.
 
 The literal carries `review_separation` too (DRE-3880): a degrade that dropped
 the fence would review a Sonnet build on the same Sonnet and look exactly like a
-healthy run.
+healthy run. And it carries the console's `groups`, `ungrouped`, `about` and
+`projects` (DRE-6633), so the degrade path gives the same answer as a healthy
+checkout.
 
 ## The effort level (DRE-4836)
 

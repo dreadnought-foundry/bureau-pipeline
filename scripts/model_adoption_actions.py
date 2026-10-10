@@ -459,6 +459,9 @@ _RUNG = re.compile(r"^(\s*-\s+model:\s*)(['\"]?)([^'\"\s#]+)\2(\s*(?:#.*)?)$")
 _SEPARATION = re.compile(
     r"^(\s*(?:-\s+)?(?:built_on|reviewers_use):\s*)(['\"]?)([^'\"\s#]+)\2(\s*(?:#.*)?)$"
 )
+_PROJECT_ENTRY = re.compile(
+    r"^(\s+)([A-Za-z_][\w-]*)(:\s*)(['\"]?)([^'\"\s#]+)\4(\s*(?:#.*)?)$"
+)
 
 
 def _split(line: str) -> tuple[str, str]:
@@ -470,6 +473,25 @@ def _split(line: str) -> tuple[str, str]:
 def _ladder_ids(config) -> dict[str, list[str]]:
     return {str(name): model_catalog._ladder_ids(rungs)
             for name, rungs in ((config or {}).get("ladders") or {}).items()}
+
+
+def _kind_ladders(config) -> dict[str, str]:
+    """`{kind: the ladder it names}` off a parsed config."""
+    return {str(kind): str(spec.get("ladder") if isinstance(spec, Mapping) else spec)
+            for kind, spec in ((config or {}).get("kinds") or {}).items()}
+
+
+def _moved_projects(projects, wanted, kinds, candidate):
+    """`projects` as `_move_projects` should leave it: each exception naming a
+    replaced rung of its own kind's ladder reads the candidate."""
+    if not isinstance(projects, Mapping):
+        return projects
+    return {
+        slug: ({kind: candidate if (kinds.get(kind), model) in wanted else model
+                for kind, model in entry.items()}
+               if isinstance(entry, Mapping) else entry)
+        for slug, entry in projects.items()
+    }
 
 
 def apply_text(text: str, decision, today: str) -> str:
@@ -527,6 +549,8 @@ def apply_text(text: str, decision, today: str) -> str:
             if m not in staying]
 
     lines = _move_separation(lines, gone, candidate)
+    kinds = _kind_ladders(before)
+    lines = _move_projects(lines, wanted, kinds, candidate)
     retired = set(model_catalog._ladder_ids(before.get("retired")))
     lines = _retire(lines, [m for m in gone if m not in retired], candidate, today)
     result = "".join(lines)
@@ -539,6 +563,10 @@ def apply_text(text: str, decision, today: str) -> str:
     if _ladder_ids(after) != expected:
         raise Refused("the text edit did not produce the intended ladders — "
                       "nothing written")
+    if after.get("projects") != _moved_projects(before.get("projects"), wanted,
+                                                kinds, candidate):
+        raise Refused("the text edit did not produce the intended `projects` "
+                      "exceptions — nothing written")
     return result
 
 
@@ -556,6 +584,45 @@ def _move_separation(lines: list[str], gone: list[str], candidate: str) -> list[
         if field and field.group(3) in gone:
             line = (f"{field.group(1)}{field.group(2)}{candidate}"
                     f"{field.group(2)}{field.group(4)}{end}")
+        out.append(line)
+    return out
+
+
+def _move_projects(lines: list[str], wanted, kinds: dict[str, str],
+                   candidate: str) -> list[str]:
+    """A `projects.<slug>.<kind>` exception naming a rung the Decision replaces
+    on THAT KIND'S ladder moves with it (DRE-6633). An exception is the choice
+    of a rung, and the rung moved — under the CEO's rule of 2026-09-14 a
+    same-family successor at no higher price replaces its rung by itself.
+
+    An exception for a kind whose ladder the Decision does not touch is left
+    alone even when it names the same id: that id is still on that kind's
+    ladder, so it is still admissible.
+    """
+    top = None
+    slug_indent = None
+    out = []
+    for line in lines:
+        body, end = _split(line)
+        if not body.strip() or body.lstrip().startswith("#"):
+            out.append(line)
+            continue
+        found = _TOP_KEY.match(body)
+        if found:
+            top, slug_indent = found.group(1), None
+            out.append(line)
+            continue
+        indent = len(body) - len(body.lstrip())
+        if top != "projects" or slug_indent is None or indent <= slug_indent:
+            if top == "projects":
+                slug_indent = indent
+            out.append(line)
+            continue
+        entry = _PROJECT_ENTRY.match(body)
+        if entry and (kinds.get(entry.group(2)), entry.group(5)) in wanted:
+            line = (f"{entry.group(1)}{entry.group(2)}{entry.group(3)}"
+                    f"{entry.group(4)}{candidate}{entry.group(4)}"
+                    f"{entry.group(6)}{end}")
         out.append(line)
     return out
 
