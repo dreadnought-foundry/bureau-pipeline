@@ -200,6 +200,20 @@ OUTCOME_MIRROR_BLOCKED = "mirror-check-blocked"
 #: The outcomes that move the channel — the only ones the mirror check reads.
 PROMOTING_OUTCOMES = (OUTCOME_PROMOTING, OUTCOME_BY_HAND, OUTCOME_BY_HAND_FORCED)
 
+#: The bound on the mirror check's one-line summary (DRE-6683). Promote
+#: Channel run 38076381376 moved `stable` and then went red: its summary named
+#: all 1,238 tests already red on `stable`, 207,749 bytes, and Linux will not
+#: start a process with an environment string over 131,072, so `Say what
+#: happened` could not start. The line now states both counts, names at most
+#: `MIRROR_EXAMPLES` tests of each list, each clamped, and points at the file
+#: that holds every one — which `promote-channel.yml` keeps as the run's
+#: `MIRROR_ARTIFACT`.
+MIRROR_SUMMARY_MAX_BYTES = 1500
+MIRROR_EXAMPLES = 3
+MIRROR_EXAMPLE_CHARS = 200
+MIRROR_RESULT_FILE = "mirror_result.json"
+MIRROR_ARTIFACT = "mirror-result"
+
 #: Actors a FORCED promote is refused to. Forcing past the harness is the one
 #: act here that is operator-only, and "a person ticked the box" has to be
 #: checked rather than assumed: every build agent in this fleet runs under an
@@ -558,25 +572,56 @@ def evaluate(
     )
 
 
+def _clamp(text: str, limit: int) -> str:
+    """`text` cut to `limit` characters, marked where it was cut."""
+    return text if len(text) <= limit else text[:limit - 1] + "…"
+
+
+def _examples(entries: list[dict]) -> str:
+    """At most `MIRROR_EXAMPLES` of a list, each clamped, then how many more."""
+    shown = "; ".join(_clamp(mirror_check.describe([e]), MIRROR_EXAMPLE_CHARS)
+                      for e in entries[:MIRROR_EXAMPLES])
+    more = len(entries) - MIRROR_EXAMPLES
+    return f"{shown} and {more} more" if more > 0 else shown
+
+
 def mirror_summary(mirror: dict | None) -> str:
     """The mirror check's result in one line — for the receipt, the forced
-    warning and the `mirror` output."""
+    warning and the `mirror` output.
+
+    Bounded at `MIRROR_SUMMARY_MAX_BYTES` (DRE-6683): both counts exactly, a
+    handful of examples, and where the full lists are."""
     if not mirror:
         return f"{OUTCOME_MIRROR_BLOCKED}: the check did not run"
     status = mirror.get("status")
     tests = mirror.get("tests", 0)
     sha = (mirror.get("agent_bureau_sha") or "unknown")[:7]
+    failing = mirror.get("failing") or []
     red = mirror.get("already_red") or []
-    tail = (f"; already red on stable: {mirror_check.describe(red)}"
-            if red else "")
     if status == mirror_check.MIRROR_PASSED:
-        return f"passed — {tests} agent-bureau tests at {sha} green{tail}"
-    if status == mirror_check.MIRROR_FAILED:
-        return (f"{OUTCOME_MIRROR_FAILED} — "
-                f"{mirror_check.describe(mirror.get('failing') or [])}, "
-                f"agent-bureau at {sha}{tail}")
-    return (f"{OUTCOME_MIRROR_BLOCKED} — "
-            f"{mirror.get('why') or 'the check gave no answer'}")
+        head = (f"passed — {tests} agent-bureau tests at {sha} green; "
+                f"0 failing, {len(red)} already red on stable")
+        examples = f": {_examples(red)}" if red else ""
+    elif status == mirror_check.MIRROR_FAILED:
+        head = (f"{OUTCOME_MIRROR_FAILED} — {len(failing)} failing, "
+                f"{len(red)} already red on stable, agent-bureau at {sha}")
+        examples = f"; failing: {_examples(failing)}"
+        if red:
+            examples += f"; already red: {_examples(red)}"
+    else:
+        why = _clamp(mirror.get("why") or "the check gave no answer",
+                     MIRROR_EXAMPLE_CHARS * 2)
+        return f"{OUTCOME_MIRROR_BLOCKED} — {why}"
+    where = (f" — full lists in {MIRROR_RESULT_FILE}, this run's "
+             f"`{MIRROR_ARTIFACT}` artifact" if failing or red else "")
+    # Each example is clamped already; this is the backstop for a result no
+    # one has imagined yet. It cuts the examples only — the counts lead and
+    # the pointer ends, so neither is ever lost.
+    room = MIRROR_SUMMARY_MAX_BYTES - len(f"{head}{where}".encode("utf-8"))
+    raw = examples.encode("utf-8")
+    if len(raw) > room:
+        examples = raw[:max(room - 3, 0)].decode("utf-8", "ignore") + "…"
+    return f"{head}{examples}{where}"
 
 
 def with_mirror(

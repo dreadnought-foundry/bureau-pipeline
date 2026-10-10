@@ -219,7 +219,7 @@ strings instead of the same silence:
 | `by-hand-candidate-not-on-main` | the named sha is not reachable from `main` | name a merged commit; a green PR head is not one |
 | `by-hand-force-needs-reason` | `force` with no reason | dispatch again with the reason that makes it safe |
 | `by-hand-force-not-operator` | `force` asked for by a bot login | forcing is operator-only; a person dispatches it |
-| `mirror-tests-failed` | agent-bureau's mirror tests pass on `stable` and fail on the candidate (DRE-6496); the reason names each test and the file it mirrors | agent-bureau's mirror follows first — the run filed one card there (`card owed` if Linear refused it); the next run re-evaluates |
+| `mirror-tests-failed` | agent-bureau's mirror tests pass on `stable` and fail on the candidate (DRE-6496); the reason counts the failing tests and names the first few with the file each mirrors; the full list is the run's `mirror-result` artifact (DRE-6683) | agent-bureau's mirror follows first — the run filed one card there (`card owed` if Linear refused it); the next run re-evaluates |
 | `mirror-check-blocked` | the mirror check could not run — a token, clone or install that failed, pytest that would not start, a run past its time limit, or no result at all | nothing proven either way; on a `main` or by-hand run the run fails so the hold is seen (DRE-6622) — read its reason, and `force` is the way past it |
 
 Before this, those runs concluded `skipped` with nothing else on them: on
@@ -403,6 +403,20 @@ promotion never clones agent-bureau. `scripts/mirror_check.py` does the work:
   names the leading files that fit and ends `and N more`. The body still names
   every one. Run 38072065598's 23-file, 716-character title was refused, and
   its card was owed.
+- **The receipt's mirror line is bounded** (DRE-6683). It states both counts
+  exactly — failing on the candidate, already red on `stable` — names at most
+  three tests of each, each clamped, says how many more, and stays under
+  1,500 bytes whatever the result holds. The full lists are
+  `mirror_result.json`, kept as the run's `mirror-result` artifact, and the
+  receipt says so; the check step's log also prints every entry. Promote
+  Channel run 38076381376 moved `stable` and went red anyway: its line named
+  1,238 already-red tests in 207,749 bytes, Linux refuses an environment
+  string over 131,072, and `Say what happened` could not start. No step
+  takes a per-test list through `env:` or a step output
+  (`tests/test_mirror_summary_bound.py` reads the workflow for it), and
+  `Say what happened` is `continue-on-error` by decision: a report that
+  cannot run warns, as `Run summary not written`, and does not turn a
+  promotion red. The run's only owed failure is the blocked check's, below.
 - **Which file it mirrors** is read off the test's own string literals — the
   ones naming a file in the candidate. A test naming none reads `mirrors: not
   read from the test`, never a guess.

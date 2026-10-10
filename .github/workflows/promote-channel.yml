@@ -514,6 +514,26 @@ jobs:
             --setup "discovery=$DISCOVER" \
             --setup "install=$INSTALL"
 
+      # The full result, kept (DRE-6683). The one-line summary every receipt
+      # below carries is bounded — both counts, a handful of examples — and
+      # names this artifact as where the full lists are. Run 38076381376's
+      # unbounded line named 1,238 already-red tests in 207,749 bytes, and
+      # `Say what happened` could not start. No step reads these lists
+      # through `env:` or an output; one that needs them reads the file.
+      # Reporting only: a missing file uploads nothing, a refused upload
+      # changes nothing.
+      - name: Keep the mirror result
+        id: keep_mirror
+        if: steps.proof.outputs.promote == 'true'
+        continue-on-error: true
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: mirror-result
+          path: mirror_result.json
+          if-no-files-found: ignore
+          overwrite: true
+          retention-days: 30
+
       # THE VERDICT: the proof's arguments replayed, plus the mirror check's
       # result. A refusal above comes back unchanged; a promotion is weighed
       # against the result, and an ABSENT result — the check timed out or
@@ -716,7 +736,21 @@ jobs:
       # And the loud block below is no longer gated on `BRANCH = main`, which
       # is EMPTY on a dispatch — a by-hand decline would have been the silent
       # green run this card is named after, in a third place.
+      #
+      # A REPORT THAT CANNOT RUN DOES NOT FAIL THE RUN (DRE-6683) — decided
+      # here, not left to chance. Run 38076381376 moved `stable`, recorded the
+      # release, and went red because this step could not start (`Argument
+      # list too long`: an unbounded `MIRROR`). A red run over a channel that
+      # moved reads as a failed promotion, the medic re-ran it, and the re-run
+      # found nothing to do and went green over the top of it. Every value in
+      # this env is now bounded (tests/test_mirror_summary_bound.py), and if
+      # the step still fails, the run's state is already written — the tag,
+      # the release, the decision record — so it is `continue-on-error`, and
+      # the step after it says the summary was not written. The red run this
+      # job owes is the blocked check's, in the last step, and nothing else.
       - name: Say what happened
+        id: say
+        continue-on-error: true
         env:
           OUTCOME: ${{ steps.decide.outputs.outcome }}
           REASON: ${{ steps.decide.outputs.reason }}
@@ -732,7 +766,9 @@ jobs:
           REASON_GIVEN: ${{ github.event.inputs.reason }}
           # DRE-6496: the mirror check's one-line result (empty where the
           # proof refused and the check never ran), and the card a refusal
-          # filed — `card owed` when Linear would not take it.
+          # filed — `card owed` when Linear would not take it. The line is
+          # bounded (DRE-6683); the full lists are the `mirror-result`
+          # artifact, never an env value.
           MIRROR: ${{ steps.decide.outputs.mirror }}
           MIRROR_CARD: ${{ steps.mirror_card.outputs.card }}
         run: |
@@ -764,6 +800,9 @@ jobs:
               echo "- at: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
               echo "- reason given: ${REASON_GIVEN:-n/a — the harness moved it}"
               echo "- mirror check: ${MIRROR:-not run}"
+              if [ -n "$MIRROR" ]; then
+                echo "- full mirror result: \`mirror_result.json\`, this run's \`mirror-result\` artifact"
+              fi
               echo ""
               echo "${REASON}"
             } >> "$GITHUB_STEP_SUMMARY"
@@ -781,6 +820,9 @@ jobs:
               echo "- gating run: ${HARNESS_RUN:-none — this was a by-hand dispatch}"
               echo "- failing scenarios: ${SCENARIOS:-none}"
               echo "- mirror check: ${MIRROR:-not run}"
+              if [ -n "$MIRROR" ]; then
+                echo "- full mirror result: \`mirror_result.json\`, this run's \`mirror-result\` artifact"
+              fi
               if [ "$OUTCOME" = "mirror-tests-failed" ]; then
                 echo "- mirror card: ${MIRROR_CARD}"
               fi
@@ -790,6 +832,20 @@ jobs:
               echo "\`${CHANNEL_RECEIPT:-pipeline-channel receipt not read}\`"
             } >> "$GITHUB_STEP_SUMMARY"
           fi
+
+      # The report could not be written (DRE-6683): one warning, from the
+      # short values alone — a word, a sha, a login — so it starts where the
+      # report could not. It says what the run did, which the decision record
+      # and `Decide`'s log also hold, and does not fail the run.
+      - name: Say the summary was not written
+        if: steps.say.outcome == 'failure'
+        env:
+          OUTCOME: ${{ steps.decide.outputs.outcome }}
+          PROMOTED: ${{ steps.decide.outputs.promote }}
+          CANDIDATE: ${{ steps.resolve.outputs.candidate || github.event.workflow_run.head_sha }}
+          MOVER: ${{ github.actor }}
+        run: |
+          echo "::warning title=Run summary not written::Say what happened failed, so this run has no summary. The run itself: outcome ${OUTCOME:-none}, promoted ${PROMOTED:-false}, candidate ${CANDIDATE:0:7}, mover ${MOVER}. Decide's log holds the reason and the mirror line."
 
       # A BLOCKED CHECK FAILS THE RUN (DRE-6622). From 02:26 to 08:45 PT on
       # 2026-10-10 the mirror check could not run — no pytest in its
