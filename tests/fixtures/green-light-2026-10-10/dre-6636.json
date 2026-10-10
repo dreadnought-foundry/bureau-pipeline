@@ -1,0 +1,35 @@
+{
+  "card": "DRE-6636",
+  "arrival": "switch-card",
+  "for": "operator",
+  "as_of": "2026-10-10T16:54:51Z",
+  "lane": "Planning",
+  "labels": [
+    "repo:portico"
+  ],
+  "comments": [
+    {
+      "body": "🎟️ planner-slot: claimed · card DRE-6636 · run 38069521083 · repo dreadnought-foundry/portico · trigger planning · at 2026-10-10T16:54:32Z",
+      "authored_by_pipeline": true,
+      "created_at": "2026-10-10T16:54:32.685Z"
+    }
+  ],
+  "filed": {
+    "original": {
+      "title": "Switch PROOF_DISPATCH_LIVE in portico is still off after its reason cleared",
+      "body": "The switch `PROOF_DISPATCH_LIVE` in portico is still off 12 hours after its reason cleared. The sweep posted its receipt on DRE-6141 at 2026-10-09 21:40 PT: every card the switch waited on is terminal — DRE-6141 Done, DRE-6142 Done, DRE-6143 Done.\n\nThe sweep never sets the variable: turning a production behavior on is a person's act. If it should come on, this is the one command:\n\n```\ngh variable set PROOF_DISPATCH_LIVE --body true -R dreadnought-foundry/portico\n```\n\nthen delete its reason with `gh variable delete PROOF_DISPATCH_LIVE_OFF_UNTIL -R dreadnought-foundry/portico`. If it should stay off, give it a new reason naming the cards it now waits on (`gh variable set PROOF_DISPATCH_LIVE_OFF_UNTIL --body \"DRE-<n>\" -R dreadnought-foundry/portico`), and close this card.\n\nFiled by the sweep's `Read the switches` step (scripts/switch_reason.py, DRE-6437); docs/switches.md describes it.",
+      "labels": [
+        "repo:portico"
+      ]
+    },
+    "now": {
+      "title": "Switch PROOF_DISPATCH_LIVE in portico is still off after its reason cleared",
+      "body": "The switch `PROOF_DISPATCH_LIVE` in portico is still off 12 hours after its reason cleared. The sweep posted its receipt on DRE-6141 at 2026-10-09 21:40 PT: every card the switch waited on is terminal — DRE-6141 Done, DRE-6142 Done, DRE-6143 Done.\n\nThis is an operator step. The sweep never sets the variable: turning a production behavior on is a person's act. Do one of these two, then close this card.\n\n**Turn the switch on** and delete its reason:\n\n```\ngh variable set PROOF_DISPATCH_LIVE --body true -R dreadnought-foundry/portico\ngh variable delete PROOF_DISPATCH_LIVE_OFF_UNTIL -R dreadnought-foundry/portico\n```\n\n**Or give it a new reason** naming the cards it now waits on:\n\n```\ngh variable set PROOF_DISPATCH_LIVE_OFF_UNTIL --body \"DRE-<n>\" -R dreadnought-foundry/portico\n```\n\nIn both cases close this card — Done when the switch is on, Canceled when it has a new reason — with a comment saying which.\n\nFiled by the sweep's `Read the switches` step (scripts/switch_reason.py, DRE-6437); docs/switches.md describes it.\n\n## Acceptance criteria\n\n- [ ] `PROOF_DISPATCH_LIVE` on dreadnought-foundry/portico reads `true` and `PROOF_DISPATCH_LIVE_OFF_UNTIL` is deleted, or `PROOF_DISPATCH_LIVE_OFF_UNTIL` names at least one open card.\n- [ ] This card is Canceled or Done, with a comment saying which.",
+      "labels": [
+        "repo:portico",
+        "agent:devops",
+        "no-code"
+      ]
+    }
+  }
+}
