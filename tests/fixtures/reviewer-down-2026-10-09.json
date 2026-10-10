@@ -1,0 +1,114 @@
+{
+  "_header": [
+    "The 2026-10-09 false alarm, as a replay input for scripts/reviewer_down.py",
+    "(DRE-6576). At 21:38 PT a review in agent-bureau ended on `API Error: 401",
+    "OAuth access token has been revoked`, and at 21:40 PT one in bureau-pipeline",
+    "got the same could-not-run receipt. Both were re-reviewed and passed within",
+    "17 minutes, and agent-bureau's sweep still filed DRE-6568, `Reviewer down",
+    "since 21:40 PT — 2 runs, 2 repos`, in Triage at 22:07:34 PT. Once both",
+    "crashes passed the 30-minute window no sweep read the card again, and an",
+    "operator closed it by hand at 23:37 PT.",
+    "",
+    "PROVENANCE, said plainly, because it is not a log capture. The instants",
+    "below are the ones DRE-6576 states, taken from the runs and the cards: the",
+    "agent-bureau could-not-run receipt on #3503 (run 38024520814, attempt 1) at",
+    "04:40:27Z, the medic's note on DRE-6533 for bureau-pipeline #904 at",
+    "04:40:51Z, #3503's own passing re-review (run 38024520814, attempt 2) at",
+    "04:56:34Z and run 38025914986 at 05:01Z. The card says the other four",
+    "agent-bureau reviews (runs 38024778387, 38025048059, 38025315980 and",
+    "38025426473) completed between 21:44 and 21:56 PT without giving each one's",
+    "instant, so the first is recorded at 04:44:00Z and the next three at",
+    "reconstructed minute marks inside that span. No comment url was fetched:",
+    "each verdict's `src` is its run's url, and the crash's is a reconstruction",
+    "of the shape `pr list --json number,comments` emits.",
+    "",
+    "`local` and `witness` are split the way agent-bureau's sweep saw them at",
+    "22:07:34 PT (`now`): its own pull requests directly, and bureau-pipeline's",
+    "crash only through the medic's note on the Linear card. `dre_6568` is the",
+    "card as filed, with the two ledger lines it carried; the close replay sets",
+    "it as `open_card` at 23:37 PT, when the operator closed it."
+  ],
+  "now": "2026-10-10T05:07:34Z",
+  "open_card": null,
+  "first_run": {
+    "repo": "agent-bureau",
+    "pr": 3503,
+    "at": "2026-10-10T04:40:27Z",
+    "run_url": "",
+    "log_line": "no run found — no failed qa-review.yml run on this head's commit could be read, so there is no log to quote",
+    "action_ref": ""
+  },
+  "local": [
+    {
+      "repo": "agent-bureau",
+      "at": "2026-10-10T04:40:27Z",
+      "kind": "could-not-run",
+      "src": "https://github.com/dreadnought-foundry/agent-bureau/pull/3503#issuecomment-reconstructed-1",
+      "pr": 3503,
+      "detail": "🔎 QA Critic could not run (infra error)"
+    },
+    {
+      "repo": "agent-bureau",
+      "at": "2026-10-10T04:44:00Z",
+      "kind": "verdict",
+      "src": "https://github.com/dreadnought-foundry/agent-bureau/actions/runs/38024778387",
+      "pr": null,
+      "detail": "🔎 QA Critic — VERDICT: APPROVE"
+    },
+    {
+      "repo": "agent-bureau",
+      "at": "2026-10-10T04:47:00Z",
+      "kind": "verdict",
+      "src": "https://github.com/dreadnought-foundry/agent-bureau/actions/runs/38025048059",
+      "pr": null,
+      "detail": "🔎 QA Critic — VERDICT: APPROVE"
+    },
+    {
+      "repo": "agent-bureau",
+      "at": "2026-10-10T04:50:00Z",
+      "kind": "verdict",
+      "src": "https://github.com/dreadnought-foundry/agent-bureau/actions/runs/38025315980",
+      "pr": null,
+      "detail": "🔎 QA Critic — VERDICT: APPROVE"
+    },
+    {
+      "repo": "agent-bureau",
+      "at": "2026-10-10T04:53:00Z",
+      "kind": "verdict",
+      "src": "https://github.com/dreadnought-foundry/agent-bureau/actions/runs/38025426473",
+      "pr": null,
+      "detail": "🔎 QA Critic — VERDICT: APPROVE"
+    },
+    {
+      "repo": "agent-bureau",
+      "at": "2026-10-10T04:56:34Z",
+      "kind": "verdict",
+      "src": "https://github.com/dreadnought-foundry/agent-bureau/actions/runs/38024520814/attempts/2",
+      "pr": 3503,
+      "detail": "🔎 QA Critic — VERDICT: APPROVE"
+    },
+    {
+      "repo": "agent-bureau",
+      "at": "2026-10-10T05:01:00Z",
+      "kind": "verdict",
+      "src": "https://github.com/dreadnought-foundry/agent-bureau/actions/runs/38025914986",
+      "pr": null,
+      "detail": "🔎 QA Critic — VERDICT: APPROVE"
+    }
+  ],
+  "witness": [
+    {
+      "repo": "bureau-pipeline",
+      "at": "2026-10-10T04:40:51Z",
+      "kind": "could-not-run",
+      "src": "linear:DRE-6533:2026-10-10T04:40:51Z",
+      "pr": null,
+      "detail": "🔌 The code reviewer was temporarily unavailable"
+    }
+  ],
+  "dre_6568": {
+    "identifier": "DRE-6568",
+    "filed_at": "2026-10-10T05:07:34Z",
+    "text": "Reviewer down since 21:40 PT — 2 runs, 2 repos\n\n- run repo=agent-bureau pr=#3503 at=2026-10-10T04:40:27Z src=https://github.com/dreadnought-foundry/agent-bureau/pull/3503#issuecomment-reconstructed-1\n- run repo=bureau-pipeline pr=- at=2026-10-10T04:40:51Z src=linear:DRE-6533:2026-10-10T04:40:51Z"
+  }
+}

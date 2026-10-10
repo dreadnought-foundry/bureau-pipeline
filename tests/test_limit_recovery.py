@@ -781,12 +781,25 @@ def test_a_classify_death_in_intake_is_reentered_by_the_sweep():
 
 def test_widening_the_pass_costs_no_extra_linear_read():
     """The lanes the pass now reads are all inside SWEPT_LANES, which the
-    sweep's one board read already covers — so the pass buys nothing."""
+    sweep's one board read already covers — so the pass buys nothing. That
+    read is of BOARD_READ_LANES since DRE-6576 (SWEPT_LANES plus the outage
+    alarm's Triage lane), and the pass is still handed SWEPT_LANES only."""
     board = [card(ident="DRE-4678", lane="Planning",
                   bodies=[marker(kind="linear", stage="plan",
                                  reset=datetime(2026, 1, 1, tzinfo=UTC))])]
     _, _, reads = _drive_recovery(board)
-    assert reads == [reconcile.SWEPT_LANES], reads
+    assert reads == [reconcile.BOARD_READ_LANES], reads
+
+
+def test_a_parked_triage_card_in_the_board_read_is_never_replanned():
+    """DRE-6576 reads Triage for the outage alarm. `REPLAN_FROM` names
+    Triage, so a pass handed the whole read would start moving parked
+    Triage cards to Planning — it is handed SWEPT_LANES, which has none."""
+    parked = card(ident="DRE-4690", lane="Triage",
+                  bodies=[marker(kind="linear", stage="classify",
+                                 reset=datetime(2026, 1, 1, tzinfo=UTC))])
+    moves, receipts, _ = _drive_recovery([parked])
+    assert moves == [] and receipts == []
 
 
 def test_planning_cards_do_not_spend_the_wip_room(monkeypatch, capsys):

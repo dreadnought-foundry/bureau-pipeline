@@ -328,17 +328,64 @@ class TestDecideFiles(unittest.TestCase):
         d = rd.decide(local, [], None, NOW, _threshold())
         self.assertEqual(d.action, rd.NOTHING)
 
-    def test_a_verdict_does_not_reset_the_repo_spread_rule(self):
-        """Two repositories is its own trigger: one crash each, a verdict in
-        between, and the reviewer is still down in two places at once."""
-        local = [
-            _cnr("bureau-pipeline", "2026-09-08T22:20:00Z", "a"),
-            _verdict("bureau-pipeline", "2026-09-08T22:23:00Z", "v"),
-        ]
+    def test_two_repos_with_no_verdict_after_either_still_file(self):
+        """Two repositories is its own trigger: one crash each, nothing has
+        succeeded in either since, and the reviewer is down in two places."""
+        local = [_cnr("bureau-pipeline", "2026-09-08T22:20:00Z", "a")]
         witness = [_cnr("agent-bureau", "2026-09-08T22:26:00Z", "b")]
         d = rd.decide(local, witness, None, NOW, _threshold())
         self.assertEqual(d.action, rd.FILE)
         self.assertEqual((d.runs, d.repos), (2, 2))
+
+    def test_a_verdict_before_the_repos_newest_crash_does_not_uncount_it(self):
+        local = [
+            _verdict("bureau-pipeline", "2026-09-08T22:19:00Z", "v"),
+            _cnr("bureau-pipeline", "2026-09-08T22:20:00Z", "a"),
+        ]
+        witness = [_cnr("agent-bureau", "2026-09-08T22:26:00Z", "b")]
+        self.assertEqual(rd.decide(local, witness, None, NOW, _threshold()).action,
+                         rd.FILE)
+
+
+class TestTheSpreadRuleSeesTheReviewerComeBack(unittest.TestCase):
+    """DRE-6576: the spread rule counts a repository only while its newest
+    could-not-run has no later verdict this sweep can see in that repository.
+    DRE-6568 was filed at 22:07 PT over two crashes in two repositories, with
+    six agent-bureau verdicts newer than agent-bureau's crash already in the
+    filing sweep's own listing."""
+
+    def test_a_repo_whose_newest_crash_has_a_later_local_verdict_is_not_counted(self):
+        local = [
+            _cnr("agent-bureau", "2026-09-08T22:20:00Z", "a"),
+            _verdict("agent-bureau", "2026-09-08T22:23:00Z", "v"),
+        ]
+        witness = [_cnr("bureau-pipeline", "2026-09-08T22:26:00Z", "b")]
+        d = rd.decide(local, witness, None, NOW, _threshold())
+        self.assertEqual(d.action, rd.NOTHING)
+
+    def test_a_repo_read_only_through_a_witness_note_still_counts(self):
+        """The sweep cannot see bureau-pipeline's verdicts from agent-bureau,
+        so a later agent-bureau crash plus that note is still two repos."""
+        local = [
+            _verdict("agent-bureau", "2026-09-08T22:19:00Z", "v"),
+            _cnr("agent-bureau", "2026-09-08T22:24:00Z", "a"),
+        ]
+        witness = [_cnr("bureau-pipeline", "2026-09-08T22:20:00Z", "b")]
+        d = rd.decide(local, witness, None, NOW, _threshold())
+        self.assertEqual(d.action, rd.FILE)
+        self.assertEqual((d.runs, d.repos), (2, 2))
+
+    def test_the_run_rule_is_unchanged(self):
+        local = [
+            _cnr("agent-bureau", "2026-09-08T22:20:00Z", "a"),
+            _verdict("agent-bureau", "2026-09-08T22:21:00Z", "v"),
+            _cnr("agent-bureau", "2026-09-08T22:22:00Z", "b"),
+            _cnr("agent-bureau", "2026-09-08T22:23:00Z", "c"),
+            _cnr("agent-bureau", "2026-09-08T22:24:00Z", "d"),
+        ]
+        d = rd.decide(local, [], None, NOW, _threshold())
+        self.assertEqual(d.action, rd.FILE)
+        self.assertEqual((d.runs, d.repos), (4, 1))
 
     def test_outcomes_older_than_the_window_never_count(self):
         old = "2026-09-08T21:00:00Z"
@@ -418,19 +465,38 @@ class TestDecideCloses(unittest.TestCase):
         self.assertEqual(
             d.resolve_note,
             "reviewer back at 15:32 PT — first successful verdict in "
-            "bureau-pipeline after its last counted crash and after this card "
-            "was filed (https://example.invalid/v)",
+            "bureau-pipeline after its last counted crash "
+            "(https://example.invalid/v)",
         )
 
-    def test_a_verdict_before_the_card_was_filed_is_not_a_close(self):
+    def test_a_verdict_before_the_card_was_filed_closes_it(self):
+        """DRE-6576: after the repository's last counted crash is the whole
+        rule. Every verdict that said DRE-6568's reviewer was back landed
+        before the card was filed, so the filed-at rule kept it open."""
         earlier = _verdict("bureau-pipeline", "2026-09-08T22:25:00Z", "v")
         d = rd.decide([earlier], [], self.card, NOW, _threshold())
-        self.assertNotEqual(d.action, rd.CLOSE)
+        self.assertEqual(d.action, rd.CLOSE)
+        self.assertEqual(d.first_at, "2026-09-08T22:25:00Z")
+
+    def test_a_card_whose_crashes_have_all_aged_out_still_closes(self):
+        """`now` two hours past the crashes: the ledger is read whole, and
+        the window only ever applied to crashes not yet written on the card."""
+        later = _verdict("bureau-pipeline", "2026-09-08T22:32:00Z",
+                         "https://example.invalid/v")
+        d = rd.decide([later], [], self.card, "2026-09-09T00:20:00Z", _threshold())
+        self.assertEqual(d.action, rd.CLOSE)
+        self.assertEqual(d.first_at, "2026-09-08T22:32:00Z")
+        self.assertEqual(
+            d.resolve_note,
+            "reviewer back at 15:32 PT — first successful verdict in "
+            "bureau-pipeline after its last counted crash "
+            "(https://example.invalid/v)",
+        )
 
     def test_a_card_whose_ledger_names_no_repository_closes_on_any_verdict(self):
         """No line names a repository, so there is no repository to be wrong
-        about: the first local verdict after filing says it is back — or the
-        card could never close itself (DRE-5291)."""
+        about: the first local verdict after the last counted crash says it
+        is back — or the card could never close itself (DRE-5291)."""
         bare = rd.OpenCard(identifier="DRE-3500",
                            filed_at="2026-09-08T22:27:00Z",
                            text="Reviewer down since 15:19 PT")
@@ -440,8 +506,7 @@ class TestDecideCloses(unittest.TestCase):
         self.assertEqual(
             d.resolve_note,
             "reviewer back at 15:32 PT — first successful verdict in "
-            "bureau-pipeline after the last counted crash and after this card "
-            "was filed (v)",
+            "bureau-pipeline after the last counted crash (v)",
         )
 
 
@@ -859,6 +924,168 @@ class TestTheIncidentReplay(unittest.TestCase):
 
     def test_the_fixture_now_is_the_one_the_card_replays_with(self):
         self.assertEqual(self.doc["now"], NOW)
+
+    def test_it_files_at_the_same_moment_under_the_verdict_aware_spread_rule(self):
+        """DRE-6576 teaches the spread rule to read verdicts, and this fixture
+        holds none — so the outcomes as they stood at each instant file at
+        22:20 UTC, the second repository's first crash, and not a minute
+        before, exactly as before that card."""
+        every = self.doc["local"] + self.doc["witness"]
+        self.assertNotIn(rd.VERDICT, {o["kind"] for o in every})
+
+        def as_of(instant):
+            seen = {key: [o for o in self.doc[key] if o["at"] <= instant]
+                    for key in ("local", "witness")}
+            return rd.replay({**self.doc, **seen}, instant).action
+
+        self.assertEqual(as_of("2026-09-08T22:19:59Z"), rd.NOTHING)
+        self.assertEqual(as_of("2026-09-08T22:20:00Z"), rd.FILE)
+
+
+# --------------------------------------------------------------------------- #
+# 7b. the 2026-10-09 replay — DRE-6568, filed after the reviewer was back       #
+# --------------------------------------------------------------------------- #
+
+FIXTURE_1009 = ROOT / "tests" / "fixtures" / "reviewer-down-2026-10-09.json"
+AB_CRASH_AT = "2026-10-10T04:40:27Z"
+DRE_6568_FILED = "2026-10-10T05:07:34Z"
+DRE_6568_CLOSED_BY_HAND = "2026-10-10T06:37:00Z"
+
+
+class TestTheDRE6568Replay(unittest.TestCase):
+    def setUp(self):
+        self.doc = json.loads(FIXTURE_1009.read_text(encoding="utf-8"))
+
+    def _local_verdicts_after_the_crash(self):
+        return sorted(o["at"] for o in self.doc["local"]
+                      if o["kind"] == rd.VERDICT and o["at"] > AB_CRASH_AT)
+
+    def test_the_fixture_says_where_it_came_from(self):
+        header = " ".join(self.doc["_header"])
+        self.assertIn("PROVENANCE", header)
+        self.assertIn("DRE-6568", header)
+        self.assertEqual(self.doc["now"], DRE_6568_FILED)
+
+    def test_it_records_what_the_agent_bureau_sweep_saw_at_22_07(self):
+        crashes = [(o["repo"], o["at"]) for o in self.doc["local"]
+                   if o["kind"] == rd.COULD_NOT_RUN]
+        self.assertEqual(crashes, [("agent-bureau", AB_CRASH_AT)])
+        verdicts = self._local_verdicts_after_the_crash()
+        self.assertEqual(verdicts[0], "2026-10-10T04:44:00Z")
+        self.assertIn("2026-10-10T04:56:34Z", verdicts, "#3503's own re-review")
+        (witness,) = self.doc["witness"]
+        self.assertEqual((witness["repo"], witness["at"], witness["src"]), (
+            "bureau-pipeline", "2026-10-10T04:40:51Z",
+            "linear:DRE-6533:2026-10-10T04:40:51Z"))
+
+    def test_replaying_it_at_the_filing_instant_files_nothing(self):
+        """RED before DRE-6576: two crashes in two repos met the spread rule
+        however many agent-bureau verdicts had landed since."""
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            code = rd.main(["replay", str(FIXTURE_1009)])
+        self.assertEqual(code, 0)
+        self.assertEqual(json.loads(out.getvalue())["action"], rd.NOTHING)
+
+    def test_dre_6568_closes_after_its_crashes_aged_out(self):
+        """The card as filed, read at 23:37 PT, when a person closed it by
+        hand: the first agent-bureau verdict after agent-bureau's crash."""
+        card = self.doc["dre_6568"]
+        self.assertEqual(card["filed_at"], DRE_6568_FILED)
+        self.assertEqual(len(rd.ledger_from_text(card["text"])), 2)
+        d = rd.replay({**self.doc, "open_card": card}, DRE_6568_CLOSED_BY_HAND)
+        self.assertEqual(d.action, rd.CLOSE)
+        self.assertEqual(d.first_at, self._local_verdicts_after_the_crash()[0])
+        self.assertTrue(d.resolve_note.startswith(
+            "reviewer back at 21:44 PT — first successful verdict in "
+            "agent-bureau after its last counted crash ("), d.resolve_note)
+
+
+# --------------------------------------------------------------------------- #
+# 7c. what the card and its receipt promise, beside what decide does           #
+# --------------------------------------------------------------------------- #
+
+BODY_CLOSE_PROMISE = (
+    "The sweep closes this card by itself on the first successful verdict it "
+    "can see on an open pull request in a repository listed above, posted "
+    "after that repository's last counted crash — or, when no line names a "
+    "repository, in any repository after the last counted crash. It reads "
+    "this card on every sweep for as long as the card is open in Triage or in "
+    "another lane the sweep reads, however long ago the crashes were. It "
+    "cannot see a verdict on a pull request that has since merged or closed, "
+    "and it does not read Backlog or Green Light; in those cases a person "
+    "closes this card."
+)
+RECEIPT_CLOSE_PROMISE = (
+    "The sweep closes it on the first successful verdict it can see in a "
+    "repository it counted, after that repository's last counted crash."
+)
+
+
+class TestThePromiseMatchesTheBehavior(unittest.TestCase):
+    """Each sentence is asserted, and then every case it promises — a close,
+    or a person — is driven through `decide`."""
+
+    FILED = "2026-09-08T22:27:00Z"
+    CRASH = _cnr("bureau-pipeline", "2026-09-08T22:20:00Z",
+                 "https://example.invalid/pull/351#issuecomment-1", pr=351)
+
+    def _card(self, text=None):
+        return rd.OpenCard("DRE-3500", self.FILED,
+                           text if text is not None
+                           else rd.card_body(None, [rd.ledger_line(self.CRASH)]))
+
+    def test_the_body_says_it(self):
+        body = rd.card_body(None, [rd.ledger_line(self.CRASH)])
+        self.assertIn(BODY_CLOSE_PROMISE, body)
+        self.assertNotIn("Nothing else needs to happen here", body)
+        self.assertNotIn("after it was filed", body)
+
+    def test_the_receipt_says_it(self):
+        d = rd.decide([self.CRASH], [_cnr("agent-bureau", "2026-09-08T22:21:00Z",
+                                          "linear:DRE-1:x")],
+                      None, NOW, _threshold())
+        receipt = rd.outage_receipt(d)
+        self.assertTrue(receipt.endswith(RECEIPT_CLOSE_PROMISE), receipt)
+        self.assertNotIn("after it was filed", receipt)
+
+    def test_every_row_of_the_table(self):
+        v = "https://example.invalid/v"
+        in_window = _verdict("bureau-pipeline", "2026-09-08T22:32:00Z", v)
+        before_filing = _verdict("bureau-pipeline", "2026-09-08T22:25:00Z", v)
+        before_crash = _verdict("bureau-pipeline", "2026-09-08T22:19:00Z", v)
+        elsewhere = _verdict("agent-bureau", "2026-09-08T22:32:00Z", v)
+        unappended = _cnr("bureau-pipeline", "2026-09-08T22:30:00Z",
+                          "https://example.invalid/pull/352#issuecomment-2")
+        between = _verdict("bureau-pipeline", "2026-09-08T22:28:00Z", v)
+        two_hours_on = "2026-09-09T00:20:00Z"
+        bare = self._card("Reviewer down since 15:19 PT\n\n- "
+                          + rd.ledger_line(_cnr(rd.UNKNOWN_REPO, self.CRASH.at,
+                                                "linear:DRE-1:x")))
+        rows = [
+            ("a counted repo's verdict, crashes in the window",
+             [in_window], self._card(), NOW, True),
+            ("the same, every crash older than window_s",
+             [in_window], self._card(), two_hours_on, True),
+            ("the same, posted before the card was filed",
+             [before_filing], self._card(), NOW, True),
+            ("a ledger naming no repo, a verdict anywhere after its crash",
+             [elsewhere], bare, NOW, True),
+            ("a verdict in a repo the ledger does not name",
+             [elsewhere], self._card(), NOW, False),
+            ("a verdict before that repo's last counted crash",
+             [before_crash], self._card(), NOW, False),
+            ("a verdict before a crash this sweep sees, not yet appended",
+             [between, unappended], self._card(), NOW, False),
+            ("its pull request is no longer in the listing — not seen",
+             [], self._card(), two_hours_on, False),
+            ("the card is in Backlog or Green Light — not read",
+             [in_window], None, two_hours_on, False),
+        ]
+        for name, local, card, now, closes in rows:
+            with self.subTest(name):
+                d = rd.decide(local, [], card, now, _threshold())
+                self.assertEqual(d.action == rd.CLOSE, closes, (name, d))
 
 
 # --------------------------------------------------------------------------- #
