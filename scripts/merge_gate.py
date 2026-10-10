@@ -116,6 +116,19 @@ D. DEPENDABOT POLICY (DRE-2039) — applies ONLY to `dependabot/**`
    as green. Every run completed evaluates exactly as before: the check
    runs alone still decide green or red.
 
+   A CHECK GITHUB LEFT LISTED UNFINISHED (DRE-6570). On 2026-10-09
+   GitHub left check run 114111594633 at `in_progress` for good, with
+   `conclusion: success` and a `completed_at`, while its run read
+   `completed`; the gate read only the status word and held an approved,
+   all-green pull request (#894) for two and a half hours. So a check run
+   counts as finished and green, whatever its `status`, when its conclusion
+   is green, its `completed_at` is set and the workflow run it belongs to
+   (by check suite, else by the run id in its `details_url`) reads
+   `completed` in that same workflow-runs record. Any piece missing, or an
+   unreadable record, waits as before. A read, never a write — nothing is
+   re-run — and every decision past condition 1 carries a `note=` line
+   naming each check read this way.
+
 2. QA Critic — the latest critic verdict comment is APPROVE, bound to the
    PR's current head:
    - AUTHORSHIP (DRE-1987 / #57): only comments authored by the qa-bot App
@@ -397,7 +410,9 @@ import json
 import re
 import sys
 from dataclasses import dataclass, field
+from datetime import datetime
 from typing import Optional
+from zoneinfo import ZoneInfo
 
 # The verdict↔content binding lives in ONE module (DRE-2340, trap 4):
 # should_review_pr and reconcile read it from here too, so the gate, the
@@ -466,6 +481,12 @@ GREEN_CONCLUSIONS = frozenset({"success", "skipped", "neutral"})
 # workflow run is still running" — the queued run a blip hides is exactly
 # the one condition 1 has to wait for.
 UNREADABLE_WORKFLOW_RUNS = '{"readable":false}'
+
+# The run a check run belongs to, read off its `details_url` when it carries no
+# check suite (DRE-6570): GitHub writes `…/actions/runs/<run id>/job/<job id>`.
+_RUN_URL_RE = re.compile(r"/actions/runs/(\d+)(?:/|$)")
+# The clock the run-log line reads in, as the incident timelines are written.
+_PT = ZoneInfo("America/Los_Angeles")
 
 # GitHub compare/{base}...{head} status values: the head is current when it
 # contains the base's tip, behind when the base has commits the head lacks.
@@ -720,6 +741,66 @@ def unfinished_runs(workflow_runs,
     ]
 
 
+def owning_run(check_run, workflow_runs) -> Optional[dict]:
+    """The workflow run a check run belongs to, from the head's workflow-runs
+    record (DRE-6570): the run whose check suite holds it, else the run its
+    `details_url` names. None when neither ties it to a listed run."""
+    suite = (check_run.get("check_suite") or {}).get("id")
+    if suite is not None:
+        for run in workflow_runs:
+            if run.get("check_suite_id") == suite:
+                return run
+    m = _RUN_URL_RE.search(check_run.get("details_url") or "")
+    if m:
+        for run in workflow_runs:
+            if str(run.get("id")) == m.group(1):
+                return run
+    return None
+
+
+def _completed_at(check_run) -> Optional[datetime]:
+    try:
+        return datetime.fromisoformat(
+            str(check_run.get("completed_at") or "").replace("Z", "+00:00"))
+    except ValueError:
+        return None
+
+
+def finished_by_record(check_run, workflow_runs) -> bool:
+    """DRE-6570: a check run GitHub still lists as not `completed` is
+    finished and green when all three hold — its conclusion is in
+    GREEN_CONCLUSIONS, its `completed_at` is set, and the workflow run it
+    belongs to reads `completed` in the head's workflow-runs record.
+
+    On 2026-10-09 GitHub left check run 114111594633 at `in_progress` for
+    good, with `conclusion: success` and a finish time, while its run read
+    `completed`; condition 1 read only the status word and held an approved,
+    all-green pull request for two and a half hours. Any piece missing, or a
+    record that could not be read (`None`), is False and condition 1 waits
+    exactly as before. A read, never a write: nothing is re-run."""
+    if workflow_runs is None:
+        return False
+    if (check_run.get("conclusion") or "") not in GREEN_CONCLUSIONS:
+        return False
+    if _completed_at(check_run) is None:
+        return False
+    run = owning_run(check_run, workflow_runs)
+    return run is not None and run.get("status") == "completed"
+
+
+def finished_check_note(check_run) -> str:
+    """The run-log line for a check read as finished by DRE-6570's rule, so
+    a merge made on it can be traced."""
+    when = _completed_at(check_run)
+    clock = when.astimezone(_PT).strftime("%H:%M PT") if when else "at an unknown time"
+    status = str(check_run.get("status") or "unfinished").replace("_", " ")
+    return (
+        f'check "{check_run.get("name")}" read as finished: conclusion '
+        f"{check_run.get('conclusion')}, completed {clock}, its run completed "
+        f"— GitHub still lists it {status}"
+    )
+
+
 def dependabot_update_types(commits) -> list:
     """Every semver level named in the PR's commit messages (Dependabot's
     `update-type: version-update:semver-<level>` trailer lines), in order.
@@ -966,8 +1047,29 @@ def currency_note(compare_status) -> Optional[str]:
     return None
 
 
+def _counted(check_runs, review_suites) -> list:
+    return [
+        r
+        for r in check_runs
+        if (r.get("check_suite") or {}).get("id") not in review_suites
+    ]
+
+
+def finished_check_notes(check_runs, review_suites=frozenset(),
+                         workflow_runs=None) -> list:
+    """One run-log line per counted check run condition 1 read as finished
+    by DRE-6570's rule rather than by GitHub's `status` — none when the rule
+    was not used."""
+    return [
+        finished_check_note(r)
+        for r in _counted(check_runs, review_suites)
+        if r.get("status") != "completed"
+        and finished_by_record(r, workflow_runs)
+    ]
+
+
 def evaluate_checks(check_runs, review_suites=frozenset(),
-                    unfinished=()) -> Optional[Decision]:
+                    unfinished=(), workflow_runs=None) -> Optional[Decision]:
     """Condition 1. None = green, proceed. Only check runs sitting in a
     verified review workflow's check suite are excluded — an empty origin
     record excludes nothing and the gate waits, fail-closed.
@@ -976,20 +1078,22 @@ def evaluate_checks(check_runs, review_suites=frozenset(),
     the check runs read green: any entry is CI still running, and `None` (the
     listing could not be read) waits rather than read as green. The default
     (empty) reproduces the pre-DRE-5045 decision for every caller that never
-    passes it."""
-    counted = [
-        r
-        for r in check_runs
-        if (r.get("check_suite") or {}).get("id") not in review_suites
-    ]
+    passes it.
+
+    `workflow_runs` is the head's workflow-runs record itself (DRE-6570): a
+    check run GitHub still lists as unfinished is green when
+    `finished_by_record` says so. The default (None — no record, or one that
+    could not be read) reads `status` alone, the pre-DRE-6570 decision."""
+    counted = _counted(check_runs, review_suites)
     total = len(counted)
     if total == 0:
         return Decision("wait", "no checks reported yet — wait")
     not_green = [
         r
         for r in counted
-        if r.get("status") != "completed"
-        or (r.get("conclusion") or "") not in GREEN_CONCLUSIONS
+        if (r.get("conclusion") or "") not in GREEN_CONCLUSIONS
+        or (r.get("status") != "completed"
+            and not finished_by_record(r, workflow_runs))
     ]
     if not_green:
         return Decision(
@@ -1035,9 +1139,10 @@ def precheck(check_runs, workflow_runs, merge_state: str = "",
     commits and the author, so a dependabot/* branch is never answered early
     (for any other branch condition D is None by construction). What is left
     is condition 1 itself, over the same records with the same review-path
-    exclusion by verified origin (DRE-1994) and the same unfinished-run rule
-    (DRE-5045). `workflow_runs` None is the unreadable listing, and condition
-    1 waits on it exactly as the full decision does."""
+    exclusion by verified origin (DRE-1994), the same unfinished-run rule
+    (DRE-5045) and the same finished-by-record rule (DRE-6570).
+    `workflow_runs` None is the unreadable listing, and condition 1 waits on
+    it exactly as the full decision does."""
     if evaluate_conflict(merge_state):
         return None
     if (head_branch or "").startswith(DEPENDABOT_BRANCH_PREFIX):
@@ -1048,7 +1153,8 @@ def precheck(check_runs, workflow_runs, merge_state: str = "",
     else:
         review_suites = review_suite_ids(workflow_runs, paths)
         unfinished = unfinished_runs(workflow_runs, paths)
-    return evaluate_checks(check_runs, review_suites, unfinished)
+    return evaluate_checks(check_runs, review_suites, unfinished,
+                           workflow_runs=workflow_runs)
 
 
 def commit_shas(pr_commits) -> frozenset:
@@ -1326,6 +1432,7 @@ def _decide(
     pr_body=None,
     pr_created_at=None,
     proof=None,
+    workflow_runs=None,
 ) -> Decision:
     """The whole gate: conditions 0 → D → 1 → 2 → 3 → P → S → F → 4 → W → O,
     first blocker wins.
@@ -1396,7 +1503,13 @@ def _decide(
     gather` wrote, parsed. Evaluated after the critic and verifier
     conditions, so the critic's own REQUEST_CHANGES still reads as the
     critic's hold (the DRE-5931 re-run acts on it), and before S. The
-    default (None) reproduces the pre-DRE-6141 behavior."""
+    default (None) reproduces the pre-DRE-6141 behavior.
+
+    `workflow_runs` is the head's workflow-runs record itself (DRE-6570),
+    which condition 1 reads to call a check run finished that GitHub still
+    lists as unfinished. Every decision past condition 1 then carries one
+    note per such check, so a merge made on the rule can be traced. The
+    default (None) reproduces the pre-DRE-6570 behavior."""
     blocked = evaluate_conflict(merge_state)
     if blocked:
         return blocked
@@ -1405,9 +1518,17 @@ def _decide(
     if blocked:
         return blocked
 
-    blocked = evaluate_checks(check_runs, review_suites, unfinished_runs)
+    blocked = evaluate_checks(check_runs, review_suites, unfinished_runs,
+                              workflow_runs=workflow_runs)
     if blocked:
         return blocked
+    finished_notes = finished_check_notes(check_runs, review_suites,
+                                          workflow_runs)
+
+    def _noted(decision: Decision) -> Decision:
+        """DRE-6570: the checks condition 1 read as finished by record."""
+        decision.notes[:0] = finished_notes
+        return decision
 
     pr_commit_shas = commit_shas(pr_commits)
     # Verdicts honoured across a head change, collected as they are read so
@@ -1421,7 +1542,7 @@ def _decide(
         critic_line, head_sha, head_content_id, pr_commit_shas
     )
     if blocked:
-        return blocked
+        return _noted(blocked)
     critic_sha = verdict_sha(critic_line)
     if critic_sha and critic_sha != head_sha:
         carried.append(f"critic@{critic_sha}")
@@ -1433,7 +1554,7 @@ def _decide(
         verifier_line, head_sha, head_content_id, pr_commit_shas
     )
     if blocked:
-        return blocked
+        return _noted(blocked)
     verifier_sha = verdict_sha(verifier_line)
     if verifier_sha and verifier_sha != head_sha:
         carried.append(f"verifier@{verifier_sha}")
@@ -1444,7 +1565,7 @@ def _decide(
         if carried:
             decision.carried = carried
             decision.content_id = head_content_id
-        return decision
+        return _noted(decision)
 
     # Condition P (DRE-6141): the critic approved a proof record, but a
     # record whose rows were not all seen working proves nothing.
@@ -1845,7 +1966,7 @@ def main(argv=None) -> int:
         head_content_id, args.merge_state, is_draft, fix_lane, args.pr_number,
         unfinished, stack, branch_commits, owners=owners,
         pr_body=pr_body, pr_created_at=args.pr_created_at or None,
-        proof=proof,
+        proof=proof, workflow_runs=workflow_runs,
     )
     if body_note:
         decision.notes.append(body_note)
