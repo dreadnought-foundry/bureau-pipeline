@@ -29,6 +29,11 @@ a Pipeline Tests step and whose functions these tests exercise):
   * NO workflow assigns `MAX_WIP` a literal — not in a step/job/workflow
     `env:` block, not inline in a `run:` line. The only accepted value is
     the caller's input, threaded verbatim.
+  * EVERY promotion step has `BUREAU_MAX_WIP` in scope, and its value is
+    exactly `${{ vars.BUREAU_MAX_WIP }}` (DRE-6631). That is the caller's
+    Actions variable — what the console writes — and reconcile.py reads it
+    after the input and the caller's reconcile stub. A path that misses it
+    promotes at the default while the other two follow the console.
 
 `effective_cap_by_workflow` resolves what each promotion path would ACTUALLY
 export, given the inputs a calling stub passes. That is the red-first
@@ -137,6 +142,22 @@ class LiveWorkflowsTest(unittest.TestCase):
             self.assertEqual("string", spec.get("type"), name)
             self.assertNotIn("default", spec, name)
 
+    def test_every_known_promoter_threads_the_callers_variable(self):
+        """DRE-6631: the variable reaches all three paths, beside the input."""
+        for name in sorted(KNOWN_PROMOTERS):
+            doc = self.docs[name]
+            steps = cwc.promotion_steps(doc)
+            self.assertTrue(steps, name)
+            for job_id, _i, step in steps:
+                self.assertEqual(
+                    cwc.REQUIRED_VARIABLE_EXPR,
+                    cwc.variable_in_scope(doc, job_id, step),
+                    f"{name}: jobs.{job_id}",
+                )
+                self.assertEqual(
+                    cwc.REQUIRED_ENV_EXPR, cwc.cap_in_scope(doc, job_id, step), name
+                )
+
     def test_no_literal_cap_anywhere_in_the_workflow_dir(self):
         """Acceptance: no `MAX_WIP` literal remains in any pipeline workflow."""
         offenders = []
@@ -233,6 +254,16 @@ class ScriptFallbackTest(unittest.TestCase):
 
         self.assertEqual(reconcile.DEFAULT_MAX_WIP, reconcile.resolve_max_wip("lots"))
 
+    def test_a_value_that_is_not_a_whole_number_of_0_or_more_is_the_default(self):
+        """DRE-6631: "-1" and "12.0" are no cap either."""
+        import reconcile
+
+        for value in ("-1", "12.0", "${{ vars.X }}"):
+            self.assertEqual(
+                reconcile.DEFAULT_MAX_WIP, reconcile.resolve_max_wip(value), value
+            )
+        self.assertEqual(0, reconcile.resolve_max_wip("0"))
+
 
 class SyntheticViolationsTest(unittest.TestCase):
     """Each violation class the checker must catch, pinned so the checker
@@ -264,7 +295,11 @@ class SyntheticViolationsTest(unittest.TestCase):
         "      max_wip:\n"
         "        type: string\n"
     )
-    GOOD_ENV = "        env:\n          MAX_WIP: ${{ inputs.max_wip }}\n"
+    GOOD_ENV = (
+        "        env:\n"
+        "          MAX_WIP: ${{ inputs.max_wip }}\n"
+        "          BUREAU_MAX_WIP: ${{ vars.BUREAU_MAX_WIP }}\n"
+    )
 
     def test_clean_workflow_passes(self):
         doc = self._reusable(
@@ -329,6 +364,85 @@ class SyntheticViolationsTest(unittest.TestCase):
         self.assertTrue(
             any("no MAX_WIP" in v for v in cwc.check_workflow(doc, "t.yml"))
         )
+
+    def test_promotion_step_with_no_variable_in_scope_is_caught(self):
+        """DRE-6631: a path that misses the variable promotes at the default
+        while the other two follow the console — two caps, one level up."""
+        doc = self._reusable(
+            inputs_yaml=self.GOOD_INPUTS,
+            step_env="        env:\n          MAX_WIP: ${{ inputs.max_wip }}\n",
+            run=self.PROMOTE_RUN,
+        )
+        violations = cwc.check_workflow(doc, "t.yml")
+        self.assertTrue(any("no BUREAU_MAX_WIP" in v for v in violations), violations)
+
+    def test_a_variable_that_is_anything_but_the_callers_is_caught(self):
+        for value in ('"12"', "${{ vars.BUREAU_MAX_WIP || '8' }}",
+                      "${{ vars.MAX_WIP }}", "${{ inputs.max_wip }}"):
+            doc = self._reusable(
+                inputs_yaml=self.GOOD_INPUTS,
+                step_env=(
+                    "        env:\n"
+                    "          MAX_WIP: ${{ inputs.max_wip }}\n"
+                    f"          BUREAU_MAX_WIP: {value}\n"
+                ),
+                run=self.PROMOTE_RUN,
+            )
+            violations = cwc.check_workflow(doc, "t.yml")
+            self.assertTrue(
+                any("BUREAU_MAX_WIP" in v and "vars.BUREAU_MAX_WIP" in v
+                    for v in violations),
+                (value, violations),
+            )
+
+    def test_a_variable_set_inline_on_the_run_line_is_read_and_caught(self):
+        doc = self._reusable(
+            inputs_yaml=self.GOOD_INPUTS,
+            step_env=self.GOOD_ENV,
+            run="BUREAU_MAX_WIP=12 python3 .bureau-pipeline/scripts/reconcile.py --promote-only\n",
+        )
+        violations = cwc.check_workflow(doc, "t.yml")
+        self.assertTrue(any("'12'" in v and "BUREAU_MAX_WIP" in v for v in violations),
+                        violations)
+
+    def test_the_variable_folded_into_the_input_line_is_caught(self):
+        """The shape the card forbids: one value where the script needs two,
+        so the stub can no longer sit between the input and the variable."""
+        doc = self._reusable(
+            inputs_yaml=self.GOOD_INPUTS,
+            step_env=(
+                "        env:\n"
+                "          MAX_WIP: ${{ inputs.max_wip || vars.BUREAU_MAX_WIP }}\n"
+                "          BUREAU_MAX_WIP: ${{ vars.BUREAU_MAX_WIP }}\n"
+            ),
+            run=self.PROMOTE_RUN,
+        )
+        violations = cwc.check_workflow(doc, "t.yml")
+        self.assertTrue(any("literal" in v for v in violations), violations)
+
+    def test_the_variable_in_job_or_workflow_env_is_in_scope(self):
+        for where in ("job", "workflow"):
+            env = "    env:\n      BUREAU_MAX_WIP: ${{ vars.BUREAU_MAX_WIP }}\n"
+            text = (
+                "name: T\n"
+                "on:\n"
+                "  workflow_call:\n"
+                "    inputs:\n"
+                f"{self.GOOD_INPUTS}"
+                + ("env:\n  BUREAU_MAX_WIP: ${{ vars.BUREAU_MAX_WIP }}\n"
+                   if where == "workflow" else "")
+                + "jobs:\n"
+                "  j:\n"
+                "    runs-on: ubuntu-latest\n"
+                + (env if where == "job" else "")
+                + "    steps:\n"
+                "      - name: s\n"
+                "        env:\n"
+                "          MAX_WIP: ${{ inputs.max_wip }}\n"
+                "        run: |\n"
+                f"          {self.PROMOTE_RUN}"
+            )
+            self.assertEqual([], cwc.check_workflow(wf(text), "t.yml"), where)
 
     def test_non_promoting_invocations_are_not_required_to_set_the_cap(self):
         """`--close-epics` and `--conflicts-only` promote nothing; demanding a

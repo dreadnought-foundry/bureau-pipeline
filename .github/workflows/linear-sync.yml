@@ -247,6 +247,11 @@ jobs:
           # The caller's cap, never a literal (DRE-2529). Through env, not
           # interpolated into the shell line.
           MAX_WIP: ${{ inputs.max_wip }}
+          # The caller's BUREAU_MAX_WIP Actions variable (DRE-6631) — `vars` is
+          # the caller's in a reusable. reconcile.py reads it after the input
+          # and the caller's reconcile stub, so it is never folded into the
+          # line above: that would leave the stub no place between them.
+          BUREAU_MAX_WIP: ${{ vars.BUREAU_MAX_WIP }}
         run: |
           # Own-branch provenance only (DRE-2027): anchored agent/DRE-<n>- or
           # repair/DRE-<n>- with the delimiter required after the number;
