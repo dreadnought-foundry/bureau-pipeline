@@ -4633,7 +4633,7 @@ def _drain_plan(record: dict, decisions: dict, *, lane: str, held=(),
             continue
         if left(identifier):
             continue
-        draft = (drafts or {}).get(identifier) if drafts is not None else {}
+        draft = drafts.get(identifier) if drafts is not None else {}
         if draft is None:
             no_draft.append(_ignored(
                 accepted[identifier]["tag"],
@@ -4642,7 +4642,9 @@ def _drain_plan(record: dict, decisions: dict, *, lane: str, held=(),
             rows.append({"identifier": identifier, "outcome": "refused",
                          "why": no_draft[-1]["why"]})
             continue
-        writing = {**row, **draft, "outcome": "rewritten"}
+        # No position: the card was never on the Planning list, so its
+        # `groom-moved` note says what an addition's says.
+        writing = {**row, **draft, "position": None, "outcome": "rewritten"}
         if full(writing):
             continue
         moving.append(writing)

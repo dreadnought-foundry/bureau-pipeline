@@ -1171,7 +1171,9 @@ or with the new body and a record naming the old one — never a moved card
 nobody can explain. The move is the drain's own: the rewritten card travels
 in the plan's `moving` list after the batch and the additions, with outcome
 `rewritten`, so it is rationed by the free planner slots with the rest and
-moved by the same lane write. One past the slots is queued like any other
+moved by the same lane write, its `groom-moved` note reading as an
+addition's, `added by the CEO, no position`, because it was never on the
+Planning list. One past the slots is queued like any other
 card, with its new body already written, and the `groom-queued` record lists
 it. The note is rendered by `groomer.rewritten_note` and posted from one call
 site in `_drain`, declared `not-an-act` in `config/pipeline-acts.json` beside
