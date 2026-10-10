@@ -42,16 +42,24 @@ tag onto the card — which would read as a split already recorded.
 ## `activate` — record it once, and put every child where its planner starts
 
 It reads the parent and its children live, re-runs the check (nothing moves on
-a finding), and then, in this order:
+a finding), reads each child's lane, and then, in this order:
 
   1. posts ONE receipt on the parent — `🧩 roll-up-split:`, composed through
      `pipeline_act.receipt()` and keyed on its tag, so a retried run posts
      nothing twice. It names every child in order with its slice's first
-     sentence and what blocks it, and ends with what the parent is;
-  2. moves every child still in Backlog to Planning, in that order. Arriving in
-     Planning is what starts a child's planner run — the relay dispatches one
-     per lane entry (DRE-1913, DRE-3030); nothing here dispatches. A child
-     already past Backlog is left alone;
+     sentence, what blocks it and where it goes — sent to Planning, waiting
+     in Backlog on the siblings named, or left where it already is — and
+     ends with what the parent is;
+  2. moves to Planning, in that order, every child still in Backlog that no
+     OPEN sibling blocks (DRE-6591). Arriving in Planning is what starts a
+     child's planner run — the relay dispatches one per lane entry (DRE-1913,
+     DRE-3030); nothing here dispatches. A child an open sibling blocks stays
+     in Backlog: the seam rule plans it only on what that sibling observed
+     (`standards/card-quality.md`), and the sweep's auto-advance
+     (`reconcile.advance_unblocked_epics`, DRE-6407) carries it on once every
+     blocker is Done. A sibling that is Done, Canceled or Duplicate
+     (`prose_blockers.TERMINAL`) holds nothing; one whose lane could not be
+     read holds its dependent. A child already past Backlog is left alone;
   3. moves the parent from Planning to In Progress — the lane the sweep reads
      active epics from (`reconcile.repo_epics` → `close_finished_epics`), so
      the parent closes by itself when its last child is Done
@@ -62,7 +70,9 @@ a finding), and then, in this order:
 The parent moves LAST on purpose. An active epic's Backlog children are what
 the sweep promotes, so the parent reaching In Progress while its children still
 sat in Backlog would put them in front of the promotion gate instead of the
-planner. A crash anywhere leaves a state the retry finishes: the receipt is
+planner. A child left waiting in Backlog is still an `[EPIC]`, which the
+promotion gate never promotes as work (`reconcile.card_is_epic`), so it waits
+there for the auto-advance and nothing else moves it. A crash anywhere leaves a state the retry finishes: the receipt is
 counted before it is posted, and `cmd_advance` moves a card only out of the
 lane it names.
 
@@ -98,6 +108,7 @@ import lane_contract  # noqa: E402
 import pipeline_act  # noqa: E402
 import planning_shape  # noqa: E402
 import proof_and_demo  # noqa: E402
+import prose_blockers  # noqa: E402
 import sanitize_untrusted  # noqa: E402
 
 # The act the receipt is composed as, and its idempotency key — both declared
@@ -119,6 +130,12 @@ PARENT_SENTENCE = (
     "This parent is never approved for building, builds nothing itself, and "
     "closes when every child is Done."
 )
+
+# Where `activate` puts one child (DRE-6591): sent to Planning, waiting in
+# Backlog on an open sibling, or left in the lane it already reached.
+SEND = "send"
+WAIT = "wait"
+LEFT = "left"
 
 # The workflow that runs this module, and so the writer the lane contract has
 # to permit for both destinations.
@@ -309,6 +326,35 @@ def order(children: list) -> list:
     return placed
 
 
+def placements(children: list, where: dict | None = None) -> dict:
+    """Where `activate` puts each child, in `order()`: identifier →
+    `(SEND | WAIT | LEFT, the open siblings it waits on)` (DRE-6591).
+
+    `where` maps an identifier to the lane it is in now; a child it does not
+    name is read as still in Backlog, which is a split nothing has moved yet.
+    A child in Backlog is SENT when every sibling blocking it is Done,
+    Canceled or Duplicate, and WAITS otherwise. A sibling whose lane is
+    unknown holds its dependent — sending a child to be planned early costs a
+    planner run nobody needed, and waiting costs nothing the auto-advance
+    does not repair. Blockers outside the roll-up are not read here, as
+    before.
+    """
+    named = lanes()
+    where = where or {}
+    siblings = _sibling_blockers(children)
+    out = {}
+    for ident in order(children):
+        if where.get(ident, named["child_from"]) != named["child_from"]:
+            out[ident] = (LEFT, [])
+            continue
+        waits_on = [
+            b for b in siblings[ident]
+            if where.get(b, named["child_from"]) not in prose_blockers.TERMINAL
+        ]
+        out[ident] = (WAIT, waits_on) if waits_on else (SEND, [])
+    return out
+
+
 def _cycle_members(children: list) -> list:
     """The children that can reach themselves through sibling relations."""
     blockers = _sibling_blockers(children)
@@ -448,13 +494,23 @@ def bounce_comment(parent: str, found: list) -> str:
 # --------------------------------------------------------------------------- #
 
 
-def receipt_detail(parent: str, children: list) -> str:
+def _placed(verdict: str, waits_on: list, lane: str | None, named: dict) -> str:
+    if verdict == SEND:
+        return f"sent to `{named['child_to']}` now"
+    if verdict == WAIT:
+        return f"waits in `{named['child_from']}` on " + ", ".join(waits_on)
+    return f"already in `{lane}`, left where it is"
+
+
+def receipt_detail(parent: str, children: list, where: dict | None = None) -> str:
     """The receipt's body, before the trailer: every child in order, its
-    slice's first sentence and what blocks it, then what the parent is."""
+    slice's first sentence, what blocks it and where it goes, then what the
+    parent is. `where` is the children's lanes now, as `placements` reads it."""
     by_id = {_ident(c): c for c in children}
     sequence = order(children)
     siblings = _sibling_blockers(children)
-    child_lane = lanes()["child_to"]
+    placed = placements(children, where)
+    named = lanes()
     lines = [
         f"{SPLIT_MARK} {SPLIT_TAG}: {parent} is split into {len(sequence)} "
         "child epics, each planned and green-lit on its own, in this order:",
@@ -469,19 +525,29 @@ def receipt_detail(parent: str, children: list) -> str:
         )
         if outside:
             waits += "; also blocked by " + ", ".join(outside)
+        verdict, waits_on = placed[ident]
+        lane = (where or {}).get(ident)
         lines.append(
             f"{position}. **{ident}** — {first_sentence(card.get('body') or '')} "
-            f"— {waits}"
+            f"— {waits} — {_placed(verdict, waits_on, lane, named)}"
         )
     lines += [
         "",
-        f"Each child still in Backlog moves to `{child_lane}` now, in this "
+        f"Each child sent to `{named['child_to']}` moves there now, in this "
         "order. Arriving there is what starts its own planner run — the relay "
         "dispatches one for every card that enters the lane, and nothing here "
         "claims that run started.",
-        "",
-        PARENT_SENTENCE,
     ]
+    if any(verdict == WAIT for verdict, _ in placed.values()):
+        lines += [
+            "",
+            f"Each child waiting in `{named['child_from']}` stays there until "
+            "every sibling it waits on is Done, Canceled or Duplicate, so it "
+            "is planned on what they observed and never ahead of it. The "
+            "sweep's auto-advance carries it on then, and nothing here starts "
+            "that run.",
+        ]
+    lines += ["", PARENT_SENTENCE]
     return "\n".join(lines)
 
 
@@ -506,6 +572,12 @@ def read_children(linear_ops, parent: str) -> list:
     return records
 
 
+def _lane_now(linear_ops, identifier: str) -> str | None:
+    """The card's lane as it is now, or None when the read names none."""
+    issue = linear_ops.get_issue(identifier, fresh=True) or {}
+    return (issue.get("state") or {}).get("name")
+
+
 def activate(linear_ops, parent: str) -> int:
     """Record the split once and put every child where its planner starts.
 
@@ -517,7 +589,7 @@ def activate(linear_ops, parent: str) -> int:
     if problems:
         raise SplitError("; ".join(problems))
 
-    lane = ((linear_ops.get_issue(parent, fresh=True) or {}).get("state") or {}).get("name")
+    lane = _lane_now(linear_ops, parent)
     if lane not in (named["parent_from"], named["parent_to"]):
         print(
             f"epic split: {parent} is in {lane!r}, not {named['parent_from']!r} "
@@ -533,20 +605,29 @@ def activate(linear_ops, parent: str) -> int:
         print(f"epic split: {parent} — {len(found)} finding(s), nothing moved")
         return 1
 
+    sequence = order(children)
+    where = {child: _lane_now(linear_ops, child) for child in sequence}
+    placed = placements(children, where)
+
     if linear_ops.count_comments(parent, f"{SPLIT_MARK} {SPLIT_TAG}:") == 0:
-        body = pipeline_act.receipt("roll-up-activated", receipt_detail(parent, children))
+        detail = receipt_detail(parent, children, where)
+        body = pipeline_act.receipt("roll-up-activated", detail)
         linear_ops.cmd_comment(parent, body)
         print(f"epic split: {parent} — receipt posted")
     else:
         print(f"epic split: {parent} — receipt already on the card")
 
-    sequence = order(children)
-    for child in sequence:
+    sent = [child for child in sequence if placed[child][0] == SEND]
+    waiting = [child for child in sequence if placed[child][0] == WAIT]
+    for child in sent:
         linear_ops.cmd_advance(child, named["child_to"], named["child_from"])
     linear_ops.cmd_advance(parent, named["parent_to"], named["parent_from"])
     print(
         f"epic split: {parent} active — {len(sequence)} child epic(s) in order: "
         + ", ".join(sequence)
+        + f"; sent to {named['child_to']}: {', '.join(sent) or 'none'}"
+        + f"; waiting in {named['child_from']}: "
+        + (", ".join(f"{c} (on {', '.join(placed[c][1])})" for c in waiting) or "none")
     )
     return 0
 
