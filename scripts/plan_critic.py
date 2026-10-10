@@ -69,7 +69,9 @@ Three rules baked in, each one bought:
     a human act, so nothing circles forever. Before this, DRE-3778 was
     approved five times and parked five times on "round 6 of 2".
     ON THE ONE-OFF ROUTE the same count
-    holds over the card's whole history (DRE-4058). DRE-3879 went round five
+    holds over the card's whole history (DRE-4058), counted from the newest
+    `🔁 bound-rewrite:` receipt when the bound exit granted the card one more
+    rewrite (DRE-6454) — the findings are never refunded. DRE-3879 went round five
     times through the CEO before anything counted. Since DRE-5376 a one-off
     send-back never reaches him: the planner revises the card in place and the
     critic re-reads it, a `QUESTION` is the only result that goes to Green
@@ -1713,6 +1715,39 @@ def current_cycle_entries(entries, epic: str | None = None) -> list:
     return kept[start:]
 
 
+#: What the first line of the bound exit's receipt opens with (DRE-6452):
+#: the exit granted a one-off card one more rewrite (DRE-6454).
+BOUND_REWRITE_MARK = "🔁 bound-rewrite:"
+
+
+def since_bound_rewrite(bodies: list) -> list[str]:
+    """The comment bodies after the newest bound-rewrite receipt, or all of
+    them when there is none (DRE-6454).
+
+    The one-off route counts its send-backs over the card's whole history,
+    because no boundary is posted on it. When the bound exit grants the card
+    one more rewrite, the fresh run's critic re-reads the same card, and a
+    whole-history count would park it before the planner's revision ever ran.
+    So the COUNT starts over at the receipt; the findings never do —
+    `send_back_findings`, `prior_findings` and `rate` still read the whole
+    cycle, because the rewrite has to answer every finding ever raised.
+
+    Read like `hold.read_stamp` reads a stamp: by its opening words, off a
+    comment's first line only, so a receipt quoted or fenced in prose opens
+    nothing. Only the pipeline's own comments are read (`_entry_trusted`, as
+    `current_cycle_entries`), so a receipt-shaped comment from anyone else
+    grants nothing either. One receipt, one new budget: a second send-back on
+    it is the bound again, and the exit finds the grant spent.
+    """
+    kept = [entry for entry in (bodies or []) if _entry_trusted(entry)]
+    start = 0
+    for i, entry in enumerate(kept):
+        first = (_entry_body(entry).strip().splitlines() or [""])[0]
+        if first.startswith(BOUND_REWRITE_MARK):
+            start = i + 1
+    return [_entry_body(entry) for entry in kept[start:]]
+
+
 def send_backs(bodies: list, stage: str) -> int:
     """Failed rounds recorded for this stage, in the bodies you hand it.
 
@@ -2718,6 +2753,9 @@ def at_bound(action: str, prior_send_backs: int, result: str,
 # before it reads the budget), so a rewritten card that now passes goes to the
 # build queue with nothing to refund. A QUESTION spends nothing: it is a
 # decision, not a failed revision, and `send_backs` does not count it.
+# The one refund is the bound exit's grant (DRE-6454): its `🔁 bound-rewrite:`
+# receipt starts the COUNT over (`since_bound_rewrite`) so the rewrite it
+# granted actually runs, while every finding ever raised is still read.
 
 #: The four actions the one-off exit can take. `proceed` runs
 #: `planning_route.py exit`; `escalate` runs `planning_escalation.py escalate`
@@ -3950,7 +3988,10 @@ def _cmd_decide(args) -> int:
         # handed its finding as item 1 (`all_findings(decided=SEND_BACK)`),
         # and the record below says SEND_BACK, so the bound counts it.
         # `prior` is recomputed on the one line directly before the call on
-        # purpose — DRE-6454 rewrites exactly that line for this route.
+        # purpose, and counts from the newest bound-rewrite receipt (DRE-6454):
+        # the rewrite the bound exit granted runs on a fresh budget, on both
+        # paths below. `cycle` stays the whole thread, so every finding the
+        # card ever had is still read from it.
         #
         # The card is read BEFORE the critic's word (DRE-6380): a card the
         # exit's own routing read would refuse for stating no acceptance
@@ -3958,7 +3999,7 @@ def _cmd_decide(args) -> int:
         # critic wrote, and the finding is the first item the planner gets.
         precheck = _one_off_precheck_finding(args)
         finding = read_finding(result_text)
-        prior = send_backs(cycle, args.stage)
+        prior = send_backs(since_bound_rewrite(cycle), args.stage)
         action, note = one_off_decide(result, reason, prior, ran_out,
                                       finding=finding, precheck=precheck)
         if action in (REVISE, PARK):
