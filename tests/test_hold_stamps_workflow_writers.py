@@ -26,6 +26,10 @@ else at the site moves:
      the first applies no hold.
   5. The registry still matches every site exactly once, unchanged.
 
+DRE-6456 adds a seventh plan.yml site: `One-off critic — park in Triage`,
+the one bound park that wrote no stamp, calls the bound exit before it parks
+and stamps `plan-critic-bound` between its note and its Triage move (6).
+
 Run: python3 -m pytest tests/test_hold_stamps_workflow_writers.py -v
 """
 
@@ -122,7 +126,7 @@ def _code_lines(text: str) -> list:
 
 
 # --------------------------------------------------------------------------
-# 1: plan.yml — six stamped parks, no bare label
+# 1: plan.yml — seven stamped parks, no bare label
 # --------------------------------------------------------------------------
 class ThePlanRouteStampsEveryParkTest(unittest.TestCase):
 
@@ -138,18 +142,25 @@ class ThePlanRouteStampsEveryParkTest(unittest.TestCase):
                 if BARE_LABEL.search(line)]
         self.assertEqual(bare, [])
 
-    def test_six_parks_stamp_plan_critic_bound(self):
+    def test_seven_parks_stamp_plan_critic_bound(self):
+        """Six epic parks stamp `$EPIC`; the one-off park stamps `$CARD`
+        (DRE-6456)."""
         applies = self._applies()
-        self.assertEqual(len(applies), 6, applies)
+        self.assertEqual(len(applies), 7, applies)
+        cards = []
         for _, line in applies:
-            self.assertIn('hold.py apply "$EPIC" --reason plan-critic-bound --by plan.yml',
-                          line)
+            match = re.search(r'hold\.py apply "\$(EPIC|CARD)" '
+                              r"--reason plan-critic-bound --by plan\.yml", line)
+            self.assertIsNotNone(match, line)
+            cards.append(match.group(1))
+        self.assertEqual(sorted(cards), ["CARD"] + ["EPIC"] * 6)
 
     def test_each_stamp_lands_before_its_steps_triage_move(self):
         """The label before the move: the relay dispatches a plan run the
         moment an `agent:planner` card enters Triage, and the plan-gate
         refuses it only when the label is already on."""
-        for number, _ in self._applies():
+        for number, line in self._applies():
+            var = re.search(r'hold\.py apply "(\$\w+)"', line).group(1)
             following = None
             for line in self.lines[number:]:
                 if re.match(r"^\s*-\s+name:", line):
@@ -159,7 +170,7 @@ class ThePlanRouteStampsEveryParkTest(unittest.TestCase):
                     break
             with self.subTest(line=number):
                 self.assertIsNotNone(following, "no linear_ops.py call follows in the step")
-                self.assertIn('state "$EPIC" "Triage"', following)
+                self.assertIn(f'state "{var}" "Triage"', following)
 
 
 # --------------------------------------------------------------------------
@@ -329,7 +340,7 @@ class TheFixDisputeIsStampedTest(unittest.TestCase):
 
 
 # --------------------------------------------------------------------------
-# 3: the stamps the nine sites post, composed by the real hold.py
+# 3: the stamps the ten sites post, composed by the real hold.py
 # --------------------------------------------------------------------------
 # What each site's shell variables hold when it runs: the card, and a full sha
 # wherever the site names a head.
@@ -340,7 +351,7 @@ _SHELL_VALUES = {
 
 
 def _shell_applies() -> list:
-    """`(where, argv)` for every `hold.py apply` line the eight shell sites
+    """`(where, argv)` for every `hold.py apply` line the nine shell sites
     carry, its variables replaced by what they hold at run time."""
     out = []
     sources = (PLAN, AGENT_FIX, REPORT)
@@ -379,9 +390,9 @@ class TheStampsTheSitesPostTest(unittest.TestCase):
         self.assertIsNotNone(parsed, stamp)
         return parsed["lifts"]
 
-    def test_eight_shell_sites_apply_through_hold_py(self):
+    def test_nine_shell_sites_apply_through_hold_py(self):
         where = [w.split(":")[0] for w, _ in _shell_applies()]
-        self.assertEqual(where.count("plan.yml"), 6)
+        self.assertEqual(where.count("plan.yml"), 7)
         self.assertEqual(where.count("agent-fix.yml"), 1)
         self.assertEqual(where.count("report_fix_result.sh"), 1)
 
@@ -439,14 +450,226 @@ class TheRegistryStillMatchesTest(unittest.TestCase):
         hold._LOADED.clear()
         self.assertEqual(hold.problems(hold.load(), root=str(ROOT)), [])
 
-    def test_every_one_of_the_nine_sites_now_writes_through_the_registry(self):
+    def test_every_one_of_the_ten_sites_now_writes_through_the_registry(self):
         files = {".github/workflows/plan.yml", ".github/workflows/agent-fix.yml",
                  "scripts/rereview_watch.py"}
         sites = [s for s in hold.discover(str(ROOT)) if s.file in files]
-        self.assertEqual(len(sites), 9, sites)
+        self.assertEqual(len(sites), 10, sites)
         for site in sites:
             with self.subTest(site=site.where):
                 self.assertRegex(site.source, r"hold\.py\s+apply|hold\.apply\(")
+
+
+
+# --------------------------------------------------------------------------
+# 6: the one-off park — the bound exit first, then the stamped park (DRE-6456)
+# --------------------------------------------------------------------------
+ONE_OFF_PARK = "One-off critic — park in Triage"
+# The step's `if:` at `main` d0f34c1c, before this card: the card adds two
+# lines to the step's run and nothing to its gate.
+ONE_OFF_PARK_IF = ("steps.oneoff.outputs.action == 'park' "
+                   "|| steps.oorevised.outputs.outcome == 'unfinished'")
+ONE_OFF_ANCHOR = "one-off-park.md"
+BOUND_EXIT = ('if python3 .bureau-pipeline/scripts/plan_bound.py exit "$CARD" '
+              '--stage one-off --repo "$GITHUB_REPOSITORY"; then')
+PARK_COMMENT = 'python3 .bureau-pipeline/scripts/linear_ops.py comment "$CARD"'
+PARK_HOLD = ('python3 .bureau-pipeline/scripts/hold.py apply "$CARD" '
+             '--reason plan-critic-bound --by plan.yml')
+PARK_TRIAGE = 'python3 .bureau-pipeline/scripts/linear_ops.py state "$CARD" "Triage"'
+
+
+def _one_off_park() -> dict:
+    doc = yaml.safe_load(PLAN.read_text())
+    found = [s for job in doc["jobs"].values() for s in job.get("steps") or []
+             if s.get("name") == ONE_OFF_PARK]
+    assert len(found) == 1, f"{len(found)} steps named {ONE_OFF_PARK!r}"
+    return found[0]
+
+
+def _logical(run: str) -> list:
+    """The run's command lines, continuations joined, comments dropped."""
+    out, pending = [], ""
+    for raw in run.splitlines():
+        line = raw.strip()
+        if line.endswith("\\"):
+            pending += line[:-1].strip() + " "
+            continue
+        line = re.split(r"\s+#", (pending + line).strip(), maxsplit=1)[0].strip()
+        pending = ""
+        if line and not line.startswith("#"):
+            out.append(line)
+    return out
+
+
+def one_off_park_problems(run: str) -> list:
+    """Everything wrong with the order the one-off park step runs in."""
+    lines = _logical(run)
+    exits = [i for i, line in enumerate(lines) if "plan_bound.py exit" in line]
+    if len(exits) != 1:
+        return [f"{len(exits)} `plan_bound.py exit` calls, want exactly one"]
+    i = exits[0]
+    found = []
+    if lines[i] != BOUND_EXIT:
+        found.append(f"the exit is {lines[i]!r}, want {BOUND_EXIT!r}")
+    if "--note-file" in lines[i]:
+        found.append("the exit takes no note file")
+    if lines[i + 1:i + 3] != ["exit 0", "fi"]:
+        found.append(f"the `then` body is {lines[i + 1:i + 3]}, want `exit 0` then `fi`")
+    order = []
+    for want in (PARK_COMMENT, PARK_HOLD, PARK_TRIAGE):
+        hits = [j for j, line in enumerate(lines) if line.startswith(want)]
+        if len(hits) != 1:
+            return found + [f"{len(hits)} lines open with {want!r}, want one"]
+        order.append(hits[0])
+    if not i < order[0] < order[1] < order[2]:
+        found.append(f"the order is exit {i}, note {order[0]}, hold {order[1]}, "
+                     f"Triage {order[2]} — want exit, note, hold, Triage")
+    return found
+
+
+class TheOneOffParkCallsTheExitAndStampsTest(unittest.TestCase):
+
+    def test_the_step_runs_the_exit_the_note_the_hold_and_the_move_in_order(self):
+        self.assertEqual(one_off_park_problems(_one_off_park()["run"]), [])
+
+    def test_the_steps_gate_is_unchanged(self):
+        self.assertEqual(_one_off_park()["if"], ONE_OFF_PARK_IF)
+
+    def test_a_step_that_drifts_is_caught(self):
+        """The reader is not vacuous: each shape it refuses, it refuses."""
+        run = _one_off_park()["run"]
+        no_exit = "\n".join(line for line in run.splitlines()
+                             if "plan_bound.py exit" not in line
+                             and '--repo "$GITHUB_REPOSITORY"' not in line)
+        mutants = {
+            "no exit": no_exit,
+            "an epic stage": run.replace("--stage one-off", "--stage post"),
+            "a note file": run.replace('--repo "$GITHUB_REPOSITORY"',
+                                       '--repo "$GITHUB_REPOSITORY" --note-file "$PARK_NOTE"'),
+            "no hold": "\n".join(line for line in run.splitlines()
+                                  if "hold.py apply" not in line),
+            "the hold after the move": run.replace(
+                PARK_HOLD, "true").replace(PARK_TRIAGE, PARK_TRIAGE + "\n" + PARK_HOLD),
+        }
+        for what, mutant in mutants.items():
+            with self.subTest(mutant=what):
+                self.assertNotEqual(mutant, run, what)
+                self.assertNotEqual(one_off_park_problems(mutant), [], what)
+
+
+BOUND_STUB = """#!/usr/bin/env python3
+import json, os, sys
+with open(os.environ["STUB_CALLS"], "a") as fh:
+    fh.write(json.dumps(["plan_bound.py"] + sys.argv[1:]) + "\\n")
+sys.exit(int(os.environ["STUB_BOUND_RC"]))
+"""
+
+
+def _run_one_off_park(rc: int) -> list:
+    """The step's real run block, `plan_bound.py`, `hold.py` and
+    `linear_ops.py` stubbed and recording, the decision step's note on disk.
+    Returns every call, in order."""
+    with tempfile.TemporaryDirectory() as raw:
+        td = Path(raw)
+        run = (_one_off_park()["run"]
+               .replace("${{ github.event.client_payload.identifier }}", EPIC)
+               .replace("${{ runner.temp }}", str(td)))
+        assert "${{" not in run, "harness left an unsubstituted expression"
+        scripts = td / ".bureau-pipeline" / "scripts"
+        scripts.mkdir(parents=True)
+        _stub_pair(scripts)
+        _executable(scripts / "plan_bound.py", BOUND_STUB)
+        (td / ONE_OFF_ANCHOR).write_text("🛑 Sent back twice: the card names no file.\n")
+        proc = subprocess.run(
+            ["bash", "-e", "-c", run], cwd=str(td), capture_output=True, text=True,
+            env={**os.environ, "STUB_CALLS": str(td / "calls.jsonl"),
+                 "STUB_BOUND_RC": str(rc), "GITHUB_REPOSITORY": "acme/widget",
+                 "LINEAR_API_KEY": "test-key"},
+            timeout=120,
+        )
+        assert proc.returncode == 0, proc.stdout + proc.stderr
+        return _calls(td / "calls.jsonl")
+
+
+class TheOneOffParkRunsTest(unittest.TestCase):
+
+    EXIT = ["plan_bound.py", "exit", EPIC, "--stage", "one-off", "--repo", "acme/widget"]
+
+    def test_a_handled_bound_writes_no_hold_and_no_lane(self):
+        calls = _run_one_off_park(0)
+        self.assertEqual(calls, [self.EXIT])
+
+    def test_a_park_or_a_crash_posts_the_note_applies_the_hold_then_moves(self):
+        for rc in (3, 1):
+            with self.subTest(exit=rc):
+                calls = _run_one_off_park(rc)
+                self.assertEqual([c[:3] for c in calls], [
+                    self.EXIT[:3],
+                    ["linear_ops.py", "comment", EPIC],
+                    ["hold.py", "apply", EPIC],
+                    ["linear_ops.py", "state", EPIC],
+                ])
+                self.assertEqual(calls[0], self.EXIT)
+                self.assertIn("names no file", calls[1][3])
+                self.assertEqual(calls[2], ["hold.py", "apply", EPIC, "--reason",
+                                            "plan-critic-bound", "--by", "plan.yml"])
+                self.assertEqual(calls[3], ["linear_ops.py", "state", EPIC, "Triage"])
+
+    def test_its_stamp_is_the_contracts(self):
+        argv = ["apply", EPIC, "--reason", "plan-critic-bound", "--by", "plan.yml"]
+        hold._LOADED.clear()
+        rc = []
+        stamps = _stamps_from(lambda: rc.append(hold.main(argv)))
+        self.assertEqual(rc, [0])
+        self.assertEqual(stamps, ["🔒 hold: reason=plan-critic-bound at=none "
+                                  "lifts=manual by=plan.yml"])
+
+
+class TheOneOffParkHasItsRowTest(unittest.TestCase):
+
+    def setUp(self):
+        hold._LOADED.clear()
+        self.doc = hold.load()
+        self.rows = [r for r in self.doc["sites"]
+                     if r["file"] == ".github/workflows/plan.yml"
+                     and r["scope"] == ONE_OFF_PARK]
+
+    def test_the_row_names_the_site(self):
+        self.assertEqual(len(self.rows), 1, self.rows)
+        row = self.rows[0]
+        self.assertEqual(row["anchor"], ONE_OFF_ANCHOR)
+        self.assertEqual([(e["reason"], e["lifts"]) for e in row["reasons"]],
+                         [("plan-critic-bound", "manual")])
+        self.assertEqual(row["reasons"][0]["tried_first"]["receipt"], "plan_bound.py exit")
+        self.assertEqual(row["readers"], list(hold.READERS))
+
+    def test_discovery_finds_the_site_once_and_the_row_matches_it(self):
+        sites = [s for s in hold.discover(str(ROOT)) if s.scope == ONE_OFF_PARK]
+        self.assertEqual(len(sites), 1, sites)
+        self.assertEqual(sites[0].file, ".github/workflows/plan.yml")
+        self.assertEqual(len(self.rows), 1)
+        self.assertTrue(hold.row_matches(self.rows[0], sites[0]))
+
+    def test_the_check_passes_with_seven_plan_yml_sites(self):
+        sites = [s for s in hold.discover(str(ROOT))
+                 if s.file == ".github/workflows/plan.yml"]
+        self.assertEqual(len(sites), 7, sites)
+        self.assertEqual(hold.problems(self.doc, root=str(ROOT)), [])
+
+    def test_the_page_lists_the_writer(self):
+        text = (ROOT / "docs" / "holds.md").read_text(encoding="utf-8")
+        rows = [line for line in text.splitlines() if line.startswith(
+            f"| `.github/workflows/plan.yml` · {ONE_OFF_PARK} | `{ONE_OFF_ANCHOR}` "
+            "| `plan-critic-bound` | `manual` |")]
+        self.assertEqual(len(rows), 1, rows)
+
+    def test_the_triage_entrance_says_the_one_off_parks_held(self):
+        contract = json.loads((ROOT / "config" / "lane-contract.json").read_text())
+        (triage,) = [lane for lane in contract["lanes"] if lane["name"] == "Triage"]
+        text = triage["clauses"]["entrance"]["text"]
+        self.assertIn("a one-off card the pre-approval critic sent back `MAX_ROUNDS` "
+                      "times, or whose revision the planner did not finish, parked "
+                      "with `needs-human`", text)
 
 
 if __name__ == "__main__":
