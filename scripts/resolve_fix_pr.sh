@@ -28,7 +28,7 @@ set -e
 #      admitted (DRE-6571): a workflow_dispatch on a clean head at a record
 #      `proof_dispatch.record_red_checks` reads as red on a check. It reads
 #      the head's check runs and the thread into record-checks.json and
-#      record-thread.json (step 4 keeps that read, so the thread is still
+#      thread.json (step 4 keeps that read, so the thread is still
 #      read once), writes the record's path to proof-record-fix.txt for the
 #      Report step, and carries the run's note in `escalation`.
 #   2. Refuses anything that is not an `agent/*` or `repair/*` branch, and
@@ -302,8 +302,9 @@ echo "base_ref=$BASE_REF" >> "$GITHUB_OUTPUT"
 IS_RECORD=$(python3 -c 'import sys; sys.path.insert(0, ".bureau-pipeline/scripts"); import proof_dispatch; print(str(proof_dispatch.proof_record_branch(sys.argv[1])).lower())' "$BRANCH")
 # The thread's one read, every page (step 4, DRE-4157): step 1b's admitted
 # record reads it here, and step 4 keeps that read rather than read twice.
+TMPD="${RUNNER_TEMP:-/tmp}"
 read_thread() {
-  python3 .bureau-pipeline/scripts/gh_read_retry.py --out "$1" \
+  python3 .bureau-pipeline/scripts/gh_read_retry.py --out "$TMPD/thread.json" \
     gh api --paginate --slurp \
     "repos/${REPO}/issues/$PR/comments?per_page=100"
 }
@@ -318,12 +319,14 @@ if [ "$IS_RECORD" = "true" ]; then
     python3 .bureau-pipeline/scripts/gh_read_retry.py --out "${RUNNER_TEMP:-/tmp}/record-checks.json" \
       gh api --paginate --slurp \
       "repos/${REPO}/commits/$HEAD_SHA/check-runs?per_page=100"
-    read_thread "${RUNNER_TEMP:-/tmp}/record-thread.json"
+    read_thread
     RECORD_NOTE=$(echo "$INFO" | python3 -c 'import json, sys; sys.path.insert(0, ".bureau-pipeline/scripts"); import proof_dispatch; red = proof_dispatch.record_red_checks_read(*sys.argv[1:5]); print(proof_dispatch.admit_record_fix(red, json.load(sys.stdin).get("files"), sys.argv[5]) if red else "")' \
       "$BRANCH" "$HEAD_SHA" "${RUNNER_TEMP:-/tmp}/record-checks.json" \
-      "${RUNNER_TEMP:-/tmp}/record-thread.json" "${RUNNER_TEMP:-/tmp}/proof-record-fix.txt")
+      "$TMPD/thread.json" "${RUNNER_TEMP:-/tmp}/proof-record-fix.txt")
   fi
   if [ -z "$RECORD_NOTE" ]; then
+    # A refused record leaves no thread behind: nothing past here reads it.
+    rm -f "$TMPD/thread.json"
     echo "fix-refused: #$PR is a proof record ($BRANCH) — the proof run re-observes it, the fix agent does not patch it" \
       | tee "${RUNNER_TEMP:-/tmp}/fix-no-work.txt"
     echo "go=false" >> "$GITHUB_OUTPUT"
@@ -341,12 +344,9 @@ if [ -n "$CARD" ]; then echo "bureau-card: $CARD"; fi
 
 # One read of the thread, then the convergence halt (steps 4 and 5;
 # DRE-4157, DRE-2024, DRE-4848).
-TMPD="${RUNNER_TEMP:-/tmp}"
-if [ -n "$RECORD_NOTE" ]; then
-  # Step 1b read every page of it already (DRE-6571).
-  mv "$TMPD/record-thread.json" "$TMPD/thread.json"
-else
-  read_thread "$TMPD/thread.json"
+# Step 1b read every page of it already on an admitted record (DRE-6571).
+if [ -z "$RECORD_NOTE" ]; then
+  read_thread
 fi
 SHA8=${HEAD_SHA:0:8}
 # Sourced: words and an integer. Unreadable stops the step (bash -e).
