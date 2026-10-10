@@ -6895,6 +6895,96 @@ def undecided_hold_is_overdue(green_lit_at: str | None) -> bool:
         return True
 
 
+def ask_cap_for_released_epic(epic: str, green_lit_at: str | None,
+                              thread: list | None) -> str | None:
+    """Ask the epic cap for an approved epic a blocker released, and record
+    the answer (DRE-6618). `start`, `queue`, or None when it was not asked or
+    the answer could not be recorded — the hold then stands, on the stall
+    clock.
+
+    The epic gate released `epic` this pass, and the cap's hold
+    (`epic_cap.promotion_refusal`) found no start since its approval. On
+    2026-10-10 that was DRE-6064: approved on 10-07 while blocked by the epic
+    DRE-6063, released at build-done three days later, and its children
+    refused `epic-cap-undecided` with nothing left to ask the cap again but a
+    person. So the sweep asks — the four rules the activate route asks at
+    approval, `epic_cap.decision` — and only where nothing else is asking:
+
+      * the epic waited on a formal `blockedBy` relation, now met or built
+        out (the gate above). An epic that waited on nothing is its activate
+        route's, and the re-run act is how a person asks again;
+      * its green light is known, and older than the activate route's window
+        (`undecided_hold_is_overdue` is the caller's);
+      * no `⏸️ epic-queued:` receipt follows the approval — a decision on
+        record, whatever lane the epic is in now;
+      * its activate run is not waiting in the planner line, where it will
+        ask itself (DRE-5177).
+
+    Then the answer is written the way it is written at approval: on `start`
+    the `▶️ epic-started:` receipt, which lifts the hold for every child on
+    this pass; on `queue` the label, the queued receipt and Green Light, in
+    `plan.yml`'s order, where `start_queued_epics` starts it in its turn.
+    Asked once per epic per pass (the caller caches the answer); the next
+    pass finds the decision on record and asks nothing. Never raises: every
+    read and write here is the sweep's own, and a failure is said and
+    ledgered, never a bad blocker reference on the child.
+    """
+    record = epic_records([epic]).get(epic) or {}
+    waited_on = sorted(prose_blockers.relation_ids(record))
+    if not waited_on:
+        print(f"epic-cap: {epic} waited on no epic, so the sweep does not ask "
+              "the cap for it — its activate route asks, or the re-run act")
+        return None
+    if not green_lit_at:
+        print(f"epic-cap: {epic}'s approval time is unknown — the sweep does not "
+              "ask the cap for it this pass")
+        return None
+    if epic_cap.queue_on_record(thread, green_lit_at):
+        print(f"epic-cap: {epic} was queued in line since its approval — that "
+              "decision is on record, so the sweep does not ask again")
+        return None
+    try:
+        in_line = planner_queue.in_line([r.get("body") or "" for r in thread or []])
+    except planner_queue.PlannerQueueError as e:
+        print(f"epic-cap: {epic}'s planner line could not be read ({e}) — the "
+              "sweep does not ask the cap for it this pass")
+        return None
+    if in_line:
+        print(f"epic-cap: {epic}'s activate run is waiting for a planner slot — "
+              "it asks the cap itself when it runs")
+        return None
+    try:
+        fleet = epic_cap.fleet_state()
+        asked = epic_cap.read_epic(epic)
+    except epic_cap.EpicCapError as e:
+        print(f"epic-cap: the epic cap could not be read ({e}) — {epic} is not "
+              "asked about this pass")
+        return None
+    except Exception as e:  # noqa: BLE001 — a read that failed decided nothing
+        _read_failures.append(f"epic cap {epic}: {e}")
+        print(f"ERROR: ask_cap_for_released_epic: {epic}: {e}", file=sys.stderr)
+        return None
+    answer = epic_cap.decision(fleet, epic, asked)
+    try:
+        if answer == "start":
+            linear_ops.cmd_comment(epic, pipeline_act.receipt(
+                epic_cap.STARTED_ACT,
+                epic_cap.released_started_receipt(fleet, epic, waited_on)))
+        else:
+            linear_ops.add_label(epic, epic_cap.QUEUED_LABEL)
+            linear_ops.cmd_comment(epic, pipeline_act.receipt(
+                epic_cap.QUEUED_ACT, epic_cap.receipt_for(fleet, epic, asked)))
+            linear_ops.cmd_advance(epic, epic_cap.GREEN_LIGHT, epic_cap.IN_PROGRESS)
+    except Exception as e:  # noqa: BLE001 — one epic's write, the run red
+        _write_failures.append(f"{epic} epic-cap {answer}: {e}")
+        print(f"ERROR: {epic}: the cap answered {answer}, and it could not be "
+              f"recorded: {e}", file=sys.stderr)
+        return None
+    print(f"epic-cap: {epic} — released by {', '.join(waited_on)} with no "
+          f"decision on record; the sweep asked the cap, which answered {answer}")
+    return answer
+
+
 def epic_thread(epic: str) -> list | None:
     """The epic's comment thread WITH authorship, or None when Linear cannot
     say (DRE-3059).
@@ -7055,7 +7145,7 @@ def takes_no_slot(bodies) -> bool:
 
 def promote_ready(
     active_count: int, candidates: list[dict] | None = None, *, close_epics: bool = False,
-    resolve_blockers: bool = False,
+    resolve_blockers: bool = False, ask_cap: bool = False,
 ) -> int:
     """Auto-promote Backlog cards whose blockers are all Done.
 
@@ -7108,6 +7198,12 @@ def promote_ready(
     `resolve_blockers` — the full sweep's alone — hands a card carrying an
     open agent blocker to its class's action module (DRE-6448). Never on a
     `--promote-only` pass: the merge path runs those under the qa-bot's token.
+
+    `ask_cap` — the full sweep's alone too — asks the epic cap for an approved
+    epic a blocker released with no decision on record, once per epic, when
+    its children meet the cap's hold (`ask_cap_for_released_epic`, DRE-6618).
+    Never on a `--promote-only` pass: the activate route runs one right after
+    asking the cap itself.
     """
     # The clock is the pure half (DRE-4207); imported here because this pass is
     # its only caller.
@@ -7121,12 +7217,14 @@ def promote_ready(
     # verdict, an epic, another repo's card, or a card the pass moved.
     refused: list = []
 
-    def stand(identifier: str, tag: str, needle: str | None) -> None:
+    def stand(identifier: str, tag: str, needle: str | None,
+              epic: str | None = None) -> None:
         """Record `identifier` as standing refused or held under `tag`, dated
         by the oldest comment carrying `needle` — the receipt the refusal or
         the hold left. No needle, no receipt: unknown, which is never stale.
         Served from the pass's board read inside a sweep; a read that fails
-        is said once and the card stays undated, never the sweep's end."""
+        is said once and the card stays undated, never the sweep's end.
+        `epic` names the epic a refusal is lifted on, for the stall notice."""
         first_seen = None
         if needle is not None:
             try:
@@ -7138,7 +7236,7 @@ def promote_ready(
                     f"this sweep: {e}",
                     file=sys.stderr,
                 )
-        refused.append(promotion_stall.Refused(identifier, tag, first_seen))
+        refused.append(promotion_stall.Refused(identifier, tag, first_seen, epic))
 
     # Which cap, and from where (DRE-3994): a run that holds or promotes must
     # say what it was holding to, or a repo at "0" promoting at 8 reads exactly
@@ -7171,6 +7269,9 @@ def promote_ready(
     # The same thread whole, for the epic cap's hold (DRE-6493) — read past
     # the window only for an epic whose window is full, once per sweep.
     cap_thread: dict[str, list | None] = {}
+    # And the cap's answer, where this pass asked it (DRE-6618) — once per
+    # epic: `start`, `queue`, or None for a hold the pass left standing.
+    cap_asked: dict[str, str | None] = {}
     # THE ORDER, and the only rule that decides it (DRE-6567): Urgent first,
     # then card number ascending within each. Every gate below decides
     # WHETHER a card goes, never in what order. By number alone, an Urgent
@@ -7512,6 +7613,25 @@ def promote_ready(
                         cap_thread[epic_id],
                         green_light[epic_id],
                     )
+                    # A blocker epic released this one with no decision on
+                    # record (DRE-6618): the full sweep asks the cap itself,
+                    # once per epic, past the activate route's window.
+                    if (refusal is not None and ask_cap
+                            and undecided_hold_is_overdue(green_light[epic_id])):
+                        if epic_id not in cap_asked:
+                            cap_asked[epic_id] = ask_cap_for_released_epic(
+                                epic_id, green_light[epic_id], cap_thread[epic_id])
+                        if cap_asked[epic_id] == "start":
+                            refusal = None  # the start is on record now
+                        elif cap_asked[epic_id] == "queue":
+                            # A declared wait: the epic is in line in Green
+                            # Light, and its children wait for its start.
+                            print(
+                                f"promotion: {card['identifier']}'s epic {epic_id} "
+                                "was queued in line by the epic cap this pass — "
+                                "skipping"
+                            )
+                            continue
                     if refusal is not None:
                         refusal_tag = epic_cap.UNDECIDED_TAG
                         surface_refusal = undecided_hold_is_overdue(green_light[epic_id])
@@ -7579,7 +7699,8 @@ def promote_ready(
             # logged and not posted has no receipt yet: undated, by design.
             elif promotion_stall.clocked(refusal_tag):
                 stand(card["identifier"], refusal_tag,
-                      refusal_tag if surface_refusal else None)
+                      refusal_tag if surface_refusal else None,
+                      epic_id if refusal_tag == epic_cap.UNDECIDED_TAG else None)
             continue
         # Stale verdict (DRE-4962), asked LAST: it is the one gate that buys a
         # read per card — the lane history, on the quota every sweep shares —
@@ -14255,7 +14376,7 @@ def main(
             # `start_queued_epics`; a Backlog close opens its slot in the cap
             # for the next pass to fill.
             promote_ready(active_count=wip_count(mine), close_epics=True,
-                          resolve_blockers=True)
+                          resolve_blockers=True, ask_cap=True)
     if promote_only:
         print(f"promote-only: gate evaluated (WIP base {wip_count(mine)})")
         _report_degraded()

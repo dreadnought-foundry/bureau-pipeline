@@ -442,6 +442,60 @@ def _labels_queued(text: str) -> bool:
     return False
 
 
+def _module_constant(root: str, module: str, name: str):
+    """The literal `name` is assigned at the top of `scripts/<module>.py`, or
+    None — read, never imported, so the value checked is the one written."""
+    try:
+        with open(os.path.join(root, "scripts", f"{module}.py"), encoding="utf-8") as fh:
+            tree = ast.parse(fh.read())
+    except (OSError, SyntaxError, ValueError):
+        return None
+    for node in tree.body:
+        if isinstance(node, ast.Assign) and isinstance(node.value, ast.Constant) \
+                and any(isinstance(t, ast.Name) and t.id == name for t in node.targets):
+            return node.value.value
+    return None
+
+
+def _python_labels_queued(root: str, write) -> bool:
+    """Whether the function a Python write sits in calls `add_label` with the
+    queued label on an earlier line (DRE-6618) — the label spelled as a
+    literal, or as `<module>.QUEUED_LABEL` whose module assigns this rule's
+    string. Anything else fails closed, as a renamed label does."""
+    file, _, line = write.where.rpartition(":")
+    try:
+        with open(os.path.join(root, file), encoding="utf-8") as fh:
+            tree = ast.parse(fh.read())
+    except (OSError, SyntaxError, ValueError):
+        return False
+    at = int(line)
+    holder = None
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) \
+                and node.lineno <= at <= (node.end_lineno or node.lineno):
+            if holder is None or node.lineno >= holder.lineno:
+                holder = node
+    if holder is None:
+        return False
+
+    def is_label(arg) -> bool:
+        if isinstance(arg, ast.Constant):
+            return arg.value == QUEUED_LABEL
+        if isinstance(arg, ast.Attribute) and isinstance(arg.value, ast.Name) \
+                and arg.attr == "QUEUED_LABEL":
+            return _module_constant(root, arg.value.id, arg.attr) == QUEUED_LABEL
+        return False
+
+    for node in ast.walk(holder):
+        if not isinstance(node, ast.Call) or node.lineno >= at:
+            continue
+        func = node.func
+        name = func.attr if isinstance(func, ast.Attribute) else getattr(func, "id", None)
+        if name == "add_label" and any(is_label(a) for a in node.args):
+            return True
+    return False
+
+
 def _runs_linear_ops(text: str, command: str) -> bool:
     """Whether `text`, read as the shell reads it, runs `linear_ops.py
     <command>` — the command run, not merely named or left in a comment."""
@@ -490,7 +544,10 @@ def _gate_problems(record: dict, writes_here: list, root: str, lane: str) -> lis
                 )
     elif kind == "queued-epic":
         for write in writes_here:
-            if write.how != "workflow" or not _labels_queued(_before_write(root, write)):
+            labeled = (_labels_queued(_before_write(root, write))
+                       if write.how == "workflow"
+                       else _python_labels_queued(root, write))
+            if not labeled:
                 out.append(
                     f"{where} ({write.where}) is a queued-epic arrival, and its "
                     f"step does not add `{QUEUED_LABEL}` before it writes {lane} — "

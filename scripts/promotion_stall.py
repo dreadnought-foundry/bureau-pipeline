@@ -24,7 +24,10 @@ already runs for an epic's prose defect, generalized.
 
 * `CLOCKED_TAGS` — the refusals no sweep can clear on its own. Each ends only
   when a person or a planner run acts, so one standing `STALL_MINUTES` earns a
-  `🚨 promotion-stalled:` receipt on the card and a red run.
+  `🚨 promotion-stalled:` receipt on the card and a red run. The epic cap's
+  hold (`epic-cap-undecided`, DRE-6618) is one: the sweep asks the cap itself
+  only for an epic a blocker epic released, so the hold on any other epic's
+  children stands until a person asks again, and the record names the epic.
 * `HELD_TAGS` — a FACT about the card after the pass, never a log line:
   `needs-human` (left in Backlog wearing the label), `agent-blocker` (left with
   an open `🛑 Agent blocked` marker), `stale-verdict`, `live-recheck`. A person
@@ -59,9 +62,12 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import dead_run  # noqa: E402 — after the path insert, by design
 
 #: Refusals the gate surfaces on a card and no sweep can clear on its own.
+#: The last is `epic_cap.UNDECIDED_TAG`, spelled because this module imports
+#: neither `reconcile` nor `linear_ops`, and `epic_cap` imports the second;
+#: `tests/test_promotion_stall.py` holds the two the same.
 CLOCKED_TAGS = ("routing-no-verdict", "mid-epic-no-verdict",
                 "plan-critic-post-unread", "plan-critic-post-sent-back",
-                "plan-critic-post-died")
+                "plan-critic-post-died", "epic-cap-undecided")
 
 #: Holds counted for the idle-board alarm and never clocked per card. The first
 #: is the hold label itself, named through its one definition: this tuple reads
@@ -96,6 +102,7 @@ class Refused(NamedTuple):
     identifier: str
     tag: str                 # one of CLOCKED_TAGS or HELD_TAGS
     first_seen: str | None   # ISO time of the oldest receipt carrying the tag's needle; None = unknown
+    epic: str | None = None  # the epic the card waits on, where the refusal is the epic's (DRE-6618)
 
 
 def _when(iso: str | None) -> datetime | None:
@@ -139,18 +146,24 @@ def stalled(refused: Refused, now: str) -> float | None:
     return age
 
 
+def _for_epic(refused: Refused) -> str:
+    """` for its epic DRE-N`, or nothing for a record that names no epic."""
+    return f" for its epic {refused.epic}" if refused.epic else ""
+
+
 def notice(refused: Refused, age_minutes: float, active: int, cap: int) -> str:
     """The `🚨 promotion-stalled:` receipt body for a card `stalled` named.
 
     Names the receipt it is clocked from by its time rather than claiming an
     unbroken duration: a refusal that cleared and recurred is still clocked
-    from its first receipt, and "first refused at" stays literally true."""
+    from its first receipt, and "first refused at" stays literally true. A
+    record carrying an epic names it: that refusal is lifted on the epic."""
     then = _when(refused.first_seen)
     since = (f"first refused at {dead_run.pacific(then)}, {_hours(age_minutes)} hours ago"
              if then else f"refused for {_hours(age_minutes)} hours")
     return (
         f"{STALL_MARK} {refused.identifier} is still refused promotion as "
-        f"{refused.tag} — {since}.\n\n"
+        f"{refused.tag}{_for_epic(refused)} — {since}.\n\n"
         "This is not a card waiting its turn: the refusal holds whatever the "
         f"WIP ({active}/{cap} on this sweep), no sweep will clear it on its own, "
         "and a person must act. The refusal receipt already on this card says "
@@ -162,7 +175,8 @@ def ledger_line(refused: Refused, age_minutes: float) -> str:
     """The one-line entry the sweep appends to its red-run ledger."""
     return (
         f"{LEDGER_STALL_OPENER}{refused.identifier}: refused promotion as "
-        f"{refused.tag} for {_hours(age_minutes)}h, which no sweep will clear — "
+        f"{refused.tag}{_for_epic(refused)} for {_hours(age_minutes)}h, which no "
+        "sweep will clear — "
         "a person must act"
     )
 

@@ -200,6 +200,7 @@ PARK = ("scripts/code_owner_hold.py", "park")
 REVIEW_CAP = ("scripts/reconcile.py", "hand_review_nudge_to_person")
 EPIC_GROWTH = ("scripts/reconcile.py", "ask_epic_growth_question")
 BLOCKER_ASK = ("scripts/blocker_ask.py", "resolve")
+RELEASED_EPIC = ("scripts/reconcile.py", "ask_cap_for_released_epic")
 
 
 # --------------------------------------------------------------------------- #
@@ -251,19 +252,24 @@ class TestTheRepositoryPasses:
 
     def test_the_queued_epic_is_declared_with_the_write_it_lands(self):
         # DRE-5136 declared kind (c)'s record in the pull request that added
-        # its write: the route step's queue answer.
+        # its write: the route step's queue answer. DRE-6618 added the sweep's
+        # for an approved epic a blocker released, the same way.
         queued = [r for r in grl.arrivals() if r["kind"] == "queued-epic"]
-        assert [r["where"] for r in queued] == ["plan.yml#Route — plan or activate"]
+        assert [r["where"] for r in queued] == [
+            "plan.yml#Route — plan or activate",
+            "reconcile.py#ask_cap_for_released_epic",
+        ]
         units = {unit for _, unit in grl.green_light_writes()}
         assert "plan.yml#Route — plan or activate" in units
+        assert "reconcile.py#ask_cap_for_released_epic" in units
 
     def test_the_callers_found_are_exactly_the_ones_declared(self):
         contract = _contract()
         declared = _declared(contract)
         assert set(declared) == {ESCALATE, CMD_EXIT, PARK, REVIEW_CAP, EPIC_GROWTH,
-                                 BLOCKER_ASK}
+                                 BLOCKER_ASK, RELEASED_EPIC}
         counts = {ESCALATE: 7, CMD_EXIT: 2, PARK: 2, REVIEW_CAP: 1, EPIC_GROWTH: 1,
-                  BLOCKER_ASK: 1}
+                  BLOCKER_ASK: 1, RELEASED_EPIC: 1}
         for (module, function), callers in declared.items():
             report = lane_callers.callers_of(module, function, str(ROOT))
             assert report.unread == frozenset(), (module, report.unread)
@@ -520,6 +526,41 @@ class TestTheQueuedEpicGate:
         _entrance(contract)["kinds"].remove("queued-epic")
         found = grl.problems(str(root), contract)
         assert _named(found, "'queued-epic'", self.WHERE, "vocabulary"), found
+
+
+@pytest.mark.usefixtures("declared_callers")
+class TestTheSweepsQueuedEpicGate:
+    """A Python queued-epic writer (DRE-6618): the function that writes the
+    lane must call `add_label` with the queued label on an earlier line."""
+
+    WHERE = "reconcile.py#ask_cap_for_released_epic"
+    LABEL = "            linear_ops.add_label(epic, epic_cap.QUEUED_LABEL)\n"
+    MOVE = ("            linear_ops.cmd_advance(epic, epic_cap.GREEN_LIGHT, "
+            "epic_cap.IN_PROGRESS)\n")
+
+    def test_the_sweep_labels_before_it_writes(self):
+        assert not _named(grl.problems(), self.WHERE)
+
+    def test_without_the_label_it_fails_naming_the_function(self, tmp_path):
+        root = _copy_repo(tmp_path)
+        _edit(root / "scripts" / "reconcile.py", self.LABEL, "")
+        found = grl.problems(str(root))
+        assert _named(found, self.WHERE, "epic-queued"), found
+
+    def test_a_label_added_after_the_write_fails_too(self, tmp_path):
+        root = _copy_repo(tmp_path)
+        _edit(root / "scripts" / "reconcile.py", self.LABEL + "            linear_ops.cmd_comment(",
+              "            linear_ops.cmd_comment(")
+        _edit(root / "scripts" / "reconcile.py", self.MOVE, self.MOVE + self.LABEL)
+        found = grl.problems(str(root))
+        assert _named(found, self.WHERE, "epic-queued"), found
+
+    def test_a_constant_that_names_another_label_fails_closed(self, tmp_path):
+        root = _copy_repo(tmp_path)
+        _edit(root / "scripts" / "epic_cap.py", 'QUEUED_LABEL = "epic-queued"',
+              'QUEUED_LABEL = "epic-waiting"')
+        found = grl.problems(str(root))
+        assert _named(found, self.WHERE, "epic-queued"), found
 
 
 @pytest.mark.usefixtures("declared_callers")
