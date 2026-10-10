@@ -1,0 +1,279 @@
+{
+  "card": "DRE-6042",
+  "arrival": "review-cap",
+  "for": "proof-run",
+  "as_of": "2026-10-10T08:54:03Z",
+  "lane": "In Review",
+  "labels": [
+    "repo:agent-bureau",
+    "initiative:bureau",
+    "agent:ops",
+    "no-code"
+  ],
+  "comments": [
+    {
+      "body": "🧭 routing-verdict: **OPERATOR** — Not code — a deploy, a migration run, a secret.\n\n**Why:** the epic's proof card, routed by the proof-and-demo check off the card itself: the card carries an explicit role label, which says where it goes — no judgement, and no model asked An epic is confirmed by something other than its builder, so the fleet is never sent at this card.\n\n**Where it goes:** Hand-work. **Who handles it there:** operator.\n**Marked:** `hand-built`, `no-code` — so the sweep neither dispatches a run nor reports the card as stalled.\nThis card is **not** dispatched to the fleet: the promoter reads this verdict and leaves it where a person will find it.",
+      "authored_by_pipeline": true,
+      "created_at": "2026-10-06T23:56:47.459Z"
+    },
+    {
+      "body": "🧳 hand-built-migration: label removed (`hand-built`).\n\n**What it read:** `hand-built` was put on this card automatically — applied by Agent-Bureau (history entry) — and the card is a proof in Backlog.\n\n**The rule it followed:** a proof keeps `no-code` and its lane; the proof dispatch takes it from Hand-work, and nothing about it needs the CEO's mark.\n\nThe CEO's rule of 2026-10-07: \"Build it and let everyone know when i say built it, I'm saying this is a hand built card.\" The mark is his alone, so the one-time hand-built migration takes off every one the pipeline applied.",
+      "authored_by_pipeline": false,
+      "created_at": "2026-10-09T17:37:19.738Z"
+    },
+    {
+      "body": "🧹 Auto-promoted Backlog → Hand-work: routed **OPERATOR** — Not code — a deploy, a migration run, a secret. operator, your turn in Hand-work — a person builds this; nothing was dispatched. Marked `no-code`.",
+      "authored_by_pipeline": true,
+      "created_at": "2026-10-09T18:55:43.870Z"
+    },
+    {
+      "body": "🔬 proof-run: dispatched a proof run at 2026-10-09 14:26 PT — first proof run (dispatch 1 of 2)\n\n📎 pipeline-act: proof-run-dispatched · kind: recovery · state: dispatched · next: proof-task.yml · discharges: nothing · subscriber: reconcile.yml · tag: proof-run",
+      "authored_by_pipeline": true,
+      "created_at": "2026-10-09T21:26:25.056Z"
+    },
+    {
+      "body": "🧠 model-attempt: claude-opus-5-5 — proof agent starting (turns=400). model-policy: claude-opus-5-5 chosen for proof (workhorse kind) — top of the ladder, nothing above it was skipped Run: https://github.com/dreadnought-foundry/agent-bureau/actions/runs/37993459395",
+      "authored_by_pipeline": true,
+      "created_at": "2026-10-09T21:27:16.377Z"
+    },
+    {
+      "body": "⏳ 1/5 read",
+      "authored_by_pipeline": true,
+      "created_at": "2026-10-09T21:27:44.890Z"
+    },
+    {
+      "body": "⏳ 2/5 observing",
+      "authored_by_pipeline": true,
+      "created_at": "2026-10-09T21:28:14.293Z"
+    },
+    {
+      "body": "⏳ 3/5 record written",
+      "authored_by_pipeline": true,
+      "created_at": "2026-10-09T21:32:38.577Z"
+    },
+    {
+      "body": "⏳ 4/5 local checks",
+      "authored_by_pipeline": true,
+      "created_at": "2026-10-09T21:32:45.550Z"
+    },
+    {
+      "body": "⏳ 5/5 PR opened",
+      "authored_by_pipeline": true,
+      "created_at": "2026-10-09T21:33:07.299Z"
+    },
+    {
+      "body": "🤖 agent-actor: proof · run https://github.com/dreadnought-foundry/agent-bureau/actions/runs/37993459395",
+      "authored_by_pipeline": true,
+      "created_at": "2026-10-09T21:33:07.811Z"
+    },
+    {
+      "body": "🤖 PR opened: https://github.com/dreadnought-foundry/agent-bureau/pull/3458 — CI + critic review running. Run: https://github.com/dreadnought-foundry/agent-bureau/actions/runs/37993459395",
+      "authored_by_pipeline": true,
+      "created_at": "2026-10-09T21:33:27.214Z"
+    },
+    {
+      "body": "🔎 QA Critic — VERDICT: APPROVE @ab3dc35e1787aeadeb453bd0a4b9ea3355fad8f1 content:0a57428f9575dfddaf8c11acfd53b956885ffaf25c366acabf0ef4b5ffc015ac\n\n## Summary\nThis change adds a written record of the check on whether the automatic proof runs reach the product through the shared channel. The record says the reach worked: an automatic sweep started the run with nobody pressing a button, and it ran on the right shared version. It reports two of the card's expected readings as not matching, rather than rounding them up.\n\nIt delivers what the card asked for. The card wanted an honest, dated record with a plain result on each point, and this one gives that. Nothing a person sees in the product changes, so \"What's new: none\" is correct.\n\nRisk if we ship: none, because this adds a document only. Risk if we don't: the two mismatches (a different cloud access setup than the card expected, and a log line the card assumed would exist) stay unwritten. I recommend approving it and then deciding whether the card's wording should be updated to match what the system now does.\n\n## Non-blocking notes\n- The record is not listed in the proofs index, unlike earlier records.\n- The record has no closing \"what is not proven\" section, which the index asks for.\n- The claim that the merge gate will hold this PR on \"Not met\" rows is not backed by anything in the repo. I searched for it and found nothing, so the gate is not in fact holding it.\n\n🕰️ PR description read at 2026-10-09T21:33:49Z.\n\n\n🧠 model: claude-sonnet-5-5 — model-policy: claude-sonnet-5-5 chosen for critic (advisory kind) — top of the ladder, nothing above it was skipped",
+      "authored_by_pipeline": true,
+      "created_at": "2026-10-09T21:35:10.946Z"
+    },
+    {
+      "body": "🔬 proof-run: dispatched a proof run at 2026-10-09 16:06 PT — re-run after the gate's decline at ab3dc35 (re-run 1 of 2)\n\n📎 pipeline-act: proof-run-dispatched · kind: recovery · state: dispatched · next: proof-task.yml · discharges: nothing · subscriber: reconcile.yml · tag: proof-run",
+      "authored_by_pipeline": true,
+      "created_at": "2026-10-09T23:06:29.879Z"
+    },
+    {
+      "body": "🧠 model-attempt: claude-opus-5-5 — proof agent starting (turns=400). model-policy: claude-opus-5-5 chosen for proof (workhorse kind) — top of the ladder, nothing above it was skipped Run: https://github.com/dreadnought-foundry/agent-bureau/actions/runs/38002738737",
+      "authored_by_pipeline": true,
+      "created_at": "2026-10-09T23:07:05.804Z"
+    },
+    {
+      "body": "⏳ 1/5 read",
+      "authored_by_pipeline": true,
+      "created_at": "2026-10-09T23:07:31.796Z"
+    },
+    {
+      "body": "⏳ 2/5 observing",
+      "authored_by_pipeline": true,
+      "created_at": "2026-10-09T23:08:21.780Z"
+    },
+    {
+      "body": "⏳ 3/5 record written",
+      "authored_by_pipeline": true,
+      "created_at": "2026-10-09T23:10:42.835Z"
+    },
+    {
+      "body": "⏳ 4/5 local checks",
+      "authored_by_pipeline": true,
+      "created_at": "2026-10-09T23:10:48.422Z"
+    },
+    {
+      "body": "⏳ 5/5 PR opened",
+      "authored_by_pipeline": true,
+      "created_at": "2026-10-09T23:10:56.491Z"
+    },
+    {
+      "body": "🤖 agent-actor: proof · run https://github.com/dreadnought-foundry/agent-bureau/actions/runs/38002738737",
+      "authored_by_pipeline": true,
+      "created_at": "2026-10-09T23:10:56.853Z"
+    },
+    {
+      "body": "🤖 PR opened: https://github.com/dreadnought-foundry/agent-bureau/pull/3458 — CI + critic review running. Run: https://github.com/dreadnought-foundry/agent-bureau/actions/runs/38002738737",
+      "authored_by_pipeline": true,
+      "created_at": "2026-10-09T23:11:15.140Z"
+    },
+    {
+      "body": "🔎 QA Critic — VERDICT: APPROVE @80ac637c39759233f4a915af5ffce35277cce0d9 content:19307d0c698b73fabb07349e3b6a1295e3a6cdf94a639c869171acc6c5020b43\n\n## Summary\nThis change adds one written record of the check on whether the automatic proof runs reach the product through the shared channel. The record says the reach worked twice: an automatic sweep started the run with nobody pressing a button, and each run used the right shared version. It also reports two of the card's expected readings as not matching, and it does not round them up.\n\nIt delivers what the card asked for. The card wanted an honest, dated record with a plain result on each point, and this one gives that. Nothing a person sees in the product changes, so \"What's new: none\" is correct.\n\nRisk if we ship: none, because this adds a document only. Risk if we don't: the two mismatches stay unwritten. I recommend approving it. The automatic merge check may still hold it until the two \"Not met\" readings are settled. That is a decision for the operator, not a defect in this record.\n\n## Non-blocking notes\n- The record is not listed in the proofs index. Ten other records are also missing from it, and nothing enforces the index.\n- The closing section is titled \"What this record does not prove\" rather than the index's \"What is not proven, and why\". The content is what the index asks for.\n- The description still tells the story of the first run. The file now also covers the 16:06 PT re-run. The two agree on the result, so this is cosmetic.\n- I checked agent-bureau's proof stub (`@stable`, `pipeline_ref: stable`, blob `70341cd`) against the record, and it matches. I could not check the Actions run data or the Linear comments from this review environment.\n\n🕰️ PR description read at 2026-10-09T23:11:34Z.\n\n\n🧠 model: claude-sonnet-5-5 — model-policy: claude-sonnet-5-5 chosen for critic (advisory kind) — top of the ladder, nothing above it was skipped",
+      "authored_by_pipeline": true,
+      "created_at": "2026-10-09T23:12:27.266Z"
+    },
+    {
+      "body": "🔬 proof-run: dispatched a proof run at 2026-10-09 16:26 PT — re-run after the gate's decline at 80ac637 (re-run 2 of 2)\n\n📎 pipeline-act: proof-run-dispatched · kind: recovery · state: dispatched · next: proof-task.yml · discharges: nothing · subscriber: reconcile.yml · tag: proof-run",
+      "authored_by_pipeline": true,
+      "created_at": "2026-10-09T23:27:04.298Z"
+    },
+    {
+      "body": "🧠 model-attempt: claude-opus-5-5 — proof agent starting (turns=400). model-policy: claude-opus-5-5 chosen for proof (workhorse kind) — top of the ladder, nothing above it was skipped Run: https://github.com/dreadnought-foundry/agent-bureau/actions/runs/38004481513",
+      "authored_by_pipeline": true,
+      "created_at": "2026-10-09T23:28:14.919Z"
+    },
+    {
+      "body": "⏳ 1/5 read",
+      "authored_by_pipeline": true,
+      "created_at": "2026-10-09T23:28:44.914Z"
+    },
+    {
+      "body": "⏳ 2/5 observing",
+      "authored_by_pipeline": true,
+      "created_at": "2026-10-09T23:28:56.683Z"
+    },
+    {
+      "body": "⏳ 3/5 record written",
+      "authored_by_pipeline": true,
+      "created_at": "2026-10-09T23:31:52.564Z"
+    },
+    {
+      "body": "⏳ 4/5 local checks",
+      "authored_by_pipeline": true,
+      "created_at": "2026-10-09T23:31:59.140Z"
+    },
+    {
+      "body": "⏳ 5/5 PR opened",
+      "authored_by_pipeline": true,
+      "created_at": "2026-10-09T23:32:05.750Z"
+    },
+    {
+      "body": "🤖 agent-actor: proof · run https://github.com/dreadnought-foundry/agent-bureau/actions/runs/38004481513",
+      "authored_by_pipeline": true,
+      "created_at": "2026-10-09T23:32:06.237Z"
+    },
+    {
+      "body": "🤖 PR opened: https://github.com/dreadnought-foundry/agent-bureau/pull/3458 — CI + critic review running. Run: https://github.com/dreadnought-foundry/agent-bureau/actions/runs/38004481513",
+      "authored_by_pipeline": true,
+      "created_at": "2026-10-09T23:32:23.911Z"
+    },
+    {
+      "body": "🔎 QA Critic — VERDICT: APPROVE @4fe1f27319f366a04122c0b2bd41dffd6cf62a78 content:f7e847fb509487876dadec4e13b608410d44bd0799df352726ac3fcf30c8b4a3\n\n\n## Summary\nThis change adds one written record of the check on whether the automatic proof runs reach the product through the shared channel. The record says the reach worked three times. A scheduled sweep started each run with nobody pressing a button, and each ran on the shared stable version. It also reports two of the card's expected readings as not matching, and it does not round them up.\n\nIt delivers what the card asked for. The card wanted an honest, dated record with a plain result on each point, and this one gives that, with every time in Pacific. Nothing a person sees in the product changes, so \"What's new: none\" is correct.\n\nRisk if we ship: none, because this adds a document only. Risk if we don't: the two mismatches stay unwritten. They are a different cloud access setup than the card expected, and a log line the card assumed would exist but that the system prints only when a release is not ready. I recommend approving it. The automatic merge check will likely still hold it until the operator settles those two readings, and that is a decision for the operator, not a defect in this record.\n\n## Non-blocking notes\n- I re-checked the latest run's claims against GitHub. Run 38004481513 is a repository_dispatch run started 16:27 PT, and its stable workflow reference resolves to bcb36ad, as the record says. The dispatcher code does print the release lines only when the state is not \"ready\", as the record describes.\n- The pull request description still tells the story of the first run only. The file now covers three. Both agree on the result. Rewriting the description would make it match, but it is not required.\n- The record is not listed in the proofs index. Nothing enforces the index, and two earlier reviews raised the same point.\n\n🕰️ PR description read at 2026-10-09T23:32:55Z.\n\n\n🧠 model: claude-sonnet-5-5 — model-policy: claude-sonnet-5-5 chosen for critic (advisory kind) — top of the ladder, nothing above it was skipped",
+      "authored_by_pipeline": true,
+      "created_at": "2026-10-09T23:33:54.390Z"
+    },
+    {
+      "body": "🔬 proof-waiting: the gate declined the record twice after re-observation — needs an operator reading the gate's declined note and the two re-run receipts\n\n📎 pipeline-act: proof-observation-pending · kind: hold · state: held · next: operator · discharges: nothing · subscriber: reconcile.yml · tag: proof-waiting",
+      "authored_by_pipeline": true,
+      "created_at": "2026-10-09T23:50:43.947Z"
+    },
+    {
+      "body": "**Operator decision on the \"proof identity\" row of architecture/proofs/proof-stub-reach-2026-10.md (agent-bureau#3458).** 2026-10-09, stuck-work cleanup.\n\n**The AWS half of the row is ACCEPTED by operator decision. A later shipped decision overtook it.**\n\n- **What the card expected.** This card was written on 2026-10-06 at 16:53 PT. It says no card in the epic sets `PROOF_ROLE_ARN`, and that `aws — none, PROOF_ROLE_ARN not provided` is the expected reading.\n- **What changed.** DRE-6142 was created on 10-07 at 08:25 PT. It gave every roster repo a read-only proof role on purpose, after three proofs closed unproven for want of one. Its stack merged as agent-bureau #3334 at 11:13 PT, and the `PROOF_ROLE_ARN` secret was set on agent-bureau at 16:04 PT.\n- **What the runs read.** All three proof runs of this card read `proof identity: aws — role assumed as proof-DRE-6042`. `proof-task.yml` prints one of three lines by design, and this one is the intended reading today.\n- **The GitHub half is met as written.** The read-only app and its four permissions are quoted in the record.\n\nThe row about the sweep's `proof-release:` line is NOT covered by this decision.",
+      "authored_by_pipeline": false,
+      "created_at": "2026-10-09T23:58:41.219Z"
+    },
+    {
+      "body": "🔎 QA Critic — VERDICT: APPROVE @98714364850bdb85b5061f6212ded84ecbd41221 content:d38a610624365f48debc46035a934771a889a2631449fde991d99f3ad59edea7\n\n\n## Summary\nThis change adds one written record of the check on whether the automatic proof runs reach the product through the shared channel. The record says the reach worked three times: a scheduled sweep started each run with nobody pressing a button, and each ran on the shared stable version. Nothing a person sees in the product changes, so \"What's new: none\" is correct.\n\nIt delivers what the card asked for: a dated record with a plain result on each point, every time in Pacific. Since the last review, the operator accepted one of the two mismatched readings, the cloud-access one. They did so in their own commit, with a written reason. That row is now marked as accepted rather than not met.\n\nRisk if we ship: none, because this adds a document only. Risk if we don't: the reach stays unwritten. One reading is still marked not met: the card expected a log line that the system prints only when a release is not ready. The automatic merge check will keep holding the record until the operator settles that one, and that is their decision to make, not a defect in the record.\n\n## Non-blocking notes\n- Re-review at head 9871436. The only change since the last approved head (4fe1f27) is the operator's commit, which rewrites the proof-identity row. The earlier fixes are all still there.\n- That row follows the standard's format: `ACCEPTED by operator decision — <reason>` plus a Linear comment link of the right shape. The commit is authored by the operator (smeed652), not the builder or the proof run, as the standard requires. I could not open the Linear comment from this review environment (I hold no Linear key), so I cannot confirm the comment exists or says what the row says. The gate checks only the link's shape.\n- The opening paragraph of the record still says \"Two rows are not met\" and \"No operator decision on either row is on the card or the pull request.\" The first is now one row. The second is now false for the identity row. The row's own \"Evidence as first recorded\" text has the same leftover. The operator or the next proof run should tidy this. It does not change the result, since the Status stays FAIL while the release-line row is unmet.\n- The pull request description still tells the story of the first run only (two rows unmet). The file covers three runs and one accepted row. It agrees on the overall result. Rewriting it is optional.\n- The record is not listed in the proofs index. Ten other records are also missing, and nothing enforces the index.\n\n🕰️ PR description read at 2026-10-10 (immediately before writing this verdict).\n\n🕰️ PR description read at 2026-10-09T23:59:38Z.\n\n\n🧠 model: claude-sonnet-5-5 — model-policy: claude-sonnet-5-5 chosen for critic (advisory kind) — top of the ladder, nothing above it was skipped",
+      "authored_by_pipeline": true,
+      "created_at": "2026-10-10T00:00:44.561Z"
+    },
+    {
+      "body": "🧹 Reconcile: gate-nudge @98714364850bdb85b5061f6212ded84ecbd41221 (1/3) — critic APPROVE, verifier none, and the gate has not merged it; merge gate re-triggered.",
+      "authored_by_pipeline": true,
+      "created_at": "2026-10-10T02:09:58.309Z"
+    },
+    {
+      "body": "🧹 Reconcile: gate-nudge @98714364850bdb85b5061f6212ded84ecbd41221 (2/3) — critic APPROVE, verifier none, and the gate has not merged it; merge gate re-triggered.",
+      "authored_by_pipeline": true,
+      "created_at": "2026-10-10T04:30:02.066Z"
+    },
+    {
+      "body": "🧹 Reconcile: gate-nudge @98714364850bdb85b5061f6212ded84ecbd41221 (3/3) — critic APPROVE, verifier none, and the gate has not merged it; merge gate re-triggered.",
+      "authored_by_pipeline": true,
+      "created_at": "2026-10-10T06:43:11.323Z"
+    }
+  ],
+  "pr": {
+    "number": 3458,
+    "url": "https://github.com/dreadnought-foundry/agent-bureau/pull/3458",
+    "headRefName": "agent/DRE-6042-proof-record",
+    "headRefOid": "98714364850bdb85b5061f6212ded84ecbd41221",
+    "createdAt": "2026-10-09T21:33:27Z",
+    "isDraft": false,
+    "state": "OPEN",
+    "comments": [
+      {
+        "author": {
+          "login": "agent-bureau-qa-bot"
+        },
+        "body": "🔎 QA Critic — VERDICT: APPROVE @ab3dc35e1787aeadeb453bd0a4b9ea3355fad8f1 content:0a57428f9575dfddaf8c11acfd53b956885ffaf25c366acabf0ef4b5ffc015ac\n\n## Summary\nThis change adds a written record of the check on whether the automatic proof runs reach the product through the shared channel. The record says the reach worked: an automatic sweep started the run with nobody pressing a button, and it ran on the right shared version. It reports two of the card's expected readings as not matching, rather than rounding them up.\n\nIt delivers what the card asked for. The card wanted an honest, dated record with a plain result on each point, and this one gives that. Nothing a person sees in the product changes, so \"What's new: none\" is correct.\n\nRisk if we ship: none, because this adds a document only. Risk if we don't: the two mismatches (a different cloud access setup than the card expected, and a log line the card assumed would exist) stay unwritten. I recommend approving it and then deciding whether the card's wording should be updated to match what the system now does.\n\n## Non-blocking notes\n- The record is not listed in the proofs index, unlike earlier records.\n- The record has no closing \"what is not proven\" section, which the index asks for.\n- The claim that the merge gate will hold this PR on \"Not met\" rows is not backed by anything in the repo. I searched for it and found nothing, so the gate is not in fact holding it.\n\n🕰️ PR description read at 2026-10-09T21:33:49Z.\n",
+        "createdAt": "2026-10-09T21:35:10Z"
+      },
+      {
+        "author": {
+          "login": "agent-bureau-qa-bot"
+        },
+        "body": "🔎 QA Critic — VERDICT: APPROVE @80ac637c39759233f4a915af5ffce35277cce0d9 content:19307d0c698b73fabb07349e3b6a1295e3a6cdf94a639c869171acc6c5020b43\n\n## Summary\nThis change adds one written record of the check on whether the automatic proof runs reach the product through the shared channel. The record says the reach worked twice: an automatic sweep started the run with nobody pressing a button, and each run used the right shared version. It also reports two of the card's expected readings as not matching, and it does not round them up.\n\nIt delivers what the card asked for. The card wanted an honest, dated record with a plain result on each point, and this one gives that. Nothing a person sees in the product changes, so \"What's new: none\" is correct.\n\nRisk if we ship: none, because this adds a document only. Risk if we don't: the two mismatches stay unwritten. I recommend approving it. The automatic merge check may still hold it until the two \"Not met\" readings are settled. That is a decision for the operator, not a defect in this record.\n\n## Non-blocking notes\n- The record is not listed in the proofs index. Ten other records are also missing from it, and nothing enforces the index.\n- The closing section is titled \"What this record does not prove\" rather than the index's \"What is not proven, and why\". The content is what the index asks for.\n- The description still tells the story of the first run. The file now also covers the 16:06 PT re-run. The two agree on the result, so this is cosmetic.\n- I checked agent-bureau's proof stub (`@stable`, `pipeline_ref: stable`, blob `70341cd`) against the record, and it matches. I could not check the Actions run data or the Linear comments from this review environment.\n\n🕰️ PR description read at 2026-10-09T23:11:34Z.\n",
+        "createdAt": "2026-10-09T23:12:27Z"
+      },
+      {
+        "author": {
+          "login": "agent-bureau-qa-bot"
+        },
+        "body": "🔎 QA Critic — VERDICT: APPROVE @4fe1f27319f366a04122c0b2bd41dffd6cf62a78 content:f7e847fb509487876dadec4e13b608410d44bd0799df352726ac3fcf30c8b4a3\n\n\n## Summary\nThis change adds one written record of the check on whether the automatic proof runs reach the product through the shared channel. The record says the reach worked three times. A scheduled sweep started each run with nobody pressing a button, and each ran on the shared stable version. It also reports two of the card's expected readings as not matching, and it does not round them up.\n\nIt delivers what the card asked for. The card wanted an honest, dated record with a plain result on each point, and this one gives that, with every time in Pacific. Nothing a person sees in the product changes, so \"What's new: none\" is correct.\n\nRisk if we ship: none, because this adds a document only. Risk if we don't: the two mismatches stay unwritten. They are a different cloud access setup than the card expected, and a log line the card assumed would exist but that the system prints only when a release is not ready. I recommend approving it. The automatic merge check will likely still hold it until the operator settles those two readings, and that is a decision for the operator, not a defect in this record.\n\n## Non-blocking notes\n- I re-checked the latest run's claims against GitHub. Run 38004481513 is a repository_dispatch run started 16:27 PT, and its stable workflow reference resolves to bcb36ad, as the record says. The dispatcher code does print the release lines only when the state is not \"ready\", as the record describes.\n- The pull request description still tells the story of the first run only. The file now covers three. Both agree on the result. Rewriting the description would make it match, but it is not required.\n- The record is not listed in the proofs index. Nothing enforces the index, and two earlier reviews raised the same point.\n\n🕰️ PR description read at 2026-10-09T23:32:55Z.\n",
+        "createdAt": "2026-10-09T23:33:54Z"
+      },
+      {
+        "author": {
+          "login": "agent-bureau-qa-bot"
+        },
+        "body": "🔎 QA Critic — VERDICT: APPROVE @98714364850bdb85b5061f6212ded84ecbd41221 content:d38a610624365f48debc46035a934771a889a2631449fde991d99f3ad59edea7\n\n\n## Summary\nThis change adds one written record of the check on whether the automatic proof runs reach the product through the shared channel. The record says the reach worked three times: a scheduled sweep started each run with nobody pressing a button, and each ran on the shared stable version. Nothing a person sees in the product changes, so \"What's new: none\" is correct.\n\nIt delivers what the card asked for: a dated record with a plain result on each point, every time in Pacific. Since the last review, the operator accepted one of the two mismatched readings, the cloud-access one. They did so in their own commit, with a written reason. That row is now marked as accepted rather than not met.\n\nRisk if we ship: none, because this adds a document only. Risk if we don't: the reach stays unwritten. One reading is still marked not met: the card expected a log line that the system prints only when a release is not ready. The automatic merge check will keep holding the record until the operator settles that one, and that is their decision to make, not a defect in the record.\n\n## Non-blocking notes\n- Re-review at head 9871436. The only change since the last approved head (4fe1f27) is the operator's commit, which rewrites the proof-identity row. The earlier fixes are all still there.\n- That row follows the standard's format: `ACCEPTED by operator decision — <reason>` plus a Linear comment link of the right shape. The commit is authored by the operator (smeed652), not the builder or the proof run, as the standard requires. I could not open the Linear comment from this review environment (I hold no Linear key), so I cannot confirm the comment exists or says what the row says. The gate checks only the link's shape.\n- The opening paragraph of the record still says \"Two rows are not met\" and \"No operator decision on either row is on the card or the pull request.\" The first is now one row. The second is now false for the identity row. The row's own \"Evidence as first recorded\" text has the same leftover. The operator or the next proof run should tidy this. It does not change the result, since the Status stays FAIL while the release-line row is unmet.\n- The pull request description still tells the story of the first run only (two rows unmet). The file covers three runs and one accepted row. It agrees on the overall result. Rewriting it is optional.\n- The record is not listed in the proofs index. Ten other records are also missing, and nothing enforces the index.\n\n🕰️ PR description read at 2026-10-10 (immediately before writing this verdict).\n\n🕰️ PR description read at 2026-10-09T23:59:38Z.\n",
+        "createdAt": "2026-10-10T00:00:44Z"
+      },
+      {
+        "author": {
+          "login": "agent-bureau-qa-bot"
+        },
+        "body": "⏸️ Merge gate: declined @98714364850bdb85b5061f6212ded84ecbd41221 — proof record not proven: architecture/proofs/proof-stub-reach-2026-10.md has 1 row(s) not met: “The record quotes the sweep's `proof-release:` line for this card and…” reads “Not met. Neither sweep that dispatched this card…” (DRE-6141)",
+        "createdAt": null
+      }
+    ],
+    "statusCheckRollup": [
+      {
+        "name": "tests",
+        "status": "COMPLETED",
+        "conclusion": "SUCCESS"
+      }
+    ],
+    "files": [
+      {
+        "path": "architecture/proofs/proof-stub-reach-2026-10.md"
+      }
+    ]
+  },
+  "rebuilt": [
+    "headRefName",
+    "headRefOid",
+    "createdAt",
+    "state",
+    "isDraft",
+    "comments",
+    "statusCheckRollup",
+    "files"
+  ],
+  "rebuilt_why": "agent-bureau#3458 could not be read live: the token DRE-6650's run held reads bureau-pipeline only. Every pr field but number and url is rebuilt from the card's own thread. comments: the critic's verdicts as the card mirrors them, less the mirror's appended `🧠 model:` line (on DRE-6364 that one change turns all four mirrors into the pull request's bodies byte for byte), createdAt the mirror's time to the second; and the gate's decline note, its first line only, as the review-cap question quoted it 1s after as_of, createdAt unknown (null). headRefName is the proof run's branch convention (`proof_record.proof_record_branch`); createdAt is the `🤖 PR opened` receipt's time, an upper bound; files is the record the gate's note names."
+}
