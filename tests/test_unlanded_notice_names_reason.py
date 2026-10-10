@@ -17,9 +17,11 @@ Run: cd bureau-pipeline && python3 -m pytest tests/test_unlanded_notice_names_re
 """
 from __future__ import annotations
 
+import ast
 import inspect
 import os
 import sys
+import textwrap
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from unittest import mock
@@ -123,8 +125,11 @@ def test_a_workbench_card_in_hand_work_names_the_verdict():
 
 def test_the_reason_is_read_from_hand_built_reason_and_never_restated():
     """One rule (DRE-6424): the notice reads the reason function, and spells
-    neither the CEO's label nor a reason of its own."""
-    source = inspect.getsource(reconcile._flag_hand_built_idle)
+    neither the CEO's label nor a reason of its own. The docstring is prose
+    and is left out: it may name the label it explains."""
+    func = ast.parse(textwrap.dedent(inspect.getsource(reconcile._flag_hand_built_idle))).body[0]
+    source = "\n".join(ast.unparse(stmt) for stmt in func.body[1:])
+    assert ast.get_docstring(func), "the first statement is no longer the docstring"
     assert "hand_built_reason(card)" in source
     assert "HAND_BUILT_LABEL" not in source
     assert "routing_verdict" not in source
