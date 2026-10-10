@@ -280,6 +280,44 @@ beside `release-live` as a terminal progress act in `tests/test_act_cadence.py`.
 It ships console-first like every other row. The console's `ACTS` has to carry
 `roll-up-split` before this row can merge.
 
+## The row that holds a blocked epic at the Planning entrance — `⏸️ epic-waits` (DRE-6671)
+
+| Field | Value |
+| -- | -- |
+| tag | `epic-waits` |
+| act name | `epic-waits-on-blocker` |
+| kind · state · next actor | `hold` · `held` · `reconcile.py` |
+| discharges | nothing |
+| cadence | `null` — the wait ends when the last blocker epic is Done, and nothing declares when that is |
+| emitted by | `scripts/epic_wait.py`, `hold()` |
+
+The roll-up's activation above keeps a blocked child in Backlog (DRE-6591), but
+an epic that arrived in Planning on its own was planned anyway, although the
+seam rule says the second epic is planned only once the first is Done
+(`standards/card-quality.md`). The planner could only escalate "wait for the
+reading", and the answer put the card back in Planning for a second run that
+asked the same question (DRE-6589, 2026-10-10).
+
+So `plan.yml` runs `python3 scripts/epic_wait.py hold <card>` after the card
+gate and before the planner slot. It reads the card's `blockedBy` relations
+live and holds the card only when the card is an epic (`mid_epic.is_epic`) in
+Planning and at least one blocker is an epic not in `prose_blockers.TERMINAL`.
+A blocker that is a card and not an epic holds nothing here, and neither does
+the card's own parent; a blocker whose lane could not be read holds the card
+and is named as such. When it holds, it posts this receipt, naming each open
+blocker epic and its lane, moves the card Planning → Backlog, and answers
+`held=true`, on which every later step of the run is skipped — no planner slot
+is claimed and no model is called. The sweep's auto-advance
+(`reconcile.advance_unblocked_epics`) carries the card on once every blocker
+epic is Done.
+
+**The tag is a live key.** The gate reads the card's receipts before it posts,
+and a receipt for the same set of blockers is never posted twice; a run that
+finds the card already in Backlog holds it again and moves nothing.
+
+The console learned the act first (DRE-6672): the `act registry consumers` job
+refuses a row the console does not carry.
+
 ## The hygiene agent's fourteen rows — `🧹 hyg-*` (DRE-5368)
 
 | Act name | Tag | Kind | Next actor |

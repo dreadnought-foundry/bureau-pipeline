@@ -274,6 +274,55 @@ jobs:
           python3 .bureau-pipeline/scripts/validate_card.py gate \
             "${{ github.event.client_payload.identifier }}"
 
+      # --- An epic whose blocker epic is open waits in Backlog (DRE-6671) ----
+      #
+      # The second epic of an observation-gated seam is planned only when the
+      # first is Done (standards/card-quality.md). DRE-6591 kept a roll-up's
+      # blocked child in Backlog at activation; the Planning entrance itself
+      # stayed open. On 2026-10-10 DRE-6589 (blocked by DRE-6587, In Progress)
+      # reached a planner that could only escalate "wait for the reading"; the
+      # answer press put it back in Planning — every decision outcome lands
+      # there — and the relay dispatched a second run that asked again. Each
+      # loop cost a planner run and a Green Light row.
+      #
+      # `epic_wait.py hold` reads the card's `blockedBy` relations live and
+      # holds an epic in Planning while any blocker EPIC is not Done, Canceled
+      # or Duplicate — a blocker that is a card holds nothing here, and one
+      # whose lane cannot be read holds the card. A held card gets one
+      # `⏸️ epic-waits:` receipt and moves Planning → Backlog, where the
+      # sweep's auto-advance (`reconcile.advance_unblocked_epics`) carries it
+      # on once every blocker epic is Done. A card already in Backlog is held
+      # again and moved nowhere.
+      #
+      # `held=true` skips the duplicate guard and the planner slot below, and
+      # every later step is gated on the slot's `admitted` — so a held run
+      # claims no slot, calls no model, writes no other lane, and ends GREEN.
+      # It sits before the duplicate guard because the slot must follow that
+      # guard directly (DRE-5179); a duplicate dispatch reaching this step
+      # reads the same relations and is idempotent here.
+      #
+      # Q1 (actor): unchanged — the planner's own Linear key; `plan.yml` is
+      # already a permitted writer of Backlog. Q2 (store): no new secret.
+      # Q3 (retry): a held run is a clean success, so the medic sees nothing to
+      # retry; the receipt is keyed on its blockers and never posted twice.
+      # Q4 (limits): one card read, plus a shape read only for an open blocker
+      # its title and children do not call an epic. Q5 (our crash): the step
+      # exits 0 on every path — a card it cannot read is `held=false` with a
+      # `::warning::`, and a crash before it answers is the same, loudly.
+      - name: Epic wait — hold an epic whose blocker epic is open
+        id: epic_wait
+        if: steps.gate.outputs.bounced != 'true'
+        env:
+          LINEAR_API_KEY: ${{ secrets.LINEAR_PLANNER_KEY || secrets.LINEAR_API_KEY }}
+          LINEAR_API_KEY_FALLBACK: ${{ secrets.LINEAR_API_KEY }}
+          CARD: ${{ github.event.client_payload.identifier }}
+        run: |
+          python3 .bureau-pipeline/scripts/epic_wait.py hold "$CARD" \
+            --github-output "$GITHUB_OUTPUT" || {
+            echo "::warning::epic wait for $CARD: the gate did not answer — the run continues"
+            echo "held=false" >> "$GITHUB_OUTPUT"
+          }
+
       # --- The planner's duplicate-dispatch guard (DRE-3409) ----------------
       #
       # SEED INCIDENT: DRE-3244, 2026-09-08 — five planner runs in 42 minutes,
@@ -320,7 +369,7 @@ jobs:
       # Linear blip the lane half, and neither costs the epic its plan.
       - name: Duplicate-dispatch guard
         id: dedupe
-        if: steps.gate.outputs.bounced != 'true'
+        if: steps.gate.outputs.bounced != 'true' && steps.epic_wait.outputs.held != 'true'
         env:
           LINEAR_API_KEY: ${{ secrets.LINEAR_PLANNER_KEY || secrets.LINEAR_API_KEY }}
           LINEAR_API_KEY_FALLBACK: ${{ secrets.LINEAR_API_KEY }}
@@ -419,7 +468,7 @@ jobs:
       # which would leave `admitted` unset and skip the whole run silently.
       - name: Planner slot — claim or wait
         id: slot
-        if: steps.gate.outputs.bounced != 'true' && steps.dedupe.outputs.skip != 'true'
+        if: steps.gate.outputs.bounced != 'true' && steps.dedupe.outputs.skip != 'true' && steps.epic_wait.outputs.held != 'true'
         env:
           LINEAR_API_KEY: ${{ secrets.LINEAR_PLANNER_KEY || secrets.LINEAR_API_KEY }}
           LINEAR_API_KEY_FALLBACK: ${{ secrets.LINEAR_API_KEY }}
