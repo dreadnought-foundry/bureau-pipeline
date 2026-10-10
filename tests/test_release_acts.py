@@ -277,6 +277,9 @@ CONSOLE_AGREES = textwrap.dedent(
         "review-run": 3_000_000,
         "merge-gate-watch": 3_900_000,
     }
+
+    # DRE-6437's switch receipt, a progress act carried for the same reason.
+    SWITCH_CADENCE_MS = {"switch-reason-cleared": 43_200_000}
     '''
 )
 

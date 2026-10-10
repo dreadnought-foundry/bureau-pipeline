@@ -1043,6 +1043,24 @@
       }
     },
     {
+      "name": "switch-reason-cleared",
+      "tag": "switch-cleared",
+      "adopted": true,
+      "kind": "progress",
+      "means": "Every card a switched-off pipeline switch was waiting on is terminal, so the sweep said once, on the first card the switch named, that the switch may be turned on — and named the one command that does it.",
+      "state": "unchanged",
+      "next_actor": "operator",
+      "discharges": null,
+      "subscriber": "reconcile.yml",
+      "cadence_s": 43200,
+      "cadence_why": "The sweep's own alarm threshold: alarm_after_hours is 12 in config/switches.json, and a receipt that old with the switch still off files the alarm card, so 43200 s is the silence after which the switch reads as forgotten.",
+      "why": "DRE-6437, the half of the switch epic that reaches a person. A pipeline switch that is off names the cards it waits on in its companion variable, <SWITCH>_OFF_UNTIL (DRE-6434), and the sweep's `Read the switches` step prints when that reason clears (DRE-6436) — but only into a step summary nobody opens. This receipt is that line said where a person looks: on the first card the companion names, composed by pipeline_act.receipt in scripts/switch_reason.py, `🔀 switch-cleared: <SWITCH> in <repo-slug> — its reason cleared at <PT time>: <cards and states>. It may be turned on: gh variable set <SWITCH> --body true -R <owner/repo>`. The tag is a live key: a comment whose FIRST line opens `🔀 switch-cleared: <SWITCH> in <repo-slug>` stops a repeat, so each repository posts its own once, and its createdAt is when the reason cleared. A receipt alarm_after_hours old with the switch still off files one card titled `Switch <SWITCH> in <repo-slug> is still off after its reason cleared`, deduplicated through linear_ops.find_open, in Planning. PROGRESS and not a recovery: it moves no card and repairs nothing, and the sweep never sets the variable — turning a production behavior on is a person's act, which is why the next actor is the operator. Nothing is discharged. Outside Actions, or with --dry-run, the phase prints `would:` lines and posts none of these.",
+      "emits": {
+        "file": "scripts/switch_reason.py",
+        "anchor": "pipeline_act.receipt(\"switch-reason-cleared\""
+      }
+    },
+    {
       "name": "reviewer-outage-fleet-wide",
       "tag": "fleet-reviewer-outage",
       "adopted": true,

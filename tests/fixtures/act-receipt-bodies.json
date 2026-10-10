@@ -56,6 +56,7 @@
     "epic-queue-started": "▶️ epic-started: a slot opened and this epic was next in line (place 1) — the sweep started it, and 15 of 15 epics are now in motion.",
     "epic-start-redispatched": "▶️ epic-start-redispatched: this epic was started from the line 120 minutes ago and its activation never ran — the `epic-queued` label is still on it and the pipeline has posted nothing since — so the sweep asked for the activate run itself. It asks once per start: if this run does not take either, the epic shows as overdue in the console.",
     "proof-run-dispatched": "🔬 proof-run: dispatched a proof run at 2026-10-06 10:00 PT — first proof run (dispatch 1 of 2)",
+    "switch-reason-cleared": "🔀 switch-cleared: PROOF_DISPATCH_LIVE in bureau-pipeline — its reason cleared at 2026-10-09 05:00 PT: DRE-1 Done, DRE-2 Done. It may be turned on: gh variable set PROOF_DISPATCH_LIVE --body true -R dreadnought-foundry/bureau-pipeline",
     "promotion-stalled": "🚨 promotion-stalled: DRE-1 is still refused promotion as routing-no-verdict — first refused at 2026-10-09 08:00 PT, 3.0 hours ago.\n\nThis is not a card waiting its turn: the refusal holds whatever the WIP (0/8 on this sweep), no sweep will clear it on its own, and a person must act. The refusal receipt already on this card says what fixes it."
   },
   "workflow": {

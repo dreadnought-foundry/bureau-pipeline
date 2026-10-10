@@ -120,9 +120,10 @@ class TestEveryActDeclaresItsCadence:
         the one re-dispatch of a start the relay never activated;
         forty-seven since DRE-5926 added the sweep's dispatch of a proof run;
         forty-eight since DRE-6180 added the hygiene agent's lift of a hold;
-        forty-nine since DRE-4210 added the promotion stall receipt; fifty
+        forty-nine since DRE-4210 added the promotion stall receipt;
+        fifty since DRE-6437 added the receipt a cleared switch posts; fifty-one
         since DRE-6451 added the alarm on a planning hold aged in Triage."""
-        assert len(pipeline_act.acts()) == 50
+        assert len(pipeline_act.acts()) == 51
 
     def test_every_act_carries_a_cadence_and_a_reason(self):
         for name in pipeline_act.acts():
@@ -219,6 +220,10 @@ class TestEveryActDeclaresItsCadence:
                 f"{workflow} no longer declares timeout-minutes: {seconds // 60}"
                 " — the cadences read off it move with it"
             )
+        # A threshold the pipeline declares as data rather than as a job
+        # timeout: the switch alarm's `alarm_after_hours` (DRE-6437).
+        switches = json.loads((ROOT / "config" / "switches.json").read_text())
+        bounds["config/switches.json"] = int(switches["alarm_after_hours"] * 3600)
         for name in pipeline_act.acts():
             entry = pipeline_act.record(name)
             if entry["cadence_s"] is None:
