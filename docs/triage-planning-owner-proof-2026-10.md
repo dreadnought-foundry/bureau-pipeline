@@ -38,7 +38,7 @@ The row that is not met is the alarm's wording. The card says the receipt opens 
   GitHub's answer: `{"message":"Resource not accessible by integration","documentation_url":"https://docs.github.com/rest/git/refs#create-a-reference","status":"403"}` — `gh: Resource not accessible by integration (HTTP 403)`. No ref was created.
 - **GitHub, written: `GH_TOKEN`.** Used only to push `agent/DRE-6483-proof-record` and open this record's pull request.
 - **Linear: `LINEAR_API_KEY`, the fleet key** — the pipeline's scripted read identity. Reads: DRE-4059's thread (through `plan_bound.py read` and `dump-comments --with-authors`) and its lane history, DRE-6562's thread, and DRE-5774's thread. Writes: this card's heartbeats and its actor marker, nothing else.
-- **linear requests: 22 of 40**, summed off the `linear-calls:` lines each invocation printed, heartbeats and the actor marker included.
+- **linear requests: 16 of 40** when this record was pushed. That total is summed off the `linear-calls:` lines each invocation printed, with the four heartbeats so far included. Two writes come after the push: the `⏳ 5/5 PR opened` heartbeat and the actor marker. Each heartbeat so far cost two requests, so the run ends near 20 of 40.
 - **aws: none.** The step summary's line: `proof identity: aws — none, PROOF_ROLE_ARN not provided`. No row here needs one.
 - **Scratch state: none created.**
 
