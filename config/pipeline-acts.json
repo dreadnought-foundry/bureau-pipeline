@@ -1582,6 +1582,13 @@
       "why": "It reports a fact about a branch to a person, not an act: nothing downstream reads it, nothing budgets off it, it changes no lane and it discharges nothing — the card stays where rule 3 leaves it, and the repair loop's own run is still what opens the pull request. The same class as `settle_note` one row up. It carries its own idempotency key (repair_card.UNLANDED_MARKER), read back off the card's own comments beside the branch and its head sha, so a later sweep over the same head writes nothing and a head that moved gets one new comment; a trailer beside that key would be a second grammar over a comment whose presence is load-bearing."
     },
     {
+      "file": "scripts/repair_finish.py",
+      "anchor": "finish_note(pr_url, branch, workflow_name)",
+      "kind": "not-an-act",
+      "means": "A repair card is told which pull request the Red-Main Repair workflow opened from its branch, after the repair agent pushed the fix and stopped before opening one itself (DRE-6525).",
+      "why": "Progress on a card, not an act — the same class as `attempt_note` above: it tells a person which pull request the workflow opened, nothing downstream reads it, nothing budgets off it, and it discharges nothing. The pull request itself is the machine-readable half: its head ref carries the card id that closes the card on merge, and a re-run finds it through `gh pr list --state all` and answers `already-open` before any comment is composed, so the pull request is also the comment's idempotency key. An act row would declare a state, a next actor and a subscriber for a line that changes none of the three."
+    },
+    {
       "file": "scripts/planning_route.py",
       "anchor": "lops.cmd_comment(identifier, body)",
       "kind": "seam",
