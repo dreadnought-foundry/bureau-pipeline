@@ -524,9 +524,11 @@ def test_the_queue_markers_and_label():
     assert groomer.QUEUED_LABEL == "groom-queued"
     assert groomer.QUEUED_TAG in groomer.ALL_MARKERS
     assert groomer.RELEASED_TAG in groomer.ALL_MARKERS
-    # No seventh outcome: the console mirrors this list.
+    # No eighth outcome: the console mirrors this list, and the seventh is
+    # DRE-6667's `rewritten`.
     assert groomer.DRAIN_OUTCOMES == (
-        "moved", "held back", "added", "cancelled", "refused", "already gone")
+        "moved", "held back", "added", "cancelled", "refused", "already gone",
+        "rewritten")
 
 
 def test_the_queued_record_reads_back_whole():

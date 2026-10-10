@@ -196,9 +196,12 @@ def test_the_cancelled_note_is_one_line_in_its_own_marker():
     assert len(note.strip().splitlines()) == 1
 
 
-def test_the_six_outcomes():
+def test_the_seven_outcomes():
+    # `rewritten` is a Rewrite first card whose accepted draft the drain
+    # wrote and moved (DRE-6667).
     assert groomer.DRAIN_OUTCOMES == (
-        "moved", "held back", "added", "cancelled", "refused", "already gone")
+        "moved", "held back", "added", "cancelled", "refused", "already gone",
+        "rewritten")
 
 
 # --------------------------------------------------------------------------
