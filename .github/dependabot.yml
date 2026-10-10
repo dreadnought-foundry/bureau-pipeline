@@ -83,16 +83,17 @@ updates:
   # Every third-party action here is pinned to a 40-char commit sha with its
   # version in a trailing comment (DRE-3418, guarded by
   # scripts/check_action_pins.py). Dependabot reads that comment to know which
-  # release the sha is, and rewrites both when it proposes the next one (the
-  # comment only when nothing follows the version: #452 moved 22 shas under a
-  # `# v1.0.217 — pinned DRE-3416: …` comment and left every comment naming the
-  # old release, which the checker does not catch — carded as DRE-4337) — so a
-  # vendor release arrives as a PR the critic reviews and the harness proves,
-  # never as a tag moving underneath us (DRE-3416: `claude-code-action@v1`
-  # moved to v1.0.218 and killed every Claude-running job in the fleet for 72
-  # minutes). A SHA pin is also what gives this entry anything to bump at all:
-  # on a floating major, a patch release moves the tag silently and the monthly
-  # sweep sees no change.
+  # release the sha is. When it proposes the next release it moves the sha
+  # always, and rewrites the comment only when nothing follows the version:
+  # #452 moved 22 shas under a `# v1.0.217 — pinned DRE-3416: …` comment and
+  # left every comment naming the old release. tests.yml runs the checker with
+  # `--resolve`, which reads each version's tag from GitHub and fails any line
+  # whose sha is not that release (DRE-4337). So a vendor release arrives as a
+  # PR the critic reviews and the harness proves, never as a tag moving
+  # underneath us (DRE-3416: `claude-code-action@v1` moved to v1.0.218 and
+  # killed every Claude-running job in the fleet for 72 minutes). A SHA pin is
+  # also what gives this entry anything to bump at all: on a floating major, a
+  # patch release moves the tag silently and the monthly sweep sees no change.
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:

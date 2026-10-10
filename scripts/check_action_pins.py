@@ -19,9 +19,32 @@ It FAILS (exit 1) when any third-party `uses:` reference is not
     uses: <owner>/<action>[/<subpath>]@<40-char lowercase-hex sha> # v<version>
 
 Both halves are load-bearing. The SHA is the pin. The version comment is what
-Dependabot READS to know which release the SHA is, and rewrites when it
-proposes the next one — a bare SHA is pinned but frozen, and nothing proposes
-its successor.
+Dependabot READS to know which release the SHA is — a bare SHA is pinned but
+frozen, and nothing proposes its successor. When Dependabot proposes the next
+release it moves the sha always, and rewrites the comment only when nothing
+follows the version: on #452 (2026-09-19) it moved 22 shas under
+`# v1.0.217 — pinned DRE-3416: …` and left every comment naming the old
+release, and this check, reading only that SOME version led the comment,
+reported all clear.
+
+## `--resolve`: the comment must name the release the sha IS (DRE-4337)
+
+Offline, the checker can see only that a version is written down, not that it
+is the right one. `--resolve` asks GitHub: for each pinned line it reads
+`gh api repos/<owner>/<repo>/git/ref/tags/<version>`, follows an annotated tag
+to its commit, and FAILS when that commit is not the pinned sha — whatever put
+the halves out of step: a comment Dependabot would not rewrite, a hand edit, a
+bump script that moved one half. One read per (repository, version), however
+many lines pin it. Every pinned repository is public, so any token that can
+read public refs will do — the read-only `github.token` of a
+Dependabot-triggered run included.
+
+A read that fails — no `gh`, no token, no network, a 404, a body that is not
+the shape of a ref — leaves that line UNKNOWN: printed, never counted as a
+pass. Exit codes: 0 every line agrees; 1 a line fails (offline, or its sha is
+not its release); 2 nothing fails but some line is UNKNOWN. A tag the vendor
+moves or deletes changes the answer to FAIL or UNKNOWN, never to a pass.
+Nothing is cached between runs and nothing is written anywhere.
 
 ## What is scanned, and what is exempt
 
@@ -45,14 +68,16 @@ Deterministic, stdlib-only, line-based on purpose: YAML parsing discards the
 `# v<version>` comment, and a violation has to be reported with the LINE the
 operator must edit. Run from anywhere:
 
-    python3 scripts/check_action_pins.py [dir_or_file ...]
+    python3 scripts/check_action_pins.py [--resolve] [dir_or_file ...]
 
 tests/test_check_action_pins.py exercises it against synthetic workflows (one
 per violation class) and against the LIVE tree, so a diff that reintroduces a
 floating tag turns Pipeline Tests red.
 """
 
+import json
 import re
+import subprocess
 import sys
 from collections import namedtuple
 from pathlib import Path
@@ -76,9 +101,10 @@ SHA_RE = re.compile(r"[0-9a-f]{40}")
 
 # The version the SHA is, leading the comment. At least two numeric components:
 # `# v7` is the floating tag written down and names no release, which is
-# exactly the thing the pin replaces. Trailing prose is fine — the live
-# claude-code-action pin explains itself after the version (DRE-3416) and
-# Dependabot reads only the leading version.
+# exactly the thing the pin replaces. Only the leading version is read, so
+# prose after it passes here — but Dependabot rewrites the comment only when
+# nothing follows the version (#452), so prose leaves a stale comment behind
+# the sha it moves, and it is `--resolve` that catches the disagreement.
 VERSION_COMMENT_RE = re.compile(r"#\s*(v\d+(?:\.\d+)+)")
 
 Reference = namedtuple(
@@ -200,8 +226,110 @@ def scan(paths):
     return violations, stats
 
 
-def main(argv):
-    paths = [Path(a) for a in argv[1:]] or list(DEFAULT_PATHS)
+class Unresolved(Exception):
+    """A tag read that produced no answer. Its message is the reason, printed
+    on the UNKNOWN line."""
+
+
+#: An annotated tag names a tag object that names the commit; a tag of a tag
+#: adds a hop. Real releases take one. Past this, the chain is a loop.
+MAX_TAG_HOPS = 4
+
+#: Seconds one `gh api` read may take before it is UNKNOWN rather than a hang.
+READ_TIMEOUT = 60
+
+
+def gh_read(path):
+    """`gh api <path>` as parsed JSON. Every way it can fail is `Unresolved`."""
+    try:
+        done = subprocess.run(
+            ["gh", "api", path], capture_output=True, text=True,
+            timeout=READ_TIMEOUT,
+        )
+    except (OSError, subprocess.TimeoutExpired) as error:
+        raise Unresolved(f"gh api {path}: {error}") from error
+    if done.returncode != 0:
+        detail = " ".join(done.stderr.split()) or f"exited {done.returncode}"
+        raise Unresolved(f"gh api {path}: {detail}")
+    try:
+        return json.loads(done.stdout)
+    except ValueError as error:
+        raise Unresolved(f"gh api {path}: body is not JSON ({error})") from error
+
+
+def _object(body, what):
+    """The `object` of a ref or tag body as (type, sha), or Unresolved."""
+    obj = body.get("object") if isinstance(body, dict) else None
+    if not isinstance(obj, dict):
+        raise Unresolved(f"{what}: no object in the response")
+    kind, sha = obj.get("type"), obj.get("sha")
+    if not isinstance(sha, str) or not SHA_RE.fullmatch(sha):
+        raise Unresolved(f"{what}: {sha!r} is not a commit sha")
+    return kind, sha
+
+
+def resolve_tag(owner_repo, tag, read=gh_read):
+    """The commit `owner_repo`'s tag `tag` names, following annotated tags.
+    Raises Unresolved for anything that is not exactly that."""
+    what = f"{owner_repo} tag {tag}"
+    body = read(f"repos/{owner_repo}/git/ref/tags/{tag}")
+    if not isinstance(body, dict) or body.get("ref") != f"refs/tags/{tag}":
+        raise Unresolved(f"{what}: the response is not that tag's ref")
+    kind, sha = _object(body, what)
+    for _ in range(MAX_TAG_HOPS):
+        if kind != "tag":
+            break
+        kind, sha = _object(read(f"repos/{owner_repo}/git/tags/{sha}"), what)
+    if kind != "commit":
+        raise Unresolved(f"{what}: resolves to a {kind!r}, not a commit")
+    return sha
+
+
+def resolve_paths(paths, read=gh_read):
+    """(fails, unknowns, agreed) for every pinned line under `paths`.
+
+    Only lines that pass offline are resolved — a floating tag or a missing
+    comment is already a FAIL with its own message and has no version to ask
+    about. One read per (repository, version)."""
+    answers = {}
+    fails, unknowns, agreed = [], [], 0
+    for path in iter_files(paths):
+        for ref in references(path):
+            if ref.local or ref.exempt or not SHA_RE.fullmatch(ref.ref):
+                continue
+            version = VERSION_COMMENT_RE.match(ref.comment or "")
+            if not version:
+                continue
+            owner_repo = "/".join(ref.action.split("/")[:2])
+            key = (owner_repo, version.group(1))
+            if key not in answers:
+                try:
+                    answers[key] = (resolve_tag(*key, read=read), None)
+                except Unresolved as error:
+                    answers[key] = (None, str(error))
+            commit, reason = answers[key]
+            where = f"{ref.path.name}:{ref.line}"
+            if commit is None:
+                unknowns.append(
+                    f"{where}: `uses: {ref.uses}` — could not read which "
+                    f"commit {key[1]} is ({reason}); not counted as a pass"
+                )
+            elif commit != ref.ref:
+                fails.append(
+                    f"{where}: `uses: {ref.uses}` says `# {key[1]}`, but "
+                    f"{owner_repo} {key[1]} is commit {commit}, not {ref.ref} "
+                    f"— the comment names a release the sha is not (DRE-4337); "
+                    f"move the sha and the comment together"
+                )
+            else:
+                agreed += 1
+    return fails, unknowns, agreed
+
+
+def main(argv, read=gh_read):
+    args = argv[1:]
+    online = "--resolve" in args
+    paths = [Path(a) for a in args if a != "--resolve"] or list(DEFAULT_PATHS)
     violations, stats = scan(paths)
     print(
         f"checked {stats['files']} files: {stats['third_party']} third-party "
@@ -218,9 +346,28 @@ def main(argv):
         print(f"\n{len(violations)} floating or uncommented action "
               f"reference(s): a vendor release would reach production without "
               f"a PR, a critic or a harness run (DRE-3416)")
+    if not online:
+        if violations:
+            return 1
+        print("ok: every third-party action is pinned to a commit sha with its "
+              "version in a comment")
+        return 0
+    fails, unknowns, agreed = resolve_paths(paths, read=read)
+    for fail in fails:
+        print(f"FAIL {fail}")
+    for unknown in unknowns:
+        print(f"UNKNOWN {unknown}")
+    print(f"resolved {agreed + len(fails) + len(unknowns)} pinned "
+          f"reference(s): {agreed} agree, {len(fails)} name a release the sha "
+          f"is not, {len(unknowns)} unknown")
+    if violations or fails:
         return 1
-    print("ok: every third-party action is pinned to a commit sha with its "
-          "version in a comment")
+    if unknowns:
+        print(f"\nnot green: {len(unknowns)} version comment(s) could not be "
+              f"checked against GitHub, and an unchecked comment is never a pass")
+        return 2
+    print("ok: every third-party action is pinned to a commit sha, and every "
+          "version comment names the release that sha is")
     return 0
 
 
