@@ -3695,6 +3695,16 @@ def serve_planner_line(skip: set[str] | frozenset[str] = frozenset()) -> int:
 #: `ready_lane_writers.py` reads the destination at the call site.
 GROOM_RELEASE_TO = "Planning"
 
+#: The freshness bound, in minutes (DRE-6640): how long after its newest
+#: `groom-queued` record a queued card's missing label is read as "not yet
+#: readable" rather than "a person took it off". On 2026-10-09 the board read
+#: came ten seconds after the drain queued twelve cards and none of their
+#: labels showed, so the bound has to sit far past that lag; and it must not
+#: outlast one sweep interval (`self-reconcile.yml` runs every 15 minutes),
+#: so a card held back is read again on the first pass past the bound and a
+#: person's removal is honored one pass later at most. Ten minutes does both.
+GROOM_LABEL_FRESH_MINUTES = 10
+
 #: The lane a stalled queue's notice is CREATED in (DRE-5292's rule, the
 #: fleet-outage card's): created there, never moved there, `no-code` and no
 #: `agent:*` role — nothing is built or planned off it.
@@ -3713,6 +3723,65 @@ def _groom_labelled(card: dict) -> bool:
         (lbl.get("name") or "").lower() == groomer.QUEUED_LABEL
         for lbl in (card.get("labels") or {}).get("nodes") or []
     )
+
+
+def _groom_fresh(entry: dict) -> bool:
+    """Is the newest `groom-queued` record naming this queued card younger
+    than `GROOM_LABEL_FRESH_MINUTES` (DRE-6640)? A record with no readable
+    time is old: its missing label means what it always meant."""
+    at = _moment(entry.get("at"))
+    return (at is not None and
+            (datetime.now(UTC) - at).total_seconds() < GROOM_LABEL_FRESH_MINUTES * 60)
+
+
+def _groom_label_readable(ident: str) -> bool:
+    """One card read directly for its `groom-queued` label (DRE-6640) — made
+    only for a card inside the freshness bound whose label this pass's board
+    read did not show. It can rescue a card, never take one out: a read that
+    fails is a read failure, and the card keeps its place."""
+    try:
+        return _groom_labelled(linear_ops.get_issue(ident, fresh=True) or {})
+    except linear_ops.LinearError as e:
+        _read_failures.append(f"{ident} groom-queued label: {e}")
+        print(f"ERROR: groom queue: {ident} could not be read directly for its "
+              f"label, so it keeps its place: {e}", file=sys.stderr)
+        return False
+
+
+def _repair_groom_queue(card: str, records: list[dict], board: dict) -> list[dict]:
+    """Put back in the line every card a `groom-released` row wrongly recorded
+    as taken out by hand (DRE-6640): one the row named, that no later
+    pipeline `groom-queued` record names (`groomer.wrongly_dropped`), and that
+    this pass's board read shows still in Intake and still carrying the
+    label. ONE `groomer.requeued_record` per batch on the standing card,
+    carrying the batch's own id and the cards in their original place order.
+
+    Returns the records posted, as the thread will carry them, so this pass
+    reads the queue they restored. A card that has left Intake, or whose
+    label is really gone, is not touched; a record Linear refused is a write
+    failure, and the next pass finds the same cards and tries again."""
+    batches: dict[str, list[dict]] = {}
+    for entry in groomer.wrongly_dropped(records):
+        found = board.get(entry["identifier"])
+        if ((found or {}).get("state", {}).get("name") == "Intake"
+                and _groom_labelled(found)):
+            batches.setdefault(entry["id"], []).append(entry)
+    posted = []
+    for pid, cards in batches.items():
+        try:
+            linear_ops.cmd_comment(card, body := groomer.requeued_record(
+                pid, cards, corrects=[c["row_at"] for c in cards]))
+        except linear_ops.LinearError as e:
+            _write_failures.append(f"{card} groom-queued repair {pid}: {e}")
+            print(f"ERROR: groom queue: batch {pid}'s wrongly dropped cards "
+                  f"were not put back on {card}: {e}", file=sys.stderr)
+            continue
+        print(f"groom queue: batch {pid} — "
+              f"{', '.join(c['identifier'] for c in cards)} put back in the "
+              "line: recorded as taken out by hand with the label still on")
+        posted.append({"body": body, "authored_by_pipeline": True,
+                       "created_at": datetime.now(UTC).isoformat()})
+    return posted
 
 
 def release_groom_queue(free: int) -> list[str]:
@@ -3735,7 +3804,12 @@ def release_groom_queue(free: int) -> list[str]:
         not held; its label comes off only if this pass's board read shows
         it still carries one;
       * a card still in Intake whose label a person removed has been taken
-        out of the queue by that person, and is never released;
+        out of the queue by that person, and is never released — read so
+        only once its newest queued record is older than
+        `GROOM_LABEL_FRESH_MINUTES` (DRE-6640). Inside that bound a missing
+        label may not be readable yet: the card is read directly when a slot
+        could take it, released if that read shows the label, and otherwise
+        keeps its place with nothing written;
       * otherwise, while a slot is free, the card gets its `groomer.
         moved_note` — the batch, its position off the proposal record on the
         same thread, this release and its queue place (DRE-3326) — then moves
@@ -3747,6 +3821,10 @@ def release_groom_queue(free: int) -> list[str]:
 
     ONE `🧺 groom-released` comment per pass that changed the queue, a line
     per batch it touched — never one per card.
+
+    Before the walk, a card a row wrongly recorded as taken out by hand is
+    put back in the line (`_repair_groom_queue`, DRE-6640), so the walk reads
+    the queue that repair restored.
 
     A STALL — the queue is not empty, this pass had a free slot, released
     nothing, and nothing has changed the queue for the planner line's own
@@ -3769,10 +3847,19 @@ def release_groom_queue(free: int) -> list[str]:
         return released
     records = groomer.decision_records(linear_ops, card, whole_thread=True)
     standing = groomer.queue_standing(records)
-    if not standing:
+    if not standing and not groomer.wrongly_dropped(records):
         print("groom queue: empty — nothing to release")
         return released
     board = {c["identifier"]: c for c in active_cards(SWEPT_LANES)}
+    # A card a row wrongly took out goes back in the line first (DRE-6640),
+    # so this pass reads the queue that record restores.
+    repaired = _repair_groom_queue(card, records, board)
+    if repaired:
+        records = [*records, *repaired]
+        standing = groomer.queue_standing(records)
+    if not standing:
+        print("groom queue: empty — nothing to release")
+        return released
     # Each batch's proposal record, off the thread already read: a released
     # card's note names its position on the approved list (DRE-3326).
     records_by_id = {pid: groomer.proposal_record(pid, records)
@@ -3801,10 +3888,24 @@ def release_groom_queue(free: int) -> list[str]:
                   f"({lane or 'off the swept board'}) — dropped from the line")
             continue
         if not _groom_labelled(found):
-            change(pid)["unqueued"].append(ident)
-            print(f"groom queue: {ident} is in Intake without "
-                  f"'{groomer.QUEUED_LABEL}' — taken out of the queue by hand")
-            continue
+            if not _groom_fresh(entry):
+                change(pid)["unqueued"].append(ident)
+                print(f"groom queue: {ident} is in Intake without "
+                      f"'{groomer.QUEUED_LABEL}' — taken out of the queue by hand")
+                continue
+            # Queued inside the bound: the label may not be readable yet
+            # (DRE-6640). With no slot free the card waits whatever a direct
+            # read would say, so it is read only when it could be released.
+            if halted or slots <= 0:
+                remaining.append(entry)
+                continue
+            if not _groom_label_readable(ident):
+                remaining.append(entry)
+                print(f"groom queue: {ident} shows no '{groomer.QUEUED_LABEL}' "
+                      f"label {GROOM_LABEL_FRESH_MINUTES} minutes or less "
+                      "after it was queued — kept in its place, read again "
+                      "next pass")
+                continue
         if halted or slots <= 0:
             remaining.append(entry)
             continue

@@ -590,7 +590,7 @@ batch that was right apart from two rows.
 | `🧺 groom-drain-refused: <id> — <reason>` | the drain | one per refusal |
 | `🧺 groom-cancelled: <id> — <reason>` | the drain, on the card it cancels | one per cancelled card, written before the card moves to `Canceled` |
 | `🧺 groom-moved: <id> — <verdict> · <from> → <to> · by <writer> · record on <batch card>` | the drain, and the reconcile sweep's queue release, on the card each moves | one per card moved into `Planning`, written before its lane changes; `<verdict>` is `position <n> of <m> on the approved Planning list` or `added by the CEO, no position`, `<writer>` is `the drain` or `the sweep's queue release, place <p>`, and `<batch card>` is the card the proposal record stands on (DRE-3326) |
-| `🧺 groom-queued: <id>` + `\| place \| card \| repo \|` table | the drain | one per drain that queued a card, written just before the drained record — the cards past the free planner slots, in place order (DRE-5435) |
+| `🧺 groom-queued: <id>` + `\| place \| card \| repo \|` table | the drain; the reconcile sweep's repair | one per drain that queued a card, written just before the drained record — the cards past the free planner slots, in place order (DRE-5435); and one per batch whose cards a `groom-released` row wrongly recorded as taken out by hand, same id, original places (DRE-6640) |
 | `🧺 groom-released: <id> — released: DRE-A, DRE-B · left the lane: DRE-C[ · taken out by hand: DRE-D]` | the reconcile sweep | one comment per pass that changed the queue, a line per batch it touched; pipeline-authored only, like `groom-queued` |
 | `🧺 groom-hold-repo: <slug>` | the CEO (console or by hand) | not bound to a proposal id; newest marker per slug wins; pipeline-authored ignored |
 | `🧺 groom-release-repo: <slug>` | the CEO (console or by hand) | same |
@@ -784,7 +784,8 @@ its position read off the proposal record on the same thread — then moved to
 `Planning` with its label removed — and Planning entry starts its plan
 run the way any Intake-to-Planning move does. A queued card that has left
 Intake is dropped with no state write; one whose label a person removed has
-been taken out of the queue by that person, and may be proposed again. Each
+been taken out of the queue by that person, and may be proposed again — read
+so only past the freshness bound below. Each
 pass that changed the queue writes ONE `🧺 groom-released` comment, so the
 queue's standing is readable off the thread alone: queued, less released, less
 left. `propose` never offers a card carrying `groom-queued`, and waiting in the
@@ -792,6 +793,36 @@ queue is never escalated to the CEO — a queued card is in Intake, which no
 Planning watchdog or planner line reads. A queue that has stood still for the
 planner line's own bound with a slot free is ONE `no-code` card created in
 `Triage` for the operator.
+
+**A label not yet readable is not a person's act** (DRE-6640). On 2026-10-09
+the drain queued twelve cards of batch `467bdb8ee5f7` and the sweep read the
+board ten seconds later, before their `groom-queued` label showed; it recorded
+all twelve as taken out by hand, and nobody had touched them. So a missing
+label means "taken out by hand" only once the newest `groom-queued` record
+naming the card is older than the freshness bound, `GROOM_LABEL_FRESH_MINUTES`
+in `scripts/reconcile.py` — longer than any lag seen, and no longer than one
+sweep interval, so a card held back is read again on the first pass past it.
+Inside the bound, a queued card whose label the board read did not show is
+read once more on its own, directly, when a slot could take it: if that read
+shows the label the card is released like any other; if not, it keeps its
+place, nothing is written about it, and the next pass reads again. A direct
+read can rescue a card, never take one out.
+
+**A wrongly dropped card is put back** (DRE-6640). Each pass also reads every
+`🧺 groom-released` row the pipeline wrote, and a card a row named as taken out
+by hand — still in Intake and still carrying `groom-queued` in this pass's
+board read, and named by no pipeline `groom-queued` record written after that
+row — was dropped wrongly. The sweep writes ONE new `🧺 groom-queued: <id>`
+record per batch on the standing card, with the batch's own id and those cards
+in their original place order, and its prose names the row it corrects, by
+date, and says nobody had removed the label. It is the same grammar the drain
+writes, so the queue's standing reads it with no second reader: a row takes a
+card out of only the queue written before it, and the later record adds it
+again, behind every card already waiting. The record is its own receipt and is
+written once because the thread is the test — on the next pass a record newer
+than the row already names the card. A card the row named that has left Intake,
+or whose label is really gone, is not touched. A repaired card's record is
+fresh, so the bound protects it on the pass that releases it.
 
 The ledger sees a released card only once its planner run posts a `claimed` or
 `waiting` receipt. Two drains approved back to back — several repos' batches
