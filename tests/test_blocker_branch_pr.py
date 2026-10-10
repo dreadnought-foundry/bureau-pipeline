@@ -231,7 +231,7 @@ class TestTheStampedCreate:
         assert second.startswith(
             "OPENED BY THE SWEEP, not by the agent — read this before approving:")
         assert "branch-without-pr" in second
-        assert STAMPED_REASON[:60] in body
+        assert STAMPED_REASON[:60] in second
         assert "HELD BY THE AGENT" not in body
         assert module.CLOSING in body
 
@@ -287,7 +287,7 @@ class TestTheLegacyCreate:
         second = _second_paragraph(body)
         assert second.startswith(
             "OPENED AS A DRAFT BY THE SWEEP — the agent held this branch:")
-        assert LEGACY_REASON[:60] in body
+        assert LEGACY_REASON[:60] in second
         assert "Green Light" in second
         assert "ready for review" in second
         assert "HELD BY THE AGENT" not in body
