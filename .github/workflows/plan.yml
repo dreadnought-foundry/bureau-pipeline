@@ -1134,6 +1134,9 @@ jobs:
           grep -E '^(LEDGER|MULCH) STATUS:' .bureau-pipeline/agent-context.md || echo "no LEDGER STATUS: or MULCH STATUS: line in the assembled context"
           python3 .bureau-pipeline/scripts/spoken_thread.py people "$CARD" >> .bureau-pipeline/agent-context.md
           grep -E '^SPOKEN STATUS:' .bureau-pipeline/agent-context.md || echo "no SPOKEN STATUS: line in the assembled context"
+          python3 .bureau-pipeline/scripts/plan_bound.py context "$CARD" >> .bureau-pipeline/agent-context.md \
+            || echo "BOUND STATUS: UNKNOWN — plan_bound.py context exited non-zero, so the bound findings were not appended" >> .bureau-pipeline/agent-context.md
+          grep -E '^BOUND STATUS:' .bureau-pipeline/agent-context.md || echo "no BOUND STATUS: line in the assembled context"
           echo "assembled $(wc -l < .bureau-pipeline/agent-context.md) lines of planner context"
 
       # DRE-1996: make the DRE-1989 sentinel fence mechanical. Epic title and
@@ -3552,6 +3555,10 @@ jobs:
           EPIC="${{ github.event.client_payload.identifier }}"
           HOW=$(PYTHONPATH=.bureau-pipeline/scripts python3 -c 'import plan_critic; print(plan_critic.REAPPROVE_HOW)')
           if [ -z "$NOTE" ]; then NOTE="The first critic's finding this round: ${FINDING}."; fi
+          if python3 .bureau-pipeline/scripts/plan_bound.py exit "$EPIC" --stage pre \
+               --repo "$GITHUB_REPOSITORY"; then
+            exit 0   # the exit asked the CEO a question or granted the planner a rewrite — nothing to park
+          fi
           python3 .bureau-pipeline/scripts/hold.py apply "$EPIC" --reason plan-critic-bound --by plan.yml
           python3 .bureau-pipeline/scripts/linear_ops.py state "$EPIC" "Triage"
           python3 .bureau-pipeline/scripts/linear_ops.py comment "$EPIC" \
@@ -4068,6 +4075,10 @@ jobs:
                 "🚨 The second critic's review could NOT be started again — the dispatch did not go through, so nothing is reading the plan. This run is red, so the medic picks it up; nothing here is yours to do."
             fi
           elif [ "$ACTION" = "park" ]; then
+            if python3 .bureau-pipeline/scripts/plan_bound.py exit "$EPIC" --stage post \
+                 --repo "$GITHUB_REPOSITORY"; then
+              exit 0   # the exit asked the CEO a question or granted the planner a rewrite — nothing to park
+            fi
             python3 .bureau-pipeline/scripts/hold.py apply "$EPIC" --reason plan-critic-bound --by plan.yml
             python3 .bureau-pipeline/scripts/linear_ops.py state "$EPIC" "Triage"
             python3 .bureau-pipeline/scripts/linear_ops.py comment "$EPIC" \
@@ -4200,6 +4211,10 @@ jobs:
           EPIC="${{ github.event.client_payload.identifier }}"
           THREAD="${{ runner.temp }}/held-park-thread.json"
           NOTE="${{ runner.temp }}/held-park-note.md"
+          if python3 .bureau-pipeline/scripts/plan_bound.py exit "$EPIC" --stage post \
+               --repo "$GITHUB_REPOSITORY"; then
+            exit 0   # the exit asked the CEO a question or granted the planner a rewrite — nothing to park
+          fi
           python3 .bureau-pipeline/scripts/hold.py apply "$EPIC" --reason plan-critic-bound --by plan.yml
           python3 .bureau-pipeline/scripts/linear_ops.py state "$EPIC" "Triage"
           # An unreadable thread is named as unreadable by the note, never as
@@ -4246,6 +4261,10 @@ jobs:
               exit 1
             fi
           else
+            if python3 .bureau-pipeline/scripts/plan_bound.py exit "$EPIC" --stage post \
+                 --repo "$GITHUB_REPOSITORY"; then
+              exit 0   # the exit asked the CEO a question or granted the planner a rewrite — nothing to park
+            fi
             python3 .bureau-pipeline/scripts/hold.py apply "$EPIC" --reason plan-critic-bound --by plan.yml
             python3 .bureau-pipeline/scripts/linear_ops.py state "$EPIC" "Triage"
             python3 .bureau-pipeline/scripts/linear_ops.py comment "$EPIC" \
@@ -4749,6 +4768,10 @@ jobs:
             WHY="The re-plan finished, but ${FAILED}.${BOUNCED}"
           fi
           HOW=$(PYTHONPATH=.bureau-pipeline/scripts python3 -c 'import plan_critic; print(plan_critic.REAPPROVE_HOW)')
+          if python3 .bureau-pipeline/scripts/plan_bound.py exit "$EPIC" --stage post \
+               --repo "$GITHUB_REPOSITORY"; then
+            exit 0   # the exit asked the CEO a question or granted the planner a rewrite — nothing to park
+          fi
           python3 .bureau-pipeline/scripts/hold.py apply "$EPIC" --reason plan-critic-bound --by plan.yml
           python3 .bureau-pipeline/scripts/linear_ops.py state "$EPIC" "Triage"
           python3 .bureau-pipeline/scripts/linear_ops.py comment "$EPIC" \
@@ -4884,6 +4907,10 @@ jobs:
             CHANGED="The re-plan did not finish (outcome: ${REPLAN_OUTCOME:-not run}), so the plan is as the critic saw it."
           fi
           if [ -z "$NOTE" ]; then NOTE="The critic's finding this round: ${FINDING}."; fi
+          if python3 .bureau-pipeline/scripts/plan_bound.py exit "$EPIC" --stage post \
+               --repo "$GITHUB_REPOSITORY"; then
+            exit 0   # the exit asked the CEO a question or granted the planner a rewrite — nothing to park
+          fi
           python3 .bureau-pipeline/scripts/hold.py apply "$EPIC" --reason plan-critic-bound --by plan.yml
           python3 .bureau-pipeline/scripts/linear_ops.py state "$EPIC" "Triage"
           python3 .bureau-pipeline/scripts/linear_ops.py comment "$EPIC" \

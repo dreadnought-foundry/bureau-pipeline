@@ -699,9 +699,11 @@ approval instruction the workflow prompt gives you.
 Both readings happen **before the CEO reads it**. The first critic asks one
 question: is this fit to take the CEO's time? When it passes the plan, the
 second critic reads it next. Whatever either critic sends back, you revise in
-the same planning attempt, and that critic reads the revision. A plan sent back
-twice by either critic parks with the operator in Triage — it does not reach
-the CEO. So spend the effort before the first reading, not after: observable
+the same planning attempt, and that critic reads the revision. At the bound, a
+plan sent back twice by either critic is first tried without a person: a
+business choice among the findings goes to the CEO as one question when it is
+in words he reads, otherwise you get one more rewrite, once, and the plan parks
+with the operator in Triage only after that. So spend the effort before the first reading, not after: observable
 acceptance criteria on every card, a repo on every card, cards that sum to
 the epic, and no two cards touching the same file. The cheap half is
 mechanical and you can run it yourself before you finish:
