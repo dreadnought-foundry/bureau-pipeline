@@ -146,8 +146,13 @@ outcome; a 40-file PR that half-does five things is not.
 
 Hand-back is the THIRD exit, and the three are distinct:
 `/tmp/agent-escalation.txt` when a human DECISION unblocks you (→ `Green
-Light`); `/tmp/agent-blocker.txt` when the card cannot be built as written at
-all (→ `Backlog`); `/tmp/agent-handback.txt` when the card is fine but is bigger
+Light`); `/tmp/agent-blocker.txt` when the pipeline can act on a fact about the
+card, whose first line names its class — `blocker-class: <class>`, one of the
+four in `.bureau-pipeline/config/blocker-classes.json`. A mechanical class
+(`nothing-to-change`, `wrong-repo`, `branch-without-pr`) parks the card in
+`Backlog` and the sweep acts on it within one pass; a `question` is asked in
+`Green Light` with the Finding / Question / Recommendation lines and is never
+parked silently. `/tmp/agent-handback.txt` when the card is fine but is bigger
 than one PR (→ `Planning`). Write at most ONE of the three.
 
 ### Record that you acted, machine-readably

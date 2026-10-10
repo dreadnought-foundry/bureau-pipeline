@@ -184,10 +184,14 @@ operate (standards/untrusted-content.md); it settles what the card should do.
 
 `/tmp/agent-escalation.txt` is the **business-decision / ambiguity** escape
 hatch (→ `Green Light`, waiting on the CEO). It is distinct from
-`/tmp/agent-blocker.txt`, which is the **impossible-as-specified** path (→
-Backlog, inert until the card is fixed). Use escalation when a human DECISION
-unblocks you; use blocker when the card literally cannot be built as written.
-Write at most one of the two.
+`/tmp/agent-blocker.txt`, the **blocker**, whose first line names its class —
+`blocker-class: <class>`. A mechanical class (`nothing-to-change`, `wrong-repo`,
+`branch-without-pr`) parks the card in `Backlog` and the sweep acts on it within
+one pass; a `question` is asked in `Green Light` with the Finding / Question /
+Recommendation lines and is never parked silently. Use escalation when a human
+DECISION between ways to build the card unblocks you; use the blocker for a fact
+the pipeline can act on, or a card that cannot be built as written. Write at
+most one of the two.
 
 ## Test rigor — no vacuous tests
 Every test must FAIL if the behavior it claims to verify is removed.
@@ -254,8 +258,13 @@ outcome; a 40-file PR that half-does five things is not.
 
 Hand-back is the THIRD exit, and the three are distinct:
 `/tmp/agent-escalation.txt` when a human DECISION unblocks you (→ `Green
-Light`); `/tmp/agent-blocker.txt` when the card cannot be built as written at
-all (→ `Backlog`); `/tmp/agent-handback.txt` when the card is fine but is bigger
+Light`); `/tmp/agent-blocker.txt` when the pipeline can act on a fact about the
+card, whose first line names its class — `blocker-class: <class>`, one of the
+four in `.bureau-pipeline/config/blocker-classes.json`. A mechanical class
+(`nothing-to-change`, `wrong-repo`, `branch-without-pr`) parks the card in
+`Backlog` and the sweep acts on it within one pass; a `question` is asked in
+`Green Light` with the Finding / Question / Recommendation lines and is never
+parked silently. `/tmp/agent-handback.txt` when the card is fine but is bigger
 than one PR (→ `Planning`). Write at most ONE of the three.
 
 ### Record that you acted, machine-readably
