@@ -598,6 +598,20 @@ batch that was right apart from two rows.
 `<id>` is the proposal id the approval names, and a decision naming any other
 batch says nothing about the approved one.
 
+**A per-card marker is read for the first card its line names (DRE-6642).** The
+shape above is the one the console writes. A marker typed by hand is honored
+for the first `DRE-N` on its first line, and everything after that card on the
+line is the reason — after an em dash, a hyphen, a colon or nothing at all — so
+`🧺 groom-excluded: <id> DRE-1234 already done` excludes DRE-1234 with the
+reason `already done`. A reason on a second line is prose, and the card on the
+first line is still honored. A marker whose first line names no card cannot
+be honored for anything. It is never dropped silently: the next proposal lists
+it, and the drain's record lists every one about the batch it drained, both
+under `## Decisions I could not read` with the marker's first line quoted. The
+console's reader of the same markers carries its own copy of the pattern
+(`_CARD_TAIL` in agent-bureau's `console/backend/groom_proposal.py`) and
+follows on its own card.
+
 The last two are the exception that proves the shape: they name a repo **slug**
 (`[a-z0-9][a-z0-9-]*`) and no id at all, because a hold outlives the proposal it
 was written on. Everything else about them is the same — anchored at the start
@@ -828,6 +842,11 @@ clause, `cancelled:`, placed before `refused:`; the reader takes that clause as
 optional and reads the other four exactly as they always read, so no clause is
 reordered, respelled or added beside it.
 
+A decision about the drained batch that names no card is a `refused` row, as it
+always was, and is also quoted under `## Decisions I could not read` AFTER the
+table (DRE-6642) — absent when there is none, so the table and the summary line
+read exactly as before.
+
 Its five counts answer five different questions: **moved** is the approved
 Planning list that went, **held back** is what the CEO excluded on either list,
 or what the free planner slots could not take (DRE-5326) and is queued for them
@@ -928,7 +947,9 @@ the CEO's newest per-card marker for each card, on **any** proposal
 - **`groom-added`** after either clears it.
 
 Only a decider's marker counts — a person's, or one the console signed — so the
-proposer cannot take a card off its own offer. A thread with no per-card
+proposer cannot take a card off its own offer. A decider's marker that names no
+card is listed on the next proposal under *Decisions I could not read*, once:
+a proposal reports what was written since the one before it. A thread with no per-card
 marker proposes exactly what it did before.
 
 ## The next proposal answers your last decline (DRE-3373)
