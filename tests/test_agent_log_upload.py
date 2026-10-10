@@ -18,6 +18,10 @@ WHAT THIS FILE PINS, and why each half is here:
     after the last model step, no `${{ }}` in the body (the 21,000-character
     expression ceiling, DRE-3484) — and the run's own `effort_arg` handed to
     the upload, on every job but those `EFFORT_PENDING` names (DRE-5356).
+  * THE SECRETS, BY NAME (DRE-4391): each step passes exactly the secrets its
+    own file references as `SCRUB_<NAME>`, derived from the file at test time,
+    and no workflow expands `toJSON(secrets)` — whose keys, printed in the
+    step's `env:` group, were every secret name a public repo holds.
   * THE BEHAVIOUR of `scripts/upload_agent_log.py`, executed for real against
     stub `aws` and a stub OIDC endpoint: no upload without a successful scrub,
     one single-part `put-object` carrying `If-None-Match`, the key under the
