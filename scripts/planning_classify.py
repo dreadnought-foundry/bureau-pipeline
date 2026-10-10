@@ -39,6 +39,24 @@ The bias toward the SMALLER shape (DRE-2719's rule, kept) is a judgement the
 prompt asks for, not a tie-break this code applies: under-sizing is loud and
 over-sizing is silent, and neither is a reason to invent an answer.
 
+## A role label is read before any model (DRE-6654)
+
+The routing rule is strict precedence, and precedence 1 asks no model: an
+explicit role label (`agent:ops`, `no-code` — the keys of `labels.map` in
+`config/routing-verdicts.json`) says who acts on the card. The critic already
+honors it (DRE-5805: a one-off whose role label routes it to a person is moved
+on that label and never read by the critic); the classifier did not. On
+2026-10-10 it read DRE-6636, an operator step, answered `decision: true`, and
+the card went to the CEO as a question.
+
+So `run` asks `routing_verdict.route` first, with no shape, and when the answer's
+`source` is `label` it stamps `one-off` without a call: the stamp's reason
+names the label and the verdict, and the `Decision` says nothing answered
+(`answered=False`, no model asked or answering), so no `model-attempt`
+heartbeat claims a model read the card. This module spells none of the labels —
+`routing_verdict` owns them. A card the epic branch claims, and every other
+card, goes to the model exactly as before.
+
 ## Nothing here is restated
 
 The judgement lives in `briefs/planner.md` under `## Classifying the card
@@ -261,6 +279,9 @@ ANSWER_KEYS = ("shape", "why", "tells", "seam", "decision", "question")
 # `roll-up`, and a `one-off` over a seam is never touched.
 SHAPE_EPIC = "epic"
 SHAPE_ROLL_UP = "roll-up"
+# And the one a role label routes to (DRE-6654): a card a label hands to a
+# person is one piece of somebody's work, never a plan.
+SHAPE_ONE_OFF = "one-off"
 
 # The literal the stamp's **Why:** line carries, followed by the seam itself.
 # `planning_route`, the roll-up planner and a person reading the card all find the
@@ -359,6 +380,12 @@ CLI_TIMEOUT_SECONDS = 300
 # no-tool call ended at the turn limit with nothing written. Read by
 # `model_receipt`, which says it in place of "out of capacity".
 NO_ANSWER = "gave no answer within its one turn"
+
+# The stamp's model slot for a card routed on its role label (DRE-6654).
+# `planning_shape.shape_comment` refuses a planner stamp that names no model
+# (DRE-3016), and no model was asked — so the slot says exactly that. The
+# `Decision` itself carries no model at all.
+LABEL_ROUTED_MODEL = "none — precedence 1 asks no model"
 
 # The bound on the `stream:` summary a failed call's message carries, so it
 # stays one readable line in the run log.
@@ -1757,12 +1784,17 @@ def run(lops, identifier: str, *, call=None, model: str | None = None,
 
     card = critic_score.read_card(lops, identifier)
     receipt = planning_shape.return_receipt(bodies)
-    if receipt is not None:
-        card = dict(card, returned=receipt)
-    parent = roll_up_parent(lops, identifier, doc=doc)
-    if parent is not None:
-        card = dict(card, roll_up_parent=parent)
-    decision = classify(card, call=call, model=model, doc=doc, repo=repo)
+    # Precedence 1 asks no model (DRE-6654): a card whose role label already
+    # says who acts on it is stamped on that label, and nothing reads it.
+    decision = label_routed(card)
+    routed = decision is not None
+    if not routed:
+        if receipt is not None:
+            card = dict(card, returned=receipt)
+        parent = roll_up_parent(lops, identifier, doc=doc)
+        if parent is not None:
+            card = dict(card, roll_up_parent=parent)
+        decision = classify(card, call=call, model=model, doc=doc, repo=repo)
     if decision.transport:
         # DRE-3074. A call that never reached a model buys one more run, off the
         # count already on the card — the receipt IS the budget, so it survives
@@ -1785,7 +1817,8 @@ def run(lops, identifier: str, *, call=None, model: str | None = None,
             why += f" — {returned_why(receipt)}"
         refusal = planning_shape.stamp(
             lops, identifier, decision.shape, why,
-            by=planning_shape.BY_PLANNER, model=decision.model, doc=doc,
+            by=planning_shape.BY_PLANNER,
+            model=LABEL_ROUTED_MODEL if routed else decision.model, doc=doc,
         )
     except (planning_shape.ShapeError, ClassifyError) as e:
         # A stamp this module cannot compose is a card nobody classified, and a
@@ -1801,6 +1834,39 @@ def run(lops, identifier: str, *, call=None, model: str | None = None,
         # classified either way, and theirs is the one that stands.
         print(f"{identifier}: not stamping — {refusal}")
     return decision
+
+
+def label_routed(card: dict) -> Decision | None:
+    """The one-off stamp for a card its role label routes, or None (DRE-6654).
+
+    Read through `routing_verdict.route` with no shape, so precedence is the
+    rule's own: a card the epic branch claims is not answered here, and neither
+    is one with no role label — both go to the model as they always did. The
+    label named in the reason is the card's own spelling of a `labels.map` key,
+    matched the way `routing_verdict.label_verdict` matches it.
+    """
+    import routing_verdict
+
+    routed = routing_verdict.route(
+        card.get("title") or "", card.get("description") or "",
+        card.get("labels") or [], bool(card.get("has_children")), shape=None,
+    )
+    if routed.source != "label":
+        return None
+    mapping = routing_verdict.label_map()
+    label = next(
+        (name for name in card.get("labels") or []
+         if mapping.get((name or "").strip().lower()) == routed.verdict),
+        None,
+    )
+    who = ("a person" if routing_verdict.is_person_verdict(routed.verdict)
+           else routing_verdict.actor(routed.verdict))
+    return Decision(
+        shape=SHAPE_ONE_OFF,
+        why=(f"its `{(label or '').strip()}` label routes it {routed.verdict}, "
+             f"to {who} — precedence 1 asks no model, DRE-5805"),
+        answered=False, asked=None, model=None,
+    )
 
 
 PARENT_QUERY = """query($id: String!) {
@@ -1965,6 +2031,8 @@ def _cmd_classify(identifier: str, github_output: str | None,
     ])
     if decision.already:
         print(f"{identifier} is already classified {decision.shape} — left alone")
+    elif not decision.answered:
+        print(f"{identifier} classified {decision.shape} on its label — no model asked")
     else:
         print(f"{identifier} classified {decision.shape} on {decision.model}")
     return 0
