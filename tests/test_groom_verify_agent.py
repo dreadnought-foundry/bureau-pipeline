@@ -307,7 +307,7 @@ def test_when_the_spares_run_out_the_slot_stays_empty_and_is_counted(tmp_path):
 # --------------------------------------------------------------------------
 # criterion 2 — a run that died is unverified, never still-needed
 # --------------------------------------------------------------------------
-def test_a_dead_agent_run_is_unverified_and_the_card_stays_on_planning_marked(tmp_path):
+def test_a_dead_agent_run_is_unverified_and_the_card_leaves_planning_marked(tmp_path):
     prop = proposal()
     pfile, targets, _ = build_targets(tmp_path, prop)
 
@@ -324,7 +324,9 @@ def test_a_dead_agent_run_is_unverified_and_the_card_stays_on_planning_marked(tm
     assert got["finished_at"].endswith("Z")
 
     after = run_apply(tmp_path, pfile, tmp_path / "verdicts")
-    assert "DRE-102" in planning(after)
+    # Nobody checked it, so it is not in the batch (DRE-6666): it waits in
+    # Intake, marked.
+    assert "DRE-102" not in planning(after)
     mark = row_of(after, "DRE-102")["verify"]
     assert mark["verdict"] == "unverified"
     assert mark["verdict"] != "still-needed"
@@ -514,7 +516,7 @@ def test_a_target_with_no_verdict_artifact_is_unverified_and_counted(tmp_path):
     assert after["verify"]["cards"] == 2
     assert after["verify"]["counts"] == {
         **{v: 0 for v in gva.VERDICTS}, "still-needed": 1, "unverified": 1}
-    assert "DRE-102" in planning(after)
+    assert "DRE-102" not in planning(after)
 
 
 def test_apply_reads_the_targets_off_the_record_when_no_flag_is_given(tmp_path):
@@ -836,7 +838,7 @@ def test_mark_without_a_file_line_proof_is_no_proof_for_every_answer(answer):
     assert (mark["verdict"], mark["reason"]) == ("unverified", "no proof")
 
 
-def test_apply_cancels_the_three_cancel_answers_and_keeps_partly_solved(tmp_path):
+def test_apply_cancels_the_three_cancel_answers_and_rewrites_partly_solved(tmp_path):
     prop = proposal()
     assert planning(prop) == ["DRE-101", "DRE-102", "DRE-103"]
     pfile, targets, _ = build_targets(tmp_path, prop)
@@ -857,7 +859,10 @@ def test_apply_cancels_the_three_cancel_answers_and_keeps_partly_solved(tmp_path
 
     after = run_apply(tmp_path, pfile, tmp_path / "verdicts")
 
-    assert planning(after) == ["DRE-103", "DRE-105", "DRE-106"]
+    # DRE-103 goes on the Rewrite first list (DRE-6666), and its slot has no
+    # still-needed spare left behind it.
+    assert planning(after) == ["DRE-105", "DRE-106"]
+    assert [r["identifier"] for r in after["outcomes"]["rewrite"]] == ["DRE-103"]
     dead = {r["identifier"]: r for r in cancel(after)}
     for identifier in ("DRE-101", "DRE-102", "DRE-104"):
         answer, said = answers[identifier]
@@ -867,17 +872,16 @@ def test_apply_cancels_the_three_cancel_answers_and_keeps_partly_solved(tmp_path
         assert dead[identifier]["reason"] == \
             gva.cancel_reason(dead[identifier]["verify"])
     assert "DRE-103" not in dead
-    assert row_of(after, "DRE-103")["verify"]["verdict"] == "partly-solved"
+    assert after["outcomes"]["rewrite"][0]["verify"]["verdict"] == "partly-solved"
     assert after["verify"]["counts"]["partly-solved"] == 1
     assert after["verify"]["counts"]["done-elsewhere"] == 1
     assert after["verify"]["counts"]["not-worth-it"] == 1
     assert after["verify"]["counts"]["obsolete"] == 1
 
     text = groomer.render_proposal(after)
-    block = text[text.index(groomer.BATCH_REASONS_HEADING):]
-    [entry] = [e for e in block.split("### ") if e.startswith("DRE-103")]
-    assert ("Verified against main: **partly-solved** — The reader exists; "
-            "the writer the card asks for does not.") in entry
+    block = text[text.index(groomer.REWRITE_HEADING):]
+    [entry] = [e for e in block.splitlines() if e.startswith("| 1 | DRE-103 |")]
+    assert ("The reader exists; the writer the card asks for does not.") in entry
 
 
 def test_the_counts_carry_every_verdict_and_the_excluded_list_is_empty(tmp_path):

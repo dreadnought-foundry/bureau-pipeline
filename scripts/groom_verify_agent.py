@@ -42,7 +42,10 @@ and the four subcommands here are everything around it.
     rules' order and renumbered from 1 (DRE-5858), and the proposal id is
     recomputed — except
     an epic with an open child, which keeps its place and is listed in
-    `cancels_refused` (DRE-5309). And it
+    `cancels_refused` (DRE-5309). A Planning card answered `partly-solved`
+    goes on the Rewrite first list with the agent's drafted body, and one
+    nobody could check (`unverified`) leaves the list and stays in Intake,
+    each slot filled like a Cancel's (DRE-6666). And it
     decides whether the morning is posted at all (DRE-5317): the lookup
     failed for every card that names a file, or the pre-post check searched
     no owner for merged pull requests, and `not_posted_why` says so —
@@ -113,6 +116,9 @@ VERDICTS = (STILL_NEEDED, PARTLY_SOLVED, DONE_ELSEWHERE, OBSOLETE,
 CANCELS = (DONE_ELSEWHERE, OBSOLETE, NOT_WORTH_IT)
 #: The answers that need no `file:line` proof — every other one does.
 _UNPROVED = (UNVERIFIED, EXCLUDED)
+#: The answers that take a card off the Planning list without cancelling it
+#: (DRE-6666): rewrite it first, or check it first.
+_LEAVES = (PARTLY_SOLVED, UNVERIFIED, EXCLUDED)
 
 #: Why a verdict is `unverified`, exact strings.
 STEP_FAILED = "agent step failed"
@@ -195,6 +201,12 @@ INTAKE = "Intake"
 #: `prepare`'s whole output for an excluded card, and the prefix of the
 #: `not-now` and `sequence` reason `apply` writes for one.
 EXCLUDED_PREFIX = "excluded without judgement: "
+#: The prefix of the `not-now` and `sequence` reason `apply` writes for a
+#: Planning card nobody could check (DRE-6666): it waits in Intake.
+UNVERIFIED_PREFIX = "not verified: "
+#: The list a `partly-solved` Planning card goes on (DRE-6666) —
+#: `groomer.REWRITE`, named here too because the walk below writes it.
+REWRITE = "rewrite"
 
 #: A comment's `by`: `spoken_thread`'s voice kind, in the words the agent
 #: reads. A withheld comment's text never reaches the agent.
@@ -493,6 +505,7 @@ def targets(proposal: dict, *, lops, repo_map: dict,
         repository, slug = _repo(row, repo_map)
         target = {"card": identifier, "repository": repository,
                   "repo_slug": slug, "title": "", "body": "",
+                  "body_digest": None,
                   "evidence": _layer_a(proposal, identifier), "list": which,
                   "context": None, "excluded": None}
         out.append(target)
@@ -514,9 +527,13 @@ def targets(proposal: dict, *, lops, repo_map: dict,
         # The fifth exclusion (DRE-5746): no repo in the map, no code to
         # read, and no place on the Planning list for work the fleet cannot
         # build. Decided here, off the map, never by the model.
+        # The digest is of the description as Linear gave it, before the
+        # fence: `groomer.py post` digests the card's current description
+        # the same way to tell whether a draft still matches it (DRE-6666).
         target.update(
             title=_clean(issue.get("title")),
             body=sanitize_untrusted.sanitize_body(issue.get("description") or ""),
+            body_digest=groomer.body_digest(issue.get("description")),
             context=context,
             excluded=(unmapped_reason(target) if repository is None
                       else exclusion(issue, now=now)))
@@ -550,12 +567,15 @@ SHAPE = f"""Write exactly one file, `{RAW_FILE}`, at the workspace root:
   "proof": [
     {{"file": "<path under target/>", "line": 1, "quote": "<the line>"}},
     {{"source": "<where>", "quote": "<the words>"}}
-  ]
+  ],
+  "rewrite": "<on partly-solved only: the card's updated body, markdown>"
 }}
 ```
 
 Every answer but `unverified` needs at least one `file:line` proof from
-`target/`. If `target/` is absent or empty, the only answer is `unverified`."""
+`target/`. If `target/` is absent or empty, the only answer is `unverified`.
+Write `"rewrite"` on a `partly-solved` answer only, and leave it out of every
+other."""
 
 
 def _context_lines(context) -> list[str]:
@@ -747,8 +767,27 @@ def judge(raw_path, *, card: str, row: dict, outcome: str) -> dict:
         return unverified(NO_PROOF, summary)
     if not any(_counts(p, card_text) for p in proof):
         return unverified(NO_PROOF, summary)
-    return {"verdict": verdict, "summary": summary, "proof": proof,
-            "reason": None, "lookup": lookup}
+    answer = {"verdict": verdict, "summary": summary, "proof": proof,
+              "reason": None, "lookup": lookup}
+    # The drafted body, read on `partly-solved` only (DRE-6666), with the
+    # digest of the body it rewrites. Absent or not a string is no draft —
+    # the verdict stands either way.
+    if verdict == PARTLY_SOLVED:
+        answer.update(rewrite=_draft(doc.get("rewrite")),
+                      body_digest=_digest(row.get("body_digest")))
+    return answer
+
+
+def _draft(value) -> str | None:
+    """A drafted body as `apply` carries it: a string with something in it,
+    else None."""
+    return value if isinstance(value, str) and value.strip() else None
+
+
+def _digest(value) -> str | None:
+    """A body digest as `groomer.body_digest` writes it, else None."""
+    return (value if isinstance(value, str)
+            and re.fullmatch(r"[0-9a-f]{12}", value) else None)
 
 
 def spend(execution_file) -> dict:
@@ -844,6 +883,11 @@ def _mark(row: dict, doc: dict | None) -> dict:
         mark.update(reason=UNREADABLE, proof=[])
     elif mark["verdict"] != UNVERIFIED:
         mark["reason"] = None
+    # Only a `partly-solved` mark carries a draft (DRE-6666), so every other
+    # mark keeps the shape it had.
+    if mark["verdict"] == PARTLY_SOLVED:
+        mark.update(rewrite=_draft(doc.get("rewrite")),
+                    body_digest=_digest(doc.get("body_digest")))
     return mark
 
 
@@ -871,11 +915,26 @@ def cancel_reason(mark: dict) -> str:
     return groomer.defang_reason("; ".join(parts))[0]
 
 
-def _excluded_fields(mark: dict) -> dict:
-    """What a `not-now` or `sequence` row of an excluded card says."""
-    return {"reason": EXCLUDED_PREFIX + _one_line(mark.get("reason")),
+def _excluded_fields(mark: dict, prefix: str = EXCLUDED_PREFIX) -> dict:
+    """What a `not-now` or `sequence` row of an excluded card says — or, with
+    `UNVERIFIED_PREFIX`, of a Planning card nobody could check (DRE-6666)."""
+    return {"reason": prefix + _one_line(mark.get("reason")),
             "cycle": None, "cycle_id": None, "projected": False,
             "trigger": None, "evidence": None, "judged": False, "reasons": {}}
+
+
+def _rewrite_row(slot: dict, mark: dict) -> dict:
+    """One Rewrite first row (DRE-6666): the Planning row's card, the agent's
+    summary of what remains, its draft or None, and the digest of the body
+    the draft rewrites. A draft bound to no body is no draft: `post` could
+    never tell whether it still matches the card."""
+    digest = mark.get("body_digest") or ""
+    return {"identifier": slot["identifier"], "title": slot.get("title"),
+            "repo": slot.get("repo"), "epic": slot.get("epic"),
+            "band": slot.get("band"), "position": None,
+            "summary": mark.get("summary"),
+            "draft": mark.get("rewrite") if digest else None,
+            "body_digest": digest}
 
 
 def _verify_field(mark: dict) -> dict:
@@ -946,23 +1005,33 @@ def apply(proposal: dict, found: dict[str, dict],
 
     canceled: list[str] = []
     promoted: dict[str, dict] = {}
+    rewrite: list[dict] = []
+    unchecked: list[str] = []
     kept, unfilled = [], 0
     for slot in now:
         identifier = slot["identifier"]
         verdict_ = marks.get(identifier, {}).get("verdict")
-        if (verdict_ not in CANCELS and verdict_ != EXCLUDED
+        if (verdict_ not in CANCELS and verdict_ not in _LEAVES
                 or identifier in marks and refuse(identifier)):
             kept.append(slot)
             continue
         # An excluded card leaves the Planning list by the same walk a
-        # Cancel takes, and goes on no other list: nothing moves it.
-        if verdict_ != EXCLUDED:
+        # Cancel takes, and goes on no other list: nothing moves it. So does
+        # one nobody could check (DRE-6666): it waits in Intake. And a
+        # partly-solved one goes on the Rewrite first list — its text no
+        # longer matches the code, so it is rewritten before it is planned.
+        if verdict_ in CANCELS:
             canceled.append(identifier)
+        elif verdict_ == PARTLY_SOLVED:
+            rewrite.append(_rewrite_row(slot, marks[identifier]))
+        elif verdict_ == UNVERIFIED:
+            unchecked.append(identifier)
         taker = next(queue, None)
         if taker is None:
             # `slots_unfilled` counts what a Cancel emptied, as the page
-            # says; the excluded card is named under its own heading.
-            if verdict_ != EXCLUDED:
+            # says; every other card that left is named under its own
+            # heading.
+            if verdict_ in CANCELS:
                 unfilled += 1
             continue
         promoted[taker] = slot
@@ -994,6 +1063,15 @@ def apply(proposal: dict, found: dict[str, dict],
         if ours:
             row["reason"] = groomer._rules_reason("now", row)
     outcomes["now"] = kept
+    # The Rewrite first list, in the rules' order and numbered from 1
+    # (DRE-6666). Written on every applied record, `[]` on a morning with
+    # none; not in the id's digest, as the Not ready list is not.
+    rewrite.sort(key=lambda r: (by_seq.get(r["identifier"]) or {}).get(
+        "position") or 0)
+    for n, row in enumerate(rewrite, 1):
+        row["position"] = n
+    outcomes[REWRITE] = rewrite
+    rewritten = {r["identifier"] for r in rewrite}
     gone = set(canceled) | set(promoted)
     outcomes["not-now"] = [r for r in outcomes["not-now"]
                            if r["identifier"] not in gone]
@@ -1011,6 +1089,15 @@ def apply(proposal: dict, found: dict[str, dict],
             outcomes["not-now"].append(row)
         row.update(_excluded_fields(marks[identifier]),
                    reconsidered_in=None)
+    # A Planning card nobody could check waits there the same way (DRE-6666):
+    # nothing scheduled, so it stays in Intake and is judged again tomorrow.
+    for identifier in unchecked:
+        base = by_seq.get(identifier) or {}
+        outcomes["not-now"].append({
+            "identifier": identifier, "title": base.get("title"),
+            "repo": base.get("repo"), "older_than_window": False,
+            **_excluded_fields(marks[identifier], UNVERIFIED_PREFIX),
+            "reconsidered_in": None})
     for identifier in canceled:
         base = by_seq.get(identifier) or {}
         reason = cancel_reason(marks[identifier])
@@ -1039,8 +1126,15 @@ def apply(proposal: dict, found: dict[str, dict],
                        trigger=None)
         elif identifier in excluded:
             row.update(_excluded_fields(marks[identifier]), outcome="not-now")
+        elif identifier in unchecked:
+            row.update(_excluded_fields(marks[identifier], UNVERIFIED_PREFIX),
+                       outcome="not-now")
+        elif identifier in rewritten:
+            row.update(outcome=REWRITE, cycle=None, cycle_id=None,
+                       projected=False, trigger=None)
 
-    for rows_ in (outcomes["now"], outcomes["not-now"], outcomes["dead"], seq):
+    for rows_ in (outcomes["now"], outcomes["not-now"], outcomes["dead"],
+                  outcomes[REWRITE], seq):
         for row in rows_:
             if row["identifier"] in marks:
                 row["verify"] = _verify_field(marks[row["identifier"]])

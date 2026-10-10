@@ -222,7 +222,8 @@ def test_post_answers_the_decline_standing_on_the_thread(ops, tmp_path):
 # --------------------------------------------------------------------------
 def _verified():
     """A record `groom_verify_agent.apply` wrote: DRE-102 proved obsolete with
-    a file:line, DRE-103 never answered, DRE-104 takes the emptied slot."""
+    a file:line, DRE-103 never answered and left the batch (DRE-6666), and
+    DRE-104 takes the slot DRE-102 emptied."""
     cards = [card(f"DRE-{100 + n}", days=n) for n in range(1, 8)]
     proposal = groomer.propose(cards, cycles=CYCLES, capacity=3, now=NOW)
     assert _planning(proposal) == ["DRE-101", "DRE-102", "DRE-103"]
@@ -321,8 +322,11 @@ def test_a_planning_row_renders_its_verdict_in_the_batch_reasons():
     for identifier in ("DRE-101", "DRE-104"):
         [entry] = [e for e in per_card if e.startswith(identifier)]
         assert "still-needed" in entry, f"{identifier}'s verdict is not shown"
-    [entry] = [e for e in per_card if e.startswith("DRE-103")]
-    assert "unverified" in entry
+    # DRE-103 was never checked, so it is not in the batch (DRE-6666): it is
+    # named under "Not verified" instead.
+    assert not [e for e in per_card if e.startswith("DRE-103")]
+    verified = section(text, groomer.VERIFIED_HEADING)
+    assert "- DRE-103 — no verdict artifact" in verified
 
 
 def test_a_record_with_no_verify_block_renders_byte_for_byte_as_today():

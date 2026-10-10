@@ -359,6 +359,16 @@ NOT_READY_HEADING = "## Not ready — and what would make it ready"
 NOT_READY_COLUMNS = ("| # | Card | Rule | Repo | Epic | Title | Reason | "
                      "Ready when |")
 
+# The verify step's list (DRE-6666): Planning cards the agent answered
+# `partly-solved`, whose text no longer matches the code, so each is rewritten
+# before it is planned. After the Cancel list and before the Not ready list;
+# ABSENT on a morning with none, so such a page renders byte for byte as
+# before. `parse_proposal_comment` reads the first two cells back as
+# `rewrite`.
+REWRITE = "rewrite"
+REWRITE_HEADING = "## Rewrite first"
+REWRITE_COLUMNS = "| # | Card | Pri | Repo | Epic | Title | What remains |"
+
 # What the verify matrix found and spent (DRE-4971), after the Cancel table.
 # Both strings are shared with the cards that write the record and wire the
 # workflow, so they are written once. ABSENT when the record carries no
@@ -526,13 +536,21 @@ QUEUED_TAG = "groom-queued"
 RELEASED_TAG = "groom-released"
 QUEUED_LABEL = "groom-queued"
 
+# The drafted rewrite of a Rewrite first card's body (DRE-6666), on the card
+# itself: `🧺 groom-rewrite-draft: <proposal id> body=<digest>`, a blank line,
+# then the draft. The digest is `body_digest` of the description the draft
+# was written against, so one draft stands per body, not one per morning.
+# Written by `post` alone (`rewrite_draft_comment`); a draft counts as
+# standing only when the pipeline's own identity wrote it.
+REWRITE_DRAFT_TAG = "groom-rewrite-draft"
+
 # Every marker this module writes or reads, in one tuple — the set a decline's
 # reason is defanged against (DRE-3373). A reason is CEO-written free text that
 # `propose` renders back into a Linear comment, and a Linear comment is exactly
 # where all of these are read from.
 ALL_MARKERS = (PROPOSAL_TAG, *DECISION_TAGS, *REPO_TAGS, DRAINED_TAG,
                DRAIN_REFUSED_TAG, CANCELLED_TAG, MOVED_TAG, QUEUED_TAG,
-               RELEASED_TAG, console_receipt.TAG)
+               RELEASED_TAG, REWRITE_DRAFT_TAG, console_receipt.TAG)
 
 # The answering paragraph's opener (DRE-3373). A constant because the console
 # finds the answer by this string, so a rename here is a rename there.
@@ -1893,13 +1911,14 @@ def assert_disjoint(proposal: dict) -> None:
     this refuses.
 
     And the outcome lists are pairwise disjoint (DRE-6665): `now`, `not-now`,
-    `dead` and `not-ready` each say something different about a card, and a
-    card on two of them is a card the page says two things about.
+    `dead`, `not-ready` and `rewrite` (DRE-6666) each say something different
+    about a card, and a card on two of them is a card the page says two
+    things about.
     """
     block = proposal.get("judgement") or {}
     lists = {name: {row["identifier"] for row in
                     (proposal["outcomes"].get(name) or [])}
-             for name in ("now", "not-now", "dead", NOT_READY)}
+             for name in ("now", "not-now", "dead", NOT_READY, REWRITE)}
     for a, b in itertools.combinations(lists, 2):
         twice = sorted(lists[a] & lists[b], key=_card_sort_key)
         if twice:
@@ -2210,6 +2229,10 @@ def proposal_id(proposal: dict) -> str:
     reason no `Why` cell ever was: a reason that reads differently on a re-run
     must not retire an approval of the same lists. Written only when there is
     a Cancel list, so a proposal with none keeps the id it always had.
+
+    The Not ready list (DRE-6665) and the Rewrite first list (DRE-6666) are
+    not in it: an approval moves neither, and a rewrite row that reads
+    differently on a re-run must retire no approval.
     """
     body = {
         "lane": proposal["lane"],
@@ -2257,6 +2280,47 @@ def proposal_comment(proposal: dict) -> str:
 # The same anchoring as the approval line below, for the same reason: a comment
 # that mentions the marker mid-sentence is prose ABOUT a proposal, not one.
 _PROPOSAL_LINE = re.compile(rf"^\s*(?:{MARK}\s*)?{PROPOSAL_TAG}\s*:\s*([0-9a-f]{{6,}})")
+
+
+def body_digest(description: str | None) -> str:
+    """The first twelve hex characters of the SHA-256 of a card's description
+    (DRE-6666) — what a drafted rewrite was written against. The verify read
+    digests the description it saw, and `post` the one the card carries now:
+    equal, and the standing draft still rewrites the body it would replace."""
+    return hashlib.sha256((description or "").encode("utf-8")).hexdigest()[:12]
+
+
+def rewrite_draft_comment(pid: str, digest: str, draft: str) -> str:
+    """The ONE renderer of a drafted rewrite (DRE-6666): the marker line, a
+    blank line, then the draft verbatim through `sanitize_body`. The draft is
+    the agent's text about card text, so a fence-shaped line in it is
+    defanged; nothing else is changed, because the CEO accepts it as is."""
+    return (f"{MARK} {REWRITE_DRAFT_TAG}: {pid} body={digest}\n\n"
+            + sanitize_untrusted.sanitize_body(draft))
+
+
+# Anchored at the start of the comment, as every marker here is read: a draft
+# line quoted mid-comment is prose about a draft, not one.
+_REWRITE_DRAFT_LINE = re.compile(
+    rf"^\s*(?:{MARK}\s*)?{REWRITE_DRAFT_TAG}\s*:\s*([0-9a-f]{{6,}})"
+    rf"\s+body=([0-9a-f]{{12}})\b")
+
+
+def standing_draft(records: list[dict], digest: str) -> dict | None:
+    """The newest draft on the card that still rewrites its body — a
+    `groom-rewrite-draft` comment the pipeline's own identity wrote whose
+    `body=` digest is `digest`, whatever proposal id it names — or None.
+
+    Only the pipeline's own comments count (`authored_by_pipeline`): a
+    draft-shaped comment anybody else wrote is not a draft, so it can neither
+    stand in for one nor stop one being posted."""
+    for record in reversed(records):
+        if not record.get("authored_by_pipeline"):
+            continue
+        match = _REWRITE_DRAFT_LINE.match(record.get("body") or "")
+        if match and match.group(2) == digest:
+            return record
+    return None
 
 
 def already_proposed(proposal: dict, records: list[dict]) -> bool:
@@ -2659,6 +2723,10 @@ def render_proposal(proposal: dict) -> str:
     # Every Cancel the guard refused (DRE-5309), right after the list it was
     # kept off — absent on a morning with none.
     w.extend(_render_cancels_refused(proposal))
+    # The partly-solved cards the verify step took off the Planning list
+    # (DRE-6666), after the Cancel list and before Not ready — absent on a
+    # morning with none.
+    w.extend(_render_rewrite(proposal))
     # The cards the readiness rules held (DRE-6665), after the Cancel list and
     # before the verify matrix — absent on a morning with none.
     w.extend(_render_not_ready(proposal))
@@ -3105,6 +3173,57 @@ def _render_cancels_refused(proposal: dict) -> list:
     return w
 
 
+#: The three endings of a Rewrite first row's "What remains" cell (DRE-6666).
+DRAFT_POSTED = "(draft posted on the card)"
+DRAFT_STANDS = "(draft of {day} stands on the card)"
+NO_DRAFT = "(no draft — the agent wrote none)"
+
+
+def _what_remains(row: dict) -> str:
+    """The agent's summary, defanged, and what became of its draft: posted by
+    this run, standing from an earlier one (`draft_stands`, the PT date `post`
+    read off it), or never written."""
+    if row.get("draft") is None:
+        ending = NO_DRAFT
+    elif row.get("draft_stands"):
+        ending = DRAFT_STANDS.format(day=row["draft_stands"])
+    else:
+        ending = DRAFT_POSTED
+    said = defang_reason(_line(row.get("summary")))[0]
+    return _whole_cell(f"{said} {ending}")
+
+
+def _render_rewrite(proposal: dict) -> list:
+    """`REWRITE_HEADING`, then `REWRITE_COLUMNS` — one row per partly-solved
+    card the verify step took off the Planning list, in the rules' order,
+    numbered from 1 (DRE-6666).
+
+    The first two cells are load-bearing (`parse_proposal_comment`). The
+    title is pipe-escaped, and "What remains" is the agent's summary,
+    defanged and escaped, with what became of its draft. Nothing at all when
+    the list is empty or absent: no heading, no table.
+    """
+    rows = proposal["outcomes"].get(REWRITE) or []
+    if not rows:
+        return []
+    w = [REWRITE_HEADING, ""]
+    w.append("Cards the verify agent found partly solved: part of what each "
+             "describes is already on main, so its text no longer matches the "
+             "code. Each takes no slot — the next card still needed takes it "
+             "— and stays in Intake. The agent's drafted update of each body "
+             "is a comment on the card itself.")
+    w.append("")
+    w.append(REWRITE_COLUMNS)
+    w.append("| -- | -- | -- | -- | -- | -- | -- |")
+    for row in rows:
+        w.append(f"| {row['position']} | {row['identifier']} | "
+                 f"{BAND_LABELS.get(row.get('band'), '—')} | {row['repo']} | "
+                 f"{row.get('epic') or '—'} | {_cell(row.get('title'))} | "
+                 f"{_what_remains(row)} |")
+    w.append("")
+    return w
+
+
 def _render_not_ready(proposal: dict) -> list:
     """`NOT_READY_HEADING`, then `NOT_READY_COLUMNS` — one row per rule a
     card tripped, in the rules' order, numbered from 1 (DRE-6665).
@@ -3163,9 +3282,10 @@ def _render_verified(proposal: dict) -> list:
              "not-worth-it with the file and line that proves it. A card it "
              "proved done-elsewhere, obsolete or not-worth-it is on the "
              "Cancel list with that proof as its reason; a partly-solved "
-             "card stays in the batch; a card it could not answer for stays "
-             "where the proposal put it; a card excluded without judgement "
-             "is dropped from the batch and stays where it is on the board.")
+             "card on the Planning list goes on the Rewrite first list; a "
+             "card it could not answer for is not in the batch and stays in "
+             "Intake; a card excluded without judgement is dropped from the "
+             "batch and stays where it is on the board.")
     w.append("")
     for verdict in groom_verify_agent.VERDICTS:
         w.append(f"- {verdict}: {int(counts.get(verdict) or 0)}")
@@ -3194,7 +3314,7 @@ def _render_verified(proposal: dict) -> list:
     if unverified:
         marks = {row["identifier"]: row.get("verify") or {}
                  for row in proposal.get("sequence") or []}
-        w.append("Not verified — each stays where the proposal put it:")
+        w.append("Not verified — not in the batch, each stays in Intake:")
         w.append("")
         for identifier in unverified:
             reason = (marks.get(identifier) or {}).get("reason")
@@ -3915,6 +4035,10 @@ def parse_proposal_comment(body: str | None) -> dict | None:
     "rule", "reason", "condition"}]`, read from the table under
     `NOT_READY_HEADING` the same way — the first three cells load-bearing, the
     last two with `\\|` unescaped. No section reads as `[]`.
+
+    Since DRE-6666 it also carries `"rewrite": [{"identifier", "position"}]`,
+    read from the table under `REWRITE_HEADING` — the first two cells
+    load-bearing. No section reads as `[]`.
     """
     text = body or ""
     marker = _PROPOSAL_LINE.match(text.strip())
@@ -3962,6 +4086,12 @@ def parse_proposal_comment(body: str | None) -> dict | None:
             "reason": cells[6].replace("\\|", "|") if len(cells) > 6 else "",
             "condition": cells[7].replace("\\|", "|") if len(cells) > 7 else "",
         })
+    rewrite = []
+    for line in _section(text, REWRITE_HEADING):
+        row = _BATCH_ROW.match(line.strip())
+        if row:
+            rewrite.append({"identifier": row.group(2),
+                            "position": int(row.group(1))})
     return {
         "id": marker.group(1),
         "lane": lane.group(1).strip() if lane else None,
@@ -3972,6 +4102,7 @@ def parse_proposal_comment(body: str | None) -> dict | None:
         "batch": sorted(batch, key=lambda r: r["position"]),
         "cancel": sorted(cancel, key=lambda r: r["position"]),
         "not_ready": sorted(not_ready, key=lambda r: r["position"]),
+        "rewrite": sorted(rewrite, key=lambda r: r["position"]),
     }
 
 
@@ -5251,6 +5382,12 @@ def post_record(lops, card: str, path: str, *, dry_run: bool = False) -> int:
     Nothing is read from Linear and nothing written; the page prints, then a
     warning annotation and the not-posted line, last. Exit 0 — a planned stop
     is not a failure, and a red run would wake the medic for a decision.
+
+    After the proposal, one drafted rewrite on each Rewrite first card that
+    has a draft (DRE-6666) — one per body, not one per morning: every card's
+    description and thread are read first, so the page says which drafts it
+    posted, and a draft the pipeline wrote for the body the card carries now
+    stands, whatever proposal id it names. A dry run reads and posts none.
     """
     try:
         with open(path, encoding="utf-8") as fh:
@@ -5267,13 +5404,53 @@ def post_record(lops, card: str, path: str, *, dry_run: bool = False) -> int:
         return 0
     records = decision_records(lops, card)
     answer_decline(proposal, records)
+    drafts = _drafts_to_post(lops, proposal)
     if dry_run:
         print(f"dry run — nothing posted to {card}; the proposal it would "
               "have posted follows")
+        for row in drafts:
+            print(f"dry run — the drafted rewrite of {row['identifier']} is "
+                  "not posted")
     else:
         post_proposal(lops, card, proposal, records)
+        for row in drafts:
+            lops.cmd_comment(row["identifier"], rewrite_draft_comment(
+                proposal["id"], row["body_digest"], row["draft"]))
     print(render_proposal(proposal))
     return 0
+
+
+#: The one read of a Rewrite first card's description (DRE-6666).
+DESCRIPTION_QUERY = """query($id: String!) { issue(id: $id) { description } }"""
+
+
+def _drafts_to_post(lops, proposal: dict) -> list[dict]:
+    """The Rewrite first rows whose draft `post` writes this run (DRE-6666).
+
+    Each row with a draft is read twice — its description and its thread —
+    before anything is written, so the page can say what became of it. A
+    draft the pipeline wrote for the description the card carries now
+    stands: the row carries its PT date as `draft_stands` and nothing is
+    posted. A card whose body changed since gets a new draft, which
+    supersedes the older one. An empty proposal is never posted, so neither
+    is any draft of it."""
+    if not proposal["batch"]["cards"] and not proposal["outcomes"]["dead"]:
+        return []
+    out = []
+    for row in proposal["outcomes"].get(REWRITE) or []:
+        if not isinstance(row.get("draft"), str) or not row.get("body_digest"):
+            continue
+        issue = (lops.gql(DESCRIPTION_QUERY, {"id": row["identifier"]})
+                 or {}).get("issue") or {}
+        standing = standing_draft(lops.comment_records(row["identifier"]),
+                                  body_digest(issue.get("description")))
+        if standing is None:
+            out.append(row)
+            continue
+        moment = _moment(standing.get("created_at") or "")
+        row["draft_stands"] = (dead_run.pacific(moment).split(" ")[0]
+                               if moment else "an earlier morning")
+    return out
 
 
 if __name__ == "__main__":                                  # pragma: no cover
