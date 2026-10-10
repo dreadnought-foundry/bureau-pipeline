@@ -2413,6 +2413,113 @@ def _no_run_reading(ident: str, nodes: list[dict], sent: str | None) -> tuple[st
         "checked)")
 
 
+# The age limit on a person's card in Hand-work, and the standing cards that
+# never alarm (DRE-6409). Read on every call, so the file is the number.
+HAND_WORK_AGE_CONFIG = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+    "config", "hand-work-age.json")
+
+
+def _hand_work_age(card: dict, reason: str) -> str:
+    """The tail `flag_stranded` appends to a Hand-work card's line, after
+    posting the one `hand-work-overdue` alarm the card is owed (DRE-6409).
+
+    The watchdog skips the RUN check on a person's card, rightly — no run is
+    expected — and nothing kept time in its place: on 2026-10-09 one sweep
+    printed `not a strand` for 18 cards and raised nothing. This is the clock,
+    called only for a card IN Hand-work and only by its own repo's sweep.
+
+    The clock is the ENTRY, never `updatedAt`, which moves on every comment:
+    the newest `🧹 Auto-promoted Backlog → Hand-work:` receipt in the window
+    (`promote_ready`'s, the mark `proof_dispatch._entered` reads), at no
+    request; only without one, and only for a card that can alarm,
+    `routing_verdict.lane_moves`' newest move into the lane, one request. An
+    unreadable history judges nothing.
+
+    In the card's order, first match wins: a standing card in
+    `config/hand-work-age.json` and the CEO's own `hand-built` card never
+    alarm — his pace is his own, and nothing is written to any queue of his;
+    a `PROOF:` card alarms only when the proof dispatcher's own reading
+    (`proof_run_state.reading` over the whole thread, `proof_dispatch.FREE`)
+    says no run is in flight, read only once it is past the limit and not yet
+    alarmed; an `operator-step` card, or one routed to the lane on a verdict
+    whose actor is the operator (WORKBENCH carries no mark since DRE-6227),
+    alarms past the limit. One comment per entry, for the operator: no label,
+    no lane move, nothing in Green Light, and only a failed write counts
+    against the sweep.
+    """
+    with open(HAND_WORK_AGE_CONFIG, encoding="utf-8") as fh:
+        rule = json.load(fh)
+    limit = int(rule["hours"])
+    ident, lane = card["identifier"], card["state"]["name"]
+    nodes = linear_ops.window_nodes(card.get("comments"))
+    at = lambda iso: datetime.fromisoformat(iso.replace("Z", "+00:00"))  # noqa: E731
+    marks = {(lbl.get("name") or "").lower()
+             for lbl in (card.get("labels") or {}).get("nodes", [])}
+    entered = next((n.get("createdAt") for n in reversed(nodes)
+                    if (n.get("body") or "").lstrip().startswith(
+                        f"🧹 Auto-promoted Backlog → {lane}:")), None)
+    exempt = ("a standing card" if ident in {s["card"] for s in rule["standing"]}
+              else "the CEO's own hand-built card" if HAND_BUILT_LABEL.lower() in marks
+              else "")
+    if exempt:
+        # A card that never alarms is told its age off the free receipt only:
+        # a history read per card, every sweep, buys nothing but the number
+        # (the real-board ceiling, tests/test_sweep_real_board.py).
+        waited_for = f" {int(age_minutes(entered) // 60)}h" if entered else ""
+        return f"; in Hand-work{waited_for} — never alarms ({exempt})"
+    if not entered:
+        into = [m["at"] for m in routing_verdict.lane_moves(ident) or ()
+                if m.get("to") == lane and m.get("at")]
+        entered = max(into, key=at) if into else None
+    if not entered:
+        return "; entry time could not be read — not judged"
+    waited = age_minutes(entered)
+    hours = int(waited // 60)
+    proof = proof_and_demo.is_proof(card.get("title"))
+    if not (proof or routing_verdict.OPERATOR_STEP_LABEL in marks or any(
+            routing_verdict.actor(name) == "operator"
+            and routing_verdict.destination(name) == lane
+            for name in routing_verdict.verdicts_on(card_comment_bodies(card)))):
+        return ""  # no person's card this rule knows — today's line, unjudged
+    if waited < limit * 60:
+        due = dead_run.pacific(at(entered) + timedelta(hours=limit))
+        return f"; in Hand-work {hours}h of {limit}, alarms at {due}"
+    alarmed = [n["createdAt"] for n in nodes
+               if (n.get("body") or "").lstrip().startswith("🚨 hand-work-overdue:")
+               and n.get("createdAt") and at(n["createdAt"]) > at(entered)]
+    if alarmed:
+        return f"; in Hand-work {hours}h, past {limit} — alarmed {_pt(alarmed[-1])}"
+    if proof:
+        import proof_dispatch  # noqa: PLC0415 — proof_dispatch imports this module
+        import proof_run_state  # noqa: PLC0415
+        try:
+            comments, viewer = proof_dispatch.LinearReads().thread(ident)
+            got = proof_run_state.reading(REPO, ident, comments, viewer,
+                                          read=proof_dispatch.github_read)
+        except Exception as e:  # noqa: BLE001 — an unread run is not a free one
+            print(f"watchdog: {ident}'s proof run could not be read ({e})",
+                  file=sys.stderr)
+            got = SimpleNamespace(state="unknown", lines=[])
+        if got.state not in proof_dispatch.FREE:
+            why = "could not be read" if got.state == "unknown" else "is in flight"
+            return f"; in Hand-work {hours}h, past {limit} — no alarm: its proof run {why}"
+        kind = f"a PROOF: card whose proof run is not in flight — {'; '.join(got.lines)}."
+    else:
+        kind = (f"the operator's card, {reason} — it entered Hand-work "
+                f"{_pt(entered)}, and no run is dispatched for it.")
+    try:
+        linear_ops.cmd_comment(ident, pipeline_act.receipt("hand-work-overdue", (
+            f"🚨 hand-work-overdue: {ident} has waited in Hand-work {hours} hours, "
+            f"past its {limit} — the operator's to look at.\nKind: {kind}"
+        )))
+    except Exception as e:  # noqa: BLE001 — recorded like every other failed write
+        _write_failures.append(f"{ident} hand-work-overdue alarm: {e}")
+        print(f"ERROR: hand-work-overdue alarm on {ident}: {e}", file=sys.stderr)
+        return f"; in Hand-work {hours}h, past {limit} — the alarm could not be posted"
+    return f"; in Hand-work {hours}h, past {limit} — alarmed {dead_run.pacific(datetime.now(UTC))}"
+
+
 def flag_stranded() -> set[str]:
     """DRE-1993 watchdog: flag active-lane cards with no evidence of work.
 
@@ -2500,10 +2607,14 @@ def flag_stranded() -> set[str]:
             # DRE-2524: neither class applies to work built by hand — no
             # dispatched run is coming and nothing is being routed. The line
             # names why, never a label the card may not carry (DRE-6424).
+            # In Hand-work the card's own repo's sweep keeps time on it
+            # instead, and the line says how long it has waited (DRE-6409).
+            aged = (_hand_work_age(card, reason)
+                    if state == "Hand-work" and card_repo(card) == REPO_SLUG else "")
             print(
                 f"watchdog: {ident} is {reason} — no "
                 "dispatched run is expected, so a missing run receipt and an "
-                "off-rail repo are both normal here, not a strand"
+                f"off-rail repo are both normal here, not a strand{aged}"
             )
             continue
         if automation_card(card):
@@ -6719,6 +6830,20 @@ def post_critic_hold_is_overdue(tag: str | None, green_lit_at: str | None,
         return True
 
 
+def undecided_hold_is_overdue(green_lit_at: str | None) -> bool:
+    """Should the epic cap's hold (DRE-6493) be posted to the card, or only
+    logged? The activate route asks the cap and writes its note within
+    minutes of the approval, so inside `POST_CRITIC_GRACE_MINUTES` the hold
+    is the race this gate exists for and says nothing on the card. An
+    unreadable green light speaks — unknown must not silence a refusal."""
+    if not green_lit_at:
+        return True
+    try:
+        return age_minutes(green_lit_at) >= POST_CRITIC_GRACE_MINUTES
+    except ValueError:
+        return True
+
+
 def epic_thread(epic: str) -> list | None:
     """The epic's comment thread WITH authorship, or None when Linear cannot
     say (DRE-3059).
@@ -6751,6 +6876,31 @@ def epic_thread(epic: str) -> list | None:
         print(
             f"plan-critic: could not read {epic}'s review thread ({exc}) — "
             "the second-critic gate abstains on this epic this sweep",
+            file=sys.stderr,
+        )
+        return None
+
+
+def whole_epic_thread(epic: str, window: list | None) -> list | None:
+    """The epic's thread for the epic cap's promotion hold (DRE-6493): the
+    whole of it, never the fifty-comment window `epic_thread` may have read.
+
+    The hold looks for ONE start note, written once, on an epic that has not
+    moved a child — so markers pile up on top of it, and once fifty follow
+    it a windowed read would hold every child for good (the window cost two
+    approved epics on 2026-10-02, DRE-5639). A window shorter than fifty is
+    the whole thread already, and inside a pass the whole read is the
+    cache's. None when the window was unreadable or the whole read fails —
+    the hold abstains on it, as `epic_thread` explains.
+    """
+    if window is None or len(window) < linear_ops.COMMENT_WINDOW:
+        return window
+    try:
+        return linear_ops.comment_records(epic, whole_thread=True)
+    except Exception as exc:  # noqa: BLE001 — an unreadable thread is unknown
+        print(
+            f"epic-cap: could not read {epic}'s whole thread ({exc}) — "
+            "the cap's promotion hold abstains on this epic this sweep",
             file=sys.stderr,
         )
         return None
@@ -6892,7 +7042,48 @@ def promote_ready(
     early return at the cap starved a person's card on every ordinary busy day
     (PR #430's review); so did breaking out of the loop once the budget was
     spent, since the candidates are read lowest number first.
+
+    And a refusal is read back as a clock (DRE-4210). Every exit that leaves a
+    card of this repo in Backlog for a reason that is NOT a declared wait —
+    a refusal no sweep can clear, or a hold a person must lift — is recorded,
+    dated by its receipt. After the loop a clocked refusal standing two hours
+    is named on the card ONCE and on the red-run ledger every sweep, and a
+    board at WIP 0 with nothing dispatched and cards standing refused or held
+    says so, and goes red once the oldest receipt is an hour old
+    (`promotion_stall`, DRE-4207). The red is `_stale_defects`, which `main`
+    already exits on; the medic reads it as a standing defect (DRE-6467).
     """
+    # The clock is the pure half (DRE-4207); imported here because this pass is
+    # its only caller.
+    import promotion_stall  # noqa: PLC0415 — the stall clock's one caller (DRE-4210)
+
+    # ONE time for the whole pass, so every record is aged against the same
+    # instant — and a test pins it by patching the module's clock.
+    now = datetime.now(UTC).isoformat()
+    # Every card this pass left in Backlog refused or held (DRE-4210) — never
+    # a declared wait: a `blockedBy`, an inactive epic, the WIP budget, a PARKED
+    # verdict, an epic, another repo's card, or a card the pass moved.
+    refused: list = []
+
+    def stand(identifier: str, tag: str, needle: str | None) -> None:
+        """Record `identifier` as standing refused or held under `tag`, dated
+        by the oldest comment carrying `needle` — the receipt the refusal or
+        the hold left. No needle, no receipt: unknown, which is never stale.
+        Served from the pass's board read inside a sweep; a read that fails
+        is said once and the card stays undated, never the sweep's end."""
+        first_seen = None
+        if needle is not None:
+            try:
+                first_seen = linear_ops.first_comment_at(identifier, needle)
+            except linear_ops.LinearError as e:
+                print(
+                    f"ERROR: could not read when {identifier}'s {tag} receipt was "
+                    f"first posted — its age is unknown, so it is not clocked "
+                    f"this sweep: {e}",
+                    file=sys.stderr,
+                )
+        refused.append(promotion_stall.Refused(identifier, tag, first_seen))
+
     # Which cap, and from where (DRE-3994): a run that holds or promotes must
     # say what it was holding to, or a repo at "0" promoting at 8 reads exactly
     # like a repo at 8.
@@ -6921,6 +7112,9 @@ def promote_ready(
     # per epic per sweep. `None` means the read FAILED, which is not the same
     # fact as an epic with no comments and must not be cached as one.
     post_critic: dict[str, list | None] = {}
+    # The same thread whole, for the epic cap's hold (DRE-6493) — read past
+    # the window only for an epic whose window is full, once per sweep.
+    cap_thread: dict[str, list | None] = {}
     candidates = sorted(
         backlog_children() if candidates is None else candidates,
         key=lambda c: int(c["identifier"].split("-")[1]),
@@ -7016,6 +7210,9 @@ def promote_ready(
                 f"('{HOLD_LABEL}' label, reason={hold.reason_of(labels, bodies)}) "
                 "— never auto-promoted; skipping"
             )
+            # Left in Backlog wearing the label (DRE-4210): dated by the stamp a
+            # pipeline park writes; a label applied by hand has none.
+            stand(card["identifier"], HOLD_LABEL, hold.STAMP_PREFIX)
             continue
         parent = card.get("parent")
         if parent and parent["state"]["name"] not in EPIC_ACTIVE_STATES:
@@ -7140,6 +7337,8 @@ def promote_ready(
             # and the card leaves Backlog).
             if has_unresolved_blocker(card):
                 print(f"promotion: {card['identifier']} has an unresolved agent-blocker — skipping")
+                # Left in Backlog with its marker open (DRE-4210).
+                stand(card["identifier"], "agent-blocker", BLOCKER_MARKER)
                 continue
             # Mid-epic discovery (DRE-2739): a card added to an epic AFTER it was
             # green-lit dispatches an agent on this very sweep — within fifteen
@@ -7184,6 +7383,25 @@ def promote_ready(
                         refusal_tag, green_light[epic_id],
                         [r.get("body") or "" for r in post_critic[epic_id] or []])
                 else:
+                    # The cap's decision, asked before any child moves
+                    # (DRE-6493): the relay sends this sweep and `plan.yml` at
+                    # once, and a child promoted first made rule 1 start the
+                    # epic past the cap. Logged at once; said on the card after
+                    # the activate route's window, as the second critic's is.
+                    if epic_id not in cap_thread:
+                        cap_thread[epic_id] = whole_epic_thread(
+                            epic_id, post_critic[epic_id])
+                    refusal = epic_cap.promotion_refusal(
+                        card["identifier"],
+                        epic_id,
+                        epic_records([epic_id]).get(epic_id),
+                        cap_thread[epic_id],
+                        green_light[epic_id],
+                    )
+                    if refusal is not None:
+                        refusal_tag = epic_cap.UNDECIDED_TAG
+                        surface_refusal = undecided_hold_is_overdue(green_light[epic_id])
+                if refusal is None:
                     refusal = mid_epic.promotion_refusal(
                         card["identifier"],
                         card.get("createdAt"),
@@ -7239,6 +7457,12 @@ def promote_ready(
             # that gives it one. Both are writes, outside the read-guard.
             if to_planning:
                 _send_to_planning(card["identifier"])
+            # Read back as a clock (DRE-4210): only the refusals no sweep can
+            # clear, and never one this pass moved to Planning. A refusal
+            # logged and not posted has no receipt yet: undated, by design.
+            elif promotion_stall.clocked(refusal_tag):
+                stand(card["identifier"], refusal_tag,
+                      refusal_tag if surface_refusal else None)
             continue
         # Stale verdict (DRE-4962), asked LAST: it is the one gate that buys a
         # read per card — the lane history, on the quota every sweep shares —
@@ -7269,6 +7493,7 @@ def promote_ready(
                     f"{stale.splitlines()[0]}"
                 )
                 _surface_once(card["identifier"], routing_verdict.STALE_VERDICT_NEEDLE, stale)
+                stand(card["identifier"], "stale-verdict", routing_verdict.STALE_VERDICT_NEEDLE)
                 continue
         # THE LIVE RE-CHECK (Stage 2 items 32 and 37, review C2/C3). When any
         # input to this promotion came from the read door — the candidate, or
@@ -7286,6 +7511,7 @@ def promote_ready(
             if why is not None:
                 print(f"promotion: {card['identifier']} is not being promoted — "
                       f"the live re-check refused it: {why}")
+                stand(card["identifier"], "live-recheck", None)
                 continue
             labels = [lbl["name"].lower() for lbl in live["labels"]["nodes"]]
             bodies = card_comment_bodies(live)
@@ -7315,6 +7541,8 @@ def promote_ready(
                 f"promotion: {card['identifier']} is held as an operator step "
                 f"but routed {verdict} → {destination}; a person reads it — skipping"
             )
+            # Left in Backlog wearing the label, like the stand-down above.
+            stand(card["identifier"], HOLD_LABEL, hold.STAMP_PREFIX)
             continue
         try:
             # MARKS FIRST, then the move (DRE-3385). The nudge loop leaves a
@@ -7379,6 +7607,33 @@ def promote_ready(
         f"one-off(s), {by_hand} hand-built (nothing dispatched) "
         f"(WIP {active_count}+{spent}/{MAX_WIP})"
     )
+    # The stall clock (DRE-4210), the shape `_report_epic_prose_defect` runs on
+    # an epic: a clocked refusal two hours old is named on the card ONCE, and
+    # its ledger entry and ERROR line recur on every sweep it still stands —
+    # which is what keeps the run red until a person acts.
+    for record in refused:
+        age = promotion_stall.stalled(record, now)
+        if age is not None:
+            _surface_once(
+                record.identifier,
+                promotion_stall.STALL_TAG,
+                pipeline_act.receipt(
+                    "promotion-stalled",
+                    promotion_stall.notice(record, age, active_count, MAX_WIP),
+                ),
+            )
+            entry = promotion_stall.ledger_line(record, age)
+            _stale_defects.append(entry)
+            print(f"ERROR: {entry}", file=sys.stderr)
+    # The idle board: WIP 0 with nothing dispatched this pass, and cards
+    # standing refused or held. `spent` as it stands after the loop, so a pass
+    # that dispatched is not idle. Which records count for what is the clock's.
+    line, entry = promotion_stall.idle_board(active_count, spent, MAX_WIP, refused, now)
+    if line is not None:
+        print(line)
+    if entry is not None:
+        _stale_defects.append(entry)
+        print(f"ERROR: {entry}", file=sys.stderr)
     if _card_skips:
         # A red pattern the run log can't miss (DRE-2035) — pairs with the
         # per-card ERROR lines above; the sweep itself stays alive and green.
@@ -8029,10 +8284,26 @@ def refresh_stale_merge_refs() -> None:
 
     The DECISION is not made here. `stale_merge_ref.decide()` owns the three
     facts that make a refresh safe (`main` has moved · every failing check
-    also fails on the merge base · every one of them is green on the `main`
-    tip), the per-`main`-commit marker and the lifetime cap; this function
-    reads the payloads it needs, makes the write, and posts the body it
-    composed. Every answer other than `refresh` is one line of log.
+    was red on `main` too, on the merge base or on one of `main`'s own merges
+    after it · every one of them is green on `main` again), the
+    per-`main`-commit marker and the lifetime cap; this function reads the
+    payloads it needs, makes the write, and posts the body it composed. Every
+    answer other than `refresh` is one line of log.
+
+    THE READS (DRE-6513), in order and all through `gh_read`: the compare;
+    the head's check runs; and only when the head has a failing check and
+    `main` has moved, the merge base's runs of each failing check BY NAME,
+    `main`'s commit listing at the compared tip, and each first-parent
+    commit's runs of each failing check by name. By name and paged because a
+    `main` commit collects the runs of every workflow that fired while it was
+    the tip — 143 to 789 of them on 2026-10-09 — and an unpaged read sees the
+    newest 30, from which the CI checks had fallen: the sweep printed
+    `Console backend (pytest)` as green on #3397's merge base, which held a
+    red run of it. The listing and the by-name reads are cached for this
+    sweep, keyed by what was read — the listing per tip sha, a by-name read
+    per `(sha, check name)` — so pull requests behind one tip share them and
+    pull requests compared against two tips each get their own. Nothing here
+    reads `actions/`: the App token cannot, and check runs answer it.
 
     FULL SWEEPS ONLY, and never `--conflicts-only`: at merge time `main`'s CI
     on the fixing commit has not finished, so the decision would read
@@ -8076,13 +8347,31 @@ def refresh_stale_merge_refs() -> None:
         print(f"ERROR: stale-merge-ref: PR listing failed: {e}", file=sys.stderr)
         return
 
+    listings: dict = {}  # main sha -> `commits?sha=` listing, this sweep only
+    named_runs: dict = {}  # (sha, check name) -> that check's runs on sha
+
+    def runs_named(sha: str, name: str) -> list:
+        """Every run of one check on one commit, paged, read once a sweep."""
+        key = (sha, name)
+        if key not in named_runs:
+            payload = json.loads(gh_read(
+                "api", f"repos/{REPO}/commits/{sha}/check-runs"
+                f"?check_name={urllib.parse.quote(name, safe='')}"
+                "&per_page=100") or "{}")
+            named_runs[key] = stale_merge_ref._check_runs(payload)
+        return named_runs[key]
+
+    def runs_for(sha: str, names: list) -> dict:
+        return {"check_runs": [run for name in names
+                               for run in runs_named(sha, name)]}
+
     eligible = []  # (pr, decision) — refreshed paced below, oldest PR first
     for pr in prs:
         number = pr.get("number")
         try:
-            # Every skip below comes BEFORE the four API reads: a PR this
-            # rule may not act on must not cost a compare and three
-            # check-run payloads to find that out.
+            # Every skip below comes BEFORE the API reads: a PR this rule
+            # may not act on must not cost a compare and the check-run
+            # payloads to find that out.
             if not card_branch(pr.get("headRefName")) or pr.get("isDraft"):
                 continue
             if pr.get("mergeStateStatus") == "DIRTY":
@@ -8107,17 +8396,35 @@ def refresh_stale_merge_refs() -> None:
                     "carries no merge base or no `main` tip; unevaluated"
                 )
                 continue
-            _behind, base_sha, main_sha = read
-            checks = {}
-            for label, sha in (("head", head), ("base", base_sha),
-                               ("main", main_sha)):
-                checks[label] = json.loads(gh_read(
-                    "api", f"repos/{REPO}/commits/{sha}/check-runs") or "{}")
+            behind, base_sha, main_sha = read
+            head_checks = json.loads(gh_read(
+                "api", f"repos/{REPO}/commits/{head}/check-runs?per_page=100")
+                or "{}")
+            try:
+                names = stale_merge_ref.failing_set(head_checks)
+            except ValueError:
+                names = []  # decide() reads the head again and says so
+            base_checks: dict = {"check_runs": []}
+            main_window: list = []
+            # Nothing more is read when nothing could come of it: decide()
+            # answers `current` or `no-failure` before it looks at either.
+            if names and behind > 0:
+                base_checks = runs_for(base_sha, names)
+                if main_sha not in listings:
+                    listings[main_sha] = json.loads(gh_read(
+                        "api", f"repos/{REPO}/commits?sha={main_sha}"
+                        "&per_page=100") or "[]")
+                main_window = [
+                    (sha, runs_for(sha, names))
+                    for sha in stale_merge_ref.first_parent_window(
+                        listings[main_sha], tip_sha=main_sha,
+                        base_sha=base_sha)
+                ]
             decision = stale_merge_ref.decide(
                 compare=compare,
-                head_checks=checks["head"],
-                base_checks=checks["base"],
-                main_checks=checks["main"],
+                head_checks=head_checks,
+                base_checks=base_checks,
+                main_window=main_window,
                 # Only the worker bot's own receipts are read back: a forged
                 # comment must not be able to freeze a branch (DRE-1998).
                 receipts=[c.get("body") or "" for c in pr.get("comments") or []
@@ -8218,6 +8525,7 @@ def _refresh_one_merge_ref(pr: dict, decision) -> None:
         inherited=decision.inherited,
         used=spent + 1,
         cap=STALE_MERGE_REFRESH_CAP,
+        evidence=decision.evidence,
     ))
     # The PR carries the idempotency key the next sweep reads back; the card
     # carries the same body because the console reads the card.
@@ -12430,6 +12738,11 @@ def recover_limit_deaths() -> None:
 
     A pass that re-enters nothing says so in one line (DRE-5519).
 
+    An `ERROR:` line carrying `limit_recovery.STOOD_PHRASE` is a marker past
+    its clock (DRE-4208) and goes on `_stale_defects`, which the medic reads
+    as a deliberate red (DRE-6467); every other `ERROR:` line is a re-entry
+    that did not land and goes on `_write_failures`.
+
     Every card it moves or posts a receipt on is recorded in
     `_limit_recovered` (DRE-5841), so the Planning watchdog later in this pass,
     reading the same snapshot and its old marker, leaves the card alone.
@@ -12459,7 +12772,12 @@ def recover_limit_deaths() -> None:
             acted = True
             print(line)
             if line.startswith("ERROR:"):
-                _write_failures.append(line)
+                # A marker past its clock is a standing defect, not a failed
+                # write: nothing failed, a card has stood too long (DRE-4208).
+                if limit_recovery.STOOD_PHRASE in line:
+                    _stale_defects.append(line)
+                else:
+                    _write_failures.append(line)
         if not acted:
             print(f"limit-recovery: nothing to re-enter — {len(cards)} card(s) read, "
                   "none with a limit death to recover")

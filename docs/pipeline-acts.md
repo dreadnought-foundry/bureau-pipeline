@@ -268,7 +268,7 @@ beside `release-live` as a terminal progress act in `tests/test_act_cadence.py`.
 It ships console-first like every other row. The console's `ACTS` has to carry
 `roll-up-split` before this row can merge.
 
-## The hygiene agent's thirteen rows — `🧹 hyg-*` (DRE-5368)
+## The hygiene agent's fourteen rows — `🧹 hyg-*` (DRE-5368)
 
 | Act name | Tag | Kind | Next actor |
 | -- | -- | -- | -- |
@@ -285,6 +285,7 @@ It ships console-first like every other row. The console's `ACTS` has to carry
 | `hygiene-card-cancel` | `hyg-card-canceled` | recovery | `operator` |
 | `hygiene-cause-name` | `hyg-cause-named` | hold | `operator` |
 | `hygiene-hold-clear` | `hyg-hold-cleared` | recovery | `reconcile.py` |
+| `hygiene-triage-alarm` | `hyg-triage-aged` | hold | `operator` |
 
 The hourly hygiene pass (`scripts/hygiene.py`) clears the mechanical rows a
 person clears by hand today. Every row is emitted from that one file, whose
@@ -292,15 +293,15 @@ table of tags is each row's anchor, and every receipt opens
 `🧹 hygiene: <tag> — <cause> · <HH:MM PT>`, names its evidence, and ends in the
 trailer. **Which** act a pass takes is decided by a lane module
 (`scripts/hygiene_<lane>.py`, a sibling card each); the core composes and posts
-all thirteen through one seam, which is why `tests/test_check_act_receipts.py`
+all fourteen through one seam, which is why `tests/test_check_act_receipts.py`
 counts a site composing a computed act name as composing the acts its own file
 declares.
 
 Every row declares a `null` cadence and none is `dispatched`: what follows a
 gate re-dispatch is the gate's own run, timed by its own acts, and every other
 row hands the work to a person, the planner or the sweep. The kinds are copied
-from the console's `ACTS` (agent-bureau PR #3023, DRE-5367) — two holds and ten
-recoveries — so they agree tag by tag. The idempotency key is the pair (tag,
+from the console's `ACTS` (agent-bureau PR #3023, DRE-5367) — three holds and
+eleven recoveries — so they agree tag by tag. The idempotency key is the pair (tag,
 cause), applied by the core's write seam and never restated by a lane.
 
 The hourly **summary** the pass posts to its standing card is not one of these:
@@ -368,6 +369,79 @@ run` or `second dispatch`.
 each proof a person is already working with `linear_ops.py proof-waiting
 <card> "being observed by hand" "the operator's record pull request"`, and the
 phase leaves it alone by name.
+
+## The row that says a switch may come on — `🔀 switch-cleared` (DRE-6437)
+
+| Field | Value |
+| -- | -- |
+| tag | `switch-cleared` |
+| act name | `switch-reason-cleared` |
+| kind · state · next actor | `progress` · `unchanged` · `operator` |
+| discharges | nothing |
+| cadence | `43200` — `alarm_after_hours`, 12, in `config/switches.json` |
+| emitted by | `scripts/switch_reason.py`, at the `pipeline_act.receipt("switch-reason-cleared", …)` call |
+
+A pipeline switch that is off names the cards it waits on in its companion
+variable, `<SWITCH>_OFF_UNTIL` (`docs/switches.md`). The `Read the switches`
+step of `reconcile.yml` reads those cards on every full pass. When every one is
+`Done`, `Canceled` or `Duplicate` and the switch is still off, the step reads
+the thread of the first card the companion names and, unless the receipt is
+already there, posts:
+
+    🔀 switch-cleared: <SWITCH> in <repo-slug> — its reason cleared at <PT time>: DRE-A Done, DRE-B Done. It may be turned on: gh variable set <SWITCH> --body true -R <owner/repo>
+
+**The tag is a live key.** A comment whose first line opens `🔀 switch-cleared:
+<SWITCH> in <repo-slug>` stops a repeat, so agent-bureau, portico and atlas each
+post their own once. The receipt's own time is when the reason cleared: once it
+is `alarm_after_hours` old and the switch is still off, the step files one card
+titled `Switch <SWITCH> in <repo-slug> is still off after its reason cleared`
+into `Planning`, after `linear_ops.find_open` finds none open under that title.
+The cadence is that same threshold, so the console reads a receipt older than
+twelve hours as a switch somebody forgot.
+
+It moves no card and repairs nothing, so it is a progress act. The sweep never
+sets the variable: turning a production behavior on is a person's act, which
+is why the next actor is the operator. Outside Actions, or with `--dry-run`,
+the step prints `would: post <card> — <line>` and `would: alarm — <title>` and
+writes nothing.
+
+## The row that names a stalled refusal — `🚨 promotion-stalled` (DRE-4210)
+
+| Field | Value |
+| -- | -- |
+| tag | `promotion-stalled` |
+| act name | `promotion-stalled` |
+| kind · state · next actor | `hold` · `unchanged` · `operator` |
+| discharges | nothing |
+| cadence | null — the hold ends with a person, and nothing bounds how long one takes |
+| emitted by | `scripts/reconcile.py`, at the `promotion_stall.notice(` call in `promote_ready` |
+
+DRE-4198 found five Backlog cards refused promotion for the same reason across
+thirty hours, and found them only by reading a sweep log: the refusal was
+posted once and never read again, so each looked exactly like a card waiting
+its turn. `promote_ready` now records every card it leaves in Backlog for a
+reason that is not a declared wait, dated by the oldest comment carrying that
+refusal's receipt — never by a count of sweeps kept somewhere
+(`scripts/promotion_stall.py`, DRE-4207).
+
+Only the refusals no sweep can clear are clocked (`CLOCKED_TAGS`). Once one has
+stood `PROMOTION_STALL_MINUTES` (120), the card gets the receipt ONCE:
+
+    🚨 promotion-stalled: <card> is still refused promotion as <tag> — first refused at <PT time>, <h> hours ago.
+
+and a `promotion-stalled <card>: …` entry joins the red-run ledger on every
+sweep it still stands, so the run stays red until a person acts. A PARKED card,
+an epic, a card with an unresolved `blockedBy`, a card sent to Planning and any
+card waiting on the WIP budget are never clocked: each already says what it
+waits for, and that thing is scheduled.
+
+The holds (`HELD_TAGS` — the hold label, an open agent-blocker, a stale
+verdict, a refused live re-check) are never clocked per card, but they count
+toward the **idle board**: a sweep at WIP 0 that dispatched nothing while cards
+stand refused or held prints `promotion: idle board — WIP 0/<cap>: …`, and
+adds an `idle board — WIP 0/<cap>: …` ledger entry once the oldest dated
+receipt is `IDLE_BOARD_MINUTES` (60) old. An undated record counts toward the
+line and never toward the red.
 
 ## Why this exists
 

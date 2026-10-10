@@ -23,9 +23,12 @@ writes, under which token, how often, and what it says afterwards:
   2. Idempotent per `main` commit: a receipt already carrying
      `stale-merge-ref-refresh @<main sha>`, or `behind_by == 0`, writes
      nothing at all.
-  3. A failure that is GREEN on the merge base is the PR's own defect (the
-     fix loop owns it); a failure still RED on the `main` tip belongs to the
-     Red-Main Repair loop. Neither is refreshed.
+  3. A failure that is GREEN on the merge base, and that `main` never went
+     red on since, is the PR's own defect (the fix loop owns it); a failure
+     still RED on `main` belongs to the Red-Main Repair loop. Neither is
+     refreshed. One `main` went red on after the merge base and is green on
+     again IS refreshed (DRE-6513), off paged, by-name reads cached for the
+     sweep.
   4. Budgets: STALE_MERGE_REFRESH_CAP lifetime refreshes per PR (0 is the
      operator's fleet-wide off switch), STALE_MERGE_REFRESH_SWEEP_CAP per
      sweep, oldest PR first — every refresh is a full CI run and possibly a
@@ -47,6 +50,7 @@ from __future__ import annotations
 
 import json
 import os
+import urllib.parse
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -68,6 +72,7 @@ HEAD = "a" * 40
 MAIN = "c" * 40
 BASE = "b" * 40  # the merge base — `main` before it moved
 OTHER_MAIN = "d" * 40
+MID = "e" * 40   # a `main` merge between the merge base and the tip
 
 RED_CHECK = "Console backend (pytest)"
 ACT = "merge-ref-refreshed"
@@ -133,14 +138,23 @@ def _refresh_receipt(main_sha=MAIN, author="agent-bureau-bot"):
 
 
 def _state(prs, compare=None, head=None, base=None, main=None, put_rc=0,
-           comment_rc=0):
-    """Everything the fake `gh` answers with, keyed the way the sweep asks."""
+           comment_rc=0, window=None, listing=None, compares=None):
+    """Everything the fake `gh` answers with, keyed the way the sweep asks.
+
+    `window` maps a `main` merge behind the tip to its check runs, newest
+    first: the default listing walks tip -> each of them -> the merge base,
+    so with no `window` the tip alone is the window. `listing` replaces that
+    walk outright (an exception makes the listing read fail). `compares` maps
+    a head sha to its own compare payload."""
     return {
         "prs": list(prs),
         "compare": compare if compare is not None else _compare(),
+        "compares": dict(compares or {}),
         "head": head if head is not None else _checks(_red()),
         "base": base if base is not None else _checks(_red()),
         "main": main if main is not None else _checks(_green()),
+        "window": dict(window or {}),
+        "listing": listing,
         "put_rc": put_rc,
         "comment_rc": comment_rc,
         "gh": [],
@@ -148,6 +162,31 @@ def _state(prs, compare=None, head=None, base=None, main=None, put_rc=0,
         "pr_comments": [],
         "card_comments": [],
     }
+
+
+def _walk(tip, behind, base=BASE):
+    """The `commits?sha=<tip>` listing: tip -> behind... -> base, by first
+    parent, with a pull request's own commit on every merge's second parent."""
+    chain = [tip, *behind, base]
+    listing = []
+    for index, sha in enumerate(chain[:-1]):
+        side = f"{index:02d}" + "f" * 38
+        listing.append({"sha": sha, "parents": [{"sha": chain[index + 1]},
+                                                {"sha": side}]})
+        listing.append({"sha": side, "parents": [{"sha": chain[index + 1]}]})
+    listing.append({"sha": base, "parents": [{"sha": "0" * 40}]})
+    return listing
+
+
+def _query(path):
+    return urllib.parse.parse_qs(urllib.parse.urlsplit(path).query)
+
+
+def _only(payload, name):
+    """What GitHub answers a `check_name=` read with: that name's runs only."""
+    if isinstance(payload, Exception):
+        return payload
+    return _checks(*[r for r in payload["check_runs"] if r["name"] == name])
 
 
 def _run_factory(state):
@@ -176,13 +215,26 @@ def _run_factory(state):
                        '{"message":"Updating pull request branch."}',
                 stderr="HTTP 422" if state["put_rc"] else "")
         if argv[1] == "api" and "/compare/" in argv[2]:
-            return _answer(state["compare"])
+            head = argv[2].rsplit("...", 1)[1]
+            return _answer(state["compares"].get(head, state["compare"]))
         if argv[1] == "api" and "/check-runs" in argv[2]:
             sha = argv[2].split("/commits/")[1].split("/")[0]
-            # Anything that is neither the head nor the merge base IS the
-            # `main` tip — the flap fixture walks several of them.
-            key = {HEAD: "head", BASE: "base"}.get(sha, "main")
-            return _answer(state[key])
+            names = _query(argv[2]).get("check_name")
+            if not names:
+                return _answer(state["head"])  # only the head is read whole
+            # Anything that is neither the merge base nor a named window
+            # commit IS the `main` tip — the flap fixture walks several.
+            if sha == BASE:
+                payload = state["base"]
+            else:
+                payload = state["window"].get(sha, state["main"])
+            return _answer(_only(payload, names[0]))
+        if argv[1] == "api" and "/commits?" in argv[2]:
+            listing = state["listing"]
+            if listing is None:
+                tip = _query(argv[2])["sha"][0]
+                listing = _walk(tip, list(state["window"]))
+            return _answer(listing)
         raise AssertionError(f"unexpected gh call: {argv}")
 
     def _answer(payload):
@@ -325,6 +377,105 @@ def test_mains_check_still_running_is_not_a_green_light():
     assert state["puts"] == []
 
 
+def test_a_green_merge_behind_an_in_flight_tip_is_read():
+    """DRE-6513: on a busy day the tip is nearly always in flight (#3444).
+    The merge behind it is `main` too, and it is green."""
+    state = _sweep(_state([_pr()], main=_checks(
+        {"name": RED_CHECK, "status": "in_progress", "conclusion": None}),
+        window={MID: _checks(_green())}))
+    assert len(state["puts"]) == 1
+
+
+# --------------------------------------------------------------------------
+# 3b. DRE-6513 — `main` went red after the merge base and is green again
+# --------------------------------------------------------------------------
+def test_main_red_one_merge_back_and_green_at_the_tip_is_refreshed():
+    """#3457 on 2026-10-09: green on its merge base, but `main` went red on
+    the same check one merge later and is green again — `main`'s fault."""
+    state = _sweep(_state([_pr()], base=_checks(_green()),
+                          window={MID: _checks(_red())}))
+    assert len(state["puts"]) == 1
+    assert f"expected_head_sha={HEAD}" in state["puts"][0]["argv"]
+    assert len(state["pr_comments"]) == 1
+    body = state["pr_comments"][0]["body"]
+    assert f"`main` went red on it at `{MID[:8]}`" in body
+    assert f"is green on it at `{MAIN[:8]}`" in body
+
+
+def _check_run_reads(state):
+    return [c["argv"][2] for c in state["gh"]
+            if c["argv"][1] == "api" and "/check-runs" in c["argv"][2]]
+
+
+def _listing_reads(state):
+    return [c["argv"][2] for c in state["gh"]
+            if c["argv"][1] == "api" and "/commits?" in c["argv"][2]]
+
+
+def test_every_check_runs_read_is_paged_and_named():
+    """The check-runs reads saw the first 30 runs only, and a `main` commit
+    carries hundreds — #3397's red merge-base run was never seen."""
+    state = _sweep(_state([_pr()], base=_checks(_green()),
+                          window={MID: _checks(_red())}))
+    reads = _check_run_reads(state)
+    head = [r for r in reads if f"/commits/{HEAD}/" in r]
+    assert head == [f"repos/{reconcile.REPO}/commits/{HEAD}/check-runs"
+                    "?per_page=100"]
+    named = [r for r in reads if r not in head]
+    assert len(named) == 3, named  # merge base, tip, the merge behind it
+    for path in named:
+        query = _query(path)
+        assert query["check_name"] == [RED_CHECK], path
+        assert query["per_page"] == ["100"], path
+        assert " " not in path, "the check name is URL-encoded"
+    assert _listing_reads(state) == [
+        f"repos/{reconcile.REPO}/commits?sha={MAIN}&per_page=100"]
+    for call in state["gh"]:
+        joined = " ".join(call["argv"])
+        assert "actions/" not in joined, "the App token cannot read actions/"
+        assert call["argv"][1:3] != ["run", "rerun"]
+
+
+def test_reads_are_shared_across_one_sweep():
+    """Three pull requests behind one tip, one failing check: one listing,
+    and each (sha, check name) read once."""
+    heads = ["1" * 40, "2" * 40, "3" * 40]
+    prs = [_pr(number=2240 + i, sha=h, branch=f"agent/DRE-{2240 + i}-x")
+           for i, h in enumerate(heads)]
+    state = _sweep(_state(prs, base=_checks(_green()),
+                          window={MID: _checks(_red())}))
+    assert len(_listing_reads(state)) == 1
+    named = [r for r in _check_run_reads(state) if "check_name=" in r]
+    keys = [(r.split("/commits/")[1].split("/")[0], _query(r)["check_name"][0])
+            for r in named]
+    assert sorted(keys) == sorted({(BASE, RED_CHECK), (MAIN, RED_CHECK),
+                                   (MID, RED_CHECK)}), keys
+    assert len(state["puts"]) == 3
+
+
+def test_two_tips_in_one_sweep_cost_two_listings():
+    heads = ["1" * 40, "2" * 40]
+    prs = [_pr(number=2240 + i, sha=h, branch=f"agent/DRE-{2240 + i}-x")
+           for i, h in enumerate(heads)]
+    state = _sweep(_state(prs, compares={
+        heads[0]: _compare(main_sha=MAIN),
+        heads[1]: _compare(main_sha=OTHER_MAIN),
+    }))
+    assert sorted(_listing_reads(state)) == sorted([
+        f"repos/{reconcile.REPO}/commits?sha={MAIN}&per_page=100",
+        f"repos/{reconcile.REPO}/commits?sha={OTHER_MAIN}&per_page=100",
+    ])
+    assert len(state["puts"]) == 2
+
+
+def test_a_head_with_no_failing_check_reads_nothing_more():
+    state = _sweep(_state([_pr()], head=_checks(_green())))
+    assert _listing_reads(state) == []
+    assert [r for r in _check_run_reads(state) if "check_name=" in r] == []
+    assert len(_check_run_reads(state)) == 1, "the head, and nothing else"
+    assert state["puts"] == []
+
+
 # --------------------------------------------------------------------------
 # 4. the budgets
 # --------------------------------------------------------------------------
@@ -421,11 +572,22 @@ def test_an_unreadable_compare_is_unevaluated_never_refreshed():
     )
 
 
-@pytest.mark.parametrize("side", ["head", "base", "main"])
+@pytest.mark.parametrize("side", ["head", "base", "main", "listing"])
 def test_an_unreadable_check_runs_read_is_unevaluated(side):
     state = _sweep(_state([_pr()], **{side: RuntimeError("502")}))
     assert state["puts"] == []
     assert state["pr_comments"] == [] and state["card_comments"] == []
+    assert reconcile._read_failures, (
+        f"an unreadable {side} read is recorded, never read as nothing to do"
+    )
+
+
+def test_an_unreadable_window_read_behind_the_tip_is_unevaluated():
+    state = _sweep(_state([_pr()], base=_checks(_green()),
+                          window={MID: RuntimeError("502")}))
+    assert state["puts"] == []
+    assert state["pr_comments"] == [] and state["card_comments"] == []
+    assert reconcile._read_failures
 
 
 # --------------------------------------------------------------------------
@@ -571,6 +733,10 @@ def test_the_registry_declares_the_act_the_way_the_contract_says():
     assert entry["adopted"] is True
     assert entry["emits"]["file"] == "scripts/stale_merge_ref.py"
     assert entry["emits"]["anchor"] == stale_merge_ref.ANCHOR_PHRASE
+    # DRE-6513: both kinds of evidence a refresh now acts on.
+    assert "red on its merge base" in entry["means"]
+    assert "a `main` merge after it" in entry["means"]
+    assert "green on now" in entry["means"]
     for cited in ("#2240", "#2241"):
         assert cited in entry["why"], (
             "the row names the incident it was written from"

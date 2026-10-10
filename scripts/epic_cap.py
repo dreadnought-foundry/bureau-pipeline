@@ -63,6 +63,7 @@ import json
 import os
 import re
 import sys
+from datetime import datetime
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 if _HERE not in sys.path:
@@ -71,6 +72,7 @@ if _HERE not in sys.path:
 import linear_ops  # noqa: E402
 import mid_epic  # noqa: E402 — ONE rule for "a child is an epic"
 import proof_and_demo  # noqa: E402 — ONE rule for "a child is a proof"
+import review_rerun  # noqa: E402 — the act that asks the cap again (DRE-6493)
 import routing_verdict  # noqa: E402 — ONE answer to "a person's mark" (DRE-6226)
 
 ROOT = os.path.dirname(_HERE)
@@ -85,6 +87,12 @@ REDISPATCHED_TAG = "epic-start-redispatched"
 QUEUED_ACT = "epic-approval-queued"
 STARTED_ACT = "epic-queue-started"
 REDISPATCHED_ACT = "epic-start-redispatched"
+#: The sweep's hold on the children of an epic the cap has not decided yet
+#: (DRE-6493) — `promotion_refusal`.
+UNDECIDED_TAG = "epic-cap-undecided"
+#: The activate route's note once the cap answered `start`. `plan.yml` spells
+#: it in shell; `tests/test_epic_cap_approval_race.py` holds the two the same.
+ACTIVATED_NOTE = "▶️ Epic activated"
 
 #: The one repo whose periodic sweep starts waiting epics (DRE-5152).
 START_OWNER_SLUG = "bureau-pipeline"
@@ -465,6 +473,76 @@ def receipt_for(fleet: dict, identifier: str, epic: dict) -> str:
     ahead = line[0].get("identifier") if number == 3 else None
     return queued_receipt(k, n, len(_others_in_motion(fleet, identifier)),
                           fleet["cap"], ahead=ahead)
+
+
+# --------------------------------------------------------------------------- #
+# the promotion hold (DRE-6493)                                                #
+# --------------------------------------------------------------------------- #
+
+def _when(iso: str | None):
+    try:
+        return datetime.fromisoformat(str(iso).replace("Z", "+00:00"))
+    except (TypeError, ValueError):
+        return None
+
+
+def start_on_record(thread: list, green_lit_at: str | None) -> bool:
+    """A pipeline-authored start after the current approval: the activate
+    route's `ACTIVATED_NOTE`, or the sweep's own `▶️ epic-started:` receipt.
+
+    Authorship is `linear_ops.comment_records`' — a note anyone else wrote
+    starts nothing. With no green light to read, any pipeline start counts.
+    A note whose time cannot be read does not follow an approval that can."""
+    since = _when(green_lit_at) if green_lit_at else None
+    for row in thread or []:
+        if not row.get("authored_by_pipeline"):
+            continue
+        body = (row.get("body") or "").lstrip()
+        if not (body.startswith(ACTIVATED_NOTE)
+                or body.startswith(f"▶️ {STARTED_TAG}:")):
+            continue
+        if not green_lit_at:
+            return True
+        at = _when(row.get("created_at"))
+        if since is not None and at is not None and at > since:
+            return True
+    return False
+
+
+def promotion_refusal(identifier: str, epic: str, record: dict | None,
+                      thread: list | None, green_lit_at: str | None) -> str | None:
+    """Why the sweep holds `identifier` in Backlog, or None.
+
+    On an approval the relay sends the sweep and `plan.yml` at once, and
+    nothing ordered the two. A child the sweep promotes first makes rule 1 of
+    `decision` true — "a child out of Backlog, so this epic has run" — and the
+    epic starts past the cap (2026-10-05, Portico sweep 37392493131). So the
+    children of an In Progress epic that has never run wait until a start
+    follows the current approval (`start_on_record`).
+
+    An epic with a child out of Backlog has run, and is never held here. An
+    unread record abstains: the epic gate already holds a child whose epic
+    Linear did not answer. An unread thread (None) abstains too, for the
+    reason `reconcile.epic_thread` gives: holding every child of every
+    epic on a failed read would freeze the board, and the hold cannot tell
+    a missing start from one it could not see.
+
+    `thread` must be the WHOLE thread (`reconcile.whole_epic_thread`): the
+    start is written once, and an epic that has not moved a child piles
+    critic and plan markers on top of it until it leaves the fifty-comment
+    window — a hold read off the window would never lift (DRE-5639)."""
+    if record is None or _state(record) != IN_PROGRESS or activated_before(record):
+        return None
+    if thread is None or start_on_record(thread, green_lit_at):
+        return None
+    why = f"no start is on record since it was approved ({green_lit_at or 'time unknown'})"
+    return (
+        f"⏸️ {UNDECIDED_TAG}: {identifier} waits in Backlog — its epic {epic} "
+        f"is In Progress, but the epic cap has not decided whether it starts or "
+        f"waits in line ({why}). The children move when the epic is activated "
+        f"or started from the line; if it is queued they stay here. To ask the "
+        f"cap again, comment `{review_rerun.RERUN_REVIEW_ACT}` on {epic}."
+    )
 
 
 # --------------------------------------------------------------------------- #

@@ -19,20 +19,33 @@ Three facts make a refresh safe, and each one rules something out:
 
   * `main` has moved past the merge base (`behind_by > 0`) — otherwise there
     is nothing a refresh could change;
-  * every failing check on the head ALSO fails on the merge base — otherwise
-    the pull request has its own defect and the fix loop owns it. That
-    comparison is `inherited_failures.inherited()`, not a second derivation
-    of it;
-  * every one of them is GREEN on the `main` TIP — otherwise `main` is still
-    red, the Red-Main Repair loop owns it, and refreshing would only
-    re-inherit the failure.
+  * every failing check on the head was ALSO red on `main` — on the merge
+    base itself, or on one of `main`'s own merges after it — otherwise the
+    pull request has its own defect and the fix loop owns it. The merge-base
+    half is `inherited_failures.inherited()`, not a second derivation of it;
+  * every one of them is GREEN on `main` again, read on the newest of those
+    merges that has a finished run of it — otherwise `main` is still red, the
+    Red-Main Repair loop owns it, and refreshing would only re-inherit the
+    failure.
+
+"`main` itself" is `main`'s first-parent commits since the merge base, at most
+MAIN_WINDOW of them, tip first (DRE-6513). Origin (live, 2026-10-09): four
+agent-bureau pull requests sat red on failures `main` had already fixed, and
+the rule called three of them their own. #3457's merge base was green on
+`Console backend shard 1` because the fault landed one merge LATER; #3428's
+merge base never ran the backend checks at all; and #3444's tip was still
+running, as a busy `main`'s tip nearly always is. A merge commit's sha was
+never a pull request head, so a check run on one is `main`'s and never a
+pull request's own — a pull request that broke the check itself leaves no
+red run of it on `main`, and still answers OWN.
 
 Deliberately narrow, and deliberately never a pass:
 
   * a payload that cannot be read reports UNEVALUATED. "We could not look" is
     not "your fault" and is not "safe to refresh";
-  * so does a check with no COMPLETED run on the `main` tip — main's CI still
-    running is an unfinished sentence, not a green light;
+  * so does a check the merge base is red on and no window commit has a
+    COMPLETED run of — main's CI still running is an unfinished sentence,
+    not a green light;
   * review-named checks (`name.endswith("review")`) never enter the failing
     set, exactly as `reconcile.fix_approved_but_red` excludes them: a critic
     verdict check is a review outcome, not a CI result;
@@ -44,7 +57,8 @@ CLI:
     python3 stale_merge_ref.py decide --compare-file <compare json> \\
         --checks-file <head check-runs json> \\
         --base-checks-file <merge-base check-runs json> \\
-        --main-checks-file <main-tip check-runs json> \\
+        (--main-checks-file <main-tip check-runs json> |
+         --main-window-file <json list of {"sha", "check_runs"}, tip first>) \\
         [--receipts-file <json list of comment bodies>] [--cap N]
 
 stdout line 1 is the action; the one-line reason goes to stderr. Exit 0 on
@@ -69,7 +83,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from inherited_failures import inherited as _inherited  # noqa: E402
 from unfixable_checks import failed_check_names  # noqa: E402
 
-# `_check_runs` because the `main` tip is the ONE side we ask a green question
+# `_check_runs` because `main`'s window is the ONE side we ask a green question
 # of, and `failed_check_names` only answers the red one. Borrowing the private
 # reader keeps the payload-shape tolerance (bare object · `--paginate --slurp`
 # pages · flat list) and the "unreadable is not all-green" ValueError in the
@@ -111,6 +125,14 @@ ACTIONS = (
 # waiting on a stale merge ref.
 DEFAULT_CAP = 2
 
+# How many of `main`'s own merges since the merge base are read, tip first
+# (DRE-6513). Measured on 2026-10-09: one 100-commit listing held 25
+# first-parent commits on agent-bureau and 27 on bureau-pipeline, so one page
+# covers twelve; the reds that mattered that afternoon were seven and eight
+# merges back. A red older than the window is not read, and the rule then
+# answers as it did before.
+MAIN_WINDOW = 12
+
 # GitHub's check-run suffix for a review outcome. `reconcile.fix_approved_but_red`
 # filters on exactly this with `.name | endswith("review")`.
 _REVIEW_SUFFIX = "review"
@@ -134,6 +156,11 @@ class Decision:
     head's spelling. On a `refresh` those names are by construction exactly
     the inherited ones — which is where the field's name comes from — and it
     is that list `receipt_detail()` is handed.
+
+    `evidence` is filled on `refresh` only: one dict per name in `inherited`,
+    `{"check", "base_red", "red_sha", "green_sha"}`. `red_sha` is the merge
+    base when `base_red`, and otherwise the newest window commit red on the
+    check; `green_sha` is the newest window commit with a finished run of it.
     """
 
     action: str
@@ -142,6 +169,7 @@ class Decision:
     base_sha: str = ""
     main_sha: str = ""
     behind_by: int = 0
+    evidence: list = field(default_factory=list)
 
 
 def _normalize(name: str) -> str:
@@ -213,30 +241,92 @@ def _read_receipts(receipts):
     return bodies
 
 
-def _main_tip_verdict(main_checks, names):
-    """('red', name) · ('unfinished', name) · ('green', None) for F on the
-    `main` tip. Raises ValueError if the payload cannot be read.
+def first_parent_window(listing, *, tip_sha, base_sha, limit=MAIN_WINDOW) -> list:
+    """`main`'s own merges since the merge base, tip first, as shas.
 
-    A definite red is reported ahead of an unfinished run: both stop the
-    refresh, and "main is still red on X" is the line that tells a reader
-    which loop owns it.
+    `listing` is the payload of `repos/{repo}/commits?sha={tip}&per_page=100`.
+    The walk starts at the tip and follows `parents[0]` — the merge commits
+    GitHub wrote as each pull request landed — so the commits a pull request
+    brought in, which arrive through the second parent, are never met. It
+    stops before the merge base, at `limit` shas, or where the next first
+    parent is not in the listing. A listing that is not a list, or does not
+    hold the tip, is an empty window.
     """
-    runs = _check_runs(main_checks)
-    red, complete_success = set(), set()
+    if not isinstance(listing, list):
+        return []
+    by_sha = {}
+    for item in listing:
+        if isinstance(item, dict) and isinstance(item.get("sha"), str):
+            by_sha.setdefault(item["sha"], item)
+    window, sha = [], tip_sha
+    while sha and sha in by_sha and sha != base_sha and len(window) < limit:
+        window.append(sha)
+        parents = by_sha[sha].get("parents")
+        first = parents[0] if isinstance(parents, list) and parents else None
+        sha = first.get("sha") if isinstance(first, dict) else None
+    return window
+
+
+def _read_window(main_window, main_sha):
+    """[(sha, runs)] tip first, or None when the window cannot be used: not a
+    list, empty, an entry that is not a (sha, payload) pair, a payload that
+    cannot be read, or a first sha that is not the compare's `main` tip."""
+    if not isinstance(main_window, list) or not main_window:
+        return None
+    commits = []
+    for entry in main_window:
+        if not isinstance(entry, (list, tuple)) or len(entry) != 2:
+            return None
+        sha, payload = entry
+        if not isinstance(sha, str) or not sha:
+            return None
+        try:
+            commits.append((sha, _check_runs(payload)))
+        except ValueError:
+            return None
+    if commits[0][0] != main_sha:
+        return None
+    return commits
+
+
+def _commit_state(runs, key):
+    """'red' · 'green' · None (silent) for one check on one commit.
+
+    A run counts when it is completed and green or red; `cancelled`,
+    `skipped`, `neutral` and in-flight runs do not. Any counted red makes the
+    commit red, the way `failed_check_names` reads the merge base."""
+    green = False
     for run in runs:
-        key = _normalize(run.get("name") or "")
-        conclusion = (run.get("conclusion") or "")
+        if _normalize(run.get("name") or "") != key or not _is_completed(run):
+            continue
+        conclusion = run.get("conclusion") or ""
         if conclusion in FAILED_CONCLUSIONS:
-            red.add(key)
-        elif conclusion == "success" and _is_completed(run):
-            complete_success.add(key)
-    for name in names:
-        if _normalize(name) in red:
-            return "red", name
-    for name in names:
-        if _normalize(name) not in complete_success:
-            return "unfinished", name
-    return "green", None
+            return "red"
+        if conclusion == "success":
+            green = True
+    return "green" if green else None
+
+
+def _window_verdict(commits, name, base_red):
+    """(verdict, red_sha, green_sha) for one failing check, by the DRE-6513
+    table. The verdict is 'fixed', MAIN_STILL_RED, UNEVALUATED or OWN."""
+    key = _normalize(name)
+    newest, newest_red = None, None
+    for sha, runs in commits:
+        state = _commit_state(runs, key)
+        if state and newest is None:
+            newest = (sha, state)
+        if state == "red" and newest_red is None:
+            newest_red = sha
+    if newest and newest[1] == "red":
+        return MAIN_STILL_RED, newest[0], None
+    if base_red:
+        if newest is None:
+            return UNEVALUATED, None, None
+        return "fixed", None, newest[0]
+    if newest_red is None:
+        return OWN, None, None
+    return "fixed", newest_red, newest[0]
 
 
 def _is_completed(run) -> bool:
@@ -247,13 +337,18 @@ def _is_completed(run) -> bool:
     return status == "completed" if status else bool(run.get("conclusion"))
 
 
-def decide(*, compare, head_checks, base_checks, main_checks, receipts, cap) -> Decision:
+def decide(*, compare, head_checks, base_checks, main_window, receipts,
+           cap) -> Decision:
     """Is this pull request red only on a fault `main` has since fixed?
 
     Every argument is a raw GitHub payload — nothing here reads the network.
+    `main_window` is a list, tip first, of `(sha, check-runs payload)` pairs:
+    `main`'s own merges since the merge base (`first_parent_window`). A window
+    of the tip alone answers exactly as the tip-only rule did.
+
     The order below is the order the answers get cheaper to be wrong about:
     an unreadable input first, then the budget (the operator's off switch),
-    then the geometry, and only then the three check-run payloads.
+    then the geometry, and only then the check-run payloads.
     """
     bodies = _read_receipts(receipts)
     if bodies is None:
@@ -309,42 +404,65 @@ def decide(*, compare, head_checks, base_checks, main_checks, receipts, cap) -> 
         return answer(UNEVALUATED,
                       f"the merge base's check runs could not be read: {exc}",
                       names)
-    if len(carried) != len(names):
-        own = [n for n in names
-               if _normalize(n) not in {_normalize(c) for c in carried}]
-        return answer(OWN,
-                      f"{', '.join(own)} is green on the merge base — this "
-                      f"pull request's own defect, and the fix loop owns it",
+    base_red = {_normalize(c) for c in carried}
+
+    commits = _read_window(main_window, main_sha)
+    if commits is None:
+        return answer(UNEVALUATED,
+                      f"`main`'s commits since merge base {base_sha[:8]} could "
+                      f"not be read as a window starting at {main_sha[:8]}",
                       names)
 
-    try:
-        verdict, culprit = _main_tip_verdict(main_checks, names)
-    except ValueError as exc:
-        return answer(UNEVALUATED,
-                      f"the `main` tip's check runs could not be read: {exc}",
+    verdicts = []
+    for name in names:
+        is_base_red = _normalize(name) in base_red
+        verdict, red_sha, green_sha = _window_verdict(commits, name,
+                                                      is_base_red)
+        verdicts.append((name, verdict, is_base_red, red_sha, green_sha))
+
+    def named(action):
+        return [v for v in verdicts if v[1] == action]
+
+    if named(OWN):
+        return answer(OWN,
+                      f"{', '.join(v[0] for v in named(OWN))} not red on merge "
+                      f"base `{base_sha[:8]}` and never red on the "
+                      f"{len(commits)} `main` commits since — this pull "
+                      f"request's own defect, and the fix loop owns it",
                       names)
-    if verdict == "red":
+    if named(MAIN_STILL_RED):
+        culprit, _, _, red_sha, _ = named(MAIN_STILL_RED)[0]
         return answer(MAIN_STILL_RED,
-                      f"{culprit} still fails on `main` {main_sha[:8]} — the "
+                      f"{culprit} still fails on `main` {red_sha[:8]} — the "
                       f"Red-Main Repair loop owns it, and a refresh would "
                       f"re-inherit it",
                       names)
-    if verdict == "unfinished":
+    if named(UNEVALUATED):
+        culprit = named(UNEVALUATED)[0][0]
         return answer(UNEVALUATED,
                       f"{culprit} has no completed successful run on `main` "
-                      f"{main_sha[:8]} yet — try again next sweep",
+                      f"{main_sha[:8]} or the {len(commits) - 1} `main` "
+                      f"commit(s) behind it yet — try again next sweep",
                       names)
 
-    return answer(REFRESH,
-                  f"{', '.join(names)} red on this head and on merge base "
-                  f"{base_sha[:8]}, green on `main` {main_sha[:8]} "
-                  f"({behind_by} commit(s) ahead) — the fault was main-side "
-                  f"and `main` has fixed it",
-                  names)
+    evidence = [
+        {"check": name, "base_red": is_base_red,
+         "red_sha": base_sha if is_base_red else red_sha,
+         "green_sha": green_sha}
+        for name, _verdict, is_base_red, red_sha, green_sha in verdicts
+    ]
+    return Decision(
+        REFRESH,
+        f"{', '.join(names)} red on this head and red on `main` at or after "
+        f"merge base {base_sha[:8]}, green on `main` since "
+        f"({behind_by} commit(s) ahead) — the fault was main-side and `main` "
+        f"has fixed it",
+        list(names), base_sha, main_sha, behind_by, evidence,
+    )
 
 
 def receipt_detail(*, pr_number, head_sha, main_sha, base_sha, inherited,
-                   used, cap) -> str:
+                   used, cap, evidence=None) -> str:
     """The plain-English body the sweep hands to `pipeline_act.receipt()`.
 
     Opens with the marker so the act is idempotent per `main` commit, names
@@ -353,17 +471,34 @@ def receipt_detail(*, pr_number, head_sha, main_sha, base_sha, inherited,
     is read as a prior fix-loop blocker by fix_context.py) and carrying no
     verdict marker (standards/untrusted-content.md — those are an approval
     credential and only the critic writes one).
+
+    `evidence` is `Decision.evidence`. Without it (None or empty — a
+    Decision built with no evidence) the body is the merge-base wording this
+    act was written with, byte for byte; with it, each bullet says what was
+    read — the merge base, or the `main` merge that went red after it — and
+    where `main` is green again (DRE-6513).
     """
     names = list(inherited)
+    if not evidence:
+        opening = [
+            f"Pull request #{pr_number} was red on {len(names)} check(s) that "
+            f"were red on its merge base (`{base_sha[:8]}`) too, and are green "
+            f"on `main` at `{main_sha[:8]}`:",
+            "",
+            *[f"- **{name}** — red on `{head_sha[:8]}` and on the merge base, "
+              f"green on `main`." for name in names],
+        ]
+    else:
+        opening = [
+            f"Pull request #{pr_number} was red on {len(evidence)} check(s) "
+            f"that `main` was red on too and is green on now:",
+            "",
+            *[_evidence_bullet(item, base_sha) for item in evidence],
+        ]
     lines = [
         marker(main_sha),
         "",
-        f"Pull request #{pr_number} was red on {len(names)} check(s) that were "
-        f"red on its merge base (`{base_sha[:8]}`) too, and are green on "
-        f"`main` at `{main_sha[:8]}`:",
-        "",
-        *[f"- **{name}** — red on `{head_sha[:8]}` and on the merge base, "
-          f"green on `main`." for name in names],
+        *opening,
         "",
         f"`main` carried the fix in `{main_sha[:8]}`, and this branch's CI had "
         f"run against a merge ref computed before it. Re-running the same jobs "
@@ -380,6 +515,18 @@ def receipt_detail(*, pr_number, head_sha, main_sha, base_sha, inherited,
         "a fresh review runs.",
     ]
     return "\n".join(lines).rstrip() + "\n"
+
+
+def _evidence_bullet(item, base_sha) -> str:
+    name = item.get("check") or ""
+    green = (item.get("green_sha") or "")[:8]
+    if item.get("base_red"):
+        return (f"- **{name}** — red on the merge base `{base_sha[:8]}`, "
+                f"green on `main` at `{green}`.")
+    red = (item.get("red_sha") or "")[:8]
+    return (f"- **{name}** — not red on the merge base `{base_sha[:8]}`, but "
+            f"`main` went red on it at `{red}` and is green on it at "
+            f"`{green}`.")
 
 
 # --------------------------------------------------------------------------- #
@@ -405,8 +552,14 @@ def main(argv=None) -> int:
                    help="JSON from `gh api repos/{repo}/commits/{head}/check-runs`")
     d.add_argument("--base-checks-file", required=True,
                    help="the same, for the merge-base commit")
-    d.add_argument("--main-checks-file", required=True,
-                   help="the same, for the tip of `main`")
+    main_side = d.add_mutually_exclusive_group(required=True)
+    main_side.add_argument("--main-checks-file",
+                           help="the same, for the tip of `main` — read as a "
+                                "window of the tip alone")
+    main_side.add_argument("--main-window-file",
+                           help='JSON list of {"sha", "check_runs"} objects, '
+                                "one per `main` first-parent commit since the "
+                                "merge base, tip first")
     d.add_argument("--receipts-file",
                    help="JSON list of the worker-bot comment bodies already "
                         "on the pull request")
@@ -435,11 +588,21 @@ def main(argv=None) -> int:
         except (OSError, ValueError, json.JSONDecodeError):
             return _Unreadable()
 
+    compare = _or_unreadable(args.compare_file, None)
+    if args.main_window_file:
+        main_window = _window_file(_or_unreadable(args.main_window_file, None))
+    else:
+        # The tip alone: its sha is the compare's, and an unreadable compare
+        # is answered before the window is looked at.
+        tip_sha = (_read_compare(compare) or ("", "", ""))[2]
+        main_window = [(tip_sha,
+                        _or_unreadable(args.main_checks_file, None))]
+
     decision = decide(
-        compare=_or_unreadable(args.compare_file, None),
+        compare=compare,
         head_checks=head_checks,
         base_checks=_or_unreadable(args.base_checks_file, None),
-        main_checks=_or_unreadable(args.main_checks_file, None),
+        main_window=main_window,
         receipts=(_or_unreadable(args.receipts_file, [])
                   if args.receipts_file else []),
         cap=args.cap,
@@ -448,6 +611,20 @@ def main(argv=None) -> int:
     print(f"stale_merge_ref: {decision.action} — {decision.reason}",
           file=sys.stderr)
     return 0
+
+
+def _window_file(data):
+    """The `--main-window-file` list as decide()'s `(sha, payload)` pairs. A
+    file that is not that shape is passed on as _Unreadable, which decide()
+    answers UNEVALUATED for."""
+    if not isinstance(data, list):
+        return _Unreadable()
+    window = []
+    for item in data:
+        if not isinstance(item, dict) or "check_runs" not in item:
+            return _Unreadable()
+        window.append((item.get("sha"), {"check_runs": item["check_runs"]}))
+    return window
 
 
 class _Unreadable:

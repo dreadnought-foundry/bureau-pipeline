@@ -5,3 +5,7 @@
 # bump here is what the suite actually runs against.
 pytest==9.1.1
 PyYAML==6.0.3
+# The proof run's browser (DRE-6025): `scripts/proof_browser.py prepare` reads
+# this line and installs exactly this version into a venv of its own, so the
+# proof run and the suite move together on one bump.
+playwright==1.63.0

@@ -1,0 +1,37 @@
+{
+  "_readme": "The classes a build agent's blocker reason can belong to (DRE-6438). Read only through scripts/blocker_class.py; `python3 scripts/blocker_class.py check` holds this file to the contract, and docs/blocker-classes.md is the page a person reads. A note's first line `<stamp><class>` names its class outright; otherwise the class is the one whose `phrases` (lower-case substrings) appear in the reason, and a reason naming none, or more than one, is the `default`. Every class names the `scripts/<action>.py` that resolves it. The vocabulary is the contract of the blocker-class epic, identical in every card of it.",
+  "version": 1,
+  "stamp": "blocker-class: ",
+  "marker": "🛑 Agent blocked:",
+  "default": "question",
+  "classes": {
+    "nothing-to-change": {
+      "means": "Every acceptance criterion is already met on the default branch, so there is no change to open a pull request for.",
+      "phrases": [
+        "nothing for this card to change"
+      ],
+      "action": "blocker_nothing_to_change"
+    },
+    "wrong-repo": {
+      "means": "The card's files live in a different repository from the one its repo label dispatched the run into.",
+      "phrases": [
+        "pointed at the wrong repo",
+        "sent to the wrong repository"
+      ],
+      "action": "blocker_wrong_repo"
+    },
+    "branch-without-pr": {
+      "means": "The work is built and pushed on the card's branch, but the run opened no pull request for it.",
+      "phrases": [
+        "pushed on the branch agent/",
+        "i opened no pull request"
+      ],
+      "action": "blocker_branch_pr"
+    },
+    "question": {
+      "means": "The reason needs a person's answer before the card can move, and the sweep asks it.",
+      "phrases": [],
+      "action": "blocker_ask"
+    }
+  }
+}

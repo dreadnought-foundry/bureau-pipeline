@@ -875,6 +875,12 @@ jobs:
       # leaves the card's facts and newest comments in a snapshot the agent
       # reads: one Linear read for a branch card, two for a failure card.
       #
+      # A run on the default branch also wakes Red-Main Repair, which files
+      # its own card for the same failure. So on the default branch the open
+      # repair card for this workflow and commit is looked for first, and an
+      # open one is the target (DRE-6521: on 2026-10-09 one red Pipeline Tests
+      # run became DRE-6511 and DRE-6512). One more read, on that branch only.
+      #
       # `|| OUT=""`: no answer here must not cost the diagnosis. The delivery
       # step below resolves the target itself when this one could not, and
       # the agent is told the snapshot may be missing.
@@ -885,9 +891,12 @@ jobs:
           # env, not inline (DRE-1996): both are agent-influenced text.
           HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
           FAILED_WORKFLOW: ${{ github.event.workflow_run.name }}
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
         run: |
           OUT=$(python3 .bureau-pipeline/scripts/medic_retry.py diagnosis-target \
             --branch "$HEAD_BRANCH" --workflow "$FAILED_WORKFLOW" \
+            --head-sha "$HEAD_SHA" --default-branch "$DEFAULT_BRANCH" \
             --snapshot .bureau-pipeline/medic-card-snapshot.json) || OUT=""
           echo "$OUT" >> "$GITHUB_OUTPUT"
           echo "$OUT"
@@ -1001,7 +1010,8 @@ jobs:
                your report goes to, read for you before you started. You
                have no access to the card tracker and need none. Its `kind`
                says where the report lands:
-               - "card": the card this run was working on. Its `state`,
+               - "card": the card this run was working on, or the red-main
+                 repair card already open for this failure. Its `state`,
                  `labels`, `title`, `description` and newest `comments` are
                  there for context.
                - "failure-card": a card already open for this same failure.
@@ -1034,6 +1044,18 @@ jobs:
       # that fails again creates nothing: a card minted on a search that never
       # answered is the duplicate the search exists to prevent.
       #
+      # Before it creates, the step asks once more for the open red-main repair
+      # card (DRE-6521, `medic_retry.py repair-card`; no read off the default
+      # branch). On 2026-10-09 the target step looked 16 seconds before the
+      # repair loop filed DRE-6511, and this step created DRE-6512 on that old
+      # answer. A hit turns the create into the comment; a search that fails
+      # creates nothing, as above.
+      #
+      # A card it does create carries acceptance criteria, written by
+      # `medic_retry.py failure-card-body` from the run's own facts and
+      # appended below the report (DRE-6521): without them the planning exit
+      # has no exit condition to route on, and parks the card for the CEO.
+      #
       # `always()`: a report written before the agent died is still a report.
       # The file decides, not the agent's outcome. Every write warns rather
       # than fails, like the medic's other notes: a red medic run is an
@@ -1050,6 +1072,9 @@ jobs:
           FAILED_WORKFLOW: ${{ github.event.workflow_run.name }}
           SLUG: ${{ steps.repo.outputs.slug }}
           RUN_URL: ${{ github.event.workflow_run.html_url }}
+          HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
         run: |
           REPORT=.bureau-pipeline/medic-report.md
           if [ ! -s "$REPORT" ]; then
@@ -1069,8 +1094,26 @@ jobs:
               fi ;;
           esac
           if [ "$KIND" = "new" ]; then
-            python3 .bureau-pipeline/scripts/linear_ops.py create "$TITLE" "$REPORT" --repo "$SLUG" \
-              || echo "::warning title=Failure card not created::The diagnosis could not be filed as '${TITLE}'. Failed run: ${RUN_URL}"
+            if ! REPAIR=$(python3 .bureau-pipeline/scripts/medic_retry.py repair-card \
+                --workflow "$FAILED_WORKFLOW" --head-sha "$HEAD_SHA" \
+                --branch "$HEAD_BRANCH" --default-branch "$DEFAULT_BRANCH"); then
+              echo "::warning title=Diagnosis not delivered::Could not search for an open red-main repair card for ${FAILED_WORKFLOW}, so the report was not posted and no card was created (a card made on an unanswered search is a duplicate). The report is in this run's log below. Failed run: ${RUN_URL}"
+              cat "$REPORT"
+              exit 0
+            fi
+            if [ -n "$REPAIR" ]; then KIND=card; TARGET="$REPAIR"; fi
+          fi
+          if [ "$KIND" = "new" ]; then
+            BODY=.bureau-pipeline/medic-card.md
+            if python3 .bureau-pipeline/scripts/medic_retry.py failure-card-body \
+                --report "$REPORT" --workflow "$FAILED_WORKFLOW" --branch "$HEAD_BRANCH" \
+                --head-sha "$HEAD_SHA" --run-url "$RUN_URL" > "$BODY"; then
+              python3 .bureau-pipeline/scripts/linear_ops.py create "$TITLE" "$BODY" --repo "$SLUG" \
+                || echo "::warning title=Failure card not created::The diagnosis could not be filed as '${TITLE}'. Failed run: ${RUN_URL}"
+            else
+              echo "::warning title=Failure card not created::The card's acceptance criteria could not be written, so '${TITLE}' was not filed. The report is in this run's log below. Failed run: ${RUN_URL}"
+              cat "$REPORT"
+            fi
           else
             python3 .bureau-pipeline/scripts/linear_ops.py comment "$TARGET" "$(cat "$REPORT")" --act=run-failure-diagnosed \
               || echo "::warning title=Diagnosis not posted::The diagnosis could not be posted on ${TARGET}. Failed run: ${RUN_URL}"

@@ -303,6 +303,15 @@ The rule the critic is given: if the repository and the card could settle it,
 it is a `SEND_BACK`. A card holding both is a `QUESTION` first. `QUESTION` is
 read only on this stage — an epic critic writing it decided nothing.
 
+**A card written wrong is read before the critic's word** (DRE-6380). A card
+that states no acceptance criteria, and that its labels and title do not
+route, goes to the planner's rewrite before the critic's word is read: the
+decision step runs the exit's own routing read first, and a card that read
+would refuse for naming no exit condition is decided as a `SEND_BACK` of that
+finding whatever the critic wrote, recorded as one, with the finding first in
+the list the planner is handed. DRE-4109 passed the critic and was parked on
+the CEO by the exit's refusal three seconds later, with no judgement to ask.
+
 **The reason lands on the card either way** — pass, send-back or question — so
 the planner scorer can grade critic against classifier against outcome.
 
@@ -336,7 +345,10 @@ nothing limited the classifications: DRE-3879 made the round trip through the
 CEO five times — five real, different findings, two signed answers, rounds 4
 and 5 six minutes apart — and DRE-3880 three times. So the same `MAX_ROUNDS`
 the epic route spends is spent here over the CARD's whole history, counted from
-the markers earlier runs posted. Since DRE-5376 each send-back is answered by
+the markers earlier runs posted — from the newest `🔁 bound-rewrite:` receipt
+when the bound exit granted the card one more rewrite (DRE-6454), so that
+rewrite gets a fresh budget of its own while the findings it must answer are
+still every one ever raised. Since DRE-5376 each send-back is answered by
 the planner's revision rather than by the CEO, so reaching the bound means the
 revision loop did not converge — and **the card parks in `Triage`**, the
 operator's defect queue, with every finding raised so far named in one place so

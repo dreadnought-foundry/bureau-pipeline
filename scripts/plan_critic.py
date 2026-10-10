@@ -69,7 +69,9 @@ Three rules baked in, each one bought:
     a human act, so nothing circles forever. Before this, DRE-3778 was
     approved five times and parked five times on "round 6 of 2".
     ON THE ONE-OFF ROUTE the same count
-    holds over the card's whole history (DRE-4058). DRE-3879 went round five
+    holds over the card's whole history (DRE-4058), counted from the newest
+    `🔁 bound-rewrite:` receipt when the bound exit granted the card one more
+    rewrite (DRE-6454) — the findings are never refunded. DRE-3879 went round five
     times through the CEO before anything counted. Since DRE-5376 a one-off
     send-back never reaches him: the planner revises the card in place and the
     critic re-reads it, a `QUESTION` is the only result that goes to Green
@@ -134,6 +136,7 @@ CLI:
   decide --stage S --result-file F [--epic E] [--github-output F]
          [--note-file F] [--record-file F] [--escalation-file F]
          [--execution-file F] [--ceiling M]
+         [--card-file B] [--card-title T] [--card-labels a,b] [--read-card]
                                      comment thread (JSON array) on stdin,
                                      from `dump-comments --with-authors`.
                                      The note and the record are TWO comments.
@@ -144,6 +147,12 @@ CLI:
                                      A QUESTION whose finding names card text
                                      is `revise`, recorded as SEND_BACK with
                                      the finding as its reason (DRE-6359).
+                                     With `--card-file` or `--read-card` the
+                                     one-off card is read FIRST: one stating
+                                     no acceptance criteria its labels and
+                                     title do not route is a send-back of
+                                     that finding, whatever the critic wrote
+                                     (DRE-6380). With neither, no read.
                                      A send-back is `revise` (the planner) or,
                                      at the bound, `park` (Triage), and writes
                                      no reason for the CEO.
@@ -1706,6 +1715,39 @@ def current_cycle_entries(entries, epic: str | None = None) -> list:
     return kept[start:]
 
 
+#: What the first line of the bound exit's receipt opens with (DRE-6452):
+#: the exit granted a one-off card one more rewrite (DRE-6454).
+BOUND_REWRITE_MARK = "🔁 bound-rewrite:"
+
+
+def since_bound_rewrite(bodies: list) -> list[str]:
+    """The comment bodies after the newest bound-rewrite receipt, or all of
+    them when there is none (DRE-6454).
+
+    The one-off route counts its send-backs over the card's whole history,
+    because no boundary is posted on it. When the bound exit grants the card
+    one more rewrite, the fresh run's critic re-reads the same card, and a
+    whole-history count would park it before the planner's revision ever ran.
+    So the COUNT starts over at the receipt; the findings never do —
+    `send_back_findings`, `prior_findings` and `rate` still read the whole
+    cycle, because the rewrite has to answer every finding ever raised.
+
+    Read like `hold.read_stamp` reads a stamp: by its opening words, off a
+    comment's first line only, so a receipt quoted or fenced in prose opens
+    nothing. Only the pipeline's own comments are read (`_entry_trusted`, as
+    `current_cycle_entries`), so a receipt-shaped comment from anyone else
+    grants nothing either. One receipt, one new budget: a second send-back on
+    it is the bound again, and the exit finds the grant spent.
+    """
+    kept = [entry for entry in (bodies or []) if _entry_trusted(entry)]
+    start = 0
+    for i, entry in enumerate(kept):
+        first = (_entry_body(entry).strip().splitlines() or [""])[0]
+        if first.startswith(BOUND_REWRITE_MARK):
+            start = i + 1
+    return [_entry_body(entry) for entry in kept[start:]]
+
+
 def send_backs(bodies: list, stage: str) -> int:
     """Failed rounds recorded for this stage, in the bodies you hand it.
 
@@ -2711,6 +2753,9 @@ def at_bound(action: str, prior_send_backs: int, result: str,
 # before it reads the budget), so a rewritten card that now passes goes to the
 # build queue with nothing to refund. A QUESTION spends nothing: it is a
 # decision, not a failed revision, and `send_backs` does not count it.
+# The one refund is the bound exit's grant (DRE-6454): its `🔁 bound-rewrite:`
+# receipt starts the COUNT over (`since_bound_rewrite`) so the rewrite it
+# granted actually runs, while every finding ever raised is still read.
 
 #: The four actions the one-off exit can take. `proceed` runs
 #: `planning_route.py exit`; `escalate` runs `planning_escalation.py escalate`
@@ -2804,9 +2849,41 @@ def one_off_ran_out_request(ran_out) -> str:
     ])
 
 
+def one_off_precheck(card: dict) -> str | None:
+    """The reason a one-off is sent back on its own text, or None (DRE-6380).
+
+    `card` is `critic_score.read_card`'s dict. This is the exit's own routing
+    read — `routing_verdict.route`, in its strict precedence — and never the
+    criteria rule alone: a role label or an anchored title decides first, so
+    a card the exit would route on either is never sent to the rewrite here.
+    Only the criteria rule's NEEDS WORK answers; a criteria signal, a
+    judgement call and the epic branch all say None. DRE-4109 passed the
+    critic and was refused three seconds later by that same rule, parked on
+    the CEO with no judgement to ask — a card written wrong is a revision.
+    """
+    import planning_route  # late: it reads us
+    import routing_verdict
+
+    decision = routing_verdict.route(
+        card.get("title") or "", card.get("description") or "",
+        card.get("labels") or (), bool(card.get("has_children")),
+        shape=planning_route.ONE_OFF_SHAPE)
+    if decision.source == "criteria" and decision.verdict == "NEEDS WORK":
+        return decision.reason
+    return None
+
+
+#: What the one-off note opens with when the precheck decided (DRE-6380).
+ONE_OFF_PRECHECK_OPENING = (
+    "the card's own text decided before the critic's word was read: it "
+    "states no acceptance criteria, and its labels and title do not route it"
+)
+
+
 def one_off_decide(result: str, reason: str = "",
                    prior_send_backs: int = 0, ran_out=None, *,
-                   finding: str = "") -> tuple[str, str]:
+                   finding: str = "",
+                   precheck: str | None = None) -> tuple[str, str]:
     """`(action, note)` for a one-off exit — `proceed` moves it, `revise` hands
     it back to the planner, `escalate` asks the CEO a question, `park` sends it
     to the operator.
@@ -2840,7 +2917,16 @@ def one_off_decide(result: str, reason: str = "",
     A decision, or a finding the classifier cannot place, still goes to the
     CEO: under-asking a real decision is the worse failure. A SEND_BACK is
     never re-read here — the critic already said it is the planner's.
+
+    `precheck` is `one_off_precheck`'s finding, flattened (DRE-6380). When
+    there is one the card's own text decides before the critic's word is
+    read: the decision is the one a `SEND_BACK — <precheck>` gets, against the
+    same `prior_send_backs`, whatever the critic actually wrote.
     """
+    if precheck:
+        action, note = one_off_decide(SEND_BACK, precheck,
+                                      prior_send_backs, ran_out)
+        return action, f"{ONE_OFF_PRECHECK_OPENING} — {note}"
     if result == PASS:
         return PROCEED, (
             "the critic read this card and found one pull request of work an "
@@ -3804,6 +3890,54 @@ def _execution_row(execution_file: str | None, ceiling) -> dict | None:
     }
 
 
+def _precheck_card(args) -> tuple[dict | None, str]:
+    """The card the one-off precheck reads, or `(None, why it was not read)`
+    (DRE-6380).
+
+    `--card-file` is offline — the body is the file, the title and labels
+    the flags. `--read-card` reads the card whole through
+    `critic_score.read_card`, the single-issue read the exit routes on. The
+    turn-ceiling step's body file is never read: a failed Linear read leaves
+    it empty, and an empty file cannot be told from an empty card. An empty
+    body counts as unread whichever way it arrived.
+    """
+    if args.card_file is not None:
+        card = {
+            "title": args.card_title or "",
+            "description": _read(args.card_file),
+            "labels": [l.strip() for l in (args.card_labels or "").split(",")
+                       if l.strip()],
+            "has_children": False,
+        }
+    elif not args.epic:
+        return None, "no card was named"
+    else:
+        import critic_score  # late, as planning_route._read_person_verdict
+        import linear_ops
+
+        try:
+            card = critic_score.read_card(linear_ops, args.epic)
+        except Exception as exc:  # noqa: BLE001 — an unread card is the critic's, not a red run
+            return None, f"the read of {args.epic} failed: {one_line(exc)}"
+    if not (card.get("description") or "").strip():
+        return None, "its description is empty"
+    return card, ""
+
+
+def _one_off_precheck_finding(args) -> str | None:
+    """The precheck's finding, flattened once, or None — and the one skip
+    line when a precheck was asked for and the card could not be read. With
+    neither `--card-file` nor `--read-card` nothing is attempted at all."""
+    if args.card_file is None and not args.read_card:
+        return None
+    card, why = _precheck_card(args)
+    if card is None:
+        print(f"one-off precheck: the card was not read ({why}) — the "
+              "critic's word stands")
+        return None
+    return one_line(one_off_precheck(card) or "") or None
+
+
 def _cmd_decide(args) -> int:
     thread = _stdin_json([])
     result_text = _read(args.result_file)
@@ -3835,6 +3969,7 @@ def _cmd_decide(args) -> int:
     # never reached, and keeps that case's own words.
     ran_out = (_execution_row(args.execution_file, args.ceiling)
                if args.stage == STAGE_ONE_OFF else None)
+    precheck = None
     if args.stage == STAGE_ONE_OFF:
         # The bound on THIS route is the card's whole send-back history
         # (DRE-4058): `prior` is how many times the card has already been sent
@@ -3853,13 +3988,24 @@ def _cmd_decide(args) -> int:
         # handed its finding as item 1 (`all_findings(decided=SEND_BACK)`),
         # and the record below says SEND_BACK, so the bound counts it.
         # `prior` is recomputed on the one line directly before the call on
-        # purpose — DRE-6454 rewrites exactly that line for this route.
+        # purpose, and counts from the newest bound-rewrite receipt (DRE-6454):
+        # the rewrite the bound exit granted runs on a fresh budget, on both
+        # paths below. `cycle` stays the whole thread, so every finding the
+        # card ever had is still read from it.
+        #
+        # The card is read BEFORE the critic's word (DRE-6380): a card the
+        # exit's own routing read would refuse for stating no acceptance
+        # criteria is decided as a send-back of that finding, whatever the
+        # critic wrote, and the finding is the first item the planner gets.
+        precheck = _one_off_precheck_finding(args)
         finding = read_finding(result_text)
-        prior = send_backs(cycle, args.stage)
+        prior = send_backs(since_bound_rewrite(cycle), args.stage)
         action, note = one_off_decide(result, reason, prior, ran_out,
-                                      finding=finding)
+                                      finding=finding, precheck=precheck)
         if action in (REVISE, PARK):
             items = all_findings(result_text, decided=SEND_BACK)
+        if precheck:
+            items = [precheck] + [f for f in items if f != precheck]
         if action == PARK:
             items = every_finding_so_far(
                 send_back_findings(cycle, args.stage), items)
@@ -3926,7 +4072,7 @@ def _cmd_decide(args) -> int:
     # One icon per next step, so a reader scanning the thread can tell a card
     # the planner is revising (🔁) from one waiting on the CEO (🙋) and one
     # parked for the operator (🛑) without reading any of them (DRE-5376).
-    if result == NO_RESULT:
+    if result == NO_RESULT and not precheck:
         icon = "⚠️"
     else:
         icon = {"hold": "🛑", "proceed": "✅", ESCALATE: "🙋",
@@ -3989,8 +4135,13 @@ def _cmd_decide(args) -> int:
     # park, `send-back-classes`) reads that reason AS the finding. The critic's
     # own word and question stay in the note's prose, and in the `result` and
     # `reason` step outputs above.
+    # A round the precheck decided (DRE-6380) is recorded the same way, its
+    # reason the precheck's finding — never the critic's, which under a PASS
+    # is its pass sentence and would come back as the next "prior finding".
     recorded, recorded_reason = result, reason
-    if (args.stage == STAGE_ONE_OFF and result == QUESTION
+    if precheck:
+        recorded, recorded_reason = SEND_BACK, precheck
+    elif (args.stage == STAGE_ONE_OFF and result == QUESTION
             and action in (REVISE, PARK)):
         recorded = SEND_BACK
         recorded_reason = one_off_finding(finding, reason)
@@ -4370,6 +4521,14 @@ def main(argv: list[str]) -> int:
     # rather than fail the argument parse.
     d.add_argument("--execution-file", default=None)
     d.add_argument("--ceiling", default="")
+    # The card the one-off precheck reads (DRE-6380). With none of these the
+    # precheck is not attempted and `decide` is exactly what it was. The
+    # body file is offline, the title and labels beside it are flags, and
+    # `--read-card` reads `--epic` whole from Linear when no file is given.
+    d.add_argument("--card-file", default=None)
+    d.add_argument("--card-title", default="")
+    d.add_argument("--card-labels", default="")
+    d.add_argument("--read-card", action="store_true")
     d.set_defaults(fn=_cmd_decide)
 
     o = sub.add_parser("revision-outcome",

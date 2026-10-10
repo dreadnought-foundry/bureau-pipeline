@@ -207,6 +207,22 @@ def _drive_unlanded_no_branch(mp):
     reconcile._flag_hand_built_idle([], set())
 
 
+@site("hand-work-overdue", "hand-work-overdue")
+def _drive_hand_work_overdue(mp):
+    card = _watchdog_card("Hand-work")
+    card["labels"]["nodes"].append({"name": "operator-step"})
+    card["comments"] = {"nodes": [{
+        "body": "🧹 Auto-promoted Backlog → Hand-work: routed **OPERATOR**",
+        "createdAt": "2026-01-01T00:00:00Z",
+    }]}
+    mp.setattr(reconcile, "active_cards", lambda *_a, **_k: [card])
+    mp.setattr(reconcile, "held", lambda _c: False)
+    mp.setattr(reconcile, "card_repo", lambda _c: reconcile.REPO_SLUG)
+    mp.setattr(reconcile, "age_minutes", lambda *_a, **_k: 1530.0)
+    _card_recorder(mp)
+    reconcile.flag_stranded()
+
+
 def _restart_driver(mp, merge_state: str):
     mp.setattr(reconcile, "_actions_runs_busy", lambda _w: False)
     # This repo has its fix stub: the no-fix-agent hold (DRE-4378) is a
@@ -603,7 +619,61 @@ def _drive_proof_run_dispatched(mp):
         now=datetime(2026, 10, 6, 17, 0, tzinfo=UTC))
 
 
-#: The hygiene agent's thirteen acts (DRE-5368, DRE-6180). The core composes every one of
+@site("switch-reason-cleared", "switch-reason-cleared")
+def _drive_switch_reason_cleared(mp):
+    """The sweep's switch receipt (DRE-6437): a switch off, every card its
+    companion names Done, no receipt yet on the first, at a fixed clock."""
+    import switch_reason  # noqa: PLC0415 — only this driver needs it
+
+    def gql(_query, variables=None):
+        return {"issues": {"nodes": [
+            {"identifier": f"DRE-{n}", "state": {"name": "Done"}}
+            for n in (variables or {}).get("numbers") or ()]}}
+
+    mp.setattr(reconcile.linear_ops, "_thread_and_viewer",
+               lambda *_a, **_k: ([], "viewer"))
+    _card_recorder(mp)
+    switch_reason.read_switches(
+        {"PROOF_DISPATCH_LIVE_OFF_UNTIL": "DRE-1, DRE-2",
+         "REPO": "dreadnought-foundry/bureau-pipeline",
+         "REPO_SLUG": "bureau-pipeline"},
+        gql=gql, now=datetime(2026, 10, 9, 12, 0, tzinfo=UTC),
+        linear=switch_reason.LinearWrites(reconcile.linear_ops), live=True)
+
+
+@site("promotion-stalled", "promotion-stalled")
+def _drive_promotion_stalled(mp):
+    """The promotion stall clock (DRE-4210): a parentless card refused for
+    carrying no verdict, its refusal receipt three hours old at a fixed
+    clock. The refusal is already on the card, so the first comment the sweep
+    posts is the stall receipt. Frozen from its first render, like the proof
+    hold above: there was no earlier wording to read it off."""
+    frozen = datetime(2026, 10, 9, 18, 0, tzinfo=UTC)
+
+    class _Clock:
+        @staticmethod
+        def now(_tz=None):
+            return frozen
+
+    card = {"id": "uuid-1", "identifier": "DRE-1", "title": "a one-off",
+            "description": "work", "createdAt": "2026-10-01T00:00:00Z",
+            "parent": None,
+            "labels": {"nodes": [{"name": "repo:bureau-pipeline"}]},
+            "comments": {"nodes": []},
+            "inverseRelations": {"nodes": []}}
+    mp.setattr(reconcile, "datetime", _Clock)
+    mp.setattr(reconcile, "REPO_SLUG", "bureau-pipeline")
+    mp.setattr(reconcile, "MAX_WIP", 8)  # the body names the cap
+    mp.setattr(reconcile, "backlog_children", lambda *_a, **_k: [card])
+    mp.setattr(reconcile.linear_ops, "count_comments",
+               lambda _i, needle, **_k: 0 if needle == "promotion-stalled" else 1)
+    mp.setattr(reconcile.linear_ops, "first_comment_at",
+               lambda *_a: "2026-10-09T15:00:00.000Z")
+    _card_recorder(mp)
+    reconcile.promote_ready(active_count=0)
+
+
+#: The hygiene agent's fourteen acts (DRE-5368, DRE-6180, DRE-6451). The core composes every one of
 #: them through `hygiene.receipt` and posts it through its one comment seam,
 #: `hygiene.send`; WHICH act a pass takes is a lane module's decision, and the
 #: lanes are sibling cards. So each driver hands the real seam the receipt a
@@ -614,7 +684,7 @@ HYGIENE_ACTS = (
     "hygiene-decision-needed", "hygiene-pr-close", "hygiene-resend-to-planning",
     "hygiene-card-close", "hygiene-proof-close", "hygiene-triage-return",
     "hygiene-review-move", "hygiene-card-cancel", "hygiene-cause-name",
-    "hygiene-hold-clear",
+    "hygiene-hold-clear", "hygiene-triage-alarm",
 )
 
 

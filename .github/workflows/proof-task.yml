@@ -657,6 +657,19 @@ jobs:
         id: install_claude
         uses: ./.bureau-pipeline/.github/actions/install-claude-code
 
+      # The identity every commit of this run carries, the first run's and
+      # every re-run's alike (DRE-6516). The action writes `claude[bot]` (its
+      # `bot_name`/`bot_id` defaults) into the checkout's own config, and
+      # when it cannot it logs and carries on — so a re-run's merge of main
+      # was once authored `x <x@x>`, unverified (agent-bureau#3458,
+      # `2db90c35a`), where the first re-run's was `claude[bot]`. Set here,
+      # globally, before every attempt, the action's write over it changes
+      # nothing, and git the agent runs anywhere else commits as the same.
+      - name: Set the git identity every proof run commits as
+        run: |
+          git config --global user.name "claude[bot]"
+          git config --global user.email "41898282+claude[bot]@users.noreply.github.com"
+
       # ---- THE AGENT STEP, AND THE ONE REFUSAL IT IS RETRIED FOR (DRE-4108) ----
       # agent-task.yml's design, copied: three attempts, each gated on
       # `claude_rate_limit_retry.py decide`, which fires ONLY when the step

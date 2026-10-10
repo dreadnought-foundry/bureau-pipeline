@@ -6,14 +6,17 @@
     "for a review once per comment in the CEO's voice. A console answer is",
     "his voice by its signature, and needs nothing here. A comment typed",
     "straight into Linear is his only when its author's Linear user id is in",
-    "`ceo_linear_user_ids` below.",
+    "`ceo_linear_user_ids` below. scripts/epic_growth.py reads the same list",
+    "for his answer to a growth question (DRE-6414).",
     "",
-    "It ships EMPTY on purpose: an empty list means no Linear comment counts",
-    "as his, so nothing fails open and no build agent had to know the id. The",
-    "operator fills it in by hand. A file that does not hold a list of ids",
-    "stops the phase rather than reading as empty.",
+    "It shipped EMPTY on purpose: an empty list means no Linear comment",
+    "counts as his, so nothing fails open and no build agent had to know the",
+    "id. The operator declared the one id below on 2026-10-09 (DRE-6498),",
+    "after his `re-approve` typed in Linear on DRE-6480 was read as nobody's.",
+    "Adding or changing an id is the operator's edit, by hand. A file that",
+    "does not hold a list of ids stops the phase rather than reading as empty.",
     "",
     "tests/test_green_light_reply.py reads this file as shipped."
   ],
-  "ceo_linear_user_ids": []
+  "ceo_linear_user_ids": ["112b0e08-9fa6-4999-b747-e0220d39b672"]
 }

@@ -71,6 +71,7 @@ ACTS = {
     "hygiene-card-cancel": "hyg-card-canceled",
     "hygiene-cause-name": "hyg-cause-named",
     "hygiene-hold-clear": "hyg-hold-cleared",
+    "hygiene-triage-alarm": "hyg-triage-aged",
 }
 
 
@@ -1467,10 +1468,11 @@ class TestTheActRegistry:
         })
         assert {n: r["next_actor"] for n, r in rows.items()} == expected
 
-    def test_two_holds_and_ten_recoveries(self):
+    def test_three_holds_and_the_rest_recoveries(self):
         rows = {r["name"]: r for r in acts_doc()["acts"] if r["name"] in ACTS}
         holds = {n for n, r in rows.items() if r["kind"] == "hold"}
-        assert holds == {"hygiene-decision-needed", "hygiene-cause-name"}
+        assert holds == {"hygiene-decision-needed", "hygiene-cause-name",
+                         "hygiene-triage-alarm"}
         assert {r["kind"] for n, r in rows.items() if n not in holds} == {"recovery"}
 
     def test_the_summary_is_declared_not_an_act(self):

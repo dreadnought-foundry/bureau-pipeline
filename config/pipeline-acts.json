@@ -308,7 +308,7 @@
       "tag": "stale-merge-ref-refresh",
       "adopted": true,
       "kind": "recovery",
-      "means": "This pull request was red only on checks that were red on its merge base too and are green on `main` now, so the sweep merged `main` into the branch to get it a fresh merge ref.",
+      "means": "This pull request was red only on checks `main` was red on too — red on its merge base, or on a `main` merge after it — and is green on now, so the sweep merged `main` into the branch to get it a fresh merge ref.",
       "state": "dispatched",
       "next_actor": "qa-review.yml",
       "discharges": null,
@@ -953,6 +953,24 @@
       }
     },
     {
+      "name": "hygiene-triage-alarm",
+      "tag": "hyg-triage-aged",
+      "adopted": true,
+      "kind": "hold",
+      "means": "A card a planning exit parked in Triage — held plan-critic-bound or epic-rereview-twice — has waited past the hygiene agent's bound, and this receipt says so once on the card, naming the hold and when its wait began.",
+      "state": "unchanged",
+      "next_actor": "operator",
+      "discharges": null,
+      "subscriber": "hygiene.yml",
+      "cadence_s": null,
+      "cadence_why": "Null: the card is a person's, and no workflow declares how long a person takes — scripts/hygiene.py reads it again on its next hourly pass and says nothing more while the hold and the bound are unchanged.",
+      "why": "DRE-6451, the hygiene agent's Triage lane (scripts/hygiene_triage.py); the core holds the one table of tags so every lane's receipt reads the same. A planning hold is lifted only by a person, so a plan parked for one could sit in Triage unseen; the lane's row names the reason, its age and the park note every pass, and once the age reaches HYGIENE_TRIAGE_ALARM_HOURS (default 8) this receipt raises it on the card. A HOLD: the agent lifts nothing and moves nothing. Its idempotency key is (tag, cause), and the cause names the reason, the bound and when the wait began but never the age, so the alarm is said once per hold rather than every hour, and again when the card is parked anew. It discharges nothing: a hold starts an obligation, it does not end one.",
+      "emits": {
+        "file": "scripts/hygiene.py",
+        "anchor": "\"hyg-triage-aged\""
+      }
+    },
+    {
       "name": "epic-approval-queued",
       "tag": "epic-queued",
       "adopted": true,
@@ -1025,6 +1043,24 @@
       }
     },
     {
+      "name": "switch-reason-cleared",
+      "tag": "switch-cleared",
+      "adopted": true,
+      "kind": "progress",
+      "means": "Every card a switched-off pipeline switch was waiting on is terminal, so the sweep said once, on the first card the switch named, that the switch may be turned on — and named the one command that does it.",
+      "state": "unchanged",
+      "next_actor": "operator",
+      "discharges": null,
+      "subscriber": "reconcile.yml",
+      "cadence_s": 43200,
+      "cadence_why": "The sweep's own alarm threshold: alarm_after_hours is 12 in config/switches.json, and a receipt that old with the switch still off files the alarm card, so 43200 s is the silence after which the switch reads as forgotten.",
+      "why": "DRE-6437, the half of the switch epic that reaches a person. A pipeline switch that is off names the cards it waits on in its companion variable, <SWITCH>_OFF_UNTIL (DRE-6434), and the sweep's `Read the switches` step prints when that reason clears (DRE-6436) — but only into a step summary nobody opens. This receipt is that line said where a person looks: on the first card the companion names, composed by pipeline_act.receipt in scripts/switch_reason.py, `🔀 switch-cleared: <SWITCH> in <repo-slug> — its reason cleared at <PT time>: <cards and states>. It may be turned on: gh variable set <SWITCH> --body true -R <owner/repo>`. The tag is a live key: a comment whose FIRST line opens `🔀 switch-cleared: <SWITCH> in <repo-slug>` stops a repeat, so each repository posts its own once, and its createdAt is when the reason cleared. A receipt alarm_after_hours old with the switch still off files one card titled `Switch <SWITCH> in <repo-slug> is still off after its reason cleared`, deduplicated through linear_ops.find_open, in Planning. PROGRESS and not a recovery: it moves no card and repairs nothing, and the sweep never sets the variable — turning a production behavior on is a person's act, which is why the next actor is the operator. Nothing is discharged. Outside Actions, or with --dry-run, the phase prints `would:` lines and posts none of these.",
+      "emits": {
+        "file": "scripts/switch_reason.py",
+        "anchor": "pipeline_act.receipt(\"switch-reason-cleared\""
+      }
+    },
+    {
       "name": "reviewer-outage-fleet-wide",
       "tag": "fleet-reviewer-outage",
       "adopted": true,
@@ -1046,6 +1082,42 @@
       "emits": {
         "file": "scripts/reviewer_down.py",
         "anchor": "def outage_receipt("
+      }
+    },
+    {
+      "name": "hand-work-overdue",
+      "tag": "hand-work-overdue",
+      "adopted": true,
+      "kind": "hold",
+      "means": "A person's card has waited in Hand-work past the hours config/hand-work-age.json declares — an operator-step card, a WORKBENCH card with no mark, or a PROOF: card whose proof run is not in flight — and the sweep says so once, for the operator.",
+      "state": "unchanged",
+      "next_actor": "operator",
+      "discharges": null,
+      "subscriber": "reconcile.yml",
+      "cadence_s": null,
+      "cadence_why": "Null: the alarm names a card a person must pick up, and scripts/reconcile.py declares no bound on how long the operator takes — the same null work-never-landed, the sweep's other alarm on a person's card, carries.",
+      "why": "DRE-6409. The stall watchdog skips every card waiting on a person, rightly — no run is expected — and nothing kept time in its place: on 2026-10-09 one sweep printed 'not a strand' for 18 cards and raised nothing. The clock is the card's entry to Hand-work, never updatedAt. Posted once per entry, by the card's own repo's sweep only; it adds no label, moves no lane and writes nothing to Green Light. A standing card and the CEO's own hand-built card never alarm — an age is not a decision he owes.",
+      "emits": {
+        "file": "scripts/reconcile.py",
+        "anchor": "🚨 hand-work-overdue: {ident} has waited in Hand-work"
+      }
+    },
+    {
+      "name": "promotion-stalled",
+      "tag": "promotion-stalled",
+      "adopted": true,
+      "kind": "hold",
+      "means": "A Backlog card the sweep has refused promotion for the same reason on sweep after sweep for two hours or more — a refusal nothing can clear on its own, which until now was indistinguishable from a card waiting its turn.",
+      "state": "unchanged",
+      "next_actor": "operator",
+      "discharges": null,
+      "subscriber": "reconcile.yml",
+      "cadence_s": null,
+      "cadence_why": "Null: the hold names a card a person must act on, and scripts/reconcile.py declares no bound on how long an operator takes — the same null the holds that end with a human carry.",
+      "why": "DRE-4198 found five Backlog cards refused promotion for the same reason across thirty hours, and found them only by reading a sweep log: the refusal was posted once and never read again, so from outside each looked exactly like a card waiting its turn. The clock is the refusal receipt's own age — the oldest comment carrying its tag, never a count of sweeps kept somewhere — the rule DRE-2676 already runs on an epic's prose defect, generalized (scripts/promotion_stall.py, DRE-4207). Only the refusals no sweep can clear are clocked: a PARKED card is never clocked, and neither is a wave epic waiting its turn or any other declared wait, because each already says what it waits for and that thing is scheduled. The receipt is posted once; the run stays red on every sweep the card still stands, so it is a hold that ends with a person.",
+      "emits": {
+        "file": "scripts/reconcile.py",
+        "anchor": "promotion_stall.notice("
       }
     }
   ],

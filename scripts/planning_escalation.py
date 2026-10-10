@@ -129,13 +129,28 @@ Every planning attempt opens with a boundary the card carries — plan.yml
 posts `plan_critic.cycle_marker` as its own comment the moment a card is
 routed to plan, first attempt and every re-plan alike — so the receipt count
 is scoped to the comments AFTER the newest boundary (`_this_attempt`), read
-through `plan_critic.CYCLE_PREFIX` and never a copied string. A card with no
-boundary keeps the once-per-card reading. The scope is the thread's ORDER,
-which is how `plan_critic.current_cycle` and `linear_ops.count_comments(since=)`
-already read it: a receipt whose time cannot be read is still somewhere in
+through `plan_critic.CYCLE_PREFIX` and never a copied string. The scope is
+the thread's ORDER, which is how `plan_critic.current_cycle` and
+`linear_ops.count_comments(since=)` already read it: a receipt whose time cannot be read is still somewhere in
 the thread, and "treat it as this attempt's" would be the silent move again.
 The two rules resolve one way only — when they disagree, a duplicate question
 is the cheap failure and a card in the queue with nothing to answer is not.
+
+## A card back in Planning is on a new attempt (DRE-6490)
+
+Only a card routed to plan gets a boundary. A card the classifier refuses never
+does, and on 2026-10-08 that parked DRE-4710 in Green Light twice with nothing
+on it: refused at 12:07 (note posted), answered by the CEO, back to Planning,
+refused at 12:24 — `already escalated` off the 12:07 note, no note, moved — and
+the same again at 18:23. So the attempt opens at the newer of the boundary and
+the card's newest return to Planning, read off its lane history
+(`linear_ops.lane_history`, `back_in_planning_at`): an entry into the segment
+other than the destination, because a move into the destination is this
+module's own park. A note older than that return is a spent attempt's and a
+fresh one is posted before the move; a note newer than it is this attempt's,
+and the move is re-asserted as before. The history is read only when there is
+a note to place, and a history or note time that cannot be read counts as a
+spent attempt — the same direction as above.
 
 CLI:
 
@@ -1214,6 +1229,62 @@ def _this_attempt(records) -> list:
     return records[start:]
 
 
+def back_in_planning_at(history, contract: dict | None = None) -> str | None:
+    """When the card last came back to be planned, off its lane history, or
+    None when the history shows no such move (DRE-6490).
+
+    `history` is `linear_ops.lane_history`'s answer, newest first. The move
+    that counts is an entry into the escalation's segment
+    (`in_escalation_segment`) other than the destination: a move into the lane
+    the card parks in is this module's own move, and the CEO's answer is the
+    move OUT of it, back to where the card is planned. That move with no time
+    on it answers `""`: the card did come back, at a time nobody can read.
+    """
+    lane = destination()
+    for node in history or ():
+        name = ((node or {}).get("toState") or {}).get("name") or ""
+        name = lane_contract.aliases(contract).get(name, name)
+        if name != lane and in_escalation_segment(name, contract):
+            return node.get("createdAt") or ""
+    return None
+
+
+def _asked_this_attempt(linear_ops, identifier: str, records) -> int:
+    """How many of this attempt's comments are an escalation note.
+
+    The attempt opens at the newer of two things (DRE-6490). One is the
+    `plan-cycle:` boundary (`_this_attempt`, DRE-4223), which only a card
+    routed to plan ever gets. The other is the card's newest return to
+    Planning (`back_in_planning_at`): on 2026-10-08 DRE-4710 was refused by the
+    classifier, answered by the CEO, moved back to Planning and refused again
+    — twice — and with no boundary on the thread each refusal after the first
+    found the 12:07 note, printed `already escalated` and parked the card with
+    nothing on it. A note older than that return is a spent attempt's.
+
+    The history is read only when there is a note to place, so the ordinary
+    first park costs no request. A note whose time cannot be read, a return
+    to Planning whose time cannot be, or a history that cannot be read at
+    all, counts as spent — the same direction DRE-4223 resolves: a duplicate
+    question is the cheap failure.
+    """
+    notes = [r for r in _this_attempt(records) if ESCALATION_TAG in _body(r)]
+    if not notes:
+        return 0
+    try:
+        since = back_in_planning_at(linear_ops.lane_history(identifier))
+    except Exception as exc:  # noqa: BLE001 — unreadable is never "already asked"
+        print(f"{identifier}: could not read where the card has been ({exc}) — "
+              "asking again", file=sys.stderr)
+        return 0
+    if since is None:
+        return len(notes)
+    if not since:
+        # Back in Planning at a time that cannot be read: `_stale` reads an
+        # empty attempt as no attempt at all, so it is settled here.
+        return 0
+    return sum(1 for note in notes if not _stale(note, since))
+
+
 def _stale(record, attempt_since: str | None) -> bool:
     """Was this comment posted BEFORE the current planning attempt began?
 
@@ -1365,7 +1436,10 @@ def escalate(linear_ops, identifier: str, reason: str | None,
     one decision into a thread, and a card re-planned after the CEO answered
     must be asked again rather than parked silently on the answered receipt —
     and the move is re-asserted every time, because the crash this guards
-    against is the one between the two writes.
+    against is the one between the two writes. The attempt also opens at the
+    card's newest return to Planning (`_asked_this_attempt`, DRE-6490), so a
+    card the classifier refuses again after the CEO answered — a card that
+    never gets a boundary — is asked again too.
 
     `last_words` is the planner's closing message, shown in either note when
     no reason was written (DRE-5564).
@@ -1429,6 +1503,9 @@ def escalate(linear_ops, identifier: str, reason: str | None,
                 transport=transport, rewrite=rewrite, last_words=last_words))
             posted = True
         return Outcome(parked=False, posted=posted, stood_down=elsewhere)
+    if already:
+        # Scoped once more, to the card's newest return to Planning (DRE-6490).
+        already = _asked_this_attempt(linear_ops, identifier, bodies)
     if already:
         print(f"{identifier}: already escalated, under {ESCALATION_TAG}")
     else:

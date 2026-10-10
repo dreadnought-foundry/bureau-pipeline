@@ -1497,6 +1497,7 @@ jobs:
           python3 .bureau-pipeline/scripts/plan_critic.py decide \
             --stage one-off \
             --epic "$CARD" \
+            --read-card \
             --result-file "${{ runner.temp }}/plan-critic-one-off.md" \
             --github-output "$GITHUB_OUTPUT" \
             --note-file "${{ runner.temp }}/one-off-note.md" \

@@ -1099,5 +1099,73 @@ class ParkStepThreeLinesTest(_StepHarness):
         self.assertNotIn(_console_escalation().RECOMMENDATION_PREFIX, ask)
 
 
+IDENTITY_STEP = "Set the git identity every proof run commits as"
+#: The identity claude-code-action writes into the checkout's own config —
+#: its `bot_name` and `bot_id` defaults — and the first run's commits carry.
+BOT_NAME = "claude[bot]"
+BOT_EMAIL = "41898282+claude[bot]@users.noreply.github.com"
+
+
+class GitIdentityTest(unittest.TestCase):
+    """DRE-6516: a re-run's merge-of-main commit was authored `x <x@x>`
+    (agent-bureau#3458, `2db90c35a`) where the first re-run's was
+    `claude[bot]`. The action sets that identity in the checkout's local
+    config and logs and carries on when it cannot, so any git the agent runs
+    outside that config commits as whoever it improvises. The workflow sets
+    the same identity for the whole job, before every attempt. EXECUTED: the
+    step's own script runs, then a merge of main in a repository that is not
+    the checkout."""
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
+        self.env = {"PATH": os.environ["PATH"], "HOME": str(self.tmp / "home"),
+                    "GIT_CONFIG_NOSYSTEM": "1"}
+        (self.tmp / "home").mkdir()
+
+    def _git(self, cwd: Path, *args: str) -> str:
+        done = subprocess.run(["git", *args], cwd=cwd, env=self.env,
+                              capture_output=True, text=True)
+        self.assertEqual(0, done.returncode, done.stderr)
+        return done.stdout.strip()
+
+    def test_the_step_comes_before_every_agent_attempt(self):
+        at = _index(IDENTITY_STEP)
+        for i, step in _agent_steps():
+            self.assertLess(at, i, step.get("name"))
+        self.assertNotIn("if", _step(IDENTITY_STEP),
+                         "every run, the first and every re-run, sets it")
+
+    def test_a_merge_of_main_is_authored_as_the_first_run_commits(self):
+        work = self.tmp / "work"
+        work.mkdir()
+        done = subprocess.run(["bash", "-e", "-c", _step(IDENTITY_STEP)["run"]],
+                              cwd=work, env=self.env, capture_output=True, text=True)
+        self.assertEqual(0, done.returncode, done.stdout + done.stderr)
+
+        repo = self.tmp / "clone"
+        repo.mkdir()
+        self._git(repo, "init", "-q", "-b", "main")
+        (repo / "a").write_text("a\n")
+        self._git(repo, "add", "a")
+        self._git(repo, "commit", "-q", "-m", "base")
+        self._git(repo, "checkout", "-q", "-b", "agent/DRE-1-proof-record")
+        (repo / "record.md").write_text("record\n")
+        self._git(repo, "add", "record.md")
+        self._git(repo, "commit", "-q", "-m", "record")
+        self._git(repo, "checkout", "-q", "main")
+        (repo / "b").write_text("b\n")
+        self._git(repo, "add", "b")
+        self._git(repo, "commit", "-q", "-m", "main moved")
+        self._git(repo, "checkout", "-q", "agent/DRE-1-proof-record")
+        self._git(repo, "merge", "-q", "--no-edit", "main")
+
+        self.assertEqual("1", self._git(repo, "rev-list", "--count", "--merges", "HEAD"))
+        self.assertEqual(f"{BOT_NAME} <{BOT_EMAIL}>",
+                         self._git(repo, "log", "-1", "--format=%an <%ae>"))
+        self.assertEqual(f"{BOT_NAME} <{BOT_EMAIL}>",
+                         self._git(repo, "log", "-1", "--format=%cn <%ce>"))
+
+
 if __name__ == "__main__":
     unittest.main()
