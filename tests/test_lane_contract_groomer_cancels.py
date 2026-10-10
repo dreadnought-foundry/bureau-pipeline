@@ -13,6 +13,15 @@ the thing that keeps it declared: an edit that drops `groomer.py` from the
 `Canceled` lane's writers, or that rewrites the clause text back to "a human —
 and the sweep, for exactly one class", turns the build red BEFORE the drain's
 write becomes an undeclared path into a terminal lane.
+
+Two classes of the clause are the pipeline's own act rather than a human's
+decision written down, and each is narrowed to exactly one class: the
+planner's, a returned child of an epic split into siblings (DRE-5242), and
+the sixth, the sweep's, a build agent's `nothing-to-change` blocker that
+attested every acceptance criterion as already holding on the default branch
+(DRE-6458). The sixth runs inside the sweep, so it writes as `reconcile.py`,
+already in `who`; the same sweep sends a note that attested fewer to
+`Planning` once, and that lane's writers say so too.
 """
 
 import os
@@ -118,6 +127,42 @@ class TestTheClauseTextSaysWhoAndWhy:
             assert "DRE-4677" in _clause(kind)["text"], (
                 f"the {kind} clause does not cite the decision it records"
             )
+
+
+class TestTheSixthClassIsTheSweepsOwnAct:
+    """A `nothing-to-change` blocker whose every criterion was attested is
+    canceled by the sweep (DRE-6458). No human decided it, and the clause says
+    so plainly rather than quietly widening the lane."""
+
+    def test_the_writers_text_names_the_sixth_class(self):
+        text = _clause("writers")["text"]
+        assert "nothing-to-change" in text
+        assert "DRE-6458" in text
+        assert "attested every acceptance criterion" in text
+
+    def test_the_writers_text_says_it_is_the_pipelines_own_act_for_that_class(self):
+        text = _clause("writers")["text"]
+        sixth = text[text.index("nothing-to-change"):]
+        assert "no human decided" in sixth.lower()
+        assert "pipeline's own act, narrowed to that one class" in sixth
+        assert "drops no work" in sixth
+        assert "reopening the card" in sixth
+
+    def test_the_entrance_text_names_the_sixth_class(self):
+        text = _clause("entrance")["text"]
+        assert "sixth" in text.lower()
+        assert "nothing-to-change" in text
+        assert "DRE-6458" in text
+
+    def test_the_sweep_stays_the_writer_and_no_who_list_changes(self):
+        assert "reconcile.py" in lane_contract.lane_writers("Canceled")
+        assert "reconcile.py" in lane_contract.lane_writers("Planning")
+
+    def test_the_planning_writers_text_names_the_sweeps_hand_off(self):
+        text = lane_contract.lane("Planning")["clauses"]["writers"]["text"]
+        assert "nothing-to-change" in text
+        assert "DRE-6458" in text
+        assert "fewer" in text
 
 
 class TestTheRenderedDocumentCarriesIt:
