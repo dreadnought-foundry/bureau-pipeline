@@ -2432,8 +2432,9 @@ def _hand_work_age(card: dict, reason: str) -> str:
     The clock is the ENTRY, never `updatedAt`, which moves on every comment:
     the newest `🧹 Auto-promoted Backlog → Hand-work:` receipt in the window
     (`promote_ready`'s, the mark `proof_dispatch._entered` reads), at no
-    request; only without one, `routing_verdict.lane_moves`' newest move into
-    the lane, one request. An unreadable history judges nothing.
+    request; only without one, and only for a card that can alarm,
+    `routing_verdict.lane_moves`' newest move into the lane, one request. An
+    unreadable history judges nothing.
 
     In the card's order, first match wins: a standing card in
     `config/hand-work-age.json` and the CEO's own `hand-built` card never
@@ -2453,9 +2454,20 @@ def _hand_work_age(card: dict, reason: str) -> str:
     ident, lane = card["identifier"], card["state"]["name"]
     nodes = linear_ops.window_nodes(card.get("comments"))
     at = lambda iso: datetime.fromisoformat(iso.replace("Z", "+00:00"))  # noqa: E731
+    marks = {(lbl.get("name") or "").lower()
+             for lbl in (card.get("labels") or {}).get("nodes", [])}
     entered = next((n.get("createdAt") for n in reversed(nodes)
                     if (n.get("body") or "").lstrip().startswith(
                         f"🧹 Auto-promoted Backlog → {lane}:")), None)
+    exempt = ("a standing card" if ident in {s["card"] for s in rule["standing"]}
+              else "the CEO's own hand-built card" if HAND_BUILT_LABEL.lower() in marks
+              else "")
+    if exempt:
+        # A card that never alarms is told its age off the free receipt only:
+        # a history read per card, every sweep, buys nothing but the number
+        # (the real-board ceiling, tests/test_sweep_real_board.py).
+        waited_for = f" {int(age_minutes(entered) // 60)}h" if entered else ""
+        return f"; in Hand-work{waited_for} — never alarms ({exempt})"
     if not entered:
         into = [m["at"] for m in routing_verdict.lane_moves(ident) or ()
                 if m.get("to") == lane and m.get("at")]
@@ -2464,12 +2476,6 @@ def _hand_work_age(card: dict, reason: str) -> str:
         return "; entry time could not be read — not judged"
     waited = age_minutes(entered)
     hours = int(waited // 60)
-    marks = {(lbl.get("name") or "").lower()
-             for lbl in (card.get("labels") or {}).get("nodes", [])}
-    if ident in {s["card"] for s in rule["standing"]}:
-        return f"; in Hand-work {hours}h — never alarms (a standing card)"
-    if HAND_BUILT_LABEL.lower() in marks:
-        return f"; in Hand-work {hours}h — never alarms (the CEO's own hand-built card)"
     proof = proof_and_demo.is_proof(card.get("title"))
     if not (proof or routing_verdict.OPERATOR_STEP_LABEL in marks or any(
             routing_verdict.actor(name) == "operator"

@@ -18,7 +18,8 @@ FIX UNDER TEST — for a card IN Hand-work, judged only by its own repo's sweep:
     verdict with no mark) and a `PROOF:` card whose proof run is not in
     flight get ONE `hand-work-overdue` comment per entry, for the operator —
     no label, no lane move, nothing in Green Light;
-  * the CEO's own `hand-built` card and a standing card never alarm;
+  * the CEO's own `hand-built` card and a standing card never alarm, and
+    without a receipt cost no history read (the real-board ceiling);
   * every Hand-work line keeps DRE-6424's text and appends one tail.
 
 Run: cd bureau-pipeline && python3 -m pytest tests/test_hand_work_age.py -v
@@ -370,6 +371,19 @@ class TestTheEntryTime:
         got = _sweep([_card(entered=None)], capsys, moves=moves)
         _nothing_written(got)
         assert "; in Hand-work 10h of 24, alarms at " in _line(got)
+
+    @pytest.mark.parametrize("ident,labels,why", [
+        ("DRE-7001", ("repo:portico", HAND_BUILT), "the CEO's own hand-built card"),
+        ("DRE-4541", ("repo:portico", OPERATOR_STEP), "a standing card"),
+    ])
+    def test_a_card_that_never_alarms_costs_no_history_read(self, ident, labels,
+                                                            why, capsys):
+        """The real-board ceiling (DRE-3641): no receipt, no request."""
+        moves = [{"at": _iso(_at(100.0)), "from": "Backlog", "to": HAND_WORK}]
+        got = _sweep([_card(ident, labels=labels, entered=None)], capsys, moves=moves)
+        _nothing_written(got)
+        got.lane_moves.assert_not_called()
+        assert _line(got, ident).endswith(f"; in Hand-work — never alarms ({why})")
 
     def test_an_unreadable_history_is_not_judged(self, capsys):
         got = _sweep([_card(entered=None)], capsys, moves=None)
