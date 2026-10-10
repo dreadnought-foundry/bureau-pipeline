@@ -198,7 +198,9 @@ def _drive_unlanded_branch(mp):
 def _drive_unlanded_no_branch(mp):
     card = _watchdog_card("Todo")
     mp.setattr(reconcile, "active_cards", lambda *_a, **_k: [card])
-    mp.setattr(reconcile, "hand_built", lambda _c: True)
+    # The notice names the reason the card is a person's (DRE-6777), so the
+    # driver stubs the reason, not the yes/no `hand_built` it is read off.
+    mp.setattr(reconcile, "hand_built_reason", lambda _c: "labeled 'hand-built'")
     mp.setattr(reconcile, "held", lambda _c: False)
     mp.setattr(reconcile, "card_repo", lambda _c: reconcile.REPO_SLUG)
     mp.setattr(reconcile, "age_minutes", lambda *_a, **_k: 240.0)
