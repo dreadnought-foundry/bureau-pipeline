@@ -350,6 +350,12 @@ def test_c_a_legacy_marker_with_no_run_url(linear, live):
     assert stub.writes == []
 
 
+def test_c_a_third_repo_label_beside_the_dispatched_one(linear):
+    stub = linear(labels=("repo:agent-bureau", "repo:portico"))
+    assert resolve(card(marker(stamped("bureau-pipeline")))) is None
+    assert stub.writes == []
+
+
 @pytest.mark.parametrize("live", [(), ("repo:portico", "repo:bureau-pipeline")])
 def test_c_live_labels_with_no_dispatched_label_and_not_exactly_one_other(linear, live):
     stub = linear(labels=live)
