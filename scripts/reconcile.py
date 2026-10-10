@@ -6820,6 +6820,19 @@ def release_waiting_epics(candidates: list[dict]) -> set[str]:
             print(f"epic-wait: {identifier} still waits — blocker epic(s) open: "
                   f"{epic_wait.named(waits)}")
             continue
+        # The candidate is the Backlog read promotion made before this pass's
+        # writes — the edge may have carried it on since, or a person moved it
+        # — so the lane is read live before the move, as the edge does.
+        try:
+            lane = card_state(identifier)
+        except Exception as e:  # noqa: BLE001 — unread is never released
+            print(f"epic-wait: {identifier}'s lane could not be read ({e}) — "
+                  "it waits, and the next sweep reads it again")
+            continue
+        if lane != "Backlog":
+            print(f"epic-wait: {identifier} is in {lane!r}, not Backlog — "
+                  "already carried on, nothing to release")
+            continue
         try:
             _auto_advance_epic(
                 identifier,

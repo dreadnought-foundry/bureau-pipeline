@@ -233,6 +233,27 @@ class TestOnceAndOnlyHeldCards:
         assert len(_notes(board, HELD)) == 1
         assert len(board.reads) == reads, "a spent wait costs no read"
 
+    @pytest.mark.parametrize("moved_to", ["Triage", "In Progress"])
+    def test_a_stale_candidate_the_edge_already_carried_on_is_left_alone(
+            self, moved_to, monkeypatch):
+        """In one pass `close_finished_epics` runs first: its edge carries the
+        epic on, but the Backlog read promotion made before it still holds the
+        card with only its `epic-waits` receipt. The card is no longer in
+        Backlog, so the level writes nothing — no second note, no release."""
+        board = _parked()
+        board.cards[BLOCKER]["state"] = "Done"
+        _wire(monkeypatch, board)
+        stale = [_candidate(board, HELD)]
+        reconcile._auto_advance_epic(HELD, "blocker epic DRE-9101 is Done.")
+        board.cards[HELD]["state"] = moved_to
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            released = reconcile.release_waiting_epics(stale)
+        assert released == set()
+        assert board.cards[HELD]["state"] == moved_to
+        assert len(_notes(board, HELD)) == 1
+        assert f"{HELD} released" not in buf.getvalue()
+
     def test_a_backlog_card_with_no_receipt_costs_no_read(self, monkeypatch):
         board = _Board(_dre6585())
         board.cards["DRE-9102"]["state"] = "Backlog"

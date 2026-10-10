@@ -290,8 +290,9 @@ jobs:
       # or Duplicate — a blocker that is a card holds nothing here, and one
       # whose lane cannot be read holds the card. A held card gets one
       # `⏸️ epic-waits:` receipt and moves Planning → Backlog, where the
-      # sweep's auto-advance (`reconcile.advance_unblocked_epics`) carries it
-      # on once every blocker epic is Done. A card already in Backlog is held
+      # sweep's level release (`reconcile.release_waiting_epics`) carries it
+      # on once every blocker epic is closed (Done, Canceled or Duplicate).
+      # A card already in Backlog is held
       # again and moved nowhere.
       #
       # `held=true` skips the duplicate guard and the planner slot below, and
