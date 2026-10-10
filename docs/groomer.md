@@ -1122,8 +1122,12 @@ The ranked read has its own stated limits, and they are on the page too:
   first lines or is not written down anywhere;
 - **the receipt line says what it ran against** — the model that answered, the
   number of cards, and the counts of epics in flight, merged PRs and closed
-  cards in the context pack. A pack section that was capped is named in the
-  proposal JSON;
+  cards in the context pack. A pack section that was capped says both
+  numbers on the header — how many rows the ranking read and how many there
+  were, as `the newest 40 of 2,539 merged PRs (titles only)` — and the
+  proposal JSON carries both under `judgement.pack.cuts`, one
+  `{"kept", "of"}` per capped section (DRE-6641). A proposal written before
+  `cuts` existed says its one count, as it always did;
 - **a context signal nobody could read is UNKNOWN, never a number** (DRE-3329).
   A source that fails — the merged-PR search with no `GH_TOKEN`, say — is
   named unread in the pack with the reason, carries no count in the proposal

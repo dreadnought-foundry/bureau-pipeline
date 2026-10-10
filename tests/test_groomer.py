@@ -333,7 +333,11 @@ def test_the_judgement_block_carries_every_field_the_contract_names():
     assert block["model_answered"] == "test-model"
     assert block["receipt"] == "test-model (asked) / test-model (answered)"
     assert set(block["pack"]) == set(groom_context.SECTIONS) | {"truncated",
-                                                                "unread"}
+                                                                "unread",
+                                                                "cuts"}
+    # A run that read no pack saves the same keys (DRE-6641's `cuts` too).
+    assert set(groomer._EMPTY_PACK()) == set(block["pack"])
+    assert groomer._EMPTY_PACK()["cuts"] == {}
     assert block["calls"] in (0, 1)
     # DRE-3259's two keys, beside the ones DRE-3150 shipped.
     assert set(block) >= {"output_budget", "truncated"}
