@@ -25,6 +25,11 @@ WHAT THESE TESTS PIN.
     every card `unread`. The `Read the switches` step is the sweep job's last,
     plumbs every row's variable and companion, and lifts its lines and spend
     into the step summary. `docs/switches.md` is the page a person reads.
+  * The RECEIPT and the ALARM (DRE-6437): a cleared reason posts one
+    `🔀 switch-cleared` receipt per switch per repo on the first named card,
+    composed by `pipeline_act.receipt`; a receipt twelve hours old with the
+    switch still off files one deduplicated alarm card. Nothing is read when
+    the reason has not cleared, and a dry pass writes nothing.
 
 Run: cd bureau-pipeline && python3 -m pytest tests/test_switch_reason.py -v
 """
@@ -36,7 +41,7 @@ import re
 import shutil
 import subprocess
 import sys
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -45,6 +50,7 @@ import yaml
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "scripts"))
 
+import pipeline_act  # noqa: E402
 import prose_blockers  # noqa: E402
 import switch_reason  # noqa: E402
 
@@ -620,3 +626,285 @@ class TestDoc:
         text = (ROOT / "docs" / "switches.md").read_text(encoding="utf-8")
         for row in switch_reason.load()["switches"]:
             assert f"`{row['name']}`" in text, row["name"]
+
+
+# --------------------------------------------------------------------------- #
+# the receipt and the alarm (DRE-6437)                                         #
+# --------------------------------------------------------------------------- #
+
+ACT = "switch-reason-cleared"
+TAG = "switch-cleared"
+OWNER_REPO = "dreadnought-foundry/agent-bureau"
+LIVE = {COMPANION: THREE, "GITHUB_ACTIONS": "true", "REPO": OWNER_REPO,
+        "REPO_SLUG": "agent-bureau"}
+ALL_DONE = {"DRE-6141": "Done", "DRE-6142": "Done", "DRE-6143": "Done"}
+KEY = f"🔀 switch-cleared: {SWITCH} in agent-bureau"
+RECEIPT_LINE = (f"{KEY} — its reason cleared at 2026-10-09 05:00 PT: "
+                "DRE-6141 Done, DRE-6142 Done, DRE-6143 Done. It may be turned on: "
+                f"gh variable set {SWITCH} --body true -R {OWNER_REPO}")
+ALARM_TITLE = f"Switch {SWITCH} in agent-bureau is still off after its reason cleared"
+
+
+def _iso(moment: datetime) -> str:
+    return moment.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def _receipt(hours_ago: float, line: str = RECEIPT_LINE) -> dict:
+    """A receipt comment as Linear hands it back, `hours_ago` before NOW."""
+    return {"body": pipeline_act.receipt(ACT, line),
+            "createdAt": _iso(NOW - timedelta(hours=hours_ago))}
+
+
+class FakeLinear:
+    """The receipt phase's one read and three writes, recorded in order.
+
+    A posted comment joins the thread, stamped NOW, so a second pass against
+    the same fake reads the receipt the first one left."""
+
+    def __init__(self, threads=None, open_card=None, thread_error=None):
+        self.threads = {k: list(v) for k, v in (threads or {}).items()}
+        self.open_card = open_card
+        self.thread_error = thread_error
+        self.calls = []
+        self.comments = []
+        self.created = []
+
+    def thread(self, identifier):
+        self.calls.append(("thread", identifier))
+        if self.thread_error is not None:
+            raise self.thread_error
+        return list(self.threads.get(identifier, ()))
+
+    def cmd_comment(self, identifier, body):
+        self.calls.append(("comment", identifier))
+        self.comments.append((identifier, body))
+        self.threads.setdefault(identifier, []).append(
+            {"body": body, "createdAt": _iso(NOW)})
+
+    def find_open(self, title):
+        self.calls.append(("find_open", title))
+        return self.open_card
+
+    def create_card(self, title, body, *, repo_slug):
+        self.calls.append(("create", title))
+        self.created.append((title, body, repo_slug))
+        return {"identifier": "DRE-9999", "url": "https://linear.app/x/DRE-9999"}
+
+
+def _pass(capsys, env=None, linear=None, states=None, argv=(), gql=None):
+    linear = linear if linear is not None else FakeLinear()
+    gql = gql if gql is not None else FakeGql(ALL_DONE if states is None else states)
+    code = switch_reason.main(list(argv), env=LIVE if env is None else env,
+                              gql=gql, now=NOW, linear=linear)
+    return code, capsys.readouterr().out.splitlines(), linear
+
+
+class TestReceipt:
+    def test_one_pass_posts_one_receipt_on_the_first_named_card(self, capsys):
+        code, lines, linear = _pass(capsys, linear=FakeLinear({"DRE-6141": []}))
+        assert code == 0
+        assert len(linear.comments) == 1
+        card, body = linear.comments[0]
+        assert card == "DRE-6141"
+        assert body.splitlines()[0] == RECEIPT_LINE
+        assert body == pipeline_act.receipt(ACT, RECEIPT_LINE)
+        assert pipeline_act.read_trailer(body)["act"] == ACT
+        assert pipeline_act.read_trailer(body)["tag"] == TAG
+        assert linear.calls[0] == ("thread", "DRE-6141")
+        assert [c for c in linear.calls if c[0] == "thread"] == [("thread", "DRE-6141")]
+        assert linear.created == []
+        assert any(l.startswith("switches: ") and "DRE-6141" in l and "posted" in l
+                   for l in lines), lines
+
+    def test_a_second_pass_posts_nothing_and_says_the_receipt_stands(self, capsys):
+        linear = FakeLinear({"DRE-6141": []})
+        _pass(capsys, linear=linear)
+        code, lines, linear = _pass(capsys, linear=linear)
+        assert code == 0
+        assert len(linear.comments) == 1
+        assert linear.created == []
+        assert any("receipt already stands" in l and "DRE-6141" in l for l in lines), lines
+
+    def test_another_repos_receipt_does_not_stop_this_repos(self, capsys):
+        portico = RECEIPT_LINE.replace("in agent-bureau", "in portico").replace(
+            OWNER_REPO, "dreadnought-foundry/Portico")
+        linear = FakeLinear({"DRE-6141": [_receipt(1, portico)]})
+        _pass(capsys, linear=linear)
+        assert len(linear.comments) == 1
+        assert linear.comments[0][1].splitlines()[0] == RECEIPT_LINE
+        _pass(capsys, linear=linear)
+        assert len(linear.comments) == 1
+
+    def test_a_longer_slug_is_another_repo(self, capsys):
+        other = RECEIPT_LINE.replace("in agent-bureau", "in agent-bureau-console")
+        linear = FakeLinear({"DRE-6141": [_receipt(1, other)]})
+        _pass(capsys, linear=linear)
+        assert len(linear.comments) == 1
+
+    def test_a_receipt_for_another_switch_does_not_count(self, capsys):
+        other = RECEIPT_LINE.replace(SWITCH, "HYGIENE_LIVE")
+        linear = FakeLinear({"DRE-6141": [_receipt(1, other)]})
+        _pass(capsys, linear=linear)
+        assert len(linear.comments) == 1
+
+    def test_the_once_key_is_the_first_line_never_a_quote(self, capsys):
+        quoted = {"body": f"As the sweep said:\n{RECEIPT_LINE}", "createdAt": _iso(NOW)}
+        linear = FakeLinear({"DRE-6141": [quoted]})
+        _pass(capsys, linear=linear)
+        assert len(linear.comments) == 1
+
+    def test_a_card_not_yet_terminal_reads_no_thread(self, capsys):
+        states = {"DRE-6141": "Done", "DRE-6142": "Done", "DRE-6143": "In Review"}
+        code, lines, linear = _pass(capsys, states=states)
+        assert code == 0
+        assert linear.calls == []
+
+    def test_an_unread_card_reads_no_thread(self, capsys):
+        gql = FakeGql(error=RuntimeError("Linear refused the read"))
+        code, _, linear = _pass(capsys, gql=gql)
+        assert code == 0
+        assert linear.calls == []
+
+    def test_an_on_switch_reads_and_writes_nothing(self, capsys):
+        _, _, linear = _pass(capsys, env={**LIVE, SWITCH: "true"},
+                             linear=FakeLinear({"DRE-6141": [_receipt(13)]}))
+        assert linear.calls == []
+
+    def test_a_thread_that_cannot_be_read_posts_nothing(self, capsys):
+        linear = FakeLinear(thread_error=RuntimeError("Linear refused: RATELIMITED"))
+        code, lines, linear = _pass(capsys, linear=linear)
+        assert code == 0
+        assert linear.comments == [] and linear.created == []
+        assert any("RATELIMITED" in l for l in lines), lines
+        assert lines[-1].startswith("linear-budget:")
+
+    def test_no_repository_named_reads_and_writes_nothing(self, capsys):
+        env = {k: v for k, v in LIVE.items() if k not in ("REPO", "REPO_SLUG")}
+        code, _, linear = _pass(capsys, env=env)
+        assert code == 0
+        assert linear.calls == []
+
+    def test_the_slug_falls_back_to_the_repository(self, capsys):
+        env = {k: v for k, v in LIVE.items() if k != "REPO_SLUG"}
+        _, _, linear = _pass(capsys, env=env, linear=FakeLinear({"DRE-6141": []}))
+        assert linear.comments[0][1].splitlines()[0] == RECEIPT_LINE
+
+
+class TestAlarm:
+    def test_thirteen_hours_on_files_one_card_after_find_open(self, capsys):
+        code, lines, linear = _pass(capsys, linear=FakeLinear({"DRE-6141": [_receipt(13)]}))
+        assert code == 0
+        assert linear.comments == []
+        assert len(linear.created) == 1
+        title, body, slug = linear.created[0]
+        assert title == ALARM_TITLE
+        assert slug == "agent-bureau"
+        kinds = [c[0] for c in linear.calls]
+        assert kinds.index("find_open") < kinds.index("create")
+        assert ("find_open", ALARM_TITLE) in linear.calls
+        for expected in (SWITCH, "agent-bureau", "2026-10-08 16:00 PT", "13 hours",
+                         "DRE-6141", "DRE-6142", "DRE-6143",
+                         f"gh variable set {SWITCH} --body true -R {OWNER_REPO}"):
+            assert expected in body, expected
+        assert any("DRE-9999" in l for l in lines), lines
+
+    def test_an_open_alarm_files_nothing(self, capsys):
+        _, lines, linear = _pass(capsys, linear=FakeLinear({"DRE-6141": [_receipt(13)]},
+                                                           open_card="DRE-7000"))
+        assert ("find_open", ALARM_TITLE) in linear.calls
+        assert linear.created == []
+        assert any("DRE-7000" in l for l in lines), lines
+
+    def test_two_hours_on_files_nothing(self, capsys):
+        _, _, linear = _pass(capsys, linear=FakeLinear({"DRE-6141": [_receipt(2)]}))
+        assert linear.created == []
+        assert linear.comments == []
+        assert not any(c[0] == "find_open" for c in linear.calls)
+
+    def test_exactly_twelve_hours_alarms(self, capsys):
+        _, _, linear = _pass(capsys, linear=FakeLinear({"DRE-6141": [_receipt(12)]}))
+        assert len(linear.created) == 1
+
+    def test_the_threshold_is_read_from_the_catalog(self, capsys, monkeypatch):
+        doc = switch_reason.load()
+        doc["alarm_after_hours"] = 24
+        monkeypatch.setattr(switch_reason, "load", lambda path=None: doc)
+        _, _, linear = _pass(capsys, linear=FakeLinear({"DRE-6141": [_receipt(13)]}))
+        assert linear.created == []
+
+    def test_an_on_switch_alarms_nothing(self, capsys):
+        _, _, linear = _pass(capsys, env={**LIVE, SWITCH: "true"},
+                             linear=FakeLinear({"DRE-6141": [_receipt(13)]}))
+        assert linear.created == [] and linear.calls == []
+
+    def test_an_unreadable_receipt_time_alarms_nothing(self, capsys):
+        receipt = {**_receipt(13), "createdAt": "not a time"}
+        _, _, linear = _pass(capsys, linear=FakeLinear({"DRE-6141": [receipt]}))
+        assert linear.created == [] and linear.comments == []
+
+    def test_a_card_that_cannot_be_filed_still_exits_zero(self, capsys):
+        class Refusing(FakeLinear):
+            def create_card(self, title, body, *, repo_slug):
+                raise RuntimeError("Linear refused the create")
+        code, lines, _ = _pass(capsys, linear=Refusing({"DRE-6141": [_receipt(13)]}))
+        assert code == 0
+        assert any("Linear refused the create" in l for l in lines), lines
+
+
+class TestDryRun:
+    def test_dry_run_flag_prints_would_post_and_writes_nothing(self, capsys):
+        _, lines, linear = _pass(capsys, argv=["--dry-run"],
+                                 linear=FakeLinear({"DRE-6141": []}))
+        assert linear.comments == []
+        assert not any(c[0] in ("comment", "create") for c in linear.calls)
+        assert f"would: post DRE-6141 — {RECEIPT_LINE}" in lines
+
+    def test_dry_run_flag_prints_would_alarm_and_files_nothing(self, capsys):
+        _, lines, linear = _pass(capsys, argv=["--dry-run"],
+                                 linear=FakeLinear({"DRE-6141": [_receipt(13)]}))
+        assert linear.created == []
+        assert not any(c[0] in ("comment", "create") for c in linear.calls)
+        assert any(l.startswith(f"would: alarm — {ALARM_TITLE}") for l in lines), lines
+
+    def test_outside_actions_the_phase_is_dry(self, capsys):
+        env = {k: v for k, v in LIVE.items() if k != "GITHUB_ACTIONS"}
+        _, lines, linear = _pass(capsys, env=env, linear=FakeLinear({"DRE-6141": []}))
+        assert linear.comments == []
+        assert any(l.startswith("would: post DRE-6141") for l in lines), lines
+
+    def test_the_cli_takes_the_flag(self):
+        env = {k: v for k, v in os.environ.items()
+               if not k.endswith(("_LIVE", "_OFF_UNTIL"))}
+        done = subprocess.run(
+            [sys.executable, str(ROOT / "scripts" / "switch_reason.py"), "--dry-run"],
+            capture_output=True, text=True, cwd=ROOT, env=env)
+        assert done.returncode == 0, done.stdout + done.stderr
+        assert len(_switch_lines(done.stdout.splitlines())) == 3
+
+
+class TestActRow:
+    def test_the_act_row_ships_with_the_module(self):
+        row = pipeline_act.record(ACT)
+        assert row["tag"] == TAG
+        assert (row["kind"], row["state"]) == ("progress", "unchanged")
+        assert row["subscriber"] == "reconcile.yml"
+        assert row["discharges"] is None
+        assert row["cadence_s"] == 43200
+        assert row["cadence_s"] == switch_reason.load()["alarm_after_hours"] * 3600
+        assert "alarm_after_hours" in row["cadence_why"]
+        assert row["emits"]["file"] == "scripts/switch_reason.py"
+        assert row["emits"]["anchor"] == f'pipeline_act.receipt("{ACT}"'
+        source = (ROOT / "scripts" / "switch_reason.py").read_text(encoding="utf-8")
+        assert source.count(row["emits"]["anchor"]) == 1
+        assert pipeline_act.problems() == []
+
+    def test_the_receipt_writer_guard_passes(self):
+        done = subprocess.run(
+            [sys.executable, str(ROOT / "scripts" / "check_act_receipts.py")],
+            capture_output=True, text=True, cwd=ROOT)
+        assert done.returncode == 0, done.stdout + done.stderr
+
+    def test_the_doc_carries_the_row(self):
+        text = (ROOT / "docs" / "pipeline-acts.md").read_text(encoding="utf-8")
+        for expected in (ACT, f"`{TAG}`", "_OFF_UNTIL", "scripts/switch_reason.py"):
+            assert expected in text, expected

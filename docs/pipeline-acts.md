@@ -369,6 +369,41 @@ each proof a person is already working with `linear_ops.py proof-waiting
 <card> "being observed by hand" "the operator's record pull request"`, and the
 phase leaves it alone by name.
 
+## The row that says a switch may come on — `🔀 switch-cleared` (DRE-6437)
+
+| Field | Value |
+| -- | -- |
+| tag | `switch-cleared` |
+| act name | `switch-reason-cleared` |
+| kind · state · next actor | `progress` · `unchanged` · `operator` |
+| discharges | nothing |
+| cadence | `43200` — `alarm_after_hours`, 12, in `config/switches.json` |
+| emitted by | `scripts/switch_reason.py`, at the `pipeline_act.receipt("switch-reason-cleared", …)` call |
+
+A pipeline switch that is off names the cards it waits on in its companion
+variable, `<SWITCH>_OFF_UNTIL` (`docs/switches.md`). The `Read the switches`
+step of `reconcile.yml` reads those cards on every full pass. When every one is
+`Done`, `Canceled` or `Duplicate` and the switch is still off, the step reads
+the thread of the first card the companion names and, unless the receipt is
+already there, posts:
+
+    🔀 switch-cleared: <SWITCH> in <repo-slug> — its reason cleared at <PT time>: DRE-A Done, DRE-B Done. It may be turned on: gh variable set <SWITCH> --body true -R <owner/repo>
+
+**The tag is a live key.** A comment whose first line opens `🔀 switch-cleared:
+<SWITCH> in <repo-slug>` stops a repeat, so agent-bureau, portico and atlas each
+post their own once. The receipt's own time is when the reason cleared: once it
+is `alarm_after_hours` old and the switch is still off, the step files one card
+titled `Switch <SWITCH> in <repo-slug> is still off after its reason cleared`
+into `Planning`, after `linear_ops.find_open` finds none open under that title.
+The cadence is that same threshold, so the console reads a receipt older than
+twelve hours as a switch somebody forgot.
+
+It moves no card and repairs nothing, so it is a progress act. The sweep never
+sets the variable: turning a production behavior on is a person's act, which
+is why the next actor is the operator. Outside Actions, or with `--dry-run`,
+the step prints `would: post <card> — <line>` and `would: alarm — <title>` and
+writes nothing.
+
 ## The row that names a stalled refusal — `🚨 promotion-stalled` (DRE-4210)
 
 | Field | Value |
