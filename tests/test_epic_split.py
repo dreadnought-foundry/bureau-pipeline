@@ -14,9 +14,10 @@ removed:
      their sibling `blockedBy` relations, ties broken by creation order.
   2. **The activation.** Against a fake Linear (the `_Card` pattern in
      `tests/test_planning_route.py`): one receipt on the parent across two
-     runs, every Backlog child to Planning in that order and nothing else
-     moved, the parent to In Progress after them, and nothing at all when the
-     check has a finding.
+     runs, every Backlog child no open sibling blocks to Planning in that
+     order, a child an open sibling blocks left in Backlog for the sweep's
+     auto-advance (DRE-6591), nothing else moved, the parent to In Progress
+     after them, and nothing at all when the check has a finding.
   3. **The contract and the registry.** The In Progress lane names `plan.yml`
      among its writers, the Planning and Intake exits no longer say `wave`, and
      the receipt is a declared act.
@@ -352,19 +353,19 @@ class TestActivate:
                      "closes when every child is Done"):
             assert said in epic_split.PARENT_SENTENCE
 
-    def test_every_backlog_child_moves_to_planning_in_the_printed_order(self):
-        board = _Board(_valid())
+    def test_every_unblocked_backlog_child_moves_to_planning_in_the_printed_order(self):
+        board = _Board(_valid(), lanes={"DRE-9103": "Done"})
         _activate(board)
         children = [m for m in board.moves if m[0] != PARENT]
-        assert children == [("DRE-9103", "Planning"), ("DRE-9101", "Planning"),
-                            ("DRE-9102", "Planning")]
+        assert children == [("DRE-9101", "Planning"), ("DRE-9102", "Planning")]
         assert all(frm == "Backlog" for card, _, frm in board.advances if card != PARENT)
 
     def test_a_child_already_past_backlog_is_left_alone(self):
-        board = _Board(_valid(), lanes={"DRE-9101": "Green Light"})
+        children = [_child("DRE-9101"), _child("DRE-9102"), _child("DRE-9103")]
+        board = _Board(children, lanes={"DRE-9101": "Green Light"})
         _activate(board)
         assert board.lanes["DRE-9101"] == "Green Light"
-        assert [m[0] for m in board.moves if m[0] != PARENT] == ["DRE-9103", "DRE-9102"]
+        assert [m[0] for m in board.moves if m[0] != PARENT] == ["DRE-9102", "DRE-9103"]
 
     def test_the_parent_moves_from_planning_to_in_progress_after_its_children(self):
         board = _Board(_valid())
@@ -422,6 +423,109 @@ class TestActivate:
         assert board.lanes[PARENT] == "In Progress"
 
 
+def _dre6585() -> list:
+    """The DRE-6585 shape (DRE-6591): three children in creation order, the
+    third blocked by the first, the second free."""
+    return [
+        _child("DRE-9101"),
+        _child("DRE-9102"),
+        _child("DRE-9103", blocked_by=["DRE-9101"]),
+    ]
+
+
+def _receipt_line(board, ident: str) -> str:
+    return next(l for l in _receipts(board)[0].splitlines() if f"**{ident}**" in l)
+
+
+class TestABlockedChildWaitsInBacklog:
+    """A child an OPEN sibling blocks is planned only when that sibling is Done
+    (the seam rule, `standards/card-quality.md`), so activation leaves it in
+    Backlog, where the sweep's auto-advance (DRE-6407) carries it on."""
+
+    def test_only_the_unblocked_children_are_sent_to_planning(self):
+        board = _Board(_dre6585())
+        assert _activate(board) == 0
+        assert board.moves == [("DRE-9101", "Planning"), ("DRE-9102", "Planning"),
+                               (PARENT, "In Progress")]
+        assert board.lanes["DRE-9103"] == "Backlog"
+        assert "DRE-9103" not in [a[0] for a in board.advances], (
+            "a waiting child is not even offered a move")
+
+    @pytest.mark.parametrize("finished", ["Done", "Canceled", "Duplicate"])
+    def test_a_finished_sibling_does_not_hold_its_dependent(self, finished):
+        board = _Board(_dre6585(), lanes={"DRE-9101": finished})
+        _activate(board)
+        assert board.lanes["DRE-9103"] == "Planning"
+        assert board.lanes["DRE-9101"] == finished, "a finished child is left alone"
+        assert "sent to `Planning`" in _receipt_line(board, "DRE-9103")
+
+    def test_an_open_sibling_past_backlog_still_holds_its_dependent(self):
+        """Open is anything not Done, Canceled or Duplicate — a sibling already
+        being planned has produced nothing its dependent could be planned on."""
+        board = _Board(_dre6585(), lanes={"DRE-9101": "Green Light"})
+        _activate(board)
+        assert board.lanes["DRE-9103"] == "Backlog"
+        assert [m[0] for m in board.moves if m[0] != PARENT] == ["DRE-9102"]
+
+    def test_an_unreadable_sibling_lane_holds_its_dependent(self):
+        board = _Board(_dre6585(), lanes={"DRE-9101": None})
+        _activate(board)
+        assert board.lanes["DRE-9103"] == "Backlog"
+
+    def test_a_blocker_outside_the_roll_up_does_not_hold_a_child(self):
+        children = _dre6585()
+        children[1]["blocked_by"] = ["DRE-42"]
+        board = _Board(children)
+        _activate(board)
+        assert board.lanes["DRE-9102"] == "Planning"
+
+    def test_the_receipt_names_each_child_as_sent_or_waiting(self):
+        board = _Board(_dre6585())
+        _activate(board)
+        for ident in ("DRE-9101", "DRE-9102"):
+            line = _receipt_line(board, ident)
+            assert "sent to `Planning`" in line and "Backlog" not in line, line
+        line = _receipt_line(board, "DRE-9103")
+        assert "waits in `Backlog` on DRE-9101" in line, line
+        assert "sent to" not in line, line
+        assert "auto-advance" in _receipts(board)[0]
+
+    def test_the_receipt_names_a_child_left_where_it_is(self):
+        board = _Board(_dre6585(), lanes={"DRE-9102": "Green Light"})
+        _activate(board)
+        line = _receipt_line(board, "DRE-9102")
+        assert "already in `Green Light`" in line and "sent to" not in line, line
+
+    def test_a_retry_after_the_parent_moved_leaves_the_waiting_child_in_backlog(self):
+        board = _Board(_dre6585())
+        _activate(board)
+        assert board.lanes[PARENT] == "In Progress"
+        first, advances = list(board.moves), len(board.advances)
+        assert _activate(board) == 0
+        assert board.moves == first, "nothing moves twice"
+        assert board.lanes["DRE-9103"] == "Backlog"
+        assert "DRE-9103" not in [a[0] for a in board.advances[advances:]]
+        assert len(_receipts(board)) == 1
+
+    def test_a_run_that_died_after_the_parent_moved_finishes_as_a_retry(self):
+        """The receipt and every move landed, the step was retried: nothing to
+        post, nothing to move, and the waiting child is still waiting."""
+        board = _Board(_dre6585(), parent_lane="In Progress",
+                       lanes={"DRE-9101": "Planning", "DRE-9102": "Planning"})
+        board.comments[PARENT] = [epic_split.receipt_detail(PARENT, _dre6585())]
+        assert _activate(board) == 0
+        assert board.moves == []
+        assert board.lanes["DRE-9103"] == "Backlog"
+        assert len(_receipts(board)) == 1
+
+    def test_the_cli_reports_who_waits(self):
+        board = _Board(_dre6585())
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            epic_split.activate(board, PARENT)
+        assert "waiting in Backlog: DRE-9103" in out.getvalue(), out.getvalue()
+
+
 # =========================================================================== #
 # 3. the lane contract and the registry                                       #
 # =========================================================================== #
@@ -440,10 +544,30 @@ class TestTheLaneContract:
             exit_text = lane_contract.lane(name)["clauses"]["exit"]["text"]
             assert "wave" not in exit_text.lower(), name
         planning = lane_contract.lane("Planning")["clauses"]["exit"]["text"]
-        assert ("a roll-up leaves as child epics under itself, each sent to "
-                "Planning to be planned on its own") in planning
+        assert ("a roll-up leaves as child epics under itself, each planned on "
+                "its own") in planning
         intake = lane_contract.lane("Intake")["clauses"]["exit"]["text"]
         assert "one-off, epic, or roll-up" in intake
+
+    def test_the_planning_exit_says_a_blocked_child_waits_in_backlog(self):
+        """DRE-6591: a child an open sibling blocks is not sent to Planning at
+        once — it waits in Backlog for the sweep's auto-advance."""
+        planning = lane_contract.lane("Planning")["clauses"]["exit"]["text"]
+        assert "each sent to Planning to be planned on its own" not in planning
+        assert ("a child blocked by an open sibling waits in Backlog until "
+                "the auto-advance carries it on") in planning
+        in_progress = lane_contract.lane("In Progress")["clauses"]["writers"]["text"]
+        assert "are sent to Planning" not in in_progress
+
+    def test_the_acts_page_says_a_blocked_child_waits_in_backlog(self):
+        page = (ROOT / "docs" / "pipeline-acts.md").read_text(encoding="utf-8")
+        section = page.split("`🧩 roll-up-split`", 1)[1].split("\n## ", 1)[0]
+        flat = " ".join(section.split())
+        assert "sends each child still in Backlog to Planning" not in flat
+        assert ("a child blocked by an open sibling waits in Backlog for the "
+                "sweep's auto-advance") in flat
+        row = pipeline_act.record(epic_split.ACT)
+        assert "each sent to Planning" not in row["means"]
 
     def test_every_lane_the_script_writes_is_read_off_the_contract(self):
         live = set(lane_contract.lane_names())
