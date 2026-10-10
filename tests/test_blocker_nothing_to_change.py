@@ -196,16 +196,23 @@ class TestFewerAttestedReplans:
         assert not [call for call in stub.calls if call[0] == "cmd_state"]
 
     def test_a_card_with_no_criteria_is_replanned(self, stub):
-        action, note = module.resolve(_card("No checklist here."), _reason(_lines(3)),
-                                      repo=REPO)
+        card = _card("No checklist here.")
+        action, note = module.resolve(card, _reason(["Nothing to change."]), repo=REPO)
         assert (action, note.split(" criteria")[0]) == ("replanned", "0 of 0")
         assert stub.calls[0][0] == "cmd_advance"
+        # Attested lines are no criteria to count them against: still replanned.
+        action, note = module.resolve(card, _reason(_lines(3)), repo=REPO)
+        assert (action, note.split(" criteria")[0]) == ("replanned", "3 of 0")
+        assert not [call for call in stub.calls if call[0] == "cmd_state"]
 
     def test_a_card_with_no_description_key_is_replanned(self, stub):
         card = _card(with_description=False)
         assert "description" not in card
-        action, note = module.resolve(card, _reason(_lines(3)), repo=REPO)
+        action, note = module.resolve(card, _reason(["Nothing to change."]), repo=REPO)
         assert (action, note.split(" criteria")[0]) == ("replanned", "0 of 0")
+        action, note = module.resolve(card, _reason(_lines(3)), repo=REPO)
+        assert (action, note.split(" criteria")[0]) == ("replanned", "3 of 0")
+        assert not [call for call in stub.calls if call[0] == "cmd_state"]
 
     def test_a_criterion_inside_a_fence_is_not_counted(self, stub):
         description = DESCRIPTION + "\n```\n- [ ] An example of a criterion\n```\n"
