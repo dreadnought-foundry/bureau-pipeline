@@ -79,8 +79,6 @@ PRIORITY_QUERY = """query($id: String!) {
 }"""
 
 _MARKER = re.compile(rf"^\W*{re.escape(CONFIRM_MARKER)}(?![\w-])", re.I)
-#: The console's heading above the CEO's words (`console_receipt.ANSWER_SPEC`).
-_ANSWER_HEAD = re.compile(r"^Answer from .* PT:\s*$")
 
 
 def _moment(value) -> datetime | None:
@@ -133,7 +131,7 @@ def _first_line(text: str | None, *, console: bool) -> str:
     if console:
         text = console_receipt.answer_text(text)
     lines = [line for line in text.replace("\r", "").split("\n") if line.strip()]
-    if console and lines and _ANSWER_HEAD.match(lines[0].strip()):
+    if console and lines and console_receipt.HEADING_LINE.match(lines[0].strip()):
         lines = lines[1:]
     return lines[0].strip() if lines else ""
 
