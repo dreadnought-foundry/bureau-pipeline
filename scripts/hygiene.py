@@ -151,6 +151,7 @@ TAGS = {
     "hygiene-card-cancel": "hyg-card-canceled",
     "hygiene-cause-name": "hyg-cause-named",
     "hygiene-hold-clear": "hyg-hold-cleared",
+    "hygiene-triage-alarm": "hyg-triage-aged",
 }
 _ACT_OF_TAG = {tag: act for act, tag in TAGS.items()}
 

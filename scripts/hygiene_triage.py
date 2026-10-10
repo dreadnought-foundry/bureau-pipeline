@@ -22,17 +22,29 @@ cause named. One action per card, the first of these that applies:
    One `Left` row says what the hold is and what lifts it, and no other rule
    runs on it. A newer stamp of another reason, a spent stamp, or the stamp
    without the label is no such hold, and the card reads on as below.
-3. **A retired-repo card.** Its `repo:<slug>` label names a slug that is not a
+3. **A card held on a planning reason** (DRE-6451). It carries `needs-human`
+   and its newest live stamp says `plan-critic-bound` or `epic-rereview-twice`
+   (`PLANNING_REASONS`): a planning exit parked it for a person. Nothing here
+   lifts it. One `Left` row names the reason, how long it has waited in Triage
+   — from its newest Triage entry on the history read, else the stamp's own
+   posting, else `age unknown` — and the park note's first line. Once that
+   wait reaches `HYGIENE_TRIAGE_ALARM_HOURS` (default `DEFAULT_ALARM_HOURS`; a
+   value that is not a positive number stops the lane), a
+   `hygiene-triage-alarm` receipt says so on the card. Cause: `held <reason>
+   past the <N>-hour bound in Triage`, which carries no age, so the core's key
+   says it once. A newer stamp of another reason, a spent stamp, or the stamp
+   without the label is no such hold, as in (2).
+4. **A retired-repo card.** Its `repo:<slug>` label names a slug that is not a
    key of `config/repo-map.json` (cause `retired repo <slug>`), or a repo that
    answers `archived: true` to `gh api repos/<owner>/<repo>` (cause `archived
    repo <owner/repo>`). It is marked `routing_verdict.OPERATOR_STEP_LABEL` —
    a repo that is gone is the operator's to re-point, which is an operator step,
    and `hand-built` is the CEO's mark alone (DRE-6228) — and parked in Backlog.
-4. **A proof with an open pull request.** The title opens `PROOF:` and
+5. **A proof with an open pull request.** The title opens `PROOF:` and
    `card_pr.find` — the one "did this card produce a pull request" seam —
    answers an OPEN pull request in the card's repo. It moves to In Review, the
    lane that pull request says it is in. Cause: `open pull request #<n>`.
-5. **A prose blocker with no relation.** `prose_blockers.undeclared_claims`
+6. **A prose blocker with no relation.** `prose_blockers.undeclared_claims`
    names the ids a declaring line claims with no `blockedBy` behind them. Each
    id that resolves — on the board read, or by one `ctx.linear` read per pass —
    gets the relation, which makes the sentence true (a relation to a Done card
@@ -43,12 +55,12 @@ cause named. One action per card, the first of these that applies:
    nothing for Backlog to route on. Then the relation is still added, under a
    `hyg-cause-named` receipt, and a `Left` row says what is missing. Nothing
    rewrites a description.
-6. **A dependency loop.** The card's `blockedBy` chain returns to itself
+7. **A dependency loop.** The card's `blockedBy` chain returns to itself
    through the relations on the board read — every card's inverse `blocks`
    relations, and its own `blocks` relations read the other way round, so a
    Done card off the board still closes a loop. When a card in the loop is met
    (`prose_blockers.TERMINAL` — the gate's own reading of a blocker that holds
-   nothing) the card returns to Backlog, under the same verdict rule as (5).
+   nothing) the card returns to Backlog, under the same verdict rule as (6).
    Cause: `loop <A → B → A> broken, <DRE-N> is <state>`. When every card in it
    is open, which edge to cut is a person's call.
 
@@ -70,8 +82,11 @@ into an action. A read the core refuses is a lane bug and is raised.
 from __future__ import annotations
 
 import json
+import math
+import os
 import re
 import sys
+from datetime import UTC, datetime, timedelta
 
 import card_pr
 import hold
@@ -224,7 +239,111 @@ def held_no_route(card: dict) -> hygiene.Left | None:
 
 
 # --------------------------------------------------------------------------- #
-# (3) a retired-repo card                                                      #
+# (3) a card held on a planning reason                                         #
+# --------------------------------------------------------------------------- #
+
+#: The planning exits that park a card in Triage with a stamp (DRE-6451): the
+#: plan critic's bound (`plan.yml`) and the re-review watcher's second
+#: send-back (`rereview_watch.py`).
+PLANNING_REASONS = ("plan-critic-bound", "epic-rereview-twice")
+
+ALARM_ACT = "hygiene-triage-alarm"
+ALARM_VAR = "HYGIENE_TRIAGE_ALARM_HOURS"
+DEFAULT_ALARM_HOURS = 8
+
+#: How a park note opens — `plan_critic.py` and `rereview_watch.py` both.
+PARK_PREFIX = "🛑 Parked"
+NOTE_CHARS = 160
+
+PLANNING_WAY_BACK = ("read the park note's own way back — clear needs-human and move the "
+                     "card to Planning for a fresh planning attempt, or answer the Green "
+                     "Light question when the exit asked one")
+
+
+def alarm_hours() -> int | float:
+    """How long a planning-held card may wait in Triage before it alarms:
+    `HYGIENE_TRIAGE_ALARM_HOURS`, else `DEFAULT_ALARM_HOURS`. Anything but a
+    positive number is raised — never read as no bound at all."""
+    raw = (os.environ.get(ALARM_VAR) or "").strip()
+    if not raw:
+        return DEFAULT_ALARM_HOURS
+    try:
+        hours = float(raw)
+    except ValueError:
+        hours = math.nan
+    if not math.isfinite(hours) or hours <= 0:
+        raise ValueError(f"{ALARM_VAR}={raw!r} is not a positive number of hours")
+    return int(hours) if hours.is_integer() else hours
+
+
+def _first_line(body: str | None) -> str:
+    text = (body or "").strip()
+    return text.splitlines()[0] if text else ""
+
+
+def _when(value: str | None) -> datetime | None:
+    try:
+        return datetime.fromisoformat((value or "").replace("Z", "+00:00"))
+    except ValueError:
+        return None
+
+
+def _iso(when: datetime) -> str:
+    return when.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _held_since(card: dict, stamp: dict) -> tuple:
+    """When the card's wait began, and the evidence for it: its newest entry
+    into Triage on the history read, else the stamp's own posting. (None,
+    None) when neither is read."""
+    entered = [_when(n.get("createdAt"))
+               for n in ((card.get("history") or {}).get("nodes") or [])
+               if ((n or {}).get("toState") or {}).get("name") == LANE]
+    entered = [e for e in entered if e is not None]
+    if entered:
+        newest = max(entered)
+        return newest, f"entered Triage {_iso(newest)}"
+    for node in reversed((card.get("comments") or {}).get("nodes") or []):
+        if _first_line((node or {}).get("body")) == stamp["line"]:
+            stamped = _when(node.get("createdAt"))
+            return (None, None) if stamped is None else (stamped, f"stamped {_iso(stamped)}")
+    return None, None
+
+
+def _park_note(card: dict) -> str:
+    """The newest park note's first line, trimmed for a row."""
+    for body in reversed(_bodies(card)):
+        if body.startswith(PARK_PREFIX):
+            return _first_line(body)[:NOTE_CHARS]
+    return "the card carries no park note"
+
+
+def held_planning(card: dict, ctx: hygiene.Context, bound) -> list | None:
+    """One row for a card a planning exit parked, naming the reason, its age
+    in Triage and the park note — and, once that age reaches `bound` hours,
+    an alarm receipt. The core's (tag, cause) key says the alarm once; an age
+    neither read gives is a row and never an alarm."""
+    stamp = hold.read_stamp(_bodies(card))
+    if (NEEDS_HUMAN not in _labels(card) or stamp is None
+            or stamp["reason"] not in PLANNING_REASONS):
+        return None
+    reason = stamp["reason"]
+    note = _park_note(card)
+    since, when = _held_since(card, stamp)
+    if since is None:
+        return [_left(card, f"held {reason} in Triage, age unknown — {note}",
+                      PLANNING_WAY_BACK)]
+    hours = max(0, int((ctx.now - since).total_seconds() // 3600))
+    row = _left(card, f"held {reason} for {hours} hour{'' if hours == 1 else 's'} in "
+                      f"Triage — {note}", PLANNING_WAY_BACK)
+    if ctx.now - since < timedelta(hours=bound):
+        return [row]
+    cause = f"held {reason} past the {bound:g}-hour bound in Triage"
+    return [_action(card, ALARM_ACT, cause, [stamp["line"], when], ctx, [], []), row]
+
+
+# --------------------------------------------------------------------------- #
+# (4) a retired-repo card                                                      #
 # --------------------------------------------------------------------------- #
 
 
@@ -245,7 +364,7 @@ def retired(card: dict, ctx: hygiene.Context, seen: _Pass) -> list | None:
 
 
 # --------------------------------------------------------------------------- #
-# (4) a proof with an open pull request                                        #
+# (5) a proof with an open pull request                                        #
 # --------------------------------------------------------------------------- #
 
 
@@ -265,7 +384,7 @@ def proof_in_review(card: dict, ctx: hygiene.Context) -> list | None:
 
 
 # --------------------------------------------------------------------------- #
-# (5) a prose blocker with no relation                                         #
+# (6) a prose blocker with no relation                                         #
 # --------------------------------------------------------------------------- #
 
 
@@ -305,7 +424,7 @@ def prose_blocker(card: dict, ctx: hygiene.Context, seen: _Pass) -> list | None:
 
 
 # --------------------------------------------------------------------------- #
-# (6) a dependency loop                                                        #
+# (7) a dependency loop                                                        #
 # --------------------------------------------------------------------------- #
 
 
@@ -394,9 +513,10 @@ def left_for_a_person(card: dict) -> hygiene.Left:
 # --------------------------------------------------------------------------- #
 
 
-def _plan_card(card: dict, ctx: hygiene.Context, seen: _Pass) -> list:
+def _plan_card(card: dict, ctx: hygiene.Context, seen: _Pass, bound) -> list:
     held = held_no_route(card)
     for rule in (lambda: moot(card, ctx), lambda: None if held is None else [held],
+                 lambda: held_planning(card, ctx, bound),
                  lambda: retired(card, ctx, seen),
                  lambda: proof_in_review(card, ctx), lambda: prose_blocker(card, ctx, seen),
                  lambda: loop(card, ctx, seen)):
@@ -408,10 +528,11 @@ def _plan_card(card: dict, ctx: hygiene.Context, seen: _Pass) -> list:
 
 def plan(board: hygiene.Board, ctx: hygiene.Context) -> list:
     out: list = []
+    bound = alarm_hours()  # a bad bound stops the lane, never one card
     seen = _Pass(board, ctx)
     for card in board.cards(ctx, LANE):
         try:
-            out += _plan_card(card, ctx, seen)
+            out += _plan_card(card, ctx, seen, bound)
         except hygiene.Forbidden:
             raise  # a refused read is a lane bug, never a skipped card
         except (RuntimeError, ValueError, KeyError, TypeError) as e:
