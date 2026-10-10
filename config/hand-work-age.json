@@ -1,0 +1,14 @@
+{
+  "_readme": "How long a person's card may wait in Hand-work before the sweep alarms on it once, for the operator (DRE-6409). Read by scripts/reconcile.py's `_hand_work_age`, judged only by the sweep of the card's own repo. `hours` is the operator's ruling of 2026-10-09, and every kind that alarms shares it: an `operator-step` card, a WORKBENCH card with no mark, and a `PROOF:` card whose proof run is not in flight. `standing` is the declared list of cards that only receive posts and are never finished — they never alarm, and adding one is a reviewed pull request, never a guess from a title. The CEO's own `hand-built` card never alarms either, and that needs no entry here: the mark says it.",
+  "hours": 24,
+  "standing": [
+    {
+      "card": "DRE-4541",
+      "why": "The daily groomer's proposals: the groomer posts to it every day and nobody ever finishes it."
+    },
+    {
+      "card": "DRE-5774",
+      "why": "The hygiene agent's hourly summary: the agent posts to it every hour and nobody ever finishes it."
+    }
+  ]
+}

@@ -2413,6 +2413,113 @@ def _no_run_reading(ident: str, nodes: list[dict], sent: str | None) -> tuple[st
         "checked)")
 
 
+# The age limit on a person's card in Hand-work, and the standing cards that
+# never alarm (DRE-6409). Read on every call, so the file is the number.
+HAND_WORK_AGE_CONFIG = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+    "config", "hand-work-age.json")
+
+
+def _hand_work_age(card: dict, reason: str) -> str:
+    """The tail `flag_stranded` appends to a Hand-work card's line, after
+    posting the one `hand-work-overdue` alarm the card is owed (DRE-6409).
+
+    The watchdog skips the RUN check on a person's card, rightly — no run is
+    expected — and nothing kept time in its place: on 2026-10-09 one sweep
+    printed `not a strand` for 18 cards and raised nothing. This is the clock,
+    called only for a card IN Hand-work and only by its own repo's sweep.
+
+    The clock is the ENTRY, never `updatedAt`, which moves on every comment:
+    the newest `🧹 Auto-promoted Backlog → Hand-work:` receipt in the window
+    (`promote_ready`'s, the mark `proof_dispatch._entered` reads), at no
+    request; only without one, and only for a card that can alarm,
+    `routing_verdict.lane_moves`' newest move into the lane, one request. An
+    unreadable history judges nothing.
+
+    In the card's order, first match wins: a standing card in
+    `config/hand-work-age.json` and the CEO's own `hand-built` card never
+    alarm — his pace is his own, and nothing is written to any queue of his;
+    a `PROOF:` card alarms only when the proof dispatcher's own reading
+    (`proof_run_state.reading` over the whole thread, `proof_dispatch.FREE`)
+    says no run is in flight, read only once it is past the limit and not yet
+    alarmed; an `operator-step` card, or one routed to the lane on a verdict
+    whose actor is the operator (WORKBENCH carries no mark since DRE-6227),
+    alarms past the limit. One comment per entry, for the operator: no label,
+    no lane move, nothing in Green Light, and only a failed write counts
+    against the sweep.
+    """
+    with open(HAND_WORK_AGE_CONFIG, encoding="utf-8") as fh:
+        rule = json.load(fh)
+    limit = int(rule["hours"])
+    ident, lane = card["identifier"], card["state"]["name"]
+    nodes = linear_ops.window_nodes(card.get("comments"))
+    at = lambda iso: datetime.fromisoformat(iso.replace("Z", "+00:00"))  # noqa: E731
+    marks = {(lbl.get("name") or "").lower()
+             for lbl in (card.get("labels") or {}).get("nodes", [])}
+    entered = next((n.get("createdAt") for n in reversed(nodes)
+                    if (n.get("body") or "").lstrip().startswith(
+                        f"🧹 Auto-promoted Backlog → {lane}:")), None)
+    exempt = ("a standing card" if ident in {s["card"] for s in rule["standing"]}
+              else "the CEO's own hand-built card" if HAND_BUILT_LABEL.lower() in marks
+              else "")
+    if exempt:
+        # A card that never alarms is told its age off the free receipt only:
+        # a history read per card, every sweep, buys nothing but the number
+        # (the real-board ceiling, tests/test_sweep_real_board.py).
+        waited_for = f" {int(age_minutes(entered) // 60)}h" if entered else ""
+        return f"; in Hand-work{waited_for} — never alarms ({exempt})"
+    if not entered:
+        into = [m["at"] for m in routing_verdict.lane_moves(ident) or ()
+                if m.get("to") == lane and m.get("at")]
+        entered = max(into, key=at) if into else None
+    if not entered:
+        return "; entry time could not be read — not judged"
+    waited = age_minutes(entered)
+    hours = int(waited // 60)
+    proof = proof_and_demo.is_proof(card.get("title"))
+    if not (proof or routing_verdict.OPERATOR_STEP_LABEL in marks or any(
+            routing_verdict.actor(name) == "operator"
+            and routing_verdict.destination(name) == lane
+            for name in routing_verdict.verdicts_on(card_comment_bodies(card)))):
+        return ""  # no person's card this rule knows — today's line, unjudged
+    if waited < limit * 60:
+        due = dead_run.pacific(at(entered) + timedelta(hours=limit))
+        return f"; in Hand-work {hours}h of {limit}, alarms at {due}"
+    alarmed = [n["createdAt"] for n in nodes
+               if (n.get("body") or "").lstrip().startswith("🚨 hand-work-overdue:")
+               and n.get("createdAt") and at(n["createdAt"]) > at(entered)]
+    if alarmed:
+        return f"; in Hand-work {hours}h, past {limit} — alarmed {_pt(alarmed[-1])}"
+    if proof:
+        import proof_dispatch  # noqa: PLC0415 — proof_dispatch imports this module
+        import proof_run_state  # noqa: PLC0415
+        try:
+            comments, viewer = proof_dispatch.LinearReads().thread(ident)
+            got = proof_run_state.reading(REPO, ident, comments, viewer,
+                                          read=proof_dispatch.github_read)
+        except Exception as e:  # noqa: BLE001 — an unread run is not a free one
+            print(f"watchdog: {ident}'s proof run could not be read ({e})",
+                  file=sys.stderr)
+            got = SimpleNamespace(state="unknown", lines=[])
+        if got.state not in proof_dispatch.FREE:
+            why = "could not be read" if got.state == "unknown" else "is in flight"
+            return f"; in Hand-work {hours}h, past {limit} — no alarm: its proof run {why}"
+        kind = f"a PROOF: card whose proof run is not in flight — {'; '.join(got.lines)}."
+    else:
+        kind = (f"the operator's card, {reason} — it entered Hand-work "
+                f"{_pt(entered)}, and no run is dispatched for it.")
+    try:
+        linear_ops.cmd_comment(ident, pipeline_act.receipt("hand-work-overdue", (
+            f"🚨 hand-work-overdue: {ident} has waited in Hand-work {hours} hours, "
+            f"past its {limit} — the operator's to look at.\nKind: {kind}"
+        )))
+    except Exception as e:  # noqa: BLE001 — recorded like every other failed write
+        _write_failures.append(f"{ident} hand-work-overdue alarm: {e}")
+        print(f"ERROR: hand-work-overdue alarm on {ident}: {e}", file=sys.stderr)
+        return f"; in Hand-work {hours}h, past {limit} — the alarm could not be posted"
+    return f"; in Hand-work {hours}h, past {limit} — alarmed {dead_run.pacific(datetime.now(UTC))}"
+
+
 def flag_stranded() -> set[str]:
     """DRE-1993 watchdog: flag active-lane cards with no evidence of work.
 
@@ -2500,10 +2607,14 @@ def flag_stranded() -> set[str]:
             # DRE-2524: neither class applies to work built by hand — no
             # dispatched run is coming and nothing is being routed. The line
             # names why, never a label the card may not carry (DRE-6424).
+            # In Hand-work the card's own repo's sweep keeps time on it
+            # instead, and the line says how long it has waited (DRE-6409).
+            aged = (_hand_work_age(card, reason)
+                    if state == "Hand-work" and card_repo(card) == REPO_SLUG else "")
             print(
                 f"watchdog: {ident} is {reason} — no "
                 "dispatched run is expected, so a missing run receipt and an "
-                "off-rail repo are both normal here, not a strand"
+                f"off-rail repo are both normal here, not a strand{aged}"
             )
             continue
         if automation_card(card):

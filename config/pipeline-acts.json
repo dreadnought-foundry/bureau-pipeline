@@ -1085,6 +1085,24 @@
       }
     },
     {
+      "name": "hand-work-overdue",
+      "tag": "hand-work-overdue",
+      "adopted": true,
+      "kind": "hold",
+      "means": "A person's card has waited in Hand-work past the hours config/hand-work-age.json declares — an operator-step card, a WORKBENCH card with no mark, or a PROOF: card whose proof run is not in flight — and the sweep says so once, for the operator.",
+      "state": "unchanged",
+      "next_actor": "operator",
+      "discharges": null,
+      "subscriber": "reconcile.yml",
+      "cadence_s": null,
+      "cadence_why": "Null: the alarm names a card a person must pick up, and scripts/reconcile.py declares no bound on how long the operator takes — the same null work-never-landed, the sweep's other alarm on a person's card, carries.",
+      "why": "DRE-6409. The stall watchdog skips every card waiting on a person, rightly — no run is expected — and nothing kept time in its place: on 2026-10-09 one sweep printed 'not a strand' for 18 cards and raised nothing. The clock is the card's entry to Hand-work, never updatedAt. Posted once per entry, by the card's own repo's sweep only; it adds no label, moves no lane and writes nothing to Green Light. A standing card and the CEO's own hand-built card never alarm — an age is not a decision he owes.",
+      "emits": {
+        "file": "scripts/reconcile.py",
+        "anchor": "🚨 hand-work-overdue: {ident} has waited in Hand-work"
+      }
+    },
+    {
       "name": "promotion-stalled",
       "tag": "promotion-stalled",
       "adopted": true,
