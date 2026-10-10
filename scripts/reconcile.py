@@ -140,6 +140,8 @@ from types import SimpleNamespace
 from typing import NamedTuple
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import blocker_class  # noqa: E402 — DRE-6448: ONE reader of an open blocker and its class
+import blocker_resolve  # noqa: E402 — DRE-6448: the class's action, behind one call
 import break_glass  # noqa: E402 — ONE source for the sanctioned gate bypass (DRE-2737)
 import bureau_read  # noqa: E402 — the read door: the board from our database (Stage 2 #5/#6a)
 import card_pr  # noqa: E402 — ONE source for "does this card have a PR?" (DRE-2316)
@@ -503,8 +505,9 @@ BLOCKER_MARKER = "🛑 Agent blocked"
 # markers (engineer/QA/reconcile receipts). A blocker is "resolved" only when a
 # HUMAN (CEO/operator) weighs in afterward — i.e. a comment that is NOT one of
 # our own machine markers. The gate's own "🧹 Auto-promoted" receipt is a
-# machine marker, so it can never clear the blocker and re-arm the loop.
-_AGENT_COMMENT_PREFIXES = ("🤖", "🛑", "🧹", "🪦", "🚨", "🏁")
+# machine marker, so it can never clear the blocker and re-arm the loop. So is
+# 🙋 (DRE-6448): the sweep's own ask and the build run's escalation open with it.
+_AGENT_COMMENT_PREFIXES = ("🤖", "🛑", "🧹", "🪦", "🚨", "🏁", "🙋")
 
 # Live-run liveness gate (DRE-2032). agent-task's "Card → In Progress" step
 # posts this heartbeat with the run's URL, so the card itself maps to its
@@ -6626,6 +6629,16 @@ def advance_unblocked_epics(done_epic: str) -> None:
         )
 
 
+def open_agent_blocker(card: dict) -> blocker_class.Blocker | None:
+    """The card's open agent blocker and its class (DRE-6448), or None — pure
+    computation over the comments the candidates query already returned. A
+    comment newer than the marker carrying the resolver's receipt tag closes it."""
+    bodies = [node.get("body") or "" for node in linear_ops.window_nodes(card.get("comments"))]
+    return blocker_class.open_blocker(
+        bodies, machine_prefixes=_AGENT_COMMENT_PREFIXES,
+        resolved_tag=pipeline_act.tag("agent-blocker-resolved"))
+
+
 def has_unresolved_blocker(card: dict) -> bool:
     """True if the card's latest engineer-blocker marker has no human reply after
     it — i.e. the card was parked in Backlog on a genuine blocker and nobody has
@@ -6642,15 +6655,9 @@ def has_unresolved_blocker(card: dict) -> bool:
     blocker marker, the blocker is still open; a later human comment (or a human
     moving/editing the card and commenting) flips it to resolved. A card with no
     `comments` key (e.g. a hand-built test fixture) is treated as unblocked.
+    The walk is `open_agent_blocker`'s (DRE-6448).
     """
-    nodes = linear_ops.window_nodes(card.get("comments"))
-    for node in reversed(nodes):  # newest → oldest
-        text = (node.get("body") or "").lstrip()
-        if text.startswith(BLOCKER_MARKER):
-            return True  # newest decisive comment is an open blocker
-        if not text.startswith(_AGENT_COMMENT_PREFIXES):
-            return False  # a human spoke after the blocker — treat as resolved
-    return False  # no blocker marker on the card at all
+    return open_agent_blocker(card) is not None
 
 
 def skip_bad_reference(identifier: str, err: Exception) -> None:
@@ -7008,6 +7015,7 @@ def takes_no_slot(bodies) -> bool:
 
 def promote_ready(
     active_count: int, candidates: list[dict] | None = None, *, close_epics: bool = False,
+    resolve_blockers: bool = False,
 ) -> int:
     """Auto-promote Backlog cards whose blockers are all Done.
 
@@ -7056,6 +7064,10 @@ def promote_ready(
     says so, and goes red once the oldest receipt is an hour old
     (`promotion_stall`, DRE-4207). The red is `_stale_defects`, which `main`
     already exits on; the medic reads it as a standing defect (DRE-6467).
+
+    `resolve_blockers` — the full sweep's alone — hands a card carrying an
+    open agent blocker to its class's action module (DRE-6448). Never on a
+    `--promote-only` pass: the merge path runs those under the qa-bot's token.
     """
     # The clock is the pure half (DRE-4207); imported here because this pass is
     # its only caller.
@@ -7169,6 +7181,7 @@ def promote_ready(
         # gates below read them — the epic test and the verdict. One
         # comprehension, hoisted to the first of them.
         bodies = card_comment_bodies(card)
+        blocker = open_agent_blocker(card)
         # The cap, asked PER CARD (DRE-3385). With the budget gone, only a card
         # bound for a person goes on — WORKBENCH or OPERATOR: the sweep moves
         # it and no run is dispatched at it, so it takes no slot. Everything
@@ -7178,7 +7191,9 @@ def promote_ready(
         # the loop broke. The verdict is read off comments the candidates query
         # already returned, so asking costs nothing. `budget` may be negative
         # (a cap lowered under work in flight); `spent >= budget` holds then too.
-        if spent >= budget and not takes_no_slot(bodies):
+        # A card carrying an open blocker takes no slot (DRE-6448): it is
+        # resolved below and never promoted on this pass.
+        if spent >= budget and not takes_no_slot(bodies) and blocker is None:
             # ONE line per sweep, not one per card (DRE-2918): a 200-card
             # Backlog must not print 200 lines. Said at the FIRST card held —
             # the count is already exact there, because `spent` never falls and
@@ -7193,6 +7208,7 @@ def promote_ready(
                     c for c in candidates[index:]
                     if card_repo(c) == REPO_SLUG
                     and not takes_no_slot(card_comment_bodies(c))
+                    and open_agent_blocker(c) is None
                 ]
                 lowest = min(
                     unconsidered, key=lambda c: int(c["identifier"].split("-")[1]))
@@ -7285,6 +7301,48 @@ def promote_ready(
             _surface_once(card["identifier"], prose_blockers.CARD_TAG, notice)
             _route_to_defect_lane(card["identifier"])
             continue
+        # An open agent blocker (DRE-1585) is never promoted on the pass that
+        # reads it — that redispatches into the same wall (DRE-1572). The full
+        # sweep hands it to its class's module (DRE-6448), outside the read
+        # guard: the resolver WRITES, and a refused write is no bad reference.
+        if blocker is not None:
+            ident = card["identifier"]
+            head = f"promotion: {ident} agent-blocker class={blocker.cls}"
+            stands = True  # left in Backlog with its marker open (DRE-4210)
+            if not resolve_blockers:
+                print(f"{head} — not resolved this pass: blockers are resolved by the full sweep")
+            else:
+                try:  # ONE live read in the gate's shape: decide on the card as it is NOW
+                    found = _fetch_backlog_linear([ident])
+                except linear_ops.LinearRateLimited:
+                    raise  # the run's own exit code (DRE-2923), never one card's problem
+                except linear_ops.LinearError as e:
+                    found = None
+                    print(f"{head} — not resolved this pass: it could not be read live ({e})")
+                if found == []:
+                    stands = False
+                    print(f"{head} — no longer in Backlog since the board was read — skipping")
+                elif found and (blocker := open_agent_blocker(found[0])) is None:
+                    stands = False
+                    print(f"{head} — resolved since the board was read — skipping")
+                elif found:
+                    try:
+                        pair = blocker_resolve.resolve_blocker(found[0], blocker, repo=REPO)
+                    except linear_ops.LinearRateLimited:
+                        raise  # as above, and a LinearError, so caught first
+                    except Exception as e:  # noqa: BLE001 — one card's failure, the run red
+                        _write_failures.append(f"{ident} agent-blocker class={blocker.cls}: {e}")
+                        print(f"ERROR: {ident} agent-blocker class={blocker.cls} — not "
+                              f"resolved: {e}", file=sys.stderr)
+                    else:
+                        # None: the resolver printed its own line, marker open.
+                        if pair is not None:
+                            stands = False
+                            print(f"promotion: {ident} agent-blocker class={blocker.cls} "
+                                  f"resolved — {pair[0]}: {pair[1]}")
+            if stands:
+                stand(ident, "agent-blocker", BLOCKER_MARKER)
+            continue
         # Per-card isolation (DRE-2035): everything from here on may read Linear
         # per THIS card, and a LinearError from any of those gate-evaluation
         # reads must skip this one card (loudly, with a one-time comment), never
@@ -7355,17 +7413,6 @@ def promote_ready(
                     for b in unmet
                 )
                 print(f"promotion: {card['identifier']} is held by {held} — skipping")
-                continue
-            # Formal blockers are clear, but the engineer may have parked this card
-            # on a *deterministic* blocker it flagged itself (DRE-1585). Re-promoting
-            # would redispatch it straight back into the same wall — exactly the
-            # five-run loop DRE-1572 hit. Skip until a human resolves it (a human
-            # comment after the blocker marker, or the human clears it some other way
-            # and the card leaves Backlog).
-            if has_unresolved_blocker(card):
-                print(f"promotion: {card['identifier']} has an unresolved agent-blocker — skipping")
-                # Left in Backlog with its marker open (DRE-4210).
-                stand(card["identifier"], "agent-blocker", BLOCKER_MARKER)
                 continue
             # Mid-epic discovery (DRE-2739): a card added to an epic AFTER it was
             # green-lit dispatches an agent on this very sweep — within fifteen
@@ -13937,7 +13984,8 @@ def main(
             # path stays the gate. The active epics closed above, before
             # `start_queued_epics`; a Backlog close opens its slot in the cap
             # for the next pass to fill.
-            promote_ready(active_count=wip_count(mine), close_epics=True)
+            promote_ready(active_count=wip_count(mine), close_epics=True,
+                          resolve_blockers=True)
     if promote_only:
         print(f"promote-only: gate evaluated (WIP base {wip_count(mine)})")
         _report_degraded()
