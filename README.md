@@ -1340,7 +1340,10 @@ naming the mirror that must follow; a test red on both is named `already red
 on stable` and refuses nothing; a check that could not run is
 `mirror-check-blocked` and proves nothing either way. `force` overrides both,
 as it overrides a red harness stamp, and the forced warning names the mirror
-result it overrode. Since DRE-6622 the check's test tools come from this
+result it overrode. Every receipt carries the result as one bounded line —
+both counts, a few examples, and the run's `mirror-result` artifact as where
+the full lists are (DRE-6683) — because an unbounded one, 1,238 tests long,
+once stopped `Say what happened` from starting. Since DRE-6622 the check's test tools come from this
 repository's `requirements-dev.txt`, installed beside agent-bureau's
 requirements (which declare no pytest), and both of its pytest runs carry
 `--no-cov`, because agent-bureau's coverage floor cannot be met by its mirror
