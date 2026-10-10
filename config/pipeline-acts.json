@@ -953,6 +953,24 @@
       }
     },
     {
+      "name": "hygiene-triage-alarm",
+      "tag": "hyg-triage-aged",
+      "adopted": true,
+      "kind": "hold",
+      "means": "A card a planning exit parked in Triage — held plan-critic-bound or epic-rereview-twice — has waited past the hygiene agent's bound, and this receipt says so once on the card, naming the hold and when its wait began.",
+      "state": "unchanged",
+      "next_actor": "operator",
+      "discharges": null,
+      "subscriber": "hygiene.yml",
+      "cadence_s": null,
+      "cadence_why": "Null: the card is a person's, and no workflow declares how long a person takes — scripts/hygiene.py reads it again on its next hourly pass and says nothing more while the hold and the bound are unchanged.",
+      "why": "DRE-6451, the hygiene agent's Triage lane (scripts/hygiene_triage.py); the core holds the one table of tags so every lane's receipt reads the same. A planning hold is lifted only by a person, so a plan parked for one could sit in Triage unseen; the lane's row names the reason, its age and the park note every pass, and once the age reaches HYGIENE_TRIAGE_ALARM_HOURS (default 8) this receipt raises it on the card. A HOLD: the agent lifts nothing and moves nothing. Its idempotency key is (tag, cause), and the cause names the reason, the bound and when the wait began but never the age, so the alarm is said once per hold rather than every hour, and again when the card is parked anew. It discharges nothing: a hold starts an obligation, it does not end one.",
+      "emits": {
+        "file": "scripts/hygiene.py",
+        "anchor": "\"hyg-triage-aged\""
+      }
+    },
+    {
       "name": "epic-approval-queued",
       "tag": "epic-queued",
       "adopted": true,

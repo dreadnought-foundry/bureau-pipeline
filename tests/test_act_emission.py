@@ -673,7 +673,7 @@ def _drive_promotion_stalled(mp):
     reconcile.promote_ready(active_count=0)
 
 
-#: The hygiene agent's thirteen acts (DRE-5368, DRE-6180). The core composes every one of
+#: The hygiene agent's fourteen acts (DRE-5368, DRE-6180, DRE-6451). The core composes every one of
 #: them through `hygiene.receipt` and posts it through its one comment seam,
 #: `hygiene.send`; WHICH act a pass takes is a lane module's decision, and the
 #: lanes are sibling cards. So each driver hands the real seam the receipt a
@@ -684,7 +684,7 @@ HYGIENE_ACTS = (
     "hygiene-decision-needed", "hygiene-pr-close", "hygiene-resend-to-planning",
     "hygiene-card-close", "hygiene-proof-close", "hygiene-triage-return",
     "hygiene-review-move", "hygiene-card-cancel", "hygiene-cause-name",
-    "hygiene-hold-clear",
+    "hygiene-hold-clear", "hygiene-triage-alarm",
 )
 
 

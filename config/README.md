@@ -178,6 +178,19 @@ of it is ever a runtime lookup.
   a row added here also owes that step its variable and its `_OFF_UNTIL`
   companion — `tests/test_switch_reason.py` fails by name until it has them.
   `docs/switches.md` is the page a person reads.
+- **`blocker-classes.json`** — the classes a build agent's blocker reason can
+  belong to (DRE-6438). In `holds.json`'s shape — a `_readme`, `version`, the
+  `stamp` the agent writes on the first line of its note (`blocker-class: `),
+  the `marker` the poster opens its comment with (`🛑 Agent blocked:`), the
+  `default` class (`question`), then `classes`: `nothing-to-change`,
+  `wrong-repo`, `branch-without-pr` and `question`, each with `means` (one
+  sentence), `phrases` (lower-case substrings that name the class when they
+  appear in a reason) and `action` (the `scripts/<module>.py` that resolves it).
+  Read only through `scripts/blocker_class.py`. `python3
+  scripts/blocker_class.py check` fails, by name, on a class with no `means`, a
+  non-default class with no phrase, a phrase under two classes, a `default`
+  that is not a class, and an `action` missing or not a `[a-z_]+` module name.
+  `docs/blocker-classes.md` is the page a person reads.
 - **`critic-audit-dre2649.json`** — the held-back review the critic is scored
   against (DRE-2685), transcribed once with a quote per judgement.
   `docs/critic-score-dre2649.md` records the run.
