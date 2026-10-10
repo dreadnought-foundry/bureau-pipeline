@@ -9966,7 +9966,13 @@ def retry_dead_fix_runs() -> None:
     a planted marker must not spawn fix runs (DRE-1995/1998 discipline).
     Skips DIRTY PRs (unstick_conflicts owns those) and backs off while a fix
     run is queued/in_progress; one dispatch per sweep, like
-    fix_approved_but_red."""
+    fix_approved_but_red.
+
+    A lost machine (DRE-6572, fix_dead_run.RUNNER_LOST_TAG) is dispatched only
+    once its marker is RUNNER_LOST_WAIT_MINUTES old: RunsOn retries the same
+    run by itself a few minutes after the attempt ends, and by the wait that
+    retry is in progress (the busy guard stands down) or has posted a newer
+    worker-bot comment (the marker is no longer the newest)."""
     # Unreadable answers BUSY (gh_actions_read): the App token 403s on this
     # API, and the old `or "[]"` turned that into "nothing running" — the
     # backoff failed OPEN at every one of these sites.
@@ -9981,22 +9987,30 @@ def retry_dead_fix_runs() -> None:
     for pr in prs:
         if not card_branch(pr["headRefName"]) or pr.get("mergeStateStatus") == "DIRTY":
             continue
-        worker = [
-            c.get("body") or ""
-            for c in pr.get("comments", [])
-            if is_worker_bot_comment(c)
-        ]
-        if not worker or not any(t in worker[-1] for t in fix_dead_run.RETRY_MARKERS):
+        worker = [c for c in pr.get("comments", []) if is_worker_bot_comment(c)]
+        newest = (worker[-1].get("body") or "") if worker else ""
+        if not newest or not any(t in newest for t in fix_dead_run.RETRY_MARKERS):
             continue
+        if fix_dead_run.RUNNER_LOST_TAG in newest:
+            # DRE-6572: RunsOn starts its own retry of the same run minutes
+            # after the attempt ends, and the busy guard cannot see a retry
+            # that has not started. Wait it out; an unreadable timestamp waits.
+            when = worker[-1].get("createdAt")
+            if not when or age_minutes(when) < fix_dead_run.RUNNER_LOST_WAIT_MINUTES:
+                print(f"dead fix run: PR #{pr['number']} lost its machine — "
+                      f"waiting {fix_dead_run.RUNNER_LOST_WAIT_MINUTES} minutes "
+                      "for the runner's own retry")
+                continue
         if fix_dispatch_blocked(pr):
             continue  # human-parked card (DRE-2024) — the loop is over
         if fix_agent_absent_hold(pr):
             return  # no fix agent in this repo — a person is told once (DRE-4378)
-        why = (
-            "ran out of turns"
-            if fix_dead_run.TURN_CAP_TAG in worker[-1]
-            else "died of a model/API error"
-        )
+        if fix_dead_run.TURN_CAP_TAG in newest:
+            why = "ran out of turns"
+        elif fix_dead_run.RUNNER_LOST_TAG in newest:
+            why = "lost its machine"
+        else:
+            why = "died of a model/API error"
         print(
             f"dead fix run: PR #{pr['number']} last fix run {why} — "
             f"re-dispatching fix agent"

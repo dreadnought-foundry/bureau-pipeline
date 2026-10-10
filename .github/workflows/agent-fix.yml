@@ -1927,6 +1927,11 @@ jobs:
           ATTEMPT: ${{ steps.pr.outputs.attempt }}
           MODE: ${{ steps.pr.outputs.mode }}
           EXEC_FILE: ${{ steps.claude.outputs.execution_file }}
+          # DRE-6572: how the agent step ended — the same expression the
+          # death-receipt step reads as MODEL_STEP_OUTCOME. With no result
+          # record, `failure` or `cancelled` here and the job's own words are
+          # what tell a machine taken mid-run from a run that changed nothing.
+          AGENT_STEP_OUTCOME: ${{ steps.claude.outcome }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
           # DRE-6350: what the Push rescue step did, for the Report to say on
           # the pull request. Wired here so DRE-6351, which teaches

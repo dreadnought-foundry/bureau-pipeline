@@ -1239,6 +1239,38 @@
     },
     {
       "file": ".github/workflows/agent-fix.yml",
+      "step": "Report",
+      "anchor": "elif [ \"$ACTION\" = \"retry-runner-lost\" ]; then",
+      "kind": "undeclared-act",
+      "means": "The fix run's machine was taken away before the agent finished — no result record, an unfinished agent step and the job's own words — so the sweep re-dispatches once per head. No fix attempt is spent and nobody is parked (DRE-6572).",
+      "why": "Act-shaped, and the registry has no row for it. Posted bare, like its two siblings (the outage retry and the turn-exhaustion retry) — giving it a row is a REGISTRY change, a tag, a kind, a state, a next actor and a subscriber, which DRE-6572 deliberately leaves for a later card. Named here so the debt is countable rather than invisible. Its body is written by scripts/fix_dead_run.py, which owns the fix-run-runner-lost tag the reconcile sweep re-dispatches on after RUNNER_LOST_WAIT_MINUTES."
+    },
+    {
+      "file": ".github/workflows/agent-fix.yml",
+      "step": "Report",
+      "anchor": "🤖 The last fix run's machine was taken away",
+      "kind": "undeclared-act",
+      "means": "The card-side half of the lost-machine retry: nothing is wrong with the work, and the pipeline retries once by itself (DRE-6572).",
+      "why": "The CARD-SIDE half of the lost-machine retry line, which has no act row for the reason that row gives. Posted bare, like its two siblings (the outage retry and the turn-exhaustion retry) — giving it a row is a REGISTRY change, a tag, a kind, a state, a next actor and a subscriber, which DRE-6572 deliberately leaves for a later card. Named here so the debt is countable rather than invisible."
+    },
+    {
+      "file": ".github/workflows/agent-fix.yml",
+      "step": "Report",
+      "anchor": "elif [ \"$ACTION\" = \"hold-runner-lost\" ]; then",
+      "kind": "undeclared-act",
+      "means": "A second fix run in a row on the same commit lost its machine: the work has not failed, and the card is held for a person rather than starting another run (DRE-6572).",
+      "why": "Act-shaped, and the registry has no row for it. Posted bare, like its two siblings (the outage retry and the turn-exhaustion retry) — giving it a row is a REGISTRY change, a tag, a kind, a state, a next actor and a subscriber, which DRE-6572 deliberately leaves for a later card. Named here so the debt is countable rather than invisible. Its body is written by scripts/fix_dead_run.py, opens with 🛑 and carries no marker, so the sweep stops on it as it does on the outage and turn-exhaustion holds."
+    },
+    {
+      "file": ".github/workflows/agent-fix.yml",
+      "step": "Report",
+      "anchor": "🙋 Two fix runs in a row on PR #$PR lost their machine",
+      "kind": "undeclared-act",
+      "means": "The card-side half of the lost-machine hold: two lost machines on one commit, not failed work, and the card waits on a person (DRE-6572).",
+      "why": "The CARD-SIDE half of the lost-machine hold line, which has no act row for the reason that row gives. Posted bare, like its two siblings (the outage retry and the turn-exhaustion retry) — giving it a row is a REGISTRY change, a tag, a kind, a state, a next actor and a subscriber, which DRE-6572 deliberately leaves for a later card. Named here so the debt is countable rather than invisible."
+    },
+    {
+      "file": ".github/workflows/agent-fix.yml",
       "anchor": "pushed no new commit (branch still at",
       "kind": "undeclared-act",
       "means": "The fix run reported success but the head sha did not move, so no review will re-run; the card is parked for a person.",

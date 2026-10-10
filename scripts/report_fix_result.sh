@@ -66,9 +66,17 @@ set -e
 #      cause, then parks with the same cause opening the card receipt.
 #    - The head did not move: `fix_dead_run.py decide` reads every page
 #      of the thread and answers retry (an outage), retry-turns (out of
-#      turns, retried once), hold-turns, hold, or anything else, which
-#      is no progress. The no-progress body comes from `fix_budget.py
-#      no-push`. Every answer but the two retries parks the card.
+#      turns, retried once), hold-turns, hold, retry-runner-lost (the
+#      machine was taken away, retried once per head), hold-runner-lost,
+#      or anything else, which is no progress. A lost machine needs all
+#      three facts: no result record (`fix_dead_run.py has-record`), an
+#      agent step that ended `failure` or `cancelled` (AGENT_STEP_OUTCOME),
+#      and the job's annotations naming it. Only that run reads them: this
+#      attempt's jobs on DISPATCH_TOKEN, the one whose `runner_name` is
+#      RUNNER_NAME, then its check run's annotations on GH_TOKEN. A read
+#      that fails is not a lost machine. The no-progress body comes from
+#      `fix_budget.py no-push`. Every answer but the three retries parks
+#      the card.
 #    - The head moved: it posts `fix-attempt-landed`, worded as a fix
 #      attempt or, in conflict mode, a conflict resolution round. In fix
 #      mode the round's convergence classification from
@@ -97,6 +105,9 @@ set -e
 #   MODE             `fix` or `conflict`
 #   EXEC_FILE        the agent's execution record (default: the runner's
 #                    claude-execution-output.json)
+#   AGENT_STEP_OUTCOME  how the agent step ended (`steps.claude.outcome`):
+#                    with no record, `failure` or `cancelled` is one of the
+#                    three facts of a lost machine
 #   RUN_URL          this run's URL, named in the dead-run and no-push
 #                    bodies
 #   RUN_ID           this run's id, the run the delivery follow-up downloads
@@ -110,7 +121,8 @@ set -e
 #   RESCUE_PUSH_STATUS  GitHub's HTTP status on the refused push
 #   RESCUE_ERROR     GitHub's words on it, one line
 #   RESCUE_TARGET_BRANCH  the pull request's branch the patch belongs on
-# RUNNER_TEMP, which the runner sets, holds the handoff.
+# RUNNER_TEMP, which the runner sets, holds the handoff. GITHUB_RUN_ATTEMPT
+# and RUNNER_NAME, which it also sets, find this job among the attempt's jobs.
 #
 # Incident history
 #
@@ -245,6 +257,18 @@ set -e
 #   once per head; the marker says so rather than asking for a hand restart.
 #   The overtaken line says only that the branch differs from the run's
 #   commit, never who moved it: the run's own earlier push looks the same.
+# 2026-10-09, DRE-6572, DRE-6556. A machine taken away is not a failed fix.
+#   Twelve minutes into run 38025638252 AWS reclaimed the Spot machine. The
+#   agent step ended `failure` with no result file, and the Report read "no
+#   result" as "ran and changed nothing": "pushed no new commit … Escalating
+#   to a human", and DRE-6556 went to Triage. A second fix run on the same
+#   commit said no person was needed fifteen minutes later. Now no record,
+#   an unfinished agent step and the job's own words retry once per head
+#   with a `fix-run-runner-lost` marker, which the sweep re-dispatches on
+#   after ten minutes, so RunsOn's own retry gets there first. Short of all
+#   three facts the run escalates as before, and the log says which fact was
+#   missing. Neither new line says "pushed no new commit", which the
+#   convergence halt counts.
 
 # Every read and comment belongs to this (repo, PR, head) or nothing posts (DRE-3951).
 handoff() { CMD=$1; shift; python3 .bureau-pipeline/scripts/fix_handoff.py \
@@ -589,8 +613,33 @@ else
     gh api --paginate --slurp \
       "repos/$REPO/issues/$PR/comments?per_page=100" \
       > "$COMMENTS_JSON" || echo '[]' > "$COMMENTS_JSON"
+    # A lost machine's third fact, read only with no record and an unfinished
+    # agent step; an empty file is an unread one, never "no annotations" (DRE-6572).
+    ANNOTATIONS_JSON=$(mktemp)
+    if [ "$(python3 .bureau-pipeline/scripts/fix_dead_run.py has-record "$EXEC_FILE" || true)" = "no" ]; then
+      case "${AGENT_STEP_OUTCOME:-}" in
+        failure|cancelled)
+          # The jobs listing on the workflow's own token: the App token holds no Actions permission (DRE-1254).
+          JOBS_JSON=$(mktemp)
+          GH_TOKEN="$DISPATCH_TOKEN" gh api \
+            "repos/$REPO/actions/runs/$RUN_ID/attempts/${GITHUB_RUN_ATTEMPT:-1}/jobs?per_page=100" \
+            > "$JOBS_JSON" 2>/dev/null || : > "$JOBS_JSON"
+          JOB_ID=$(jq -r --arg name "${RUNNER_NAME:-}" \
+            'first(.jobs[] | select(.runner_name == $name) | .id) // empty' \
+            < "$JOBS_JSON" 2>/dev/null || true)
+          if [ -n "$JOB_ID" ]; then
+            gh api "repos/$REPO/check-runs/$JOB_ID/annotations?per_page=100" \
+              > "$ANNOTATIONS_JSON" 2>/dev/null || : > "$ANNOTATIONS_JSON"
+          else
+            echo "lost machine: this job was not found among attempt ${GITHUB_RUN_ATTEMPT:-1}'s jobs — its annotations could not be read"
+          fi
+          ;;
+      esac
+    fi
     DECISION=$(python3 .bureau-pipeline/scripts/fix_dead_run.py decide \
-      "$EXEC_FILE" --comments-json "$COMMENTS_JSON" --run-url "$RUN_URL")
+      "$EXEC_FILE" --comments-json "$COMMENTS_JSON" --run-url "$RUN_URL" \
+      --head "$POST_SHA" --agent-step-outcome "${AGENT_STEP_OUTCOME:-}" \
+      --annotations-json "$ANNOTATIONS_JSON")
     ACTION=$(printf '%s\n' "$DECISION" | head -1)
     BODY=$(printf '%s\n' "$DECISION" | tail -n +3)
     if [ "$ACTION" = "retry" ]; then
@@ -622,6 +671,27 @@ $ANSWERS"
       if [ -n "$CARD" ]; then
         python3 .bureau-pipeline/scripts/linear_ops.py comment "$CARD" \
           "🙋 Two fix runs in a row ran out of steps on this PR before finishing — both did real work and hit their step limit. That means the remaining fix is too big for one sitting, so it needs breaking into smaller pieces rather than another retry. This needs your look. Details on PR #$PR. Move it to **Todo** to try again anyway, or to **Backlog** to drop it." || true
+      fi
+      park_for_human
+    elif [ "$ACTION" = "retry-runner-lost" ]; then
+      # The machine was taken away, not a failed fix: one retry per head (DRE-6572).
+      gh pr comment "$PR" --repo $REPO --body "$BODY
+
+$ANSWERS"
+      if [ -n "$CARD" ]; then
+        python3 .bureau-pipeline/scripts/linear_ops.py comment "$CARD" \
+          "🤖 The last fix run's machine was taken away by the cloud provider before the agent finished — nothing is wrong with the work. The pipeline retries once automatically; no action needed." || true
+      fi
+    elif [ "$ACTION" = "hold-runner-lost" ]; then
+      # The second lost machine in a row on this head: a person decides, not a third run.
+      gh pr comment "$PR" --repo $REPO --body "$BODY
+
+$FORMAT
+
+$ANSWERS"
+      if [ -n "$CARD" ]; then
+        python3 .bureau-pipeline/scripts/linear_ops.py comment "$CARD" \
+          "🙋 Two fix runs in a row on PR #$PR lost their machine before the agent finished — the work itself has not failed. The pipeline is holding for a person rather than starting another run on the same commit. Move this card to **Todo** to try again, or to **Backlog** to drop it." || true
       fi
       park_for_human
     elif [ "$ACTION" = "hold" ]; then
