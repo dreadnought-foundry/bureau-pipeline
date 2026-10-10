@@ -642,6 +642,22 @@ healthy run. And it carries the console's `groups`, `ungrouped`, `about` and
 `projects` (DRE-6633), so the degrade path gives the same answer as a healthy
 checkout.
 
+The third target is a whole generated file, `config/model-choices.json`
+(DRE-6635) — what the console's Settings › Agents & models page reads instead
+of parsing this file and re-deriving the policy: every model with a declared
+price in `model-prices.yaml` (label, price, and its `excluded` reason or
+`null`), one group per kind with its ladder and a choice per model, every agent
+with a move per other kind, and the per-project exceptions. Every `allowed` and
+`reason` is `model_fallback.policy_errors`' answer on a copy of this file
+carrying that one option as a real entry — a project exception under
+`projects`, an agent moved under `agents` — so the page is read off the same
+gate a pull request meets. A missing or stale file is `STALE` under `--check`,
+exactly like the two mirrors; `tests/test_model_choices.py` pins its content
+and recomputes every verdict through a real repo slug. The daily
+`.github/workflows/model-adoption.yml` is a writer too: it runs the generator
+after it applies an adoption and stages `config/model-choices.json` beside
+`config/models.yaml`, `agents.yaml` and `scripts/model_fallback.py`.
+
 ## The effort level (DRE-4836)
 
 `models.yaml` carries an `effort:` block — model id → the level every run on
