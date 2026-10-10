@@ -263,7 +263,7 @@ class CheckTest(unittest.TestCase):
         trees.write("cloud/x/test_import_breaks.py", (
             "import json, os\n"
             "P = os.path.join(os.environ['BUREAU_PIPELINE_DIR'], 'config/routing-verdicts.json')\n"
-            "assert 'operator-step' not in open(P).read()\n"
+            "assert all('operator-step' not in v['marks'] for v in json.load(open(P))['verdicts'])\n"
             "def test_never_reached():\n"
             "    pass\n"
         ))
@@ -283,9 +283,12 @@ class CheckTest(unittest.TestCase):
     def test_the_checkouts_are_put_back_after_the_re_read(self):
         trees = _Trees(self)
         trees.check()
-        verdicts = (trees.candidate / VERDICTS).read_text()
-        self.assertIn("operator-step", verdicts)
-        self.assertNotIn("operator-step", (trees.stable / VERDICTS).read_text())
+        def operator_marks(tree):
+            verdicts = json.loads((tree / VERDICTS).read_text())["verdicts"]
+            return [v["marks"] for v in verdicts if v["name"] == "OPERATOR"][0]
+
+        self.assertIn("operator-step", operator_marks(trees.candidate))
+        self.assertIn("hand-built", operator_marks(trees.stable))
 
     # --- a check that could not run is never a failing candidate ---------- #
 

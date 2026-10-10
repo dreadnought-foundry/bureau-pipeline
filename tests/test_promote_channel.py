@@ -529,6 +529,13 @@ class MirrorCliTest(unittest.TestCase):
         self.assertIn("promote=true", written)
         self.assertIn(f"outcome={promote_channel.OUTCOME_PROMOTING}", written)
 
+    def test_a_run_the_proof_refused_says_nothing_about_the_check(self):
+        """It never ran there, and that is the ordinary case — not a blocked
+        check for the receipt to report."""
+        written = self._run(MIRROR_FAILED, extra=["--hold", "who=Ada paused"])
+        self.assertIn(f"outcome={promote_channel.OUTCOME_HELD}", written)
+        self.assertNotIn("mirror=", written)
+
     def test_every_output_is_one_line(self):
         written = self._run(MIRROR_FAILED)
         keys = [l.split("=", 1)[0] for l in written.strip().splitlines()]
