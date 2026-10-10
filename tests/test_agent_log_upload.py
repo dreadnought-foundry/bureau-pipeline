@@ -18,6 +18,10 @@ WHAT THIS FILE PINS, and why each half is here:
     after the last model step, no `${{ }}` in the body (the 21,000-character
     expression ceiling, DRE-3484) — and the run's own `effort_arg` handed to
     the upload, on every job but those `EFFORT_PENDING` names (DRE-5356).
+  * THE SECRETS, BY NAME (DRE-4391): each step passes exactly the secrets its
+    own file references as `SCRUB_<NAME>`, derived from the file at test time,
+    and no workflow expands `toJSON(secrets)` — whose keys, printed in the
+    step's `env:` group, were every secret name a public repo holds.
   * THE BEHAVIOUR of `scripts/upload_agent_log.py`, executed for real against
     stub `aws` and a stub OIDC endpoint: no upload without a successful scrub,
     one single-part `put-object` carrying `If-None-Match`, the key under the
@@ -302,6 +306,131 @@ class StepShapeTest(unittest.TestCase):
             hits.extend(f"{path.name}: …{text[max(0, m.start() - 40):m.end() + 40]}…"
                         for m in stale.finditer(text))
         self.assertEqual([], hits, "\n".join(hits))
+
+
+#: The prefix every upload step names its secrets under, and the uploader's
+#: `--secrets-env-prefix` reads (DRE-4391). One spelling, in all eight files.
+SCRUB_PREFIX = "SCRUB_"
+
+#: `toJSON(secrets)`, however it is spaced. Its keys are the repo's whole secret
+#: inventory, and the step's `env:` group prints them in a public repo's log.
+WHOLE_INVENTORY = re.compile(r"toJSON\(\s*secrets\s*\)")
+
+#: An expression, and a secret named inside one.
+EXPRESSION = re.compile(r"\$\{\{(.*?)\}\}", re.S)
+SECRET_REF = re.compile(r"\bsecrets\.([A-Za-z_][A-Za-z0-9_]*)")
+
+
+def _strings(node):
+    """Every string in a parsed workflow, keys included. Comments are gone
+    after parsing, so a secret a comment mentions is not a reference."""
+    if isinstance(node, str):
+        yield node
+    elif isinstance(node, dict):
+        for key, value in node.items():
+            yield from _strings(key)
+            yield from _strings(value)
+    elif isinstance(node, list):
+        for value in node:
+            yield from _strings(value)
+
+
+def _without_upload_steps(node):
+    """The document minus the upload step itself, whose `SCRUB_` lines would
+    otherwise count as the file referencing the very names they pass."""
+    if isinstance(node, dict):
+        return {key: _without_upload_steps(value) for key, value in node.items()}
+    if isinstance(node, list):
+        return [_without_upload_steps(value) for value in node
+                if not (isinstance(value, dict)
+                        and UPLOAD_CALL in str(value.get("run") or ""))]
+    return node
+
+
+def _referenced_secrets(filename):
+    """Every NAME in a `${{ … secrets.NAME … }}` expression anywhere in the
+    file outside the upload step, plus GITHUB_TOKEN: `actions/checkout` writes
+    that token into the repo's git config whether or not the file names it.
+    Derived from the file at test time — never a list."""
+    doc = yaml.safe_load((WORKFLOWS / filename).read_text())
+    names = {"GITHUB_TOKEN"}
+    for text in _strings(_without_upload_steps(doc)):
+        for expression in EXPRESSION.findall(text):
+            names |= set(SECRET_REF.findall(expression))
+    return names
+
+
+class SecretInventoryTest(unittest.TestCase):
+    """DRE-4391. The upload step's `env:` group is printed in the run log. A
+    secret's VALUE is masked there and its NAME is not, so the step passes
+    only the secrets its own file names — names already public in the file —
+    and never one JSON value holding every secret the repo has."""
+
+    def test_no_workflow_builds_the_whole_secret_inventory(self):
+        for path in sorted(WORKFLOWS.glob("*.yml")):
+            with self.subTest(workflow=path.name):
+                self.assertIsNone(
+                    WHOLE_INVENTORY.search(path.read_text()),
+                    f"{path.name} expands `toJSON(secrets)` — its keys are every "
+                    f"secret the repo holds, and an `env:` group prints them",
+                )
+
+    def test_the_step_passes_each_secret_by_name_under_the_prefix(self):
+        for mj in _uploading_jobs():
+            with self.subTest(workflow=mj.filename, job=mj.job):
+                env = _upload_steps(mj)[0].get("env") or {}
+                prefixed = {k: str(v) for k, v in env.items()
+                            if str(k).startswith(SCRUB_PREFIX)}
+                self.assertTrue(prefixed, f"{mj.filename} [{mj.job}]: the upload "
+                                          f"step passes no `{SCRUB_PREFIX}*` secret")
+                for key, value in prefixed.items():
+                    name = key[len(SCRUB_PREFIX):]
+                    expected = ("${{ github.token }}" if name == "GITHUB_TOKEN"
+                                else f"${{{{ secrets.{name} }}}}")
+                    self.assertEqual(
+                        value, expected,
+                        f"{mj.filename} [{mj.job}]: `{key}` must be exactly "
+                        f"`{expected}`, so the name it prints is the name it reads",
+                    )
+                for key, value in env.items():
+                    if str(key).startswith(SCRUB_PREFIX):
+                        continue
+                    self.assertNotRegex(
+                        str(value), r"\bsecrets\b",
+                        f"{mj.filename} [{mj.job}]: `{key}` hands the upload a "
+                        f"secret outside the `{SCRUB_PREFIX}` entries",
+                    )
+
+    def test_the_step_scrubs_every_secret_its_file_references(self):
+        """A secret added to a workflow later without a `SCRUB_` line fails
+        here, rather than quietly going unscrubbed; a `SCRUB_` line for a
+        secret the file never uses fails here too, because its name is one the
+        log would print and the file does not."""
+        for mj in _uploading_jobs():
+            with self.subTest(workflow=mj.filename, job=mj.job):
+                env = _upload_steps(mj)[0].get("env") or {}
+                passed = {str(k)[len(SCRUB_PREFIX):] for k in env
+                          if str(k).startswith(SCRUB_PREFIX)}
+                referenced = _referenced_secrets(mj.filename)
+                self.assertGreater(len(referenced), 1,
+                                   "the derivation found no secrets at all")
+                self.assertEqual(
+                    passed, referenced,
+                    f"{mj.filename} [{mj.job}]: missing "
+                    f"{sorted(referenced - passed)}, extra "
+                    f"{sorted(passed - referenced)}",
+                )
+
+    def test_the_upload_call_reads_the_prefixed_environment(self):
+        for mj in _uploading_jobs():
+            with self.subTest(workflow=mj.filename, job=mj.job):
+                run = str(_upload_steps(mj)[0].get("run") or "")
+                call = run[run.index(UPLOAD_CALL):]
+                self.assertRegex(
+                    call, rf"--secrets-env-prefix\s+{SCRUB_PREFIX}(\s|$)",
+                    f"{mj.filename} [{mj.job}]: the `{UPLOAD_CALL}` call must "
+                    f"pass `--secrets-env-prefix {SCRUB_PREFIX}`",
+                )
 
 
 class NeverAnArtifactTest(unittest.TestCase):
@@ -710,6 +839,121 @@ class UploaderBehaviourTest(unittest.TestCase):
         result = self._run(secrets="")
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(self._calls(), [])
+
+    # ---- secrets by name, from the step's own `env:` (DRE-4391) ---------
+    # The workflows pass each secret they reference as `SCRUB_<NAME>`, so the
+    # step's printed `env:` group names only what the file already names. The
+    # uploader assembles the scrub's JSON from those variables itself.
+
+    def _run_prefixed(self, env_secrets, stdin=""):
+        env = self._env(**env_secrets)
+        return self._run(env=env, secrets=stdin,
+                         extra=["--secrets-env-prefix", SCRUB_PREFIX])
+
+    def _uploaded_text(self):
+        call = self._calls()[0]
+        body = [Path(t) for t in call.split()
+                if t.endswith(".json.gz") and Path(t).exists()]
+        self.assertTrue(body, f"no readable --body path in: {call}")
+        return gzip.decompress(body[0].read_bytes()).decode()
+
+    def test_the_prefixed_environment_is_what_the_scrub_redacts(self):
+        result = self._run_prefixed({"SCRUB_BUREAU_TOKEN": self.SECRET})
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(len(self._calls()), 1, result.stdout)
+        text = self._uploaded_text()
+        self.assertNotIn(self.SECRET, text)
+        # Labeled by the bare name: the prefix was stripped before the scrub.
+        self.assertIn("«redacted:BUREAU_TOKEN»", text)
+        self.assertNotIn("SCRUB_BUREAU_TOKEN", text)
+        self.assertIn('"BUREAU_TOKEN"', result.stdout,
+                      "the scrub's summary should count the bare name")
+
+    def test_a_multi_line_value_is_carried_whole(self):
+        """A private key is the commonest secret here, and it has newlines."""
+        key = ("-----BEGIN RSA PRIVATE KEY-----\n" + "Q" * 64 + "\n"
+               + "R" * 64 + "\n-----END RSA PRIVATE KEY-----")
+        self.log.write_text(json.dumps([{"text": f"key was {key} ok",
+                                         "body": "PLANTED-LOG-BODY"}]))
+        result = self._run_prefixed({"SCRUB_BUREAU_APP_PRIVATE_KEY": key})
+        self.assertEqual(result.returncode, 0, result.stderr)
+        text = self._uploaded_text()
+        self.assertNotIn("Q" * 64, text)
+        self.assertIn("«redacted:BUREAU_APP_PRIVATE_KEY»", text)
+
+    def test_only_the_prefixed_variables_are_read_as_secrets(self):
+        """stdin is not consulted once the prefix is given, and a variable
+        without the prefix is not a secret."""
+        on_stdin = "stdin-only-value-0123456789"
+        unprefixed = "unprefixed-value-0123456789"
+        self.log.write_text(json.dumps(
+            [{"a": self.SECRET, "b": on_stdin, "c": unprefixed}]))
+        result = self._run_prefixed(
+            {"SCRUB_BUREAU_TOKEN": self.SECRET, "BUREAU_OTHER": unprefixed},
+            stdin=json.dumps({"FROM_STDIN": on_stdin}))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        text = self._uploaded_text()
+        self.assertIn("«redacted:BUREAU_TOKEN»", text)
+        self.assertIn(on_stdin, text)
+        self.assertIn(unprefixed, text)
+        self.assertNotIn("FROM_STDIN", result.stdout)
+        self.assertNotIn("BUREAU_OTHER", result.stdout)
+
+    def test_no_secret_value_is_ever_on_a_command_line(self):
+        """Every process the uploader starts is recorded through Python's own
+        `subprocess.Popen` audit event, and the stub `aws` records its argv:
+        the value is on none of them, because it reaches the scrub on stdin."""
+        hook = self.tmp / "audit"
+        hook.mkdir()
+        argv_log = self.tmp / "argv.txt"
+        (hook / "sitecustomize.py").write_text(
+            "import sys, json\n"
+            "def _hook(event, args):\n"
+            "    if event == 'subprocess.Popen':\n"
+            f"        with open({str(argv_log)!r}, 'a') as h:\n"
+            "            h.write(json.dumps([str(a) for a in args[1]]) + '\\n')\n"
+            "sys.addaudithook(_hook)\n")
+        env = self._env(SCRUB_BUREAU_TOKEN=self.SECRET, PYTHONPATH=str(hook))
+        result = self._run(env=env, secrets="",
+                           extra=["--secrets-env-prefix", SCRUB_PREFIX])
+        self.assertEqual(result.returncode, 0, result.stderr)
+        recorded = argv_log.read_text()
+        self.assertIn("scrub_agent_log.py", recorded,
+                      "the audit hook saw no scrub call — the check is vacuous")
+        self.assertIn("put-object", recorded)
+        self.assertNotIn(self.SECRET, recorded)
+        self.assertNotIn(self.SECRET, "\n".join(self._calls()))
+        self.assertNotIn(self.SECRET, result.stdout + result.stderr)
+
+    def test_no_prefixed_variable_is_a_loud_gap_and_uploads_nothing(self):
+        """In a workflow that references secrets, an empty set means the step
+        is miswired — never "this job held no secrets". Valid JSON on stdin
+        does not stand in for it."""
+        result = self._run_prefixed(
+            {}, stdin=json.dumps({"BUREAU_TOKEN": self.SECRET}))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self._calls(), [])
+        self.assertIn("::warning title=Agent working log not kept::",
+                      result.stdout)
+        self.assertIn(SCRUB_PREFIX, result.stdout)
+
+    def test_no_prefixed_variable_is_loud_even_with_no_log(self):
+        """The miswiring is the step's, whatever the run did."""
+        result = self._run(log=self.tmp / "nothing-here.json", secrets="",
+                           extra=["--secrets-env-prefix", SCRUB_PREFIX])
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("::warning title=Agent working log not kept::",
+                      result.stdout)
+
+    def test_an_empty_prefix_is_a_loud_gap(self):
+        """An empty prefix matches the whole environment, which is not a list
+        of secrets."""
+        result = self._run(env=self._env(SCRUB_BUREAU_TOKEN=self.SECRET),
+                           secrets="", extra=["--secrets-env-prefix", ""])
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self._calls(), [])
+        self.assertIn("::warning title=Agent working log not kept::",
+                      result.stdout)
 
 
 if __name__ == "__main__":

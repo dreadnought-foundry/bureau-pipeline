@@ -1714,8 +1714,16 @@ jobs:
       # not have one), a log over the single-part cap — is recorded as a GAP
       # on the run instead.
       #
-      # The job's secrets arrive on STDIN, so the scrub can redact each one by
-      # value; never as an argument, which would reach the process table. The
+      # The job's secrets reach the scrub on STDIN, so it can redact each one
+      # by value; never as an argument, which would reach the process table.
+      # They are passed ONE BY ONE as `SCRUB_<NAME>` — every secret this file
+      # references, plus the `github.token` the checkout writes into git
+      # config — and never as the whole `secrets` context in one JSON value:
+      # GitHub masks the values in the printed `env:` group but not that
+      # value's keys, so it printed the name of every secret the repo holds
+      # into public logs (DRE-4391). A secret added to this file needs its
+      # line here, and tests/test_agent_log_upload.py fails until it has
+      # one. The
       # calling stub grants `id-token: write` (DRE-4348); this file declares no
       # `permissions:` block, because a called job asking for more than its
       # caller granted fails the whole run at startup. Every `${{ }}` is in
@@ -1730,12 +1738,24 @@ jobs:
         env:
           CLAUDE_EXECUTION_FILE: ${{ steps.claude.outputs.execution_file }}
           EFFORT_ARG: ${{ steps.model.outputs.effort_arg }}
-          SECRETS_JSON: ${{ toJSON(secrets) }}
+          SCRUB_GITHUB_TOKEN: ${{ github.token }}
+          SCRUB_ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          SCRUB_BUREAU_APP_ID: ${{ secrets.BUREAU_APP_ID }}
+          SCRUB_BUREAU_APP_ID_2: ${{ secrets.BUREAU_APP_ID_2 }}
+          SCRUB_BUREAU_APP_ID_3: ${{ secrets.BUREAU_APP_ID_3 }}
+          SCRUB_BUREAU_APP_ID_4: ${{ secrets.BUREAU_APP_ID_4 }}
+          SCRUB_BUREAU_APP_PRIVATE_KEY: ${{ secrets.BUREAU_APP_PRIVATE_KEY }}
+          SCRUB_BUREAU_APP_PRIVATE_KEY_2: ${{ secrets.BUREAU_APP_PRIVATE_KEY_2 }}
+          SCRUB_BUREAU_APP_PRIVATE_KEY_3: ${{ secrets.BUREAU_APP_PRIVATE_KEY_3 }}
+          SCRUB_BUREAU_APP_PRIVATE_KEY_4: ${{ secrets.BUREAU_APP_PRIVATE_KEY_4 }}
+          SCRUB_CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          SCRUB_LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+          SCRUB_LINEAR_PLANNER_KEY: ${{ secrets.LINEAR_PLANNER_KEY }}
         run: |
           EXEC_FILE="${CLAUDE_EXECUTION_FILE:-${RUNNER_TEMP:-/tmp}/claude-execution-output.json}"
-          printf '%s' "$SECRETS_JSON" \
-            | python3 .bureau-pipeline/scripts/upload_agent_log.py \
-                --log-file "$EXEC_FILE" $EFFORT_ARG || true
+          python3 .bureau-pipeline/scripts/upload_agent_log.py \
+              --secrets-env-prefix SCRUB_ \
+              --log-file "$EXEC_FILE" $EFFORT_ARG || true
 
       # ---- DELIVER WHAT THE FIX AGENT COMMITTED (DRE-6350) ----
       # The token minted at the top of this job dies at sixty minutes, and

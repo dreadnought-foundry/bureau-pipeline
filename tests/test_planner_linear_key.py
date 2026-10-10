@@ -108,12 +108,22 @@ def test_every_such_step_carries_the_fleet_key_as_its_fallback():
     assert not missing, f"steps with no fleet fallback for a dead token: {missing[:5]}"
 
 
+# The one other place the token's VALUE may go: the agent-log upload step,
+# which redacts every secret its file references by value (DRE-4391,
+# tests/test_agent_log_upload.py). It spends nothing, so it is no reader.
+SCRUB_LINE = "SCRUB_LINEAR_PLANNER_KEY: ${{ secrets.LINEAR_PLANNER_KEY }}"
+
+
 def test_no_step_reads_the_planner_key_under_any_other_name():
     """The planner key reaches a process only as the primary; anywhere else it
-    would be a copy nothing falls back from."""
+    would be a copy nothing falls back from. The scrub's line is the one
+    exception, held to exactly one."""
     code = [line for line in PLAN.read_text(encoding="utf-8").splitlines()
             if not line.lstrip().startswith("#")]
-    uses = sum(line.count("secrets.LINEAR_PLANNER_KEY") for line in code)
+    scrubs = [line for line in code if line.strip() == SCRUB_LINE]
+    assert len(scrubs) == 1, len(scrubs)
+    uses = sum(line.count("secrets.LINEAR_PLANNER_KEY") for line in code
+               if line.strip() != SCRUB_LINE)
     assert uses == len(_key_steps(_plan())), uses
 
 
