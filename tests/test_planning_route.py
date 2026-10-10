@@ -434,13 +434,23 @@ class _Card:
     """
 
     def __init__(self, comments, *, description: str = ONE_OFF_BODY,
-                 labels=ONE_OFF_LABELS, lane: str = "Planning"):
+                 labels=ONE_OFF_LABELS, lane: str = "Planning",
+                 blocked_by=(), has_children: bool = False, history=(),
+                 relations_fail: bool = False, history_fail: bool = False):
         self.comments = list(comments)
         self.description = description
         self.labels = list(labels)
         #: Where the board says the card is — the escalation re-reads this
         #: before it parks (DRE-3654).
         self.lane = lane
+        #: What an epic's wait reads (DRE-6651): its formal blockers as
+        #: `{"identifier", "state"}` rows, whether it has children, and its
+        #: lane history newest first — and whether either read fails.
+        self.blocked_by = [dict(row) for row in blocked_by]
+        self.has_children = has_children
+        self.history = [dict(row) for row in history]
+        self.relations_fail = relations_fail
+        self.history_fail = history_fail
         self.posted: list[tuple[str, str]] = []
         self.labelled: list[tuple[str, str]] = []
         self.states: list[tuple[str, str]] = []
@@ -466,6 +476,33 @@ class _Card:
                 "children": {"nodes": []},
             }
 
+        def gql(query, variables=None, **kw):
+            # The one single-issue read the epic wait makes (DRE-6651): its
+            # formal relations with their states, and whether it has children.
+            # Anything else is a read nothing here expected.
+            if "inverseRelations" not in query:
+                raise AssertionError(f"an unstubbed Linear read: {query[:80]!r}")
+            if self.relations_fail:
+                raise linear_ops.LinearError("Linear is down")
+            return {"issue": {
+                "identifier": (variables or {}).get("id"),
+                "children": {"nodes": [{"id": "child"}] if self.has_children else []},
+                "inverseRelations": {
+                    "pageInfo": {"hasNextPage": False},
+                    "nodes": [
+                        {"type": "blocks", "issue": {
+                            "identifier": row["identifier"],
+                            "state": {"name": row["state"]}}}
+                        for row in self.blocked_by
+                    ],
+                },
+            }}
+
+        def history(identifier, **kw):
+            if self.history_fail:
+                raise linear_ops.LinearError("Linear is down")
+            return list(self.history)
+
         with patch.object(
             linear_ops, "comment_bodies",
             side_effect=lambda i, **_kw: list(self.comments)
@@ -487,8 +524,11 @@ class _Card:
         ), patch.object(
             # The escalation reads it too, once a note is on the thread, to
             # tell this attempt's note from a spent one (DRE-6490) — the same
-            # card, never moved INTO Planning, so no attempt opens there.
-            linear_ops, "lane_history", side_effect=lambda i, **_kw: [],
+            # card, never moved INTO Planning, so no attempt opens there. The
+            # epic wait reads it for an earlier green light (DRE-6651).
+            linear_ops, "lane_history", side_effect=history,
+        ), patch.object(
+            linear_ops, "gql", side_effect=gql,
         ), patch.object(
             linear_ops, "cmd_comment", side_effect=post
         ), patch.object(
@@ -1114,3 +1154,265 @@ class TestAPersonsCardIsRoutedBeforeTheCritic:
         assert card.run(lambda: planning_route.main(["exit", CARD])) == 0
         assert routing_verdict.verdict_on([b for _, b in card.posted]) == "OPERATOR"
         assert card.states == [(CARD, planning_shape.destination("one-off"))]
+
+
+# ===========================================================================
+# DRE-6651: an epic still to be planned whose formal blocker is open waits in
+# Backlog instead of asking the CEO
+# ===========================================================================
+#
+# DRE-6589 reached Planning blocked by DRE-6587 (In Progress), the planner
+# could only ask "wait, or plan now?", and the CEO answered a question the
+# board already held the answer to. `decide` reads the relation, the children
+# and the lane history beside the shape and says `wait`; `plan.yml` posts the
+# receipt, moves the epic to Backlog and dispatches no planner.
+REPLAY = ROOT / "tests" / "fixtures" / "green-light-2026-10-10" / "dre-6589.json"
+REPLAY_KEYS = {"card", "arrival", "for", "as_of", "lane", "labels", "comments"}
+#: The `Route — plan or activate` gate at `main` before this card.
+ROUTE_GATE = (
+    "steps.gate.outputs.bounced != 'true' && steps.dedupe.outputs.skip != 'true' "
+    "&& steps.slot.outputs.admitted == 'true' && steps.shape.outputs.route == 'epic'"
+)
+#: The `decide` step's gate, which `planning_escalation.workflow_problems`
+#: reads: unchanged by this card.
+DECIDE_GATE = (
+    "steps.gate.outputs.bounced != 'true' && steps.dedupe.outputs.skip != 'true' "
+    "&& steps.slot.outputs.admitted == 'true' && steps.classify.outputs.escalate != 'true' "
+    "&& steps.classify.outputs.requeue != 'true'"
+)
+WAIT_STEP = "Epic waits on its blocker — Backlog, no planner"
+WAIT_GATE = "steps.shape.outputs.route == 'epic' && steps.shape.outputs.wait == 'true'"
+WAIT_ACT = "epic-waits-on-blocker"
+
+
+def _replay() -> dict:
+    return json.loads(REPLAY.read_text(encoding="utf-8"))
+
+
+def _replayed(tmp_path, capsys, **overrides) -> tuple:
+    """DRE-6589 as `decide` read it, with Linear answering the fixture's
+    relations, children and history — `overrides` changes any of them."""
+    doc = _replay()
+    relations = doc["relations"]
+    kw = {
+        "blocked_by": relations["blocked_by"],
+        "has_children": relations["has_children"],
+        "history": relations["history"],
+        "labels": doc["labels"],
+        "lane": doc["lane"],
+    }
+    kw.update(overrides)
+    card = _Card([c["body"] for c in doc["comments"]], **kw)
+    out = tmp_path / "out.txt"
+    capsys.readouterr()
+    assert card.run(
+        lambda: planning_route.main(["decide", doc["card"], "--github-output", str(out)])
+    ) == 0
+    said = capsys.readouterr()
+    written = dict(line.split("=", 1) for line in out.read_text().splitlines() if line)
+    return written, said.out + said.err, card
+
+
+class TestTheReplayFixture:
+    def test_the_fixture_carries_the_shared_contract_and_the_relations_extra(self):
+        doc = _replay()
+        assert REPLAY_KEYS <= set(doc)
+        assert doc["card"] == "DRE-6589"
+        assert doc["arrival"] == "blocked-epic"
+        assert doc["for"] == "planner"
+        assert doc["lane"] == "Planning"
+        assert doc["as_of"].endswith("Z")
+        for row in doc["comments"]:
+            assert set(row) == {"body", "authored_by_pipeline", "created_at"}
+            assert row["created_at"] <= doc["as_of"]
+        relations = doc["relations"]
+        assert relations["parent"] == "DRE-6585"
+        assert relations["has_children"] is False
+        assert relations["blocked_by"] == [{"identifier": "DRE-6587", "state": "In Progress"}]
+        assert isinstance(relations["history"], list)
+        assert not [row for row in relations["history"]
+                    if (row.get("toState") or {}).get("name") == "In Progress"]
+        assert planning_shape.shape_on([c["body"] for c in doc["comments"]]) == "epic"
+
+
+class TestABlockedEpicWaits:
+    def test_dre_6589_waits_on_dre_6587(self, tmp_path, capsys):
+        written, said, card = _replayed(tmp_path, capsys)
+        assert written["route"] == "epic"
+        assert written["wait"] == "true"
+        assert written["waits_on"] == "DRE-6587 (In Progress)"
+        assert "DRE-6587 (In Progress)" in said
+        assert card.posted == [] and card.states == [], (
+            "decide reads; plan.yml's wait step is the writer"
+        )
+
+    def test_the_same_epic_is_planned_once_its_blocker_is_done(self, tmp_path, capsys):
+        written, _, _ = _replayed(
+            tmp_path, capsys,
+            blocked_by=[{"identifier": "DRE-6587", "state": "Done"}])
+        assert written["route"] == "epic"
+        assert written["wait"] == "false"
+        assert written["waits_on"] == ""
+
+    @pytest.mark.parametrize("state", ["Canceled", "Duplicate"])
+    def test_every_terminal_blocker_is_met(self, tmp_path, capsys, state):
+        written, _, _ = _replayed(
+            tmp_path, capsys,
+            blocked_by=[{"identifier": "DRE-6587", "state": state}])
+        assert written["wait"] == "false"
+
+    def test_an_epic_with_no_blockers_is_planned(self, tmp_path, capsys):
+        written, _, _ = _replayed(tmp_path, capsys, blocked_by=[])
+        assert written["wait"] == "false"
+
+    def test_every_open_blocker_is_named_with_its_state(self, tmp_path, capsys):
+        written, _, _ = _replayed(tmp_path, capsys, blocked_by=[
+            {"identifier": "DRE-6587", "state": "In Progress"},
+            {"identifier": "DRE-6500", "state": "Done"},
+            {"identifier": "DRE-6401", "state": "Todo"},
+        ])
+        assert written["wait"] == "true"
+        assert written["waits_on"] == "DRE-6401 (Todo), DRE-6587 (In Progress)"
+
+    def test_an_amended_epic_with_children_and_a_green_light_is_not_held(self, tmp_path, capsys):
+        """DRE-6407 releases an approved epic at its blocker's build-done, and
+        `mid_epic.py discovery --kind amendment` sends exactly such an epic
+        back to Planning. Holding it in Backlog would park running work with
+        nothing to bring it back."""
+        history = [
+            {"createdAt": "2026-10-10T12:00:00.000Z", "toState": {"name": "Planning"}},
+            {"createdAt": "2026-10-09T08:00:00.000Z", "toState": {"name": "In Progress"}},
+            {"createdAt": "2026-10-08T08:00:00.000Z", "toState": {"name": "Green Light"}},
+        ]
+        written, said, _ = _replayed(tmp_path, capsys, has_children=True, history=history)
+        assert written["wait"] == "false"
+        assert written["waits_on"] == ""
+        assert "children" in said
+        assert "In Progress" in said and "green light" in said
+
+    def test_a_green_light_alone_is_enough_to_plan(self, tmp_path, capsys):
+        history = [{"createdAt": "2026-10-09T08:00:00.000Z", "toState": {"name": "In Progress"}}]
+        written, said, _ = _replayed(tmp_path, capsys, history=history)
+        assert written["wait"] == "false"
+        assert "green light" in said
+
+    def test_children_alone_are_enough_to_plan(self, tmp_path, capsys):
+        written, said, _ = _replayed(tmp_path, capsys, has_children=True)
+        assert written["wait"] == "false"
+        assert "children" in said
+
+    def test_a_history_read_that_fails_holds_nothing(self, tmp_path, capsys):
+        written, said, _ = _replayed(tmp_path, capsys, history_fail=True)
+        assert written["route"] == "epic"
+        assert written["wait"] == "false"
+        assert "history" in said and "Linear is down" in said
+
+    def test_a_relation_or_children_read_that_fails_holds_nothing(self, tmp_path, capsys):
+        written, said, _ = _replayed(tmp_path, capsys, relations_fail=True)
+        assert written["route"] == "epic"
+        assert written["wait"] == "false"
+        assert "relations" in said and "Linear is down" in said
+
+    def test_a_one_off_never_waits_and_reads_no_relations(self, tmp_path, capsys):
+        card = _Card([_stamp("one-off")], blocked_by=[
+            {"identifier": "DRE-6587", "state": "In Progress"}], relations_fail=True)
+        written = _decided(card, tmp_path)
+        assert written["route"] == "one-off"
+        assert written["wait"] == "false"
+
+
+def _gate(step: dict) -> str:
+    return " ".join(str(step.get("if") or "").split())
+
+
+class TestPlanYmlParksAWaitingEpic:
+    def test_the_wait_step_sits_between_the_shape_and_the_route(self):
+        assert _index("Planning shape") < _index(WAIT_STEP) < _index("Route — plan or activate")
+        assert _gate(_step(WAIT_STEP)) == WAIT_GATE
+
+    def test_the_wait_step_posts_the_receipt_then_moves_the_epic_to_backlog(self):
+        run = _step(WAIT_STEP)["run"]
+        assert f"--act={WAIT_ACT}" in run
+        assert "⏸️ epic-waits:" in run
+        assert "steps.shape.outputs.waits_on" in json.dumps(_step(WAIT_STEP))
+        assert 'linear_ops.py state "$EPIC" "Backlog"' in run
+        assert run.index(f"--act={WAIT_ACT}") < run.index('state "$EPIC" "Backlog"')
+        for absent in ("plan-cycle", "cycle-start", "open_attempt", "Plan heartbeat"):
+            assert absent not in run
+
+    def test_route_carries_the_one_new_clause(self):
+        assert _gate(_step("Route — plan or activate")) == (
+            ROUTE_GATE + " && steps.shape.outputs.wait != 'true'")
+
+    def test_the_decide_step_keeps_its_gate(self):
+        assert _gate(_step("Planning shape")) == DECIDE_GATE
+        import planning_escalation
+        assert planning_escalation.workflow_problems(WF.read_text(encoding="utf-8")) == []
+
+    def test_no_other_step_reads_the_wait(self):
+        readers = [s.get("name") for s in _steps()
+                   if "steps.shape.outputs.wait" in json.dumps(s)]
+        assert sorted(readers) == sorted([WAIT_STEP, "Route — plan or activate"])
+
+    def test_route_is_the_only_other_step_keyed_on_the_epic_shape(self):
+        keyed = [s.get("name") for s in _steps()
+                 if "steps.shape.outputs.route == 'epic'" in _gate(s)]
+        assert sorted(keyed) == sorted([WAIT_STEP, "Route — plan or activate"])
+
+    def test_every_mode_keyed_step_sits_behind_the_gated_route(self):
+        """No planner, no `plan-cycle: start`, no heartbeat, no critic: each of
+        them keys on `steps.route.outputs.mode`, which `Route` alone writes and
+        which is unset when the wait skips it."""
+        steps = _jobs()["plan"]["steps"]
+        route = _index("Route — plan or activate")
+        assert steps[route].get("id") == "route"
+        mode_keyed = [i for i, s in enumerate(steps)
+                      if "steps.route.outputs.mode" in _gate(s)]
+        assert mode_keyed and min(mode_keyed) > route
+        # The `plan-cycle: start` boundary is written by `Route`, or by a step
+        # keyed on the mode it writes.
+        writers = [s for s in steps if "cycle-start" in (s.get("run") or "")]
+        assert writers[0].get("id") == "route"
+        for step in writers[1:]:
+            assert "steps.route.outputs.mode" in _gate(step), step.get("name")
+        # Every planner and critic step keys on the mode, or on a shape the
+        # wait never reads (the one-off and roll-up routes, and the one-off
+        # critic's decision behind them).
+        for step in steps:
+            if str(step.get("uses", "")).startswith("anthropics/claude-code-action"):
+                gate = _gate(step)
+                assert ("steps.route.outputs.mode" in gate
+                        or "steps.shape.outputs.route == 'one-off'" in gate
+                        or "steps.shape.outputs.route == 'roll-up'" in gate
+                        or "steps.oneoff.outputs" in gate
+                        or "steps.oorevised.outputs" in gate
+                        or "steps.pre1.outputs" in gate
+                        or "steps.post1.outputs" in gate), step.get("name")
+        assert _gate(_step("Plan heartbeat")) == "steps.route.outputs.mode == 'plan'"
+
+    def test_the_planner_slot_is_still_claimed_before_and_released_always(self):
+        assert _index("Planner slot — claim or wait") < _index("Planning shape")
+        assert _index("Classify the card") < _index("Planning shape")
+        assert _gate(_step("Planner slot — release")) == (
+            "always() && steps.slot.outputs.admitted == 'true'")
+
+
+class TestTheWaitActIsDeclared:
+    def test_the_act_row_is_in_the_shape_of_epic_approval_queued(self):
+        acts = json.loads((ROOT / "config" / "pipeline-acts.json").read_text(encoding="utf-8"))
+        rows = [a for a in acts["acts"] if a["name"] == WAIT_ACT]
+        assert len(rows) == 1
+        row = rows[0]
+        assert row["tag"] == "epic-waits"
+        assert row["kind"] == "hold"
+        assert row["state"] == "held"
+        assert row["next_actor"] == "reconcile.py"
+        assert row["discharges"] is None
+        assert row["subscriber"] == "plan.yml"
+        assert row["cadence_s"] is None and row["cadence_why"].strip()
+        assert row["emits"]["file"] == ".github/workflows/plan.yml"
+        assert f"--act={WAIT_ACT}" in row["emits"]["anchor"]
+
+    def test_the_registry_checks_clean(self):
+        import pipeline_act
+        assert pipeline_act.problems() == []
