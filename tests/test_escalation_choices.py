@@ -124,6 +124,14 @@ class _Card:
             return fn()
 
 
+def _posted_note(identifier: str, reason, **kw) -> str:
+    """The note `escalate` posts here: today's render with the earlier-answer
+    block (DRE-6358) — the stub's thread is empty, so it says there is none."""
+    return planning_escalation.escalation_comment(
+        identifier, reason, prior_answer=planning_escalation.NO_PRIOR_ANSWER,
+        **kw)
+
+
 def _write(tmp_path: Path, block) -> str:
     path = tmp_path / "planner-escalation-choices.json"
     path.write_text(block if isinstance(block, str) else json.dumps(block),
@@ -149,8 +157,7 @@ class TestAValidAnswerAddsTheBlock:
         card = _escalate(tmp_path, _write(tmp_path, DRE_5260))
         assert len(card.posted) == 1
         body = card.posted[0]
-        today = planning_escalation.escalation_comment(CARD, REASON,
-                                                       choices=DRE_5260)
+        today = _posted_note(CARD, REASON, choices=DRE_5260)
         assert body.startswith(today)
         rest = body[len(today):]
         assert rest.startswith("\n\n```escalation-choices\n")
@@ -208,7 +215,7 @@ class TestAValidAnswerAddsTheBlock:
         posts the refusal line alone, as today."""
         leak = "The fix is in scripts/plan.py and nobody owns it."
         card = _escalate(tmp_path, _write(tmp_path, DRE_5260), reason=leak)
-        assert card.posted == [planning_escalation.escalation_comment(CARD, leak)]
+        assert card.posted == [_posted_note(CARD, leak)]
         assert "escalation-choices" not in card.posted[0]
 
     def test_the_stand_down_note_never_carries_a_block(self, tmp_path):
@@ -279,7 +286,7 @@ class TestAnInvalidAnswerFallsBackToProse:
         assert len(refused) == 1, err
         assert rule in refused[0]
         # The escalation still happens exactly as today.
-        assert card.posted == [planning_escalation.escalation_comment(CARD, REASON)]
+        assert card.posted == [_posted_note(CARD, REASON)]
         assert card.states == ["Green Light"]
         # Nothing about the refusal reaches the card.
         assert "refused" not in card.posted[0]
@@ -296,20 +303,20 @@ class TestAnInvalidAnswerFallsBackToProse:
     def test_a_missing_file_is_silent(self, tmp_path, capsys):
         card = _escalate(tmp_path, str(tmp_path / "never-written.json"))
         assert "escalation-choices" not in capsys.readouterr().err
-        assert card.posted == [planning_escalation.escalation_comment(CARD, REASON)]
+        assert card.posted == [_posted_note(CARD, REASON)]
         assert card.states == ["Green Light"]
 
     def test_no_choices_flag_is_todays_comment(self, tmp_path, capsys):
         card = _escalate(tmp_path, None)
         assert "escalation-choices" not in capsys.readouterr().err
-        assert card.posted == [planning_escalation.escalation_comment(CARD, REASON)]
+        assert card.posted == [_posted_note(CARD, REASON)]
 
     def test_a_file_that_is_not_json_is_logged(self, tmp_path, capsys):
         card = _escalate(tmp_path, _write(tmp_path, "Time + Refresh, I think"))
         err = capsys.readouterr().err
         assert "escalation-choices refused: " in err
         assert "not JSON" in err
-        assert card.posted == [planning_escalation.escalation_comment(CARD, REASON)]
+        assert card.posted == [_posted_note(CARD, REASON)]
         assert card.states == ["Green Light"]
 
     @pytest.mark.parametrize("mutate, rule", [

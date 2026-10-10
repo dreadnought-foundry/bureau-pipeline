@@ -129,13 +129,28 @@ Every planning attempt opens with a boundary the card carries — plan.yml
 posts `plan_critic.cycle_marker` as its own comment the moment a card is
 routed to plan, first attempt and every re-plan alike — so the receipt count
 is scoped to the comments AFTER the newest boundary (`_this_attempt`), read
-through `plan_critic.CYCLE_PREFIX` and never a copied string. A card with no
-boundary keeps the once-per-card reading. The scope is the thread's ORDER,
-which is how `plan_critic.current_cycle` and `linear_ops.count_comments(since=)`
-already read it: a receipt whose time cannot be read is still somewhere in
+through `plan_critic.CYCLE_PREFIX` and never a copied string. The scope is
+the thread's ORDER, which is how `plan_critic.current_cycle` and
+`linear_ops.count_comments(since=)` already read it: a receipt whose time cannot be read is still somewhere in
 the thread, and "treat it as this attempt's" would be the silent move again.
 The two rules resolve one way only — when they disagree, a duplicate question
 is the cheap failure and a card in the queue with nothing to answer is not.
+
+## A card back in Planning is on a new attempt (DRE-6490)
+
+Only a card routed to plan gets a boundary. A card the classifier refuses never
+does, and on 2026-10-08 that parked DRE-4710 in Green Light twice with nothing
+on it: refused at 12:07 (note posted), answered by the CEO, back to Planning,
+refused at 12:24 — `already escalated` off the 12:07 note, no note, moved — and
+the same again at 18:23. So the attempt opens at the newer of the boundary and
+the card's newest return to Planning, read off its lane history
+(`linear_ops.lane_history`, `back_in_planning_at`): an entry into the segment
+other than the destination, because a move into the destination is this
+module's own park. A note older than that return is a spent attempt's and a
+fresh one is posted before the move; a note newer than it is this attempt's,
+and the move is re-asserted as before. The history is read only when there is
+a note to place, and a history or note time that cannot be read counts as a
+spent attempt — the same direction as above.
 
 CLI:
 
@@ -475,17 +490,22 @@ def _why_lines(heading: str, reason: str | None,
 # prefixes and the `none given` grammar are `console_escalation`'s and are
 # never restated here. Where the lines come from, in precedence: lifted out of
 # a reason that declares them; completed from the choices block in hand;
-# otherwise completed from the reason's first sentence, the route's fixed
-# question and the recommendation the reason states in its own prose — read
+# otherwise completed from the reason's first sentence, the question it asks
+# or one naming that finding (`fallback_question`; the rewrite route keeps its
+# fixed one) and the recommendation the reason states in its own prose — read
 # the way the Green Light lane reads it — or `none given` when it states none.
-# The fixed question is used only in that last case, so a note never carries
-# two asks.
+# The completed question is used only in that last case, so a note never
+# carries two asks.
 
-#: What the ordinary note asks when nothing stated a question.
+#: The sentence the ordinary note used to close every completed Question line
+#: with, whatever was found (retired by DRE-6358 for `fallback_question`). Kept
+#: bound for the tests that assert its absence; nothing renders it.
 ORDINARY_QUESTION = (
     "Is this something you want to settle yourself, or should we put it back "
     "in the queue as it stands?"
 )
+#: How much of the Finding the completed question names.
+FALLBACK_FINDING_CUT = 160
 #: What the rewrite note asks (DRE-4058).
 REWRITE_QUESTION = (
     "Rewrite the card and send it back through, or park it for good?"
@@ -592,6 +612,26 @@ def _stated_recommendation(shown: str | None) -> str | None:
     return None if stated == hygiene_green_light.NO_RECOMMENDATION else stated
 
 
+def fallback_question(shown: str) -> str:
+    """The Question line when the reason declared none (DRE-6358).
+
+    The reason's own question when its last sentence asks one — the
+    classifier's refusal carries its question in its prose — cut to one line.
+    Otherwise a question naming the Finding, so two different findings never
+    reach the CEO as one fixed sentence asked twice. `shown` is the text the
+    reason block shows, never a reason `refusal()` held back."""
+    flat = " ".join((shown or "").split())
+    last = console_escalation._SENTENCE_END.split(flat)[-1]
+    if last.endswith("?"):
+        return console_escalation._one_line(last)
+    finding = console_escalation._one_line(
+        console_escalation._first_sentence(flat), FALLBACK_FINDING_CUT)
+    if finding.endswith("."):
+        finding = finding[:-1]
+    return (f"Do you want to settle this yourself — {finding} — or should we "
+            "put the card back in the queue as it stands?")
+
+
 def _three_lines(shown: str | None,
                  lifted: console_escalation.Escalation | None,
                  choices: dict | None,
@@ -609,22 +649,142 @@ def _three_lines(shown: str | None,
     else:
         # The first sentence of what the reason block states — the reason
         # itself, or the sentence that stands for one refused or never written.
-        # The Recommendation is the one the reason states in prose, and
-        # `none given` only when it states none.
+        # The Question is the one that text asks, else one naming that Finding
+        # (DRE-6358). The Recommendation is the one the reason states in prose,
+        # and `none given` only when it states none.
         stated = _why_lines("", shown, last_words)[0].strip()
         recommended = _stated_recommendation(shown)
         esc = console_escalation.Escalation(
             console_escalation._first_sentence(stated),
-            REWRITE_QUESTION if rewrite else ORDINARY_QUESTION,
+            REWRITE_QUESTION if rewrite else fallback_question(stated),
             recommended,
             NO_RECOMMENDATION if recommended is None else RECOMMENDED_IN_REASON)
     return console_escalation.render(esc)
 
 
+# --------------------------------------------------------------------------- #
+# whether he has answered on this card before (DRE-6358)                       #
+# --------------------------------------------------------------------------- #
+#
+# On DRE-3879 five different objections reached the CEO reading as one question
+# asked five times, and rounds 4 and 5 arrived 4 and 10 minutes after his
+# 13:12 PT answer; on 2026-10-08 DRE-6288 was parked back in his queue twice
+# within a minute of each answer. So every park's note carries one block under
+# its three lines: his earlier signed answer, quoted, on the record and older
+# than the question above; or that there is none; or that it could not be
+# checked.
+#
+# It says "on the record" and never "stands". Whether his earlier answer still
+# settles the matter is not readable off the thread — a decision-class finding
+# can exist precisely because that answer ran into something it did not settle
+# — so the block claims only what the thread establishes: he answered, at that
+# signed time, in those words; it is on the record; and this note was posted
+# after it, so the question above is a later ask and not that answer re-asked.
+#
+# Its thread is the WHOLE thread, read for it alone (`_prior_answer`): a
+# signed answer is often the oldest comment on a busy card, and the
+# fifty-newest window `escalate` holds for its attempt count would tell him he
+# never answered once it had scrolled away.
+
+#: The second form: the thread holds no answer of his that verifies.
+NO_PRIOR_ANSWER = "There is no earlier signed answer from you on this card."
+#: The third form's two reasons.
+PRIOR_ANSWER_KEY_UNREAD = "the console's key could not be read"
+PRIOR_ANSWER_THREAD_UNREAD = "this card's comments could not be read"
+#: How much of his words the block quotes.
+PRIOR_ANSWER_CUT = 300
+
+
+def _unchecked_prior_answer(why: str) -> str:
+    return f"Whether you answered on this card before could not be checked — {why}."
+
+
+def _first_line_of_answer(body: str) -> str:
+    """The first line of his words: the answer text with the console's
+    "Answer from …" heading removed (and the blank line after it), cut to
+    one line and defanged — the only words in the note the pipeline did not
+    write."""
+    import console_receipt
+    import sanitize_untrusted
+    import spoken_thread
+
+    lines = [line.strip() for line in
+             console_receipt.answer_text(body).split("\n")]
+    if lines and spoken_thread._ANSWER_HEAD.match(lines[0]):
+        lines = lines[1:]
+        if lines and not lines[0]:
+            lines = lines[1:]
+    first = lines[0] if lines else ""
+    return sanitize_untrusted.sanitize_line(
+        console_escalation._one_line(first, PRIOR_ANSWER_CUT))
+
+
+def prior_answer_block(comments, viewer, *, card, verifier=None) -> str:
+    """The block saying whether the CEO answered on this card before.
+
+    `comments` are `{"body", "createdAt"}` records, oldest first — the card's
+    whole thread — read by `spoken_thread.voices`, to which `verifier` is
+    forwarded (None builds the process's own, which fetches the key). A
+    `ceo-via-console` voice is his answer; an `unchecked` voice with none of
+    his after it makes the block say the check could not run; every other
+    voice is nobody's answer. `comments=None` is the caller saying the thread
+    could not be read. Pure: it reads nothing but what it is handed."""
+    if comments is None:
+        return _unchecked_prior_answer(PRIOR_ANSWER_THREAD_UNREAD)
+    import console_receipt
+    import spoken_thread
+
+    answers = []
+    unchecked = False
+    for voice in spoken_thread.voices(list(comments), viewer, card=card,
+                                      verifier=verifier):
+        if voice.kind == spoken_thread.CEO_VIA_CONSOLE:
+            answers.append(voice)
+            unchecked = False
+        elif voice.kind == spoken_thread.UNCHECKED:
+            unchecked = True
+    if unchecked:
+        return _unchecked_prior_answer(PRIOR_ANSWER_KEY_UNREAD)
+    if not answers:
+        return NO_PRIOR_ANSWER
+    newest = answers[-1].body
+    when = spoken_thread.pacific_label(console_receipt.parse_answer(newest).at)
+    words = _first_line_of_answer(newest)
+    if len(answers) == 1:
+        return (f'Your earlier answer on this card, {when}: "{words}". It is on '
+                "the record, and the question above was raised after it; "
+                "nothing here asks you to answer it again.")
+    return (f"Your earlier answers on this card: {len(answers)}. The newest, "
+            f'{when}: "{words}". They are on the record, and the question above '
+            "was raised after the newest; nothing here asks you to answer any "
+            "of them again.")
+
+
+def _prior_answer(linear_ops, identifier: str) -> str:
+    """The block over the card's whole thread, read here and nowhere else.
+
+    Fails open on the read and never on the park: a thread that cannot be
+    read, or a `voices` call that raises over it, is the third form, and the
+    card still parks with its question."""
+    try:
+        thread = linear_ops.comment_timeline(identifier, whole_thread=True)
+    except Exception as exc:  # noqa: BLE001 — a read failure must not strand the card
+        print(f"{identifier}: could not read the whole thread for an earlier "
+              f"answer ({exc})", file=sys.stderr)
+        thread = None
+    try:
+        return prior_answer_block(thread, None, card=identifier)
+    except Exception as exc:  # noqa: BLE001 — same rule, over the reader
+        print(f"{identifier}: could not read who said what on the thread "
+              f"({exc})", file=sys.stderr)
+        return prior_answer_block(None, None, card=identifier)
+
+
 def escalation_comment(identifier: str, reason: str | None,
                        transport: bool = False, rewrite: bool = False,
                        last_words: str | None = None,
-                       choices: dict | None = None) -> str:
+                       choices: dict | None = None,
+                       prior_answer: str | None = None) -> str:
     """The note that IS the escalation. One card, one of these.
 
     Written to `standards/comms.md`: purpose in the first sentence, the reason
@@ -659,6 +819,11 @@ def escalation_comment(identifier: str, reason: str | None,
     declared none, and the block itself is appended by `escalate`, not here.
     A reason that declares the lines has them lifted out of its prose and
     shown once, in this position.
+
+    `prior_answer` is the block `prior_answer_block` composed (DRE-6358),
+    placed directly under the three lines and above the reason block, so the
+    reason the Green Light lane reads is unchanged by it. `escalate` passes it
+    on every park; without it the note is exactly what it was.
     """
     lane = destination()
     shown, lifted = _lift(reason)
@@ -685,6 +850,8 @@ def escalation_comment(identifier: str, reason: str | None,
     lines = [opening, "",
              _three_lines(shown, lifted, choices, transport, rewrite, last_words),
              ""]
+    if prior_answer:
+        lines += [prior_answer, ""]
     lines += _why_lines("**Why it needs you:**", shown, last_words)
     if rewrite:
         lines += [
@@ -1062,6 +1229,62 @@ def _this_attempt(records) -> list:
     return records[start:]
 
 
+def back_in_planning_at(history, contract: dict | None = None) -> str | None:
+    """When the card last came back to be planned, off its lane history, or
+    None when the history shows no such move (DRE-6490).
+
+    `history` is `linear_ops.lane_history`'s answer, newest first. The move
+    that counts is an entry into the escalation's segment
+    (`in_escalation_segment`) other than the destination: a move into the lane
+    the card parks in is this module's own move, and the CEO's answer is the
+    move OUT of it, back to where the card is planned. That move with no time
+    on it answers `""`: the card did come back, at a time nobody can read.
+    """
+    lane = destination()
+    for node in history or ():
+        name = ((node or {}).get("toState") or {}).get("name") or ""
+        name = lane_contract.aliases(contract).get(name, name)
+        if name != lane and in_escalation_segment(name, contract):
+            return node.get("createdAt") or ""
+    return None
+
+
+def _asked_this_attempt(linear_ops, identifier: str, records) -> int:
+    """How many of this attempt's comments are an escalation note.
+
+    The attempt opens at the newer of two things (DRE-6490). One is the
+    `plan-cycle:` boundary (`_this_attempt`, DRE-4223), which only a card
+    routed to plan ever gets. The other is the card's newest return to
+    Planning (`back_in_planning_at`): on 2026-10-08 DRE-4710 was refused by the
+    classifier, answered by the CEO, moved back to Planning and refused again
+    — twice — and with no boundary on the thread each refusal after the first
+    found the 12:07 note, printed `already escalated` and parked the card with
+    nothing on it. A note older than that return is a spent attempt's.
+
+    The history is read only when there is a note to place, so the ordinary
+    first park costs no request. A note whose time cannot be read, a return
+    to Planning whose time cannot be, or a history that cannot be read at
+    all, counts as spent — the same direction DRE-4223 resolves: a duplicate
+    question is the cheap failure.
+    """
+    notes = [r for r in _this_attempt(records) if ESCALATION_TAG in _body(r)]
+    if not notes:
+        return 0
+    try:
+        since = back_in_planning_at(linear_ops.lane_history(identifier))
+    except Exception as exc:  # noqa: BLE001 — unreadable is never "already asked"
+        print(f"{identifier}: could not read where the card has been ({exc}) — "
+              "asking again", file=sys.stderr)
+        return 0
+    if since is None:
+        return len(notes)
+    if not since:
+        # Back in Planning at a time that cannot be read: `_stale` reads an
+        # empty attempt as no attempt at all, so it is settled here.
+        return 0
+    return sum(1 for note in notes if not _stale(note, since))
+
+
 def _stale(record, attempt_since: str | None) -> bool:
     """Was this comment posted BEFORE the current planning attempt began?
 
@@ -1213,7 +1436,10 @@ def escalate(linear_ops, identifier: str, reason: str | None,
     one decision into a thread, and a card re-planned after the CEO answered
     must be asked again rather than parked silently on the answered receipt —
     and the move is re-asserted every time, because the crash this guards
-    against is the one between the two writes.
+    against is the one between the two writes. The attempt also opens at the
+    card's newest return to Planning (`_asked_this_attempt`, DRE-6490), so a
+    card the classifier refuses again after the CEO answered — a card that
+    never gets a boundary — is asked again too.
 
     `last_words` is the planner's closing message, shown in either note when
     no reason was written (DRE-5564).
@@ -1228,6 +1454,13 @@ def escalate(linear_ops, identifier: str, reason: str | None,
     `split` lifts out of it when there is one, else `choices`, else none. That
     one block completes the note's three lines and is the one appended, so a
     reason carrying a block and a run passing a choices file never post two.
+
+    The note carries whether the CEO has answered on this card before
+    (DRE-6358, `prior_answer_block`), read off the WHOLE thread by its own
+    read — never `bodies`, which is the window the attempt count and
+    `moved_on` ask about, and never the handed `comments`. The read is made
+    only here, on the path that posts a note, so a stand-down and a retry
+    whose note is already on the card cost nothing.
     """
     choices = lifted_choices(reason) or choices
     lane = destination()
@@ -1271,12 +1504,16 @@ def escalate(linear_ops, identifier: str, reason: str | None,
             posted = True
         return Outcome(parked=False, posted=posted, stood_down=elsewhere)
     if already:
+        # Scoped once more, to the card's newest return to Planning (DRE-6490).
+        already = _asked_this_attempt(linear_ops, identifier, bodies)
+    if already:
         print(f"{identifier}: already escalated, under {ESCALATION_TAG}")
     else:
         linear_ops.cmd_comment(
             identifier,
             escalation_comment(identifier, reason, transport, rewrite,
-                               last_words=last_words, choices=choices)
+                               last_words=last_words, choices=choices,
+                               prior_answer=_prior_answer(linear_ops, identifier))
             + _choices_tail(reason, choices))
         posted = True
     linear_ops.cmd_state(identifier, lane)
