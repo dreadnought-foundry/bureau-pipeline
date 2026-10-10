@@ -80,11 +80,14 @@ def test_stalled_reads_an_unparseable_first_seen_as_unknown():
 # --- clocked ---------------------------------------------------------------
 
 
-def test_clocked_is_true_for_exactly_the_five_clocked_tags():
+def test_clocked_is_true_for_exactly_the_six_clocked_tags():
+    """The sixth is the epic cap's hold (DRE-6618): a sweep asks the cap only
+    for an epic a blocker released, so a hold on any other stands until a
+    person acts, and is clocked like every refusal no sweep clears."""
     assert promotion_stall.CLOCKED_TAGS == (
         "routing-no-verdict", "mid-epic-no-verdict",
         "plan-critic-post-unread", "plan-critic-post-sent-back",
-        "plan-critic-post-died",
+        "plan-critic-post-died", "epic-cap-undecided",
     )
     for tag in promotion_stall.CLOCKED_TAGS:
         assert promotion_stall.clocked(tag) is True, tag
@@ -127,6 +130,32 @@ def test_notice_names_the_card_tag_receipt_time_and_age():
     assert "no sweep will clear it" in body
     assert "a person must act" in body
     assert "refusal receipt already on this card" in body
+
+
+def test_the_epic_caps_hold_is_clocked_under_its_own_tag():
+    """Spelled here, never imported: this module imports neither `reconcile`
+    nor `linear_ops`, and `epic_cap` imports the second."""
+    import epic_cap  # noqa: PLC0415 — the test reads the one definition
+    assert epic_cap.UNDECIDED_TAG in promotion_stall.CLOCKED_TAGS
+
+
+def test_notice_and_ledger_name_the_epic_when_the_record_carries_one():
+    """An `epic-cap-undecided` card waits on its EPIC, and the act is on the
+    epic (DRE-6618), so the stall says which one."""
+    refused = Refused("DRE-6066", "epic-cap-undecided", "2026-10-10T10:50:00.000Z",
+                      epic="DRE-6064")
+    body = promotion_stall.notice(refused, 180.0, 0, CAP)
+    assert body.startswith(promotion_stall.STALL_MARK + " DRE-6066 ")
+    assert "DRE-6064" in body
+    line = promotion_stall.ledger_line(refused, 180.0)
+    assert line.startswith(promotion_stall.LEDGER_STALL_OPENER + "DRE-6066:")
+    assert "DRE-6064" in line
+
+
+def test_a_record_with_no_epic_reads_as_before():
+    refused = Refused("DRE-4198", "routing-no-verdict", "2026-10-09T15:00:00.000Z")
+    assert refused.epic is None
+    assert "epic" not in promotion_stall.notice(refused, 180.0, 0, CAP).split(" — ")[0]
 
 
 def test_notice_carries_no_other_acts_tag():
