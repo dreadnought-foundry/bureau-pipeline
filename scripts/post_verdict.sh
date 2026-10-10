@@ -35,14 +35,19 @@ set -e
 #      past 60 seconds. The comment names the runner, its class and both
 #      running times, and says the machine ran out of memory only when the
 #      back-off sleep was itself ended early.
-#   9. Crashed — nothing above explains it. The critic could not run, and
-#      whatever the attempts spent is appended.
+#   9. Crashed, wall read — an attempt left a crash record. The comment
+#      names the wall death_cause.py read off it: a rate limit that clears
+#      by itself, the account's usage limit and its reset, or a refused
+#      credential, which alone keeps the stale-credential wording. When it
+#      read none, the comment says the cause could not be read and what was.
+#  10. Crashed — nothing above explains it, and no attempt left a record.
+#      The critic could not run, and whatever the attempts spent is appended.
 #
 # Every comment but 3 is a neutral status. It carries "QA Critic", so the
 # merge gate reads it as the latest word and it supersedes a stale APPROVE,
 # and it carries no "VERDICT:" line, so the merge is held and the fix agent
 # is not woken for findings nobody made. When REFUTED is true a footer under
-# any of the nine says why this head carries two verdicts.
+# any of the ten says why this head carries two verdicts.
 #
 # The comment is posted with `gh pr comment`, tried four times, because the
 # merge gate reads it. When the pull request has a card, the same text plus
@@ -87,6 +92,15 @@ set -e
 #   A1_CAUSE_TEXT, A2_CAUSE_TEXT
 #                     a fixed sentence naming why the verdict file was
 #                     unusable — never a byte of that file
+#   A1_WALL, A2_WALL  which wall a crashed attempt hit, death_cause.py's
+#                     word: throttled, capped or revoked; empty when it
+#                     read none or the attempt did not crash
+#   A1_WALL_RESET, A2_WALL_RESET
+#                     when a capped attempt's limit resets, as the record
+#                     states it (`YYYY-MM-DD HH:MM UTC`); empty otherwise
+#   A1_API_STATUS, A2_API_STATUS
+#                     the three-digit API error status a crashed attempt's
+#                     record carried; empty when it carried none
 #   A1_EVIDENCE, A2_EVIDENCE
 #                     `ok` or `defective`: did a finished verdict carry the
 #                     evidence for the runs it asserts. The hold MESSAGE
@@ -171,11 +185,12 @@ set -e
 #     before a light runner ran out of memory, and was told it had crashed.
 #     Branch 8 tells a stopped attempt from one that never started by its
 #     running time, and comes after every branch that reads an execution
-#     record. Its first line is branch 9's byte for byte, because it is the
+#     record. Its first line is branch 10's byte for byte, because it is the
 #     neutral marker medic_classify.CRITIC_NEUTRAL_MARKER and the merge gate
 #     match on.
-#   What holds now: the crash wording is branch 9, the last resort, and it
+#   What holds now: the crash wording is branch 10, the last resort, and it
 #   carries the attempts' numbers so a reader can see when it is wrong.
+#   DRE-6701 (2026-10-10) took the crash records out from under it, below.
 #
 # 2026-09-04 · DRE-3005. A critic blocked two correct pull requests
 #   overnight (agent-bureau #2247 among them) on claims about what a command
@@ -205,6 +220,18 @@ set -e
 #   there. If it is gone entirely the step fails before this file starts,
 #   nothing is posted, and `Fail if critic never really ran` turns the job
 #   red.
+#
+# 2026-10-10 · DRE-6701. Agent-bureau PR #3363's reviewer died on a rate
+#   limit (run 37713749781) and the crash wording told the pull request
+#   its one-turn, $0 run "IS the stale-credential signature"; the retry
+#   reviewed eleven minutes later. 21 notices carried that sentence in
+#   the ten days before. The gate now hands on death_cause.py's answer for
+#   each crashed attempt (DRE-4129), and branch 9 words the notice by it,
+#   the retry's answer winning when both have one. Only `revoked` keeps the
+#   stale-credential wording and its pointer to DRE-2924; a crash no wall
+#   explains says the cause could not be read and names no credential. The
+#   job's red line says the same word. Branch 9 sits after branch 8, so an
+#   attempt stopped mid-review is still told it was stopped.
 # Is the pipeline checkout still there? It decides branch 2 (DRE-3226).
 if [ -n "${PIPELINE_DIR:-}" ] \
    && [ -r "${PIPELINE_DIR}/scripts/check_critic_result.py" ]; then
@@ -293,7 +320,7 @@ elif [ -n "$RAN" ]; then
     "The adversarial reviewer completed its run and then left no verdict we could read — $RAN.${WHY:+ What was found in its place: $WHY.} This is NOT an authentication or startup failure: it authenticated, did real work, and was billed for it, so no credential needs rotating on the strength of this message. Merge is held until a critic actually reviews this PR; this is not a request for changes." \
     > /tmp/qa-comment.md
 elif [ -n "$A1_STOPPED$A2_STOPPED" ]; then
-  # Branch 8, stopped mid-review. Line 1 is branch 9's, byte for byte.
+  # Branch 8, stopped mid-review. Line 1 is branch 10's, byte for byte.
   _took() {
     if [ "$1" -eq 1 ]; then printf '1 second'
     elif [ "$1" -lt 120 ]; then printf '%s seconds' "$1"
@@ -327,11 +354,56 @@ elif [ -n "$A1_STOPPED$A2_STOPPED" ]; then
     "🔎 QA Critic could not run (infra error) — re-review needed, this is NOT a code rejection." \
     "$WHY No verdict was produced and nothing was rejected. This was NOT an authentication or startup failure, so no credential needs rotating on the strength of this message.${SPENT:+ What the execution records report: $SPENT.} Merge is held until a critic actually reviews this PR; this is not a request for changes." \
     > /tmp/qa-comment.md
-else
-  # Branch 9, crashed: the last resort.
+elif [ "${A1_OUTCOME:-}" = "crash" ] || [ "${A2_OUTCOME:-}" = "crash" ]; then
+  # Branch 9, crashed: worded by the wall death_cause.py read (DRE-6701).
+  # The retry's answer wins, as WHY's does on branch 7. Line 1 is branch
+  # 10's, byte for byte: the medic and the merge gate match on it.
+  if [ -n "${A2_WALL:-}" ]; then
+    WALL="$A2_WALL"; RESET="${A2_WALL_RESET:-}"
+  else
+    WALL="${A1_WALL:-}"; RESET="${A1_WALL_RESET:-}"
+  fi
+  case "$WALL" in
+    throttled)
+      WHY="The adversarial reviewer hit a rate limit before it could review — death_cause.py read the execution records as \`throttled\`. A rate limit clears by itself, usually within minutes, and the review will be retried. No credential action is needed on the strength of this message.${SPENT:+ What the execution records report: $SPENT.}" ;;
+    capped)
+      if [ -n "$RESET" ]; then
+        WHEN="The limit resets at $RESET, and a retry before then meets the same wall."
+      else
+        WHEN="The record does not say when it resets."
+      fi
+      WHY="The adversarial reviewer hit the account's usage limit before it could review — death_cause.py read the execution records as \`capped\`. $WHEN No other model on the same account gets past it, and no credential action is needed on the strength of this message.${SPENT:+ What the execution records report: $SPENT.}" ;;
+    revoked)
+      WHY="The adversarial reviewer crashed twice (startup/auth failure, no inference): the credential was refused — death_cause.py read the execution records as \`revoked\`. That is the stale-credential signature, nothing resets it, and a new credential is the only remedy (DRE-2924).${SPENT:+ What the execution records report for those attempts: $SPENT — an instant, one-turn, \$0 run IS the stale-credential signature, and anything more than that means the reviewer did real work and this notice is naming the wrong cause.}" ;;
+    *)
+      # No wall read: say so, say what was read, and guess nothing.
+      _read() {
+        [ -n "$2" ] || return 0
+        if [ "$2" = "unknown" ]; then
+          printf '%s left no execution record' "$1"
+          return 0
+        fi
+        printf '%s ran %s turns and billed about $%s' "$1" "${3:-?}" "${4:-?}"
+        if [ -n "$5" ]; then
+          printf ', API error status %s' "$5"
+        else
+          printf ', no API error status'
+        fi
+      }
+      READ=$(_read "the first attempt" "${A1_OUTCOME:-}" "${A1_TURNS:-}" "${A1_COST:-}" "${A1_API_STATUS:-}")
+      READ2=$(_read "the retry" "${A2_OUTCOME:-}" "${A2_TURNS:-}" "${A2_COST:-}" "${A2_API_STATUS:-}")
+      if [ -n "$READ2" ]; then READ="${READ:+$READ; }$READ2"; fi
+      WHY="The adversarial reviewer stopped before it could review, and the cause could not be read: death_cause.py found no rate limit, usage limit or refusal in the execution records. What was read: $READ. This notice does not guess at a cause — the job log carries each attempt's own error lines." ;;
+  esac
   printf '%s\n\n%s\n' \
     "🔎 QA Critic could not run (infra error) — re-review needed, this is NOT a code rejection." \
-    "The adversarial reviewer crashed twice (startup/auth failure, no inference). No findings were produced.${SPENT:+ What the execution records report for those attempts: $SPENT — an instant, one-turn, \$0 run IS the stale-credential signature, and anything more than that means the reviewer did real work and this notice is naming the wrong cause (DRE-2924).} Merge is held until a critic actually reviews this PR; this is not a request for changes." \
+    "$WHY No findings were produced. Merge is held until a critic actually reviews this PR; this is not a request for changes." \
+    > /tmp/qa-comment.md
+else
+  # Branch 10, crashed with no record: the last resort.
+  printf '%s\n\n%s\n' \
+    "🔎 QA Critic could not run (infra error) — re-review needed, this is NOT a code rejection." \
+    "The adversarial reviewer crashed twice (startup/auth failure, no inference). No findings were produced.${SPENT:+ What the execution records report for those attempts: $SPENT.} Merge is held until a critic actually reviews this PR; this is not a request for changes." \
     > /tmp/qa-comment.md
 fi
 fi
