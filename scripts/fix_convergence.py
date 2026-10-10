@@ -54,13 +54,26 @@ also the compatible direction: a fleet still on an older release cuts
 verdicts with no line, and a loop of unreadable rounds behaves as the old
 counter did rather than running to the ceiling on nobody's word.
 
+That promise is kept by a budget of its own (DRE-6533). Until then one
+budget of two covered every non-converging round, so — with the first
+review converging by construction — two silent re-reviews stopped the loop
+after two fix attempts, one short of the retired three-attempt counter.
+Agent-bureau PR #3481 (2026-10-09) stopped exactly there: three reviews,
+three different findings, each fixed, and none of them carried the line.
+Treating a silent round as neutral was considered and rejected — a loop of
+them would run to the ceiling on nobody's word, the outcome this paragraph
+exists to prevent.
+
 The FIRST review is converging by construction: there is no earlier round
 for it to repeat and no earlier fix for it to have regressed.
 
 THE BUDGET, in one sentence: stop after `STOP_BUDGET` CONSECUTIVE
-non-converging rounds, with `CEILING` total attempts as the runaway
-backstop. Consecutive matters — one round of real progress resets it,
-which is what lets a long-but-converging loop finish.
+non-converging rounds when at least one of them DECLARED circling, after
+`SILENCE_BUDGET` when every one of them was silent, with `CEILING` total
+attempts as the runaway backstop, read first. Three stops, three names —
+`ceiling`, `non-convergence` and `silence` — because each asks the person
+for something different. Consecutive matters — one round of real progress
+resets the streak, which is what lets a long-but-converging loop finish.
 
 WHAT THIS MODULE DOES NOT TOUCH. The CONFLICT budget (five rounds, counted
 by attempt) is a different failure class and stays exactly as it was: main
@@ -98,6 +111,12 @@ CRITIC_LOGIN = QA_BOT_LOGIN
 #: sooner than the retired cap, not later.
 STOP_BUDGET = 2
 
+#: The silence budget (DRE-6533): CONSECUTIVE non-converging rounds when NONE
+#: of them declared circling — every one `unclassified`, padded rounds
+#: included. Three is the retired attempt counter's number, so a loop of
+#: rounds that say nothing behaves as the old counter did.
+SILENCE_BUDGET = 3
+
 #: The runaway backstop, in total fix attempts. Generous on purpose: #199
 #: needed four and would have got there, so a ceiling that stops it is the
 #: same defect with a bigger number. Six is twice the retired cap, and
@@ -117,6 +136,8 @@ AXES = (
     ("in-scope", "scope-creep"),
 )
 CONVERGING_TOKENS = tuple(axis[0] for axis in AXES)
+#: The reasons a round DECLARES circling — the second token of each axis.
+CIRCLING_TOKENS = tuple(axis[1] for axis in AXES)
 
 #: The two reasons that are not a token: a first review, and a re-review
 #: whose verdict said nothing this module can read.
@@ -148,6 +169,7 @@ RECEIPT_TAG = "📊 fix-convergence"
 #: The stop names, as they appear in the sourced env and in the receipt.
 NON_CONVERGENCE = "non-convergence"
 RUNAWAY = "ceiling"
+SILENCE = "silence"
 
 #: A heading ends the header region. The line is read ABOVE the first one
 #: and nowhere else: the critic writes the middle of a verdict having just
@@ -322,13 +344,19 @@ class State:
         self.rounds = rounds_
         self.attempts = attempts
         self.streak = streak(rounds_)
+        # Which budget the tail streak spends (DRE-6533): one round in it that
+        # DECLARED circling makes it the stop budget; a streak of silent
+        # rounds only spends the silence budget.
+        tail = rounds_[len(rounds_) - self.streak:] if self.streak else []
+        self.declared = any(r.reason in CIRCLING_TOKENS for r in tail)
+        self.budget = STOP_BUDGET if self.declared else SILENCE_BUDGET
         # The ceiling is read FIRST: it is the unconditional limit, and a
         # loop that got this far was converging round after round, which is
         # a different thing for a human to look at than a stuck one.
         if attempts >= CEILING:
             self.stopped_by = RUNAWAY
-        elif self.streak >= STOP_BUDGET:
-            self.stopped_by = NON_CONVERGENCE
+        elif self.streak >= self.budget:
+            self.stopped_by = NON_CONVERGENCE if self.declared else SILENCE
         else:
             self.stopped_by = None
 
@@ -348,8 +376,10 @@ class State:
         (standards/untrusted-content.md).
         """
         tail = (f"Non-converging rounds in a row: {self.streak} of "
-                f"{STOP_BUDGET}. Attempts so far: {self.attempts} of a "
-                f"{CEILING}-attempt ceiling.")
+                f"{self.budget} — the loop stops at {STOP_BUDGET} when one of "
+                f"them says it is circling, and at {SILENCE_BUDGET} when none "
+                f"of them says either way. Attempts so far: {self.attempts} "
+                f"of a {CEILING}-attempt ceiling.")
         latest = self.latest
         if latest is None:
             return (f"{RECEIPT_TAG}: no review round has landed here yet, so "
@@ -359,14 +389,20 @@ class State:
                 f"{REASONS[latest.reason]}. {tail}")
 
     def hold_reason(self) -> str:
-        """Why the loop stopped, in the words the hold comment uses. The two
-        stops read differently on purpose (AC4): the human needs to know
-        which one happened, because the remedies are not the same."""
+        """Why the loop stopped, in the words the hold comment uses. The three
+        stops read differently on purpose (AC4, DRE-6533): the human needs to
+        know which one happened, because the remedies are not the same."""
         if self.stopped_by == RUNAWAY:
             return (f"it reached the hard ceiling of {CEILING} fix attempts. "
                     "That is the runaway backstop, not a judgement that the "
                     "loop stopped making progress — it kept finding new work "
                     "and never finished")
+        if self.stopped_by == SILENCE:
+            return (f"{self.streak} reviews in a row did not say whether they "
+                    "found new ground or repeated themselves, so none of them "
+                    "could be read as progress and the loop stopped rather "
+                    "than run on blind. The reviewer may have found something "
+                    "new each time — the record cannot show it")
         return (f"{self.streak} review rounds in a row made no progress "
                 f"(the stop budget is {STOP_BUDGET}). A round that finds "
                 "something new, leaves the earlier fixes working and stays "

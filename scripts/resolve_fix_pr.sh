@@ -275,6 +275,14 @@ set -e
 #   comment leg) and a conflict are still refused: those are the proof
 #   run's.
 #
+# 2026-10-10 · DRE-6533. The hold has a third arm. A streak of re-reviews
+#   that said nothing about convergence now spends a budget of its own and
+#   stops as STOPPED_BY=silence, one round later than before, so the
+#   person is told the reviews did not say whether they found new ground —
+#   not that the reviewer kept landing on the same ground (agent-bureau
+#   #3481: three reviews, three different findings, stopped as circling).
+#   The non-convergence and ceiling wordings are unchanged.
+#
 PR=${PR_NUMBER}
 INFO=$(gh pr view "$PR" --repo ${REPO} --json state,headRefName,headRefOid,mergeStateStatus,baseRefName,isDraft,files)
 STATE=$(echo "$INFO" | python3 -c "import json,sys; print(json.load(sys.stdin)['state'])")
@@ -466,6 +474,8 @@ else
   # quote-safe (DRE-1996).
   if [ "$STOPPED_BY" = "ceiling" ]; then
     WHY="it reached the hard ceiling of $CEILING fix attempts. That is the runaway backstop, not a judgement that the loop stopped making progress — it kept finding new work and never finished"
+  elif [ "$STOPPED_BY" = "silence" ]; then
+    WHY="$NONCONVERGING reviews in a row did not say whether they found new ground or repeated themselves, so none of them could be read as progress and the loop stopped rather than run on blind. The reviewer may have found something new each time — the record cannot show it"
   else
     WHY="$NONCONVERGING review rounds in a row made no progress (the stop budget is $STOP). A round that finds something new, leaves the earlier fixes working and stays in scope does not spend that budget"
   fi

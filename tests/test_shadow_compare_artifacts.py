@@ -9,8 +9,8 @@ the comparison, checked against Linear and the console's database:
     `_fetch_active_cards` never selects `parent`, so the Linear side read as
     None for a field it never asked for;
   * backlog `priority` on DRE-5474, 5537 and 5542, `door=0 linear=None`:
-    `backlog_children` never selects `priority` (and 0 is Linear's "No
-    priority" in any case);
+    `backlog_children` never selected `priority` then (and 0 is Linear's
+    "No priority" in any case) — it does since DRE-6567, and compares it;
   * the `door-newer` class: the door serves `updatedAt` as the later of the
     card's stamp and its newest stored comment, while Linear does not move
     `updatedAt` for a comment that lands within about a minute of its last
@@ -203,9 +203,11 @@ def test_run_37145213637_replays_with_no_unexplained_difference(monkeypatch, cap
     monkeypatch.setattr(reconcile, "complete_inverse_relations", lambda cards: None)
     linear_board = reconcile._fetch_active_cards(reconcile.SWEPT_LANES)
     linear_backlog = reconcile.backlog_children(None, from_linear=True, stamped=True)
-    # The reproduction is honest only if the queries really leave these out.
+    # The reproduction is honest only if the board query really leaves
+    # `parent` out. The Backlog query selects `priority` since DRE-6567, so
+    # that side is compared now — and Linear's 0 matches the door's.
     assert all("parent" not in n for n in linear_board)
-    assert all("priority" not in n for n in linear_backlog)
+    assert all(n["priority"] == 0 for n in linear_backlog)
 
     door_read = bureau_read.DoorRead(nodes=board_door, as_of=AS_OF)
     reconcile._shadow_door["board"] = door_read

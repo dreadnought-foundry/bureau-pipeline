@@ -57,8 +57,11 @@ import proof_local  # noqa: E402
 LOGIN = "proof-login"
 SCREENSHOT = "proof-screenshot"
 
-#: The keys the login file's contract names (DRE-6024).
+#: The keys the login file's contract names (DRE-6024), and for the `session`
+#: kind of `login` (DRE-6536), which carries `session` in place of the
+#: username and password.
 LOGIN_FILE_KEYS = ("username", "password", "identity", "ration")
+SESSION_FILE_KEYS = ("identity", "ration", "session")
 LOGIN_FILE_MODE = 0o600
 
 #: The browser's interpreter, where `prepare` installs it.
@@ -132,9 +135,10 @@ def _declaration(path):
 # login
 # ---------------------------------------------------------------------------
 
-def _check_login_file(path: Path) -> str:
+def _check_login_file(path: Path, keys=LOGIN_FILE_KEYS) -> str:
     """The file's `identity`, or `Refused` naming what is wrong — never its
-    path or anything it holds."""
+    path or anything it holds. `keys` are the keys the declared kind's file
+    must carry."""
     try:
         mode = stat.S_IMODE(path.stat().st_mode)
     except FileNotFoundError:
@@ -147,9 +151,14 @@ def _check_login_file(path: Path) -> str:
         raise Refused("the login file is not readable JSON") from None
     if not isinstance(data, dict):
         raise Refused("the login file is not one JSON object")
-    missing = [key for key in LOGIN_FILE_KEYS if key not in data]
+    missing = [key for key in keys if key not in data]
     if missing:
         raise Refused(f"the login file is missing {', '.join(missing)}")
+    if "session" in keys:
+        session = data["session"]
+        if not isinstance(session, dict) or not all(
+                isinstance(value, str) for value in session.values()):
+            raise Refused("the login file's session is not an object of strings")
     identity = data["identity"]
     if not isinstance(identity, str) or not _one_line(identity):
         raise Refused("the login file's identity is empty")
@@ -191,8 +200,9 @@ def login(*, declaration=proof_local.DECLARATION, out=print) -> int:
         out(f"{LOGIN}: refused — "
             + (line or f"login.command exited {done.returncode} and printed no line"))
         return 1
+    keys = SESSION_FILE_KEYS if "session" in found.login else LOGIN_FILE_KEYS
     try:
-        identity = _check_login_file(path)
+        identity = _check_login_file(path, keys)
     except Refused as exc:
         out(f"{LOGIN}: {exc} — {line}" if line else f"{LOGIN}: {exc}")
         return 1
@@ -354,6 +364,11 @@ def screenshot(argv, *, page_key, out_png, signed_in=False, wait_for=None,
                               f"proof_session.py login first")
             if not found.login:
                 raise Refused(f"{declaration} declares no login form to fill")
+            if "session" in found.login:
+                # The planting step is the follow-up to DRE-6536.
+                raise Refused(f"{declaration} declares the `session` kind of "
+                              f"login, and planting a session in the browser "
+                              f"is not built yet — no page was opened")
             form = found.login["form"]
             credentials = _read_login_file(login_path)
     except Refused as exc:

@@ -338,6 +338,28 @@
       ]
     },
     {
+      "file": ".github/workflows/plan.yml",
+      "scope": "One-off critic — park in Triage",
+      "anchor": "one-off-park.md",
+      "note": "The one-off critic's bound, or a revision the planner did not finish.",
+      "reasons": [
+        {
+          "reason": "plan-critic-bound",
+          "lifts": "manual",
+          "tried_first": {
+            "step": "The one-off critic's own send-back rounds, each answered by the planner rewriting the card in place and read again on a fresh planning run, up to `MAX_ROUNDS` (DRE-5376). Before the park, the bound exit (scripts/plan_bound.py, `--stage one-off`) classifies the worst finding of every send-back round on the card's whole trusted thread: a finding that names a business choice goes to the CEO as one Green Light question when it is in words he reads, and otherwise the planner gets one more rewrite on a fresh planning run, once per card; the park comes only after that.",
+            "receipt": "plan_bound.py exit"
+          }
+        }
+      ],
+      "readers": [
+        "sweep",
+        "fix-dispatch",
+        "medic",
+        "limit-recovery"
+      ]
+    },
+    {
       "file": ".github/workflows/agent-fix.yml",
       "scope": "Escalate checks the loop structurally cannot fix",
       "anchor": "unfixable-check-hold",

@@ -491,6 +491,26 @@ jobs:
           # already used by the Report step in this same job; only the
           # agent's own step lacked it.
           LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+          # BACKGROUND TASKS OFF (DRE-6520, DRE-6523). On 2026-10-09 the
+          # repair agent for DRE-6511 committed and pushed its fix, started
+          # the whole test suite with `run_in_background`, said it would open
+          # the PR once the suite reported, and ended its turn. In a headless
+          # run, ending the turn ends the session: no PR was opened and main
+          # stayed red for 75 minutes. The same guard agent-fix.yml's "Fix"
+          # step carries since DRE-5271.
+          #
+          # CHECKED, NOT GUESSED. https://code.claude.com/docs/en/env-vars
+          # documents CLAUDE_CODE_DISABLE_BACKGROUND_TASKS — "Set to `1` to
+          # disable all background task functionality, including the
+          # `run_in_background` parameter on Bash and subagent tools,
+          # auto-backgrounding, and the Ctrl+B shortcut". A command that
+          # reaches its timeout is stopped and handed back to the agent in
+          # the foreground instead of being moved out of reach, so the agent
+          # keeps its turn and can still open the PR. The prompt's step 4
+          # removes the need for a long command at all: no full suite
+          # locally, push and open the PR before any long check. Pinned by
+          # tests/test_repair_run_no_background_wait.py.
+          CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: "1"
         with:
           # DRE-3414: the launcher the shared install step above PROVED
           # runs. Without it the vendor action installs a second copy of
@@ -571,7 +591,21 @@ jobs:
                stale justification — is the failure mode the reviewer
                exists to reject.
             4. Run the repo's local checks (see .github/bureau/overrides.md)
-               until green.
+               until green, narrowed to what your change can reach
+               (DRE-6523). Do not run the whole test suite locally, because
+               CI runs it on the pull request. Run only the test files your
+               change touches, each under a timeout (for example
+               `timeout 300 <test command> <file>`). Commit and push before
+               any check that runs longer than a few minutes: finish step 5
+               first — push and open the PR — run that check after, and fix
+               a red result with another commit on the same branch.
+               Background tasks are off in this run, so a command that
+               outlasts its timeout is stopped rather than moved to the
+               background. Never end your turn while a background task is
+               still running — in this headless run, ending the turn ends
+               the session, no notification ever arrives, and no PR is
+               opened. A finished edit with no push loses the work, and a
+               push with no PR leaves main red.
             5. Push the branch and open a PR with `gh pr create`, titled
                "fix(red-main): <summary>". The body MUST include: the failed
                run URL above, the card link above (or the one line saying the

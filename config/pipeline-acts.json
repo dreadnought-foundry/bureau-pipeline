@@ -1079,6 +1079,24 @@
       }
     },
     {
+      "name": "agent-blocker-resolved",
+      "tag": "agent-blocker-resolved",
+      "adopted": true,
+      "kind": "recovery",
+      "means": "A build agent's blocker named a class the sweep can act on, and the sweep acted on it with no person: it canceled a card whose every criterion the agent attested, sent one that attested fewer to the planner, relabeled a card dispatched at the wrong repo, opened or found the pull request for work left on a branch, or asked in Green Light the one question it could not act on. This receipt's tag, in a comment newer than the marker, is what tells blocker_class.open_blocker the marker is resolved.",
+      "state": "unchanged",
+      "next_actor": "reconcile.py",
+      "discharges": null,
+      "subscriber": "reconcile.yml",
+      "cadence_s": null,
+      "cadence_why": "Null: scripts/blocker_resolve.py resolves the blocker as one sweep act, and nothing is dispatched back whose run could be late — whatever the card does next is read by the lane it now stands in.",
+      "why": "DRE-6508, the resolver of the blocker-class epic (DRE-6438). A `🛑 Agent blocked:` marker held its card in Backlog for a person whatever the reason said, so DRE-3242 sat three days on a label the agent had already named. The resolver reads the marker's class off config/blocker-classes.json, calls that class's action module (blocker_nothing_to_change, blocker_wrong_repo, blocker_branch_pr, or blocker_ask for a question and for any module's person's call), and posts this receipt ONLY after the module's own write: `🧹 agent-blocker-resolved: class=<class> action=<action> — <note>`, the action one of canceled, replanned, relabeled, pr-opened, pr-found and asked. A write Linear refused is the module's blocker_class.NotNow, so no receipt is posted, the marker stays open and the next sweep tries again. The tag is a live key: blocker_class.open_blocker is handed it as `resolved_tag`, and a comment newer than the marker carrying it closes the marker. RECOVERY: the card no longer waits on a person for a fact the pipeline could act on. Nothing is discharged. The console learned the act first (DRE-6440).",
+      "emits": {
+        "file": "scripts/blocker_resolve.py",
+        "anchor": "🧹 agent-blocker-resolved: class="
+      }
+    },
+    {
       "name": "reviewer-outage-fleet-wide",
       "tag": "fleet-reviewer-outage",
       "adopted": true,
@@ -1236,6 +1254,38 @@
       "kind": "undeclared-act",
       "means": "Several model deaths in a row: an outage or an account problem, parked for a person.",
       "why": "Act-shaped, and the registry has no row for it. DRE-2825 declared thirteen acts by reading reconcile.py's ten tag constants, the fix loop's three notices and the medic; this receipt was not among them. Giving it a row is a REGISTRY change — a tag, a kind, a state, a next actor, a subscriber, and the reasoning that fixes each — not an emission change, and this card converts what the registry declares. Named here so the debt is countable rather than invisible. Its body is written by scripts/fix_dead_run.py."
+    },
+    {
+      "file": ".github/workflows/agent-fix.yml",
+      "step": "Report",
+      "anchor": "elif [ \"$ACTION\" = \"retry-runner-lost\" ]; then",
+      "kind": "undeclared-act",
+      "means": "The fix run's machine was taken away before the agent finished — no result record, an unfinished agent step and the job's own words — so the sweep re-dispatches once per head. No fix attempt is spent and nobody is parked (DRE-6572).",
+      "why": "Act-shaped, and the registry has no row for it. Posted bare, like its two siblings (the outage retry and the turn-exhaustion retry) — giving it a row is a REGISTRY change, a tag, a kind, a state, a next actor and a subscriber, which DRE-6572 deliberately leaves for a later card. Named here so the debt is countable rather than invisible. Its body is written by scripts/fix_dead_run.py, which owns the fix-run-runner-lost tag the reconcile sweep re-dispatches on after RUNNER_LOST_WAIT_MINUTES."
+    },
+    {
+      "file": ".github/workflows/agent-fix.yml",
+      "step": "Report",
+      "anchor": "🤖 The last fix run's machine was taken away",
+      "kind": "undeclared-act",
+      "means": "The card-side half of the lost-machine retry: nothing is wrong with the work, and the pipeline retries once by itself (DRE-6572).",
+      "why": "The CARD-SIDE half of the lost-machine retry line, which has no act row for the reason that row gives. Posted bare, like its two siblings (the outage retry and the turn-exhaustion retry) — giving it a row is a REGISTRY change, a tag, a kind, a state, a next actor and a subscriber, which DRE-6572 deliberately leaves for a later card. Named here so the debt is countable rather than invisible."
+    },
+    {
+      "file": ".github/workflows/agent-fix.yml",
+      "step": "Report",
+      "anchor": "elif [ \"$ACTION\" = \"hold-runner-lost\" ]; then",
+      "kind": "undeclared-act",
+      "means": "A second fix run in a row on the same commit lost its machine: the work has not failed, and the card is held for a person rather than starting another run (DRE-6572).",
+      "why": "Act-shaped, and the registry has no row for it. Posted bare, like its two siblings (the outage retry and the turn-exhaustion retry) — giving it a row is a REGISTRY change, a tag, a kind, a state, a next actor and a subscriber, which DRE-6572 deliberately leaves for a later card. Named here so the debt is countable rather than invisible. Its body is written by scripts/fix_dead_run.py, opens with 🛑 and carries no marker, so the sweep stops on it as it does on the outage and turn-exhaustion holds."
+    },
+    {
+      "file": ".github/workflows/agent-fix.yml",
+      "step": "Report",
+      "anchor": "🙋 Two fix runs in a row on PR #$PR lost their machine",
+      "kind": "undeclared-act",
+      "means": "The card-side half of the lost-machine hold: two lost machines on one commit, not failed work, and the card waits on a person (DRE-6572).",
+      "why": "The CARD-SIDE half of the lost-machine hold line, which has no act row for the reason that row gives. Posted bare, like its two siblings (the outage retry and the turn-exhaustion retry) — giving it a row is a REGISTRY change, a tag, a kind, a state, a next actor and a subscriber, which DRE-6572 deliberately leaves for a later card. Named here so the debt is countable rather than invisible."
     },
     {
       "file": ".github/workflows/agent-fix.yml",
@@ -1530,6 +1580,13 @@
       "kind": "not-an-act",
       "means": "A repair card whose main is green again records that the repair is over, that no pull request was ever opened under it, and which completed run proves it — beside the move to Canceled (DRE-4411).",
       "why": "It reports an OUTCOME of the work — a flake that passed on its re-run, or somebody else's merge turning main green — rather than a refusal, a recovery, a hold or a progress act the pipeline chose for itself. The same class as the dependabot card's `cancel_note` two rows on, and as the merge→Done seam's `✅ Merged` line from the other end: its only reader is a person looking at the card, and the state change beside it is the machine-readable half. It carries its own idempotency key (repair_card.SETTLE_MARKER), read back off the card's own comments so a second sweep over a card whose cancel landed and whose comment did not writes nothing; a trailer beside that key would be a second grammar over a comment whose presence is load-bearing."
+    },
+    {
+      "file": "scripts/repair_card.py",
+      "anchor": "unlanded_note(branch, at, base)",
+      "kind": "not-an-act",
+      "means": "A repair card whose main is still red is told that a repair branch for its commit is on the remote, ahead of the default branch, with no pull request of any state on it — naming the branch and its head, and that the repair loop's own run or a person opens the pull request (DRE-6524).",
+      "why": "It reports a fact about a branch to a person, not an act: nothing downstream reads it, nothing budgets off it, it changes no lane and it discharges nothing — the card stays where rule 3 leaves it, and the repair loop's own run is still what opens the pull request. The same class as `settle_note` one row up. It carries its own idempotency key (repair_card.UNLANDED_MARKER), read back off the card's own comments beside the branch and its head sha, so a later sweep over the same head writes nothing and a head that moved gets one new comment; a trailer beside that key would be a second grammar over a comment whose presence is load-bearing."
     },
     {
       "file": "scripts/planning_route.py",

@@ -25,7 +25,9 @@ has not reached `fix_convergence.CEILING` attempts. A round that finds
 something new, leaves the earlier fixes holding and stays in scope spends
 nothing; a round that re-finds an earlier defect or reports a regression
 spends one, so a circling loop now stops at two attempts where it used to
-get three. Everything below is unchanged by that: the operator-decision
+get three. A streak of rounds that said nothing either way spends
+`fix_convergence.SILENCE_BUDGET` instead (DRE-6533), so it stops at three,
+as the retired counter did, under the stop name `silence`. Everything below is unchanged by that: the operator-decision
 re-arm, the hand-dispatch noop, and the conflict budget (five rounds,
 counted by attempt — main moving under a branch is not a convergence
 question and the two budgets have been separate since PR #13).
@@ -62,7 +64,12 @@ Contract with agent-fix.yml:
   --env-out    shell-sourceable ACTION/ATTEMPT/ATTEMPTS/REARMED/POST and
                STOPPED_BY/NONCONVERGING/STOP/CEILING lines, every value from
                a fixed vocabulary (a word or an integer), so sourcing it can
-               never execute thread text.
+               never execute thread text. STOPPED_BY is `none` or the stop's
+               name — in fix mode `ceiling`, `non-convergence` (a streak that
+               declared circling) or `silence` (a streak of rounds that said
+               nothing, DRE-6533), in conflict mode `budget` — and
+               resolve_fix_pr.sh and the Linear note each word the hold by it.
+               STOP stays `fix_convergence.STOP_BUDGET`.
   --note-out   the PR comment body to post, EMPTY when nothing should be
                posted (the notice is idempotent per answer).
   --classification-out
@@ -133,7 +140,7 @@ class Outcome:
         self.note = note              # PR comment body, or None
         self.summary = summary        # one line for the run record
         self.classification = classification  # the DRE-2817 receipt line
-        self.stopped_by = stopped_by  # None | non-convergence | ceiling
+        self.stopped_by = stopped_by  # None | non-convergence | silence | ceiling | budget
         self.streak = streak          # consecutive non-converging rounds
         self.ceiling = ceiling        # the attempt ceiling for this mode
 
@@ -229,11 +236,12 @@ def decide(
     if mode == "fix":
         state = fix_convergence.state(comments, attempts, critic_login)
         stopped_by, streak = state.stopped_by, state.streak
+        budget = state.budget
         classification = state.receipt()
         spent_because = state.hold_reason()
     else:
         stopped_by = "budget" if attempts >= cap else None
-        streak = 0
+        streak = budget = 0
         classification = ""
         spent_because = f"all {cap} rounds are spent"
 
@@ -242,7 +250,7 @@ def decide(
 
     if stopped_by is None:
         room = (f"{cap - attempts} of {cap} attempts left" if mode != "fix"
-                else f"{streak} of {fix_convergence.STOP_BUDGET} stop-budget "
+                else f"{streak} of {budget} stop-budget "
                      f"spent, attempt {attempts + 1} of a {cap} ceiling")
         return Outcome(
             "run", attempts + 1, attempts, False, None,

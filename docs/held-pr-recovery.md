@@ -10,13 +10,14 @@ When the fix loop runs out of budget it stops and posts a 🛑 hold on the PR:
 There is **one** way out of that state, and it is the one the hold comment
 asks for.
 
-## Which stop was it? (DRE-2817)
+## Which stop was it? (DRE-2817, DRE-6533)
 
-The hold names one of two stops, and they ask you for different things.
+The hold names one of three stops, and each asks you for something different.
 
 | The hold says | What happened | What you are being asked |
 | -- | -- | -- |
-| *N review rounds in a row made no progress* | The reviewer kept landing on the same ground — it re-found a problem an earlier round already named, or an earlier fix came undone | Settle it. The loop is circling and another round of it will not help |
+| *N review rounds in a row made no progress* | The reviewer kept landing on the same ground — at least one of the last rounds said it re-found a problem an earlier round already named, that an earlier fix came undone, or that the change grew past the card. Two such rounds in a row stop it | Settle it. The loop is circling and another round of it will not help |
+| *N reviews in a row did not say whether they found new ground* | The last three reviews each sent the PR back without saying whether the finding was new or a repeat, so none of them could be read as progress. The reviewer may have found something new each time — agent-bureau #3481 did, three times — and the record cannot show it | Read the last few findings. If each was new and each was fixed, release it; if they repeat, settle it as above |
 | *it reached the hard ceiling of N fix attempts* | The reviewer kept finding **new**, real problems and the loop ran out of runway. Nothing went backwards; it just never finished | Decide whether the remaining work belongs on this PR at all, or should be split |
 
 Each round also leaves a one-line record on the PR beside the fix attempt it
@@ -24,8 +25,9 @@ authorised:
 
 > 📊 fix-convergence: round 4 is CONVERGING — the finding is new, every earlier
 > fix still holds, and the change is still what the card asked for.
-> Non-converging rounds in a row: 0 of 2. Attempts so far: 3 of a 6-attempt
-> ceiling.
+> Non-converging rounds in a row: 0 of 3 — the loop stops at 2 when one of
+> them says it is circling, and at 3 when none of them says either way.
+> Attempts so far: 3 of a 6-attempt ceiling.
 
 So "why did this stop" is answerable from the thread without reading four
 verdicts.
@@ -36,7 +38,11 @@ closing in: four rounds, four different real defects, every earlier fix
 verified. The cap fired anyway and cost a night. The classification comes off
 the **critic's** verdict (a `convergence:` line it writes on every re-review),
 never off the fixing agent's account of its own progress. A verdict that says
-nothing counts as no progress: the claim has to come from the reviewer.
+nothing counts as no progress: the claim has to come from the reviewer. It
+spends a budget of its own, though — three such rounds in a row, the retired
+counter's number — so a reviewer that forgot to say is not read as one going
+in circles (DRE-6533). The reviewer is now told which round it is on, so the
+line is rarely left out.
 
 ## The recovery
 
@@ -125,7 +131,7 @@ conflict sweep, and dispatches at most once per sweep.
 | Route | Fires when | Log line |
 | -- | -- | -- |
 | approved-but-red | The critic APPROVEd and a CI check is failing, so nothing event-driven will fix it | `approved-but-red: …` |
-| dead-fix-run | The last fix run died of a model/API error or ran out of turns, and its trigger was consumed | `dead fix run: …` |
+| dead-fix-run | The last fix run died of a model/API error, ran out of turns, or lost its machine (the worker bot's `fix-run-runner-lost` comment, DRE-6572, dispatched only once it is 10 minutes old so the runner's own retry goes first), and its trigger was consumed | `dead fix run: …` |
 | answered-blocker | An operator decision landed after the loop's last 🛑 blocker | `answered blocker: …` |
 | standing-verdict | A blocking verdict — the critic's REQUEST_CHANGES or, since DRE-5230, the Verifier's FAIL — binds the current head, is over 20 minutes old, and no worker-bot comment is newer than it — the fix run it should have started never arrived | `evicted-verdict: …` |
 | committed-not-pushed | The last fix run finished its fix and GitHub refused the push (the worker bot's `fix-run-committed-not-pushed` comment, DRE-6351), the branch is still at the head that comment names, 30 minutes have passed, and no more than one such comment stands for that head — the delivery of the saved commits never landed | `committed-not-pushed: …` |
@@ -199,6 +205,7 @@ verdict on an OLDER commit, which is a different fault.
 | ⚠️ `operator-decision-near-miss` notice | Your comment did not parse — re-post it in the format above |
 | 🔁 re-dispatch receipt on a blocking verdict | Nothing. The sweep started the fix run the verdict never got. |
 | `fix-run-committed-not-pushed` comment | Nothing. The saved fix is being delivered; if the branch has not moved in 30 minutes the sweep restarts the fix loop once. |
+| ⚡ `fix-run-runner-lost` comment | Nothing. The fix run's machine was taken away before the agent finished, which is not a failed fix; the pipeline retries once on that commit. A second lost machine on the same commit holds for you with a 🛑 line instead. |
 | 🔄 `head-desync` notice | GitHub left the pull request on an older commit than its branch holds (DRE-6217, bp #780), so every check, the review and the merge gate were reading a commit the branch had already left. The sweep closed and reopened it once for that branch commit, which makes GitHub move the head. Nothing to do. If it is still behind on the next sweep, the sweep posts `head-desync-unresolved` once and stops: close and reopen it by hand, or push a new commit. |
 
 Related: `scripts/fix_budget.py` (the decision), `scripts/fix_convergence.py`

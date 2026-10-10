@@ -699,6 +699,27 @@ def _drive_promotion_stalled(mp):
     reconcile.promote_ready(active_count=0)
 
 
+@site("agent-blocker-resolved", "agent-blocker-resolved")
+def _drive_agent_blocker_resolved(mp):
+    """The blocker resolver's receipt (DRE-6508): a `nothing-to-change`
+    marker whose class module, stubbed here, canceled the card. Frozen from
+    its first render: there was no earlier wording to read it off."""
+    import blocker_class  # noqa: PLC0415 — only this driver needs it
+    import blocker_resolve  # noqa: PLC0415
+
+    reason = "- [x] The cap file says 15. — config/epic-cap.json holds 15 on main"
+    mp.setitem(sys.modules, "blocker_nothing_to_change", SimpleNamespace(
+        resolve=lambda *_a, **_k: ("canceled", "every criterion attested")))
+    card = {"identifier": "DRE-1", "title": "a one-off", "description": "work",
+            "labels": {"nodes": [{"name": "repo:bureau-pipeline"}]},
+            "comments": {"nodes": []}}
+    _card_recorder(mp)
+    blocker_resolve.resolve_blocker(
+        card, blocker_class.Blocker("nothing-to-change", reason,
+                                    f"🛑 Agent blocked: class=nothing-to-change · {reason}"),
+        repo="dreadnought-foundry/bureau-pipeline")
+
+
 #: The hygiene agent's fourteen acts (DRE-5368, DRE-6180, DRE-6451). The core composes every one of
 #: them through `hygiene.receipt` and posts it through its one comment seam,
 #: `hygiene.send`; WHICH act a pass takes is a lane module's decision, and the

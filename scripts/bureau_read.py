@@ -998,11 +998,12 @@ def _normal(node: dict) -> dict:
     order by (createdAt, body, author), relations as a set.
 
     ONLY the fields the node carries (DRE-5730). A key absent from a node is
-    a field its query never selected — Reconcile's board read has no `parent`,
-    its Backlog read no `priority` — and comparing it would report the query,
-    not the data. A field that was selected and came back null is present,
-    and IS compared. The door's own nodes are always whole: the client refuses
-    a door answer missing any field (`missing-field`) before it gets here."""
+    a field its query never selected — Reconcile's board read has no
+    `parent` — and comparing it would report the query, not the data. Its
+    Backlog read selects `priority` since DRE-6567, so that is compared. A
+    field that was selected and came back null is present, and IS compared.
+    The door's own nodes are always whole: the client refuses a door answer
+    missing any field (`missing-field`) before it gets here."""
     out = {}
     if "state" in node:
         out["lane"] = (node.get("state") or {}).get("name")

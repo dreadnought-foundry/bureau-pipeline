@@ -522,10 +522,14 @@ jobs:
           # Through env, never interpolated into the shell line.
           STOPPED_BY: ${{ steps.pr.outputs.stopped_by }}
         run: |
-          if [ "${{ steps.pr.outputs.mode }}" = "conflict" ]; then
-            MSG="🛑 Five conflict-resolution rounds couldn't keep this PR mergeable — main keeps moving under it. Needs a human decision."
-          elif [ "$STOPPED_BY" = "ceiling" ]; then
+          # DRE-6533: three fix-mode stops. Conflict mode's stop is always
+          # `budget`, so reading the two named fix stops first is safe.
+          if [ "$STOPPED_BY" = "ceiling" ]; then
             MSG="🛑 The review kept finding new, real problems on this change and the fix loop ran out of runway after several rounds. Nothing here says the work is going backwards — it just never finished. This card needs a human decision. See PR for the full review trail."
+          elif [ "$STOPPED_BY" = "silence" ]; then
+            MSG="🛑 The last few reviews did not say whether they found new ground or repeated themselves, so none of them could be read as progress and the fix loop stopped rather than run on blind. The reviewer may have found something new each time — the record cannot show it. This card needs a human decision. See PR for the full review trail."
+          elif [ "${{ steps.pr.outputs.mode }}" = "conflict" ]; then
+            MSG="🛑 Five conflict-resolution rounds couldn't keep this PR mergeable — main keeps moving under it. Needs a human decision."
           else
             MSG="🛑 The last few review rounds stopped making progress — the reviewer kept landing on the same ground rather than new ground — so the fix loop stopped rather than spend another round on it. This card needs a human decision. See PR for the full review trail."
           fi
@@ -1925,6 +1929,11 @@ jobs:
           ATTEMPT: ${{ steps.pr.outputs.attempt }}
           MODE: ${{ steps.pr.outputs.mode }}
           EXEC_FILE: ${{ steps.claude.outputs.execution_file }}
+          # DRE-6572: how the agent step ended — the same expression the
+          # death-receipt step reads as MODEL_STEP_OUTCOME. With no result
+          # record, `failure` or `cancelled` here and the job's own words are
+          # what tell a machine taken mid-run from a run that changed nothing.
+          AGENT_STEP_OUTCOME: ${{ steps.claude.outcome }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
           # DRE-6350: what the Push rescue step did, for the Report to say on
           # the pull request. Wired here so DRE-6351, which teaches

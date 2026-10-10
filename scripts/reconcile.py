@@ -5962,6 +5962,9 @@ def backlog_children(
     field the query never fetched would report "no children" for every epic on
     the board.
 
+    `priority` is selected for the promotion order (DRE-6567): `promote_ready`
+    takes Urgent cards first, and this read is where it learns which those are.
+
     `only` — identifiers — narrows the read to those cards, still in Backlog,
     in one request (DRE-3236): the merge path asks for the merged card's own
     dependents and nothing else. Same node shape, so the gate that reads them
@@ -6009,7 +6012,7 @@ def backlog_children(
              %s
              state: {name: {eq: "Backlog"}}
            }) { nodes {
-             id identifier title description createdAt%s
+             id identifier title description createdAt priority%s
              parent { identifier state { name } }
              children(first: 1) { nodes { id } }
              labels { nodes { name } }
@@ -7052,7 +7055,7 @@ def promote_ready(
     because "a hand-built card needs no room" (the lane contract's words). An
     early return at the cap starved a person's card on every ordinary busy day
     (PR #430's review); so did breaking out of the loop once the budget was
-    spent, since the candidates are read lowest number first.
+    spent, since a person's card can stand anywhere in the order.
 
     And a refusal is read back as a clock (DRE-4210). Every exit that leaves a
     card of this repo in Backlog for a reason that is NOT a declared wait —
@@ -7126,9 +7129,16 @@ def promote_ready(
     # The same thread whole, for the epic cap's hold (DRE-6493) — read past
     # the window only for an epic whose window is full, once per sweep.
     cap_thread: dict[str, list | None] = {}
+    # THE ORDER, and the only rule that decides it (DRE-6567): Urgent first,
+    # then card number ascending within each. Every gate below decides
+    # WHETHER a card goes, never in what order. By number alone, an Urgent
+    # fix filed today waited behind every older ready card — on 2026-10-09
+    # DRE-6560 was the 31st of 31 at a full cap, and the fix the cap was
+    # waiting on. A card read with no `priority` sorts among the rest.
     candidates = sorted(
         backlog_children() if candidates is None else candidates,
-        key=lambda c: int(c["identifier"].split("-")[1]),
+        key=lambda c: (c.get("priority") != URGENT_PRIORITY,
+                       int(c["identifier"].split("-")[1])),
     )
     if close_epics:
         closed = set(
@@ -7183,21 +7193,37 @@ def promote_ready(
             # Backlog must not print 200 lines. Said at the FIRST card held —
             # the count is already exact there, because `spent` never falls and
             # a hand-built promotion never raises it, so every later card of
-            # this repo's that needs a slot is held too. `candidates` is sorted
-            # ascending by card number, so the cards left waiting are always
-            # the newest, every sweep.
+            # this repo's that needs a slot is held too. `candidates` is in
+            # promotion order — Urgent first, then by number (DRE-6567) — so
+            # the first card left waiting is not always the lowest-numbered,
+            # and the line asks for that by number rather than by position.
             if not waiting_reported:
                 waiting_reported = True
                 unconsidered = [
-                    c["identifier"] for c in candidates[index:]
+                    c for c in candidates[index:]
                     if card_repo(c) == REPO_SLUG
                     and not takes_no_slot(card_comment_bodies(c))
                 ]
+                lowest = min(
+                    unconsidered, key=lambda c: int(c["identifier"].split("-")[1]))
                 print(
                     f"promotion: WIP budget spent ({spent}/{max(budget, 0)} "
                     f"dispatched) — {len(unconsidered)} candidate(s) not "
-                    f"considered this sweep, lowest-numbered {unconsidered[0]}"
+                    f"considered this sweep, lowest-numbered {lowest['identifier']}"
                 )
+                # A waiting Urgent card is named in the sweep's own log
+                # (DRE-6567), so a person can see it and decide — whether one
+                # may take a slot over the cap is theirs, not this line's.
+                # Every Urgent card the cap held, not only the ready ones: the
+                # cap stops a card before any gate below is asked, and asking
+                # them here would spend reads on a sweep with no room to act.
+                urgent = [c["identifier"] for c in unconsidered
+                          if c.get("priority") == URGENT_PRIORITY]
+                if urgent:
+                    print(
+                        "promotion: Urgent card(s) held at the cap, gates not "
+                        f"yet asked: {', '.join(urgent)}"
+                    )
             continue
         if card_is_epic(card, bodies):
             print(
@@ -10033,7 +10059,13 @@ def retry_dead_fix_runs() -> None:
     a planted marker must not spawn fix runs (DRE-1995/1998 discipline).
     Skips DIRTY PRs (unstick_conflicts owns those) and backs off while a fix
     run is queued/in_progress; one dispatch per sweep, like
-    fix_approved_but_red."""
+    fix_approved_but_red.
+
+    A lost machine (DRE-6572, fix_dead_run.RUNNER_LOST_TAG) is dispatched only
+    once its marker is RUNNER_LOST_WAIT_MINUTES old: RunsOn retries the same
+    run by itself a few minutes after the attempt ends, and by the wait that
+    retry is in progress (the busy guard stands down) or has posted a newer
+    worker-bot comment (the marker is no longer the newest)."""
     # Unreadable answers BUSY (gh_actions_read): the App token 403s on this
     # API, and the old `or "[]"` turned that into "nothing running" — the
     # backoff failed OPEN at every one of these sites.
@@ -10048,22 +10080,30 @@ def retry_dead_fix_runs() -> None:
     for pr in prs:
         if not card_branch(pr["headRefName"]) or pr.get("mergeStateStatus") == "DIRTY":
             continue
-        worker = [
-            c.get("body") or ""
-            for c in pr.get("comments", [])
-            if is_worker_bot_comment(c)
-        ]
-        if not worker or not any(t in worker[-1] for t in fix_dead_run.RETRY_MARKERS):
+        worker = [c for c in pr.get("comments", []) if is_worker_bot_comment(c)]
+        newest = (worker[-1].get("body") or "") if worker else ""
+        if not newest or not any(t in newest for t in fix_dead_run.RETRY_MARKERS):
             continue
+        if fix_dead_run.RUNNER_LOST_TAG in newest:
+            # DRE-6572: RunsOn starts its own retry of the same run minutes
+            # after the attempt ends, and the busy guard cannot see a retry
+            # that has not started. Wait it out; an unreadable timestamp waits.
+            when = worker[-1].get("createdAt")
+            if not when or age_minutes(when) < fix_dead_run.RUNNER_LOST_WAIT_MINUTES:
+                print(f"dead fix run: PR #{pr['number']} lost its machine — "
+                      f"waiting {fix_dead_run.RUNNER_LOST_WAIT_MINUTES} minutes "
+                      "for the runner's own retry")
+                continue
         if fix_dispatch_blocked(pr):
             continue  # human-parked card (DRE-2024) — the loop is over
         if fix_agent_absent_hold(pr):
             return  # no fix agent in this repo — a person is told once (DRE-4378)
-        why = (
-            "ran out of turns"
-            if fix_dead_run.TURN_CAP_TAG in worker[-1]
-            else "died of a model/API error"
-        )
+        if fix_dead_run.TURN_CAP_TAG in newest:
+            why = "ran out of turns"
+        elif fix_dead_run.RUNNER_LOST_TAG in newest:
+            why = "lost its machine"
+        else:
+            why = "died of a model/API error"
         print(
             f"dead fix run: PR #{pr['number']} last fix run {why} — "
             f"re-dispatching fix agent"
@@ -12993,7 +13033,7 @@ _SETTLE_DEGRADE_THEN = "the card is left exactly as it is and re-read next sweep
 
 
 class _RepairSettleOps:
-    """The two seams `repair_card.settle` reads, wired to this sweep's own.
+    """The seams `repair_card.settle` reads, wired to this sweep's own.
 
     Every read here is one this pass has already paid for, or pays for once.
     `active_cards()` is the ONE board read (DRE-2929) and costs nothing extra.
@@ -13016,6 +13056,11 @@ class _RepairSettleOps:
     whole of what an UNKNOWN owes, and six red sweeps an hour over a bucket
     that refills on its own said nothing a `DEGRADED:` line does not
     (DRE-4214).
+
+    Rule 3's three branch reads (DRE-6524) — `branch_heads`, `pulls_for_head`
+    and `compare` — follow the same two rules: lazy, because `settle` makes
+    them only after a red reading, and memoised for the pass, failures
+    included, for the reason `workflow_runs` gives below.
     """
 
     def __init__(self) -> None:
@@ -13023,6 +13068,10 @@ class _RepairSettleOps:
         self._refs_read = False
         self._runs: dict = {}
         self._cards: dict = {}
+        self._heads: dict | None = None
+        self._heads_read = False
+        self._pulls: dict = {}
+        self._compared: dict = {}
 
     def repair_cards(self) -> list:
         """This sweep's repair cards, normalised — discovered by the title
@@ -13105,6 +13154,58 @@ class _RepairSettleOps:
         self._runs[workflow_name] = runs
         return runs
 
+    def _settle_json(self, what: str, *args: str):
+        """One `gh_read` parsed, or None with a `DEGRADED:` line saying so."""
+        try:
+            return json.loads(gh_read(*args) or "null")
+        except Exception as e:  # noqa: BLE001 — an unreadable answer is UNKNOWN
+            _degrade("repair settle", what, e, then=_SETTLE_DEGRADE_THEN)
+            return None
+
+    def branch_heads(self):
+        """Every `repair/` branch on the remote → its head sha, read once per
+        pass, or None."""
+        if self._heads_read:
+            return self._heads
+        self._heads_read = True
+        listing = self._settle_json(
+            "the repair branches",
+            "api", f"repos/{REPO}/git/matching-refs/heads/repair/")
+        if isinstance(listing, list):
+            self._heads = {
+                (ref.get("ref") or "").removeprefix("refs/heads/"):
+                    (ref.get("object") or {}).get("sha") or ""
+                for ref in listing if isinstance(ref, dict)
+            }
+        return self._heads
+
+    def pulls_for_head(self, branch: str):
+        """The state of every pull request of ANY state whose head is
+        `branch`, or None. A closed one counts: somebody already looked."""
+        if branch not in self._pulls:
+            listing = self._settle_json(
+                f"the pull requests on {branch!r}",
+                "pr", "list", "--repo", REPO, "--head", branch,
+                "--state", "all", "--json", "state")
+            self._pulls[branch] = (
+                [pr.get("state") or "" for pr in listing if isinstance(pr, dict)]
+                if isinstance(listing, list) else None)
+        return self._pulls[branch]
+
+    def compare(self, base: str, head: str):
+        """GitHub's compare payload for `base...head` (`status`, `ahead_by`),
+        or None."""
+        key = (base, head)
+        if key not in self._compared:
+            payload = self._settle_json(
+                f"how far {head!r} is ahead of {base!r}",
+                "api", f"repos/{REPO}/compare/"
+                       f"{urllib.parse.quote(base, safe='/')}..."
+                       f"{urllib.parse.quote(head, safe='/')}",
+                "--jq", "{status: .status, ahead_by: .ahead_by}")
+            self._compared[key] = payload if isinstance(payload, dict) else None
+        return self._compared[key]
+
     def cancel(self, identifier: str) -> None:
         # From-lane-conditional on the door's reading (item 33). Refused, it
         # raises: `settle` then records it rather than posting a cancel note
@@ -13134,6 +13235,7 @@ def settle_repair_cards() -> None:
     report = repair_card.settle(
         repo_slug=REPO_SLUG, ops=_RepairSettleOps(),
         fatal=(linear_ops.LinearRateLimited, BoardNotRead),
+        base=default_branch(),
     )
     for failure in report.failures:
         _write_failures.append(failure)

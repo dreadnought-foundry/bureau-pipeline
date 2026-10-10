@@ -63,6 +63,20 @@ def _valid(**over) -> dict:
     return {k: v for k, v in data.items() if v is not None}
 
 
+def _session(**over) -> dict:
+    """A valid declaration whose `login` declares the `session` kind;
+    `over` replaces keys of `login.session`, a None value drops one."""
+    session = {
+        "local_storage": [{"key": "app_id_token", "from": "id_token"},
+                          {"key": "app_refresh_token", "from": "refresh_token"}],
+        "cookies": [{"name": "app_session", "from": "session_cookie"}],
+    }
+    session.update(over)
+    session = {k: v for k, v in session.items() if v is not None}
+    return _valid(login={"command": "node scripts/proof-session.mjs",
+                         "session": session})
+
+
 class _Repo:
     """A repo root with `.github/bureau/` holding the files a test names."""
 
@@ -234,6 +248,121 @@ class CheckTest(unittest.TestCase):
         del data["login"]["command"]
         self.assertIn("login.command", self.reason(data))
 
+    # The `session` kind (DRE-6536): a sign-in that fills no form.
+
+    def test_a_session_login_is_accepted_with_the_same_ok_line(self):
+        with TemporaryDirectory() as tmp:
+            repo = _Repo(tmp, _session())
+            done = _run("check", "--declaration", str(repo.declaration))
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertEqual(done.stdout.strip(),
+                         "proof-local: ok — surface portals, 2 page(s), login declared")
+
+    def test_a_session_login_with_one_list_is_accepted(self):
+        for absent in ("local_storage", "cookies"):
+            with self.subTest(absent=absent):
+                found = proof_local.validate(_session(**{absent: None}), RELEASE)
+                self.assertEqual(found.login["session"][absent], [])
+
+    def test_a_login_carrying_both_kinds_is_refused(self):
+        data = _session()
+        data["login"]["form"] = _valid()["login"]["form"]
+        self.assertIn("`login` carries both `form` and `session` — declare one",
+                      self.reason(data))
+
+    def test_a_login_carrying_neither_kind_is_refused(self):
+        line = self.reason(_valid(login={"command": "node scripts/proof-login.mjs"}))
+        self.assertIn("`login` must carry one of `form` or `session` beside `command`",
+                      line)
+
+    def test_a_session_with_no_entry_is_refused(self):
+        for session in ({}, {"local_storage": []}, {"cookies": []},
+                        {"local_storage": [], "cookies": []}):
+            data = _valid(login={"command": "x", "session": session})
+            with self.subTest(session=session):
+                line = self.reason(data)
+                self.assertIn("login.session", line)
+                self.assertIn("no entry", line)
+
+    def test_a_session_that_is_not_an_object_is_refused(self):
+        data = _valid(login={"command": "x", "session": [{"key": "a", "from": "b"}]})
+        self.assertIn("login.session", self.reason(data))
+
+    def test_a_session_list_that_is_not_a_list_is_refused(self):
+        line = self.reason(_session(cookies={"name": "a", "from": "b"}))
+        self.assertIn("login.session.cookies", line)
+        self.assertIn("list", line)
+
+    def test_an_entry_that_is_not_an_object_is_refused(self):
+        line = self.reason(_session(local_storage=["app_id_token"]))
+        self.assertIn("login.session.local_storage[0]", line)
+
+    def test_an_entry_missing_from_is_refused_and_named(self):
+        for where, entry, path in (
+                ("cookies", {"name": "app_session"}, "login.session.cookies[0].from"),
+                ("local_storage", {"key": "k"}, "login.session.local_storage[0].from")):
+            with self.subTest(where=where):
+                self.assertIn(path, self.reason(_session(**{where: [entry]})))
+
+    def test_a_from_of_the_wrong_shape_is_refused_and_named(self):
+        for bad in ("", "1token", "id-token", "id token", "id.token", "tök",
+                    "id_token\n", 5, None, ["id_token"]):
+            entry = {"name": "app_session", "from": bad}
+            with self.subTest(bad=bad):
+                line = self.reason(_session(cookies=[entry]))
+                self.assertIn("login.session.cookies[0].from", line)
+
+    def test_a_from_of_the_right_shape_is_accepted(self):
+        for good in ("_", "a", "id_token", "Token2", "_9"):
+            with self.subTest(good=good):
+                proof_local.validate(
+                    _session(cookies=[{"name": "c", "from": good}]), RELEASE)
+
+    def test_an_entry_missing_its_key_or_name_is_refused_and_named(self):
+        for where, entry, path in (
+                ("local_storage", {"from": "id_token"}, "login.session.local_storage[0].key"),
+                ("cookies", {"from": "id_token"}, "login.session.cookies[0].name"),
+                ("local_storage", {"key": "", "from": "a"}, "login.session.local_storage[0].key"),
+                ("cookies", {"name": "a\nb", "from": "a"}, "login.session.cookies[0].name")):
+            with self.subTest(where=where, entry=entry):
+                self.assertIn(path, self.reason(_session(**{where: [entry]})))
+
+    def test_two_entries_sharing_a_key_or_name_are_refused(self):
+        for where, field in (("local_storage", "key"), ("cookies", "name")):
+            entries = [{field: "same", "from": "a"}, {field: "same", "from": "b"}]
+            with self.subTest(where=where):
+                line = self.reason(_session(**{where: entries}))
+                self.assertIn(f"login.session.{where}[1].{field}", line)
+                self.assertIn("same", line)
+
+    def test_the_same_name_in_both_lists_is_accepted(self):
+        proof_local.validate(_session(local_storage=[{"key": "t", "from": "a"}],
+                                      cookies=[{"name": "t", "from": "a"}]), RELEASE)
+
+    def test_an_unknown_key_inside_the_session_is_refused(self):
+        line = self.reason(_session(session_storage=[{"key": "a", "from": "b"}]))
+        self.assertIn("login.session", line)
+        self.assertIn("session_storage", line)
+
+    def test_an_unknown_key_inside_an_entry_is_refused(self):
+        for where, entry, extra in (
+                ("local_storage", {"key": "k", "from": "a", "value": "v"}, "value"),
+                ("local_storage", {"key": "k", "name": "k", "from": "a"}, "name"),
+                ("cookies", {"name": "n", "from": "a", "domain": "evil.test"}, "domain"),
+                ("cookies", {"name": "n", "key": "n", "from": "a"}, "key")):
+            with self.subTest(where=where, extra=extra):
+                line = self.reason(_session(**{where: [entry]}))
+                self.assertIn(f"login.session.{where}[0]", line)
+                self.assertIn(f"unknown key(s) {extra}", line)
+
+    def test_the_contract_names_are_the_modules(self):
+        self.assertEqual(proof_local.LOGIN_KINDS, ("form", "session"))
+        self.assertEqual(proof_local.LOGIN_KEYS, ("command", "form", "session"))
+        self.assertEqual(proof_local.SESSION_KEYS, ("local_storage", "cookies"))
+        self.assertEqual(proof_local.STORAGE_ENTRY_KEYS, ("key", "from"))
+        self.assertEqual(proof_local.COOKIE_ENTRY_KEYS, ("name", "from"))
+        self.assertEqual(proof_local.FORM_FIELDS, ("username", "password", "submit"))
+
     def test_start_is_required(self):
         data = _valid()
         del data["start"]
@@ -284,6 +413,44 @@ class LoadTest(unittest.TestCase):
         self.assertIsNone(found.setup)
         self.assertIsNone(found.login)
         self.assertEqual(found.ready_timeout_seconds, 180)
+
+    def test_a_form_login_loads_exactly_as_before(self):
+        with TemporaryDirectory() as tmp:
+            repo = _Repo(tmp, _valid())
+            found = proof_local.load(repo.declaration)
+        self.assertEqual(found.login, {
+            "command": "node scripts/proof-login.mjs",
+            "form": {"username": "#email", "password": "#password",
+                     "submit": "button[type=submit]"}})
+
+    def test_a_session_login_loads_as_command_and_both_lists(self):
+        with TemporaryDirectory() as tmp:
+            repo = _Repo(tmp, _session())
+            found = proof_local.load(repo.declaration)
+        self.assertEqual(found.login, {
+            "command": "node scripts/proof-session.mjs",
+            "session": {
+                "local_storage": [{"key": "app_id_token", "from": "id_token"},
+                                  {"key": "app_refresh_token", "from": "refresh_token"}],
+                "cookies": [{"name": "app_session", "from": "session_cookie"}]}})
+        self.assertNotIn("form", found.login)
+
+    def test_a_session_login_returns_an_absent_list_as_empty(self):
+        with TemporaryDirectory() as tmp:
+            repo = _Repo(tmp, _session(local_storage=None))
+            found = proof_local.load(repo.declaration)
+        self.assertEqual(found.login["session"], {
+            "local_storage": [],
+            "cookies": [{"name": "app_session", "from": "session_cookie"}]})
+        self.assertEqual(list(found.login["session"]), ["local_storage", "cookies"])
+
+    def test_a_session_login_keeps_the_declared_order(self):
+        entries = [{"key": k, "from": k} for k in ("zeta", "alpha", "mid")]
+        found = proof_local.validate(_session(local_storage=entries, cookies=None),
+                                     RELEASE)
+        self.assertEqual([e["key"] for e in found.login["session"]["local_storage"]],
+                         ["zeta", "alpha", "mid"])
+        self.assertEqual(found.login["session"]["cookies"], [])
 
     def test_an_invalid_file_raises_invalid(self):
         with TemporaryDirectory() as tmp:
@@ -527,6 +694,40 @@ class DocTest(unittest.TestCase):
     def test_it_leaves_the_runtime_and_the_workflow_to_the_siblings(self):
         self.assertSays("DRE-6025")
         self.assertSays("DRE-6047")
+
+    def test_it_describes_the_session_kind(self):
+        for name in ("`login.session`", "`local_storage`", "`cookies`", "`from`"):
+            self.assertIn(name, self.text)
+        self.assertSays("`login` carries both `form` and `session` — declare one")
+        self.assertSays("`login` must carry one of `form` or `session` beside `command`")
+        self.assertSays("its own sign-in page offers no password path")
+        self.assertSays("`[A-Za-z_][A-Za-z0-9_]*`")
+        self.assertSays("before the first declared page is opened")
+
+    def test_it_keeps_the_login_file_rules_for_the_session_kind(self):
+        section = _section(self.text, "The `session` kind")
+        for phrase in ("written 0600", "never printed",
+                       "never put on a command line",
+                       "removed at the end of the run", "`proof_browser.py stop`",
+                       "runs once"):
+            self.assertRegex(section, _loose(phrase))
+
+    def test_the_session_worked_example_is_accepted(self):
+        section = _section(self.text, "The `session` kind")
+        blocks = re.findall(r"```json\n(.*?)```", section, re.S)
+        example = json.loads(blocks[-1])
+        found = proof_local.validate(
+            example, {"surfaces": {example["surface"]: {"tag_series": ["v*"]}}})
+        self.assertEqual(len(found.login["session"]["local_storage"]), 2)
+        self.assertEqual(len(found.login["session"]["cookies"]), 1)
+        self.assertNotIn("form", found.login)
+        self.assertNotIn("eb_", blocks[-1], "the example names Portico's keys")
+
+
+def _section(text: str, title: str) -> str:
+    found = re.search(rf"^## {re.escape(title)}\n(.*?)(?=^## |\Z)", text, re.S | re.M)
+    assert found, f"docs/proof-local-run.md must carry `## {title}`"
+    return found.group(1)
 
 
 class PlannerBriefTest(unittest.TestCase):
