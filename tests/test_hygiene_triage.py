@@ -12,7 +12,11 @@ mechanical defects the standard already names, returning the card to
   4. a proof with an open pull request — moved to In Review;
   5. a card whose parent epic is Canceled or Duplicate — canceled;
   6. a card held `no-route` (DRE-6190) — its newest `🔒 hold:` stamp says so,
-     and the holds lane owns its lift: one `Left` row and no other rule.
+     and the holds lane owns its lift: one `Left` row and no other rule;
+  7. a card held on a planning reason (DRE-6451) — `plan-critic-bound` or
+     `epic-rereview-twice`: one `Left` row naming the reason, its age in
+     Triage and the park note, and once past `HYGIENE_TRIAGE_ALARM_HOURS` an
+     alarm receipt the core's (tag, cause) key posts once.
 
 Everything else is a `Left` row naming what a person must do.
 
@@ -32,6 +36,7 @@ import importlib.util
 import json
 import os
 import re
+import subprocess
 import sys
 from datetime import UTC, datetime
 from pathlib import Path
@@ -565,7 +570,9 @@ class TestLeftForAPerson:
 # the whole fixture                                                            #
 # --------------------------------------------------------------------------- #
 
-EXPECTED = {
+#: What the fixture yielded before DRE-6451 added its two planning-held cards,
+#: and what those cards add — the first must not move.
+EXPECTED_BEFORE = {
     "DRE-4401": "hygiene-triage-return",
     "DRE-4402": "hygiene-cause-name",
     "DRE-4404": "hygiene-triage-return",
@@ -575,7 +582,10 @@ EXPECTED = {
     "DRE-4431": "hygiene-review-move",
     "DRE-4441": "hygiene-card-cancel",
 }
-LEFT = ["DRE-4402", "DRE-4403", "DRE-4412", "DRE-4423", "DRE-4432", "DRE-4451"]
+LEFT_BEFORE = ["DRE-4402", "DRE-4403", "DRE-4412", "DRE-4423", "DRE-4432", "DRE-4451"]
+PLANNING_HELD = ("DRE-4424", "DRE-4425")
+EXPECTED = {**EXPECTED_BEFORE, "DRE-4424": "hygiene-triage-alarm"}
+LEFT = sorted(LEFT_BEFORE + list(PLANNING_HELD))
 
 _CLOCK = re.compile(r"\b\d{1,2}:\d{2}\b|\bPT\b|\bUTC\b")
 _COUNT = re.compile(r"\b\d+\s+(?:time|times|attempt|attempts|round|rounds|minute|minutes|"
@@ -588,6 +598,13 @@ class TestTheWholeFixture:
         assert {a.target: a.act for a in actions(items)} == EXPECTED
         assert len(actions(items)) == len(EXPECTED)
         assert sorted(r.target for r in lefts(items)) == LEFT
+
+    def test_every_card_before_the_planning_holds_yields_what_it_yielded(self):
+        items, _ctx, _gh, _linear = plan()
+        before = [i for i in items if i.target not in PLANNING_HELD]
+        assert {a.target: a.act for a in actions(before)} == EXPECTED_BEFORE
+        assert len(actions(before)) == len(EXPECTED_BEFORE)
+        assert sorted(r.target for r in lefts(before)) == LEFT_BEFORE
 
     def test_no_action_writes_todo_in_progress_or_done(self):
         items, ctx, _gh, _linear = plan()
@@ -683,6 +700,271 @@ class TestIdempotency:
         again = [a for a in ledger2["actions"] if a["target"] == "DRE-4441"]
         assert [(a["outcome"], a["cause"]) for a in again] == [
             ("executed", "parent DRE-4440 is Duplicate")]
+
+
+# --------------------------------------------------------------------------- #
+# (7) a card held on a planning reason (DRE-6451)                              #
+# --------------------------------------------------------------------------- #
+
+ALARM_VAR = "HYGIENE_TRIAGE_ALARM_HOURS"
+CRITIC_STAMP = "🔒 hold: reason=plan-critic-bound at=none lifts=manual by=plan.yml"
+REREVIEW_STAMP = ("🔒 hold: reason=epic-rereview-twice at=none lifts=manual "
+                  "by=rereview_watch.py")
+PARKED = "🛑 Parked in Triage with needs-human for an operator — "
+ALARM_CAUSE = "held plan-critic-bound past the 8-hour bound in Triage"
+WAY_BACK = ("read the park note's own way back — clear needs-human and move the card to "
+            "Planning for a fresh planning attempt, or answer the Green Light question "
+            "when the exit asked one")
+
+
+def park_note(doc, ident):
+    return card(doc, ident)["comments"]["nodes"][-2]["body"]
+
+
+@pytest.fixture(autouse=True)
+def _no_alarm_override(monkeypatch):
+    monkeypatch.delenv(ALARM_VAR, raising=False)
+
+
+class TestAPlanningHeldCard:
+    def test_the_reasons_and_the_bound_are_named_once(self):
+        assert lane.PLANNING_REASONS == ("plan-critic-bound", "epic-rereview-twice")
+        assert lane.DEFAULT_ALARM_HOURS == 8
+        assert lane.alarm_hours() == 8
+
+    @pytest.mark.parametrize("ident, stamp, entered", [
+        ("DRE-4424", CRITIC_STAMP, "2026-09-30T06:00:00.000Z"),
+        ("DRE-4425", REREVIEW_STAMP, "2026-09-30T19:00:00.000Z"),
+    ])
+    def test_the_fixture_cards_carry_the_label_the_park_note_and_the_stamp_newest(
+            self, ident, stamp, entered):
+        held = card(fixture(), ident)
+        assert {"agent:planner", "repo:bureau-pipeline", "needs-human"} <= {
+            n["name"] for n in held["labels"]["nodes"]}
+        assert held["comments"]["nodes"][-1]["body"] == stamp
+        assert held["comments"]["nodes"][-2]["body"].startswith(PARKED)
+        assert {"createdAt": entered, "toState": {"name": "Triage"}} in held["history"]["nodes"]
+
+    def test_a_card_past_the_bound_is_one_row_and_one_alarm(self):
+        doc = fixture()
+        items, ctx, _gh, _linear = plan(doc)
+        rows = lefts(items, "DRE-4424")
+        assert len(rows) == 1
+        assert rows[0].why.startswith("held plan-critic-bound for 15 hours in Triage — ")
+        assert rows[0].why == ("held plan-critic-bound for 15 hours in Triage — "
+                               + park_note(doc, "DRE-4424")[:160])
+        assert rows[0].recommendation == WAY_BACK
+        action = the_action(items, "DRE-4424")
+        assert action.act == "hygiene-triage-alarm"
+        assert action.cause == ALARM_CAUSE
+        assert action.evidence == [CRITIC_STAMP, "entered Triage 2026-09-30T06:00:00Z"]
+        assert kinds(action) == ["linear_comment"]
+        assert not [w for w in action.writes if w.kind in ("linear_state", "linear_label")]
+        assert comment_of(action).splitlines()[0] == (
+            f"🧹 hygiene: hyg-triage-aged — {ALARM_CAUSE} · 14:05 PT")
+        for write in action.writes:
+            hygiene.guard(write, ctx)
+
+    def test_a_card_inside_the_bound_is_one_row_and_no_alarm(self):
+        doc = fixture()
+        items, _ctx, _gh, _linear = plan(doc)
+        assert actions(items, "DRE-4425") == []
+        rows = lefts(items, "DRE-4425")
+        assert len(rows) == 1
+        assert rows[0].why.startswith("held epic-rereview-twice for 2 hours in Triage — ")
+        assert rows[0].recommendation == WAY_BACK
+
+    def test_the_row_carries_the_park_notes_first_line_trimmed_to_160_characters(self):
+        doc = fixture()
+        items, _ctx, _gh, _linear = plan(doc)
+        note = park_note(doc, "DRE-4425")
+        first = note.splitlines()[0]
+        assert "\n" in note and len(first) <= 160
+        assert lefts(items, "DRE-4425")[0].why.endswith(" — " + first)
+        assert len(park_note(doc, "DRE-4424")) > 160
+        why = lefts(items, "DRE-4424")[0].why
+        assert why.endswith(" — " + park_note(doc, "DRE-4424")[:160])
+
+    def test_the_newest_triage_entry_decides_the_age(self):
+        doc = fixture()
+        card(doc, "DRE-4424")["history"]["nodes"].insert(
+            0, {"createdAt": "2026-09-30T20:00:00.000Z", "toState": {"name": "Triage"}})
+        items, _ctx, _gh, _linear = plan(doc)
+        assert lefts(items, "DRE-4424")[0].why.startswith(
+            "held plan-critic-bound for 1 hour in Triage — ")
+        assert actions(items, "DRE-4424") == []
+
+    def test_a_lower_bound_alarms_the_younger_card_too(self, monkeypatch):
+        monkeypatch.setenv(ALARM_VAR, "1")
+        items, _ctx, _gh, _linear = plan()
+        action = the_action(items, "DRE-4425")
+        assert action.act == "hygiene-triage-alarm"
+        assert action.cause == "held epic-rereview-twice past the 1-hour bound in Triage"
+        assert action.evidence == [REREVIEW_STAMP, "entered Triage 2026-09-30T19:00:00Z"]
+        assert kinds(action) == ["linear_comment"]
+        assert the_action(items, "DRE-4424").cause == (
+            "held plan-critic-bound past the 1-hour bound in Triage")
+
+    @pytest.mark.parametrize("value", ["0", "abc", "-3"])
+    def test_a_bound_that_is_not_a_positive_number_raises(self, monkeypatch, value):
+        monkeypatch.setenv(ALARM_VAR, value)
+        with pytest.raises(ValueError, match=ALARM_VAR):
+            lane.alarm_hours()
+        with pytest.raises(ValueError, match=ALARM_VAR):
+            plan()
+
+    def test_no_triage_entry_read_takes_the_age_off_the_stamp_comment(self):
+        doc = fixture()
+        held = card(doc, "DRE-4424")
+        held["history"]["nodes"] = [n for n in held["history"]["nodes"]
+                                    if n["toState"]["name"] != "Triage"]
+        held["comments"]["nodes"][-1]["createdAt"] = "2026-09-30T10:00:00.000Z"
+        items, _ctx, _gh, _linear = plan(doc)
+        assert lefts(items, "DRE-4424")[0].why.startswith(
+            "held plan-critic-bound for 11 hours in Triage — ")
+        action = the_action(items, "DRE-4424")
+        assert action.cause == ALARM_CAUSE
+        assert action.evidence == [CRITIC_STAMP, "stamped 2026-09-30T10:00:00Z"]
+
+    def test_neither_read_is_age_unknown_and_never_an_alarm(self):
+        doc = fixture()
+        held = card(doc, "DRE-4424")
+        held["history"]["nodes"] = []
+        del held["comments"]["nodes"][-1]["createdAt"]
+        items, _ctx, _gh, _linear = plan(doc)
+        rows = lefts(items, "DRE-4424")
+        assert len(rows) == 1
+        assert "age unknown" in rows[0].why and "hours" not in rows[0].why
+        assert rows[0].why.startswith("held plan-critic-bound ")
+        assert actions(items, "DRE-4424") == []
+
+    def test_it_reads_before_the_retired_repo_rule(self):
+        doc = fixture()
+        held = card(doc, "DRE-4424")
+        held["labels"]["nodes"] = [{"name": "repo:legacy-site"} if n["name"].startswith("repo:")
+                                   else n for n in held["labels"]["nodes"]]
+        items, _ctx, _gh, _linear = plan(doc)
+        assert the_action(items, "DRE-4424").act == "hygiene-triage-alarm"
+        assert lefts(items, "DRE-4424")[0].why.startswith("held plan-critic-bound for ")
+
+    def test_a_canceled_parent_outranks_the_planning_hold(self):
+        doc = fixture()
+        card(doc, "DRE-4424")["parent"] = copy.deepcopy(card(doc, "DRE-4441")["parent"])
+        items, _ctx, _gh, _linear = plan(doc)
+        assert the_action(items, "DRE-4424").act == "hygiene-card-cancel"
+        assert lefts(items, "DRE-4424") == []
+
+    def test_the_stamp_without_the_label_is_no_planning_hold(self):
+        doc = fixture()
+        held = card(doc, "DRE-4424")
+        held["labels"]["nodes"] = [n for n in held["labels"]["nodes"]
+                                   if n["name"] != "needs-human"]
+        items, _ctx, _gh, _linear = plan(doc)
+        assert actions(items, "DRE-4424") == []
+        assert not lefts(items, "DRE-4424")[0].why.startswith("held ")
+
+    @pytest.mark.parametrize("newer", [
+        "🔓 hold lifted: reason=plan-critic-bound because=operator by=hold.py",
+        "🔒 hold: reason=dead-run-cap at=none lifts=unpark-marker by=dead_run.py",
+    ])
+    def test_a_spent_stamp_or_a_newer_reason_is_no_planning_hold(self, newer):
+        doc = fixture()
+        card(doc, "DRE-4424")["comments"]["nodes"].append(comment(newer))
+        items, _ctx, _gh, _linear = plan(doc)
+        assert actions(items, "DRE-4424") == []
+        rows = lefts(items, "DRE-4424")
+        assert len(rows) == 1 and rows[0].why == "parked with needs-human — a person owns it"
+
+
+ALARM_RECEIPT = (f"🧹 hygiene: hyg-triage-aged — {ALARM_CAUSE} · 14:05 PT\n"
+                 f"evidence: {CRITIC_STAMP}, entered Triage 2026-09-30T06:00:00Z")
+
+
+class TestTheAlarmIsSaidOnce:
+    """The suppression is the core's (tag, cause) key, driven through
+    `hygiene.run_leg` — the lane carries no key of its own."""
+
+    def test_a_card_already_alarmed_is_suppressed_by_the_core(self, monkeypatch):
+        doc = fixture()
+        card(doc, "DRE-4424")["comments"]["nodes"].append(
+            comment(ALARM_RECEIPT, at="2026-09-30T14:05:00.000Z"))
+        sent, ledger = run(doc, monkeypatch)
+        mine = [a for a in ledger["actions"] if a["target"] == "DRE-4424"]
+        assert [(a["act"], a["cause"], a["outcome"]) for a in mine] == [
+            ("hygiene-triage-alarm", ALARM_CAUSE, "suppressed")]
+        assert [w for w in sent if w.card == "DRE-4424"] == []
+        assert "DRE-4424" in {row["target"] for row in ledger["left"]}
+
+        add_receipts(doc, sent)
+        sent2, ledger2 = run(doc, monkeypatch)
+        assert [w for w in sent2 if w.card == "DRE-4424"] == []
+        assert [a["outcome"] for a in ledger2["actions"] if a["target"] == "DRE-4424"] == [
+            "suppressed"]
+
+        items, _ctx, _gh, _linear = plan(doc)
+        assert the_action(items, "DRE-4424").cause == ALARM_CAUSE
+
+    def test_the_first_pass_posts_one_receipt_and_the_second_none(self, monkeypatch):
+        doc = fixture()
+        sent, ledger = run(doc, monkeypatch)
+        mine = [w for w in sent if w.card == "DRE-4424"]
+        assert [w.kind for w in mine] == ["linear_comment"]
+        assert [a["outcome"] for a in ledger["actions"] if a["target"] == "DRE-4424"] == [
+            "executed"]
+        add_receipts(doc, sent)
+        sent2, _ledger2 = run(doc, monkeypatch)
+        assert [w for w in sent2 if w.card == "DRE-4424"] == []
+
+
+# --------------------------------------------------------------------------- #
+# the console learns the tag first                                             #
+# --------------------------------------------------------------------------- #
+
+CONSUMERS = ROOT / "scripts" / "check_act_consumers.py"
+
+
+def console_copy(path, *, aged: bool) -> None:
+    """A console `receipts.py` that carries every tag the live registry
+    declares — with or without this card's `hyg-triage-aged`."""
+    rows = json.loads((ROOT / "config" / "pipeline-acts.json").read_text("utf-8"))["acts"]
+    known = [(r["tag"], r["kind"]) for r in rows if aged or r["tag"] != "hyg-triage-aged"]
+    path.write_text("ACTS = {\n" + "".join(f"    {t!r}: {k!r},\n" for t, k in known) + "}\n",
+                    encoding="utf-8")
+
+
+def consumers_check(console):
+    env = {k: v for k, v in os.environ.items()
+           if k not in ("BUREAU_CONSOLE_TOKEN", "BUREAU_CONSOLE_ACTS_FILE")}
+    env["BUREAU_CONSOLE_ACTS_FILE"] = str(console)
+    return subprocess.run([sys.executable, str(CONSUMERS), "check"],
+                          capture_output=True, text=True, env=env)
+
+
+class TestTheConsoleLearnsTheTagFirst:
+    def test_the_registry_declares_the_alarm_beside_the_hygiene_rows(self):
+        rows = json.loads((ROOT / "config" / "pipeline-acts.json").read_text("utf-8"))["acts"]
+        names = [r["name"] for r in rows]
+        row = rows[names.index("hygiene-triage-alarm")]
+        assert (row["tag"], row["kind"], row["state"], row["next_actor"]) == (
+            "hyg-triage-aged", "hold", "unchanged", "operator")
+        assert row["emits"] == {"file": "scripts/hygiene.py", "anchor": '"hyg-triage-aged"'}
+        assert names[names.index("hygiene-triage-alarm") - 1].startswith("hygiene-")
+        assert names[-1] != "hygiene-triage-alarm"
+        assert hygiene.TAGS["hygiene-triage-alarm"] == "hyg-triage-aged"
+
+    def test_a_console_that_carries_the_tag_passes(self, tmp_path):
+        console = tmp_path / "receipts.py"
+        console_copy(console, aged=True)
+        out = consumers_check(console)
+        assert out.returncode == 0, out.stdout + out.stderr
+
+    def test_a_console_without_the_tag_fails_naming_it_and_the_console_fix(self, tmp_path):
+        console = tmp_path / "receipts.py"
+        console_copy(console, aged=False)
+        out = consumers_check(console)
+        assert out.returncode == 1, out.stdout + out.stderr
+        assert "hygiene-triage-alarm" in out.stdout
+        assert "add 'hyg-triage-aged' (kind 'hold') to ACTS" in out.stdout
 
 
 # --------------------------------------------------------------------------- #
