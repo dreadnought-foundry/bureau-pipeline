@@ -682,7 +682,10 @@ class _Pass:
             self._hold(ident, observed, needs)
 
     def _released(self, issue: dict, ident: str) -> None:
-        """Condition 7: the release carrying the siblings' merges is live."""
+        """Condition 7: the release carrying the siblings' merges is live.
+        On `ready` the reading is printed, one `proof-release:` line per line
+        and naming the card, so the dispatch it allows has a line a proof
+        record can quote (DRE-6516); any other state is the refusal's line."""
         siblings = [c for c in ((issue.get("parent") or {}).get("children")
                                 or {}).get("nodes") or []
                     if c.get("identifier") != ident
@@ -714,6 +717,8 @@ class _Pass:
         if got.state != "ready":
             raise _condition(7, "release", "; ".join(got.lines),
                              "waiting" if got.state == "waiting" else "refused")
+        for line in got.lines:
+            print(f"{proof_release.TAG}: {ident} — {line}")
 
     # -- the return after the CEO's answer ---------------------------------- #
 

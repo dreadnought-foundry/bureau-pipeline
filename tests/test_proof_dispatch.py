@@ -625,6 +625,36 @@ def test_condition_7_a_release_not_ready_never_dispatches(monkeypatch, capsys, r
         assert tally.waiting == 1
 
 
+@pytest.mark.parametrize("live", [True, False])
+def test_condition_7_a_ready_release_prints_its_lines_for_the_card_it_dispatches(
+        monkeypatch, capsys, live):
+    """DRE-6516: `ready` leaves the gate's reading in the log, one
+    `proof-release:` line per line of it, naming the card it dispatches — the
+    line a proof record quotes. Printed before the card's eligible line."""
+    lines = ["ready — whole repository: stable carries #5921 (abcdef0) for DRE-5921",
+             "ready — console: untouched — #5922 (1234567) for DRE-5922 changed "
+             "nothing under console/ that it does not ignore"]
+    board = Board(hand=[lane_card("DRE-5930")])
+    h = Harness(monkeypatch, board, release="ready", release_lines=lines)
+    tally = h.sweep(live=live)
+    out = _lines(capsys)
+    released = [l for l in out if l.startswith(f"{proof_release.TAG}:")]
+    assert released == [f"proof-release: DRE-5930 — {line}" for line in lines]
+    assert tally.dispatched == 1
+    eligible = next(i for i, l in enumerate(out) if "DRE-5930 — eligible:" in l)
+    assert out.index(released[-1]) < eligible
+
+
+@pytest.mark.parametrize("reading", ["waiting", "unknown"])
+def test_condition_7_a_release_not_ready_prints_no_ready_line(monkeypatch, capsys, reading):
+    """A refused card's reading stays on its condition 7 line: the
+    `proof-release:` line is the dispatched card's alone."""
+    board = Board(hand=[lane_card("DRE-5930")])
+    h = Harness(monkeypatch, board, release=reading)
+    h.sweep()
+    assert not any(l.startswith("proof-release:") for l in _lines(capsys))
+
+
 def test_condition_7_reads_the_siblings_merges_and_skips_other_repos(monkeypatch, capsys):
     siblings = [("DRE-5921", "Done", SLUG), ("DRE-5922", "Done", "agent-bureau"),
                 ("DRE-5923", "Canceled", SLUG), ("DRE-5930", "Hand-work", SLUG)]
@@ -1233,6 +1263,28 @@ def test_the_summary_grep_lifts_the_switch_the_tally_and_the_would_lines(tmp_pat
                           cwd=tmp_path, capture_output=True, text=True)
     assert done.returncode == 0, done.stderr
     assert done.stdout.splitlines() == [log[0], log[2], log[3]]
+
+
+def test_the_summary_grep_lifts_the_release_reading_of_the_dispatched_card(tmp_path):
+    """DRE-6516: the `proof-release:` lines `_released` prints on `ready` reach
+    the step summary, in log order beside the would line they explain."""
+    grep = next(line.strip() for line in _step()["run"].splitlines()
+                if line.strip().startswith("SUMMARY="))
+    log = [
+        "proof-dispatch: DRE-5921 — unchecked — its repo: label names portico",
+        "proof-release: DRE-5930 — ready — whole repository: stable carries "
+        "#5921 (abcdef0) for DRE-5921",
+        "proof-dispatch: DRE-5930 — eligible: first proof run (dispatch 1 of 2)",
+        "would: dispatch DRE-5930 — first proof run",
+        "proof-dispatch: eligible 1, dispatched 1, deferred 0 (dry run)",
+        "linear-budget: 4 request(s)",
+    ]
+    (tmp_path / "proof-dispatch.log").write_text("\n".join(log) + "\n",
+                                                 encoding="utf-8")
+    done = subprocess.run(["bash", "-e", "-c", f"{grep}\nprintf '%s\\n' \"$SUMMARY\""],
+                          cwd=tmp_path, capture_output=True, text=True)
+    assert done.returncode == 0, done.stderr
+    assert done.stdout.splitlines() == [log[1], log[3], log[4]]
 
 
 def test_the_stub_is_tested_before_any_python():
