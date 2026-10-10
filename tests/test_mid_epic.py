@@ -202,6 +202,7 @@ WALKED = {
     ("planning_route", "returned_child"),
     ("epic_cap", "_child_is_epic"),
     ("epic_todo_gate", "is_epic_card"),
+    ("groom_readiness", "_is_epic"),
 }
 
 
@@ -465,6 +466,50 @@ class TestEveryCallerIsWalked:
             PROBE_TITLE, False, [_stamp("one-off")]) is False
         assert epic_todo_gate.is_epic_card(
             PROBE_TITLE, False, [_stamp("epic")]) is True
+
+    def _named_on_a_depends_on_line(self, title: str, *, children: int = 0):
+        """A card whose ranked read waits on DRE-3018, In Progress and read
+        as `groom_readiness.NAMED_NODE` returns it — no labels, no comments."""
+        import groom_judgement
+        import groom_readiness
+
+        light = {"identifier": "DRE-3018", "title": title,
+                 "state": {"name": "In Progress"},
+                 "children": {"nodes": [{"id": f"c{n}"} for n in range(children)]}}
+        verdicts = {"DRE-1": groom_judgement.Verdict(
+            "now", "the read's reason", None,
+            {"why now": "it is time", "depends on": "DRE-3018"})}
+        board = groom_readiness.board(
+            groom_readiness.facts(named={"DRE-3018": light}),
+            verdicts=verdicts)
+        card = {"identifier": "DRE-1", "title": "DRE-1 does a thing",
+                "description": "", "labels": {"nodes": []}}
+        return light, next(row for row in groom_readiness.evaluate(card, board)
+                           if row["rule"] == "read-waits-on-open-card")
+
+    def test_groom_readiness_does_not_read_a_planner_owned_one_off_as_an_epic(self):
+        """`groom_readiness._is_epic` (DRE-6665) — a card waiting on a one-off
+        waits for it to be Done. Read as an epic, its row would ask for it to
+        be "built out", and the morning would spend a children read on it."""
+        import groom_readiness
+
+        light, row = self._named_on_a_depends_on_line(PROBE_TITLE)
+        assert groom_readiness._is_epic(light) is False
+        assert row["condition"] == "DRE-3018 is Done"
+        assert "an epic" not in row["reason"]
+
+        class _NoRead:
+            def gql(self, *_a, **_k):
+                raise AssertionError("a one-off costs no epic read")
+
+        assert groom_readiness.read_epics(_NoRead(), {"DRE-3018": light}) == {}
+
+    def test_groom_readiness_still_reads_a_card_with_children_as_an_epic(self):
+        import groom_readiness
+
+        light, row = self._named_on_a_depends_on_line(PROBE_TITLE, children=1)
+        assert groom_readiness._is_epic(light) is True
+        assert row["condition"] == "DRE-3018 is built out or Done"
 
 
 # ===========================================================================
