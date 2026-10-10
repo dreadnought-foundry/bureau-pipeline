@@ -113,11 +113,20 @@ class Linear:
         self.calls.append(("add_label", identifier, name))
         if self.refuse_add:
             raise self.add_error
+        if not any(have.lower() == name.lower() for have in self.labels):
+            self.labels.append(name)
 
     def remove_label(self, identifier, name):
+        """The real one matches the card's label names exactly, apart from
+        case, and returns quietly when none matches — so a name the card does
+        not carry is a swap that silently leaves the old label behind."""
         self.calls.append(("remove_label", identifier, name))
         if self.refuse_remove:
             raise self.remove_error
+        if not any(have.lower() == name.lower() for have in self.labels):
+            raise AssertionError(f"{name!r} is not on the card {self.labels!r} — "
+                                 "the real remove_label would do nothing")
+        self.labels = [have for have in self.labels if have.lower() != name.lower()]
 
     def comment_bodies(self, identifier, *, whole_thread=False):
         self.calls.append(("comment_bodies", identifier, whole_thread))
@@ -379,6 +388,43 @@ def test_a_card_that_left_backlog_is_not_now_and_nothing_is_written(linear):
 # --------------------------------------------------------------------------- #
 # refused writes                                                               #
 # --------------------------------------------------------------------------- #
+
+
+def test_reading_b_removes_an_owner_prefixed_label_by_the_name_the_card_carries(linear):
+    """`repo:dreadnought-foundry/agent-bureau` routes as agent-bureau, so it
+    is the dispatched repo's label — and it is that name that comes off."""
+    stub = linear(labels=("repo:dreadnought-foundry/agent-bureau",))
+    action, note = resolve(card(marker(stamped("bureau-pipeline"))))
+    assert (action, note) == (
+        "relabeled", "repo:agent-bureau → repo:bureau-pipeline, named by the blocker")
+    assert stub.writes == [
+        ("add_label", CARD, "repo:bureau-pipeline"),
+        ("remove_label", CARD, "repo:dreadnought-foundry/agent-bureau"),
+    ]
+    assert stub.labels == ["repo:bureau-pipeline"]
+
+
+def test_reading_b_removes_a_mixed_case_label_by_the_name_the_card_carries(linear):
+    stub = linear(labels=("repo:Agent-Bureau",))
+    action, _ = resolve(card(marker(stamped("bureau-pipeline"))))
+    assert action == "relabeled"
+    assert stub.writes == [
+        ("add_label", CARD, "repo:bureau-pipeline"),
+        ("remove_label", CARD, "repo:Agent-Bureau"),
+    ]
+    assert stub.labels == ["repo:bureau-pipeline"]
+
+
+def test_reading_b_removes_every_spelling_of_the_dispatched_label(linear):
+    stub = linear(labels=("repo:agent-bureau", "repo:dreadnought-foundry/agent-bureau"))
+    action, _ = resolve(card(marker(stamped("bureau-pipeline"))))
+    assert action == "relabeled"
+    assert stub.writes == [
+        ("add_label", CARD, "repo:bureau-pipeline"),
+        ("remove_label", CARD, "repo:agent-bureau"),
+        ("remove_label", CARD, "repo:dreadnought-foundry/agent-bureau"),
+    ]
+    assert stub.labels == ["repo:bureau-pipeline"]
 
 
 def test_a_refused_add_propagates_and_nothing_is_removed(linear):
