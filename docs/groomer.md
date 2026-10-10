@@ -232,10 +232,10 @@ link to work in flight still precedes a High card that has one.
   paragraph gains one sentence naming the rule — only on a batch the step
   placed a card in, so `--no-judgement` renders byte for byte as before on a
   population with nothing in flight.
-- **Readiness outranks the key.** The in-flight step ORDERS cards; the
-  readiness rules (DRE-6665) decide whether a card takes a slot at all. A card
-  the readiness rules hold is not ready whatever its position, and this step
-  never puts a Not ready card into the batch.
+- **Readiness outranks the key.** The in-flight step only ORDERS cards; it
+  decides nothing about whether a card takes a slot. That is the readiness
+  rules' to decide (DRE-6665, not yet in this file): once they land, a card
+  they hold is not ready whatever position this step gave it.
 
 The population read carries what the step reads: every row selects the
 parent's state and both relation lists (`relations` and `inverseRelations`,
