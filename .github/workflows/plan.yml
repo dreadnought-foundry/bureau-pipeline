@@ -1850,9 +1850,15 @@ jobs:
       # THE BOUND parks in Triage, the operator's defect queue — never in Green
       # Light (DRE-5376, the lane contract DRE-5275 landed for plans). The
       # decision step's note above already names every finding raised so far;
-      # a revision that did not finish writes its own note here first. No
-      # label: a card no revision could fix is the operator's to read, the
-      # same as the sweep's stall park (DRE-4124).
+      # a revision that did not finish writes its own note here first.
+      #
+      # Before any of that, the bound exit (scripts/plan_bound.py, DRE-6452)
+      # tries the bound without a person, as the six epic parks do: exit 0 is
+      # one Green Light question or one more planner rewrite, and nothing
+      # parks. Exit 3, or a crash, falls through to the park. The park stamps
+      # `plan-critic-bound` between the note and the move (DRE-6456), so the
+      # hygiene agent's Triage lane names the card with its age instead of
+      # reading it as any other card a person must read.
       - name: One-off critic — park in Triage
         if: steps.oneoff.outputs.action == 'park' || steps.oorevised.outputs.outcome == 'unfinished'
         env:
@@ -1861,9 +1867,14 @@ jobs:
         run: |
           CARD="${{ github.event.client_payload.identifier }}"
           PARK_NOTE="${{ runner.temp }}/one-off-park.md"
+          if python3 .bureau-pipeline/scripts/plan_bound.py exit "$CARD" --stage one-off \
+               --repo "$GITHUB_REPOSITORY"; then
+            exit 0   # the exit asked the CEO a question or granted the planner a rewrite — nothing to park
+          fi
           if [ -s "$PARK_NOTE" ]; then
             python3 .bureau-pipeline/scripts/linear_ops.py comment "$CARD" "$(cat "$PARK_NOTE")"
           fi
+          python3 .bureau-pipeline/scripts/hold.py apply "$CARD" --reason plan-critic-bound --by plan.yml
           python3 .bureau-pipeline/scripts/linear_ops.py state "$CARD" "Triage"
 
       # ...and the move, only on a pass — or on a card the shape step's routing
