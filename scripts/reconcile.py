@@ -12430,6 +12430,11 @@ def recover_limit_deaths() -> None:
 
     A pass that re-enters nothing says so in one line (DRE-5519).
 
+    An `ERROR:` line carrying `limit_recovery.STOOD_PHRASE` is a marker past
+    its clock (DRE-4208) and goes on `_stale_defects`, which the medic reads
+    as a deliberate red (DRE-6467); every other `ERROR:` line is a re-entry
+    that did not land and goes on `_write_failures`.
+
     Every card it moves or posts a receipt on is recorded in
     `_limit_recovered` (DRE-5841), so the Planning watchdog later in this pass,
     reading the same snapshot and its old marker, leaves the card alone.
@@ -12459,7 +12464,12 @@ def recover_limit_deaths() -> None:
             acted = True
             print(line)
             if line.startswith("ERROR:"):
-                _write_failures.append(line)
+                # A marker past its clock is a standing defect, not a failed
+                # write: nothing failed, a card has stood too long (DRE-4208).
+                if limit_recovery.STOOD_PHRASE in line:
+                    _stale_defects.append(line)
+                else:
+                    _write_failures.append(line)
         if not acted:
             print(f"limit-recovery: nothing to re-enter — {len(cards)} card(s) read, "
                   "none with a limit death to recover")

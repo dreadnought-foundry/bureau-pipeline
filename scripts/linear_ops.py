@@ -1492,6 +1492,23 @@ def _clobbered_terminal_state(
     return None
 
 
+def lane_history(identifier: str, first: int = 50) -> list[dict]:
+    """The card's newest `first` lane moves, newest first, as Linear's issue
+    history records them: `{"createdAt", "toState": {"name"}}` per entry.
+
+    `history(first: n)` is the n NEWEST entries (DRE-5034), so the card's
+    latest moves are always in the read however long its history is. An
+    entry that is not a lane move (a label, a title) carries no `toState`.
+    """
+    data = gql(
+        """query($id: String!) { issue(id: $id) {
+             history(first: %d) { nodes { createdAt toState { name } } } } }""" % first,
+        {"id": identifier},
+    )
+    nodes = (((data.get("issue") or {}).get("history") or {}).get("nodes")) or []
+    return [node for node in nodes if node.get("toState")]
+
+
 def _expectation_refusal(
     identifier: str,
     issue: dict,
