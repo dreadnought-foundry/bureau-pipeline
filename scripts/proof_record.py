@@ -87,8 +87,10 @@ MET_WORDS = ("met", "holds", "observed", "proven", "pass", "yes")
 HEDGES = ("but", "only", "except", "partly", "partially", "with caveats?", "and no", "and not",
           "not")
 #: A result cell opening with this is a criterion the operator accepted as
-#: overtaken by a later shipped decision (DRE-6244) — accepted, not met, and
-#: only when the same cell links the written decision (`_DECISION_LINK`).
+#: shown working but not as the card words it (DRE-6244, DRE-6773 — which rows
+#: qualify is the card-quality standard's to say, never this reader's) —
+#: accepted, not met, and only when the same cell links the written decision
+#: (`_DECISION_LINK`).
 ACCEPTED_OPENING = "accepted by operator decision"
 #: What an accepted row with no linked decision is held for.
 UNLINKED = "accepted without a linked decision"

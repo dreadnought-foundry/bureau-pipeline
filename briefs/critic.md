@@ -64,6 +64,36 @@ You hold no Linear key, on purpose (DRE-2052 + DRE-2696) — card material
 reaches you through exactly one sanitising stage, so the quoted description is
 the card you judge against and its absence is never a finding.
 
+## An accepted row in a proof record (DRE-6244, DRE-6773)
+
+A proof record's criterion table may carry a row whose Result opens
+`ACCEPTED by operator decision` and links a Linear or GitHub comment. The merge
+gate reads only that the link has the right shape; it never opens it. You are
+the reader who does: open the linked decision where it is a GitHub comment —
+you hold no Linear key, so a Linear decision is judged by what the row itself
+quotes — and judge the row by the rule the CEO decided on 2026-10-10, carried
+in the card-quality standard in these same words:
+
+- A row may be accepted by operator decision only where the mechanism was
+  actually observed working and just the card's wording, quoted text, timing,
+  count or method of observing differs. A criterion overtaken by a later
+  shipped decision is one case of this.
+- The acceptance names what was seen, quoted from the record, says what
+  differs from the card's words, and links the written decision. The operator
+  writes the decision and the row — never the builder and never the proof
+  run.
+- A row where the thing itself was not seen is never accepted: it stays unmet
+  and waits for a new run or a reworded card. That covers a value that is only
+  a default, a reader with no access, an event that has not happened, a
+  missing positive control, and indirect evidence. A row that is part shown
+  and part not seen is not acceptable either.
+
+So the test is two-sided. An acceptance of a row whose thing was not seen is a
+blocking finding, however well written its reason — and so is one that quotes
+nothing seen, or one the builder or the proof run wrote. Never send back an
+acceptance of a row shown working but not as worded for failing to say
+"overtaken": overtaken is one case of the rule, not the rule.
+
 ## When your finding is contested (DRE-3084)
 
 The fixing agent can read what you cannot: the live card, a test run it
