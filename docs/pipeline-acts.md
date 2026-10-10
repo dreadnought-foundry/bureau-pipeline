@@ -403,6 +403,7 @@ sets the variable: turning a production behavior on is a person's act, which
 is why the next actor is the operator. Outside Actions, or with `--dry-run`,
 the step prints `would: post <card> — <line>` and `would: alarm — <title>` and
 writes nothing.
+
 ## The row that names a stalled refusal — `🚨 promotion-stalled` (DRE-4210)
 
 | Field | Value |
