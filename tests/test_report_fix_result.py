@@ -56,6 +56,7 @@ ENV_KEYS = (
     "CLASSIFICATION", "REPO", "PR", "ATTEMPT", "MODE", "EXEC_FILE", "RUN_URL",
     "RESCUE_LOCAL_WORK", "RESCUE_PUSHED", "RESCUE_PATCH", "RESCUE_ARTIFACT",
     "RESCUE_PUSH_STATUS", "RESCUE_ERROR", "RESCUE_TARGET_BRANCH", "RUN_ID",
+    "AGENT_STEP_OUTCOME",
 )
 
 #: The 21 card references the block carried on `main`; `verify` requires
