@@ -16,10 +16,12 @@ repo with no file is a normal answer — most repos have no on-screen steps — 
 its `Local screen:` rows stay `Not observed.`
 
 This page is the contract. The browser runtime and the workflow steps that act
-on it are the sibling cards' work: DRE-6025 installs the browser (Playwright,
-in a virtual environment of its own) and adds the `proof-task.yml` steps, and
-DRE-6047's `scripts/proof_session.py` serves the released commit, signs in and
-opens the pages. Nothing in this card starts a process or opens a browser.
+on it are the sibling cards' work: DRE-6025's `scripts/proof_browser.py`
+serves the released commit and installs the browser (Playwright, in a virtual
+environment of its own) — see [Standing the run up](#standing-the-run-up) —
+DRE-6047's `scripts/proof_session.py` signs in and opens the pages, and
+DRE-6027 adds the `proof-task.yml` steps that call them. The reader itself
+starts no process and opens no browser.
 
 ## The schema
 
@@ -135,6 +137,29 @@ From Python: `proof_local.load(path) -> Declaration` (attributes `surface`,
 `node_dir`, `setup`, `start`, `ready_url`, `ready_timeout_seconds`, `pages`,
 `login`), `proof_local.released(repo_root, declaration) -> Released(sha, tag,
 surface) | None`, and `proof_local.DECLARATION`.
+
+## Standing the run up
+
+`scripts/proof_browser.py` (DRE-6025) is the workflow's half of the runtime,
+on the same runner `python3`; it never imports Playwright.
+
+- `python3 scripts/proof_browser.py prepare --github-output <path> --summary <path>`
+  runs before the agent. It resolves the released commit, adds the released
+  worktree, creates a venv at `$RUNNER_TEMP/proof-venv` from that `python3`,
+  installs the version of Playwright `requirements-dev.txt` pins into it with
+  the venv's own pip, installs chromium with `--with-deps`, runs `setup`,
+  starts `start` detached (pid in `$RUNNER_TEMP/proof-local-run.pid`, output
+  in `proof-local-run.log` beside it) and polls `ready_url` for a 200. It
+  writes `status` (`up`|`none`|`failed`), `note`, `url` (`ready_url`'s
+  origin), `commit`, `tag`, `pid_file` and `python` (the venv's interpreter)
+  and appends one summary line: `proof local run: up — <surface> at <sha7>
+  (<tag>) serving <ready_url>`, `proof local run: none, no
+  .github/bureau/proof-local.json`, or `proof local run: failed — <note>`.
+  Every failure is a status and exit 0, never an exception.
+- `python3 scripts/proof_browser.py stop` runs after the agent, `always()`.
+  It ends the process group, prints the last 20 lines of the start log, and
+  overwrites then deletes the files at `PROOF_BROWSER_STATE` and
+  `PROOF_LOGIN_FILE`, so no credential outlives the run.
 
 ## A worked example
 
