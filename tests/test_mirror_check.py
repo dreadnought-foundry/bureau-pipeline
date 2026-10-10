@@ -962,7 +962,7 @@ class CrossTalkTest(unittest.TestCase):
         self.assertEqual(result["already_red"], [])
         console = _suite(result, "console")
         self.assertEqual(console["status"], mirror_check.MIRROR_PASSED)
-        self.assertEqual(console["files"], [READER_TEST, ROUTING_TEST])
+        self.assertEqual(console["files"], [ROUTING_TEST, READER_TEST])
         self.assertEqual(console["totals"]["candidate"], _totals(passed=2))
         cloud = _suite(result, "cloud")
         self.assertEqual(cloud["files"], [RELAY_TEST, STUB_TEST])
@@ -1016,8 +1016,8 @@ class LikeForLikeVerdictTest(unittest.TestCase):
 
         with mock.patch.object(mirror_check, "run_pytest", recording):
             result = trees.check()
-        self.assertEqual(calls, [[STUB_TEST], [READER_TEST, ROUTING_TEST],
-                                 [READER_TEST, ROUTING_TEST]])
+        self.assertEqual(calls, [[STUB_TEST], [ROUTING_TEST, READER_TEST],
+                                 [ROUTING_TEST, READER_TEST]])
         cloud = _suite(result, "cloud")
         self.assertFalse(cloud["re_read"])
         self.assertIsNone(cloud["totals"]["stable"])
@@ -1097,7 +1097,8 @@ class BlockedSuiteTest(unittest.TestCase):
         self.assertEqual([s["name"] for s in result["suites"][1:]], ["cloud", "console"])
         for name in ("cloud", "console"):
             self.assertIsNotNone(_suite(result, name)["totals"]["candidate"], name)
-        for text in (summary, stdout):
+        own = "\n".join(l for l in stdout.splitlines() if l.startswith("mirror check: "))
+        for text in (summary, own):
             lines = [l for l in text.splitlines() if "suite " in l]
             self.assertTrue(lines and "suite infra: blocked — " in lines[0], text)
             named = {SUITE_LINE.match(l.removeprefix("mirror check: ")).group("name")
@@ -1195,7 +1196,9 @@ class SideBySideTest(unittest.TestCase):
         written = [l for l in summary.read_text().splitlines() if l.strip()]
         self.assertTrue(written[0].startswith("⏱ mirror check: "), written)
         self.assertEqual([l.removeprefix("- ") for l in written[1:3]], wanted)
-        printed = stdout.getvalue().splitlines()
+        # pytest's own output comes first; the check's lines follow it.
+        printed = [l for l in stdout.getvalue().splitlines()
+                   if l.startswith("mirror check: ")]
         self.assertTrue(printed[0].startswith("mirror check: failed — "), printed)
         self.assertEqual([l.removeprefix("mirror check: ") for l in printed[1:3]], wanted)
 

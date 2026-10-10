@@ -94,6 +94,18 @@
 # the mirror tests alone), and a `mirror-check-blocked` decision on a main or
 # by-hand run fails the run in the job's last step.
 #
+# DRE-6670: the check runs agent-bureau's mirror tests one suite at a time, one
+# pytest process per suite — a suite is the first component of a test's path
+# (`cloud`, `console`, `.`), read off the discovered files alone — so the
+# relay's `jwt` stub never reaches the console's tests again (1238 setup
+# errors on run 38072065598, none of them the candidate's). Every suite with a
+# red test on the candidate then runs again, whole, with `stable` in the
+# candidate's place, and a test is judged by its outcome in the two identical
+# runs: red on both is `already red on stable` and refuses nothing. A suite
+# that cannot run is blocked, and blocks the check; the other suites still run.
+# Each suite's totals for both runs go side by side, one line per suite, under
+# the `⏱ mirror check` line in the run summary and in a refusal's card.
+#
 #   Q1 WHO INITIATES. The same promote run, initiated as today. The clone uses
 #      the bureau App, installed on every fleet repo.
 #   Q2 WHICH SECRETS STORE. The store the tag move already reads
@@ -446,9 +458,10 @@ jobs:
           path: agent-bureau/.bureau-pipeline
           persist-credentials: false
 
-      # Where `stable` stands now — what a failing test is re-read against
-      # before it counts. None on the first ever promotion; the check then
-      # blocks on a failure rather than lay it at the candidate.
+      # Where `stable` stands now — what a suite with a failing test is run
+      # again against, whole, before the failure counts (DRE-6670). None on
+      # the first ever promotion; the check then blocks on a failure rather
+      # than lay it at the candidate.
       - name: Check out stable beside it
         id: stable_checkout
         if: >-
@@ -488,8 +501,9 @@ jobs:
       # slow run still writes `blocked` rather than nothing — though nothing
       # is read as blocked too. The run summary gets the `⏱ mirror check`
       # line, the harness's duration shape, so the budget is measured on live
-      # runs rather than assumed. The App token is deliberately not in this
-      # step's environment.
+      # runs rather than assumed, and under it one line per suite with both
+      # runs' totals side by side (DRE-6670). The App token is deliberately
+      # not in this step's environment.
       - name: Run agent-bureau's mirror tests against the candidate
         id: mirror
         if: steps.proof.outputs.promote == 'true'

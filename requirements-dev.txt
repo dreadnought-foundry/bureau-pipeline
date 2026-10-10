@@ -9,9 +9,13 @@ pytest==9.1.1
 # requirements, and the check runs pytest with `--no-cov`, which is
 # pytest-cov's switch — without the plugin pytest refuses it.
 pytest-cov==7.1.0
-# And the async plugin (DRE-6657): agent-bureau's async tests fail with
-# `async def functions are not natively supported` without it, on stable and
-# candidate alike. The version agent-bureau's own backend CI installs.
+# And the async plugin (DRE-6657, DRE-6670): agent-bureau's async tests fail
+# with `async def functions are not natively supported` without it, on stable
+# and candidate alike — 26 of them on Promote Channel run 38072065598, all
+# console tests, where a hand run in agent-bureau's own backend environment
+# had none. 1.4.0 is what agent-bureau's backend job installs inline
+# (recorded in tests/test_ci_python_plumbing_once.py), and it declares
+# `pytest<10,>=8.4`, which the pytest pin above satisfies.
 pytest-asyncio==1.4.0
 PyYAML==6.0.3
 # The proof run's browser (DRE-6025): `scripts/proof_browser.py prepare` reads

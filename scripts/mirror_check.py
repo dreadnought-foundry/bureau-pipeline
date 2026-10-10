@@ -37,17 +37,30 @@ The check, step by step:
      the day — on 2026-10-09 that was 103 files — and kept nowhere.
   2. The candidate sits at `<agent-bureau>/.bureau-pipeline` AND is exported as
      `BUREAU_PIPELINE_DIR`, so both ways a test finds the pipeline read it.
-  3. pytest from agent-bureau's root over exactly those files, once it is
-     proven to start, and with `--no-cov`: agent-bureau's coverage floor
-     cannot be met by its mirror tests alone (DRE-6622).
-  4. Every failure is re-read against `stable`: the whole discovered set runs
-     once more, in the same order and with the same flags, with `stable` in the
-     candidate's place (DRE-6657 — re-reading only the failing files compared
-     two runs that differed in what they ran). A test red on both is
-     agent-bureau's own red, or the run's own doing, named `already red on
-     stable`, and refuses nothing. Only a test that does not fail on `stable`
-     and fails on the candidate refuses.
-  5. The bureau-pipeline file a failing test mirrors is read off the test's own
+  3. pytest from agent-bureau's root, once it is proven to start, with
+     `--no-cov` (agent-bureau's coverage floor cannot be met by its mirror
+     tests alone, DRE-6622), ONE PROCESS PER SUITE (DRE-6670). A test's suite
+     is the first component of its root-relative path — `cloud`, `console`,
+     `.` at the root — read off the discovered files and nothing else. One
+     process for every file let three relay files' `jwt` stub reach the
+     console's tests: 1238 setup errors on run 38072065598, none of them the
+     candidate's. Each suite runs its files in sorted order, inside one
+     shared budget.
+  4. Every suite with a red test on the candidate — a failure, or a setup,
+     teardown or collection error — runs again, whole: the same files, in
+     the same order, in the same process layout, with `stable` in the
+     candidate's place. A suite with nothing red is not re-read, and says so.
+     Each red test is judged by its outcome in the two identical runs: red on
+     both is agent-bureau's own red, or the run's own doing, named `already
+     red on stable`, and refuses nothing. Only a test red on the candidate
+     and not on `stable` refuses. (Until DRE-6657 the re-read ran only the
+     failing files, and a test that failed beside the relay's stub passed
+     alone and read as the candidate's red.)
+  5. Each suite's totals for both runs — passed, failed, errors, skipped, as
+     pytest counts them — go in the result file's `suites`, and side by side,
+     one line per suite, in the run summary, the step's output and the
+     refusal's card.
+  6. The bureau-pipeline file a failing test mirrors is read off the test's own
      string literals — a literal, or a chain of them joined by `/` or a call,
      that names a file in the candidate checkout. None found reads `mirrors:
      not read from the test`; it is never guessed.
@@ -56,7 +69,11 @@ A check that COULD NOT RUN — a token that did not mint, a checkout or an
 install that failed, pytest that would not start, a run past its time limit —
 is `blocked`, never `failed`. That is the `harness-blocked-by-sandbox`
 distinction (DRE-3076): nothing was proven either way, and a reader sent to the
-candidate's diff would be looking at code nobody judged.
+candidate's diff would be looking at code nobody judged. So is one SUITE that
+could not run — pytest exiting other than 0 or 1, writing no report, or
+running past the budget: that suite's mirrors are unproven and a promotion is
+all or nothing, so it blocks the check, while the other suites still run and
+are still reported, the blocked one first with its reason.
 """
 
 from __future__ import annotations
@@ -71,7 +88,7 @@ import subprocess
 import sys
 import tempfile
 import time
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 #: The check's three answers. `promote_channel.with_mirror` reads them.
 MIRROR_PASSED = "passed"
@@ -83,6 +100,21 @@ MIRROR_BLOCKED = "blocked"
 PIPELINE_ENV = "BUREAU_PIPELINE_DIR"
 PIPELINE_DIRNAME = ".bureau-pipeline"
 MARKERS = (PIPELINE_ENV, PIPELINE_DIRNAME)
+
+#: The suite of a test at agent-bureau's root, which has no first directory.
+ROOT_SUITE = "."
+
+#: The outcomes that are red (DRE-6670): a failure in the test body, and an
+#: error — in setup, in teardown, or collecting the file. Judged alike; counted
+#: apart, as pytest counts them.
+RED = ("failed", "error")
+
+#: The counts each run's totals carry, in the order they are written.
+TOTALS = ("passed", "failed", "errors", "skipped")
+
+#: What a suite that held no failure on the candidate says in place of its
+#: `stable` totals.
+NOT_RE_READ = "stable not re-read: nothing failed on the candidate"
 
 #: pytest's default `python_files`.
 TEST_FILES = ("test_*.py", "*_test.py")
@@ -106,7 +138,7 @@ REQUIREMENTS = "requirements*.txt"
 #: test fails, on `stable` and the candidate alike.
 TOOLS_MANIFEST = "requirements-dev.txt"
 
-#: Appended to both pytest runs (DRE-6622). agent-bureau's pytest settings
+#: Appended to every pytest run, the candidate's and `stable`'s (DRE-6622). agent-bureau's pytest settings
 #: enforce a coverage floor, and a run of the mirror tests alone reads ~16%
 #: against it, so pytest exits 1 with no failing test and the check could only
 #: ever say `blocked`. `--no-cov` switches coverage, and the floor with it,
@@ -141,6 +173,8 @@ import json
 import os
 
 _RESULTS = {}
+_TOTALS = {"passed": 0, "failed": 0, "errors": 0, "skipped": 0}
+_RED = ("failed", "error")
 _CONFIG = []
 
 
@@ -161,20 +195,35 @@ def _key(nodeid):
 
 def pytest_collectreport(report):
     if report.failed:
-        _RESULTS[_key(report.nodeid)] = "failed"
+        _RESULTS[_key(report.nodeid)] = "error"
+        _TOTALS["errors"] += 1
 
 
 def pytest_runtest_logreport(report):
+    # pytest's own categories: a failure in the test body is `failed`, one in
+    # setup or teardown is an `error`, a skip in any phase is `skipped`, and
+    # an xfail or xpass is none of the four.
     key = _key(report.nodeid)
+    counted = not hasattr(report, "wasxfail")
     if report.failed:
-        _RESULTS[key] = "failed"
-    elif _RESULTS.get(key) != "failed":
+        outcome = "failed" if report.when == "call" else "error"
+        if counted:
+            _TOTALS["failed" if outcome == "failed" else "errors"] += 1
+        if _RESULTS.get(key) not in _RED:
+            _RESULTS[key] = outcome
+        return
+    if counted and report.skipped:
+        _TOTALS["skipped"] += 1
+    elif counted and report.when == "call":
+        _TOTALS["passed"] += 1
+    if _RESULTS.get(key) not in _RED:
         _RESULTS[key] = report.outcome
 
 
 def pytest_sessionfinish(session, exitstatus):
     with open(os.environ["BUREAU_MIRROR_REPORT"], "w") as fh:
-        json.dump({"exitstatus": int(exitstatus), "results": _RESULTS}, fh)
+        json.dump({"exitstatus": int(exitstatus), "results": _RESULTS,
+                   "totals": _TOTALS}, fh)
 '''
 
 
@@ -205,6 +254,26 @@ def discover(root: Path) -> list[str]:
             if _names_the_pipeline(path):
                 found.append(path.relative_to(root).as_posix())
     return sorted(found)
+
+
+def suite_of(test: str) -> str:
+    """A test's suite: the first component of its root-relative path —
+    `cloud` for `cloud/relay/test_x.py`, `.` for a test at agent-bureau's
+    root (DRE-6670)."""
+    parts = PurePosixPath(test).parts
+    return parts[0] if len(parts) > 1 else ROOT_SUITE
+
+
+def suites(tests: list[str]) -> dict[str, list[str]]:
+    """The discovered tests grouped by suite, suites and files sorted. Read off
+    the file list alone: nothing in agent-bureau's workflows is read, because
+    a build run here cannot read agent-bureau, and a rule it cannot test is a
+    guess. It is not agent-bureau's job layout and does not need to be — it
+    keeps the relay out of the console's process, the one cross-talk seen."""
+    grouped: dict[str, list[str]] = {}
+    for test in sorted(tests):
+        grouped.setdefault(suite_of(test), []).append(test)
+    return {name: grouped[name] for name in sorted(grouped)}
 
 
 def requirement_files(root: Path, tests: list[str]) -> list[str]:
@@ -335,7 +404,8 @@ def run_pytest(root: Path, targets: list[str], *, python: str,
                timeout: float) -> dict:
     """pytest from agent-bureau's root over `targets`, with the checkout at
     `<root>/.bureau-pipeline` also named by `BUREAU_PIPELINE_DIR`. Returns
-    `{node id: outcome}`; raises `_Blocked` when there is no honest answer."""
+    `{"results": {node id: outcome}, "totals": {passed, failed, errors,
+    skipped}}`; raises `_Blocked` when there is no honest answer."""
     root = Path(root)
     with tempfile.TemporaryDirectory(prefix="mirror-check-") as tmp:
         plugin_dir = Path(tmp) / "plugin"
@@ -370,15 +440,16 @@ def run_pytest(root: Path, targets: list[str], *, python: str,
             raise _Blocked(f"pytest wrote no report (exit {proc.returncode}): "
                            f"{tail[:400]}")
         results = data.get("results") or {}
-        failed = [k for k, v in results.items() if v == "failed"]
-        if proc.returncode == 1 and not failed:
+        if proc.returncode == 1 and not _red(results):
             raise _Blocked("pytest reported a failure it did not attribute "
                            "to any test")
-        return results
+        totals = data.get("totals") or {}
+        return {"results": results,
+                "totals": {k: int(totals.get(k) or 0) for k in TOTALS}}
 
 
-def _failed(results: dict) -> list[str]:
-    return sorted(k for k, v in results.items() if v == "failed")
+def _red(results: dict) -> list[str]:
+    return sorted(k for k, v in results.items() if v in RED)
 
 
 def _file_of(nodeid: str) -> str:
@@ -393,27 +464,6 @@ def _swap(a: Path, b: Path) -> None:
     os.rename(spare, b)
 
 
-def _re_read_on_stable(root: Path, stable: Path, *, discovered: list[str],
-                       python: str, timeout: float) -> dict:
-    """Run the candidate run again with `stable` where the candidate was: the
-    whole discovered list, in the same order, with the same flags (DRE-6657).
-    Re-reading only the failing files was not like for like: on run
-    38072065598 the candidate run's 1238 `'jwt' is not a package` errors — a
-    stub one file leaves in the process, breaking another — never showed on
-    `stable`, because the re-read left out the files that passed, and so read
-    as the candidate's red. Anything the run itself causes now shows on both
-    sides and is named `already red on stable`."""
-    if not stable.is_dir():
-        raise _Blocked("there is no stable checkout to re-read the failures "
-                       "against, so none of them can be laid at the candidate")
-    candidate = root / PIPELINE_DIRNAME
-    _swap(candidate, stable)
-    try:
-        return run_pytest(root, discovered, python=python, timeout=timeout)
-    finally:
-        _swap(candidate, stable)
-
-
 def _entry(root: Path, nodeid: str) -> dict:
     mirrors = mirrored_files(root / _file_of(nodeid), root / PIPELINE_DIRNAME)
     return {"test": nodeid, "mirrors": mirrors}
@@ -423,14 +473,29 @@ def check(root: Path, stable: Path, *, candidate: str, stable_sha: str,
           agent_bureau_sha: str, python: str = sys.executable,
           budget_seconds: float = BUDGET_SECONDS,
           setup: dict | None = None) -> dict:
-    """The whole check. Returns the result `promote_channel.py` reads."""
+    """The whole check. Returns the result `promote_channel.py` reads.
+
+    One pytest process per suite (DRE-6670), inside the one budget. Every
+    suite with a red test on the candidate then runs again, whole — same
+    files, same order, same flags — with `stable` in the candidate's place,
+    and each red test is judged by its outcome in the two identical runs. A
+    suite that cannot run is `blocked`, and blocks the check; the others still
+    run and are still reported, the blocked ones first."""
     started = time.monotonic()
     root, stable = Path(root), Path(stable)
     result = {
         "status": MIRROR_BLOCKED, "why": "", "candidate": candidate,
         "stable": stable_sha, "agent_bureau_sha": agent_bureau_sha,
-        "tests": 0, "failing": [], "already_red": [], "seconds": 0,
+        "tests": 0, "failing": [], "already_red": [], "suites": [],
+        "seconds": 0,
     }
+
+    def left(what: str) -> float:
+        seconds = budget_seconds - (time.monotonic() - started)
+        if seconds <= 0:
+            raise _Blocked(f"the check's time limit was spent before {what}")
+        return seconds
+
     try:
         for name, outcome in (setup or {}).items():
             if outcome != "success":
@@ -447,22 +512,66 @@ def check(root: Path, stable: Path, *, candidate: str, stable_sha: str,
                            f"{PIPELINE_ENV} or {PIPELINE_DIRNAME} — nothing "
                            f"was checked, so nothing is proven")
         pytest_starts(python, timeout=min(120.0, budget_seconds))
-        results = run_pytest(root, discovered, python=python,
-                             timeout=budget_seconds)
-        failing = _failed(results)
-        red_on_stable: set[str] = set()
-        if failing:
-            left = budget_seconds - (time.monotonic() - started)
-            if left <= 0:
-                raise _Blocked("the check ran past its time limit before the "
-                               "re-read against stable")
-            again = _re_read_on_stable(root, stable, discovered=discovered,
-                                       python=python, timeout=left)
-            red_on_stable = {n for n in failing if again.get(n) == "failed"}
-        result["failing"] = [_entry(root, n) for n in failing
-                             if n not in red_on_stable]
-        result["already_red"] = [_entry(root, n) for n in failing
-                                 if n in red_on_stable]
+
+        entries = result["suites"]
+        outcomes: dict[str, dict] = {}
+        for name, files in suites(discovered).items():
+            entry = {"name": name, "files": files, "status": MIRROR_PASSED,
+                     "re_read": False,
+                     "totals": {"candidate": None, "stable": None}}
+            entries.append(entry)
+            try:
+                run = run_pytest(root, files, python=python,
+                                 timeout=left("this suite ran"))
+            except _Blocked as exc:
+                entry.update(status=MIRROR_BLOCKED, why=str(exc))
+                continue
+            entry["totals"]["candidate"] = run["totals"]
+            outcomes[name] = {"candidate": run["results"], "stable": {}}
+
+        again = [e for e in entries if e["status"] != MIRROR_BLOCKED
+                 and _red(outcomes[e["name"]]["candidate"])]
+        if again:
+            if not stable.is_dir():
+                raise _Blocked("there is no stable checkout to re-read the "
+                               "failures against, so none of them can be laid "
+                               "at the candidate")
+            here = root / PIPELINE_DIRNAME
+            _swap(here, stable)
+            try:
+                for entry in again:
+                    try:
+                        run = run_pytest(
+                            root, entry["files"], python=python,
+                            timeout=left("this suite's re-read against stable"))
+                    except _Blocked as exc:
+                        entry.update(status=MIRROR_BLOCKED,
+                                     why=f"the re-read against stable: {exc}")
+                        continue
+                    entry["re_read"] = True
+                    entry["totals"]["stable"] = run["totals"]
+                    outcomes[entry["name"]]["stable"] = run["results"]
+            finally:
+                _swap(here, stable)
+
+        failing, already_red = [], []
+        for entry in entries:
+            if entry["status"] == MIRROR_BLOCKED:
+                continue
+            seen = outcomes[entry["name"]]
+            for nodeid in _red(seen["candidate"]):
+                if seen["stable"].get(nodeid) in RED:
+                    already_red.append(nodeid)
+                else:
+                    failing.append(nodeid)
+                    entry["status"] = MIRROR_FAILED
+        entries.sort(key=lambda e: e["status"] != MIRROR_BLOCKED)
+        result["already_red"] = [_entry(root, n) for n in sorted(already_red)]
+        blocked = [e for e in entries if e["status"] == MIRROR_BLOCKED]
+        if blocked:
+            raise _Blocked("; ".join(f"suite {e['name']}: {e['why']}"
+                                     for e in blocked))
+        result["failing"] = [_entry(root, n) for n in sorted(failing)]
         result["status"] = MIRROR_FAILED if result["failing"] else MIRROR_PASSED
     except _Blocked as exc:
         result["status"] = MIRROR_BLOCKED
@@ -478,6 +587,38 @@ def summary_line(result: dict) -> str:
     minutes = int(result.get("seconds") or 0) // 60
     sha = (result.get("agent_bureau_sha") or "unknown")[:7]
     return f"⏱ mirror check: {minutes}m ({result.get('tests', 0)} tests, agent-bureau {sha})"
+
+
+def _counts(totals: dict) -> str:
+    return ", ".join(f"{int(totals.get(k) or 0)} {k}" for k in TOTALS)
+
+
+def suite_line(suite: dict) -> str:
+    """Both runs' totals for one suite, side by side (DRE-6670) — the shape
+    the card, the run summary and the step's own output all carry:
+    `suite <name>: candidate <counts> · stable <counts>`."""
+    totals = suite.get("totals") or {}
+    mine, theirs = totals.get("candidate"), totals.get("stable")
+    first = f"candidate {_counts(mine)}" if mine else "candidate not run"
+    if theirs:
+        second = f"stable {_counts(theirs)}"
+    elif suite.get("status") == MIRROR_BLOCKED:
+        second = "stable not re-read: the suite is blocked"
+    else:
+        second = NOT_RE_READ
+    return f"suite {suite.get('name')}: {first} · {second}"
+
+
+def suite_lines(result: dict) -> list[str]:
+    """One line per suite, blocked suites first with their reason, then the
+    totals of every suite whose candidate run gave any."""
+    lines = []
+    for suite in result.get("suites") or []:
+        if suite.get("status") == MIRROR_BLOCKED:
+            lines.append(f"suite {suite.get('name')}: blocked — {suite.get('why')}")
+        if (suite.get("totals") or {}).get("candidate"):
+            lines.append(suite_line(suite))
+    return lines
 
 
 def describe(entries: list[dict]) -> str:
@@ -536,6 +677,13 @@ def card_body(result: dict, run_url: str) -> str:
         "`stable` did not move: agent-bureau's mirror has to follow first.",
         "",
         *rows,
+    ]
+    per_suite = suite_lines(result)
+    if per_suite:
+        lines += ["", "Both runs' totals, per suite — the candidate's, then the "
+                      "identical run with `stable` in its place:", "",
+                  *(f"- {line}" for line in per_suite)]
+    lines += [
         "",
         f"- bureau-pipeline candidate: `{result.get('candidate') or 'unknown'}`",
         f"- agent-bureau tested at: `{result.get('agent_bureau_sha') or 'unknown'}`",
@@ -694,7 +842,10 @@ def _cmd_run(args) -> int:
     )
     Path(args.out).write_text(json.dumps(result, indent=2) + "\n")
     line = summary_line(result)
+    per_suite = suite_lines(result)
     print(f"mirror check: {result['status']} — {line}")
+    for each in per_suite:
+        print(f"mirror check: {each}")
     if result["why"]:
         print(f"mirror check: {result['why']}")
     for entry in result["failing"]:
@@ -705,6 +856,8 @@ def _cmd_run(args) -> int:
     if summary:
         with open(summary, "a") as fh:
             fh.write(line + "\n\n")
+            if per_suite:
+                fh.write("".join(f"- {each}\n" for each in per_suite) + "\n")
     return 0
 
 
