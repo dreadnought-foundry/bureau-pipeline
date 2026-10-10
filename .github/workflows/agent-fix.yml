@@ -1108,7 +1108,9 @@ jobs:
       # DRE-1996: the branch name is agent-chosen (agent/* refs, and git
       # refnames may contain $ and backticks) and the escalation preamble
       # opens the prompt's FIRST line. The escalation is workflow-static
-      # today, but both are step outputs headed into the prompt — route them
+      # except on a proof record red on a check, where it names the record's
+      # path and the red checks (DRE-6571), and both are step outputs headed
+      # into the prompt — route them
       # through the sanitizer via env (no shell expansion) so neither can
       # ever smuggle multi-line or sentinel-lookalike text into the prompt.
       # tests/test_untrusted_content_wiring.py pins this.

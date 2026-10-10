@@ -2231,3 +2231,70 @@ def test_gate_the_record_is_read_at_the_head_off_the_pull_requests_files(
         fire=h.fire, voices=fake_voices, now=NOW, find_record=h.find_record)
     assert asked == [("api", f"repos/{REPO}/contents/{RECORD_PATH}?ref={HEAD}")]
     assert h.holds == [("DRE-5930", *WAITING)] and h.fired == []
+
+
+# --------------------------------------------------------------------------- #
+# DRE-6571: a record the critic approved that is red on a CHECK, not on a row  #
+# --------------------------------------------------------------------------- #
+RED_CHECK = "scripts unit tests (part 2)"
+
+
+def rollup(**conclusions) -> list:
+    """The head's checks as `gh pr view --json statusCheckRollup` returns
+    them: CheckRun nodes, conclusions in capitals."""
+    return [{"__typename": "CheckRun", "name": name, "status": "COMPLETED",
+             "conclusion": conclusion.upper()}
+            for name, conclusion in {"scripts unit tests (part 1)": "success",
+                                     "QA critic review": "success",
+                                     **conclusions}.items()]
+
+
+def _red(pr: dict, **conclusions) -> dict:
+    return dict(pr, statusCheckRollup=rollup(**conclusions))
+
+
+def test_red_the_record_pull_request_is_read_with_its_checks():
+    assert "statusCheckRollup" in proof_dispatch.RECORD_FIELDS.split(",")
+
+
+def test_red_an_approved_record_red_on_a_check_names_the_check_and_the_fix_agent(
+        monkeypatch, capsys):
+    pr = _red(record(verdict("APPROVE", 100)), **{RED_CHECK: "failure"})
+    h, tally, writes = _gate_pass(monkeypatch, thread=_sent_back(), pr=pr)
+    lines = _about(_lines(capsys), "DRE-5930")
+    assert h.fired == [] and h.posted == [] and h.holds == [] and writes.log == []
+    said = [line for line in lines if "re-run" in line]
+    assert len(said) == 1, lines
+    assert RED_CHECK in said[0] and "the fix agent has it" in said[0], said
+    assert "nothing to answer" not in said[0]
+    assert tally.someone_else == 1
+    # The record itself is never read for it: a check is not a row.
+    assert h.text_reads == []
+
+
+def test_red_a_review_check_or_a_cancelled_one_is_not_red(monkeypatch, capsys):
+    for conclusions in ({RED_CHECK: "cancelled"}, {"call / review": "failure"}):
+        pr = _red(record(verdict("APPROVE", 100)), **conclusions)
+        _gate_pass(monkeypatch, thread=_sent_back(), pr=pr)
+        lines = _about(_lines(capsys), "DRE-5930")
+        assert any("no decline note" in line and "nothing to answer" in line
+                   for line in lines), lines
+        assert not any("fix agent" in line for line in lines), lines
+
+
+def test_red_a_not_proven_decline_at_the_head_is_re_run_as_today(monkeypatch, capsys):
+    """DRE-6488's path holds whatever the checks say: the decline at the head
+    is a row only the proof run can re-observe."""
+    h, tally, _ = _gate_pass(monkeypatch, thread=_sent_back(),
+                             pr=_red(_declined(), **{RED_CHECK: "failure"}))
+    assert h.fired == [("DRE-5930", REPO, GATE_RERUN, "proof-execute")]
+    assert tally.dispatched == 1
+
+
+def test_red_a_decline_on_an_earlier_head_with_a_red_check_is_the_fix_agents(
+        monkeypatch, capsys):
+    pr = _red(_declined(note=gate_note(90, sha=OLD_HEAD)), **{RED_CHECK: "failure"})
+    h, _, _ = _gate_pass(monkeypatch, thread=_sent_back(), pr=pr)
+    lines = _about(_lines(capsys), "DRE-5930")
+    assert h.fired == []
+    assert any(RED_CHECK in line and "the fix agent has it" in line for line in lines), lines
