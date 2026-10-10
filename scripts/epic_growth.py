@@ -15,6 +15,10 @@ does the reads and the writes; everything they say is composed here.
     more than `ratio` times the approved size AND at least `minimum_added`
     more cards. An approved size that cannot be read never crosses: nothing is
     asked against an approval nobody can read (console-honesty rule 2).
+  * What crosses is the cards still to build (DRE-6501): the epic's children
+    not in Done, Canceled or Duplicate (`mid_epic.still_open`), never every
+    card it has. DRE-4721 was asked at 50 cards, told to split, with 48 of
+    them finished; the growth record still counts every card.
   * `title()` and `body()` are the question card: its body is the one Green
     Light format (DRE-3893), one `console_escalation.Escalation` rendered by
     `console_escalation.render` and nothing else, as the review-cap question
@@ -103,14 +107,17 @@ def threshold(path: Path = CONFIG) -> Threshold:
     return Threshold(ratio=ratio, minimum_added=minimum)
 
 
-def crossed(approved, running, limit: Threshold | None = None) -> bool:
-    """Has an epic approved at `approved` cards and running `running` grown
-    past the threshold? Both must hold: more than `ratio` × approved, and at
-    least `minimum_added` more. None for either never crosses."""
-    if approved is None or running is None:
+def crossed(approved, still_open, limit: Threshold | None = None) -> bool:
+    """Has an epic approved at `approved` cards, with `still_open` of its
+    cards still to build, grown past the threshold? Both must hold: more than
+    `ratio` × approved, and at least `minimum_added` more. None for either
+    never crosses. The caller passes the cards still open (DRE-6501): a card
+    already finished is not a card he is being asked to approve."""
+    if approved is None or still_open is None:
         return False
     limit = limit or threshold()
-    return running > limit.ratio * approved and running - approved >= limit.minimum_added
+    return (still_open > limit.ratio * approved
+            and still_open - approved >= limit.minimum_added)
 
 
 # --------------------------------------------------------------------------- #
@@ -136,35 +143,43 @@ def _joined(card: dict) -> str:
     return f"{card['id']} ({route}: {because})" if because else f"{card['id']} ({route})"
 
 
-def _finding(epic, approved, running, joined) -> str:
+def _finding(epic, approved, running, joined, still_open) -> str:
+    """Both numbers, each its own (DRE-6501): the cards that joined since the
+    green light, and how many of the epic's cards are still open — so a
+    finished card is never read as one still to approve."""
     more = running - approved
     head = (f"{epic} was approved at {approved} cards and is now running "
-            f"{running}, {more} more than you approved.")
+            f"{running}, {more} more than you approved; {still_open} of its "
+            f"{running} cards are still open.")
     if not joined:
         return head
-    return (f"{head} Joined since its green light: "
+    return (f"{head} {len(joined)} cards joined since its green light: "
             + ", ".join(_joined(c) for c in joined) + ".")
 
 
-def _recommendation(approved, running) -> tuple[str, str]:
-    if running >= SPLIT_AT * approved:
+def _recommendation(approved, still_open) -> tuple[str, str]:
+    """`split` only when the cards still open are at least `SPLIT_AT` times
+    the approved size (DRE-6501) — finished cards are no plan left to split."""
+    if still_open >= SPLIT_AT * approved:
         return SPLIT, (
-            f"it is running at least {SPLIT_AT} times the size you approved, and "
-            "a plan that size is a different plan from the one you said yes to — "
-            "splitting it lets you approve each part on its own, while the work "
-            "already under way finishes")
+            f"{still_open} of its cards are still open, at least {SPLIT_AT} times "
+            "the size you approved, and a plan that size is a different plan "
+            "from the one you said yes to — splitting it lets you approve each "
+            "part on its own, while the work already under way finishes")
     return RE_APPROVE, (
-        f"it is under {SPLIT_AT} times the size you approved, so the extra cards "
-        "most likely are more of the same plan — the epic keeps running either "
-        "way, and the next question comes only if it grows this far again")
+        f"{still_open} of its cards are still open, under {SPLIT_AT} times the "
+        "size you approved, so the extra cards most likely are more of the same "
+        "plan — the epic keeps running either way, and the next question comes "
+        "only if it grows this far again")
 
 
-def escalation(epic: str, approved: int, running: int,
-               joined) -> console_escalation.Escalation:
-    """The one reading of the growth the card's three lines render."""
-    pick, why = _recommendation(approved, running)
+def escalation(epic: str, approved: int, running: int, joined, *,
+               still_open: int) -> console_escalation.Escalation:
+    """The one reading of the growth the card's three lines render. `running`
+    is every card the epic has, `still_open` the ones not yet finished."""
+    pick, why = _recommendation(approved, still_open)
     return console_escalation.Escalation(
-        finding=_finding(epic, approved, running, list(joined or [])),
+        finding=_finding(epic, approved, running, list(joined or []), still_open),
         question=(f"Is the bigger plan for {epic} still the one you approved? "
                   f"Answer with the word {RE_APPROVE} to keep it running as it "
                   f"is, or the word {SPLIT} to send it back to planning to be "
@@ -174,9 +189,10 @@ def escalation(epic: str, approved: int, running: int,
     )
 
 
-def body(epic: str, approved: int, running: int, joined) -> str:
+def body(epic: str, approved: int, running: int, joined, *, still_open: int) -> str:
     """The question card's description: the three lines and nothing else."""
-    return console_escalation.render(escalation(epic, approved, running, joined))
+    return console_escalation.render(
+        escalation(epic, approved, running, joined, still_open=still_open))
 
 
 # --------------------------------------------------------------------------- #
@@ -255,5 +271,6 @@ def split_because(approved: int, running: int, question: str) -> str:
 
 if __name__ == "__main__":
     limit = threshold()
-    print(f"epic-growth: crossed past {limit.ratio}× the approved size and at "
-          f"least {limit.minimum_added} more cards ({CONFIG})")
+    print(f"epic-growth: crossed when the cards still open are past "
+          f"{limit.ratio}× the approved size and at least {limit.minimum_added} "
+          f"more ({CONFIG})")

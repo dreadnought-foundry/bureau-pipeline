@@ -116,12 +116,16 @@ COMMITTED_NOT_PUSHED_RESTARTS = 1
 RUNNER_LOST_TAG = "fix-run-runner-lost"
 RUNNER_LOST_WAIT_MINUTES = 10
 RUNNER_LOST_RETRIES = 1
+# RunsOn's words for a Spot machine AWS took back, copied from job
+# 114135785854 (2026-10-09). The red-main repair backs off on the same
+# sentence (red_main_repair.INFRA_SIGNATURES, DRE-6575), which compiles it as
+# written — so it stays a plain sentence with no regex metacharacter.
+SPOT_INTERRUPTED = "AWS interrupted the EC2 Spot instance running this job"
 # The job's words for a machine taken mid-run, matched case-insensitively
 # against its annotations. "Process completed with exit code 137" is NOT one:
 # it is also what the memory kill scripts/out_of_memory.py reads looks like.
 RUNNER_LOST_WORDINGS = (
-    # RunsOn's, copied from job 114135785854 (2026-10-09).
-    "AWS interrupted the EC2 Spot instance running this job",
+    SPOT_INTERRUPTED,
     # GitHub's, for a runner that went away (red_main_repair.py matches it too).
     "lost communication with the server",
     # GitHub's, for a runner stopped under the job.

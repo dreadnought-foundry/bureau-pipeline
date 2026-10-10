@@ -144,6 +144,7 @@ import blocker_class  # noqa: E402 — DRE-6448: ONE reader of an open blocker a
 import blocker_resolve  # noqa: E402 — DRE-6448: the class's action, behind one call
 import break_glass  # noqa: E402 — ONE source for the sanctioned gate bypass (DRE-2737)
 import bureau_read  # noqa: E402 — the read door: the board from our database (Stage 2 #5/#6a)
+import canceled_check  # noqa: E402 — DRE-3072: a canceled check is re-run once, never sent a fix agent
 import card_pr  # noqa: E402 — ONE source for "does this card have a PR?" (DRE-2316)
 import console_receipt  # noqa: E402 — an unchecked receipt is not a refused one (DRE-4153)
 # DRE-2687: ONE source for the critic's own alert tag — the aged-Intake
@@ -5541,8 +5542,10 @@ def ask_epic_growth_question(epic: str, report: dict) -> str:
     fleet-outage card is created in Triage (DRE-5292): `no-code` and no
     `agent:*` role, so no run is ever dispatched for it, and no parent — a
     child of the epic would be one more card in it, and would be promoted.
-    Its description is `epic_growth.body`, the three declared lines. The epic
-    stays In Progress and keeps promoting: nothing is paused, labeled or held.
+    Its description is `epic_growth.body`, the three declared lines, which
+    name every card it has and the cards still open (DRE-6501) — the count it
+    crossed on. The epic stays In Progress and keeps promoting: nothing is
+    paused, labeled or held.
 
     The marker is the `open` line on the epic's growth record, and while it
     stands nothing is asked again. A card created on a pass that died, or
@@ -5550,7 +5553,7 @@ def ask_epic_growth_question(epic: str, report: dict) -> str:
     by this epic's title prefix that no line names is that card, and is
     recorded rather than asked twice. Returns the question card.
     """
-    approved, running = report["approved"], report["current"]
+    approved, running, still_open = report["approved"], report["current"], report["open"]
     asked = mid_epic._now()
     named = {q["id"] for q in report.get("questions") or []}
     found = linear_ops.find_open_prefix(epic_growth.title_prefix(epic))
@@ -5561,7 +5564,8 @@ def ask_epic_growth_question(epic: str, report: dict) -> str:
     else:
         issue = linear_ops.create_card(
             epic_growth.title(epic, approved, running),
-            epic_growth.body(epic, approved, running, report.get("joined") or []),
+            epic_growth.body(epic, approved, running, report.get("joined") or [],
+                             still_open=still_open),
             repo_slug=REPO_SLUG,
             labels=(linear_ops.NO_CODE_LABEL,),
             lane=EPIC_GROWTH_LANE,
@@ -5575,8 +5579,8 @@ def ask_epic_growth_question(epic: str, report: dict) -> str:
         print(f"epic-growth: {epic} question {question} not recorded on the "
               f"epic — {recorded['contended']}; the next sweep records it")
     print(f"epic-growth: {epic} grew past its green light — approved at "
-          f"{approved} cards, running {running}; asked {question} in "
-          f"{EPIC_GROWTH_LANE}")
+          f"{approved} cards, running {running}, {still_open} still open; "
+          f"asked {question} in {EPIC_GROWTH_LANE}")
     return question
 
 
@@ -9927,6 +9931,77 @@ def _head_check_runs(sha: str) -> list[dict] | None:
         return None
 
 
+def _canceled_job_limit(checks) -> str | None:
+    """The time limit a canceled job's annotations name ("15-minute"), for the
+    re-run receipt's wording only — so an unreadable answer is None and the
+    receipt reads "canceled, re-running" (DRE-3072). A job's id IS its check
+    run's id; silent `gh()`, on GH_TOKEN, as `_check_run_annotations` reads."""
+    for check in checks:
+        if check.get("conclusion") != canceled_check.CANCELLED:
+            continue
+        notes = gh("api", f"repos/{REPO}/check-runs/{check.get('id')}"
+                   "/annotations?per_page=100")
+        try:
+            limit = canceled_check.limit(json.loads(notes or "[]"))
+        except (ValueError, AttributeError, TypeError):
+            limit = None
+        if limit:
+            return limit
+    return None
+
+
+def _tend_canceled_runs(pr: dict, sha: str, unknown: dict) -> bool:
+    """Re-run, or tell once, each workflow run on `pr`'s head that holds a
+    canceled check (DRE-3072). The rule is `canceled_check`'s; the reads and
+    writes are here, in the shape `rerun_runner_lost_ci` gave them (DRE-5901):
+    the run is read on GH_DISPATCH_TOKEN, re-run with `gh run rerun --failed`,
+    and a refused re-run is a write failure that turns the sweep red.
+
+    Returns False when a re-run was refused, so the caller sends no fix agent
+    for this pull request on this pass."""
+    worker = [c.get("body") or "" for c in pr.get("comments", [])
+              if is_worker_bot_comment(c)]
+    ok = True
+    for run_id, checks in unknown.items():
+        run = None
+        if run_id is not None:
+            out, detail = _actions_read(("api", f"repos/{REPO}/actions/runs/{run_id}"))
+            try:
+                run = json.loads(out) if detail is None and out else None
+            except ValueError:
+                run = None
+            if not isinstance(run, dict):
+                run = None
+                _degrade("canceled-check", f"run {run_id} on PR #{pr['number']}",
+                         detail or "the Actions read answered nothing",
+                         then="re-running nothing for it this sweep")
+        jobs = canceled_check.canceled_jobs(checks)
+        step = canceled_check.decide(run_id, run, sha, worker)
+        print(f"canceled-check: PR #{pr['number']} {step.action} — {step.why} "
+              f"({', '.join(jobs)}); no fix agent for it")
+        if step.action == "rerun":
+            limit = _canceled_job_limit(checks)
+            try:
+                gh_dispatch("run", "rerun", str(run_id), "--failed", "--repo", REPO)
+            except ReconcileWriteError as e:
+                ok = False
+                _write_failures.append(
+                    f"canceled-check: re-running run {run_id} on PR "
+                    f"#{pr['number']} was refused: {e}")
+                print(f"ERROR: canceled-check: re-running run {run_id} on PR "
+                      f"#{pr['number']} was refused ({e}) — tried again next "
+                      "sweep, and no fix agent", file=sys.stderr)
+                continue
+            _post_pr_note(pr["number"], pipeline_act.receipt(
+                canceled_check.RERUN_ACT,
+                canceled_check.rerun_receipt(pr["number"], sha, run_id, jobs, limit)))
+        elif step.action == "tell":
+            _post_pr_note(pr["number"], pipeline_act.receipt(
+                canceled_check.AGAIN_ACT,
+                canceled_check.again_receipt(pr["number"], sha, run, jobs)))
+    return ok
+
+
 def fix_approved_but_red() -> None:
     """Dead-zone repair: a PR with critic APPROVE but a failed CI check has
     no automatic fixer — agent-fix's trigger is a REQUEST_CHANGES comment,
@@ -9934,7 +10009,11 @@ def fix_approved_but_red() -> None:
     open agent PR in that state whose head is >20 min old (gives medic's
     auto-retry time to clear transient flakes first). Origin: PR #46 sat
     approved-but-red with nothing coming. Skips when a fix run is already
-    queued/in_progress (same busy-guard as the conflict sweep)."""
+    queued/in_progress (same busy-guard as the conflict sweep).
+
+    A canceled check is not red (DRE-3072): a workflow run holding one is
+    re-run once, or told once on a later attempt, and never counted toward a
+    fix dispatch — the rule is `canceled_check`'s."""
     # Unreadable answers BUSY (gh_actions_read): the App token 403s on this
     # API, and the old `or "[]"` turned that into "nothing running" — the
     # backoff failed OPEN at every one of these sites.
@@ -9957,11 +10036,14 @@ def fix_approved_but_red() -> None:
         runs = _head_check_runs(sha)
         if runs is None:
             continue  # unreadable: skip this PR, as an empty read always did
-        failed = sum(
-            1 for r in runs
-            if not str(r.get("name") or "").endswith("review")
-            and (r.get("conclusion") or "") in ("failure", "timed_out", "cancelled")
-        )
+        # DRE-3072: a workflow run holding a `cancelled` check is UNKNOWN, not
+        # red — a `failure` beside it included, because a canceled shard turns
+        # its summary job red (agent-bureau #3502, 2026-10-09). It is re-run
+        # once, or told once on a later attempt, and never sent a fix agent.
+        split = canceled_check.split(runs)
+        if not _tend_canceled_runs(pr, sha, split.unknown):
+            continue  # a refused re-run never falls through to a fix dispatch
+        failed = len(split.red)
         if not failed:
             continue
         commit = json.loads(gh("api", f"repos/{REPO}/git/commits/{sha}") or "{}")
@@ -12540,7 +12622,8 @@ def report_epic_growth(epics: set[str]) -> list[tuple[str, int]]:
     unapproved one with no single decision being wrong. Riding the sweep that
     already runs is what makes it visible without anyone remembering to look.
 
-    Far past the approval the CEO is asked (DRE-6414): an epic past the
+    Far past the approval the CEO is asked (DRE-6414): an epic whose cards
+    still open (DRE-6501 — not Done, Canceled or Duplicate) are past the
     threshold in `config/epic-growth.json` with no growth question open gets
     one (`ask_epic_growth_question`), and an open one is settled on his
     answer (`settle_epic_growth_question`) — after the refresh, never on an
@@ -12587,9 +12670,11 @@ def report_epic_growth(epics: set[str]) -> list[tuple[str, int]]:
             # took the whole phase down with it.
             print(f"epic-growth: {epic} took no comment — {report['capped']}")
         # The growth question (DRE-6414): an open one is settled on his answer,
-        # and an epic past the threshold with none open is asked. Never on an
-        # idle pass, and never off a contended refresh — its numbers came from
-        # a read already known to be stale.
+        # and an epic past the threshold with none open is asked. What crosses
+        # is the cards still open, never every card (DRE-6501): DRE-4721 was
+        # asked at 50 with 48 finished. Never on an idle pass, and never off a
+        # contended refresh — its numbers came from a read already known to be
+        # stale.
         if not _idle_pass and not report.get("contended"):
             try:
                 open_question = next(
@@ -12597,7 +12682,7 @@ def report_epic_growth(epics: set[str]) -> list[tuple[str, int]]:
                      if q.get("status") == mid_epic.QUESTION_OPEN), None)
                 if open_question is not None:
                     settle_epic_growth_question(epic, open_question, report.get("approved"))
-                elif epic_growth.crossed(report.get("approved"), report.get("current")):
+                elif epic_growth.crossed(report.get("approved"), report.get("open")):
                     ask_epic_growth_question(epic, report)
             except Exception as exc:  # noqa: BLE001 — one epic's question never ends the phase
                 _write_failures.append(f"epic-growth question on {epic}: {exc}")
