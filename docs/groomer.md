@@ -952,6 +952,15 @@ card is listed on the next proposal under *Decisions I could not read*, once:
 a proposal reports what was written since the one before it. A thread with no per-card
 marker proposes exactly what it did before.
 
+Such a marker changes neither list, so the next proposal usually carries the
+**same id** as the one already on the card — and a proposal whose id already
+stands there is normally not posted again. When the proposal has decisions to
+list, it is posted again under that id unless a page with the id already
+quotes every one of them. The second page carries the same lists, so an
+approval of the id means the same batch on either page, and the id is not
+retired. The run after that lists nothing, because the second page is now the
+newest proposal, and a repeat id posts nothing as before.
+
 ## The next proposal answers your last decline (DRE-3373)
 
 Declining a batch used to be a one-way message. The reason went into the drain's

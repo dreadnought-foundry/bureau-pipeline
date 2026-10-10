@@ -132,6 +132,46 @@ def test_the_next_proposal_lists_the_decision_it_could_not_read(monkeypatch):
     assert line in section, "the decision's first line is not quoted"
 
 
+def test_an_unchanged_batch_is_posted_again_to_list_what_it_could_not_read(
+        monkeypatch):
+    """The whole path, through `post_proposal`. A marker that names no card
+    changes neither list, so the next proposal carries the SAME id — and a
+    proposal whose id already stands on the thread is not posted. Without a
+    second post the section never reaches the card."""
+    _patch_build(monkeypatch, LANE)
+    first = groomer._build(_args(post=STANDING_CARD))
+    ops = FakeOps()
+    assert groomer.post_proposal(ops, STANDING_CARD, first)
+    line = (f"{groomer.MARK} {groomer.EXCLUDE_TAG}: {first['id']} the second "
+            f"card is already done")
+    thread = [{"body": ops.written[0][1], "authored_by_pipeline": True},
+              _said(line)]
+    _patch_build(monkeypatch, LANE, thread)
+    second = groomer._build(_args(post=STANDING_CARD))
+    assert second["id"] == first["id"]
+    ops.comments = thread
+    assert groomer.post_proposal(ops, STANDING_CARD, second)
+    assert len(ops.written) == 2
+    assert line in _section(ops.written[1][1])
+
+    # And once that page is on the thread, a retry posts nothing more.
+    thread.append({"body": ops.written[1][1], "authored_by_pipeline": True})
+    _patch_build(monkeypatch, LANE, thread)
+    third = groomer._build(_args(post=STANDING_CARD))
+    assert "unreadable_decisions" not in third
+    assert not groomer.post_proposal(ops, STANDING_CARD, third)
+    assert len(ops.written) == 2
+
+
+def test_a_page_already_listing_the_decision_is_not_posted_again():
+    line = f"{groomer.MARK} {groomer.EXCLUDE_TAG}: {PID} already done"
+    proposal = groomer.propose(LANE[:5], cycles=CYCLES, capacity=3, now=NOW,
+                               unreadable_decisions=[line])
+    posted = {"body": groomer.proposal_comment(proposal),
+              "authored_by_pipeline": True}
+    assert groomer.already_proposed(proposal, [posted])
+
+
 def test_a_same_line_reason_without_the_dash_keeps_the_card_off_the_offer(
         monkeypatch):
     _patch_build(monkeypatch, LANE)

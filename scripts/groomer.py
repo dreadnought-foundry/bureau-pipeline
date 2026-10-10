@@ -2060,11 +2060,21 @@ _PROPOSAL_LINE = re.compile(rf"^\s*(?:{MARK}\s*)?{PROPOSAL_TAG}\s*:\s*([0-9a-f]{
 
 
 def already_proposed(proposal: dict, records: list[dict]) -> bool:
-    """Is THIS batch already proposed on the card?"""
+    """Is THIS batch already proposed on the card?
+
+    And, when the proposal lists decisions it could not read, is there a page
+    with this id that lists them too (DRE-6642)? A marker that names no card
+    changes neither list, so the id stays the same — and if this answered yes
+    off the id alone, the section would never reach the card. A second page
+    with the same id is what lists them; `standing_decisions` starts counting
+    again from it, so the next run's proposal lists nothing and is a repeat.
+    """
     pid = proposal["id"]
+    quoted = _quoted(proposal.get("unreadable_decisions") or [])
     for record in records:
-        match = _PROPOSAL_LINE.match((record.get("body") or "").strip())
-        if match and match.group(1) == pid:
+        body = (record.get("body") or "").strip()
+        match = _PROPOSAL_LINE.match(body)
+        if match and match.group(1) == pid and all(q in body for q in quoted):
             return True
     return False
 
@@ -2089,6 +2099,12 @@ def post_proposal(lops, card: str, proposal: dict,
     has to, because the approval is the oldest of a card's decisions — and the
     two differ on purpose: a duplicate proposal costs a comment, while a missed
     approval costs a batch.
+
+    One exception to "same id, nothing posted" (DRE-6642): a proposal that
+    lists decisions it could not read is posted again under the same id
+    unless a page with that id already lists them — see `already_proposed`.
+    The second page carries the same lists, so an approval of the id means
+    the same batch on either page, and the drain reads the first it finds.
 
     `records` is that same read, already in the caller's hand: `main` reads the
     thread once to find the decline this proposal answers (DRE-3373) and passes
@@ -2988,7 +3004,6 @@ def _render_unreadable(proposal: dict) -> list:
             + f" with the card after the batch id — `{MARK} {EXCLUDE_TAG}: "
               f"{proposal['id']} DRE-N — <reason>`.", "",
             *_quoted(lines), ""]
-
 
 
 def _quoted(lines: list[str]) -> list[str]:
