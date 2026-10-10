@@ -268,8 +268,10 @@ def test_an_accepted_rewrite_is_recorded_then_written_then_moved_in_that_order()
     assert "## Body before the rewrite" in note
     assert note.index("## Body before the rewrite") < note.index(_body(FIRST))
     assert writes[1][2] == _draft(FIRST)
-    # The move is an ordinary move: its own groom-moved note, then the lane.
-    assert groomer.parse_moved_note(writes[2][2])
+    # The move is an addition's: its own groom-moved note, naming no place
+    # on the Planning list it was never on, then the lane.
+    moved = groomer.parse_moved_note(writes[2][2])
+    assert moved and moved["added"] and moved["position"] is None
 
     assert result["rewritten"] == [FIRST]
     assert FIRST in result["moved"]
