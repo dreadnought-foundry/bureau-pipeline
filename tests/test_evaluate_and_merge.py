@@ -124,6 +124,28 @@ class TheScriptFileTest(unittest.TestCase):
         self.assertIn("proof_record.py gather", what)
         self.assertRegex(history, r"DRE-6141(?!\d)")
 
+    def test_the_header_names_the_fix_lane_recheck_knobs_beside_the_merge_retry(self):
+        """DRE-6577: the gate looks at the Agent Fix lane again before a
+        condition F wait stands. Its two knobs are named where the merge
+        retry's is, with their defaults, and the history says why."""
+        what, history = "\n".join(header()).split("Incident history", 1)
+        knobs = [ln for ln in what.splitlines()
+                 if re.search(r"\b(MERGE_RETRY_SECONDS|FIX_LANE_RECHECK_SECONDS|"
+                              r"FIX_LANE_RECHECK_CEILING_SECONDS)\b", ln)]
+        self.assertEqual(len(knobs), 3, knobs)
+        self.assertIn("MERGE_RETRY_SECONDS", knobs[0])
+        self.assertRegex(knobs[1], r"FIX_LANE_RECHECK_SECONDS\b.*\b15\b")
+        self.assertRegex(knobs[2], r"FIX_LANE_RECHECK_CEILING_SECONDS\b.*\b60\b")
+        lines = what.splitlines()
+        rows = [lines.index(k) for k in knobs]
+        self.assertEqual(rows, list(range(rows[0], rows[0] + 3)), knobs)
+        self.assertRegex(history, r"DRE-6577(?!\d)")
+
+    def test_the_fix_lane_recheck_defaults_are_15_and_60(self):
+        code = "\n".join(step_shell.code_lines(SCRIPT.read_text()))
+        self.assertIn("${FIX_LANE_RECHECK_SECONDS:-15}", code)
+        self.assertIn("${FIX_LANE_RECHECK_CEILING_SECONDS:-60}", code)
+
     def test_every_history_reference_survives_in_the_header(self):
         history = "\n".join(header()).split("Incident history", 1)[1]
         for ref in REFERENCES:
