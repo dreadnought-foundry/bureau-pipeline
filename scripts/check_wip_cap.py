@@ -29,6 +29,15 @@ This checker FAILS (exit 1) when:
     a declared "8" rendered 8 instead, and a repo held at "0" promoted three
     cards when an epic was approved on 2026-09-15. The ONE fallback is
     `reconcile.DEFAULT_MAX_WIP`, in the script, and nowhere else.
+  * any promotion step has no `BUREAU_MAX_WIP` in scope, or one whose value
+    is anything but `${{ vars.BUREAU_MAX_WIP }}` (DRE-6631). That is the
+    caller's Actions variable — the number the console writes — and
+    reconcile.py reads it after the input and the caller's reconcile stub. A
+    path that misses it promotes at the default while the other two follow
+    the console: the two-caps defect one level up. It stays a separate line
+    beside `MAX_WIP`, never folded into it as `inputs.max_wip ||
+    vars.BUREAU_MAX_WIP` — one value where the script needs two would leave
+    the stub no place between them, and the `MAX_WIP` rule above refuses it.
 
 Deterministic, PyYAML-only (the script default is read with `ast`, so
 importing reconcile.py — which requires live env — is never needed). Run
@@ -53,6 +62,8 @@ PIPELINE_WORKFLOW_PREFIX = "dreadnought-foundry/bureau-pipeline/.github/workflow
 INPUT_NAME = "max_wip"
 ENV_NAME = "MAX_WIP"
 REQUIRED_ENV_EXPR = "${{ inputs.max_wip }}"
+VARIABLE_ENV_NAME = "BUREAU_MAX_WIP"
+REQUIRED_VARIABLE_EXPR = "${{ vars.BUREAU_MAX_WIP }}"
 ROOT = Path(__file__).resolve().parent.parent
 WORKFLOWS_DIR = ROOT / ".github" / "workflows"
 RECONCILE_PY = Path(__file__).resolve().parent / "reconcile.py"
@@ -62,6 +73,8 @@ NON_PROMOTING_FLAGS = ("--close-epics", "--conflicts-only")
 
 _INLINE_ASSIGN = re.compile(rf"(?:^|\s){ENV_NAME}=(\S+)")
 _INPUT_EXPR = re.compile(r"^\$\{\{\s*inputs\.max_wip\s*\}\}$")
+_INLINE_VARIABLE_ASSIGN = re.compile(rf"(?:^|\s){VARIABLE_ENV_NAME}=(\S+)")
+_VARIABLE_EXPR = re.compile(r"^\$\{\{\s*vars\.BUREAU_MAX_WIP\s*\}\}$")
 
 
 def script_default(path=RECONCILE_PY):
@@ -87,6 +100,13 @@ def is_input_expression(value):
     """True only for the caller's input threaded verbatim. Any other value —
     including a quoted `"8"` — is a literal cap."""
     return bool(_INPUT_EXPR.match(str(value).strip().strip('"').strip("'")))
+
+
+def is_variable_expression(value):
+    """True only for the caller's BUREAU_MAX_WIP variable, threaded verbatim.
+    A literal, another variable, or the variable with a fallback folded in
+    (`|| '8'`) is not it."""
+    return bool(_VARIABLE_EXPR.match(str(value).strip().strip('"').strip("'")))
 
 
 def _on_block(doc):
@@ -174,19 +194,31 @@ def max_wip_assignments(doc, name="<doc>"):
     return found
 
 
-def cap_in_scope(doc, job_id, step):
-    """The MAX_WIP value a promotion step would actually export, or None if
-    nothing sets it. Inline assignment on the run line wins over step env,
-    which wins over job env, which wins over workflow env — shell order."""
+def _in_scope(doc, job_id, step, env_name, inline):
+    """The value `env_name` would have in a step, or None if nothing sets it.
+    Inline assignment on the run line wins over step env, which wins over job
+    env, which wins over workflow env — shell order."""
     run = step.get("run")
     if isinstance(run, str):
-        matches = _INLINE_ASSIGN.findall(run.replace("\\\n", " "))
+        matches = inline.findall(run.replace("\\\n", " "))
         if matches:
             return matches[-1]
     for scope in (step, (doc.get("jobs") or {}).get(job_id), doc):
-        if ENV_NAME in _env(scope):
-            return _env(scope)[ENV_NAME]
+        if env_name in _env(scope):
+            return _env(scope)[env_name]
     return None
+
+
+def cap_in_scope(doc, job_id, step):
+    """The MAX_WIP value a promotion step would actually export, or None if
+    nothing sets it."""
+    return _in_scope(doc, job_id, step, ENV_NAME, _INLINE_ASSIGN)
+
+
+def variable_in_scope(doc, job_id, step):
+    """The BUREAU_MAX_WIP value a promotion step would actually export, or
+    None if nothing sets it (DRE-6631)."""
+    return _in_scope(doc, job_id, step, VARIABLE_ENV_NAME, _INLINE_VARIABLE_ASSIGN)
 
 
 def effective_cap(doc, caller_inputs, default=None):
@@ -251,6 +283,21 @@ def check_workflow(doc, name, default=None):
                 f"{name}: jobs.{job_id}.steps[{i}]: promotes with no {ENV_NAME} "
                 f"in scope — it falls through to the script default instead of "
                 f"the caller's cap"
+            )
+        variable = variable_in_scope(doc, job_id, step)
+        if variable is None:
+            violations.append(
+                f"{name}: jobs.{job_id}.steps[{i}]: promotes with no "
+                f"{VARIABLE_ENV_NAME} in scope — set it to "
+                f"{REQUIRED_VARIABLE_EXPR!r}, or this path promotes at the "
+                f"default while the others follow the console (DRE-6631)"
+            )
+        elif not is_variable_expression(variable):
+            violations.append(
+                f"{name}: jobs.{job_id}.steps[{i}]: {VARIABLE_ENV_NAME} is "
+                f"{variable!r} — it must be exactly {REQUIRED_VARIABLE_EXPR!r}, "
+                f"the caller's own variable, or this path promotes at a cap "
+                f"the console cannot change (DRE-6631)"
             )
 
     if steps and is_reusable(doc):
@@ -393,8 +440,8 @@ def main(argv):
         for v in violations:
             print(f"FAIL {v}")
         return 1
-    print("ok: every promotion path takes the caller's WIP cap; "
-          "no literal cap remains")
+    print("ok: every promotion path takes the caller's WIP cap and its "
+          "BUREAU_MAX_WIP variable; no literal cap remains")
     return 0
 
 

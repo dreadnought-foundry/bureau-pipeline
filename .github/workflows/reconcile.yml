@@ -330,6 +330,11 @@ jobs:
           GH_DISPATCH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
           MAX_WIP: ${{ inputs.max_wip }}
+          # The caller's BUREAU_MAX_WIP Actions variable (DRE-6631) — `vars` is
+          # the caller's in a reusable. reconcile.py reads it after the input
+          # and the caller's reconcile stub, so it is never folded into the
+          # line above: that would leave the stub no place between them.
+          BUREAU_MAX_WIP: ${{ vars.BUREAU_MAX_WIP }}
           # The operator's controls on Intake are NOT threaded here any more
           # (DRE-4141). The sweep moves no card out of Intake on age, so it
           # reads no hold, no window and no cap; `groomer.yml` threads the hold
