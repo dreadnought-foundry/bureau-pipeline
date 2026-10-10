@@ -202,13 +202,15 @@ def _patch_classify(monkeypatch, table: dict):
 class TestDecide:
     def test_the_uncertain_table_is_this_modules_own(self):
         assert plan_bound.UNCERTAIN_BY_STAGE == {
-            "one-off": send_back_class.DECISION,
+            "one-off": send_back_class.REVISION,
             "pre": send_back_class.REVISION,
             "post": send_back_class.REVISION,
         }
-        # One-off is DRE-6356's own collapse.
+        # DRE-6649: the critic's own collapse stays the critic's — the bound
+        # reads only SEND_BACK rounds, never a QUESTION it could not place.
+        assert send_back_class.UNCERTAIN_GOES_TO == send_back_class.DECISION
         assert (plan_bound.UNCERTAIN_BY_STAGE["one-off"]
-                == send_back_class.UNCERTAIN_GOES_TO)
+                != send_back_class.UNCERTAIN_GOES_TO)
 
     def test_uncertain_on_post_is_a_rewrite_then_a_park(self, monkeypatch):
         _patch_classify(monkeypatch, {f: None for f in DRE_4059_POST})
@@ -219,17 +221,16 @@ class TestDecide:
         _patch_classify(monkeypatch, {f: None for f in DRE_4059_POST})
         assert plan_bound.decide(list(DRE_4059_POST), False, "pre")[0] == "rewrite"
 
-    @pytest.mark.parametrize("granted", [False, True])
-    def test_uncertain_on_one_off_is_a_question(self, monkeypatch, granted):
+    def test_uncertain_on_one_off_is_a_rewrite_then_a_park(self, monkeypatch):
         _patch_classify(monkeypatch, {f: None for f in DRE_4059_POST})
-        outcome, _ = plan_bound.decide(list(DRE_4059_POST), granted, "one-off")
-        assert outcome == "question"
+        assert plan_bound.decide(list(DRE_4059_POST), False, "one-off")[0] == "rewrite"
+        assert plan_bound.decide(list(DRE_4059_POST), True, "one-off")[0] == "park"
 
-    def test_the_one_off_rule_is_route_class(self, monkeypatch):
+    def test_the_one_off_rule_is_not_route_class(self, monkeypatch):
         _patch_classify(monkeypatch, {f: None for f in DRE_4059_POST})
         for finding in DRE_4059_POST:
-            assert (plan_bound.stage_class(finding, "one-off")
-                    == send_back_class.route_class(finding))
+            assert plan_bound.stage_class(finding, "one-off") == send_back_class.REVISION
+            assert send_back_class.route_class(finding) == send_back_class.DECISION
 
     @pytest.mark.parametrize("stage", ["pre", "post", "one-off"])
     @pytest.mark.parametrize("granted", [False, True])
@@ -498,7 +499,7 @@ class TestRead:
                            DRE_4059_POST[0]]
         assert rows[2][0] == "decision"
 
-    def test_uncertain_findings_read_as_rewrite_on_post_and_question_on_one_off(
+    def test_uncertain_findings_read_as_rewrite_on_post_and_on_one_off(
             self, monkeypatch, capsys):
         records = (_thread("post", DRE_4059_POST)
                    + [_send_back("one-off", n, f)
@@ -506,7 +507,7 @@ class TestRead:
         post = self._read(monkeypatch, capsys, records, "--stage", "post")
         assert post[0] == "rewrite"
         one_off = self._read(monkeypatch, capsys, records, "--stage", "one-off")
-        assert one_off[0] == "question"
+        assert one_off[0] == "rewrite"
         assert all(line.startswith("uncertain\t") for line in one_off[1:])
 
     def test_whole_thread_reads_past_the_newest_boundary(self, monkeypatch, capsys):
@@ -764,3 +765,90 @@ class TestConsoleConsumer:
         assert "plan-bound-rewrite" in out.stdout
         # The one-line console fix.
         assert "add 'bound-rewrite' (kind 'recovery') to ACTS" in out.stdout
+
+
+# --------------------------------------------------------------------------- #
+# 9. the one-off bound replayed on the two cards of 2026-10-10 (DRE-6649)      #
+# --------------------------------------------------------------------------- #
+
+# Each card's thread as the bound read it: after the round-2 marker landed and
+# before the bound's own question posted. On the day both answered `question`
+# with "Recommendation: none given", and every finding was a rewording.
+REPLAY_DIR = REPO / "tests" / "fixtures" / "green-light-2026-10-10"
+REPLAY_CARDS = ("DRE-6590", "DRE-6617")
+SEND_BACK_FIXTURE = REPO / "tests" / "fixtures" / "send-back-findings.json"
+
+
+def _replay(card: str) -> dict:
+    return json.loads((REPLAY_DIR / f"{card.lower()}.json").read_text("utf-8"))
+
+
+def _decision_fixtures() -> list[str]:
+    rows = json.loads(SEND_BACK_FIXTURE.read_text("utf-8"))
+    return [row["finding"] for row in rows
+            if row["expected"] == send_back_class.DECISION]
+
+
+class TestOneOffBoundReplay:
+    @pytest.mark.parametrize("card", REPLAY_CARDS)
+    def test_the_fixture_is_in_the_contract_shape(self, card):
+        doc = _replay(card)
+        assert doc["card"] == card
+        assert doc["arrival"] == "plan-bound"
+        assert doc["for"] == "planner"
+        assert doc["as_of"].endswith("Z")
+        assert doc["lane"] == "Planning"
+        assert all(isinstance(label, str) for label in doc["labels"])
+        assert doc["comments"]
+        for row in doc["comments"]:
+            assert set(row) == {"body", "authored_by_pipeline", "created_at"}
+            assert row["created_at"] <= doc["as_of"]
+        # Cut at the second round: the bound read both rounds' markers.
+        assert doc["comments"][-1]["body"].startswith(
+            "plan-critic: stage=one-off round=2 result=SEND_BACK")
+
+    @pytest.mark.parametrize("card", REPLAY_CARDS)
+    def test_every_finding_is_the_planners(self, card):
+        doc = _replay(card)
+        found = plan_bound.findings(doc["comments"], card, "one-off")
+        assert len(found) == 2
+        assert all(send_back_class.classify(f) is None for f in found)
+        assert plan_bound.decision_findings(found, "one-off") == []
+
+    @pytest.mark.parametrize("card", REPLAY_CARDS)
+    def test_no_receipt_is_a_rewrite(self, card):
+        doc = _replay(card)
+        assert not plan_bound.granted(doc["comments"])
+        found = plan_bound.findings(doc["comments"], card, "one-off")
+        outcome, _ = plan_bound.decide(found, False, "one-off")
+        assert outcome == "rewrite"
+
+    @pytest.mark.parametrize("card", REPLAY_CARDS)
+    def test_a_standing_receipt_is_a_park(self, card):
+        doc = _replay(card)
+        records = [_receipt(at="2026-10-10T00:00:00Z")] + doc["comments"]
+        assert plan_bound.granted(records)
+        found = plan_bound.findings(records, card, "one-off")
+        outcome, _ = plan_bound.decide(found, plan_bound.granted(records),
+                                       "one-off")
+        assert outcome == "park"
+
+    @pytest.mark.parametrize("card", REPLAY_CARDS)
+    def test_the_exit_dispatches_the_rewrite_and_never_asks(self, monkeypatch, card):
+        world = _World(monkeypatch, _replay(card)["comments"])
+        assert _exit("one-off", card) == 0
+        assert not world.of("escalate")
+        assert len(world.of("dispatch")) == 1
+
+
+class TestOneOffDecisionsStillAsk:
+    """The change narrows nothing the classifier can place."""
+
+    def test_the_fixture_carries_decisions(self):
+        assert _decision_fixtures()
+
+    @pytest.mark.parametrize("finding", _decision_fixtures())
+    @pytest.mark.parametrize("granted", [False, True])
+    def test_a_decision_fixture_is_a_question_on_one_off(self, finding, granted):
+        assert send_back_class.classify(finding) == send_back_class.DECISION
+        assert plan_bound.decide([finding], granted, "one-off")[0] == "question"
