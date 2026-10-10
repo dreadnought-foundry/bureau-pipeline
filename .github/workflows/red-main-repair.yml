@@ -86,8 +86,11 @@ jobs:
     # Guardrail 3: ONE repair in flight per repo. cancel-in-progress: false
     # queues a duplicate failure event behind the running repair; by the
     # time it runs, the decide step sees the repair branch/PR record and
-    # no-ops. The single-job shape is load-bearing — the lock must cover
-    # the agent run itself, not just the trigger.
+    # no-ops — or, when the branch is ahead of the default branch with no
+    # pull request on it, answers finish-unlanded and opens the pull request
+    # the agent pushed and left (DRE-6526). The single-job shape is
+    # load-bearing — the lock must cover the agent run itself, not just the
+    # trigger.
     concurrency:
       group: red-main-repair-${{ github.repository }}
       cancel-in-progress: false
@@ -196,6 +199,34 @@ jobs:
           gh api "repos/${{ github.repository }}/pulls?state=all&per_page=100" \
             > /tmp/repair-pulls.json 2>/dev/null || echo 'FETCH-FAILED' > /tmp/repair-pulls.json
 
+      # DRE-6526: is a record branch a fix the agent pushed and left? For each
+      # ref that IS an attempt at the failing sha — `record-refs` prints them,
+      # so the rule lives once, in the script — the comparison with the
+      # default branch, as `{"<ref>": {status, ahead_by} | null}`. A compare
+      # that fails is null for its ref and a file that will not parse is the
+      # FETCH-FAILED marker; the decide step reads either as "nothing known"
+      # and answers duplicate-event, never finish-unlanded. The ref names are
+      # `_sha_record_re` matches (`repair/`, `DRE-<n>`, hex, `-<n>`), so they
+      # need no escaping as JSON keys. Boot token, like the records step.
+      - name: Gather repair branch comparisons (pushed and never opened?)
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          REFS=$(python3 .bureau-pipeline/scripts/red_main_repair.py record-refs \
+            --refs-file /tmp/repair-refs.json --head-sha "$HEAD_SHA") || REFS=''
+          ENTRIES=''
+          for REF in $REFS; do
+            COMPARE=$(gh api "repos/$GITHUB_REPOSITORY/compare/$DEFAULT_BRANCH...$REF" \
+              --jq '{status: .status, ahead_by: .ahead_by}' 2>/dev/null) || COMPARE=''
+            ENTRIES="$ENTRIES${ENTRIES:+,}\"$REF\":${COMPARE:-null}"
+          done
+          printf '{%s}\n' "$ENTRIES" > /tmp/repair-compares.json
+          python3 -c 'import json, sys; json.load(open(sys.argv[1]))' /tmp/repair-compares.json \
+            2>/dev/null || echo 'FETCH-FAILED' > /tmp/repair-compares.json
+          echo "compared $(printf '%s\n' $REFS | grep -c . || true) repair branch(es) with $DEFAULT_BRANCH"
+
       # DRE-1996 discipline: head_branch is on the pinned-fields list (it is
       # only trusted here BECAUSE the job `if:` proved it equals the default
       # branch) — it travels via env, never interpolated into the script.
@@ -223,7 +254,8 @@ jobs:
             --log-file /tmp/red-main-log.txt \
             --refs-file /tmp/repair-refs.json \
             --pulls-file /tmp/repair-pulls.json \
-            --history-file /tmp/repair-history.json >> "$GITHUB_OUTPUT"
+            --history-file /tmp/repair-history.json \
+            --compares-file /tmp/repair-compares.json >> "$GITHUB_OUTPUT"
 
       # DRE-5069: the skip's receipt. A superseded failure files no card and
       # dispatches no agent (every step that would is gated on go), so this
@@ -239,6 +271,44 @@ jobs:
           echo "superseded: run $SUPERSEDED_BY of this workflow went green on a later commit of the default branch, so the failure at ${HEAD_SHA:0:7} ($RUN_URL) is already behind main — no card, no repair agent."
           echo "green run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$SUPERSEDED_BY"
           echo "Superseded by [run $SUPERSEDED_BY]($GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$SUPERSEDED_BY) — no repair needed for ${HEAD_SHA:0:7}." >> "$GITHUB_STEP_SUMMARY"
+
+      # DRE-6526: the agent pushed its fix and ended before opening the pull
+      # request, and no pull request of any state is on its branch. On
+      # 2026-10-09 the medic's 16:24 PT retry of run 38003951327 read
+      # duplicate-event here and opened nothing; this opens it through the
+      # Report step's own helper (repair_finish.py, DRE-6525). go is false, so
+      # the card, pool, agent and Report steps are all skipped. The boot App
+      # (agent-bureau-bot) authors the pull request — an allowed bot of
+      # qa-review.yml, so the critic reviews it like any repair. `--card-url`
+      # is not passed: the card step did not run, and the helper names the
+      # card off the branch. Exit 0 is `opened` or `already-open` (a re-run
+      # opens nothing twice); anything else fails the step for the medic.
+      - name: Finish — open the pull request the agent pushed and left
+        if: steps.decide.outputs.reason == 'finish-unlanded'
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+          RUN_URL: ${{ github.event.workflow_run.html_url }}
+          WF_NAME: ${{ github.event.workflow_run.name }}
+          BRANCH: ${{ steps.decide.outputs.branch }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          if FINISH=$(python3 .bureau-pipeline/scripts/repair_finish.py finish \
+              --repo "$GITHUB_REPOSITORY" --branch "$BRANCH" \
+              --default-branch "$DEFAULT_BRANCH" --failed-run-url "$RUN_URL" \
+              --workflow-name "$WF_NAME"); then
+            RC=0
+          else
+            RC=$?
+          fi
+          RESULT=$(printf '%s\n' "$FINISH" | sed -n 's/^finish=//p' | head -1)
+          FINISHED_URL=$(printf '%s\n' "$FINISH" | sed -n 's/^pr_url=//p' | head -1)
+          if [ "$RC" -ne 0 ]; then
+            echo "::error::finish-unlanded: the pull request could not be opened for $BRANCH (finish=${RESULT:-none})"
+            exit 1
+          fi
+          echo "finish-unlanded: $RESULT — repair PR from $BRANCH: $FINISHED_URL — the critic and the merge gate own it from here (author ≠ merger)."
+          echo "Repair pull request for \`$BRANCH\` ($RESULT): $FINISHED_URL" >> "$GITHUB_STEP_SUMMARY"
 
       # Guardrail 2, budget exhausted: two attempts failed at this SHA —
       # stop and raise a plain-English triage card for a human, never a
