@@ -1,0 +1,122 @@
+scripts unit tests (part 3)	UNKNOWN STEP	﻿2026-10-09T22:45:35.2243620Z Current runner version: '2.337.0'
+scripts unit tests (part 3)	UNKNOWN STEP	2026-10-09T22:45:35.2269351Z ##[group]Runner Image Provisioner
+scripts unit tests (part 3)	UNKNOWN STEP	2026-10-09T22:45:35.2270219Z Hosted Compute Agent
+scripts unit tests (part 3)	UNKNOWN STEP	2026-10-09T22:45:35.2271024Z Version: 20261002.596
+scripts unit tests (part 3)	UNKNOWN STEP	2026-10-09T22:45:35.2271683Z Commit: c3d12f3313a95f25162a1503be624f3b0617f8c0
+scripts unit tests (part 3)	UNKNOWN STEP	2026-10-09T22:46:06.7442955Z tests/test_assemble_context.py::ProofRoleTest::test_standards_are_comms_untrusted_card_quality_engineering PASSED [  0%]
+scripts unit tests (part 3)	UNKNOWN STEP	2026-10-09T22:46:06.7462896Z tests/test_assemble_context.py::ProofBriefTest::test_it_emits_no_verdict_marker PASSED [  0%]
+scripts unit tests (part 3)	UNKNOWN STEP	2026-10-09T22:46:06.7480410Z tests/test_assemble_context.py::ProofBriefTest::test_the_branch_title_and_first_line PASSED [  0%]
+scripts unit tests (part 3)	UNKNOWN STEP	2026-10-09T22:46:06.7497945Z tests/test_assemble_context.py::ProofBriefTest::test_the_escalation_resume_and_answer PASSED [  0%]
+scripts unit tests (part 3)	UNKNOWN STEP	2026-10-09T22:46:06.7515277Z tests/test_assemble_context.py::ProofBriefTest::test_the_github_read_token_reaches_the_organization PASSED [  0%]
+scripts unit tests (part 3)	UNKNOWN STEP	2026-10-09T22:46:06.7532347Z tests/test_assemble_context.py::ProofBriefTest::test_the_heartbeats PASSED [  1%]
+scripts unit tests (part 3)	UNKNOWN STEP	2026-10-09T22:46:06.7550346Z tests/test_assemble_context.py::ProofBriefTest::test_the_identities_and_what_each_may_do PASSED [  1%]
+scripts unit tests (part 3)	UNKNOWN STEP	2026-10-09T22:46:06.7567801Z tests/test_assemble_context.py::ProofBriefTest::test_the_linear_reads_and_their_request_cap PASSED [  1%]
+scripts unit tests (part 3)	UNKNOWN STEP	2026-10-09T22:46:06.7585145Z tests/test_assemble_context.py::ProofBriefTest::test_the_result_vocabulary PASSED [  1%]
+scripts unit tests (part 3)	UNKNOWN STEP	2026-10-09T22:46:06.7603868Z tests/test_assemble_context.py::WhatsNewBriefsTest::test_a_held_pull_request_is_answered_in_the_body_plus_an_empty_commit PASSED [  1%]
+scripts unit tests (part 3)	UNKNOWN STEP	2026-10-09T22:49:54.8583635Z tests/test_limit_death_is_its_own_class.py::test_every_signature_classifies_as_a_limit_and_names_the_wall[LinearRateLimited] PASSED [ 43%]
+scripts unit tests (part 3)	UNKNOWN STEP	2026-10-09T22:49:54.8622522Z tests/test_limit_death_is_its_own_class.py::test_every_signature_classifies_as_a_limit_and_names_the_wall[RATELIMITED-on-the-client-line] PASSED [ 43%]
+scripts unit tests (part 3)	UNKNOWN STEP	2026-10-09T22:49:54.8660924Z tests/test_limit_death_is_its_own_class.py::test_every_signature_classifies_as_a_limit_and_names_the_wall[read-timeout-pair] PASSED [ 43%]
+scripts unit tests (part 3)	UNKNOWN STEP	2026-10-09T22:49:54.8697518Z tests/test_limit_death_is_its_own_class.py::test_the_signatures_are_one_module_constant PASSED [ 43%]
+scripts unit tests (part 3)	UNKNOWN STEP	2026-10-09T22:49:54.8734947Z tests/test_limit_death_is_its_own_class.py::test_ordinary_death_text_is_not_a_limit[] PASSED [ 43%]
+scripts unit tests (part 3)	UNKNOWN STEP	2026-10-09T22:49:54.8774265Z tests/test_limit_death_is_its_own_class.py::test_ordinary_death_text_is_not_a_limit[{"type":"result","is_error":true,"result":"Error: fetch failed","num_turns":0}] PASSED [ 43%]
+scripts unit tests (part 3)	UNKNOWN STEP	2026-10-09T22:49:54.8812028Z tests/test_limit_death_is_its_own_class.py::test_ordinary_death_text_is_not_a_limit[Error: fetch failed] PASSED [ 43%]
+scripts unit tests (part 3)	UNKNOWN STEP	2026-10-09T22:49:54.8848639Z tests/test_limit_death_is_its_own_class.py::test_a_quoted_ratelimited_payload_in_prose_does_not_classify PASSED [ 43%]
+scripts unit tests (part 3)	UNKNOWN STEP	2026-10-09T22:49:54.8885566Z tests/test_limit_death_is_its_own_class.py::test_the_read_timeout_counts_only_as_the_pair_in_order PASSED [ 43%]
+scripts unit tests (part 3)	UNKNOWN STEP	2026-10-09T22:49:54.8924036Z tests/test_limit_death_is_its_own_class.py::test_claude_reset_is_today_or_tomorrow[still-today] PASSED [ 43%]
+scripts unit tests (part 3)	UNKNOWN STEP	2026-10-09T22:49:54.8962675Z tests/test_limit_death_is_its_own_class.py::test_claude_reset_is_today_or_tomorrow[past-today-so-tomorrow] PASSED [ 43%]
+scripts unit tests (part 3)	UNKNOWN STEP	2026-10-09T22:49:54.8999982Z tests/test_limit_death_is_its_own_class.py::test_claude_reset_without_minutes PASSED [ 43%]
+scripts unit tests (part 3)	UNKNOWN STEP	2026-10-09T22:49:54.9042646Z tests/test_limit_death_is_its_own_class.py::test_linear_reset_reads_the_header_epoch[epoch-ms] PASSED [ 43%]
+scripts unit tests (part 3)	UNKNOWN STEP	2026-10-09T22:49:54.9081790Z tests/test_limit_death_is_its_own_class.py::test_linear_reset_reads_the_header_epoch[epoch-s] PASSED [ 43%]
+scripts unit tests (part 3)	UNKNOWN STEP	2026-10-09T22:49:54.9121392Z tests/test_limit_death_is_its_own_class.py::test_reset_is_unknown_when_the_text_carries_none[linear_ops.LinearRateLimited: Linear API returned 400 from https://api.linear.app/graphql: rate limited: 2500 requests/hour exhausted \u2014 body: '{"errors":[{"message":"Only 2500 requests are allowed per 1 hour"}]}'-linear] PASSED [ 43%]
+scripts unit tests (part 3)	UNKNOWN STEP	2026-10-09T22:49:54.9159262Z tests/test_limit_death_is_its_own_class.py::test_reset_is_unknown_when_the_text_carries_none[API Error: 429 {"type":"error","error":{"type":"rate_limit_error","message":"This request would exceed your organization's rate limit"}}-claude] PASSED [ 43%]
+scripts unit tests (part 3)	UNKNOWN STEP	2026-10-09T22:49:54.9197169Z tests/test_limit_death_is_its_own_class.py::test_reset_is_unknown_when_the_text_carries_none[-claude] PASSED [ 43%]
+scripts unit tests (part 3)	UNKNOWN STEP	2026-10-09T22:49:54.9237095Z tests/test_limit_death_is_its_own_class.py::test_the_workflow_names_the_stage[Agent Plan (reusable)--plan] PASSED [ 43%]
+scripts unit tests (part 3)	UNKNOWN STEP	2026-10-09T22:49:54.9276159Z tests/test_limit_death_is_its_own_class.py::test_the_workflow_names_the_stage[Agent Plan-Classify the card-classify] PASSED [ 43%]
+scripts unit tests (part 3)	UNKNOWN STEP	2026-10-09T22:49:54.9315235Z tests/test_limit_death_is_its_own_class.py::test_the_workflow_names_the_stage[Agent Plan (reusable)-Run the classifier-classify] PASSED [ 43%]
+scripts unit tests (part 3)	UNKNOWN STEP	2026-10-09T22:49:54.9355013Z tests/test_limit_death_is_its_own_class.py::test_the_workflow_names_the_stage[Agent Task (reusable)-Card \u2192 In Progress-build] PASSED [ 43%]
+scripts unit tests (part 3)	UNKNOWN STEP	2026-10-09T22:56:18.5376982Z tests/test_whats_new_release.py::test_a_first_release_collects_nothing_and_says_so PASSED [ 99%]
+scripts unit tests (part 3)	UNKNOWN STEP	2026-10-09T22:56:18.6234275Z tests/test_whats_new_release.py::test_a_release_with_nothing_to_say_publishes_nothing PASSED [ 99%]
+scripts unit tests (part 3)	UNKNOWN STEP	2026-10-09T22:56:18.7097394Z tests/test_whats_new_release.py::test_a_tag_with_no_release_gets_one_created_with_the_asset PASSED [ 99%]
+scripts unit tests (part 3)	UNKNOWN STEP	2026-10-09T22:56:18.7974695Z tests/test_whats_new_release.py::test_a_tag_with_a_release_has_its_asset_clobbered PASSED [ 99%]
+scripts unit tests (part 3)	UNKNOWN STEP	2026-10-09T22:56:18.8831124Z tests/test_whats_new_release.py::test_a_forbidden_read_names_the_missing_permission_and_publishes_nothing PASSED [ 99%]
+scripts unit tests (part 3)	UNKNOWN STEP	2026-10-09T22:56:18.9694441Z tests/test_whats_new_release.py::test_a_rate_limited_read_is_not_a_missing_permission[gh: API rate limit exceeded for installation. (HTTP 403)\n] PASSED [ 99%]
+scripts unit tests (part 3)	UNKNOWN STEP	2026-10-09T22:56:19.0561264Z tests/test_whats_new_release.py::test_a_rate_limited_read_is_not_a_missing_permission[gh: You have exceeded a secondary rate limit. (HTTP 403)\n] PASSED [ 99%]
+scripts unit tests (part 3)	UNKNOWN STEP	2026-10-09T22:56:19.1422701Z tests/test_whats_new_release.py::test_a_bare_403_is_not_a_missing_permission PASSED [ 99%]
+scripts unit tests (part 3)	UNKNOWN STEP	2026-10-09T22:56:19.2279218Z tests/test_whats_new_release.py::test_one_unreadable_pull_request_is_skipped_and_the_rest_still_publish[gh: Not Found (HTTP 404)\n] PASSED [ 99%]
+scripts unit tests (part 3)	UNKNOWN STEP	2026-10-09T22:56:19.3144370Z tests/test_whats_new_release.py::test_one_unreadable_pull_request_is_skipped_and_the_rest_still_publish[gh: HTTP 502: Bad Gateway\n] PASSED [ 99%]
+scripts unit tests (part 3)	UNKNOWN STEP	2026-10-09T22:56:19.4014508Z tests/test_whats_new_release.py::test_a_refused_release_returns_the_stderr_as_the_problem PASSED [ 99%]
+scripts unit tests (part 3)	UNKNOWN STEP	2026-10-09T22:56:19.4881604Z tests/test_whats_new_release.py::test_a_release_view_that_fails_otherwise_is_a_problem_not_a_create PASSED [ 99%]
+scripts unit tests (part 3)	UNKNOWN STEP	2026-10-09T22:56:19.5725391Z tests/test_whats_new_release.py::test_an_unreadable_range_is_a_problem_not_an_exception PASSED [ 99%]
+scripts unit tests (part 3)	UNKNOWN STEP	2026-10-09T22:56:19.6592563Z tests/test_whats_new_release.py::test_shipped_is_the_injected_clock_on_the_pacific_clock_to_the_second PASSED [ 99%]
+scripts unit tests (part 3)	UNKNOWN STEP	2026-10-09T22:56:19.7467256Z tests/test_whats_new_release.py::test_publish_dry_run_prints_the_document_and_publishes_nothing PASSED [ 99%]
+scripts unit tests (part 3)	UNKNOWN STEP	2026-10-09T22:56:19.8344340Z tests/test_whats_new_release.py::test_publish_without_dry_run_runs_the_same_write PASSED [ 99%]
+scripts unit tests (part 3)	UNKNOWN STEP	2026-10-09T22:56:19.9747642Z tests/test_whats_new_release.py::test_305_holds_every_range_a_hand_cut_left_behind PASSED [ 99%]
+scripts unit tests (part 3)	UNKNOWN STEP	2026-10-09T22:56:20.1132226Z tests/test_whats_new_release.py::test_the_bases_own_range_is_never_collected_again PASSED [ 99%]
+scripts unit tests (part 3)	UNKNOWN STEP	2026-10-09T22:56:20.2526349Z tests/test_whats_new_release.py::test_a_tag_whose_release_had_nothing_to_say_is_passed_over_once PASSED [ 99%]
+scripts unit tests (part 3)	UNKNOWN STEP	2026-10-09T22:56:20.3935317Z tests/test_whats_new_release.py::test_the_since_line_names_the_base_and_the_tags_reached_over PASSED [ 99%]
+scripts unit tests (part 3)	UNKNOWN STEP	2026-10-09T22:56:20.5330087Z tests/test_whats_new_release.py::test_the_since_line_is_unchanged_when_the_previous_tag_published PASSED [ 99%]
+scripts unit tests (part 3)	UNKNOWN STEP	2026-10-09T22:56:20.6736382Z tests/test_whats_new_release.py::test_the_walk_is_bounded_by_a_named_cap PASSED [ 99%]
+scripts unit tests (part 3)	UNKNOWN STEP	2026-10-09T22:56:20.8130807Z tests/test_whats_new_release.py::test_a_series_with_no_published_tag_falls_back_to_the_previous_tag PASSED [ 99%]
+scripts unit tests (part 3)	UNKNOWN STEP	2026-10-09T22:56:20.9560181Z tests/test_whats_new_release.py::test_a_failed_release_read_falls_back_to_the_previous_tag[gh: HTTP 502: Bad Gateway\n] PASSED [ 99%]
+scripts unit tests (part 3)	UNKNOWN STEP	2026-10-09T22:56:21.0985753Z tests/test_whats_new_release.py::test_a_failed_release_read_falls_back_to_the_previous_tag[gh: Forbidden (HTTP 403)\n] PASSED [ 99%]
+scripts unit tests (part 3)	UNKNOWN STEP	2026-10-09T22:56:21.2413015Z tests/test_whats_new_release.py::test_a_rate_limited_release_read_is_the_rate_limit_problem[gh: API rate limit exceeded for installation. (HTTP 403)\n] PASSED [ 99%]
+scripts unit tests (part 3)	UNKNOWN STEP	2026-10-09T22:56:21.3795993Z tests/test_whats_new_release.py::test_a_rate_limited_release_read_is_the_rate_limit_problem[gh: You have exceeded a secondary rate limit. (HTTP 403)\n] PASSED [ 99%]
+scripts unit tests (part 3)	UNKNOWN STEP	2026-10-09T22:56:21.5236893Z tests/test_whats_new_release.py::test_a_previous_tag_outside_the_series_falls_back_and_says_so PASSED [ 99%]
+scripts unit tests (part 3)	UNKNOWN STEP	2026-10-09T22:56:21.7959907Z tests/test_whats_new_release.py::test_the_docstring_states_the_base_rule PASSED [100%]
+scripts unit tests (part 3)	UNKNOWN STEP	2026-10-09T22:56:21.7960835Z 
+scripts unit tests (part 3)	UNKNOWN STEP	2026-10-09T22:56:21.7961083Z =================================== FAILURES ===================================
+scripts unit tests (part 3)	UNKNOWN STEP	2026-10-09T22:56:21.7961962Z _ TestTheBlockReadsTheWholeThread.test_a_retry_whose_note_is_on_the_card_never_reads_it _
+scripts unit tests (part 3)	UNKNOWN STEP	2026-10-09T22:56:21.7962600Z 
+scripts unit tests (part 3)	UNKNOWN STEP	2026-10-09T22:56:21.7963148Z self = <test_planning_escalation_prior_answer.TestTheBlockReadsTheWholeThread object at 0x7f2863d209e0>
+scripts unit tests (part 3)	UNKNOWN STEP	2026-10-09T22:56:21.7964572Z accept = <test_planning_escalation_prior_answer._Verifier object at 0x7f286063a270>
+scripts unit tests (part 3)	UNKNOWN STEP	2026-10-09T22:56:21.7965326Z 
+scripts unit tests (part 3)	UNKNOWN STEP	2026-10-09T22:56:21.7965681Z     def test_a_retry_whose_note_is_on_the_card_never_reads_it(self, accept):
+scripts unit tests (part 3)	UNKNOWN STEP	2026-10-09T22:56:21.7966372Z         lops = _Lops(_sixty_with_the_answer_oldest())
+scripts unit tests (part 3)	UNKNOWN STEP	2026-10-09T22:56:21.7966945Z         planning_escalation.escalate(lops, CARD, REASON)
+scripts unit tests (part 3)	UNKNOWN STEP	2026-10-09T22:56:21.7967463Z         lops.timeline_calls.clear()
+scripts unit tests (part 3)	UNKNOWN STEP	2026-10-09T22:56:21.7967999Z         outcome = planning_escalation.escalate(lops, CARD, REASON)
+scripts unit tests (part 3)	UNKNOWN STEP	2026-10-09T22:56:21.7968982Z >       assert outcome.parked and not outcome.posted
+scripts unit tests (part 3)	UNKNOWN STEP	2026-10-09T22:56:21.7969507Z E       assert (True and not True)
+scripts unit tests (part 3)	UNKNOWN STEP	2026-10-09T22:56:21.7970094Z E        +  where True = Outcome(parked=True, posted=True, stood_down=None).parked
+scripts unit tests (part 3)	UNKNOWN STEP	2026-10-09T22:56:21.7970872Z E        +  and   True = Outcome(parked=True, posted=True, stood_down=None).posted
+scripts unit tests (part 3)	UNKNOWN STEP	2026-10-09T22:56:21.7971335Z 
+scripts unit tests (part 3)	UNKNOWN STEP	2026-10-09T22:56:21.7971626Z tests/test_planning_escalation_prior_answer.py:528: AssertionError
+scripts unit tests (part 3)	UNKNOWN STEP	2026-10-09T22:56:21.7972337Z ----------------------------- Captured stderr call -----------------------------
+scripts unit tests (part 3)	UNKNOWN STEP	2026-10-09T22:56:21.7974221Z spoken-thread: the comment on DRE-6288 posted 2026-10-08 11:09 PT is the CEO's answer, via the console — console user sid@dreadnought.example, signed 2026-10-08T18:09:04Z
+scripts unit tests (part 3)	UNKNOWN STEP	2026-10-09T22:56:21.7975834Z DRE-6288: could not read where the card has been ('_Lops' object has no attribute 'lane_history') — asking again
+scripts unit tests (part 3)	UNKNOWN STEP	2026-10-09T22:56:21.7977465Z spoken-thread: the comment on DRE-6288 posted 2026-10-08 11:09 PT is the CEO's answer, via the console — console user sid@dreadnought.example, signed 2026-10-08T18:09:04Z
+scripts unit tests (part 3)	UNKNOWN STEP	2026-10-09T22:56:21.7978687Z _________________ test_the_door_is_asked_for_the_window_start __________________
+scripts unit tests (part 3)	UNKNOWN STEP	2026-10-09T22:56:21.7979135Z 
+scripts unit tests (part 3)	UNKNOWN STEP	2026-10-09T22:56:21.7979370Z door = <bureau_read_fakes.FakeDoor object at 0x7f2862b73e90>
+scripts unit tests (part 3)	UNKNOWN STEP	2026-10-09T22:56:21.7980279Z github = [('DRE-9102', 'dreadnought-foundry/bureau-pipeline'), ('DRE-9109', 'dreadnought-foundry/bureau-pipeline')]
+scripts unit tests (part 3)	UNKNOWN STEP	2026-10-09T22:56:21.7981344Z tmp_path = PosixPath('/tmp/pytest-of-runner/pytest-0/test_the_door_is_asked_for_the0')
+scripts unit tests (part 3)	UNKNOWN STEP	2026-10-09T22:56:21.7981886Z 
+scripts unit tests (part 3)	UNKNOWN STEP	2026-10-09T22:56:21.7982178Z     def test_the_door_is_asked_for_the_window_start(door, github, tmp_path):
+scripts unit tests (part 3)	UNKNOWN STEP	2026-10-09T22:56:21.7982804Z         _derive(tmp_path, "--window-days", "30")
+scripts unit tests (part 3)	UNKNOWN STEP	2026-10-09T22:56:21.7983333Z         since = door.asked("/split-history")[0]["query"]["since"]
+scripts unit tests (part 3)	UNKNOWN STEP	2026-10-09T22:56:21.7984060Z         assert split_ledger._moment(since) is not None
+scripts unit tests (part 3)	UNKNOWN STEP	2026-10-09T22:56:21.7984739Z         age = split_ledger._moment(split_ledger.now_iso()) - split_ledger._moment(since)
+scripts unit tests (part 3)	UNKNOWN STEP	2026-10-09T22:56:21.7985440Z >       assert 29.9 < age.total_seconds() / 86400 <= 30.0
+scripts unit tests (part 3)	UNKNOWN STEP	2026-10-09T22:56:21.7985912Z E       assert (2592001.0 / 86400) <= 30.0
+scripts unit tests (part 3)	UNKNOWN STEP	2026-10-09T22:56:21.7986620Z E        +  where 2592001.0 = <built-in method total_seconds of datetime.timedelta object at 0x7f28626a59b0>()
+scripts unit tests (part 3)	UNKNOWN STEP	2026-10-09T22:56:21.7987938Z E        +    where <built-in method total_seconds of datetime.timedelta object at 0x7f28626a59b0> = datetime.timedelta(days=30, seconds=1).total_seconds
+scripts unit tests (part 3)	UNKNOWN STEP	2026-10-09T22:56:21.7989067Z 
+scripts unit tests (part 3)	UNKNOWN STEP	2026-10-09T22:56:21.7989252Z tests/test_split_ledger.py:915: AssertionError
+scripts unit tests (part 3)	UNKNOWN STEP	2026-10-09T22:56:21.7989833Z ----------------------------- Captured stdout call -----------------------------
+scripts unit tests (part 3)	UNKNOWN STEP	2026-10-09T22:56:21.7990879Z split-ledger: 5 row(s) derived from the read door, generated 2026-09-10T00:00:00Z over 30 days: DRE-3029, DRE-9101, DRE-9105, DRE-9106, DRE-9108
+scripts unit tests (part 3)	UNKNOWN STEP	2026-10-09T22:56:21.7992153Z wrote /tmp/pytest-of-runner/pytest-0/test_the_door_is_asked_for_the0/split-ledger.json (5 rows, 2 month(s))
+scripts unit tests (part 3)	UNKNOWN STEP	2026-10-09T22:56:21.7993053Z ----------------------------- Captured stderr call -----------------------------
+scripts unit tests (part 3)	UNKNOWN STEP	2026-10-09T22:56:21.7994366Z   unread: 2026-09: the planner-children count could not be read, so the month says UNKNOWN rather than 0: Linear refused the count: RATELIMITED
+scripts unit tests (part 3)	UNKNOWN STEP	2026-10-09T22:56:21.7995396Z =========================== short test summary info ============================
+scripts unit tests (part 3)	UNKNOWN STEP	2026-10-09T22:56:21.7996654Z FAILED tests/test_planning_escalation_prior_answer.py::TestTheBlockReadsTheWholeThread::test_a_retry_whose_note_is_on_the_card_never_reads_it - assert (True and not True)
+scripts unit tests (part 3)	UNKNOWN STEP	2026-10-09T22:56:21.7997974Z  +  where True = Outcome(parked=True, posted=True, stood_down=None).parked
+scripts unit tests (part 3)	UNKNOWN STEP	2026-10-09T22:56:21.7998678Z  +  and   True = Outcome(parked=True, posted=True, stood_down=None).posted
+scripts unit tests (part 3)	UNKNOWN STEP	2026-10-09T22:56:21.7999594Z FAILED tests/test_split_ledger.py::test_the_door_is_asked_for_the_window_start - assert (2592001.0 / 86400) <= 30.0
+scripts unit tests (part 3)	UNKNOWN STEP	2026-10-09T22:56:21.8000866Z  +  where 2592001.0 = <built-in method total_seconds of datetime.timedelta object at 0x7f28626a59b0>()
+scripts unit tests (part 3)	UNKNOWN STEP	2026-10-09T22:56:21.8002117Z  +    where <built-in method total_seconds of datetime.timedelta object at 0x7f28626a59b0> = datetime.timedelta(days=30, seconds=1).total_seconds
+scripts unit tests (part 3)	UNKNOWN STEP	2026-10-09T22:56:21.8003226Z ======= 2 failed, 4357 passed, 445 subtests passed in 641.61s (0:10:41) ========
+scripts unit tests (part 3)	UNKNOWN STEP	2026-10-09T22:56:22.1392241Z ##[error]Process completed with exit code 1.
+scripts unit tests (part 3)	UNKNOWN STEP	2026-10-09T22:56:22.1499348Z ##[group]Run actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+scripts unit tests (part 3)	UNKNOWN STEP	2026-10-09T22:56:22.1499800Z with:
+scripts unit tests (part 3)	UNKNOWN STEP	2026-10-09T22:56:22.1500003Z   name: unit-part-3
+scripts unit tests (part 3)	UNKNOWN STEP	2026-10-09T22:56:22.1500274Z   path: /home/runner/work/_temp/unit-parts/part-3.txt
