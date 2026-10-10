@@ -70,6 +70,11 @@ than 14 days out of every batch, for ever, and the window stays gone.
   6. **The date is the CREATION date**, never the last update. A stray agent
      comment must not move a card.
 
+Inside every band, a unit serving an epic already In Progress goes ahead of
+the rest, which stay newest first (the CEO's decision of 2026-10-10 on
+DRE-6643, DRE-6664, `serves_in_flight`). It orders inside a band and never
+across one, and the constraints of step 5 stay on top of it.
+
 The epic is still the unit, so an epic's band is the highest priority among
 the epic and its children — one Urgent child pulls the whole unit into the
 batch — and its age for ordering is its NEWEST card, so one new child brings
@@ -254,6 +259,10 @@ proposal on the standing card (`standing_decisions`): `groom-excluded` is Don't
 do — the card is not offered again until `groom-added` brings it back — and
 `groom-held` is Hold — the drain holds it back exactly as an exclusion, and a
 later proposal may offer it again, ranked after every card never held.
+A per-card marker is read for the first card its line names, the rest of the
+line its reason, dash or no dash; one whose line names no card is listed on
+the next proposal and in the drain's record under `## Decisions I could not
+read`, never dropped (DRE-6642).
 """
 
 from __future__ import annotations
@@ -339,6 +348,16 @@ BATCH_REASONS_HEADING = "## Why each card is in the batch"
 # how the reader knows there is none.
 CANCEL_HEADING = "## Cancel, with reasons"
 CANCEL_COLUMNS = "| # | Card | Pri | Repo | Epic | Title | Reason |"
+
+# The readiness rules' list (DRE-6665): cards that take no slot this morning,
+# each with the rule, the reason and the condition that brings it back. After
+# the Cancel list and before "Verified against main"; ABSENT on a morning with
+# none, so such a page renders byte for byte as before. The proof card reads
+# the Rule cell off the parsed record (`parse_proposal_comment`'s `not_ready`).
+NOT_READY = "not-ready"
+NOT_READY_HEADING = "## Not ready — and what would make it ready"
+NOT_READY_COLUMNS = ("| # | Card | Rule | Repo | Epic | Title | Reason | "
+                     "Ready when |")
 
 # What the verify matrix found and spent (DRE-4971), after the Cancel table.
 # Both strings are shared with the cards that write the record and wire the
@@ -432,6 +451,9 @@ DECISION_TAGS = (APPROVAL_TAG, DECLINE_TAG, EXCLUDE_TAG, ADD_TAG, HOLD_TAG)
 # The per-card markers, and the ones that keep a card out of the drain.
 PER_CARD_TAGS = (EXCLUDE_TAG, ADD_TAG, HOLD_TAG)
 HELD_BACK_TAGS = (EXCLUDE_TAG, HOLD_TAG)
+# Where a per-card marker naming no card is quoted, on the next proposal and in
+# the drain's record (DRE-6642) — said, never dropped.
+UNREADABLE_HEADING = "## Decisions I could not read"
 
 # --- the CEO's repo switch (DRE-3403) ---------------------------------------
 # Beside the decision markers, and deliberately NOT one of them: these are not
@@ -572,6 +594,12 @@ BAND_HIGH = 1
 BAND_OLDER = 2
 BAND_LABELS = {BAND_URGENT: "Urgent", BAND_HIGH: "High"}
 
+# The epic states that put a card's work in flight for the order (DRE-6664,
+# the CEO's decision of 2026-10-10 on DRE-6643): inside a band, a unit serving
+# an epic in one of these goes ahead of the rest. Exactly In Progress — an
+# approved epic being built — and held here once.
+IN_FLIGHT_EPIC_STATES_FOR_ORDER = ("In Progress",)
+
 # A path cited by more than this many cards is REFERENCE, not ownership: a
 # branch-rule banner naming `.github/workflows/linear-sync.yml` sits on nineteen
 # live cards and none of them edits it, and treating that as a collision
@@ -682,20 +710,34 @@ class WillNotClose(RuntimeError):
 # its children are rarely in the same lane, so the population cannot say. The
 # nested selection multiplies what one page costs Linear, so a page is 50
 # cards rather than 100 — `gql_paged` follows the cursor either way.
-POPULATION_PAGE = 50
+#
+# The parent's state and both relation lists are how the order knows a card
+# serves an epic In Progress (DRE-6664, `serves_in_flight`), and the readiness
+# rules read the same fields as written (DRE-6665), and a child's title is how
+# the roll-up rule knows a child is an epic. They widen every row again, so a page
+# is 25. Measured on 2026-10-10 against the live Intake lane with the build
+# run's key: X-Complexity 239 per page of this query, and 239 at 10 and 50
+# rows too, against Linear's stated per-request limit of 10,000 — under half
+# of it, so the page was not halved again.
+POPULATION_PAGE = 25
 POPULATION_QUERY = """query($lane: String!, $after: String) {
   issues(first: %d, after: $after, filter: {state: {name: {eq: $lane}}}) {
     nodes {
       identifier title description createdAt priority
       state { name }
       labels { nodes { name } }
-      parent { identifier title }
+      parent { identifier title state { name } }
       project { name }
       cycle { number }
-      inverseRelations(first: 20) { nodes {
-        type issue { identifier state { name } }
+      relations(first: 20) { nodes {
+        type relatedIssue { identifier state { name } archivedAt
+                            parent { identifier state { name } } }
       } }
-      children(first: 50) { nodes { identifier state { name } } }
+      inverseRelations(first: 20) { nodes {
+        type issue { identifier state { name } archivedAt
+                     parent { identifier state { name } } }
+      } }
+      children(first: 50) { nodes { identifier title state { name } } }
     }
     pageInfo { hasNextPage endCursor }
   }
@@ -859,6 +901,36 @@ def blockers_of(card: dict) -> set[str]:
     return {f for f in found if f}
 
 
+def serves_in_flight(card: dict) -> str | None:
+    """The epic In Progress this card serves, or None (DRE-6664).
+
+    Read off the board, never off text, and off two fields only: the card's
+    `parent`, and its own `relations` — a `blocks` relation FROM this card to
+    a card whose parent epic is In Progress. Being blocked by such a card
+    (`inverseRelations`) is not serving it, and neither is `related`. A
+    relation to an archived or closed card serves nothing: there is nothing
+    left there to unblock. The parent is read first, then the relations in
+    identifier order, so the answer is the same on every read.
+    """
+    parent = card.get("parent") or {}
+    if (parent.get("state") or {}).get("name") in IN_FLIGHT_EPIC_STATES_FOR_ORDER \
+            and parent.get("identifier"):
+        return parent["identifier"]
+    related = [(rel or {}).get("relatedIssue") or {}
+               for rel in ((card.get("relations") or {}).get("nodes") or [])
+               if (rel or {}).get("type") == "blocks"]
+    for issue in sorted(related,
+                        key=lambda i: _card_sort_key(i.get("identifier") or "")):
+        if issue.get("archivedAt") or \
+                (issue.get("state") or {}).get("name") in CLOSED_STATES:
+            continue
+        epic = issue.get("parent") or {}
+        if (epic.get("state") or {}).get("name") in \
+                IN_FLIGHT_EPIC_STATES_FOR_ORDER and epic.get("identifier"):
+            return epic["identifier"]
+    return None
+
+
 def collision_report(cards: list[dict], *,
                      threshold: int = BOILERPLATE_THRESHOLD) -> dict:
     """Every pair of cards that names the same file, with a direction.
@@ -962,6 +1034,11 @@ def units(cards: list[dict]) -> list[dict]:
         repo = sorted(repos.items(), key=lambda kv: (-kv[1], kv[0]))[0][0]
         priority = min((p for p in (_priority(c) for c in members) if p),
                        default=0)
+        # In flight when any member serves an epic In Progress (DRE-6664);
+        # the members are already in identifier order, so the epic named is
+        # the first one found by card identifier.
+        serves = next((s for s in (serves_in_flight(c) for c in members) if s),
+                      None)
         out.append({
             "key": key,
             "epic": epic,
@@ -969,6 +1046,8 @@ def units(cards: list[dict]) -> list[dict]:
             "created": max(_created(c) for c in members),
             "priority": priority,
             "band": _band(priority),
+            "in_flight": serves is not None,
+            "serves": serves,
             "cards": [c["identifier"] for c in members],
         })
     return sorted(out, key=lambda u: (u["created"], u["key"]))
@@ -1204,14 +1283,23 @@ def sequence(cards: list[dict], *, collisions: dict | None = None,
         # newest first too — only orders cards the day cannot separate. A unit
         # with no readable creation date is not the newest in the pile: it
         # goes to the back of its band, the reversible answer.
+        #
+        # Inside the band, a unit serving an epic In Progress goes first, and
+        # the rest stay newest first (DRE-6664, the CEO's decision of
+        # 2026-10-10 on DRE-6643). The band still comes before it, so the key
+        # never moves a unit across bands.
         unit = unit_index[key]
         day = _day_ordinal(unit["created"])
-        return (unit["band"], -day if day else float("inf"),
+        return (unit["band"], 0 if unit["in_flight"] else 1,
+                -day if day else float("inf"),
                 ranks[unit["repo"]], -_epoch(unit["created"]),
                 _card_sort_key(key))
 
     ordered_units = _topo([u["key"] for u in unit_list], unit_edges, unit_rank,
                           broken)
+    if broken is not None:
+        broken += _in_flight_held_back(ordered_units, unit_index, constraints,
+                                       unit_of)
 
     rows = []
     position = 0
@@ -1238,12 +1326,46 @@ def sequence(cards: list[dict], *, collisions: dict | None = None,
                 "repo": repo_of(by_id[cid]),
                 "project": ((by_id[cid].get("project") or {}) or {}).get("name"),
                 "band": unit["band"],
+                # Only on a row the in-flight key placed (DRE-6664), so a
+                # population with none sequences into the rows it always did.
+                **({"serves": unit["serves"]} if unit["serves"] else {}),
                 "deferred": key not in batchable,
                 # On every row, so each writer of a Cancel can ask
                 # `cancel_refusal` without the card in hand (DRE-5309).
                 "open_children": open_children(by_id[cid]),
             })
     return rows
+
+
+def _in_flight_held_back(ordered: list[str], unit_index: dict,
+                         constraints: list[tuple[str, str]],
+                         unit_of: dict) -> list[dict]:
+    """Every constraint that put a unit not in flight ahead of one that is, in
+    the same band (DRE-6664).
+
+    The in-flight key orders among what the constraints leave possible, so a
+    unit that collides with, or is blocked by, an earlier unit is placed after
+    it, as before. That is the key not being honoured, and the page names the
+    pair — card before card, with the epic the held-back card serves — rather
+    than leaving the reader to wonder why work in flight did not go first.
+    """
+    place = {key: i for i, key in enumerate(ordered)}
+    out = []
+    for before, after in sorted(set(constraints),
+                                key=lambda p: (_card_sort_key(p[1]),
+                                               _card_sort_key(p[0]))):
+        first, held = unit_of.get(before), unit_of.get(after)
+        if first is None or held is None or first == held:
+            continue
+        a, b = unit_index[first], unit_index[held]
+        if b["in_flight"] and not a["in_flight"] and a["band"] == b["band"] \
+                and place[first] < place[held]:
+            out.append({
+                "before": before, "after": after, "serves": b["serves"],
+                "why": f"{after} serves {b['serves']} (In Progress) but must "
+                       f"follow {before}, so the constraint won",
+            })
+    return out
 
 
 def _held_last(cards: list[dict], held, *, collisions: dict,
@@ -1368,7 +1490,9 @@ def propose(cards: list[dict], *, cycles: list[dict], capacity: int = DEFAULT_CA
             lane: str = "Intake", now: str | None = None,
             window_days: int = WINDOW_DAYS, judgement=None,
             held_repos=(), excluded=(), held_cards=(),
-            verified: dict | None = None) -> dict:
+            unreadable_decisions=(),
+            verified: dict | None = None,
+            readiness: dict | None = None) -> dict:
     """The whole population, sequenced, with one outcome per card.
 
     `judgement` is a `groom_judgement.Judgement` (or a bare
@@ -1392,11 +1516,23 @@ def propose(cards: list[dict], *, cycles: list[dict], capacity: int = DEFAULT_CA
     card does. A held card — Hold — stays on offer and is sequenced after
     every card that was never held (`_held_last`).
 
+    `unreadable_decisions` is the first line of each per-card marker on the
+    standing card that names no card (`standing_decisions`, DRE-6642) — said
+    on the page under `## Decisions I could not read`, and in no list.
+
     `verified` is `groom_verify.check`'s answer about a first proposal of the
     same lane (`verify_proposal`): `cancel` puts a card on the Cancel list with
     its evidence as the reason and takes it out of the slots, so the next card
     in order fills its place; `keep` rejects a Cancel whose replacement is not
     real and leaves the card on the Planning list with the reason named.
+
+    `readiness` is the morning's board facts for the readiness rules
+    (`groom_readiness.facts`, read in `_build`, DRE-6665). Every card left in
+    the walk is evaluated against them after `_held_last` and before
+    `cycle_plan`; a card that trips a rule takes no slot, whatever place the
+    order gave it, and goes on `outcomes["not-ready"]` — one row per rule —
+    and on no other list. None is today's groomer: nothing is evaluated, no
+    fourth list is written and nothing renders.
     """
     now = now or _now()
     # The whole lane, kept under its own name — every read below this line is
@@ -1466,6 +1602,28 @@ def propose(cards: list[dict], *, cycles: list[dict], capacity: int = DEFAULT_CA
     broken: list = []
     ordered = _held_last(cards, held_cards, collisions=collisions,
                          broken=broken, repo_priority=repo_priority)
+    # Readiness outranks order (DRE-6665): a card a rule holds takes no slot,
+    # and the next card in order fills it — the walk a declined card takes.
+    # Evaluated only over cards with no Cancel decision standing: a card the
+    # Cancel list claims is dead, not unready, and that list carries its own
+    # check and the CEO's agreement. `check_keep` and `cancel_refusal` have
+    # already taken their cards out of `to_cancel` above, so those are read
+    # like any other. And before `declined`: a card the rules hold is a Not
+    # ready row, never a `could not rank` one.
+    not_ready: dict = {}
+    if readiness is not None:
+        import groom_readiness
+
+        board = groom_readiness.board(readiness, population=cards,
+                                      verdicts=verdicts)
+        by_id = {c["identifier"]: c for c in cards}
+        for row in ordered:
+            if row["identifier"] in to_cancel \
+                    or row["identifier"] in check_cancel:
+                continue
+            tripped = groom_readiness.evaluate(by_id[row["identifier"]], board)
+            if tripped:
+                not_ready[row["identifier"]] = tripped
     # A card the read DECLINED is not in the batch (DRE-3544). The rules put
     # DRE-3020 at position 32 of `f673bfefa340` — under the capacity — and the
     # model had said it could not place it, so the CEO was shown a batch row
@@ -1494,18 +1652,26 @@ def propose(cards: list[dict], *, cycles: list[dict], capacity: int = DEFAULT_CA
     # model's refusal to place the card, as the description's line does.
     declined = declined_cards(verdicts, getattr(judgement, "problem", None)) \
         - {cid for cid, (source, _) in to_cancel.items()
-           if source == DEAD_FROM_LINE} - set(check_cancel)
+           if source == DEAD_FROM_LINE} - set(check_cancel) - set(not_ready)
     planned = {row["identifier"]: row for row in cycle_plan(
         [r for r in ordered if r["identifier"] not in declined
-         and r["identifier"] not in check_cancel], cycles, capacity)}
+         and r["identifier"] not in check_cancel
+         and r["identifier"] not in not_ready], cycles, capacity)}
 
     batch_numbers = sorted({r["cycle"] for r in planned.values()})[:batch_cycles]
     # The morning's set is the batch cycle(s) — `capacity` cards, Planning
     # plus Cancel together, units never split — and each card in it goes on
     # exactly one of the two lists. Each list is numbered from 1 in the rules'
     # order, so the page reads as two lists and not as one with holes in it.
-    now_rows, later_rows, dead, refused = [], [], [], []
+    now_rows, later_rows, dead, refused, unready = [], [], [], [], []
     for row in ordered:
+        if row["identifier"] in not_ready:
+            for tripped in not_ready[row["identifier"]]:
+                unready.append({"identifier": row["identifier"],
+                                "title": row["title"], "repo": row["repo"],
+                                "epic": row["epic"], "band": row["band"],
+                                **tripped, "position": len(unready) + 1})
+            continue
         if row["identifier"] in check_cancel:
             dead.append({"identifier": row["identifier"],
                          "title": row["title"], "repo": row["repo"],
@@ -1542,6 +1708,8 @@ def propose(cards: list[dict], *, cycles: list[dict], capacity: int = DEFAULT_CA
                                  "cycle_id", "unit", "epic", "repo",
                                  "projected", "band", "open_children")},
                              **({"held": True} if row.get("held") else {}),
+                             **({"serves": row["serves"]}
+                                if row.get("serves") else {}),
                              "position": len(now_rows) + 1})
         else:
             # Outside the batch is `not-now` with the cycle it is projected
@@ -1561,7 +1729,11 @@ def propose(cards: list[dict], *, cycles: list[dict], capacity: int = DEFAULT_CA
     # cycle either: it is proposed for cancellation, not scheduled.
     cancelled = {d["identifier"] for d in dead}
     sequence_rows = [{**r, "cycle": None, "cycle_id": None, "projected": False,
-                      "outcome": "not-now"} if r["identifier"] in declined
+                      "reconsidered_in": None, "outcome": NOT_READY}
+                     if r["identifier"] in not_ready
+                     else {**r, "cycle": None, "cycle_id": None,
+                           "projected": False, "outcome": "not-now"}
+                     if r["identifier"] in declined
                      else {**r, "cycle": None, "cycle_id": None,
                            "projected": False, "outcome": "dead"}
                      if r["identifier"] in check_cancel
@@ -1605,6 +1777,11 @@ def propose(cards: list[dict], *, cycles: list[dict], capacity: int = DEFAULT_CA
         # `[]` on a morning with none. Not in the id's digest: the lists are.
         "cancels_refused": refused,
     }
+    # The fourth list (DRE-6665), only when the rules ran: a proposal built
+    # without `readiness` keeps the three lists it always had. Not in the id's
+    # digest — a Not ready card is in neither list an approval moves.
+    if readiness is not None:
+        proposal["outcomes"][NOT_READY] = unready
     # The CEO's earlier answers, said on the page (DRE-4966) — and absent when
     # there are none, so a thread with no per-card marker proposes exactly
     # what it did before.
@@ -1612,6 +1789,8 @@ def propose(cards: list[dict], *, cycles: list[dict], capacity: int = DEFAULT_CA
         proposal["excluded_before"] = left_out
     if held_cards:
         proposal["held_before"] = sorted(held_cards, key=_card_sort_key)
+    if unreadable_decisions:
+        proposal["unreadable_decisions"] = list(unreadable_decisions)
     # The priorities ranked as Medium, and the ones not read (DRE-5307), off
     # the cards `groom_priority.annotate` marked — absent when there are none,
     # so a morning with neither proposes exactly what it did before.
@@ -1623,7 +1802,8 @@ def propose(cards: list[dict], *, cycles: list[dict], capacity: int = DEFAULT_CA
         proposal["priorities_unread"] = unread
     proposal["deprioritised"] = _deprioritised(proposal)
     proposal["judgement"] = _annotate(proposal, judgement, verdicts,
-                                      declined=declined)
+                                      declined=declined,
+                                      not_ready=set(not_ready))
     # A rejected Cancel stays on the Planning list with the reason named
     # (DRE-4966): its Why is the rejection, whoever else wrote one.
     for rows in (proposal["outcomes"]["now"], proposal["outcomes"]["not-now"],
@@ -1711,8 +1891,21 @@ def assert_disjoint(proposal: dict) -> None:
     Recomputed off the written proposal rather than trusted from the filter in
     `propose`: two derivations of one rule that disagree is exactly the bug
     this refuses.
+
+    And the outcome lists are pairwise disjoint (DRE-6665): `now`, `not-now`,
+    `dead` and `not-ready` each say something different about a card, and a
+    card on two of them is a card the page says two things about.
     """
     block = proposal.get("judgement") or {}
+    lists = {name: {row["identifier"] for row in
+                    (proposal["outcomes"].get(name) or [])}
+             for name in ("now", "not-now", "dead", NOT_READY)}
+    for a, b in itertools.combinations(lists, 2):
+        twice = sorted(lists[a] & lists[b], key=_card_sort_key)
+        if twice:
+            raise ProposalContradiction(
+                f"{_plural(len(twice), 'card')} would be listed both "
+                f"`{a}` and `{b}`: {', '.join(twice)}")
     batch = {row["identifier"] for row in proposal["outcomes"]["now"]}
     # `declined_cards` says why a `problem` run declines nothing. The page for
     # one of those says, above the batch, that every card below is placed by
@@ -1757,6 +1950,11 @@ def _rules_reason(outcome: str, row: dict) -> str:
             return (f"held on an earlier proposal, so it is ranked after every "
                     f"card that was not — position {row['position']}")
         band = BAND_LABELS.get(row.get("band"))
+        if row.get("serves"):
+            # Placed by the in-flight key (DRE-6664), naming the epic it serves.
+            marked = f", marked {band}" if band else ""
+            return (f"in flight — serves {row['serves']} (In Progress){marked}, "
+                    f"position {row['position']}")
         opened = f"marked {band}" if band else "newest first"
         return f"in the batch by the rules — {opened}, position {row['position']}"
     return (f"wanted, and this batch was full — it is reconsidered in cycle "
@@ -1874,14 +2072,23 @@ def _cancel_mark(row: dict, verdict, judged: bool, *, withheld: list) -> dict:
 
 
 def _annotate(proposal: dict, judgement, verdicts: dict | None, *,
-              declined: set | frozenset = frozenset()) -> dict:
+              declined: set | frozenset = frozenset(),
+              not_ready: set | frozenset = frozenset()) -> dict:
     """Write the reason, trigger, evidence and judged flag onto every row, and
     return the proposal's `judgement` block.
 
     One pass over one map, so a card's reason is the same string in
     `sequence`, in `outcomes` and in the rendered proposal — three copies of a
     reason is three chances for them to disagree.
+
+    It walks `now`, `not-now` and `dead` only: a Not ready row (DRE-6665)
+    carries the rule's own reason and condition and is never marked here.
+    `not_ready` is the cards the readiness rules held — none of them is listed
+    as `unranked`, because each is a Not ready row and not a `could not rank`
+    one, whatever the read said about it.
     """
+    import groom_readiness
+
     context: dict = {}
     for row in proposal["outcomes"]["now"]:
         context[row["identifier"]] = ("now", row)
@@ -1910,7 +2117,8 @@ def _annotate(proposal: dict, judgement, verdicts: dict | None, *,
                  if d["identifier"] == row["identifier"]), DEAD_FROM_LINE)
 
     unranked = sorted({identifier for identifier, v in (verdicts or {}).items()
-                       if v.outcome == "unranked"}, key=_card_sort_key)
+                       if v.outcome == "unranked"
+                       and identifier not in not_ready}, key=_card_sort_key)
     return {
         "enabled": verdicts is not None,
         "calls": int(getattr(judgement, "calls", 0) or 0),
@@ -1940,6 +2148,11 @@ def _annotate(proposal: dict, judgement, verdicts: dict | None, *,
         "ranked": int(getattr(judgement, "ranked", 0) or 0),
         "accounting": dict(getattr(judgement, "accounting", None) or {}),
         "continuations": int(getattr(judgement, "continuations", 0) or 0),
+        # How many `now` verdicts carry no `depends on` line at all (DRE-6665):
+        # what the readiness rule that reads that line could not see. A
+        # diagnostic of the read, shown so the gap is visible every morning —
+        # never a measure of the rule.
+        "depends_on_missing": groom_readiness.depends_on_missing(verdicts),
     }
 
 
@@ -1952,6 +2165,7 @@ def _EMPTY_PACK() -> dict:
     """
     out = {name: None for name in groom_context.SECTIONS}
     out["truncated"] = []
+    out["cuts"] = {}
     out["unread"] = sorted(groom_context.SECTIONS)
     return out
 
@@ -2046,11 +2260,21 @@ _PROPOSAL_LINE = re.compile(rf"^\s*(?:{MARK}\s*)?{PROPOSAL_TAG}\s*:\s*([0-9a-f]{
 
 
 def already_proposed(proposal: dict, records: list[dict]) -> bool:
-    """Is THIS batch already proposed on the card?"""
+    """Is THIS batch already proposed on the card?
+
+    And, when the proposal lists decisions it could not read, is there a page
+    with this id that lists them too (DRE-6642)? A marker that names no card
+    changes neither list, so the id stays the same — and if this answered yes
+    off the id alone, the section would never reach the card. A second page
+    with the same id is what lists them; `standing_decisions` starts counting
+    again from it, so the next run's proposal lists nothing and is a repeat.
+    """
     pid = proposal["id"]
+    quoted = _quoted(proposal.get("unreadable_decisions") or [])
     for record in records:
-        match = _PROPOSAL_LINE.match((record.get("body") or "").strip())
-        if match and match.group(1) == pid:
+        body = (record.get("body") or "").strip()
+        match = _PROPOSAL_LINE.match(body)
+        if match and match.group(1) == pid and all(q in body for q in quoted):
             return True
     return False
 
@@ -2075,6 +2299,12 @@ def post_proposal(lops, card: str, proposal: dict,
     has to, because the approval is the oldest of a card's decisions — and the
     two differ on purpose: a duplicate proposal costs a comment, while a missed
     approval costs a batch.
+
+    One exception to "same id, nothing posted" (DRE-6642): a proposal that
+    lists decisions it could not read is posted again under the same id
+    unless a page with that id already lists them — see `already_proposed`.
+    The second page carries the same lists, so an approval of the id means
+    the same batch on either page, and the drain reads the first it finds.
 
     `records` is that same read, already in the caller's hand: `main` reads the
     thread once to find the decline this proposal answers (DRE-3373) and passes
@@ -2393,7 +2623,13 @@ def render_proposal(proposal: dict) -> str:
         f"order ("
         + " → ".join(proposal.get("repo_order") or [])
         + ") breaks a tie between cards of equal priority created on the same "
-          "day, and decides nothing else. An epic and its children are one "
+          "day, and decides nothing else. "
+        # Said only when the key placed a card in this batch (DRE-6664), so a
+        # page with none renders byte for byte as it did before.
+        + ("Within a band, a card serving an epic In Progress goes first, and "
+           "the rest stay newest first (the CEO's decision of 2026-10-10). "
+           if any(row.get("serves") for row in batch) else "")
+        + "An epic and its children are one "
           "unit — unless a collision or a recorded blocks relation says "
           "otherwise, in which case the constraint wins.")
     add("")
@@ -2423,6 +2659,9 @@ def render_proposal(proposal: dict) -> str:
     # Every Cancel the guard refused (DRE-5309), right after the list it was
     # kept off — absent on a morning with none.
     w.extend(_render_cancels_refused(proposal))
+    # The cards the readiness rules held (DRE-6665), after the Cancel list and
+    # before the verify matrix — absent on a morning with none.
+    w.extend(_render_not_ready(proposal))
     # What the verify matrix found and spent (DRE-4971). Absent when the record
     # carries no `verify` block, so a run without it renders as before.
     w.extend(_render_verified(proposal))
@@ -2460,11 +2699,24 @@ def render_proposal(proposal: dict) -> str:
                           in proposal["collisions"]["boilerplate"].items())
         add(f"Read as reference rather than ownership: {cited}.")
         add("")
-    if proposal.get("unhonoured_constraints"):
-        add(f"{len(proposal['unhonoured_constraints'])} constraint(s) point both "
+    # The two kinds of entry, each said its own way: a loop the ranked order
+    # broke, and work in flight a constraint held back (DRE-6664) — the second
+    # absent on a morning with none, so the page reads as it did before.
+    unhonoured = proposal.get("unhonoured_constraints") or []
+    looped = [c for c in unhonoured if "serves" not in c]
+    held_back = [c for c in unhonoured if "serves" in c]
+    if looped:
+        add(f"{len(looped)} constraint(s) point both "
             f"ways and could not all be honoured — the ranked order won, and "
             f"each one is in the JSON. Two cards that each have to go first is a "
             f"planning question, not an ordering one.")
+        add("")
+    if held_back:
+        add("In flight, and still placed after a card it collides with or is "
+            "blocked by — the constraint won over the in-flight key:")
+        add("")
+        for c in held_back:
+            add(f"- {c['before']} before {c['after']} — {c['why']}")
         add("")
     add("## What waits, and roughly how long")
     add("")
@@ -2493,6 +2745,7 @@ def render_proposal(proposal: dict) -> str:
     w.extend(_render_unranked(proposal))
     w.extend(_render_held(proposal))
     w.extend(_render_earlier(proposal))
+    w.extend(_render_unreadable(proposal))
     add("## On cycles")
     add("")
     add(CYCLE_IS_NOT_SPRINT_PLANNING)
@@ -2666,6 +2919,33 @@ def _pack_count(pack: dict, name: str, noun: str) -> str:
     return _plural(int(pack.get(name) or 0), noun)
 
 
+# What the ranking reads of each row of a capped section, said where the line
+# names the cut (DRE-6641). "Newest" only where the pack sorts by date
+# (`groom_context._newest_first`): epics come in the order Linear returns them.
+_CUT_PHRASES = {
+    "epics_in_progress": "{kept} of {of} epics in flight (title and plan summary)",
+    "merged_prs": "the newest {kept} of {of} merged PRs (titles only)",
+    "closed_cards": "the newest {kept} of {of} closed cards (titles and reason lines)",
+}
+
+
+def _pack_section(pack: dict, name: str, noun: str, after: str = "") -> str:
+    """One section of the receipt line: UNKNOWN, the cut, or the count.
+
+    A section the pack cut to its cap says both numbers, read from
+    `pack['cuts']` and never from the section's own count, which is the
+    whole: "2539 merged PRs" over a ranking that saw the titles of 40 is a
+    label on what the proposal rests on that is not true (DRE-6641). A
+    proposal written before `cuts` existed says its one count as it did.
+    """
+    unread = name in set(pack.get("unread") or ()) or pack.get(name) is None
+    cut = (pack.get("cuts") or {}).get(name)
+    if cut and not unread:
+        return _CUT_PHRASES[name].format(kept=f"{int(cut['kept']):,}",
+                                         of=f"{int(cut['of']):,}")
+    return _pack_count(pack, name, noun) + after
+
+
 def _receipt_line(proposal: dict) -> str:
     """What ranked this batch, over how much, against what — in one line.
 
@@ -2684,9 +2964,9 @@ def _receipt_line(proposal: dict) -> str:
     line = (f"Ranked by {block.get('receipt')} in "
             f"{_plural(int(block.get('calls') or 0), 'call')} over "
             f"{_plural(proposal['population'], 'card')}, against "
-            f"{_pack_count(pack, 'epics_in_progress', 'epic')} in "
-            f"flight, {_pack_count(pack, 'merged_prs', 'merged PR')}"
-            f" and {_pack_count(pack, 'closed_cards', 'closed card')}")
+            f"{_pack_section(pack, 'epics_in_progress', 'epic', ' in flight')}"
+            f", {_pack_section(pack, 'merged_prs', 'merged PR')}"
+            f" and {_pack_section(pack, 'closed_cards', 'closed card')}")
     # `judgement.truncated` is the ANSWER being cut at the budget — never
     # `pack['truncated']`, which is the list of context sections that were
     # capped. A proposal written before DRE-3259 carries neither key, and this
@@ -2713,6 +2993,12 @@ def _receipt_line(proposal: dict) -> str:
         ) if counts.get(key)]
         if rest:
             line += " (" + ", ".join(rest) + ")"
+        # What the readiness rule could not see (DRE-6665): `now` answers with
+        # no `depends on` line, beside the count it is a part of. Said only
+        # above zero, so a morning with none reads as it did before.
+        if int(block.get("depends_on_missing") or 0) > 0:
+            line += (f"; {block['depends_on_missing']} ranked now without a "
+                     f"depends-on line")
     line += "."
     if block.get("continuations"):
         line += (f" The answer came back in "
@@ -2815,6 +3101,38 @@ def _render_cancels_refused(proposal: dict) -> list:
                  f"proposed for Cancel by "
                  f"{_REFUSED_FROM.get(source, 'a writer')} (`{source}`), and "
                  f"kept where the order put it.")
+    w.append("")
+    return w
+
+
+def _render_not_ready(proposal: dict) -> list:
+    """`NOT_READY_HEADING`, then `NOT_READY_COLUMNS` — one row per rule a
+    card tripped, in the rules' order, numbered from 1 (DRE-6665).
+
+    The first three cells are load-bearing (`parse_proposal_comment`). Title,
+    Reason and Ready when are pipe-escaped so a `|` in any of them cannot move
+    a column, and Reason and Ready when pass `defang_reason`, because both
+    quote card text — a question, a reason Linear gave for an unread read.
+    Nothing at all when no card is held: no heading, no table.
+    """
+    rows = proposal["outcomes"].get(NOT_READY) or []
+    if not rows:
+        return []
+    w = [NOT_READY_HEADING, ""]
+    w.append("Cards the readiness rules keep out of this batch. Each takes no "
+             "slot — the next card in order takes it — and each comes back by "
+             "itself on the first morning its condition holds: the rules are "
+             "read again from the board every morning, and nothing is "
+             "remembered. Nothing here is sent anywhere.")
+    w.append("")
+    w.append(NOT_READY_COLUMNS)
+    w.append("| -- | -- | -- | -- | -- | -- | -- | -- |")
+    for row in rows:
+        w.append(f"| {row['position']} | {row['identifier']} | {row['rule']} | "
+                 f"{row['repo']} | {row.get('epic') or '—'} | "
+                 f"{_cell(row.get('title'))} | "
+                 f"{_whole_cell(defang_reason(row.get('reason'))[0])} | "
+                 f"{_whole_cell(defang_reason(row.get('condition'))[0])} |")
     w.append("")
     return w
 
@@ -2957,6 +3275,30 @@ def _render_earlier(proposal: dict) -> list:
     return w
 
 
+def _render_unreadable(proposal: dict) -> list:
+    """`## Decisions I could not read` — every per-card marker written since
+    the last proposal that names no card, its first line quoted (DRE-6642).
+    Absent when there is none, so a thread with none renders as before."""
+    lines = proposal.get("unreadable_decisions") or []
+    if not lines:
+        return []
+    return [UNREADABLE_HEADING, "",
+            (f"This decision names no card, so this proposal was made "
+             f"without it. Write it again"
+             if len(lines) == 1 else
+             f"These {len(lines)} decisions name no card, so this proposal "
+             f"was made without them. Write each again")
+            + f" with the card after the batch id — `{MARK} {EXCLUDE_TAG}: "
+              f"{proposal['id']} DRE-N — <reason>`.", "",
+            *_quoted(lines), ""]
+
+
+def _quoted(lines: list[str]) -> list[str]:
+    """One bullet per line, each inside one code span: a backtick in the
+    line cannot close the span early, and the line is cut, never wrapped."""
+    return [f"- `{_trim(line.replace('`', "'"), 200)}`" for line in lines]
+
+
 def _render_held(proposal: dict) -> list:
     """The repos the CEO switched off, and the marker that switches one back on.
 
@@ -3027,9 +3369,13 @@ _DECISION_LINES = {
     for tag in (*DECISION_TAGS, DRAINED_TAG)
 }
 _APPROVAL_LINE = _DECISION_LINES[APPROVAL_TAG]
-# The tail of an exclusion or an addition: the card it names, then an optional
-# reason after an em dash. And the tail of a decline: a reason, and nothing else.
-_CARD_TAIL = re.compile(r"^\s+(DRE-\d+)\s*(?:—\s*(.*?))?\s*$")
+# The tail of an exclusion, a hold or an addition: the FIRST card it names, and
+# everything after that card on the line as the reason — after an em dash, a
+# hyphen, a colon or nothing at all (DRE-6642). A marker read only in its one
+# tidy shape dropped `<id> DRE-N already done` without a word, and the card was
+# offered again the next morning. And the tail of a decline: a reason, and
+# nothing else.
+_CARD_TAIL = re.compile(r"\b(DRE-\d+)\b\s*(?:[—–:-]+\s*)?(.*?)\s*$")
 _REASON_TAIL = re.compile(r"^\s*—\s*(\S.*?)\s*$")
 
 
@@ -3189,7 +3535,9 @@ def read_decisions(records: list[dict]) -> dict:
     too, under its own tag, because the drain holds both back (DRE-4966);
     `ignored` is every marker the drain would not
     honour, each with the reason, so the record can say what it dropped;
-    `drained` is every batch a `groom-drained` record already stands for.
+    `drained` is every batch a `groom-drained` record already stands for;
+    `unreadable_decisions` is the first line of every per-card marker about
+    the approved batch that names no card (DRE-6642).
 
     The NEWEST human decision wins, for the approval as it always has and for
     the decline beside it — a thread carries several as batches are re-proposed
@@ -3207,6 +3555,7 @@ def read_decisions(records: list[dict]) -> dict:
     approval_receipt_refused: str | None = None
     per_card: list[tuple[str, str, str, str | None]] = []   # tag, pid, card, why
     ignored: list[dict] = []
+    unread: list[tuple[str, str]] = []                      # pid, first line
     drained: list[str] = []
 
     for index, record in enumerate(records):
@@ -3235,7 +3584,7 @@ def read_decisions(records: list[dict]) -> dict:
                 else:
                     ignored.append(_ignored(
                         tag, _by_the_pipeline(tag, record),
-                        _named_card(tail)))
+                        _named_card(tail) if tag in PER_CARD_TAGS else None))
                 break
             if tag == APPROVAL_TAG:
                 approvals.append((index, pid))
@@ -3252,14 +3601,14 @@ def read_decisions(records: list[dict]) -> dict:
                 else:
                     declines.append((index, pid, reason.group(1)))
             else:
-                named = _CARD_TAIL.match(tail)
+                named = _card_tail(tail)
                 if not named:
                     ignored.append(_ignored(
                         tag, f"`{tag}` names no card — the shape is "
                              f"`{MARK} {tag}: <id> DRE-N[ — <reason>]`"))
+                    unread.append((pid, console_receipt.marker_line(body)))
                 else:
-                    per_card.append((tag, pid, named.group(1),
-                                     (named.group(2) or "").strip() or None))
+                    per_card.append((tag, pid, *named))
             break
 
     approved, problem = _current_decision(approvals, declines,
@@ -3281,8 +3630,13 @@ def read_decisions(records: list[dict]) -> dict:
         added.pop(identifier, None)
         (excluded if tag in HELD_BACK_TAGS else added)[identifier] = {
             "tag": tag, "reason": reason}
+    # A decider's per-card marker that names no card, about the approved
+    # batch: quoted in the drain's record under its own heading (DRE-6642),
+    # beside the `refused` row it has always had.
+    unreadable = [line for p, line in unread if approved and p == approved]
     return {"approved": approved, "problem": problem, "excluded": excluded,
-            "added": added, "ignored": ignored, "drained": drained}
+            "added": added, "ignored": ignored, "drained": drained,
+            "unreadable_decisions": unreadable}
 
 
 def standing_decisions(records: list[dict]) -> dict:
@@ -3303,31 +3657,54 @@ def standing_decisions(records: list[dict]) -> dict:
     proposer cannot take a card off its own offer. `records` is the WHOLE
     thread, vouched (`decision_records(..., whole_thread=True)`) — the
     answer about a card can be the oldest comment on the card.
+
+    `unreadable` is the first line of every decider's per-card marker that
+    names no card, written since the newest proposal on the thread — so the
+    next proposal lists each one once, rather than nobody hearing that it did
+    not count (DRE-6642).
     """
     last: dict[str, str] = {}
+    unreadable: list[str] = []
     for record in records:
+        body = record.get("body") or ""
+        if _PROPOSAL_LINE.match(body.strip()):
+            # Everything before this proposal was reported on it, or on one
+            # before it.
+            unreadable = []
+            continue
         if not _decides(record):
             continue
-        body = record.get("body") or ""
         for tag in PER_CARD_TAGS:
             match = decision_match(tag, body)
             if not match:
                 continue
-            named = _CARD_TAIL.match(match.group(2))
+            named = _card_tail(match.group(2))
             if named:
-                last[named.group(1)] = tag
+                last[named[0]] = tag
+            else:
+                unreadable.append(console_receipt.marker_line(body))
             break
     return {"excluded": sorted((c for c, t in last.items() if t == EXCLUDE_TAG),
                                key=_card_sort_key),
             "held": sorted((c for c, t in last.items() if t == HOLD_TAG),
-                           key=_card_sort_key)}
+                           key=_card_sort_key),
+            "unreadable": unreadable}
+
+
+def _card_tail(tail: str) -> tuple[str, str | None] | None:
+    """`(card, reason)` off a per-card marker's tail, or None when the line
+    names no card. The reason is None when nothing follows the card."""
+    found = _CARD_TAIL.search(tail)
+    if not found:
+        return None
+    return found.group(1), found.group(2) or None
 
 
 def _named_card(tail: str) -> str | None:
     """The card an exclusion or addition names, for a marker being reported
     rather than honoured. None on a decline, which names none."""
-    found = _CARD_TAIL.match(tail)
-    return found.group(1) if found else None
+    named = _card_tail(tail)
+    return named[0] if named else None
 
 
 def _current_decision(approvals: list[tuple[int, str]],
@@ -3533,6 +3910,11 @@ def parse_proposal_comment(body: str | None) -> dict | None:
     the SEVENTH cell with `\\|` unescaped, because the reason is the line the
     drain writes onto the card it cancels. No section reads as `[]` — the
     render leaves it out when nothing is proposed for cancellation.
+
+    Since DRE-6665 it also carries `"not_ready": [{"identifier", "position",
+    "rule", "reason", "condition"}]`, read from the table under
+    `NOT_READY_HEADING` the same way — the first three cells load-bearing, the
+    last two with `\\|` unescaped. No section reads as `[]`.
     """
     text = body or ""
     marker = _PROPOSAL_LINE.match(text.strip())
@@ -3567,6 +3949,19 @@ def parse_proposal_comment(body: str | None) -> dict | None:
             "repo": cells[3] if len(cells) > 3 else "",
             "reason": cells[6].replace("\\|", "|") if len(cells) > 6 else "",
         })
+    not_ready = []
+    for line in _section(text, NOT_READY_HEADING):
+        row = _BATCH_ROW.match(line.strip())
+        if not row:
+            continue
+        cells = [c.strip() for c in _UNESCAPED_PIPE.split(line.strip())[1:-1]]
+        not_ready.append({
+            "identifier": row.group(2),
+            "position": int(row.group(1)),
+            "rule": cells[2] if len(cells) > 2 else "",
+            "reason": cells[6].replace("\\|", "|") if len(cells) > 6 else "",
+            "condition": cells[7].replace("\\|", "|") if len(cells) > 7 else "",
+        })
     return {
         "id": marker.group(1),
         "lane": lane.group(1).strip() if lane else None,
@@ -3576,6 +3971,7 @@ def parse_proposal_comment(body: str | None) -> dict | None:
                   if heading else [],
         "batch": sorted(batch, key=lambda r: r["position"]),
         "cancel": sorted(cancel, key=lambda r: r["position"]),
+        "not_ready": sorted(not_ready, key=lambda r: r["position"]),
     }
 
 
@@ -3843,6 +4239,7 @@ def _drain(lops, *, card: str, lane: str = "Intake", to: str = DRAIN_TO) -> dict
               "slots": slots,
               "already_gone": list(gone),
               "refused": plan["ignored"],
+              "unreadable_decisions": decisions["unreadable_decisions"],
               "rows": plan["rows"], "to": to, "from": lane,
               "cycle": cycle[0], "proposal": record["id"]}
     lops.cmd_comment(card, drained_record(result))
@@ -4095,6 +4492,17 @@ def drained_record(result: dict) -> str:
     for row in rows:
         w.append(f"| {order.get(row['identifier'], '—')} | "
                  f"{row['identifier']} | {row['outcome']} | {row['why']} |")
+    # After the table, never inside it: the rows are the console's contract
+    # (DRE-6642). Each marker here is also a `refused` row above.
+    unreadable = result.get("unreadable_decisions") or []
+    if unreadable:
+        w += ["", UNREADABLE_HEADING, "",
+              ("This decision about this batch names no card, so it held "
+               "no card back and added none:"
+               if len(unreadable) == 1 else
+               f"These {len(unreadable)} decisions about this batch name no "
+               f"card, so they held no card back and added none:"), "",
+              *_quoted(unreadable)]
     return "\n".join(w).rstrip() + "\n"
 
 
@@ -4563,6 +4971,10 @@ def _build(args) -> dict:
     # held card stays on offer and is ranked last.
     standing = standing_decisions(records)
     excluded = set(standing["excluded"])
+    if standing["unreadable"]:
+        print(f"groomer: {_plural(len(standing['unreadable']), 'decision')} "
+              f"on {thread} name no card — listed on this proposal",
+              file=sys.stderr)
     on_offer = [c for c in offered(cards, holds)
                 if c["identifier"] not in excluded]
     # An Urgent or High nobody re-confirmed in three weeks ranks as Medium
@@ -4615,12 +5027,41 @@ def _build(args) -> dict:
                    window_days=args.window_days, judgement=judgement,
                    held_repos=holds, excluded=standing["excluded"],
                    held_cards=standing["held"],
-                   repo_priority=tuple(p for p in args.priority.split(",") if p))
+                   unreadable_decisions=standing["unreadable"],
+                   repo_priority=tuple(p for p in args.priority.split(",") if p),
+                   readiness=_readiness(linear_ops, on_offer, judgement))
     if getattr(args, "verify", False):
         # After `propose` and before anything is posted, so the id the CEO
         # approves covers the checked lists (DRE-4966).
         return verify_proposal(cards, shaping, lops=linear_ops)
     return propose(cards, **shaping)
+
+
+def _readiness(lops, on_offer: list[dict], judgement) -> dict:
+    """The morning's board facts for the readiness rules (DRE-6665).
+
+    Each in-flight lane read once, with `read_population` — its cards' files
+    are what rule 2 compares a card's files against — and then the cards the
+    ranked read's `depends on` lines name, in `groom_readiness`'s two bounded
+    steps. Read here, once, and handed to `propose` as one argument, so the
+    first proposal and the one `verify_proposal` builds read the same board.
+    A named card that could not be read holds every card naming it; nothing
+    is retried in the run.
+    """
+    import groom_readiness
+
+    lanes = {lane: read_population(lops, lane)
+             for lane in groom_readiness.IN_FLIGHT_LANES}
+    facts = groom_readiness.read(lops, on_offer, _verdicts_of(judgement),
+                                 lanes=lanes)
+    unread = sorted((i for i, r in {**facts["named"], **facts["epics"]}.items()
+                     if "unread" in r), key=_card_sort_key)
+    in_flight = sum(len(cards) for cards in lanes.values())
+    print(f"groomer: readiness read {_plural(in_flight, 'card')} in flight "
+          f"and {_plural(len(facts['named']), 'named card')}"
+          + (f" — could not read {', '.join(unread)}, which holds every card "
+             f"naming it" if unread else ""), file=sys.stderr)
+    return facts
 
 
 def verify_proposal(cards: list[dict], shaping: dict, *, lops, run=None,

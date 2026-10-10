@@ -437,7 +437,9 @@ about:
 # The walk rule: that repo's builders walk [the exception] + the workhorse
 # ladder with the exception removed — here claude-sonnet-5-5, claude-opus-5-5,
 # claude-opus-5, claude-sonnet-5. Every other repo, and every other kind in
-# atlas, walks the fleet ladder above unchanged.
+# atlas, walks the fleet ladder above unchanged. Selection reads it when the
+# repo is named — `model_fallback.py select <role> --repo <slug or owner/name>`
+# (DRE-6634) — and every workflow step that selects a model names it (DRE-6637).
 #
 # The model must already be a rung of THAT KIND'S OWN ladder. An exception
 # reorders a ladder and never adds a model to one: a model joins a ladder only

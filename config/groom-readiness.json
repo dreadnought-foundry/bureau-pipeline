@@ -1,0 +1,44 @@
+{
+  "_doc": "The groomer's readiness rules (DRE-6665). One record per rule, in the order a card's rows are listed. `applied_by` names what applies the rule: `groom_readiness` for the five evaluated in scripts/groom_readiness.py, `held_repo_rows` for the parked repo, which scripts/groomer.py removes from the offer under DRE-3403. `reason` and `condition` are plain English, rendered once per card the rule found and joined with `; ` and ` and ` (roll-up-parent renders once, naming every child epic). Placeholders: {names} the card id the rule found, {state} that card's lane, {files} the shared files in backticks, {why} why a named card could not be read, {question} the quoted question of undecided-question, {repo} the parked repo. `python3 scripts/groom_readiness.py check` fails when these ids and the evaluators disagree.",
+  "rules": [
+    {
+      "id": "read-waits-on-open-card",
+      "applied_by": "groom_readiness",
+      "reason": "its ranked read waits on {names} ({state})",
+      "condition": "{names} is Done",
+      "epic_reason": "its ranked read waits on {names} ({state}), an epic with work left to build",
+      "epic_condition": "{names} is built out or Done",
+      "unread_reason": "its ranked read waits on {names}, which could not be read this morning ({why})"
+    },
+    {
+      "id": "file-named-by-in-flight-card",
+      "applied_by": "groom_readiness",
+      "reason": "names {files}, which {names} ({state}) also names",
+      "condition": "{names} is Done"
+    },
+    {
+      "id": "child-of-epic-not-in-progress",
+      "applied_by": "groom_readiness",
+      "reason": "its epic {names} is in {state}, not In Progress",
+      "condition": "{names} is In Progress"
+    },
+    {
+      "id": "undecided-question",
+      "applied_by": "groom_readiness",
+      "reason": "open question: {question}",
+      "condition": "that section is settled on the card"
+    },
+    {
+      "id": "roll-up-parent",
+      "applied_by": "groom_readiness",
+      "reason": "a roll-up parent — its child epics: {names}",
+      "condition": "never — its child epics are offered on their own"
+    },
+    {
+      "id": "parked-repo",
+      "applied_by": "held_repo_rows",
+      "reason": "its repo {repo} is switched off",
+      "condition": "{repo} is switched back on"
+    }
+  ]
+}

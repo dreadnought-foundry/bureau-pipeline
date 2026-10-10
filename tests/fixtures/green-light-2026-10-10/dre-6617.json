@@ -1,0 +1,70 @@
+{
+  "card": "DRE-6617",
+  "arrival": "plan-bound",
+  "for": "planner",
+  "as_of": "2026-10-10T11:50:41.988Z",
+  "lane": "Planning",
+  "labels": [
+    "agent:engineer",
+    "repo:agent-bureau",
+    "initiative:bureau",
+    "Bug"
+  ],
+  "comments": [
+    {
+      "body": "🎟️ planner-slot: claimed · card DRE-6617 · run 38049040716 · repo dreadnought-foundry/agent-bureau · trigger planning · at 2026-10-10T11:37:58Z",
+      "authored_by_pipeline": true,
+      "created_at": "2026-10-10T11:37:58.511Z"
+    },
+    {
+      "body": "🧩 planning-shape: **one-off** — One card, one pull request. It owes no plan artifact and stops for no green light.\n\n**Why:** One backend module and its tests: reorder two branches in one classifier, exclude Intake, and name whose turn in the alert text — one language, one tier, one pull request, with the 25 rows already enumerated for the replay test. — size tests checked: 1 contracts between the pieces, 2 two languages or two tiers, 3 a criterion counting something never enumerated, 4 an unbounded quantifier, 5 specific is not small, 6 cut on file footprint, not only on concern\n\n**Stamped by:** `planner` · **model:** `claude-fable-5-1`\n\n**Where it goes:** Backlog. **Who handles it there:** reconcile.py.",
+      "authored_by_pipeline": true,
+      "created_at": "2026-10-10T11:38:27.766Z"
+    },
+    {
+      "body": "🧠 model-attempt: claude-fable-5-1 (asked) / claude-fable-5-1 (answered) — planning classifier read the card.",
+      "authored_by_pipeline": true,
+      "created_at": "2026-10-10T11:38:28.350Z"
+    },
+    {
+      "body": "🔁 **Pre-approval critic — before this is built** — sent back — round 1 of 2. Every finding here is a defect in the card an agent can fix, so the planner revises the card in place and the critic reads it again.\n\nReason: the last \"done\" test can only be met by someone looking at the live console after release, which a build run cannot do, so it needs to move to a separate follow-up proof card or be dropped from this one.\n\nEvery finding this round (6), ranked — the revision answers all of them, and the next round checks those fixes rather than finding these again:\n\n1. the last \"done\" test can only be met by someone looking at the live console after release, which a build run cannot do, so it needs to move to a separate follow-up proof card or be dropped from this one.\n2. DRE-6617: the card never mentions that the check for \"is this card waiting on another card\" is itself unreliable today — for any card with a real list of blockers it garbles the blocker names, can't find them, and treats the card as still blocked even when every blocker is finished. Once the new ru…\n3. DRE-6617: \"If old Intake cards need a different signal… one line on the capacity strip or one alert for the lane\" leaves an open choice with no answer. An unattended agent will either skip it or invent one. The card should say plainly that this build adds none (and file a separate card if wanted), …\n4. DRE-6617: \"says whose turn it is… in the words the console already uses\" doesn't name the actual wording or where it lives, and the card admits it did not check whether the nine surviving cards are worded for the right person. The two test cases (operator, CEO in Green Light) should name the exact …\n5. DRE-6617: the replay test is meant to rebuild 25 cards \"as they stood at 04:32 PT\", but the card only gives states and blocker lists for some of them. For the nine that should still alert, the labels and history that decide which alert fires are not given, so the builder has to invent them. Saying …\n6. DRE-6617: the card is silent on what to do with a blocked card that also carries a stop notice, an unresolved agent-blocked comment, or repeated deaths. \"Whatever its labels\" could be read as silencing those too. It should say the rule is limited to the \"needs a human\" alert.\n\nThis card is not going to the build queue yet, and nothing here is for the CEO — it stays in Planning while the planner rewrites it to answer every finding above, and the critic reads it again.",
+      "authored_by_pipeline": true,
+      "created_at": "2026-10-10T11:39:42.689Z"
+    },
+    {
+      "body": "plan-critic: stage=one-off round=1 result=SEND_BACK collisions=0 — the last \"done\" test can only be met by someone looking at the live console after release, which a build run cannot do, so it needs to move to a separate follow-up proof card or be dropped from this one.",
+      "authored_by_pipeline": true,
+      "created_at": "2026-10-10T11:39:43.526Z"
+    },
+    {
+      "body": "🔁 The planner revised this card in place to answer the critic. What it changed, finding by finding:\n\n1. Dropped the post-release criterion. The monitor already resolves any open `pipeline_stuck:*` alert whose card classifies clean on a successful tick, so the card now carries a test instead: a second replay tick against a store pre-seeded with the sixteen open CRITICALs leaves each with a `resolved_at` the tick wrote and the nine still open. \"No live row is cleared by hand\" stays as the rule, and the live observation is named under \"Not in this card\" as a DRE-3075 follow-up a person may file. I did not file one (the prompt forbids new cards).\n2. Added the broken blocker check as a second defect and a required fix. I ran `_is_blocked` against a store: a three-blocker list is read through `str()` as the one name `['DRE-3726'`, found nowhere, and the card answers blocked even with every blocker Done; it also counts Canceled and Duplicate blockers as unfinished, against `inflight.SETTLED_BLOCKER_STATES`. The card says reordering alone would silence every operator step with finished blockers, names the fix (`enrich.unfinished_blockers` with `inflight.blocker_is_settled`, fail closed on an unknown blocker), removes the `pragma: no cover`, and adds four criteria for it, the first of which fails today.\n3. Removed the open choice. The card now says plainly that this build adds no Intake signal, not a strip line and not a lane alert, and lists it under \"Not in this card\" as a separate card if wanted.\n4. Named the exact wording and where whose-turn comes from. Whose turn is `inflight.card_who_next` (the same call `alerts._card_held_audience` makes, so the monitor and the feed agree), never the lane. The two titles are fixed verbatim: `A card is the operator's step — open the card` and `A card needs your decision — open the card`; the give-up title is unchanged. I ran that derivation over the nine cards' live labels and threads: all seven needs-human survivors are the operator's, the two Green Light PROOF cards included, because neither proof-waiting caption names the CEO's press (DRE-6432). The old text's \"the CEO's decision in Green Light\" was wrong for those two and is gone. The CEO-wording test now uses a parked proof card whose caption names the CEO's press, plus a stop-notice card, since no live card of the nine is the CEO's. The two existing tests that pin today's titles are named for re-pinning. The two WARN rows (DRE-6400, DRE-6543) are stated to be the merge-gate alert, untouched.\n5. Gave the whole fixture. I re-read all 25 cards from Linear on 2026-10-10: lane, title prefix, the marks that decide whose turn, every blocker with its state, and the threads (none carries a hold, a give-up, a `🛑` blocker or `hand-built`). The card carries them as a 25-row table with the expected result per row, says the fixture is built through the poll's own ingest path so `blocked_by` is stored as production stores it, names the PR-row seeding helper, and sets `now` at 2026-10-10 11:32 UTC (04:32 PT).\n6. Limited the rule to the needs-human branch. The card now states the branch's internal order (give-up receipt first and still raised, then blocked, then Intake, then whose-turn), says the stop-notice hold, the unresolved blocker comment, repeated deaths, the stalled gate and the weak signals keep today's precedence and suppression exactly, and adds a criterion showing a blocked card still raises each of those. The \"whatever its labels\" sentence is gone.",
+      "authored_by_pipeline": true,
+      "created_at": "2026-10-10T11:48:11.438Z"
+    },
+    {
+      "body": "🔁 The critic reads the revised card again on the next planning run, which has been started — nothing here is for the CEO. If the revision still does not satisfy it, the card parks in Triage for the operator with every finding named.",
+      "authored_by_pipeline": true,
+      "created_at": "2026-10-10T11:48:13.740Z"
+    },
+    {
+      "body": "🎟️ planner-slot: released · card DRE-6617 · run 38049040716 · repo dreadnought-foundry/agent-bureau · trigger - · at 2026-10-10T11:48:14Z · because finished",
+      "authored_by_pipeline": true,
+      "created_at": "2026-10-10T11:48:14.738Z"
+    },
+    {
+      "body": "🎟️ planner-slot: claimed · card DRE-6617 · run 38049696101 · repo dreadnought-foundry/agent-bureau · trigger planning · at 2026-10-10T11:49:22Z",
+      "authored_by_pipeline": true,
+      "created_at": "2026-10-10T11:49:22.233Z"
+    },
+    {
+      "body": "🛑 **Pre-approval critic — before this is built** — two send-backs on this card — the bound. The planner's revision did not satisfy the critic, so the card parks in Triage for the operator with every finding raised so far named below. A revision loop that does not converge is a defect in the card, not a decision, so it is not put to the CEO.\n\nReason: the card says the other alert-monitor test files pass with only two titles changed, but one of them also checks the old \"needs a human\" wording in two more places and is not on the card's file list, so the builder is told to leave it alone and it will fail.\n\nEvery finding raised on this card so far (5), oldest first — one rewrite answers all of them, rather than one answer each:\n\n1. the last \"done\" test can only be met by someone looking at the live console after release, which a build run cannot do, so it needs to move to a separate follow-up proof card or be dropped from this one.\n2. the card says the other alert-monitor test files pass with only two titles changed, but one of them also checks the old \"needs a human\" wording in two more places and is not on the card's file list, so the builder is told to leave it alone and it will fail.\n3. DRE-6617: the last criterion lists the \"reads the pull request\" test file among suites that \"pass with only the two re-pinned titles changed.\" That file checks the old title in two more tests (a needs-human card outranking a stalled gate, and the needs-human check on every not-moving pull request s…\n4. DRE-6617: that same file builds a card with its blocker given as a plain string (\"DRE-1\"), while the new blocked check reads a list. Read as a list, the string splits into single characters. It still answers \"blocked\" by accident, but the card should say the file's fixtures move to a real list so t…\n5. DRE-6617: the card does not say what happens if the store errors while looking up a blocker. Today's code treats an error as \"unfinished\"; the new one-line lookup would let the error escape and could end the whole tick. Say it fails closed (counts as blocked), as the old code did.\n\nThis card is not going to the build queue, and it is not waiting on the CEO — it parks in Triage. Fix the card so one rewrite answers every finding above and send it back through Planning, or take it out of the queue.",
+      "authored_by_pipeline": true,
+      "created_at": "2026-10-10T11:50:41.302Z"
+    },
+    {
+      "body": "plan-critic: stage=one-off round=2 result=SEND_BACK collisions=0 — the card says the other alert-monitor test files pass with only two titles changed, but one of them also checks the old \"needs a human\" wording in two more places and is not on the card's file list, so the builder is told to leave it alone and it will fail.",
+      "authored_by_pipeline": true,
+      "created_at": "2026-10-10T11:50:41.988Z"
+    }
+  ]
+}

@@ -475,6 +475,7 @@ jobs:
           WHY_FILE="$RUNNER_TEMP/model-why.txt"
           EFFORT_FILE="$RUNNER_TEMP/model-effort.txt"
           MODEL=$(python3 .bureau-pipeline/scripts/model_fallback.py select "$ROLE" \
+            --repo "$GITHUB_REPOSITORY" \
             --explain-file "$WHY_FILE" --effort-file "$EFFORT_FILE")
           WHY=$(cat "$WHY_FILE")
           # DRE-4836: the effort level the CHOSEN model runs at, declared in
@@ -1412,7 +1413,7 @@ jobs:
       - name: Upload the usage reading
         if: always() && steps.gate.outputs.bounced != 'true' && steps.dedupe.outputs.skip != 'true' && steps.usage.outputs.path != ''
         continue-on-error: true
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: claude-usage-reading-${{ github.job }}-attempt${{ github.run_attempt }}
           path: ${{ steps.usage.outputs.path }}
@@ -1469,7 +1470,7 @@ jobs:
       - name: Upload the death-cause receipt
         if: always() && steps.death.outputs.path != ''
         continue-on-error: true
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: death-receipt-${{ github.job }}-attempt${{ github.run_attempt }}
           path: ${{ steps.death.outputs.path }}
@@ -1602,6 +1603,12 @@ jobs:
       # that already did the work. Its `local_work` output is what the Report
       # step reads to say `credential`, not `died`.
       #
+      # The agent's stop notes make it stand aside — except a blocker note
+      # stamped `blocker-class: branch-without-pr`, written alone (DRE-6719):
+      # that note reports the very case this step repairs, so it delivers
+      # instead, and the Report step reads `pr_opened`/`pr_url` to report the
+      # pull request rather than the blocker.
+      #
       # BEFORE the two steps below on purpose: both resolve this card's branch
       # from `git branch -r`, and both must see the branch this step delivers.
       - name: Push rescue
@@ -1648,7 +1655,7 @@ jobs:
       - name: Upload rescued work
         if: always() && steps.rescue.outputs.patch != ''
         continue-on-error: true
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: rescue-${{ github.event.client_payload.identifier }}.patch
           path: ${{ steps.rescue.outputs.patch }}
@@ -1765,6 +1772,12 @@ jobs:
           # which is where the cause of the DRE-3165 400 still is.
           RESCUE_PUSHED: ${{ steps.rescue.outputs.pushed }}
           RESCUE_ERROR: ${{ steps.rescue.outputs.error }}
+          # DRE-6719: the pull request the rescue opened in this run. The PR
+          # lookup below holds GH_TOKEN — the agent's, dead at the hour — so
+          # on exactly the runs the rescue opens one for, the lookup cannot
+          # see it, and a `branch-without-pr` note would park the card anyway.
+          RESCUE_PR_OPENED: ${{ steps.rescue.outputs.pr_opened }}
+          RESCUE_PR_URL: ${{ steps.rescue.outputs.pr_url }}
           # WHICH CREDENTIAL MAY DISPATCH (DRE-1254, DRE-3262). A
           # workflow_dispatch needs `actions: write`, and the App token above
           # carries no Actions permission at all — only the workflow's own

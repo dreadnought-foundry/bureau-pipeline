@@ -91,8 +91,24 @@ its first run read.
 A record the critic APPROVED can still be held: the merge gate declines any
 proof record with a row not met (DRE-6141), and before this nothing picked it
 up again. The same branch, the same lanes and the same stops read a second
-trigger, only when the critic's standing verdict at the head is `APPROVE`
-(its `REQUEST_CHANGES` keeps precedence): the gate's newest hold note on the
+trigger, only when the critic's `APPROVE` is bound to the head the way the
+gate binds it (its `REQUEST_CHANGES` at the head keeps precedence): the
+newest critic verdict's token is `APPROVE` (`reconcile.critic_token`) and
+`reconcile.verdict_bound` holds, written at the head or carried to it across
+a merge of main (DRE-2340, DRE-6650). On DRE-6364 the verdict was carried,
+the standing reading said `APPROVE from earlier head 2ae86ef`, and the branch
+refused with "nothing to answer" while the sweep parked the record on its
+review cap.
+
+The contract with the sweep, one sentence in both files: a proof record the
+critic sent back at its head, or one whose `APPROVE` is bound to the head and
+which the gate's note declines at that head as not proven (`not_proven_at`,
+the one reader of the note), is the proof run's — the sweep writes nothing on
+it (`reconcile.proof_record_owned_by_proof_run`) and this branch reads it.
+Every other record keeps the review lane's nudge and cap, and a record the
+critic never answered is still the sweep's at the cap.
+
+The trigger is the gate's newest hold note on the
 pull request — qa-bot only, anchored on its first line, as
 `reconcile.gate_hold_note_line` reads it — declining the record at the head
 with a reason that opens `proof record not proven:`. A note on an earlier
@@ -484,9 +500,11 @@ def _by_qa_bot(comment: dict) -> bool:
         {"author": comment.get("author") or comment.get("user")})
 
 
-def _not_proven_at(pr: dict, head: str) -> bool:
+def not_proven_at(pr: dict, head: str) -> bool:
     """Has the gate declined the record AT `head` as not proven — any qa-bot
-    hold note whose first line says so, newest or not?"""
+    hold note whose first line says so, newest or not? Public because the
+    sweep's review lane reads the note through it too
+    (`reconcile.proof_record_owned_by_proof_run`, DRE-6650)."""
     for comment in pr.get("comments") or []:
         body = comment.get("body") or ""
         if not (_by_qa_bot(comment) and merge_gate.opens_with_marker(
@@ -515,7 +533,7 @@ def record_red_checks(pr: dict, runs) -> list:
     `statusCheckRollup` nodes; the conclusion is read in either case."""
     if not proof_record_branch(pr.get("headRefName")):
         return []
-    if _not_proven_at(pr, pr.get("headRefOid") or ""):
+    if not_proven_at(pr, pr.get("headRefOid") or ""):
         return []
     red = []
     for run in runs or ():
@@ -936,7 +954,10 @@ class _Pass:
                                               head)
         if standing == SENT_BACK:
             trigger = self._sent_back(verdicts, number)
-        elif standing == APPROVED:
+        elif (reconcile.critic_token(pr) == APPROVED
+              and reconcile.verdict_bound(pr)):
+            # The gate's reading of the approval (DRE-6650): written at the
+            # head or carried to it across a merge of main (DRE-2340).
             trigger = self._declined(pr, number, head)
         else:
             raise _Refused(f"re-run: the critic's newest verdict on #{number} "
@@ -1002,8 +1023,8 @@ class _Pass:
                         (RERUN_UNANSWERED_OBSERVED, RERUN_UNANSWERED_NEEDS))
 
     def _declined(self, pr: dict, number, head: str) -> _Trigger:
-        """The gate's trigger (DRE-6488): with the critic's `APPROVE` at the
-        head, the gate's newest hold note declines the record AT that head
+        """The gate's trigger (DRE-6488): with the critic's `APPROVE` bound to
+        the head (DRE-6650), the gate's newest hold note declines the record AT that head
         as not proven. A note on an earlier head is already answered — the
         gate reads every new head itself — and any other reason is not this.
 

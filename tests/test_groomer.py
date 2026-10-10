@@ -333,7 +333,11 @@ def test_the_judgement_block_carries_every_field_the_contract_names():
     assert block["model_answered"] == "test-model"
     assert block["receipt"] == "test-model (asked) / test-model (answered)"
     assert set(block["pack"]) == set(groom_context.SECTIONS) | {"truncated",
-                                                                "unread"}
+                                                                "unread",
+                                                                "cuts"}
+    # A run that read no pack saves the same keys (DRE-6641's `cuts` too).
+    assert set(groomer._EMPTY_PACK()) == set(block["pack"])
+    assert groomer._EMPTY_PACK()["cuts"] == {}
     assert block["calls"] in (0, 1)
     # DRE-3259's two keys, beside the ones DRE-3150 shipped.
     assert set(block) >= {"output_budget", "truncated"}
@@ -896,19 +900,21 @@ class PagedLinear:
             linear_ops.gql = real
 
 
-def test_the_population_query_pages_at_fifty_and_carries_the_children():
-    assert groomer.POPULATION_PAGE == 50
-    assert "issues(first: 50, after: $after" in groomer.POPULATION_QUERY
-    assert ("children(first: 50) { nodes { identifier state { name } } }"
+def test_the_population_query_pages_at_25_and_carries_the_children():
+    assert groomer.POPULATION_PAGE == 25
+    assert "issues(first: 25, after: $after" in groomer.POPULATION_QUERY
+    # The child's title is how the roll-up rule knows a child is an epic
+    # (DRE-6665).
+    assert ("children(first: 50) { nodes { identifier title state { name } } }"
             in groomer.POPULATION_QUERY)
 
 
-def test_a_120_card_lane_is_read_in_three_pages_and_every_row_counts_children():
+def test_a_120_card_lane_is_read_in_five_pages_and_every_row_counts_children():
     nodes = [epic(f"DRE-{n:04d}", children=(("DRE-9", "In Progress"),)
                   if n % 2 else ()) for n in range(120)]
     fake = PagedLinear(nodes)
     got = groomer.read_population(fake, lane="Intake")
-    assert fake.pages == [50, 50, 20]
+    assert fake.pages == [25, 25, 25, 25, 20]
     assert len(got) == 120
     rows = groomer.sequence(got)
     assert len(rows) == 120

@@ -22,6 +22,12 @@ The reusables declare no default, so a silent stub renders an empty input and
 this fallback actually runs. No product stub has to change. The promotion step
 prints the cap it applied and where it read it.
 
+The caller's BUREAU_MAX_WIP Actions variable comes third (DRE-6631): after the
+input and the stub, before the built-in default. It is what the console
+writes, and until then only agent-bureau's own stubs read it. A value at any
+source that is not a whole number of 0 or more is skipped to the next source
+with one `promotion: ignored …` line; an empty one is skipped in silence.
+
 Run: cd bureau-pipeline && python3 -m pytest tests/test_wip_cap_follows_the_repo.py -v
 """
 from __future__ import annotations
@@ -151,11 +157,17 @@ class TestTheCapIsReadFromTheRepo:
         assert cap == reconcile.DEFAULT_MAX_WIP
         assert "no reconcile stub" in source
 
-    def test_a_cap_that_is_not_a_number_is_the_default_and_says_why(self, tmp_path):
+    def test_a_cap_that_is_not_a_number_is_skipped_and_says_why(self, tmp_path):
+        """DRE-6631: an unreadable stub cap no longer folds its reason into the
+        source text — it is skipped to the next source, and the skip is a line
+        of its own. With no variable set, the next source is the default."""
         ws = _workspace(tmp_path, _stub("max_wip: ${{ vars.MAX_WIP }}"))
-        cap, source = reconcile.cap_and_source("", str(ws))
+        ignored: list[str] = []
+        cap, source = reconcile.cap_and_source("", str(ws), "", ignored=ignored)
         assert cap == reconcile.DEFAULT_MAX_WIP
-        assert "vars.MAX_WIP" in source
+        assert "default" in source
+        assert len(ignored) == 1, ignored
+        assert "${{ vars.MAX_WIP }}" in ignored[0]
 
     def test_this_repo_resolves_through_its_own_self_stub(self):
         """bureau-pipeline self-hosts through self-reconcile.yml, and an empty
@@ -171,6 +183,138 @@ class TestTheCapIsReadFromTheRepo:
 
     def test_the_module_names_where_its_cap_came_from(self):
         assert isinstance(reconcile.MAX_WIP_SOURCE, str) and reconcile.MAX_WIP_SOURCE
+
+
+# --------------------------------------------------------------------------
+# The four sources, in order (DRE-6631)
+# --------------------------------------------------------------------------
+NOT_A_NUMBER = ("lots", "-1", "12.0", "${{ vars.SOMETHING }}")
+
+
+def _resolve(raw, ws, variable):
+    """cap_and_source with the run-log lines it would print collected."""
+    ignored: list[str] = []
+    cap, source = reconcile.cap_and_source(raw, ws, variable, ignored=ignored)
+    return cap, source, ignored
+
+
+class TestTheFourSources:
+    """The run's input, else the caller's reconcile stub, else the caller's
+    BUREAU_MAX_WIP variable, else reconcile.DEFAULT_MAX_WIP. The variable is
+    what the console writes, and before DRE-6631 no reusable read it: only
+    agent-bureau's own stubs folded it into the input, so the console could
+    change the number for one project of five."""
+
+    def test_the_input_beats_the_stub_and_the_variable(self, tmp_path):
+        """agent-bureau, portico and agent-bureau-demo pass a number on every
+        stub today; setting their variable must change nothing."""
+        ws = _workspace(tmp_path, _stub('max_wip: "0"'))
+        cap, source, ignored = _resolve("12", str(ws), "5")
+        assert (cap, ignored) == (12, [])
+        assert source == "this run's max_wip input"
+
+    def test_the_stub_beats_the_variable_when_the_input_is_empty(self, tmp_path):
+        """Portico with a variable set and its literal still standing: the
+        sweep gets the literal as its input, so the fast paths, whose stubs
+        pass nothing, must read the same literal — not the variable — or the
+        repo promotes at two caps again (DRE-2529)."""
+        ws = _workspace(tmp_path, _stub('max_wip: "12"'))
+        cap, source, ignored = _resolve("", str(ws), "3")
+        assert (cap, ignored) == (12, [])
+        assert ".github/workflows/reconcile.yml" in source
+
+    def test_the_variable_wins_when_neither_names_a_number(self, tmp_path):
+        """atlas and deltasolv: their stubs pass nothing and set no max_wip,
+        so the console's number is the cap."""
+        ws = _workspace(tmp_path, _stub(None))
+        cap, source, ignored = _resolve("", str(ws), "5")
+        assert (cap, ignored) == (5, [])
+        assert source == "the caller's BUREAU_MAX_WIP variable"
+
+    def test_the_variable_wins_with_no_reconcile_stub_or_no_checkout(self, tmp_path):
+        ws = _workspace(tmp_path, None)
+        assert _resolve(None, str(ws), "6")[:2] == (6, "the caller's BUREAU_MAX_WIP variable")
+        assert _resolve(None, None, "6")[:2] == (6, "the caller's BUREAU_MAX_WIP variable")
+
+    def test_a_variable_of_zero_holds_the_repo(self, tmp_path):
+        """Zero is a number, not "unset": agent-bureau-demo held from the
+        console must build nothing."""
+        ws = _workspace(tmp_path, _stub(None))
+        assert _resolve("", str(ws), "0")[:2] == (0, "the caller's BUREAU_MAX_WIP variable")
+
+    def test_the_default_when_all_three_are_empty(self, tmp_path):
+        ws = _workspace(tmp_path, _stub(None))
+        cap, source, ignored = _resolve("", str(ws), "")
+        assert (cap, ignored) == (reconcile.DEFAULT_MAX_WIP, [])
+        assert source.startswith(f"the default {reconcile.DEFAULT_MAX_WIP}")
+        assert "BUREAU_MAX_WIP" in source
+
+    def test_an_unset_variable_is_the_default_too(self, tmp_path):
+        ws = _workspace(tmp_path, _stub(None))
+        cap, _source, ignored = _resolve("", str(ws), None)
+        assert (cap, ignored) == (reconcile.DEFAULT_MAX_WIP, [])
+
+    def test_empty_values_at_every_source_say_nothing(self, tmp_path):
+        """Empty is the normal "not set" — a project with no variable must not
+        warn on every sweep. A stub line that names no value is empty too."""
+        ws = _workspace(tmp_path, _stub('max_wip: ""'))
+        cap, _source, ignored = _resolve("  ", str(ws), "")
+        assert (cap, ignored) == (reconcile.DEFAULT_MAX_WIP, [])
+
+    @pytest.mark.parametrize("value", NOT_A_NUMBER)
+    def test_an_input_that_is_not_a_number_is_skipped_to_the_stub(self, tmp_path, value):
+        ws = _workspace(tmp_path, _stub('max_wip: "3"'))
+        cap, source, ignored = _resolve(value, str(ws), "7")
+        assert cap == 3
+        assert ".github/workflows/reconcile.yml" in source
+        assert ignored == [
+            f"promotion: ignored this run's max_wip input = {value}: "
+            "not a whole number of 0 or more"
+        ]
+
+    @pytest.mark.parametrize("value", NOT_A_NUMBER)
+    def test_a_stub_cap_that_is_not_a_number_is_skipped_to_the_variable(
+        self, tmp_path, value
+    ):
+        ws = _workspace(tmp_path, _stub(f'max_wip: "{value}"'))
+        cap, source, ignored = _resolve("", str(ws), "7")
+        assert (cap, source) == (7, "the caller's BUREAU_MAX_WIP variable")
+        assert ignored == [
+            "promotion: ignored the caller's reconcile stub "
+            f".github/workflows/reconcile.yml = {value}: "
+            "not a whole number of 0 or more"
+        ]
+
+    @pytest.mark.parametrize("value", NOT_A_NUMBER)
+    def test_a_variable_that_is_not_a_number_is_skipped_to_the_default(
+        self, tmp_path, value
+    ):
+        ws = _workspace(tmp_path, _stub(None))
+        cap, source, ignored = _resolve("", str(ws), value)
+        assert cap == reconcile.DEFAULT_MAX_WIP
+        assert source.startswith(f"the default {reconcile.DEFAULT_MAX_WIP}")
+        assert ignored == [
+            f"promotion: ignored the caller's BUREAU_MAX_WIP variable = {value}: "
+            "not a whole number of 0 or more"
+        ]
+
+    def test_every_source_unreadable_names_each_one_in_order(self, tmp_path):
+        ws = _workspace(tmp_path, _stub('max_wip: "lots"'))
+        cap, _source, ignored = _resolve("-1", str(ws), "12.0")
+        assert cap == reconcile.DEFAULT_MAX_WIP
+        assert [line.split(" = ")[0] for line in ignored] == [
+            "promotion: ignored this run's max_wip input",
+            "promotion: ignored the caller's reconcile stub .github/workflows/reconcile.yml",
+            "promotion: ignored the caller's BUREAU_MAX_WIP variable",
+        ]
+
+    def test_the_module_reads_the_variable_from_the_environment(self):
+        """The one module-level call passes BUREAU_MAX_WIP as its third
+        argument — the name each promotion step's env: carries."""
+        src = (ROOT / "scripts" / "reconcile.py").read_text()
+        call = src.split("MAX_WIP, MAX_WIP_SOURCE = cap_and_source(", 1)[1].split("\n)\n", 1)[0]
+        assert 'os.environ.get("BUREAU_MAX_WIP")' in call
+        assert isinstance(reconcile.MAX_WIP_IGNORED, list)
 
 
 # --------------------------------------------------------------------------
@@ -196,9 +340,12 @@ class _Activation:
     step runs — over an approved epic's children, at the cap the repo's own
     stub resolves to, with every gate but the cap held open."""
 
-    def __init__(self, tmp_path, stub_line, *, children=3, active=0):
+    def __init__(self, tmp_path, stub_line, *, children=3, active=0,
+                 max_wip="", variable=""):
+        self.ignored: list[str] = []
         self.cap, self.source = reconcile.cap_and_source(
-            "", str(_workspace(tmp_path, _stub(stub_line)))
+            max_wip, str(_workspace(tmp_path, _stub(stub_line))), variable,
+            ignored=self.ignored,
         )
         self.children = [_child(f"DRE-38{n:02d}") for n in range(children)]
         self.active = [
@@ -218,6 +365,8 @@ class _Activation:
     def approve(self) -> None:
         with patch.object(reconcile, "MAX_WIP", self.cap), patch.object(
             reconcile, "MAX_WIP_SOURCE", self.source
+        ), patch.object(
+            reconcile, "MAX_WIP_IGNORED", self.ignored
         ), patch.object(reconcile, "REPO_SLUG", "bureau-pipeline"), patch.object(
             reconcile, "active_cards", return_value=self.active
         ), patch.object(
@@ -273,6 +422,37 @@ class TestEpicApprovalAtTheCap:
         said = [ln for ln in out.splitlines() if "WIP cap 0" in ln]
         assert len(said) == 1, out
         assert ".github/workflows/reconcile.yml" in said[0]
+
+    def test_the_run_log_names_the_variable_when_it_set_the_cap(
+        self, tmp_path, capsys
+    ):
+        """DRE-6631: a project whose stubs pass nothing promotes at its
+        BUREAU_MAX_WIP, and the cap line says that is where it came from."""
+        run = _Activation(tmp_path, None, children=3, active=0, variable="2")
+        run.approve()
+        assert run.advanced == ["DRE-3800", "DRE-3801"]
+        out = capsys.readouterr().out
+        said = [ln for ln in out.splitlines() if ln.startswith("promotion: WIP cap ")]
+        assert said == ["promotion: WIP cap 2, read from the caller's BUREAU_MAX_WIP variable"]
+
+    def test_an_ignored_value_is_logged_before_the_cap_line(self, tmp_path, capsys):
+        run = _Activation(tmp_path, 'max_wip: "lots"', variable="1")
+        run.approve()
+        assert run.advanced == ["DRE-3800"]
+        lines = capsys.readouterr().out.splitlines()
+        ignored = [i for i, ln in enumerate(lines) if ln.startswith("promotion: ignored ")]
+        cap = [i for i, ln in enumerate(lines) if ln.startswith("promotion: WIP cap ")]
+        assert len(ignored) == 1 and len(cap) == 1, lines
+        assert ignored[0] < cap[0]
+        assert lines[ignored[0]] == (
+            "promotion: ignored the caller's reconcile stub "
+            ".github/workflows/reconcile.yml = lots: not a whole number of 0 or more"
+        )
+
+    def test_an_unset_variable_logs_no_ignored_line(self, tmp_path, capsys):
+        run = _Activation(tmp_path, None)
+        run.approve()
+        assert "promotion: ignored" not in capsys.readouterr().out
 
     def test_at_a_non_zero_cap_with_the_cap_in_flight_nothing_more_builds(
         self, tmp_path, capsys
@@ -337,4 +517,26 @@ class TestTheReusablesLetTheRepoSpeak:
                     assert caller_checked_out, (
                         f"{name}: jobs.{job_id} promotes before checking out the caller"
                     )
+        assert found >= 1, f"{name}: no promotion step found — the check went vacuous"
+
+    @pytest.mark.parametrize("name", PROMOTING_REUSABLES)
+    def test_every_promoting_step_carries_the_callers_variable(self, name):
+        """In a reusable workflow `vars` is the caller's, so this one line is
+        how the console's number reaches the script — beside the input, never
+        folded into it (DRE-6631)."""
+        doc = _doc(name)
+        found = 0
+        for job_id, job in (doc.get("jobs") or {}).items():
+            for step in (job or {}).get("steps") or []:
+                run = step.get("run")
+                if isinstance(run, str) and "reconcile.py" in run and (
+                    "--promote-only" in run or name == "reconcile.yml"
+                ):
+                    found += 1
+                    env = {**(doc.get("env") or {}), **(job.get("env") or {}),
+                           **(step.get("env") or {})}
+                    assert env.get("BUREAU_MAX_WIP") == "${{ vars.BUREAU_MAX_WIP }}", (
+                        f"{name}: jobs.{job_id} promotes without the caller's BUREAU_MAX_WIP"
+                    )
+                    assert env.get("MAX_WIP") == "${{ inputs.max_wip }}", name
         assert found >= 1, f"{name}: no promotion step found — the check went vacuous"

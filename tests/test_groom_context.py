@@ -120,8 +120,25 @@ def test_every_section_the_proposal_names_is_a_key_of_the_pack():
     for name in groom_context.SECTIONS:
         assert name in got, f"the pack has no {name!r} section"
     assert set(groom_context.summary(got)) == set(groom_context.SECTIONS) | {
-        "truncated", "unread"
+        "truncated", "unread", "cuts"
     }
+
+
+def test_the_summary_carries_the_kept_number_of_every_cut_section():
+    """The page can say "40 of 2,539" only if the saved summary holds both
+    numbers (DRE-6641). `cuts` is the pack's own record of each cut, and
+    `truncated` stays the sorted list of the same names."""
+    got = groom_context.pack(
+        epics=[epic(f"DRE-{n}") for n in range(24)],
+        merged_prs=[pr(n) for n in range(40)],
+        counts={"merged_prs": 2539}, now=NOW)
+    out = groom_context.summary(got)
+    assert out["cuts"] == got["truncated"] == {
+        "epics_in_progress": {"kept": 20, "of": 24},
+        "merged_prs": {"kept": 40, "of": 2539},
+    }
+    assert out["truncated"] == sorted(out["cuts"])
+    assert groom_context.summary(groom_context.pack(now=NOW))["cuts"] == {}
 
 
 # --------------------------------------------------------------------------

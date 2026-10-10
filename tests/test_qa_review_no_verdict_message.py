@@ -67,6 +67,9 @@ AUTH_DEATH = {
     "duration_ms": 634,
     "num_turns": 1,
     "total_cost_usd": 0,
+    # DRE-6701: the status a refused credential records, which is what
+    # death_cause.py reads `revoked` — the one wall that keeps this wording.
+    "api_error_status": 401,
     "result": "API Error: 401 authentication_error",
 }
 
@@ -154,6 +157,13 @@ def run_post(td: Path, gate2: dict, *, gate1: dict | None = None,
         "A2_OUTCOME": gate2.get("outcome", ""),
         "A2_TURNS": gate2.get("turns", ""),
         "A2_COST": gate2.get("cost", ""),
+        # DRE-6701: the wall death_cause.py read off a crashed attempt.
+        "A1_WALL": gate1.get("wall", ""),
+        "A2_WALL": gate2.get("wall", ""),
+        "A1_WALL_RESET": gate1.get("wall_reset", ""),
+        "A2_WALL_RESET": gate2.get("wall_reset", ""),
+        "A1_API_STATUS": gate1.get("api_status", ""),
+        "A2_API_STATUS": gate2.get("api_status", ""),
     })
     env.update(extra_env or {})
     proc = subprocess.run(["bash", str(script)], cwd=td, env=env,
@@ -336,7 +346,8 @@ class AHeldVerdictIsNotACrashTest(unittest.TestCase):
         self.assertIn("job-coverage", line)
 
     def test_a_genuine_crash_still_reads_as_a_crash(self):
-        crash = {"outcome": "crash"}
+        # DRE-6701: a crash death_cause.py reads as a refused credential.
+        crash = {"outcome": "crash", "wall": "revoked"}
         self.assertIn("crashed", no_verdict_cause.annotation(crash, crash))
 
     def test_turn_exhaustion_still_reads_as_turn_exhaustion(self):

@@ -533,13 +533,38 @@ jobs:
     secrets: inherit
 ```
 
-A stub that passes nothing inherits the default, which is correct on its own:
-the workflows' declared default is single-sourced from
-`reconcile.DEFAULT_MAX_WIP`, the value the script itself uses when `MAX_WIP`
-is unset or empty. `scripts/check_wip_cap.py` (a Pipeline Tests step) fails
-the build if any workflow re-hardcodes a cap, if a promotion path stops taking
-the input, if the declared default drifts from the script's, or if this repo's
-own stubs disagree with each other.
+A stub may also pass nothing at all, and that is how the console sets a
+project's cap with no code push (DRE-6631). `cap_and_source` in
+`scripts/reconcile.py` is the one place the number is resolved, for all three
+paths, from four sources in order:
+
+1. **The run's `max_wip` input**, when the stub passes a number.
+2. **The `max_wip:` line of the caller's own reconcile stub**, read off the
+   caller checkout, when the input is empty (DRE-3994). This is what makes a
+   plan or linear-sync stub that passes nothing agree with the sweep.
+3. **The caller's `BUREAU_MAX_WIP` Actions variable**, when neither names a
+   number. GitHub resolves it repo-level first, then org-level, so each
+   project has its own setting and each org a default. Each promotion step
+   carries `BUREAU_MAX_WIP: ${{ vars.BUREAU_MAX_WIP }}` beside its
+   `MAX_WIP: ${{ inputs.max_wip }}` — `vars` in a reusable is the caller's.
+4. **`reconcile.DEFAULT_MAX_WIP`**, the one built-in fallback. The reusables
+   declare no default for the input, so a silent stub renders it empty and
+   the sources above are actually read.
+
+The variable sits below the stub on purpose: setting it changes nothing while
+a project's stubs still pass a literal, and removing the literal from all
+three stubs hands the number to the variable. A non-empty value at any source
+that is not a whole number of 0 or more (`"lots"`, `"-1"`, `"12.0"`) is
+skipped to the next source with one `promotion: ignored <source> = <value>`
+line in the run log; an empty one is the normal "not set" and says nothing.
+The next line, `promotion: WIP cap N, read from <source>`, names which source
+won.
+
+`scripts/check_wip_cap.py` (a Pipeline Tests step) fails the build if any
+workflow re-hardcodes a cap, if a promotion path stops taking the input or
+declares a default for it, if a promotion step lacks
+`BUREAU_MAX_WIP: ${{ vars.BUREAU_MAX_WIP }}`, or if this repo's own stubs
+disagree with each other.
 
 ## The three runner lanes: short jobs, long jobs and builds (DRE-3887, DRE-4276, DRE-4606, DRE-4846)
 
@@ -1315,7 +1340,10 @@ naming the mirror that must follow; a test red on both is named `already red
 on stable` and refuses nothing; a check that could not run is
 `mirror-check-blocked` and proves nothing either way. `force` overrides both,
 as it overrides a red harness stamp, and the forced warning names the mirror
-result it overrode. Since DRE-6622 the check's test tools come from this
+result it overrode. Every receipt carries the result as one bounded line —
+both counts, a few examples, and the run's `mirror-result` artifact as where
+the full lists are (DRE-6683) — because an unbounded one, 1,238 tests long,
+once stopped `Say what happened` from starting. Since DRE-6622 the check's test tools come from this
 repository's `requirements-dev.txt`, installed beside agent-bureau's
 requirements (which declare no pytest), and both of its pytest runs carry
 `--no-cov`, because agent-bureau's coverage floor cannot be met by its mirror

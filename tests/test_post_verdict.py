@@ -36,7 +36,7 @@ import step_shell  # noqa: E402
 from test_verdict_evidence_scenario import APPROVE, _gate, _gh_stub  # noqa: E402
 
 #: The step's inputs on `main` before the move, every one of which the
-#: script still reads from its environment.
+#: script still reads from its environment, and the ones added since.
 ENV_KEYS = (
     "GH_TOKEN", "LINEAR_API_KEY", "PR", "CARD", "REPO", "REVIEWED_SHA",
     "CONTENT_ID", "REAL", "A1_OUTCOME", "A1_TURNS", "A1_COST", "A2_OUTCOME",
@@ -44,6 +44,9 @@ ENV_KEYS = (
     "A2_EVIDENCE", "BODY_READ_AT", "MODEL_ID", "MODEL_WHY", "STRATEGY",
     "OVERSIZE_MESSAGE", "REFUTED", "INSTALL_FAILED", "A1_ELAPSED",
     "A2_ELAPSED", "BACKOFF_OUTCOME",
+    # DRE-6701: the wall death_cause.py read off each crashed attempt.
+    "A1_WALL", "A2_WALL", "A1_WALL_RESET", "A2_WALL_RESET",
+    "A1_API_STATUS", "A2_API_STATUS",
 )
 
 #: The fixed paths the script reads and writes.

@@ -303,17 +303,35 @@ send-backs, then held for an operator (DRE-6488); a row waiting for an event
 is held until the operator records the event instead. Never reword a row to
 get it merged.
 
-**A criterion a later decision overtook is accepted by the operator, never by
-you (DRE-6244).** An accepted row is used only when a criterion has been
-overtaken by a later shipped decision, and the linked comment names that
-decision. The operator, never the builder and never the proof run, writes the
-decision comment and the row. You never write an accepted row on your own
-judgment, however plainly the design has moved on: record `Not observed.` or
-`Not met.` with what you saw, and let the gate hold. The operator's row reads
+**A row shown working but not as the card words it is accepted by the
+operator, never by you (DRE-6244, DRE-6773).** The CEO decided on 2026-10-10
+which unmet rows the operator may accept:
+
+- A row may be accepted by operator decision only where the mechanism was
+  actually observed working and just the card's wording, quoted text, timing,
+  count or method of observing differs. A criterion overtaken by a later
+  shipped decision is one case of this.
+- The acceptance names what was seen, quoted from the record, says what
+  differs from the card's words, and links the written decision. The operator
+  writes the decision and the row — never the builder and never the proof
+  run.
+- A row where the thing itself was not seen is never accepted: it stays unmet
+  and waits for a new run or a reworded card. That covers a value that is only
+  a default, a reader with no access, an event that has not happened, a
+  missing positive control, and indirect evidence. A row that is part shown
+  and part not seen is not acceptable either.
+
+You never write an accepted row on your own judgment, however plainly the
+design has moved on or the mechanism plainly worked: record `Not observed.` or
+`Not met.` with what you saw, and let the gate hold. Where you saw the
+mechanism working but not as the card words it, write what you saw after the
+`Not met.` in that row's Result, exactly — it is what the operator's acceptance
+will quote. The operator's row reads
 
     ACCEPTED by operator decision — <reason> (<link>)
 
-where the link, in the same cell, is a Linear comment
+where the reason is what was seen and what differs, and the link, in the same
+cell, is a Linear comment
 (`linear.app/<workspace>/issue/DRE-<n>/<slug>#comment-<id>`) or a GitHub pull
 request comment (`github.com/<owner>/<repo>/pull/<n>#issuecomment-<id>`). The
 row without the link is held as not met. A record whose judged rows are all

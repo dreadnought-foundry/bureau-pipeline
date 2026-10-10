@@ -35,11 +35,17 @@ WHAT THIS PINS, one section per acceptance criterion of the card:
   6. A proof record the critic sent back at its head is the proof run's
      (DRE-6406): the sweep nudges nothing, holds nothing and parks nothing on
      it, in the loop and in the park itself.
+  7. So is one whose critic `APPROVE` is bound to the head and which the
+     gate declines at that head as not proven (DRE-6650): DRE-6042 and
+     DRE-6364, replayed from tests/fixtures/green-light-2026-10-10/ as the
+     sweep parked them, write nothing; the same records without the
+     decline are still nudged and capped.
 
 Run: cd bureau-pipeline && python3 -m pytest tests/test_review_cap_green_light.py -v
 """
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import subprocess
@@ -603,6 +609,198 @@ class TestTheParkItselfStandsDown:
         assert posted == [] and board.pr_notes == []
         assert board.state == reconcile.REVIEW_LANE
         assert len(_owned(capsys.readouterr().out)) == 1
+
+
+# --------------------------------------------------------------------------- #
+# 7. an approved record the gate declined as not proven is the proof run's     #
+#    (DRE-6650) — DRE-6042 and DRE-6364 replayed as the sweep parked them      #
+# --------------------------------------------------------------------------- #
+
+FIXTURES = ROOT / "tests" / "fixtures" / "green-light-2026-10-10"
+#: What the stand-down line names for the gate's trigger.
+NOT_PROVEN_TRIGGER = "the gate's not-proven decline"
+
+
+def _fixture(card: str) -> dict:
+    return json.loads((FIXTURES / f"{card.lower()}.json").read_text(encoding="utf-8"))
+
+
+def _without_the_decline_at_the_head(pr: dict) -> dict:
+    """The fixture's pull request with the gate's decline note at its head
+    removed; the notes on earlier heads stay."""
+    note = f"⏸️ {reconcile.GATE_HOLD_NOTE_MARKER} @{pr['headRefOid']} "
+    return {**pr, "comments": [c for c in pr["comments"]
+                               if not c["body"].startswith(note)]}
+
+
+def _replay(monkeypatch, doc: dict, *, pr: dict | None = None, carried=False,
+            receipts=True):
+    """The review-lane branch of main() over `doc` as it stood at `as_of`:
+    the card's own thread, its labels, In Review, and its record pull request.
+    `carried` stubs verdict_bound True — the carry itself is DRE-2340's.
+    `receipts=False` drops the card's gate-nudge receipts, so the budget is
+    unspent."""
+    import test_review_lane_nudge_cap as nudge_cap
+
+    monkeypatch.setattr(nudge_cap, "IDENT", doc["card"])
+    monkeypatch.setattr(reconcile, "REPO_SLUG", doc["pr"]["url"].split("/")[4])
+    board = _Board()
+    board.labels = list(doc["labels"])
+    spend = f"🧹 Reconcile: {reconcile.GATE_NUDGE_KEY} @"
+    board.comments = [c["body"] for c in doc["comments"]
+                      if receipts or not c["body"].startswith(spend)]
+    pr = json.loads(json.dumps(pr or doc["pr"]))
+    applied = MagicMock(wraps=hold.apply)
+    bound = (patch.object(reconcile, "verdict_bound", return_value=True)
+             if carried else contextlib.nullcontext())
+    with bound, patch.object(hold, "apply", applied):
+        tag, _, _ = reconcile.review_standing(pr)
+        spent = reconcile.review_nudges_spent(board.card(), tag, pr["headRefOid"])
+        nudge, cmd_state, posted = board.sweep(pr)
+    return board, applied, nudge, posted, (tag, spent)
+
+
+def _record_owned(out: str, doc: dict) -> list:
+    return [line for line in out.splitlines()
+            if OWNER in line and doc["card"] in line
+            and f"#{doc['pr']['number']}" in line and NOT_PROVEN_TRIGGER in line]
+
+
+class TestTheFixturesAreTheContractsShape:
+    @pytest.mark.parametrize("card", ["DRE-6042", "DRE-6364"])
+    def test_the_keys_the_six_card_replay_reads(self, card):
+        doc = _fixture(card)
+        assert doc["card"] == card
+        assert doc["arrival"] == "review-cap" and doc["for"] == "proof-run"
+        assert doc["as_of"].endswith("Z") and doc["lane"] == reconcile.REVIEW_LANE
+        assert all(set(row) == {"body", "authored_by_pipeline", "created_at"}
+                   for row in doc["comments"])
+        pr = doc["pr"]
+        assert {"number", "url", "headRefName", "headRefOid", "createdAt",
+                "isDraft", "state", "comments", "statusCheckRollup",
+                "files"} <= set(pr)
+        assert pr["state"] == "OPEN" and pr["isDraft"] is False
+        assert {"headRefOid", "state", "isDraft", "statusCheckRollup"} <= set(doc["rebuilt"])
+        assert set(doc["rebuilt"]) <= set(pr)
+
+
+class TestAnApprovedRecordTheGateDeclinedIsTheProofRuns:
+    """At the spent cap, both cards parked on 2026-10-10. Neither question
+    was the CEO's: the gate's not-proven decline at the head is the proof
+    run's re-run branch's trigger (DRE-6488)."""
+
+    @pytest.mark.parametrize("card, carried", [("DRE-6042", False),
+                                               ("DRE-6364", True)])
+    def test_the_sweep_holds_nothing_asks_nothing_and_parks_nothing(
+            self, monkeypatch, capsys, card, carried):
+        doc = _fixture(card)
+        board, applied, nudge, posted, (tag, spent) = _replay(
+            monkeypatch, doc, carried=carried)
+        assert tag == reconcile.GATE_NUDGE_KEY
+        assert spent >= reconcile.REVIEW_NUDGE_CAP
+        applied.assert_not_called()
+        nudge.assert_not_called()
+        assert [b for b in posted if reconcile.REVIEW_NUDGE_CAP_KEY in b] == []
+        assert posted == [] and board.pr_notes == []
+        assert board.state == reconcile.REVIEW_LANE
+        assert reconcile.HOLD_LABEL not in board.labels
+        assert len(_record_owned(capsys.readouterr().out, doc)) == 1
+
+    def test_the_approve_on_dre_6364_is_carried_not_written_at_the_head(self):
+        # The difference between the two replays: the verdict line names an
+        # earlier head, and the receipt string says so — never tested by prefix.
+        pr = _fixture("DRE-6364")["pr"]
+        critic = reconcile.standing_verdict(
+            reconcile.critic_comments(pr), reconcile.merge_gate.CRITIC_MARKER,
+            pr["headRefOid"])
+        assert critic == "APPROVE from earlier head 2ae86ef"
+
+    @pytest.mark.parametrize("card, carried", [("DRE-6042", False),
+                                               ("DRE-6364", True)])
+    def test_with_the_decline_removed_the_cap_still_parks(
+            self, monkeypatch, capsys, card, carried):
+        doc = _fixture(card)
+        board, applied, _, posted, _ = _replay(
+            monkeypatch, doc, pr=_without_the_decline_at_the_head(doc["pr"]),
+            carried=carried)
+        head = doc["pr"]["headRefOid"]
+        applied.assert_called_once_with(doc["card"], "review-cap-spent", head,
+                                        "reconcile.py")
+        assert len([b for b in posted if b.startswith(
+            f"🚨 {reconcile.REVIEW_NUDGE_CAP_KEY} PR #{doc['pr']['number']} @{head}:")]) == 1
+        assert board.state == "Green Light"
+        assert _record_owned(capsys.readouterr().out, doc) == []
+
+    @pytest.mark.parametrize("card, carried", [("DRE-6042", False),
+                                               ("DRE-6364", True)])
+    def test_with_the_decline_removed_the_gate_is_still_nudged(
+            self, monkeypatch, card, carried):
+        doc = _fixture(card)
+        _, applied, nudge, posted, _ = _replay(
+            monkeypatch, doc, pr=_without_the_decline_at_the_head(doc["pr"]),
+            carried=carried, receipts=False)
+        nudge.assert_called_once_with(reconcile.gate_workflow(), doc["pr"]["number"])
+        assert f"{reconcile.GATE_NUDGE_KEY} @{doc['pr']['headRefOid']} (1/3)" in posted[0]
+        applied.assert_not_called()
+
+    def test_a_decline_for_another_reason_at_the_head_still_parks(self, monkeypatch):
+        doc = _fixture("DRE-6042")
+        pr = _without_the_decline_at_the_head(doc["pr"])
+        pr["comments"].append({**doc["pr"]["comments"][-1], "body": (
+            f"⏸️ {reconcile.GATE_HOLD_NOTE_MARKER} @{pr['headRefOid']} — required "
+            "check tests concluded failure")})
+        board, applied, _, _, _ = _replay(monkeypatch, doc, pr=pr)
+        applied.assert_called_once()
+        assert board.state == "Green Light"
+
+    def test_a_decline_by_another_login_still_parks(self, monkeypatch):
+        doc = _fixture("DRE-6042")
+        pr = json.loads(json.dumps(doc["pr"]))
+        pr["comments"][-1]["author"] = {"login": "someone"}
+        board, applied, _, _, _ = _replay(monkeypatch, doc, pr=pr)
+        applied.assert_called_once()
+        assert board.state == "Green Light"
+
+    def test_an_approve_not_bound_to_the_head_is_the_reviews_and_parks(
+            self, monkeypatch, capsys):
+        # DRE-6364 with no carry: the APPROVE names an earlier head, so the
+        # review budget is spent and the decline at the head does not stand
+        # the sweep down.
+        doc = _fixture("DRE-6364")
+        review = f"🧹 Reconcile: {reconcile.REVIEW_NUDGE_KEY} @{doc['pr']['headRefOid']}"
+        doc["comments"] += [{"body": f"{review} ({n}/3) — re-triggered.",
+                             "authored_by_pipeline": True,
+                             "created_at": doc["as_of"]} for n in (1, 2, 3)]
+        board, applied, _, _, (tag, _) = _replay(monkeypatch, doc)
+        assert tag == reconcile.REVIEW_NUDGE_KEY
+        applied.assert_called_once()
+        assert board.state == "Green Light"
+        assert _record_owned(capsys.readouterr().out, doc) == []
+
+    def test_the_park_itself_stands_down_on_the_declined_record(self, capsys):
+        doc = _fixture("DRE-6042")
+        pr = doc["pr"]
+        card = {**_card(), "identifier": doc["card"]}
+        log = _Writes().run(card, pr, tag=reconcile.GATE_NUDGE_KEY,
+                            critic="APPROVE", verifier="none")
+        assert log == []
+        assert len(_record_owned(capsys.readouterr().out, doc)) == 1
+
+    def test_the_sent_back_line_names_the_critics_trigger(self, capsys):
+        pr = {**_pr_with(), "headRefName": RECORD_BRANCH}
+        _Writes().run(_card(), pr, critic="REQUEST_CHANGES")
+        line = _owned(capsys.readouterr().out)[0]
+        assert "the critic's send-back" in line and NOT_PROVEN_TRIGGER in line
+
+
+class TestTheSweepReadsTheDispatchersReader:
+    def test_one_reader_of_the_note_and_the_old_name_is_gone(self):
+        import proof_dispatch
+
+        source = (ROOT / "scripts" / "reconcile.py").read_text(encoding="utf-8")
+        assert "proof_dispatch.not_proven_at(" in source
+        assert "proof_record_sent_back" not in source
+        assert not hasattr(proof_dispatch, "_not_proven_at")
 
 
 if __name__ == "__main__":

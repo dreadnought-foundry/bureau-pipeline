@@ -1,0 +1,470 @@
+{
+  "generated_from": "config/models.yaml",
+  "models": [
+    {
+      "id": "claude-opus-5-5",
+      "label": "Opus 5.5",
+      "input": 4.0,
+      "output": 20.0,
+      "excluded": null
+    },
+    {
+      "id": "claude-opus-5",
+      "label": "Opus 5",
+      "input": 5.0,
+      "output": 25.0,
+      "excluded": null
+    },
+    {
+      "id": "claude-sonnet-5-5",
+      "label": "Sonnet 5.5",
+      "input": 2.0,
+      "output": 10.0,
+      "excluded": null
+    },
+    {
+      "id": "claude-sonnet-5",
+      "label": "Sonnet 5",
+      "input": 2.0,
+      "output": 10.0,
+      "excluded": null
+    },
+    {
+      "id": "claude-haiku-5-5",
+      "label": "Haiku 5.5",
+      "input": 0.1,
+      "output": 0.5,
+      "excluded": "on no ladder by the CEO's signed answer of 2026-10-08 (DRE-6288): added to the record, used by no agent or reviewer until he says otherwise"
+    },
+    {
+      "id": "claude-sonnet-4-6",
+      "label": "Sonnet 4.6",
+      "input": 3.0,
+      "output": 15.0,
+      "excluded": null
+    },
+    {
+      "id": "claude-fable-5-1",
+      "label": "Fable 5.1",
+      "input": 10.0,
+      "output": 50.0,
+      "excluded": null
+    }
+  ],
+  "groups": [
+    {
+      "key": "workhorse",
+      "label": "Builders",
+      "purpose": "Do the work on every card.",
+      "default_model": "claude-opus-5-5",
+      "fallbacks": [
+        "claude-opus-5",
+        "claude-sonnet-5-5",
+        "claude-sonnet-5"
+      ],
+      "choices": [
+        {
+          "model": "claude-opus-5-5",
+          "allowed": true,
+          "reason": null
+        },
+        {
+          "model": "claude-opus-5",
+          "allowed": true,
+          "reason": null
+        },
+        {
+          "model": "claude-sonnet-5-5",
+          "allowed": true,
+          "reason": null
+        },
+        {
+          "model": "claude-sonnet-5",
+          "allowed": true,
+          "reason": null
+        },
+        {
+          "model": "claude-haiku-5-5",
+          "allowed": false,
+          "reason": "claude-haiku-5-5 is not on the workhorse ladder (it is on no ladder) — an exception reorders a kind's own ladder and never adds a model to it; a model joins a ladder only through a reviewed pull request to config/models.yaml"
+        },
+        {
+          "model": "claude-sonnet-4-6",
+          "allowed": false,
+          "reason": "claude-sonnet-4-6 is not on the workhorse ladder (it sits on the judgement ladder) — an exception reorders a kind's own ladder and never adds a model to it; a model joins a ladder only through a reviewed pull request to config/models.yaml"
+        },
+        {
+          "model": "claude-fable-5-1",
+          "allowed": false,
+          "reason": "claude-fable-5-1 is not on the workhorse ladder (it sits on the judgement ladder) — an exception reorders a kind's own ladder and never adds a model to it; a model joins a ladder only through a reviewed pull request to config/models.yaml"
+        }
+      ]
+    },
+    {
+      "key": "advisory",
+      "label": "Reviewers",
+      "purpose": "Judge a pull request, a plan or a failed run.",
+      "default_model": "claude-sonnet-5-5",
+      "fallbacks": [
+        "claude-sonnet-5",
+        "claude-opus-5-5"
+      ],
+      "choices": [
+        {
+          "model": "claude-opus-5-5",
+          "allowed": false,
+          "reason": "breaks rule 8 on the walk this exception makes (claude-opus-5-5, claude-sonnet-5-5, claude-sonnet-5) — ladders.advisory: claude-opus-5-5 tops the advisory ladder and also sits on a build ladder — a BARE overlap is refused. Declare it in `review_separation.rules` (which model the reviewers use when a build ran on it) or take it off one of the two ladders; breaks rule 4 on the walk this exception makes (claude-opus-5-5, claude-sonnet-5-5, claude-sonnet-5) — ladders.advisory: claude-opus-5-5 tops the advisory ladder and must not appear on a build ladder — availability is not permission (2026-08-09)"
+        },
+        {
+          "model": "claude-opus-5",
+          "allowed": false,
+          "reason": "claude-opus-5 is not on the advisory ladder (it sits on the workhorse ladder) — an exception reorders a kind's own ladder and never adds a model to it; a model joins a ladder only through a reviewed pull request to config/models.yaml"
+        },
+        {
+          "model": "claude-sonnet-5-5",
+          "allowed": true,
+          "reason": null
+        },
+        {
+          "model": "claude-sonnet-5",
+          "allowed": true,
+          "reason": null
+        },
+        {
+          "model": "claude-haiku-5-5",
+          "allowed": false,
+          "reason": "claude-haiku-5-5 is not on the advisory ladder (it is on no ladder) — an exception reorders a kind's own ladder and never adds a model to it; a model joins a ladder only through a reviewed pull request to config/models.yaml"
+        },
+        {
+          "model": "claude-sonnet-4-6",
+          "allowed": false,
+          "reason": "claude-sonnet-4-6 is not on the advisory ladder (it sits on the judgement ladder) — an exception reorders a kind's own ladder and never adds a model to it; a model joins a ladder only through a reviewed pull request to config/models.yaml"
+        },
+        {
+          "model": "claude-fable-5-1",
+          "allowed": false,
+          "reason": "claude-fable-5-1 is not on the advisory ladder (it sits on the judgement ladder) — an exception reorders a kind's own ladder and never adds a model to it; a model joins a ladder only through a reviewed pull request to config/models.yaml"
+        }
+      ]
+    },
+    {
+      "key": "judgement",
+      "label": "Planners",
+      "purpose": "Turn an epic into the cards the fleet builds.",
+      "default_model": "claude-fable-5-1",
+      "fallbacks": [
+        "claude-opus-5-5",
+        "claude-sonnet-4-6"
+      ],
+      "choices": [
+        {
+          "model": "claude-opus-5-5",
+          "allowed": false,
+          "reason": "breaks rule 4 on the walk this exception makes (claude-opus-5-5, claude-fable-5-1, claude-sonnet-4-6) — ladders.judgement: claude-opus-5-5 tops the judgement ladder and must not appear on a build ladder — availability is not permission (2026-08-09); breaks rule 4b on the walk this exception makes (claude-opus-5-5, claude-fable-5-1, claude-sonnet-4-6) — ladders.judgement: claude-fable-5-1 sits BELOW the claude-opus-5-5 rung the judgement ladder degrades onto and is DEARER ($10.00/$50.00 against $4.00/$20.00 per MTok) — a stronger model may not hide beneath the fallback"
+        },
+        {
+          "model": "claude-opus-5",
+          "allowed": false,
+          "reason": "claude-opus-5 is not on the judgement ladder (it sits on the workhorse ladder) — an exception reorders a kind's own ladder and never adds a model to it; a model joins a ladder only through a reviewed pull request to config/models.yaml"
+        },
+        {
+          "model": "claude-sonnet-5-5",
+          "allowed": false,
+          "reason": "claude-sonnet-5-5 is not on the judgement ladder (it sits on the workhorse and advisory ladders) — an exception reorders a kind's own ladder and never adds a model to it; a model joins a ladder only through a reviewed pull request to config/models.yaml"
+        },
+        {
+          "model": "claude-sonnet-5",
+          "allowed": false,
+          "reason": "claude-sonnet-5 is not on the judgement ladder (it sits on the workhorse and advisory ladders) — an exception reorders a kind's own ladder and never adds a model to it; a model joins a ladder only through a reviewed pull request to config/models.yaml"
+        },
+        {
+          "model": "claude-haiku-5-5",
+          "allowed": false,
+          "reason": "claude-haiku-5-5 is not on the judgement ladder (it is on no ladder) — an exception reorders a kind's own ladder and never adds a model to it; a model joins a ladder only through a reviewed pull request to config/models.yaml"
+        },
+        {
+          "model": "claude-sonnet-4-6",
+          "allowed": true,
+          "reason": null
+        },
+        {
+          "model": "claude-fable-5-1",
+          "allowed": true,
+          "reason": null
+        }
+      ]
+    }
+  ],
+  "agents": [
+    {
+      "name": "engineer",
+      "label": "Engineer",
+      "about": "Builds a card and opens the PR",
+      "group": "workhorse",
+      "moves": [
+        {
+          "group": "advisory",
+          "allowed": true,
+          "reason": null
+        },
+        {
+          "group": "judgement",
+          "allowed": false,
+          "reason": "agents.engineer: 'judgement' is the planner's kind — it admits a role that runs once per epic, and engineer runs per card; volume on the strongest model is the 2026-08-09 incident. A build or fix role is 'workhorse', a reviewer is 'advisory'"
+        }
+      ]
+    },
+    {
+      "name": "frontend",
+      "label": "Frontend",
+      "about": "Builds the screens a card asks for and opens the PR",
+      "group": "workhorse",
+      "moves": [
+        {
+          "group": "advisory",
+          "allowed": true,
+          "reason": null
+        },
+        {
+          "group": "judgement",
+          "allowed": false,
+          "reason": "agents.frontend: 'judgement' is the planner's kind — it admits a role that runs once per epic, and frontend runs per card; volume on the strongest model is the 2026-08-09 incident. A build or fix role is 'workhorse', a reviewer is 'advisory'"
+        }
+      ]
+    },
+    {
+      "name": "database-architect",
+      "label": "Database Architect",
+      "about": "Designs the schema and writes the migrations a card needs",
+      "group": "workhorse",
+      "moves": [
+        {
+          "group": "advisory",
+          "allowed": true,
+          "reason": null
+        },
+        {
+          "group": "judgement",
+          "allowed": false,
+          "reason": "agents.database-architect: 'judgement' is the planner's kind — it admits a role that runs once per epic, and database-architect runs per card; volume on the strongest model is the 2026-08-09 incident. A build or fix role is 'workhorse', a reviewer is 'advisory'"
+        }
+      ]
+    },
+    {
+      "name": "devops",
+      "label": "Devops",
+      "about": "Writes the infrastructure, CI and deploy code a card needs",
+      "group": "workhorse",
+      "moves": [
+        {
+          "group": "advisory",
+          "allowed": true,
+          "reason": null
+        },
+        {
+          "group": "judgement",
+          "allowed": false,
+          "reason": "agents.devops: 'judgement' is the planner's kind — it admits a role that runs once per epic, and devops runs per card; volume on the strongest model is the 2026-08-09 incident. A build or fix role is 'workhorse', a reviewer is 'advisory'"
+        }
+      ]
+    },
+    {
+      "name": "fixer",
+      "label": "Fixer",
+      "about": "Answers a review's requested changes on an open PR",
+      "group": "workhorse",
+      "moves": [
+        {
+          "group": "advisory",
+          "allowed": true,
+          "reason": null
+        },
+        {
+          "group": "judgement",
+          "allowed": false,
+          "reason": "agents.fixer: 'judgement' is the planner's kind — it admits a role that runs once per epic, and fixer runs per card; volume on the strongest model is the 2026-08-09 incident. A build or fix role is 'workhorse', a reviewer is 'advisory'"
+        }
+      ]
+    },
+    {
+      "name": "repairer",
+      "label": "Repairer",
+      "about": "Repairs the main branch when its tests go red",
+      "group": "workhorse",
+      "moves": [
+        {
+          "group": "advisory",
+          "allowed": true,
+          "reason": null
+        },
+        {
+          "group": "judgement",
+          "allowed": false,
+          "reason": "agents.repairer: 'judgement' is the planner's kind — it admits a role that runs once per epic, and repairer runs per card; volume on the strongest model is the 2026-08-09 incident. A build or fix role is 'workhorse', a reviewer is 'advisory'"
+        }
+      ]
+    },
+    {
+      "name": "proof",
+      "label": "Proof",
+      "about": "Runs a proof card's checks and records what it saw",
+      "group": "workhorse",
+      "moves": [
+        {
+          "group": "advisory",
+          "allowed": true,
+          "reason": null
+        },
+        {
+          "group": "judgement",
+          "allowed": false,
+          "reason": "agents.proof: 'judgement' is the planner's kind — it admits a role that runs once per epic, and proof runs per card; volume on the strongest model is the 2026-08-09 incident. A build or fix role is 'workhorse', a reviewer is 'advisory'"
+        }
+      ]
+    },
+    {
+      "name": "planner",
+      "label": "Planner",
+      "about": "Turns an epic into the cards the fleet builds",
+      "group": "judgement",
+      "moves": [
+        {
+          "group": "workhorse",
+          "allowed": true,
+          "reason": null
+        },
+        {
+          "group": "advisory",
+          "allowed": true,
+          "reason": null
+        }
+      ]
+    },
+    {
+      "name": "critic",
+      "label": "Critic",
+      "about": "Reviews every pull request before it merges",
+      "group": "advisory",
+      "moves": [
+        {
+          "group": "workhorse",
+          "allowed": false,
+          "reason": "agents.critic: must be 'advisory' (it gates unattended merges), got 'workhorse'; review_separation.roles: 'critic' is not an advisory role — the separation binds the roles that REVIEW a pull request, and binding a build role would be a spend change wearing a safety rule"
+        },
+        {
+          "group": "judgement",
+          "allowed": false,
+          "reason": "agents.critic: must be 'advisory' (it gates unattended merges), got 'judgement'; agents.critic: 'judgement' is the planner's kind — it admits a role that runs once per epic, and critic runs per card; volume on the strongest model is the 2026-08-09 incident. A build or fix role is 'workhorse', a reviewer is 'advisory'; review_separation.roles: 'critic' is not an advisory role — the separation binds the roles that REVIEW a pull request, and binding a build role would be a spend change wearing a safety rule"
+        }
+      ]
+    },
+    {
+      "name": "verifier",
+      "label": "Verifier",
+      "about": "Tries a UI or multi-system change the way a person would",
+      "group": "advisory",
+      "moves": [
+        {
+          "group": "workhorse",
+          "allowed": false,
+          "reason": "agents.verifier: must be 'advisory' (it gates unattended merges), got 'workhorse'; review_separation.roles: 'verifier' is not an advisory role — the separation binds the roles that REVIEW a pull request, and binding a build role would be a spend change wearing a safety rule"
+        },
+        {
+          "group": "judgement",
+          "allowed": false,
+          "reason": "agents.verifier: must be 'advisory' (it gates unattended merges), got 'judgement'; agents.verifier: 'judgement' is the planner's kind — it admits a role that runs once per epic, and verifier runs per card; volume on the strongest model is the 2026-08-09 incident. A build or fix role is 'workhorse', a reviewer is 'advisory'; review_separation.roles: 'verifier' is not an advisory role — the separation binds the roles that REVIEW a pull request, and binding a build role would be a spend change wearing a safety rule"
+        }
+      ]
+    },
+    {
+      "name": "medic",
+      "label": "Medic",
+      "about": "Diagnoses a failed run and says what went wrong",
+      "group": "advisory",
+      "moves": [
+        {
+          "group": "workhorse",
+          "allowed": true,
+          "reason": null
+        },
+        {
+          "group": "judgement",
+          "allowed": false,
+          "reason": "agents.medic: 'judgement' is the planner's kind — it admits a role that runs once per epic, and medic runs per card; volume on the strongest model is the 2026-08-09 incident. A build or fix role is 'workhorse', a reviewer is 'advisory'"
+        }
+      ]
+    },
+    {
+      "name": "plan-critic-pre",
+      "label": "Plan Critic Pre",
+      "about": "Checks a plan's cards before they reach the CEO",
+      "group": "advisory",
+      "moves": [
+        {
+          "group": "workhorse",
+          "allowed": true,
+          "reason": null
+        },
+        {
+          "group": "judgement",
+          "allowed": false,
+          "reason": "agents.plan-critic-pre: 'judgement' is the planner's kind — it admits a role that runs once per epic, and plan-critic-pre runs per card; volume on the strongest model is the 2026-08-09 incident. A build or fix role is 'workhorse', a reviewer is 'advisory'"
+        }
+      ]
+    },
+    {
+      "name": "plan-critic-post",
+      "label": "Plan Critic Post",
+      "about": "Reads a passed plan as the spec agents will build from",
+      "group": "advisory",
+      "moves": [
+        {
+          "group": "workhorse",
+          "allowed": true,
+          "reason": null
+        },
+        {
+          "group": "judgement",
+          "allowed": false,
+          "reason": "agents.plan-critic-post: 'judgement' is the planner's kind — it admits a role that runs once per epic, and plan-critic-post runs per card; volume on the strongest model is the 2026-08-09 incident. A build or fix role is 'workhorse', a reviewer is 'advisory'"
+        }
+      ]
+    },
+    {
+      "name": "designer",
+      "label": "Designer",
+      "about": "Designs screens and systems",
+      "group": null,
+      "moves": []
+    },
+    {
+      "name": "ux-ui-engineer",
+      "label": "Ux Ui Engineer",
+      "about": "Turns a design into working screens",
+      "group": null,
+      "moves": []
+    },
+    {
+      "name": "fullstack-engineer",
+      "label": "Fullstack Engineer",
+      "about": "Builds across the front and back end",
+      "group": null,
+      "moves": []
+    },
+    {
+      "name": "mobile",
+      "label": "Mobile",
+      "about": "Builds the mobile apps",
+      "group": null,
+      "moves": []
+    },
+    {
+      "name": "product-lead",
+      "label": "Product Lead",
+      "about": "Decides what to build next and writes the cards",
+      "group": null,
+      "moves": []
+    }
+  ],
+  "projects": []
+}

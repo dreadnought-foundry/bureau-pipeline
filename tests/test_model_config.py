@@ -93,6 +93,9 @@ _TREE_FILES = (
     # so the throwaway tree carries the map to validate one against.
     "config/repo-map.json",
     "agents.yaml",
+    # The console's page reads this generated file (DRE-6635), so the no-op,
+    # `--check` and writer tests below cover it beside the two mirrors.
+    "config/model-choices.json",
 )
 
 
@@ -425,7 +428,11 @@ class GeneratedMirrorTest(unittest.TestCase):
             tree = _copy_tree(Path(td))
             before = {
                 rel: (tree / rel).read_bytes()
-                for rel in ("scripts/model_fallback.py", "agents.yaml")
+                for rel in (
+                    "scripts/model_fallback.py",
+                    "agents.yaml",
+                    "config/model-choices.json",
+                )
             }
             proc = _run_sync(tree)
             self.assertEqual(
@@ -437,17 +444,56 @@ class GeneratedMirrorTest(unittest.TestCase):
                     f"regenerating an in-sync {rel} must be a no-op diff",
                 )
 
-    def test_the_plain_run_writes_only_the_two_mirrors(self):
-        # DRE-6633 adds no target: the daily adoption workflow stages exactly
-        # these two files, and a third would be left out of its commit.
+    def test_the_plain_run_writes_only_the_three_targets(self):
+        # DRE-6635 adds the console's file as the third target, and the daily
+        # adoption workflow stages it beside the two mirrors — a fourth would
+        # be left out of its commit.
         with tempfile.TemporaryDirectory() as td:
             tree = _copy_tree(Path(td))
             proc = _run_sync(tree)
             self.assertEqual(proc.returncode, 0, proc.stderr)
             self.assertEqual(
                 sorted(proc.stdout.split("\n")[:-1]),
-                ["ok:    agents.yaml", "ok:    scripts/model_fallback.py"],
+                [
+                    "ok:    agents.yaml",
+                    "ok:    config/model-choices.json",
+                    "ok:    scripts/model_fallback.py",
+                ],
             )
+
+    def test_check_fails_on_a_missing_choices_file_and_names_the_repair(self):
+        with tempfile.TemporaryDirectory() as td:
+            tree = _copy_tree(Path(td))
+            (tree / "config" / "model-choices.json").unlink()
+            proc = _run_sync(tree, "--check")
+            self.assertEqual(proc.returncode, 1, proc.stdout + proc.stderr)
+            self.assertIn("STALE: config/model-choices.json", proc.stderr)
+            self.assertIn(REPAIR_COMMAND, proc.stderr)
+            self.assertFalse((tree / "config" / "model-choices.json").exists())
+            write = _run_sync(tree)
+            self.assertEqual(write.returncode, 0, write.stderr)
+            self.assertIn("wrote: config/model-choices.json", write.stdout)
+            self.assertEqual(
+                (tree / "config" / "model-choices.json").read_bytes(),
+                (ROOT / "config" / "model-choices.json").read_bytes(),
+            )
+
+    def test_check_fails_when_only_the_choices_file_is_stale(self):
+        # An excluded model's reason reaches no mirror but the console's file,
+        # so this edit leaves exactly one target stale.
+        with tempfile.TemporaryDirectory() as td:
+            tree = _copy_tree(Path(td))
+            path = tree / "config" / "models.yaml"
+            text = path.read_text()
+            self.assertIn("used by no agent or reviewer", text)
+            path.write_text(text.replace(
+                "used by no agent or reviewer", "used by nobody"))
+            proc = _run_sync(tree, "--check")
+            self.assertEqual(proc.returncode, 1, proc.stdout + proc.stderr)
+            self.assertIn("STALE: config/model-choices.json", proc.stderr)
+            self.assertIn(REPAIR_COMMAND, proc.stderr)
+            self.assertIn("ok:    scripts/model_fallback.py", proc.stdout)
+            self.assertIn("ok:    agents.yaml", proc.stdout)
 
     def test_a_project_exception_validates_and_mirrors_in_the_tree(self):
         # The tree carries config/repo-map.json, so a real slug validates and

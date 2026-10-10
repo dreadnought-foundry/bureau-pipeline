@@ -672,6 +672,7 @@ jobs:
         run: |
           python3 .bureau-pipeline/scripts/planning_classify.py classify \
             "${{ github.event.client_payload.identifier }}" \
+            --repo "$GITHUB_REPOSITORY" \
             --github-output "$GITHUB_OUTPUT" \
             --escalation-file "${{ runner.temp }}/classifier-escalation.txt" \
             --transport-file "${{ runner.temp }}/classifier-transport.txt"
@@ -852,6 +853,7 @@ jobs:
           FALLBACK_FILE="$RUNNER_TEMP/model-fallback.txt"
           EFFORT_FILE="$RUNNER_TEMP/model-effort.txt"
           MODEL=$(python3 .bureau-pipeline/scripts/model_fallback.py select planner \
+            --repo "$GITHUB_REPOSITORY" \
             --out-of-capacity "${FELL_FROM:-}" \
             --explain-file "$WHY_FILE" --fallback-file "$FALLBACK_FILE" \
             --effort-file "$EFFORT_FILE")
@@ -867,6 +869,7 @@ jobs:
           case "$DIED" in ''|*[!0-9]*) DIED=0 ;; esac
           if [ "$DIED" -gt 0 ]; then
             MODEL=$(python3 .bureau-pipeline/scripts/model_fallback.py select planner \
+              --repo "$GITHUB_REPOSITORY" \
               --out-of-capacity "${FELL_FROM:-}" --avoid "$MODEL" \
               --explain-file "$WHY_FILE" --fallback-file "$FALLBACK_FILE" \
               --effort-file "$EFFORT_FILE")
@@ -1294,6 +1297,7 @@ jobs:
           WHY_FILE="$RUNNER_TEMP/one-off-critic-why.txt"
           EFFORT_FILE="$RUNNER_TEMP/model-effort.txt"
           MODEL=$(python3 .bureau-pipeline/scripts/model_fallback.py select plan-critic-pre \
+            --repo "$GITHUB_REPOSITORY" \
             --explain-file "$WHY_FILE" --effort-file "$EFFORT_FILE")
           # DRE-4836: the CHOSEN model's declared effort level, empty when it
           # declares none — see agent-task.yml's Select model step.
@@ -2237,6 +2241,7 @@ jobs:
         run: |
           [ -n "$EXEC_FILE" ] || EXEC_FILE="$RUNNER_TEMP/claude-execution-output.json"
           python3 .bureau-pipeline/scripts/planner_capacity.py decide "$EXEC_FILE" \
+            --repo "$GITHUB_REPOSITORY" \
             --model "$MODEL" --github-output "$GITHUB_OUTPUT"
 
       - name: Re-mint bot token — Plan epic on the next rung
@@ -2755,6 +2760,7 @@ jobs:
           WHY_FILE="$RUNNER_TEMP/pre-critic-why.txt"
           EFFORT_FILE="$RUNNER_TEMP/model-effort.txt"
           MODEL=$(python3 .bureau-pipeline/scripts/model_fallback.py select plan-critic-pre \
+            --repo "$GITHUB_REPOSITORY" \
             --explain-file "$WHY_FILE" --effort-file "$EFFORT_FILE")
           # DRE-4836: the CHOSEN model's declared effort level, empty when it
           # declares none — see agent-task.yml's Select model step.
@@ -3080,6 +3086,7 @@ jobs:
         run: |
           [ -n "$EXEC_FILE" ] || EXEC_FILE="$RUNNER_TEMP/claude-execution-output.json"
           python3 .bureau-pipeline/scripts/planner_capacity.py decide "$EXEC_FILE" \
+            --repo "$GITHUB_REPOSITORY" \
             --model "$MODEL" --github-output "$GITHUB_OUTPUT"
 
       - name: Re-mint bot token — Re-plan after send-back on the next rung
@@ -3405,7 +3412,7 @@ jobs:
       # DRE-5299, and removes it before the re-plan runs.)
       - name: Plan artifact — upload source
         if: steps.route.outputs.mode == 'plan' && steps.kids.outputs.count != '0'
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: plan-source-${{ github.event.client_payload.identifier }}
           path: ${{ runner.temp }}/plan-artifact.md
@@ -3675,6 +3682,7 @@ jobs:
           WHY_FILE="$RUNNER_TEMP/post-critic-why.txt"
           EFFORT_FILE="$RUNNER_TEMP/model-effort.txt"
           MODEL=$(python3 .bureau-pipeline/scripts/model_fallback.py select plan-critic-post \
+            --repo "$GITHUB_REPOSITORY" \
             --explain-file "$WHY_FILE" --effort-file "$EFFORT_FILE")
           # DRE-4836: the CHOSEN model's declared effort level, empty when it
           # declares none — see agent-task.yml's Select model step.
@@ -4600,6 +4608,7 @@ jobs:
         run: |
           [ -n "$EXEC_FILE" ] || EXEC_FILE="$RUNNER_TEMP/claude-execution-output.json"
           python3 .bureau-pipeline/scripts/planner_capacity.py decide "$EXEC_FILE" \
+            --repo "$GITHUB_REPOSITORY" \
             --model "$MODEL" --github-output "$GITHUB_OUTPUT"
 
       - name: Re-mint bot token — Re-plan after the second critic sent it back on the next rung
@@ -4887,7 +4896,7 @@ jobs:
       # and republishes at the epic's one address.
       - name: Plan artifact — upload source (review)
         if: steps.route.outputs.mode == 'review' && steps.post1.outputs.action == 'hold' && steps.post1.outputs.bound != 'true' && steps.recheck_review.outputs.ok == 'true'
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: plan-source-${{ github.event.client_payload.identifier }}
           path: ${{ runner.temp }}/plan-artifact.md
@@ -5076,6 +5085,11 @@ jobs:
           # The caller's cap, never a literal (DRE-2529). Through env, not
           # interpolated into the shell line.
           MAX_WIP: ${{ inputs.max_wip }}
+          # The caller's BUREAU_MAX_WIP Actions variable (DRE-6631) — `vars` is
+          # the caller's in a reusable. reconcile.py reads it after the input
+          # and the caller's reconcile stub, so it is never folded into the
+          # line above: that would leave the stub no place between them.
+          BUREAU_MAX_WIP: ${{ vars.BUREAU_MAX_WIP }}
         run: |
           EPIC="${{ github.event.client_payload.identifier }}"
           THREAD="${{ runner.temp }}/activate-thread.json"
@@ -5339,6 +5353,7 @@ jobs:
         run: |
           [ -n "$EXEC_FILE" ] || EXEC_FILE="$RUNNER_TEMP/claude-execution-output.json"
           python3 .bureau-pipeline/scripts/planner_capacity.py decide "$EXEC_FILE" \
+            --repo "$GITHUB_REPOSITORY" \
             --model "$MODEL" --github-output "$GITHUB_OUTPUT"
 
       - name: Re-mint bot token — Roll-up route — split into child epics on the next rung
@@ -5739,7 +5754,7 @@ jobs:
       - name: Upload the death-cause receipt
         if: always() && steps.death.outputs.path != ''
         continue-on-error: true
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: death-receipt-${{ github.job }}-attempt${{ github.run_attempt }}
           path: ${{ steps.death.outputs.path }}
@@ -5947,7 +5962,7 @@ jobs:
           path: .bureau-pipeline
 
       - name: Plan artifact — fetch source
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: plan-source-${{ github.event.client_payload.identifier }}
           path: ${{ runner.temp }}
@@ -5991,7 +6006,7 @@ jobs:
       # when no portal is configured (console-honesty rule 2: the run says
       # where it is rather than pointing at a URL that does not resolve).
       - name: Plan artifact — upload build output
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: plan-artifact-${{ github.event.client_payload.identifier }}
           path: |

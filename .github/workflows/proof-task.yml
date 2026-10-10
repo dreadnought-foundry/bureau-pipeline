@@ -347,6 +347,7 @@ jobs:
           WHY_FILE="$RUNNER_TEMP/model-why.txt"
           EFFORT_FILE="$RUNNER_TEMP/model-effort.txt"
           MODEL=$(python3 .bureau-pipeline/scripts/model_fallback.py select proof \
+            --repo "$GITHUB_REPOSITORY" \
             --explain-file "$WHY_FILE" --effort-file "$EFFORT_FILE")
           WHY=$(cat "$WHY_FILE")
           # DRE-4836: the effort level the CHOSEN model runs at, if it declares one.
@@ -1365,7 +1366,7 @@ jobs:
       - name: Upload the usage reading
         if: always() && steps.usage.outputs.path != ''
         continue-on-error: true
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: claude-usage-reading-${{ github.job }}-attempt${{ github.run_attempt }}
           path: ${{ steps.usage.outputs.path }}
@@ -1422,7 +1423,7 @@ jobs:
       - name: Upload the death-cause receipt
         if: always() && steps.death.outputs.path != ''
         continue-on-error: true
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: death-receipt-${{ github.job }}-attempt${{ github.run_attempt }}
           path: ${{ steps.death.outputs.path }}
@@ -1602,7 +1603,7 @@ jobs:
       - name: Upload rescued work
         if: always() && steps.rescue.outputs.patch != ''
         continue-on-error: true
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: rescue-${{ github.event.client_payload.identifier }}.patch
           path: ${{ steps.rescue.outputs.patch }}

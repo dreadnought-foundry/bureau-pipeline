@@ -121,10 +121,23 @@ switch is still off, the step files one card into `Planning`:
 Switch PROOF_DISPATCH_LIVE in agent-bureau is still off after its reason cleared
 ```
 
-The card names the switch, the repository, the receipt's time, the hours since,
-the cards and the one command that turns the switch on. Before filing, the step
-looks for an open card with exactly that title and files nothing if it finds
-one.
+The alarm is an operator step, so it is filed as an operator card: beside
+`repo:<slug>` it carries `agent:devops` and `no-code`. `no-code` is the label
+the routing vocabulary reads as OPERATOR at precedence 1
+(`config/routing-verdicts.json`, `labels.map`), so Planning's label route moves
+the card to the operator's queue on the label and never asks a model, and the
+sweep stamps `operator-step` when it carries the card to `Hand-work`. It never
+carries `needs-human`: that label is a hold, and the alarm holds nothing.
+
+The card names the switch, the repository, the receipt's time, the hours since
+and the cards. It then gives the operator the step, as a step and never a
+question: either turn the switch on and delete its reason, or give it a new
+reason naming the cards it now waits on — each with its one command — and in
+both cases close the card. It ends with a `## Acceptance criteria` section of
+two items: the switch reads `true` and its companion is deleted, or the
+companion names at least one open card; and the card is Canceled or Done with a
+comment saying which. Before filing, the step looks for an open card with
+exactly that title and files nothing if it finds one.
 
 The receipt is written first, and the alarm is timed only from the receipt. A
 pass that stops between the two loses nothing: the next pass finds the receipt

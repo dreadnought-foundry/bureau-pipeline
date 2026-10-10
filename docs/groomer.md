@@ -25,7 +25,11 @@ fast path shipped, which the sweep moves straight to Planning (DRE-4150, point
 2. **Groups into units.** An epic and its children are one unit, because
    classifying eleven children of one Forms epic in three separate batches
    spreads one deliverable across three cycles for no reason. The epic, not the
-   card, is the atom of cycle assignment.
+   card, is the atom of cycle assignment: the unit is the atom for order and
+   cycle assignment. Readiness is read per card, though (DRE-6665, below), and
+   a child's readiness follows its epic's state — a child whose epic has not
+   started is Not ready — so a unit leaves Intake epic first and its children
+   follow once the epic is In Progress.
 3. **Finds the collisions.** Two cards citing the same file become an explicit
    order between those two cards, reported with the file that caused it.
 4. **Sequences.** Urgent, then High, then everything else newest first —
@@ -207,6 +211,43 @@ is left out of the batch for its age.
    comment must not move a card; the population query does not even read
    `updatedAt`.
 
+**Inside every band, work in flight goes first** — the CEO's decision of
+2026-10-10 on DRE-6643 (DRE-6664). The step sits between the band (steps 1 to
+3) and the creation day: within Urgent, within High and within everything
+else, a unit that serves an epic already In Progress goes ahead of the rest of
+its band, and the rest stay newest first, then repo, timestamp and identifier
+exactly as above. It never moves a card across bands — an Urgent card with no
+link to work in flight still precedes a High card that has one.
+
+- **Serving is read off the board, never off text** (`serves_in_flight` in
+  `scripts/groomer.py`): the card's parent epic is In Progress, or the card
+  has a Linear `blocks` relation to a card whose parent epic is In Progress. A
+  `related` relation does not count, nor does being blocked BY such a card,
+  nor a relation to an archived or closed card. The in-flight states are
+  exactly `In Progress`, held once as `IN_FLIGHT_EPIC_STATES_FOR_ORDER`.
+- **A unit is in flight when any member serves**, and it names the first epic
+  found, by card identifier order.
+- **Step 5's constraints stay on top.** An in-flight unit that collides with,
+  or is blocked by, an earlier unit of its band is placed after it, and the
+  page names the pair under its collisions, with the epic the held-back card
+  serves (`unhonoured_constraints` in the JSON).
+- **The page says so.** A rules-only row placed by this step reads
+  `in flight — serves DRE-N (In Progress)` in its `Why` cell, and the batch
+  paragraph gains one sentence naming the rule — only on a batch the step
+  placed a card in, so `--no-judgement` renders byte for byte as before on a
+  population with nothing in flight.
+- **Readiness outranks the key.** The in-flight step only ORDERS cards; it
+  decides nothing about whether a card takes a slot. That is the readiness
+  rules' to decide (DRE-6665, the next section): a card they hold is Not ready
+  whatever position this step gave it.
+
+The population read carries what the step reads: every row selects the
+parent's state and both relation lists (`relations` and `inverseRelations`,
+twenty each, with each related card's state, `archivedAt` and parent state).
+That widens every row, so `POPULATION_PAGE` is 25. Measured on 2026-10-10
+against the live Intake lane, one page of the widened query costs
+`X-Complexity` 239 against Linear's stated per-request limit of 10,000.
+
 The epic is still the unit, so an epic's band is the highest priority among the
 epic and its children — one Urgent child pulls the whole unit into the batch —
 and its age for the order is its **newest** card, so one new child brings an
@@ -214,6 +255,133 @@ old epic forward with it. Inside a unit the order is unchanged — the build
 order, oldest child first, with collisions and blocks relations on top. Nothing
 leaves Intake for being old either way: DRE-4141 removed the sweep's age-out,
 and the operator's Intake hold (DRE-3035) is untouched by any of this.
+
+The unit is the atom for order and cycle assignment, and only for those:
+readiness is read per card. A child's readiness follows its epic's state, so
+when an epic and its children sit in Intake together the children are Not
+ready naming the epic, and the epic card is offered as a unit of one. A unit
+leaves Intake epic first; its children follow, by themselves, the first
+morning the epic is In Progress, and the in-flight key then orders them first.
+
+## Not ready — the readiness rules (DRE-6665)
+
+The batch used to be the first twenty cards of the order, and nothing in the
+rules asked whether a card was ready to be planned. On 2026-10-10 a person
+removed five such cards from proposal `a4f198411b02` by hand. Readiness is now
+a deterministic rule set, with no model call, that `propose` applies to every
+card in the walk after the order is computed and before the cycles are filled.
+A card that trips any rule takes no slot — the next card in order fills it,
+the same walk a declined card takes — and goes on a fourth list,
+`outcomes["not-ready"]`, one row per rule it trips, and on no other list.
+
+**The rules are data.** `config/groom-readiness.json` holds one record per
+rule — `id`, a plain-English `reason` and `condition` with placeholders, and
+`applied_by`. `scripts/groom_readiness.py` evaluates five of them, and
+`python3 scripts/groom_readiness.py check` fails when the data file and the
+evaluators disagree on the ids. The six rules:
+
+1. `read-waits-on-open-card` — the ranked read's `depends on` line names a
+   card that is open: Planning, Green Light, Backlog, Todo, In Progress or In
+   Review. A named card with no child and no `[EPIC]` title holds the card
+   until it is Done. A named epic holds it until the epic is **built out or
+   Done**, read exactly as the sweep's epic gate reads a blocker
+   (`reconcile._not_built_out`, DRE-6407): In Progress with children, no child
+   `buildable()`, no open child epic, the children page read to the end. An
+   epic not yet In Progress is not built out. So rule 1 holds a card for
+   another epic until that epic is built out, and never for the card's own
+   parent: a child waiting on its own epic is DRE-6664's in-flight case.
+2. `file-named-by-in-flight-card` — a file the card names in backticks is
+   named by a card in Planning, Todo, In Progress or In Review, in the same
+   repo, each lane read once a morning. A file cited by more than
+   `BOILERPLATE_THRESHOLD` cards across Intake and the four lanes is
+   reference, not ownership — `collision_report`'s rule. Ready when that card
+   is Done.
+3. `child-of-epic-not-in-progress` — the card's parent epic is in Intake,
+   Planning, Green Light, Backlog, Todo or Triage. Ready when the epic is In
+   Progress. The epic card itself trips nothing and keeps its slot as a unit
+   of one, and the verify step's own exclusion keeps it in Intake with its
+   reason on the page — nothing of the unit moves until a person moves the
+   epic, which is the decision.
+4. `undecided-question` — a `##` or `###` heading containing `decide before
+   building` with at least one list item beneath it, and no `## Decisions from
+   the CEO` block on the card. An undecided question is listed with its
+   question quoted and sent nowhere: the Reason cell quotes the first item and
+   the heading, `(+N more)` when there are more, and nothing goes to Green
+   Light or is posted on the card. Ready when that section is settled.
+5. `roll-up-parent` — a child of the card has a title opening `[EPIC]`. Ready
+   never: its child epics are offered on their own.
+6. The parked repo — applied by `held_repo_rows` before any of the above
+   (DRE-3403, "Switching a repo off" below), and unchanged.
+
+There is no rule for a card that leans on a Canceled, Duplicate or archived
+card. `standards/card-quality.md` says Canceled clears the blocker without
+claiming delivery, and the sweep's dependency gate honors that, so a rule
+holding on one would contradict the standard and state a condition only a
+person's edit to the relation could meet — and a Not ready card must come
+back by itself.
+
+**How the named cards are read.** In two bounded steps, in `_build`. First
+the light read: the distinct ids named across the population's `depends on`
+lines, less each card's own parent, at most `NAMED_PAGE` (50) aliases a
+request, each selecting `NAMED_NODE` — about four nodes an alias, far under
+the 5,000-node yardstick `epic_cap.py` records. A named card with no child and
+no `[EPIC]` title is decided on that read alone. Then the epic read: one
+`issue(id:)` request carrying `epic_cap.IN_MOTION_NODE` per named card the
+light read shows In Progress and an epic, however many cards name it — never
+aliased over a list, because Linear prices that node at up to 1,200. An epic
+in any other open state is not built out and costs no second read. A named
+card that could not be read holds the card: when a request raises or Linear
+returns no issue, every card naming it is Not ready with the Reason `its
+ranked read waits on DRE-N, which could not be read this morning (<why>)` and
+the condition the rule would have stated. One failed light request leaves
+every id in it unread. Nothing is guessed and nothing is retried in the run;
+the proposal still renders and posts.
+
+**Rule 1 is only as reliable as the line the read writes.** On 2026-10-10 the
+read gave DRE-4054 its reason in prose and wrote no `depends on` line, so the
+rule would not have seen it; `briefs/groomer.md` now asks the read to write
+the card id on that line, or `nothing`. The parser gives the labelled reasons
+to a `now` line only, so a `not-now` answer's wait is still invisible to the
+rule. The judgement block carries `depends_on_missing`, the count of `now`
+verdicts with no `depends on` line at all, and the receipt line says `N ranked
+now without a depends-on line` when it is above zero — a diagnostic of how
+much of the read the rule could see, never a measure of the rule.
+
+**Precedence.**
+
+- **Readiness outranks the in-flight key.** The key orders cards; readiness
+  decides whether a card takes a slot, whatever place the key gave it.
+- **Readiness runs before the verify step.** A Not ready card is never a
+  verify target (the verify step reads the Planning list and the `not-now`
+  spares), so it costs no verify call and never reaches the verify step's
+  lists until its condition holds.
+- **The Cancel list outranks Not ready.** A card with a Cancel decision
+  standing — its own `Superseded by:` line, a `likely-done` read, or the
+  check's evidence — is not evaluated at all: it is dead, not unready. A card
+  the check's `keep` took off the Cancel list, or an epic with an open child
+  the refusal took off it, is read for readiness like any other.
+- **And readiness outranks the read's decline.** A card the read declined
+  that also trips a rule is a Not ready row, not a `could not rank` one: the
+  rules read the board, and a row naming a rule and a condition says more.
+
+**On the page**, after the Cancel list and before "Verified against main":
+
+```
+## Not ready — and what would make it ready
+
+| # | Card | Rule | Repo | Epic | Title | Reason | Ready when |
+```
+
+One row per rule a card trips, in the rules' order, numbered from 1; the
+Reason and Ready when cells pass `defang_reason` and are pipe-escaped. The
+section is absent on a morning with no Not ready card, so that page renders
+byte for byte as before. `parse_proposal_comment` reads it back as
+`not_ready`, the first three cells load-bearing. The proposal id does not
+digest the list: a Not ready card is in neither list an approval moves.
+
+**Nothing is remembered between mornings.** The rules are recomputed from the
+live board every morning and nothing is remembered, so a Not ready card returns to the Planning list by
+itself on the first morning its condition holds, with no person adding it.
 
 ## The outcomes, and what each one owes the reader
 
@@ -228,6 +396,7 @@ line per card, before anything moves.
 | `not-now` | **Wanted, and deliberately not this batch** — the batch is full, and it names the cycle it is reconsidered in. This is "later", and it is not "no". | a **trigger** — what brings it back. Cards sharing one are grouped under it, with the count. |
 | `dead` (the read calls it `likely-done`) | **Proposed for cancellation, on the Cancel list beside the batch**. It is one of the morning's twenty, and the drain cancels it once the CEO agrees, with the reason on the card. Two readers propose one: a `Superseded by:` line a person wrote on the card, or the ranked read's judgement. | a one-line **reason** — `superseded by DRE-N` off the card's own line, or the **evidence** the read named: the superseding card, merged PR or decision. A recommendation nobody can check is one nobody should act on. |
 | `could not rank` | **The read could not place it**, so it is **out of the batch** — whatever the rules did with it (DRE-3544). It carries no cycle and no trigger: what is owed is a person, not a fortnight. | **itself** — its own section in the proposal, never folded into "not now". |
+| `not-ready` | **A readiness rule holds it** (DRE-6665), so it takes no slot and carries no cycle — whatever the order or the read said. It is in `outcomes["not-ready"]` and no other list. | the **rule**, a plain-English **reason** and the **condition** that brings it back, under `## Not ready — and what would make it ready`. |
 
 **The morning's twenty are Planning plus Cancel together** (DRE-4727, the
 CEO's decision on DRE-4669). `propose` walks the rules' order and places each
@@ -598,6 +767,20 @@ batch that was right apart from two rows.
 `<id>` is the proposal id the approval names, and a decision naming any other
 batch says nothing about the approved one.
 
+**A per-card marker is read for the first card its line names (DRE-6642).** The
+shape above is the one the console writes. A marker typed by hand is honored
+for the first `DRE-N` on its first line, and everything after that card on the
+line is the reason — after an em dash, a hyphen, a colon or nothing at all — so
+`🧺 groom-excluded: <id> DRE-1234 already done` excludes DRE-1234 with the
+reason `already done`. A reason on a second line is prose, and the card on the
+first line is still honored. A marker whose first line names no card cannot
+be honored for anything. It is never dropped silently: the next proposal lists
+it, and the drain's record lists every one about the batch it drained, both
+under `## Decisions I could not read` with the marker's first line quoted. The
+console's reader of the same markers carries its own copy of the pattern
+(`_CARD_TAIL` in agent-bureau's `console/backend/groom_proposal.py`) and
+follows on its own card.
+
 The last two are the exception that proves the shape: they name a repo **slug**
 (`[a-z0-9][a-z0-9-]*`) and no id at all, because a hold outlives the proposal it
 was written on. Everything else about them is the same — anchored at the start
@@ -859,6 +1042,11 @@ clause, `cancelled:`, placed before `refused:`; the reader takes that clause as
 optional and reads the other four exactly as they always read, so no clause is
 reordered, respelled or added beside it.
 
+A decision about the drained batch that names no card is a `refused` row, as it
+always was, and is also quoted under `## Decisions I could not read` AFTER the
+table (DRE-6642) — absent when there is none, so the table and the summary line
+read exactly as before.
+
 Its five counts answer five different questions: **moved** is the approved
 Planning list that went, **held back** is what the CEO excluded on either list,
 or what the free planner slots could not take (DRE-5326) and is queued for them
@@ -959,8 +1147,19 @@ the CEO's newest per-card marker for each card, on **any** proposal
 - **`groom-added`** after either clears it.
 
 Only a decider's marker counts — a person's, or one the console signed — so the
-proposer cannot take a card off its own offer. A thread with no per-card
+proposer cannot take a card off its own offer. A decider's marker that names no
+card is listed on the next proposal under *Decisions I could not read*, once:
+a proposal reports what was written since the one before it. A thread with no per-card
 marker proposes exactly what it did before.
+
+Such a marker changes neither list, so the next proposal usually carries the
+**same id** as the one already on the card — and a proposal whose id already
+stands there is normally not posted again. When the proposal has decisions to
+list, it is posted again under that id unless a page with the id already
+quotes every one of them. The second page carries the same lists, so an
+approval of the id means the same batch on either page, and the id is not
+retired. The run after that lists nothing, because the second page is now the
+newest proposal, and a repeat id posts nothing as before.
 
 ## The next proposal answers your last decline (DRE-3373)
 
@@ -1122,8 +1321,12 @@ The ranked read has its own stated limits, and they are on the page too:
   first lines or is not written down anywhere;
 - **the receipt line says what it ran against** — the model that answered, the
   number of cards, and the counts of epics in flight, merged PRs and closed
-  cards in the context pack. A pack section that was capped is named in the
-  proposal JSON;
+  cards in the context pack. A pack section that was capped says both
+  numbers on the header — how many rows the ranking read and how many there
+  were, as `the newest 40 of 2,539 merged PRs (titles only)` — and the
+  proposal JSON carries both under `judgement.pack.cuts`, one
+  `{"kept", "of"}` per capped section (DRE-6641). A proposal written before
+  `cuts` existed says its one count, as it always did;
 - **a context signal nobody could read is UNKNOWN, never a number** (DRE-3329).
   A source that fails — the merged-PR search with no `GH_TOKEN`, say — is
   named unread in the pack with the reason, carries no count in the proposal

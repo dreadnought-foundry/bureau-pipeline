@@ -300,7 +300,7 @@ jobs:
       # exact list the rule classified — never a second fetch.
       - name: Hand the catalog and the decision on
         if: steps.pick.outputs.candidate != ''
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: model-adoption-decision
           path: |
@@ -423,7 +423,7 @@ jobs:
             requirements-dev.txt
 
       - name: Fetch the catalog and the decision
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: model-adoption-decision
           path: ${{ runner.temp }}
@@ -513,7 +513,7 @@ jobs:
         if: env.DRY_RUN != 'true'
         run: |
           set +e
-          python3 -m pytest tests/test_model_policy.py tests/test_model_config.py -q \
+          python3 -m pytest tests/test_model_policy.py tests/test_model_config.py tests/test_model_choices.py -q \
             > "$RUNNER_TEMP/model-tests.txt" 2>&1
           rc=$?
           set -e
@@ -523,9 +523,9 @@ jobs:
           echo "model tests: $result"
 
       # The staged set is PROVED before the commit: config/models.yaml,
-      # agents.yaml and the generated region of scripts/model_fallback.py, and
-      # nothing else — the three paths the TDD gate reads as data and a
-      # generated region (DRE-3896).
+      # agents.yaml, the generated region of scripts/model_fallback.py and the
+      # generated config/model-choices.json (DRE-6635), and nothing else — the
+      # four paths the TDD gate reads as data and a generated region (DRE-3896).
       - name: Commit and push the adoption branch
         if: env.DRY_RUN != 'true' && steps.branch.outputs.reuse != 'true'
         env:
@@ -533,11 +533,11 @@ jobs:
           CARD: ${{ steps.record.outputs.card }}
           CANDIDATE: ${{ needs.classify.outputs.candidate }}
         run: |
-          git add -- config/models.yaml agents.yaml scripts/model_fallback.py
+          git add -- config/models.yaml agents.yaml scripts/model_fallback.py config/model-choices.json
           STAGED=$(git diff --cached --name-only)
           for path in $STAGED; do
             case "$path" in
-              config/models.yaml|agents.yaml|scripts/model_fallback.py) ;;
+              config/models.yaml|agents.yaml|scripts/model_fallback.py|config/model-choices.json) ;;
               *) echo "::error::refusing to commit $path — an adoption touches only the model config"; exit 1 ;;
             esac
           done
@@ -709,7 +709,7 @@ jobs:
 
       - name: Hand the pin record on
         if: steps.find.outputs.answer == 'found'
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: model-adoption-pin
           path: ${{ runner.temp }}/pin.json
@@ -755,7 +755,7 @@ jobs:
             requirements-dev.txt
 
       - name: Fetch the pin record
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: model-adoption-pin
           path: ${{ runner.temp }}

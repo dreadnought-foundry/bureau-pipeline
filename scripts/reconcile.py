@@ -71,7 +71,9 @@ The calling workflow passes the repo's own cap through its `max_wip` input;
 every promotion path in the pipeline uses that one value (DRE-2529). When the
 input is empty — a plan.yml or linear-sync.yml stub that passes nothing — the
 cap is read from the caller's own reconcile.yml stub, so a repo held at "0"
-builds nothing on any path (DRE-3994; see `cap_and_source`).
+builds nothing on any path (DRE-3994), and when the stub names no cap either,
+from the caller's BUREAU_MAX_WIP Actions variable (DRE-6631; see
+`cap_and_source`).
 
 Mid-epic discovery (DRE-2739): a Backlog child created AFTER its epic's most
 recent green light is a card the approved plan never described, and promoting it
@@ -313,12 +315,13 @@ STALE_MINUTES = lane_contract.stale_minutes()
 # carrying it, so a rename fails at import instead of leaving a dead literal
 # that writes into a state Linear no longer has.
 REVIEW_LANE = lane_contract.lane("In Review")["name"]
-# The ONE work-in-progress fallback (DRE-2529). It applies only when neither
-# the run's `max_wip` input nor the caller's reconcile.yml stub names a cap
-# (`cap_and_source` below). scripts/check_wip_cap.py reads this constant, and
-# since DRE-3994 fails the build if any reusable workflow re-declares it as an
-# input default: a declared default renders "8" whenever a stub is silent, and
-# the script could then never fall through to the repo's own cap.
+# The ONE work-in-progress fallback (DRE-2529). It applies only when none of
+# the run's `max_wip` input, the caller's reconcile.yml stub and the caller's
+# BUREAU_MAX_WIP variable names a cap (`cap_and_source` below).
+# scripts/check_wip_cap.py reads this constant, and since DRE-3994 fails the
+# build if any reusable workflow re-declares it as an input default: a declared
+# default renders "8" whenever a stub is silent, and the script could then
+# never fall through to the repo's own cap.
 # It was 4 while the workflows all said 8 — a fifth cap hiding behind an unset
 # env var, which is the same defect DRE-2529 removed from the workflows.
 DEFAULT_MAX_WIP = 8
@@ -330,13 +333,18 @@ def resolve_max_wip(raw):
     Empty is NOT zero. `MAX_WIP` now comes from a workflow_call input, and on
     any event where the `inputs` context is empty the interpolation yields the
     empty string — `int("")` would crash the promotion step outright, turning
-    a cap question into a red run. Unset, empty, and unparseable all mean
-    "the one default".
+    a cap question into a red run. Unset, empty, and anything that is not a
+    whole number of 0 or more all mean "the one default" (DRE-6631).
     """
-    try:
-        return int(str(raw).strip())
-    except (TypeError, ValueError):
-        return DEFAULT_MAX_WIP
+    cap = _whole_number(raw)
+    return DEFAULT_MAX_WIP if cap is None else cap
+
+
+def _whole_number(raw):
+    """`raw` as a whole number of 0 or more, or None. "-1", "12.0", "lots" and
+    an unresolved `${{ … }}` are all None; so is unset and empty."""
+    text = "" if raw is None else str(raw).strip()
+    return int(text) if re.fullmatch(r"[0-9]+", text) else None
 
 
 # The reusable a caller's reconcile stub calls. Matched on a `uses:` line that
@@ -351,7 +359,7 @@ _RECONCILE_STUB_USES = re.compile(
 _STUB_MAX_WIP = re.compile(r"^[ \t]*max_wip:[ \t]*(.*?)[ \t]*(?:#.*)?$", re.MULTILINE)
 
 
-def cap_and_source(raw, workspace) -> tuple[int, str]:
+def cap_and_source(raw, workspace, variable=None, ignored=None) -> tuple[int, str]:
     """The WIP cap this run promotes at, and where it was read (DRE-3994).
 
     The order, and why:
@@ -366,20 +374,64 @@ def cap_and_source(raw, workspace) -> tuple[int, str]:
          default of 8: on 2026-09-15 approving DRE-3777 promoted three cards in
          portico, held at "0" for a week, and atlas and agent-bureau-demo
          (also "0") and deltasolv ("4") would have leaked the same way.
-      3. DEFAULT_MAX_WIP, saying why — no checkout, no stub, a stub that sets
-         no cap, or one whose cap is not a number.
+      3. The caller's BUREAU_MAX_WIP Actions variable (DRE-6631), when neither
+         names a number. It is what the console writes, and GitHub resolves it
+         repo-level first, then org-level, so one read gives each project its
+         own setting and each org a default. It sits BELOW the stub on
+         purpose: the sweep receives the stub's literal as its input, so the
+         two fast paths, whose stubs pass nothing, must prefer that literal
+         too, or a repo with both set promotes at two caps (DRE-2529).
+         Setting a variable therefore changes nothing while a literal stands.
+      4. DEFAULT_MAX_WIP, saying why.
+
+    A non-empty value that is not a whole number of 0 or more ("lots", "-1",
+    "12.0", an unresolved `${{ … }}`) is skipped to the next source, and one
+    `promotion: ignored <source> = <value>: …` line is appended to `ignored`
+    for the run log. An empty value is the normal "not set" and says nothing.
 
     Read with the standard library on purpose: the promotion steps install
     nothing, and reconcile.py imports no YAML parser. Never raises — a cap
     question must not turn a promotion step red.
     """
-    try:
-        return int(str(raw).strip()), "this run's max_wip input"
-    except (TypeError, ValueError):
-        pass
-    fallback = f"the default {DEFAULT_MAX_WIP}"
+    notes = ignored if ignored is not None else []
+
+    def _ignore(source, value):
+        shown = " ".join(str(value).split())
+        notes.append(
+            f"promotion: ignored {source} = {shown}: not a whole number of 0 or more"
+        )
+
+    def _read(source, value):
+        cap = _whole_number(value)
+        if cap is None and value is not None and str(value).strip():
+            _ignore(source, str(value).strip())
+        return cap
+
+    cap = _read("this run's max_wip input", raw)
+    if cap is not None:
+        return cap, "this run's max_wip input"
+
+    stub_cap, why_not_stub = _stub_cap(workspace, _ignore)
+    if stub_cap is not None:
+        return stub_cap, why_not_stub
+
+    variable_source = "the caller's BUREAU_MAX_WIP variable"
+    cap = _read(variable_source, variable)
+    if cap is not None:
+        return cap, variable_source
+    return DEFAULT_MAX_WIP, (
+        f"the default {DEFAULT_MAX_WIP} — {why_not_stub}, and no BUREAU_MAX_WIP "
+        "variable names a number"
+    )
+
+
+def _stub_cap(workspace, ignore) -> tuple[int | None, str]:
+    """(cap, source) from the caller's reconcile stub, or (None, why not).
+
+    A `max_wip:` value that is not a whole number of 0 or more is handed to
+    `ignore` and skipped; an empty one is skipped in silence."""
     if not workspace:
-        return DEFAULT_MAX_WIP, f"{fallback} — no caller checkout to read a reconcile stub from"
+        return None, "no caller checkout to read a reconcile stub from"
     workflows = os.path.join(str(workspace), ".github", "workflows")
     try:
         names = sorted(
@@ -397,36 +449,35 @@ def cap_and_source(raw, workspace) -> tuple[int, str]:
         if _RECONCILE_STUB_USES.search(text):
             stubs.append((f".github/workflows/{name}", text))
     if not stubs:
-        return DEFAULT_MAX_WIP, (
-            f"{fallback} — no reconcile stub in the caller's .github/workflows"
-        )
+        return None, "no reconcile stub in the caller's .github/workflows"
     caps: list[tuple[int, str]] = []
-    unreadable: list[str] = []
     for path, text in stubs:
         for match in _STUB_MAX_WIP.finditer(text):
             value = match.group(1).strip().strip("'\"").strip()
-            try:
-                caps.append((int(value), path))
-            except ValueError:
-                unreadable.append(f"{path} sets max_wip: {match.group(1).strip()}")
+            cap = _whole_number(value)
+            if cap is not None:
+                caps.append((cap, path))
+            elif value:
+                ignore(f"the caller's reconcile stub {path}", value)
     if caps:
         # More than one stub or line is not a fleet shape; if it ever happens,
         # the LOWER cap is the one that cannot build past anybody's hold.
         cap, path = min(caps)
         return cap, f"the caller's reconcile stub {path}"
-    if unreadable:
-        return DEFAULT_MAX_WIP, (
-            f"{fallback} — {'; '.join(unreadable)}, which is not a number this "
-            "step can read"
-        )
-    return DEFAULT_MAX_WIP, (
-        f"{fallback} — the caller's reconcile stub "
-        f"{', '.join(p for p, _ in stubs)} sets no max_wip"
+    return None, (
+        f"the caller's reconcile stub {', '.join(p for p, _ in stubs)} "
+        "names no max_wip number"
     )
 
 
+# The `promotion: ignored …` lines cap_and_source wrote, printed just before
+# the cap line so the run log says what it skipped (DRE-6631).
+MAX_WIP_IGNORED: list[str] = []
 MAX_WIP, MAX_WIP_SOURCE = cap_and_source(
-    os.environ.get("MAX_WIP"), os.environ.get("GITHUB_WORKSPACE")
+    os.environ.get("MAX_WIP"),
+    os.environ.get("GITHUB_WORKSPACE"),
+    os.environ.get("BUREAU_MAX_WIP"),
+    ignored=MAX_WIP_IGNORED,
 )
 
 # Parent-epic states that count as ACTIVATED for the dependency gate (DRE-1893,
@@ -5503,30 +5554,68 @@ def gate_hold_note_line(pr: dict) -> str | None:
     return None
 
 
-def proof_record_sent_back(card: dict, pr: dict, critic: str) -> bool:
-    """Is this a proof record the critic sent back at its head (DRE-6406)?
-    When it is, say so in one line and answer True: the review lane writes
-    nothing on it — no nudge, no receipt, no hold, no question, no park.
+def critic_token(pr: dict) -> str | None:
+    """The newest critic verdict's token — APPROVE, REQUEST_CHANGES — whatever
+    commit it names, or None (DRE-6650). Whether it binds the head is
+    verdict_bound's call; standing_verdict's `APPROVE from earlier head` is a
+    receipt string, never a reading to test by prefix."""
+    verdicts = critic_comments(pr)
+    if not verdicts:
+        return None
+    return merge_gate.verdict_token(
+        merge_gate.first_line(verdicts[-1].get("body") or ""),
+        merge_gate.CRITIC_MARKER)
 
-    `critic` is `review_standing`'s reading, and only its exact
-    `REQUEST_CHANGES` counts — the same reading `proof_dispatch.rerunning`
-    makes. No gate re-trigger can change a record nothing has amended, the
-    fix agent is kept off it (`fix_dispatch_blocked`), and the proof run's
-    re-run branch is what amends it. A record with no verdict at its head
-    still reaches a person at the cap: that is how a critic that never
-    answers is found. Imported here, not at the top: proof_dispatch imports
-    this module, and the branch rule lives in its leaf."""
+
+def proof_record_owned_by_proof_run(card: dict, pr: dict, tag: str,
+                                    critic: str) -> bool:
+    """Is this a proof record the proof run's re-run branch owns (DRE-6406,
+    DRE-6650)? When it is, say so in one line and answer True: the review
+    lane writes nothing on it — no nudge, no receipt, no hold, no question,
+    no park.
+
+    The contract with `proof_dispatch.rerunning`, in both files: a proof
+    record the critic sent back at its head, or one whose `APPROVE` is bound
+    to the head and which the gate's note declines at that head as not
+    proven, is the proof run's.
+
+      * Sent back: `critic` is `review_standing`'s reading, and only its
+        exact `REQUEST_CHANGES` counts. No gate re-trigger can change a
+        record nothing has amended, and the fix agent is kept off it
+        (`fix_dispatch_blocked`).
+      * Declined as not proven: `tag` is GATE_NUDGE_KEY — verdict_bound
+        holds, written at the head or carried to it (DRE-2340) — the newest
+        critic verdict's token is `APPROVE`, and `proof_dispatch.not_proven_at`
+        reads the gate's decline at the head: the dispatcher's own reader, so
+        the two halves cannot read the note differently.
+
+    Every other record keeps the nudge and the cap: an `APPROVE` with no
+    gate note at the head, a decline for another reason, a conflict, a red
+    check (DRE-6571's approved-but-red sweep sends the fix agent) and a
+    record with no verdict at its head, which still reaches a person at the
+    cap — that is how a critic that never answers is found. Imported here,
+    not at the top: proof_dispatch imports this module, and the branch rule
+    lives in its leaf."""
     import proof_record  # noqa: PLC0415 — see fix_dispatch_blocked
 
-    if critic != "REQUEST_CHANGES" or not proof_record.proof_record_branch(
-        pr.get("headRefName")
-    ):
+    if not proof_record.proof_record_branch(pr.get("headRefName")):
         return False
     head = pr.get("headRefOid") or ""
+    if critic == "REQUEST_CHANGES":
+        trigger = f"the critic sent back at {head[:7]}"
+    elif tag == GATE_NUDGE_KEY and critic_token(pr) == "APPROVE":
+        import proof_dispatch  # noqa: PLC0415 — proof_dispatch imports this module
+
+        if not proof_dispatch.not_proven_at(pr, head):
+            return False
+        trigger = f"the critic approved and the gate declined as not proven at {head[:7]}"
+    else:
+        return False
     print(
         f"review-nudge: {card['identifier']} PR #{pr['number']} is a proof record "
-        f"the critic sent back at {head[:7]} — the proof run's re-run branch owns "
-        "it (proof_dispatch.py); no nudge, no hold, no park"
+        f"{trigger} — the proof run's re-run branch owns it (proof_dispatch.py) "
+        "on the critic's send-back or the gate's not-proven decline; no nudge, "
+        "no hold, no park"
     )
     return True
 
@@ -5566,11 +5655,13 @@ def hand_review_nudge_to_person(
     held In Review for the next sweep to post it, rather than leaving the
     review lane with a question no Operator decision could answer.
 
-    Never on a proof record the critic sent back at its head
-    (`proof_record_sent_back`, DRE-6406): the loop does not come here for
-    one, and neither does the held-card path finishing an older park.
+    Never on a proof record the proof run's re-run branch owns — sent back
+    by the critic at its head, or approved and declined by the gate there as
+    not proven (`proof_record_owned_by_proof_run`, DRE-6406, DRE-6650): the
+    loop does not come here for one, and neither does the held-card path
+    finishing an older park.
     """
-    if proof_record_sent_back(card, pr, critic):
+    if proof_record_owned_by_proof_run(card, pr, tag, critic):
         return
     ident = card["identifier"]
     number = pr["number"]
@@ -7426,6 +7517,8 @@ def promote_ready(
     # Which cap, and from where (DRE-3994): a run that holds or promotes must
     # say what it was holding to, or a repo at "0" promoting at 8 reads exactly
     # like a repo at 8.
+    for line in MAX_WIP_IGNORED:
+        print(line)
     print(f"promotion: WIP cap {MAX_WIP}, read from {MAX_WIP_SOURCE}")
     budget = MAX_WIP - active_count
     if budget <= 0:
@@ -14837,10 +14930,10 @@ def main(
                         )
                     continue
                 tag, critic, verifier = review_standing(pr)
-                if proof_record_sent_back(card, pr, critic):
-                    # DRE-6406: the proof run's re-run branch amends it; a
-                    # gate re-trigger cannot, and the park would put a
-                    # question in front of the CEO that is not his.
+                if proof_record_owned_by_proof_run(card, pr, tag, critic):
+                    # DRE-6406, DRE-6650: the proof run's re-run branch
+                    # amends it; a gate re-trigger cannot, and the park would
+                    # put a question in front of the CEO that is not his.
                     continue
                 bound = tag == GATE_NUDGE_KEY
                 spent = review_nudges_spent(card, tag, head)

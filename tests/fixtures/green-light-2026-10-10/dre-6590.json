@@ -1,0 +1,70 @@
+{
+  "card": "DRE-6590",
+  "arrival": "plan-bound",
+  "for": "planner",
+  "as_of": "2026-10-10T10:08:34.150Z",
+  "lane": "Planning",
+  "labels": [
+    "agent:engineer",
+    "repo:agent-bureau",
+    "initiative:bureau",
+    "Bug"
+  ],
+  "comments": [
+    {
+      "body": "🎟️ planner-slot: claimed · card DRE-6590 · run 38043111492 · repo dreadnought-foundry/agent-bureau · trigger planning · at 2026-10-10T09:56:27Z",
+      "authored_by_pipeline": true,
+      "created_at": "2026-10-10T09:56:28.156Z"
+    },
+    {
+      "body": "🧩 planning-shape: **one-off** — One card, one pull request. It owes no plan artifact and stops for no green light.\n\n**Why:** Two independent monitor-rule fixes in one backend tier and one language (Python), each in its own file with its own replay test, which fits one pull request; the doubt is that it bundles two separately-caused defects, and the wip_health count must be pinned to the sweep's definition in another repo, so if the first monitor's root cause proves deep it hands back as two cards. — size tests checked: 1 contracts between the pieces, 2 two languages or two tiers, 5 specific is not small, 6 cut on file footprint, not only on concern\n\n**Stamped by:** `planner` · **model:** `claude-fable-5-1`\n\n**Where it goes:** Backlog. **Who handles it there:** reconcile.py.",
+      "authored_by_pipeline": true,
+      "created_at": "2026-10-10T09:56:59.843Z"
+    },
+    {
+      "body": "🧠 model-attempt: claude-fable-5-1 (asked) / claude-fable-5-1 (answered) — planning classifier read the card.",
+      "authored_by_pipeline": true,
+      "created_at": "2026-10-10T09:57:00.578Z"
+    },
+    {
+      "body": "🔁 **Pre-approval critic — before this is built** — sent back — round 1 of 2. Every finding here is a defect in the card an agent can fix, so the planner revises the card in place and the critic reads it again.\n\nReason: The last \"done\" test needs someone to watch the live console after release and quote the times on the card, which an unattended build cannot do, so it has to move out of the acceptance list.\n\nEvery finding this round (5), ranked — the revision answers all of them, and the next round checks those fixes rather than finding these again:\n\n1. The last \"done\" test needs someone to watch the live console after release and quote the times on the card, which an unattended build cannot do, so it has to move out of the acceptance list.\n2. The first test is to be built from \"bureau-pipeline's real run list of 2026-10-10, recorded as a fixture\", but the card never says how the builder gets that list. Those runs are in the production record and on GitHub, and the card itself says a build agent usually cannot read that repo's runs. Eith…\n3. The \"wording and bound\" criterion says \"last successful read\" without saying what that means. This monitor reads fresh every pass, and the old row stays unchanged only because the monitor takes no action when it gets no answer. The card should say that is the case it means, so the builder does not …\n4. The card says the cause of the first alert is \"not determined\", yet the first test must fail on today's code and name the cause in the PR. That is workable, because the cause is findable in the repository (see the working), but the card should say the cause is the builder's to find, not leave it op…\n5. The second alert compares a count taken across all repositories against a cap that belongs to one repository (agent-bureau). The card says it has not checked what the sweep counts, but it is the heart of the fix, so the card should say the count must be for that one repository only.\n\nThis card is not going to the build queue yet, and nothing here is for the CEO — it stays in Planning while the planner rewrites it to answer every finding above, and the critic reads it again.",
+      "authored_by_pipeline": true,
+      "created_at": "2026-10-10T09:58:12.796Z"
+    },
+    {
+      "body": "plan-critic: stage=one-off round=1 result=SEND_BACK collisions=0 — The last \"done\" test needs someone to watch the live console after release and quote the times on the card, which an unattended build cannot do, so it has to move out of the acceptance list.",
+      "authored_by_pipeline": true,
+      "created_at": "2026-10-10T09:58:13.820Z"
+    },
+    {
+      "body": "🔁 The planner revised this card in place to answer the critic. What it changed, finding by finding:\n\n1. Moved the post-release observation out of the acceptance list into a closing section headed \"After release (not an acceptance criterion)\", written in the DRE-3075 deferred shape: the operator reads both rows after the release is live and records the PT times on this card, and the observation belongs on a follow-up card carrying `needs-human` and `no-code`, blocked by this one. The planner may not file cards in this run, so a person files that follow-up. The remaining criteria are all checkable against the diff and the tests.\n2. Supplied the fixture on the card itself. I read bureau-pipeline's run list with the pipeline's own GitHub token at about 03:00 PT on 2026-10-10 and recorded it as a table: the newest completed run of each of the five watched names and of the five `self-` stubs the sweep itself names, with run id, number, conclusion, branch, start and update stamps, and the job count from the jobs endpoint. The card now says the builder transcribes that table into the test module and reads nothing from GitHub. The first criterion is rewritten to run over that fixture with the live alert's kind already open, so it proves the resolution rather than just the absence of a raise.\n3. Defined \"the last verdict\" in the card's own words: the last tick on which every watched workflow answered and each was judged refused or normal, that is, the last tick that raised or resolved, or would have. The card states that the monitor reads fresh every tick, that it takes no action on a no-answer tick, and that this inaction is the one reason an old row stays unchanged, which is the case the rule is for. It says where to keep the time across ticks (the same store idiom the monitor already uses for lane state) and how to date a row raised before the change (from the dated sentence its body already carries). I also removed the \"or stand down\" option the original left open: standards/console-honesty.md rule 2 says unknown is shown as unknown, never as the last known value, and this monitor resolves only on positive evidence, so the alert carries its age and is never resolved on no answer. The bound stays the builder's to state, with a one-day recommendation and the reasons for it, and the 18-day test is unchanged.\n4. Replaced \"Not determined\" with a section that gives the cause as read from the repository and says the builder confirms it against the fixture and the live Record and names it in the pull request. It has two halves. Half one: `WATCHED_WORKFLOWS` names the scaffold stubs, but in bureau-pipeline those filenames are the `workflow_call`-only reusables, so `agent-task.yml` there has only its five refused runs of 2026-09-09 and its newest completed run is a refusal forever, `qa-review.yml` has one refused run from June, and the other three have no runs at all. The sweep already resolves these names per repo (`build_workflow()` and its siblings in reconcile.py answer `self-agent-task.yml`, `pr-review.yml`, `self-agent-fix.yml`, `self-merge-gate.yml`). Half two: the body's \"Read from GitHub at\" wording predates the move of both reads onto the event Record, the body is refreshed on every raise whose content moved, so the last raising tick was 2026-09-22 11:31 PT, and every tick since has had no answer because the Record does not hold a window back to a run created on 2026-09-09. The fix for half one is a per-repo watch list, pinned against bureau-pipeline's own workflow directory, and that is now the second criterion.\n5. Stated that the count is for the one repository whose cap the monitor reads (agent-bureau) and wrote out what the sweep's cap counts, read from where the sweep states it: `wip_base` keeps this repo's cards over the work-segment lanes with a stall window in the lane contract (Todo, In Progress, In Review today), drops epics and `automation` cards, and `counts_against_wip` drops cards carrying a person mark from the routing vocabulary, `no-code` cards and `PROOF:` cards. The card names why today's number is wrong (every routed card in every repo in `ACTIVE_STATES`, minus epics), says the body must name what it counted beside the cap, and rewrites the fourth criterion so the 30-card replay contains each kind of excluded card. The pin criterion now says what is compared to what: the console's lane set, excluded labels and proof prefix against bureau-pipeline's `config/lane-contract.json`, `config/routing-verdicts.json`, `linear_ops.NO_CODE_LABEL` and `dependabot_card.LABEL`, read from the `.bureau-pipeline/` checkout or fetched at `stable` under the two-copies rule, failing rather than skipping on a disagreement. The console cannot import reconcile.py, and the card says why, so the rule is held as data and pinned rather than restated as prose.",
+      "authored_by_pipeline": true,
+      "created_at": "2026-10-10T10:06:13.619Z"
+    },
+    {
+      "body": "🔁 The critic reads the revised card again on the next planning run, which has been started — nothing here is for the CEO. If the revision still does not satisfy it, the card parks in Triage for the operator with every finding named.",
+      "authored_by_pipeline": true,
+      "created_at": "2026-10-10T10:06:15.784Z"
+    },
+    {
+      "body": "🎟️ planner-slot: released · card DRE-6590 · run 38043111492 · repo dreadnought-foundry/agent-bureau · trigger - · at 2026-10-10T10:06:16Z · because finished",
+      "authored_by_pipeline": true,
+      "created_at": "2026-10-10T10:06:16.623Z"
+    },
+    {
+      "body": "🎟️ planner-slot: claimed · card DRE-6590 · run 38043740208 · repo dreadnought-foundry/agent-bureau · trigger planning · at 2026-10-10T10:07:21Z",
+      "authored_by_pipeline": true,
+      "created_at": "2026-10-10T10:07:22.820Z"
+    },
+    {
+      "body": "🛑 **Pre-approval critic — before this is built** — two send-backs on this card — the bound. The planner's revision did not satisfy the critic, so the card parks in Triage for the operator with every finding raised so far named below. A revision loop that does not converge is a defect in the card, not a decision, so it is not put to the CEO.\n\nReason: One \"done\" test asks the build to report that it confirmed the cause against the live production record, which an unattended build cannot read, so the test has to be reworded to what the build can actually check.\n\nEvery finding raised on this card so far (5), oldest first — one rewrite answers all of them, rather than one answer each:\n\n1. The last \"done\" test needs someone to watch the live console after release and quote the times on the card, which an unattended build cannot do, so it has to move out of the acceptance list.\n2. One \"done\" test asks the build to report that it confirmed the cause against the live production record, which an unattended build cannot read, so the test has to be reworded to what the build can actually check.\n3. Same card, first \"done\" test and the \"cause\" section: both say the builder \"confirms against the live Record\" which of the two reads fails, and the pull request must name both halves as confirmed that way. A build run has no way to read the live record (the card itself says a build agent's view of …\n4. Same card, second alert's \"pin\" test: it says the test \"fetches from bureau-pipeline at stable\" when the pipeline checkout is absent, and \"fails, never skips.\" That needs network access in the test run and a failure whenever the fetch fails, which makes the suite fail for reasons that are not a dis…\n5. Same card, second alert: the card says the store carries each card's repo and labels, but some stored cards have no label list at all (the console already handles that elsewhere). The card should say how such a card is counted, since it decides whether the count is high or low.\n\nThis card is not going to the build queue, and it is not waiting on the CEO — it parks in Triage. Fix the card so one rewrite answers every finding above and send it back through Planning, or take it out of the queue.",
+      "authored_by_pipeline": true,
+      "created_at": "2026-10-10T10:08:33.528Z"
+    },
+    {
+      "body": "plan-critic: stage=one-off round=2 result=SEND_BACK collisions=0 — One \"done\" test asks the build to report that it confirmed the cause against the live production record, which an unattended build cannot read, so the test has to be reworded to what the build can actually check.",
+      "authored_by_pipeline": true,
+      "created_at": "2026-10-10T10:08:34.150Z"
+    }
+  ]
+}

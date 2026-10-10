@@ -685,9 +685,9 @@ class FakeLinear:
         self.calls.append(("find_open", title))
         return self.open_card
 
-    def create_card(self, title, body, *, repo_slug):
+    def create_card(self, title, body, *, repo_slug, labels=()):
         self.calls.append(("create", title))
-        self.created.append((title, body, repo_slug))
+        self.created.append((title, body, repo_slug, labels))
         return {"identifier": "DRE-9999", "url": "https://linear.app/x/DRE-9999"}
 
 
@@ -796,7 +796,7 @@ class TestAlarm:
         assert code == 0
         assert linear.comments == []
         assert len(linear.created) == 1
-        title, body, slug = linear.created[0]
+        title, body, slug, _labels = linear.created[0]
         assert title == ALARM_TITLE
         assert slug == "agent-bureau"
         kinds = [c[0] for c in linear.calls]
@@ -844,11 +844,177 @@ class TestAlarm:
 
     def test_a_card_that_cannot_be_filed_still_exits_zero(self, capsys):
         class Refusing(FakeLinear):
-            def create_card(self, title, body, *, repo_slug):
+            def create_card(self, title, body, *, repo_slug, labels=()):
                 raise RuntimeError("Linear refused the create")
         code, lines, _ = _pass(capsys, linear=Refusing({"DRE-6141": [_receipt(13)]}))
         assert code == 0
         assert any("Linear refused the create" in l for l in lines), lines
+
+
+# --------------------------------------------------------------------------- #
+# the alarm is an operator step (DRE-6652)                                     #
+# --------------------------------------------------------------------------- #
+
+ALARM_LABELS = ("agent:devops", "no-code")
+ALARM_CARDS = ("DRE-6141", "DRE-6142", "DRE-6143")
+POSTED = NOW - timedelta(hours=13)
+
+
+def _alarm_body(**overrides) -> str:
+    args = dict(name=SWITCH, slug="agent-bureau", repo=OWNER_REPO,
+                states=ALL_DONE, cards=ALARM_CARDS, first="DRE-6141",
+                posted=POSTED, now=NOW)
+    args.update(overrides)
+    return switch_reason.alarm_body(**args)
+
+
+def _section(body: str, heading: str) -> list:
+    """The non-blank lines after `heading` to the end of `body`."""
+    lines = body.splitlines()
+    return [l for l in lines[lines.index(heading) + 1:] if l.strip()]
+
+
+class TestAlarmIsAnOperatorStep:
+    def test_the_alarm_is_filed_with_the_two_labels(self, capsys):
+        _, _, linear = _pass(capsys, linear=FakeLinear({"DRE-6141": [_receipt(13)]}))
+        assert len(linear.created) == 1
+        title, _body, slug, labels = linear.created[0]
+        assert (title, slug) == (ALARM_TITLE, "agent-bureau")
+        assert tuple(labels) == ALARM_LABELS
+
+    def test_the_labels_are_spelled_as_the_constants_spell_them(self):
+        import linear_ops  # noqa: PLC0415
+        assert switch_reason.alarm_labels() == ("agent:devops", linear_ops.NO_CODE_LABEL)
+
+    def test_no_code_routes_operator_and_no_hold_label_is_written(self):
+        import hold  # noqa: PLC0415
+        import linear_ops  # noqa: PLC0415
+        labels = switch_reason.alarm_labels()
+        assert hold.HOLD_LABEL not in labels
+        assert "needs-human" not in labels
+        for label in labels:
+            assert linear_ops.agent_label_refusal(label) is None, label
+        vocab = json.loads((ROOT / "config" / "routing-verdicts.json")
+                           .read_text(encoding="utf-8"))
+        assert vocab["labels"]["map"][linear_ops.NO_CODE_LABEL] == "OPERATOR"
+
+    def test_linear_writes_passes_the_labels_through(self):
+        seen = []
+
+        class Ops:
+            def create_card(self, title, body, *, repo_slug, labels=()):
+                seen.append((title, body, repo_slug, tuple(labels)))
+                return {"identifier": "DRE-1"}
+
+        writes = switch_reason.LinearWrites(Ops())
+        writes.create_card("t", "b", repo_slug="portico", labels=ALARM_LABELS)
+        assert seen == [("t", "b", "portico", ALARM_LABELS)]
+
+    def test_the_body_keeps_its_facts(self):
+        body = _alarm_body()
+        for expected in (f"`{SWITCH}`", "agent-bureau", "DRE-6141",
+                         "2026-10-08 16:00 PT", "13 hours",
+                         "DRE-6141 Done, DRE-6142 Done, DRE-6143 Done"):
+            assert expected in body, expected
+
+    def test_the_body_states_the_two_steps_in_order_with_their_commands(self):
+        body = _alarm_body()
+        on = f"gh variable set {SWITCH} --body true -R {OWNER_REPO}"
+        delete = f"gh variable delete {COMPANION} -R {OWNER_REPO}"
+        reason = f'gh variable set {COMPANION} --body "DRE-<n>" -R {OWNER_REPO}'
+        for command in (on, delete, reason):
+            assert command in body, command
+        assert body.index(on) < body.index(delete) < body.index(reason)
+        assert "close this card" in body
+        assert "In both cases close this card" in body
+
+    def test_the_body_asks_nothing(self):
+        body = _alarm_body()
+        assert "?" not in body
+        assert "If it should" not in body
+
+    def test_the_body_ends_with_a_two_item_checklist(self):
+        body = _alarm_body()
+        items = _section(body, "## Acceptance criteria")
+        assert len(items) == 2, items
+        assert all(item.startswith("- [ ] ") for item in items), items
+        assert f"`{SWITCH}`" in items[0] and "`true`" in items[0]
+        assert f"`{COMPANION}` is deleted" in items[0]
+        assert "names at least one open card" in items[0]
+        assert "Canceled or Done" in items[1] and "comment saying which" in items[1]
+        assert body.rstrip().splitlines()[-1] == items[-1]
+
+    def test_the_body_keeps_its_trailer(self):
+        body = _alarm_body()
+        assert ("Filed by the sweep's `Read the switches` step "
+                "(scripts/switch_reason.py, DRE-6437)") in body
+
+    def test_the_title_is_unchanged(self):
+        assert switch_reason.alarm_title(SWITCH, "agent-bureau") == ALARM_TITLE
+
+    def test_the_filed_body_is_the_one_alarm_body_composes(self, capsys):
+        _, _, linear = _pass(capsys, linear=FakeLinear({"DRE-6141": [_receipt(13)]}))
+        assert linear.created[0][1] == _alarm_body()
+
+    def test_the_doc_says_where_the_alarm_goes(self):
+        text = (ROOT / "docs" / "switches.md").read_text(encoding="utf-8")
+        section = text.split("## The receipt and the alarm", 1)[1]
+        for expected in ("`agent:devops`", "`no-code`", "operator",
+                         "routing-verdicts.json", "## Acceptance criteria"):
+            assert expected in section, expected
+
+
+# --------------------------------------------------------------------------- #
+# the replay of DRE-6636 (DRE-6652, under DRE-6639)                           #
+# --------------------------------------------------------------------------- #
+
+REPLAY = ROOT / "tests" / "fixtures" / "green-light-2026-10-10" / "dre-6636.json"
+REPLAY_KEYS = ("card", "arrival", "for", "as_of", "lane", "labels", "comments")
+
+
+class TestReplayDre6636:
+    @pytest.fixture
+    def replay(self):
+        return json.loads(REPLAY.read_text(encoding="utf-8"))
+
+    def test_the_fixture_has_the_shared_shape(self, replay):
+        for key in REPLAY_KEYS:
+            assert key in replay, key
+        assert replay["card"] == "DRE-6636"
+        assert replay["arrival"] == "switch-card"
+        assert replay["for"] == "operator"
+        assert re.fullmatch(r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ", replay["as_of"])
+        assert replay["lane"] == "Planning"
+        assert replay["labels"] == ["repo:portico"]
+        for row in replay["comments"]:
+            assert set(row) == {"body", "authored_by_pipeline", "created_at"}
+            assert row["created_at"] <= replay["as_of"]
+        assert set(replay["filed"]) == {"original", "now"}
+        for side in ("original", "now"):
+            assert set(replay["filed"][side]) == {"title", "body", "labels"}
+
+    def test_the_original_was_a_question_with_no_role(self, replay):
+        original = replay["filed"]["original"]
+        assert original["labels"] == replay["labels"]
+        assert "If it should come on" in original["body"]
+        assert "## Acceptance criteria" not in original["body"]
+
+    def test_filed_now_is_what_the_filer_files(self, replay):
+        """The fixture cannot drift from the filer: the same switch, repo and
+        cards, timed as DRE-6636 was — the receipt on DRE-6141 at 04:40:51Z,
+        the card filed at 16:53:52Z."""
+        cards = ("DRE-6141", "DRE-6142", "DRE-6143")
+        body = switch_reason.alarm_body(
+            SWITCH, "portico", "dreadnought-foundry/portico",
+            {card: "Done" for card in cards}, cards, "DRE-6141",
+            datetime(2026, 10, 10, 4, 40, 51, 636000, tzinfo=timezone.utc),
+            datetime(2026, 10, 10, 16, 53, 52, tzinfo=timezone.utc))
+        now = replay["filed"]["now"]
+        assert now["title"] == switch_reason.alarm_title(SWITCH, "portico")
+        assert now["title"] == replay["filed"]["original"]["title"]
+        assert now["body"] == body
+        assert now["labels"] == ["repo:portico", *switch_reason.alarm_labels()]
+        assert now["labels"] == ["repo:portico", *ALARM_LABELS]
 
 
 class TestDryRun:
@@ -865,6 +1031,7 @@ class TestDryRun:
         assert linear.created == []
         assert not any(c[0] in ("comment", "create") for c in linear.calls)
         assert any(l.startswith(f"would: alarm — {ALARM_TITLE}") for l in lines), lines
+        assert f"would: alarm — {ALARM_TITLE}" in lines
 
     def test_outside_actions_the_phase_is_dry(self, capsys):
         env = {k: v for k, v in LIVE.items() if k != "GITHUB_ACTIONS"}

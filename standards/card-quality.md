@@ -363,24 +363,39 @@ and one posted after the merge. A refused card stays open under the
 `🔒 Merged — card deliberately left open` comment, which names what refused
 it, such as the standing hold or the unmet row.
 
-**A criterion a later decision overtook is accepted, not met (DRE-6244).** The
-CEO decided on 2026-10-07 that a record may carry a row the operator accepted
-as out of date, provided the record links the written reason. Use it only when
-a criterion has been overtaken by a later shipped decision, and the linked
-comment names that decision. The operator writes the decision comment and the
-row — never the builder, and never the proof run. A proof run never writes an
-accepted row on its own judgment: it records `Not observed.` or `Not met.` and
-lets the gate hold. The row reads `ACCEPTED by operator decision — <reason>
-(<link>)`, where the link is a Linear comment
+**A row shown working but not as the card words it is accepted, not met
+(DRE-6244, DRE-6773).** The CEO decided on 2026-10-07 that a record may carry a
+row the operator accepted, provided the record links the written reason. The
+CEO decided on 2026-10-10 which rows those are, and rejected both accepting
+every unmet row and accepting none:
+
+- A row may be accepted by operator decision only where the mechanism was
+  actually observed working and just the card's wording, quoted text, timing,
+  count or method of observing differs. A criterion overtaken by a later
+  shipped decision is one case of this.
+- The acceptance names what was seen, quoted from the record, says what
+  differs from the card's words, and links the written decision. The operator
+  writes the decision and the row — never the builder and never the proof
+  run.
+- A row where the thing itself was not seen is never accepted: it stays unmet
+  and waits for a new run or a reworded card. That covers a value that is only
+  a default, a reader with no access, an event that has not happened, a
+  missing positive control, and indirect evidence. A row that is part shown
+  and part not seen is not acceptable either.
+
+A proof run never writes an accepted row on its own judgment: it records
+`Not observed.` or `Not met.` and lets the gate hold. The row reads
+`ACCEPTED by operator decision — <reason> (<link>)`, where the reason is what
+was seen and what differs, and the link is a Linear comment
 (`linear.app/<workspace>/issue/DRE-<n>/<slug>#comment-<id>`) or a GitHub pull
 request comment (`github.com/<owner>/<repo>/pull/<n>#issuecomment-<id>`) in
 the same cell. An accepted row with no such link is held as not met. A record
 whose judged rows are all `Met.` or accepted is `**Status: PASS.**`, and the
 card's close comment names every accepted row by its criterion. The gate checks
 only that a link of the right shape is present. It does not open the link, so
-it cannot confirm the comment exists, that the operator wrote it, or that it
-names a shipped decision — the critic, whose APPROVE the gate still requires,
-is the reader who follows it.
+it cannot confirm the comment exists, that the operator wrote it, or that the
+row it accepts was seen — the critic, whose APPROVE the gate still requires,
+is the reader who follows it and applies both halves of the rule above.
 
 **Proofs never wait on the CEO's sign-in (DRE-5391).** The CEO decided on
 2026-09-30 that the operator runs a proof as soon as its build cards finish,

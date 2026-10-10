@@ -1128,11 +1128,69 @@ def kind_for(role: str) -> str:
     return kind if kind in KINDS else WORKHORSE_KIND
 
 
-def ladder_for(role: str) -> list[str]:
+def resolve_repo_slug(value: str | None, repo_map_path: Path | None = None) -> str | None:
+    """The config/repo-map.json slug `value` names, or None (DRE-6634).
+
+    Two spellings: a slug that is a key of the map, or an `owner/name` such as
+    `$GITHUB_REPOSITORY` (`EveryBite/atlas`), matched case-insensitively
+    against the map's values — `upload_agent_log.repo_slug`'s lookup, copied
+    rather than imported because that module is not on the dispatch path. An
+    empty or whitespace value, an unreadable map and anything else are None:
+    no project, so the fleet ladder.
+    """
+    import json
+
+    wanted = value.strip() if isinstance(value, str) else ""
+    if not wanted:
+        return None
+    try:
+        repo_map = json.loads(Path(repo_map_path or _REPO_MAP_PATH).read_text())
+    except Exception:
+        return None
+    if not isinstance(repo_map, Mapping):
+        return None
+    if wanted in repo_map:
+        return wanted
+    lowered = wanted.lower()
+    for slug, full in repo_map.items():
+        if isinstance(full, str) and full.lower() == lowered:
+            return str(slug)
+    return None
+
+
+def _project_exception(role: str, slug: str | None) -> str | None:
+    """The model `slug`'s exception puts first on `role`'s walk, or None.
+
+    A role absent from `agents` keeps `default_ladder` whatever the project
+    says (DRE-6634): an unrecognized name lands on the fleet's default, never
+    on a project's choice for a kind it was never classified as. And an
+    exception `effective_ladders` would not apply — off its kind's own ladder —
+    is no exception here either.
+    """
+    if slug is None or role not in AGENT_KINDS:
+        return None
+    projects = CONFIG.get("projects")
+    entry = projects.get(slug) if isinstance(projects, Mapping) else None
+    model = entry.get(kind_for(role)) if isinstance(entry, Mapping) else None
+    ladder = LADDERS.get(KINDS.get(kind_for(role), ""), [])
+    return model if isinstance(model, str) and model in ladder else None
+
+
+def ladder_for(role: str, repo: str | None = None) -> list[str]:
     """The ordered ladder an agent/role walks: role → KIND → ladder. An unknown
     name gets the workhorse (default) ladder — select() must never block a
-    build on a role it does not recognize, and must never promote one."""
-    return LADDERS.get(KINDS.get(kind_for(role), ""), LADDER)
+    build on a role it does not recognize, and must never promote one.
+
+    `repo` (DRE-6634) is a slug or an `owner/name`: when it names a project
+    whose `projects` entry carries an exception for this role's kind, the walk
+    is `effective_ladders(CONFIG, slug)` for that kind — the exception first,
+    then the kind's ladder with it removed. No repo, an unknown one or no
+    exception is the fleet ladder, exactly as before."""
+    name = KINDS.get(kind_for(role), "")
+    slug = resolve_repo_slug(repo)
+    if _project_exception(role, slug) is None:
+        return LADDERS.get(name, LADDER)
+    return effective_ladders(CONFIG, slug).get(name, LADDER)
 
 # Cache availability results so we don't probe on every dispatch. ~12 min keeps
 # latency negligible across a burst of cards while picking up an Anthropic
@@ -1440,11 +1498,14 @@ def effort_for(model: str) -> str | None:
     return level if level in EFFORT_LEVELS else None
 
 
-def fallback_for(role: str, model: str) -> str | None:
+def fallback_for(role: str, model: str, repo: str | None = None) -> str | None:
     """The rung directly below `model` on `role`'s ladder, or None when it is
     the last rung or not on the ladder at all (DRE-3970). What a step hands the
-    CLI as `--fallback-model` — read off the reviewed ladder, never a literal."""
-    walk = ladder_for(role)
+    CLI as `--fallback-model` — read off the reviewed ladder, never a literal.
+
+    `repo` reads it off that project's walk (DRE-6634), the same walk `select`
+    chose from, so the fallback and the capacity retry agree with it."""
+    walk = ladder_for(role, repo)
     if model not in walk:
         return None
     at = walk.index(model)
@@ -1489,8 +1550,8 @@ def separated_walk(role: str, walk: list[str], built_on=None, built_on_unknown=F
 
 
 def select_with_reasons(
-    role: str = "engineer", *, probe=None, clock=None, ladder=None, avoid=(),
-    out_of_capacity=(), built_on=None, built_on_unknown=False,
+    role: str = "engineer", *, repo=None, probe=None, clock=None, ladder=None,
+    avoid=(), out_of_capacity=(), built_on=None, built_on_unknown=False,
 ) -> dict:
     """The full selection DECISION, not just the answer (DRE-2317).
 
@@ -1499,7 +1560,18 @@ def select_with_reasons(
         {"role":…, "kind": "workhorse"|"advisory", "ladder": [ids…],
          "model": chosen, "skipped": [{"model":…, "reason":…}, …],
          "separated": [ids…], "built_on_unknown": bool,
-         "degraded": bool, "exhausted": bool}
+         "degraded": bool, "exhausted": bool,
+         "project": slug|None, "exception": model|None, "repo": str|None}
+
+    `repo` (DRE-6634) is a slug or an `owner/name`; `project` is the slug it
+    resolved to and `exception` the model that project's entry puts first on
+    this role's walk (`ladder_for`). `repo` echoes the value as given, stripped
+    and None when empty, so the note can name one that resolved to nothing. An
+    exception leading the walk is not a skip and not a degradation: the rung
+    is the project's TOP, and anything skipped below it is reported as ever.
+    Review separation narrows the project walk exactly as it narrows the fleet
+    ladder. An explicit `ladder` overrides the config lookup, the project's
+    exception with it.
 
     `skipped` lists every rung ABOVE the chosen one and why it was passed over.
     Recording the selection alone was never enough: a run that quietly dropped
@@ -1536,10 +1608,15 @@ def select_with_reasons(
         probe = _probe_real
     if clock is None:
         clock = time.monotonic
-    walk = _normalize_ladder(ladder) or ladder_for(role)
+    given = repo.strip() if isinstance(repo, str) and repo.strip() else None
+    project = resolve_repo_slug(given)
+    explicit = _normalize_ladder(ladder)
+    exception = None if explicit else _project_exception(role, project)
+    walk = explicit or ladder_for(role, project)
     walk, separated = separated_walk(role, walk, built_on, built_on_unknown)
     avoided = {m for m in (avoid or ()) if isinstance(m, str) and m}
     refused = {m for m in (out_of_capacity or ()) if isinstance(m, str) and m}
+    where = {"project": project, "exception": exception, "repo": given}
 
     skipped: list[dict[str, str]] = []
     for model in walk:
@@ -1561,6 +1638,7 @@ def select_with_reasons(
                 "built_on_unknown": bool(built_on_unknown),
                 "degraded": bool(skipped),
                 "exhausted": False,
+                **where,
             }
         skipped.append(
             {
@@ -1581,6 +1659,7 @@ def select_with_reasons(
         "built_on_unknown": bool(built_on_unknown),
         "degraded": True,
         "exhausted": True,
+        **where,
     }
 
 
@@ -1624,12 +1703,38 @@ def selection_note(decision: Mapping) -> str:
         note += " — top of the ladder, nothing above it was skipped"
     if decision.get("exhausted"):
         note += " — no rung probed available; fell through to the lowest rung"
+    note += _project_fragment(decision, kind)
     return " ".join(note.split())
 
 
+# What an unresolved `--repo` value may echo into the note: the characters a
+# slug or an `owner/name` is made of. The note rides a shell string, so a quote,
+# a backtick or a `$` from the command line must never reach it.
+_ECHO_SAFE = frozenset(
+    "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._/-"
+)
+
+
+def _project_fragment(decision: Mapping, kind: str) -> str:
+    """Exactly one of the four project fragments the note ends with (DRE-6634).
+    An exception leading the walk is the project's top rung, so it never
+    touches the `DEGRADED` prefix."""
+    project = decision.get("project")
+    exception = decision.get("exception")
+    if project and exception:
+        return f" — project {project}: exception {exception} leads the {kind} walk"
+    if project:
+        return f" — project {project}: no exception, fleet ladder"
+    given = decision.get("repo")
+    if isinstance(given, str) and given.strip():
+        echo = "".join(c if c in _ECHO_SAFE else "?" for c in given.strip())
+        return f" — project unknown ({echo}): fleet ladder"
+    return " — project none: fleet ladder"
+
+
 def select(
-    role: str = "engineer", *, probe=None, clock=None, ladder=None, avoid=(),
-    out_of_capacity=(), built_on=None, built_on_unknown=False,
+    role: str = "engineer", *, repo=None, probe=None, clock=None, ladder=None,
+    avoid=(), out_of_capacity=(), built_on=None, built_on_unknown=False,
 ) -> str:
     """The model the next attempt should use: the first AVAILABLE model walking
     that agent's ordered ladder best→worst.
@@ -1665,9 +1770,13 @@ def select(
     `review_separation` block binds — the critic and the verifier — a declared
     overlap comes off the walk, so a Sonnet-5 build is never reviewed by Sonnet
     5 at any availability. Every other role ignores both.
+
+    `repo` is a slug or an `owner/name` (DRE-6634): that project's exception,
+    when it has one for this role's kind, leads the walk. Nothing, or anything
+    that names no project, is the fleet ladder.
     """
     return select_with_reasons(
-        role, probe=probe, clock=clock, ladder=ladder, avoid=avoid,
+        role, repo=repo, probe=probe, clock=clock, ladder=ladder, avoid=avoid,
         out_of_capacity=out_of_capacity, built_on=built_on,
         built_on_unknown=built_on_unknown,
     )["model"]
@@ -1788,6 +1897,7 @@ def main(argv: list[str]) -> int:
       select [<agent>] [--explain-file <path>] [--avoid <model>]...
              [--out-of-capacity <model>]... [--fallback-file <path>]
              [--effort-file <path>] [--built-on <model>] [--built-on-unknown]
+             [--repo <slug-or-owner/name>]
                                    print the model the next attempt should use
                                    (walks that agent's ladder from
                                    config/models.yaml, probes availability) and,
@@ -1805,7 +1915,12 @@ def main(argv: list[str]) -> int:
                                    --built-on names the model the pull request
                                    under review was BUILT on and
                                    --built-on-unknown says we could not find
-                                   out, which fails closed (DRE-3880)
+                                   out, which fails closed (DRE-3880);
+                                   --repo names the project — a repo-map slug
+                                   or an `owner/name` such as
+                                   $GITHUB_REPOSITORY — whose exception leads
+                                   the walk, and --fallback-file reads that
+                                   same walk (DRE-6634)
       effort <model>               print the effort level that model runs at,
                                    or NOTHING when it declares none (DRE-4836).
                                    Exit 0 either way: the caller writes
@@ -1834,7 +1949,7 @@ def main(argv: list[str]) -> int:
     if not argv:
         print(
             "usage: model_fallback.py select [<agent>] [--explain-file <path>] "
-            "[--built-on <model>|--built-on-unknown] "
+            "[--built-on <model>|--built-on-unknown] [--repo <slug-or-owner/name>] "
             "| build-model <comments.json> | role-of <labels>"
         )
         return 2
@@ -1857,6 +1972,7 @@ def main(argv: list[str]) -> int:
         effort_path = None
         built_on = None
         built_on_unknown = False
+        repo = None
         args: list[str] = []
         pending = list(rest)
         while pending:
@@ -1875,6 +1991,8 @@ def main(argv: list[str]) -> int:
                 built_on = pending.pop(0) if pending else None
             elif arg == "--built-on-unknown":
                 built_on_unknown = True
+            elif arg == "--repo":
+                repo = pending.pop(0) if pending else ""
             else:
                 args.append(arg)
         # Ignore a legacy comments-file 2nd arg if the workflow still passes one
@@ -1882,7 +2000,7 @@ def main(argv: list[str]) -> int:
         role = args[0] if args else "engineer"
         clear_availability_cache()
         decision = select_with_reasons(
-            role, probe=_fake_probe_from_env(), avoid=avoid,
+            role, repo=repo, probe=_fake_probe_from_env(), avoid=avoid,
             out_of_capacity=refused, built_on=built_on,
             built_on_unknown=built_on_unknown,
         )
@@ -1899,7 +2017,7 @@ def main(argv: list[str]) -> int:
         if fallback_path:
             try:
                 with open(fallback_path, "w") as fh:
-                    fh.write((fallback_for(role, decision["model"]) or "") + "\n")
+                    fh.write((fallback_for(role, decision["model"], repo) or "") + "\n")
             except OSError as exc:  # same rule as the note
                 print(f"model_fallback: could not write {fallback_path} ({exc})",
                       file=sys.stderr)

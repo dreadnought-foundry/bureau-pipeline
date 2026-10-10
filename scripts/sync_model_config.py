@@ -15,6 +15,15 @@ marker comments — never a hand edit:
 The ladders themselves live ONLY in the canonical file: the registry's 5x
 copy-pasted ``ladder:`` block is gone.
 
+A third target is a whole generated file (DRE-6635):
+
+  * ``config/model-choices.json`` — what the console's Settings › Agents &
+    models page reads: every priced model, every group with the choices it
+    allows, every agent with the moves it allows, and the per-project
+    exceptions. Every ``allowed`` / ``reason`` is ``policy_errors``' answer on
+    a copy of the canonical config carrying that one option as a real entry,
+    so the page is read off the gate a pull request meets.
+
 Usage:
 
     python3 scripts/sync_model_config.py          # rewrite the regions in place
@@ -30,7 +39,9 @@ failure message that names the one repair command.
 from __future__ import annotations
 
 import argparse
+import copy
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -41,12 +52,15 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from model_fallback import _normalize_config  # noqa: E402
 from model_fallback import _normalize_separation  # noqa: E402
+from model_fallback import declared_prices  # noqa: E402
+from model_fallback import declared_repo_slugs  # noqa: E402
 from model_fallback import policy_errors as _policy_errors  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
 CONFIG = ROOT / "config" / "models.yaml"
 FALLBACK_TARGET = ROOT / "scripts" / "model_fallback.py"
 REGISTRY_TARGET = ROOT / "agents.yaml"
+CHOICES_TARGET = ROOT / "config" / "model-choices.json"
 
 _PY_BEGIN = "BEGIN generated model config"
 _PY_END = "END generated model config"
@@ -54,6 +68,10 @@ _YAML_BEGIN = "BEGIN generated model"
 _YAML_END = "END generated model"
 
 REPAIR_COMMAND = "python3 scripts/sync_model_config.py"
+
+# The slug a choice is probed under (DRE-6635). Injected into the repo slugs the
+# probe is judged against, so it can never collide with a real project entry.
+PROBE_SLUG = "__choice__"
 
 
 # --------------------------------------------------------------------------- #
@@ -243,6 +261,121 @@ def render_registry_model(cfg: dict, agent: str) -> str:
     )
 
 
+def render_choices(raw: dict, cfg: dict, prices: dict) -> str:
+    """config/model-choices.json, the console's contract (DRE-6635): key order
+    fixed, 2-space indent, trailing newline.
+
+    No rule is restated here. A group's choice is ``policy_errors``' answer on
+    a deep copy of ``raw`` carrying that model as an exception under
+    ``projects[PROBE_SLUG]``, filtered to that entry's own prefix so an error
+    elsewhere in the config never reaches it; an agent's move is the errors a
+    copy with that agent reassigned ADDS to the canonical config's own.
+    """
+    excluded = {
+        entry["model"]: entry.get("reason")
+        for entry in raw.get("excluded") or []
+        if isinstance(entry, dict) and isinstance(entry.get("model"), str)
+    }
+    # Only a priced model is offered: a price is never invented.
+    models = [
+        {
+            "id": model,
+            "label": _model_label(model),
+            "input": price["input"],
+            "output": price["output"],
+            "excluded": excluded.get(model),
+        }
+        for model, price in prices.items()
+    ]
+
+    probe_slugs = (declared_repo_slugs() or set()) | {PROBE_SLUG}
+    groups = []
+    for kind, words in cfg["groups"].items():
+        ladder = cfg["ladders"][cfg["kinds"][kind]]
+        prefix = f"projects.{PROBE_SLUG}.{kind}: "
+        choices = []
+        for model in models:
+            trial = copy.deepcopy(raw)
+            trial["projects"] = {PROBE_SLUG: {kind: model["id"]}}
+            refused = [
+                error[len(prefix):]
+                for error in _policy_errors(trial, prices, repo_slugs=probe_slugs)
+                if error.startswith(prefix)
+            ]
+            choices.append(_verdict("model", model["id"], refused))
+        groups.append({
+            "key": kind,
+            "label": words["label"],
+            "purpose": words["purpose"],
+            "default_model": ladder[0],
+            "fallbacks": ladder[1:],
+            "choices": choices,
+        })
+
+    repo_slugs = declared_repo_slugs()
+    baseline = set(_policy_errors(raw, prices, repo_slugs=repo_slugs))
+    agents = []
+    for name, kind in cfg["agents"].items():
+        moves = []
+        for other in cfg["groups"]:
+            if other == kind:
+                continue
+            trial = copy.deepcopy(raw)
+            trial["agents"][name] = other
+            added = [
+                error
+                for error in _policy_errors(trial, prices, repo_slugs=repo_slugs)
+                if error not in baseline
+            ]
+            moves.append(_verdict("group", other, added))
+        agents.append(_agent_entry(cfg, name, kind, moves))
+    for name in cfg["ungrouped"]:
+        agents.append(_agent_entry(cfg, name, None, []))
+
+    document = {
+        "generated_from": "config/models.yaml",
+        "models": models,
+        "groups": groups,
+        "agents": agents,
+        "projects": [
+            {"slug": slug, "exceptions": dict(entry)}
+            for slug, entry in cfg["projects"].items()
+        ],
+    }
+    return json.dumps(document, indent=2, ensure_ascii=False) + "\n"
+
+
+_MODEL_ID = re.compile(r"claude-([a-z]+)-(\d+)(?:-(\d+))?")
+
+
+def _model_label(model: str) -> str:
+    """`claude-<family>-<major>-<minor>` → `<Family> <major>.<minor>`
+    (`claude-opus-5` → `Opus 5`). An id of any other shape is its own label."""
+    match = _MODEL_ID.fullmatch(model)
+    if not match:
+        return model
+    family, major, minor = match.groups()
+    return f"{family.title()} {major}" + (f".{minor}" if minor else "")
+
+
+def _verdict(key: str, value: str, refused: list[str]) -> dict:
+    return {
+        key: value,
+        "allowed": not refused,
+        "reason": "; ".join(refused) if refused else None,
+    }
+
+
+def _agent_entry(cfg: dict, name: str, kind: str | None, moves: list) -> dict:
+    return {
+        "name": name,
+        "label": name.replace("-", " ").title(),
+        "about": cfg["about"].get(name),
+        "group": kind,
+        "moves": moves,
+    }
+
+
 # --------------------------------------------------------------------------- #
 # Splicing                                                                     #
 # --------------------------------------------------------------------------- #
@@ -334,6 +467,12 @@ def main(argv: list[str] | None = None) -> int:
     args = ap.parse_args(argv)
 
     cfg = load_config()
+    # The raw document, beside the normalized one: a choice is judged on a deep
+    # copy of it carrying that one option (DRE-6635). load_config validated it.
+    import yaml
+
+    raw = yaml.safe_load(CONFIG.read_text())
+    choices = render_choices(raw, cfg, declared_prices())
     targets = [
         (
             FALLBACK_TARGET,
@@ -346,26 +485,31 @@ def main(argv: list[str] | None = None) -> int:
             ),
         ),
         (REGISTRY_TARGET, lambda text: splice_registry(text, cfg)),
+        # A whole generated file, so a missing one is stale, not an error.
+        (CHOICES_TARGET, lambda text: choices),
     ]
 
     stale = False
     for path, rewrite in targets:
-        original = path.read_text()
+        original = path.read_text(encoding="utf-8") if path.exists() else None
         updated = rewrite(original)
         rel = path.relative_to(ROOT)
         if updated == original:
             print(f"ok:    {rel}")
             continue
         if args.check:
+            why = (
+                "it is missing" if original is None
+                else "its generated content does not match config/models.yaml"
+            )
             print(
-                f"STALE: {rel} — its generated region does not match "
-                f"config/models.yaml; run `{REPAIR_COMMAND}` and commit the "
+                f"STALE: {rel} — {why}; run `{REPAIR_COMMAND}` and commit the "
                 "result.",
                 file=sys.stderr,
             )
             stale = True
             continue
-        path.write_text(updated)
+        path.write_text(updated, encoding="utf-8")
         print(f"wrote: {rel}")
     return 1 if stale else 0
 
