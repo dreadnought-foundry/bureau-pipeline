@@ -14,10 +14,12 @@ agent-bureau PR at once, and fixed by hand each time.
   * discovery — every `test_*.py` / `*_test.py` in the agent-bureau checkout
     whose text names `BUREAU_PIPELINE_DIR` or `.bureau-pipeline`; never a list;
   * the run — pytest from agent-bureau's root with the candidate at
-    `<agent-bureau>/.bureau-pipeline` AND in `BUREAU_PIPELINE_DIR`;
-  * the re-read — the whole discovered set run again against the current
-    `stable` (DRE-6657), so a test red on both is agent-bureau's own red, or
-    the run's own doing, and refuses nothing;
+    `<agent-bureau>/.bureau-pipeline` AND in `BUREAU_PIPELINE_DIR`, one
+    process per suite, a suite being the first component of a test's path
+    (DRE-6670);
+  * the re-read — every suite with a failure run again, whole, against the
+    current `stable`, so a test red on both is agent-bureau's own red, or the
+    run's own doing, and refuses nothing;
   * the mirror map — the bureau-pipeline file a failing test mirrors, read off
     the test's own string literals, never guessed;
   * the card — one per breakage, found again by its exact title.
@@ -40,6 +42,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "scripts"))
 
@@ -71,12 +74,14 @@ class _Trees:
     checkout inside it, and the current `stable` beside it."""
 
     def __init__(self, test, *, candidate="bureau-pipeline-new",
-                 stable="bureau-pipeline-old"):
+                 stable="bureau-pipeline-old", overlay=None):
         self._tmp = tempfile.TemporaryDirectory()
         test.addCleanup(self._tmp.cleanup)
         base = Path(self._tmp.name)
         self.agent_bureau = base / "agent-bureau"
         shutil.copytree(FIXTURES / "agent-bureau", self.agent_bureau)
+        if overlay:
+            shutil.copytree(overlay, self.agent_bureau, dirs_exist_ok=True)
         shutil.copyfile(PYTEST_SETTINGS, self.agent_bureau / "pyproject.toml")
         self.candidate = self.agent_bureau / mirror_check.PIPELINE_DIRNAME
         shutil.copytree(FIXTURES / candidate, self.candidate)
@@ -769,25 +774,24 @@ class LikeForLikeReReadTest(unittest.TestCase):
             red, {"cloud/x/test_b_reads_the_stub.py::test_imports_a_submodule"})
         self.assertEqual(result["status"], mirror_check.MIRROR_PASSED)
 
-    def test_the_stable_run_gets_the_whole_discovered_list(self):
+    def test_the_stable_run_gets_the_whole_suite(self):
+        """DRE-6670: the re-read is per suite — every file of a suite that
+        held a failure, in the same order, and nothing of a suite that held
+        none."""
         trees = _Trees(self)
         trees.write("cloud/x/test_more.py", "BUREAU_PIPELINE_DIR = 'read'\n")
-        discovered = mirror_check.discover(trees.agent_bureau)
+        cloud = [RELAY_TEST, "cloud/x/test_more.py"]
         calls = []
 
         def fake_run_pytest(root, targets, *, python, timeout):
             calls.append(list(targets))
-            return {f"{RELAY_TEST}::test_mirror": "failed"}
+            red = RELAY_TEST in targets
+            return {"results": {f"{RELAY_TEST}::test_mirror": "failed"} if red else {},
+                    "totals": _totals(failed=1) if red else _totals(passed=1)}
 
-        real = mirror_check.run_pytest
-        mirror_check.run_pytest = fake_run_pytest
-        try:
+        with mock.patch.object(mirror_check, "run_pytest", fake_run_pytest):
             trees.check()
-        finally:
-            mirror_check.run_pytest = real
-        self.assertEqual(len(calls), 2)
-        self.assertEqual(calls[0], discovered)
-        self.assertEqual(calls[1], discovered)
+        self.assertEqual(calls, [cloud, [ROUTING_TEST], cloud])
 
 
 class TitleCapTest(unittest.TestCase):
@@ -847,6 +851,375 @@ class SelfHostingFixtureTest(unittest.TestCase):
         found = [p.relative_to(FIXTURES).as_posix() for p in FIXTURES.rglob("*")
                  if p.name in names]
         self.assertEqual(found, [])
+
+
+# --------------------------------------------------------------------------- #
+# 8. One suite at a time, judged like for like (DRE-6670)                     #
+# --------------------------------------------------------------------------- #
+
+#: Laid over the stand-in where a test needs the relay-stubs-the-console shape:
+#: a relay file that replaces `standin_tokens` at import, and a console file
+#: whose fixture needs the real package. Run 38072065598's 1238 `'jwt' is not a
+#: package` errors, at the size of a fixture.
+CROSS_TALK = FIXTURES / "agent-bureau-cross-talk"
+STUB_TEST = "cloud/relay/test_token_stub_mirror.py"
+READER_TEST = "console/backend/tests/test_token_reader_mirror.py"
+READER_NODE = f"{READER_TEST}::test_the_console_signs_with_the_real_module"
+
+#: The line the card and the run summary carry per suite — the contract.
+SUITE_LINE = re.compile(
+    r"^(?:- )?suite (?P<name>\S+): candidate \d+ passed, \d+ failed, \d+ errors, "
+    r"\d+ skipped · (?:stable \d+ passed, \d+ failed, \d+ errors, \d+ skipped"
+    r"|stable not re-read: nothing failed on the candidate)$")
+
+
+def _totals(passed=0, failed=0, errors=0, skipped=0):
+    return {"passed": passed, "failed": failed, "errors": errors,
+            "skipped": skipped}
+
+
+def _suite(result, name):
+    found = [s for s in result.get("suites") or [] if s["name"] == name]
+    if not found:
+        raise AssertionError(f"no suite {name!r} in {result.get('suites')!r}")
+    return found[0]
+
+
+class SuiteTest(unittest.TestCase):
+    """A suite is the first component of a test's root-relative path, read off
+    the discovered files and nothing else, and each runs in a pytest process
+    of its own."""
+
+    def test_a_suites_name_is_the_first_component_of_its_path(self):
+        for path, name in (("cloud/relay/test_lambda_function.py", "cloud"),
+                           ("console/backend/tests/test_console_actor.py", "console"),
+                           ("test_at_the_root.py", ".")):
+            with self.subTest(path=path):
+                self.assertEqual(mirror_check.suite_of(path), name)
+
+    def test_the_suites_come_from_the_discovered_files_alone(self):
+        files = ["test_root.py", "console/backend/tests/test_c.py",
+                 "cloud/relay/test_b.py", "cloud/relay/test_a.py"]
+        got = mirror_check.suites(files)
+        self.assertEqual(list(got), [".", "cloud", "console"])
+        self.assertEqual(got, {
+            ".": ["test_root.py"],
+            "cloud": ["cloud/relay/test_a.py", "cloud/relay/test_b.py"],
+            "console": ["console/backend/tests/test_c.py"],
+        })
+
+    def test_the_check_runs_one_pytest_process_per_suite(self):
+        """agent-bureau's own workflow layout is never read: a workflow that
+        runs everything in one job changes nothing here."""
+        trees = _Trees(self, candidate="bureau-pipeline-old")
+        trees.write("test_root_mirror.py", (
+            "BUREAU_PIPELINE_DIR = 'read'\n"
+            "def test_at_the_root():\n"
+            "    pass\n"))
+        trees.write(".github/workflows/ci.yml", (
+            "jobs:\n  everything:\n    runs-on: ubuntu-latest\n"
+            "    steps:\n      - run: pytest cloud console test_root_mirror.py\n"))
+        calls = []
+        real = mirror_check.run_pytest
+
+        def recording(root, targets, *, python, timeout):
+            calls.append(list(targets))
+            return real(root, targets, python=python, timeout=timeout)
+
+        with mock.patch.object(mirror_check, "run_pytest", recording):
+            result = trees.check()
+        self.assertEqual(calls, [["test_root_mirror.py"], [RELAY_TEST], [ROUTING_TEST]])
+        self.assertEqual(result["status"], mirror_check.MIRROR_PASSED)
+        self.assertEqual([s["name"] for s in result["suites"]], [".", "cloud", "console"])
+        self.assertEqual(_suite(result, "cloud")["files"], [RELAY_TEST])
+        self.assertEqual(_suite(result, "console")["files"], [ROUTING_TEST])
+
+
+class CrossTalkTest(unittest.TestCase):
+    """Two suites, one of which replaces at import a module the other needs —
+    the relay and the console on run 38072065598."""
+
+    def test_the_stand_in_really_crosses_in_one_process(self):
+        """Honesty first: in one process the console test errors at setup,
+        and that is an error, not a failure."""
+        trees = _Trees(self, candidate="bureau-pipeline-old", overlay=CROSS_TALK)
+        with contextlib.redirect_stdout(io.StringIO()), \
+                contextlib.redirect_stderr(io.StringIO()):
+            run = mirror_check.run_pytest(trees.agent_bureau, [STUB_TEST, READER_TEST],
+                                          python=sys.executable, timeout=120)
+        self.assertEqual(run["results"][READER_NODE], "error")
+        self.assertEqual(run["totals"], _totals(passed=1, errors=1))
+
+    def test_a_stub_one_suite_leaves_never_reaches_another(self):
+        """The candidate changes nothing these tests mirror, so the check
+        passes, and the console test passes outright — it is not even
+        `already red on stable`."""
+        trees = _Trees(self, candidate="bureau-pipeline-old", overlay=CROSS_TALK)
+        result = trees.check()
+        self.assertEqual(result["why"], "")
+        self.assertEqual(result["status"], mirror_check.MIRROR_PASSED)
+        self.assertEqual(result["failing"], [])
+        self.assertEqual(result["already_red"], [])
+        console = _suite(result, "console")
+        self.assertEqual(console["status"], mirror_check.MIRROR_PASSED)
+        self.assertEqual(console["files"], [READER_TEST, ROUTING_TEST])
+        self.assertEqual(console["totals"]["candidate"], _totals(passed=2))
+        cloud = _suite(result, "cloud")
+        self.assertEqual(cloud["files"], [RELAY_TEST, STUB_TEST])
+        self.assertEqual(cloud["totals"]["candidate"], _totals(passed=2))
+
+
+class LikeForLikeVerdictTest(unittest.TestCase):
+    def test_a_fail_on_the_candidate_and_a_pass_on_stable_refuses(self):
+        trees = _Trees(self, overlay=CROSS_TALK)
+        result = trees.check()
+        self.assertEqual(result["status"], mirror_check.MIRROR_FAILED)
+        failing = {f["test"].split("::")[0]: f["mirrors"] for f in result["failing"]}
+        self.assertEqual(failing, {ROUTING_TEST: [VERDICTS], RELAY_TEST: [VERDICTS]})
+        for name in ("cloud", "console"):
+            with self.subTest(suite=name):
+                suite = _suite(result, name)
+                self.assertEqual(suite["status"], mirror_check.MIRROR_FAILED)
+                self.assertTrue(suite["re_read"])
+                self.assertEqual(suite["totals"]["candidate"], _totals(passed=1, failed=1))
+                self.assertEqual(suite["totals"]["stable"], _totals(passed=2))
+
+    def test_a_failure_on_both_identical_runs_is_already_red_and_refuses_nothing(self):
+        trees = _Trees(self, stable="bureau-pipeline-new", overlay=CROSS_TALK)
+        result = trees.check()
+        self.assertEqual(result["status"], mirror_check.MIRROR_PASSED)
+        self.assertEqual(result["failing"], [])
+        red = {f["test"].split("::")[0] for f in result["already_red"]}
+        self.assertEqual(red, {ROUTING_TEST, RELAY_TEST})
+        for name in ("cloud", "console"):
+            with self.subTest(suite=name):
+                suite = _suite(result, name)
+                self.assertEqual(suite["status"], mirror_check.MIRROR_PASSED)
+                self.assertEqual(suite["totals"]["candidate"], suite["totals"]["stable"])
+        with contextlib.redirect_stdout(io.StringIO()) as out:
+            self.assertEqual(mirror_check.main([
+                "run", "--agent-bureau", str(trees.agent_bureau),
+                "--stable", str(trees.stable), "--candidate", CANDIDATE,
+                "--out", str(trees.agent_bureau.parent / "r.json")]), 0)
+        self.assertIn(f"mirror check: already red on stable: {ROUTING_TEST}",
+                      out.getvalue())
+
+    def test_a_suite_with_no_failure_is_not_re_read_and_says_so(self):
+        trees = _Trees(self, overlay=CROSS_TALK)
+        (trees.agent_bureau / RELAY_TEST).unlink()
+        calls = []
+        real = mirror_check.run_pytest
+
+        def recording(root, targets, *, python, timeout):
+            calls.append(list(targets))
+            return real(root, targets, python=python, timeout=timeout)
+
+        with mock.patch.object(mirror_check, "run_pytest", recording):
+            result = trees.check()
+        self.assertEqual(calls, [[STUB_TEST], [READER_TEST, ROUTING_TEST],
+                                 [READER_TEST, ROUTING_TEST]])
+        cloud = _suite(result, "cloud")
+        self.assertFalse(cloud["re_read"])
+        self.assertIsNone(cloud["totals"]["stable"])
+        self.assertEqual(
+            mirror_check.suite_line(cloud),
+            "suite cloud: candidate 1 passed, 0 failed, 0 errors, 0 skipped "
+            "· stable not re-read: nothing failed on the candidate")
+
+
+class TotalsTest(unittest.TestCase):
+    def test_each_suite_carries_both_runs_four_counts_and_errors_apart(self):
+        trees = _Trees(self)
+        trees.write("console/backend/tests/test_setup_errors_mirror.py", (
+            "import pytest\n"
+            "BUREAU_PIPELINE_DIR = 'read'\n"
+            "@pytest.fixture\n"
+            "def broken():\n"
+            "    raise RuntimeError('setup breaks')\n"
+            "def test_passes():\n"
+            "    pass\n"
+            "def test_errors_at_setup(broken):\n"
+            "    pass\n"
+            "@pytest.mark.skip(reason='not here')\n"
+            "def test_skipped():\n"
+            "    pass\n"))
+        out = trees.agent_bureau.parent / "mirror_result.json"
+        with contextlib.redirect_stdout(io.StringIO()):
+            mirror_check.main([
+                "run", "--agent-bureau", str(trees.agent_bureau),
+                "--stable", str(trees.stable), "--candidate", CANDIDATE,
+                "--stable-sha", STABLE, "--agent-bureau-sha", AGENT_BUREAU,
+                "--out", str(out)])
+        result = json.loads(out.read_text())
+        console = _suite(result, "console")
+        self.assertEqual(console["totals"], {
+            "candidate": _totals(passed=1, failed=1, errors=1, skipped=1),
+            "stable": _totals(passed=2, failed=0, errors=1, skipped=1),
+        })
+        cloud = _suite(result, "cloud")
+        self.assertEqual(cloud["totals"], {
+            "candidate": _totals(failed=1), "stable": _totals(passed=1)})
+        # The setup error is red on both identical runs: already red, never
+        # the candidate's.
+        red = {f["test"] for f in result["already_red"]}
+        self.assertEqual(red, {"console/backend/tests/test_setup_errors_mirror.py"
+                               "::test_errors_at_setup"})
+
+
+class BlockedSuiteTest(unittest.TestCase):
+    """A suite its environment cannot run is `blocked`, never `failed`; the
+    check is blocked; the other suites still run and are still reported."""
+
+    def _run_cli(self, trees, *extra):
+        out = trees.agent_bureau.parent / "mirror_result.json"
+        summary = trees.agent_bureau.parent / "summary.md"
+        os.environ["GITHUB_STEP_SUMMARY"] = str(summary)
+        try:
+            with contextlib.redirect_stdout(io.StringIO()) as stdout:
+                mirror_check.main([
+                    "run", "--agent-bureau", str(trees.agent_bureau),
+                    "--stable", str(trees.stable), "--candidate", CANDIDATE,
+                    "--stable-sha", STABLE, "--agent-bureau-sha", AGENT_BUREAU,
+                    "--out", str(out), *extra])
+        finally:
+            os.environ.pop("GITHUB_STEP_SUMMARY", None)
+        return json.loads(out.read_text()), summary.read_text(), stdout.getvalue()
+
+    def _assert_infra_blocked_first(self, result, summary, stdout, *words):
+        self.assertEqual(result["status"], mirror_check.MIRROR_BLOCKED)
+        self.assertEqual(result["failing"], [])
+        self.assertTrue(result["why"].startswith("suite infra: "), result["why"])
+        infra = result["suites"][0]
+        self.assertEqual(infra["name"], "infra")
+        self.assertEqual(infra["status"], mirror_check.MIRROR_BLOCKED)
+        for word in words:
+            self.assertIn(word, infra["why"])
+        self.assertEqual([s["name"] for s in result["suites"][1:]], ["cloud", "console"])
+        for name in ("cloud", "console"):
+            self.assertIsNotNone(_suite(result, name)["totals"]["candidate"], name)
+        for text in (summary, stdout):
+            lines = [l for l in text.splitlines() if "suite " in l]
+            self.assertTrue(lines and "suite infra: blocked — " in lines[0], text)
+            named = {SUITE_LINE.match(l.removeprefix("mirror check: ")).group("name")
+                     for l in lines[1:]
+                     if SUITE_LINE.match(l.removeprefix("mirror check: "))}
+            self.assertEqual(named, {"cloud", "console"}, text)
+
+    def test_a_suite_pytest_cannot_run_is_blocked_and_the_others_still_run(self):
+        trees = _Trees(self)
+        trees.write("infra/conftest.py",
+                    "raise RuntimeError('the infra environment is missing')\n")
+        trees.write("infra/test_infra_mirror.py", (
+            "BUREAU_PIPELINE_DIR = 'read'\n"
+            "def test_infra():\n"
+            "    pass\n"))
+        result, summary, stdout = self._run_cli(trees)
+        self._assert_infra_blocked_first(result, summary, stdout, "exit")
+        console = _suite(result, "console")
+        self.assertEqual(console["status"], mirror_check.MIRROR_FAILED)
+        self.assertEqual(console["totals"]["stable"], _totals(passed=1))
+
+    def test_a_suite_that_writes_no_report_is_blocked(self):
+        trees = _Trees(self)
+        trees.write("infra/test_infra_mirror.py", (
+            "import os\n"
+            "BUREAU_PIPELINE_DIR = 'read'\n"
+            "def test_dies():\n"
+            "    os._exit(1)\n"))
+        result, summary, stdout = self._run_cli(trees)
+        self._assert_infra_blocked_first(result, summary, stdout, "no report")
+
+    def test_a_suite_past_the_budget_is_blocked(self):
+        trees = _Trees(self, candidate="bureau-pipeline-old")
+        trees.write("infra/test_infra_mirror.py", (
+            "import time\n"
+            "BUREAU_PIPELINE_DIR = 'read'\n"
+            "def test_slow():\n"
+            "    time.sleep(60)\n"))
+        result, summary, stdout = self._run_cli(trees, "--budget-seconds", "12")
+        self._assert_infra_blocked_first(result, summary, stdout, "time limit")
+        self.assertEqual(_suite(result, "cloud")["status"], mirror_check.MIRROR_PASSED)
+
+
+class SideBySideTest(unittest.TestCase):
+    CONSOLE = {"name": "console", "files": [ROUTING_TEST], "status": "passed",
+               "re_read": True,
+               "totals": {"candidate": _totals(1212, 0, 1238, 4),
+                          "stable": _totals(1212, 0, 1238, 4)}}
+    CLOUD = {"name": "cloud", "files": [RELAY_TEST], "status": "passed",
+             "re_read": False,
+             "totals": {"candidate": _totals(3), "stable": None}}
+
+    def test_the_line_has_exactly_the_contract_shape(self):
+        self.assertEqual(
+            mirror_check.suite_line(self.CONSOLE),
+            "suite console: candidate 1212 passed, 0 failed, 1238 errors, 4 skipped "
+            "· stable 1212 passed, 0 failed, 1238 errors, 4 skipped")
+        self.assertEqual(
+            mirror_check.suite_line(self.CLOUD),
+            "suite cloud: candidate 3 passed, 0 failed, 0 errors, 0 skipped "
+            "· stable not re-read: nothing failed on the candidate")
+
+    def test_the_refusal_card_carries_one_line_per_suite_under_the_failing_tests(self):
+        result = dict(_failed(ROUTING_FAIL), suites=[self.CLOUD, self.CONSOLE])
+        body = mirror_check.card_body(result, RUN_URL)
+        lines = body.splitlines()
+        row = next(i for i, l in enumerate(lines) if ROUTING_FAIL["test"] in l)
+        for suite in (self.CLOUD, self.CONSOLE):
+            line = mirror_check.suite_line(suite)
+            at = [i for i, l in enumerate(lines) if l.endswith(line)]
+            self.assertEqual(len(at), 1, line)
+            self.assertGreater(at[0], row)
+        self.assertIsNone(linear_ops.body_problem(body))
+        self.assertEqual(validate_card.missing(body, mirror_check.card_labels()), [])
+
+    def test_the_run_summary_carries_one_line_per_suite_under_the_duration(self):
+        trees = _Trees(self, overlay=CROSS_TALK)
+        (trees.agent_bureau / RELAY_TEST).unlink()
+        out = trees.agent_bureau.parent / "mirror_result.json"
+        summary = trees.agent_bureau.parent / "summary.md"
+        os.environ["GITHUB_STEP_SUMMARY"] = str(summary)
+        try:
+            with contextlib.redirect_stdout(io.StringIO()) as stdout:
+                mirror_check.main([
+                    "run", "--agent-bureau", str(trees.agent_bureau),
+                    "--stable", str(trees.stable), "--candidate", CANDIDATE,
+                    "--out", str(out)])
+        finally:
+            os.environ.pop("GITHUB_STEP_SUMMARY", None)
+        result = json.loads(out.read_text())
+        wanted = [mirror_check.suite_line(_suite(result, n)) for n in ("cloud", "console")]
+        self.assertIn("stable not re-read: nothing failed on the candidate", wanted[0])
+        self.assertTrue(wanted[1].endswith("stable 2 passed, 0 failed, 0 errors, 0 skipped"),
+                        wanted[1])
+        written = [l for l in summary.read_text().splitlines() if l.strip()]
+        self.assertTrue(written[0].startswith("⏱ mirror check: "), written)
+        self.assertEqual([l.removeprefix("- ") for l in written[1:3]], wanted)
+        printed = stdout.getvalue().splitlines()
+        self.assertTrue(printed[0].startswith("mirror check: failed — "), printed)
+        self.assertEqual([l.removeprefix("mirror check: ") for l in printed[1:3]], wanted)
+
+
+class CrossTalkFixtureHereTest(unittest.TestCase):
+    """Collected by this repo's own suite, the cross-talk stand-ins find no
+    bureau-pipeline checkout: they stub nothing and skip."""
+
+    def test_they_skip_and_stub_nothing_here(self):
+        env = {k: v for k, v in os.environ.items() if k != mirror_check.PIPELINE_ENV}
+        probe = (
+            "import sys, pytest\n"
+            f"code = pytest.main(['-q', '-p', 'no:cacheprovider', '-rs', "
+            f"{str(CROSS_TALK / STUB_TEST)!r}, {str(CROSS_TALK / READER_TEST)!r}])\n"
+            "print('STUBBED' if 'standin_tokens' in sys.modules else 'CLEAN')\n"
+            "sys.exit(int(code))\n")
+        with tempfile.TemporaryDirectory() as tmp:
+            proc = subprocess.run([sys.executable, "-c", probe], cwd=tmp, env=env,
+                                  capture_output=True, text=True, timeout=120)
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        self.assertIn("2 skipped", proc.stdout)
+        self.assertIn("CLEAN", proc.stdout)
+        for rel in (STUB_TEST, READER_TEST):
+            self.assertTrue(re.search(r"skipif", (CROSS_TALK / rel).read_text()), rel)
 
 
 if __name__ == "__main__":
