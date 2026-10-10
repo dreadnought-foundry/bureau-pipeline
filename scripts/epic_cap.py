@@ -34,7 +34,9 @@ Three things live here and nowhere else:
     the newest entry into Planning, `createdAt` as the fallback), then the
     identifier.
   * **the decision** the approval gate makes — `start` or `queue`, in four
-    rules, each named on stderr when it answers.
+    rules, each named on stderr when it answers. The sweep asks the same four
+    for an approved epic a blocker epic has released with no decision on
+    record (DRE-6618, `reconcile.ask_cap_for_released_epic`).
 
 The waiting line is every `Green Light` epic carrying `epic-queued`. The label
 alone is not the line: an epic that left Green Light any other way has left
@@ -486,20 +488,18 @@ def _when(iso: str | None):
         return None
 
 
-def start_on_record(thread: list, green_lit_at: str | None) -> bool:
-    """A pipeline-authored start after the current approval: the activate
-    route's `ACTIVATED_NOTE`, or the sweep's own `▶️ epic-started:` receipt.
-
-    Authorship is `linear_ops.comment_records`' — a note anyone else wrote
-    starts nothing. With no green light to read, any pipeline start counts.
-    A note whose time cannot be read does not follow an approval that can."""
+def _pipeline_note_since(thread: list, green_lit_at: str | None, openers) -> bool:
+    """A pipeline-authored comment opening with one of `openers`, posted after
+    the green light. Authorship is `linear_ops.comment_records`' — a note
+    anyone else wrote records nothing. With no green light to read, any such
+    note counts. A note whose time cannot be read does not follow an approval
+    that can."""
     since = _when(green_lit_at) if green_lit_at else None
     for row in thread or []:
         if not row.get("authored_by_pipeline"):
             continue
         body = (row.get("body") or "").lstrip()
-        if not (body.startswith(ACTIVATED_NOTE)
-                or body.startswith(f"▶️ {STARTED_TAG}:")):
+        if not body.startswith(tuple(openers)):
             continue
         if not green_lit_at:
             return True
@@ -507,6 +507,24 @@ def start_on_record(thread: list, green_lit_at: str | None) -> bool:
         if since is not None and at is not None and at > since:
             return True
     return False
+
+
+def queue_on_record(thread: list, green_lit_at: str | None) -> bool:
+    """The cap's other answer on record after the current approval: a
+    pipeline-authored `⏸️ epic-queued:` receipt (DRE-6618). With
+    `start_on_record`, the two kinds of decision the cap leaves."""
+    return _pipeline_note_since(thread, green_lit_at, (f"⏸️ {QUEUED_TAG}:",))
+
+
+def start_on_record(thread: list, green_lit_at: str | None) -> bool:
+    """A pipeline-authored start after the current approval: the activate
+    route's `ACTIVATED_NOTE`, or the sweep's own `▶️ epic-started:` receipt.
+
+    Authorship is `linear_ops.comment_records`' — a note anyone else wrote
+    starts nothing. With no green light to read, any pipeline start counts.
+    A note whose time cannot be read does not follow an approval that can."""
+    return _pipeline_note_since(thread, green_lit_at,
+                                (ACTIVATED_NOTE, f"▶️ {STARTED_TAG}:"))
 
 
 def promotion_refusal(identifier: str, epic: str, record: dict | None,
@@ -526,6 +544,12 @@ def promotion_refusal(identifier: str, epic: str, record: dict | None,
     reason `reconcile.epic_thread` gives: holding every child of every
     epic on a failed read would freeze the board, and the hold cannot tell
     a missing start from one it could not see.
+
+    The full sweep that meets this hold asks the cap itself for an epic a
+    blocker epic released (DRE-6618) — the approval was days earlier, with
+    nothing to start — and a hold it does not settle is on the stall clock
+    (`promotion_stall.CLOCKED_TAGS`). The re-run act stays the way a person
+    asks sooner.
 
     `thread` must be the WHOLE thread (`reconcile.whole_epic_thread`): the
     start is written once, and an epic that has not moved a child piles
@@ -577,6 +601,20 @@ def queued_receipt(place: int, total: int, in_motion: int, cap: int, *,
     return (
         f"⏸️ {QUEUED_TAG}: approved and waiting in line — place {place} of "
         f"{total}. {why} {_ORDER_SENTENCE} {_MOVE_UP} {_NOT_AGAIN}"
+    )
+
+
+def released_started_receipt(fleet: dict, identifier: str, waited_on) -> str:
+    """`▶️ epic-started:` — the sweep asked the cap for an approved epic the
+    epics it `waited_on` released, and the cap had room (DRE-6618). The count
+    is the epics in motion with this one."""
+    in_motion = len(_others_in_motion(fleet, identifier)) + 1
+    return (
+        f"▶️ {STARTED_TAG}: what this epic waited on ({', '.join(waited_on)}) "
+        "has no card left to build, and no start or place in line was on "
+        "record since it was approved, so the sweep asked the epic cap itself. "
+        f"There was room: {in_motion} of {fleet['cap']} epics are now in "
+        "motion, this one included, and its children move to build in order."
     )
 
 

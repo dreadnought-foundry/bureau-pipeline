@@ -447,6 +447,12 @@ an epic, a card with an unresolved `blockedBy`, a card sent to Planning and any
 card waiting on the WIP budget are never clocked: each already says what it
 waits for, and that thing is scheduled.
 
+The epic cap's hold, `epic-cap-undecided`, is clocked too (DRE-6618), and its
+receipt and ledger entry add `for its epic <epic>` after the tag, because that
+refusal is lifted on the epic, not the card. The full sweep asks the cap
+itself for an approved epic a blocker epic has released with no decision on
+record; the hold it does not settle that way is the one the clock reports.
+
 The holds (`HELD_TAGS` — the hold label, an open agent-blocker, a stale
 verdict, a refused live re-check) are never clocked per card, but they count
 toward the **idle board**: a sweep at WIP 0 that dispatched nothing while cards
