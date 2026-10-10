@@ -546,6 +546,14 @@ import fix_dead_run  # noqa: E402
 WORKFLOWS_WITH_FIX = ["agent-task.yml", "agent-fix.yml", "qa-review.yml"]
 WORKFLOWS_WITHOUT_FIX = ["agent-task.yml", "qa-review.yml"]
 
+
+def _failed_pages(count: int) -> str:
+    """`count` failed CI runs on the head, as the `gh api --paginate --slurp`
+    read of its check runs answers them (DRE-6532)."""
+    runs = [{"name": f"ci job {i}", "status": "completed", "conclusion": "failure"}
+            for i in range(count)]
+    return json.dumps([{"total_count": count, "check_runs": runs}])
+
 ABSENT_PR = 2255
 ABSENT_SHA = "b" * 40
 ABSENT_BRANCH = "agent/DRE-4378-harness"
@@ -646,7 +654,7 @@ class AbsentFixAgentHarness(unittest.TestCase):
             if args[:2] == ("pr", "list"):
                 return json.dumps(prs)
             if args[0] == "api" and "/check-runs" in joined:
-                return "2"
+                return _failed_pages(2)
             if args[0] == "api" and "/git/commits/" in joined:
                 return json.dumps({"committer": {"date": "2026-01-01T00:00:00Z"}})
             if args[0] == "api" and "/comments" in joined:
@@ -894,7 +902,7 @@ class AbsentFixAgentSweepCostTest(AbsentFixAgentHarness):
             if args[:2] == ("pr", "list"):
                 return json.dumps(prs)
             if args[0] == "api" and "/check-runs" in joined:
-                return "2"
+                return _failed_pages(2)
             if args[0] == "api" and "/git/commits/" in joined:
                 return json.dumps({"committer": {"date": "2026-01-01T00:00:00Z"}})
             if args[0] == "api" and "/comments" in joined:

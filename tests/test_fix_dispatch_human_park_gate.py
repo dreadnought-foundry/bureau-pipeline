@@ -32,6 +32,14 @@ import reconcile  # noqa: E402
 SHA = "a" * 40
 
 
+def _failed_pages(count: int) -> str:
+    """`count` failed CI runs on the head, as the `gh api --paginate --slurp`
+    read of its check runs answers them (DRE-6532)."""
+    runs = [{"name": f"ci job {i}", "status": "completed", "conclusion": "failure"}
+            for i in range(count)]
+    return json.dumps([{"total_count": count, "check_runs": runs}])
+
+
 def _issue(state="In QA", labels=()):
     return {
         "issue": {
@@ -91,8 +99,8 @@ def _fake_gh(prs, busy="[]", failed_checks="0"):
             return busy
         if args[:2] == ("pr", "list"):
             return json.dumps(prs)
-        if args[0] == "api" and "/check-runs" in args[1]:
-            return failed_checks
+        if args[0] == "api" and any("/check-runs" in a for a in args[1:]):
+            return _failed_pages(int(failed_checks))
         if args[0] == "api" and "/git/commits/" in args[1]:
             # Old commit: comfortably past every staleness threshold.
             return json.dumps({"committer": {"date": "2026-01-01T00:00:00Z"}})

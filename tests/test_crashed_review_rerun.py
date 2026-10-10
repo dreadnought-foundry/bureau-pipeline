@@ -51,6 +51,19 @@ BOUND = reconcile.HEAD_REVIEW_CHECK_NAME
 CRASHED_CHECKS = json.dumps([["completed", "failure", "call / review"]])
 
 
+def _paged(rows: str) -> str:
+    """The jq'd `[status, conclusion(, name)]` rows a test names, served as
+    the `gh api --paginate --slurp` pages the head read asks for (DRE-6532).
+    A row with no name is the run-attributed `call / review`. An empty
+    answer stays empty: the read failed."""
+    if not rows:
+        return rows
+    runs = [{"status": r[0], "conclusion": r[1] or None,
+             "name": r[2] if len(r) > 2 else "call / review"}
+            for r in json.loads(rows)]
+    return json.dumps([{"total_count": len(runs), "check_runs": runs}])
+
+
 @pytest.fixture(autouse=True)
 def _product_repo(monkeypatch):
     monkeypatch.setattr(reconcile, "REPO", REPO)
@@ -106,8 +119,8 @@ def _sweep(prs, checks=CRASHED_CHECKS, head_runs=(), dispatch_runs=(),
         ok = SimpleNamespace(returncode=0, stdout="", stderr="")
         if args[:2] == ["pr", "list"]:
             return SimpleNamespace(returncode=0, stdout=json.dumps(prs), stderr="")
-        if args[0] == "api" and "/check-runs" in args[1]:
-            return SimpleNamespace(returncode=0, stdout=checks, stderr="")
+        if args[0] == "api" and any("/check-runs" in a for a in args[1:]):
+            return SimpleNamespace(returncode=0, stdout=_paged(checks), stderr="")
         if args[:2] == ["run", "list"]:
             rows = head_runs if "--commit" in args else dispatch_runs
             return SimpleNamespace(returncode=0, stdout=json.dumps(list(rows)),

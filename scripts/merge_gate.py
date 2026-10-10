@@ -329,7 +329,8 @@ tests/test_merge_gate_decision_table.py.
 
 Contract with merge-gate.yml:
   stdin/argv: --head-sha, --qa-login, --check-runs-file (the raw REST
-    payload of GET /repos/{repo}/commits/{sha}/check-runs), --comments-file
+    payload of GET /repos/{repo}/commits/{sha}/check-runs, every page of it
+    as `gh api --paginate --slurp` writes it, DRE-6532), --comments-file
     (the raw REST payload of GET /repos/{repo}/issues/{pr}/comments),
     --workflow-runs-file (the raw REST payload of
     GET /repos/{repo}/actions/runs?head_sha={sha} — the verified-origin
@@ -423,6 +424,12 @@ import code_owner_hold  # noqa: E402
 # when the rule is on and what a line must look like live in ONE module, read
 # by the gate, the critic's context, the collector and the train alike.
 import whats_new  # noqa: E402
+
+# Condition 1's record (DRE-6532). Every shape `gh api` writes for a commit's
+# check runs — the bare object, a flat list, the array of pages
+# `--paginate --slurp` writes — is read in ONE function, the one the fix
+# loop's unfixable-check rule and the sweep already read through.
+from unfixable_checks import _check_runs  # noqa: E402
 
 CRITIC_MARKER = "QA Critic"
 VERIFIER_MARKER = "QA Verifier"
@@ -1631,16 +1638,23 @@ def _die(msg: str) -> "NoReturn":  # noqa: F821
 
 
 def _read_check_runs(path: str) -> list:
-    """The check-runs record, or exit 2 — a caller that broke."""
+    """The check-runs record, or exit 2 — a caller that broke.
+
+    Every run on every page (DRE-6532): the bare object, a flat list of runs,
+    or the array of pages `gh api --paginate --slurp` writes. GitHub pages
+    the runs 30 at a time, newest first, so a reader that stops at one page
+    loses the oldest — the CI jobs — and counts a red head green."""
     try:
         with open(path) as f:
             payload = json.load(f)
     except (OSError, json.JSONDecodeError) as e:
         _die(f"cannot read check runs: {e}")
-    check_runs = payload.get("check_runs") if isinstance(payload, dict) else payload
-    if not isinstance(check_runs, list):
+    if isinstance(payload, dict) and not isinstance(payload.get("check_runs"), list):
         _die("check-runs payload has no check_runs list")
-    return check_runs
+    try:
+        return _check_runs(payload)
+    except ValueError as e:
+        _die(f"cannot read check runs: {e}")
 
 
 def _read_workflow_runs(path: str):

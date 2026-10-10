@@ -67,6 +67,19 @@ REVIEW_RUNNING = '[["in_progress", ""]]'
 NO_REVIEW_CHECKS = "[]"
 
 
+def _paged(rows: str) -> str:
+    """The jq'd `[status, conclusion(, name)]` rows a test names, served as
+    the `gh api --paginate --slurp` pages the head read asks for (DRE-6532).
+    A row with no name is the run-attributed `call / review`. An empty
+    answer stays empty: the read failed."""
+    if not rows:
+        return rows
+    runs = [{"status": r[0], "conclusion": r[1] or None,
+             "name": r[2] if len(r) > 2 else "call / review"}
+            for r in json.loads(rows)]
+    return json.dumps([{"total_count": len(runs), "check_runs": runs}])
+
+
 @pytest.fixture(autouse=True)
 def _product_repo(monkeypatch):
     monkeypatch.setattr(reconcile, "REPO", "dreadnought-foundry/atlas")
@@ -120,8 +133,9 @@ def _run_factory(state):
             return SimpleNamespace(
                 returncode=0, stdout=json.dumps(state["prs"]), stderr=""
             )
-        if argv[1] == "api" and "/check-runs" in argv[2]:
-            return SimpleNamespace(returncode=0, stdout=state["checks"], stderr="")
+        if argv[1] == "api" and any("/check-runs" in a for a in argv[2:]):
+            return SimpleNamespace(returncode=0, stdout=_paged(state["checks"]),
+                                   stderr="")
         if argv[1] == "run" and argv[2] == "list":
             return SimpleNamespace(
                 returncode=0, stdout=json.dumps(state["runs"]), stderr=""

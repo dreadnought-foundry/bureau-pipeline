@@ -272,6 +272,7 @@ import stranded_fix  # noqa: E402
 # DRE-2682: ONE source for "this card is finished" — the terminal states the
 # structural sweep already names, read here rather than spelled a fifth time.
 import structural_repair  # noqa: E402
+import unfixable_checks  # noqa: E402 — DRE-6532: ONE reader of a check-runs payload, every page
 import validate_card  # noqa: E402 — VALID_SLUGS, the canonical routing snapshot
 import verdict_content  # noqa: E402 — the content-binding algorithm
 
@@ -9832,6 +9833,27 @@ def move_hand_built_to_review() -> None:
         )
 
 
+def _head_check_runs(sha: str) -> list[dict] | None:
+    """Every check run on `sha`, every page — or None when the read fails.
+
+    DRE-6532. GitHub pages a commit's check runs 30 at a time, newest first,
+    so a read that stops at one page loses the oldest runs: the CI jobs. On
+    2026-10-09 agent-bureau's `main` commit 21ca627e carried 143 and the
+    unpaged read returned 30, none of them a `Console backend` check. A raised
+    `per_page` alone is the same cut with a higher ceiling. The pages are
+    flattened by `unfixable_checks._check_runs`, which the merge gate reads
+    through too. Silent `gh()`, as the reads this replaced were: an empty or
+    unreadable answer is None, and each caller keeps its own answer for it."""
+    out = gh("api", "--paginate", "--slurp",
+             f"repos/{REPO}/commits/{sha}/check-runs?per_page=100")
+    if not out:
+        return None
+    try:
+        return unfixable_checks._check_runs(json.loads(out))
+    except ValueError:
+        return None
+
+
 def fix_approved_but_red() -> None:
     """Dead-zone repair: a PR with critic APPROVE but a failed CI check has
     no automatic fixer — agent-fix's trigger is a REQUEST_CHANGES comment,
@@ -9859,10 +9881,15 @@ def fix_approved_but_red() -> None:
         if not verdicts or "VERDICT: APPROVE" not in verdicts[-1]:
             continue
         sha = pr["headRefOid"]
-        failed = gh("api", f"repos/{REPO}/commits/{sha}/check-runs", "--jq",
-                    '[.check_runs[] | select(.name | endswith("review") | not)'
-                    ' | select(.conclusion // "" | IN("failure","timed_out","cancelled"))] | length')
-        if failed.strip() in ("", "0"):
+        runs = _head_check_runs(sha)
+        if runs is None:
+            continue  # unreadable: skip this PR, as an empty read always did
+        failed = sum(
+            1 for r in runs
+            if not str(r.get("name") or "").endswith("review")
+            and (r.get("conclusion") or "") in ("failure", "timed_out", "cancelled")
+        )
+        if not failed:
             continue
         commit = json.loads(gh("api", f"repos/{REPO}/git/commits/{sha}") or "{}")
         when = (commit.get("committer") or {}).get("date")
@@ -9872,7 +9899,7 @@ def fix_approved_but_red() -> None:
             continue  # human-parked card (DRE-2024) — the loop is over
         if fix_agent_absent_hold(pr):
             return  # no fix agent in this repo — a person is told once (DRE-4378)
-        print(f"approved-but-red: PR #{pr['number']} has APPROVE + {failed.strip()} failed check(s) — dispatching fix agent")
+        print(f"approved-but-red: PR #{pr['number']} has APPROVE + {failed} failed check(s) — dispatching fix agent")
         gh_dispatch("workflow", "run", fix_workflow(), "--repo", REPO,
                     "-f", f"pr_number={pr['number']}")
         return  # one dispatch per sweep; the busy-guard handles the rest
@@ -10989,16 +11016,14 @@ def _review_checks_at_head(sha: str) -> list[tuple[str, ...]] | None:
     The name rides along since DRE-2291 so callers can prefer the
     head-bound record over the run's own event-attributed check.
     """
-    out = gh("api", f"repos/{REPO}/commits/{sha}/check-runs", "--jq",
-             '[.check_runs[] | select(.name | endswith("review")) '
-             '| [.status, (.conclusion // ""), .name]]')
-    if not out:
+    runs = _head_check_runs(sha)  # every page (DRE-6532)
+    if runs is None:
         return None
-    try:
-        rows = json.loads(out)
-        return [tuple(str(f) for f in row) for row in rows]
-    except (ValueError, TypeError):
-        return None
+    return [
+        (str(r.get("status")), str(r.get("conclusion") or ""), str(r.get("name")))
+        for r in runs
+        if str(r.get("name") or "").endswith("review")
+    ]
 
 
 def _authoritative_review_checks(
