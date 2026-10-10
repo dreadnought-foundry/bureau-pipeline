@@ -138,6 +138,23 @@ jobs:
             --manifest "$RUNNER_TEMP/unit-parts/part-$PART.txt" \
             > "$RUNNER_TEMP/unit-part-files.txt"
           echo "part $PART of $OF: $(wc -l < "$RUNNER_TEMP/unit-part-files.txt") test files"
+      # The proof run's browser tests (DRE-6047) drive a real chromium. The
+      # Playwright package comes from requirements-dev.txt above; the browser
+      # is not a pip package, so it is installed here, and only in the part
+      # whose file list holds those tests. A script decides, never an
+      # `on: paths:` filter, and there is no `if:` or `continue-on-error`: a
+      # part that holds the file and cannot install the browser is red, never
+      # skipped. `--with-deps` installs the system libraries through the
+      # runner's passwordless sudo; Playwright ships linux-arm64 chromium, so
+      # the same command serves RunsOn's arm64 runners and ubuntu-latest.
+      # `tests/test_proof_session_ci.py` holds this step where it is.
+      - name: Install the proof browser (only in the part that runs its tests)
+        run: |
+          if grep -qx 'tests/test_proof_session.py' "$RUNNER_TEMP/unit-part-files.txt"; then
+            python3 -m playwright install --with-deps chromium
+          else
+            echo "this part runs no browser test; chromium not installed"
+          fi
       # pytest, not stdlib unittest discover: half the suite is written
       # pytest-style (function tests), which unittest discover silently
       # collects as ZERO tests — they had never run in CI before this.
