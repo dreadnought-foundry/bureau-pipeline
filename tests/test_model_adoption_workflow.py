@@ -534,7 +534,8 @@ def test_the_branch_is_cut_from_origin_main_or_reused_after_a_crash():
 def test_the_model_tests_are_informational():
     step = _step_by_id(_job("adopt"), "tests")
     run = step["run"]
-    assert "python3 -m pytest tests/test_model_policy.py tests/test_model_config.py -q" in run
+    assert ("python3 -m pytest tests/test_model_policy.py tests/test_model_config.py "
+            "tests/test_model_choices.py -q") in run
     assert "set +e" in run, "a red model test must not stop the pull request"
     assert "result=" in run
     pr = [s for s in _steps(_job("adopt")) if "gh pr create" in (s.get("run") or "")][0]
@@ -543,9 +544,13 @@ def test_the_model_tests_are_informational():
 
 def test_the_commit_touches_only_the_model_config():
     run = [s for s in _steps(_job("adopt")) if "git push" in (s.get("run") or "")][0]["run"]
-    assert "git add -- config/models.yaml agents.yaml scripts/model_fallback.py" in run
+    # The console's file is the generator's third target (DRE-6635): an
+    # adoption that moves a ladder rewrites it, so it is staged and allowed.
+    assert ("git add -- config/models.yaml agents.yaml scripts/model_fallback.py "
+            "config/model-choices.json") in run
     assert "git add ." not in run and "git add -A" not in run
-    assert "config/models.yaml|agents.yaml|scripts/model_fallback.py" in run
+    assert ("config/models.yaml|agents.yaml|scripts/model_fallback.py"
+            "|config/model-choices.json) ;;") in run
     assert 'user.name="agent-bureau-bot[bot]"' in run
 
 
