@@ -303,6 +303,15 @@ The rule the critic is given: if the repository and the card could settle it,
 it is a `SEND_BACK`. A card holding both is a `QUESTION` first. `QUESTION` is
 read only on this stage — an epic critic writing it decided nothing.
 
+**A card written wrong is read before the critic's word** (DRE-6380). A card
+that states no acceptance criteria, and that its labels and title do not
+route, goes to the planner's rewrite before the critic's word is read: the
+decision step runs the exit's own routing read first, and a card that read
+would refuse for naming no exit condition is decided as a `SEND_BACK` of that
+finding whatever the critic wrote, recorded as one, with the finding first in
+the list the planner is handed. DRE-4109 passed the critic and was parked on
+the CEO by the exit's refusal three seconds later, with no judgement to ask.
+
 **The reason lands on the card either way** — pass, send-back or question — so
 the planner scorer can grade critic against classifier against outcome.
 
