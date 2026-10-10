@@ -274,7 +274,7 @@ def _settle(page, wait_for) -> None:
         pass
 
 
-def _shoot(*, key, url, out_png, signed_in, wait_for, form, state, credentials,
+def _shoot(*, url, out_png, signed_in, wait_for, form, state, credentials,
            login_path, sidecar) -> None:
     """The browser half: Playwright is imported here, after `reexec`."""
     from playwright.sync_api import sync_playwright
@@ -363,7 +363,7 @@ def screenshot(argv, *, page_key, out_png, signed_in=False, wait_for=None,
     out_png = Path(out_png).absolute()
     sidecar = requests_dir() / f"proof-requests-{page_key}.txt"
     try:
-        _shoot(key=page_key, url=url, out_png=out_png, signed_in=signed_in,
+        _shoot(url=url, out_png=out_png, signed_in=signed_in,
                wait_for=wait_for, form=form, state=state, credentials=credentials,
                login_path=login_path, sidecar=sidecar)
     except ImportError as exc:
@@ -371,7 +371,7 @@ def screenshot(argv, *, page_key, out_png, signed_in=False, wait_for=None,
             f"({exc}) — prepare did not install the browser")
         return 1
     except Exception as exc:  # noqa: BLE001 — Playwright's errors are one line here
-        first = last_line(str(exc).splitlines()[0] if str(exc).strip() else type(exc).__name__)
+        first = _one_line((str(exc).strip().splitlines() or [type(exc).__name__])[0])
         out(f"{SCREENSHOT}: {page_key} — {url} could not be shot: {first}")
         return 1
     out(f"{SCREENSHOT}: {page_key} — {url} at {_sha7()}, {out_png}, requests {sidecar}")
