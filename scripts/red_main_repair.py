@@ -87,6 +87,7 @@ import re
 import sys
 from datetime import datetime
 
+import fix_dead_run
 import github_output
 import medic_classify
 import promote_channel
@@ -102,6 +103,10 @@ INFRA_SIGNATURES = medic_classify._INFRA_SIGNATURES + (
     re.compile(r"lost communication with the server", re.I),
     re.compile(r"runner has received a shutdown signal", re.I),
     re.compile(r"no space left on device", re.I),
+    # DRE-6575: AWS took back the Spot machine under the job. Twice in three
+    # days (DRE-6262, DRE-6563) an agent was sent at a `main` whose re-run
+    # went green with nobody touching it. DRE-6572's sentence, not a copy.
+    re.compile(fix_dead_run.SPOT_INTERRUPTED, re.I),
 )
 
 # The harness's own "the SANDBOX blocked this run" receipt (DRE-3076), written
