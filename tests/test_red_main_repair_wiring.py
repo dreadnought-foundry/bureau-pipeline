@@ -283,6 +283,54 @@ class SelfHostTest(unittest.TestCase):
         self.assertNotIn("Red-Main Repair", wr.get("workflows") or [])
 
 
+class ReportFinishesTheRepairTest(unittest.TestCase):
+    """DRE-6525: a pushed branch with no pull request is opened by the Report
+    step itself, before the step fails for the medic."""
+
+    ERROR_LINE = ("echo \"::error::repair agent produced neither a PR nor an "
+                  "escalation — failing for medic visibility\"")
+
+    @staticmethod
+    def _report():
+        steps = doc(REUSABLE)["jobs"]["repair"]["steps"]
+        found = [s for s in steps if s.get("name") == "Report"]
+        assert len(found) == 1, "exactly one Report step"
+        return found[0]
+
+    def test_the_step_runs_the_finish_helper_on_the_branch_and_the_run(self):
+        run = self._report()["run"]
+        self.assertIn("repair_finish.py finish", run)
+        self.assertIn('--branch "$BRANCH"', run)
+        self.assertIn('--failed-run-url "$RUN_URL"', run)
+
+    def test_the_agents_own_pull_request_is_still_looked_for_first(self):
+        run = self._report()["run"]
+        self.assertIn("card_pr.py find", run)
+        self.assertLess(run.index("card_pr.py find"),
+                        run.index("repair_finish.py finish"))
+        self.assertLess(run.index("/tmp/repair-escalation.txt"),
+                        run.index("repair_finish.py finish"))
+
+    def test_the_fall_through_still_fails_for_the_medic(self):
+        run = self._report()["run"]
+        self.assertIn(self.ERROR_LINE, run)
+        after = run[run.index(self.ERROR_LINE):]
+        self.assertIn("exit 1", after)
+        self.assertLess(run.index("repair_finish.py finish"),
+                        run.index(self.ERROR_LINE))
+
+    def test_the_step_condition_is_unchanged(self):
+        self.assertEqual(self._report().get("if"),
+                         "always() && steps.decide.outputs.go == 'true'")
+
+    def test_the_card_url_and_default_branch_reach_the_step_by_env(self):
+        env = self._report().get("env") or {}
+        self.assertEqual(env.get("CARD_URL"), "${{ steps.card.outputs.card_url }}")
+        self.assertEqual(env.get("DEFAULT_BRANCH"),
+                         "${{ github.event.repository.default_branch }}")
+        self.assertEqual(env.get("GH_TOKEN"), "${{ steps.worker.outputs.token }}")
+
+
 class RegistryTest(unittest.TestCase):
     def test_repair_agent_is_on_the_console_roster(self):
         with open(os.path.join(REPO, "agents.yaml")) as f:

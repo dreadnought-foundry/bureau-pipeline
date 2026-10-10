@@ -636,6 +636,10 @@ jobs:
           # (DRE-3533). Reading the decide step's fallback here would look for
           # a PR on a branch that never existed and report the agent dead.
           BRANCH: ${{ steps.card.outputs.branch || steps.decide.outputs.branch }}
+          # Empty when the card could not be filed; the helper then names the
+          # card from the branch, or says it is owed (DRE-6525).
+          CARD_URL: ${{ steps.card.outputs.card_url }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
         run: |
           # Shared predicate (DRE-2316): `gh pr list` defaults to --state open,
           # so a repair PR that merged before this step ran read as "no PR" and
@@ -671,6 +675,21 @@ jobs:
               CREATED=$(python3 .bureau-pipeline/scripts/linear_ops.py create "$TITLE" /tmp/repair-question.md --repo "$REPO_SLUG" | grep -oE 'DRE-[0-9]+' | head -1 || true)
               [ -n "$CREATED" ] && python3 .bureau-pipeline/scripts/linear_ops.py state "$CREATED" "Triage" || true
             fi
+          elif FINISH=$(python3 .bureau-pipeline/scripts/repair_finish.py finish \
+              --repo "$GITHUB_REPOSITORY" --branch "$BRANCH" \
+              --default-branch "$DEFAULT_BRANCH" --failed-run-url "$RUN_URL" \
+              --workflow-name "$WF_NAME" --card-url "$CARD_URL"); then
+            # Pushed and stopped (DRE-6525): on 2026-10-09 the agent pushed the
+            # right fix to its branch and ended before `gh pr create`, and this
+            # step failed the run over a finished repair. repair_finish.py opens
+            # the pull request from that branch on this step's worker token —
+            # an allowed bot of qa-review.yml, so the critic reviews it like any
+            # repair — and tells the card. Exit 0 also covers a pull request of
+            # any state already on the branch, which is what makes a re-run of
+            # this step open nothing. Exit 2 (no branch, nothing ahead, a read
+            # it could not make) falls through to the medic's error below.
+            FINISHED_URL=$(printf '%s\n' "$FINISH" | sed -n 's/^pr_url=//p' | head -1)
+            echo "repair PR opened by the workflow from $BRANCH: $FINISHED_URL — the critic and the merge gate own it from here (author ≠ merger)."
           else
             echo "::error::repair agent produced neither a PR nor an escalation — failing for medic visibility"
             exit 1

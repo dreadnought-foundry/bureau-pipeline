@@ -76,7 +76,10 @@ because a medic that watched itself is the crash-loop guardrail 2 forbids.
    critic (qa-review), and merged only by the qa identity
    (`agent-bureau-qa-bot`) on CI green + verdict APPROVE. Author ≠ merger is
    enforced by different GitHub App identities, not policy — the repair
-   agent structurally cannot merge its own fix.
+   agent structurally cannot merge its own fix. When the agent pushes its
+   branch and stops before opening the PR, the workflow's Report step opens
+   it from that branch on the same worker token (`scripts/repair_finish.py`,
+   DRE-6525) — same author, same critic, same gate.
 4. **Escalate when unsure.** If the agent cannot confidently produce a fix
    (ambiguous cause, a product-behavior choice, a destructive-looking
    remedy), it opens no PR and posts a plain-English question to Linear —
