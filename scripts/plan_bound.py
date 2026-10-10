@@ -35,7 +35,14 @@ so nothing here reads them.
 Each finding is classified with `send_back_class.classify` — REVISION,
 DECISION, or None for a finding neither of DRE-6356's phrase lists places.
 What an uncertain finding does is this module's one rule of its own,
-`UNCERTAIN_BY_STAGE`, with its reason beside it.
+`UNCERTAIN_BY_STAGE`, with its reason beside it: on every stage it is the
+planner's. Every finding read here is the worst of a `SEND_BACK` round, which
+the critic itself called a defect in the card an agent can fix. DRE-6356's
+collapse of an uncertain finding to a decision belongs to the critic's own
+`QUESTION`, where under-asking is the worse error, and `plan_critic`
+applies it there, so a question the classifier cannot place goes to the CEO
+before any bound. Applied again at the bound it put DRE-6590 and DRE-6617 to
+the CEO on 2026-10-10 over findings that were all rewordings (DRE-6649).
 
   * `question` — at least one finding is DECISION after the stage rule. The
     CEO gets one Green Light question through `planning_escalation.escalate`,
@@ -45,7 +52,7 @@ What an uncertain finding does is this module's one rule of its own,
     question takes the rewrite when it is still owed — the planner is the one
     reader that can turn a choice written in code into a question the CEO can
     read — and parks when it is spent.
-  * `rewrite` — every finding is REVISION, or uncertain on an epic stage, and
+  * `rewrite` — every finding is REVISION or uncertain, and
     no `🔁 bound-rewrite` receipt the pipeline wrote stands anywhere on the
     card. A fresh planning run is dispatched (`review_rerun._cmd_dispatch`,
     `--route plan --trigger-state planning --reason bound-rewrite`, carrying
@@ -107,20 +114,27 @@ STAGES = (plan_critic.STAGE_PRE, plan_critic.STAGE_POST,
           plan_critic.STAGE_ONE_OFF)
 
 #: What an uncertain finding — one `classify` returns None for — is on each
-#: stage. On the one-off route it is DRE-6356's own collapse (`route_class`,
-#: `UNCERTAIN_GOES_TO`): the one-off critic writes for the CEO in plain
-#: English, and the classifier's lists were read off exactly those findings.
-#: On the epic route the critics write for the PLANNER, in engineer prose —
-#: DRE-4059's round 2 names a workflow output and its round 3 a function — and
-#: the classifier places none of DRE-4059's three second-critic findings, so
-#: collapsing them to the CEO would send every epic bound to him as a question
-#: written in code, which `planning_escalation.refusal` then refuses, and the
-#: card would park exactly as today under a new name. The planner can act on
-#: engineer prose: it re-plans with every finding in front of it, and when one
+#: stage: the planner's, on all three. Every finding this module reads is the
+#: worst finding of a `SEND_BACK` round (`plan_critic.send_back_findings`), and
+#: a `SEND_BACK` is, in the critic's own words on the card, a defect in the
+#: card an agent can fix. DRE-6356's collapse of an uncertain finding to a
+#: decision (`route_class`, `UNCERTAIN_GOES_TO`) is right where the critic
+#: itself asked a `QUESTION` — there under-asking a real decision is the worse
+#: error — and that is where it is applied: `plan_critic.one_off_decide` routes
+#: a `QUESTION` the classifier cannot place to the CEO on the spot, so it never
+#: reaches the bound. Collapsing again here read the critic's own "fix the
+#: card" as a choice nobody made: on 2026-10-10 the one-off bound asked the
+#: CEO about DRE-6590 and DRE-6617 with "Recommendation: none given", and
+#: every finding on both was a rewording (DRE-6649). On the epic route the
+#: critics write for the PLANNER, in engineer prose — DRE-4059's round 2 names
+#: a workflow output and its round 3 a function — and a question built from it
+#: would be refused by `planning_escalation.refusal` anyway. The planner can
+#: act on either: it re-plans with every finding in front of it, and when one
 #: is really a business choice it asks the CEO through its own escalation exit,
-#: in plain English and with a recommendation (`briefs/planner.md`).
+#: in plain English and with a recommendation (`briefs/planner.md`). A finding
+#: a `DECISION_PHRASES` entry places still asks the CEO on every stage.
 UNCERTAIN_BY_STAGE = {
-    "one-off": DECISION,
+    "one-off": REVISION,
     "pre": REVISION,
     "post": REVISION,
 }
@@ -237,7 +251,8 @@ def class_word(finding: str) -> str:
 
 def stage_class(finding: str, stage: str) -> str:
     """REVISION or DECISION: `classify`, with an uncertain finding read by the
-    stage rule. On `one-off` this is `send_back_class.route_class`."""
+    stage rule — never `send_back_class.route_class`, whose collapse is the
+    critic's (`UNCERTAIN_BY_STAGE`)."""
     cls = send_back_class.classify(finding)
     return UNCERTAIN_BY_STAGE[stage] if cls is None else cls
 
