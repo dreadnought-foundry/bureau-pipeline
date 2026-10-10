@@ -677,10 +677,24 @@ class EveryTurnDeathLeavesTheTagScenario(unittest.TestCase):
     def test_a_blocker_written_before_dying_keeps_its_exit_and_the_tag(self):
         _, journal = run_report(
             self, _this_run(2),
-            exit_files={"/tmp/agent-blocker.txt": "the API does not exist"})
+            exit_files={"/tmp/agent-blocker.txt":
+                        "blocker-class: branch-without-pr\n"
+                        "the work is pushed and no pull request was opened\n"})
         posted = comments(journal)
         self.assertEqual(1, len(self._tagged(posted)), posted)
         self.assertIn(("state", "Backlog", "--park"), moves(journal))
+
+    def test_a_question_written_as_a_blocker_before_dying_is_asked_with_the_tag(self):
+        """An unstamped note is a person's question (DRE-6444): the escalation
+        branch asks it in Green Light, and the death still leaves its tag."""
+        _, journal = run_report(
+            self, _this_run(2),
+            exit_files={"/tmp/agent-blocker.txt": "the API does not exist"})
+        posted = comments(journal)
+        self.assertEqual(1, len(self._tagged(posted)), posted)
+        self.assertIn(("advance", "Green Light", "In Progress,Todo"),
+                      moves(journal))
+        self.assertFalse([m for m in moves(journal) if "Backlog" in m])
 
     def test_an_unreadable_pr_state_keeps_the_tag(self):
         _, journal = run_report(self, _this_run(3), card_pr_exit="3")

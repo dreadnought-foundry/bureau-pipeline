@@ -177,11 +177,12 @@ def _checkout(td: str) -> None:
     _executable(os.path.join(base, "scripts", "card_pr.py"), CARD_PR_STUB)
 
 
-def run_pr_opened(tc, command: list[str]):
+def run_pr_opened(tc, command: list[str], *, card_pr: str = CARD_PR_STUB):
     """Run `command` from a runner-shaped directory; return `(proc, journal)`."""
     td = tempfile.mkdtemp()
     tc.addCleanup(shutil.rmtree, td, ignore_errors=True)
     _checkout(td)
+    _executable(os.path.join(td, ".bureau-pipeline", "scripts", "card_pr.py"), card_pr)
     binary = os.path.join(td, "bin")
     os.makedirs(binary)
     _executable(os.path.join(binary, "git"), "#!/bin/sh\nexit 0\n")
@@ -243,6 +244,162 @@ class PrOpenedRunsAsAFile(unittest.TestCase):
         """The step's own `run:` executed from the runner's working
         directory, where the pipeline checkout sits at .bureau-pipeline."""
         self._assert_pr_opened(*run_pr_opened(self, ["bash", "-c", step()["run"]]))
+
+
+# --------------------------------------------------------------------------- #
+# a blocker note is classified before it is parked (DRE-6444)                  #
+# --------------------------------------------------------------------------- #
+
+#: tests/test_turn_budget_scenario.py's CARD_PR_EXIT_STUB answering exit 0: no
+#: pull request, so the chain walks past the PR branches to the agent's notes.
+CARD_PR_NO_PR_STUB = '''#!/usr/bin/env python3
+print("\\t")
+'''
+
+BLOCKER = "/tmp/agent-blocker.txt"
+ESCALATION = "/tmp/agent-escalation.txt"
+HANDBACK = "/tmp/agent-handback.txt"
+EXIT_FILES = (HANDBACK, ESCALATION, BLOCKER)
+
+FIXTURES = os.path.join(ROOT, "tests", "fixtures", "blocker-reasons.json")
+PARKED = " — parked in Backlog"
+ATTESTED = (
+    "- [x] the cap is 15 — config/epic-cap.json reads 15 on main\n"
+    "- [x] the proof names the count — architecture/proofs/epic-cap.md says 9 of 15\n"
+    "- [x] no pull request is opened — the change would be empty\n"
+)
+
+
+def _clear_exit_files():
+    for path in EXIT_FILES:
+        if os.path.exists(path):
+            os.remove(path)
+
+
+def _quoted(comment: str) -> str:
+    """What the marker quotes: after the `·`, up to the LAST parked clause."""
+    rest = comment.split(" · ", 1)[1]
+    return rest[:rest.rindex(PARKED)]
+
+
+class ABlockerIsClassifiedBeforeItParks(unittest.TestCase):
+    """The blocker branch, driven through the file with no PR to report."""
+
+    def _run(self, exit_files: dict):
+        _clear_exit_files()
+        self.addCleanup(_clear_exit_files)
+        for path, text in exit_files.items():
+            with open(path, "w", encoding="utf-8") as fh:
+                fh.write(text)
+        proc, journal = run_pr_opened(self, ["bash", SCRIPT], card_pr=CARD_PR_NO_PR_STUB)
+        self.assertEqual(0, proc.returncode, proc.stderr + proc.stdout)
+        posted = [e["args"][1] for e in journal if e["op"] == "comment"]
+        moved = [e["args"] for e in journal if e["op"] in ("advance", "state")]
+        return posted, moved
+
+    def _assert_parked(self, cls: str, note: str):
+        posted, moved = self._run({BLOCKER: note})
+        self.assertEqual(1, len(posted), posted)
+        self.assertTrue(
+            posted[0].startswith(f"🛑 Agent blocked: class={cls} · "), posted[0])
+        self.assertNotIn("blocker-class:", posted[0])
+        self.assertIn(PARKED + " until the sweep acts on it (", posted[0])
+        self.assertTrue(posted[0].endswith(
+            f"Run: https://github.com/{REPO}/actions/runs/{RUN_ID}"), posted[0])
+        self.assertEqual([[CARD, "Backlog", "--park"]], moved)
+        return posted[0]
+
+    def test_a_wrong_repo_note_keeps_its_repo_line_first(self):
+        posted = self._assert_parked(
+            "wrong-repo",
+            "blocker-class: wrong-repo\nrepo: bureau-pipeline\n"
+            "The card's files live in bureau-pipeline, not here.\n")
+        self.assertTrue(_quoted(posted).startswith("repo: bureau-pipeline\n"), posted)
+        self.assertIn("The card's files live in bureau-pipeline, not here.",
+                      _quoted(posted))
+
+    def test_a_branch_without_pr_note_parks_with_its_class(self):
+        posted = self._assert_parked(
+            "branch-without-pr",
+            "blocker-class: branch-without-pr\n"
+            "The work is pushed on agent/DRE-5223-x and no PR was opened.\n")
+        self.assertEqual(
+            "The work is pushed on agent/DRE-5223-x and no PR was opened.",
+            _quoted(posted))
+
+    def test_a_nothing_to_change_note_quotes_its_attestations_verbatim(self):
+        posted = self._assert_parked(
+            "nothing-to-change", "blocker-class: nothing-to-change\n" + ATTESTED)
+        self.assertEqual(ATTESTED.rstrip("\n"), _quoted(posted))
+
+    def test_the_class_names_what_the_sweep_does_with_it(self):
+        """Each mechanical class gets its own clause, never one shared text."""
+        clauses = set()
+        for cls, note in (
+                ("wrong-repo", "blocker-class: wrong-repo\nrepo: bureau-pipeline\n"),
+                ("branch-without-pr", "blocker-class: branch-without-pr\nx\n"),
+                ("nothing-to-change", "blocker-class: nothing-to-change\n" + ATTESTED)):
+            posted = self._assert_parked(cls, note)
+            clauses.add(posted.rsplit(PARKED, 1)[1])
+        self.assertEqual(3, len(clauses), clauses)
+
+    def test_a_legacy_note_reaches_the_poster_through_its_wording(self):
+        """DRE-5195's free prose, stamped by nothing, names one class."""
+        with open(FIXTURES, encoding="utf-8") as fh:
+            row = next(r for r in json.load(fh) if r["card"] == "DRE-5195")
+        posted = self._assert_parked("nothing-to-change", row["reason"])
+        self.assertEqual(row["reason"], _quoted(posted))
+
+    def _assert_asked(self, posted, moved):
+        self.assertEqual(1, len(posted), posted)
+        self.assertTrue(posted[0].startswith("🙋"), posted[0])
+        for line in ("🔎 Finding:", "❓ Question:", "💡 Recommendation:"):
+            self.assertIn(line, posted[0])
+        self.assertNotIn("🛑 Agent blocked", posted[0])
+        self.assertNotIn("blocker-class:", posted[0])
+        self.assertIn([CARD, "Green Light", "In Progress,Todo"], moved)
+        self.assertNotIn("Backlog", [m[1] for m in moved])
+
+    def test_an_unclassed_note_is_asked_in_green_light(self):
+        posted, moved = self._run({BLOCKER: "the API does not exist"})
+        self._assert_asked(posted, moved)
+        self.assertIn("🔎 Finding: the API does not exist", posted[0])
+        self.assertIn("💡 Recommendation: none given — ", posted[0])
+
+    def test_a_note_stamped_question_is_asked_without_its_stamp(self):
+        posted, moved = self._run(
+            {BLOCKER: "blocker-class: question\nShould a canceled run count?\n"})
+        self._assert_asked(posted, moved)
+        self.assertIn("Should a canceled run count?", posted[0])
+
+    def test_an_escalation_the_agent_wrote_is_never_overwritten(self):
+        posted, moved = self._run({
+            ESCALATION: "Which of A or B should ship first?",
+            BLOCKER: "the API does not exist",
+        })
+        self._assert_asked(posted, moved)
+        self.assertIn("Which of A or B should ship first?", posted[0])
+        self.assertNotIn("the API does not exist", posted[0])
+        with open(ESCALATION, encoding="utf-8") as fh:
+            self.assertEqual("Which of A or B should ship first?", fh.read())
+
+    def test_a_question_with_nothing_to_ask_parks_for_the_sweep(self):
+        """A stamp and no words: the hand-off leaves no escalation, so the
+        blocker branch parks the question and the sweep asks it."""
+        posted, moved = self._run({BLOCKER: "blocker-class: question\n"})
+        self.assertEqual(1, len(posted), posted)
+        self.assertTrue(
+            posted[0].startswith("🛑 Agent blocked: class=question · "), posted[0])
+        self.assertIn(PARKED + " until the sweep asks it in Green Light. Run: ",
+                      posted[0])
+        self.assertEqual([[CARD, "Backlog", "--park"]], moved)
+
+    def test_the_header_describes_the_classify_first_branch(self):
+        lines = script_text().splitlines()
+        section = "\n".join(lines[lines.index("# What this script does"):
+                                  lines.index("# Incident history")])
+        self.assertIn("blocker_class.py classify", section)
+        self.assertIn("class=<class>", section)
 
 
 if __name__ == "__main__":

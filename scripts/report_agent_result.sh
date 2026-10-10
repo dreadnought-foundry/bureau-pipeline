@@ -22,16 +22,28 @@ set -e
 #    (to none, delivered and yes). GitHub's outcomes for the five steps
 #    before the agent name the one that failed, and `medic_classify.py`
 #    says whether that failure was Linear refusing a quota.
-# 3. It routes the card. The first of these that holds takes it:
+# 3. It classifies a blocker note before any exit is chosen. The class
+#    comes from `blocker_class.py classify` alone, and the quoted reason
+#    from `blocker_class.py reason`, which drops the stamp line and keeps
+#    the rest verbatim. A `question` is a person's: when the agent wrote
+#    no escalation of its own, the reason becomes /tmp/agent-escalation.txt
+#    and the escalation branch below asks it. An escalation the agent
+#    wrote is never overwritten.
+# 4. It routes the card. The first of these that holds takes it:
 #    - PR already merged: a receipt, and no move. linear-sync owns Done.
 #    - PR opened: a receipt, and the card advances to In Review.
 #    - Hand-back to Planning: the agent's /tmp/agent-handback.txt is
 #      posted and the card advances to Planning. A turn-cap death skips
 #      this branch, and the dead-run branch reads it instead.
-#    - Escalation to Green Light: /tmp/agent-escalation.txt is posted and
-#      the card advances to Green Light, the CEO's "needs you" queue.
-#    - Blocker to Backlog: /tmp/agent-blocker.txt is posted and the card
-#      parks in Backlog with `state --park`, never Todo.
+#    - Escalation to Green Light: /tmp/agent-escalation.txt is posted with
+#      its three lines and the card advances to Green Light, the CEO's
+#      "needs you" queue.
+#    - Blocker to Backlog: /tmp/agent-blocker.txt is posted as one marker,
+#      `🛑 Agent blocked: class=<class> · <reason> — parked in Backlog
+#      until …`, and the card parks in Backlog with `state --park`, never
+#      Todo. The clause after the reason says what the sweep does with the
+#      class. A `question` reaches this branch only when its note left
+#      nothing to ask, and the sweep asks it in Green Light.
 #    - Rescue delivery: the run failed to deliver and its patch exists,
 #      so `deliver_rescue.py handoff` names the artifact on the card and
 #      dispatches the job that opens the PR. Nothing is requeued.
@@ -45,7 +57,7 @@ set -e
 #      that left no PR and no blocker note), infra (a run warning, the card
 #      left where it is)
 #      or defer (a receipt only, for a cancelled run).
-# 4. A turn-cap death that an escalation, a blocker, a rescue delivery or
+# 5. A turn-cap death that an escalation, a blocker, a rescue delivery or
 #    the unreadable receipt took still gets its tagged receipt from
 #    `dead_run.py turn-noted`, so the turn-cap count sees it.
 #
@@ -202,6 +214,14 @@ set -e
 # 2026-09-29, DRE-4368. A card branch that was already there when this run
 #   started, the dead run's whether resumed or not, proves nothing until it
 #   moves.
+# 2026-10-10, DRE-6444, DRE-6438. A blocker is classified before it parks.
+#   Every note used to park in Backlog under the same words, and the sweep
+#   held each one for a person, though most said one of three mechanical
+#   things. Now the marker carries the class for the sweep's action, and a
+#   question goes to Green Light at once through the escalation branch,
+#   whose `complete` stays the step's one Green Light writer. The marker is
+#   still one `linear_ops.py comment` whose own text carries the act
+#   registry's anchor, so the registry's row matches one site.
 RUN_URL="$BUREAU_SERVER_URL/$BUREAU_REPOSITORY/actions/runs/$BUREAU_RUN_ID"
 # The card's own branch first, so the PR lookup reads no other card's (DRE-1343).
 BRANCH=$(git branch -r | grep -o "agent/${CARD}-[^ ]*" | head -1 | sed 's|origin/||' || true)
@@ -255,6 +275,18 @@ if python3 .bureau-pipeline/scripts/medic_classify.py \
   RATE_FLAGS="--rate-limited"
 fi
 
+# A blocker note's class, from the one reader; missing or empty is question (DRE-6438).
+BLOCKER_CLASS=""
+if [ -f /tmp/agent-blocker.txt ]; then
+  BLOCKER_CLASS=$(python3 .bureau-pipeline/scripts/blocker_class.py classify /tmp/agent-blocker.txt || echo question)
+fi
+# A question is a person's, so the escalation branch asks it; the agent's own
+# escalation is never overwritten, and that branch's `complete` renders the
+# three lines (DRE-6444).
+if [ "$BLOCKER_CLASS" = "question" ] && [ ! -s /tmp/agent-escalation.txt ]; then
+  python3 .bureau-pipeline/scripts/blocker_class.py reason /tmp/agent-blocker.txt > /tmp/agent-escalation.txt || true
+fi
+
 # Which exit took the card, read by the turn-cap tag at the end (DRE-4366).
 EXIT_TAKEN=""
 if [ "$PR_STATE" = "MERGED" ]; then
@@ -295,8 +327,17 @@ elif [ -f /tmp/agent-escalation.txt ] && [ -s /tmp/agent-escalation.txt ]; then
 elif [ -f /tmp/agent-blocker.txt ]; then
   # Backlog, never Todo: a redispatched blocker hits the same wall (DRE-1286).
   EXIT_TAKEN="blocker note"
+  # The marker names the class and what the sweep does with it (DRE-6444).
+  case "$BLOCKER_CLASS" in
+    nothing-to-change) BLOCKER_UNTIL="the sweep acts on it (it cancels the card once every criterion is attested met, and sends the rest to the planner)" ;;
+    wrong-repo) BLOCKER_UNTIL="the sweep acts on it (it moves the card's repo label to the repository that holds its files)" ;;
+    branch-without-pr) BLOCKER_UNTIL="the sweep acts on it (it opens or finds the pull request for the work on the branch)" ;;
+    *) BLOCKER_CLASS="question"; BLOCKER_UNTIL="the sweep asks it in Green Light" ;;
+  esac
+  # The stamp line off, everything else verbatim: a repo: line stays first.
+  BLOCKER_REASON=$(python3 .bureau-pipeline/scripts/blocker_class.py reason /tmp/agent-blocker.txt || cat /tmp/agent-blocker.txt)
   python3 .bureau-pipeline/scripts/linear_ops.py comment "$CARD" \
-    "🛑 Agent blocked: $(cat /tmp/agent-blocker.txt) — parked in Backlog until the blocker is resolved (a Todo return here would redispatch agents into the same wall). Run: $RUN_URL"
+    "🛑 Agent blocked: class=$BLOCKER_CLASS · $BLOCKER_REASON — parked in Backlog until $BLOCKER_UNTIL. Run: $RUN_URL"
   # --park, or the DRE-1885 building-card guard re-routes this to Todo.
   python3 .bureau-pipeline/scripts/linear_ops.py state "$CARD" "Backlog" --park || true
 elif [ "$FAILED_DELIVERY" = "failed" ] && [ -n "$RESCUE_PATCH" ] && [ -f "$RESCUE_PATCH" ]; then
