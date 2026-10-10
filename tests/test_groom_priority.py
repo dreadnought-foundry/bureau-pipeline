@@ -76,7 +76,7 @@ def comment(body, days, *, by=SOMEONE):
             "user": {"id": by} if by else None, "botActor": None}
 
 
-def console_answer(words, *, card_id, days):
+def console_answer(words, *, card_id, days, lead="Answer from"):
     """The console's answer shape on the pipeline's key — the heading, his
     words and a well-formed trailer. Whether the signature holds is the fake
     verifier's to say."""
@@ -84,7 +84,7 @@ def console_answer(words, *, card_id, days):
         card=card_id, sha256="0" * 64, user="ceo-console-user",
         at=ago(days).replace(".000", "")[:19] + "Z", kid="0" * 16,
         sig="A" * 86)
-    body = ("Answer from Sid (signed in to the console), 2026-09-26 09:00 PT:"
+    body = (f"{lead} Sid (signed in to the console), 2026-09-26 09:00 PT:"
             f"\n\n{words}\n\n{trailer}")
     return comment(body, days, by=FLEET)
 
@@ -219,6 +219,20 @@ def test_the_ceos_console_answer_confirming_3_days_ago_keeps_its_band():
     found = annotate([old], FakeLinear(
         {"DRE-2702": ([set_to(1, 38)], [answer])}), verifier=verifier)
     assert verifier.checked == 1, "the verifier is handed through unchanged"
+    assert found["stale"] == []
+    assert "priority_stale" not in old
+
+
+def test_a_confirmation_typed_into_the_console_comment_box_keeps_its_band():
+    """The card panel's comment box writes `Comment from` over the same receipt
+    (DRE-6500): the heading is the console's, so his first line is the marker."""
+    old = card("DRE-2702", priority=1, days=40)
+    answer = console_answer("priority-confirmed", card_id="DRE-2702", days=3,
+                            lead="Comment from")
+    verifier = FakeVerifier(why=None)
+    found = annotate([old], FakeLinear(
+        {"DRE-2702": ([set_to(1, 38)], [answer])}), verifier=verifier)
+    assert verifier.checked == 1
     assert found["stale"] == []
     assert "priority_stale" not in old
 

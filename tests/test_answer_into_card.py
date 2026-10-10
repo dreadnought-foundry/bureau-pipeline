@@ -116,10 +116,95 @@ def test_words_keeps_his_first_line_when_no_blank_line_follows_the_heading():
     assert A.words(text) == "Go with B.\nAnd soon."
 
 
-def test_answer_head_cannot_drift_from_spoken_threads_reader():
-    """Two readers of the console's heading — this one and `newest_answer` —
-    must strip the same line, or one of them reads the heading as his words."""
-    assert A.ANSWER_HEAD.pattern == spoken_thread._ANSWER_HEAD.pattern
+#: The card panel's comment box heading (DRE-6500): same receipt, other words.
+COMMENT_HEAD = ("Comment from Sid Conklin (signed in to the console), "
+                "2026-10-09 15:21 PT:")
+
+
+def test_words_drops_a_comment_box_heading_and_the_blank_line_after_it():
+    assert A.words(f"{COMMENT_HEAD}\n\n{V.ANSWER_WORDS}") == V.ANSWER_WORDS
+    assert A.words(f"{COMMENT_HEAD}\nGo with B.") == "Go with B."
+    assert A.words(f"{COMMENT_HEAD}  \n\nGo with B.") == "Go with B."
+
+
+def test_the_console_writes_two_heading_leads_declared_once():
+    assert console_receipt.HEADING_LEADS == ("Answer from", "Comment from")
+
+
+@pytest.mark.parametrize("line", [
+    "Answer from Test Owner (signed in to the console), 2026-09-13 09:52 PT:",
+    "Comment from Sid Conklin (signed in to the console), 2026-10-09 15:21 PT:",
+])
+def test_the_heading_line_matches_both_console_headings(line):
+    assert console_receipt.HEADING_LINE.match(line)
+
+
+@pytest.mark.parametrize("line", [
+    "Answer from the board, 10:00 PT",   # no trailing colon
+    "Reply from Sid, 10:00 PT:",         # not a lead the console writes
+    "Go with B.",
+])
+def test_the_heading_line_matches_nothing_else(line):
+    assert not console_receipt.HEADING_LINE.match(line)
+
+
+# Every reader of a console-signed comment's heading, each handed a comment
+# under a heading only a stand-in declaration recognizes: it is stripped only
+# when the reader reads `console_receipt.HEADING_LINE` itself, at call time.
+_STAND_IN = re.compile(r"^Note from .* PT:\s*$")
+_STAND_IN_HEAD = "Note from Sid (signed in to the console), 2026-10-09 15:21 PT:"
+_STAND_IN_TRAILER = console_receipt.answer_trailer(
+    card=CARD, sha256="0" * 64, user=V.ANSWER_USER, at=V.ANSWER_AT,
+    kid="0" * 16, sig="A" * 86)
+_STAND_IN_COMMENT = f"{_STAND_IN_HEAD}\n\nre-approve\n\n{_STAND_IN_TRAILER}"
+
+
+def _epic_growth(body):
+    import epic_growth
+    return epic_growth.read_words(body) == epic_growth.RE_APPROVE
+
+
+def _spoken_thread(body):
+    park = spoken_thread.Voice(spoken_thread.PIPELINE, spoken_thread.PIPELINE,
+                               V.ANSWER_AT, spoken_thread.PROOF_PARK_MARKS[1])
+    his = spoken_thread.Voice(spoken_thread.CEO_VIA_CONSOLE,
+                              spoken_thread.CEO_VIA_CONSOLE, V.ANSWER_AT, body)
+    return spoken_thread.newest_answer([park, his])[1] == "re-approve"
+
+
+def _answer_into_card(body):
+    return A.words(console_receipt.answer_text(body)) == "re-approve"
+
+
+def _planning_escalation(body):
+    import planning_escalation
+    return planning_escalation._first_line_of_answer(body) == "re-approve"
+
+
+def _groom_priority(body):
+    import groom_priority
+    return groom_priority._first_line(body, console=True) == "re-approve"
+
+
+@pytest.mark.parametrize("reader", [
+    _epic_growth, _spoken_thread, _answer_into_card, _planning_escalation,
+    _groom_priority,
+])
+def test_every_reader_reads_the_heading_through_the_one_declaration(
+        reader, monkeypatch):
+    """Five readers once kept five private copies of the console's heading, and
+    four knew only `Answer from` (DRE-6500). Each now reads the one declaration,
+    so a heading the console adds is learned in one place."""
+    assert not reader(_STAND_IN_COMMENT), "the stand-in already reads as a heading"
+    monkeypatch.setattr(console_receipt, "HEADING_LINE", _STAND_IN)
+    assert reader(_STAND_IN_COMMENT)
+
+
+def test_no_script_but_console_receipt_spells_the_heading():
+    """A sixth private copy of the heading pattern cannot appear unnoticed."""
+    spelled = sorted(path.name for path in (ROOT / "scripts").glob("*.py")
+                     if re.search(r"from \.\* PT", path.read_text("utf-8")))
+    assert spelled == ["console_receipt.py"]
 
 
 # --------------------------------------------------------------------------
