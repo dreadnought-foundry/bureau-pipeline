@@ -262,6 +262,13 @@ class WorkflowEnvTest(unittest.TestCase):
                         f"no bound covers — read mirror_result.json instead")
         # The guard is about something: the summary does reach an env.
         self.assertIn(("decide", "mirror"), seen)
+        # And COVERED means covered: each one that reaches an env is measured
+        # here, over the largest result in this file, not taken on trust.
+        written = _decide(_result("failed", failing=RED_COUNT,
+                                  already_red=RED_COUNT))
+        for step_id, output in sorted(seen & COVERED):
+            with self.subTest(output=f"steps.{step_id}.outputs.{output}"):
+                self.assertLess(_size(written[output]), 2 * BOUND)
 
     def test_the_check_step_writes_no_output_at_all(self):
         """Its per-test lists go to the result file and the log, never to
