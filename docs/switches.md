@@ -55,8 +55,9 @@ is still printed: it shows as `off — no reason given`. It is never left out.
 Every line, plus the `linear-budget:` spend line, is copied into the run's step
 summary under `### Switches — spend`.
 
-The step only reads and prints. It posts no comment, files no card and
-changes no variable.
+The step never changes a variable. It writes to the board in only two cases,
+both after a switch's reason clears: it posts one receipt, and later it may
+file one alarm card (see [The receipt and the alarm](#the-receipt-and-the-alarm)).
 
 ### The line grammar
 
@@ -93,16 +94,48 @@ fails, every card of that switch shows as `unread`, the error is added to the
 end of the line (`— the read failed: <error>`), and the pass still finishes
 with exit code 0.
 
-## What comes next
+## The receipt and the alarm
 
-This card prints and reads, and that is all it does. Two sibling cards build
-on the same per-switch loop in `switch_reason.main()`. Neither adds a second
-read of the states:
+When a switch is off and its reason has cleared, the same pass tells a person
+where they will see it, so nobody has to read a run summary. It uses the
+states it already read and makes no second read of them.
 
-- **The receipt** will post once to the board when a switch's reason clears,
-  so a person learns the switch may come on without having to read a run
-  summary.
-- **The alarm** will be raised when a switch stays off after its reason has
-  cleared for longer than `alarm_after_hours` in `config/switches.json`.
+**The receipt.** The step reads the thread of the first card the companion
+names, in the order written. If no receipt is there yet, it posts one:
 
-This page will describe each of them when it ships.
+```
+🔀 switch-cleared: PROOF_DISPATCH_LIVE in agent-bureau — its reason cleared at 2026-10-09 05:00 PT: DRE-6141 Done, DRE-6142 Done, DRE-6143 Done. It may be turned on: gh variable set PROOF_DISPATCH_LIVE --body true -R dreadnought-foundry/agent-bureau
+```
+
+A receipt is posted once per switch per repository. The step checks the first
+line of each comment for `🔀 switch-cleared: <SWITCH> in <repo-slug>`, so each
+repository posts its own receipt and none repeats. The step's line says
+`receipt posted on <card>` the first time and `the receipt already stands on
+<card>` after that.
+
+**The alarm.** The receipt's time is when the reason cleared. If the receipt
+is at least `alarm_after_hours` old (12 in `config/switches.json`) and the
+switch is still off, the step files one card into `Planning`:
+
+```
+Switch PROOF_DISPATCH_LIVE in agent-bureau is still off after its reason cleared
+```
+
+The card names the switch, the repository, the receipt's time, the hours since,
+the cards and the one command that turns the switch on. Before filing, the step
+looks for an open card with exactly that title and files nothing if it finds
+one.
+
+The receipt is written first, and the alarm is timed only from the receipt. A
+pass that stops between the two loses nothing: the next pass finds the receipt
+and times the alarm from it.
+
+The step reads no thread when the switch is on, when any named card is not yet
+terminal or is `unread`, or when `REPO` names no repository. If a read, a post
+or a filing fails, the step prints why and the pass still exits 0.
+
+Outside GitHub Actions, or with `--dry-run`, the step writes nothing. It prints
+`would: post <card> — <receipt line>` or `would: alarm — <title>` instead.
+
+The receipt is the `switch-reason-cleared` act in `config/pipeline-acts.json`
+(`docs/pipeline-acts.md`).

@@ -233,6 +233,10 @@ RELEASE_CADENCES = textwrap.dedent(
         "release-roll-out": 600_000,
         "release-verify": 3_600_000,
     }
+
+    # DRE-6437's switch receipt, a progress act too, carried for the same
+    # reason: its cadence is alarm_after_hours, 12, in config/switches.json.
+    SWITCH_CADENCE_MS = {"switch-reason-cleared": 43_200_000}
     '''
 )
 

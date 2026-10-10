@@ -6,9 +6,9 @@ A pipeline switch is a repository variable a reusable workflow reads from
 switch that was off carried no reason, so nothing could say when the reason
 was over. `config/switches.json` is the list of switches as data, and this
 module reads a switch's declared off-reason and composes the one line every
-reader prints. It posts nothing, reads no Linear and edits no workflow: the
-sweep step, the receipt and the alarm are the sibling cards, and they import
-this.
+reader prints. The sweep's `Read the switches` step runs it (DRE-6436), and
+when a reason clears it posts the receipt and files the alarm (DRE-6437). It
+never sets a variable: turning a switch on is a person's act.
 
 ## The contract (identical in every sibling card)
 
@@ -41,6 +41,29 @@ on every full pass. A switch's cards are read in ONE Linear request
 card. A read that fails leaves every card of that switch `unread`, so its
 reason never reads as cleared, and the pass still exits 0.
 
+## The receipt and the alarm (DRE-6437)
+
+When a switch is off and every card its companion names is terminal, the pass
+reads the thread of the FIRST card named, in the order written. With no
+receipt there it posts one, composed by `pipeline_act.receipt`:
+
+    🔀 switch-cleared: <SWITCH> in <repo-slug> — its reason cleared at <PT time>: DRE-A Done, DRE-B Done. It may be turned on: gh variable set <SWITCH> --body true -R <owner/repo>
+
+The once-key is a comment whose FIRST line opens `🔀 switch-cleared: <SWITCH>
+in <repo-slug>`, so each repository posts its own and none repeats. A receipt
+already standing is when the reason cleared: once it is `alarm_after_hours`
+old (`config/switches.json`) and the switch is still off, the pass files one
+card titled `Switch <SWITCH> in <repo-slug> is still off after its reason
+cleared`, after `find_open` finds none open under that title. The receipt is
+written first and the alarm reads only the receipt, so a pass that dies
+between the two loses nothing: the next one finds the receipt and times the
+alarm from it.
+
+No thread is read when the reason has not cleared, when `REPO` is unset, or
+when the switch is on. A read, a post or a filing that fails is printed and the
+pass still exits 0. The phase is dry — `would: post …` and `would: alarm …`,
+nothing written — when `GITHUB_ACTIONS` is not `true` or `--dry-run` is passed.
+
 ## The check
 
     python3 scripts/switch_reason.py check [--root DIR]
@@ -53,7 +76,8 @@ are DISCOVERED, never listed: every `vars.<NAME>_LIVE` under
 
 Import-safe and pure: no I/O at import, and every function but `load`,
 `discover`, `problems` and `main` reads only its arguments; `read_states`
-reaches Linear only through the `gql` it is handed.
+reaches Linear only through the `gql` it is handed, and the receipt phase only
+through the `linear` it is handed.
 """
 
 from __future__ import annotations
@@ -68,6 +92,7 @@ from pathlib import Path
 from typing import Mapping, NamedTuple
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import pipeline_act  # noqa: E402 — import-safe: no I/O at import
 import prose_blockers  # noqa: E402 — import-safe: no I/O at import
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
@@ -329,8 +354,13 @@ def _one_line(text: str) -> str:
     return " ".join(str(text).split())
 
 
-def read_switches(env: Mapping, *, gql, now, catalog: dict | None = None) -> list:
-    """The `switches:` line of every catalog switch, in the catalog's order."""
+def read_switches(env: Mapping, *, gql, now, catalog: dict | None = None,
+                  linear=None, live: bool = False) -> list:
+    """The `switches:` line of every catalog switch, in the catalog's order.
+
+    Handed a `linear`, a switch whose reason cleared also gets the receipt
+    phase's lines, right after its own (`receipt_phase`).
+    """
     doc = catalog if catalog is not None else load()
     lines = []
     for row in doc.get("switches") or []:
@@ -342,20 +372,206 @@ def read_switches(env: Mapping, *, gql, now, catalog: dict | None = None) -> lis
                 states = read_states(reason.cards, gql=gql)
             except Exception as exc:  # noqa: BLE001 — every refusal is unread
                 states, error = {}, exc
-        line = reading(name, env, states, now).line
+        read = reading(name, env, states, now)
+        line = read.line
         if error is not None:
             line = f"{line} — the read failed: {_one_line(error) or type(error).__name__}"
         lines.append(f"{PREFIX} {line}")
+        if linear is not None and read.cleared:
+            lines += receipt_phase(name, read, states, env, linear=linear, now=now,
+                                   hours=doc.get("alarm_after_hours"), live=live)
     return lines
 
 
-def _read_pass(env: Mapping | None, gql, now) -> int:
+# --------------------------------------------------------------------------- #
+# the receipt and the alarm (DRE-6437)                                         #
+# --------------------------------------------------------------------------- #
+
+RECEIPT_ICON = "🔀"
+WOULD = "would:"
+
+
+def _pt(moment: datetime) -> str:
+    """`2026-10-09 05:00 PT` — every time a person reads is Pacific."""
+    try:
+        from zoneinfo import ZoneInfo  # noqa: PLC0415
+
+        local = moment.astimezone(ZoneInfo("America/Los_Angeles"))
+        return local.strftime("%Y-%m-%d %H:%M PT")
+    except Exception:  # noqa: BLE001 — no tz database: say UTC, never a wrong PT
+        return moment.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+
+
+def receipt_key(name: str, slug: str) -> str:
+    """What the first line of `name`'s receipt in `slug` opens with."""
+    return f"{RECEIPT_ICON} switch-cleared: {name} in {slug}"
+
+
+def receipt_line(name: str, slug: str, repo: str, states: Mapping, cards, now) -> str:
+    """The receipt's first line — its once-key, the cards, and the command."""
+    named = ", ".join(f"{card} {states[card]}" for card in cards)
+    return (f"{receipt_key(name, slug)} — its reason cleared at {_pt(now)}: "
+            f"{named}. It may be turned on: gh variable set {name} --body true "
+            f"-R {repo}")
+
+
+def alarm_title(name: str, slug: str) -> str:
+    return f"Switch {name} in {slug} is still off after its reason cleared"
+
+
+def standing_receipt(thread, name: str, slug: str) -> dict | None:
+    """The oldest comment whose FIRST line opens `name`'s key in `slug`.
+
+    The key ends where the slug ends: `agent-bureau-console` is another
+    repository, and a comment quoting a receipt below its own first line is
+    not one.
+    """
+    key = receipt_key(name, slug)
+    for node in thread or ():
+        first = (node.get("body") or "").split("\n", 1)[0].strip()
+        if first == key or first.startswith(f"{key} "):
+            return node
+    return None
+
+
+def _moment(stamp) -> datetime | None:
+    try:
+        moment = datetime.fromisoformat(str(stamp or "").replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return moment if moment.tzinfo else None
+
+
+def _hours(seconds: float) -> str:
+    whole = int(seconds // 3600)
+    return f"{whole} hour" if whole == 1 else f"{whole} hours"
+
+
+def alarm_body(name: str, slug: str, repo: str, states: Mapping, cards,
+               first: str, posted: datetime, now) -> str:
+    named = ", ".join(f"{card} {states[card]}" for card in cards)
+    since = _hours((now - posted).total_seconds())
+    return "\n".join([
+        f"The switch `{name}` in {slug} is still off {since} after its reason "
+        f"cleared. The sweep posted its receipt on {first} at {_pt(posted)}: "
+        f"every card the switch waited on is terminal — {named}.",
+        "",
+        "The sweep never sets the variable: turning a production behavior on "
+        "is a person's act. If it should come on, this is the one command:",
+        "",
+        f"    gh variable set {name} --body true -R {repo}",
+        "",
+        f"then delete its reason with `gh variable delete {companion(name)} -R "
+        f"{repo}`. If it should stay off, give it a new reason naming the cards "
+        f"it now waits on (`gh variable set {companion(name)} --body \"DRE-<n>\" "
+        f"-R {repo}`), and close this card.",
+        "",
+        "Filed by the sweep's `Read the switches` step (scripts/switch_reason.py, "
+        "DRE-6437); docs/switches.md describes it.",
+    ])
+
+
+def receipt_phase(name: str, read: Reading, states: Mapping, env: Mapping, *,
+                  linear, now, hours, live: bool) -> list:
+    """The receipt, or the alarm, for one switch whose reason cleared.
+
+    Every write is preceded by its read, and every failure is a line rather
+    than an exception, so one switch's trouble never costs another its turn.
+    """
+    if not read.off or not read.cleared or not read.cards:
+        return []
+    repo = (env.get("REPO") or "").strip()
+    if not repo:
+        return [f"{PREFIX} {name} — no receipt read: REPO names no repository"]
+    slug = (env.get("REPO_SLUG") or "").strip() or repo.rsplit("/", 1)[-1].lower()
+    first = read.cards[0]
+    try:
+        thread = linear.thread(first)
+    except Exception as exc:  # noqa: BLE001 — a refused read posts nothing
+        return [f"{PREFIX} {name} — {first}'s thread could not be read, so no "
+                f"receipt was posted: {_one_line(exc) or type(exc).__name__}"]
+    receipt = standing_receipt(thread, name, slug)
+    if receipt is None:
+        line = receipt_line(name, slug, repo, states, read.cards, now)
+        if not live:
+            return [f"{WOULD} post {first} — {line}"]
+        body = pipeline_act.receipt("switch-reason-cleared", line)
+        try:
+            refused = linear.cmd_comment(first, body)
+        except Exception as exc:  # noqa: BLE001 — reported, never fatal
+            refused = _one_line(exc) or type(exc).__name__
+        if refused:
+            return [f"{PREFIX} {name} — the receipt was not posted on {first}: "
+                    f"{_one_line(refused)}"]
+        return [f"{PREFIX} {name} — receipt posted on {first}"]
+
+    posted = _moment(receipt.get("createdAt"))
+    if posted is None:
+        return [f"{PREFIX} {name} — the receipt on {first} carries no readable "
+                f"time ({receipt.get('createdAt')!r}), so no alarm is timed from it"]
+    age = (now - posted).total_seconds()
+    if isinstance(hours, bool) or not isinstance(hours, (int, float)) or hours <= 0:
+        return [f"{PREFIX} {name} — the receipt already stands on {first}, and "
+                f"{CATALOG} names no alarm_after_hours to time an alarm by"]
+    if age < hours * 3600:
+        return [f"{PREFIX} {name} — the receipt already stands on {first}, "
+                f"posted {_pt(posted)}"]
+    title = alarm_title(name, slug)
+    try:
+        open_card = linear.find_open(title)
+    except Exception as exc:  # noqa: BLE001 — an unread dedupe files nothing
+        return [f"{PREFIX} {name} — still off {_hours(age)} after its reason "
+                "cleared, and the open alarms could not be read, so none was "
+                f"filed: {_one_line(exc) or type(exc).__name__}"]
+    if open_card:
+        return [f"{PREFIX} {name} — still off {_hours(age)} after its reason "
+                f"cleared; the alarm {open_card} is already open"]
+    body = alarm_body(name, slug, repo, states, read.cards, first, posted, now)
+    if not live:
+        return [f"{WOULD} alarm — {title}"]
+    try:
+        issue = linear.create_card(title, body, repo_slug=slug)
+    except Exception as exc:  # noqa: BLE001 — reported, never fatal
+        return [f"{PREFIX} {name} — still off {_hours(age)} after its reason "
+                f"cleared, and the alarm was not filed: "
+                f"{_one_line(exc) or type(exc).__name__}"]
+    return [f"{PREFIX} {name} — still off {_hours(age)} after its reason "
+            f"cleared; filed the alarm {issue.get('identifier')} "
+            f"{issue.get('url') or ''}".rstrip()]
+
+
+class LinearWrites:
+    """The receipt phase's one read and three writes, through `linear_ops`."""
+
+    def __init__(self, linear_ops):
+        self._ops = linear_ops
+
+    def thread(self, identifier: str):
+        """The whole thread, oldest first, paged past the window (DRE-5850)."""
+        nodes, _viewer = self._ops._thread_and_viewer(identifier, "body",
+                                                      "createdAt", whole=True)
+        return nodes
+
+    def cmd_comment(self, identifier: str, body: str):
+        return self._ops.cmd_comment(identifier, body)
+
+    def find_open(self, title: str):
+        return self._ops.find_open(title)
+
+    def create_card(self, title: str, body: str, *, repo_slug: str):
+        return self._ops.create_card(title, body, repo_slug=repo_slug)
+
+
+def _read_pass(env: Mapping | None, gql, now, linear=None, dry: bool = False) -> int:
     import linear_ops  # noqa: PLC0415 — the import stays off the pure path
 
+    env = os.environ if env is None else env
+    live = not dry and env.get("GITHUB_ACTIONS") == "true"
     try:
-        for line in read_switches(os.environ if env is None else env,
-                                  gql=gql or linear_ops.gql,
-                                  now=now or datetime.now(timezone.utc)):
+        for line in read_switches(env, gql=gql or linear_ops.gql,
+                                  now=now or datetime.now(timezone.utc),
+                                  linear=linear or LinearWrites(linear_ops),
+                                  live=live):
             print(line, flush=True)
         return 0
     finally:
@@ -367,15 +583,18 @@ def _read_pass(env: Mapping | None, gql, now) -> int:
 # --------------------------------------------------------------------------- #
 
 
-def main(argv=None, *, env: Mapping | None = None, gql=None, now=None) -> int:
-    """No command: the sweep's read. `check`: the catalog against the tree."""
+def main(argv=None, *, env: Mapping | None = None, gql=None, now=None,
+         linear=None) -> int:
+    """No command: the sweep's read, and its receipt phase (`--dry-run` writes
+    nothing). `check`: the catalog against the tree."""
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser.add_argument("--dry-run", action="store_true")
     sub = parser.add_subparsers(dest="command")
     p_check = sub.add_parser("check")
     p_check.add_argument("--root", default=ROOT)
     args = parser.parse_args(argv)
     if args.command is None:
-        return _read_pass(env, gql, now)
+        return _read_pass(env, gql, now, linear=linear, dry=args.dry_run)
 
     doc = load(os.path.join(args.root, CATALOG))
     found = problems(doc, root=args.root)

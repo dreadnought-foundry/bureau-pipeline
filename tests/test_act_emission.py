@@ -603,6 +603,27 @@ def _drive_proof_run_dispatched(mp):
         now=datetime(2026, 10, 6, 17, 0, tzinfo=UTC))
 
 
+@site("switch-reason-cleared", "switch-reason-cleared")
+def _drive_switch_reason_cleared(mp):
+    """The sweep's switch receipt (DRE-6437): a switch off, every card its
+    companion names Done, no receipt yet on the first, at a fixed clock."""
+    import switch_reason  # noqa: PLC0415 — only this driver needs it
+
+    def gql(_query, variables=None):
+        return {"issues": {"nodes": [
+            {"identifier": f"DRE-{n}", "state": {"name": "Done"}}
+            for n in (variables or {}).get("numbers") or ()]}}
+
+    mp.setattr(reconcile.linear_ops, "_thread_and_viewer",
+               lambda *_a, **_k: ([], "viewer"))
+    _card_recorder(mp)
+    switch_reason.read_switches(
+        {"PROOF_DISPATCH_LIVE_OFF_UNTIL": "DRE-1, DRE-2",
+         "REPO": "dreadnought-foundry/bureau-pipeline",
+         "REPO_SLUG": "bureau-pipeline"},
+        gql=gql, now=datetime(2026, 10, 9, 12, 0, tzinfo=UTC),
+        linear=switch_reason.LinearWrites(reconcile.linear_ops), live=True)
+
 #: The hygiene agent's thirteen acts (DRE-5368, DRE-6180). The core composes every one of
 #: them through `hygiene.receipt` and posts it through its one comment seam,
 #: `hygiene.send`; WHICH act a pass takes is a lane module's decision, and the
