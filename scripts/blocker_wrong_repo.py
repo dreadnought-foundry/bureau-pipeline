@@ -30,7 +30,8 @@ and acts on one of three readings:
 * B — the live labels carry the dispatched repo's label, the blocker names
   exactly one other rail slug, the title's `<slug>:` prefix does not disagree,
   and the thread carries no earlier wrong-repo relabel receipt: the label is
-  swapped ADD FIRST, so a card is never left with no `repo:` label. A refused
+  swapped ADD FIRST, so a card is never left with no `repo:` label, and the
+  old label comes off by every name the card carries for it. A refused
   write propagates; a half-done swap reads as B again on the next pass and
   finishes itself (`add_label` is a no-op on a label the card carries).
 * C — anything else is a person's call: None. One swap per card, so a card
@@ -95,6 +96,7 @@ def resolve(card: dict, reason: str, *, repo: str) -> tuple[str, str] | None:
     swapped, None when it is a person's call. `repo` is the sweep's own; the
     dispatched repo is read off the run URL instead, because the run that
     wrote the blocker is the one that was sent to the wrong place."""
+    del repo  # the shared signature's; see above
     identifier = card["identifier"]
     live = linear_ops.get_issue(identifier, fresh=True)
     lane = (live.get("state") or {}).get("name")
@@ -129,6 +131,11 @@ def resolve(card: dict, reason: str, *, repo: str) -> tuple[str, str] | None:
         return None
 
     old = dispatched
+    # `remove_label` matches a name exactly, so the old label comes off by
+    # every spelling the card carries — `repo:dreadnought-foundry/agent-bureau`
+    # routes as agent-bureau too, and `repo:agent-bureau` would not remove it.
+    carried = [name for name in names if validate_card._repo_label_slugs([name]) == [old]]
     linear_ops.add_label(card["identifier"], f"repo:{new}")
-    linear_ops.remove_label(card["identifier"], f"repo:{old}")
+    for name in carried:
+        linear_ops.remove_label(card["identifier"], name)
     return ("relabeled", f"repo:{old} → repo:{new}, named by the blocker")
