@@ -464,8 +464,8 @@ jobs:
       # Discovered, never typed: the tests whose text names
       # BUREAU_PIPELINE_DIR or .bureau-pipeline, and the requirement files at
       # agent-bureau's root and in the directories that hold them — then this
-      # repo's requirements-dev.txt, which pins the check's own pytest and
-      # pytest-cov (DRE-6622).
+      # repo's requirements-dev.txt, which pins the check's own pytest,
+      # pytest-cov (DRE-6622) and pytest-asyncio (DRE-6657).
       - name: Find agent-bureau's mirror tests
         id: discover
         if: steps.proof.outputs.promote == 'true'

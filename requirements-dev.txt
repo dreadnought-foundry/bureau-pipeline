@@ -9,6 +9,10 @@ pytest==9.1.1
 # requirements, and the check runs pytest with `--no-cov`, which is
 # pytest-cov's switch — without the plugin pytest refuses it.
 pytest-cov==7.1.0
+# And the async plugin (DRE-6657): agent-bureau's async tests fail with
+# `async def functions are not natively supported` without it, on stable and
+# candidate alike. The version agent-bureau's own backend CI installs.
+pytest-asyncio==1.4.0
 PyYAML==6.0.3
 # The proof run's browser (DRE-6025): `scripts/proof_browser.py prepare` reads
 # this line and installs exactly this version into a venv of its own, so the

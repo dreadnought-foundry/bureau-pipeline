@@ -373,17 +373,36 @@ promotion never clones agent-bureau. `scripts/mirror_check.py` does the work:
   check proves `pytest --version` starts; when it does not, the check is
   blocked with a reason that opens `pytest does not start in the check's
   environment`. A pin here that conflicts with one of agent-bureau's fails the
-  install, which blocks the check by name.
+  install, which blocks the check by name. The tools are pytest, pytest-cov
+  and pytest-asyncio (DRE-6657): without the async plugin every agent-bureau
+  async test fails with `async def functions are not natively supported`, on
+  `stable` and the candidate alike, and pytest-asyncio is pinned at the
+  version agent-bureau's own backend CI installs.
 - **Both pytest runs carry `--no-cov`** (DRE-6622). agent-bureau's pytest
   settings enforce a coverage floor that its mirror tests alone cannot meet,
   so pytest exited 1 with no failing test and the check could only say
   `blocked`. `--no-cov` is pytest-cov's switch, pinned beside pytest for that
   reason; agent-bureau's other pytest settings stay in force. A run in which
   every mirror test passes is a pass.
-- **A failure is re-read against `stable`** before it counts. A test red on
-  both is agent-bureau's own red: the receipt names it `already red on stable`
-  and it refuses nothing. Only a test that passes on `stable` and fails on the
-  candidate refuses, as `mirror-tests-failed`.
+- **A failure is re-read against `stable`** before it counts: the whole
+  discovered set runs again, in the same order and with the same flags, with
+  `stable` in the candidate's place (DRE-6657). A test red on both is
+  agent-bureau's own red, or the run's own doing: the receipt names it
+  `already red on stable` and it refuses nothing. Only a test that passes on
+  `stable` and fails on the candidate refuses, as `mirror-tests-failed`.
+  Until DRE-6657 the re-read ran only the files that held a failure, so the
+  two runs differed in what they ran: on run 38072065598 the candidate run
+  ended with 1238 `'jwt' is not a package` errors — a stub one agent-bureau
+  file leaves in the process, breaking another — that the 22-file re-read
+  could not show, and a candidate that touched nothing of the kind was
+  refused. The like-for-like re-read costs about a minute and a half more,
+  inside the check's 14-minute budget.
+- **The card's title stays inside Linear's limit** (DRE-6657). It names the
+  sorted mirrored files, and is the key the open card is found again by; when
+  the list will not fit in `TITLE_MAX` (200 characters, under Linear's 255) it
+  names the leading files that fit and ends `and N more`. The body still names
+  every one. Run 38072065598's 23-file, 716-character title was refused, and
+  its card was owed.
 - **Which file it mirrors** is read off the test's own string literals — the
   ones naming a file in the candidate. A test naming none reads `mirrors: not
   read from the test`, never a guess.

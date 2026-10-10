@@ -15,8 +15,9 @@ agent-bureau PR at once, and fixed by hand each time.
     whose text names `BUREAU_PIPELINE_DIR` or `.bureau-pipeline`; never a list;
   * the run — pytest from agent-bureau's root with the candidate at
     `<agent-bureau>/.bureau-pipeline` AND in `BUREAU_PIPELINE_DIR`;
-  * the re-read — each failure run again against the current `stable`, so a
-    test red on both is agent-bureau's own red and refuses nothing;
+  * the re-read — the whole discovered set run again against the current
+    `stable` (DRE-6657), so a test red on both is agent-bureau's own red, or
+    the run's own doing, and refuses nothing;
   * the mirror map — the bureau-pipeline file a failing test mirrors, read off
     the test's own string literals, never guessed;
   * the card — one per breakage, found again by its exact title.
@@ -641,7 +642,7 @@ class CheckCanRunTest(unittest.TestCase):
             "requirements-dev.txt",
         ])
         pins = (ROOT / "requirements-dev.txt").read_text().splitlines()
-        for tool in ("pytest", "pytest-cov"):
+        for tool in ("pytest", "pytest-cov", "pytest-asyncio"):
             with self.subTest(tool=tool):
                 self.assertTrue(
                     [p for p in pins if re.fullmatch(rf"{tool}==\d+(\.\d+)*", p)],
@@ -681,6 +682,149 @@ class CheckCanRunTest(unittest.TestCase):
         failing = {f["test"].split("::")[0]: f["mirrors"] for f in result["failing"]}
         self.assertEqual(failing, {ROUTING_TEST: [VERDICTS], RELAY_TEST: [VERDICTS]})
         self.assertEqual(result["already_red"], [])
+
+
+# --------------------------------------------------------------------------- #
+# 7. Two runs that are alike, and a title Linear accepts (DRE-6657)           #
+# --------------------------------------------------------------------------- #
+
+#: The 23 files the failing tests mirrored on Promote Channel run 38072065598
+#: (candidate e47e565, `stable` at 9c5b7d2). Named in full they made a
+#: 716-character title, and Linear's `issueCreate` takes 255 at most.
+RUN_38072065598_MIRRORS = [
+    ".github/actions/tdd-commit-check/action.yml",
+    ".github/workflows/agent-fix.yml",
+    ".github/workflows/qa-review.yml",
+    ".github/workflows/reconcile.yml",
+    ".github/workflows/release-train.yml",
+    ".github/workflows/self-groomer.yml",
+    ".gitignore",
+    "config/linear-identities.json",
+    "config/models.yaml",
+    "config/pipeline-acts.json",
+    "scripts/bureau_read.py",
+    "scripts/check_tdd_commits.py",
+    "scripts/console_receipt.py",
+    "scripts/epic_cap.py",
+    "scripts/groomer.py",
+    "scripts/model_fallback.py",
+    "scripts/plan_critic.py",
+    "scripts/planning_escalation.py",
+    "scripts/promote_channel.py",
+    "scripts/release_train.py",
+    "scripts/reviewer_environment.py",
+    "scripts/split_ledger.py",
+    "tests/fixtures/act-receipt-bodies.json",
+]
+
+#: Passes, and on import leaves a plain module in `sys.modules` where a package
+#: of that name sits on the path — the shape of run 38072065598's 1238
+#: `'jwt' is not a package` errors.
+_LEAVES_A_STUB = (
+    "import sys, types\n"
+    "BUREAU_PIPELINE_DIR = 'read, and leaves a stub behind'\n"
+    "sys.modules['mirrorstub'] = types.ModuleType('mirrorstub')\n"
+    "def test_passes():\n"
+    "    pass\n"
+)
+
+#: Passes alone, and errors only after the file above ran in the same process.
+_READS_THE_STUB = (
+    "BUREAU_PIPELINE_DIR = 'read'\n"
+    "def test_imports_a_submodule():\n"
+    "    import mirrorstub.algorithms\n"
+)
+
+
+class LikeForLikeReReadTest(unittest.TestCase):
+    """Run 38072065598 ran 38 files on the candidate and re-read only the 22
+    that held a failure on `stable`. A failure the run itself caused — one
+    file's leftovers breaking another's — showed only on the candidate side,
+    and was laid at a candidate that could not have caused it."""
+
+    def _polluted(self):
+        trees = _Trees(self, candidate="bureau-pipeline-old")
+        trees.write("cloud/x/mirrorstub/__init__.py", "")
+        trees.write("cloud/x/mirrorstub/algorithms.py", "")
+        trees.write("cloud/x/test_a_leaves_a_stub.py", _LEAVES_A_STUB)
+        trees.write("cloud/x/test_b_reads_the_stub.py", _READS_THE_STUB)
+        return trees
+
+    def test_the_second_file_passes_on_its_own(self):
+        """The stand-in is honest: the second file is red only beside the
+        first, never because of anything either checkout holds."""
+        trees = self._polluted()
+        (trees.agent_bureau / "cloud/x/test_a_leaves_a_stub.py").unlink()
+        result = trees.check()
+        self.assertEqual(result["status"], mirror_check.MIRROR_PASSED)
+        self.assertEqual(result["already_red"], [])
+
+    def test_a_failure_the_run_itself_causes_is_already_red_on_stable(self):
+        trees = self._polluted()
+        result = trees.check()
+        self.assertEqual(result["why"], "")
+        self.assertEqual(result["failing"], [])
+        red = {f["test"] for f in result["already_red"]}
+        self.assertEqual(
+            red, {"cloud/x/test_b_reads_the_stub.py::test_imports_a_submodule"})
+        self.assertEqual(result["status"], mirror_check.MIRROR_PASSED)
+
+    def test_the_stable_run_gets_the_whole_discovered_list(self):
+        trees = _Trees(self)
+        trees.write("cloud/x/test_more.py", "BUREAU_PIPELINE_DIR = 'read'\n")
+        discovered = mirror_check.discover(trees.agent_bureau)
+        calls = []
+
+        def fake_run_pytest(root, targets, *, python, timeout):
+            calls.append(list(targets))
+            return {f"{RELAY_TEST}::test_mirror": "failed"}
+
+        real = mirror_check.run_pytest
+        mirror_check.run_pytest = fake_run_pytest
+        try:
+            trees.check()
+        finally:
+            mirror_check.run_pytest = real
+        self.assertEqual(len(calls), 2)
+        self.assertEqual(calls[0], discovered)
+        self.assertEqual(calls[1], discovered)
+
+
+class TitleCapTest(unittest.TestCase):
+    def _result(self, names):
+        return _failed(*({"test": f"t/test_{i}.py::test_x", "mirrors": [name]}
+                         for i, name in enumerate(names)))
+
+    def test_the_cap_is_inside_linears_limit(self):
+        self.assertLessEqual(mirror_check.TITLE_MAX, 200)
+
+    def test_run_38072065598s_23_files_make_a_title_inside_the_cap(self):
+        title = mirror_check.card_title(self._result(RUN_38072065598_MIRRORS))
+        self.assertLessEqual(len(title), mirror_check.TITLE_MAX)
+        self.assertTrue(title.startswith("agent-bureau: "), title)
+        match = re.search(r" and (\d+) more$", title)
+        self.assertIsNotNone(match, title)
+        named = len(RUN_38072065598_MIRRORS) - int(match.group(1))
+        self.assertGreater(named, 0, title)
+        for name in sorted(RUN_38072065598_MIRRORS)[:named]:
+            self.assertIn(name, title)
+
+    def test_the_capped_title_is_the_same_whatever_order_the_tests_failed_in(self):
+        one = mirror_check.card_title(self._result(RUN_38072065598_MIRRORS))
+        two = mirror_check.card_title(self._result(reversed(RUN_38072065598_MIRRORS)))
+        self.assertEqual(one, two)
+
+    def test_a_list_that_fits_is_written_as_before(self):
+        names = RUN_38072065598_MIRRORS[:3]
+        title = mirror_check.card_title(self._result(names))
+        self.assertEqual(title, "agent-bureau: mirrors of "
+                                + ", ".join(sorted(names))
+                                + " must follow bureau-pipeline")
+
+    def test_the_capped_title_is_a_card_the_create_seam_accepts(self):
+        title = mirror_check.card_title(self._result(RUN_38072065598_MIRRORS))
+        self.assertIsNone(validate_card.repo_title_mismatch(
+            title, mirror_check.card_labels()))
 
 
 class SelfHostingFixtureTest(unittest.TestCase):

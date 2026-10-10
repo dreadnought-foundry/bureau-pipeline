@@ -23,7 +23,8 @@ so a refused run never clones agent-bureau. Three subcommands:
 
   discover  names the requirement files the install step needs, and the count:
             agent-bureau's own, then this repository's `requirements-dev.txt`,
-            which pins the test tools the check runs (DRE-6622).
+            which pins the test tools the check runs — pytest, pytest-cov and
+            pytest-asyncio (DRE-6622, DRE-6657).
   run       the check itself — writes the result file `promote_channel.py`
             reads, and the `⏱ mirror check` line to the run summary.
   card      files the one card a refusal owes in agent-bureau, or comments on
@@ -39,10 +40,13 @@ The check, step by step:
   3. pytest from agent-bureau's root over exactly those files, once it is
      proven to start, and with `--no-cov`: agent-bureau's coverage floor
      cannot be met by its mirror tests alone (DRE-6622).
-  4. Every failure is re-read against `stable`: the failing files run once more
-     with `stable` in the candidate's place. A test red on both is agent-bureau's
-     own red, named `already red on stable`, and refuses nothing. Only a test
-     that does not fail on `stable` and fails on the candidate refuses.
+  4. Every failure is re-read against `stable`: the whole discovered set runs
+     once more, in the same order and with the same flags, with `stable` in the
+     candidate's place (DRE-6657 — re-reading only the failing files compared
+     two runs that differed in what they ran). A test red on both is
+     agent-bureau's own red, or the run's own doing, named `already red on
+     stable`, and refuses nothing. Only a test that does not fail on `stable`
+     and fails on the candidate refuses.
   5. The bureau-pipeline file a failing test mirrors is read off the test's own
      string literals — a literal, or a chain of them joined by `/` or a call,
      that names a file in the candidate checkout. None found reads `mirrors:
@@ -98,6 +102,8 @@ REQUIREMENTS = "requirements*.txt"
 #: its own workflow jobs — and a build run here cannot read agent-bureau at
 #: all. pytest is the tool this check invokes, so its pin is this check's own,
 #: and pytest-cov beside it is what makes `--no-cov` a switch pytest accepts.
+#: pytest-asyncio is the third (DRE-6657): without it every agent-bureau async
+#: test fails, on `stable` and the candidate alike.
 TOOLS_MANIFEST = "requirements-dev.txt"
 
 #: Appended to both pytest runs (DRE-6622). agent-bureau's pytest settings
@@ -120,6 +126,11 @@ BUDGET_SECONDS = 14 * 60
 #: nor the CEO's `hand-built` mark.
 CARD_REPO = "agent-bureau"
 CARD_LABELS = (f"repo:{CARD_REPO}", "agent:engineer", "initiative:bureau", "Bug")
+
+#: The longest card title the check writes (DRE-6657). Linear's `issueCreate`
+#: takes 1–255 characters; run 38072065598's title named 23 files in 716 and
+#: was refused, so the card was owed. 200 sits safely under the limit.
+TITLE_MAX = 200
 
 #: The plugin pytest loads to report every test's outcome by node id. Written
 #: to a fresh directory of its own, so nothing of this repo's `scripts/` is put
@@ -382,22 +393,23 @@ def _swap(a: Path, b: Path) -> None:
     os.rename(spare, b)
 
 
-def _re_read_on_stable(root: Path, stable: Path, failing: list[str], *,
-                       discovered: list[str], python: str,
-                       timeout: float) -> dict:
-    """Run the failing tests' files again with `stable` where the candidate
-    was. Whole files, not node ids: a test parametrized over the pipeline's
-    own data may not even exist on `stable`, and that is not a red there."""
+def _re_read_on_stable(root: Path, stable: Path, *, discovered: list[str],
+                       python: str, timeout: float) -> dict:
+    """Run the candidate run again with `stable` where the candidate was: the
+    whole discovered list, in the same order, with the same flags (DRE-6657).
+    Re-reading only the failing files was not like for like: on run
+    38072065598 the candidate run's 1238 `'jwt' is not a package` errors — a
+    stub one file leaves in the process, breaking another — never showed on
+    `stable`, because the re-read left out the files that passed, and so read
+    as the candidate's red. Anything the run itself causes now shows on both
+    sides and is named `already red on stable`."""
     if not stable.is_dir():
         raise _Blocked("there is no stable checkout to re-read the failures "
                        "against, so none of them can be laid at the candidate")
-    files = sorted({_file_of(n) for n in failing})
-    if not all(f.endswith(".py") for f in files):
-        files = discovered
     candidate = root / PIPELINE_DIRNAME
     _swap(candidate, stable)
     try:
-        return run_pytest(root, files, python=python, timeout=timeout)
+        return run_pytest(root, discovered, python=python, timeout=timeout)
     finally:
         _swap(candidate, stable)
 
@@ -444,9 +456,8 @@ def check(root: Path, stable: Path, *, candidate: str, stable_sha: str,
             if left <= 0:
                 raise _Blocked("the check ran past its time limit before the "
                                "re-read against stable")
-            again = _re_read_on_stable(root, stable, failing,
-                                       discovered=discovered, python=python,
-                                       timeout=left)
+            again = _re_read_on_stable(root, stable, discovered=discovered,
+                                       python=python, timeout=left)
             red_on_stable = {n for n in failing if again.get(n) == "failed"}
         result["failing"] = [_entry(root, n) for n in failing
                              if n not in red_on_stable]
@@ -489,7 +500,17 @@ def card_title(result: dict) -> str:
     names = sorted({m for e in failing for m in (e.get("mirrors") or [])})
     if not names:
         names = sorted({_file_of(e["test"]) for e in failing})
-    return f"{CARD_REPO}: mirrors of {', '.join(names)} must follow bureau-pipeline"
+    title = f"{CARD_REPO}: mirrors of {', '.join(names)} must follow bureau-pipeline"
+    if len(title) <= TITLE_MAX:
+        return title
+    # Too long for Linear (DRE-6657): the leading files that fit, then how
+    # many more. Still deterministic, and the body names every one.
+    lead = f"{CARD_REPO}: mirrors must follow bureau-pipeline: "
+    for shown in range(len(names) - 1, 0, -1):
+        title = f"{lead}{', '.join(names[:shown])} and {len(names) - shown} more"
+        if len(title) <= TITLE_MAX:
+            return title
+    return f"{lead}{len(names)} files"
 
 
 def card_labels() -> list[str]:
