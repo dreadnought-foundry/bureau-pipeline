@@ -119,6 +119,10 @@ _HARNESS_WORKFLOW = re.compile(r"integration harness", re.I)
 
 _SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 
+#: How much of the matched line an `infra-backoff` prints (DRE-6522): enough
+#: to recognize it, short of a 2,000-character test id filling the step log.
+INFRA_LINE_CHARS = 200
+
 
 def is_sandbox_blocked(workflow_name: str, log_text: str) -> bool:
     """True iff the INTEGRATION HARNESS ended on its sandbox-block receipt.
@@ -134,6 +138,37 @@ def is_sandbox_blocked(workflow_name: str, log_text: str) -> bool:
     return SANDBOX_BLOCKED_MARKER in (log_text or "")
 
 
+def _line_with(text: str, marker: str) -> str:
+    """The first log line carrying `marker`, as the log printed it."""
+    return next((line for line in text.splitlines() if marker in line), "")
+
+
+def infra_match(log_text: str, workflow_name: str = ""):
+    """`(what matched, the line it matched on)` for the first infra
+    fingerprint in the failed run's logs, or None.
+
+    The signatures are matched only against the lines the run itself said
+    (`medic_classify.run_lines`, DRE-6522). On 2026-10-09 a red `main` whose
+    only failure was one plain test read as infrastructure here, because five
+    PASSING test ids carried rate-limit lines in their brackets, and the
+    repair stood down for 36 minutes. The critic's neutral marker and the
+    harness's sandbox-block receipt are each scoped by workflow already and
+    are read in the whole log, as before.
+    """
+    text = log_text or ""
+    if medic_classify.CRITIC_NEUTRAL_MARKER in text:
+        return ("the critic's neutral marker",
+                _line_with(text, medic_classify.CRITIC_NEUTRAL_MARKER))
+    if is_sandbox_blocked(workflow_name, text):
+        return ("the harness's sandbox-block receipt",
+                _line_with(text, SANDBOX_BLOCKED_MARKER))
+    for line in medic_classify.run_lines(text):
+        for sig in INFRA_SIGNATURES:
+            if sig.search(line):
+                return sig.pattern, line
+    return None
+
+
 def is_infra_failure(log_text: str, workflow_name: str = "") -> bool:
     """True iff the failed run's logs carry an infra fingerprint — a failure
     class where dispatching a fix agent burns quota without fixing anything.
@@ -143,12 +178,7 @@ def is_infra_failure(log_text: str, workflow_name: str = "") -> bool:
     must fall toward the CURRENT behaviour. A wrongly-dispatched agent costs
     one run; a wrongly-suppressed one leaves main red with nothing watching.
     """
-    text = log_text or ""
-    if medic_classify.CRITIC_NEUTRAL_MARKER in text:
-        return True
-    if is_sandbox_blocked(workflow_name, text):
-        return True
-    return any(sig.search(text) for sig in INFRA_SIGNATURES)
+    return infra_match(log_text, workflow_name) is not None
 
 
 # --------------------------------------------------------------------------- #
@@ -195,28 +225,43 @@ def timed_out_actions(log_text: str) -> dict:
     A dump with no prefixing at all cannot be attributed, so the line is taken
     at face value under the step it names.
     """
-    found = {}
+    return {(job, step): limit
+            for job, step, limit, _line in _timeout_lines(log_text)}
+
+
+def _timeout_lines(log_text: str):
+    """`(job, step, limit, the runner's line)` for each timeout line that
+    counts — the self-check `timed_out_actions` documents, in one place."""
     for line in (log_text or "").splitlines():
         seen = _TIMEOUT_LINE.search(line)
         if not seen:
             continue
         named, limit = seen.group(1), seen.group(2).strip()
+        said = line[seen.start():]
         fields = line.split("\t")
         if len(fields) >= _LOG_PREFIX_FIELDS:
             job, step = fields[0], fields[1]
             if step != named:
                 continue
-            found[(job, step)] = limit
+            yield job, step, limit, said
         else:
-            found[("", named)] = limit
-    return found
+            yield "", named, limit, said
+
+
+def timeout_match(log_text: str):
+    """`("step timeout", the runner's line)` for the first timeout that
+    counts, or None — what `infra-backoff` names when the clock ended it."""
+    for _job, _step, _limit, said in _timeout_lines(log_text):
+        return "step timeout", said
+    return None
 
 
 def is_step_timeout(log_text: str) -> bool:
     """Did the clock end this run? The "a timeout can be infrastructure ONCE"
-    half of DRE-4674 — a lone one still backs off, and it is this predicate
-    that makes it back off rather than dispatch."""
-    return bool(timed_out_actions(log_text))
+    half of DRE-4674 — a lone one still backs off, and it is this rule (read
+    by `decide` through `timeout_match`, which also names the line) that makes
+    it back off rather than dispatch."""
+    return timeout_match(log_text) is not None
 
 
 def timed_out_steps(entry) -> dict:
@@ -449,7 +494,8 @@ def decide(
     # asking which branch it came down: a key the decision omitted would
     # interpolate an empty expression into a card or a prompt.
     detail = {"timeout_job": "", "timeout_step": "", "timeout_limit": "",
-              "timeout_commits": "", "superseded_by": ""}
+              "timeout_commits": "", "superseded_by": "",
+              "infra_signature": "", "infra_line": ""}
 
     def noop(reason: str, escalate: bool = False) -> dict:
         return {"go": False, "branch": "", "attempt": 0,
@@ -481,8 +527,16 @@ def decide(
     repeat = repeated_timeout(history)
     if repeat:
         detail = {**detail, **repeat}
-    elif is_infra_failure(log_text, workflow_name) or is_step_timeout(log_text):
-        return noop("infra-backoff")
+    else:
+        # DRE-6522: what matched, and on which line, so a backoff can be
+        # explained from its own run rather than re-derived from the log.
+        matched = (infra_match(log_text, workflow_name)
+                   or timeout_match(log_text))
+        if matched:
+            signature, line = matched
+            detail = {**detail, "infra_signature": signature,
+                      "infra_line": line}
+            return noop("infra-backoff")
 
     record_re = _sha_record_re(head_sha)
     pulls = list(pulls)
@@ -617,7 +671,8 @@ def main(argv: list[str]) -> int:
                         "escalate": False, "reason": "records-unreadable",
                         "timeout_job": "", "timeout_step": "",
                         "timeout_limit": "", "timeout_commits": "",
-                        "superseded_by": ""}
+                        "superseded_by": "", "infra_signature": "",
+                        "infra_line": ""}
             print("repair decide: attempt records unreadable — fail-closed, no "
                   "dispatch (the next failure event retries with fresh records)",
                   file=sys.stderr)
@@ -643,6 +698,13 @@ def main(argv: list[str]) -> int:
             print(f"repair decide: {decision['reason']}"
                   + (f" → {decision['branch']}" if decision["go"] else ""),
                   file=sys.stderr)
+            if decision["infra_signature"]:
+                # DRE-6522: the 16:07 PT backoff of 2026-10-09 could not be
+                # explained from its own run. This line is the explanation.
+                print(f"repair decide: infra-backoff matched "
+                      f"{decision['infra_signature']!r} on the line: "
+                      f"{decision['infra_line'][:INFRA_LINE_CHARS]}",
+                      file=sys.stderr)
             if decision["superseded_by"]:
                 print(f"repair decide: run {decision['superseded_by']} of this "
                       f"workflow went green on a later commit of "

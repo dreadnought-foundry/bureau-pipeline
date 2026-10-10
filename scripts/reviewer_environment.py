@@ -291,8 +291,14 @@ _TEST_REPORT_LINE = re.compile(
 )
 
 
-def _message_lines(log_text: str | None) -> list[str]:
-    """Every log line that is the run SAYING something, prefix stripped."""
+def message_lines(log_text: str | None) -> list[str]:
+    """Every log line that is the run SAYING something, prefix stripped.
+
+    The one public way to read "what the run itself said" out of a failed-run
+    log (DRE-6522): the medic's line readers and the red-main repair's
+    signatures read through it, so a test id that carries a rate-limit line in
+    its brackets is the suite naming a test, never the step hitting a limit.
+    """
     out = []
     for raw in (log_text or "").splitlines():
         line = _LOG_PREFIX.sub("", raw, count=1)
@@ -343,7 +349,7 @@ def _credential_refused(log_text: str | None) -> bool:
     `execution_from_log` sets it by construction, and a future reader should
     not have to know that to see the rule.
     """
-    if any(_REFUSED_401.search(line) for line in _message_lines(log_text)):
+    if any(_REFUSED_401.search(line) for line in message_lines(log_text)):
         return True
     record = execution_record(log_text)
     if not record or record.get("is_error") is not True:
@@ -359,7 +365,7 @@ def detect(log_text: str | None) -> Signature | None:
     straight through to the classes that were here before (DRE-1921's critic
     infra-crash, DRE-2488's upstream 5xx, DRE-2923's Linear rate limit).
     """
-    lines = _message_lines(log_text)
+    lines = message_lines(log_text)
     for signature in SIGNATURES:
         if signature.pattern is None:
             if _credential_refused(log_text):
