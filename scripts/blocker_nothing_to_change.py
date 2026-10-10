@@ -43,6 +43,7 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import blocker_class  # noqa: E402
 import checkbox_marks  # noqa: E402
+import dead_run  # noqa: E402
 import linear_ops  # noqa: E402
 import routing_verdict  # noqa: E402
 
@@ -77,7 +78,7 @@ def resolve(card: dict, reason: str, *, repo: str) -> tuple[str, str] | None:
     lines = attested(reason)
     if criteria and lines >= criteria:
         if not linear_ops.cmd_state(identifier, "Canceled", expect=("Backlog",),
-                                    labels_absent=("needs-human",)):
+                                    labels_absent=(dead_run.HOLD_LABEL,)):
             raise blocker_class.NotNow("Linear refused the Canceled write")
         return "canceled", f"the agent attested every criterion: {(reason or '')[:QUOTE]}"
     if _replanned_before(card):
