@@ -27,6 +27,10 @@ set -e
 #                   verdict counts, and the author of every note.
 #   LINEAR_API_KEY  for the card writes linear_ops.py and code_owner_hold.py
 #                   make.
+# Its pauses, from the env too, each with a default; the tests set them to 0:
+#   MERGE_RETRY_SECONDS               15, before a merge's one retry (step 7).
+#   FIX_LANE_RECHECK_SECONDS          15, between Agent Fix lane re-reads (step 3).
+#   FIX_LANE_RECHECK_CEILING_SECONDS  60, the most those re-reads wait in all.
 # It runs in the calling repo's checkout with the pipeline at .bureau-pipeline,
 # writes its records under /tmp, and runs under `set -euo pipefail`, so a
 # required read that fails kills the step.
@@ -61,7 +65,12 @@ set -e
 #     `carried_content_id=` when a verdict carried across a head change, and
 #     `stacked_on=`, `code_owner_review=` and `owner_hold=`. Each optional line
 #     is read with `|| true`, because under pipefail a grep that finds nothing
-#     kills the step. No `decision=merge` line, no merge.
+#     kills the step. No `decision=merge` line, no merge. A condition F wait,
+#     whose reason cites DRE-4486, is looked at again: after each pause it
+#     reads the Agent Fix lane once more and runs merge_gate.py over the same
+#     records with the fresh lane, until the answer is anything else or the
+#     ceiling is reached, logging one `fix-lane read <n>:` line per read. The
+#     last answer is the one acted on.
 #  4. Posts one carry note per content id when a verdict carried, and moves a
 #     card it parked for a code-owner review back to In Review once that
 #     review has landed.
@@ -74,8 +83,9 @@ set -e
 #               hold, which also parks the card in Green Light; or, for any
 #               other hold, `Merge gate: declined @<head> — <reason>`, once per
 #               head and reason.
-#     wait      stops quietly. A live Agent Fix run on this pull request, or an
-#               unfinished CI run on the head, is a wait.
+#     wait      stops quietly. A live Agent Fix run on this pull request still
+#               there after step 3's re-reads, or an unfinished CI run on the
+#               head, is a wait.
 #     Anything but merge exits 0 there.
 #  6. Asks scripts/order_sensitive_refresh.py whether merging now could fork
 #     the base: `refresh` updates the branch from the base and posts one note
@@ -339,6 +349,19 @@ set -e
 #   The read now takes every page of 100 in one `gh api --paginate --slurp`
 #   call, merge_gate.py and `code_owner_hold.py explain` read the array of
 #   pages it writes, and a read that fails on any page still stops the step.
+# DRE-6577 (2026-10-10). The critic's APPROVE on bureau-pipeline #904 woke
+#   the gate and an Agent Fix run in the same second, as every comment does.
+#   The fix run skips itself on an APPROVE, ten seconds later; the gate's
+#   lane read landed first, saw it queued, and answered condition F's wait
+#   (DRE-4486). A skipped run pushes and posts nothing, so nothing woke the
+#   gate again, and the pull request sat approved and green for 100 minutes
+#   until a person dispatched the gate. Now a condition F wait is looked at
+#   again inside the same run, FIX_LANE_RECHECK_SECONDS apart and at most
+#   FIX_LANE_RECHECK_CEILING_SECONDS in all. Only the lane is re-read, so
+#   only condition F can change the answer, and the merge stays pinned to
+#   the evaluated head. A fix run still queued or running at the ceiling,
+#   or a lane still unreadable, ends in today's wait. Nothing is posted: a
+#   comment would wake both workflows and start the same race again.
 
 set -euo pipefail
 
@@ -428,27 +451,70 @@ python3 .bureau-pipeline/scripts/proof_record.py gather \
   --repo "$REPO_FULL" --pr-view-file /tmp/pr-view.json \
   --head-sha "$SHA" --out /tmp/proof-record.json
 
-python3 .bureau-pipeline/scripts/merge_gate.py \
-  --head-sha "$SHA" \
-  --qa-login "$QA_LOGIN" \
-  --check-runs-file /tmp/check-runs.json \
-  --comments-file /tmp/comments.json \
-  --workflow-runs-file /tmp/workflow-runs.json \
-  --compare-file /tmp/compare.json \
-  --merge-state "$MSTATE" \
-  --is-draft "$IS_DRAFT" \
-  --review-workflows "$REVIEW_WORKFLOWS" \
-  --head-branch "$BRANCH" \
-  --pr-author "$AUTHOR" \
-  --pr-commits-file /tmp/pr-commits.json \
-  --fix-lane-file /tmp/fix-lane.json \
-  --pr-number "$PR" \
-  --stack-file /tmp/stack.json \
-  --owners-file /tmp/owners.json \
-  --pr-body-file /tmp/pr-body.txt \
-  --pr-created-at "$CREATED_AT" \
-  --proof-record-file /tmp/proof-record.json \
-  | tee /tmp/gate-decision
+gate_decision() {
+  python3 .bureau-pipeline/scripts/merge_gate.py \
+    --head-sha "$SHA" \
+    --qa-login "$QA_LOGIN" \
+    --check-runs-file /tmp/check-runs.json \
+    --comments-file /tmp/comments.json \
+    --workflow-runs-file /tmp/workflow-runs.json \
+    --compare-file /tmp/compare.json \
+    --merge-state "$MSTATE" \
+    --is-draft "$IS_DRAFT" \
+    --review-workflows "$REVIEW_WORKFLOWS" \
+    --head-branch "$BRANCH" \
+    --pr-author "$AUTHOR" \
+    --pr-commits-file /tmp/pr-commits.json \
+    --fix-lane-file /tmp/fix-lane.json \
+    --pr-number "$PR" \
+    --stack-file /tmp/stack.json \
+    --owners-file /tmp/owners.json \
+    --pr-body-file /tmp/pr-body.txt \
+    --pr-created-at "$CREATED_AT" \
+    --proof-record-file /tmp/proof-record.json
+}
+gate_decision | tee /tmp/gate-decision
+
+# Condition F's second look (DRE-6577): only a wait whose reason cites
+# DRE-4486, every wording stranded_fix.lane_refusal emits, and only the lane
+# is read again. Every other record stays as first gathered.
+fix_lane_wait() {
+  grep -qx 'decision=wait' /tmp/gate-decision \
+    && grep -qE '^reason=.*DRE-4486([^0-9]|$)' /tmp/gate-decision
+}
+# What the lane answered, in one phrase for the log.
+fix_lane_answer() {
+  python3 -c 'import json, sys
+try: r = json.load(open(sys.argv[1]))
+except (OSError, ValueError) as e: r = {"readable": False, "detail": str(e)}
+if not isinstance(r, dict) or not r.get("readable"):
+    print("unreadable — %s" % (r.get("detail") if isinstance(r, dict) else "not a lane record"))
+else:
+    runs = [x for x in r.get("runs") or [] if isinstance(x, dict)]
+    print("; ".join("run %s %s (%s)" % (x.get("id"), x.get("status"), x.get("display_title") or "no run-name") for x in runs) or "no Agent Fix run in flight")' \
+    /tmp/fix-lane.json 2>/dev/null || echo "unreadable"
+}
+if fix_lane_wait; then
+  RECHECK_PAUSE=${FIX_LANE_RECHECK_SECONDS:-15}
+  RECHECK_CEILING=${FIX_LANE_RECHECK_CEILING_SECONDS:-60}
+  case "$RECHECK_PAUSE" in ''|*[!0-9]*) RECHECK_PAUSE=15;; esac
+  case "$RECHECK_CEILING" in ''|*[!0-9]*) RECHECK_CEILING=60;; esac
+  # Never a pause past the ceiling; with no pause to spend, one more read.
+  [ "$RECHECK_PAUSE" -gt "$RECHECK_CEILING" ] && RECHECK_PAUSE=$RECHECK_CEILING
+  RECHECKS=1
+  [ "$RECHECK_PAUSE" -gt 0 ] && RECHECKS=$((RECHECK_CEILING / RECHECK_PAUSE))
+  LANE_READ=1
+  while fix_lane_wait && [ "$LANE_READ" -le "$RECHECKS" ]; do
+    sleep "$RECHECK_PAUSE"
+    LANE_READ=$((LANE_READ + 1))
+    GH_TOKEN="$WORKFLOW_TOKEN" python3 .bureau-pipeline/scripts/stranded_fix.py lane \
+      --repo "$REPO_FULL" --out /tmp/fix-lane.json > /dev/null
+    gate_decision > /tmp/gate-decision
+    echo "fix-lane read $LANE_READ: $(fix_lane_answer) — the gate answers $(grep -m1 '^decision=' /tmp/gate-decision | cut -d= -f2-)"
+  done
+  # The answer acted on, last in the log where a reader looks for it.
+  cat /tmp/gate-decision
+fi
 # Fail-closed on shape drift: no `decision=merge` line, no merge.
 DECISION=$(grep -m1 '^decision=' /tmp/gate-decision | cut -d= -f2-)
 
