@@ -622,6 +622,7 @@ jobs:
         run: |
           python3 .bureau-pipeline/scripts/planning_classify.py classify \
             "${{ github.event.client_payload.identifier }}" \
+            --repo "$GITHUB_REPOSITORY" \
             --github-output "$GITHUB_OUTPUT" \
             --escalation-file "${{ runner.temp }}/classifier-escalation.txt" \
             --transport-file "${{ runner.temp }}/classifier-transport.txt"
@@ -802,6 +803,7 @@ jobs:
           FALLBACK_FILE="$RUNNER_TEMP/model-fallback.txt"
           EFFORT_FILE="$RUNNER_TEMP/model-effort.txt"
           MODEL=$(python3 .bureau-pipeline/scripts/model_fallback.py select planner \
+            --repo "$GITHUB_REPOSITORY" \
             --out-of-capacity "${FELL_FROM:-}" \
             --explain-file "$WHY_FILE" --fallback-file "$FALLBACK_FILE" \
             --effort-file "$EFFORT_FILE")
@@ -817,6 +819,7 @@ jobs:
           case "$DIED" in ''|*[!0-9]*) DIED=0 ;; esac
           if [ "$DIED" -gt 0 ]; then
             MODEL=$(python3 .bureau-pipeline/scripts/model_fallback.py select planner \
+              --repo "$GITHUB_REPOSITORY" \
               --out-of-capacity "${FELL_FROM:-}" --avoid "$MODEL" \
               --explain-file "$WHY_FILE" --fallback-file "$FALLBACK_FILE" \
               --effort-file "$EFFORT_FILE")
@@ -1244,6 +1247,7 @@ jobs:
           WHY_FILE="$RUNNER_TEMP/one-off-critic-why.txt"
           EFFORT_FILE="$RUNNER_TEMP/model-effort.txt"
           MODEL=$(python3 .bureau-pipeline/scripts/model_fallback.py select plan-critic-pre \
+            --repo "$GITHUB_REPOSITORY" \
             --explain-file "$WHY_FILE" --effort-file "$EFFORT_FILE")
           # DRE-4836: the CHOSEN model's declared effort level, empty when it
           # declares none — see agent-task.yml's Select model step.
@@ -2187,6 +2191,7 @@ jobs:
         run: |
           [ -n "$EXEC_FILE" ] || EXEC_FILE="$RUNNER_TEMP/claude-execution-output.json"
           python3 .bureau-pipeline/scripts/planner_capacity.py decide "$EXEC_FILE" \
+            --repo "$GITHUB_REPOSITORY" \
             --model "$MODEL" --github-output "$GITHUB_OUTPUT"
 
       - name: Re-mint bot token — Plan epic on the next rung
@@ -2705,6 +2710,7 @@ jobs:
           WHY_FILE="$RUNNER_TEMP/pre-critic-why.txt"
           EFFORT_FILE="$RUNNER_TEMP/model-effort.txt"
           MODEL=$(python3 .bureau-pipeline/scripts/model_fallback.py select plan-critic-pre \
+            --repo "$GITHUB_REPOSITORY" \
             --explain-file "$WHY_FILE" --effort-file "$EFFORT_FILE")
           # DRE-4836: the CHOSEN model's declared effort level, empty when it
           # declares none — see agent-task.yml's Select model step.
@@ -3030,6 +3036,7 @@ jobs:
         run: |
           [ -n "$EXEC_FILE" ] || EXEC_FILE="$RUNNER_TEMP/claude-execution-output.json"
           python3 .bureau-pipeline/scripts/planner_capacity.py decide "$EXEC_FILE" \
+            --repo "$GITHUB_REPOSITORY" \
             --model "$MODEL" --github-output "$GITHUB_OUTPUT"
 
       - name: Re-mint bot token — Re-plan after send-back on the next rung
@@ -3625,6 +3632,7 @@ jobs:
           WHY_FILE="$RUNNER_TEMP/post-critic-why.txt"
           EFFORT_FILE="$RUNNER_TEMP/model-effort.txt"
           MODEL=$(python3 .bureau-pipeline/scripts/model_fallback.py select plan-critic-post \
+            --repo "$GITHUB_REPOSITORY" \
             --explain-file "$WHY_FILE" --effort-file "$EFFORT_FILE")
           # DRE-4836: the CHOSEN model's declared effort level, empty when it
           # declares none — see agent-task.yml's Select model step.
@@ -4550,6 +4558,7 @@ jobs:
         run: |
           [ -n "$EXEC_FILE" ] || EXEC_FILE="$RUNNER_TEMP/claude-execution-output.json"
           python3 .bureau-pipeline/scripts/planner_capacity.py decide "$EXEC_FILE" \
+            --repo "$GITHUB_REPOSITORY" \
             --model "$MODEL" --github-output "$GITHUB_OUTPUT"
 
       - name: Re-mint bot token — Re-plan after the second critic sent it back on the next rung
@@ -5294,6 +5303,7 @@ jobs:
         run: |
           [ -n "$EXEC_FILE" ] || EXEC_FILE="$RUNNER_TEMP/claude-execution-output.json"
           python3 .bureau-pipeline/scripts/planner_capacity.py decide "$EXEC_FILE" \
+            --repo "$GITHUB_REPOSITORY" \
             --model "$MODEL" --github-output "$GITHUB_OUTPUT"
 
       - name: Re-mint bot token — Roll-up route — split into child epics on the next rung

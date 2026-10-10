@@ -1238,6 +1238,7 @@ jobs:
           # shellcheck disable=SC2086 # deliberate word split: one flag or two
           EFFORT_FILE="$RUNNER_TEMP/model-effort.txt"
           MODEL=$(python3 "$PIPELINE_DIR"/scripts/model_fallback.py select critic \
+            --repo "$GITHUB_REPOSITORY" \
             $SEPARATION_ARG \
             --explain-file "$WHY_FILE" --effort-file "$EFFORT_FILE")
           WHY=$(cat "$WHY_FILE")
