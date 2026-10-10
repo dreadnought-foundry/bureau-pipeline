@@ -23,9 +23,12 @@ writes, under which token, how often, and what it says afterwards:
   2. Idempotent per `main` commit: a receipt already carrying
      `stale-merge-ref-refresh @<main sha>`, or `behind_by == 0`, writes
      nothing at all.
-  3. A failure that is GREEN on the merge base is the PR's own defect (the
-     fix loop owns it); a failure still RED on the `main` tip belongs to the
-     Red-Main Repair loop. Neither is refreshed.
+  3. A failure that is GREEN on the merge base, and that `main` never went
+     red on since, is the PR's own defect (the fix loop owns it); a failure
+     still RED on `main` belongs to the Red-Main Repair loop. Neither is
+     refreshed. One `main` went red on after the merge base and is green on
+     again IS refreshed (DRE-6513), off paged, by-name reads cached for the
+     sweep.
   4. Budgets: STALE_MERGE_REFRESH_CAP lifetime refreshes per PR (0 is the
      operator's fleet-wide off switch), STALE_MERGE_REFRESH_SWEEP_CAP per
      sweep, oldest PR first — every refresh is a full CI run and possibly a

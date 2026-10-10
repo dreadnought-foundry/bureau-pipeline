@@ -17,11 +17,12 @@ The three facts a refresh needs, and what each one rules out:
 
   * `main` has moved past the merge base (`behind_by > 0`) — otherwise there is
     nothing a refresh could change;
-  * every failing check on the head also fails on the MERGE BASE — otherwise
+  * every failing check on the head was red on `main` too — on the MERGE BASE
+    or, since DRE-6513, on one of `main`'s own merges after it — otherwise
     the PR has its own defect and the fix loop owns it;
-  * every one of them is GREEN on the `main` TIP — otherwise `main` is still
-    red, the Red-Main Repair loop owns it, and a refresh would only re-inherit
-    the failure.
+  * every one of them is GREEN on `main` again, on the newest window commit
+    with a finished run of it — otherwise `main` is still red, the Red-Main
+    Repair loop owns it, and a refresh would only re-inherit the failure.
 """
 
 import contextlib
