@@ -345,7 +345,7 @@ jobs:
 
       - name: Keep the proposal
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: groom-proposal
           path: |
@@ -397,7 +397,7 @@ jobs:
       - name: Upload the death-cause receipt
         if: always() && steps.death.outputs.path != ''
         continue-on-error: true
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: death-receipt-${{ github.job }}-attempt${{ github.run_attempt }}
           path: ${{ steps.death.outputs.path }}
@@ -447,7 +447,7 @@ jobs:
           path: .bureau-pipeline
 
       - name: Download the proposal and its targets
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: groom-proposal
 
@@ -482,7 +482,7 @@ jobs:
       # reads whatever is in the directory.
       - name: Keep this owner's lookups
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: groom-lookups-${{ matrix.owner }}
           path: lookups-${{ matrix.owner }}.json
@@ -536,7 +536,7 @@ jobs:
           path: .bureau-pipeline
 
       - name: Download the proposal and its targets
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: groom-proposal
 
@@ -550,7 +550,7 @@ jobs:
       # leg that never reaches its verdict.
       - name: Download every owner's lookups
         continue-on-error: true
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           pattern: groom-lookups-*
           path: lookups
@@ -713,7 +713,7 @@ jobs:
       # `overwrite`: re-running one failed leg re-uploads its artifact.
       - name: Keep the verdict
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: groom-verdict-${{ matrix.card }}
           path: verdict.json
@@ -748,7 +748,7 @@ jobs:
       - name: Upload the death-cause receipt
         if: always() && steps.death.outputs.path != ''
         continue-on-error: true
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: death-receipt-verify-${{ matrix.card }}-attempt${{ github.run_attempt }}
           path: ${{ steps.death.outputs.path }}
@@ -778,7 +778,7 @@ jobs:
           path: .bureau-pipeline
 
       - name: Download the proposal
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: groom-proposal
 
@@ -790,7 +790,7 @@ jobs:
       # upload) is every target `unverified`, not a proposal left unposted.
       - name: Download every verdict
         continue-on-error: true
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           pattern: groom-verdict-*
           path: verdicts
@@ -875,7 +875,7 @@ jobs:
 
       - name: Keep the verified proposal
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: groom-proposal-verified
           path: |
