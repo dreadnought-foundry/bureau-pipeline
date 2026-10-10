@@ -91,6 +91,26 @@ say so — the build workflow's call passes neither and is unchanged:
 Whenever `--branch` was given and the push was not made, `rescue-<CARD>.target.json`
 is written beside the patch, naming the branch the patch belongs on.
 
+AND A `branch-without-pr` NOTE IS THIS STEP'S JOB, NOT ITS EXIT (DRE-6719).
+Since DRE-6443 the brief tells the agent to write `/tmp/agent-blocker.txt`
+stamped `blocker-class: branch-without-pr` when its work is committed and the
+pull request could not be opened — which is the very case this step exists
+for, and any note used to make it stand aside. On 2026-10-10 five runs did
+exactly that: each pushed its branch, met HTTP 401 on `gh pr create` because
+the run's credential had expired, wrote the note, and this step printed "the
+agent chose a different exit" while holding two fresh tokens. Each card went to
+Backlog and waited for the sweep to open its pull request.
+
+So a note whose FIRST line stamps that class, written alone, is delivered: the
+branch is pushed if GitHub does not have it and the pull request opened if the
+card has none, each tried on both tokens. The stamp, not the wording: a note
+read as this class by its wording alone may describe a branch held on purpose
+(DRE-6056, docs/blocker-classes.md). Any other class, a stamp-less note, or an
+escalation or hand-back beside it is still a total no-op. The note itself is
+left where the agent wrote it: the Report step reads `pr_opened` and `pr_url`
+and reports the pull request as an ordinary build result, and when neither
+token delivers, the note is posted as before and the sweep is the backstop.
+
 CLI (the form agent-task.yml calls; outputs on stdout, logs on stderr, so the
 whole thing can be appended to `$GITHUB_OUTPUT`):
 
@@ -162,6 +182,17 @@ STOP_NOTES = (
     "/tmp/agent-blocker.txt",  # nosec B108
     "/tmp/agent-handback.txt",  # nosec B108
 )
+
+# The one exit that is NOT a decision against a pull request (DRE-6719): a
+# blocker note stamped with this class says the work is committed and only the
+# pull request is missing — the case this module exists for. Matched by the
+# note's file name, so a test's scratch copy of the path counts the same.
+BLOCKER_NOTE_NAME = "agent-blocker.txt"
+BRANCH_WITHOUT_PR = "branch-without-pr"
+
+# How much of a note is read for its stamp. The stamp is the first line; the
+# rest is the agent's prose and none of this module's business.
+_NOTE_READ_LIMIT = 65536
 
 # What GitHub says when it refuses a credential, in the two shapes git and gh
 # print it: `The requested URL returned error: 400` (the DRE-3098 incident) and
@@ -603,14 +634,45 @@ def pr_state_refusal(number: str, repo: str, token: str, *, run,
     return PR_UNREADABLE
 
 
-def _pr_body(card: str, card_url: str) -> str:
+def delivered_note(written: list[str]) -> str:
+    """The class of the one stop note this step delivers instead of obeying,
+    or "" when it must stand aside (DRE-6719).
+
+    Delivered only when the agent wrote the blocker note ALONE and its first
+    line stamps `branch-without-pr`. An escalation or a hand-back beside it is
+    a decision against a pull request, and the stamp is required because a
+    note read as this class by its wording may describe a branch held on
+    purpose. Anything this cannot read — the note, the vocabulary — answers
+    "": standing aside is today's behavior, and the sweep's backstop.
+    """
+    if len(written) != 1 or os.path.basename(written[0]) != BLOCKER_NOTE_NAME:
+        return ""
+    try:
+        with open(written[0], encoding="utf-8", errors="replace") as fh:
+            text = fh.read(_NOTE_READ_LIMIT)
+        import blocker_class  # the one reader of the stamp (DRE-6438)
+        stamped = blocker_class.stamp_class(text)
+    except Exception:  # never fail the job over a rescue
+        return ""
+    return stamped if stamped == BRANCH_WITHOUT_PR else ""
+
+
+def _pr_body(card: str, card_url: str, note: str = "") -> str:
     """The body for a PR the AGENT did not open.
 
     It says exactly that, and nothing about whether the work is complete —
     this step knows only that commits existed on the runner and had not
-    reached GitHub. Claiming the card is done would be a claim nothing here
-    can support, and the critic reads this body.
+    reached GitHub, or that the agent's own note said the pull request was
+    missing. Claiming the card is done would be a claim nothing here can
+    support, and the critic reads this body.
     """
+    because = (
+        f"The agent's blocker note was stamped `{note}`: it said the work is "
+        f"committed on this branch and the pull request could not be opened. "
+        f"This step opened it with a freshly minted token instead of leaving "
+        f"the card for the sweep (DRE-6719).\n\n"
+        if note else ""
+    )
     return (
         f"{card_url}\n\n"
         f"**Opened by the run's push-rescue step, not by the agent** "
@@ -618,6 +680,7 @@ def _pr_body(card: str, card_url: str) -> str:
         f"reached GitHub, and the credential the run started with had expired "
         f"— a GitHub App installation token lives one hour — so the branch was "
         f"delivered with a freshly minted one.\n\n"
+        f"{because}"
         f"The commits are the agent's; only the push and this pull request are "
         f"not. Nothing here asserts the card is finished: read the diff and the "
         f"checks, and expect no author-written summary.\n"
@@ -685,6 +748,7 @@ def rescue(
             out.sidecar = write_target_sidecar(card, out, patch_path)
         log(_preserved(out))
 
+    note = ""
     if branch:
         # The stop notes are the BUILD agent's exits. On the fix path the
         # handoff files are the Report's to read (DRE-6351), and a committed
@@ -698,10 +762,16 @@ def rescue(
     else:
         wrote = [p for p in (stop_notes or ())
                  if os.path.isfile(p) and os.path.getsize(p)]
-        if wrote:
+        note = delivered_note(wrote)
+        if wrote and not note:
             log(f"push rescue: the agent chose a different exit ({wrote[0]}) — "
                 f"nothing to deliver")
             return out
+        if note:
+            log(f"push rescue: the agent's note ({wrote[0]}) is stamped "
+                f"{note} — the work is committed and only the pull request is "
+                f"missing, so this step delivers it with its own token "
+                f"(DRE-6719)")
 
         out.branch = card_branch(card, run=run, workdir=workdir)
         if not out.branch:
@@ -809,38 +879,55 @@ def rescue(
         # the caller's to know (DRE-6348).
         return out
 
-    # `active_token`, not the one the step started with: after a retry that is
-    # the credential GitHub actually accepted, and handing `gh` the one that
-    # was just refused re-runs the incident one call further on.
-    existing = _existing_pr(out.branch, repo, active_token, run=run,
-                            workdir=workdir)
-    if existing:
-        out.pr_url = "" if existing == "unreadable" else existing
-        if existing == "unreadable":
-            out.error = out.error or "could not read this branch's PR state"
-            log("push rescue: GitHub would not say whether a PR exists — not "
-                "opening one, because 'could not tell' is not 'no PR'")
-        else:
-            log(f"push rescue: {out.branch} already has a pull request")
-        return out
-
+    # `active_token` first, not the one the step started with: after a retry
+    # that is the credential GitHub actually accepted, and handing `gh` the one
+    # that was just refused re-runs the incident one call further on. The
+    # other mint is the second try (DRE-6719): a pull request GitHub refused on
+    # one token is asked again on the other before the card is left to the
+    # sweep — and the lookup is repeated on it, so a create that landed despite
+    # its error is found rather than opened twice.
     title = (
         f"feat({card}): {card_title.strip()}" if card_title.strip()
         else f"feat({card}): delivered by push rescue"
     )
-    code, created, err = run(
-        ["gh", "pr", "create", "--repo", repo, "--base", base,
-         "--head", out.branch, "--title", title,
-         "--body", _pr_body(card, card_url)],
-        cwd=workdir, env=_gh_env(active_token),
-    )
-    if code != 0:
+    tries = [active_token] + [c for c, _ in credentials if c != active_token]
+    unreadable = False
+    for candidate in tries:
+        existing = _existing_pr(out.branch, repo, candidate, run=run,
+                                workdir=workdir)
+        if existing == "unreadable":
+            unreadable = True
+            continue
+        if existing:
+            out.pr_url = existing
+            out.error = ""
+            log(f"push rescue: {out.branch} already has a pull request")
+            return out
+        code, created, err = run(
+            ["gh", "pr", "create", "--repo", repo, "--base", base,
+             "--head", out.branch, "--title", title,
+             "--body", _pr_body(card, card_url, note)],
+            cwd=workdir, env=_gh_env(candidate),
+        )
+        if code == 0:
+            out.pr_opened = True
+            out.error = ""
+            out.pr_url = (created.strip().splitlines()[-1]
+                          if (created or "").strip() else "")
+            log(f"push rescue: opened {out.pr_url or 'the pull request'}")
+            if note:
+                log(f"push rescue: the agent's {note} note is answered — the "
+                    f"Report step reports this pull request, not the blocker")
+            return out
         out.error = (err.strip().splitlines() or ["pr create refused"])[-1]
         log(f"push rescue: opening the pull request failed — {out.error}")
-        return out
-    out.pr_opened = True
-    out.pr_url = (created or "").strip().splitlines()[-1] if created.strip() else ""
-    log(f"push rescue: opened {out.pr_url or 'the pull request'}")
+    if unreadable and not out.error:
+        out.error = "could not read this branch's PR state"
+        log("push rescue: GitHub would not say whether a PR exists — not "
+            "opening one, because 'could not tell' is not 'no PR'")
+    if note:
+        log(f"push rescue: no pull request was opened for the agent's {note} "
+            f"note — the blocker stands, and the sweep opens it")
     return out
 
 

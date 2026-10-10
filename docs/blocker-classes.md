@@ -50,6 +50,21 @@ one classifies as the table says.
   the agent stamped `branch-without-pr` says outright that the pull request is
   simply missing, and only that one gets a ready pull request.
 
+### The run opens a stamped `branch-without-pr` pull request first
+
+The note almost always means the run's GitHub credential expired between the
+push and `gh pr create` (DRE-6719: five runs on 2026-10-10, each HTTP 401). The
+build run's `Push rescue` step holds two freshly minted tokens for exactly that,
+so a note stamped `branch-without-pr` on its first line, written with no
+escalation or hand-back beside it, no longer makes the step stand aside. It
+pushes the branch if GitHub does not have it and opens the pull request if the
+card has none, trying each token. When it opens one, the card gets the ordinary
+`🤖 PR opened:` receipt and moves to In Review, and no `🛑 Agent blocked:`
+comment is posted. When neither token works, the note is posted and parked
+exactly as above, and the sweep's action is the backstop. A note of the class
+read only by its wording is never delivered by the run, for the DRE-6056 reason
+above.
+
 ## The stamp — the first line of the agent's note
 
 The build agent writes the class on the FIRST line of `/tmp/agent-blocker.txt`

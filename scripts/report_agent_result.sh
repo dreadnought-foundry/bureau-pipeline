@@ -13,7 +13,10 @@ set -e
 #    `card_pr.py find` answers OPEN or MERGED with the PR's URL. It reads
 #    PRs in every state and checks the head ref against this card. Its
 #    exit 3 means GitHub would not answer, and the script records
-#    UNREADABLE, never "no PR".
+#    UNREADABLE, never "no PR". When Push rescue opened the card's PR in
+#    this run, that PR is the answer whenever the lookup found none or
+#    could not read: the lookup holds the agent's token, which may have
+#    expired, and the rescue's own mint did not.
 # 2. It classifies the run's death through `check_agent_result.py`:
 #    `classify` answers none, api_death, turn_exhaustion or
 #    credential_expiry. `delivery` answers whether committed work on the
@@ -91,6 +94,9 @@ set -e
 #   RESCUE_ERROR           GitHub's own words when it refused
 #   RESCUE_PATCH           the rescue patch's path on the runner
 #   RESCUE_ARTIFACT        the name the patch was uploaded under
+#   RESCUE_PR_OPENED       true when Push rescue opened the card's PR
+#   RESCUE_PR_URL          that PR's URL, used only when it has the shape
+#                          https://github.com/<owner>/<repo>/pull/<n>
 # RUNNER_TEMP, which the runner sets, holds the card-thread dump.
 #
 # Incident history
@@ -222,6 +228,14 @@ set -e
 #   whose `complete` stays the step's one Green Light writer. The marker is
 #   still one `linear_ops.py comment` whose own text carries the act
 #   registry's anchor, so the registry's row matches one site.
+# 2026-10-10, DRE-6719. A `branch-without-pr` note the rescue answered is an
+#   ordinary build result. Five runs that day pushed their branch, met HTTP
+#   401 on `gh pr create` because the run's credential had expired, and
+#   wrote the stamped note; the rescue stood aside and every card waited in
+#   Backlog for the sweep. Now the rescue opens that PR with its own mint,
+#   and this script reports it from the rescue's outputs, because its own
+#   lookup holds the same expired token and reads UNREADABLE. A PR the
+#   rescue only found, or a note it could not deliver, is posted as before.
 RUN_URL="$BUREAU_SERVER_URL/$BUREAU_REPOSITORY/actions/runs/$BUREAU_RUN_ID"
 # The card's own branch first, so the PR lookup reads no other card's (DRE-1343).
 BRANCH=$(git branch -r | grep -o "agent/${CARD}-[^ ]*" | head -1 | sed 's|origin/||' || true)
@@ -235,6 +249,14 @@ if PR_INFO=$(python3 .bureau-pipeline/scripts/card_pr.py find "$CARD" --branch "
   PR_URL=$(printf '%s' "$PR_INFO" | cut -f2)
 else
   PR_STATE="UNREADABLE"
+fi
+# The PR Push rescue opened in this run, which a lookup on the agent's expired token cannot see (DRE-6719).
+if [ "$RESCUE_PR_OPENED" = "true" ] && [ "$PR_STATE" != "MERGED" ] \
+   && { [ -z "$PR_URL" ] || [ "$PR_URL" = "null" ]; }; then
+  case "$RESCUE_PR_URL" in
+    *[!A-Za-z0-9:/._-]*) ;;
+    https://github.com/*/pull/[0-9]*) PR_STATE="OPEN"; PR_URL="$RESCUE_PR_URL" ;;
+  esac
 fi
 
 # How the run died, from the one shared classifier (DRE-2312, DRE-2695).

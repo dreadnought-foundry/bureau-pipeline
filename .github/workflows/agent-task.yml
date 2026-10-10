@@ -1603,6 +1603,12 @@ jobs:
       # that already did the work. Its `local_work` output is what the Report
       # step reads to say `credential`, not `died`.
       #
+      # The agent's stop notes make it stand aside — except a blocker note
+      # stamped `blocker-class: branch-without-pr`, written alone (DRE-6719):
+      # that note reports the very case this step repairs, so it delivers
+      # instead, and the Report step reads `pr_opened`/`pr_url` to report the
+      # pull request rather than the blocker.
+      #
       # BEFORE the two steps below on purpose: both resolve this card's branch
       # from `git branch -r`, and both must see the branch this step delivers.
       - name: Push rescue
@@ -1766,6 +1772,12 @@ jobs:
           # which is where the cause of the DRE-3165 400 still is.
           RESCUE_PUSHED: ${{ steps.rescue.outputs.pushed }}
           RESCUE_ERROR: ${{ steps.rescue.outputs.error }}
+          # DRE-6719: the pull request the rescue opened in this run. The PR
+          # lookup below holds GH_TOKEN — the agent's, dead at the hour — so
+          # on exactly the runs the rescue opens one for, the lookup cannot
+          # see it, and a `branch-without-pr` note would park the card anyway.
+          RESCUE_PR_OPENED: ${{ steps.rescue.outputs.pr_opened }}
+          RESCUE_PR_URL: ${{ steps.rescue.outputs.pr_url }}
           # WHICH CREDENTIAL MAY DISPATCH (DRE-1254, DRE-3262). A
           # workflow_dispatch needs `actions: write`, and the App token above
           # carries no Actions permission at all — only the workflow's own
