@@ -917,7 +917,7 @@ def test_the_standing_reading_takes_the_newest_marker_per_card():
     # DRE-1 was excluded and then added back; DRE-3 was excluded and then
     # held, which is the CEO's newer word.
     assert groomer.standing_decisions(records) == {
-        "excluded": [], "held": ["DRE-2", "DRE-3"]}
+        "excluded": [], "held": ["DRE-2", "DRE-3"], "unreadable": []}
 
 
 def test_the_standing_reading_spans_every_proposal_on_the_card():
