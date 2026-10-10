@@ -655,6 +655,10 @@ def test_every_step_the_card_gate_guards_also_honors_the_skip():
         s.get("name")
         for s in _steps()
         if s.get("id") != "dedupe"  # the guard cannot skip on its own answer
+        # Nor can the epic wait (DRE-6671), which runs BEFORE the guard: its
+        # `held` skips the guard and the slot, and a duplicate run reaching it
+        # re-reads the same relations and is idempotent there.
+        and s.get("id") != "epic_wait"
         and "steps.gate.outputs.bounced" in str(s.get("if", ""))
         and not re.search(r"steps\.dedupe\.outputs\.skip\s*!=\s*'true'",
                           str(s.get("if", "")))
