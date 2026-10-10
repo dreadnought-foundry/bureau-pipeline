@@ -35,7 +35,11 @@ What these tests pin, one class per acceptance criterion:
   * cards are discovered by the title anchor `card_title` itself is built from,
     imported rather than retyped;
   * at most one comment per card ever;
-  * the sweep calls it once per pass, beside the existing sweep steps.
+  * the sweep calls it once per pass, beside the existing sweep steps;
+  * a red main whose repair branch is pushed, ahead of the default branch and
+    under no pull request of any state gets ONE comment saying so (DRE-6524,
+    the replay of DRE-6511 on 2026-10-09 below), and an unreadable branch read
+    is UNKNOWN, never a yes.
 
 Run: cd bureau-pipeline && python3 -m pytest tests/test_repair_card_settle.py -v
 """
@@ -116,7 +120,9 @@ class FakeGitHubAndLinear:
     """
 
     def __init__(self, cards=(), refs=(), runs=(), *, board_error=None,
-                 refs_error=None, runs_error=None, cancel_error=None):
+                 refs_error=None, runs_error=None, cancel_error=None,
+                 heads=None, pulls=..., compared=None, heads_error=None,
+                 pulls_error=None, compare_error=None):
         self._cards = list(cards)
         self._refs = refs
         self._runs = runs
@@ -127,6 +133,16 @@ class FakeGitHubAndLinear:
         self.canceled: list[str] = []
         self.comments: list[tuple] = []
         self.runs_asked: list[str] = []
+        # DRE-6524's three reads off the repair branches. The defaults are a
+        # remote with no repair branch on it, so a fixture that never names a
+        # branch reads exactly as it did before they existed.
+        self._heads = {} if heads is None else heads
+        self._pulls = {} if pulls is ... else pulls
+        self._compared = compared
+        self.heads_error = heads_error
+        self.pulls_error = pulls_error
+        self.compare_error = compare_error
+        self.branch_reads: list[tuple] = []
 
     def repair_cards(self):
         if self.board_error:
@@ -151,6 +167,26 @@ class FakeGitHubAndLinear:
 
     def cmd_comment(self, identifier, body):
         self.comments.append((identifier, body))
+
+    def branch_heads(self):
+        self.branch_reads.append(("branch_heads",))
+        if self.heads_error:
+            raise self.heads_error
+        return self._heads
+
+    def pulls_for_head(self, branch):
+        self.branch_reads.append(("pulls_for_head", branch))
+        if self.pulls_error:
+            raise self.pulls_error
+        if self._pulls is None:
+            return None
+        return self._pulls.get(branch, [])
+
+    def compare(self, base, head):
+        self.branch_reads.append(("compare", base, head))
+        if self.compare_error:
+            raise self.compare_error
+        return self._compared
 
 
 def settle(ops, *, repo_slug=SLUG, **kw):
@@ -733,6 +769,452 @@ class TheSweepEndToEndTest(unittest.TestCase):
             rc.settle_repair_cards()
         self.assertTrue(seen, "the step must read the open pull requests")
         self.assertIn("100", seen[0])
+
+
+# DRE-6511, 2026-10-09: Pipeline Tests red at bcb36adf6037, and the sweep read
+# the card twice (runs 38006250226 and 38008147573) and said "left alone" both
+# times while `repair/DRE-6511-bcb36adf6037` sat on the remote one commit ahead
+# of main under no pull request at all.
+UNLANDED = {
+    "card": "DRE-6511",
+    "sha": "bcb36adf60370d0e8052c5a3f81021900f93165b",
+    "workflow": "Pipeline Tests",
+    "repo": "bureau-pipeline",
+}
+UNLANDED_BRANCH = "repair/DRE-6511-bcb36adf6037"
+UNLANDED_HEAD = "64a5a2ac7" + "0" * 31
+RED_RUN_URL = ("https://github.com/dreadnought-foundry/bureau-pipeline/"
+               "actions/runs/38006250226")
+
+
+def unlanded_ops(*, comments=(), heads=None, pulls=..., compared=...,
+                 **kw) -> FakeGitHubAndLinear:
+    """The 2026-10-09 reading: main red, no open pull request, the repair
+    branch pushed and one commit ahead, and no pull request of any state."""
+    return FakeGitHubAndLinear(
+        cards=[repair_card_row(UNLANDED, comments=comments)], refs=[],
+        runs=[run_record(UNLANDED["sha"], conclusion="failure",
+                         url=RED_RUN_URL)],
+        heads={UNLANDED_BRANCH: UNLANDED_HEAD} if heads is None else heads,
+        pulls={UNLANDED_BRANCH: []} if pulls is ... else pulls,
+        compared=({"status": "ahead", "ahead_by": 1}
+                  if compared is ... else compared),
+        **kw,
+    )
+
+
+class AnUnlandedRepairBranchIsSaidOnTheCardTest(unittest.TestCase):
+    """Rule 3, DRE-6524: a finished fix sitting unlanded is said on the card."""
+
+    def test_the_replay_of_2026_10_09_posts_one_comment(self):
+        self.assertEqual(
+            red_main_repair.repair_branch(UNLANDED["sha"], 1,
+                                          card=UNLANDED["card"]),
+            UNLANDED_BRANCH)
+        ops = unlanded_ops()
+        report, log = settle(ops)
+        self.assertEqual(len(ops.comments), 1)
+        identifier, body = ops.comments[0]
+        self.assertEqual(identifier, UNLANDED["card"])
+        self.assertTrue(body.startswith(repair_card.UNLANDED_MARKER), body)
+        self.assertIn(UNLANDED_BRANCH, body)
+        self.assertIn(UNLANDED_HEAD[:red_main_repair.SHA_CHARS], body)
+        self.assertEqual(
+            [d.decision for d in report.decisions],
+            [repair_card.SETTLED_RED_UNLANDED])
+
+    def test_the_card_state_does_not_change(self):
+        ops = unlanded_ops()
+        settle(ops)
+        self.assertEqual(ops.canceled, [])
+
+    def test_the_comment_says_what_happened_and_who_opens_it(self):
+        ops = unlanded_ops()
+        settle(ops)
+        body = ops.comments[0][1].lower()
+        self.assertIn("pushed", body)
+        self.assertIn("no pull request", body)
+        self.assertIn("repair loop", body)
+        self.assertIn("person", body)
+
+    def test_the_sweep_log_names_the_branch_and_the_head(self):
+        ops = unlanded_ops()
+        _, log = settle(ops)
+        self.assertIn(UNLANDED["card"], log)
+        self.assertIn(UNLANDED_BRANCH, log)
+        self.assertIn(UNLANDED_HEAD[:red_main_repair.SHA_CHARS], log)
+
+    def test_the_branch_is_compared_against_the_default_branch(self):
+        ops = unlanded_ops()
+        settle(ops)
+        self.assertIn(("compare", "main", UNLANDED_BRANCH), ops.branch_reads)
+
+    def test_the_contract_words_are_the_cards(self):
+        self.assertEqual(repair_card.UNLANDED_MARKER,
+                         "📌 Repair branch pushed, no pull request")
+        self.assertEqual(repair_card.SETTLED_RED_UNLANDED,
+                         "main-still-red-unlanded")
+
+
+class TheUnlandedCommentIsSaidOncePerHeadTest(unittest.TestCase):
+    """Idempotency is read off the card's own comments, as SETTLE_MARKER is."""
+
+    def _first_note(self) -> str:
+        first = unlanded_ops()
+        settle(first)
+        return first.comments[0][1]
+
+    def test_a_second_pass_posts_nothing_and_says_already_said(self):
+        second = unlanded_ops(comments=[self._first_note()])
+        report, log = settle(second)
+        self.assertEqual(second.comments, [])
+        self.assertEqual(
+            [d.decision for d in report.decisions], [repair_card.SETTLED_RED])
+        self.assertIn("already said", report.decisions[0].why)
+        self.assertIn("already said", log)
+
+    def test_a_moved_head_gets_one_new_comment_naming_it(self):
+        moved = "77c0ffee1234" + "0" * 28
+        second = unlanded_ops(comments=[self._first_note()],
+                              heads={UNLANDED_BRANCH: moved})
+        report, _ = settle(second)
+        self.assertEqual(len(second.comments), 1)
+        body = second.comments[0][1]
+        self.assertIn(moved[:red_main_repair.SHA_CHARS], body)
+        self.assertNotIn(UNLANDED_HEAD[:red_main_repair.SHA_CHARS], body)
+        self.assertEqual(
+            [d.decision for d in report.decisions],
+            [repair_card.SETTLED_RED_UNLANDED])
+
+
+class AnUnreadableBranchIsNeverAYesTest(unittest.TestCase):
+    """Rule 4 holds for the three new reads: UNKNOWN, card id, nothing posted."""
+
+    def _assert_unknown(self, ops):
+        report, log = settle(ops)
+        self.assertEqual(ops.comments, [])
+        self.assertEqual(ops.canceled, [])
+        self.assertEqual(
+            [d.decision for d in report.decisions],
+            [repair_card.SETTLED_UNKNOWN])
+        self.assertIn("UNKNOWN", log)
+        self.assertIn(UNLANDED["card"], log)
+        return report, log
+
+    def test_branch_heads_answering_none(self):
+        ops = unlanded_ops()
+        ops._heads = None  # the fixture's own default is "no branch at all"
+        self._assert_unknown(ops)
+
+    def test_pulls_for_head_answering_none(self):
+        self._assert_unknown(unlanded_ops(pulls=None))
+
+    def test_compare_answering_none(self):
+        self._assert_unknown(unlanded_ops(compared=None))
+
+    def test_compare_without_an_integer_ahead_by(self):
+        for payload in ({"status": "ahead"}, {"ahead_by": "1"},
+                        {"ahead_by": None}, {"ahead_by": True}, ["ahead"]):
+            with self.subTest(payload=payload):
+                self._assert_unknown(unlanded_ops(compared=payload))
+
+    def test_any_of_the_three_raising(self):
+        boom = RuntimeError("HTTP 403: API rate limit exceeded")
+        for kw in ({"heads_error": boom}, {"pulls_error": boom},
+                   {"compare_error": boom}):
+            with self.subTest(kw=list(kw)):
+                report, _ = self._assert_unknown(unlanded_ops(**kw))
+                self.assertEqual(report.failures, [])
+
+
+class ABranchThatDoesNotQualifyIsTodaysAnswerTest(unittest.TestCase):
+    """No qualifying branch: SETTLED_RED, today's `why`, nothing posted."""
+
+    def _todays_why(self) -> str:
+        ops = unlanded_ops(heads={})
+        report, _ = settle(ops)
+        return report.decisions[0].why
+
+    def _assert_todays_answer(self, ops):
+        report, _ = settle(ops)
+        self.assertEqual(ops.comments, [])
+        self.assertEqual(
+            [d.decision for d in report.decisions], [repair_card.SETTLED_RED])
+        self.assertEqual(report.decisions[0].why, self._todays_why())
+
+    def test_todays_why_is_unchanged(self):
+        self.assertTrue(self._todays_why().endswith(
+            "main is still red, and the repair budget path in "
+            "red-main-repair.yml owns what happens next"))
+
+    def test_a_branch_with_a_closed_pull_request(self):
+        self._assert_todays_answer(
+            unlanded_ops(pulls={UNLANDED_BRANCH: ["CLOSED"]}))
+
+    def test_a_branch_with_a_merged_pull_request(self):
+        self._assert_todays_answer(
+            unlanded_ops(pulls={UNLANDED_BRANCH: ["MERGED"]}))
+
+    def test_a_branch_not_ahead_of_main(self):
+        self._assert_todays_answer(
+            unlanded_ops(compared={"status": "identical", "ahead_by": 0}))
+
+    def test_a_repair_branch_for_another_card_is_not_read(self):
+        other = red_main_repair.repair_branch("f" * 40, 1, card="DRE-9999")
+        ops = unlanded_ops(heads={other: UNLANDED_HEAD},
+                           pulls={other: []})
+        self._assert_todays_answer(ops)
+        self.assertFalse(
+            [r for r in ops.branch_reads if r[0] != "branch_heads"])
+
+    def test_the_cardless_fallback_branch_counts_too(self):
+        fallback = red_main_repair.repair_branch(UNLANDED["sha"], 1)
+        ops = unlanded_ops(heads={fallback: UNLANDED_HEAD},
+                           pulls={fallback: []})
+        report, _ = settle(ops)
+        self.assertEqual(len(ops.comments), 1)
+        self.assertIn(fallback, ops.comments[0][1])
+
+
+class TheNewReadsAreLazyTest(unittest.TestCase):
+    """Rule 1 and rule 2 pay for none of the three new reads."""
+
+    def test_an_open_pull_request_reads_no_branch(self):
+        ref = red_main_repair.repair_branch(
+            UNLANDED["sha"], 1, card=UNLANDED["card"])
+        ops = unlanded_ops()
+        ops._refs = [ref]
+        report, _ = settle(ops)
+        self.assertEqual(
+            [d.decision for d in report.decisions],
+            [repair_card.SETTLED_PR_OPEN])
+        self.assertEqual(ops.branch_reads, [])
+        self.assertEqual(ops.comments, [])
+
+    def test_a_green_main_reads_no_branch(self):
+        ops = unlanded_ops()
+        ops._runs = [run_record(UNLANDED["sha"])]
+        report, _ = settle(ops)
+        self.assertEqual(
+            [d.decision for d in report.decisions], [repair_card.SETTLED_GREEN])
+        self.assertEqual(ops.branch_reads, [])
+
+    def test_no_repair_card_reads_no_branch(self):
+        ops = FakeGitHubAndLinear(cards=[])
+        settle(ops)
+        self.assertEqual(ops.branch_reads, [])
+
+
+def _settle_ops_calls() -> set:
+    """Every `ops.<name>(…)` call `repair_card`'s settle path makes."""
+    tree = ast.parse(open(os.path.join(SCRIPTS, "repair_card.py")).read())
+    return {
+        n.func.attr for n in ast.walk(tree)
+        if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)
+        and isinstance(n.func.value, ast.Name) and n.func.value.id == "ops"
+    }
+
+
+class TheSeamsMatchSettlesCallsTest(unittest.TestCase):
+    """Both real seams carry every method `settle` calls."""
+
+    def test_settle_calls_the_three_new_seams(self):
+        self.assertLessEqual(
+            {"branch_heads", "pulls_for_head", "compare"}, _settle_ops_calls())
+
+    def test_the_sweep_seam_carries_every_method_settle_calls(self):
+        import reconcile
+
+        settle_only = _settle_ops_calls() - {
+            # `open_card`'s Linear seam, not settle's.
+            "find_open", "create_card", "stamp_card"}
+        for name in sorted(settle_only):
+            with self.subTest(name=name):
+                self.assertTrue(
+                    callable(getattr(reconcile._RepairSettleOps, name, None)),
+                    f"reconcile._RepairSettleOps has no {name}")
+                self.assertTrue(
+                    callable(getattr(repair_card._SettleOps, name, None)),
+                    f"repair_card._SettleOps has no {name}")
+
+
+class TheSweepsBranchReadsTest(unittest.TestCase):
+    """`reconcile._RepairSettleOps`: one read each, None when unreadable."""
+
+    def setUp(self):
+        import reconcile
+
+        self.rc = reconcile
+
+    def _ops_with(self, answer):
+        """A fresh seam whose `gh_read` answers `answer` (or raises it)."""
+        from unittest.mock import patch
+
+        seen: list = []
+
+        def reads(*args):
+            seen.append(args)
+            if isinstance(answer, Exception):
+                raise answer
+            return answer
+
+        patcher = patch.object(self.rc, "gh_read", reads)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        degraded = list(self.rc._degraded)
+        self.addCleanup(lambda: self.rc._degraded.__setitem__(
+            slice(None), degraded))
+        return self.rc._RepairSettleOps(), seen
+
+    def test_branch_heads_maps_ref_names_to_shas(self):
+        ops, seen = self._ops_with(
+            f'[{{"ref":"refs/heads/{UNLANDED_BRANCH}",'
+            f'"object":{{"sha":"{UNLANDED_HEAD}","type":"commit"}}}}]')
+        self.assertEqual(ops.branch_heads(), {UNLANDED_BRANCH: UNLANDED_HEAD})
+        self.assertIn(
+            f"repos/{self.rc.REPO}/git/matching-refs/heads/repair/", seen[0])
+
+    def test_branch_heads_is_read_once_per_pass(self):
+        ops, seen = self._ops_with("[]")
+        self.assertEqual(ops.branch_heads(), {})
+        ops.branch_heads()
+        self.assertEqual(len(seen), 1)
+
+    def test_pulls_for_head_reads_every_state(self):
+        ops, seen = self._ops_with('[{"state":"CLOSED"}]')
+        self.assertEqual(ops.pulls_for_head(UNLANDED_BRANCH), ["CLOSED"])
+        self.assertIn("--head", seen[0])
+        self.assertIn(UNLANDED_BRANCH, seen[0])
+        self.assertIn("all", seen[0])
+
+    def test_compare_returns_the_payload(self):
+        ops, seen = self._ops_with('{"status":"ahead","ahead_by":1}')
+        self.assertEqual(ops.compare("main", UNLANDED_BRANCH),
+                         {"status": "ahead", "ahead_by": 1})
+        self.assertTrue(any(
+            f"compare/main...{UNLANDED_BRANCH}" in arg for arg in seen[0]))
+
+    def test_a_failed_read_is_none_never_empty(self):
+        boom = self.rc.ReconcileReadError("HTTP 502")
+        for call in (lambda o: o.branch_heads(),
+                     lambda o: o.pulls_for_head(UNLANDED_BRANCH),
+                     lambda o: o.compare("main", UNLANDED_BRANCH)):
+            ops, _ = self._ops_with(boom)
+            self.assertIsNone(call(ops))
+
+    def test_an_unparseable_read_is_none_never_empty(self):
+        for raw in ("not json", '{"a": 1}', "null"):
+            with self.subTest(raw=raw):
+                ops, _ = self._ops_with(raw)
+                self.assertIsNone(ops.branch_heads())
+                ops, _ = self._ops_with(raw)
+                self.assertIsNone(ops.pulls_for_head(UNLANDED_BRANCH))
+        for raw in ("not json", "[]", "null"):
+            with self.subTest(raw=raw):
+                ops, _ = self._ops_with(raw)
+                self.assertIsNone(ops.compare("main", UNLANDED_BRANCH))
+
+    def test_a_failed_read_says_so(self):
+        ops, _ = self._ops_with(self.rc.ReconcileReadError("HTTP 502"))
+        self.rc._degraded.clear()
+        ops.branch_heads()
+        self.assertTrue(any("repair settle" in d for d in self.rc._degraded))
+
+
+class TheCliSeamsBranchReadsTest(unittest.TestCase):
+    """`repair_card._SettleOps` (by hand): None on a failed or bad read."""
+
+    def _ops(self, rc=0, stdout=""):
+        from unittest.mock import patch
+
+        done = subprocess.CompletedProcess([], rc, stdout=stdout, stderr="no")
+        patcher = patch.object(repair_card.subprocess, "run",
+                               lambda *a, **k: done)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        return repair_card._SettleOps("dreadnought-foundry/bureau-pipeline")
+
+    def test_reads_answer(self):
+        self.assertEqual(
+            self._ops(stdout=f'[{{"ref":"refs/heads/{UNLANDED_BRANCH}",'
+                             f'"object":{{"sha":"{UNLANDED_HEAD}"}}}}]'
+                      ).branch_heads(),
+            {UNLANDED_BRANCH: UNLANDED_HEAD})
+        self.assertEqual(
+            self._ops(stdout='[{"state":"OPEN"}]').pulls_for_head("x"),
+            ["OPEN"])
+        self.assertEqual(
+            self._ops(stdout='{"status":"ahead","ahead_by":2}').compare(
+                "main", "x"),
+            {"status": "ahead", "ahead_by": 2})
+
+    def test_a_failed_read_is_none(self):
+        self.assertIsNone(self._ops(rc=1).branch_heads())
+        self.assertIsNone(self._ops(rc=1).pulls_for_head("x"))
+        self.assertIsNone(self._ops(rc=1).compare("main", "x"))
+
+    def test_an_unparseable_read_is_none(self):
+        self.assertIsNone(self._ops(stdout="nope").branch_heads())
+        self.assertIsNone(self._ops(stdout="{}").pulls_for_head("x"))
+        self.assertIsNone(self._ops(stdout="[]").compare("main", "x"))
+
+
+class TheSweepSaysItEndToEndTest(unittest.TestCase):
+    """The 2026-10-09 replay through the sweep's OWN seams and Linear writes."""
+
+    def setUp(self):
+        import reconcile
+
+        self.reconcile = reconcile
+        self.slug = reconcile.REPO_SLUG
+
+    def _board(self, *, state="In Progress"):
+        return [{
+            "identifier": UNLANDED["card"],
+            "title": repair_card.card_title(UNLANDED["workflow"],
+                                            UNLANDED["sha"]),
+            "description": repair_card.card_body(
+                workflow_name=UNLANDED["workflow"], run_url=RED_RUN_URL,
+                head_sha=UNLANDED["sha"], repo_slug=self.slug, attempt=1),
+            "state": {"name": state},
+            "labels": {"nodes": [{"name": f"repo:{self.slug}"}]},
+            "comments": {"nodes": []},
+        }]
+
+    def test_the_sweep_posts_the_unlanded_comment(self):
+        from unittest.mock import patch
+
+        rc = self.reconcile
+        runs = (f'[{{"status":"completed","conclusion":"failure",'
+                f'"headSha":"{UNLANDED["sha"]}","url":"{RED_RUN_URL}"}}]')
+
+        def reads(*args):
+            joined = " ".join(args)
+            if "matching-refs" in joined:
+                return (f'[{{"ref":"refs/heads/{UNLANDED_BRANCH}",'
+                        f'"object":{{"sha":"{UNLANDED_HEAD}"}}}}]')
+            if "--head" in args:
+                return "[]"
+            if "/compare/" in joined:
+                return '{"status":"ahead","ahead_by":1}'
+            return "[]"  # the open pull request listing
+
+        calls = {"state": [], "comment": []}
+        with patch.object(rc, "active_cards", lambda *a, **k: self._board()), \
+             patch.object(rc, "default_branch", lambda: "main"), \
+             patch.object(rc, "_actions_read", lambda args: (runs, None)), \
+             patch.object(rc, "gh_read", reads), \
+             patch.object(rc.linear_ops, "cmd_state",
+                          lambda i, s, *f: calls["state"].append((i, s))), \
+             patch.object(rc.linear_ops, "cmd_comment",
+                          lambda i, b, *f: calls["comment"].append((i, b))):
+            rc.settle_repair_cards()
+        self.assertEqual(calls["state"], [])
+        self.assertEqual(len(calls["comment"]), 1)
+        identifier, body = calls["comment"][0]
+        self.assertEqual(identifier, UNLANDED["card"])
+        self.assertTrue(body.startswith(repair_card.UNLANDED_MARKER))
+        self.assertIn(UNLANDED_BRANCH, body)
 
 
 if __name__ == "__main__":
