@@ -499,7 +499,10 @@ def _drive_roll_up_split(mp):
     over a two-child split — the second child blocked on the first — with the
     `linear_ops` module it is handed standing in for Linear. Frozen from the
     first render of the receipt, like the proof hold above: there was no
-    earlier wording to read it off."""
+    earlier wording to read it off. Re-frozen by DRE-6591, which names each
+    child as sent to Planning or waiting in Backlog: the parent reads as
+    Planning and both children as Backlog, so the first is sent and the
+    second waits on it."""
     import epic_split  # noqa: PLC0415 — only this driver needs it
 
     body = ("The engine ships first and ends at a watched release. More "
@@ -516,7 +519,8 @@ def _drive_roll_up_split(mp):
         raise _Posted(text)
 
     epic_split.activate(SimpleNamespace(
-        get_issue=lambda _i, **_k: {"state": {"name": "Planning"}},
+        get_issue=lambda i, **_k: {
+            "state": {"name": "Planning" if i == "DRE-1" else "Backlog"}},
         cmd_children_detail=lambda _i: print(json.dumps(children)),
         count_comments=lambda *_a, **_k: 0,
         cmd_comment=posted,

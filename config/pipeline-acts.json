@@ -741,7 +741,7 @@
       "tag": "roll-up-split",
       "adopted": true,
       "kind": "progress",
-      "means": "A roll-up's child epics passed the split check, so its split is recorded once on the parent: every child in order, each sent to Planning to be planned on its own, and the parent placed where the sweep closes it.",
+      "means": "A roll-up's child epics passed the split check, so its split is recorded once on the parent: every child in order, named as sent to Planning or waiting in Backlog on the open sibling that blocks it (DRE-6591), and the parent placed where the sweep closes it.",
       "state": "unchanged",
       "next_actor": "plan.yml",
       "discharges": null,

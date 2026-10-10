@@ -259,10 +259,15 @@ A card too big for one epic is a roll-up: the planner splits it into child
 epics under itself, and each child is planned and green-lit on its own
 (`standards/card-quality.md`). `python3 scripts/epic_split.py check` refuses a
 split that is not one. `activate` then posts this receipt ONCE on the parent,
-naming every child in `blockedBy` order with its slice's first sentence and
-what blocks it. After that it sends each child still in Backlog to Planning,
+naming every child in `blockedBy` order with its slice's first sentence, what
+blocks it, and whether it is sent to Planning or waits in Backlog. After that
+it sends to Planning each child still in Backlog that no open sibling blocks,
 where the relay starts that child's planner run, and moves the parent to
-In Progress, where the sweep's ordinary epic close finds it.
+In Progress, where the sweep's ordinary epic close finds it. Meanwhile, a
+child blocked by an open sibling waits in Backlog for the sweep's auto-advance
+(DRE-6591): the seam rule plans it only on what that sibling observed, so it
+is carried on to its planner run once every sibling it waits on is Done. A
+sibling already Done, Canceled or Duplicate holds nothing.
 
 **It is a `progress` act whose tag IS a live key**, and that is the one way it
 differs from the heartbeats above. Nothing is held and nothing is repaired: the
