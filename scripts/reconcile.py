@@ -162,6 +162,7 @@ import epic_todo_gate  # noqa: E402 — ONE rule for an epic in Todo (DRE-5316, 
 import fix_budget  # noqa: E402 — ONE reading of what a fix run may still do
 import fix_concurrency  # noqa: E402 — ONE source for the fix loop's grouping (DRE-2810)
 import fix_context  # noqa: E402 — ONE parser for what an operator decision is
+import fix_convergence  # noqa: E402 — ONE spelling of a fix run's no-commit line (DRE-6583)
 import fix_dead_run  # noqa: E402
 import gh_read_retry  # noqa: E402 — ONE read-retry seam, shared with agent-fix.yml (DRE-4157)
 # DRE-4150: the Urgent fast path reads the CEO's per-card exclusions off the
@@ -10107,6 +10108,16 @@ def fix_approved_but_red() -> None:
     approved-but-red with nothing coming. Skips when a fix run is already
     queued/in_progress (same busy-guard as the conflict sweep).
 
+    DRE-6583: a pull request whose last fix run at its CURRENT head pushed no
+    commit (`_no_commit_fix_runs`) is passed over — named in the log, nothing
+    posted — and the pass goes on to the next one in listing order. Before
+    this, the newest such pull request (bureau-pipeline #918, red on a check
+    whose fix lives in another repo) took the one dispatch of every pass, and
+    an older approved-but-red pull request (#912) never got a fix run. One
+    such line is enough here, deliberately stricter than the fix run's own
+    halt at `fix_convergence.HALT_AFTER`: the sweep's reading decides who gets
+    the pass's one dispatch, and a run that will halt still spends it.
+
     A proof record is the proof run's, except when it is red on a check
     (DRE-6571): `proof_dispatch.record_red_checks` is the one rule, and the
     sweep holds no copy of it. Such a record is dispatched once per head,
@@ -10146,8 +10157,18 @@ def fix_approved_but_red() -> None:
         split = canceled_check.split(runs)
         if not _tend_canceled_runs(pr, sha, split.unknown):
             continue  # a refused re-run never falls through to a fix dispatch
-        failed = len(split.red)
+        failed = list(dict.fromkeys(
+            str(r.get("name") or "") for r in split.red
+        ))
         if not failed:
+            continue
+        if _no_commit_fix_runs(pr):
+            print(
+                f"approved-but-red: PR #{pr['number']} @{sha[:8]} is red on "
+                f"{', '.join(failed)} — the last fix run at this head pushed no "
+                "commit, so the fix agent is not sent again until the head "
+                "moves; going on to the next (DRE-6583)"
+            )
             continue
         commit = json.loads(gh("api", f"repos/{REPO}/git/commits/{sha}") or "{}")
         when = (commit.get("committer") or {}).get("date")
@@ -10162,7 +10183,7 @@ def fix_approved_but_red() -> None:
             return  # no fix agent in this repo — a person is told once (DRE-4378)
         if red and not _record_red_untold(pr, red):
             continue
-        print(f"approved-but-red: PR #{pr['number']} has APPROVE + {failed} failed check(s) — dispatching fix agent")
+        print(f"approved-but-red: PR #{pr['number']} has APPROVE + {len(failed)} failed check(s) — dispatching fix agent")
         gh_dispatch("workflow", "run", fix_workflow(), "--repo", REPO,
                     "-f", f"pr_number={pr['number']}")
         if red:
@@ -10830,6 +10851,27 @@ def _worker_receipt_count(pr: dict, tag: str) -> int:
         if is_worker_bot_comment(c)
         and tag in (c.get("body") or "")
         and sha in (c.get("body") or "")
+    )
+
+
+def _no_commit_fix_runs(pr: dict) -> int:
+    """How many fix runs at the PR's current head ended without pushing a
+    commit (DRE-6583) — `fix_convergence.is_no_progress`'s three conditions,
+    read over the sweep's GraphQL comment shape (`author.login`, no `[bot]`)
+    rather than the REST one it reads. Worker bot only, so a planted line
+    cannot pass a pull request over. Matched on the head's FIRST EIGHT
+    characters, not `_worker_receipt_count`'s full sha: the quiet line
+    (`fix_exit.py`, `(head `<sha8>`)`) and the escalation line (`fix_budget.py`,
+    `(branch still at `<sha8>`)`) carry only those, and a moved head re-arms."""
+    sha8 = (pr.get("headRefOid") or "")[:8]
+    if not sha8:
+        return 0
+    return sum(
+        1
+        for c in pr.get("comments", [])
+        if is_worker_bot_comment(c)
+        and fix_convergence.NO_PROGRESS in (c.get("body") or "")
+        and sha8 in (c.get("body") or "")
     )
 
 
