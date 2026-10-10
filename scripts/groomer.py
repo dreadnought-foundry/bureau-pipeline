@@ -4213,11 +4213,50 @@ def queued_record(pid: str, queued: list[dict]) -> str:
          f"order and behind every earlier queue, and writes a "
          f"`{MARK} {RELEASED_TAG}` row when it does. Taking the label off a "
          f"card takes it out of the queue.", "",
-         QUEUE_COLUMNS, "| -- | -- | -- |"]
-    for place, row in enumerate(queued, 1):
-        w.append(f"| {place} | {row['identifier']} | "
-                 f"{_cell(row.get('repo') or NO_REPO)} |")
+         *_queue_table((place, row) for place, row in enumerate(queued, 1))]
     return "\n".join(w) + "\n"
+
+
+def requeued_record(pid: str, cards: list[dict], *, corrects: list[str | None]) -> str:
+    """The repair (DRE-6640): a `🧺 groom-queued: <id>` record that puts back
+    in the line the cards of batch `pid` a `groom-released` row recorded as
+    taken out by hand while nobody had removed their label. `cards` are
+    `wrongly_dropped` entries, each keeping the place the batch's queue gave
+    it; `corrects` the Linear times of the rows it corrects.
+
+    The grammar is `queued_record`'s, so `queue_standing` reads it with no
+    second reader: a row takes a card out of only the queue written before
+    it, and this later record adds the pair again. The record is its own
+    receipt — the prose names the row and the date — and the thread is the
+    test it is written once: `wrongly_dropped` names no card a pipeline
+    record newer than the row already names."""
+    when = " and ".join(dict.fromkeys(_utc_minute(at) for at in corrects))
+    w = [f"{MARK} {QUEUED_TAG}: {pid}", "",
+         f"{_plural(len(cards), 'card')} from batch `{pid}` are put back in "
+         f"the queue, in their original place order. The `{MARK} "
+         f"{RELEASED_TAG}` row of {when} recorded them as taken out by hand, "
+         f"but nobody had removed the `{QUEUED_LABEL}` label: the sweep read "
+         f"the board before the label the drain had just written was readable "
+         f"(DRE-6640). Each is still in Intake carrying the label. They wait "
+         f"for a planner slot behind every card already waiting, and the "
+         f"reconcile sweep moves them to Planning one per free slot. Taking "
+         f"the label off a card takes it out of the queue.", "",
+         *_queue_table((c["place"], c) for c in cards)]
+    return "\n".join(w) + "\n"
+
+
+def _queue_table(rows) -> list[str]:
+    """`QUEUE_COLUMNS` and a row per `(place, card)`, as `parse_queued_record`
+    reads them."""
+    return [QUEUE_COLUMNS, "| -- | -- | -- |",
+            *(f"| {place} | {row['identifier']} | "
+              f"{_cell(row.get('repo') or NO_REPO)} |" for place, row in rows)]
+
+
+def _utc_minute(at: str | None) -> str:
+    moment = _moment(at or "")
+    return (moment.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+            if moment else "an unrecorded time")
 
 
 def parse_queued_record(body: str | None) -> dict | None:
@@ -4298,7 +4337,8 @@ def queue_standing(records: list[dict]) -> list[dict]:
     left, less taken out by hand, read off the thread alone (DRE-5435).
 
     Each entry is `{"id", "place", "identifier", "repo", "at"}`, `at` being
-    the queued record's own Linear time.
+    the Linear time of the NEWEST queued record naming the pair — the age the
+    sweep's freshness bound is measured by (DRE-6640).
 
     Read in thread order, one place per `(batch, card)`: a batch whose drain
     died before its drained record is queued again when it is approved again,
@@ -4313,13 +4353,53 @@ def queue_standing(records: list[dict]) -> list[dict]:
                 standing.setdefault((queued["id"], c["identifier"]), {
                     "id": queued["id"], "place": c["place"],
                     "identifier": c["identifier"], "repo": c["repo"],
-                    "at": at})
+                    })["at"] = at
             continue
         for change in parse_released_record(body):
             for ident in (*change["released"], *change["left"],
                           *change["unqueued"]):
                 standing.pop((change["id"], ident), None)
     return list(standing.values())
+
+
+def wrongly_dropped(records: list[dict]) -> list[dict]:
+    """Every card a pipeline `groom-released` row named as taken out by hand
+    that no pipeline `groom-queued` record written AFTER that row names
+    (DRE-6640) — the candidates for `requeued_record`, read off the thread
+    alone. Whether each is wrongly dropped is the board's to say (still in
+    Intake, still labelled); the thread says only that nothing has put it
+    back yet. A record a person wrote is not the queue (`queue_records`),
+    so it neither drops a card nor counts as putting one back.
+
+    Each entry is `{"id", "identifier", "place", "repo", "row_at"}`: the
+    place and repo off the batch's queue written before the row, `row_at`
+    the row's Linear time. Row order, then place order within a batch."""
+    places: dict[tuple[str, str], dict] = {}
+    named_at: dict[str, int] = {}      # card → index of the newest record naming it
+    found: dict[tuple[str, str], tuple[int, dict]] = {}
+    for index, (record, at) in enumerate(queue_records(records)):
+        body = record.get("body") or ""
+        queued = parse_queued_record(body)
+        if queued:
+            for c in queued["cards"]:
+                places[(queued["id"], c["identifier"])] = c
+                named_at[c["identifier"]] = index
+            continue
+        for change in parse_released_record(body):
+            for ident in change["unqueued"]:
+                row = places.get((change["id"], ident))
+                if row is not None:
+                    found[(change["id"], ident)] = (index, {
+                        "id": change["id"], "identifier": ident,
+                        "place": row["place"], "repo": row["repo"],
+                        "row_at": at})
+    dropped = [(index, entry) for index, entry in found.values()
+               if named_at.get(entry["identifier"], -1) < index]
+    first_row: dict[str, int] = {}
+    for index, entry in dropped:
+        first_row[entry["id"]] = min(index, first_row.get(entry["id"], index))
+    return sorted((entry for _index, entry in dropped),
+                  key=lambda e: (first_row[e["id"]], e["place"]))
 
 
 def drain_refused_record(pid: str, reason: str) -> str:

@@ -163,6 +163,8 @@ class Queue:
     def get_issue(self, identifier, *, fresh=False):
         self.direct_reads.append((identifier, fresh))
         assert identifier in self.direct, f"{identifier} was read directly"
+        if isinstance(self.direct[identifier], Exception):
+            raise self.direct[identifier]
         card = _card(identifier, queued=self.direct[identifier])
         return {"id": card["id"], "identifier": identifier,
                 "state": card["state"], "labels": card["labels"]}
@@ -440,6 +442,18 @@ def test_inside_the_bound_with_a_label_in_neither_read_nothing_is_written():
                   [_card("DRE-11", queued=False)], direct={"DRE-11": False})
     assert _release(queue, 2) == []
     assert queue.writes == []
+
+
+def test_a_direct_read_that_fails_keeps_the_card_in_its_place():
+    """It can rescue a card, never take one out: a read Linear refused is a
+    read failure, and the card waits for the next pass."""
+    queue = Queue([_queued(OLDER, ["DRE-11"], minutes_ago=INSIDE)],
+                  [_card("DRE-11", queued=False)],
+                  direct={"DRE-11": linear_ops.LinearError("Linear said no")})
+    assert _release(queue, 1) == []
+    assert queue.writes == []
+    assert any("DRE-11" in f for f in reconcile._read_failures)
+    assert _standing_after(queue.thread) == ["DRE-11"]
 
 
 def test_the_direct_read_is_made_only_for_an_unlabelled_card_inside_the_bound():

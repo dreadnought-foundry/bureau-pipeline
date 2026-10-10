@@ -1479,6 +1479,13 @@
     },
     {
       "file": "scripts/reconcile.py",
+      "anchor": "groomer.requeued_record(",
+      "kind": "not-an-act",
+      "means": "The cards of an approved batch that a groom-released row recorded as taken out by hand while nobody had removed their groom-queued label, put back in the queue on the groomer's standing card: one groom-queued record per batch, the batch's own id, the cards in their original place order, and prose naming the row it corrects and its date (DRE-6640).",
+      "why": "It corrects the queue's own bookkeeping back to what the CEO's approval already decided — the cards were never taken out by a person — so it is the same record the drain writes, not a new decision. The sweep reads it by the queue's one grammar (`groomer.queue_standing`), and the thread is the test it is written once: a pipeline groom-queued record newer than the row already names the card. A trailer would name a next actor nobody chose; the next actor is the sweep's release, as for any queued card. One record per batch, never one per card."
+    },
+    {
+      "file": "scripts/reconcile.py",
       "anchor": "groomer.moved_note(",
       "kind": "not-an-act",
       "means": "Which batch moved a card the sweep released from the groom queue into Planning, on the card itself, in one line: the proposal id, its position read off the proposal record on the standing card's thread, the lanes, the sweep's queue release and the card's queue place as the writer, and the card the proposal record stands on (DRE-3326).",
