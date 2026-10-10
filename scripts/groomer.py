@@ -70,6 +70,11 @@ than 14 days out of every batch, for ever, and the window stays gone.
   6. **The date is the CREATION date**, never the last update. A stray agent
      comment must not move a card.
 
+Inside every band, a unit serving an epic already In Progress goes ahead of
+the rest, which stay newest first (the CEO's decision of 2026-10-10 on
+DRE-6643, DRE-6664, `serves_in_flight`). It orders inside a band and never
+across one, and the constraints of step 5 stay on top of it.
+
 The epic is still the unit, so an epic's band is the highest priority among
 the epic and its children — one Urgent child pulls the whole unit into the
 batch — and its age for ordering is its NEWEST card, so one new child brings
@@ -579,6 +584,12 @@ BAND_HIGH = 1
 BAND_OLDER = 2
 BAND_LABELS = {BAND_URGENT: "Urgent", BAND_HIGH: "High"}
 
+# The epic states that put a card's work in flight for the order (DRE-6664,
+# the CEO's decision of 2026-10-10 on DRE-6643): inside a band, a unit serving
+# an epic in one of these goes ahead of the rest. Exactly In Progress — an
+# approved epic being built — and held here once.
+IN_FLIGHT_EPIC_STATES_FOR_ORDER = ("In Progress",)
+
 # A path cited by more than this many cards is REFERENCE, not ownership: a
 # branch-rule banner naming `.github/workflows/linear-sync.yml` sits on nineteen
 # live cards and none of them edits it, and treating that as a collision
@@ -689,18 +700,31 @@ class WillNotClose(RuntimeError):
 # its children are rarely in the same lane, so the population cannot say. The
 # nested selection multiplies what one page costs Linear, so a page is 50
 # cards rather than 100 — `gql_paged` follows the cursor either way.
-POPULATION_PAGE = 50
+#
+# The parent's state and both relation lists are how the order knows a card
+# serves an epic In Progress (DRE-6664, `serves_in_flight`), and the readiness
+# rules read the same fields as written. They widen every row again, so a page
+# is 25. Measured on 2026-10-10 against the live Intake lane with the build
+# run's key: X-Complexity 239 per page of this query, and 239 at 10 and 50
+# rows too, against Linear's stated per-request limit of 10,000 — under half
+# of it, so the page was not halved again.
+POPULATION_PAGE = 25
 POPULATION_QUERY = """query($lane: String!, $after: String) {
   issues(first: %d, after: $after, filter: {state: {name: {eq: $lane}}}) {
     nodes {
       identifier title description createdAt priority
       state { name }
       labels { nodes { name } }
-      parent { identifier title }
+      parent { identifier title state { name } }
       project { name }
       cycle { number }
+      relations(first: 20) { nodes {
+        type relatedIssue { identifier state { name } archivedAt
+                            parent { identifier state { name } } }
+      } }
       inverseRelations(first: 20) { nodes {
-        type issue { identifier state { name } }
+        type issue { identifier state { name } archivedAt
+                     parent { identifier state { name } } }
       } }
       children(first: 50) { nodes { identifier state { name } } }
     }
@@ -866,6 +890,36 @@ def blockers_of(card: dict) -> set[str]:
     return {f for f in found if f}
 
 
+def serves_in_flight(card: dict) -> str | None:
+    """The epic In Progress this card serves, or None (DRE-6664).
+
+    Read off the board, never off text, and off two fields only: the card's
+    `parent`, and its own `relations` — a `blocks` relation FROM this card to
+    a card whose parent epic is In Progress. Being blocked by such a card
+    (`inverseRelations`) is not serving it, and neither is `related`. A
+    relation to an archived or closed card serves nothing: there is nothing
+    left there to unblock. The parent is read first, then the relations in
+    identifier order, so the answer is the same on every read.
+    """
+    parent = card.get("parent") or {}
+    if (parent.get("state") or {}).get("name") in IN_FLIGHT_EPIC_STATES_FOR_ORDER \
+            and parent.get("identifier"):
+        return parent["identifier"]
+    related = [(rel or {}).get("relatedIssue") or {}
+               for rel in ((card.get("relations") or {}).get("nodes") or [])
+               if (rel or {}).get("type") == "blocks"]
+    for issue in sorted(related,
+                        key=lambda i: _card_sort_key(i.get("identifier") or "")):
+        if issue.get("archivedAt") or \
+                (issue.get("state") or {}).get("name") in CLOSED_STATES:
+            continue
+        epic = issue.get("parent") or {}
+        if (epic.get("state") or {}).get("name") in \
+                IN_FLIGHT_EPIC_STATES_FOR_ORDER and epic.get("identifier"):
+            return epic["identifier"]
+    return None
+
+
 def collision_report(cards: list[dict], *,
                      threshold: int = BOILERPLATE_THRESHOLD) -> dict:
     """Every pair of cards that names the same file, with a direction.
@@ -969,6 +1023,11 @@ def units(cards: list[dict]) -> list[dict]:
         repo = sorted(repos.items(), key=lambda kv: (-kv[1], kv[0]))[0][0]
         priority = min((p for p in (_priority(c) for c in members) if p),
                        default=0)
+        # In flight when any member serves an epic In Progress (DRE-6664);
+        # the members are already in identifier order, so the epic named is
+        # the first one found by card identifier.
+        serves = next((s for s in (serves_in_flight(c) for c in members) if s),
+                      None)
         out.append({
             "key": key,
             "epic": epic,
@@ -976,6 +1035,8 @@ def units(cards: list[dict]) -> list[dict]:
             "created": max(_created(c) for c in members),
             "priority": priority,
             "band": _band(priority),
+            "in_flight": serves is not None,
+            "serves": serves,
             "cards": [c["identifier"] for c in members],
         })
     return sorted(out, key=lambda u: (u["created"], u["key"]))
@@ -1211,14 +1272,23 @@ def sequence(cards: list[dict], *, collisions: dict | None = None,
         # newest first too — only orders cards the day cannot separate. A unit
         # with no readable creation date is not the newest in the pile: it
         # goes to the back of its band, the reversible answer.
+        #
+        # Inside the band, a unit serving an epic In Progress goes first, and
+        # the rest stay newest first (DRE-6664, the CEO's decision of
+        # 2026-10-10 on DRE-6643). The band still comes before it, so the key
+        # never moves a unit across bands.
         unit = unit_index[key]
         day = _day_ordinal(unit["created"])
-        return (unit["band"], -day if day else float("inf"),
+        return (unit["band"], 0 if unit["in_flight"] else 1,
+                -day if day else float("inf"),
                 ranks[unit["repo"]], -_epoch(unit["created"]),
                 _card_sort_key(key))
 
     ordered_units = _topo([u["key"] for u in unit_list], unit_edges, unit_rank,
                           broken)
+    if broken is not None:
+        broken += _in_flight_held_back(ordered_units, unit_index, constraints,
+                                       unit_of)
 
     rows = []
     position = 0
@@ -1245,12 +1315,46 @@ def sequence(cards: list[dict], *, collisions: dict | None = None,
                 "repo": repo_of(by_id[cid]),
                 "project": ((by_id[cid].get("project") or {}) or {}).get("name"),
                 "band": unit["band"],
+                # Only on a row the in-flight key placed (DRE-6664), so a
+                # population with none sequences into the rows it always did.
+                **({"serves": unit["serves"]} if unit["serves"] else {}),
                 "deferred": key not in batchable,
                 # On every row, so each writer of a Cancel can ask
                 # `cancel_refusal` without the card in hand (DRE-5309).
                 "open_children": open_children(by_id[cid]),
             })
     return rows
+
+
+def _in_flight_held_back(ordered: list[str], unit_index: dict,
+                         constraints: list[tuple[str, str]],
+                         unit_of: dict) -> list[dict]:
+    """Every constraint that put a unit not in flight ahead of one that is, in
+    the same band (DRE-6664).
+
+    The in-flight key orders among what the constraints leave possible, so a
+    unit that collides with, or is blocked by, an earlier unit is placed after
+    it, as before. That is the key not being honoured, and the page names the
+    pair — card before card, with the epic the held-back card serves — rather
+    than leaving the reader to wonder why work in flight did not go first.
+    """
+    place = {key: i for i, key in enumerate(ordered)}
+    out = []
+    for before, after in sorted(set(constraints),
+                                key=lambda p: (_card_sort_key(p[1]),
+                                               _card_sort_key(p[0]))):
+        first, held = unit_of.get(before), unit_of.get(after)
+        if first is None or held is None or first == held:
+            continue
+        a, b = unit_index[first], unit_index[held]
+        if b["in_flight"] and not a["in_flight"] and a["band"] == b["band"] \
+                and place[first] < place[held]:
+            out.append({
+                "before": before, "after": after, "serves": b["serves"],
+                "why": f"{after} serves {b['serves']} (In Progress) but must "
+                       f"follow {before}, so the constraint won",
+            })
+    return out
 
 
 def _held_last(cards: list[dict], held, *, collisions: dict,
@@ -1554,6 +1658,8 @@ def propose(cards: list[dict], *, cycles: list[dict], capacity: int = DEFAULT_CA
                                  "cycle_id", "unit", "epic", "repo",
                                  "projected", "band", "open_children")},
                              **({"held": True} if row.get("held") else {}),
+                             **({"serves": row["serves"]}
+                                if row.get("serves") else {}),
                              "position": len(now_rows) + 1})
         else:
             # Outside the batch is `not-now` with the cycle it is projected
@@ -1771,6 +1877,11 @@ def _rules_reason(outcome: str, row: dict) -> str:
             return (f"held on an earlier proposal, so it is ranked after every "
                     f"card that was not — position {row['position']}")
         band = BAND_LABELS.get(row.get("band"))
+        if row.get("serves"):
+            # Placed by the in-flight key (DRE-6664), naming the epic it serves.
+            marked = f", marked {band}" if band else ""
+            return (f"in flight — serves {row['serves']} (In Progress){marked}, "
+                    f"position {row['position']}")
         opened = f"marked {band}" if band else "newest first"
         return f"in the batch by the rules — {opened}, position {row['position']}"
     return (f"wanted, and this batch was full — it is reconsidered in cycle "
@@ -2424,7 +2535,13 @@ def render_proposal(proposal: dict) -> str:
         f"order ("
         + " → ".join(proposal.get("repo_order") or [])
         + ") breaks a tie between cards of equal priority created on the same "
-          "day, and decides nothing else. An epic and its children are one "
+          "day, and decides nothing else. "
+        # Said only when the key placed a card in this batch (DRE-6664), so a
+        # page with none renders byte for byte as it did before.
+        + ("Within a band, a card serving an epic In Progress goes first, and "
+           "the rest stay newest first (the CEO's decision of 2026-10-10). "
+           if any(row.get("serves") for row in batch) else "")
+        + "An epic and its children are one "
           "unit — unless a collision or a recorded blocks relation says "
           "otherwise, in which case the constraint wins.")
     add("")
@@ -2491,11 +2608,24 @@ def render_proposal(proposal: dict) -> str:
                           in proposal["collisions"]["boilerplate"].items())
         add(f"Read as reference rather than ownership: {cited}.")
         add("")
-    if proposal.get("unhonoured_constraints"):
-        add(f"{len(proposal['unhonoured_constraints'])} constraint(s) point both "
+    # The two kinds of entry, each said its own way: a loop the ranked order
+    # broke, and work in flight a constraint held back (DRE-6664) — the second
+    # absent on a morning with none, so the page reads as it did before.
+    unhonoured = proposal.get("unhonoured_constraints") or []
+    looped = [c for c in unhonoured if "serves" not in c]
+    held_back = [c for c in unhonoured if "serves" in c]
+    if looped:
+        add(f"{len(looped)} constraint(s) point both "
             f"ways and could not all be honoured — the ranked order won, and "
             f"each one is in the JSON. Two cards that each have to go first is a "
             f"planning question, not an ordering one.")
+        add("")
+    if held_back:
+        add("In flight, and still placed after a card it collides with or is "
+            "blocked by — the constraint won over the in-flight key:")
+        add("")
+        for c in held_back:
+            add(f"- {c['before']} before {c['after']} — {c['why']}")
         add("")
     add("## What waits, and roughly how long")
     add("")

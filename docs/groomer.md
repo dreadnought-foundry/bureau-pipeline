@@ -207,6 +207,43 @@ is left out of the batch for its age.
    comment must not move a card; the population query does not even read
    `updatedAt`.
 
+**Inside every band, work in flight goes first** — the CEO's decision of
+2026-10-10 on DRE-6643 (DRE-6664). The step sits between the band (steps 1 to
+3) and the creation day: within Urgent, within High and within everything
+else, a unit that serves an epic already In Progress goes ahead of the rest of
+its band, and the rest stay newest first, then repo, timestamp and identifier
+exactly as above. It never moves a card across bands — an Urgent card with no
+link to work in flight still precedes a High card that has one.
+
+- **Serving is read off the board, never off text** (`serves_in_flight` in
+  `scripts/groomer.py`): the card's parent epic is In Progress, or the card
+  has a Linear `blocks` relation to a card whose parent epic is In Progress. A
+  `related` relation does not count, nor does being blocked BY such a card,
+  nor a relation to an archived or closed card. The in-flight states are
+  exactly `In Progress`, held once as `IN_FLIGHT_EPIC_STATES_FOR_ORDER`.
+- **A unit is in flight when any member serves**, and it names the first epic
+  found, by card identifier order.
+- **Step 5's constraints stay on top.** An in-flight unit that collides with,
+  or is blocked by, an earlier unit of its band is placed after it, and the
+  page names the pair under its collisions, with the epic the held-back card
+  serves (`unhonoured_constraints` in the JSON).
+- **The page says so.** A rules-only row placed by this step reads
+  `in flight — serves DRE-N (In Progress)` in its `Why` cell, and the batch
+  paragraph gains one sentence naming the rule — only on a batch the step
+  placed a card in, so `--no-judgement` renders byte for byte as before on a
+  population with nothing in flight.
+- **Readiness outranks the key.** The in-flight step only ORDERS cards; it
+  decides nothing about whether a card takes a slot. That is the readiness
+  rules' to decide (DRE-6665, not yet in this file): once they land, a card
+  they hold is not ready whatever position this step gave it.
+
+The population read carries what the step reads: every row selects the
+parent's state and both relation lists (`relations` and `inverseRelations`,
+twenty each, with each related card's state, `archivedAt` and parent state).
+That widens every row, so `POPULATION_PAGE` is 25. Measured on 2026-10-10
+against the live Intake lane, one page of the widened query costs
+`X-Complexity` 239 against Linear's stated per-request limit of 10,000.
+
 The epic is still the unit, so an epic's band is the highest priority among the
 epic and its children — one Urgent child pulls the whole unit into the batch —
 and its age for the order is its **newest** card, so one new child brings an
