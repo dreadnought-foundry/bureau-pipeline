@@ -761,5 +761,6 @@ class TestConsoleConsumer:
         tags = [a["tag"] for a in _acts() if a["tag"] != "bound-rewrite"]
         out = self._run(_console(tags))
         assert out.returncode == 1, out.stdout + out.stderr
-        assert "bound-rewrite" in out.stdout
         assert "plan-bound-rewrite" in out.stdout
+        # The one-line console fix.
+        assert "add 'bound-rewrite' (kind 'recovery') to ACTS" in out.stdout
