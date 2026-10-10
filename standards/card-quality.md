@@ -141,8 +141,8 @@ in the PR.
 
 `Green Light` (decision needed, build can proceed once answered) is distinct
 from `Backlog` (a build agent's blocker: a mechanical class the sweep acts on
-within one pass; a question is asked in Green Light), and from `Triage` (the card itself is malformed and cannot proceed as
-written, whoever answers).
+within one pass; a question is asked in Green Light), and from `Triage` (the
+card itself is malformed and cannot proceed as written, whoever answers).
 
 There is **no propose-first hard stop**: cards are not gated awaiting
 approval before any work — autonomy is the default, the human is the exception.
