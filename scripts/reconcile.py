@@ -1628,6 +1628,25 @@ SWEPT_LANES = tuple(
     dict.fromkeys(SWEEP_STATES + WATCHDOG_LANES + PLANNING_LANE + INTAKE_LANE)
 )
 
+#: The lane an outage card is CREATED in (DRE-5292). Created there, never moved
+#: there: Planning entry is what the relay dispatches the planner on, and
+#: DRE-5273 — created in Planning, moved to Triage one second later — got an
+#: Agent Plan run (36658173529) off that one second. The relay dispatches from
+#: Triage only for an `agent:planner` card (the DRE-3013 probe's reading of
+#: it), and this card wears no `agent:*` role at all.
+FLEET_OUTAGE_LANE = "Triage"
+
+# What the sweep's ONE paged board read covers (DRE-6576): every lane it acts
+# on, and the lane its own outage card sits in. `report_fleet_reviewer_outage`
+# finds its open card in that read for as long as the card is open — the open
+# card was otherwise looked up only while a crash was still in the window, and
+# DRE-6568 sat in Triage until a person closed it. SWEPT_LANES stays what the
+# sweep ACTS on, and the lane sets derived from it stay as they are: the limit
+# recovery reads `active_cards(SWEPT_LANES)` and replans from Triage
+# (`limit_recovery.REPLAN_FROM`), so handing it this read would start moving
+# parked Triage cards to Planning.
+BOARD_READ_LANES = tuple(dict.fromkeys(SWEPT_LANES + (FLEET_OUTAGE_LANE,)))
+
 # How the read door serves those lanes (Stage 2 #6a, DRE-5848). The work
 # lanes, where this repo's own cards are, are one `scope=repo` read. Intake and
 # Planning hold every repo's cards and the unlabeled ones — the Urgent fast
@@ -1650,9 +1669,9 @@ BACKLOG_LANE = "Backlog"
 # there with six of six Done). NOT SWEPT_LANES, which is what the sweep READS:
 # Intake, Planning and Green Light hold an epic whose plan is still being
 # written, reviewed or approved — a re-plan may be about to add children — and
-# Hand-work is a person's lane the sweep never puts an epic in. Triage and Green
-# Light are not read at all, and reading either for this would be one more
-# request per pass for a lane that holds no finished epic by design.
+# Hand-work is a person's lane the sweep never puts an epic in. Green Light is
+# not read at all, and Triage only for the outage alarm (BOARD_READ_LANES,
+# DRE-6576): neither holds a finished epic by design, so neither is closed from.
 EPIC_CLOSE_LANES = SWEEP_STATES + (BACKLOG_LANE,)
 
 # The lanes `move_hand_built_to_review` reads a hand-built card OUT of
@@ -1765,11 +1784,12 @@ def drain_retiring_lanes() -> None:
 # ONE board read per sweep (DRE-2929). Four callers ask active_cards() for
 # four lane sets, SWEPT_LANES is already their union, and every one of them was
 # its own paged query — so a fleet of four repos paid four board reads per
-# sweep for the same rows. None of them mutates the list it gets back, and the
-# writes that DO happen mid-sweep are already read from the pre-write snapshot
-# on purpose (flag_stranded's hold labels are the documented example: main()
-# skips a card flagged this very sweep off the returned `flagged` set, never
-# off a re-read). Reset at the top of every main() so a second sweep in one
+# sweep for the same rows. The read is of BOARD_READ_LANES, which adds the
+# outage card's lane to that union (DRE-6576). None of them mutates the list it
+# gets back, and the writes that DO happen mid-sweep are already read from the
+# pre-write snapshot on purpose (flag_stranded's hold labels are the documented
+# example: main() skips a card flagged this very sweep off the returned
+# `flagged` set, never off a re-read). Reset at the top of every main() so a second sweep in one
 # process — which is what a test run is — never inherits the first one's board.
 _swept_cards: list[dict] | None = None
 
@@ -2048,7 +2068,7 @@ def _fetch_active_cards(states: tuple[str, ...]) -> list[dict]:
              team: {key: {eq: "DRE"}},
              state: {name: {in: $states}}
            }) { nodes {
-             id identifier title description updatedAt priority
+             id identifier title description createdAt updatedAt priority
              state { name } labels { nodes { name } }
              children(first: 1) { nodes { id } }
              %s
@@ -2067,12 +2087,13 @@ def active_cards(states: tuple[str, ...] = SWEEP_STATES) -> list[dict]:
     budgets promotion, and the stranded-card watchdog all read it. A single
     unpaginated page silently truncated every one of them at 100 rows.
 
-    Served from ONE read of SWEPT_LANES per sweep (DRE-2929), filtered here to
-    the lanes the caller asked for — so the answer is byte-identical to its own
-    query's, and the sweep's Linear cost is a function of the lanes rather than
-    of the cards in them. A caller asking for a lane OUTSIDE that union gets a
-    real query: the union is what was read, and answering from it would be a
-    confident empty (drain_retiring_lanes is that caller by construction).
+    Served from ONE read of BOARD_READ_LANES per sweep (DRE-2929, DRE-6576),
+    filtered here to the lanes the caller asked for — so the answer is
+    byte-identical to its own query's, and the sweep's Linear cost is a
+    function of the lanes rather than of the cards in them. A caller asking
+    for a lane OUTSIDE that read gets a real query: the read is what was read,
+    and answering from it would be a confident empty (drain_retiring_lanes is
+    that caller by construction).
 
     THE READ DOOR (Stage 2 #6a, DRE-5848). In `BUREAU_READ=on` the work lanes
     come from the console's door at `scope=repo`, and Intake/Planning
@@ -2085,16 +2106,20 @@ def active_cards(states: tuple[str, ...] = SWEEP_STATES) -> list[dict]:
     """
     global _swept_cards
     wanted = set(states)
-    if not wanted <= set(SWEPT_LANES):
+    if not wanted <= set(BOARD_READ_LANES):
         return _fetch_active_cards(states)
     if bureau_read.mode() != "on":
         if _swept_cards is None:
             if bureau_read.mode() == "shadow":
                 _shadow_board()
-            _swept_cards = _fetch_active_cards(SWEPT_LANES)
+            _swept_cards = _fetch_active_cards(BOARD_READ_LANES)
             if bureau_read.mode() == "shadow":
                 _shadow_compare_board(_swept_cards)
         return [card for card in _swept_cards if card["state"]["name"] in wanted]
+    if not wanted <= set(SWEPT_LANES):
+        # The door serves DOOR_WORK_LANES and DOOR_LINEAR_LANES, and neither
+        # holds the outage lane: a real query, never a confident empty.
+        return _fetch_active_cards(states)
     out: list[dict] = []
     work = wanted & set(DOOR_WORK_LANES)
     if work:
@@ -2107,8 +2132,8 @@ def active_cards(states: tuple[str, ...] = SWEEP_STATES) -> list[dict]:
 
 def _door_work_cards() -> list[dict]:
     """The work lanes, from the door — or, when it cannot answer, from the one
-    Linear read of SWEPT_LANES the sweep has always made. Raises BoardHeld
-    when the door says Linear is held (no Linear fallback, item 34)."""
+    Linear board read the sweep has always made, of BOARD_READ_LANES. Raises
+    BoardHeld when the door says Linear is held (no Linear fallback, item 34)."""
     global _swept_cards, _linear_lane_cards
     if _door_hold:
         raise BoardHeld(_door_hold[0])
@@ -2122,7 +2147,7 @@ def _door_work_cards() -> list[dict]:
             _door_hold.append(e.reason)
             raise BoardHeld(e.reason) from e
         print(f"read-door: board unknown ({e}) — read from Linear this pass")
-        _swept_cards = _fetch_active_cards(SWEPT_LANES)
+        _swept_cards = _fetch_active_cards(BOARD_READ_LANES)
         if _linear_lane_cards is None and DOOR_LINEAR_LANES not in _fleet_lane_cards:
             _linear_lane_cards = [c for c in _swept_cards
                                   if c["state"]["name"] in DOOR_LINEAR_LANES]
@@ -11734,13 +11759,8 @@ def recover_crashed_reviews() -> None:
 #: mechanism exists to remove.
 FLEET_OUTAGE_SWEEP_CAP = int(os.environ.get("FLEET_OUTAGE_SWEEP_CAP", "1"))
 
-#: The lane an outage card is CREATED in (DRE-5292). Created there, never moved
-#: there: Planning entry is what the relay dispatches the planner on, and
-#: DRE-5273 — created in Planning, moved to Triage one second later — got an
-#: Agent Plan run (36658173529) off that one second. The relay dispatches from
-#: Triage only for an `agent:planner` card (the DRE-3013 probe's reading of
-#: it), and this card wears no `agent:*` role at all.
-FLEET_OUTAGE_LANE = "Triage"
+# FLEET_OUTAGE_LANE, the lane the outage card is created in, is declared beside
+# SWEPT_LANES: the sweep's one board read carries it (DRE-6576).
 
 
 def _fleet_outage_crashed_run(sha: str) -> tuple[str, str]:
@@ -11894,6 +11914,33 @@ def _fleet_outage_resolve_duplicates(keep: str, duplicates: list) -> None:
         _fleet_outage_state(f"cancel {identifier}", identifier, "Canceled")
 
 
+def _fleet_outage_open_card() -> dict | None:
+    """The open outage card, in `linear_ops.find_open_prefix`'s shape, or None.
+
+    Off the board this pass already read (DRE-6576): the one paged read covers
+    BOARD_READ_LANES, which carries `FLEET_OUTAGE_LANE`, so every card there
+    whose title opens with the prefix is an open alarm — in Triage where it was
+    filed, or in any lane the sweep reads that a person moved it to. Oldest
+    `createdAt` first: the oldest is the card, and the rest are the
+    `duplicates` the cross-repo filing race leaves. No Linear request.
+
+    Under `BUREAU_READ=on` the snapshot is the door's, and the door is asked
+    for DOOR_WORK_LANES, which does not hold the alarm lane — so on that path,
+    and only there, this is the one `find_open_prefix` request, on every pass.
+    Folding the lane into the door's read is the console's to do.
+    """
+    if bureau_read.mode() == "on":
+        return linear_ops.find_open_prefix(reviewer_down.TITLE_PREFIX)
+    alarms = sorted(
+        (card for card in active_cards(BOARD_READ_LANES)
+         if (card.get("title") or "").startswith(reviewer_down.TITLE_PREFIX)),
+        key=lambda card: card.get("createdAt") or "",
+    )
+    if not alarms:
+        return None
+    return {**alarms[0], "duplicates": alarms[1:]}
+
+
 def report_fleet_reviewer_outage() -> None:
     """Is the reviewer down across the FLEET? File ONE card, append, or close.
 
@@ -11901,10 +11948,13 @@ def report_fleet_reviewer_outage() -> None:
     read the SAME open-pull-request listing (`_open_pr_listing`), that one
     re-dispatching per head, this one counting across the fleet.
 
-    What it reads, in order, and nothing further until the previous answer
-    justifies it:
+    What it reads, in order:
 
-      1. LOCAL outcomes — `reviewer_down.outcomes_from_pr` over the shared
+      1. THE OPEN CARD, off the board snapshot this sweep already holds
+         (`_fleet_outage_open_card`, DRE-6576) — zero Linear requests, except
+         under `BUREAU_READ=on`, where it is the one `find_open_prefix`
+         request per pass, said here rather than hidden.
+      2. LOCAL outcomes — `reviewer_down.outcomes_from_pr` over the shared
          listing. Only the neutral could-not-run receipt and critic verdicts
          count; the runner-environment HOLD receipt (DRE-3428) is NOT an
          outcome — it records a second crash whose evidence note is already
@@ -11914,22 +11964,24 @@ def report_fleet_reviewer_outage() -> None:
          is still `reviewer_down.outcomes_from_pr`, which counts only the
          neutral receipt and verdicts, so every hold the sweep above now posts
          is invisible here by that module's own rule.
-      2. THE FLEET WITNESS — a second repository's crashes reach this sweep
+      3. THE FLEET WITNESS — a second repository's crashes reach this sweep
          only through the medic's note on the Linear card, attributed to the
          repository its run link names (DRE-5291), and `active_cards()`
          has already been read once for this sweep and is served from the pass
          cache. So this step costs ZERO Linear requests, which is the whole
          reason the fleet half is affordable at all.
-      3. EARLY EXIT. No could-not-run inside the window from either source and
-         the sweep says so in one line and stops. A quiet sweep — the common
-         case, every fifteen minutes, in every repo — must cost nothing.
-      4. Only past that: the open card, by title prefix.
+      4. EARLY EXIT. No could-not-run inside the window from either source AND
+         no open card, and the sweep says so in one line and stops. A quiet
+         sweep — the common case, every fifteen minutes, in every repo — must
+         cost nothing.
 
-    The consequence of ordering it that way, stated rather than discovered: the
-    card is closed by a sweep that can still SEE a crash in the window. Once
-    every could-not-run outcome has aged past `window_s` there is nothing for
-    this to act on, and the card waits for the person it was filed for — which
-    is the same person the `escalated` act row already names as its next actor.
+    The consequence of ordering it that way, stated rather than discovered: an
+    open card is read on every sweep for as long as it is open, however long
+    ago its crashes were. `decide` reads the card's whole ledger, so once
+    every crash has aged past `window_s` the card still closes on the first
+    verdict in a counted repository after that repository's last counted
+    crash. DRE-6568 was filed after its reviewer was back, and no sweep read
+    it again once its crashes left the window, so a person closed it.
 
     A backstop must never take the sweep down with it (DRE-2035): every write
     is recorded on the fail-loudly rail and the sweep continues, red.
@@ -11937,6 +11989,23 @@ def report_fleet_reviewer_outage() -> None:
     prs = _open_pr_listing()
     if prs is None:
         return  # unreadable listing — recorded there, never acted on here
+    try:
+        found = _fleet_outage_open_card()
+    except Exception as e:  # noqa: BLE001 — an unreadable board is not an empty one
+        _read_failures.append(f"fleet-reviewer-outage: open-card lookup failed: {e}")
+        print(f"ERROR: fleet-reviewer-outage: open-card lookup failed: {e}",
+              file=sys.stderr)
+        return
+    open_card = None
+    if found:
+        bodies = [node.get("body") or ""
+                  for node in linear_ops.window_nodes(found.get("comments"))]
+        open_card = reviewer_down.OpenCard(
+            identifier=found["identifier"],
+            filed_at=found.get("createdAt") or "",
+            text="\n".join([found.get("description") or "", *bodies]),
+        )
+
     local = []
     for pr in prs:
         local.extend(reviewer_down.outcomes_from_pr(pr, REPO_SLUG))
@@ -11958,29 +12027,14 @@ def report_fleet_reviewer_outage() -> None:
         o for o in reviewer_down._window(local + witness, now, threshold.window_s)
         if o.kind == reviewer_down.COULD_NOT_RUN
     ]
-    if not fresh:
+    if not fresh and open_card is None:
         print(
             "fleet-reviewer-outage: nothing to report — 0 could-not-run in "
             f"the last {threshold.window_s // 60} min"
         )
         return
 
-    try:
-        found = linear_ops.find_open_prefix(reviewer_down.TITLE_PREFIX)
-    except Exception as e:  # noqa: BLE001 — an unreadable board is not an empty one
-        _read_failures.append(f"fleet-reviewer-outage: open-card lookup failed: {e}")
-        print(f"ERROR: fleet-reviewer-outage: open-card lookup failed: {e}",
-              file=sys.stderr)
-        return
-    open_card = None
-    if found:
-        bodies = [node.get("body") or ""
-                  for node in linear_ops.window_nodes(found.get("comments"))]
-        open_card = reviewer_down.OpenCard(
-            identifier=found["identifier"],
-            filed_at=found.get("createdAt") or "",
-            text="\n".join([found.get("description") or "", *bodies]),
-        )
+    if open_card is not None:
         _fleet_outage_resolve_duplicates(open_card.identifier,
                                          found.get("duplicates") or [])
 

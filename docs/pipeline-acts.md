@@ -192,9 +192,16 @@ run is dispatched at it (DRE-5292). Its first crashed run is the head's own
 failed review workflow run, or "no run found" when none can be read — never a
 check run's `details_url`. It appends one comment per newly counted
 run and rewrites the title's counts, and closes the card on the first
-successful verdict posted after it was filed. Every one of those comments
-composes through this act, so the console's alert per open card is unchanged by
-the trailer. `FLEET_OUTAGE_SWEEP_CAP=0` is the off switch: it stops the sweep
+successful verdict it can see in a repository the card counted, posted after
+that repository's last counted crash — whenever that verdict was posted
+(DRE-6576). It finds its open card in the board read it already makes, which
+carries `Triage`, so it reads the card on every sweep for as long as the card
+is open, however long ago the crashes were. Under `BUREAU_READ=on` that lookup
+is one Linear request per sweep. A repository whose newest crash already has a
+later verdict there does not count toward the two-repository rule, so the
+alarm stays quiet when the reviewer is back before it files. Every comment it
+posts composes through this act, so the console's alert per open card is
+unchanged by the trailer. `FLEET_OUTAGE_SWEEP_CAP=0` is the off switch: it stops the sweep
 FILING fleet-wide, and deliberately leaves appends and closes running, so an
 outage card that is already open is never orphaned by the switch.
 

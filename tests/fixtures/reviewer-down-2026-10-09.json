@@ -45,7 +45,7 @@
       "kind": "could-not-run",
       "src": "https://github.com/dreadnought-foundry/agent-bureau/pull/3503#issuecomment-reconstructed-1",
       "pr": 3503,
-      "detail": "🔎 QA Critic could not run (infra error)"
+      "detail": "could-not-run receipt: API Error: 401 OAuth access token has been revoked"
     },
     {
       "repo": "agent-bureau",
@@ -53,7 +53,7 @@
       "kind": "verdict",
       "src": "https://github.com/dreadnought-foundry/agent-bureau/actions/runs/38024778387",
       "pr": null,
-      "detail": "🔎 QA Critic — VERDICT: APPROVE"
+      "detail": "the review passed"
     },
     {
       "repo": "agent-bureau",
@@ -61,7 +61,7 @@
       "kind": "verdict",
       "src": "https://github.com/dreadnought-foundry/agent-bureau/actions/runs/38025048059",
       "pr": null,
-      "detail": "🔎 QA Critic — VERDICT: APPROVE"
+      "detail": "the review passed"
     },
     {
       "repo": "agent-bureau",
@@ -69,7 +69,7 @@
       "kind": "verdict",
       "src": "https://github.com/dreadnought-foundry/agent-bureau/actions/runs/38025315980",
       "pr": null,
-      "detail": "🔎 QA Critic — VERDICT: APPROVE"
+      "detail": "the review passed"
     },
     {
       "repo": "agent-bureau",
@@ -77,7 +77,7 @@
       "kind": "verdict",
       "src": "https://github.com/dreadnought-foundry/agent-bureau/actions/runs/38025426473",
       "pr": null,
-      "detail": "🔎 QA Critic — VERDICT: APPROVE"
+      "detail": "the review passed"
     },
     {
       "repo": "agent-bureau",
@@ -85,7 +85,7 @@
       "kind": "verdict",
       "src": "https://github.com/dreadnought-foundry/agent-bureau/actions/runs/38024520814/attempts/2",
       "pr": 3503,
-      "detail": "🔎 QA Critic — VERDICT: APPROVE"
+      "detail": "the review passed"
     },
     {
       "repo": "agent-bureau",
@@ -93,7 +93,7 @@
       "kind": "verdict",
       "src": "https://github.com/dreadnought-foundry/agent-bureau/actions/runs/38025914986",
       "pr": null,
-      "detail": "🔎 QA Critic — VERDICT: APPROVE"
+      "detail": "the review passed"
     }
   ],
   "witness": [
