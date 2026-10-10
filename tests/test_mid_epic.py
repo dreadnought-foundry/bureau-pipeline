@@ -516,6 +516,9 @@ WALKED_ROUTE = {
     ("critic_score", "judgement_from_body"),
     ("proof_and_demo", "_verdict"),
     ("routing_verdict", "main"),
+    # DRE-6380: the one-off exit's own precheck. It is only ever handed a card
+    # that already left as a one-off, so it passes that shape outright.
+    ("plan_critic", "one_off_precheck"),
 }
 
 
@@ -580,6 +583,20 @@ class TestEveryRouteCallerIsWalked:
             "labels": ["agent:planner", "agent:ops", "repo:agent-bureau"],
         })
         assert verdict in proof_and_demo.confirming_verdicts()
+
+    def test_the_one_off_precheck_does_not_read_children_as_an_epic(self):
+        """`plan_critic.one_off_precheck` reads a card the one-off exit is
+        already holding. A planner-owned card with children and no criteria is
+        still a one-off there, so it is sent to the rewrite, not let through as
+        an epic."""
+        import plan_critic
+
+        assert plan_critic.one_off_precheck({
+            "identifier": "DRE-6380", "title": "the front door",
+            "description": "We should tidy the front door.\n",
+            "labels": ["agent:planner", "repo:agent-bureau"],
+            "has_children": True,
+        })
 
     def test_the_classify_command_can_be_given_the_stamp(self, capsys):
         """The CLI is a caller too, and it read `--has-children` but had no way
