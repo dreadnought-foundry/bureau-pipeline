@@ -357,7 +357,13 @@ class CheckTest(unittest.TestCase):
 
     def test_failures_with_no_stable_to_re_read_block_the_check(self):
         trees = _Trees(self, stable=None)
-        self._assert_blocked(trees.check(), "stable")
+        result = trees.check()
+        self._assert_blocked(result, "stable")
+        # DRE-6670: a suite holding a failure nobody could re-read is not
+        # reported as passed.
+        self.assertEqual({s["name"]: s["status"] for s in result["suites"]},
+                         {"cloud": mirror_check.MIRROR_BLOCKED,
+                          "console": mirror_check.MIRROR_BLOCKED})
 
 
 # --------------------------------------------------------------------------- #

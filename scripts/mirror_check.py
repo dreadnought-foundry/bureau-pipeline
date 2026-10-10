@@ -533,9 +533,12 @@ def check(root: Path, stable: Path, *, candidate: str, stable_sha: str,
                  and _red(outcomes[e["name"]]["candidate"])]
         if again:
             if not stable.is_dir():
-                raise _Blocked("there is no stable checkout to re-read the "
-                               "failures against, so none of them can be laid "
-                               "at the candidate")
+                why = ("there is no stable checkout to re-read the failures "
+                       "against, so none of them can be laid at the candidate")
+                for entry in again:
+                    entry.update(status=MIRROR_BLOCKED, why=why)
+                entries.sort(key=lambda e: e["status"] != MIRROR_BLOCKED)
+                raise _Blocked(why)
             here = root / PIPELINE_DIRNAME
             _swap(here, stable)
             try:
