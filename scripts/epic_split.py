@@ -72,9 +72,9 @@ the sweep promotes, so the parent reaching In Progress while its children still
 sat in Backlog would put them in front of the promotion gate instead of the
 planner. A child left waiting in Backlog is still an `[EPIC]`, which the
 promotion gate never promotes as work (`reconcile.card_is_epic`), so it waits
-there for the auto-advance and nothing else moves it. A crash anywhere leaves a state the retry finishes: the receipt is
-counted before it is posted, and `cmd_advance` moves a card only out of the
-lane it names.
+there for the auto-advance and nothing else moves it. A crash anywhere leaves
+a state the retry finishes: the receipt is counted before it is posted, and
+`cmd_advance` moves a card only out of the lane it names.
 
 The lane names are read off the contract (`lane_contract.lane_names`) at the
 moment they are used, and `contract_problems()` holds the contract to the
@@ -499,6 +499,8 @@ def _placed(verdict: str, waits_on: list, lane: str | None, named: dict) -> str:
         return f"sent to `{named['child_to']}` now"
     if verdict == WAIT:
         return f"waits in `{named['child_from']}` on " + ", ".join(waits_on)
+    if lane is None:
+        return "its lane could not be read, left where it is"
     return f"already in `{lane}`, left where it is"
 
 

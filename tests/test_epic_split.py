@@ -471,6 +471,9 @@ class TestABlockedChildWaitsInBacklog:
         board = _Board(_dre6585(), lanes={"DRE-9101": None})
         _activate(board)
         assert board.lanes["DRE-9103"] == "Backlog"
+        line = _receipt_line(board, "DRE-9101")
+        assert "None" not in line, line
+        assert "could not be read, left where it is" in line, line
 
     def test_a_blocker_outside_the_roll_up_does_not_hold_a_child(self):
         children = _dre6585()
