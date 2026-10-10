@@ -88,6 +88,12 @@
 # main as today, agent-bureau's mirror catches up, and only then does `stable`
 # move onto it. A refusal files one card in agent-bureau naming the mirror.
 #
+# DRE-6622: the check's test tools come from this repo's requirements-dev.txt,
+# installed beside agent-bureau's requirements (which declare no pytest), its
+# pytest runs carry `--no-cov` (agent-bureau's coverage floor cannot be met by
+# the mirror tests alone), and a `mirror-check-blocked` decision on a main or
+# by-hand run fails the run in the job's last step.
+#
 #   Q1 WHO INITIATES. The same promote run, initiated as today. The clone uses
 #      the bureau App, installed on every fleet repo.
 #   Q2 WHICH SECRETS STORE. The store the tag move already reads
@@ -457,7 +463,9 @@ jobs:
 
       # Discovered, never typed: the tests whose text names
       # BUREAU_PIPELINE_DIR or .bureau-pipeline, and the requirement files at
-      # agent-bureau's root and in the directories that hold them.
+      # agent-bureau's root and in the directories that hold them — then this
+      # repo's requirements-dev.txt, which pins the check's own pytest and
+      # pytest-cov (DRE-6622).
       - name: Find agent-bureau's mirror tests
         id: discover
         if: steps.proof.outputs.promote == 'true'
