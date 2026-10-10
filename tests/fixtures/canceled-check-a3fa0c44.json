@@ -1,0 +1,63 @@
+{
+  "_source": [
+    "DRE-3072's replay: the check runs on agent-bureau #3502 (DRE-6556) at head",
+    "a3fa0c44d7cad59023d1bc6f59b45da5041cba11, 2026-10-09 PT, as the card and its",
+    "evidence comment of 22:41 PT record them. The two that decide the case are",
+    "exact: `Console backend shard 1` (job 114129034599) cancelled at 21:30:38",
+    "with the annotation quoted below, and `Console backend (pytest)` (job",
+    "114131786651) failure at 21:31:23, both in CI run 38023358661 on attempt 1,",
+    "whose own conclusion is `cancelled`. The other eighteen are `success` or",
+    "`skipped`, as recorded; their names and job ids stand in for the real ones,",
+    "which this repository's token cannot read, and nothing the rule decides",
+    "turns on them. Two of them belong to other workflow runs, the critic's",
+    "review check among them, because a head's check runs come from more than",
+    "one run."
+  ],
+  "repo": "dreadnought-foundry/agent-bureau",
+  "pr": 3502,
+  "head_sha": "a3fa0c44d7cad59023d1bc6f59b45da5041cba11",
+  "run": {
+    "id": 38023358661,
+    "name": "CI",
+    "status": "completed",
+    "conclusion": "cancelled",
+    "run_attempt": 1,
+    "head_sha": "a3fa0c44d7cad59023d1bc6f59b45da5041cba11"
+  },
+  "annotations": {
+    "114129034599": [
+      {
+        "annotation_level": "failure",
+        "message": "The job has exceeded the maximum execution time of 15m0s"
+      }
+    ],
+    "114131786651": [
+      {
+        "annotation_level": "failure",
+        "message": "Process completed with exit code 1."
+      }
+    ]
+  },
+  "check_runs": [
+    {"id": 114131786651, "name": "Console backend (pytest)", "status": "completed", "conclusion": "failure", "details_url": "https://github.com/dreadnought-foundry/agent-bureau/actions/runs/38023358661/job/114131786651"},
+    {"id": 114129034599, "name": "Console backend shard 1", "status": "completed", "conclusion": "cancelled", "details_url": "https://github.com/dreadnought-foundry/agent-bureau/actions/runs/38023358661/job/114129034599"},
+    {"id": 114129034601, "name": "Console backend shard 2", "status": "completed", "conclusion": "success", "details_url": "https://github.com/dreadnought-foundry/agent-bureau/actions/runs/38023358661/job/114129034601"},
+    {"id": 114129034603, "name": "Console backend shard 3", "status": "completed", "conclusion": "success", "details_url": "https://github.com/dreadnought-foundry/agent-bureau/actions/runs/38023358661/job/114129034603"},
+    {"id": 114129034605, "name": "Console backend shard 4", "status": "completed", "conclusion": "success", "details_url": "https://github.com/dreadnought-foundry/agent-bureau/actions/runs/38023358661/job/114129034605"},
+    {"id": 114129034607, "name": "Console web (vitest)", "status": "completed", "conclusion": "success", "details_url": "https://github.com/dreadnought-foundry/agent-bureau/actions/runs/38023358661/job/114129034607"},
+    {"id": 114129034609, "name": "Console web (typecheck)", "status": "completed", "conclusion": "success", "details_url": "https://github.com/dreadnought-foundry/agent-bureau/actions/runs/38023358661/job/114129034609"},
+    {"id": 114129034611, "name": "Console web (lint)", "status": "completed", "conclusion": "success", "details_url": "https://github.com/dreadnought-foundry/agent-bureau/actions/runs/38023358661/job/114129034611"},
+    {"id": 114129034613, "name": "Console backend (lint)", "status": "completed", "conclusion": "success", "details_url": "https://github.com/dreadnought-foundry/agent-bureau/actions/runs/38023358661/job/114129034613"},
+    {"id": 114129034615, "name": "Console backend (migrations)", "status": "completed", "conclusion": "success", "details_url": "https://github.com/dreadnought-foundry/agent-bureau/actions/runs/38023358661/job/114129034615"},
+    {"id": 114129034617, "name": "Infra (cdk synth)", "status": "completed", "conclusion": "skipped", "details_url": "https://github.com/dreadnought-foundry/agent-bureau/actions/runs/38023358661/job/114129034617"},
+    {"id": 114129034619, "name": "Infra (tests)", "status": "completed", "conclusion": "skipped", "details_url": "https://github.com/dreadnought-foundry/agent-bureau/actions/runs/38023358661/job/114129034619"},
+    {"id": 114129034621, "name": "Relay (tests)", "status": "completed", "conclusion": "skipped", "details_url": "https://github.com/dreadnought-foundry/agent-bureau/actions/runs/38023358661/job/114129034621"},
+    {"id": 114129034623, "name": "Scripts (pytest)", "status": "completed", "conclusion": "success", "details_url": "https://github.com/dreadnought-foundry/agent-bureau/actions/runs/38023358661/job/114129034623"},
+    {"id": 114129034625, "name": "Suite filters", "status": "completed", "conclusion": "success", "details_url": "https://github.com/dreadnought-foundry/agent-bureau/actions/runs/38023358661/job/114129034625"},
+    {"id": 114129034627, "name": "Speed gate", "status": "completed", "conclusion": "success", "details_url": "https://github.com/dreadnought-foundry/agent-bureau/actions/runs/38023358661/job/114129034627"},
+    {"id": 114129034629, "name": "Case-colliding filenames", "status": "completed", "conclusion": "success", "details_url": "https://github.com/dreadnought-foundry/agent-bureau/actions/runs/38023358661/job/114129034629"},
+    {"id": 114129034631, "name": "Workflow lint", "status": "completed", "conclusion": "success", "details_url": "https://github.com/dreadnought-foundry/agent-bureau/actions/runs/38023358661/job/114129034631"},
+    {"id": 114127000001, "name": "TDD commit discipline", "status": "completed", "conclusion": "success", "details_url": "https://github.com/dreadnought-foundry/agent-bureau/actions/runs/38023350001/job/114127000001"},
+    {"id": 114132000001, "name": "qa-review / review", "status": "completed", "conclusion": "success", "details_url": "https://github.com/dreadnought-foundry/agent-bureau/actions/runs/38023390001/job/114132000001"}
+  ]
+}

@@ -130,7 +130,7 @@ conflict sweep, and dispatches at most once per sweep.
 
 | Route | Fires when | Log line |
 | -- | -- | -- |
-| approved-but-red | The critic APPROVEd and a CI check is failing, so nothing event-driven will fix it | `approved-but-red: …` |
+| approved-but-red | The critic APPROVEd and a CI check is failing, so nothing event-driven will fix it. A workflow run holding a canceled check is not failing (DRE-3072): it is re-run once with a `canceled-check-rerun` receipt, told once with a `canceled-check-again` hold if a later attempt is canceled again, and never sent a fix agent | `approved-but-red: …` · `canceled-check: …` |
 | dead-fix-run | The last fix run died of a model/API error, ran out of turns, or lost its machine (the worker bot's `fix-run-runner-lost` comment, DRE-6572, dispatched only once it is 10 minutes old so the runner's own retry goes first), and its trigger was consumed | `dead fix run: …` |
 | answered-blocker | An operator decision landed after the loop's last 🛑 blocker | `answered blocker: …` |
 | standing-verdict | A blocking verdict — the critic's REQUEST_CHANGES or, since DRE-5230, the Verifier's FAIL — binds the current head, is over 20 minutes old, and no worker-bot comment is newer than it — the fix run it should have started never arrived | `evicted-verdict: …` |
