@@ -378,25 +378,52 @@ promotion never clones agent-bureau. `scripts/mirror_check.py` does the work:
   async test fails with `async def functions are not natively supported`, on
   `stable` and the candidate alike, and pytest-asyncio is pinned at the
   version agent-bureau's own backend CI installs.
-- **Both pytest runs carry `--no-cov`** (DRE-6622). agent-bureau's pytest
+- **Every pytest run carries `--no-cov`** (DRE-6622). agent-bureau's pytest
   settings enforce a coverage floor that its mirror tests alone cannot meet,
   so pytest exited 1 with no failing test and the check could only say
   `blocked`. `--no-cov` is pytest-cov's switch, pinned beside pytest for that
   reason; agent-bureau's other pytest settings stay in force. A run in which
   every mirror test passes is a pass.
-- **A failure is re-read against `stable`** before it counts: the whole
-  discovered set runs again, in the same order and with the same flags, with
-  `stable` in the candidate's place (DRE-6657). A test red on both is
-  agent-bureau's own red, or the run's own doing: the receipt names it
-  `already red on stable` and it refuses nothing. Only a test that passes on
-  `stable` and fails on the candidate refuses, as `mirror-tests-failed`.
-  Until DRE-6657 the re-read ran only the files that held a failure, so the
-  two runs differed in what they ran: on run 38072065598 the candidate run
-  ended with 1238 `'jwt' is not a package` errors — a stub one agent-bureau
-  file leaves in the process, breaking another — that the 22-file re-read
-  could not show, and a candidate that touched nothing of the kind was
-  refused. The like-for-like re-read costs about a minute and a half more,
-  inside the check's 14-minute budget.
+- **One suite at a time, one pytest process per suite** (DRE-6670). A test's
+  suite is the first component of its path in agent-bureau — `cloud` for
+  `cloud/relay/test_lambda_function.py`, `console` for
+  `console/backend/tests/test_console_actor.py`, `.` for a test at the root —
+  read off the discovered files and nothing else: a build run here cannot read
+  agent-bureau's workflows, and a rule it cannot test is a guess. It is not
+  agent-bureau's job layout and does not need to be. It keeps the relay out of
+  the console's process, which is the one cross-talk seen: three relay test
+  files run `sys.modules.setdefault("jwt", mock.MagicMock())` at import, and in
+  one process with the console's tests that stub ended run 38072065598's
+  candidate run with 1238 `'jwt' is not a package` setup errors. agent-bureau's
+  own CI runs the two as separate jobs and never meets it. Each suite runs its
+  files in sorted order, inside the check's one 14-minute budget.
+- **A failure is judged against an identical run on `stable`** before it
+  counts. Every suite with a red test on the candidate — a failure, or a setup,
+  teardown or collection error — runs again, whole: the same files, in the same
+  order, in the same process layout, with `stable` in the candidate's place. A
+  test red on both is agent-bureau's own red, or the run's own doing: the
+  receipt names it `already red on stable` and it refuses nothing. Only a test
+  red on the candidate and not on `stable` refuses, as `mirror-tests-failed`.
+  A suite with nothing red is not re-read, and its line says `stable not
+  re-read: nothing failed on the candidate`. Until DRE-6657 the re-read ran
+  only the files that held a failure, so the two runs differed in what they
+  ran, and a console test that errored beside the relay's stub passed alone
+  and was laid at a candidate that touched nothing of the kind.
+- **Both runs' totals, side by side, per suite** (DRE-6670): passed, failed,
+  errors (setup, teardown and collection errors, counted apart from failures)
+  and skipped, as pytest counts them. They are in the result file's `suites`,
+  and one line per suite — `suite console: candidate 1212 passed, 0 failed,
+  1238 errors, 4 skipped · stable 1212 passed, 0 failed, 1238 errors, 4
+  skipped` — under the `⏱ mirror check` line in the run summary, in the step's
+  output and in a refusal's card. A failure red on both runs is how a reader
+  sees an environment gap, such as a missing async plugin, rather than has it
+  swallowed.
+- **A suite that cannot run is `blocked`, never `failed`** (DRE-6670): pytest
+  exiting other than 0 or 1 for it, writing no report, or running past the
+  budget. Its mirrors are unproven and a promotion is all or nothing, so it
+  blocks the check — `mirror-check-blocked`, and the run fails as DRE-6622
+  made it. The other suites still run, and their results and totals are still
+  written, the blocked suite first with its reason.
 - **The card's title stays inside Linear's limit** (DRE-6657). It names the
   sorted mirrored files, and is the key the open card is found again by; when
   the list will not fit in `TITLE_MAX` (200 characters, under Linear's 255) it
