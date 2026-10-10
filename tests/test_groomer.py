@@ -903,7 +903,9 @@ class PagedLinear:
 def test_the_population_query_pages_at_25_and_carries_the_children():
     assert groomer.POPULATION_PAGE == 25
     assert "issues(first: 25, after: $after" in groomer.POPULATION_QUERY
-    assert ("children(first: 50) { nodes { identifier state { name } } }"
+    # The child's title is how the roll-up rule knows a child is an epic
+    # (DRE-6665).
+    assert ("children(first: 50) { nodes { identifier title state { name } } }"
             in groomer.POPULATION_QUERY)
 
 
