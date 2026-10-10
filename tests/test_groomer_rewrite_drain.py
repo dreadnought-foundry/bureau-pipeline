@@ -577,8 +577,9 @@ def test_the_receipt_guard_passes_and_fails_naming_the_site_without_the_row():
                           if r.get("anchor") != "rewritten_note("]
     found = check_act_receipts.problems(doc)
     assert found, "removing the row left the note's call site undeclared"
-    assert any("scripts/groomer.py" in str(p) and "rewritten_note(" in str(p)
-               for p in found), found
+    [(_, line, _)] = [c for c in _calls_of("cmd_comment")
+                      if "rewritten_note(" in c[2]]
+    assert any(f"scripts/groomer.py:{line} " in str(p) for p in found), found
 
 
 # --------------------------------------------------------------------------
