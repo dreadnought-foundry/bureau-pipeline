@@ -254,6 +254,10 @@ proposal on the standing card (`standing_decisions`): `groom-excluded` is Don't
 do — the card is not offered again until `groom-added` brings it back — and
 `groom-held` is Hold — the drain holds it back exactly as an exclusion, and a
 later proposal may offer it again, ranked after every card never held.
+A per-card marker is read for the first card its line names, the rest of the
+line its reason, dash or no dash; one whose line names no card is listed on
+the next proposal and in the drain's record under `## Decisions I could not
+read`, never dropped (DRE-6642).
 """
 
 from __future__ import annotations
@@ -432,6 +436,9 @@ DECISION_TAGS = (APPROVAL_TAG, DECLINE_TAG, EXCLUDE_TAG, ADD_TAG, HOLD_TAG)
 # The per-card markers, and the ones that keep a card out of the drain.
 PER_CARD_TAGS = (EXCLUDE_TAG, ADD_TAG, HOLD_TAG)
 HELD_BACK_TAGS = (EXCLUDE_TAG, HOLD_TAG)
+# Where a per-card marker naming no card is quoted, on the next proposal and in
+# the drain's record (DRE-6642) — said, never dropped.
+UNREADABLE_HEADING = "## Decisions I could not read"
 
 # --- the CEO's repo switch (DRE-3403) ---------------------------------------
 # Beside the decision markers, and deliberately NOT one of them: these are not
@@ -1368,6 +1375,7 @@ def propose(cards: list[dict], *, cycles: list[dict], capacity: int = DEFAULT_CA
             lane: str = "Intake", now: str | None = None,
             window_days: int = WINDOW_DAYS, judgement=None,
             held_repos=(), excluded=(), held_cards=(),
+            unreadable_decisions=(),
             verified: dict | None = None) -> dict:
     """The whole population, sequenced, with one outcome per card.
 
@@ -1391,6 +1399,10 @@ def propose(cards: list[dict], *, cycles: list[dict], capacity: int = DEFAULT_CA
     excluded card — Don't do — leaves the offer here exactly as a held repo's
     card does. A held card — Hold — stays on offer and is sequenced after
     every card that was never held (`_held_last`).
+
+    `unreadable_decisions` is the first line of each per-card marker on the
+    standing card that names no card (`standing_decisions`, DRE-6642) — said
+    on the page under `## Decisions I could not read`, and in no list.
 
     `verified` is `groom_verify.check`'s answer about a first proposal of the
     same lane (`verify_proposal`): `cancel` puts a card on the Cancel list with
@@ -1612,6 +1624,8 @@ def propose(cards: list[dict], *, cycles: list[dict], capacity: int = DEFAULT_CA
         proposal["excluded_before"] = left_out
     if held_cards:
         proposal["held_before"] = sorted(held_cards, key=_card_sort_key)
+    if unreadable_decisions:
+        proposal["unreadable_decisions"] = list(unreadable_decisions)
     # The priorities ranked as Medium, and the ones not read (DRE-5307), off
     # the cards `groom_priority.annotate` marked — absent when there are none,
     # so a morning with neither proposes exactly what it did before.
@@ -2047,11 +2061,21 @@ _PROPOSAL_LINE = re.compile(rf"^\s*(?:{MARK}\s*)?{PROPOSAL_TAG}\s*:\s*([0-9a-f]{
 
 
 def already_proposed(proposal: dict, records: list[dict]) -> bool:
-    """Is THIS batch already proposed on the card?"""
+    """Is THIS batch already proposed on the card?
+
+    And, when the proposal lists decisions it could not read, is there a page
+    with this id that lists them too (DRE-6642)? A marker that names no card
+    changes neither list, so the id stays the same — and if this answered yes
+    off the id alone, the section would never reach the card. A second page
+    with the same id is what lists them; `standing_decisions` starts counting
+    again from it, so the next run's proposal lists nothing and is a repeat.
+    """
     pid = proposal["id"]
+    quoted = _quoted(proposal.get("unreadable_decisions") or [])
     for record in records:
-        match = _PROPOSAL_LINE.match((record.get("body") or "").strip())
-        if match and match.group(1) == pid:
+        body = (record.get("body") or "").strip()
+        match = _PROPOSAL_LINE.match(body)
+        if match and match.group(1) == pid and all(q in body for q in quoted):
             return True
     return False
 
@@ -2076,6 +2100,12 @@ def post_proposal(lops, card: str, proposal: dict,
     has to, because the approval is the oldest of a card's decisions — and the
     two differ on purpose: a duplicate proposal costs a comment, while a missed
     approval costs a batch.
+
+    One exception to "same id, nothing posted" (DRE-6642): a proposal that
+    lists decisions it could not read is posted again under the same id
+    unless a page with that id already lists them — see `already_proposed`.
+    The second page carries the same lists, so an approval of the id means
+    the same batch on either page, and the drain reads the first it finds.
 
     `records` is that same read, already in the caller's hand: `main` reads the
     thread once to find the decline this proposal answers (DRE-3373) and passes
@@ -2494,6 +2524,7 @@ def render_proposal(proposal: dict) -> str:
     w.extend(_render_unranked(proposal))
     w.extend(_render_held(proposal))
     w.extend(_render_earlier(proposal))
+    w.extend(_render_unreadable(proposal))
     add("## On cycles")
     add("")
     add(CYCLE_IS_NOT_SPRINT_PLANNING)
@@ -2985,6 +3016,30 @@ def _render_earlier(proposal: dict) -> list:
     return w
 
 
+def _render_unreadable(proposal: dict) -> list:
+    """`## Decisions I could not read` — every per-card marker written since
+    the last proposal that names no card, its first line quoted (DRE-6642).
+    Absent when there is none, so a thread with none renders as before."""
+    lines = proposal.get("unreadable_decisions") or []
+    if not lines:
+        return []
+    return [UNREADABLE_HEADING, "",
+            (f"This decision names no card, so this proposal was made "
+             f"without it. Write it again"
+             if len(lines) == 1 else
+             f"These {len(lines)} decisions name no card, so this proposal "
+             f"was made without them. Write each again")
+            + f" with the card after the batch id — `{MARK} {EXCLUDE_TAG}: "
+              f"{proposal['id']} DRE-N — <reason>`.", "",
+            *_quoted(lines), ""]
+
+
+def _quoted(lines: list[str]) -> list[str]:
+    """One bullet per line, each inside one code span: a backtick in the
+    line cannot close the span early, and the line is cut, never wrapped."""
+    return [f"- `{_trim(line.replace('`', "'"), 200)}`" for line in lines]
+
+
 def _render_held(proposal: dict) -> list:
     """The repos the CEO switched off, and the marker that switches one back on.
 
@@ -3055,9 +3110,13 @@ _DECISION_LINES = {
     for tag in (*DECISION_TAGS, DRAINED_TAG)
 }
 _APPROVAL_LINE = _DECISION_LINES[APPROVAL_TAG]
-# The tail of an exclusion or an addition: the card it names, then an optional
-# reason after an em dash. And the tail of a decline: a reason, and nothing else.
-_CARD_TAIL = re.compile(r"^\s+(DRE-\d+)\s*(?:—\s*(.*?))?\s*$")
+# The tail of an exclusion, a hold or an addition: the FIRST card it names, and
+# everything after that card on the line as the reason — after an em dash, a
+# hyphen, a colon or nothing at all (DRE-6642). A marker read only in its one
+# tidy shape dropped `<id> DRE-N already done` without a word, and the card was
+# offered again the next morning. And the tail of a decline: a reason, and
+# nothing else.
+_CARD_TAIL = re.compile(r"\b(DRE-\d+)\b\s*(?:[—–:-]+\s*)?(.*?)\s*$")
 _REASON_TAIL = re.compile(r"^\s*—\s*(\S.*?)\s*$")
 
 
@@ -3217,7 +3276,9 @@ def read_decisions(records: list[dict]) -> dict:
     too, under its own tag, because the drain holds both back (DRE-4966);
     `ignored` is every marker the drain would not
     honour, each with the reason, so the record can say what it dropped;
-    `drained` is every batch a `groom-drained` record already stands for.
+    `drained` is every batch a `groom-drained` record already stands for;
+    `unreadable_decisions` is the first line of every per-card marker about
+    the approved batch that names no card (DRE-6642).
 
     The NEWEST human decision wins, for the approval as it always has and for
     the decline beside it — a thread carries several as batches are re-proposed
@@ -3235,6 +3296,7 @@ def read_decisions(records: list[dict]) -> dict:
     approval_receipt_refused: str | None = None
     per_card: list[tuple[str, str, str, str | None]] = []   # tag, pid, card, why
     ignored: list[dict] = []
+    unread: list[tuple[str, str]] = []                      # pid, first line
     drained: list[str] = []
 
     for index, record in enumerate(records):
@@ -3263,7 +3325,7 @@ def read_decisions(records: list[dict]) -> dict:
                 else:
                     ignored.append(_ignored(
                         tag, _by_the_pipeline(tag, record),
-                        _named_card(tail)))
+                        _named_card(tail) if tag in PER_CARD_TAGS else None))
                 break
             if tag == APPROVAL_TAG:
                 approvals.append((index, pid))
@@ -3280,14 +3342,14 @@ def read_decisions(records: list[dict]) -> dict:
                 else:
                     declines.append((index, pid, reason.group(1)))
             else:
-                named = _CARD_TAIL.match(tail)
+                named = _card_tail(tail)
                 if not named:
                     ignored.append(_ignored(
                         tag, f"`{tag}` names no card — the shape is "
                              f"`{MARK} {tag}: <id> DRE-N[ — <reason>]`"))
+                    unread.append((pid, console_receipt.marker_line(body)))
                 else:
-                    per_card.append((tag, pid, named.group(1),
-                                     (named.group(2) or "").strip() or None))
+                    per_card.append((tag, pid, *named))
             break
 
     approved, problem = _current_decision(approvals, declines,
@@ -3309,8 +3371,13 @@ def read_decisions(records: list[dict]) -> dict:
         added.pop(identifier, None)
         (excluded if tag in HELD_BACK_TAGS else added)[identifier] = {
             "tag": tag, "reason": reason}
+    # A decider's per-card marker that names no card, about the approved
+    # batch: quoted in the drain's record under its own heading (DRE-6642),
+    # beside the `refused` row it has always had.
+    unreadable = [line for p, line in unread if approved and p == approved]
     return {"approved": approved, "problem": problem, "excluded": excluded,
-            "added": added, "ignored": ignored, "drained": drained}
+            "added": added, "ignored": ignored, "drained": drained,
+            "unreadable_decisions": unreadable}
 
 
 def standing_decisions(records: list[dict]) -> dict:
@@ -3331,31 +3398,54 @@ def standing_decisions(records: list[dict]) -> dict:
     proposer cannot take a card off its own offer. `records` is the WHOLE
     thread, vouched (`decision_records(..., whole_thread=True)`) — the
     answer about a card can be the oldest comment on the card.
+
+    `unreadable` is the first line of every decider's per-card marker that
+    names no card, written since the newest proposal on the thread — so the
+    next proposal lists each one once, rather than nobody hearing that it did
+    not count (DRE-6642).
     """
     last: dict[str, str] = {}
+    unreadable: list[str] = []
     for record in records:
+        body = record.get("body") or ""
+        if _PROPOSAL_LINE.match(body.strip()):
+            # Everything before this proposal was reported on it, or on one
+            # before it.
+            unreadable = []
+            continue
         if not _decides(record):
             continue
-        body = record.get("body") or ""
         for tag in PER_CARD_TAGS:
             match = decision_match(tag, body)
             if not match:
                 continue
-            named = _CARD_TAIL.match(match.group(2))
+            named = _card_tail(match.group(2))
             if named:
-                last[named.group(1)] = tag
+                last[named[0]] = tag
+            else:
+                unreadable.append(console_receipt.marker_line(body))
             break
     return {"excluded": sorted((c for c, t in last.items() if t == EXCLUDE_TAG),
                                key=_card_sort_key),
             "held": sorted((c for c, t in last.items() if t == HOLD_TAG),
-                           key=_card_sort_key)}
+                           key=_card_sort_key),
+            "unreadable": unreadable}
+
+
+def _card_tail(tail: str) -> tuple[str, str | None] | None:
+    """`(card, reason)` off a per-card marker's tail, or None when the line
+    names no card. The reason is None when nothing follows the card."""
+    found = _CARD_TAIL.search(tail)
+    if not found:
+        return None
+    return found.group(1), found.group(2) or None
 
 
 def _named_card(tail: str) -> str | None:
     """The card an exclusion or addition names, for a marker being reported
     rather than honoured. None on a decline, which names none."""
-    found = _CARD_TAIL.match(tail)
-    return found.group(1) if found else None
+    named = _card_tail(tail)
+    return named[0] if named else None
 
 
 def _current_decision(approvals: list[tuple[int, str]],
@@ -3871,6 +3961,7 @@ def _drain(lops, *, card: str, lane: str = "Intake", to: str = DRAIN_TO) -> dict
               "slots": slots,
               "already_gone": list(gone),
               "refused": plan["ignored"],
+              "unreadable_decisions": decisions["unreadable_decisions"],
               "rows": plan["rows"], "to": to, "from": lane,
               "cycle": cycle[0], "proposal": record["id"]}
     lops.cmd_comment(card, drained_record(result))
@@ -4123,6 +4214,17 @@ def drained_record(result: dict) -> str:
     for row in rows:
         w.append(f"| {order.get(row['identifier'], '—')} | "
                  f"{row['identifier']} | {row['outcome']} | {row['why']} |")
+    # After the table, never inside it: the rows are the console's contract
+    # (DRE-6642). Each marker here is also a `refused` row above.
+    unreadable = result.get("unreadable_decisions") or []
+    if unreadable:
+        w += ["", UNREADABLE_HEADING, "",
+              ("This decision about this batch names no card, so it held "
+               "no card back and added none:"
+               if len(unreadable) == 1 else
+               f"These {len(unreadable)} decisions about this batch name no "
+               f"card, so they held no card back and added none:"), "",
+              *_quoted(unreadable)]
     return "\n".join(w).rstrip() + "\n"
 
 
@@ -4591,6 +4693,10 @@ def _build(args) -> dict:
     # held card stays on offer and is ranked last.
     standing = standing_decisions(records)
     excluded = set(standing["excluded"])
+    if standing["unreadable"]:
+        print(f"groomer: {_plural(len(standing['unreadable']), 'decision')} "
+              f"on {thread} name no card — listed on this proposal",
+              file=sys.stderr)
     on_offer = [c for c in offered(cards, holds)
                 if c["identifier"] not in excluded]
     # An Urgent or High nobody re-confirmed in three weeks ranks as Medium
@@ -4643,6 +4749,7 @@ def _build(args) -> dict:
                    window_days=args.window_days, judgement=judgement,
                    held_repos=holds, excluded=standing["excluded"],
                    held_cards=standing["held"],
+                   unreadable_decisions=standing["unreadable"],
                    repo_priority=tuple(p for p in args.priority.split(",") if p))
     if getattr(args, "verify", False):
         # After `propose` and before anything is posted, so the id the CEO
