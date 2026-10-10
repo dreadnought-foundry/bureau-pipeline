@@ -84,6 +84,10 @@ HISTORICAL = (
     "docs/release-decision-proof-2026-09.md",
     "docs/medic-wake-proof-2026-09.md",
     "config/planner-audit.json",
+    # DRE-6381's proof record quotes the retired branch and workflow verbatim:
+    # the dry run's own output and the CEO's signed answers. A quote cannot be
+    # reworded, so the record is a historical record like the ones above.
+    "docs/send-back-class-proof-2026-10.md",
 )
 
 
