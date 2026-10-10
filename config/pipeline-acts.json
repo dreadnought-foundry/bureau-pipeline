@@ -1575,6 +1575,13 @@
       "why": "It reports an OUTCOME of the work — a flake that passed on its re-run, or somebody else's merge turning main green — rather than a refusal, a recovery, a hold or a progress act the pipeline chose for itself. The same class as the dependabot card's `cancel_note` two rows on, and as the merge→Done seam's `✅ Merged` line from the other end: its only reader is a person looking at the card, and the state change beside it is the machine-readable half. It carries its own idempotency key (repair_card.SETTLE_MARKER), read back off the card's own comments so a second sweep over a card whose cancel landed and whose comment did not writes nothing; a trailer beside that key would be a second grammar over a comment whose presence is load-bearing."
     },
     {
+      "file": "scripts/mirror_check.py",
+      "anchor": "comment_note(result, run_url)",
+      "kind": "not-an-act",
+      "means": "The open agent-bureau card for a set of mirrored bureau-pipeline files is told that the channel promotion refused another candidate on the same mirrors — naming the candidate, the agent-bureau sha tested, where stable stands and the run (DRE-6496).",
+      "why": "Progress on a card, not an act: nothing downstream reads it, nothing budgets off it, it changes no lane and it discharges nothing — the card stays where Planning put it, and the refusal itself is the promote-channel run's receipt. The same class as repair_card's `attempt_note`. It carries its own idempotency key, the full candidate sha, read back off the card's own comments so a re-run for the same candidate writes nothing; a trailer beside that key would be a second grammar over a comment whose presence is load-bearing."
+    },
+    {
       "file": "scripts/repair_card.py",
       "anchor": "unlanded_note(branch, at, base)",
       "kind": "not-an-act",

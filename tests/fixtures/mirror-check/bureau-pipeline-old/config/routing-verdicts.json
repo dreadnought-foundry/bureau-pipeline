@@ -1,0 +1,10 @@
+{
+  "_readme": "Stand-in for bureau-pipeline's routing vocabulary BEFORE the 2026-10-09 operator-step change (DRE-6227/DRE-6228): OPERATOR and WORKBENCH still carry the CEO's own hand-built mark. tests/test_mirror_check.py reads it as the stable channel head.",
+  "verdicts": [
+    {"name": "FLEET", "destination": "Todo", "marks": []},
+    {"name": "WORKBENCH", "destination": "Hand-work", "marks": ["hand-built"]},
+    {"name": "OPERATOR", "destination": "Hand-work", "marks": ["hand-built", "no-code"]},
+    {"name": "PARKED", "destination": "Backlog", "marks": []},
+    {"name": "NEEDS WORK", "destination": "Planning", "marks": []}
+  ]
+}

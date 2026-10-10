@@ -49,7 +49,9 @@ agent-bureau repo; the third clause added by DRE-2103).
   on a run that has not finished.
 - **`stable` moves itself; `vN` is still cut by hand (DRE-2551).**
   `promote-channel.yml` keeps one moving tag, `stable`, on the newest
-  commit on `main` carrying a green `integration-harness` stamp. No
+  commit on `main` carrying a green `integration-harness` stamp — and, since
+  DRE-6496, one that agent-bureau's mirror tests accept (see "agent-bureau's
+  mirror tests are part of the proof" below). No
   operator is involved in the ordinary case (there is a by-hand route since
   DRE-4111 — see below), the repository variable `CHANNEL_HOLD` pauses it
   (unset means run), and `release-gate.yml` fires on `stable` too, so an
@@ -213,10 +215,12 @@ strings instead of the same silence:
 | `no-harness-stamp` | no green `integration-harness` status on this sha | fail-closed by design; check the harness run |
 | `not-ahead-of-channel` | already there, or behind | nothing — the channel never moves backwards |
 | `by-hand-promoting` | a person promoted a commit the harness had already proved | nothing — the run records who, when and why |
-| `by-hand-forced-promoting` | a person promoted PAST the harness, with a reason on the run | read the reason; the commit is on the channel unproven |
+| `by-hand-forced-promoting` | a person promoted PAST the harness or the agent-bureau mirror check (DRE-6496), with a reason on the run; the warning names the mirror result it overrode | read the reason; the commit is on the channel unproven |
 | `by-hand-candidate-not-on-main` | the named sha is not reachable from `main` | name a merged commit; a green PR head is not one |
 | `by-hand-force-needs-reason` | `force` with no reason | dispatch again with the reason that makes it safe |
 | `by-hand-force-not-operator` | `force` asked for by a bot login | forcing is operator-only; a person dispatches it |
+| `mirror-tests-failed` | agent-bureau's mirror tests pass on `stable` and fail on the candidate (DRE-6496); the reason names each test and the file it mirrors | agent-bureau's mirror follows first — the run filed one card there (`card owed` if Linear refused it); the next run re-evaluates |
+| `mirror-check-blocked` | the mirror check could not run — a token, clone or install that failed, a run past its time limit, or no result at all | nothing proven either way; the next run re-checks, and `force` is the way past it |
 
 Before this, those runs concluded `skipped` with nothing else on them: on
 2026-09-03 four consecutive PR-head runs each produced one, and learning that
@@ -303,6 +307,13 @@ the proof alone:
   could put `stable` on a commit that never merged, the proof present and the
   code unshipped.
 
+Since DRE-6496 the proof has two parts — the harness stamp and agent-bureau's
+mirror tests — and **force overrides both**: it promotes past
+`mirror-tests-failed` and `mirror-check-blocked` exactly as it promotes past a
+red stamp, under the same `by-hand-forced-promoting` warning, which now names
+the mirror result it overrode. The three rails above still hold. An ordinary
+by-hand promote, without `force`, runs the mirror check like any other.
+
 The push is made with the bot App token on this route too, so
 `release-gate.yml` fires and validates the move exactly as it does an
 automatic one. The `promote-channel` concurrency group is declared at workflow
@@ -322,6 +333,68 @@ unknown cause. The console's channel-health monitor raises the stall alarm now
 One skipped head is the rule above working; two is merges arriving faster than
 the harness can prove them. The lever is the harness's duration or the merge rate — never
 cancelling the run in progress.
+
+### agent-bureau's mirror tests are part of the proof (DRE-6496)
+
+**2026-10-09, the incident this closes.** One change here, the `operator-step`
+vocabulary (DRE-6227 and DRE-6228), merged and reached `stable` around 03:00
+PT, and broke agent-bureau's CI three separate times that day: the read door's
+e2e (found 10:25 PT), the relay's copy of the routing verdicts (about 13:50 PT,
+and live behavior in the deployed relay too), and the hold-reason registry
+(14:55 PT). Each break held every agent-bureau pull request until someone fixed
+it by hand. agent-bureau mirrors several of this repo's vocabularies, and each
+mirror's drift test reads bureau-pipeline at `stable` — so a change here was
+found only after it was promoted, by every agent-bureau pull request at once.
+
+**What runs now.** Where the decision would otherwise promote — a run on
+`main`, a green harness, a green stamp, a candidate strictly ahead, or an
+ordinary by-hand promote — `promote-channel.yml` runs agent-bureau's mirror
+tests against the candidate before `stable` moves. Every cheaper refusal in the
+table above still costs a checkout and one `python3`; a run that does not reach
+promotion never clones agent-bureau. `scripts/mirror_check.py` does the work:
+
+- **Which agent-bureau**: the head of its default branch at the moment of the
+  run, cloned with the bureau App token scoped to `agent-bureau`. Its sha is in
+  the receipt and on any card filed.
+- **Which tests**: discovered, never typed — every `test_*.py` or `*_test.py`
+  whose text names `BUREAU_PIPELINE_DIR` or `.bureau-pipeline`. The count is in
+  the receipt; the gate keeps no list.
+- **Which bureau-pipeline**: the candidate, checked out at
+  `<agent-bureau>/.bureau-pipeline` and exported as `BUREAU_PIPELINE_DIR`, so
+  both ways a test finds the pipeline read it. agent-bureau's own
+  dependencies come in through `setup-python-cached`, from its root
+  `requirements*.txt` and those in the directories that hold the tests.
+- **A failure is re-read against `stable`** before it counts. A test red on
+  both is agent-bureau's own red: the receipt names it `already red on stable`
+  and it refuses nothing. Only a test that passes on `stable` and fails on the
+  candidate refuses, as `mirror-tests-failed`.
+- **Which file it mirrors** is read off the test's own string literals — the
+  ones naming a file in the candidate. A test naming none reads `mirrors: not
+  read from the test`, never a guess.
+- **A check that could not run** — a token that did not mint, a clone or an
+  install that failed, a run past the step's 15 minutes — is
+  `mirror-check-blocked`, never a failing candidate. The step writes `⏱ mirror
+  check: Nm (N tests, agent-bureau <sha>)` to the run summary, so the real
+  budget is measured on live runs.
+
+**The card a refusal files.** One, in agent-bureau, through `linear_ops.py
+oneoff`: titled `agent-bureau: mirrors of <files> must follow bureau-pipeline`
+with the sorted mirrored files (no sha), labeled `repo:agent-bureau`,
+`agent:engineer`, `initiative:bureau` and `Bug`, landing in `Planning` like any
+one-off. A later refusal for the same files finds the open card by its exact
+title and comments on it once per candidate, so a harness re-running on every
+push to `main` appends to one card. A card that cannot be filed is one warning
+and `card owed` in the receipt; the refusal stands either way.
+
+**The order this buys** is the consumer-first one a breaking schema change
+already follows: the change merges to `main` as today, agent-bureau's mirror
+catches up, and only then does `stable` move onto it.
+
+**The companion this does not build.** agent-bureau's drift tests compare each
+mirror against bureau-pipeline at `stable`. Until they also accept a mirror
+that matches the head of `main`, the fix pull request in agent-bureau fails its
+own drift test and the two repositories deadlock; until then the operator's
+`force` is the way past, with one loud step and an exact card.
 
 ### How long a run is allowed to take
 

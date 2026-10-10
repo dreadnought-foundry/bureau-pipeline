@@ -83,6 +83,19 @@ itself — so a by-hand promote must not become "skip the proof":
     a by-hand promote could put `stable` on a commit that never merged — the
     proof present, the code unshipped.
   * The mover is recorded either way: who, when, which sha, and why by hand.
+
+AGENT-BUREAU'S MIRROR TESTS ARE PART OF THE PROOF (DRE-6496)
+------------------------------------------------------------
+On 2026-10-09 the `operator-step` vocabulary reached `stable` and broke
+agent-bureau's CI three times in one day: agent-bureau mirrors this repo's
+vocabularies, and every mirror's drift test reads bureau-pipeline at `stable`,
+so the break was found only after the promotion. `with_mirror` weighs
+`scripts/mirror_check.py`'s result against a decision that would move the
+channel — `mirror-tests-failed` when a test passes on `stable` and fails on the
+candidate, `mirror-check-blocked` when the check could not run — and a person's
+`force` overrides both, as it overrides a red harness stamp. The workflow runs
+the decision twice: on the proof alone, to learn whether the check runs at all,
+and then with `--mirror-result`.
 """
 
 from __future__ import annotations
@@ -93,6 +106,10 @@ import json
 import os
 import sys
 from typing import NamedTuple
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+import mirror_check  # noqa: E402
 
 #: The moving, always-proven head this repo keeps for itself. NOT a consumer
 #: pin — no product repo references `@stable`; `v*` tags remain what they
@@ -167,6 +184,15 @@ OUTCOME_BY_HAND_FORCED = "by-hand-forced-promoting"
 OUTCOME_FORCE_NEEDS_REASON = "by-hand-force-needs-reason"
 OUTCOME_FORCE_NOT_OPERATOR = "by-hand-force-not-operator"
 OUTCOME_NOT_ON_TRUNK = "by-hand-candidate-not-on-main"
+
+#: The mirror check's two refusals (DRE-6496). Named apart for the same reason
+#: the harness's are: "agent-bureau's mirror of this change is behind" and
+#: "the check could not run" send a reader to different places.
+OUTCOME_MIRROR_FAILED = "mirror-tests-failed"
+OUTCOME_MIRROR_BLOCKED = "mirror-check-blocked"
+
+#: The outcomes that move the channel — the only ones the mirror check reads.
+PROMOTING_OUTCOMES = (OUTCOME_PROMOTING, OUTCOME_BY_HAND, OUTCOME_BY_HAND_FORCED)
 
 #: Actors a FORCED promote is refused to. Forcing past the harness is the one
 #: act here that is operator-only, and "a person ticked the box" has to be
@@ -526,6 +552,98 @@ def evaluate(
     )
 
 
+def mirror_summary(mirror: dict | None) -> str:
+    """The mirror check's result in one line — for the receipt, the forced
+    warning and the `mirror` output."""
+    if not mirror:
+        return f"{OUTCOME_MIRROR_BLOCKED}: the check did not run"
+    status = mirror.get("status")
+    tests = mirror.get("tests", 0)
+    sha = (mirror.get("agent_bureau_sha") or "unknown")[:7]
+    red = mirror.get("already_red") or []
+    tail = (f"; already red on stable: {mirror_check.describe(red)}"
+            if red else "")
+    if status == mirror_check.MIRROR_PASSED:
+        return f"passed — {tests} agent-bureau tests at {sha} green{tail}"
+    if status == mirror_check.MIRROR_FAILED:
+        return (f"{OUTCOME_MIRROR_FAILED} — "
+                f"{mirror_check.describe(mirror.get('failing') or [])}, "
+                f"agent-bureau at {sha}{tail}")
+    return (f"{OUTCOME_MIRROR_BLOCKED} — "
+            f"{mirror.get('why') or 'the check gave no answer'}")
+
+
+def with_mirror(
+    decision: Decision,
+    mirror: dict | None,
+    *,
+    sha: str,
+    force: bool = False,
+    actor: str | None = None,
+    reason: str | None = None,
+) -> Decision:
+    """Weigh agent-bureau's mirror tests against a decision (DRE-6496).
+
+    On 2026-10-09 the `operator-step` vocabulary reached `stable` and broke
+    agent-bureau's CI three times in one day, because each of its mirrors is
+    proven against bureau-pipeline at `stable` — after the promotion, by every
+    agent-bureau pull request at once. So the check is part of the proof:
+
+      * Only a decision that would MOVE the channel is weighed. Every refusal
+        before it stands as it was, and the workflow never ran the check for
+        one, so an absent result there is the ordinary case.
+      * `mirror` is `scripts/mirror_check.py`'s result. A green one promotes
+        under the outcome the proof gave, unchanged. A failed one refuses as
+        `mirror-tests-failed`; one that could not run refuses as
+        `mirror-check-blocked`, which proves nothing either way. ABSENT means
+        the check did not run, which is legal only on a forced promote — on
+        any other promoting route it is a blocked check.
+      * `force` is the by-hand operator's force, and the caller passes it only
+        on that route (`manual and force`). It overrides the mirror check
+        exactly as it overrides a red harness stamp, under
+        `by-hand-forced-promoting`, naming the result it overrode. It reaches
+        nothing else: the hold, the trunk check, the ancestry rail and the
+        bot refusal all answered before a decision got here.
+    """
+    if not decision.promote or decision.outcome not in PROMOTING_OUTCOMES:
+        return decision
+    summary = mirror_summary(mirror)
+    status = (mirror or {}).get("status")
+    if status == mirror_check.MIRROR_PASSED:
+        return Decision(True, f"{decision.reason} Mirror check: {summary}.",
+                        decision.outcome)
+    if force:
+        return Decision(True, (
+            f"{decision.reason} FORCED past the agent-bureau mirror check: "
+            f"{summary}. Mover: {actor}. Reason: {(reason or '').strip()}."
+        ), OUTCOME_BY_HAND_FORCED)
+    if status == mirror_check.MIRROR_FAILED:
+        return Decision(False, (
+            f"not promoting {sha}: agent-bureau's mirror tests pass on "
+            f"{CHANNEL} and fail on this candidate — {summary}. agent-bureau's "
+            f"mirror follows first; the next run on {TRUNK} (or an ordinary "
+            f"by-hand promote) re-evaluates, and a person's force is the way "
+            f"past it."
+        ), OUTCOME_MIRROR_FAILED)
+    return Decision(False, (
+        f"not promoting {sha}: the agent-bureau mirror check could not run — "
+        f"{summary}. Nothing is proven either way; the next run re-checks, and "
+        f"a person's force is the way past it."
+    ), OUTCOME_MIRROR_BLOCKED)
+
+
+def _read_mirror(path: str | None) -> dict | None:
+    """The mirror check's result file, or None — absent, unreadable and not a
+    result are all "the check did not run"."""
+    if not path:
+        return None
+    try:
+        data = json.loads(open(path).read())
+    except (OSError, ValueError):
+        return None
+    return data if isinstance(data, dict) else None
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--sha", required=True)
@@ -577,6 +695,14 @@ def main(argv: list[str] | None = None) -> int:
         help=f"the sha {CHANNEL} points at now — the last proven sha, which a "
              "refusal names so the operator does not have to go and look.",
     )
+    parser.add_argument(
+        "--mirror-result", default=None,
+        help="scripts/mirror_check.py's result file (DRE-6496). Given, the "
+             "decision weighs agent-bureau's mirror tests, and a file that is "
+             "absent means the check did not run. Not given, the decision is "
+             "the proof alone — the workflow's first pass, which decides "
+             "whether the check runs at all.",
+    )
     args = parser.parse_args(argv)
 
     try:
@@ -599,6 +725,20 @@ def main(argv: list[str] | None = None) -> int:
         trunk=(args.trunk or None),
         channel_head=(args.channel_head or None),
     )
+    # The mirror check is weighed only where the proof would move the channel
+    # — the same runs the workflow ran it for. Anywhere else there is nothing
+    # to say about it, so the `mirror` output is left unwritten rather than
+    # read as a check that was blocked.
+    weighed = (args.mirror_result is not None and decision.promote
+               and decision.outcome in PROMOTING_OUTCOMES)
+    mirror = None
+    if weighed:
+        mirror = _read_mirror(args.mirror_result)
+        decision = with_mirror(
+            decision, mirror, sha=args.sha,
+            force=args.manual and args.force,
+            actor=(args.actor or None), reason=(args.reason or None),
+        )
     # The receipt: the token first so it can be grepped out of a run log, the
     # prose after it so a human never has to.
     print(f"{decision.outcome}: {decision.reason}")
@@ -612,6 +752,8 @@ def main(argv: list[str] | None = None) -> int:
             # reason can quote a sandbox log, which is not ours to trust.
             fh.write(f"reason={' '.join(decision.reason.split())}\n")
             fh.write(f"outcome={decision.outcome}\n")
+            if weighed:
+                fh.write(f"mirror={' '.join(mirror_summary(mirror).split())}\n")
     # A refusal is ordinary, not a failure — the caller branches on `promote`.
     return 0
 
