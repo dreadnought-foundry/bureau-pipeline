@@ -54,8 +54,15 @@ RELEASE_JSON = ".github/bureau/release.json"
 DEFAULT_READY_TIMEOUT = 180
 REQUIRED = ("surface", "start", "ready_url", "pages")
 OPTIONAL = ("node_dir", "setup", "ready_timeout_seconds", "login")
-LOGIN_KEYS = ("command", "form")
+#: `login` carries `command` and exactly one of these (DRE-6536): `form` is
+#: filled with the file's username and password, `session` is planted in the
+#: browser from the file's `session` values and fills no form.
+LOGIN_KINDS = ("form", "session")
+LOGIN_KEYS = ("command", "form", "session")
 FORM_FIELDS = ("username", "password", "submit")
+SESSION_KEYS = ("local_storage", "cookies")
+STORAGE_ENTRY_KEYS = ("key", "from")
+COOKIE_ENTRY_KEYS = ("name", "from")
 #: The GitHub output keys `read` writes — these and no others.
 OUTPUT_KEYS = ("declared", "node_dir", "surface")
 
@@ -65,6 +72,8 @@ OUTPUT_KEYS = ("declared", "node_dir", "surface")
 _READY_URL = re.compile(r"http://127\.0\.0\.1:(\d{1,5})(/[^\s@\\]*)")
 _PAGE_KEY = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]*")
 _CONTROL = re.compile(r"[\x00-\x1f\x7f]")
+#: A `from`: a field of the session file's `session` object.
+_FIELD = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 
 
 class Invalid(ValueError):
@@ -176,22 +185,74 @@ def _pages(data: dict) -> dict:
     return dict(pages)
 
 
-def _login(data: dict) -> dict | None:
-    if "login" not in data:
-        return None
-    login = data["login"]
-    if not isinstance(login, dict):
-        raise Invalid("`login` must be an object with `command` and `form`")
-    _unknown(login, LOGIN_KEYS, "`login`")
-    _text(login, "command", "login.command")
-    form = login.get("form")
+def _form(form) -> dict:
     if not isinstance(form, dict):
         raise Invalid("`login.form` must be an object with "
                       + ", ".join(FORM_FIELDS))
     _unknown(form, FORM_FIELDS, "`login.form`")
     for field in FORM_FIELDS:
         _text(form, field, f"login.form.{field}")
-    return {"command": login["command"], "form": dict(form)}
+    return dict(form)
+
+
+def _entries(session: dict, name: str, keys: tuple) -> list:
+    """One list of `login.session`, its entries in declared order. `keys[0]`
+    is what the entry sets — a localStorage key or a cookie name."""
+    where = f"login.session.{name}"
+    entries = session.get(name, [])
+    if not isinstance(entries, list):
+        raise Invalid(f"`{where}` must be a list of objects with "
+                      + " and ".join(keys))
+    seen = set()
+    for i, entry in enumerate(entries):
+        at = f"{where}[{i}]"
+        if not isinstance(entry, dict):
+            raise Invalid(f"`{at}` must be an object with " + " and ".join(keys))
+        _unknown(entry, keys, f"`{at}`")
+        target = _text(entry, keys[0], f"{at}.{keys[0]}")
+        if target in seen:
+            raise Invalid(f"`{at}.{keys[0]}` {target} is declared twice in `{where}`")
+        seen.add(target)
+        field = entry.get("from")
+        if not isinstance(field, str) or not _FIELD.fullmatch(field):
+            raise Invalid(f"`{at}.from` {field!r} must name a field of the session "
+                          f"file's `session` — letters, digits and `_`, not "
+                          f"opening with a digit")
+    return [dict(entry) for entry in entries]
+
+
+def _session(session) -> dict:
+    if not isinstance(session, dict):
+        raise Invalid("`login.session` must be an object with "
+                      + " and/or ".join(SESSION_KEYS))
+    _unknown(session, SESSION_KEYS, "`login.session`")
+    planted = {
+        "local_storage": _entries(session, "local_storage", STORAGE_ENTRY_KEYS),
+        "cookies": _entries(session, "cookies", COOKIE_ENTRY_KEYS),
+    }
+    if not any(planted.values()):
+        raise Invalid("`login.session` declares no entry — name at least one "
+                      "in `local_storage` or `cookies`")
+    return planted
+
+
+def _login(data: dict) -> dict | None:
+    if "login" not in data:
+        return None
+    login = data["login"]
+    if not isinstance(login, dict):
+        raise Invalid("`login` must be an object with `command` and one of "
+                      "`form` or `session`")
+    _unknown(login, LOGIN_KEYS, "`login`")
+    _text(login, "command", "login.command")
+    kinds = [kind for kind in LOGIN_KINDS if kind in login]
+    if len(kinds) > 1:
+        raise Invalid("`login` carries both `form` and `session` — declare one")
+    if not kinds:
+        raise Invalid("`login` must carry one of `form` or `session` beside `command`")
+    if kinds == ["form"]:
+        return {"command": login["command"], "form": _form(login["form"])}
+    return {"command": login["command"], "session": _session(login["session"])}
 
 
 def validate(data, release: dict) -> Declaration:

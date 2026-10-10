@@ -41,6 +41,20 @@ starts no process and opens no browser.
 }
 ```
 
+`login` is one of two kinds. The one above, `form`, fills a username and
+password form. The other, `session`, fills no form: it plants a session the
+command obtained into the browser ([The `session` kind](#the-session-kind)):
+
+```json
+"login": {
+  "command": "<shell command, run from the root of the default-branch checkout>",
+  "session": {
+    "local_storage": [{"key": "<localStorage key>", "from": "<field>"}],
+    "cookies": [{"name": "<cookie name>", "from": "<field>"}]
+  }
+}
+```
+
 `surface`, `start`, `ready_url` and `pages` are required; `node_dir`, `setup`,
 `ready_timeout_seconds` and `login` are optional. Any other key is refused, so a
 typo is named rather than ignored.
@@ -54,7 +68,7 @@ typo is named rather than ignored.
 | `ready_url` | `http://127.0.0.1:<port>/<path>` — plain http, the loopback address, an explicit port, a path. `localhost` is refused: it can resolve to `::1` while the app listens on 127.0.0.1. | Polled until it answers; the local run is local. |
 | `ready_timeout_seconds` | A positive whole number; 180 when absent. | How long `ready_url` is polled before the run gives up. |
 | `pages` | A non-empty object of page key → path. Keys are letters, digits, `_`, `-` or `.`; every path opens with `/` and never with `//` or `/\`. | A `Local screen:` criterion names a page by its key; the run opens `ready_url`'s origin plus that path. |
-| `login` | Optional. `command` and a `form` with all three of `username`, `password`, `submit` as CSS selectors. | Runs `command` for a throwaway sign-in, then fills and submits the form. |
+| `login` | Optional. `command` and exactly one of `form` or `session`. A `form` has all three of `username`, `password`, `submit` as CSS selectors; a `session` is described in [The `session` kind](#the-session-kind). Both is refused as `` `login` carries both `form` and `session` — declare one ``, neither as `` `login` must carry one of `form` or `session` beside `command` ``. | Runs `command` for a throwaway sign-in, then fills and submits the form, or plants the session. |
 
 ## Two trees, and which command runs in which
 
@@ -83,12 +97,16 @@ package install — names it in the command itself, or relies on what the repo's
 
 ## What `login.command` writes and prints
 
-It writes one JSON object to the path in `$PROOF_LOGIN_FILE`:
+It writes one JSON object to the path in `$PROOF_LOGIN_FILE`. For the `form`
+kind:
 
 ```json
 {"username": "…", "password": "…", "identity": "<name>",
  "ration": {"spent": 1, "cap": 5, "remaining": 4, "date": "<YYYY-MM-DD, Pacific>"}}
 ```
+
+The `session` kind's file carries `session` in place of `username` and
+`password` — see [The `session` kind](#the-session-kind).
 
 What it prints is one rule: the run takes **the last non-empty line of its
 standard output** as the product's status line when the command succeeds, and
@@ -100,6 +118,103 @@ the line reads `hosted sign-in ration: <spent> of <cap> spent today
 with `<cap> of <cap>` and `0 remaining`. `scripts/proof_session.py login`
 (DRE-6047) runs the command with exactly that working directory and reads
 exactly that line.
+
+## The `session` kind
+
+A repo declares `login.session` in place of `login.form` when its own sign-in
+page offers no password path — an emailed one-time code, a single sign-on
+button, nothing a script can type a password into. The product's sign-in page
+is never changed for the sake of a proof identity (the operator's decision,
+2026-10-09, DRE-6536): a customer would see a password option that exists only
+so a script can use it. The proof run adapts instead. `login.command` obtains a
+session for the scripted proof identity by whatever path the identity provider
+allows it, and the declaration says, as data, where in the browser that session
+goes.
+
+- `login.session` is an object whose only keys are `local_storage` and
+  `cookies`. Either may be absent, and an absent one reads as `[]`; each
+  present one is a list. At least one entry must exist across the two lists.
+- A `local_storage` entry is an object with exactly `key` and `from`. A
+  `cookies` entry is an object with exactly `name` and `from`. `key` and
+  `name` are non-empty one-line strings, and no two entries in one list share
+  one.
+- `from` names a field of the session file's `session` object: letters,
+  digits and `_`, not opening with a digit (`[A-Za-z_][A-Za-z0-9_]*`). An
+  entry with no `from`, or a `from` of any other shape, is refused, and the
+  refusal names the entry — `login.session.cookies[0].from`, say.
+
+`login.command` writes, for this kind, one JSON object to `$PROOF_LOGIN_FILE`:
+
+```json
+{"identity": "<name>",
+ "ration": {"spent": 1, "cap": 5, "remaining": 4, "date": "<YYYY-MM-DD, Pacific>"},
+ "session": {"<field>": "<string value>", "…": "…"}}
+```
+
+Every `from` in the declaration names a key of that `session` object, and
+every value there is a string. `identity` and `ration` mean what they mean for
+the `form` kind; `username` and `password` are not part of this file. The
+reader checks the declaration alone — the shape of each `from`, and that each
+entry has one. Whether the file the command writes carries every named field
+is checked at run time by the step that plants the session, which refuses a
+file short a named field and names the field.
+
+The file's rules do not loosen for this kind: it is written 0600, never
+printed, never put on a command line, and removed at the end of the run —
+`proof_browser.py stop` (DRE-6025) overwrites and deletes the file at
+`PROOF_LOGIN_FILE`, whichever kind wrote it. The sign-in ration is still drawn
+once per sign-in: `command` is what draws it, and it runs once.
+
+What the run step does with it: with the browser on the local run's own origin
+and before the first declared page is opened, it sets each declared
+`local_storage` entry and cookie from the file's `session` values, then opens
+the page, with no form filled. That step is `screenshot --signed-in` of
+`scripts/proof_session.py` (DRE-6047), and planting a session in it is a
+follow-up card to DRE-6536. Until that follow-up lands, a `session` declaration
+is checked by `proof_local.py check`, `proof_session.py login` runs its command
+once and checks the file carries `identity`, `ration` and a `session` object of
+strings, and `screenshot --signed-in` refuses the declaration in one line and
+opens no page. The follow-up is what applies it.
+
+`proof_local.load()` returns `login` for this kind as `{"command": …,
+"session": {"local_storage": [...], "cookies": [...]}}`, both lists present,
+entries in declared order — the shape the run step reads. For the `form` kind
+it returns `{"command": …, "form": {...}}`, as it always has.
+
+### A worked example: a portal that signs in by emailed code
+
+A portal whose sign-in page offers an emailed one-time code and a single
+sign-on button, and which keeps its session in two `localStorage` keys and one
+cookie. The names below are placeholders; a repo writes its own.
+
+```json
+{
+  "surface": "portal",
+  "node_dir": "app",
+  "setup": "npm ci --prefix app",
+  "start": "npm run dev --prefix app -- --host 127.0.0.1 --port 5173 --strictPort",
+  "ready_url": "http://127.0.0.1:5173/",
+  "pages": {
+    "home": "/"
+  },
+  "login": {
+    "command": "node scripts/proof/session.mjs",
+    "session": {
+      "local_storage": [
+        {"key": "app_id_token", "from": "id_token"},
+        {"key": "app_refresh_token", "from": "refresh_token"}
+      ],
+      "cookies": [
+        {"name": "app_session", "from": "session_cookie"}
+      ]
+    }
+  }
+}
+```
+
+Its `session.mjs` signs the proof identity in against the identity provider
+directly, and writes `{"identity": …, "ration": …, "session": {"id_token": …,
+"refresh_token": …, "session_cookie": …}}` to `$PROOF_LOGIN_FILE`.
 
 ## The released commit
 
