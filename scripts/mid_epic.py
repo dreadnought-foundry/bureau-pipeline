@@ -654,6 +654,16 @@ def parse_artifact(description: str) -> dict:
     return out
 
 
+def still_open(children) -> int | None:
+    """How many of the epic's children are still to build: not in
+    `CLOSED_STATES` (DRE-6501). None when any child's lane cannot be read —
+    an unknown lane is not a finished card, and not an open one either."""
+    lanes = [((c.get("state") or {}).get("name")) for c in children or []]
+    if any(not lane for lane in lanes):
+        return None
+    return sum(1 for lane in lanes if lane not in CLOSED_STATES)
+
+
 def approved_size(record: dict, green_lit, green_lit_at) -> int | None:
     """The size the CEO last approved this epic at (DRE-6414): the count on
     the newest `re-approved` or `withdrawn` growth question asked since the
@@ -724,14 +734,21 @@ def unrecorded_additions(children, green_lit_at, recorded_ids) -> list[str]:
 # max of what it is given, so only coverage matters, never order.
 _EPIC_QUERY = """query($id: String!) { issue(id: $id) {
      id identifier description state { name }
-     children(first: 250) { nodes { identifier createdAt } }
+     children(first: 250) { nodes { identifier createdAt state { name } } }
      history(first: 50) { nodes { createdAt toState { name } } }
    } }"""
 
+#: A child in one of these lanes has nothing left to build. The growth
+#: question counts the cards that are not (DRE-6501); `epic_cap` and
+#: `groomer` hold the same three, and `epic_cap` imports this module, so it
+#: cannot be imported from here.
+CLOSED_STATES = ("Done", "Canceled", "Duplicate")
+
 
 def read_epic(linear_ops, epic: str) -> dict:
-    """The epic as Linear has it: body, lane, children (with creation times) and
-    the state history the green light is read out of. One read per epic."""
+    """The epic as Linear has it: body, lane, children (with creation times
+    and lanes) and the state history the green light is read out of. One read
+    per epic."""
     data = linear_ops.gql(_EPIC_QUERY, {"id": epic})
     return (data or {}).get("issue") or {}
 
@@ -1013,6 +1030,7 @@ def _build_growth(epic: str, issue: dict, add, amend, question=None) -> dict:
         "merged": merged if owed else None,
         "green_lit": green_lit,
         "current": len(children),
+        "open": still_open(children),
         "unrecorded": unrecorded,
         "re_approved": re_approved,
         "joined": joined,
@@ -1053,8 +1071,11 @@ def refresh_epic_growth(linear_ops, epic: str, *, add=None, amend=None,
     sweep just asked, or the same question settled — written in place of any
     line with its card number.
 
-    Returns {"green_lit", "current", "unrecorded", "re_approved", "capped",
-    "comments", "contended", "joined", "questions", "approved"}: `joined` is
+    Returns {"green_lit", "current", "open", "unrecorded", "re_approved",
+    "capped", "comments", "contended", "joined", "questions", "approved"}:
+    `open` is how many children are still to build (`still_open`, DRE-6501),
+    the count the growth question is measured on, while `current` counts
+    every child, as the record does; `joined` is
     every card that joined since the green light, each with its route
     (`addition` or `unrecorded`) and reason; `questions` the record's growth
     question lines; `approved` the size the CEO last approved
@@ -1127,6 +1148,7 @@ def refresh_epic_growth(linear_ops, epic: str, *, add=None, amend=None,
         return {
             "green_lit": green_lit,
             "current": current,
+            "open": None,
             "unrecorded": [],
             "re_approved": [],
             "capped": capped,
@@ -1167,6 +1189,7 @@ def refresh_epic_growth(linear_ops, epic: str, *, add=None, amend=None,
     return {
         "green_lit": green_lit,
         "current": current,
+        "open": built["open"],
         "unrecorded": unrecorded,
         "re_approved": re_approved,
         "capped": capped,
