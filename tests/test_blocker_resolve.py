@@ -371,7 +371,11 @@ def test_the_tag_is_written_in_one_file_of_scripts_and_workflows():
             if path.suffix in (".py", ".yml", ".sh") and path.is_file():
                 if ACT in path.read_text(encoding="utf-8", errors="replace"):
                     hits.append(path.relative_to(ROOT).as_posix())
-    assert hits == ["scripts/blocker_resolve.py"]
+    # The gate (DRE-6448) is a reference, never a second writer: it passes the
+    # act's name to `pipeline_act.tag` exactly once, and says it nowhere else.
+    assert sorted(hits) == ["scripts/blocker_resolve.py", "scripts/reconcile.py"]
+    gate = (ROOT / "scripts" / "reconcile.py").read_text(encoding="utf-8")
+    assert gate.count(ACT) == gate.count(f'pipeline_act.tag("{ACT}")') == 1
 
 
 # --------------------------------------------------------------------------- #
