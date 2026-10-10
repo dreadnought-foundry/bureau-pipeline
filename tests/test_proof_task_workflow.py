@@ -1167,5 +1167,177 @@ class GitIdentityTest(unittest.TestCase):
                          self._git(repo, "log", "-1", "--format=%cn <%ce>"))
 
 
+IDENTITY_RECORD_STEP = "Record the caller's proof identity"
+INSTALL_STEP = "Install Claude Code (asserted)"
+#: The four steps before the agent, in this order (DRE-6027).
+LOCAL_BEFORE = ("local_decl", "local_node", "local_node_setup", "local")
+DECLARED = "steps.local_decl.outputs.declared == 'true'"
+NODE_DIR = "steps.local_decl.outputs.node_dir != ''"
+#: The agent's seven `PROOF_*` names, read off the `local` step's outputs.
+LOCAL_ENV = {
+    "PROOF_LOCAL_STATUS": "${{ steps.local.outputs.status || 'none' }}",
+    "PROOF_LOCAL_NOTE": "${{ steps.local.outputs.note }}",
+    "PROOF_LOCAL_URL": "${{ steps.local.outputs.url }}",
+    "PROOF_LOCAL_COMMIT": "${{ steps.local.outputs.commit }}",
+    "PROOF_LOCAL_TAG": "${{ steps.local.outputs.tag }}",
+    "PROOF_PYTHON": "${{ steps.local.outputs.python || '' }}",
+    "PROOF_LOGIN_FILE": "${{ runner.temp }}/proof-login.json",
+}
+
+
+def _by_id(step_id: str) -> tuple[int, dict]:
+    for i, step in enumerate(_steps()):
+        if step.get("id") == step_id:
+            return i, step
+    raise AssertionError(f"proof-task.yml has no step with id {step_id!r}")
+
+
+class LocalRunStepsTest(unittest.TestCase):
+    """DRE-6027: the workflow stands the declared local run up before the
+    agent and tears it down after. The logic is the sibling modules'
+    (proof_local.py, proof_browser.py, proof_session.py); these are the five
+    steps that call them, the agent's env and the prompt's bullet."""
+
+    def test_four_steps_between_the_aws_record_and_the_install_in_order(self):
+        after = _index(IDENTITY_RECORD_STEP)
+        before = _index(INSTALL_STEP)
+        at = [_by_id(step_id)[0] for step_id in LOCAL_BEFORE]
+        self.assertEqual(sorted(at), at, "local_decl, local_node, local_node_setup, local")
+        self.assertLess(after, at[0], "the local run holds the AWS session")
+        self.assertLess(at[-1], before, "the agent finds the local run ready")
+        self.assertEqual(list(range(after + 1, after + 5)), at, "nothing between them")
+
+    def test_the_declaration_is_read_on_every_run(self):
+        _i, step = _by_id("local_decl")
+        self.assertEqual("Read the local-run declaration", step["name"])
+        self.assertNotIn("if", step, "a repo with no file writes declared=false")
+        self.assertIn('python3 .bureau-pipeline/scripts/proof_local.py read '
+                      '--github-output "$GITHUB_OUTPUT"', step["run"])
+        # An invalid declaration exits 1; it costs the Local screen: rows,
+        # never the run, and `prepare` names it (below).
+        self.assertIs(step.get("continue-on-error"), True)
+
+    def test_the_node_steps_are_qa_reviews_copied_and_gated_on_a_node_dir(self):
+        _i, resolve = _by_id("local_node")
+        self.assertEqual("Resolve the consumer's node for the local run", resolve["name"])
+        _i, setup = _by_id("local_node_setup")
+        self.assertEqual("Set up the consumer's node for the local run", setup["name"])
+        for step in (resolve, setup):
+            self.assertIn(DECLARED, step["if"])
+            self.assertIn(NODE_DIR, step["if"])
+            self.assertIs(step.get("continue-on-error"), True)
+        self.assertIn("python3 .bureau-pipeline/scripts/consumer_node.py", resolve["run"])
+        self.assertIn('"$NODE_DIR"', resolve["run"])
+        self.assertEqual("${{ steps.local_decl.outputs.node_dir }}",
+                         resolve["env"]["NODE_DIR"])
+        self.assertEqual("./.bureau-pipeline/.github/actions/setup-node-cached",
+                         setup["uses"])
+        self.assertIn("steps.local_node.outputs.setup == 'true'", setup["if"])
+        self.assertEqual("${{ steps.local_decl.outputs.node_dir }}",
+                         setup["with"]["working-directory"])
+
+    def test_prepare_stands_the_run_up_and_never_fails_the_job(self):
+        _i, step = _by_id("local")
+        self.assertEqual("Stand up a local run of the released commit", step["name"])
+        self.assertIn(DECLARED, step["if"])
+        self.assertIn("steps.local_decl.outcome == 'failure'", step["if"],
+                      "an invalid declaration reaches prepare, which names it")
+        self.assertIs(step.get("continue-on-error"), True)
+        self.assertIn('python3 .bureau-pipeline/scripts/proof_browser.py prepare '
+                      '--github-output "$GITHUB_OUTPUT" --summary "$GITHUB_STEP_SUMMARY"',
+                      step["run"])
+
+    def test_stop_runs_after_the_result_step_always_with_no_env(self):
+        at, step = _by_id("local_stop")
+        self.assertEqual("Stop the local run", step["name"])
+        self.assertLess(_index(RESULT_STEP), at)
+        self.assertLess(at, _index("Fail if the agent step failed"))
+        self.assertEqual("always()", step["if"])
+        self.assertNotIn("env", step, "PROOF_LOGIN_FILE is the module's own default")
+        self.assertEqual("python3 .bureau-pipeline/scripts/proof_browser.py stop",
+                         step["run"].strip())
+
+    def test_every_expression_is_in_env_never_in_run(self):
+        for step_id in (*LOCAL_BEFORE, "local_stop"):
+            _i, step = _by_id(step_id)
+            self.assertNotIn("${{", str(step.get("run") or ""), step_id)
+
+    def test_no_setup_python_and_the_steps_run_the_runners_python3(self):
+        for step in _steps():
+            uses = str(step.get("uses") or "")
+            self.assertNotIn("actions/setup-python", uses, step.get("name"))
+            self.assertNotIn("setup-python-cached", uses, step.get("name"))
+        for step_id in (*LOCAL_BEFORE, "local_stop"):
+            _i, step = _by_id(step_id)
+            run = str(step.get("run") or "")
+            if not run:
+                continue
+            self.assertRegex(run, r"(^|\s)python3 \.bureau-pipeline/scripts/", step_id)
+            # No interpreter of its own: never the venv, never a path.
+            self.assertNotRegex(run, r"PROOF_PYTHON|/bin/python|proof-venv", step_id)
+
+    def test_the_agent_env_carries_the_seven_names_on_every_attempt(self):
+        for _i, step in _agent_steps():
+            env = step.get("env") or {}
+            for name, value in LOCAL_ENV.items():
+                self.assertEqual(value, env.get(name), f"{step['name']}: {name}")
+
+    def test_the_prompt_says_how_a_local_screen_row_is_observed(self):
+        prompt = " ".join(_agent_steps()[0][1]["with"]["prompt"].split())
+        for phrase in (
+            "PROOF_LOCAL_STATUS",
+            "`Not observed. no local run declared`",
+            "`Not observed. the local run did not start: $PROOF_LOCAL_NOTE`",
+            '`"$PROOF_PYTHON" <script>`',
+            "A `Local screen:` row is never inferred from a `Live request:` row.",
+            "proof_session.py login",
+            "screenshot --signed-in",
+            "never open, print, copy or quote the login file at $PROOF_LOGIN_FILE, "
+            "the browser state file or anything under $RUNNER_TEMP/proof-venv",
+            "the password is never in the record, the pull request or a comment",
+            "row for row as `<method> <origin and path> <status>`",
+            "the sidecar itself is never committed",
+        ):
+            self.assertIn(phrase, prompt)
+        # `login` once, then the signed-in screenshot — never the other order.
+        self.assertLess(prompt.index("proof_session.py login"),
+                        prompt.index("screenshot --signed-in"))
+
+
+class LocalRunStepExecutedTest(unittest.TestCase):
+    """The read and stop steps' own scripts, run as written against the real
+    modules: a repo with no declaration writes `declared=false`, and `stop`
+    leaves no login file behind."""
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
+        (self.tmp / ".bureau-pipeline").symlink_to(ROOT)
+        self.output = self.tmp / "output"
+        self.output.write_text("")
+        self.env = {"PATH": os.environ["PATH"], "RUNNER_TEMP": str(self.tmp),
+                    "GITHUB_OUTPUT": str(self.output),
+                    "GITHUB_STEP_SUMMARY": str(self.tmp / "summary.md")}
+
+    def _run(self, step_id: str) -> subprocess.CompletedProcess:
+        _i, step = _by_id(step_id)
+        return subprocess.run(["bash", "-e", "-c", step["run"]], cwd=self.tmp,
+                              env=self.env, capture_output=True, text=True, timeout=60)
+
+    def test_a_repo_with_no_declaration_writes_declared_false(self):
+        done = self._run("local_decl")
+        self.assertEqual(0, done.returncode, done.stdout + done.stderr)
+        self.assertIn("declared=false", self.output.read_text().splitlines())
+
+    def test_stop_deletes_a_login_file_left_at_the_agents_path(self):
+        # The agent's PROOF_LOGIN_FILE is `${{ runner.temp }}/proof-login.json`;
+        # stop carries no env, so it must find the file at its own default.
+        path = LOCAL_ENV["PROOF_LOGIN_FILE"].replace("${{ runner.temp }}", str(self.tmp))
+        Path(path).write_text('{"password": "x"}')
+        done = self._run("local_stop")
+        self.assertEqual(0, done.returncode, done.stdout + done.stderr)
+        self.assertFalse(Path(path).exists(), "the login file outlived the run")
+
+
 if __name__ == "__main__":
     unittest.main()
