@@ -27,10 +27,10 @@ browser in from the login file once — the `form` kind fills the declared form,
 the `session` kind plants the declared `localStorage` entries and cookies on
 the local run's own origin before the page's first request (DRE-6818) — saves
 the state, and overwrites and deletes the login file. It never signs in on its
-own account: no state and no login file is an exit 1 that opens no page. Each request the page made is
-recorded as `<method> <scheme>://<host>[:<port>]<path> <status>` — no query
-string, fragment, header or body — in `$PROOF_REQUESTS_DIR`, never beside the
-PNG.
+own account: no state and no login file is an exit 1 that opens no page. Each
+request the page made is recorded as `<method> <scheme>://<host>[:<port>]<path>
+<status>` — no query string, fragment, header or body — in
+`$PROOF_REQUESTS_DIR`, never beside the PNG.
 
 The module runs on the runner's own `python3` up to the re-execution and
 imports only the standard library and its sibling pipeline modules at module
@@ -346,8 +346,12 @@ def _origin(url: str) -> tuple:
     parts = urllib.parse.urlsplit(url)
     host = parts.hostname or ""
     netloc = f"[{host}]" if ":" in host else host
-    if parts.port is not None:
-        netloc += f":{parts.port}"
+    try:
+        port = parts.port
+    except ValueError:
+        port = None
+    if port is not None:
+        netloc += f":{port}"
     return f"{parts.scheme}://{netloc}", host, parts.scheme
 
 
