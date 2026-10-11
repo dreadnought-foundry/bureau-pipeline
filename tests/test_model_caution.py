@@ -314,7 +314,11 @@ def test_every_published_sentence_is_in_plain_words():
 
 def test_the_old_shape_is_still_there_and_caution_is_the_only_addition():
     doc = _choices()
-    assert list(doc) == ["generated_from", "models", "groups", "agents", "projects"]
+    # DRE-6834 adds one top-level key, `add_group`, after `groups`; a reader
+    # of the old shape finds every key it read where it was.
+    assert list(doc) == ["generated_from", "models", "groups", "add_group", "agents",
+                         "projects"]
+    assert list(doc["add_group"]) == ["allowed", "reason"]
     for model in doc["models"]:
         assert list(model) == ["id", "label", "input", "output", "excluded"]
     for group in doc["groups"]:

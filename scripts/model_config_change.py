@@ -19,7 +19,11 @@ The six operations:
     add_agent           a new name in `ungrouped` and `session_agents`, with its
                         `about` line
     add_group           a new `kinds` entry (`label`, `purpose`) plus a ladder
-                        of the same name whose first rung is `model`
+                        of the same name whose first rung is `model` — a build
+                        group beside the three (DRE-6834); its name is
+                        lowercase letters, digits and dashes, starting with a
+                        letter, and one that is taken, empty or not that shape
+                        is refused in one plain sentence
     set_default_model   that model moves to the front of the group's ladder and
                         the other rungs keep their order; a model not on the
                         ladder is inserted at the front
@@ -75,8 +79,9 @@ engineers — go to the run log as ordinary output, and
 A CHOICE IS COMPLETE (DRE-6789)
 -------------------------------
 The CEO, 2026-10-10: a choice from the console is complete, and he never has to
-know a rule exists. So a `set_default_model` or `set_project_model` naming a
-model under `excluded` removes that entry in the same change (the last one gone
+know a rule exists. So a `set_default_model`, `set_project_model` or
+`add_group` (DRE-6834) naming a model under `excluded` removes that entry in
+the same change (the last one gone
 leaves `excluded: []`), and a `clear_project_model`, or a `set_project_model`
 that replaces a standing exception, sets the model it took off aside again —
 appended under `excluded` with a dated reason — when no ladder, other project,
@@ -118,8 +123,8 @@ from pathlib import Path
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import model_choice  # noqa: E402
-from model_fallback import ADVISORY_KIND, JUDGEMENT_KIND, JUDGEMENT_ROLES  # noqa: E402
-from model_fallback import WORKHORSE_KIND  # noqa: E402
+from model_fallback import ADDED_GROUP_NAME, ADVISORY_KIND, JUDGEMENT_KIND  # noqa: E402
+from model_fallback import JUDGEMENT_ROLES, WORKHORSE_KIND, build_kinds  # noqa: E402
 from model_fallback import _project_ids, _unpriced  # noqa: E402
 from model_fallback import declared_prices, effective_ladders, policy_errors  # noqa: E402
 from model_fallback import reviewers_for  # noqa: E402
@@ -216,6 +221,10 @@ def check_change_set(change_set) -> dict:
             value = change.get(field)
             if field in _TEXT_FIELDS:
                 entry[field] = _one_line(value, where, errors)
+            elif op == "add_group" and field == "group":
+                # Judged by `_problems`, so a name the console may not use is
+                # refused in one plain sentence (DRE-6834).
+                entry[field] = value.strip() if isinstance(value, str) else ""
             elif not isinstance(value, str) or not value:
                 errors.append(f"{where}: missing")
             elif not _usable_name(value):
@@ -286,7 +295,8 @@ def describe(change: dict, config) -> str:
         return (f"Add a new agent, {change['agent']}, in no group yet: "
                 f"\"{change['about']}\".")
     if op == "add_group":
-        return (f"Add a new group, {change['label']} ({change['group']}): "
+        named = f" ({change['group']})" if change["group"] else ""
+        return (f"Add a new group, {change['label']}{named}: "
                 f"\"{change['purpose']}\", with {change['model']} as its "
                 "default model.")
     if op == "set_default_model":
@@ -313,8 +323,9 @@ def pr_title(change_set) -> str:
 
 
 def _whom(config, change: dict) -> str:
-    """`Builders`, or `atlas's Builders` for a project's choice."""
-    label = _label(config, change["group"])
+    """`Builders`, or `atlas's Builders` for a project's choice — or the
+    label an `add_group` gives the group it adds."""
+    label = change.get("label") or _label(config, change["group"])
     return f"{change['project']}'s {label}" if change.get("project") else label
 
 
@@ -322,14 +333,18 @@ def _separation_note(change: dict, after) -> str | None:
     """Where a pull request built on the chosen model is reviewed, when the
     choice puts it on both the build walk and the reviewers' walk of its
     scope (DRE-6789). Said, never written: the selector takes the build model
-    off the reviewers' walk by itself (DRE-6785). The planning model neither
-    builds nor reviews a pull request, so a Planners choice says nothing."""
-    if change["group"] not in (WORKHORSE_KIND, ADVISORY_KIND):
+    off the reviewers' walk by itself (DRE-6785). A build walk is the
+    Builders' or a group's added beside them (DRE-6834). The planning model
+    neither builds nor reviews a pull request, so a Planners choice says
+    nothing."""
+    builds = build_kinds((after or {}).get("kinds") or {})
+    if change["group"] not in (*builds, ADVISORY_KIND):
         return None
     chosen, slug = change["model"], change.get("project")
     walks = effective_ladders(after, slug)
-    on_both = all(chosen in walks.get(_ladder_name(after, kind), [])
-                  for kind in (WORKHORSE_KIND, ADVISORY_KIND))
+    on_both = (chosen in walks.get(_ladder_name(after, ADVISORY_KIND), [])
+               and any(chosen in walks.get(_ladder_name(after, kind), [])
+                       for kind in builds))
     reviewers = reviewers_for(after, chosen, slug) if on_both else []
     if not reviewers or reviewers[0] == chosen:
         return None
@@ -345,7 +360,7 @@ def _change_lines(change: dict, before, after, prices) -> list[str]:
     lines that belong to it (DRE-6789)."""
     line = describe(change, before)
     notes = []
-    if change["op"] in CHOICE_OPS and after is not None:
+    if change["op"] in MODEL_OPS and after is not None:
         model = change["model"]
         current = _standing(before, change) if change["op"] == "set_project_model" else None
         try:
@@ -429,6 +444,10 @@ def _rung_reason(change: dict, config, today: str) -> str:
 
 #: The two operations that choose a model for a group or a project.
 CHOICE_OPS = ("set_default_model", "set_project_model")
+#: Every operation that names a model, `add_group`'s first one with them
+#: (DRE-6834): each is a choice, held to the pinned Claude Code and lifting
+#: an exclusion the same way.
+MODEL_OPS = CHOICE_OPS + ("add_group",)
 
 
 def _standing(raw, change: dict) -> str | None:
@@ -440,7 +459,7 @@ def _standing(raw, change: dict) -> str | None:
 
 def _lifts(raw, change: dict) -> bool:
     """A choice of a model under `excluded` brings it back (DRE-6789)."""
-    return (change["op"] in CHOICE_OPS
+    return (change["op"] in MODEL_OPS
             and change["model"] in _rung_ids((raw or {}).get("excluded")))
 
 
@@ -914,7 +933,17 @@ def _problems(change: dict, raw, prices, registry: set[str]) -> list[str]:
 
     group = change.get("group")
     if op == "add_group":
-        if group in kinds or group in (raw.get("ladders") or {}):
+        # One plain sentence for each name the console may not use (DRE-6834).
+        if not group:
+            problems.append("a new group needs a name")
+        elif not ADDED_GROUP_NAME.fullmatch(group):
+            problems.append(f"a group's name is lowercase letters, digits and "
+                            f"dashes, starting with a letter, and \"{group}\" is not")
+        elif not _usable_name(group):
+            problems.append(f"\"{group}\" is a word the settings read as a yes, a no "
+                            "or nothing, so it cannot name a group — a group's name "
+                            "is lowercase letters, digits and dashes")
+        elif group in kinds or group in (raw.get("ladders") or {}):
             problems.append(f"there is already a group named {group}")
     elif group is not None and group not in kinds:
         problems.append(f"there is no group named {group} — the groups are "
@@ -1012,7 +1041,7 @@ def apply_change_set(text: str, change_set, *, today: str, prices=None,
     refusals = []
     for n, change in enumerate(change_set["changes"], 1):
         reasons = _problems(change, state, prices, registry)
-        if not reasons and change["op"] in CHOICE_OPS:
+        if not reasons and change["op"] in MODEL_OPS:
             reasons, floors, installed = _cannot_run(change["model"], floors, installed)
         if not reasons:
             try:
@@ -1062,6 +1091,13 @@ def _why(reason: str, change: dict, config) -> str:
     if reason.startswith(("there is no agent named ",
                           "there is already an agent named ")):
         return reason
+    found = re.match(r"there is already a group named (\S+)$", reason)
+    if found:
+        taken = found.group(1)
+        if taken in ((config or {}).get("kinds") or {}):
+            return (f"the name {taken} is already taken by the "
+                    f"{_label(config, taken)} group")
+        return f"the name {taken} is already taken"
     found = re.match(r"(\S+) has no entry in the agent registry", reason)
     if found:
         return (f"{found.group(1)} is neither an agent the pipeline runs nor "
@@ -1096,10 +1132,16 @@ def _why(reason: str, change: dict, config) -> str:
     if reason.startswith(_UNINTENDED):
         return ("the edit did not come out as asked, so an engineer has to make "
                 "this change by hand")
-    if change["op"] in ("move_agent", "add_agent"):
+    if change["op"] in ("move_agent", "add_agent") or (
+            change["op"] == "add_group" and _FINDING.match(reason)):
         return ("it would break one of the checks every change to the model "
                 "settings must pass — the run log names it for an engineer")
     return reason
+
+
+#: A validator finding — `kinds.<x>: …`, `ladders.<x>: …`, `retired: …` —
+#: rather than a sentence this script wrote for the CEO.
+_FINDING = re.compile(r"[a-z_]+(?:\.[^\s:]+)*: ")
 
 
 def plain_lines(change: dict | None, reasons: list[str], config, *,

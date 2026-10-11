@@ -41,6 +41,11 @@ assigned a kind — never a raw ladder name:
     `claude-fable-5-1` (the STRONGEST model, and its primary from 2026-09-03),
     then to `claude-sonnet-4-6`.
 
+A group added from the console's "+ Add a group" (DRE-6834) is a further kind
+beside these three, on a ladder of its own name, and it is a BUILD group: every
+rule that holds for the workhorse ladder holds for its ladder, and a reviewer
+skips the model its build ran on (`build_kinds`).
+
 Before DRE-2317 the allocation was exactly inverted: the critic ran on the
 cheapest model we had while build agents walked a ladder topped by the most
 expensive one. A build failure is loud; a shallow review is silent.
@@ -158,6 +163,13 @@ WORKHORSE_KIND = "workhorse"
 ADVISORY_KIND = "advisory"
 JUDGEMENT_KIND = "judgement"
 ROLE_KINDS = (WORKHORSE_KIND, ADVISORY_KIND, JUDGEMENT_KIND)
+
+# A group added from the console (DRE-6834, the CEO's approved design of
+# 2026-10-10) is a fourth kind beside these three, and it is a BUILD group:
+# every rule that holds for the workhorse ladder holds for its ladder
+# (`build_kinds`). Its name is lowercase letters, digits and dashes, starting
+# with a letter, and it walks the ladder of its own name.
+ADDED_GROUP_NAME = re.compile(r"[a-z][a-z0-9-]*")
 
 # The roles that MUST stay advisory: they are the correctness backstop for a
 # pipeline where no human reads a diff. Demoting either is a config error.
@@ -589,6 +601,18 @@ def _separate(walk: list[str], barred: set[str], rules: Mapping) -> tuple[list[s
     return lead + [m for m in kept if m not in lead], separated
 
 
+def build_kinds(kinds) -> list[str]:
+    """The kinds whose roles BUILD a pull request: `workhorse`, then every
+    group added beside the three in `kinds`' order (DRE-6834). A rule that
+    reads "the build ladder" reads each of theirs."""
+    return [WORKHORSE_KIND] + [kind for kind in kinds if kind not in ROLE_KINDS]
+
+
+def _build_models(kinds: Mapping, ladders: Mapping) -> set[str]:
+    """Every model on a build kind's ladder in `ladders`."""
+    return {m for kind in build_kinds(kinds) for m in ladders.get(kinds.get(kind), [])}
+
+
 def _project_ids(cfg: Mapping) -> set[str]:
     """Every model id named under `projects.<slug>.<kind>`, or none when the
     key is malformed — `policy_errors` refuses a malformed one."""
@@ -620,11 +644,15 @@ def policy_errors(config, prices=None, repo_slugs=None) -> list[str]:
 
     The rules, each one an edit that would recreate the 2026-08-09 outage:
 
-      1. Exactly the declared kinds exist, and each names a real ladder that
+      1. The three declared kinds exist, and each names a real ladder that
          no other kind names — build work, advisory work and planning work
-         each walk their own.
-      2. Every role is assigned a KIND (not a ladder name, not an invented
-         fourth thing).
+         each walk their own. A kind beside them is a group added from the
+         console (DRE-6834): its name is lowercase letters, digits and
+         dashes, starting with a letter, it walks the ladder of its own name,
+         and it is a BUILD kind (`build_kinds`) — every rule below that reads
+         the workhorse ladder reads its ladder too.
+      2. Every role is assigned a KIND (not a ladder name, not a name no
+         kind declares).
       3. The critic and the verifier are advisory. They gate unattended merges;
          a demotion is the inversion this policy removes.
       4. Retired (DRE-6785). This rule used to refuse the top rung of a
@@ -708,7 +736,7 @@ def policy_errors(config, prices=None, repo_slugs=None) -> list[str]:
     errors: list[str] = []
     kinds, ladders = cfg["kinds"], cfg["ladders"]
 
-    if sorted(kinds) != sorted(ROLE_KINDS):
+    if not set(ROLE_KINDS) <= set(kinds):
         # Spelled FROM `ROLE_KINDS`, never hand-written. This is the line a
         # maintainer reads when they typo a kind name, and a hand-written
         # enumeration of it went stale the day `judgement` arrived — telling
@@ -716,12 +744,24 @@ def policy_errors(config, prices=None, repo_slugs=None) -> list[str]:
         # mistyped (DRE-3015).
         every_kind = f"{', '.join(ROLE_KINDS[:-1])} or {ROLE_KINDS[-1]}"
         return [
-            f"kinds: must declare exactly {list(ROLE_KINDS)}, got {sorted(kinds)} — "
-            f"every role is {every_kind}, and nothing else"
+            f"kinds: must declare {list(ROLE_KINDS)}, got {sorted(kinds)} — "
+            f"every role is {every_kind}, or in a group added beside them"
         ]
     for kind, ladder in kinds.items():
         if ladder not in ladders:
             errors.append(f"kinds.{kind}: unknown ladder {ladder!r}")
+    # Rule 1, for a group added from the console (DRE-6834).
+    for kind in build_kinds(kinds)[1:]:
+        if not ADDED_GROUP_NAME.fullmatch(kind):
+            errors.append(
+                f"kinds.{kind}: an added group's name is lowercase letters, "
+                "digits and dashes, starting with a letter"
+            )
+        elif kinds[kind] != kind:
+            errors.append(
+                f"kinds.{kind}: an added group walks the ladder of its own "
+                f"name, {kind!r}, got {kinds[kind]!r}"
+            )
     if errors:
         return errors
     if len(set(kinds.values())) != len(kinds):
@@ -734,7 +774,7 @@ def policy_errors(config, prices=None, repo_slugs=None) -> list[str]:
         if kind not in kinds:
             errors.append(
                 f"agents.{role}: {kind!r} is not a role kind — roles are assigned "
-                f"{list(ROLE_KINDS)}, never a ladder name"
+                f"{list(kinds)}, never a ladder name"
             )
     for role in BACKSTOP_ROLES:
         assigned = cfg["agents"].get(role)
@@ -820,7 +860,8 @@ def _ladder_findings(cfg: dict, ladders: dict, prices: Mapping) -> list[tuple[st
     """
     kinds = cfg["kinds"]
     findings: list[tuple[str, str]] = []
-    workhorse_models = set(ladders.get(kinds[WORKHORSE_KIND], []))
+    # Every build ladder: the workhorse one and an added group's (DRE-6834).
+    build_models = _build_models(kinds, ladders)
 
     def refuse(rule: str, message: str) -> None:
         findings.append((rule, message))
@@ -830,7 +871,7 @@ def _ladder_findings(cfg: dict, ladders: dict, prices: Mapping) -> list[tuple[st
     # model off the reviewer's walk at selection time, rule or no rule.
     advisory_ladder_name = kinds[ADVISORY_KIND]
     advisory_models = ladders.get(advisory_ladder_name, [])
-    overlaps = [m for m in advisory_models if m in workhorse_models]
+    overlaps = [m for m in advisory_models if m in build_models]
     separation = cfg["review_separation"]
     if separation["declared"]:
         for role in BACKSTOP_ROLES:
@@ -1614,6 +1655,8 @@ def separated_walk(role: str, walk: list[str], built_on=None, built_on_unknown=F
     rung, which stays whatever other walk it sits on, because every rung
     might have built it and the dispatch may not strand. On today's fleet
     that is `claude-opus-5-5`, the Builders' first rung, and the note says so.
+    A group added from the console builds too (DRE-6834), so its walk for
+    that project counts as a build walk here exactly as the Builders' does.
 
     Roles the separation does not bind — the medic, every build role — walk
     their ladder untouched, and so does a reviewer looking at a build that ran
@@ -1623,7 +1666,7 @@ def separated_walk(role: str, walk: list[str], built_on=None, built_on_unknown=F
     if role not in set(SEPARATION["roles"]) | set(BACKSTOP_ROLES):
         return list(walk), []
     if built_on_unknown:
-        builds = set(effective_ladders(CONFIG, slug).get(KINDS[WORKHORSE_KIND], []))
+        builds = _build_models(KINDS, effective_ladders(CONFIG, slug))
         barred = {m for m in walk[:-1] if m in builds}
     else:
         barred = {built_on} & set(walk) if built_on else set()
@@ -1641,16 +1684,19 @@ def _kept_build_rung(walk: list[str], separated: list[str], built_on_unknown: bo
     also builds for that scope — the walk's last rung, which stays because
     nothing else was left (DRE-6785) — as `{"model", "builds_for"}`, or None.
 
-    `builds_for` is the project's slug when its Builders walk is its own (it
-    carries a Builders exception), else "the fleet"."""
+    `builds_for` is the project's slug when a build walk of its own is its
+    own (it carries an exception for the Builders, or for a group added
+    beside them — DRE-6834), else "the fleet"."""
     if not built_on_unknown or not separated:
         return None
-    name = KINDS[WORKHORSE_KIND]
-    builds = effective_ladders(CONFIG, slug).get(name, [])
+    walks = effective_ladders(CONFIG, slug)
+    builds = _build_models(KINDS, walks)
     kept = [m for m in walk if m in builds]
     if not kept:
         return None
-    scope = slug if slug and builds != LADDERS.get(name, []) else "the fleet"
+    own = any(walks.get(KINDS[kind]) != LADDERS.get(KINDS[kind])
+              for kind in build_kinds(KINDS))
+    scope = slug if slug and own else "the fleet"
     return {"model": kept[-1], "builds_for": scope}
 
 

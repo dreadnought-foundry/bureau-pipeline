@@ -454,8 +454,28 @@ group's ladder or that project's walk; an excluded model lifted from `excluded`
 in the same pull request; and **no reviewer rule**, because a reviewer skips
 the model that built the pull request on that project's walk
 (`model_fallback.reviewers_for`). DRE-6789's change-writer builds the writer;
-this is the contract it writes to. A **new group is still refused** by the
-three-groups rule (rule 1, exactly the three kinds) until that rule changes.
+this is the contract it writes to.
+
+**A group added from the console is a build group (DRE-6834).** The CEO's
+approved design has "+ Add a group" — a name, what it is for, a model — and
+`add_group` writes it as a new `kinds` entry with its `label` and `purpose` and
+a ladder of the same name whose first model is the one chosen; rule 1 now asks
+for the three kinds and admits any kind beside them whose name is lowercase
+letters, digits and dashes, starting with a letter, on a ladder of its own
+name. Every safety rule has one answer for it: it is treated as the Builders
+are (`model_fallback.build_kinds`). Every rule that refuses a model on the
+Builders' ladder — no declared price, excluded, retired, a model the pinned
+Claude Code cannot run — refuses it on the added group's ladder; a pull request
+built by a role in it is never reviewed by the model that built it, because
+`separated_walk` takes that model off the reviewer's walk and the fail-closed
+`--built-on-unknown` walk counts the added group's models as build models; a
+`review_separation` rule may name a model the Reviewers share with it. The
+critic and the verifier still may not leave Reviewers, and only the planner may
+be in Planners, exactly as before. Any agent that may move into Builders may
+move into an added group, pipeline-run or session-run; a pipeline role there
+selects from that group's ladder with a project's exception in front, and the
+group's default model and a project's exception for it are set and cleared by
+the same operations as any group's. Removing or renaming a group is not built.
 
 ## The three rules — `adopt`, `ignore`, `ask` (CEO decision, 2026-09-14)
 
@@ -576,8 +596,8 @@ committed map rather than assume one (DRE-6858).
   rather than a pipeline workflow: today the same five. Independent of
   `ungrouped`: a name stays here after it is given a group, so the file still
   knows it is not a pipeline role. Each must be in `agents` or `ungrouped` (a
-  record for nobody is refused). A session agent may join any of the three
-  groups, and its group never makes it a pipeline role: it has no
+  record for nobody is refused). A session agent may join any group, an added
+  one too (DRE-6834), and its group never makes it a pipeline role: it has no
   `agents.yaml` entry (`sync_model_config.py` skips it, and refuses one that
   has a generated region), `model_fallback.AGENT_KINDS` leaves it out, and
   `kind_for`, `ladder_for` and `select` answer it exactly as an unknown name —
@@ -766,8 +786,12 @@ judged by `model_fallback.policy_errors` before anything is written: one
 refusal fails the run with each refused change's reason and opens no branch.
 An accepted set is regenerated with the generator above and opened as ONE pull
 request on `agent/model-config-<digest>`, the same changes always naming the
-same branch, so pressing Save twice opens one pull request. `kinds` admits
-exactly the three kinds, so a new group is refused until that rule changes. A
+same branch, so pressing Save twice opens one pull request. A new group is a
+build group beside the three (DRE-6834, *An explicit choice is admissible*
+above), and a name that is taken, empty or not lowercase letters, digits and
+dashes is refused in one plain sentence; the file's top-level `add_group`,
+`{"allowed": true, "reason": null}` today, tells the console the pipeline takes
+one, judged as a move is. A
 session agent joins any group (DRE-6833), and so does an agent added in the same
 change set, since `add_agent` makes it one; a name in neither `agents.yaml` nor
 `session_agents` cannot, because the generator writes a model for every other

@@ -70,7 +70,8 @@ def _free_name(raw: dict, wanted: str = WANTED) -> str:
 
 
 def _add(raw: dict, model: str, group: str | None = None) -> dict:
-    return {"op": "add_group", "group": group or _free_name(raw), "label": LABEL,
+    return {"op": "add_group", "group": _free_name(raw) if group is None else group,
+            "label": LABEL,
             "purpose": PURPOSE, "model": model}
 
 
