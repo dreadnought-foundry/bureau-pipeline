@@ -1788,7 +1788,7 @@ jobs:
                 REC_ARGS=(--recommendation "$RECOMMENDATION")
               fi
               if CAUSE_HOLD=$(python3 .bureau-pipeline/scripts/proof_cause_park.py hold --escalation-file "$ESCALATION_FILE") \
-                 && python3 .bureau-pipeline/scripts/proof_cause_park.py question --escalation-file "$ESCALATION_FILE" --run-url "$RUN_URL" "${REC_ARGS[@]}" > "${RUNNER_TEMP:-/tmp}/proof-cause-question.md"; then
+                 && python3 .bureau-pipeline/scripts/proof_cause_park.py question --escalation-file "$ESCALATION_FILE" --run-url "$RUN_URL" "${REC_ARGS[@]}" > "${RUNNER_TEMP:-/tmp}/proof-escalation-comment.md"; then
                 CAUSE_PARKED="yes"
               else
                 echo "::warning::the cause rows could not be read; the escalation parks as the file reads"
@@ -1837,15 +1837,15 @@ jobs:
               echo "::warning::the 🔬 proof-waiting hold could not be posted; the question still parks in Green Light"
               echo "proof park: the hold could not be posted for $CARD" >> "$GITHUB_STEP_SUMMARY"
             fi
+            # Then the park: the question, posted before the move — for cause
+            # rows the module's, already written above.
             if [ -n "$CAUSE_PARKED" ]; then
-              python3 .bureau-pipeline/scripts/linear_ops.py comment "$CARD" "$(cat "${RUNNER_TEMP:-/tmp}/proof-cause-question.md")"
               echo "proof park: cause rows ($(printf '%s\n' "$CAUSES" | grep -c .))" >> "$GITHUB_STEP_SUMMARY"
             else
-              # Then the park: the question, posted before the move. The cause
-              # lines, held in $CAUSES, are lifted out of the file first and set
-              # under the three lines, so a file that declared its three lines
-              # still reads them before its rows. This step is the file's last
-              # reader.
+              # The cause lines, held in $CAUSES, are lifted out of the file
+              # first and set under the three lines, so a file that declared its
+              # three lines still reads them before its rows. This step is the
+              # file's last reader.
               if [ -n "$CAUSES" ]; then
                 grep -vE '^[[:space:]]*cause:' "$ESCALATION_FILE" > "${RUNNER_TEMP:-/tmp}/proof-escalation-press.txt" || true
                 cat "${RUNNER_TEMP:-/tmp}/proof-escalation-press.txt" > "$ESCALATION_FILE"
@@ -1861,12 +1861,12 @@ jobs:
                 echo ""
                 echo "Run: $RUN_URL"
               } > "${RUNNER_TEMP:-/tmp}/proof-escalation-comment.md"
-              python3 .bureau-pipeline/scripts/linear_ops.py comment "$CARD" \
-                "$(cat "${RUNNER_TEMP:-/tmp}/proof-escalation-comment.md")"
               if [ "$PARK" = "press" ]; then
                 echo "proof park: press" >> "$GITHUB_STEP_SUMMARY"
               fi
             fi
+            python3 .bureau-pipeline/scripts/linear_ops.py comment "$CARD" \
+              "$(cat "${RUNNER_TEMP:-/tmp}/proof-escalation-comment.md")"
             # Out of either lane: the record's pull request opened before the
             # escalation file was written, and qa-review.yml may already have
             # carried the card to `In Review`. Never Triage — the card is not
