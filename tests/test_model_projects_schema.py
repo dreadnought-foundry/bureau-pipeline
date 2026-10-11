@@ -5,9 +5,12 @@ honor, and `policy_errors` refuses a malformed one in plain English.
 WHAT CHANGES, AND WHAT DOES NOT
 -------------------------------
 The file gains `kinds.<kind>.label` / `kinds.<kind>.purpose`, `ungrouped`,
-`about` and `projects`. It ships with `projects: {}`, so NOTHING any run selects
-changes: `SelectionIsUnchangedTest` pins every role's pick, read off the
-ladders rather than hardcoded.
+`about` and `projects`. It shipped with `projects: {}`, so NOTHING any run
+selected changed: `SelectionIsUnchangedTest` pins every role's pick, read off the
+ladders rather than hardcoded. Since DRE-6858 the console's Save changes may
+commit an exception, so every test of the COMMITTED file derives what it
+expects from the `projects` written there, and every test of how the tools
+behave builds the starting file it needs.
 
 THE OWN-KIND READING (pinned here so this card and DRE-6635 agree)
 ------------------------------------------------------------------
@@ -109,8 +112,20 @@ class TestCommittedData:
         assert cfg["about"]["engineer"] == "Builds a card and opens the PR"
         assert cfg["about"]["designer"] == "Designs screens and systems"
 
-    def test_projects_ships_empty(self):
-        assert committed()["projects"] == {}
+    def test_the_committed_projects_map_is_well_formed_and_in_the_repo_map(self):
+        # A choice, not a rule: `projects` shipped empty (DRE-6633) and the
+        # console writes it (DRE-6858). What holds for any saved state is the
+        # shape, and that every project is a repo the map routes.
+        cfg = committed()
+        projects = cfg["projects"]
+        assert isinstance(projects, dict)
+        for slug, exceptions in projects.items():
+            assert slug in slugs(), slug
+            assert isinstance(exceptions, dict) and exceptions, slug
+            for kind, model in exceptions.items():
+                assert kind in cfg["kinds"], (slug, kind)
+                assert isinstance(model, str) and model, (slug, kind)
+        assert [e for e in errors(cfg) if e.startswith("projects")] == []
 
     def test_the_committed_config_validates_clean_with_the_real_repo_map(self):
         assert mf.policy_errors(committed()) == []
@@ -138,7 +153,7 @@ class TestNormalizedShape:
         }
         assert cfg["ungrouped"] == INTERACTIVE
         assert cfg["about"] == committed()["about"]
-        assert cfg["projects"] == {}
+        assert cfg["projects"] == committed()["projects"]
 
     def test_a_kind_with_no_label_or_purpose_gets_the_defaults(self):
         raw = committed()
@@ -167,12 +182,23 @@ class TestNormalizedShape:
         for key in ("groups", "ungrouped", "about", "projects"):
             assert cfg[key] == mf.CONFIG[key], key
 
-    def test_the_mirror_writes_them_after_review_separation_in_order(self):
+    def test_the_mirror_writes_them_after_review_separation_in_order(self, tmp_path):
         literal = sync_model_config.render_literal(sync_model_config.load_config())
         at = [literal.index(f'\n    "{key}": ') for key in
               ("review_separation", "groups", "ungrouped", "about", "projects")]
         assert at == sorted(at)
+        # The shape, on a starting file this test builds: an empty map, then
+        # one exception — whatever the committed file holds.
+        path = tmp_path / "models.yaml"
+        path.write_text(yaml.safe_dump(with_projects({}), sort_keys=False))
+        literal = sync_model_config.render_literal(sync_model_config.load_config(path))
         assert '\n    "projects": {},' in literal
+        path.write_text(yaml.safe_dump(
+            with_projects({"atlas": {"workhorse": SONNET55}}), sort_keys=False))
+        literal = sync_model_config.render_literal(sync_model_config.load_config(path))
+        assert ('\n    "projects": {\n'
+                f'        "atlas": {{"workhorse": "{SONNET55}"}},\n'
+                '    },') in literal
 
 
 # --------------------------------------------------------------------------- #
@@ -283,7 +309,7 @@ class TestMalformedKeys:
             "projects.atlas", "projects.portico"]
         assert all("config/repo-map.json" in e for e in found)
         # …and an empty `projects` never needs the map at all.
-        assert mf.policy_errors(committed()) == []
+        assert mf.policy_errors(with_projects({})) == []
 
     def test_a_kind_that_is_not_declared_is_refused(self):
         found = errors(with_projects({"atlas": {"builders": SONNET55}}))
@@ -451,9 +477,17 @@ class TestSelectionIsUnchanged:
             mf.clear_availability_cache()
             assert mf.select(role, probe=lambda m: True) == ladder(cfg, kind)[0], role
 
-    def test_no_repo_walks_anything_but_the_fleet_ladders(self):
+    def test_every_repo_walks_the_fleet_ladders_but_for_its_own_exceptions(self):
+        # Read off the committed `projects`: a repo with no entry walks the
+        # fleet ladders, and one with an entry changes only that kind's walk.
+        cfg = committed()
+        projects = cfg["projects"]
         for slug in sorted(slugs()):
-            assert mf.effective_ladders(mf.CONFIG, slug) == mf.LADDERS, slug
+            want = {name: list(rungs) for name, rungs in mf.LADDERS.items()}
+            for kind, model in projects.get(slug, {}).items():
+                name = cfg["kinds"][kind]["ladder"]
+                want[name] = [model] + [m for m in want[name] if m != model]
+            assert mf.effective_ladders(mf.CONFIG, slug) == want, slug
 
 
 # --------------------------------------------------------------------------- #
@@ -473,6 +507,7 @@ class TestDocumented:
 
     def test_the_yaml_shows_the_projects_shape_in_a_comment(self):
         lines = CONFIG_PATH.read_text().splitlines()
-        at = lines.index("projects: {}")
+        # `projects: {}` empty, `projects:` once an exception is saved.
+        at = next(i for i, l in enumerate(lines) if l in ("projects: {}", "projects:"))
         above = " ".join(l for l in lines[max(0, at - 30):at] if l.lstrip().startswith("#"))
         assert "atlas:" in above and "workhorse:" in above

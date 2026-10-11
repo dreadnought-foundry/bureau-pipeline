@@ -55,9 +55,24 @@ SONNET5 = "claude-sonnet-5"
 # Helpers                                                                      #
 # --------------------------------------------------------------------------- #
 
+#: The top-level `projects` block, empty (`projects: {}`) or with entries.
+_PROJECTS_BLOCK = re.compile(r"^projects:(?: \{\}|(?:\n .*)+)\n", re.M)
+
+
+def _without_projects(text: str) -> str:
+    """`text` with its `projects` block emptied and every other byte kept —
+    built here, never by the module under test."""
+    out, count = _PROJECTS_BLOCK.subn("projects: {}\n", text)
+    assert count == 1, "config/models.yaml has no top-level projects block"
+    assert yaml.safe_load(out) == dict(yaml.safe_load(text), projects={})
+    return out
+
+
 def _text() -> str:
-    """A copy of the real file, read fresh for every test."""
-    return CONFIG.read_text()
+    """A copy of the real file, read fresh for every test, with no project
+    exception: the starting file these tests need, whatever exceptions the
+    console's Save changes has committed (DRE-6858)."""
+    return _without_projects(CONFIG.read_text())
 
 
 def _comments(text: str) -> list[str]:
@@ -481,10 +496,11 @@ def test_apply_writes_the_edit_and_the_generator_then_reports_in_sync(tmp_path):
 def test_apply_check_prints_the_diff_and_writes_nothing(tmp_path):
     tree = _tree(tmp_path / "tree")
     changes = _write_set(tmp_path, {"op": "move_agent", "agent": "proof", "group": "advisory"})
+    before = (tree / "config/models.yaml").read_text()
     proc = _cli(tree, "apply", "--changes", str(changes), "--check")
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert "+  proof: advisory" in proc.stdout
-    assert (tree / "config/models.yaml").read_text() == _text()
+    assert (tree / "config/models.yaml").read_text() == before
 
 
 def test_a_refused_change_set_exits_2_names_each_reason_and_writes_nothing(tmp_path):
@@ -495,13 +511,14 @@ def test_a_refused_change_set_exits_2_names_each_reason_and_writes_nothing(tmp_p
         {"op": "move_agent", "agent": "nobody", "group": "workhorse"},
         {"op": "move_agent", "agent": "engineer", "group": "judgement"},
     )
+    before = (tree / "config/models.yaml").read_text()
     proc = _cli(tree, "apply", "--changes", str(changes))
     assert proc.returncode == 2
     errors = [line for line in proc.stdout.splitlines() if line.startswith("::error::")]
     assert any("change 2" in e and "no agent named nobody" in e for e in errors), proc.stdout
     assert any("change 3" in e and "agents.engineer" in e for e in errors), proc.stdout
     assert not any("change 1" in e for e in errors)
-    assert (tree / "config/models.yaml").read_text() == _text()
+    assert (tree / "config/models.yaml").read_text() == before
 
 
 def test_an_unreadable_change_set_exits_2(tmp_path):

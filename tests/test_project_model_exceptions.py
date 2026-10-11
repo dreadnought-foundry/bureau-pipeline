@@ -325,15 +325,21 @@ def test_an_unknown_value_cannot_put_a_quote_in_the_note(tree):
 
 
 # --------------------------------------------------------------------------- #
-# The committed config: no project changes anything                            #
+# The committed config: only the projects it names change anything             #
 # --------------------------------------------------------------------------- #
 
-def test_every_role_on_every_repo_selects_the_fleet_pick_on_the_committed_config():
+def test_every_role_on_every_repo_selects_what_the_committed_config_says():
+    """Read off the committed `projects`, which the console's Save changes
+    writes (DRE-6858): a repo with an exception for a role's kind runs that
+    model, and every other repo and kind runs the fleet pick."""
     repo_map = json.loads((ROOT / "config" / "repo-map.json").read_text())
+    projects = yaml.safe_load((ROOT / "config" / "models.yaml").read_text())["projects"]
     probe = lambda m: True  # noqa: E731
     assert mf.AGENT_KINDS
-    for role in mf.AGENT_KINDS:
+    for role, kind in mf.AGENT_KINDS.items():
+        mf.clear_availability_cache()
         fleet = mf.select(role, probe=probe)
         for slug in repo_map:
             mf.clear_availability_cache()
-            assert mf.select(role, repo=slug, probe=probe) == fleet, (role, slug)
+            want = projects.get(slug, {}).get(kind, fleet)
+            assert mf.select(role, repo=slug, probe=probe) == want, (role, slug)

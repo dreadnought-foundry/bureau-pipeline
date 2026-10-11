@@ -295,9 +295,13 @@ def test_refused_and_allowed_moves():
             assert _move(doc, name, "judgement")["allowed"] is False, name
 
 
-def test_projects_is_empty_while_the_map_is():
-    assert _raw()["projects"] == {}
-    assert _choices()["projects"] == []
+def test_projects_mirrors_the_committed_map_in_file_order():
+    # Derived from the committed map, never typed: the console's Save changes
+    # writes exceptions there (DRE-6858), and this holds for any saved state.
+    assert _choices()["projects"] == [
+        {"slug": slug, "exceptions": exceptions}
+        for slug, exceptions in _raw()["projects"].items()
+    ]
 
 
 def test_projects_lists_each_slug_in_file_order(tmp_path):

@@ -501,12 +501,17 @@ class GeneratedMirrorTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             tree = _copy_tree(Path(td))
             path = tree / "config" / "models.yaml"
-            text = path.read_text()
-            self.assertIn("\nprojects: {}\n", text)
-            path.write_text(text.replace(
-                "\nprojects: {}\n",
-                f"\nprojects:\n  atlas:\n    workhorse: {SONNET55}\n",
-            ))
+            # The starting file this test needs: atlas's exception and no
+            # other, whatever exceptions the console has committed (DRE-6858).
+            text, count = re.subn(
+                r"^projects:(?: \{\}|(?:\n .*)+)\n",
+                f"projects:\n  atlas:\n    workhorse: {SONNET55}\n",
+                path.read_text(), flags=re.M,
+            )
+            self.assertEqual(count, 1)
+            path.write_text(text)
+            self.assertEqual(yaml.safe_load(text)["projects"],
+                             {"atlas": {"workhorse": SONNET55}})
             self.assertEqual(_run_sync(tree).returncode, 0)
             self.assertIn(
                 f'"atlas": {{"workhorse": "{SONNET55}"}},',
@@ -610,6 +615,10 @@ class ConfigDrivesTheFleetTest(unittest.TestCase):
             # rule describing an overlap that no longer exists is refused, so
             # the fleet can never inherit a stale guarantee. Still one file.
             cfg["review_separation"]["rules"] = []
+            # The starting file holds no project exception: one the console
+            # committed may name a rung this edit takes away (DRE-6858), and a
+            # refused file would be read off the degrade mirror instead.
+            cfg["projects"] = {}
             path.write_text(yaml.safe_dump(cfg, sort_keys=False))
             self.assertEqual(_cli_select(tree, "critic"), SONNET)
             # …and the build fleet is untouched by that edit.

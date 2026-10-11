@@ -262,11 +262,15 @@ class TestApply:
                    if l.startswith("-") and not l.startswith("---")]
         added = [l[1:] for l in difflib.unified_diff(before, after, lineterm="", n=0)
                  if l.startswith("+") and not l.startswith("+++")]
-        # The ONLY lines that change are the rung ids and the separation rule
-        # that names the moved rung; everything else is added, never rewritten.
+        # The ONLY lines that change are the rung ids, the separation rule
+        # that names the moved rung, and any project exception the committed
+        # file holds on it (it moves with its rung, DRE-6633 — and the console
+        # commits exceptions, DRE-6858); everything else is added, never
+        # rewritten.
+        kinds = "|".join(map(re.escape, yaml.safe_load("\n".join(before))["kinds"]))
         for line in removed:
             assert re.fullmatch(
-                r"\s*-?\s*(model|built_on): claude-sonnet-(5|4-6)", line), line
+                rf"\s*-?\s*(model|built_on|{kinds}): claude-sonnet-(5|4-6)", line), line
         assert all(not l.lstrip().startswith("#") for l in removed)
         assert all("reason:" not in l for l in removed)
         assert sum(1 for l in added if re.fullmatch(r"\s*- model: claude-sonnet-6", l)) == 3
@@ -421,9 +425,23 @@ class TestApply:
     # A project exception follows the rung it names (DRE-6633)                #
     # ----------------------------------------------------------------------- #
 
-    @staticmethod
-    def _with_projects(block: str) -> str:
+    #: The top-level `projects` block, empty (`projects: {}`) or with entries.
+    _PROJECTS_BLOCK = re.compile(r"^projects:(?: \{\}|(?:\n .*)+)\n", re.M)
+
+    @classmethod
+    def _without_projects(cls) -> str:
+        """Today's config with its `projects` block emptied and every other
+        byte kept: the starting file these tests need, whatever exceptions the
+        console has committed (DRE-6858)."""
         text = CONFIG_PATH.read_text()
+        out, count = cls._PROJECTS_BLOCK.subn("projects: {}\n", text)
+        assert count == 1, "config/models.yaml has no top-level projects block"
+        assert yaml.safe_load(out) == dict(yaml.safe_load(text), projects={})
+        return out
+
+    @classmethod
+    def _with_projects(cls, block: str) -> str:
+        text = cls._without_projects()
         assert "\nprojects: {}\n" in text
         return text.replace("\nprojects: {}\n", f"\nprojects:\n{block}")
 
@@ -449,7 +467,7 @@ class TestApply:
         assert judgement in result
         # The only line that differs from the same edit with `projects: {}`
         # is the exception that moved.
-        plain = maa.apply_text(CONFIG_PATH.read_text(), decision, "2026-11-02")
+        plain = maa.apply_text(self._without_projects(), decision, "2026-11-02")
         removed = [l for l in difflib.unified_diff(
             plain.splitlines(), result.splitlines(), lineterm="", n=0)
             if l[:1] in "+-" and l[:3] not in ("+++", "---")]
