@@ -93,8 +93,8 @@ VERDICT_MARKERS = ("VERDICT:", "QA Critic", "QA Verifier")
 # --------------------------------------------------------------------------- #
 
 #: The successors a test adds to the committed catalog snapshot. Every rung on
-#: every ladder today is dated by that snapshot, so the classifier ranks these
-#: against the real ladders.
+#: every frozen ladder is dated by that snapshot, so the classifier ranks these
+#: against the frozen ladders.
 SUCCESSORS = [
     {"id": SONNET6, "display_name": "Claude Sonnet 6",
      "created_at": "2026-11-01T00:00:00Z", "in_catalog": True},
