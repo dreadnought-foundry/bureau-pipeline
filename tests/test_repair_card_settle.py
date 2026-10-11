@@ -1578,6 +1578,42 @@ class TheEarlierCardsReadTest(unittest.TestCase):
         self.assertIn("createdAt: {gte:", query)
         self.assertNotIn("state: {", query)
 
+    def test_a_full_page_is_followed_to_the_next_rather_than_taken_as_all(self):
+        # One page filled to Linear's limit: the older cards past it are read
+        # too, so a Canceled card on page two still counts as an earlier
+        # failure rather than falling silently out of the history.
+        from unittest.mock import patch
+
+        def node(n, state="Done"):
+            return {"identifier": f"DRE-{n}", "description": "d",
+                    "createdAt": "2026-10-09T15:00:00.000Z",
+                    "state": {"name": state}}
+
+        pages = {
+            None: {"issues": {
+                "nodes": [node(n) for n in range(100)],
+                "pageInfo": {"hasNextPage": True, "endCursor": "c1"}}},
+            "c1": {"issues": {
+                "nodes": [node(100, "Canceled")],
+                "pageInfo": {"hasNextPage": False, "endCursor": "c2"}}},
+        }
+        asked: list = []
+
+        def gql(query, variables=None, **kw):
+            asked.append((query, variables))
+            return pages[(variables or {}).get("after")]
+
+        with patch.object(linear_ops, "gql", gql):
+            got = linear_ops.repo_cards_by_title_prefix(
+                repair_card.TITLE_ANCHOR, repo_slug="bureau-pipeline",
+                since=NOW - timedelta(days=14))
+        self.assertEqual(101, len(got))
+        self.assertEqual({"identifier": "DRE-100", "description": "d",
+                          "state": "Canceled",
+                          "createdAt": "2026-10-09T15:00:00.000Z"}, got[-1])
+        self.assertEqual([None, "c1"], [v["after"] for _, v in asked])
+        self.assertIn("pageInfo { hasNextPage endCursor }", asked[0][0])
+
     def test_both_seams_hand_settle_the_read(self):
         from unittest.mock import patch
 

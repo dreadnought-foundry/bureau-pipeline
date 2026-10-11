@@ -135,6 +135,33 @@ class ShapeOfTheIdTest(unittest.TestCase):
             failed_tests.failed_tests(logged(
                 "FAILED tests/test_red-main.py::test_one[a-b] - assert 1 == 2")))
 
+    def test_a_spaced_hyphen_inside_the_brackets_is_part_of_the_id(self):
+        self.assertEqual(
+            ["tests/test_x.py::test_a[a - b]"],
+            failed_tests.failed_tests(logged(
+                "FAILED tests/test_x.py::test_a[a - b] - AssertionError: x")))
+
+    def test_two_cases_differing_after_a_spaced_hyphen_stay_two_ids(self):
+        self.assertEqual(
+            ["tests/test_x.py::test_a[a - b]", "tests/test_x.py::test_a[a - c]"],
+            failed_tests.failed_tests(logged(
+                "FAILED tests/test_x.py::test_a[a - b] - AssertionError: x",
+                "FAILED tests/test_x.py::test_a[a - c] - AssertionError: x")))
+
+    def test_a_spaced_hyphen_in_the_brackets_with_no_message_is_read(self):
+        self.assertEqual(
+            ["tests/test_x.py::test_a[a - b]"],
+            failed_tests.failed_tests(logged(
+                "FAILED tests/test_x.py::test_a[a - b]")))
+
+    def test_brackets_that_never_close_end_the_id_at_the_last_bracket(self):
+        # A parameter value holding a lone `[` leaves the id unbalanced; the
+        # id still ends where pytest closed it, before the message.
+        self.assertEqual(
+            ["tests/test_x.py::test_a[a[b - c]"],
+            failed_tests.failed_tests(logged(
+                "FAILED tests/test_x.py::test_a[a[b - c] - AssertionError: x")))
+
     def test_a_colored_pytest_line_is_read(self):
         self.assertEqual(["tests/test_a.py::test_one"], failed_tests.failed_tests(
             logged(f"{ESC}[31mFAILED{ESC}[0m tests/test_a.py::test_one - boom")))

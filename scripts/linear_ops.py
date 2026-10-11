@@ -3715,18 +3715,23 @@ def repo_cards_by_title_prefix(prefix: str, *, repo_slug: str,
     card lists the tests that failed, and a Canceled one is a failure main
     passed on its own — so every state on purpose, unlike `find_open_prefix`.
 
-    `first: 50`: one repo's repair cards over two weeks. Measured 2026-10-06
-    to 10-10, the two busiest repos had 27 red mains between them in five
-    days; a listing that ever filled this would itself be the finding.
+    Paged to exhaustion through `gql_paged`: measured 2026-10-06 to 10-10,
+    the two busiest repos had 27 red mains between them in five days, so two
+    weeks of one repo's cards can outrun a single page. A page cut short
+    would drop the OLDER cards — exactly the earlier Canceled one this read
+    exists to find — and the sweep would miss the repeat with nothing saying
+    so.
     """
-    data = gql(
-        """query($prefix: String!, $label: String!, $since: DateTimeOrDuration!) {
-             issues(first: 50, filter: {
+    nodes = gql_paged(
+        """query($prefix: String!, $label: String!, $since: DateTimeOrDuration!,
+                 $after: String) {
+             issues(first: 100, after: $after, filter: {
                team: {key: {eq: "DRE"}},
                title: {startsWith: $prefix},
                labels: {name: {eqIgnoreCase: $label}},
                createdAt: {gte: $since}
-             }) { nodes { identifier description createdAt state { name } } } }""",
+             }) { nodes { identifier description createdAt state { name } }
+                  pageInfo { hasNextPage endCursor } } }""",
         {"prefix": prefix, "label": f"repo:{repo_slug}",
          "since": since.isoformat()},
     )
@@ -3737,7 +3742,7 @@ def repo_cards_by_title_prefix(prefix: str, *, repo_slug: str,
             "state": (node.get("state") or {}).get("name") or "",
             "createdAt": node.get("createdAt") or "",
         }
-        for node in (data.get("issues") or {}).get("nodes") or []
+        for node in nodes
     ]
 
 

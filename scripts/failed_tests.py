@@ -14,7 +14,9 @@ test ids in log order, no repeats, from two shapes and nothing else:
 
   * pytest, in both repos — a line that opens `FAILED <path>.py::<name>`. The
     id runs up to the ` - ` pytest writes before the failure's message, so a
-    hyphen inside a path or a parametrized id stays part of it.
+    hyphen inside a path stays part of it. Inside a parametrized id's brackets
+    even a spaced ` - ` (`test_a[a - b]`) is the id's own, so two cases that
+    differ only after it stay two ids.
   * vitest, agent-bureau's web suite — a line that, its color codes gone,
     opens `FAIL <file> > <suite> > <test>`. The id is the whole
     `file > suite > test` text. A `FAIL <file>` line with no `>` is a file
@@ -63,11 +65,35 @@ MAX_ID_CHARS = 300
 MAX_IDS = 20
 
 
+def _pytest_id(rest: str) -> str:
+    """`<path>.py::<name>[…]` off the front of pytest's `<id> - <message>`.
+
+    The message starts at the first ` - ` outside every `[…]`, so a spaced
+    hyphen in a parameter is part of the id. A parameter holding a lone `[`
+    leaves the brackets unbalanced, and there the id ends at the first ` - `
+    after a `]` — where pytest closed it — or, with no `]` at all, the first.
+    """
+    depth = 0
+    for at, char in enumerate(rest):
+        if char == "[":
+            depth += 1
+        elif char == "]":
+            depth = max(depth - 1, 0)
+        elif depth == 0 and rest.startswith(" - ", at):
+            return rest[:at].strip()
+    if depth == 0:
+        return rest.strip()
+    closed = rest.find("] - ")
+    if closed != -1:
+        return rest[:closed + 1].strip()
+    return rest.split(" - ", 1)[0].strip()
+
+
 def _test_id(line: str) -> str | None:
     """The test id one log line names, or None."""
     found = _PYTEST.match(line)
     if found:
-        return found.group("rest").split(" - ", 1)[0].strip()
+        return _pytest_id(found.group("rest"))
     found = _VITEST.match(line)
     if found:
         return found.group("id").strip()
