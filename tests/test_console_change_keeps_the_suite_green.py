@@ -34,7 +34,9 @@ names one the tree does not hold (`cases`):
   * for each (from-group, to-group) pair with an `allowed` move in
     `agents[].moves`, the first such agent moved (an agent in no group moves
     from `ungrouped`);
-  * an agent added under a name the file does not hold.
+  * an agent added under a name the file does not hold;
+  * a group added under a name the file does not hold, on the Builders
+    group's default model (DRE-6834).
 
 Builders is the group the default ladder backs, and the added agent's name is
 the first free one — both read off the tree's `config/models.yaml`.
@@ -97,11 +99,14 @@ SKIP_REASON = 'runs in the "console change keeps the suite green" job'
 REQUESTED_BY = "suite-green harness"
 ABOUT = "Answers questions from our data"
 
-#: Each operation the policy refuses today, and the test that proves it.
-REFUSED_BY_POLICY: dict[str, str] = {
-    "add_group": "the policy refuses a fourth kind — "
-                 "tests/test_model_config_change.py::test_the_policy_gate_refuses_a_fourth_group",
-}
+#: Each operation the policy refuses today, and the test that proves it. Empty
+#: since DRE-6834: `add_group` was the one, and the policy takes a group now.
+REFUSED_BY_POLICY: dict[str, str] = {}
+
+#: What the added group's case calls it, and the name it asks for.
+GROUP_LABEL = "Product & design"
+GROUP_PURPOSE = "Decide what to build and how it looks."
+GROUP_NAME = "product-design"
 
 _TEST_ID = re.compile(r"(tests/\S+\.py)::(\w+)")
 
@@ -158,6 +163,17 @@ def _change_set(*changes: dict) -> dict:
     return {"requested_by": REQUESTED_BY, "changes": list(changes)}
 
 
+def fresh_group_name(raw: dict, wanted: str = GROUP_NAME) -> str:
+    """`wanted`, or `wanted-2`, `wanted-3`, … — the first name no group or
+    ladder of `raw` holds."""
+    taken = set(raw.get("kinds") or {}) | set(raw.get("ladders") or {})
+    name, n = wanted, 1
+    while name in taken:
+        n += 1
+        name = f"{wanted}-{n}"
+    return name
+
+
 def cases(tree: Path) -> list[tuple[str, dict]]:
     """Every case, name and change set, in a fixed order — read off the tree's
     `config/model-choices.json`, `config/repo-map.json`, `config/models.yaml`
@@ -190,6 +206,10 @@ def cases(tree: Path) -> list[tuple[str, dict]]:
 
     out.append(("agent-added", _change_set(
         {"op": "add_agent", "agent": fresh_agent_name(_models(tree)), "about": ABOUT})))
+    out.append(("group-added", _change_set(
+        {"op": "add_group", "group": fresh_group_name(_models(tree)),
+         "label": GROUP_LABEL, "purpose": GROUP_PURPOSE,
+         "model": groups[home]["default_model"]})))
     return out
 
 
@@ -385,6 +405,11 @@ def test_the_cases_cover_every_kind_of_save_and_name_only_what_the_tree_holds():
         kinds.setdefault(tuple(c["op"] for c in change_set["changes"]), []).append(name)
         for change in change_set["changes"]:
             group = groups.get(change.get("group"))
+            if change["op"] == "add_group":
+                assert group is None and change["group"] not in raw["ladders"], name
+                assert choices["add_group"]["allowed"], name
+                assert change["model"] in {m["id"] for m in choices["models"]}, name
+                continue
             if "group" in change:
                 assert group is not None, (name, change)
             if "model" in change:

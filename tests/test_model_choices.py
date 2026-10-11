@@ -122,7 +122,8 @@ def test_the_file_is_two_space_json_with_a_trailing_newline():
 
 def test_top_level_keys_in_the_contract_order():
     doc = _choices()
-    assert list(doc) == ["generated_from", "models", "groups", "agents", "projects"]
+    assert list(doc) == ["generated_from", "models", "groups", "add_group", "agents",
+                         "projects"]
     assert doc["generated_from"] == "config/models.yaml"
 
 
