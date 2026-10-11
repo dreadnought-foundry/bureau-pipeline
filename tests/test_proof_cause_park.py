@@ -189,10 +189,10 @@ class TestTheContractSaysInReview:
         assert "proof_dispatch.RERUN_LANE" in text and "two-dispatch budget" in text
         assert "the hold, not the lane" in text and "config/pipeline-acts.json" in text
 
-    def test_the_in_review_entrance_names_the_bound_not_live_until_dre_6852(self):
+    def test_the_in_review_entrance_names_the_bound_live_with_dre_6852(self):
         text = " ".join(_lane("In Review")["clauses"]["entrance"]["text"].split())
         assert "`hand-work-overdue`" in text and "config/hand-work-age.json" in text
-        assert "not live until DRE-6852 lands" in text
+        assert "(DRE-6852)" in text and "not live until DRE-6852" not in text
         assert "DRE-6842" in text
 
     def test_the_act_rows_say_in_review_and_never_a_move(self):
@@ -206,7 +206,8 @@ class TestTheContractSaysInReview:
     def test_the_hand_work_overdue_row_names_the_held_proof_kind(self):
         row = _act_row(name="hand-work-overdue")
         assert "held In Review for the operator" in row["means"]
-        assert "not live until DRE-6852" in row["means"]
+        assert "`alarm_held_proofs` (DRE-6852)" in row["means"]
+        assert "not live until DRE-6852" not in row["means"]
         assert row["emits"] == {"file": "scripts/reconcile.py",
                                 "anchor": "🚨 hand-work-overdue: {ident} has waited in Hand-work"}
         assert (row["tag"], row["kind"], row["next_actor"], row["cadence_s"]) == (
