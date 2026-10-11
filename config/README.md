@@ -411,7 +411,7 @@ validation in `model_fallback.policy_errors()` rather than by convention:
   rather than as a side effect of the rule above;
 - the critic and verifier must stay `advisory`;
 - only the planner may be `judgement` — **rule 10** (DRE-6633), see *The
-  console's keys* below;
+  console's keys* below; a session agent is exempt (DRE-6833);
 - `default_ladder` must be the workhorse ladder, so an unrecognized role lands on
   the cheap side of the fence;
 - `discovery.on_new_model` may be `advisory` or `none`, and `advisory` now
@@ -526,12 +526,23 @@ The console's Settings › Agents & models page reads five more keys. Only
 - **`kinds.<kind>.label`** and **`kinds.<kind>.purpose`** — the group's name on
   the page and the one line under it. `label` defaults to the key title-cased
   (`Workhorse`) and `purpose` to empty. Today: Builders, Reviewers, Planners.
-- **`ungrouped`** — agents that exist but are in no group: the console's
-  interactive agents (`designer`, `ux-ui-engineer`, `fullstack-engineer`,
-  `mobile`, `product-lead`). It is a roster the console reads, not a dispatch
-  table — none of them runs on a pipeline workflow or has an `agents.yaml`
-  entry here, and `sync_model_config.py` generates nothing for them. A name may
-  not be in both `agents` and `ungrouped`.
+- **`ungrouped`** — agents that exist but are in no group: today the
+  console's interactive agents (`designer`, `ux-ui-engineer`,
+  `fullstack-engineer`, `mobile`, `product-lead`). It is a roster the console
+  reads, not a dispatch table. A name may not be in both `agents` and
+  `ungrouped`; moving one into a group takes it off this list.
+- **`session_agents`** (DRE-6833) — the agents that run in a person's session
+  rather than a pipeline workflow: today the same five. Independent of
+  `ungrouped`: a name stays here after it is given a group, so the file still
+  knows it is not a pipeline role. Each must be in `agents` or `ungrouped` (a
+  record for nobody is refused). A session agent may join any of the three
+  groups, and its group never makes it a pipeline role: it has no
+  `agents.yaml` entry (`sync_model_config.py` skips it, and refuses one that
+  has a generated region), `model_fallback.AGENT_KINDS` leaves it out, and
+  `kind_for`, `ladder_for` and `select` answer it exactly as an unknown name —
+  the top of the Builders ladder, from the YAML and from the degrade mirror.
+  Its group is a published fact for the console; making it run on that group's
+  model is DRE-6784 in agent-bureau. `add_agent` appends every agent it adds.
 - **`about`** — agent name → one line, for every name in `agents` and
   `ungrouped`. A line for a name in neither is refused.
 - **`projects`** — repo slug → `{ <kind>: <model id> }`, the per-project
@@ -598,7 +609,11 @@ volume on the strongest model — the 2026-08-09 incident. The `kinds.judgement`
 comment said "ONE role, deliberately" from DRE-3015 on and nothing enforced it.
 The rule is one-directional: the planner moving to `advisory` or `workhorse` is
 a spend decrease and stays admissible. `agents.critic: judgement` is refused by
-rule 3 and rule 10, each with its own reason.
+rule 3 and rule 10, each with its own reason. A name in `session_agents` is
+exempt, and nobody else (DRE-6833): the selector never reads a session agent's
+group, so a designer in Planners puts no run on Fable 5.1 and the volume this
+rule guards against cannot arise. Every pipeline role is held to it exactly as
+before.
 
 ## Every run says which model it used, and why anything above it was skipped
 
@@ -662,19 +677,23 @@ changes what the fleet selects.
 The literal carries `review_separation` too (DRE-3880): a degrade that dropped
 the fence would review a Sonnet build on the same Sonnet and look exactly like a
 healthy run. And it carries the console's `groups`, `ungrouped`, `about` and
-`projects` (DRE-6633), so the degrade path gives the same answer as a healthy
-checkout.
+`projects` (DRE-6633), and `session_agents` beside `ungrouped` (DRE-6833), so
+the degrade path gives the same answer as a healthy checkout.
 
 The third target is a whole generated file, `config/model-choices.json`
 (DRE-6635) — what the console's Settings › Agents & models page reads instead
 of parsing this file and re-deriving the policy: every model with a declared
 price in `model-prices.yaml` (label, price, and its `excluded` reason or
 `null`), one group per kind with its ladder and a choice per model, every agent
-with a move per other kind, and the per-project exceptions. Every `allowed` and
-`reason` is `model_fallback.policy_errors`' answer on a copy of this file
-carrying that one option as a real entry — a project exception under
-`projects`, an agent moved under `agents` — so the page is read off the same
-gate a pull request meets. A missing or stale file is `STALE` under `--check`,
+— in a group or not — with a move per group it is not in and `runs_in`
+(`pipeline` or `session`, off `session_agents`), and the per-project
+exceptions. Every `allowed` and `reason` is `model_fallback.policy_errors`'
+answer on a copy of this file carrying that one option as a real entry — a
+project exception under `projects`; for a move, the edit the change script
+below would make (`model_config_change.edit_data`), after its own pre-flight
+checks — so the page is read off the same gate a pull request meets. A refused
+move's `reason` is the plain sentence the change script prints for it
+(DRE-6833). A missing or stale file is `STALE` under `--check`,
 exactly like the two mirrors; `tests/test_model_choices.py` pins its content
 and recomputes every verdict through a real repo slug. The daily
 `.github/workflows/model-adoption.yml` is a writer too: it runs the generator
@@ -691,11 +710,16 @@ judged by `model_fallback.policy_errors` before anything is written: one
 refusal fails the run with each refused change's reason and opens no branch.
 An accepted set is regenerated with the generator above and opened as ONE pull
 request on `agent/model-config-<digest>`, the same changes always naming the
-same branch, so pressing Save twice opens one pull request. Two refusals follow
-from the rules as they stand: `kinds` admits exactly the three kinds, so a new
-group is refused until that rule changes, and an interactive agent with no
-`agents.yaml` entry cannot join a group, because the generator writes a model
-for every name in `agents`.
+same branch, so pressing Save twice opens one pull request. `kinds` admits
+exactly the three kinds, so a new group is refused until that rule changes. A
+session agent joins any group (DRE-6833), and so does an agent added in the same
+change set, since `add_agent` makes it one; a name in neither `agents.yaml` nor
+`session_agents` cannot, because the generator writes a model for every other
+name in `agents`. The console shows the CEO every `::error::` line and summary
+bullet of a refusal word for word, so each is one plain sentence — the change in
+the pull request body's words, then why, groups by their labels — rendered by
+`model_config_change.plain_lines`; the validator's own findings go to the run
+log and to a block under the bullets, for an engineer.
 
 ## The effort level (DRE-4836)
 

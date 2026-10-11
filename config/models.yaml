@@ -99,14 +99,31 @@
 #   agents         agent/role name → KIND. The names match agents.yaml `name:`
 #                  entries; the four label-routed roles
 #                  (engineer/frontend/devops/planner) are also the role strings
-#                  the workflows pass to `model_fallback.py select`.
+#                  the workflows pass to `model_fallback.py select`. The one
+#                  exception is a session agent (`session_agents` below): it
+#                  may sit here with no agents.yaml entry, and its kind is the
+#                  console's group for it and selects nothing (DRE-6833).
 #                  `judgement` is the planner's kind and no other role's
 #                  (rule 10, DRE-6633): a role that runs per card on the
-#                  strongest model is the 2026-08-09 incident.
-#   ungrouped      agent names that exist but are in no group — the console's
-#                  interactive agents. A roster the console reads, not a
-#                  dispatch table: none runs on a pipeline workflow, and a name
-#                  may not be in both `agents` and here (DRE-6633).
+#                  strongest model is the 2026-08-09 incident. Rule 10 does not
+#                  apply to a session agent, and to nobody else: the selector
+#                  answers a session agent exactly as it answers an unknown
+#                  name, whatever its group, so its group puts no run on the
+#                  strongest model.
+#   ungrouped      agent names that exist but are in no group. A roster the
+#                  console reads, not a dispatch table, and a name may not be
+#                  in both `agents` and here (DRE-6633). `move_agent` takes a
+#                  name off this list when it gives it a group.
+#   session_agents agent names that run in a person's session rather than a
+#                  pipeline workflow — the console's interactive agents
+#                  (DRE-6833). Independent of `ungrouped`: a name stays here
+#                  after it is given a group, so the file still knows it is not
+#                  a pipeline role. Each must be in `agents` or `ungrouped`;
+#                  none has an agents.yaml entry (the generator refuses one
+#                  that does), none is in `model_fallback.AGENT_KINDS`, and no
+#                  workflow selects a model for it. `add_agent` appends every
+#                  agent it adds. Making one RUN on its group's model is
+#                  DRE-6784's work in agent-bureau.
 #   about          agent name → one line saying what it does, for every name
 #                  in `agents` and `ungrouped`. A line for a name that is in
 #                  neither is refused.
@@ -391,12 +408,24 @@ agents:
 # -------------------------------
 # The console's Settings › Agents & models page shows one group per kind (its
 # `label` and `purpose` above) and, under it, the agents assigned that kind.
-# `ungrouped` names the agents that exist but are in no group: the console's
-# interactive agents. None of them runs on a pipeline workflow or has an
-# agents.yaml entry in this repo, and that is fine — this list is a roster the
-# console reads, not a dispatch table, and `sync_model_config.py` generates
-# nothing for a name it does not hold in `agents`.
+# `ungrouped` names the agents that exist but are in no group. Today those are
+# the console's interactive agents, and moving one into a group takes it off
+# this list and writes it under `agents`.
 ungrouped:
+  - designer
+  - ux-ui-engineer
+  - fullstack-engineer
+  - mobile
+  - product-lead
+
+# The agents that run in a person's session, not a pipeline workflow (DRE-6833).
+# None of them has an agents.yaml entry in this repo, and that is fine: a name
+# here is never a pipeline role, in a group or not. `sync_model_config.py`
+# writes no registry region for it, `model_fallback` answers it as an unknown
+# name (the top of the Builders ladder), and rule 10 does not apply to it, so
+# the CEO may put it in any group. Its group is a published fact the console
+# shows; making it run on that group's model is DRE-6784 (agent-bureau).
+session_agents:
   - designer
   - ux-ui-engineer
   - fullstack-engineer

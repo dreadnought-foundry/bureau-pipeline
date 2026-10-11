@@ -246,6 +246,7 @@ _FALLBACK_MODEL_CONFIG = {
         "judgement": {"label": "Planners", "purpose": "Turn an epic into the cards the fleet builds."},
     },
     "ungrouped": ["designer", "ux-ui-engineer", "fullstack-engineer", "mobile", "product-lead"],
+    "session_agents": ["designer", "ux-ui-engineer", "fullstack-engineer", "mobile", "product-lead"],
     "about": {
         "engineer": "Builds a card and opens the PR",
         "frontend": "Builds the screens a card asks for and opens the PR",
@@ -334,6 +335,7 @@ def _normalize_config(raw) -> dict | None:
     # ABSENT; a value of the wrong shape is carried through, as `agents` is, so
     # `policy_errors` can refuse it rather than have it silently vanish.
     ungrouped = raw.get("ungrouped")
+    session_agents = raw.get("session_agents")
     about = raw.get("about")
     projects = raw.get("projects")
     return {
@@ -349,6 +351,9 @@ def _normalize_config(raw) -> dict | None:
         "groups": _normalize_groups(raw.get("kinds"), raw.get("groups")),
         "ungrouped": [] if ungrouped is None else (
             list(ungrouped) if isinstance(ungrouped, list) else ungrouped),
+        "session_agents": [] if session_agents is None else (
+            list(session_agents) if isinstance(session_agents, list)
+            else session_agents),
         "about": {} if about is None else (
             {str(n): line for n, line in about.items()}
             if isinstance(about, Mapping) else about),
@@ -619,13 +624,18 @@ def policy_errors(config, prices=None, repo_slugs=None) -> list[str]:
          `judgement` (DRE-6633). The kind admits a role that runs once per
          epic; a per-card role on it is volume on the strongest model, which is
          the 2026-08-09 incident. One-directional: the planner moving to a
-         cheaper kind is a spend decrease and stays admissible.
+         cheaper kind is a spend decrease and stays admissible. A name in
+         `session_agents` is exempt, and nobody else (DRE-6833): the selector
+         never reads a session agent's group (`AGENT_KINDS` leaves it out), so
+         no run lands on the strongest model because of it.
 
     The console's keys (DRE-6633) are checked last, each refusal prefixed by
     the key it is about: `kinds.<kind>.label` / `.purpose` are text,
-    `ungrouped` is a list of names none of which is in `agents`, `about` maps a
-    known agent to a line, and `projects` maps a slug of config/repo-map.json
-    to `{kind: model}`. An exception's model must be a rung of THAT KIND'S OWN
+    `ungrouped` is a list of names none of which is in `agents`,
+    `session_agents` is a list of names each in `agents` or `ungrouped`
+    (DRE-6833), `about` maps a known agent to a line, and `projects` maps a
+    slug of config/repo-map.json to `{kind: model}`. An exception's model must
+    be a rung of THAT KIND'S OWN
     ladder — it reorders the ladder and never adds to it — and that refusal is
     the entry's only reason. An exception that passes is held to rules 4, 4b,
     7 and 8 on the walk it makes, every finding the fleet does not already
@@ -673,10 +683,13 @@ def policy_errors(config, prices=None, repo_slugs=None) -> list[str]:
                 f"agents.{role}: must be {ADVISORY_KIND!r} (it gates unattended "
                 f"merges), got {assigned!r}"
             )
-    # Rule 10 (DRE-6633): the judgement kind is the planner's.
+    # Rule 10 (DRE-6633): the judgement kind is the planner's. A session agent
+    # is exempt (DRE-6833): its group selects nothing, see `AGENT_KINDS`.
     owners = " and ".join(JUDGEMENT_ROLES)
+    session = _session_names(cfg)
     for role, kind in cfg["agents"].items():
-        if kind == JUDGEMENT_KIND and role not in JUDGEMENT_ROLES:
+        if (kind == JUDGEMENT_KIND and role not in JUDGEMENT_ROLES
+                and role not in session):
             errors.append(
                 f"agents.{role}: {JUDGEMENT_KIND!r} is the {owners}'s kind — it "
                 f"admits a role that runs once per epic, and {role} runs per "
@@ -890,9 +903,19 @@ def _ladder_findings(cfg: dict, ladders: dict, prices: Mapping) -> list[tuple[st
     return findings
 
 
+def _session_names(cfg: Mapping) -> set[str]:
+    """The names `session_agents` holds, or none when it is malformed — a
+    malformed list exempts nobody, and `_console_errors` refuses it."""
+    names = cfg.get("session_agents")
+    if not isinstance(names, list) or not all(isinstance(n, str) for n in names):
+        return set()
+    return set(names)
+
+
 def _console_errors(cfg: dict) -> list[str]:
     """The console's roster keys (DRE-6633): `kinds.<kind>.label` / `.purpose`,
-    `ungrouped` and `about`, each refusal prefixed by the key it is about."""
+    `ungrouped`, `session_agents` (DRE-6833) and `about`, each refusal prefixed
+    by the key it is about."""
     errors: list[str] = []
     for kind, group in cfg["groups"].items():
         for field in ("label", "purpose"):
@@ -918,6 +941,21 @@ def _console_errors(cfg: dict) -> list[str]:
                 errors.append(
                     f"ungrouped.{name}: is also in `agents` — an agent is in "
                     "its kind's group or ungrouped, never both"
+                )
+
+    # DRE-6833: a record for nobody is refused, the way an `about` line is.
+    session = cfg["session_agents"]
+    if not isinstance(session, list) or not all(isinstance(n, str) for n in session):
+        errors.append(
+            f"session_agents: must be a list of agent names, got {session!r}"
+        )
+    elif roster_ok:
+        for name in session:
+            if name not in cfg["agents"] and name not in ungrouped:
+                errors.append(
+                    f"session_agents.{name}: names no agent in `agents` or "
+                    "`ungrouped` — a record for nobody is a typo or an agent "
+                    "that was removed"
                 )
 
     about = cfg["about"]
@@ -1076,7 +1114,18 @@ KINDS: dict[str, str] = CONFIG["kinds"]
 # agent/role name → role KIND. No role hardcodes a model, and no role names a
 # ladder directly: the critic, verifier and medic resolve theirs here too
 # (DRE-2316), through the kind they are classified as (DRE-2317).
-AGENT_KINDS: dict[str, str] = CONFIG["agents"]
+#
+# A session agent is left out, whatever group it is in (DRE-6833): it runs in a
+# person's session, not a pipeline workflow, so `kind_for`, `ladder_for` and
+# `select` answer it exactly as they answer an unknown name — the top of the
+# default (Builders) ladder, never the judgement one. Its group is a published
+# fact for the console (config/model-choices.json) and nothing on the dispatch
+# path reads it; that is also why rule 10 may exempt it.
+SESSION_AGENTS: set[str] = _session_names(CONFIG)
+AGENT_KINDS: dict[str, str] = {
+    role: kind for role, kind in CONFIG["agents"].items()
+    if role not in SESSION_AGENTS
+}
 
 # What happens to a model id we see but do not configure: `advisory` (may be
 # proposed for the advisory ladder by a human) or `none`. Never `workhorse`.
