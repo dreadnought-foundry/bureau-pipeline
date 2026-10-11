@@ -1795,17 +1795,12 @@ jobs:
                 echo "proof park: the cause rows could not be read for $CARD" >> "$GITHUB_STEP_SUMMARY"
               fi
             fi
+            # The hold first, one for either reason.
             if [ -n "$CAUSE_PARKED" ]; then
               OBSERVED=$(printf '%s' "$CAUSE_HOLD" | cut -f1)
               NEEDS=$(printf '%s' "$CAUSE_HOLD" | cut -f2-)
-              if ! python3 .bureau-pipeline/scripts/linear_ops.py proof-waiting "$CARD" "$OBSERVED" "$NEEDS"; then
-                echo "::warning::the 🔬 proof-waiting hold could not be posted; the question still parks in Green Light"
-                echo "proof park: the hold could not be posted for $CARD" >> "$GITHUB_STEP_SUMMARY"
-              fi
-              python3 .bureau-pipeline/scripts/linear_ops.py comment "$CARD" "$(cat "${RUNNER_TEMP:-/tmp}/proof-cause-question.md")"
-              echo "proof park: cause rows ($(printf '%s\n' "$CAUSES" | grep -c .))" >> "$GITHUB_STEP_SUMMARY"
             else
-              # The hold first: the criterion in the card's words and the press,
+              # The press hold: the criterion in the card's words and the press,
               # read off the criterion line the planner opens with `needs the
               # CEO's press:` (DRE-5923) — the one the escalation names, else
               # the first. A card that marks none holds on the escalation's own
@@ -1834,13 +1829,18 @@ jobs:
           print(f"{criterion}\t{press}".replace("\n", " "))
           PY
               )
-              CRITERION=$(printf '%s' "$HOLD" | cut -f1)
+              OBSERVED=$(printf '%s' "$HOLD" | cut -f1)
               PRESS=$(printf '%s' "$HOLD" | cut -f2-)
-              if ! python3 .bureau-pipeline/scripts/linear_ops.py proof-waiting "$CARD" \
-                   "$CRITERION" "the CEO's press: $PRESS"; then
-                echo "::warning::the 🔬 proof-waiting hold could not be posted; the question still parks in Green Light"
-                echo "proof park: the hold could not be posted for $CARD" >> "$GITHUB_STEP_SUMMARY"
-              fi
+              NEEDS="the CEO's press: $PRESS"
+            fi
+            if ! python3 .bureau-pipeline/scripts/linear_ops.py proof-waiting "$CARD" "$OBSERVED" "$NEEDS"; then
+              echo "::warning::the 🔬 proof-waiting hold could not be posted; the question still parks in Green Light"
+              echo "proof park: the hold could not be posted for $CARD" >> "$GITHUB_STEP_SUMMARY"
+            fi
+            if [ -n "$CAUSE_PARKED" ]; then
+              python3 .bureau-pipeline/scripts/linear_ops.py comment "$CARD" "$(cat "${RUNNER_TEMP:-/tmp}/proof-cause-question.md")"
+              echo "proof park: cause rows ($(printf '%s\n' "$CAUSES" | grep -c .))" >> "$GITHUB_STEP_SUMMARY"
+            else
               # Then the park: the question, posted before the move. The cause
               # lines, held in $CAUSES, are lifted out of the file first and set
               # under the three lines, so a file that declared its three lines
