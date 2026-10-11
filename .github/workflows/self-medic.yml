@@ -58,11 +58,18 @@
 # proof run amends the record it already began rather than opening a second
 # one, and it never re-posts the dispatcher's receipt — that is the sweep's,
 # and the run writes no lane.
+#
+# Model config change (DRE-6624) is watched on the same terms. Retrying it is
+# safe because its one branch is named for the change set and every write is
+# looked up before it is made: an open pull request on that branch ends the
+# run, and a branch pushed with no pull request is reused, not re-cut. A set
+# the validator refused is red by design, and its retry is refused the same
+# way, writing nothing.
 name: Pipeline Medic
 
 on:
   workflow_run:
-    workflows: [Pipeline Tests, Agent Task, Agent Plan, QA Review, Merge Gate, Linear Sync, Reconcile, Agent Fix, Red-Main Repair, Integration Harness, Release Gate, Smoke · setup-node-cached, Smoke · setup-python-cached, Promote Channel, Nightly Watch, Groomer, Deliver Rescue, Model adoption, Hygiene, Proof Task]
+    workflows: [Pipeline Tests, Agent Task, Agent Plan, QA Review, Merge Gate, Linear Sync, Reconcile, Agent Fix, Red-Main Repair, Integration Harness, Release Gate, Smoke · setup-node-cached, Smoke · setup-python-cached, Promote Channel, Nightly Watch, Groomer, Deliver Rescue, Model adoption, Hygiene, Proof Task, Model config change]
     types: [completed]
 
 permissions:

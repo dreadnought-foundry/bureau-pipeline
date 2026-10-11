@@ -42,6 +42,10 @@ What's new: <kind>, <audience>: <sentence> [<second sentence>] [(open: </path>)]
 - The model adoption workflow's pull requests — `agent/<card>-adopt-<candidate>`,
   `agent/model-adoption-<candidate>` and `agent/claude-code-pin-<version>` —
   carry `What's new: none`, written by their own body renderers (DRE-5573).
+- The model config change workflow's pull request — the console's Save
+  changes on Settings › Agents & models, on `agent/model-config-<digest>` —
+  carries `What's new: none` the same way, written by
+  `scripts/model_config_change.py` (DRE-6624).
 - The two rescue pull requests carry no line: `scripts/push_rescue.py` opens one
   on an agent's own `agent/` branch, `scripts/deliver_rescue.py` one on
   `agent/<card>-rescued-delivery`. Both bodies are machine-written because the

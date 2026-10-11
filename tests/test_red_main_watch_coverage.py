@@ -228,7 +228,8 @@ class NewWorkflowCannotSlipThroughTest(unittest.TestCase):
         (self.dir / REPAIR_STUB).write_text(stub)
         # The medic must also see it — a red commit AND a crashed run.
         before = (self.dir / "self-medic.yml").read_text()
-        medic = before.replace("Proof Task]", "Proof Task, Brand New Gate]")
+        medic = before.replace("Model config change]",
+                                "Model config change, Brand New Gate]")
         # Guards the fixture: a replace that matches nothing leaves the medic
         # blind to the new gate, and the test then passes on the repair rail
         # alone (it did, silently, from the day the list stopped ending in the
