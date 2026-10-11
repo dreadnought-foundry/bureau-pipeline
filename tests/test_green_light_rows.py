@@ -269,9 +269,10 @@ class TestTheRepositoryPasses:
         declared = _declared(contract)
         assert set(declared) == {ESCALATE, CMD_EXIT, PARK, REVIEW_CAP, EPIC_GROWTH,
                                  BLOCKER_ASK, RELEASED_EPIC, PROOF_CAUSE}
-        # The cause park's callers are added by the cards that call it (DRE-6612).
+        # The cause park's callers are added by the cards that call it
+        # (DRE-6612): the proof dispatcher's park is the first (DRE-6610).
         counts = {ESCALATE: 7, CMD_EXIT: 2, PARK: 2, REVIEW_CAP: 1, EPIC_GROWTH: 1,
-                  BLOCKER_ASK: 1, RELEASED_EPIC: 1, PROOF_CAUSE: 0}
+                  BLOCKER_ASK: 1, RELEASED_EPIC: 1, PROOF_CAUSE: 1}
         for (module, function), callers in declared.items():
             report = lane_callers.callers_of(module, function, str(ROOT))
             assert report.unread == frozenset(), (module, report.unread)

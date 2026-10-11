@@ -325,7 +325,9 @@ brings that next run. For any other row, the sweep sends the record back to a
 proof run once the critic has approved it and the gate has declined it at its
 head — at most twice per record pull request, counted with the critic's
 send-backs, then held for an operator (DRE-6488); a row waiting for an event
-is held until the operator records the event instead. Never reword a row to
+is held until the operator records the event instead, and a record whose unmet
+rows all carry a cause word is never sent back — it is parked for the
+operator's decision on those rows (DRE-6610). Never reword a row to
 get it merged.
 
 **A row shown working but not as the card words it is accepted by the

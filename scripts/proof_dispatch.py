@@ -122,9 +122,22 @@ the note; a record not read there is refused. Then, after the stops:
      (`proof_record.row_waiting`) holds the card on one `🔬 proof-waiting`
      naming the waiting rows and their events, and nothing is dispatched. The
      operator's `🔬 proof-observed` discharges it, and the next pass re-runs.
-  2. Otherwise the run is dispatched, `re-run after the gate's decline at
+  2. A record whose unmet rows ALL carry a cause word
+     (`proof_record.all_unmet_caused`, DRE-6607) is never re-run at that head
+     (DRE-6610): a re-run would read the same 403, Done card or closed
+     repository again. `park_caused` puts it to the operator once, through
+     the one writer `proof_cause_park.park` (DRE-6612) — the hold, the
+     question and the move to Green Light out of `In Review`, each skipped
+     when the thread already carries it, so a record the run parked but could
+     not move is only moved. Its own hold does not hold an `In Review` card
+     off the park; any other open hold still does. The line reads `re-run:
+     <n> row(s) of the record at <sha7> cannot be observed as worded (cause:
+     …) — <what the park did>, never re-run to read the same thing`, counted
+     held. One caused row beside a plain unmet row is re-run, because the
+     plain row may read differently.
+  3. Otherwise the run is dispatched, `re-run after the gate's decline at
      <sha7>`, under the same rule for a newer receipt as the critic's.
-  3. The one budget: two re-runs per record pull request, whichever trigger
+  4. The one budget: two re-runs per record pull request, whichever trigger
      spent them. After two, one hold; a re-run that finished with the decline
      still at the head, one hold. Never a third guess.
 
@@ -206,6 +219,7 @@ import merge_gate  # noqa: E402 — the critic's marker for `standing_verdict`
 import pipeline_act  # noqa: E402
 import plan_run  # noqa: E402
 import proof_and_demo  # noqa: E402
+import proof_cause_park  # noqa: E402 — the one Green Light write for cause rows (DRE-6612)
 import proof_record  # noqa: E402 — the record at the head, read as the gate reads it
 import proof_release  # noqa: E402
 # The branch rule and the hold reader live once, in the leaf the merge gate and
@@ -305,6 +319,8 @@ RERUN_UNANSWERED_OBSERVED = ("the re-run finished and the critic's findings "
                              "still stand at the record's head")
 RERUN_UNANSWERED_NEEDS = ("an operator reading the critic's findings and the "
                           "re-run's thread")
+#: How the cause park's refusal line ends (DRE-6610).
+NEVER_AGAIN = "never re-run to read the same thing"
 #: The same two holds when the gate's decline is what stands (DRE-6488).
 GATE_EXHAUSTED_OBSERVED = "the gate declined the record twice after re-observation"
 GATE_EXHAUSTED_NEEDS = ("an operator reading the gate's declined note and the two "
@@ -674,6 +690,28 @@ UNCHECKED_NOTE = ("a console answer after it COULD NOT BE CHECKED (the "
                   "until a pass that can check it")
 
 
+def _past_cause_hold(holds: list, text: str) -> list:
+    """`holds` without the cause park's own hold, when every unmet row of the
+    record carries a cause word — the park reads that hold itself and only
+    moves the card (DRE-6610). Any other open hold still holds."""
+    read = proof_record.reading(text)
+    if not proof_record.all_unmet_caused(read):
+        return holds
+    line = linear_ops.proof_waiting_line(
+        *proof_cause_park.hold(proof_cause_park.rows_of(text)))
+    return [h for h in holds if not h.startswith(line)]
+
+
+def park_caused(one: "_Pass", ident: str, text: str, voices: list) -> str:
+    """The dispatcher's cause park (DRE-6610): the record's cause rows handed
+    to `proof_cause_park.park`, the one Green Light write for them, and what
+    it did. Declared on the lane contract as that writer's caller; it makes
+    no lane write of its own. Not live, it prints `would: park` and writes
+    nothing."""
+    rows = proof_cause_park.rows_of(text)
+    return proof_cause_park.park(ident, rows, voices=voices, live=one.live)
+
+
 class _Pass:
     def __init__(self, repo, slug, *, live, linear, read, find_pr, run_state,
                  release, fire, voices, now, find_record, read_record):
@@ -970,6 +1008,12 @@ class _Pass:
         comments, viewer, voices = self._thread(card)
         self._parked_on(card, comments, number, head)
         holds = _open_holds(voices)
+        text = None
+        if holds and trigger.gate and (card.get("state") or {}).get("name") == RERUN_LANE:
+            # The cause park's own hold on a card its move left in `In Review`
+            # does not hold it off the park that moves it (DRE-6610).
+            text = self._record_at_head(pr, number, head)
+            holds = _past_cause_hold(holds, text)
         if holds:
             note = f"; {UNCHECKED_NOTE}" if _unchecked_after_hold(voices) else ""
             raise _Refused(f"re-run: held by {holds[-1]}{note}", "held")
@@ -981,8 +1025,12 @@ class _Pass:
                            "running")
 
         if trigger.gate:
-            self._waiting(ident, voices, trigger,
-                          self._unmet_at_head(pr, number, head), head)
+            if text is None:
+                text = self._record_at_head(pr, number, head)
+            read = proof_record.reading(text)
+            self._waiting(ident, voices, trigger, read.unmet, head)
+            if proof_record.all_unmet_caused(read):
+                self._caused(ident, text, read, voices, head)
 
         # A receipt with no readable time is read as the newer, and counted:
         # unread never answers "nothing has been sent" or "budget left".
@@ -1069,9 +1117,9 @@ class _Pass:
                         (GATE_EXHAUSTED_OBSERVED, GATE_EXHAUSTED_NEEDS),
                         (GATE_UNANSWERED_OBSERVED, GATE_UNANSWERED_NEEDS), gate=True)
 
-    def _unmet_at_head(self, pr: dict, number, head: str) -> list:
-        """The record's unmet rows at the head, by the reader the gate held
-        on — never the note's quotation. Unread never answers "re-run"."""
+    def _record_at_head(self, pr: dict, number, head: str) -> str:
+        """The record's text at the head, by the reader the gate held on —
+        never the note's quotation. Unread never answers "re-run"."""
         try:
             found = self.read_record(pr, head)
         except Exception as error:  # noqa: BLE001
@@ -1080,7 +1128,23 @@ class _Pass:
             detail = getattr(found, "detail", None) or "nothing was read"
             raise _Refused(f"re-run: the record on #{number} could not be read "
                            f"at {head[:7]} — {detail}; nothing dispatched")
-        return proof_record.reading(found.text).unmet
+        return found.text
+
+    def _caused(self, ident: str, text: str, read, voices: list, head: str) -> None:
+        """Behavior 2 (DRE-6610): every unmet row carries a cause word, so a
+        re-run would read the same thing. The card is parked through
+        `park_caused` and never re-run at this head; a park that failed is a
+        failure of the pass, and still never a re-run."""
+        words = ", ".join(dict.fromkeys(word for _, word in read.caused))
+        said = (f"re-run: {len(read.caused)} row(s) of the record at {head[:7]} "
+                f"cannot be observed as worded (cause: {words}) — ")
+        try:
+            said += park_caused(self, ident, text, voices)
+        except Exception as error:  # noqa: BLE001
+            self.tally.failures.append(f"{ident}: the cause park was not "
+                                       f"completed: {error}")
+            said += f"ERROR: the park was not completed: {error}"
+        raise _Refused(f"{said}, {NEVER_AGAIN}", "held")
 
     def _waiting(self, ident: str, voices: list, trigger: _Trigger,
                  unmet: list, head: str) -> None:
