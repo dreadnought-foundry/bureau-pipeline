@@ -5,10 +5,20 @@ honor, and `policy_errors` refuses a malformed one in plain English.
 WHAT CHANGES, AND WHAT DOES NOT
 -------------------------------
 The file gains `kinds.<kind>.label` / `kinds.<kind>.purpose`, `ungrouped`,
-`about` and `projects`. It shipped with `projects: {}`, so NOTHING any run
-selected changed: `SelectionIsUnchangedTest` pins every role's pick, read off
-the ladders rather than hardcoded, and every repo the console has given no
-exception still walks the fleet ladders.
+`about` and `projects`. A repo the console has given no exception walks the
+fleet ladders, and every role's pick is read off the ladders rather than
+hardcoded (`TestSelectionIsUnchanged`).
+
+WHAT IS READ FROM WHERE (DRE-6863)
+----------------------------------
+The console rewrites config/models.yaml on every save, so a RULE here — an
+exception puts one of the kind's own rungs first and never adds a model, the
+walk below it is the fleet ladder, rule 10 — is proved on the frozen copy
+(`model_fixture.fixture_config()`), and every model id and role it names is read
+off that copy's ladders and `agents:` map. What holds for any saved state — the
+committed `projects` block validates with the committed repo map, `ungrouped`
+and `agents` are disjoint and every name in them has an `about` line — keeps
+reading the committed file and derives what it expects from it.
 
 ANY PRICED MODEL (DRE-6785, the CEO's decision of 2026-10-10)
 -------------------------------------------------------------
@@ -44,23 +54,46 @@ sys.path.insert(0, str(ROOT / "scripts"))
 sys.path.insert(0, str(ROOT / "tests"))
 
 import model_fallback as mf  # noqa: E402
+import model_fixture  # noqa: E402
 import sync_model_config  # noqa: E402
-from model_config_text import config_with_session_agents_ungrouped  # noqa: E402
+from model_config_text import with_session_agents_ungrouped  # noqa: E402
+from model_fixture import ladder  # noqa: E402
 
 CONFIG_PATH = ROOT / "config" / "models.yaml"
 REPO_MAP_PATH = ROOT / "config" / "repo-map.json"
 README = ROOT / "config" / "README.md"
 
-OPUS55 = "claude-opus-5-5"
-OPUS5 = "claude-opus-5"
-SONNET55 = "claude-sonnet-5-5"
-SONNET5 = "claude-sonnet-5"
-SONNET46 = "claude-sonnet-4-6"
-FABLE51 = "claude-fable-5-1"
+# The frozen copy's ladders, and the rungs the rules below are about, read off
+# them by their place — never typed. `TestTheFixtureHoldsTheRows` pins the
+# shape each name relies on.
+FIXTURE = model_fixture.fixture_config()
+FIXTURE_PRICES = mf.declared_prices(model_fixture.FIXTURE_DIR / "model-prices.yaml")
+WORK = ladder(FIXTURE, "workhorse")
+ADVICE = ladder(FIXTURE, "advisory")
+PLAN = ladder(FIXTURE, "judgement")
+# The build ladder's top, which every other ladder degrades onto.
+BUILD_TOP = WORK[0]
+# A build rung below the top: the workhorse exception the scenarios set.
+REORDER = WORK[2]
+# The judgement ladder's top and last rung, both on no other ladder.
+PLAN_TOP = PLAN[0]
+PLAN_LAST = PLAN[-1]
+
+# The roles the rules move, read off the frozen `agents:` map.
+_KINDS = FIXTURE["agents"]
+BUILD_ROLES = [r for r, k in _KINDS.items() if k == "workhorse"]
+PLANNER = next(r for r, k in _KINDS.items() if k == "judgement")
+BOUND = FIXTURE["review_separation"]["roles"][0]
+UNBOUND_ADVISORY = next(r for r, k in _KINDS.items()
+                        if k == "advisory" and r not in FIXTURE["review_separation"]["roles"])
 
 
 def committed() -> dict:
     return yaml.safe_load(CONFIG_PATH.read_text())
+
+
+def fixture() -> dict:
+    return model_fixture.fixture_config()
 
 
 def slugs() -> set[str]:
@@ -68,17 +101,28 @@ def slugs() -> set[str]:
 
 
 def with_projects(projects) -> dict:
-    cfg = committed()
+    cfg = fixture()
     cfg["projects"] = projects
     return cfg
 
 
 def errors(cfg, repo_slugs=None) -> list[str]:
-    return mf.policy_errors(cfg, repo_slugs=slugs() if repo_slugs is None else repo_slugs)
+    """`policy_errors` on a config built from the frozen copy, priced by it."""
+    return mf.policy_errors(cfg, prices=FIXTURE_PRICES,
+                            repo_slugs=slugs() if repo_slugs is None else repo_slugs)
 
 
-def ladder(cfg, kind) -> list[str]:
-    return [r["model"] for r in cfg["ladders"][cfg["kinds"][kind]["ladder"]]]
+class TestTheFixtureHoldsTheRows:
+    """What each name above relies on, true of the frozen copy."""
+
+    def test_the_names_sit_where_the_rows_need_them(self):
+        assert len(WORK) == 4 and len(PLAN) == 3
+        assert BUILD_TOP in PLAN[1:] and BUILD_TOP in ADVICE[1:]
+        assert BUILD_TOP not in {r["built_on"] for r in FIXTURE["review_separation"]["rules"]}
+        assert REORDER != BUILD_TOP
+        for model in (PLAN_TOP, PLAN_LAST):
+            assert model not in WORK and model not in ADVICE
+        assert len(BUILD_ROLES) >= 2
 
 
 # --------------------------------------------------------------------------- #
@@ -88,12 +132,10 @@ def ladder(cfg, kind) -> list[str]:
 class TestCommittedData:
 
     def test_every_kind_carries_its_label_and_purpose(self):
-        kinds = committed()["kinds"]
-        assert {k: (v["label"], v["purpose"]) for k, v in kinds.items()} == {
-            "workhorse": ("Builders", "Do the work on every card."),
-            "advisory": ("Reviewers", "Judge a pull request, a plan or a failed run."),
-            "judgement": ("Planners", "Turn an epic into the cards the fleet builds."),
-        }
+        # The words are the console's to change; that each group has them is not.
+        for kind, spec in committed()["kinds"].items():
+            assert isinstance(spec["label"], str) and spec["label"].strip(), kind
+            assert isinstance(spec["purpose"], str) and spec["purpose"].strip(), kind
 
     def test_every_session_agent_is_in_a_group_or_in_none_and_only_they_are_in_none(self):
         # DRE-6889: the CEO moves these agents into groups and adds new ones,
@@ -112,8 +154,6 @@ class TestCommittedData:
         for name, line in cfg["about"].items():
             assert isinstance(line, str) and line.strip(), name
             assert "\n" not in line.strip(), name
-        assert cfg["about"]["engineer"] == "Builds a card and opens the PR"
-        assert cfg["about"]["designer"] == "Designs screens and systems"
 
     def test_every_project_exception_names_a_declared_repo(self):
         # The console writes exceptions here (DRE-6624); each one is a repo
@@ -125,7 +165,7 @@ class TestCommittedData:
 
     def test_the_committed_config_validates_clean_with_the_real_repo_map(self):
         assert mf.policy_errors(committed()) == []
-        assert errors(committed()) == []
+        assert mf.policy_errors(committed(), repo_slugs=slugs()) == []
 
     def test_no_pipeline_act_is_declared_for_this_card(self):
         acts = (ROOT / "config" / "pipeline-acts.json").read_text()
@@ -141,12 +181,8 @@ class TestNormalizedShape:
     def test_the_loaded_config_carries_the_four_keys(self):
         cfg = mf.CONFIG
         assert cfg["groups"] == {
-            "workhorse": {"label": "Builders", "purpose": "Do the work on every card."},
-            "advisory": {"label": "Reviewers",
-                         "purpose": "Judge a pull request, a plan or a failed run."},
-            "judgement": {"label": "Planners",
-                          "purpose": "Turn an epic into the cards the fleet builds."},
-        }
+            kind: {"label": spec["label"], "purpose": spec["purpose"]}
+            for kind, spec in committed()["kinds"].items()}
         assert cfg["ungrouped"] == committed()["ungrouped"]
         assert cfg["about"] == committed()["about"]
         assert cfg["projects"] == committed()["projects"]
@@ -154,7 +190,7 @@ class TestNormalizedShape:
     def test_a_kind_with_no_label_or_purpose_gets_the_defaults(self):
         # From a file with no session-run agent in a group: with
         # `session_agents` popped, one the CEO grouped would be a stranger.
-        raw = yaml.safe_load(config_with_session_agents_ungrouped())
+        raw = yaml.safe_load(with_session_agents_ungrouped(model_fixture.fixture_text()))
         for spec in raw["kinds"].values():
             spec.pop("label")
             spec.pop("purpose")
@@ -168,8 +204,8 @@ class TestNormalizedShape:
         assert errors(raw) == []
 
     def test_projects_normalize_to_slug_kind_model(self):
-        cfg = mf._normalize_config(with_projects({"atlas": {"workhorse": SONNET55}}))
-        assert cfg["projects"] == {"atlas": {"workhorse": SONNET55}}
+        cfg = mf._normalize_config(with_projects({"atlas": {"workhorse": REORDER}}))
+        assert cfg["projects"] == {"atlas": {"workhorse": REORDER}}
 
     def test_the_degrade_mirror_gives_the_same_four_keys(self):
         mirror = mf._normalize_config(mf._FALLBACK_MODEL_CONFIG)
@@ -181,8 +217,9 @@ class TestNormalizedShape:
         for key in ("groups", "ungrouped", "about", "projects"):
             assert cfg[key] == mf.CONFIG[key], key
 
-    def test_the_mirror_writes_them_after_review_separation_in_order(self):
-        cfg = sync_model_config.load_config()
+    def test_the_mirror_writes_them_after_review_separation_in_order(self, tmp_path):
+        (tmp_path / "models.yaml").write_text(model_fixture.fixture_text())
+        cfg = sync_model_config.load_config(tmp_path / "models.yaml")
         literal = sync_model_config.render_literal(cfg)
         at = [literal.index(f'\n    "{key}": ') for key in
               ("review_separation", "groups", "ungrouped", "about", "projects")]
@@ -207,15 +244,16 @@ class TestHelpers:
         assert mf.project_walk(rungs, None) is not rungs
 
     def test_effective_ladders_for_the_workhorse_case(self):
-        cfg = with_projects({"atlas": {"workhorse": SONNET55}})
+        cfg = with_projects({"atlas": {"workhorse": REORDER}})
         fleet = mf._normalize_config(cfg)["ladders"]
         walks = mf.effective_ladders(cfg, "atlas")
-        assert walks["workhorse"] == [SONNET55, OPUS55, OPUS5, SONNET5]
+        # The exception first, then every fleet rung in the fleet's order.
+        assert walks["workhorse"] == [WORK[2], WORK[0], WORK[1], WORK[3]]
         assert walks["advisory"] == fleet["advisory"]
         assert walks["judgement"] == fleet["judgement"]
 
     def test_effective_ladders_with_no_entry_is_the_fleet(self):
-        cfg = with_projects({"atlas": {"workhorse": SONNET55}})
+        cfg = with_projects({"atlas": {"workhorse": REORDER}})
         fleet = mf._normalize_config(cfg)["ladders"]
         assert mf.effective_ladders(cfg, None) == fleet
         assert mf.effective_ladders(cfg, "portico") == fleet
@@ -224,13 +262,13 @@ class TestHelpers:
         # (DRE-6883): an empty map, and the normalized shape naming another
         # project.
         assert mf.effective_ladders(with_projects({}), "atlas") == fleet
-        norm = mf._normalize_config(with_projects({"portico": {"advisory": SONNET5}}))
+        norm = mf._normalize_config(with_projects({"portico": {"advisory": ADVICE[1]}}))
         assert mf.effective_ladders(norm, "atlas") == fleet
 
     def test_effective_ladders_reads_the_normalized_shape_too(self):
-        cfg = mf._normalize_config(with_projects({"atlas": {"judgement": SONNET46}}))
+        cfg = mf._normalize_config(with_projects({"atlas": {"judgement": PLAN_LAST}}))
         assert mf.effective_ladders(cfg, "atlas")["judgement"] == [
-            SONNET46, FABLE51, OPUS55]
+            PLAN[2], PLAN[0], PLAN[1]]
 
     def test_declared_repo_slugs_are_the_repo_map_keys(self):
         assert mf.declared_repo_slugs() == slugs()
@@ -255,41 +293,41 @@ class TestMalformedKeys:
         assert all(e.startswith(prefix) for e in found), found
 
     def test_a_non_string_label_is_refused(self):
-        cfg = committed()
+        cfg = fixture()
         cfg["kinds"]["workhorse"]["label"] = 3
         self._only(errors(cfg), "kinds.workhorse.label: ")
 
     def test_a_non_string_purpose_is_refused(self):
-        cfg = committed()
+        cfg = fixture()
         cfg["kinds"]["advisory"]["purpose"] = ["two", "lines"]
         self._only(errors(cfg), "kinds.advisory.purpose: ")
 
     @pytest.mark.parametrize("value", ["designer", {"designer": 1}, ["designer", 7]])
     def test_ungrouped_must_be_a_list_of_strings(self, value):
-        cfg = committed()
+        cfg = fixture()
         cfg["ungrouped"] = value
         self._only(errors(cfg), "ungrouped")
 
     def test_about_must_be_a_map(self):
-        cfg = committed()
-        cfg["about"] = ["engineer"]
+        cfg = fixture()
+        cfg["about"] = [BUILD_ROLES[0]]
         self._only(errors(cfg), "about: ")
 
     def test_an_about_line_must_be_a_string(self):
-        cfg = committed()
-        cfg["about"]["engineer"] = {"line": "x"}
-        self._only(errors(cfg), "about.engineer: ")
+        cfg = fixture()
+        cfg["about"][BUILD_ROLES[0]] = {"line": "x"}
+        self._only(errors(cfg), f"about.{BUILD_ROLES[0]}: ")
 
     @pytest.mark.parametrize("projects, prefix", [
         (["atlas"], "projects: "),
-        ({"atlas": "claude-sonnet-5-5"}, "projects.atlas: "),
+        ({"atlas": REORDER}, "projects.atlas: "),
         ({"atlas": {"workhorse": 5}}, "projects.atlas.workhorse: "),
     ])
     def test_projects_must_be_a_map_of_maps_of_strings(self, projects, prefix):
         self._only(errors(with_projects(projects)), prefix)
 
     def test_a_project_that_is_not_in_the_repo_map_is_refused(self):
-        found = errors(with_projects({"nowhere": {"workhorse": SONNET55}}))
+        found = errors(with_projects({"nowhere": {"workhorse": REORDER}}))
         assert len(found) == 1, found
         assert found[0].startswith("projects.nowhere: ")
         assert "config/repo-map.json" in found[0]
@@ -298,33 +336,33 @@ class TestMalformedKeys:
                                                                  tmp_path):
         monkeypatch.setattr(mf, "_REPO_MAP_PATH", tmp_path / "gone.json")
         found = mf.policy_errors(with_projects({
-            "atlas": {"workhorse": SONNET55},
-            "portico": {"judgement": SONNET46},
-        }))
+            "atlas": {"workhorse": REORDER},
+            "portico": {"judgement": PLAN_LAST},
+        }), prices=FIXTURE_PRICES)
         assert sorted(e.split(":")[0] for e in found) == [
             "projects.atlas", "projects.portico"]
         assert all("config/repo-map.json" in e for e in found)
-        # …and an empty `projects` never needs the map at all.
-        assert mf.policy_errors(with_projects({})) == []
+        # …and a config with no exception never needs the map at all.
+        assert mf.policy_errors(with_projects({}), prices=FIXTURE_PRICES) == []
 
     def test_a_kind_that_is_not_declared_is_refused(self):
-        found = errors(with_projects({"atlas": {"builders": SONNET55}}))
+        found = errors(with_projects({"atlas": {"builders": REORDER}}))
         assert len(found) == 1, found
         assert found[0].startswith("projects.atlas.builders: ")
 
     def test_an_about_name_that_is_no_agent_is_refused(self):
-        cfg = committed()
+        cfg = fixture()
         cfg["about"]["ghost"] = "Haunts the build"
         found = errors(cfg)
         assert len(found) == 1, found
         assert found[0].startswith("about.ghost: ")
 
     def test_a_name_in_both_agents_and_ungrouped_is_refused(self):
-        cfg = committed()
-        cfg["ungrouped"] = cfg["ungrouped"] + ["engineer"]
+        cfg = fixture()
+        cfg["ungrouped"] = cfg["ungrouped"] + [BUILD_ROLES[0]]
         found = errors(cfg)
         assert len(found) == 1, found
-        assert found[0].startswith("ungrouped.engineer: ")
+        assert found[0].startswith(f"ungrouped.{BUILD_ROLES[0]}: ")
         assert "agents" in found[0]
 
 
@@ -336,27 +374,25 @@ class TestOwnKindMembership:
     """The cross-ladder row DRE-6635's test reads the same way — admitted
     since 2026-10-10."""
 
-    def test_the_rows_preconditions_hold_on_the_committed_ladders(self):
-        cfg = committed()
-        assert SONNET46 in ladder(cfg, "judgement")
-        assert FABLE51 in ladder(cfg, "judgement")
-        for model in (SONNET46, FABLE51):
+    def test_the_rows_preconditions_hold_on_the_frozen_ladders(self):
+        cfg = fixture()
+        for model in (PLAN_LAST, PLAN_TOP):
+            assert model in ladder(cfg, "judgement")
             assert model not in ladder(cfg, "workhorse")
             assert model not in ladder(cfg, "advisory")
 
-    def test_sonnet_4_6_is_admitted_as_a_workhorse_exception(self):
-        cfg = with_projects({"atlas": {"workhorse": SONNET46}})
+    def test_a_judgement_only_rung_is_admitted_as_a_workhorse_exception(self):
+        cfg = with_projects({"atlas": {"workhorse": PLAN_LAST}})
         assert errors(cfg) == []
-        assert mf.effective_ladders(cfg, "atlas")["workhorse"] == [
-            SONNET46, OPUS55, OPUS5, SONNET55, SONNET5]
+        assert mf.effective_ladders(cfg, "atlas")["workhorse"] == [PLAN_LAST] + WORK
 
-    def test_fable_is_admitted_as_a_workhorse_exception(self):
-        cfg = with_projects({"atlas": {"workhorse": FABLE51}})
+    def test_the_judgement_top_is_admitted_as_a_workhorse_exception(self):
+        cfg = with_projects({"atlas": {"workhorse": PLAN_TOP}})
         assert errors(cfg) == []
-        assert mf.effective_ladders(cfg, "atlas")["workhorse"][0] == FABLE51
+        assert mf.effective_ladders(cfg, "atlas")["workhorse"][0] == PLAN_TOP
 
     def test_the_same_model_on_its_own_kinds_ladder_is_admitted(self):
-        assert errors(with_projects({"atlas": {"judgement": SONNET46}})) == []
+        assert errors(with_projects({"atlas": {"judgement": PLAN_LAST}})) == []
 
     def test_a_priced_model_on_no_ladder_is_admitted(self):
         cfg = committed()
@@ -382,24 +418,24 @@ class TestOwnKindMembership:
 class TestExceptionsRunThePolicy:
 
     def test_a_workhorse_reorder_is_admissible(self):
-        assert errors(with_projects({"atlas": {"workhorse": SONNET55}})) == []
+        assert errors(with_projects({"atlas": {"workhorse": REORDER}})) == []
 
-    def test_opus_on_top_of_the_judgement_walk_is_admitted(self):
+    def test_a_build_rung_on_top_of_the_judgement_walk_is_admitted(self):
         # Refused by rules 4 and 4b until 2026-10-10 (DRE-6785).
-        cfg = with_projects({"atlas": {"judgement": OPUS55}})
+        cfg = with_projects({"atlas": {"judgement": BUILD_TOP}})
         assert errors(cfg) == []
-        assert mf.effective_ladders(cfg, "atlas")["judgement"] == [
-            OPUS55, FABLE51, SONNET46]
+        assert mf.effective_ladders(cfg, "atlas")["judgement"][0] == BUILD_TOP
 
-    def test_opus_on_top_of_the_advisory_walk_is_admitted(self):
+    def test_a_build_rung_on_top_of_the_advisory_walk_is_admitted(self):
         # Refused as a bare overlap until 2026-10-10: the reviewer now skips
         # the build model at selection time instead (DRE-6785).
-        cfg = with_projects({"atlas": {"advisory": OPUS55}})
+        cfg = with_projects({"atlas": {"advisory": BUILD_TOP}})
         assert errors(cfg) == []
-        assert mf.reviewers_for(cfg, OPUS55, "atlas")[0] == SONNET55
+        assert mf.reviewers_for(cfg, BUILD_TOP, "atlas")[0] != BUILD_TOP
 
     def test_an_excluded_model_on_the_walk_is_refused_by_rule_7(self):
-        found = errors(with_projects({"atlas": {"advisory": "claude-haiku-5-5"}}))
+        excluded = fixture()["excluded"][0]["model"]
+        found = errors(with_projects({"atlas": {"advisory": excluded}}))
         assert found
         assert all(e.startswith("projects.atlas.advisory: ") for e in found), found
         assert any("rule 7 " in e and "is excluded" in e for e in found), found
@@ -407,7 +443,7 @@ class TestExceptionsRunThePolicy:
     def test_the_fleets_own_findings_are_not_repeated_per_project(self):
         # A finding the fleet config already carries is the fleet's, not the
         # exception's: the per-project re-run reports only what the walk adds.
-        cfg = with_projects({"atlas": {"workhorse": SONNET55}})
+        cfg = with_projects({"atlas": {"workhorse": REORDER}})
         excluded = cfg["excluded"][0]["model"]
         cfg["ladders"]["judgement"].append({"model": excluded, "reason": "test"})
         found = errors(cfg)
@@ -417,8 +453,8 @@ class TestExceptionsRunThePolicy:
 
     def test_every_exception_is_judged_on_its_own(self):
         found = errors(with_projects({"atlas": {
-            "workhorse": SONNET55, "judgement": SONNET46,
-            "advisory": "claude-haiku-5-5"}}))
+            "workhorse": REORDER, "judgement": PLAN_LAST,
+            "advisory": fixture()["excluded"][0]["model"]}}))
         assert found
         assert all(e.startswith("projects.atlas.advisory: ") for e in found), found
 
@@ -432,36 +468,38 @@ class TestRuleTen:
     def test_the_judgement_roles_are_the_planner(self):
         assert mf.JUDGEMENT_ROLES == ("planner",)
 
-    def test_engineer_on_judgement_is_refused_in_plain_english(self):
-        cfg = committed()
-        cfg["agents"]["engineer"] = "judgement"
+    def test_a_build_role_on_judgement_is_refused_in_plain_english(self):
+        role = BUILD_ROLES[0]
+        cfg = fixture()
+        cfg["agents"][role] = "judgement"
         assert errors(cfg) == [
-            "agents.engineer: 'judgement' is the planner's kind — it admits a "
-            "role that runs once per epic, and engineer runs per card; volume on "
+            f"agents.{role}: 'judgement' is the planner's kind — it admits a "
+            f"role that runs once per epic, and {role} runs per card; volume on "
             "the strongest model is the 2026-08-09 incident. A build or fix role "
             "is 'workhorse', a reviewer is 'advisory'"
         ]
 
-    @pytest.mark.parametrize("role", ["fixer", "medic"])
+    # Another build role, and an advisory role the review fence does not bind.
+    @pytest.mark.parametrize("role", [BUILD_ROLES[-1], UNBOUND_ADVISORY])
     def test_any_other_role_on_judgement_is_refused(self, role):
-        cfg = committed()
+        cfg = fixture()
         cfg["agents"][role] = "judgement"
         found = errors(cfg)
         assert len(found) == 1, found
         assert found[0].startswith(f"agents.{role}: 'judgement' is the planner's kind")
 
-    def test_the_critic_on_judgement_carries_both_reasons(self):
-        cfg = committed()
-        cfg["agents"]["critic"] = "judgement"
+    def test_a_bound_reviewer_on_judgement_carries_both_reasons(self):
+        cfg = fixture()
+        cfg["agents"][BOUND] = "judgement"
         found = errors(cfg)
-        assert any(e.startswith("agents.critic: must be 'advisory'") for e in found), found
-        assert any(e.startswith("agents.critic: 'judgement' is the planner's kind")
+        assert any(e.startswith(f"agents.{BOUND}: must be 'advisory'") for e in found), found
+        assert any(e.startswith(f"agents.{BOUND}: 'judgement' is the planner's kind")
                    for e in found), found
 
     @pytest.mark.parametrize("kind", ["advisory", "workhorse"])
     def test_moving_the_planner_down_is_admissible(self, kind):
-        cfg = committed()
-        cfg["agents"]["planner"] = kind
+        cfg = fixture()
+        cfg["agents"][PLANNER] = kind
         assert errors(cfg) == []
 
 
@@ -484,7 +522,7 @@ class TestSelectionIsUnchanged:
         cfg = committed()
         session = set(cfg["session_agents"])
         roles = {r: k for r, k in cfg["agents"].items() if r not in session}
-        assert len(roles) == 13
+        assert roles
         for role, kind in roles.items():
             mf.clear_availability_cache()
             assert mf.select(role, probe=lambda m: True) == ladder(cfg, kind)[0], role

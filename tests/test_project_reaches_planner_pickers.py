@@ -26,6 +26,7 @@ from __future__ import annotations
 import ast
 import json
 import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -69,7 +70,14 @@ def py(tree: Path, code: str):
 
 @pytest.fixture(scope="module")
 def tree(tmp_path_factory) -> Path:
-    return make_tree(tmp_path_factory.mktemp("dre6634-planner"), PROJECTS)
+    tree = make_tree(tmp_path_factory.mktemp("dre6634-planner"), PROJECTS)
+    # The frozen tree carries the model files only; the planner scripts read
+    # the rest of config/ (the lane contract, the planning shapes) as they run,
+    # so today's copies fill in what the tree does not hold (DRE-6863).
+    for path in (ROOT / "config").iterdir():
+        if path.is_file() and not (tree / "config" / path.name).exists():
+            shutil.copy2(path, tree / "config" / path.name)
+    return tree
 
 
 @pytest.fixture(scope="module")
