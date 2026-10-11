@@ -252,6 +252,10 @@ class WorkflowWiringTest(unittest.TestCase):
                                   report[:planning]))
         self.assertTrue(guards, "the Report step guards no file before Planning")
         report_path = guards[-1].group(1)
+        # The Report step names the note in its notes directory (DRE-6961);
+        # no workflow sets AGENT_NOTES_DIR, so the step reads the default.
+        default = re.search(r'NOTES_DIR="\$\{AGENT_NOTES_DIR:-(\S+?)\}"', report).group(1)
+        report_path = report_path.replace('"$NOTES_DIR"', default)
 
         self.assertEqual(
             gate_path, report_path,

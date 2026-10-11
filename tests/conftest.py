@@ -106,6 +106,15 @@ def _own_runner_temp(monkeypatch, tmp_path_factory) -> None:
     monkeypatch.setenv("RUNNER_TEMP", str(tmp_path_factory.mktemp("runner-temp")))
 
 
+def _own_agent_notes(monkeypatch, tmp_path_factory) -> None:
+    """`scripts/report_agent_result.sh` reads the agent's three notes from
+    `AGENT_NOTES_DIR`, and from /tmp when it is unset (DRE-6961). Two copies
+    of this suite on one machine share /tmp, so a harness that hands the
+    script `os.environ` would read another copy's note. Each test gets an
+    empty directory of its own; a test that writes a note names its own."""
+    monkeypatch.setenv("AGENT_NOTES_DIR", str(tmp_path_factory.mktemp("agent-notes")))
+
+
 #: CI's own value for the Linear key (tests.yml sets `LINEAR_API_KEY: test-key`).
 CI_LINEAR_KEY = "test-key"
 #: The other Linear keys a job can carry; CI carries none of them.
@@ -133,6 +142,7 @@ def fresh_sweep_board(monkeypatch, tmp_path_factory):
     _no_live_linear_key(monkeypatch)
     _no_ambient_event(monkeypatch)
     _own_runner_temp(monkeypatch, tmp_path_factory)
+    _own_agent_notes(monkeypatch, tmp_path_factory)
     _lift_drain_slots(monkeypatch)
     _empty_epic_queue(monkeypatch)
     _reset_sweep_board()
