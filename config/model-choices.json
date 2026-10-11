@@ -465,17 +465,12 @@
       ]
     },
     {
-      "name": "designer",
-      "label": "Designer",
-      "about": "Designs screens and systems",
-      "group": null,
+      "name": "fullstack-engineer",
+      "label": "Fullstack Engineer",
+      "about": "Builds across the front and back end",
+      "group": "workhorse",
       "runs_in": "session",
       "moves": [
-        {
-          "group": "workhorse",
-          "allowed": true,
-          "reason": null
-        },
         {
           "group": "advisory",
           "allowed": true,
@@ -492,14 +487,9 @@
       "name": "ux-ui-engineer",
       "label": "Ux Ui Engineer",
       "about": "Turns a design into working screens",
-      "group": null,
+      "group": "workhorse",
       "runs_in": "session",
       "moves": [
-        {
-          "group": "workhorse",
-          "allowed": true,
-          "reason": null
-        },
         {
           "group": "advisory",
           "allowed": true,
@@ -513,19 +503,14 @@
       ]
     },
     {
-      "name": "fullstack-engineer",
-      "label": "Fullstack Engineer",
-      "about": "Builds across the front and back end",
-      "group": null,
+      "name": "designer",
+      "label": "Designer",
+      "about": "Designs screens and systems",
+      "group": "advisory",
       "runs_in": "session",
       "moves": [
         {
           "group": "workhorse",
-          "allowed": true,
-          "reason": null
-        },
-        {
-          "group": "advisory",
           "allowed": true,
           "reason": null
         },
@@ -540,14 +525,9 @@
       "name": "mobile",
       "label": "Mobile",
       "about": "Builds the mobile apps",
-      "group": null,
+      "group": "workhorse",
       "runs_in": "session",
       "moves": [
-        {
-          "group": "workhorse",
-          "allowed": true,
-          "reason": null
-        },
         {
           "group": "advisory",
           "allowed": true,
@@ -564,7 +544,7 @@
       "name": "product-lead",
       "label": "Product Lead",
       "about": "Decides what to build next and writes the cards",
-      "group": null,
+      "group": "judgement",
       "runs_in": "session",
       "moves": [
         {
@@ -574,11 +554,6 @@
         },
         {
           "group": "advisory",
-          "allowed": true,
-          "reason": null
-        },
-        {
-          "group": "judgement",
           "allowed": true,
           "reason": null
         }

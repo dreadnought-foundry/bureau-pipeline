@@ -310,19 +310,25 @@ def _plant(tmp_path: Path, tree: Path = TREE) -> Path:
 
 def _allow_a_new_pair(planted: Path) -> tuple:
     """Allow, in the planted choices file, one move whose (from, to) pair no
-    agent may make today. Returns the pair."""
+    agent may make: a planted agent, appended in the first group, allowed to
+    move to a group the file names nowhere. Nothing is taken out, and the pair
+    never depends on which moves the tree refuses today. Returns the pair."""
     path = planted / "config" / "model-choices.json"
     choices = json.loads(path.read_text())
-    pairs = allowed_pairs(choices)
-    for agent in choices["agents"]:
-        for move in agent.get("moves") or []:
-            pair = (agent.get("group"), move["group"])
-            if not move.get("allowed") and pair not in pairs:
-                move["allowed"], move["reason"] = True, None
-                path.write_text(json.dumps(choices, indent=2))
-                return pair
-    pytest.fail("every refused move shares its pair with an allowed one — "
-                "no pair is left to plant")
+    named = ({group["key"] for group in choices["groups"]}
+             | {move["group"] for agent in choices["agents"]
+                for move in agent.get("moves") or []})
+    agents = {agent["name"] for agent in choices["agents"]}
+    to = next(f"planted-group-{n}" for n in range(len(named) + 1)
+              if f"planted-group-{n}" not in named)
+    name = next(f"planted-agent-{n}" for n in range(len(agents) + 1)
+                if f"planted-agent-{n}" not in agents)
+    frm = choices["groups"][0]["key"]
+    assert (frm, to) not in allowed_pairs(choices)
+    choices["agents"].append({"name": name, "group": frm,
+                              "moves": [{"group": to, "allowed": True, "reason": None}]})
+    path.write_text(json.dumps(choices, indent=2))
+    return frm, to
 
 
 def test_every_operation_and_every_allowed_move_has_a_case():

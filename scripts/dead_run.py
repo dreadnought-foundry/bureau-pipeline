@@ -182,6 +182,10 @@ import model_fallback  # noqa: E402 — after the path insert, by design
 # prints into the log, and the one reader of it. Import-safe: no I/O at import.
 import credential_rotation  # noqa: E402 — after the path insert, by design
 
+# A run the stream watchdog stopped for going silent (DRE-6974): the one reader
+# of the line it writes. Stdlib-only at module level, so no import cycle.
+import stream_watchdog  # noqa: E402 — after the path insert, by design
+
 DEAD_TAG = "dead-run-requeue"
 HOLD_LABEL = "needs-human"
 # The clock on every limit-death marker (DRE-4208): a marker nothing has
@@ -418,10 +422,23 @@ def limit_kind(text: str) -> str | None:
     GitHub echoes into every planner run's log. The evidence is the receipt
     step's printed line (`credential_rotation.in_log`), because the 401 itself
     never reaches the log. Linear is untouched, as it is by the turn cap.
+
+    THE STALL VETO (DRE-6974) is the third, on the same side. A run the stream
+    watchdog stopped for going silent hit no wall, and it is owed the medic's
+    one retry. Planner run 38170959772 went quiet 13 minutes in and was marked
+    `kind=claude … assumed=yes` off that same echoed plan.yml comment, so the
+    marker skipped the retry the card's stall record promised. The evidence is
+    the watchdog's own line (`stream_watchdog.stall_from_log`), which reads
+    only a real, unquoted stall — prose that mentions one changes nothing. A
+    real wall behind a stall dies at the retry's first model call, with no
+    stall line, and is marked then. Linear is untouched, as above.
     """
     text = text or ""
-    if not turn_cap_in_text(text) and not credential_rotation.in_log(text) and any(
-        sig in text.lower() for sig in _CLAUDE_LIMIT_SIGNATURES
+    if (
+        not turn_cap_in_text(text)
+        and not credential_rotation.in_log(text)
+        and stream_watchdog.stall_from_log(text) is None
+        and any(sig in text.lower() for sig in _CLAUDE_LIMIT_SIGNATURES)
     ):
         return "claude"
     for sig in LIMIT_SIGNATURES:
@@ -686,6 +703,8 @@ REPLAN_MARK = f"✂️ {TURN_TAG} → Planning:"
 #: DRE-2727). agent-task.yml's hand-back branch reads the same path; a
 #: turn-cap death that left one attaches it to the replan receipt, because
 #: the pieces the agent already found are what the planner needs first.
+#: `decide --handback-file` overrides it: the report script passes the file
+#: from its notes directory, which a test moves off /tmp (DRE-6961).
 HANDBACK_PATH = "/tmp/agent-handback.txt"
 
 #: The five `⏳ n/5` phases, as the engineering standard names them. Only for
@@ -1422,7 +1441,8 @@ def main(argv: list[str]) -> int:
     """CLI for the workflow:
 
       decide <prior_dead> [--is-error] [--error-model M] [--cancelled]
-             [--turn-exhaustion [--execution-file PATH] [--comments-file PATH]]
+             [--turn-exhaustion [--execution-file PATH] [--comments-file PATH]
+                                [--handback-file PATH]]
              [--run-url U]
              [--pre-agent [--failed-step NAME] [--rate-limited]]
              [--credential-expiry [--push-status N] [--artifact NAME]]
@@ -1448,8 +1468,8 @@ def main(argv: list[str]) -> int:
 
     A turn-cap "replan" body is completed here, not in decide(): the run's own markers
     and, when the agent wrote one before it died, the hand-back at
-    HANDBACK_PATH are listed under the first line. They are receipt text, not
-    facts the decision branches on.
+    --handback-file (HANDBACK_PATH when it is not given) are listed under the
+    first line. They are receipt text, not facts the decision branches on.
 
     `decide` prints (to stdout) the action on the first line, then a blank
     line, then the comment body. The workflow reads line 1 for the branch and
@@ -1462,7 +1482,8 @@ def main(argv: list[str]) -> int:
     """
     usage = ("usage: dead_run.py decide <prior_dead> [--is-error] "
              "[--error-model M] [--cancelled] [--turn-exhaustion] "
-             "[--execution-file PATH] [--comments-file PATH] [--pre-agent] "
+             "[--execution-file PATH] [--comments-file PATH] "
+             "[--handback-file PATH] [--pre-agent] "
              "[--failed-step NAME] [--rate-limited] [--credential-expiry] "
              "[--push-status N] [--artifact NAME] [--run-url U] "
              "[--limit-log PATH --workflow NAME --run-id ID [--account L] "
@@ -1517,6 +1538,8 @@ def main(argv: list[str]) -> int:
     exec_path = _flag_value(rest, "--execution-file")
     failed_step = _flag_value(rest, "--failed-step")
     comments_path = _flag_value(rest, "--comments-file")
+    # The report script names the hand-back's directory (DRE-6961).
+    handback_path = _flag_value(rest, "--handback-file") or HANDBACK_PATH
     # DRE-3171: was this a wall rather than a death? Read off the failed run's
     # own text (`--limit-log`: the result JSON, or `gh run view --log-failed`
     # output), classified here so the workflow never re-derives a signature.
@@ -1624,7 +1647,7 @@ def main(argv: list[str]) -> int:
     )
     body = d.comments[0]
     if d.action == "replan" and turn_exhaustion:
-        body += replan_evidence(markers, _read_handback(HANDBACK_PATH))
+        body += replan_evidence(markers, _read_handback(handback_path))
     print(d.action)
     print()
     print(body)

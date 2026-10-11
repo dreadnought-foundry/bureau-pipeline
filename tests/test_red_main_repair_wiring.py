@@ -371,7 +371,7 @@ class FinishUnlandedWiringTest(unittest.TestCase):
         return found[0]
 
     def test_the_comparisons_are_gathered_between_the_records_and_the_decision(self):
-        records = self._index("git/matching-refs/heads/repair/")
+        records = self._index("red_main_repair.py gather-records")
         gather = self._index("/tmp/repair-compares.json")
         decide = self._index("red_main_repair.py decide")
         self.assertGreater(records, -1)
@@ -380,13 +380,21 @@ class FinishUnlandedWiringTest(unittest.TestCase):
         self.assertLess(records, gather)
         self.assertLess(gather, decide)
 
-    def test_the_gather_matches_refs_through_record_refs(self):
+    def test_the_gather_matches_refs_through_the_script(self):
+        # DRE-6963: the comparisons ride the same wait-and-retry as the
+        # records, in the script, which also owns the record rule
+        # (`record_refs`) and the null-per-unreadable-compare shape.
         run = self._gather()["run"]
-        self.assertIn("red_main_repair.py record-refs", run)
+        self.assertIn("red_main_repair.py gather-compares", run)
         self.assertIn("--refs-file /tmp/repair-refs.json", run)
         self.assertIn('--head-sha "$HEAD_SHA"', run)
-        self.assertIn("/compare/", run)
-        self.assertIn("FETCH-FAILED", run)
+        self.assertIn('--default-branch "$DEFAULT_BRANCH"', run)
+        self.assertIn("--out /tmp/repair-compares.json", run)
+        # DRE-6963: the records' pulls file too, so a failed records gather
+        # costs no second wait here (the decision is already made).
+        self.assertIn("--pulls-file /tmp/repair-pulls.json", run)
+        self.assertNotIn("gh api", run)
+        self.assertNotIn("2>/dev/null", run)
         # The regex lives once, in the script.
         self.assertNotIn("DRE-[0-9]", run)
 
@@ -452,6 +460,71 @@ class FinishUnlandedWiringTest(unittest.TestCase):
 
     def test_the_concurrency_comment_names_the_ending(self):
         self.assertIn("finish-unlanded", src(REUSABLE).split("concurrency:")[0])
+
+
+class GatherRecordsRetryWiringTest(unittest.TestCase):
+    """DRE-6963: the attempt records are read by the script that says why a
+    read failed and waits the call limit out, and a read that never comes
+    back fails the run instead of ending it green."""
+
+    @staticmethod
+    def _steps():
+        return doc(REUSABLE)["jobs"]["repair"]["steps"]
+
+    @classmethod
+    def _step(cls, name):
+        found = [s for s in cls._steps() if s.get("name") == name]
+        assert len(found) == 1, f"exactly one step named {name!r}"
+        return found[0]
+
+    @classmethod
+    def records_step(cls):
+        return cls._step("Gather repair attempt records")
+
+    def test_the_reason_is_no_longer_thrown_away(self):
+        run = self.records_step()["run"]
+        self.assertNotIn("2>/dev/null || echo 'FETCH-FAILED'", run)
+        self.assertNotIn("2>/dev/null || echo 'FETCH-FAILED'", src(REUSABLE))
+        self.assertNotIn("gh api", run)
+
+    def test_the_step_calls_the_new_command(self):
+        run = self.records_step()["run"]
+        self.assertIn("red_main_repair.py gather-records", run)
+        self.assertIn('--repo "$GITHUB_REPOSITORY"', run)
+        self.assertIn("--refs-out /tmp/repair-refs.json", run)
+        self.assertIn("--pulls-out /tmp/repair-pulls.json", run)
+        self.assertNotIn("${{", run)
+
+    def test_a_failed_gather_fails_the_step(self):
+        # Never swallowed: the step's non-zero exit is the red run the medic
+        # and the alerts read.
+        step = self.records_step()
+        self.assertNotIn("continue-on-error", step)
+        self.assertNotIn("||", step["run"])
+        self.assertEqual((step.get("env") or {}).get("GH_TOKEN"),
+                         "${{ steps.app.outputs.token }}")
+
+    def test_the_decision_still_answers_after_a_failed_gather(self):
+        # The decide step still runs after the gather failed, and answers
+        # records-unreadable with go=false; every step that acts is gated on
+        # its outputs, so nothing dispatches.
+        decide = [s for s in self._steps() if s.get("id") == "decide"][0]
+        self.assertEqual(decide.get("if"), "${{ !cancelled() }}")
+        compares = self._step(
+            "Gather repair branch comparisons (pushed and never opened?)")
+        self.assertEqual(compares.get("if"), "${{ !cancelled() }}")
+
+    def test_the_job_outlasts_the_twenty_minute_wait(self):
+        job = doc(REUSABLE)["jobs"]["repair"]
+        self.assertGreaterEqual(int(job["timeout-minutes"]), 25)
+
+    def test_the_comment_states_the_new_behavior(self):
+        body = src(REUSABLE)
+        comment = body[:body.index("- name: Gather repair attempt records")]
+        comment = comment[comment.rindex("\n\n"):]
+        self.assertIn("DRE-6963", comment)
+        self.assertIn("rate limit", comment)
+        self.assertNotIn("the next failure event retries", comment)
 
 
 _FINISH_STUB = """\

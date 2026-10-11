@@ -28,7 +28,7 @@ WORKFLOW = os.path.join(
 
 def blocker_branch() -> str:
     src = step_shell.workflow_source(WORKFLOW)
-    m = re.search(r"elif \[ -f /tmp/agent-blocker\.txt \]; then(.*?)\n\s*else\b", src, re.S)
+    m = re.search(r'elif \[ -f "\$NOTES_DIR"/agent-blocker\.txt \]; then(.*?)\n\s*else\b', src, re.S)
     if not m:
         raise AssertionError("blocker branch not found in agent-task.yml")
     return m.group(1)
@@ -50,7 +50,7 @@ def escalation_branch() -> str:
     ask the CEO a decision and the workflow parks the card in Green Light."""
     src = report_step()
     m = re.search(
-        r"elif \[ -f /tmp/agent-escalation\.txt \](.*?)\n\s*elif \[ -f /tmp/agent-blocker\.txt \]",
+        r'elif \[ -f "\$NOTES_DIR"/agent-escalation\.txt \](.*?)\n\s*elif \[ -f "\$NOTES_DIR"/agent-blocker\.txt \]',
         src,
         re.S,
     )
@@ -130,8 +130,8 @@ class BlockerParksInBacklogTest(unittest.TestCase):
     def test_the_class_comes_from_the_one_reader(self):
         # The script restates no phrase list and no stamp grammar (DRE-6438).
         src = report_step()
-        self.assertIn("blocker_class.py classify /tmp/agent-blocker.txt", src)
-        self.assertIn("blocker_class.py reason /tmp/agent-blocker.txt", src)
+        self.assertIn('blocker_class.py classify "$NOTES_DIR"/agent-blocker.txt', src)
+        self.assertIn('blocker_class.py reason "$NOTES_DIR"/agent-blocker.txt', src)
         self.assertNotIn("blocker-class:", src)
 
     def test_dead_run_branch_still_requeues_to_todo(self):

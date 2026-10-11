@@ -865,6 +865,37 @@ class CliTest(unittest.TestCase):
         self.assertEqual(out["go"], "false")
         self.assertEqual(out["reason"], "records-unreadable")
 
+    def test_the_2026_10_11_rate_limit_answer_is_unreadable_records(self):
+        # DRE-6963. Red-Main Repair run 38169396180: the login was out of
+        # calls, and both reads answered GitHub's rate-limit object — JSON,
+        # but not records. It must read as unreadable, never as "no records"
+        # (which would dispatch blind).
+        limit = json.dumps({
+            "message": "API rate limit exceeded for installation ID "
+                       "123249480. If you reach out to GitHub Support for "
+                       "help, please include the request ID "
+                       "0000:0000:0000000:0000000:00000000.",
+            "documentation_url": "https://docs.github.com/rest/overview/"
+                                 "rate-limits-for-the-rest-api",
+            "status": "403",
+        })
+        with tempfile.TemporaryDirectory() as td:
+            refs = os.path.join(td, "refs.json")
+            pulls = os.path.join(td, "pulls.json")
+            open(refs, "w").write(limit)
+            open(pulls, "w").write(limit)
+            self.assertIsNone(red_main_repair._load_records(refs, pulls))
+            for empty in ("{}", '{"message": "x"}'):
+                open(refs, "w").write("[]")
+                open(pulls, "w").write(empty)
+                self.assertIsNone(red_main_repair._load_records(refs, pulls),
+                                  empty)
+        res = self._run(limit, limit)
+        self.assertEqual(res.returncode, 0, res.stderr)
+        out = self._outputs(res.stdout)
+        self.assertEqual(out["go"], "false")
+        self.assertEqual(out["reason"], "records-unreadable")
+
     def test_workflow_name_reaches_the_classifier(self):
         # The name is what scopes the sandbox-block marker, so it has to
         # survive the CLI boundary the workflow actually crosses.
