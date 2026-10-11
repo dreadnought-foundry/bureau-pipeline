@@ -656,13 +656,14 @@ class TestTheAgentEscalationGate:
 
     def test_the_proof_cause_park_is_an_agent_escalation_site(self):
         # DRE-6612: the one writer that parks a proof card on its cause rows,
-        # declared in the pull request that lands it, with no caller yet.
+        # declared in the pull request that lands it; DRE-6610 declares the
+        # proof dispatcher's park its one caller.
         assert grl.PROOF_CAUSE_SITE == "proof_cause_park.py#park"
         record = next(r for r in grl.arrivals() if r["where"] == grl.PROOF_CAUSE_SITE)
         assert record["kind"] == "agent-escalation"
         assert record["writer"] == "proof_cause_park.py"
         assert record["card"] == "DRE-6612"
-        assert record["callers"] == []
+        assert record["callers"] == ["proof_dispatch.py#park_caused"]
         assert grl.PROOF_CAUSE_SITE in {unit for _, unit in grl.green_light_writes()}
         assert grl._gate_problems(record, [], str(ROOT), grl.lane_name()) == []
 
