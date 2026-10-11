@@ -21,6 +21,8 @@ Pinned here, over a fixture board:
   * the re-run after the critic's findings (DRE-5931): its trigger, its
     budget of two counted apart from the first run's, its three stops, the
     hold after two, and its place behind the first runs under one cap;
+  * a sent-back record with a row waiting on an event is held, not re-run,
+    as the gate's decline holds it — DRE-6678 replayed (DRE-6814);
   * the dry run, which writes nothing;
   * the read bound: five candidates cost at most eight Linear requests;
   * the step in `reconcile.yml`: gated on a full pass, the stub tested before
@@ -2042,12 +2044,13 @@ def test_gate_dispatches_nothing_and_says_why(monkeypatch, capsys, case):
 
 def test_gate_a_request_changes_at_the_head_is_the_critics_re_run_not_the_gates(
         monkeypatch, capsys):
-    """Both stand at the head: the critic's trigger keeps precedence, and the
-    record is not read for it."""
+    """Both stand at the head: the critic's trigger keeps precedence. The
+    record is read once at the head for a waiting row (DRE-6814), and with
+    none it is the critic's re-run that is sent."""
     h, _, _ = _gate_pass(monkeypatch, thread=_sent_back(),
                          pr=_declined(approve=verdict("REQUEST_CHANGES", 100)))
     assert [f[2] for f in h.fired] == [RERUN]
-    assert h.text_reads == []
+    assert h.text_reads == [(900, HEAD)]
 
 
 def test_gate_a_review_cap_park_on_the_head_is_re_run_the_same_way(monkeypatch, capsys):
@@ -2663,3 +2666,166 @@ def test_carry_every_field_the_carry_reads_off_the_record_is_asked_for():
     missing = sorted(fields - set(_record_fields()))
     assert missing == [], (f"RECORD_FIELDS lacks {missing}, which "
                            f"{sorted(readers)} read off the record")
+
+
+# --------------------------------------------------------------------------- #
+# DRE-6814: a record the critic sent back whose rows wait on an event is held, #
+# as the gate's decline holds it — DRE-6678 replayed as the 19:22 PT pass read #
+# --------------------------------------------------------------------------- #
+SENT_BACK_FIXTURES = ROOT / "tests" / "fixtures" / "dre-6678-sent-back-2026-10-10"
+SHA7_6678 = "3a1671b"
+RERUN_6678 = f"re-run after the critic's findings at {SHA7_6678}"
+
+
+def _replay_6678() -> tuple:
+    """The card's thread, its record pull request and the record at the head,
+    as the fixture recorded them; a pipeline comment is the viewer's."""
+    doc = json.loads((SENT_BACK_FIXTURES / "dre-6678.json").read_text(encoding="utf-8"))
+    thread = [{"body": n["body"], "createdAt": n["createdAt"],
+               "user": {"id": VIEWER if n["by_pipeline"] else PERSON}}
+              for n in doc["thread"]]
+    text = (SENT_BACK_FIXTURES / f"record-{SHA7_6678}.md").read_text(encoding="utf-8")
+    return doc, thread, text
+
+
+def _waiting_cells(text: str) -> list:
+    """The result cells of the record's table that open `Not observed. waiting
+    for` — counted off the markdown, not through the reader under test."""
+    cells = [line.rstrip().rstrip("|").rsplit("|", 1)[-1].strip()
+             for line in text.splitlines() if line.startswith("| ")]
+    return [c for c in cells if c.lower().startswith("not observed. waiting for")]
+
+
+def _pass_6678(monkeypatch, *, extra=(), minutes_later: float = 0):
+    doc, thread, text = _replay_6678()
+    now = (datetime.fromisoformat(doc["as_of"].replace("Z", "+00:00"))
+           + timedelta(minutes=minutes_later))
+    board = Board(review=[lane_card(doc["card"], state=doc["lane"], window=thread)],
+                  threads={doc["card"]: [*thread, *extra]})
+    h = Harness(monkeypatch, board, records={doc["card"]: doc["pr"]},
+                texts={doc["pr"]["number"]: text},
+                states={doc["card"]: state("finished", dispatches=1,
+                                           record={"number": 981, "state": "open"})})
+    tally = h.sweep(now=now)
+    return h, tally, doc, text
+
+
+def _after(doc: dict, minutes: float) -> str:
+    when = datetime.fromisoformat(doc["as_of"].replace("Z", "+00:00"))
+    return (when + timedelta(minutes=minutes)).isoformat().replace("+00:00", "Z")
+
+
+def test_sent_back_dre_6678_every_row_waiting_is_held_not_re_run(monkeypatch, capsys):
+    """The 19:22 PT pass on 2026-10-10 spent re-run 1 of 2 on a record whose
+    nine judged rows all wait for the morning of 2026-10-11 or 2026-10-12.
+    It holds instead: one hold naming the rows and their events, no dispatch."""
+    h, tally, doc, text = _pass_6678(monkeypatch)
+    lines = _about(_lines(capsys), "DRE-6678")
+    waiting = _waiting_cells(text)
+    assert len(waiting) == 9
+    assert h.fired == [] and h.posted == []
+    assert len(h.holds) == 1, h.holds
+    ident, observed, needs = h.holds[0]
+    assert ident == "DRE-6678"
+    assert observed.count("; ") == 8 and needs.count("; ") == 8
+    assert "the scheduled morning of 2026-10-11 06:00 PT" in needs
+    assert "the scheduled mornings of 2026-10-11 and 2026-10-12, 06:00 PT" in needs
+    for half in (observed, needs):
+        assert linear_ops.proof_text_refusal(half, "half") is None
+    assert tally.held == 1 and tally.dispatched == 0
+    assert h.text_reads == [(981, doc["pr"]["headRefOid"])]
+    said = [line for line in lines if "re-run" in line]
+    assert len(said) == 1, lines
+    assert ("9 row(s) of the record at 3a1671b wait on an event — held for "
+            in said[0]), said
+
+
+def test_sent_back_dre_6678_a_second_pass_posts_no_second_hold(monkeypatch, capsys):
+    h, _, doc, _ = _pass_6678(monkeypatch)
+    _, observed, needs = h.holds[0]
+    capsys.readouterr()
+    posted = comment(linear_ops.proof_waiting_line(observed, needs), 0)
+    posted["createdAt"] = _after(doc, 1)
+    h, tally, _, _ = _pass_6678(monkeypatch, extra=[posted], minutes_later=30)
+    lines = _about(_lines(capsys), "DRE-6678")
+    assert h.fired == [] and h.posted == [] and h.holds == []
+    assert tally.held == 1
+    assert any("held by 🔬 proof-waiting: " in line for line in lines), lines
+
+
+def test_sent_back_dre_6678_after_proof_observed_the_next_pass_re_runs(monkeypatch, capsys):
+    h, _, doc, _ = _pass_6678(monkeypatch)
+    _, observed, needs = h.holds[0]
+    posted = comment(linear_ops.proof_waiting_line(observed, needs), 0)
+    posted["createdAt"] = _after(doc, 1)
+    seen = comment(linear_ops.proof_observed_line(
+        "the 2026-10-11 06:00 PT morning ran and its proposal is on DRE-4541"),
+        0, PERSON)
+    seen["createdAt"] = _after(doc, 600)
+    h, tally, _, _ = _pass_6678(monkeypatch, extra=[posted, seen], minutes_later=610)
+    assert [(f[0], f[2]) for f in h.fired] == [("DRE-6678", RERUN_6678)]
+    assert h.holds == [] and tally.dispatched == 1
+    assert h.posted[0][1].split("\n", 1)[0].endswith(
+        f" — {RERUN_6678} (re-run 1 of 2)")
+
+
+def _critic_pass(monkeypatch, *, text, thread=None, live=True):
+    board = Board(review=[_review()], threads={"DRE-5930": thread or _sent_back()})
+    h = Harness(monkeypatch, board,
+                records={"DRE-5930": record(verdict("REQUEST_CHANGES", 100))},
+                texts={900: text},
+                states={"DRE-5930": state("finished", dispatches=1,
+                                          record={"number": 900, "state": "open"})})
+    tally = h.sweep(live=live)
+    return h, tally
+
+
+@pytest.mark.parametrize("rows", [(MET_ROW, NOT_MET_ROW), (MET_ROW, BROWSER_ROW)],
+                         ids=["not-met", "not-observed-for-another-reason"])
+def test_sent_back_with_no_waiting_row_is_re_run_as_today(monkeypatch, capsys, rows):
+    h, tally = _critic_pass(monkeypatch, text=record_md(*rows))
+    assert h.fired == [("DRE-5930", REPO, RERUN, "proof-execute")]
+    assert h.holds == [] and tally.dispatched == 1
+    assert h.posted[0][1].split("\n", 1)[0].endswith(f" — {RERUN} (re-run 1 of 2)")
+    assert h.text_reads == [(900, HEAD)]
+
+
+OTHER_NOT_MET_ROW = ("The sweep names the record's head on the hold",
+                     "Not met. the hold named an earlier head")
+
+
+def test_sent_back_a_waiting_row_beside_a_not_met_row_is_held(monkeypatch, capsys):
+    """The one rule for a mixed record, on either trigger: a waiting row holds
+    it. No re-run before the event can make the record merge — the gate
+    declines any row not met — and the one re-run after the operator's
+    `🔬 proof-observed` re-observes every row, the `Not met.` one with it."""
+    h, tally = _critic_pass(monkeypatch, text=record_md(MET_ROW, WAITING_ROW,
+                                                        OTHER_NOT_MET_ROW))
+    assert h.fired == [] and h.posted == []
+    assert h.holds == [("DRE-5930", *WAITING)]
+    assert tally.held == 1
+
+    # Discharged by the operator, the next pass re-runs it.
+    observed = _sent_back(hold(*WAITING, 60), comment(linear_ops.proof_observed_line(
+        "the 2026-10-14 release was cut at 10:02 PT"), 30, PERSON))
+    h, _ = _critic_pass(monkeypatch, thread=observed,
+                        text=record_md(MET_ROW, WAITING_ROW, OTHER_NOT_MET_ROW))
+    assert [f[2] for f in h.fired] == [RERUN] and h.holds == []
+    assert h.posted[0][1].split("\n", 1)[0].endswith(f" — {RERUN} (re-run 1 of 2)")
+
+
+def test_sent_back_a_record_not_read_at_the_head_is_re_run_as_today(monkeypatch, capsys):
+    """Unread never holds the critic's re-run: only a row read as waiting
+    does, and the line says the rows were not read."""
+    h, tally = _critic_pass(monkeypatch, text=RuntimeError("HTTP 502"))
+    lines = _about(_lines(capsys), "DRE-5930")
+    assert h.fired == [("DRE-5930", REPO, RERUN, "proof-execute")]
+    assert h.holds == [] and tally.dispatched == 1
+    assert any("could not be read" in line and "HTTP 502" in line
+               for line in lines), lines
+
+
+def test_sent_back_waiting_hold_in_the_dry_run_writes_nothing(monkeypatch, capsys):
+    h, _ = _critic_pass(monkeypatch, text=record_md(WAITING_ROW), live=False)
+    assert h.fired == [] and h.posted == [] and h.holds == []
+    assert f"would: hold DRE-5930 — {WAITING[0]}" in _lines(capsys)
