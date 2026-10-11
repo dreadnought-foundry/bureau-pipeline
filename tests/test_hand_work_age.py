@@ -825,28 +825,31 @@ class TestTheSweepRunsIt:
             events.append("board_read")
             return real_epics(cards)
 
+        alarms: list = []
+
         def held_pass(cards):
             before = fake.requests
             events.append(("alarm_held_proofs", [c["identifier"] for c in cards]))
+            # The harness stubs every Linear write; this is its stub, read here.
+            comment = reconcile.linear_ops.cmd_comment
+            seen = len(comment.call_args_list)
             try:
                 return real_pass(cards)
             finally:
                 events.append(("spent", fake.requests - before))
+                alarms.extend(c.args for c in comment.call_args_list[seen:])
 
         monkeypatch.setattr(reconcile, "repo_epics", epics)
         monkeypatch.setattr(reconcile, "alarm_held_proofs", held_pass)
         monkeypatch.setattr(reconcile, "_idle_pass", [])
         monkeypatch.setattr(reconcile, "sweep_idle", lambda: None)
-        with patch.object(reconcile.linear_ops, "cmd_comment") as comment:
-            spend._run_sweep(fake, mocks=("flag_stranded", "hand_built_to_review",
-                                          "move_hand_built_to_review"))
-            alarms = [c.args for c in comment.call_args_list
-                      if HELD_OPENING in c.args[1]]
+        spend._run_sweep(fake, mocks=("flag_stranded", "move_hand_built_to_review"))
         assert ("alarm_held_proofs", ["DRE-7001"]) in events
         called = events.index(("alarm_held_proofs", ["DRE-7001"]))
         assert "board_read" in events[:called]
         assert ("spent", 0) in events
         assert len(alarms) == 1 and alarms[0][0] == "DRE-7001"
+        assert alarms[0][1].startswith(HELD_OPENING)
 
     def test_main_wraps_it_in_its_own_phase_after_board_read(self):
         source = (ROOT / "scripts" / "reconcile.py").read_text()
