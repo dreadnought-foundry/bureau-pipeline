@@ -182,6 +182,18 @@ class TestHold:
         _, needs = pcp.hold(ROWS)
         assert linear_ops.proof_text_refusal(needs, "needs") is None
 
+    @pytest.mark.parametrize("marker", linear_ops.CONSOLE_HOLD_MARKERS)
+    @pytest.mark.parametrize("case", [str.lower, str.upper, str.title])
+    def test_neither_half_borrows_a_fix_budget_marker(self, marker, case):
+        # Read off the console's own list, so a marker added there later
+        # fails here rather than in a live park.
+        said = case(marker)
+        rows = [ROWS[0]._replace(criterion=f"The {said} comment shows",
+                                 seen=f"the thread read {said}")]
+        for half, what in zip(pcp.hold(rows), ("observed", "needs")):
+            assert marker not in half.lower()
+            assert linear_ops.proof_text_refusal(half, what) is None
+
     def test_a_press_park_is_never_read_off_the_cause_hold(self):
         import proof_dispatch
 
@@ -241,7 +253,9 @@ class TestQuestion:
     def test_a_recommendation_with_no_why_still_has_one(self):
         body = pcp.question(ROWS, recommendation="Drop both")
         assert console_escalation.problems(body) == []
-        assert console_escalation.parse(body).recommendation == "Drop both"
+        esc = console_escalation.parse(body)
+        assert esc.recommendation == "Drop both"
+        assert esc.why == pcp.RECOMMENDED_BY
 
     def test_one_cause_line_per_row_then_the_run(self):
         body = pcp.question(ROWS, run_url=RUN)
