@@ -326,8 +326,10 @@ NO_PIN = (
     "No model test pins a choice the console can change: a rule is tested against "
     "the frozen fixture at tests/fixtures/model-config-frozen/ "
     "(model_fixture.FIXTURE_DIR), and "
-    "tests/test_console_change_keeps_the_suite_green.py proves every operation "
-    "leaves every model-reading test green — so a red result on a change pull "
+    "tests/test_console_change_keeps_the_suite_green.py is written to prove every "
+    "operation leaves every model-reading test green (its per-case runs skip in "
+    "the unit parts and run in the console change keeps the suite green job once "
+    "DRE-6873 lands) — so a red result on a change pull "
     "request is a defect in the change or in a test, never the expected cost of "
     "a change the console allows."
 )
@@ -374,6 +376,16 @@ def test_the_no_pin_sentence_names_the_fixture_and_the_harness_that_exist():
     rel = model_fixture.FIXTURE_DIR.relative_to(ROOT).as_posix() + "/"
     assert rel in NO_PIN
     assert (ROOT / "tests" / "test_console_change_keeps_the_suite_green.py").is_file()
+
+
+def test_the_no_pin_sentence_says_the_per_case_runs_are_not_wired_yet():
+    """The per-case runs skip in the unit parts and their job is DRE-6873's, so
+    the sentence says where they run instead of claiming a proof CI never ran
+    — and names the job the harness's own skip reason names."""
+    import test_console_change_keeps_the_suite_green as harness
+    job = re.fullmatch(r'runs in the "(.+)" job', harness.SKIP_REASON).group(1)
+    assert f"run in the {job} job once DRE-6873 lands" in NO_PIN
+    assert " proves " not in NO_PIN
 
 
 def test_the_header_says_no_model_test_pins_a_console_choice():
