@@ -86,6 +86,18 @@ one hold, and the card is left for an operator.
 Conditions 2, 3 and 7 are not read for it: the record is open on the release
 its first run read.
 
+A fourth stop is the rows (DRE-6814). The record is read at the head as the
+gate's trigger reads it, and a row reading `Not observed. waiting for <the
+event>` holds the card the same way, rule 1 below: one `🔬 proof-waiting`
+naming the waiting rows and their events, no dispatch, and the operator's
+`🔬 proof-observed` lets the next pass re-run. It holds beside a row a re-run
+could answer too: no run before the event can make the record merge, and the
+one re-run after it re-observes every row. With no waiting row the re-run is
+dispatched as before, and a record not read at the head holds nothing — the
+critic's findings were never a reading of the rows, and the line says so. On
+2026-10-10 DRE-6678 spent both re-runs in 33 minutes on a record whose nine
+judged rows all waited for the mornings of 2026-10-11 and 2026-10-12.
+
 ## The re-run after the gate's decline (DRE-6488)
 
 A record the critic APPROVED can still be held: the merge gate declines any
@@ -122,6 +134,8 @@ the note; a record not read there is refused. Then, after the stops:
      (`proof_record.row_waiting`) holds the card on one `🔬 proof-waiting`
      naming the waiting rows and their events, and nothing is dispatched. The
      operator's `🔬 proof-observed` discharges it, and the next pass re-runs.
+     The same rule holds a record the critic sent back (DRE-6814), except
+     that there an unread record holds nothing.
   2. Otherwise the run is dispatched, `re-run after the gate's decline at
      <sha7>`, under the same rule for a newer receipt as the critic's.
   3. The one budget: two re-runs per record pull request, whichever trigger
@@ -605,7 +619,7 @@ class _Trigger:
     again: str          # what the budget line says happened again
     exhausted: tuple    # the hold after two re-runs
     unanswered: tuple   # the hold after a re-run that finished
-    gate: bool = False  # the record's rows are read only for the gate's
+    gate: bool = False  # an unread record refuses only the gate's (DRE-6814)
 
 
 def _number(card: dict) -> int:
@@ -980,9 +994,10 @@ class _Pass:
             raise _Refused(f"re-run: a run is in flight or unreadable — {why}",
                            "running")
 
-        if trigger.gate:
-            self._waiting(ident, voices, trigger,
-                          self._unmet_at_head(pr, number, head), head)
+        # Either trigger (DRE-6814): a row waiting on an event holds the
+        # record, because no re-run before the event can make it merge.
+        self._waiting(ident, voices, trigger,
+                      self._unmet_at_head(ident, pr, number, head, trigger), head)
 
         # A receipt with no readable time is read as the newer, and counted:
         # unread never answers "nothing has been sent" or "budget left".
@@ -1069,26 +1084,37 @@ class _Pass:
                         (GATE_EXHAUSTED_OBSERVED, GATE_EXHAUSTED_NEEDS),
                         (GATE_UNANSWERED_OBSERVED, GATE_UNANSWERED_NEEDS), gate=True)
 
-    def _unmet_at_head(self, pr: dict, number, head: str) -> list:
+    def _unmet_at_head(self, ident: str, pr: dict, number, head: str,
+                       trigger: _Trigger) -> list:
         """The record's unmet rows at the head, by the reader the gate held
-        on — never the note's quotation. Unread never answers "re-run"."""
+        on — never the note's quotation. For the gate's trigger unread never
+        answers "re-run": the rows are what declined it. For the critic's,
+        unread holds nothing (DRE-6814): its findings were sent back without
+        a row read, so they are answered as before, and the line says so."""
         try:
             found = self.read_record(pr, head)
         except Exception as error:  # noqa: BLE001
             found = proof_record.Record(None, None, str(error))
         if found is None or found.text is None:
             detail = getattr(found, "detail", None) or "nothing was read"
+            if not trigger.gate:
+                _say(ident, f"re-run: the record on #{number} could not be read "
+                            f"at {head[:7]} — {detail}; no row is read as "
+                            "waiting, and the critic's findings are answered "
+                            "as before")
+                return []
             raise _Refused(f"re-run: the record on #{number} could not be read "
                            f"at {head[:7]} — {detail}; nothing dispatched")
         return proof_record.reading(found.text).unmet
 
     def _waiting(self, ident: str, voices: list, trigger: _Trigger,
                  unmet: list, head: str) -> None:
-        """Behavior 1 (DRE-6488): a row waiting on an event holds the card
-        instead of a re-run, which could not make the record merge while it
-        stands. Posted once per decline: a hold posted after this note and
-        since discharged by the operator's `🔬 proof-observed` leaves the
-        record to a re-run that re-observes every row."""
+        """Behavior 1 (DRE-6488, both triggers since DRE-6814): a row waiting
+        on an event holds the card instead of a re-run, which could not make
+        the record merge while it stands — whatever else the record holds.
+        Posted once per decline or verdict: a hold posted after it and since
+        discharged by the operator's `🔬 proof-observed` leaves the record to
+        a re-run that re-observes every row."""
         waiting = [(criterion, event) for criterion, result in unmet
                    if (event := proof_record.row_waiting(result))]
         if not waiting:

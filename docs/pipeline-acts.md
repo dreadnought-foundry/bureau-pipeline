@@ -357,9 +357,10 @@ one budget of two re-runs per record pull request; after it, or after a re-run
 that finished with the decline still at the head, one `🔬 proof-waiting` hold
 for an operator. A row whose Result reads `Not observed. waiting for <the
 event>` — and nothing else — is waiting on something no one on the card has to
-cause: the card is held with `🔬 proof-waiting: <the waiting criteria> — needs
-<their events>` instead of a re-run, and is re-run once the operator posts
-`proof-observed`. It is read after the first runs, under the same one-per-pass
+cause: on either trigger, beside any other unmet row, the card is held with
+`🔬 proof-waiting: <the waiting criteria> — needs <their events>` instead of a
+re-run, and is re-run once the operator posts `proof-observed` (DRE-6488, and
+for the critic's trigger DRE-6814). It is read after the first runs, under the same one-per-pass
 cap, and moves nothing.
 
 The receipt is posted only after `plan_run.fire` confirms the dispatch:

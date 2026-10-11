@@ -276,9 +276,10 @@ reached, a scheduled run that has not fired — the Result reads
 and names the event. A capability the run lacks — no browser on a local run,
 `aws: none`, a spent sign-in ration, the Linear request cap, a repository the
 read token cannot reach — is written as above, never as `waiting for`. The
-sweep reads this shape and nothing else: a record the gate declines with a
-waiting row is held with `🔬 proof-waiting` naming the event, and is re-run
-once the operator records that it happened; any other unmet row is re-run.
+sweep reads this shape and nothing else: a record with a waiting row is held
+with `🔬 proof-waiting` naming the event, whether the critic sent it back or
+the gate declined it (DRE-6814), and is re-run once the operator records that
+it happened; a record whose unmet rows are all of another kind is re-run.
 
 **A log read is a quoted phrase, and an empty one needs a control
 (DRE-6778).** A CloudWatch Logs filter pattern for a literal phrase is written
@@ -322,11 +323,13 @@ record is amended in place by the next run (resume, below), and the gate reads
 it again on every new head, so a record whose rows are all met merges with
 nobody involved. For a press only the CEO can make, the park below is what
 brings that next run. For any other row, the sweep sends the record back to a
-proof run once the critic has approved it and the gate has declined it at its
-head — at most twice per record pull request, counted with the critic's
-send-backs, then held for an operator (DRE-6488); a row waiting for an event
-is held until the operator records the event instead. Never reword a row to
-get it merged.
+proof run when the critic sends it back, or once the critic has approved it
+and the gate has declined it at its head — at most twice per record pull
+request, either trigger counted, then held for an operator (DRE-5931,
+DRE-6488). On either trigger, a record with a row waiting for an event is held
+until the operator records the event instead, even beside a row a re-run could
+answer: no run before the event can make it merge, and the one re-run after it
+re-observes every row (DRE-6814). Never reword a row to get it merged.
 
 **A row shown working but not as the card words it is accepted by the
 operator, never by you (DRE-6244, DRE-6773).** The CEO decided on 2026-10-10
