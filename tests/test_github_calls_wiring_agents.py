@@ -57,12 +57,15 @@ LOGIN = re.compile(r'--login\s+"\$(\w+):\$(\w+):(\w+)"')
 #
 # The token is the freshest one minted for THAT installation. agent-task.yml's
 # DRE-3043 re-mint (`pushtoken`) is the worker's App again, so the worker gets
-# `pushtoken || worker`. agent-fix.yml's DRE-6350 re-mint (`pushtoken`) is the
-# BOOT App's pair, so there it falls back to the bot's token, never the
-# worker's: a bot token handed under the worker's installation id would read
-# the wrong meter. Both re-mints sit AFTER `Keep the run's working log`, so at
-# the emit step neither has run and each `||` resolves to the job's own mint —
-# the reference is the card's rule, ready for a re-mint that moves ahead.
+# `pushtoken || worker`; it sits AFTER `Keep the run's working log`, so at the
+# emit step it has not run and the `||` resolves to the job's own mint — the
+# reference is the card's rule, ready for a re-mint that moves ahead.
+# agent-fix.yml cannot do that: DRE-4320 (tests/test_agent_fix_token_remint.py)
+# forbids any step there spending a token minted before `Fix` or a token minted
+# after the step itself. So the emit step there has two mints of its own,
+# between `Fix` and it: `callsbot`, the boot App again, and `callsworker`, the
+# selected pool slot again — each for its own installation, because a token
+# handed under another installation's id would read the wrong meter.
 #
 # The worker is listed FIRST: when the pool selects slot 1 the worker and the
 # bot are one installation, the script keeps the first one named, and the
@@ -78,8 +81,8 @@ WIRED = {
     "agent-fix.yml": (
         "fix",
         ("worker", "app"),
-        {"worker": "steps.worker.outputs.token",
-         "app": "steps.pushtoken.outputs.token || steps.app.outputs.token"},
+        {"worker": "steps.callsworker.outputs.token || steps.worker.outputs.token",
+         "app": "steps.callsbot.outputs.token || steps.app.outputs.token"},
         # The loop must not act past the unfixable gate at all
         # (tests/test_unfixable_check_escalation.py).
         ("steps.unfixable.outputs.escalate != 'true'",),
@@ -211,18 +214,24 @@ class EmitStep(unittest.TestCase):
         self.assertIn(_expr("steps.pushtoken.outputs.token || steps.worker.outputs.token"),
                       (step.get("env") or {}).values())
 
-    def test_the_agent_fix_re_mint_stands_in_for_the_bot_never_the_worker(self):
-        # agent-fix.yml's DRE-6350 re-mint is the BOOT App's pair, so its token
-        # belongs to the bot's installation; handed as the worker's it would
-        # read another login's meter.
+    def test_the_agent_fix_reading_mints_its_own_tokens_after_the_fix_agent(self):
+        # Each re-mint is its own installation's App again — a token handed
+        # under another installation's id would read another login's meter —
+        # and both sit between `Fix` and the emit step, so the step spends no
+        # token that crossed the unbounded model run (DRE-4320).
         steps = _steps("agent-fix.yml")
-        remint = steps[_step_id(steps, "pushtoken")]
-        app = steps[_step_id(steps, "app")]
-        self.assertEqual(remint["with"]["app-id"], app["with"]["app-id"])
-        step = steps[_index(steps, "agent-fix.yml", "emit")]
-        values = (step.get("env") or {}).values()
-        self.assertIn(_expr("steps.pushtoken.outputs.token || steps.app.outputs.token"), values)
-        self.assertIn(_expr("steps.worker.outputs.token"), values)
+        emit = _index(steps, "agent-fix.yml", "emit")
+        model = _step_id(steps, "claude")
+        for remint_id, original_id in (("callsbot", "app"), ("callsworker", "worker")):
+            with self.subTest(remint=remint_id):
+                i = _step_id(steps, remint_id)
+                remint, original = steps[i], steps[_step_id(steps, original_id)]
+                self.assertEqual(remint["uses"], original["uses"])
+                self.assertEqual(remint["with"], original["with"])
+                self.assertIs(remint.get("continue-on-error"), True)
+                self.assertTrue(str(remint.get("if")).startswith("always()"))
+                self.assertLess(model, i)
+                self.assertLess(i, emit)
 
     def test_the_emit_step_names_its_reusable_and_writes_its_outputs(self):
         for name in WIRED:

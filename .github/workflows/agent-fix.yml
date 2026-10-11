@@ -1729,19 +1729,56 @@ jobs:
           if-no-files-found: warn
           retention-days: 90
 
+      # THE GITHUB CALLS READING'S OWN MINTS (DRE-6916). The reading below
+      # runs after `Fix`, the one step here whose duration is not bounded in
+      # seconds, so it may not spend a token minted before it — DRE-4320's
+      # rule, pinned by tests/test_agent_fix_token_remint.py. This file's
+      # other re-mints (`Mint fresh push token`, `Mint fresh report token`)
+      # sit after `Keep the run's working log`, too late for a step that sits
+      # immediately before it, so the reading mints its own: the BOOT App's
+      # pair again, for the bot's meter, and the selected pool slot again,
+      # for the worker's — each token reads its own installation's meter, so
+      # neither stands in for the other. Gated exactly as the Report's
+      # re-mint is, `always()` included: a `Fix` that failed is a run whose
+      # spend is still worth reading. continue-on-error: a mint that fails
+      # leaves the run as it was, and the reading falls back to the job-start
+      # token behind a `||` and reads an expired one as unread, never as 0.
+      - name: Mint fresh GitHub calls token (bot)
+        id: callsbot
+        if: always() && steps.pr.outputs.go == 'true' && steps.unfixable.outputs.escalate != 'true'
+        continue-on-error: true
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: ${{ secrets.BUREAU_APP_ID }}
+          private-key: ${{ secrets.BUREAU_APP_PRIVATE_KEY }}
+
+      - name: Mint fresh GitHub calls token (selected pool app)
+        id: callsworker
+        if: always() && steps.pr.outputs.go == 'true' && steps.unfixable.outputs.escalate != 'true'
+        continue-on-error: true
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: >-
+            ${{ steps.pool.outputs.n == '2' && secrets.BUREAU_APP_ID_2
+             || steps.pool.outputs.n == '3' && secrets.BUREAU_APP_ID_3
+             || steps.pool.outputs.n == '4' && secrets.BUREAU_APP_ID_4
+             || secrets.BUREAU_APP_ID }}
+          private-key: >-
+            ${{ steps.pool.outputs.n == '2' && secrets.BUREAU_APP_PRIVATE_KEY_2
+             || steps.pool.outputs.n == '3' && secrets.BUREAU_APP_PRIVATE_KEY_3
+             || steps.pool.outputs.n == '4' && secrets.BUREAU_APP_PRIVATE_KEY_4
+             || secrets.BUREAU_APP_PRIVATE_KEY }}
+
       # THE GITHUB CALLS READING (DRE-6916): the after point on the same
       # logins as `Take the GitHub calls before point`, written as one document
-      # and put in the agent-log store over the run's OIDC login. The freshest
-      # token per installation. This file's re-mint (`Mint fresh push token`,
-      # DRE-6350) is the BOOT App's pair, so it stands in for the bot's token
-      # when it ran — never for the worker's, which would read the wrong
-      # meter. It is BELOW this step, so today it has not run and each login
-      # is read on its own mint; a run past the hour reads its end point as
-      # unread, with a reason, never as 0. `always()` + `continue-on-error`,
-      # and the script exits 0 on every path: keeping a reading never changes
-      # the job's conclusion. `escalate != 'true'` like every step past the
-      # unfixable gate. `--workflow` names this reusable, because inside a
-      # called workflow `$GITHUB_WORKFLOW_REF` names the caller's stub.
+      # and put in the agent-log store over the run's OIDC login. Each login
+      # is read on the mint just above for its own installation, falling back
+      # to the job's own mint when that one did not run. `always()` +
+      # `continue-on-error`, and the script exits 0 on every path: keeping a
+      # reading never changes the job's conclusion. `escalate != 'true'` like
+      # every step past the unfixable gate. `--workflow` names this reusable,
+      # because inside a called workflow `$GITHUB_WORKFLOW_REF` names the
+      # caller's stub.
       - name: Keep the run's GitHub calls reading
         id: github_calls
         if: always() && steps.unfixable.outputs.escalate != 'true'
@@ -1749,10 +1786,10 @@ jobs:
         env:
           GH_CALLS_WORKER_APP: ${{ steps.worker.outputs.app-slug }}
           GH_CALLS_WORKER_INSTALLATION: ${{ steps.worker.outputs.installation-id }}
-          GH_CALLS_WORKER_TOKEN: ${{ steps.worker.outputs.token }}
+          GH_CALLS_WORKER_TOKEN: ${{ steps.callsworker.outputs.token || steps.worker.outputs.token }}
           GH_CALLS_BOT_APP: ${{ steps.app.outputs.app-slug }}
           GH_CALLS_BOT_INSTALLATION: ${{ steps.app.outputs.installation-id }}
-          GH_CALLS_BOT_TOKEN: ${{ steps.pushtoken.outputs.token || steps.app.outputs.token }}
+          GH_CALLS_BOT_TOKEN: ${{ steps.callsbot.outputs.token || steps.app.outputs.token }}
         run: |
           python3 .bureau-pipeline/scripts/github_calls_reading.py emit \
             --before "${RUNNER_TEMP:-/tmp}/github-calls-before.json" \
