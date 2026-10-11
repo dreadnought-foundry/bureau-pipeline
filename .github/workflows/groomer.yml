@@ -386,7 +386,7 @@ jobs:
           CLAUDE_AUTH_MODE: ${{ vars.CLAUDE_AUTH_MODE }}
         run: |
           python3 .bureau-pipeline/scripts/death_receipt.py emit \
-            --execution-file /home/runner/work/_temp/claude-execution-output.json \
+            --execution-file "${RUNNER_TEMP:-/tmp}/claude-execution-output.json" \
             --out "${RUNNER_TEMP:-/tmp}/death-receipt.json" \
             --job-status "$JOB_STATUS" \
             --step-outcome "$MODEL_STEP_OUTCOME" \
@@ -702,7 +702,7 @@ jobs:
         env:
           CARD: ${{ matrix.card }}
           OUTCOME: ${{ steps.claude.outcome }}
-          EXECUTION_FILE: ${{ steps.claude.outputs.execution_file || '/home/runner/work/_temp/claude-execution-output.json' }}
+          EXECUTION_FILE: ${{ steps.claude.outputs.execution_file || format('{0}/claude-execution-output.json', runner.temp) }}
         run: |
           python3 .bureau-pipeline/scripts/groom_verify_agent.py verdict \
             --card "$CARD" --targets verify-targets.json \
