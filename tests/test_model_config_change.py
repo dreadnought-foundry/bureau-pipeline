@@ -433,7 +433,8 @@ def test_the_pr_body_says_who_asked_and_one_line_per_change():
     lines = [line for line in body.splitlines() if line.startswith("- ")]
     assert len(lines) == len(CHANGE_SET["changes"])
     label = {key: kind["label"] for key, kind in FROZEN["kinds"].items()}
-    assert "product-lead" in lines[0] and label["judgement"] in lines[0]
+    move = CHANGE_SET["changes"][0]
+    assert move["agent"] in lines[0] and label[move["group"]] in lines[0]
     assert "data-analyst" in lines[1] and "Answers questions from our data" in lines[1]
     assert "Product & design" in lines[2] and TOP in lines[2]
     assert MIDDLE in lines[3] and label["workhorse"] in lines[3]
