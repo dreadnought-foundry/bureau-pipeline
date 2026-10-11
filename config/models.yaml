@@ -67,6 +67,25 @@
 # only way onto either is a merged PR to this file, written by a person or
 # opened by the adoption workflow for a same-family successor it has trialed.
 #
+# AN EXPLICIT CHOICE CAUTIONS, IT IS NOT REFUSED (DRE-6785, CEO decision
+# 2026-10-10)
+# ----------------------------------------------------------------------
+# The CEO, 2026-10-10 17:54 PT, looking at the Planners' dropdown with five of
+# seven models grayed out: "It shouldn't gray out these models. I should be
+# able to set it to anything I want. Fix this." So a person's explicit choice
+# of ANY model with a declared price is admissible for any group and for any
+# project. Three rules that used to refuse such a choice were relaxed that day:
+# the top of the advisory or judgement ladder may also sit on a build ladder
+# (Opus 5.5 may lead the Planners, Fable 5.1 the Builders); a dearer model may
+# sit below a ladder's fallback; and a model on both the advisory and a build
+# ladder needs no written rule, because a reviewer skips the model that built
+# the pull request at selection time (`review_separation` below). What is left
+# of them is the price: an id with no declared price is refused in plain words.
+# Nothing automatic changed — the probe still walks only DOWN, discovery still
+# proposes nothing for a build or planning ladder, and the daily adoption still
+# adopts only a same-family successor at no higher price, and never retires a
+# model a project still names.
+#
 # Schema
 # ------
 #   kinds          the role kinds, each naming the ladder its roles walk.
@@ -129,22 +148,24 @@
 #                  neither is refused.
 #   projects       repo slug → `{ <kind>: <model id> }`, the per-project
 #                  exception: that repo's runs of that kind try the named model
-#                  FIRST and then walk the kind's ladder with it removed. The
-#                  model must already be a rung of THAT KIND'S OWN ladder — an
-#                  exception reorders a ladder and never adds a model to one —
-#                  and the slug must be a key of config/repo-map.json. The walk
-#                  is held to the same policy rules as the fleet's (DRE-6633).
+#                  FIRST and then walk the kind's ladder with it removed. Since
+#                  2026-10-10 (DRE-6785) the model may be any model with a
+#                  declared price, on that kind's ladder or not — a person's
+#                  explicit choice — and the slug must be a key of
+#                  config/repo-map.json. The walk is held to the same policy
+#                  rules as the fleet's (DRE-6633), and a model a project names
+#                  is a known model: the adoption never asks about it and a
+#                  reviewer reads a build's marker for it.
 #   review_separation
 #                  the build/review fence, bought at SELECTION time rather than
 #                  by keeping the ladders disjoint (DRE-3880). `roles` names the
 #                  reviewer roles it binds — the critic and the verifier, both
-#                  advisory — and `rules` names, for each model that sits on the
-#                  advisory ladder AND a build ladder, the model those reviewers
-#                  use instead when the pull request in front of them was BUILT
-#                  on it. Every such model ABOVE the advisory ladder's last rung
-#                  needs a rule (DRE-5116; it was only the top rung until two
-#                  Sonnet versions sat on both ladders at once). Schema
-#                  validation refuses a BARE overlap (one with no rule), a rule
+#                  advisory. A reviewer skips the model that built the pull
+#                  request in front of it on that project's walk and the next
+#                  model leads, with no rule written for it (DRE-6785). `rules`
+#                  may name, for a model on the advisory ladder AND a build
+#                  ladder, the model those reviewers use instead when the pull
+#                  request was BUILT on it. Schema validation refuses a rule
 #                  that sends the reviewer back to the build model, a
 #                  `reviewers_use` that is not on the advisory ladder, and a
 #                  STALE rule describing an overlap that no longer exists.
@@ -174,6 +195,9 @@
 #                  selectable — `model-attempt:` / `model-error:` markers on
 #                  in-flight cards must keep attributing, and dropping an id
 #                  would resolve those deaths to None instead of reporting them.
+#                  A retired id is named by no ladder and no `projects` entry
+#                  (DRE-6785): an adoption that would retire a model a project
+#                  still names is refused, and the person's choice stands.
 #   excluded       ids that are available but excluded from EVERY ladder by
 #                  POLICY (cost/quota). Same read-not-select treatment as
 #                  `retired`. It also holds a model the CEO has said we do
@@ -182,9 +206,9 @@
 kinds:
   # THE HOT PATH. Hundreds of turns per card, every card, every repo — this is
   # what consumes the shared rolling session window, so it gets the
-  # cost-appropriate model, and the stronger models are structurally barred
-  # from it: schema validation rejects a config that puts the top of the
-  # advisory or the judgement ladder here.
+  # cost-appropriate model. A stronger model reaches it only by a person's
+  # explicit choice in a reviewed PR (DRE-6785, 2026-10-10) — never by a probe
+  # or by discovery.
   workhorse:
     ladder: workhorse
     label: Builders
@@ -366,10 +390,10 @@ ladders:
         last resort — never block a plan on availability. It left the WORKHORSE
         ladder on 2026-09-16 (DRE-3880) and kept this rung, on the CEO's answer
         in as many words: do not retire it. It sits below the rung this ladder
-        degrades onto, which is admissible because it is CHEAPER than that rung
-        ($3/$15 against Opus 5.5 at $4/$20, config/model-prices.yaml) — the rule is
-        "no dearer model hides below the fallback", and validation reads the
-        declared price rather than assuming every lower rung is a build model.
+        degrades onto and is CHEAPER than that rung ($3/$15 against Opus 5.5 at
+        $4/$20, config/model-prices.yaml). Validation used to refuse a dearer
+        model below the fallback; since 2026-10-10 (DRE-6785) it asks only that
+        every rung has a declared price, which this one does.
 
 default_ladder: workhorse
 
@@ -470,14 +494,16 @@ about:
 # repo is named — `model_fallback.py select <role> --repo <slug or owner/name>`
 # (DRE-6634) — and every workflow step that selects a model names it (DRE-6637).
 #
-# The model must already be a rung of THAT KIND'S OWN ladder. An exception
-# reorders a ladder and never adds a model to one: a model joins a ladder only
-# through a reviewed pull request to this file (availability is not permission,
-# 2026-08-09). So `workhorse: claude-sonnet-4-6` is refused — it sits only on
-# the judgement ladder, and the 2026-09-16 decision took it off the build one.
-# The walk an exception makes is then held to the same rules as the fleet's
-# ladders (`model_fallback.policy_errors`), and the daily adoption moves an
-# exception with the rung it names when a same-family successor replaces it.
+# Since 2026-10-10 (DRE-6785, the CEO's decision recorded at the top of this
+# file) the model may be ANY model with a declared price, a rung of that kind's
+# ladder or not: `workhorse: claude-sonnet-4-6` walks claude-sonnet-4-6, then
+# claude-opus-5-5, claude-opus-5, claude-sonnet-5-5, claude-sonnet-5. The
+# choice is a person's, in a reviewed pull request to this file — never a probe
+# or discovery (availability is not permission, 2026-08-09). The walk an
+# exception makes is then held to the same rules as the fleet's ladders
+# (`model_fallback.policy_errors`); the daily adoption moves an exception with
+# the rung it names when a same-family successor replaces it on that kind's
+# ladder, and never retires a model an exception still names.
 projects:
   agent-bureau-demo:
     workhorse: claude-sonnet-5-5
@@ -486,31 +512,34 @@ projects:
 # --------------------------------------------------------------------
 # `claude-sonnet-5` topped the advisory ladder AND backed the workhorse one, so
 # the separation the old schema rule bought by keeping those two lists disjoint
-# has to be bought somewhere else. It is bought HERE, per pull request: when a
-# build ran on a model named below, the reviewers for that pull request skip it
-# and use the model this file names instead.
+# has to be bought somewhere else. It is bought at SELECTION time, per pull
+# request: the reviewers for a pull request skip the model it was built on, on
+# the walk that project's reviewers really make, and the next model leads.
+# Since 2026-10-10 (DRE-6785) that needs no rule written here: a rule below
+# only says which model leads instead, when a build ran on the model it names.
 #
 # Since 2026-09-28 (DRE-5116) TWO models sit on both ladders: Sonnet 5.5 tops
 # the advisory ladder and is the workhorse ladder's Sonnet rung, and Sonnet 5 is
-# the rung below it on both. Each gets a rule. Validation used to admit a rule
-# only for the advisory TOP, which would have refused Sonnet 5's as stale and
-# left a Sonnet-5 build one unavailable Sonnet 5.5 away from being reviewed on
-# Sonnet 5 — and a Sonnet-5 build happens precisely when Sonnet 5.5 was
-# skipped. So every advisory rung ABOVE the ladder's last that also sits on a
-# build ladder needs a rule; the last rung is the designed loud fall onto the
-# build model and needs none.
+# the rung below it on both. Each carries a rule sending its builds to Opus 5.5.
+# A reviewer never falls back onto the build model, even when every other model
+# on its walk is unavailable: an Opus 5.5 build whose two Sonnet reviewers are
+# both down is reviewed on neither Opus 5.5 nor anything else, and the review
+# fails loudly, saying the build model was skipped for separation, until a
+# Sonnet returns. A card whose build model cannot be read reviews on the
+# walk's last rung (Opus 5.5 today), whatever other walk it sits on, and says
+# so — every rung might have built it, and the dispatch may not strand.
 #
 # The overlap is not new in principle — the advisory ladder's own fallback is
 # `claude-opus-5`, the workhorse PRIMARY, so reviewer and worker have coincided
 # whenever the critic falls back. What is new is that the guarantee is explicit
 # per run instead of incidental.
 #
-# A rule is not decoration: `model_fallback.policy_errors` refuses a bare
-# overlap, a rule pointing back at the build model, a `reviewers_use` that is
-# not on the advisory ladder, and a rule that no longer describes a real
-# overlap. That last one is the DRE-3892 carry-forward — a future same-family
-# adoption moves a Sonnet rung on BOTH ladders at once, and an adoption that did
-# not move the rule with it fails `sync_model_config.py --check` twice over.
+# A rule is not decoration: `model_fallback.policy_errors` refuses a rule
+# pointing back at the build model, a `reviewers_use` that is not on the
+# advisory ladder, and a rule that no longer describes a real overlap. That
+# last one is the DRE-3892 carry-forward — a future same-family adoption moves
+# a Sonnet rung on BOTH ladders at once, and an adoption that did not move the
+# rule with it fails `sync_model_config.py --check`.
 review_separation:
   # The two roles that REVIEW a pull request. The medic is advisory too and is
   # deliberately absent: it diagnoses a failed run and reviews nothing, so

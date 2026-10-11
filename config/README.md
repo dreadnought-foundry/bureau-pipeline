@@ -357,6 +357,19 @@ every agent as one of three **role kinds**, and lists the ids that stay *readabl
 but not selectable* (retired ids, and ids excluded by cost policy or because
 the CEO has said we do not use them).
 
+A retired id is named by no ladder and by no `projects.<slug>.<kind>` entry —
+`policy_errors` refuses one that is (DRE-6785) — so **an adoption never retires
+a model a project still names**. When the daily adoption would, it is refused
+and writes nothing: the operator changes or clears that project's choice on
+Settings › Agents & models, and the next daily run retires the model. The
+operator hears of it from the red `Model adoption` run, which the medic retries
+once, and from the medic's one `Pipeline failure: Model adoption` card in
+Planning, deduplicated on that title. Until then each day it stands costs one
+trial run, one refused apply, the medic's retry (another trial run) and every
+other adoption that day — the run acts on the first `adopt` decision only — and
+nothing bounds how long it stands but the operator's act: the choice is a
+person's, and nothing automatic overrides one.
+
 ## The role kinds — workhorse, advisory, judgement
 
 | kind | who | model | why |
@@ -368,9 +381,11 @@ the CEO has said we do not use them).
 The allocation used to be exactly inverted — the cheapest model judging the most
 expensive one's work — and the priciest model sat on the hot path where it could
 drain the account. Both halves are fixed by the split, and the second half is
-also the structural cost fix: **the strongest model is never on the build path,
-so it cannot be consumed at build volume.** That is what makes the planner's
-promotion affordable: it is a decision point, not a hot path.
+also the structural cost fix: **nothing automatic puts the strongest model on
+the build path, so it is never consumed at build volume by accident.** That is
+what makes the planner's promotion affordable: it is a decision point, not a
+hot path. Since 2026-10-10 a person may still choose it for the Builders (see
+*An explicit choice is admissible* below) — a spend decision made in the open.
 
 A role is assigned a **kind**, never a ladder name. That indirection is what
 stops a future edit from inventing a ladder of its own and quietly putting build
@@ -390,25 +405,19 @@ on `main` — never a probe flip. The probe decides how far *down* a ladder we
 walk, never how far up.
 
 What stands between an available model and the fleet, enforced by schema
-validation in `model_fallback.policy_errors()` rather than by convention:
+validation in `model_fallback.policy_errors()` rather than by convention — a
+config that breaks any of these is **refused**: `sync_model_config.py --check`
+fails CI red, and the selector keeps running the last-known-good ladders
+instead of honouring it:
 
-- the model at the **top of a non-build ladder** — the advisory one, the
-  judgement one — must not appear on any build ladder. A config that puts it
-  there is **refused**: `sync_model_config.py --check` fails CI red, and the
-  selector keeps running the last-known-good ladders instead of honouring it.
-  The rungs beneath the top are deliberately shared: that is the DEGRADED fall
-  onto the build model. **One exemption, for the advisory ladder only**
-  (DRE-3880) — see *The declared overlaps* below;
-- nothing **dearer than the rung a non-build ladder degrades onto** may sit
-  below that rung, where the check above cannot see it. The question is the
-  **declared price** in `model-prices.yaml`, so a rung with no declared price is
-  refused: a price is never guessed, and a rung that cannot be shown to be no
-  dearer fails closed. (This used to read "every rung below the fallback is a
-  workhorse model" — a proxy for the same thing, and it stopped working the
-  moment `claude-sonnet-4-6` left the build ladder and stayed the planner's last
-  resort.);
-- an `excluded` id must not appear on **any** ladder, enforced on its own terms
-  rather than as a side effect of the rule above;
+- every rung of every ladder, and every project exception, has a **declared
+  price** in `model-prices.yaml`. A price is never guessed, so an id with none
+  is refused in plain words: `<id> has no declared price, so it cannot be
+  chosen.`;
+- an `excluded` id must not appear on **any** ladder, enforced on its own terms:
+  the change that chooses an excluded model lifts it from `excluded` in the
+  same pull request;
+- an id under `retired` is named by no ladder and no project exception;
 - the critic and verifier must stay `advisory`;
 - only the planner may be `judgement` — **rule 10** (DRE-6633), see *The
   console's keys* below; a session agent is exempt (DRE-6833);
@@ -424,6 +433,29 @@ validation in `model_fallback.policy_errors()` rather than by convention:
   `adopt` rule, not this key: it replaces its own family's rung through a
   trialed, reviewed pull request, and never adds one. `discovery.alert` must
   be true.
+
+### An explicit choice is admissible (DRE-6785, CEO decision 2026-10-10)
+
+The CEO, 2026-10-10 17:54 PT, looking at the Planners' dropdown with five of
+seven models grayed out: *"It shouldn't gray out these models. I should be able
+to set it to anything I want. Fix this."* So a person's explicit choice of
+**any model with a declared price** is admissible for any group and for any
+project. That day relaxed three rules that used to sit in the list above: the
+top of the advisory or judgement ladder is no longer refused on a build ladder
+(Opus 5.5 may lead the Planners, Fable 5.1 the Builders); a dearer model may
+sit below a ladder's fallback; and a model on both the advisory and a build
+ladder needs no written rule (*The declared overlaps* below). What is left of
+them is the price. Nothing automatic changed: the probe still walks only down,
+discovery still proposes nothing for a build or planning ladder, and the daily
+adoption still adopts only a same-family successor at no higher price.
+
+What a choice from the console writes: the chosen model **first** on that
+group's ladder or that project's walk; an excluded model lifted from `excluded`
+in the same pull request; and **no reviewer rule**, because a reviewer skips
+the model that built the pull request on that project's walk
+(`model_fallback.reviewers_for`). DRE-6789's change-writer builds the writer;
+this is the contract it writes to. A **new group is still refused** by the
+three-groups rule (rule 1, exactly the three kinds) until that rule changes.
 
 ## The three rules — `adopt`, `ignore`, `ask` (CEO decision, 2026-09-14)
 
@@ -445,15 +477,20 @@ catalog offers that no ladder names into exactly one of three:
   decision**. The workflow files one plain-English question and adopts nothing
   until it is answered.
 
-## The declared overlaps — a Sonnet build is never reviewed by the same Sonnet
+## The declared overlaps — a pull request is never reviewed by the model that built it
 
 Since 2026-09-16 (CEO decision, DRE-3880) `claude-sonnet-5` **topped the
 advisory ladder and backed the workhorse one**. One model, two ladders — so the
 build / review fence the rule above used to buy by keeping those two lists
 disjoint is bought at **selection time**, per pull request, instead. Since
-2026-09-28 (DRE-5116) there are **two** such models: `claude-sonnet-5-5` tops the
-advisory ladder and is the workhorse ladder's Sonnet rung, and `claude-sonnet-5`
-is the rung below it on both. Each has a rule:
+2026-10-10 (DRE-6785) that takes **no written rule**: on the walk a project's
+reviewers really make — its Reviewers exception first, then the fleet's
+Reviewers ladder — the model that built the pull request comes off and the
+next model leads (`model_fallback.reviewers_for`, `separated_walk`). A bare
+overlap is no longer refused. Since 2026-09-28 (DRE-5116) there are **two**
+models on both ladders: `claude-sonnet-5-5` tops the advisory ladder and is the
+workhorse ladder's Sonnet rung, and `claude-sonnet-5` is the rung below it on
+both. Each carries a declared rule saying which model leads instead:
 
 ```yaml
 review_separation:
@@ -465,24 +502,30 @@ review_separation:
       reviewers_use: claude-opus-5-5
 ```
 
-**Which overlaps need a rule.** Every advisory rung that also sits on a build
-ladder, except the advisory ladder's **last** rung, which is the designed loud
-fall onto the build model (Opus 5.5 today) and may carry a rule but never needs
-one. Until DRE-5116 this read "the advisory top only", which was the same set
-while one Sonnet sat on both ladders; with two, it refused Sonnet 5's rule as
-stale, and without that rule a Sonnet-5 build — which happens exactly when
-Sonnet 5.5 was skipped — would be one unavailable Sonnet 5.5 away from its own
-reviewer. `tests/test_review_separation.py::TwoSonnetsOnBothLaddersTest` holds
-it.
+**No overlap needs a rule.** Until 2026-10-10 every advisory rung above the
+ladder's last that also sat on a build ladder needed one, and a config without
+it was refused. Now a declared rule is honored where it applies — when it names
+the build model and its `reviewers_use` is on what is left, that model leads —
+and none is required. A reviewer **never falls onto the build model**, even when
+every other model on its walk is unavailable: an Opus 5.5 build whose two
+Sonnet reviewers are both down walks `claude-sonnet-5-5, claude-sonnet-5`, the
+note says the build model was skipped for separation, and the review fails
+loudly until a Sonnet returns. `tests/test_model_choice_policy.py` holds the
+four scenarios the decision named.
 
 The critic's and the verifier's Select-model steps read the model the build ran
 on off the card's own `model-attempt:` heartbeat
 (`model_fallback.py build-model`) and pass it as `--built-on`, which takes that
 rung off the reviewer's walk. A card they cannot read is `--built-on-unknown`,
-which bars **every** declared overlap: absence of evidence that the build ran on
-something else is not evidence that it did, and the guarantee has to survive a
-Linear blip. The cost of that fail-closed default is a reviewer on Opus rather
-than Sonnet on any pull request whose card cannot be read.
+which bars **every** model on the reviewer's walk that also sits on that
+project's build walk, **except the walk's last rung**, which stays whatever
+other walk it sits on: absence of evidence that the build ran on something else
+is not evidence that it did, every rung might have built it, and the dispatch
+may not strand. The note says so — `; <model>, the walk's last rung, also
+builds for <the fleet | slug> and reviews this one because nothing else was
+left`. The cost of that fail-closed default is a reviewer on Opus rather than
+Sonnet on any pull request whose card cannot be read; with the Reviewers led by
+Opus 5.5 it would be `claude-sonnet-5`, the Builders' own last rung.
 
 **A cardless pull request is the everyday case of that.** A bot PR has no card,
 so its critic runs `--built-on-unknown`, skips both Sonnet rungs and lands on
@@ -493,25 +536,21 @@ any model but a Sonnet is reviewed on Sonnet 5.5 as usual.
 is what holds it.
 
 The overlap is not new in principle — the advisory ladder's own fallback is
-`claude-opus-5-5`, the workhorse **primary**, so reviewer and worker have
-coincided whenever the critic falls back. What is new is that the guarantee is
+`claude-opus-5-5`, the workhorse **primary**, so reviewer and worker could
+coincide whenever the critic fell back. What is new is that the guarantee is
 explicit per run instead of incidental.
 
-A declaration is not decoration. `policy_errors` refuses a **bare** overlap (one
-with no rule), a rule that sends the reviewer back to the build model, a
-`reviewers_use` that is not on the advisory ladder, and a **stale** rule
-describing an overlap that no longer exists. That last one is the DRE-3892
-carry-forward: a same-family successor replaces a Sonnet rung on *both* ladders
-at once, so an adoption that leaves the rule behind fails `--check` twice — the new
-rung is a bare overlap, and the old rule names a model that is no longer one.
+A declaration is not decoration. `policy_errors` refuses a rule that sends the
+reviewer back to the build model, a `reviewers_use` that is not on the advisory
+ladder, and a **stale** rule describing an overlap that no longer exists. That
+last one is the DRE-3892 carry-forward: a same-family successor replaces a
+Sonnet rung on *both* ladders at once, so an adoption that leaves the rule
+behind fails `--check` — the old rule names a model that is no longer one.
 **DRE-4836 (2026-09-25) is the first adoption that hit it**: Opus 5.5 replaced
 Opus 5 on all three ladders at once, and the rule moved with the rung.
 
 The separation binds reviewers and **only** reviewers. The medic is advisory too
-and is deliberately absent: it diagnoses a failed run and reviews nothing. The
-judgement ladder gets no such exemption at all — declaring a rule buys nothing
-for the planner's model, because Fable on a build ladder is still the 2026-08-09
-incident.
+and is deliberately absent: it diagnoses a failed run and reviews nothing.
 
 Recording it is **not** a degradation: the selection note names the separation
 and never carries the `DEGRADED` prefix. A `::warning::` on every Sonnet build
@@ -549,7 +588,10 @@ committed map rather than assume one (DRE-6858).
   `ungrouped`. A line for a name in neither is refused.
 - **`projects`** — repo slug → `{ <kind>: <model id> }`, the per-project
   exception. The slug must be a key of `config/repo-map.json`; when that file
-  cannot be read every entry is refused, naming it (fail closed).
+  cannot be read every entry is refused, naming it (fail closed). A model a
+  project names is a **known model** (`model_fallback.KNOWN_MODELS`,
+  `model_adoption._known_ids`), so an adoption never asks about it and a
+  reviewer reads a build's `model-attempt:` marker for it.
 
 **The walk rule.** A project's runs of that kind walk `[the exception]` followed
 by the kind's ladder with the exception removed
@@ -573,34 +615,35 @@ that step passes the card's own repo off its matrix row as `--repo
 "$REPOSITORY"`. `tests/test_select_passes_repo.py` finds every site by regex and
 holds each to its flag.
 
-**The own-kind reading.** The exception must already be a rung of **that kind's
-own ladder** — the one `kinds.<kind>.ladder` names. An exception reorders a
-kind's own ladder and never adds a model to it: a model joins a ladder only
-through a reviewed pull request to `models.yaml` (availability is not
-permission). The wider "on any ladder" reading is rejected because one console
-press would then put `claude-sonnet-4-6`, which sits only on the judgement
-ladder, at the head of a project's every build — undoing the 2026-09-16
-decision that took it off the build ladder with no ladder pull request. The
-refusal says where the model does sit, and is the entry's only reason:
+**Any priced model (DRE-6785).** The own-kind reading — an exception had to be
+a rung of that kind's own ladder, and never added a model to it — was lifted
+by the CEO's decision of 2026-10-10 (*An explicit choice is admissible*,
+above). An exception may name any model with a declared price; when it is not
+a rung of that kind's ladder the walk is one longer, so
+`projects: {atlas: {workhorse: claude-sonnet-4-6}}` has atlas's builders walk
+`claude-sonnet-4-6, claude-opus-5-5, claude-opus-5, claude-sonnet-5-5,
+claude-sonnet-5`. A model with no declared price is refused with that one
+plain reason:
 
 ```
-projects.atlas.workhorse: claude-sonnet-4-6 is not on the workhorse ladder (it sits on the judgement ladder) — …
+projects.atlas.workhorse: claude-nova-9 has no declared price, so it cannot be chosen.
 ```
 
-An exception that passes is then held to rules 4, 4b, 7 and 8 on the walk it
-makes, and every finding the fleet's own ladders do not already carry is
-reported as `projects.<slug>.<kind>: breaks rule <n> …` — the prefix the
-console filters on. A workhorse exception is a reorder of the build ladder and
-no rule reads that order, so it always passes. `judgement: claude-opus-5-5` is
-refused (a build model tops the planner's walk, and Fable sits dearer beneath
-it); `advisory: claude-opus-5-5` is refused (a bare overlap on top of the
-reviewers' walk); `judgement: claude-sonnet-4-6` is admitted.
+An exception that passes is then held to rules 7 and 8 on the walk it makes,
+and every finding the fleet's own ladders do not already carry is reported as
+`projects.<slug>.<kind>: breaks rule <n> …` — the prefix the console filters
+on. `judgement: claude-opus-5-5`, `advisory: claude-opus-5-5` and
+`workhorse: claude-fable-5-1` are all admitted; an excluded model is refused
+until the same change lifts it from `excluded`. A model the pinned Claude Code
+cannot run is caught in CI by
+`tests/test_model_cli_support.py::ProjectExceptionSupportTest`.
 
 The daily adoption carries an exception with its rung
 (`model_adoption_actions._move_projects`): when a same-family successor
 replaces a rung, every `projects.<slug>.<kind>` naming that rung of that kind's
 ladder moves to the successor too, as a text edit. An exception for a kind
-whose ladder the adoption does not touch is left alone. The edit reads the
+whose ladder the adoption does not touch is left alone — and if the adoption
+would retire the model it names, the write is refused (see `retired`, above). The edit reads the
 block shape shown in `models.yaml`'s comment; anything it could not move is
 caught by the edit's own closing comparison, and nothing is written.
 
