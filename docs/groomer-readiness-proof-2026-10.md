@@ -9,12 +9,35 @@ them. The first morning the card asks about is the scheduled run of
 2026-10-11 at 06:00 PT. Every judged row below waits for that morning, or for
 the morning after it.
 
+The critic held this record at 19:03 PT on 2026-10-10 for that reason, and a
+second proof run was dispatched at 19:22 PT, before the morning. It found the
+same board: no `self-groomer.yml` run after 10:05 PT, and no proposal on the
+standing card newer than `a4f198411b02`. Nothing changed in the rows below
+except the run ids.
+
 ## How this was recorded
 
 - **This run:** proof run
+  [38104939908](https://github.com/dreadnought-foundry/bureau-pipeline/actions/runs/38104939908)
+  (`Proof Task`, dispatched as the re-run after the critic's findings at `3a1671b`), started
+  2026-10-10 19:22 PT on `main` at `47073ee5670da6cab316c4814b1f433a9c291421`. Observed
+  2026-10-10 19:23–19:35 PT. It resumed this branch, merged `main` (`c5295316`) into it, and
+  re-read what the first run read:
+  - `gh run list --workflow self-groomer.yml` still lists 38070329055 (drain, 10:05 PT) as the
+    newest run. No run has started since.
+  - `stable` has moved to `47073ee5670da6cab316c4814b1f433a9c291421`, a commit dated 2026-10-10
+    19:10 PT. `proof_release.py check` still answers `ready` for all four merges (#960, #965, #966,
+    #971), and `gh api repos/…/compare/<merge>...main` answers `ahead` for each, so the next
+    morning's checkout of `main` carries all four.
+  - `linear_ops.py dump-comments DRE-4541` returned the newest 50 comments. The newest
+    `🧺 groom-proposal` among them is still `a4f198411b02`, and no proposal in the window carries
+    `## Not ready` or `## Rewrite first`.
+  - The cron lines on `main` are still `0 13 * * *` and `0 14 * * *`.
+- **The first run:** proof run
   [38103553587](https://github.com/dreadnought-foundry/bureau-pipeline/actions/runs/38103553587)
   (`Proof Task`, dispatched for the first proof run), started 2026-10-10 18:57 PT on `main` at
-  `c7cc71ce9bbf755b6fc6052e03d5fb2e27230a26`. Observed 2026-10-10 18:58–19:10 PT.
+  `c7cc71ce9bbf755b6fc6052e03d5fb2e27230a26`. Observed 2026-10-10 18:58–19:10 PT. What it saw
+  follows.
 - **The release.** `proof_release.py check` against the four build merges answered:
 
   ```
@@ -63,12 +86,22 @@ the morning after it.
     `GH_TOKEN=$GH_READ_TOKEN gh api -X POST repos/dreadnought-foundry/bureau-pipeline/git/refs -f ref=refs/heads/proof-write-probe-38103553587 -f sha=c7cc71ce…`
     — GitHub answered `{"message":"Resource not accessible by integration", … "status":"403"}`.
     No ref was created.
+  - **This run (38104939908)** held the same token, by the same `proof identity: github read`
+    line. Used for the run list, the run's own metadata, `main` and `stable`, the four compares,
+    `proof_release.py check`, `self-groomer.yml` on `main`, and pull request #981's comments.
+    **Its refused write:**
+    `GH_TOKEN=$GH_READ_TOKEN gh api -X POST repos/dreadnought-foundry/bureau-pipeline/git/refs -f ref=refs/heads/proof-write-probe-38104939908 -f sha=47073ee5…`
+    — GitHub answered `{"message":"Resource not accessible by integration", … "status":"403"}`.
+    No ref was created.
 - **github write** — `GH_TOKEN`, the worker token. Used only to push this branch and open its pull
   request.
 - **linear** — `LINEAR_API_KEY`, the fleet key. Reads: `dump-comments DRE-4541`, `state-of DRE-6678`
   (`Hand-work`), `epics-in-flight`, `children DRE-6644` and `children-json DRE-6644`. Writes: this
   run's heartbeats and its `agent-actor` marker on DRE-6678, nothing else.
-  linear requests: 13 of 40, counted when this record was pushed. The `⏳ 5/5 PR opened` heartbeat
+  The first run counted linear requests: 13 of 40 when it pushed.
+  This run's reads: `dump-comments DRE-4541`. Its writes: its heartbeats and its `agent-actor`
+  marker on DRE-6678, nothing else.
+  linear requests: 9 of 40, counted when this record was pushed. The `⏳ 5/5 PR opened` heartbeat
   and the `agent-actor` marker come after the push, at about two requests each.
 - **aws** — `proof identity: aws — none, PROOF_ROLE_ARN not provided`. No criterion here needs it.
 - No scratch state was created.
@@ -85,5 +118,5 @@ the morning after it.
 | A card on the Not ready list one morning whose stated condition held by the next morning appears on the next morning's Planning list with no person adding it, read off the two proposal pages and the card's state between them; if no card's condition turned inside the two-morning window, the row says so as `Not observed.` | Not observed. waiting for the scheduled mornings of 2026-10-11 and 2026-10-12, 06:00 PT: the two proposal pages on DRE-4541, and for any card on the first page's Not ready list whose condition held by the second, its place on the second page's Planning list and its state between them. |
 | For every `now` verdict in the morning's judgement artifact whose `depends on` line names a card or an epic that is open on the board that morning and is not the card's own parent, that card is on the Not ready table under `read-waits-on-open-card` naming it, with the condition the rule states (Done for a card; built out or Done for an epic), and the board that morning bears the name out: the record quotes the line, the row and the named card's state, and for an epic the child that keeps it from being built out. Beside that, as evidence of how much of the read the rule could see and not as a judged measure, the record states how many `now` verdicts carried no `depends on` line, against the page's `depends_on_missing` count. A morning on which no `now` verdict named an open card, or whose read was declined or ran with no judgement, is `Not observed.` and says which. | Not observed. waiting for the scheduled morning of 2026-10-11 06:00 PT: its judgement artifact downloaded with `gh run download`, each `now` verdict's `depends on` line, the `read-waits-on-open-card` rows on its Not ready table, the named cards' states that morning, and the count of `now` verdicts with no `depends on` line against the page's `depends_on_missing`. |
 | If the CEO accepted a Rewrite first draft inside the window with `🧺 groom-rewrite-accepted`, the drain's record counts the card under `rewritten`, the card carries a `🧺 groom-rewritten` comment holding its previous body, its description is the accepted draft, and it is in Planning or past it; if he accepted none, the row is `Not observed.` and says so. | Not observed. waiting for the two-morning window of 2026-10-11 and 2026-10-12 to close: whether any `🧺 groom-rewrite-accepted` was posted on DRE-4541, and for each one the drain's `rewritten` count, the card's `🧺 groom-rewritten` comment, its description, and its state. No Rewrite first draft has been posted yet, so none can have been accepted. |
-| The record names the `main` commit the morning's run checked out and the run ids, and it is merged on `agent/DRE-<n>-proof-record` with every judged row read by the critic. | Not observed. waiting for the scheduled morning of 2026-10-11 06:00 PT: its run id and the `main` commit it checked out, recorded here. This record already names every run so far: 38054243567 (morning, `6d6a8434`), 38058824979 (off-hour cron), 38070329055 (drain, `9447e7b2`) and this proof run, 38103553587 (`c7cc71ce`). It is on `agent/DRE-6678-proof-record` and not yet merged. |
+| The record names the `main` commit the morning's run checked out and the run ids, and it is merged on `agent/DRE-<n>-proof-record` with every judged row read by the critic. | Not observed. waiting for the scheduled morning of 2026-10-11 06:00 PT: its run id and the `main` commit it checked out, recorded here. This record already names every run so far: 38054243567 (morning, `6d6a8434`), 38058824979 (off-hour cron), 38070329055 (drain, `9447e7b2`) and the two proof runs, 38103553587 (`c7cc71ce`) and 38104939908 (`47073ee5`). It is on `agent/DRE-6678-proof-record` and not yet merged. |
 | The CEO closes this card after reading the record | Open: the CEO's step |
