@@ -358,8 +358,11 @@ def test_each_part_uploads_what_it_ran():
 
 
 def test_one_job_carries_the_required_check_name():
+    # It waits on the parts and, since DRE-6909, on the walks' job too
+    # (`tests/test_tests_workflow_parts.py`).
     _, job = _aggregate()
-    assert job.get("needs") in (PARTS_JOB, [PARTS_JOB])
+    needs = job.get("needs")
+    assert PARTS_JOB in ([needs] if isinstance(needs, str) else needs)
 
 
 def test_the_required_check_runs_even_when_a_part_failed():
