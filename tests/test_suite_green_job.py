@@ -390,7 +390,9 @@ def _run_reach(tmp_path: Path, gh_body: str, base: str = "base-sha") -> tuple[st
                GITHUB_OUTPUT=str(out), RUNNER_TEMP=str(runner_temp),
                GITHUB_REPOSITORY="dreadnought-foundry/bureau-pipeline",
                BASE=base, HEAD="head-sha")
-    proc = subprocess.run(["bash", "-e", "-c", _reach_step()["run"]], cwd=ROOT,
+    # GitHub's own `run:` shell for bash.
+    proc = subprocess.run(["bash", "--noprofile", "--norc", "-eo", "pipefail", "-c",
+                           _reach_step()["run"]], cwd=ROOT,
                           env=env, capture_output=True, text=True)
     assert proc.returncode == 0, proc.stdout + proc.stderr
     return out.read_text(), proc.stdout
