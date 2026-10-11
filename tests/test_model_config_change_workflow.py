@@ -24,6 +24,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import shutil
 import stat
 import subprocess
 import sys
@@ -389,3 +390,209 @@ def test_the_workflow_posts_no_comment_and_declares_no_act():
         assert writer not in text, writer
     acts = json.loads((ROOT / "config" / "pipeline-acts.json").read_text())
     assert "model-config-change" not in json.dumps(acts)
+
+
+# --------------------------------------------------------------------------- #
+# 8. The whole run, end to end, against a throwaway remote                     #
+# --------------------------------------------------------------------------- #
+#
+# The steps above are read one at a time. This runs the job's steps IN ORDER,
+# the way the runner does: each `if:` is evaluated against the outputs the
+# earlier steps wrote, every `${{ }}` in an `env:` is resolved, the first step
+# that exits non-zero ends the run, and a `uses:` step (the App token, the
+# checkout, the Python install) is the one thing stood in for — the tree is
+# already checked out and the token is a fake. `git push` reaches a real bare
+# repository, and `gh` is a fake that records what it was asked to create and
+# then answers that the pull request is open, as GitHub would. The model tests
+# step is informational and is stood in for too, so the scenario stays fast.
+
+_EXPR = re.compile(r"\$\{\{\s*(.+?)\s*\}\}")
+_CLAUSE = re.compile(r"^steps\.([\w-]+)\.outputs\.([\w-]+)\s*(==|!=)\s*'([^']*)'$")
+
+FAKE_GH = """#!/usr/bin/env bash
+echo "$*" >> "$FAKE_GH_LOG"
+if [ "$1 $2" = "pr list" ]; then
+  cat "$FAKE_GH_OPEN" 2>/dev/null || true
+  exit 0
+fi
+if [ "$1 $2" = "pr create" ]; then
+  while [ $# -gt 0 ]; do
+    if [ "$1" = "--head" ]; then echo "https://github.com/o/r/pull/1" > "$FAKE_GH_OPEN"; fi
+    if [ "$1" = "--body-file" ]; then cp "$2" "$FAKE_GH_BODY"; fi
+    shift
+  done
+  exit 0
+fi
+exit 1
+"""
+
+
+def _resolve(value: str, inputs: dict, outputs: dict) -> str:
+    def one(match):
+        expr = match.group(1)
+        if expr.startswith("inputs."):
+            return inputs.get(expr[len("inputs."):], "")
+        parts = expr.split(".")
+        if parts[0] == "steps" and len(parts) == 4:
+            return outputs.get(parts[1], {}).get(parts[3], "")
+        if expr in ("github.token", "steps.app.outputs.token"):
+            return "fake-token"
+        raise AssertionError(f"the harness cannot resolve ${{{{ {expr} }}}}")
+    return _EXPR.sub(one, str(value))
+
+
+def _passes(condition, outputs: dict) -> bool:
+    if not condition:
+        return True
+    for clause in str(condition).split("&&"):
+        found = _CLAUSE.match(clause.strip())
+        assert found, f"the harness cannot evaluate `{clause.strip()}`"
+        step, name, op, literal = found.groups()
+        value = outputs.get(step, {}).get(name, "")
+        if (value == literal) != (op == "=="):
+            return False
+    return True
+
+
+class _Run:
+    def __init__(self, tmp_path: Path):
+        self.tmp = tmp_path
+        self.remote = tmp_path / "remote.git"
+        self.work = tmp_path / "work"
+        self.bin = tmp_path / "bin"
+        self.state = tmp_path / "gh"
+        for path in (self.work, self.bin, self.state):
+            path.mkdir()
+        ignore = shutil.ignore_patterns("__pycache__", "*.pyc")
+        shutil.copytree(ROOT / "scripts", self.work / "scripts", ignore=ignore)
+        shutil.copytree(ROOT / "config", self.work / "config", ignore=ignore)
+        shutil.copy(ROOT / "agents.yaml", self.work / "agents.yaml")
+        gh = self.bin / "gh"
+        gh.write_text(FAKE_GH)
+        gh.chmod(gh.stat().st_mode | stat.S_IEXEC)
+        self.git("init", "-q", "-b", "main")
+        self.git("add", "-A")
+        self.git("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "base")
+        subprocess.run(["git", "init", "-q", "--bare", "-b", "main", str(self.remote)],
+                       check=True)
+        self.git("remote", "add", "origin", str(self.remote))
+        self.git("push", "-q", "origin", "main")
+        self.base = self.git("rev-parse", "HEAD").strip()
+
+    def git(self, *args: str, cwd: Path | None = None) -> str:
+        return subprocess.run(["git", *args], cwd=cwd or self.work, check=True,
+                              capture_output=True, text=True).stdout
+
+    def remote_branches(self) -> list[str]:
+        out = subprocess.run(["git", "for-each-ref", "--format=%(refname:short)",
+                              "refs/heads"], cwd=self.remote, check=True,
+                             capture_output=True, text=True).stdout
+        return sorted(out.split())
+
+    def gh_calls(self) -> list[str]:
+        log = self.state / "log"
+        return log.read_text().splitlines() if log.exists() else []
+
+    def dispatch(self, change_set: str, skip=("tests",)):
+        """One run of the job. Returns (ran step names, the failed step or None,
+        the combined output)."""
+        # A fresh runner: the checkout is main as the remote has it.
+        self.git("checkout", "-q", "-f", "main")
+        self.git("reset", "-q", "--hard", "origin/main")
+        temp = self.tmp / f"runner-{len(list(self.tmp.glob('runner-*')))}"
+        temp.mkdir()
+        outputs: dict[str, dict] = {}
+        ran, log = [], []
+        for n, step in enumerate(_steps()):
+            sid = step.get("id") or f"step-{n}"
+            if not _passes(step.get("if"), outputs):
+                continue
+            if "uses" in step or sid in skip:
+                outputs[sid] = {"result": "skipped"} if sid in skip else {}
+                continue
+            out_file = temp / f"output-{n}"
+            out_file.write_text("")
+            env = {k: v for k, v in os.environ.items()
+                   if k not in ("GITHUB_OUTPUT", "GITHUB_STEP_SUMMARY")}
+            env.update({
+                "RUNNER_TEMP": str(temp),
+                "GITHUB_OUTPUT": str(out_file),
+                "GITHUB_STEP_SUMMARY": str(temp / "summary"),
+                "GITHUB_REPOSITORY": "dreadnought-foundry/bureau-pipeline",
+                "PATH": f"{self.bin}{os.pathsep}{os.environ['PATH']}",
+                "FAKE_GH_LOG": str(self.state / "log"),
+                "FAKE_GH_OPEN": str(self.state / "open"),
+                "FAKE_GH_BODY": str(self.state / "body.md"),
+            })
+            for key, value in (step.get("env") or {}).items():
+                env[key] = _resolve(value, {"change_set": change_set}, outputs)
+            proc = subprocess.run(["bash", "-e", "-c", step["run"]], cwd=self.work,
+                                  env=env, capture_output=True, text=True)
+            ran.append(step.get("name"))
+            log.append(proc.stdout + proc.stderr)
+            outputs[sid] = dict(line.split("=", 1)
+                                for line in out_file.read_text().splitlines()
+                                if "=" in line)
+            if proc.returncode != 0:
+                return ran, step.get("name"), "\n".join(log)
+        return ran, None, "\n".join(log)
+
+
+def test_a_refused_change_set_ends_the_run_with_no_branch_and_no_pull_request(tmp_path):
+    run = _Run(tmp_path)
+    ran, failed, log = run.dispatch(_change_set(VALID, REFUSED))
+    assert failed == "Validate the change set", log
+    assert "change 2 of 2 (move_agent engineer judgement): agents.engineer" in log
+    assert run.remote_branches() == ["main"], "no branch was pushed"
+    assert not any(call.startswith("pr create") for call in run.gh_calls())
+    assert run.git("rev-parse", "origin/main").strip() == run.base
+
+
+def test_a_valid_change_set_opens_one_pull_request_and_a_rerun_opens_none(tmp_path):
+    run = _Run(tmp_path)
+    change_set = _change_set(
+        VALID, {"op": "set_default_model", "group": "workhorse", "model": "claude-sonnet-5-5"})
+    branch = mcc.branch_name(json.loads(change_set))
+
+    ran, failed, log = run.dispatch(change_set)
+    assert failed is None, log
+    assert run.remote_branches() == sorted(["main", branch])
+    changed = run.git("diff", "--name-only", f"origin/main...origin/{branch}").split()
+    assert sorted(changed) == sorted(CONFIG_FILES), "the edit and every generated file"
+    run.git("checkout", "-q", f"origin/{branch}")
+    check = subprocess.run([sys.executable, "scripts/sync_model_config.py", "--check"],
+                           cwd=run.work, capture_output=True, text=True)
+    assert check.returncode == 0, check.stdout + check.stderr
+    models = yaml.safe_load((run.work / "config/models.yaml").read_text())
+    assert models["agents"]["proof"] == "advisory"
+    assert models["ladders"]["workhorse"][0]["model"] == "claude-sonnet-5-5"
+    creates = [call for call in run.gh_calls() if call.startswith("pr create")]
+    assert len(creates) == 1
+    assert f"--head {branch}" in creates[0] and "--base main" in creates[0]
+    body = (run.state / "body.md").read_text()
+    assert body.splitlines()[0] == "What's new: none"
+    assert "ceo@example.com" in body
+    assert sum(line.startswith("- ") for line in body.splitlines()) == 2
+
+    ran, failed, log = run.dispatch(change_set)
+    assert failed is None, log
+    assert "already open as https://github.com/o/r/pull/1" in log
+    assert ran == ["Read the change set and name its branch", "Is its pull request already open"]
+    assert len([c for c in run.gh_calls() if c.startswith("pr create")]) == 1
+
+
+def test_a_run_that_crashed_after_its_push_is_finished_on_the_same_branch(tmp_path):
+    run = _Run(tmp_path)
+    change_set = _change_set(VALID)
+    branch = mcc.branch_name(json.loads(change_set))
+    run.dispatch(change_set)
+    pushed = run.git("rev-parse", f"origin/{branch}").strip()
+    # The pull request never opened: GitHub has no record of it.
+    (run.state / "open").unlink()
+    (run.state / "log").unlink()
+
+    ran, failed, log = run.dispatch(change_set)
+    assert failed is None, log
+    assert "reusing it as it stands" in log
+    assert run.git("rev-parse", f"origin/{branch}").strip() == pushed, "nothing re-cut"
+    assert len([c for c in run.gh_calls() if c.startswith("pr create")]) == 1
