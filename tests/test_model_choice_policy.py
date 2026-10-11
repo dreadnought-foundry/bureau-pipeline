@@ -258,7 +258,10 @@ def test_a_reviewer_is_separated_from_the_build_model(name, tmp_path):
 
 
 def test_reviewers_for_reads_the_raw_and_the_normalized_shape():
-    cfg = with_project(committed(), "atlas", {"advisory": OPUS55})
+    # Only atlas carries an entry: the committed map is whatever the console
+    # last saved (DRE-6858), and portico must be a project with none here.
+    cfg = committed()
+    cfg["projects"] = {"atlas": {"advisory": OPUS55}}
     norm = mf._normalize_config(cfg)
     assert mf.reviewers_for(cfg, OPUS55, "atlas") == \
         mf.reviewers_for(norm, OPUS55, "atlas") == [SONNET55, SONNET5]

@@ -1985,8 +1985,9 @@ def _build_model_from_thread(path: str) -> str | None:
     Reads the two shapes `linear_ops.py dump-comments` writes: a JSON array of
     bodies, and the `--with-authors` array of records. DEGRADES to None on a
     missing file, unreadable JSON or an unexpected shape — the caller's answer
-    is then `--built-on-unknown`, which bars every declared overlap, so a
-    Linear outage costs a cheaper reviewer and never a failed review job.
+    is then `--built-on-unknown`, which bars every reviewer rung that also
+    builds but the walk's last, so a Linear outage costs a different reviewer
+    and never a failed review job.
     """
     import json
 
