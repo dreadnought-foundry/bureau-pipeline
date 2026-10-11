@@ -43,7 +43,7 @@ moves itself (below).
 | -- | -- | -- | -- |
 | `stranded-no-run` | `run-started` | A 🧠 or ⏳ run receipt newer than the stamp proves a run started. The pipeline never starts that run itself — see below. | Nothing moves |
 | `no-route` | `repo-on-rail` | Read off the card's current `repo:` label, never the stamp, because the usual fix is a person correcting the label. | Triage → Planning |
-| `review-cap-spent` | `new-head` | The review re-triggers were spent on one head. A pushed fix is a new head, and the review runs on it again. | Green Light → In Review |
+| `review-cap-spent` | `new-head` | The review re-triggers were spent on one head. A pushed fix is a new head, and the review runs on it again. The sweep parks a code pull request's card in Green Light, and holds a proof record's In Review for the operator (DRE-6841). | Green Light → In Review, or no move when the proof record was held In Review |
 | `dead-run-cap` | `unpark-marker` | Only an operator's `unpark` resets the death budget, and its `dead-run-budget-reset` marker is the fact. | Nothing moves |
 | `turn-cap-park` | `unpark-marker` | The same budget reset. Two turn-cap deaths past green are the most a card ever gets. | Nothing moves |
 | `epic-rereview-twice` | `manual` | The park ends in Triage for an operator. The way back, `plan_critic.REAPPROVE_HOW`, is a person's act that leaves no fact a sweep can read. | Nothing moves |
@@ -83,7 +83,10 @@ what amends it. A record already parked under the stamp is read by that branch
 in Green Light too, and the amended record's new head lifts the stamp here as
 for any other card. Every other record — an `APPROVE` the gate has not declined
 as not proven at the head, a red check, or no verdict at its head — is nudged
-and capped as before.
+and capped as before. At the cap it is held In Review under the stamp with the
+operator's question, never parked in Green Light (DRE-6841): a record's
+refusal is `proof record not proven`, which the operator answers by accepting
+rows, recording the event with `🔬 proof-observed`, or dropping the record.
 
 ### `operator-step` is lifted by the sweep
 
@@ -226,7 +229,9 @@ nothing resumes, so each also moves it (DRE-6273):
   stamped sha. The lane reads the head off the leg's own pull-request listing:
   the newest open pull request whose branch carries the card's identifier. No
   open pull request means no lift. A `review-cap-spent` card the sweep parked
-  in Green Light (DRE-6181) goes from Green Light to In Review, and a
+  in Green Light (DRE-6181) goes from Green Light to In Review — a proof
+  record the sweep held In Review for the operator instead (DRE-6841) is
+  already there, and the lift moves nothing — and a
   `fix-dispute` or `unfixable-check` card the fix loop parked in Triage
   (DRE-6179) goes from Triage to In Review — the lane its open pull request
   says it is in. The push that made the new head has already started the
@@ -395,7 +400,7 @@ without a person before it holds.
 | -- | -- | -- | -- | -- | -- |
 | `scripts/reconcile.py` · `flag_stranded` | `WATCHDOG_TAG` | `stranded-no-run` | `run-started` | sweep, fix-dispatch, medic, limit-recovery | The sweep's one Todo re-send (DRE-5743) |
 | `scripts/reconcile.py` · `flag_stranded` | `WATCHDOG_TAG` | `no-route` | `repo-on-rail` | sweep, fix-dispatch, medic, limit-recovery | The move to the operator's queue (DRE-6177) |
-| `scripts/reconcile.py` · `hand_review_nudge_to_person` | `REVIEW_NUDGE_CAP_KEY` | `review-cap-spent` | `new-head` | sweep, fix-dispatch, medic, limit-recovery | Three review re-triggers on the head, then the Green Light question (DRE-6181) |
+| `scripts/reconcile.py` · `hand_review_nudge_to_person` | `REVIEW_NUDGE_CAP_KEY` | `review-cap-spent` | `new-head` | sweep, fix-dispatch, medic, limit-recovery | Three review re-triggers on the head, then the Green Light question (DRE-6181) — parked in Green Light for a code pull request, held In Review with the operator's question for a proof record (DRE-6841) |
 | `scripts/reconcile.py` · `hand_dead_run_to_planner` (In Progress or In Review, no PR) | `held-for-human` | `dead-run-cap` | `unpark-marker` | sweep, fix-dispatch, medic, limit-recovery | Two requeues, then one hand-off to the planner on a silent death (DRE-6178, DRE-6186) |
 | `scripts/dead_run.py` · `_cmd_park` | `PARK_STATE` | `dead-run-cap` | `unpark-marker` | sweep, fix-dispatch, medic, limit-recovery | Two requeues, then one hand-off to the planner on a silent death (DRE-6178, DRE-6186) |
 | `scripts/dead_run.py` · `_cmd_park` | `PARK_STATE` | `turn-cap-park` | `unpark-marker` | sweep, fix-dispatch, medic, limit-recovery | One requeue after a death past implementation green (DRE-4366) |
@@ -427,7 +432,7 @@ records.
 | -- | -- | -- |
 | `stranded-no-run` | The sweep re-sends a card that sat in Todo with no run, once (DRE-5743). | `card sat in Todo with no run — re-dispatched` |
 | `no-route` | The card moves to the operator's queue under the `card-stranded` act. The move lands with DRE-6177. | `card-stranded` |
-| `review-cap-spent` | Three review re-triggers on the head, then the evidence-built Green Light question. The question lands with DRE-6181. | `review-nudge-cap` |
+| `review-cap-spent` | Three review re-triggers on the head, then the evidence-built Green Light question. The question lands with DRE-6181. On a proof record the question is the operator's and the card is held In Review, not parked in Green Light (DRE-6841). | `review-nudge-cap` |
 | `dead-run-cap` | Two requeues at the same budget, then — on a silent death, with no pull request and no blocker note — one hand-off to the planner. The Report step's cap has asked `dead_run.decide` since DRE-6178, and the sweep's two no-PR caps ask it through `hand_dead_run_to_planner` since DRE-6186; what the sweep sees at its cap is always the silent death. A credential refusal or an API or model death at the cap holds as today, because neither says anything about the card's size. | `✂️ dead-run-cap → Planning:` (`hold.DEAD_SPLIT_MARK`) |
 | `turn-cap-park` | One requeue at the same budget after a death past implementation green (DRE-4366). | `turn-exhaustion-requeue` |
 | `epic-rereview-twice` | The watcher's own first firing asks for the second critic's review again. | `asked for the review again` |
