@@ -791,7 +791,9 @@ build group beside the three (DRE-6834, *An explicit choice is admissible*
 above), and a name that is taken, empty or not lowercase letters, digits and
 dashes is refused in one plain sentence; the file's top-level `add_group`,
 `{"allowed": true, "reason": null}` today, tells the console the pipeline takes
-one, judged as a move is. A
+one, judged as a move is, and when it does not, `reason` says why in plain
+words. The new group's model carries a caution in the pull request the way a
+Builders choice does, priced against the Builders' default model. A
 session agent joins any group (DRE-6833), and so does an agent added in the same
 change set, since `add_agent` makes it one; a name in neither `agents.yaml` nor
 `session_agents` cannot, because the generator writes a model for every other

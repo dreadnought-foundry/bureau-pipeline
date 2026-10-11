@@ -420,18 +420,35 @@ def test_a_name_that_is_not_lowercase_letters_digits_and_dashes_is_refused(name)
 # The published file                                                          #
 # --------------------------------------------------------------------------- #
 
-def _page(raw: dict, tmp_path: Path) -> dict:
+def _page(raw: dict, tmp_path: Path, **pin) -> dict:
     path = tmp_path / "models.yaml"
     path.write_text(yaml.safe_dump(raw, sort_keys=False))
     registry = mcc.registry_agents((model_fixture.FIXTURE_DIR / "agents.yaml").read_text())
     return json.loads(sync_model_config.render_choices(
-        raw, sync_model_config.load_config(path), PRICES, registry))
+        raw, sync_model_config.load_config(path), PRICES, registry, **pin))
 
 
 def test_the_published_file_says_the_pipeline_takes_a_new_group(tmp_path):
     page = _page(FROZEN, tmp_path)
     assert page["add_group"] == {"allowed": True, "reason": None}
     assert [g["key"] for g in page["groups"]] == list(FROZEN["kinds"])
+
+
+def test_the_published_file_says_why_the_pipeline_cannot_take_a_new_group(tmp_path):
+    """The refused branch: the Builders' default is a model the pinned Claude
+    Code cannot run, so no group can be added on it. The reason is the why in
+    plain words, never the probe's own name, label or purpose read back to the
+    CEO as if he had asked for them."""
+    model = model_fixture.ladder(FROZEN, mf.WORKHORSE_KIND)[0]
+    page = _page(FROZEN, tmp_path, floors={model: "99.0.0"}, installed="2.1.0")
+    assert page["add_group"]["allowed"] is False
+    reason = page["add_group"]["reason"]
+    assert reason == ("A new group cannot be added right now. Our pinned Claude Code "
+                      f"cannot run {model_choice.model_label(model)} yet.")
+    assert model_choice.plain_words_problems(reason) == [], reason
+    for placeholder in (sync_model_config.ADD_GROUP_PROBE, "New group",
+                        "A group added from the console"):
+        assert placeholder not in reason, reason
 
 
 def test_the_published_file_carries_an_added_group_and_every_move_into_it(tmp_path):

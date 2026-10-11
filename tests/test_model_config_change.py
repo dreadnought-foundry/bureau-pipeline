@@ -796,6 +796,32 @@ def test_a_project_replacing_its_exception_is_cautioned_against_that_exception()
         "tokens.")
 
 
+def _new_group(model: str) -> dict:
+    return {"op": "add_group", "group": "product-design", "label": "Product & design",
+            "purpose": "Decide what to build and how it looks.", "model": model}
+
+
+def test_an_added_group_on_fable_5_1_is_cautioned_against_the_builders_default():
+    """DRE-6834: a new group has no model of its own yet, so its first one is
+    priced against the Builders' default, the group it is built beside — and
+    the Builders' busiest-group words are not said of it."""
+    assert _line_for(_new_group(FABLE_5_1)).endswith(
+        "Fable 5.1 costs more than Opus 5.5: $10/$50 against $4/$20 per million "
+        "tokens.")
+
+
+def test_an_added_group_on_a_set_aside_model_says_it_comes_back_for_that_group():
+    line = _line_for(_new_group(HAIKU))
+    assert (f"{model_choice.model_label(HAIKU)} is a model we set aside; choosing it "
+            "brings it back for Product & design") in line, line
+    assert "against Opus 5.5 at $4/$20" in line, line
+
+
+def test_an_added_group_on_the_builders_default_carries_no_caution():
+    change = _new_group(OPUS_5_5)
+    assert _line_for(change) == f"- {mcc.describe(change, yaml.safe_load(_text()))}"
+
+
 # -- item 4: an added group's model is a choice, and a choice is complete -----
 
 @pytest.mark.parametrize("model", [HAIKU, OPUS_5_5])

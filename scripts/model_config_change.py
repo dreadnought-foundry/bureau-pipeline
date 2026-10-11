@@ -92,7 +92,8 @@ build model by itself (DRE-6785).
 
 The pull request says each of these in plain words, from `model_choice` and
 `model_fallback` and never restated: a choice's line ends on its
-`model_choice.caution_for` sentence, read against the file just before it,
+`model_choice.caution_for` sentence, read against the file just before it
+(an `add_group`'s model priced against the Builders' default, DRE-6834),
 and is followed by the set-aside line, the line naming where a pull request
 built on a model that now builds and reviews is reviewed (a Builders or
 Reviewers choice only), and the set-aside-again line, as they apply.
@@ -353,6 +354,26 @@ def _separation_note(change: dict, after) -> str | None:
             f"{model_choice.model_label(reviewers[0])}.")
 
 
+def _caution(change: dict, before, after, prices) -> str | None:
+    """The `model_choice.caution_for` sentence a choice carries, read against
+    the file just before it. An `add_group` has no model of its own to compare
+    with, so its first one is priced against the Builders' default, the group
+    it is built beside (DRE-6834): read on `after`, where the group and its
+    label are, with `before`'s `excluded`, where the model may still be set
+    aside."""
+    group, model = change["group"], change["model"]
+    try:
+        if change["op"] == "add_group":
+            builders = _rung_ids(before["ladders"][_ladder_name(before, WORKHORSE_KIND)])
+            return model_choice.caution_for(
+                {**after, "excluded": before.get("excluded")}, prices, group, model,
+                current=builders[0])
+        current = _standing(before, change) if change["op"] == "set_project_model" else None
+        return model_choice.caution_for(before, prices, group, model, current=current)
+    except (KeyError, IndexError):  # a change apply refuses; render stays total
+        return None
+
+
 def _change_lines(change: dict, before, after, prices) -> list[str]:
     """The `## What changes` lines for one change, read against the file just
     before it (`before`) and just after it (`after`): its line, ending on its
@@ -362,12 +383,7 @@ def _change_lines(change: dict, before, after, prices) -> list[str]:
     notes = []
     if change["op"] in MODEL_OPS and after is not None:
         model = change["model"]
-        current = _standing(before, change) if change["op"] == "set_project_model" else None
-        try:
-            caution = model_choice.caution_for(before, prices, change["group"], model,
-                                               current=current)
-        except KeyError:  # a change apply refuses; render stays total
-            caution = None
+        caution = _caution(change, before, after, prices)
         if caution:
             line = f"{line} {caution}"
         if _lifts(before, change):

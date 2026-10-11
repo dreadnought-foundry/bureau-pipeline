@@ -315,8 +315,10 @@ def render_choices(raw: dict, cfg: dict, prices: dict,
     ``add_group`` (DRE-6834) says whether the pipeline takes a new group, as
     ``{allowed, reason}``: the change script's answer for an ``add_group``
     under a free name on the Builders' default model, judged exactly as a
-    move is. A group added from the console is then one more entry under
-    ``groups``, and every agent's ``moves`` names it like any other.
+    move is, and a refused one's ``reason`` says why in plain words without
+    the probe's own words. A group added from the console is then one more
+    entry under ``groups``, and every agent's ``moves`` names it like any
+    other.
     """
     # The change script imports this module, so this one imports it late.
     import model_config_change as mcc
@@ -443,8 +445,24 @@ def _add_group(raw: dict, cfg: dict, prices: dict, registry: set[str],
                    if error not in baseline])
     return {
         "allowed": not refused,
-        "reason": " ".join(mcc.plain_lines(change, refused, raw)) if refused else None,
+        "reason": _add_group_reason(change, refused, raw) if refused else None,
     }
+
+
+def _add_group_reason(change: dict, refused: list[str], raw: dict) -> str:
+    """Why no group can be added, for the console: the change script's why for
+    each finding, after one opening sentence. The probe's name, label and
+    purpose are this generator's own words, never the CEO's, so the change it
+    describes is never read back to him."""
+    import model_config_change as mcc
+
+    sentences = ["A new group cannot be added right now."]
+    for reason in refused:
+        why = mcc._why(reason, change, raw).rstrip(".")
+        sentence = f"{why[:1].upper()}{why[1:]}."
+        if sentence not in sentences:
+            sentences.append(sentence)
+    return " ".join(sentences)
 
 
 def _entry_id(entry) -> str | None:
