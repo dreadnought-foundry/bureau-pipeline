@@ -24,7 +24,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "scripts"))
 # `proof_dispatch` imports `reconcile`, which reads these at import.
 os.environ.setdefault("LINEAR_API_KEY", "test-key")
-os.environ.setdefault("REPO", "dreadnought-foundry/bureau-pipeline")
+os.environ.setdefault("REPO", "dreadnought-foundry/agent-bureau")
 os.environ.setdefault("REPO_SLUG", "agent-bureau")
 os.environ.setdefault("GH_TOKEN", "x")
 
