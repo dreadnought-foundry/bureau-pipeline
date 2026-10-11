@@ -65,9 +65,16 @@ PACK = groom_context.pack(now=NOW)
 # above it runs AT it, so the ceiling is held under the smallest of them rather
 # than trusting the number we ask for. Recorded here rather than probed: the
 # fleet's runners install the CLI at run time and a test may not have one.
-# All three were re-read off the 2.1.284 binary on 2026-09-28 (DRE-5116) and
-# are unchanged from the 2.1.282 reading of 2026-09-25, which superseded the
+# The first three were re-read off the 2.1.284 binary on 2026-09-28 (DRE-5116)
+# and are unchanged from the 2.1.282 reading of 2026-09-25, which superseded the
 # 2.1.263 one.
+#
+# The map is keyed by model, not by the ladder of the day (DRE-6885): the
+# console may move the planner into another group or change its ladder, and
+# the planner then walks rungs of the other ladders. Those three — Opus 5,
+# Sonnet 5.5 and Sonnet 5 — were read off the same 2.1.284 binary on
+# 2026-10-11, so every rung of every committed ladder has its limit here. A
+# rung the map does not know is named by the test below rather than guessed.
 CLI_OUTPUT_UPPER_LIMITS = {
     "claude-fable-5-1": 128000,
     # `claude-opus-5-5` took this rung from `claude-opus-5` on 2026-09-25
@@ -77,6 +84,9 @@ CLI_OUTPUT_UPPER_LIMITS = {
     # that is where this 128,000 now comes from; 2.1.284 carries the same.
     "claude-opus-5-5": 128000,
     "claude-sonnet-4-6": 128000,
+    "claude-opus-5": 128000,
+    "claude-sonnet-5-5": 128000,
+    "claude-sonnet-5": 128000,
 }
 
 
@@ -217,13 +227,22 @@ def test_the_wall_clock_is_sized_from_the_budget():
 
 def test_the_ceiling_is_under_every_rung_of_the_planner_ladder():
     """The CLI clamps the budget to a per-model upper limit, so a ceiling above
-    any rung's limit is a number we ask for and never get (Q4)."""
+    any rung's limit is a number we ask for and never get (Q4).
+
+    An invariant of the committed state: the rungs are whichever the committed
+    file gives the planner today, read by name and never asserted."""
     ladder = model_fallback.ladder_for(groom_judgement.ROLE)
-    assert set(ladder) == set(CLI_OUTPUT_UPPER_LIMITS), (
-        "the planner ladder moved — re-read the installed CLI's own limit for "
-        "every rung before trusting the ceiling"
+    unknown = [rung for rung in ladder if rung not in CLI_OUTPUT_UPPER_LIMITS]
+    assert not unknown, (
+        f"no CLI limit recorded for {', '.join(unknown)} on the planner's "
+        "ladder — re-read the installed CLI's own limit for it before trusting "
+        "the ceiling"
     )
-    assert groom_judgement.OUTPUT_CEILING <= min(CLI_OUTPUT_UPPER_LIMITS.values())
+    for rung in ladder:
+        assert groom_judgement.OUTPUT_CEILING <= CLI_OUTPUT_UPPER_LIMITS[rung], (
+            f"the ceiling is above {rung}'s limit, so the CLI runs it AT "
+            f"{CLI_OUTPUT_UPPER_LIMITS[rung]}"
+        )
 
 
 def test_the_one_call_is_made_with_the_budget_and_the_clock():

@@ -21,25 +21,51 @@ So:
   B. A turn-limit end that carries an answer, or that ran more than two turns, makes no second call.
   C. Every transport error from an error envelope carries a bounded `stream:` summary of what the CLI wrote, so
      the next failure names its cause in the run log.
+
+These are rules of the classifier, so they run against the frozen model files (DRE-6885): `planning_classify` and the
+selector it falls through are imported from `model_fixture.fixture_tree`, and the rungs a test expects are the first
+and second of the planner's ladder in `model_fixture.fixture_config()`, never a literal. A console save that moves the
+planner or changes its ladder leaves them alone.
 """
 
 from __future__ import annotations
 
 import json
+import shutil
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / "scripts"))
+sys.path.insert(0, str(ROOT / "tests"))
 
-import model_fallback as mf  # noqa: E402
-import planning_classify  # noqa: E402
+import model_fixture  # noqa: E402
 
-FABLE51 = "claude-fable-5-1"
-OPUS55 = "claude-opus-5-5"
+# The model files a console save rewrites; everything else the classifier reads is no save's to change.
+_MODEL_FILES = ("models.yaml", "model-prices.yaml", "model-choices.json")
+
+
+def _classifier_tree(dest: Path) -> Path:
+    """Today's scripts on the frozen model files, with what else the classifier reads — the lane contract and shape
+    vocabulary under `config/`, and the brief and standard its prompt is cut from — as committed."""
+    shutil.copytree(ROOT / "config", dest / "config", ignore=shutil.ignore_patterns(*_MODEL_FILES))
+    for name in ("briefs", "standards"):
+        shutil.copytree(ROOT / name, dest / name)
+    return model_fixture.fixture_tree(dest)
+
+
+# The classifier, and the selector it imported, are the tree's.
+_TREE = tempfile.TemporaryDirectory()
+planning_classify = model_fixture.fixture_module(_classifier_tree(Path(_TREE.name) / "tree"), "planning_classify")
+mf = planning_classify.model_fallback
+
+# The planner's walk on the frozen files, named for its place: the rung a call is asked on, and the one below it.
+_PLANNER = model_fixture.ladder(model_fixture.fixture_config(),
+                                model_fixture.fixture_config()["agents"]["planner"])
+TOP, NEXT = _PLANNER[0], _PLANNER[1]
 
 # The envelope shape the failing CI runs reported: the turn cap, an error, and no result text.
 NO_ANSWER_RECORD = {"type": "result", "subtype": "error_max_turns", "is_error": True,
@@ -51,6 +77,10 @@ def _fresh_cache():
     mf.clear_availability_cache()
     yield
     mf.clear_availability_cache()
+
+
+def teardown_module():
+    _TREE.cleanup()
 
 
 def _card() -> dict:
@@ -85,20 +115,20 @@ def _no_answer_on(refused: str, *, record=None):
 # --------------------------------------------------------------------------- #
 
 def test_a_turn_limit_end_with_no_answer_is_answered_by_the_next_rung():
-    call = _no_answer_on(FABLE51)
-    decision = planning_classify.classify(_card(), call=call, model=FABLE51)
-    assert call.seen == [FABLE51, OPUS55], "one call per rung, Fable then Opus"
+    call = _no_answer_on(TOP)
+    decision = planning_classify.classify(_card(), call=call, model=TOP)
+    assert call.seen == [TOP, NEXT], "one call per rung, the top rung then the one below it"
     assert not decision.transport
     assert decision.refusal is None
     assert decision.answered
-    assert decision.asked == FABLE51
-    assert decision.model == OPUS55
+    assert decision.asked == TOP
+    assert decision.model == NEXT
 
 
-def test_it_is_not_a_capacity_refusal_so_the_planner_keeps_fable():
-    call = _no_answer_on(FABLE51)
-    decision = planning_classify.classify(_card(), call=call, model=FABLE51)
-    assert decision.fell_from is None, "the planner plans fine on Fable; only a capacity refusal demotes it"
+def test_it_is_not_a_capacity_refusal_so_the_planner_keeps_its_top_rung():
+    call = _no_answer_on(TOP)
+    decision = planning_classify.classify(_card(), call=call, model=TOP)
+    assert decision.fell_from is None, "the planner plans fine on its top rung; only a capacity refusal demotes it"
     pairs = dict(planning_classify._model_pairs(decision))
     assert pairs["fell_from"] == ""
     receipt = pairs["receipt"]
@@ -126,17 +156,17 @@ def test_the_helper_reads_the_record():
 
 def test_a_turn_limit_end_that_carries_an_answer_makes_no_second_call():
     record = dict(NO_ANSWER_RECORD, result='{"shape": "one-off"}')
-    call = _no_answer_on(FABLE51, record=record)
-    decision = planning_classify.classify(_card(), call=call, model=FABLE51)
-    assert call.seen == [FABLE51]
+    call = _no_answer_on(TOP, record=record)
+    decision = planning_classify.classify(_card(), call=call, model=TOP)
+    assert call.seen == [TOP]
     assert decision.transport
 
 
 def test_a_long_run_that_hit_the_cap_makes_no_second_call():
     record = dict(NO_ANSWER_RECORD, num_turns=12)
-    call = _no_answer_on(FABLE51, record=record)
-    decision = planning_classify.classify(_card(), call=call, model=FABLE51)
-    assert call.seen == [FABLE51]
+    call = _no_answer_on(TOP, record=record)
+    decision = planning_classify.classify(_card(), call=call, model=TOP)
+    assert call.seen == [TOP]
     assert decision.transport
 
 
@@ -147,8 +177,8 @@ def test_both_rungs_without_an_answer_is_still_one_fall_then_a_transport_failure
         seen.append(model)
         raise planning_classify.TransportError("no answer", "error_max_turns", record=dict(NO_ANSWER_RECORD))
 
-    decision = planning_classify.classify(_card(), call=call, model=FABLE51)
-    assert seen == [FABLE51, OPUS55]
+    decision = planning_classify.classify(_card(), call=call, model=TOP)
+    assert seen == [TOP, NEXT]
     assert decision.transport
 
 
@@ -164,7 +194,7 @@ def test_an_error_envelope_names_the_stream_in_its_message(monkeypatch):
     monkeypatch.setenv("ANTHROPIC_API_KEY", "")
     monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", "oauth-token")
     stdout = _stream(
-        {"type": "system", "subtype": "init", "model": FABLE51, "permissionMode": "auto",
+        {"type": "system", "subtype": "init", "model": TOP, "permissionMode": "auto",
          "tools": ["Read", "Bash", "Grep"], "mcp_servers": []},
         {"type": "assistant", "message": {"id": "m1", "stop_reason": "tool_use",
                                           "content": [{"type": "tool_use", "name": "Read", "input": {}}]}},
@@ -178,7 +208,7 @@ def test_an_error_envelope_names_the_stream_in_its_message(monkeypatch):
     Done.stdout = stdout
     monkeypatch.setattr(subprocess, "run", lambda *a, **k: Done())
     with pytest.raises(planning_classify.TransportError) as caught:
-        planning_classify._call_claude_code(FABLE51, "prompt")
+        planning_classify._call_claude_code(TOP, "prompt")
     message = str(caught.value)
     assert "error_max_turns" in message
     assert "stream:" in message
