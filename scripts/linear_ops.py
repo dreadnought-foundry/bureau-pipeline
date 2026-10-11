@@ -1875,8 +1875,13 @@ def _held_state_move(
 def cmd_advance(
     identifier: str, to_state: str, from_states_csv: str, *flags: str,
     held: bool = False,
-) -> None:
+) -> bool:
     """Move a card into `to_state`, but only out of one of `from_states_csv`.
+
+    Returns True when the move was written, False when it was refused — an
+    epic under `--not-epic`, a card out of the from-lanes, or a write
+    `guarded_state_write` refused. The CLI ignores it; a caller that says the
+    move happened reads it first (DRE-6653).
 
     `--not-epic` (DRE-4179) refuses the move on an epic. The caller that needs
     it is the PR-side lane write in `qa-review.yml`: it is driven by a BRANCH
@@ -1921,14 +1926,14 @@ def cmd_advance(
             "child's pull request does not put an epic's plan in review, and an "
             "epic's lane is moved by the CEO."
         )
-        return
+        return False
     current = issue["state"]["name"].lower()
     allowed = [s.strip().lower() for s in from_states_csv.split(",")]
     if current not in allowed:
         print(
             f"{identifier} is in {issue['state']['name']!r}, not in {from_states_csv!r} — not advancing"
         )
-        return
+        return False
     sid, stype = target or state_id_and_type(issue["team"]["id"], to_state)
     # The from-states csv is checked against the read ABOVE, so this seam has
     # the same check-then-act race cmd_state had: agent-task's PR path runs
@@ -1938,6 +1943,8 @@ def cmd_advance(
     if guarded_state_write(identifier, issue, sid, stype, to_state,
                            pre_read=issue if held else None):
         print(f"{identifier} → {to_state}")
+        return True
+    return False
 
 
 def set_description(identifier: str, body: str) -> None:

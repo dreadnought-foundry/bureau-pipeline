@@ -55,9 +55,11 @@ a finding), reads each child's lane, and then, in this order:
      child's planner run — the relay dispatches one per lane entry (DRE-1913,
      DRE-3030); nothing here dispatches. A child an open sibling blocks stays
      in Backlog: the seam rule plans it only on what that sibling observed
-     (`standards/card-quality.md`), and the sweep's auto-advance
-     (`reconcile.advance_unblocked_epics`, DRE-6407) carries it on once every
-     blocker is Done. A sibling that is Done, Canceled or Duplicate
+     (`standards/card-quality.md`), and the sweep returns it to Planning,
+     where the planner is dispatched, once every blocker is Done — the
+     auto-advance (`reconcile.advance_unblocked_epics`, DRE-6407) when the
+     sweep closes the blocker, and the full sweep's return pass
+     (`reconcile.return_waiting_epics`, DRE-6653) however it closed. A sibling that is Done, Canceled or Duplicate
      (`prose_blockers.TERMINAL`) holds nothing; one whose lane could not be
      read holds its dependent. A child already past Backlog is left alone;
   3. moves the parent from Planning to In Progress — the lane the sweep reads

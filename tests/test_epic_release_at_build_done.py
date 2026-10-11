@@ -18,7 +18,7 @@ THE RULE, two of them, one per caller of `reconcile.epic_blockers_unmet`:
      count_rollup_parents=True)` is false. A proof card and a card a person
      builds by hand do not hold.
   2. The auto-advance (`advance_unblocked_epics`) moves a Backlog epic to
-     Triage to be PLANNED, and the seam rule (DRE-3244) says that plan is
+     Planning to be PLANNED (DRE-6653), and the seam rule (DRE-3244) says that plan is
      written against what the first epic's proof observed. It keeps waiting
      for Done.
 
@@ -423,9 +423,9 @@ def test_the_auto_advance_moves_w_once_every_blocker_is_done(capsys):
             patch.object(linear_ops, "cmd_advance") as advance, \
             patch.object(linear_ops, "cmd_comment") as comment:
         assert reconcile._close_epic_if_finished(B) is True
-    advance.assert_called_once_with(W, "Triage", "Backlog")
+    advance.assert_called_once_with(W, "Planning", "Backlog")
     to_w = [c.args[1] for c in comment.call_args_list if c.args[0] == W]
-    assert len(to_w) == 1 and to_w[0].startswith("🧹 Auto-advanced"), to_w
+    assert len(to_w) == 1 and to_w[0].startswith("🧹 Auto-advanced Backlog → Planning:"), to_w
 
 
 def test_the_strict_rule_is_asked_for_by_name():

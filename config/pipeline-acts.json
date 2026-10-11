@@ -1714,9 +1714,9 @@
     },
     {
       "file": "scripts/reconcile.py",
-      "anchor": "🧹 Auto-advanced Backlog → Triage",
+      "anchor": "🧹 Auto-advanced Backlog → Planning",
       "kind": "undeclared-act",
-      "means": "The last blocker epic reached Done, so the dependent epic advances on its own.",
+      "means": "Every blocker of a waiting epic is closed, so the dependent epic advances on its own from Backlog to Planning, where the planner is dispatched.",
       "why": "Act-shaped, and the registry has no row for it. DRE-2825 declared thirteen acts by reading reconcile.py's ten tag constants, the fix loop's three notices and the medic; this receipt was not among them. Giving it a row is a REGISTRY change — a tag, a kind, a state, a next actor, a subscriber, and the reasoning that fixes each — not an emission change, and this card converts what the registry declares. Named here so the debt is countable rather than invisible."
     },
     {
