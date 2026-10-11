@@ -14,8 +14,10 @@ SET, and this module is what that workflow runs —
 The six operations:
 
     move_agent          agents.<agent> = <group>; an agent listed under
-                        `ungrouped` leaves that list
-    add_agent           a new name in `ungrouped`, with its `about` line
+                        `ungrouped` leaves that list (a session agent stays in
+                        `session_agents`)
+    add_agent           a new name in `ungrouped` and `session_agents`, with its
+                        `about` line
     add_group           a new `kinds` entry (`label`, `purpose`) plus a ladder
                         of the same name whose first rung is `model`
     set_default_model   that model moves to the front of the group's ladder and
@@ -52,9 +54,22 @@ set: nothing is written, the CLI exits 2 with one `::error::` line per reason,
 and the workflow opens no branch and no pull request.
 
 One more check is the generator's, made early: `sync_model_config.py` needs an
-`agents.yaml` region for every name in `agents`, and the console's interactive
-agents have none. Moving one of them into a group is refused here, with that
-reason, rather than failing the regeneration on a branch that already exists.
+`agents.yaml` region for every name in `agents` that is not a session agent.
+The console's interactive agents are session agents (`session_agents`,
+DRE-6833) — they run in a person's session, have no region and need none — so
+any of them may join any group. A name in neither the registry nor
+`session_agents` is refused here, with that reason, rather than failing the
+regeneration on a branch that already exists.
+
+PLAIN WORDS FOR A REFUSAL (DRE-6833)
+------------------------------------
+The console shows the CEO each `::error::` line and each summary bullet of a
+refusal word for word, so each is one plain sentence: the change in
+`describe`'s words, then why (`plain_lines`). The findings themselves —
+`policy_errors`' text, which `sync_model_config.py --check` prints for
+engineers — go to the run log as ordinary output, and
+`sync_model_config.py` publishes the same plain line as a refused move's
+`reason` in `config/model-choices.json`.
 
 THE BRANCH IS THE CHANGE SET
 ----------------------------
@@ -81,8 +96,7 @@ from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-import github_output  # noqa: E402
-from model_adoption_actions import WHATS_NEW_NONE, _quiet  # noqa: E402
+from model_fallback import ADVISORY_KIND, JUDGEMENT_KIND, JUDGEMENT_ROLES  # noqa: E402
 from model_fallback import declared_prices, policy_errors  # noqa: E402
 from sync_model_config import _YAML_BEGIN as REGISTRY_REGION  # noqa: E402
 
@@ -276,6 +290,10 @@ def pr_title(change_set) -> str:
 def pr_body(change_set, config=None) -> str:
     """Who asked and what changes, one line per change. No verdict marker,
     whatever the console sent (standards/untrusted-content.md)."""
+    # Imported here, not at the top: `sync_model_config` imports this module
+    # to judge the console's moves (DRE-6833), and needs none of this.
+    from model_adoption_actions import WHATS_NEW_NONE, _quiet
+
     if config is None:
         import yaml
 
@@ -323,6 +341,8 @@ def edit_data(raw, change: dict, today: str) -> dict:
         doc["agents"] = agents
     elif op == "add_agent":
         doc["ungrouped"] = list(doc.get("ungrouped") or []) + [change["agent"]]
+        doc["session_agents"] = (list(doc.get("session_agents") or [])
+                                 + [change["agent"]])
         about = doc.get("about") or {}
         about[change["agent"]] = change["about"]
         doc["about"] = about
@@ -509,6 +529,8 @@ def _move_agent(lines, change, raw):
 def _add_agent(lines, change, raw):
     pad = " " * _child_indent(lines, "ungrouped", "[]")
     lines = _grow(lines, "ungrouped", "[]", [f"{pad}- {change['agent']}"])
+    pad = " " * _child_indent(lines, "session_agents", "[]")
+    lines = _grow(lines, "session_agents", "[]", [f"{pad}- {change['agent']}"])
     pad = " " * _child_indent(lines, "about", "{}")
     return _grow(lines, "about", "{}",
                  [f"{pad}{change['agent']}: {_scalar(change['about'])}"])
@@ -692,6 +714,7 @@ def _problems(change: dict, raw, prices, registry: set[str]) -> list[str]:
     kinds = raw.get("kinds") or {}
     agents = raw.get("agents") or {}
     ungrouped = raw.get("ungrouped") or []
+    session = raw.get("session_agents") or []
     retired = set(_rung_ids(raw.get("retired")))
     problems = []
 
@@ -720,14 +743,15 @@ def _problems(change: dict, raw, prices, registry: set[str]) -> list[str]:
         elif agents.get(agent) == group:
             problems.append(f"{agent} is already in the {group} group, so there "
                             "is nothing to change")
-        elif agent not in agents and agent not in registry:
+        elif agent not in agents and agent not in registry and agent not in session:
             problems.append(
-                f"{agent} has no entry in the agent registry (agents.yaml), so "
-                "the pipeline has no way to run it — an agent joins a group only "
-                "once it is defined there")
+                f"{agent} has no entry in the agent registry (agents.yaml) and "
+                "is not in `session_agents`, so nothing runs it — an agent joins "
+                "a group once it is defined there or listed as a session agent")
     elif op == "add_agent":
         agent = change["agent"]
-        if agent in agents or agent in ungrouped or agent in (raw.get("about") or {}):
+        if (agent in agents or agent in ungrouped or agent in session
+                or agent in (raw.get("about") or {})):
             problems.append(f"there is already an agent named {agent}")
     elif op == "set_default_model":
         ladder = (raw.get("ladders") or {}).get(_ladder_name(raw, group))
@@ -747,6 +771,11 @@ def _problems(change: dict, raw, prices, registry: set[str]) -> list[str]:
     return problems
 
 
+_STANDING = "config/models.yaml already fails validation before any change"
+_UNEDITABLE = "config/models.yaml could not be edited for it"
+_UNINTENDED = "the edit to config/models.yaml did not produce the intended change"
+
+
 def apply_change_set(text: str, change_set, *, today: str, prices=None,
                      repo_slugs=None, registry: set[str] | None = None):
     """`(text, refusals)`. With no refusal, `text` is the file with every change
@@ -764,8 +793,7 @@ def apply_change_set(text: str, change_set, *, today: str, prices=None,
     standing = set(policy_errors(state, prices, repo_slugs))
     if standing:
         return text, [{"index": 0, "change": None, "reasons": [
-            f"config/models.yaml already fails validation before any change: {e}"
-            for e in sorted(standing)]}]
+            f"{_STANDING}: {e}" for e in sorted(standing)]}]
 
     refusals = []
     for n, change in enumerate(change_set["changes"], 1):
@@ -775,11 +803,10 @@ def apply_change_set(text: str, change_set, *, today: str, prices=None,
                 after = edit_text(state_text, change, today)
                 parsed = yaml.safe_load(after) or {}
             except (Refused, yaml.YAMLError) as exc:
-                reasons = [f"config/models.yaml could not be edited for it ({exc})"]
+                reasons = [f"{_UNEDITABLE} ({exc})"]
             else:
                 if parsed != edit_data(state, change, today):
-                    reasons = ["the edit to config/models.yaml did not produce the "
-                               "intended change, so nothing was written"]
+                    reasons = [f"{_UNINTENDED}, so nothing was written"]
                 else:
                     reasons = [e for e in policy_errors(parsed, prices, repo_slugs)
                                if e not in standing]
@@ -790,6 +817,95 @@ def apply_change_set(text: str, change_set, *, today: str, prices=None,
     if refusals:
         return text, refusals
     return state_text, []
+
+
+# --------------------------------------------------------------------------- #
+# Plain words for a refusal (DRE-6833)                                         #
+# --------------------------------------------------------------------------- #
+
+def _labels(config) -> str:
+    """Every group by its label: `Builders, Reviewers and Planners`."""
+    labels = [_label(config, kind) for kind in ((config or {}).get("kinds") or {})]
+    if len(labels) < 2:
+        return "".join(labels)
+    return f"{', '.join(labels[:-1])} and {labels[-1]}"
+
+
+def _why(reason: str, change: dict, config) -> str:
+    """Why `change` was refused, in words for the CEO, from one finding —
+    `_problems`' line, `policy_errors`' line or the apply step's own."""
+    found = re.match(r"there is no group named (\S+) — ", reason)
+    if found:
+        return (f"there is no group called {found.group(1)} — the groups are "
+                f"{_labels(config)}")
+    found = re.match(r"(\S+) is already in the (\S+) group", reason)
+    if found:
+        return (f"{found.group(1)} is already in the "
+                f"{_label(config, found.group(2))} group, so there is nothing "
+                "to change")
+    if reason.startswith(("there is no agent named ",
+                          "there is already an agent named ")):
+        return reason
+    found = re.match(r"(\S+) has no entry in the agent registry", reason)
+    if found:
+        return (f"{found.group(1)} is neither an agent the pipeline runs nor "
+                "one that works in a person's session, so a group would mean "
+                "nothing for it — an engineer has to set it up first")
+    # Rules 3 and 8 say one thing about a reviewer, so they render as one line.
+    found = (re.match(rf"agents\.(\S+): must be '{ADVISORY_KIND}'", reason)
+             or re.match(rf"review_separation\.roles: '([^']+)' is not an "
+                         rf"{ADVISORY_KIND} role", reason))
+    if found:
+        return (f"{found.group(1)} must stay in the "
+                f"{_label(config, ADVISORY_KIND)} group — it checks work before "
+                "it merges, and no person reads the change")
+    found = re.match(rf"agents\.(\S+): '{JUDGEMENT_KIND}' is the ", reason)
+    if found:
+        owners = " and ".join(f"the {role}" for role in JUDGEMENT_ROLES)
+        return (f"only {owners} may be in the {_label(config, JUDGEMENT_KIND)} "
+                f"group — {owners} runs once per plan, while {found.group(1)} "
+                "runs far more often, which would put many more runs on the most "
+                "expensive model")
+    found = re.match(r"session_agents\.(\S+): names no agent", reason)
+    if found:
+        return (f"{found.group(1)} is listed as an agent that works in a "
+                "person's session, but there is no agent by that name")
+    found = re.match(r"ungrouped\.(\S+): is also in", reason)
+    if found:
+        return (f"{found.group(1)} would be in a group and in no group at the "
+                "same time")
+    if reason.startswith(_UNEDITABLE):
+        return ("the settings file is laid out in a way the console cannot edit "
+                "safely, so an engineer has to make this change by hand")
+    if reason.startswith(_UNINTENDED):
+        return ("the edit did not come out as asked, so an engineer has to make "
+                "this change by hand")
+    if change["op"] in ("move_agent", "add_agent"):
+        return ("it would break one of the checks every change to the model "
+                "settings must pass — the run log names it for an engineer")
+    return reason
+
+
+def plain_lines(change: dict | None, reasons: list[str], config, *,
+                index: int = 1, total: int = 1) -> list[str]:
+    """One plain sentence per distinct reason `change` was refused: the change
+    in `describe`'s words (with its place in the set when the set has more
+    than one), then why. `change` None is the file that already fails before
+    any change. The generator publishes these, joined, as a refused move's
+    `reason` in config/model-choices.json."""
+    if change is None:
+        return ["Nothing was written: the model settings already have a problem "
+                "that has nothing to do with this change, and an engineer has to "
+                "fix it first."]
+    head = describe(change, config).rstrip(".")
+    if total > 1:
+        head = f"{head} (change {index} of {total})"
+    lines: list[str] = []
+    for reason in reasons:
+        line = f"{head} — refused, because {_why(reason, change, config).rstrip('.')}."
+        if line not in lines:
+            lines.append(line)
+    return lines
 
 
 # --------------------------------------------------------------------------- #
@@ -847,19 +963,32 @@ def _cmd_apply(argv) -> int:
 
     total = len(change_set["changes"])
     if refusals:
+        import yaml
+
+        # Plain words for the CEO on every `::error::` line and summary bullet
+        # (DRE-6833); the findings themselves are for an engineer, so they go
+        # to the log as ordinary output and to a block below the bullets.
+        config = yaml.safe_load(text) or {}
         print(f"::error::the change set from {change_set['requested_by']} was "
               "refused — nothing was written, and no branch or pull request is "
               "opened")
         report = ["### Model config change refused", "",
                   f"Requested by {change_set['requested_by']}. Nothing was "
                   "written, and no branch or pull request is opened.", ""]
+        details = []
         for refusal in refusals:
             where = (f"change {refusal['index']} of {total} "
                      f"({_short(refusal['change'])})" if refusal["change"]
                      else "the change set")
-            for reason in refusal["reasons"]:
-                print(f"::error::{where}: {reason}")
-                report.append(f"- {where}: {reason}")
+            details += [f"{where}: {reason}" for reason in refusal["reasons"]]
+            for line in plain_lines(refusal["change"], refusal["reasons"], config,
+                                    index=refusal["index"], total=total):
+                print(f"::error::{line}")
+                report.append(f"- {line}")
+        print("The findings, for an engineer:")
+        for line in details:
+            print(f"  {line}")
+        report += ["", "The findings, for an engineer:", "", "```", *details, "```"]
         _summary(report)
         return 2
 
@@ -909,6 +1038,8 @@ def _cmd_branch(argv) -> int:
         for line in str(exc).splitlines():
             print(f"::error::change set refused: {line}", file=sys.stderr)
         return 2
+    import github_output
+
     sys.stdout.write(github_output.render([("branch", branch_name(change_set)),
                                            ("digest", digest(change_set))]))
     return 0

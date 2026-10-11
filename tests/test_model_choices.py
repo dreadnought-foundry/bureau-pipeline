@@ -32,6 +32,7 @@ PRICES = ROOT / "config" / "model-prices.yaml"
 
 sys.path.insert(0, str(ROOT / "scripts"))
 
+import model_config_change as mcc  # noqa: E402
 import model_fallback as mf  # noqa: E402
 import sync_model_config  # noqa: E402
 
@@ -105,7 +106,7 @@ def test_entry_keys_in_the_contract_order():
         for choice in group["choices"]:
             assert list(choice) == ["model", "allowed", "reason"]
     for agent in doc["agents"]:
-        assert list(agent) == ["name", "label", "about", "group", "moves"]
+        assert list(agent) == ["name", "label", "about", "group", "runs_in", "moves"]
         for move in agent["moves"]:
             assert list(move) == ["group", "allowed", "reason"]
 
@@ -260,11 +261,16 @@ def test_agents_in_file_order_then_the_ungrouped():
 
 
 def test_the_ungrouped_agents_have_no_group_and_no_moves():
+    # Three moves each since DRE-6833: they are session agents, and a session
+    # agent may join any group. The test keeps its name; its claim about
+    # moves inverted with the card.
     doc = _choices()
     for name in UNGROUPED:
         agent = _agent(doc, name)
         assert agent["group"] is None
-        assert agent["moves"] == []
+        assert agent["runs_in"] == "session"
+        assert [m["group"] for m in agent["moves"]] == ["workhorse", "advisory", "judgement"]
+        assert all(m["allowed"] and m["reason"] is None for m in agent["moves"])
     assert _agent(doc, "designer")["about"] == "Designs screens and systems"
 
 
@@ -282,10 +288,10 @@ def test_refused_and_allowed_moves():
     # The CEO's sample row: refused because the gate refuses it (rule 10).
     engineer = _move(doc, "engineer", "judgement")
     assert engineer["allowed"] is False
-    assert "'judgement' is the planner's kind" in engineer["reason"]
+    assert "only the planner may be in the Planners group" in engineer["reason"]
     critic = _move(doc, "critic", "workhorse")
     assert critic["allowed"] is False
-    assert "must be 'advisory'" in critic["reason"]
+    assert "critic must stay in the Reviewers group" in critic["reason"]
     assert _move(doc, "engineer", "advisory") == {
         "group": "advisory", "allowed": True, "reason": None,
     }
@@ -354,20 +360,26 @@ def test_every_choice_is_the_gates_answer_for_a_real_project():
 
 
 def test_every_move_is_the_gates_answer():
+    """Every agent, grouped or not, probed through the change script's own edit
+    (`edit_data`) and judged as the change script judges it: its pre-flight
+    checks, then the findings `policy_errors` ADDS. The published reason is the
+    plain line the change script prints for those findings (DRE-6833)."""
     raw = _raw()
     prices = mf.declared_prices()
     slugs = mf.declared_repo_slugs()
+    registry = mcc.registry_agents((ROOT / "agents.yaml").read_text())
     baseline = set(mf.policy_errors(raw, prices, repo_slugs=slugs))
     checked = 0
     for agent in _choices()["agents"]:
         for move in agent["moves"]:
-            trial = copy.deepcopy(raw)
-            trial["agents"][agent["name"]] = move["group"]
-            added = [
-                e for e in mf.policy_errors(trial, prices, repo_slugs=slugs)
+            change = {"op": "move_agent", "agent": agent["name"], "group": move["group"]}
+            added = mcc._problems(change, raw, prices, registry) or [
+                e for e in mf.policy_errors(mcc.edit_data(raw, change, ""), prices,
+                                            repo_slugs=slugs)
                 if e not in baseline
             ]
             assert move["allowed"] is (not added), (agent["name"], move["group"])
-            assert move["reason"] == ("; ".join(added) if added else None)
+            assert move["reason"] == (
+                " ".join(mcc.plain_lines(change, added, raw)) if added else None)
             checked += 1
-    assert checked == 2 * len(raw["agents"])
+    assert checked == 2 * len(raw["agents"]) + 3 * len(raw["ungrouped"])

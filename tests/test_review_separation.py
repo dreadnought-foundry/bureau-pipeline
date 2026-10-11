@@ -97,6 +97,9 @@ REVIEWER_ROLES = ("critic", "verifier")
 _TREE_FILES = (
     "scripts/model_fallback.py",
     "scripts/sync_model_config.py",
+    # The generator judges each published move as the change script does, and
+    # renders its reason with the change script's words (DRE-6833).
+    "scripts/model_config_change.py",
     "config/models.yaml",
     "config/model-prices.yaml",
     "agents.yaml",
