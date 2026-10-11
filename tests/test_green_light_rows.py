@@ -749,7 +749,10 @@ class TestTheProofRunPark:
     the step: the `🔬 proof-waiting` hold and the 🙋 escalation comment, both
     posted before the lane moves."""
 
-    WORKFLOW = Path(".github") / "workflows" / "proof-task.yml"
+    #: Where the result step's shell lives since DRE-6613: the step is one
+    #: delegation line, and the check reads the script through it, so a
+    #: weakened gate is planted here.
+    REPORT_SCRIPT = Path("scripts") / "report_proof_result.sh"
     UNIT = "proof-task.yml#Report proof result to Linear"
 
     def test_the_park_is_discovered_and_declared(self):
@@ -774,13 +777,13 @@ class TestTheProofRunPark:
 
     def test_a_park_without_the_hold_fails(self, tmp_path):
         root = _copy_repo(tmp_path)
-        _edit(root / self.WORKFLOW, "linear_ops.py proof-waiting", "linear_ops.py comment")
+        _edit(root / self.REPORT_SCRIPT, "linear_ops.py proof-waiting", "linear_ops.py comment")
         found = grl.problems(str(root))
         assert _named(found, self.UNIT, "agent-escalation", "proof-waiting"), found
 
     def test_a_park_without_the_question_fails(self, tmp_path):
         root = _copy_repo(tmp_path)
-        _edit(root / self.WORKFLOW, grl.AGENT_ESCALATION_STEPS[self.UNIT],
+        _edit(root / self.REPORT_SCRIPT, grl.AGENT_ESCALATION_STEPS[self.UNIT],
               "The proof run stopped")
         found = grl.problems(str(root))
         assert _named(found, self.UNIT, "agent-escalation"), found
