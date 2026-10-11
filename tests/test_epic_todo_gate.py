@@ -199,7 +199,7 @@ class _History:
         self.answer = answer
         self.queries = []
 
-    def gql(self, query, variables=None):
+    def gql(self, query, variables=None, **_kw):
         q = " ".join(query.split())
         self.queries.append(q)
         if self.raises:
@@ -289,7 +289,7 @@ class _Board:
     def comment(self, body):
         self.comments.append(body)
 
-    def gql(self, query, variables=None):
+    def gql(self, query, variables=None, **_kw):
         v = variables or {}
         q = " ".join(query.split())
         if "issue(id: $id) { id identifier title team" in q:
@@ -551,7 +551,7 @@ class _ReadLayer:
     def comment_bodies(self, identifier):
         return list(self.bodies)
 
-    def gql(self, query, variables=None):
+    def gql(self, query, variables=None, **_kw):
         q = " ".join(query.split())
         if "mutation" in q:
             self.writes.append(q)

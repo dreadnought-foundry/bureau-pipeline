@@ -295,13 +295,16 @@ def test_refused_and_allowed_moves():
             assert _move(doc, name, "judgement")["allowed"] is False, name
 
 
-def test_projects_mirrors_the_committed_map_in_file_order():
-    # Derived from the committed map, never typed: the console's Save changes
-    # writes exceptions there (DRE-6858), and this holds for any saved state.
+def test_projects_mirrors_the_map_in_file_order():
+    # Holds for any state of the live map: the console writes exceptions here.
+    projects = _raw()["projects"]
     assert _choices()["projects"] == [
         {"slug": slug, "exceptions": exceptions}
-        for slug, exceptions in _raw()["projects"].items()
+        for slug, exceptions in projects.items()
     ]
+    slugs = mf.declared_repo_slugs()
+    for slug in projects:
+        assert slug in slugs, slug
 
 
 def test_projects_lists_each_slug_in_file_order(tmp_path):

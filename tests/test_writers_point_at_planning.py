@@ -71,7 +71,7 @@ class FakeBoard:
     def __init__(self):
         self.created = None
 
-    def gql(self, query, variables=None):
+    def gql(self, query, variables=None, **_kw):
         v = variables or {}
         q = " ".join(query.split())
         if "teams(filter:" in q:
@@ -168,7 +168,7 @@ class FakeLinear:
     def get_issue(self, identifier):
         return {"id": "x", "identifier": identifier, "state": {"name": self._state}}
 
-    def gql(self, query, variables=None):
+    def gql(self, query, variables=None, **_kw):
         return {
             "issue": {
                 "title": self._title,
