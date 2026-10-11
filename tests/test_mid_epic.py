@@ -203,6 +203,8 @@ WALKED = {
     ("epic_cap", "_child_is_epic"),
     ("epic_todo_gate", "is_epic_card"),
     ("groom_readiness", "_is_epic"),
+    ("epic_wait", "hold"),
+    ("epic_wait", "open_blockers"),
 }
 
 
@@ -510,6 +512,78 @@ class TestEveryCallerIsWalked:
         light, row = self._named_on_a_depends_on_line(PROBE_TITLE, children=1)
         assert groom_readiness._is_epic(light) is True
         assert row["condition"] == "DRE-3018 is built out or Done"
+
+    class _WaitBoard:
+        """A fake `linear_ops` for `epic_wait`: one card read by `gql`, each
+        card's thread by `comment_bodies`, and the two writes recorded."""
+
+        def __init__(self, card: dict, threads: dict):
+            self.card, self.threads, self.writes = card, threads, []
+
+        def gql(self, *_a, **_k):
+            return {"issue": self.card}
+
+        def comment_bodies(self, identifier, whole_thread=False):
+            return list(self.threads.get(identifier, []))
+
+        def cmd_comment(self, *args):
+            self.writes.append(("comment", *args))
+
+        def cmd_advance(self, *args):
+            self.writes.append(("advance", *args))
+
+    def _waiting_card(self, title: str, blocker_title: str) -> dict:
+        """DRE-3018 in Planning, blocked by DRE-3013, which is In Progress."""
+        return {
+            "identifier": "DRE-3018", "title": title, "state": {"name": "Planning"},
+            "parent": None, "children": {"nodes": []},
+            "inverseRelations": {"nodes": [{"type": "blocks", "issue": {
+                "identifier": "DRE-3013", "title": blocker_title,
+                "state": {"name": "In Progress"}, "children": {"nodes": []},
+            }}], "pageInfo": {"hasNextPage": False}},
+        }
+
+    def test_epic_wait_open_blockers_does_not_read_a_planner_owned_one_off_as_an_epic(self):
+        """`epic_wait.open_blockers` (DRE-6671) — a one-off blocker is a card,
+        and the gate holds an epic only on a blocker epic. Read as an epic, it
+        would park every epic that merely waits on an ordinary card."""
+        import epic_wait
+
+        card = self._waiting_card("the intake front door", PROBE_TITLE)
+        one_off = self._WaitBoard(card, {"DRE-3013": [_stamp("one-off")]})
+        assert epic_wait.open_blockers(one_off, card) == []
+
+        epic = self._WaitBoard(card, {"DRE-3013": [_stamp("epic")]})
+        assert epic_wait.open_blockers(epic, card) == [("DRE-3013", "In Progress")]
+
+    def test_epic_wait_hold_does_not_hold_a_planner_owned_one_off(self, tmp_path):
+        """`epic_wait.hold` (DRE-6671) — the gate holds only an epic. A one-off
+        wearing `agent:planner` in Planning is planned, blocker or not: nothing
+        is posted, nothing is moved, and the run is told `held=false`."""
+        import epic_wait
+
+        out = tmp_path / "out"
+        board = self._WaitBoard(
+            self._waiting_card(PROBE_TITLE, "the fleet design contract"),
+            {"DRE-3018": [_stamp("one-off")], "DRE-3013": [_stamp("epic")]},
+        )
+        assert epic_wait.hold(board, "DRE-3018", github_output=str(out)) == 0
+        assert out.read_text(encoding="utf-8") == "held=false\n"
+        assert board.writes == []
+
+    def test_epic_wait_hold_still_holds_a_stamped_epic(self, tmp_path):
+        """Guard the guard: the same card stamped epic, with no `[EPIC]` title
+        and no children, is held by the same open blocker epic."""
+        import epic_wait
+
+        out = tmp_path / "out"
+        board = self._WaitBoard(
+            self._waiting_card(PROBE_TITLE, "the fleet design contract"),
+            {"DRE-3018": [_stamp("epic")], "DRE-3013": [_stamp("epic")]},
+        )
+        assert epic_wait.hold(board, "DRE-3018", github_output=str(out)) == 0
+        assert out.read_text(encoding="utf-8") == "held=true\n"
+        assert ("advance", "DRE-3018", "Backlog", "Planning") in board.writes
 
 
 # ===========================================================================
