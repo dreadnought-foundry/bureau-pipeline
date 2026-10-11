@@ -672,7 +672,7 @@ def test_the_real_create_writes_triage_and_the_labels_in_one_mutation():
     `agent:*` label — there is no second write to have got it wrong."""
     mutations: list = []
 
-    def fake_gql(query, variables=None):
+    def fake_gql(query, variables=None, **_kw):
         if "teams(" in query:
             return {"teams": {"nodes": [{"id": "team-1"}]}}
         if "issueCreate" in query:
@@ -1037,7 +1037,7 @@ def test_set_title_writes_the_recomputed_title():
     calls: list = []
     with patch.object(linear_ops, "get_issue", return_value={"id": "uuid-1"}), \
         patch.object(linear_ops, "gql",
-                     side_effect=lambda q, v=None: calls.append((q, v)) or {}):
+                     side_effect=lambda q, v=None, **_kw: calls.append((q, v)) or {}):
         linear_ops.set_title("DRE-9500", "Reviewer down since 15:19 PT — 4 runs, 2 repos")
     query, variables = calls[0]
     assert "issueUpdate" in query
@@ -1233,7 +1233,7 @@ def test_the_board_read_lanes_are_swept_lanes_plus_the_alarm_lane():
 def test_the_one_board_read_is_made_with_the_board_read_lanes():
     sent: list = []
 
-    def gql(query, variables=None):
+    def gql(query, variables=None, **_kw):
         sent.append((query, dict(variables or {})))
         return {"issues": {"nodes": [], "pageInfo": {"hasNextPage": False,
                                                      "endCursor": None}}}

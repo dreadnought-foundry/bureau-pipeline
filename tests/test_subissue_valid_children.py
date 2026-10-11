@@ -185,7 +185,7 @@ class FakeLinear:
             "DRE-100": {"id": "blk-100", "team": {"id": "team-1"}, "state": {"name": "Backlog"}},
         }
 
-    def gql(self, query, variables=None):
+    def gql(self, query, variables=None, **_kw):
         v = variables or {}
         q = " ".join(query.split())
         # get_issue

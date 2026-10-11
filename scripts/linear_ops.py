@@ -1016,7 +1016,10 @@ def api_key(*, env=None, run=None) -> str:
     return key
 
 
-def gql(query: str, variables: dict | None = None) -> dict:
+def gql(query: str, variables: dict | None = None, *, landed=None) -> dict:
+    # `landed` is a create's look (DRE-6839): see `_send`. A read or an update
+    # passes none, and goes exactly as it always has.
+    #
     # Stop at the first RATELIMITED (DRE-3202): a rate-limited process asks
     # nothing more. Every further request would spend the quota that proves
     # there is none left, against a window that is the whole fleet's.
@@ -1028,13 +1031,13 @@ def gql(query: str, variables: dict | None = None) -> dict:
     _skip_a_known_dead_token()
     payload = json.dumps({"query": query, "variables": variables or {}}).encode()
     try:
-        out = _send(payload)
+        out = _send(payload, landed)
     except _KeyRefused as refused:
         # A dead planner token (DRE-5589): `||` in plan.yml falls back only on
         # an EMPTY secret, and the console never un-publishes a token it could
         # not keep alive. This one request goes again on the fleet key, once.
         _fall_back(refused.why)
-        out = _send(payload)
+        out = _send(payload, landed)
     if out.get("errors"):
         errors = json.dumps(out["errors"])
         condition = rate_limit_condition(errors)
@@ -1068,11 +1071,71 @@ def gql(query: str, variables: dict | None = None) -> dict:
     return out["data"]
 
 
-def _send(payload: bytes) -> dict:
+#: The creates that keep the blind retry (DRE-6839): sent a second time on a
+#: transient fault with no look first. Every other `…Create` mutation in
+#: `scripts/*.py` is sent with `landed`, and
+#: `tests/test_linear_ops_create_once.py` fails on one that is neither — so the
+#: next creating call cannot be added without choosing.
+BLIND_RETRY_CREATES = {
+    "issueLabelCreate": "a team label is looked up by name before it is made, "
+                        "and what a second create of one name does was not tested",
+    "issueRelationCreate": "a relation joins two cards that already exist, and "
+                           "what Linear does with a repeated pair was not tested",
+    "releaseNoteCreate": "the train reads the release's notes and updates one that "
+                         "exists, and a repeated note was not tested",
+}
+
+
+def _look_before_resending(landed):
+    """What the first attempt of a create made, asked of its `landed` look,
+    or None when there is no look or it found nothing. A look that raises is
+    raised: nothing can tell then whether the first attempt landed."""
+    if landed is None:
+        return None
+    found = landed()
+    if found is None:
+        print("create: the first attempt made nothing; sent again", file=sys.stderr)
+        return None
+    print(f"create: the first attempt landed as {_landed_as(found)}; not sent again",
+          file=sys.stderr)
+    return found
+
+
+def _landed_as(found: dict) -> str:
+    """The thing a look found, named for the stderr line: the card's
+    identifier, else the node's id, else the mutation and when it was made."""
+    for field, answer in found.items():
+        for node in (answer or {}).values():
+            if isinstance(node, dict):
+                name = node.get("identifier") or node.get("id")
+                return name or f"{field} at {node.get('createdAt') or '?'}"
+        return field
+    return "?"
+
+
+def _send(payload: bytes, landed=None) -> dict:
     """One request through the one-shot transient retry (DRE-3087), answered
     as parsed JSON. Raises `_KeyRefused` when the key itself was refused and
     there is a different key to fall back to; every other failure raises
-    exactly as it always has."""
+    exactly as it always has.
+
+    A CREATE IS NEVER SENT TWICE BLIND (DRE-6839). This seam is handed bytes
+    and cannot tell a read from a create, and a read sent twice is harmless
+    while a create sent twice makes a second thing: on 2026-10-10 one
+    `oneoff` made DRE-6795 and DRE-6796. A bare `TimeoutError` is a fault
+    while waiting for the answer, so the request had been sent in full and
+    Linear had taken it. So a create passes `landed`: a function of no
+    arguments that answers what the first attempt made, in the shape of the
+    mutation's own answer, or None. After a transient fault — the same line,
+    the same backoff — it is asked before anything is sent again. Something
+    found is this call's answer and nothing more is sent; None sends the
+    create once more, as before; a look that raises is raised.
+
+    WHAT THE LOOK CANNOT SEE, stated plainly: if Linear is still making the
+    card when the look runs — its answer was slow, not lost — the look finds
+    nothing, the create is sent again, and there are two. The look turns
+    "always two" into "two only then". Closing that needs Linear to refuse the
+    second request itself, and nothing here relies on that."""
     for attempt in range(_MAX_ATTEMPTS):
         # A fresh Request per attempt: a retry re-sends the call, it does not
         # re-drive an object urllib has already handled.
@@ -1097,6 +1160,9 @@ def _send(payload: bytes) -> dict:
             if attempt + 1 < _MAX_ATTEMPTS and is_transient(exc):
                 _note_transient(exc)
                 time.sleep(RETRY_BACKOFF_SECONDS)
+                found = _look_before_resending(landed)
+                if found is not None:
+                    return {"data": found}
                 continue
             # CAPTURE THE BODY, NOT THE STATUS (DRE-2923). urllib's own message
             # is `HTTP Error 400: Bad Request` — no endpoint, no reason, and a
@@ -1116,6 +1182,9 @@ def _send(payload: bytes) -> dict:
             if attempt + 1 < _MAX_ATTEMPTS and is_transient(exc):
                 _note_transient(exc)
                 time.sleep(RETRY_BACKOFF_SECONDS)
+                found = _look_before_resending(landed)
+                if found is not None:
+                    return {"data": found}
                 continue
             raise
     if out.get("errors") and _fallback_key() and is_auth_refusal(
@@ -2018,6 +2087,7 @@ def cmd_comment(identifier: str, body: str, *flags: str) -> str | None:
             """mutation($input: CommentCreateInput!) {
                  commentCreate(input: $input) { success } }""",
             {"input": {"issueId": issue["id"], "body": body}},
+            landed=_comment_look(identifier, body, datetime.now(UTC)),
         )
     except CommentCapReached:
         # Named on stderr, for the same reason the budget line is: some of this
@@ -2030,6 +2100,32 @@ def cmd_comment(identifier: str, body: str, *flags: str) -> str | None:
     _pass["threads"].pop(identifier, None)
     print(f"commented on {identifier}")
     return None
+
+
+def _comment_look(identifier: str, body: str, began: datetime):
+    """The `landed` look for a `commentCreate` begun at `began` (DRE-6839).
+
+    Some receipts are COUNTED — two `turn-exhaustion-requeue` tags park a card
+    for a person — so a doubled comment moves a count. A caller's own marker
+    check runs before the first attempt and cannot see what that attempt
+    made; this reads the thread after it, through the reader every other
+    thread read uses, for a comment by this key with exactly this body made at
+    or after `began` less `_READ_BACK_SKEW`."""
+    since = began - _READ_BACK_SKEW
+
+    def landed() -> dict | None:
+        # A pass's cached thread predates the first attempt.
+        _pass["threads"].pop(identifier, None)
+        nodes, me = _thread_and_viewer(identifier, "body", "createdAt", "user")
+        for node in reversed(nodes):
+            at = _history_at(node)
+            if (me and (node.get("user") or {}).get("id") == me
+                    and node.get("body") == body and at is not None and at >= since):
+                return {"commentCreate": {"success": True,
+                                          "comment": {"createdAt": node.get("createdAt")}}}
+        return None
+
+    return landed
 
 
 def cmd_actor(identifier: str, role: str) -> None:
@@ -3047,6 +3143,52 @@ def _reject_unless_creatable(kind: str, title: str, description: str,
         )
 
 
+_CARD_LOOK_QUERY = """query($title: String!, $since: DateTimeOrDuration!) {
+     viewer { id }
+     issues(filter: {title: {eq: $title}, createdAt: {gte: $since}}, first: 10) {
+       nodes { id identifier url title createdAt creator { id } parent { id } } } }"""
+
+
+def _card_look(title: str, began: datetime, parent_id: str | None = None):
+    """The `landed` look for an `issueCreate` begun at `began` (DRE-6839).
+
+    One query: the cards with exactly this title made by this key's own
+    identity at or after `began` less `_READ_BACK_SKEW` — and, for a child,
+    under the same parent. One found is what the first attempt made, answered
+    as `issueCreate` answers. More than one is refused naming them: which of
+    them is ours is a guess, and adopting a guess hangs the blockers and the
+    hold on somebody else's card."""
+    since = began - _READ_BACK_SKEW
+
+    def landed() -> dict | None:
+        data = gql(_CARD_LOOK_QUERY, {"title": title, "since": since.isoformat()})
+        me = (data.get("viewer") or {}).get("id")
+        mine = []
+        for node in ((data.get("issues") or {}).get("nodes")) or []:
+            at = _history_at(node)
+            if (node.get("title") != title or not me
+                    or (node.get("creator") or {}).get("id") != me
+                    or at is None or at < since):
+                continue
+            if parent_id is not None and (node.get("parent") or {}).get("id") != parent_id:
+                continue
+            mine.append(node)
+        if len(mine) > 1:
+            raise LinearError(
+                f"create: the first attempt of {title!r} lost its answer, and "
+                f"{len(mine)} cards with that title were made since — "
+                f"{', '.join(n.get('identifier') or '?' for n in mine)}. Adopting "
+                "none and sending nothing more: a person decides which one stays."
+            )
+        if not mine:
+            return None
+        node = mine[0]
+        return {"issueCreate": {"success": True, "issue": {
+            "id": node["id"], "identifier": node["identifier"], "url": node["url"]}}}
+
+    return landed
+
+
 def _create_card(team_id: str, title: str, description: str, labels: list[str],
                  blockers: list[str], *, parent_id: str | None = None,
                  lane: str = "Planning") -> None:
@@ -3080,10 +3222,14 @@ def _create_card(team_id: str, title: str, description: str, labels: list[str],
     }
     if parent_id is not None:
         card_input["parentId"] = parent_id
+    # The card a lost answer made is adopted, not made twice (DRE-6839): the
+    # blockers, the operator hold and the receipt below all name it.
+    began = datetime.now(UTC)
     data = gql(
         """mutation($input: IssueCreateInput!) {
              issueCreate(input: $input) { success issue { id identifier url } } }""",
         {"input": card_input},
+        landed=_card_look(title, began, parent_id),
     )
     issue = data["issueCreate"]["issue"]
     rel = _add_blocked_by(issue["id"], blockers) if blockers else []
@@ -3451,6 +3597,9 @@ def create_card(title: str, description: str, *, repo_slug: str,
     # place) would otherwise print `repo:<slug>` twice in a receipt whose write
     # carried it once.
     names = list(dict.fromkeys([f"repo:{slug}", *labels]))
+    # A `find_open` before this call cannot see the card a lost answer is
+    # about to make; the look can (DRE-6839).
+    began = datetime.now(UTC)
     data = gql(
         """mutation($input: IssueCreateInput!) {
              issueCreate(input: $input) { success issue { id identifier url } } }""",
@@ -3463,6 +3612,7 @@ def create_card(title: str, description: str, *, repo_slug: str,
                 "labelIds": _team_label_ids(team_id, names),
             }
         },
+        landed=_card_look(title, began),
     )
     issue = data["issueCreate"]["issue"]
     print(f"created {issue['identifier']} {issue['url']} "

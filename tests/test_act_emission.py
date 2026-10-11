@@ -631,7 +631,7 @@ def _drive_switch_reason_cleared(mp):
     companion names Done, no receipt yet on the first, at a fixed clock."""
     import switch_reason  # noqa: PLC0415 — only this driver needs it
 
-    def gql(_query, variables=None):
+    def gql(_query, variables=None, **_kw):
         return {"issues": {"nodes": [
             {"identifier": f"DRE-{n}", "state": {"name": "Done"}}
             for n in (variables or {}).get("numbers") or ()]}}
@@ -901,7 +901,7 @@ class TestEveryWorkflowSiteEmitsItsTrailer:
         sent = {}
         original = linear_ops.gql
 
-        def fake_gql(query, variables=None):
+        def fake_gql(query, variables=None, **_kw):
             if "commentCreate" in query:
                 sent["body"] = variables["input"]["body"]
                 return {"commentCreate": {"success": True}}
@@ -922,7 +922,7 @@ class TestEveryWorkflowSiteEmitsItsTrailer:
 
         sent = {}
         with pytest.MonkeyPatch.context() as mp:
-            mp.setattr(linear_ops, "gql", lambda q, v=None: sent.update(
+            mp.setattr(linear_ops, "gql", lambda q, v=None, **_kw: sent.update(
                 body=v["input"]["body"]) or {"commentCreate": {"success": True}})
             mp.setattr(linear_ops, "get_issue", lambda _i: {"id": "uuid"})
             linear_ops.cmd_comment("DRE-1", "a body")

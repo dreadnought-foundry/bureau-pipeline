@@ -55,7 +55,7 @@ class FakeBoard:
     def __init__(self):
         self.created = None
 
-    def gql(self, query, variables=None):
+    def gql(self, query, variables=None, **_kw):
         v = variables or {}
         q = " ".join(query.split())
         if "teams(filter:" in q:
