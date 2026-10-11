@@ -741,6 +741,31 @@ def unfinished_runs(workflow_runs,
     ]
 
 
+def last_test_run(workflow_runs,
+                  review_workflows=DEFAULT_REVIEW_WORKFLOWS) -> Optional[dict]:
+    """The pull request's last test run (DRE-6872): the run with the latest
+    `created_at` among the head's `pull_request` runs at no review path, or
+    None when there is none. It is the anchor of the new-test rule
+    (order_sensitive_refresh.py, DRE-6871): `main`'s tip when it was created
+    is the `main` its result was earned against.
+
+    The review exclusion is `unfinished_runs`'s, because a review run is
+    created later than the tests whenever a description is edited or a draft
+    is marked ready, and would move the anchor past the run the gate is
+    about to merge on. A `push` run tests the head alone, not its merge with
+    `main`, so it is never a candidate. The newest candidate wins: it is the
+    run whose result the gate reads.
+    """
+    excluded = frozenset(review_workflows)
+    candidates = [
+        r for r in workflow_runs
+        if r.get("path") not in excluded and r.get("event") == "pull_request"
+    ]
+    if not candidates:
+        return None
+    return max(candidates, key=lambda r: str(r.get("created_at") or ""))
+
+
 def owning_run(check_run, workflow_runs) -> Optional[dict]:
     """The workflow run a check run belongs to, from the head's workflow-runs
     record (DRE-6570): the run whose check suite holds it, else the run its
@@ -1753,6 +1778,26 @@ def build_precheck_parser() -> argparse.ArgumentParser:
     return parser
 
 
+_CREATED_AT_RE = re.compile(r"^\d{4}-\d{2}-\d{2}T[0-9:.]+(?:Z|[+-]\d{2}:\d{2})$")
+
+
+def build_last_test_run_parser() -> argparse.ArgumentParser:
+    """`merge_gate.py last-test-run`: the anchor of the new-test rule."""
+    parser = argparse.ArgumentParser(
+        prog="merge_gate.py last-test-run",
+        description="Print the created_at of the head's last test run — its "
+                    "newest pull_request run at a non-review workflow path "
+                    "(DRE-6872) — as created_at=<value>, or created_at=none.",
+    )
+    parser.add_argument("--workflow-runs-file", required=True,
+                        help="raw REST payload of GET actions/runs?head_sha=<sha>; "
+                             f"{UNREADABLE_WORKFLOW_RUNS} exits 2 with no line")
+    parser.add_argument("--review-workflows",
+                        default=",".join(DEFAULT_REVIEW_WORKFLOWS),
+                        help="the same review paths condition 1 excludes")
+    return parser
+
+
 def _die(msg: str) -> "NoReturn":  # noqa: F821
     print(f"merge_gate: {msg}", file=sys.stderr)
     sys.exit(2)
@@ -1825,10 +1870,35 @@ def precheck_main(argv) -> int:
     return 0
 
 
+def last_test_run_main(argv) -> int:
+    """Exit 0 with `created_at=<value>` or `created_at=none`. An unreadable
+    listing, or an anchor with no `created_at`, exits 2 and prints no line:
+    the gate then writes `{}`, and the decision waits rather than reading it
+    as "no test run" (DRE-6872)."""
+    args = build_last_test_run_parser().parse_args(argv)
+    workflow_runs = _read_workflow_runs(args.workflow_runs_file)
+    if workflow_runs is None:
+        _die("the workflow-runs listing could not be read — no anchor run")
+    anchor = last_test_run(workflow_runs,
+                           review_workflows=_review_paths(args.review_workflows))
+    if anchor is None:
+        print("created_at=none")
+        return 0
+    created_at = anchor.get("created_at")
+    # It goes into a URL's query, so only a timestamp's characters pass.
+    if not isinstance(created_at, str) or not _CREATED_AT_RE.match(created_at):
+        _die(f"the last test run (id {anchor.get('id')}) carries no readable "
+             f"created_at: {created_at!r}")
+    print(f"created_at={created_at}")
+    return 0
+
+
 def main(argv=None) -> int:
     argv = sys.argv[1:] if argv is None else list(argv)
     if argv[:1] == ["precheck"]:
         return precheck_main(argv[1:])
+    if argv[:1] == ["last-test-run"]:
+        return last_test_run_main(argv[1:])
     args = build_parser().parse_args(argv)
 
     if not _HEAD_SHA_RE.match(args.head_sha or ""):

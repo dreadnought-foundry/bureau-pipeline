@@ -88,8 +88,11 @@ set -e
 #               head, is a wait.
 #     Anything but merge exits 0 there.
 #  6. Asks scripts/order_sensitive_refresh.py whether merging now could fork
-#     the base: `refresh` updates the branch from the base and posts one note
-#     per base tip, `wait` stops, `proceed` goes on.
+#     the base, or, where the repo switched the new-test rule on, whether a
+#     test one side added names a file the other changed since the last test
+#     run: `refresh` updates the branch from the base and posts one note, per
+#     base tip for a fork and once per pull request for new tests, `wait`
+#     stops, `proceed` goes on.
 #  7. Moves the card to In Review if it is still In Progress, merges pinned to
 #     the evaluated head, and comments the merge on the card. A merge refused
 #     because the head moved exits 0. With the head unmoved, GitHub's own
@@ -362,6 +365,22 @@ set -e
 #   the evaluated head. A fix run still queued or running at the ceiling,
 #   or a lane still unreadable, ends in today's wait. Nothing is posted: a
 #   comment would wake both workflows and start the same race again.
+# DRE-6871, DRE-6872 (2026-10-11). bureau-pipeline #871 merged green beside a
+#   test `main` had gained since its last test run, naming a file it
+#   changed: each side passed its own CI, and the pair never ran together.
+#   With `"recheck_new_tests": true` in the declaration, and the branch
+#   behind, the fork-refresh block also reads what `main` gained since the
+#   pull request's last test run began. The anchor is `merge_gate.py
+#   last-test-run` over the runs listing already read: the newest
+#   `pull_request` run at a non-review path, so a review run created later on
+#   `edited` never moves it. Its record does not name `main`'s tip, so the tip
+#   at its `created_at` is read (`commits?until=`), then the compare from it
+#   to `main`, handed over as --since-run-file. A head with no test run is
+#   `{"no_test_run": true}`, which merges as today; a failed read is `{}`,
+#   which waits. The key off or absent reads nothing more. On `rule=new-tests`,
+#   read by its key because `prefix=` is empty there, the same pinned update
+#   runs and the note is `Merge gate: refreshed for new tests onto <tip>`,
+#   the receipt that holds the rule to one refresh per pull request.
 
 set -euo pipefail
 
@@ -617,14 +636,33 @@ merged() {
 }
 [ "$DECISION" = "merge" ] || exit 0
 
-# The fork refresh, the first of the gate's two branch writes (DRE-4912, DRE-5070).
+# The fork refresh, the first of the gate's two branch writes (DRE-4912, DRE-5070),
+# and the new-test refresh through the same write (DRE-6871, DRE-6872).
 BEHIND=$(python3 -c 'import json, sys; b = json.load(open(sys.argv[1])).get("behind_by"); print(b if type(b) is int and b > 0 else 0)' /tmp/compare.json 2>/dev/null || echo 0)
 echo '{}' > /tmp/base-advance.json
+echo '{}' > /tmp/since-run.json
 if [ "$BEHIND" -gt 0 ] && [ -f .github/bureau/merge-recheck.json ]; then
   MERGE_BASE=$(python3 -c 'import json, sys; print((json.load(open(sys.argv[1])).get("merge_base_commit") or {}).get("sha") or "")' /tmp/compare.json 2>/dev/null || true)
   if [ -n "$MERGE_BASE" ]; then
     gh api "repos/$REPO_FULL/compare/$MERGE_BASE...$BASE" > /tmp/base-advance.json 2>/dev/null \
       || echo '{}' > /tmp/base-advance.json
+  fi
+  # The new-test rule's payload, only under `"recheck_new_tests": true`
+  # (DRE-6872): what $BASE gained since the last test run began. A failed
+  # read leaves `{}`, which the decision answers `wait`.
+  if python3 -c 'import json, sys; sys.exit(0 if json.load(open(sys.argv[1])).get("recheck_new_tests") is True else 1)' .github/bureau/merge-recheck.json 2>/dev/null; then
+    ANCHOR=$(python3 .bureau-pipeline/scripts/merge_gate.py last-test-run --workflow-runs-file /tmp/workflow-runs.json --review-workflows "$REVIEW_WORKFLOWS" 2>/dev/null \
+      | grep -m1 '^created_at=' | cut -d= -f2- || true)
+    if [ "$ANCHOR" = "none" ]; then
+      echo '{"no_test_run": true}' > /tmp/since-run.json
+    elif [ -n "$ANCHOR" ]; then
+      TIP_THEN=$(gh api "repos/$REPO_FULL/commits?sha=$BASE&until=$ANCHOR&per_page=1" 2>/dev/null \
+        | python3 -c 'import json, re, sys; c = json.load(sys.stdin); s = c[0].get("sha") if isinstance(c, list) and c and isinstance(c[0], dict) else None; print(s if isinstance(s, str) and re.fullmatch("[0-9a-f]{40}", s) else "")' 2>/dev/null || true)
+      if [ -n "$TIP_THEN" ]; then
+        gh api "repos/$REPO_FULL/compare/$TIP_THEN...$BASE" > /tmp/since-run.json 2>/dev/null \
+          || echo '{}' > /tmp/since-run.json
+      fi
+    fi
   fi
 fi
 python3 -c 'import json, sys; sys.path.insert(0, ".bureau-pipeline/scripts"); import merge_gate; json.dump(merge_gate.flatten_pages(json.load(open("/tmp/comments.json"))), sys.stdout)' \
@@ -635,6 +673,7 @@ python3 .bureau-pipeline/scripts/order_sensitive_refresh.py decide \
   --base-advance-file /tmp/base-advance.json \
   --declaration-file .github/bureau/merge-recheck.json \
   --receipts-file /tmp/receipts.json \
+  --since-run-file /tmp/since-run.json \
   > /tmp/refresh-decision || REFRESH_RC=$?
 # Exit 2 is an unreadable compare record, read as `wait`; any other failure is loud.
 if [ "$REFRESH_RC" = 2 ]; then
@@ -649,11 +688,20 @@ REFRESH_REASON=$(grep -m1 '^reason=' /tmp/refresh-decision | cut -d= -f2- || tru
 # refresh: update-branch as the qa-bot, pinned to the evaluated head (DRE-3138, DRE-2037).
 if [ "$REFRESH" = "refresh" ]; then
   TIP=$(python3 -c 'import json, sys; print((json.load(open(sys.argv[1])).get("base_commit") or {}).get("sha") or "")' /tmp/compare.json 2>/dev/null || true)
+  # By its key, never its line: `prefix=` is empty on a new-tests refresh (DRE-6872).
+  REFRESH_RULE=$(grep -m1 '^rule=' /tmp/refresh-decision | cut -d= -f2- || true)
   if gh api -X PUT "repos/$REPO_FULL/pulls/$PR/update-branch" -f expected_head_sha="$SHA" >/dev/null; then
-    REFRESH_MARK="Merge gate: refreshed onto $TIP"
-    printf '♻️ %s — %s\n\n%s\n' "$REFRESH_MARK" "$REFRESH_REASON" \
-      "Not merged: $BASE gained a file under the same order-sensitive path since this branch's merge base, so merging now could fork $BASE (DRE-4912). The branch was updated from $BASE and CI re-runs on the result, where the repo's own check sees both files together. The standing review carries if this pull request's own changes are unchanged (DRE-2340)." \
-      > /tmp/refresh-note.md
+    if [ "$REFRESH_RULE" = "new-tests" ]; then
+      REFRESH_MARK="Merge gate: refreshed for new tests onto $TIP"
+      printf '♻️ %s — %s\n\n%s\n' "$REFRESH_MARK" "$REFRESH_REASON" \
+        "Not merged: $BASE gained a test since this pull request's last test run began, and one side's new test names a file the other side changed (DRE-6871). The branch was updated from $BASE so the tests run on the combined result. The standing review carries if this pull request's own changes are unchanged (DRE-2340). This rule refreshes a pull request once, never a second time." \
+        > /tmp/refresh-note.md
+    else
+      REFRESH_MARK="Merge gate: refreshed onto $TIP"
+      printf '♻️ %s — %s\n\n%s\n' "$REFRESH_MARK" "$REFRESH_REASON" \
+        "Not merged: $BASE gained a file under the same order-sensitive path since this branch's merge base, so merging now could fork $BASE (DRE-4912). The branch was updated from $BASE and CI re-runs on the result, where the repo's own check sees both files together. The standing review carries if this pull request's own changes are unchanged (DRE-2340)." \
+        > /tmp/refresh-note.md
+    fi
     python3 .bureau-pipeline/scripts/gate_note.py \
       --repo "$REPO_FULL" \
       --pr "$PR" \
