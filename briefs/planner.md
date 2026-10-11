@@ -674,7 +674,8 @@ as a reading the run can make:
 
 A row the run still cannot observe as worded comes back with one of four
 causes — `out-of-reach`, `state-gone`, `misdescribed` or
-`operator-step-unblocked` — and is put to the CEO as a question in Green Light.
+`operator-step-unblocked` — and is put to the operator once, in In Review,
+under a hold (DRE-6837).
 Every one of them is a criterion written wrong when the plan was written.
 
 ## The plan artifact (what the CEO green-lights) — and the roll-up split

@@ -135,7 +135,7 @@ class CauseParkStepTest(ptw._StepHarness):
         self.assertEqual(PARK_MOVE, tuple(park[3:]))
         # The module's question, the Recommendation read off the file's own.
         self.assertTrue(ask[3].startswith(
-            "🙋 The proof run cannot observe 2 row(s) as worded, and asks:"), ask[3])
+            f"{proof_cause_park.QUESTION_OPENING} 2 row(s) as worded, and asks:"), ask[3])
         self.assertEqual(proof_cause_park.question(
             rows, recommendation=RECOMMENDATION, run_url=ptw.RUN_URL), ask[3])
         lines = ask[3].split("\n")

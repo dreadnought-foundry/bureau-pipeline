@@ -59,7 +59,6 @@ import epic_growth  # noqa: E402
 import green_light_rows  # noqa: E402
 import lane_contract  # noqa: E402
 import planning_escalation  # noqa: E402
-import proof_cause_park  # noqa: E402
 import review_cap_question  # noqa: E402
 import step_shell  # noqa: E402
 from test_no_unplanned_ready_lane_writer import _Staged  # noqa: E402
@@ -282,26 +281,6 @@ def _blocker_ask_question() -> None:
     assert esc.recommendation == _fixture_escalation().recommendation
 
 
-def _proof_cause_question() -> None:
-    """`proof_cause_park.py#park` (DRE-6612): the park on a proof record's
-    cause rows posts `proof_cause_park.question` — with the run's
-    recommendation, and with none."""
-    rows = [proof_cause_park.CauseRow("The nightly reads the repo variable",
-                                      "out-of-reach", "`gh variable get` answered 403"),
-            proof_cause_park.CauseRow("The stale branch is deleted", "state-gone",
-                                      "the branch was gone at 09:02 PT")]
-    run_url = "https://github.com/o/r/actions/runs/1"
-    esc = assert_declares_the_lines(proof_cause_park.question(
-        rows, recommendation="Reword both on a new card — the words are old",
-        run_url=run_url))
-    assert esc.recommendation == "Reword both on a new card"
-    assert esc.question == proof_cause_park.QUESTION
-    note = proof_cause_park.question(rows)
-    esc = assert_declares_the_lines(note)
-    assert esc.recommendation is None
-    assert _recommendation_line(note) == _none_given_line(esc)
-
-
 def _step_lines(write) -> list:
     """The write's own step, from its first line up to the write line, read
     through `step_shell.workflow_source` and then as the shell reads it."""
@@ -362,7 +341,6 @@ CASES = {
     "reconcile.py#hand_review_nudge_to_person": _review_cap_question,
     "reconcile.py#ask_epic_growth_question": _epic_growth_question,
     "blocker_ask.py#resolve": _blocker_ask_question,
-    "proof_cause_park.py#park": _proof_cause_question,
     "agent-task.yml#Report result to Linear":
         _workflow_case("agent-task.yml#Report result to Linear"),
     "proof-task.yml#Report proof result to Linear":

@@ -201,7 +201,6 @@ REVIEW_CAP = ("scripts/reconcile.py", "hand_review_nudge_to_person")
 EPIC_GROWTH = ("scripts/reconcile.py", "ask_epic_growth_question")
 BLOCKER_ASK = ("scripts/blocker_ask.py", "resolve")
 RELEASED_EPIC = ("scripts/reconcile.py", "ask_cap_for_released_epic")
-PROOF_CAUSE = ("scripts/proof_cause_park.py", "park")
 
 
 # --------------------------------------------------------------------------- #
@@ -268,11 +267,10 @@ class TestTheRepositoryPasses:
         contract = _contract()
         declared = _declared(contract)
         assert set(declared) == {ESCALATE, CMD_EXIT, PARK, REVIEW_CAP, EPIC_GROWTH,
-                                 BLOCKER_ASK, RELEASED_EPIC, PROOF_CAUSE}
-        # The cause park's callers are added by the cards that call it
-        # (DRE-6612): the proof dispatcher's park is the first (DRE-6610).
+                                 BLOCKER_ASK, RELEASED_EPIC}
+        # The cause park writes no lane since DRE-6837, so it has no record.
         counts = {ESCALATE: 7, CMD_EXIT: 2, PARK: 2, REVIEW_CAP: 1, EPIC_GROWTH: 1,
-                  BLOCKER_ASK: 1, RELEASED_EPIC: 1, PROOF_CAUSE: 1}
+                  BLOCKER_ASK: 1, RELEASED_EPIC: 1}
         for (module, function), callers in declared.items():
             report = lane_callers.callers_of(module, function, str(ROOT))
             assert report.unread == frozenset(), (module, report.unread)
@@ -655,34 +653,12 @@ class TestTheAgentEscalationGate:
         assert _named(found, "reconcile.py#promote_ready", grl.BLOCKER_ASK_SITE,
                       "does not declare"), found
 
-    def test_the_proof_cause_park_is_an_agent_escalation_site(self):
-        # DRE-6612: the one writer that parks a proof card on its cause rows,
-        # declared in the pull request that lands it; DRE-6610 declares the
-        # proof dispatcher's park its one caller.
-        assert grl.PROOF_CAUSE_SITE == "proof_cause_park.py#park"
-        record = next(r for r in grl.arrivals() if r["where"] == grl.PROOF_CAUSE_SITE)
-        assert record["kind"] == "agent-escalation"
-        assert record["writer"] == "proof_cause_park.py"
-        assert record["card"] == "DRE-6612"
-        assert record["callers"] == ["proof_dispatch.py#park_caused"]
-        assert grl.PROOF_CAUSE_SITE in {unit for _, unit in grl.green_light_writes()}
-        assert grl._gate_problems(record, [], str(ROOT), grl.lane_name()) == []
-
-    def test_the_proof_cause_park_with_no_record_fails_by_location(self):
-        contract = _contract()
-        _entrance(contract)["arrivals"] = [
-            r for r in _entrance(contract)["arrivals"]
-            if r["where"] != grl.PROOF_CAUSE_SITE]
-        found = grl.problems(contract=contract)
-        assert _named(found, grl.PROOF_CAUSE_SITE,
-                      "no arrival on its entrance declares it"), found
-
     def test_the_python_agent_escalation_sites_are_pinned(self):
         record = {"kind": "agent-escalation", "where": "zz.py#ask"}
         found = grl._gate_problems(record, [], str(ROOT), grl.lane_name())
         assert len(found) == 1, found
         for site in (grl.CODE_OWNER_SITE, grl.REVIEW_CAP_SITE, grl.BLOCKER_ASK_SITE,
-                     grl.PROOF_CAUSE_SITE, *grl.AGENT_ESCALATION_STEPS):
+                     *grl.AGENT_ESCALATION_STEPS):
             assert site in found[0], site
             assert grl._gate_problems({**record, "where": site}, [], str(ROOT),
                                       grl.lane_name()) == [], site

@@ -54,6 +54,7 @@ NINE = (
 
 DECLARATION = proof_reach.DECLARATION
 GREEN_LIGHT = "Green Light"
+IN_REVIEW = "In Review"
 
 
 def _read(path: Path) -> str:
@@ -156,16 +157,30 @@ def test_the_standard_explains_each_cause_with_one_of_the_nine(word):
     )
 
 
-def test_the_standard_puts_the_record_to_the_ceo_in_green_light_once():
+def test_the_standard_puts_the_record_to_the_operator_in_in_review_once():
+    """A record whose unmet rows all carry a cause is the operator's to settle,
+    held in In Review under a hold (DRE-6837) — never put to the CEO in Green
+    Light. The standard and the planner's brief say so the same day."""
     lanes = {lane["name"] for lane in json.loads(_read(LANE_CONTRACT))["lanes"]}
-    assert GREEN_LIGHT in lanes, f"the lane contract no longer carries {GREEN_LIGHT}"
+    assert IN_REVIEW in lanes, f"the lane contract no longer carries {IN_REVIEW}"
     passage = _passage(STANDARD)
-    assert GREEN_LIGHT in passage, "the standard's passage names no lane for the record"
+    assert IN_REVIEW in passage, "the standard's passage names no lane for the record"
     assert _loose("one writer").search(passage), (
         "the standard's passage does not say the question is put through one writer"
     )
     assert _loose("never re-run").search(passage), (
         "the standard's passage does not say the record is never re-run"
+    )
+    assert _loose(f"never to the CEO in {GREEN_LIGHT}").search(passage), (
+        "the standard's passage does not say the record is never put to the CEO "
+        f"in {GREEN_LIGHT}"
+    )
+    planner = _passage(PLANNER)
+    assert _loose(IN_REVIEW).search(planner), (
+        "briefs/planner.md's passage does not say the row is held in In Review"
+    )
+    assert not _loose(f"as a question in {GREEN_LIGHT}").search(planner), (
+        f"briefs/planner.md's passage still puts the row to the CEO in {GREEN_LIGHT}"
     )
 
 
