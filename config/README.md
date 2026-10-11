@@ -193,6 +193,25 @@ of it is ever a runtime lookup.
   non-default class with no phrase, a phrase under two classes, a `default`
   that is not a class, and an `action` missing or not a `[a-z_]+` module name.
   `docs/blocker-classes.md` is the page a person reads.
+- **`proof-reach.json`** — what a dispatched proof run can read, declared once
+  (DRE-6605). Four keys, in order: `github` (the proof workflow, its two mint
+  steps, the `owner` they are scoped by with no `repositories`, the
+  `permissions` both ask for and the `optional_permissions` only the wide one
+  asks for — no organization is listed, the unreachable repos are derived from
+  `repo-map.json` by owner), `readings` (each `held` true, false or
+  `"optional"`, an optional one held only for the slugs its `held_for` names,
+  with the patterns that find it in one criterion, the card it was read off and
+  the sentence `briefs/proof.md` carries for it; `queries_declared_by` points at
+  the product's own script rather than copying its list), `log_lines` (the
+  tagged lines a criterion may quote and what prints each) and `causes` (the
+  four cause words a proof row is filed under). Read only through
+  `scripts/proof_reach.py`: `out_of_reach(criterion, …)` names each reading a
+  criterion asks for that the run cannot make, and `python3
+  scripts/proof_reach.py check` fails, by step and input, when either mint in
+  `proof-task.yml` drifts from `github`, by reading when the brief loses its
+  sentence, and by tag when a printer's constant changes.
+  `tests/test_proof_task_workflow.py` derives the mints' permission sets from
+  it rather than restating them.
 - **`critic-audit-dre2649.json`** — the held-back review the critic is scored
   against (DRE-2685), transcribed once with a quote per judgement.
   `docs/critic-score-dre2649.md` records the run.
