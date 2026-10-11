@@ -109,7 +109,11 @@ def load_config(path: Path = CONFIG) -> dict:
                 raise SystemExit(f"{path}: bad ladder rung {rung!r}")
         return out
 
-    violations = _policy_errors(raw)
+    # Judged against the prices declared BESIDE this config (DRE-6785): every
+    # rung needs a declared price now, and a tree the adoption edited carries
+    # the candidate's price in its own model-prices.yaml.
+    beside = path.parent / "model-prices.yaml"
+    violations = _policy_errors(raw, declared_prices(beside) if beside.exists() else None)
     if violations:
         raise SystemExit(
             f"{path}: rejected by model policy (DRE-2317)\n  - "

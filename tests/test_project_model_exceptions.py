@@ -214,6 +214,24 @@ def test_separation_is_applied_to_an_advisory_exception_too(tmp_path):
         f" — project atlas: exception {EXCEPTION} leads the advisory walk")
 
 
+def test_an_exception_off_its_kinds_ladder_leads_the_walk(tmp_path):
+    """DRE-6785: an exception may name any priced model. Sonnet 4.6 is on the
+    judgement ladder only, and atlas's builders walk it first, then the
+    Builders' ladder — through the CLI, `ladder_for` and `--fallback-file`."""
+    sonnet46 = "claude-sonnet-4-6"
+    tree = make_tree(tmp_path / "t", {"atlas": {"workhorse": sonnet46}})
+    fleet = ladder(tree_config(tree), "workhorse")
+    assert sonnet46 not in fleet
+    model, note = select(tree, "engineer", "--repo", "atlas", tmp=tmp_path)
+    assert model == sonnet46
+    assert note.endswith(
+        f" — project atlas: exception {sonnet46} leads the workhorse walk")
+    assert py(tree, "print(json.dumps(mf.ladder_for('engineer', 'atlas')))") == \
+        [sonnet46] + fleet
+    assert py(tree, "print(json.dumps(mf.fallback_for('engineer', "
+                    f"{sonnet46!r}, repo='atlas')))") == fleet[0]
+
+
 # --------------------------------------------------------------------------- #
 # The two spellings, and everything that is not a project                      #
 # --------------------------------------------------------------------------- #

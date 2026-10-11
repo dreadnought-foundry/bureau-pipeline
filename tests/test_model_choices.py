@@ -214,38 +214,30 @@ def test_one_group_per_kind_with_its_words_and_ladder():
         assert [c["model"] for c in group["choices"]] == [m["id"] for m in doc["models"]]
 
 
-def test_a_model_off_a_groups_ladder_is_refused_with_where_it_sits():
-    # Any state of the file: a model that is not a rung of the group's own
-    # ladder as written is refused, and the reason says which ladders it does
-    # sit on, if any.
-    doc = _choices()
-    raw = _raw()
+def test_every_priced_model_but_an_excluded_one_is_allowed_everywhere(tmp_path):
+    # DRE-6785 (the CEO, 2026-10-10): any priced model may lead any group, so
+    # the own-kind rule, rule 4 and rule 4b refuse nothing now; what is left
+    # refused is a model the file excludes. A rule of the renderer, on the
+    # frozen fixture.
+    raw, doc = _fixture_choices(tmp_path)
+    excluded = {e["model"] for e in raw["excluded"]}
+    assert excluded, "the fixture excludes a model"
     for group in doc["groups"]:
-        kind = group["key"]
-        name = raw["kinds"][kind]["ladder"]
         for choice in group["choices"]:
             model = choice["model"]
-            if model in _rungs(raw, kind):
-                continue
-            assert choice["allowed"] is False, (kind, model)
-            assert f"{model} is not on the {name} ladder" in choice["reason"]
-            elsewhere = [k for k in raw["kinds"] if model in _rungs(raw, k)]
-            if not elsewhere:
-                assert "(it is on no ladder)" in choice["reason"]
-            for other in elsewhere:
-                assert raw["kinds"][other]["ladder"] in choice["reason"], (kind, model)
+            if model in excluded:
+                assert choice["allowed"] is False, (group["key"], model)
+                assert f"{model} is excluded" in choice["reason"]
+            else:
+                assert choice == {"model": model, "allowed": True, "reason": None}, (
+                    group["key"], model)
 
 
-def test_a_groups_allowed_choices_are_its_own_rungs():
-    # A project exception reorders its kind's own ladder and never adds a
-    # model to it, so whatever the file holds, an allowed choice is a rung of
-    # the group's ladder as written, and its leader is always allowed.
+def test_a_groups_leader_is_always_allowed_and_a_reason_never_names_a_project():
+    # Any state of the file the console can save.
     doc = _choices()
-    raw = _raw()
     for group in doc["groups"]:
-        rungs = _rungs(raw, group["key"])
         allowed = [c["model"] for c in group["choices"] if c["allowed"]]
-        assert set(allowed) <= set(rungs), group["key"]
         assert group["default_model"] in allowed, group["key"]
         for choice in group["choices"]:
             if choice["allowed"]:
@@ -254,29 +246,6 @@ def test_a_groups_allowed_choices_are_its_own_rungs():
                 assert isinstance(choice["reason"], str) and choice["reason"]
                 assert not choice["reason"].startswith("projects.")
 
-
-def test_the_renderer_refuses_a_rung_that_would_lead_the_wrong_ladder(tmp_path):
-    # A rule of the renderer, on the frozen fixture: the reviewers' and the
-    # planners' last rung (the loud fallback) is on their ladder but may not
-    # lead it — rule 4 for both, and rule 4b for the planners — while every
-    # other rung of the planners' ladder may.
-    raw, doc = _fixture_choices(tmp_path)
-    fallback = _rungs(raw, mf.ADVISORY_KIND)[-1]
-    assert fallback == _rungs(raw, mf.JUDGEMENT_KIND)[-2]
-    reviewers = _choice(doc, mf.ADVISORY_KIND, fallback)
-    assert reviewers["allowed"] is False
-    assert "tops the advisory ladder" in reviewers["reason"]
-    planners = _choice(doc, mf.JUDGEMENT_KIND, fallback)
-    assert planners["allowed"] is False
-    assert "tops the judgement ladder" in planners["reason"]
-    assert "rule 4b" in planners["reason"]
-    for model in _rungs(raw, mf.JUDGEMENT_KIND):
-        if model != fallback:
-            assert _choice(doc, mf.JUDGEMENT_KIND, model)["allowed"] is True, model
-    for model in _rungs(raw, mf.WORKHORSE_KIND):
-        assert _choice(doc, mf.WORKHORSE_KIND, model) == {
-            "model": model, "allowed": True, "reason": None,
-        }
 
 
 def test_an_error_elsewhere_in_the_config_never_reaches_a_choice():

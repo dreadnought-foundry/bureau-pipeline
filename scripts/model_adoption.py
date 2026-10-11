@@ -185,12 +185,14 @@ def _ladder_rungs(config) -> dict[str, list[str]]:
 
 def _known_ids(config) -> set[str]:
     """Every id the pipeline has ALREADY been configured with: the ladders, the
-    retired ids and the excluded ones.
+    retired ids, the excluded ones and every model a project names.
 
     `model_fallback.KNOWN_MODELS` is exactly that set for the live config, and
     it is the set the card names. The config passed in is unioned with it so a
     caller classifying against a config of its own cannot accidentally offer a
-    rung it runs as a discovery.
+    rung it runs as a discovery — nor a model only a project names (DRE-6785):
+    that is a person's explicit choice, and asking the CEO about it would be
+    asking about a model he just chose.
     """
     known = set(KNOWN_MODELS)
     for rungs in _ladder_rungs(config).values():
@@ -198,6 +200,10 @@ def _known_ids(config) -> set[str]:
     if isinstance(config, Mapping):
         for key in ("retired", "excluded"):
             known |= set(model_catalog._ladder_ids(config.get(key)))
+        projects = config.get("projects")
+        for entry in (projects.values() if isinstance(projects, Mapping) else ()):
+            if isinstance(entry, Mapping):
+                known |= {m for m in entry.values() if isinstance(m, str) and m}
     return known
 
 

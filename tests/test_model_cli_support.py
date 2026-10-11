@@ -115,18 +115,35 @@ def _canonical_ladders() -> dict[str, list[str]]:
     }
 
 
-def _unsupported(ladders: dict[str, list[str]], pinned: str) -> list[str]:
+def _canonical_exceptions() -> dict[str, list[str]]:
+    """Every `projects.<slug>.<kind>` model of the committed config, keyed by
+    that path (DRE-6785): since 2026-10-10 an exception may name a model on no
+    ladder, so the ladder check alone no longer covers what a run selects."""
+    cfg = yaml.safe_load(CONFIG.read_text())
+    return {
+        f"projects.{slug}.{kind}": [model]
+        for slug, entry in (cfg.get("projects") or {}).items()
+        for kind, model in (entry or {}).items()
+    }
+
+
+def _unsupported(ladders: dict[str, list[str]], pinned: str,
+                 prefix: str = "ladders.") -> list[str]:
+    """Every model the pin cannot run, named `<prefix><key>` — `ladders.<name>`
+    for a ladder, and `""` for `_canonical_exceptions`' already-full paths."""
+    remedy = ("keep the model off the ladder" if prefix == "ladders."
+              else "choose another model for that project")
     found = []
     for name, models in ladders.items():
         for model in models:
             floor = _minimums().get(model)
             if floor and _version(pinned) < _version(floor):
                 found.append(
-                    f"ladders.{name}: {model} needs Claude Code {floor} or newer, "
+                    f"{prefix}{name}: {model} needs Claude Code {floor} or newer, "
                     f"and the fleet installs {pinned} "
                     "(.github/actions/install-claude-code `version` default) — "
                     "every run that selects it dies with a 400. Raise the pin "
-                    "first (DRE-4862), or keep the model off the ladder."
+                    f"first (DRE-4862), or {remedy}."
                 )
     return found
 
@@ -209,6 +226,36 @@ class LadderSupportTest(unittest.TestCase):
     def test_a_pin_at_the_minimum_clears_it(self):
         ladders = {"workhorse": ["claude-opus-5-5", "claude-opus-5"]}
         self.assertEqual(_unsupported(ladders, "2.1.280"), [])
+
+
+class ProjectExceptionSupportTest(unittest.TestCase):
+    """A project's exception may name a model on no ladder (DRE-6785), so a
+    hand-edited `projects.<slug>.<kind>` is held to the pin here, in CI. The
+    console's paths refuse such a model before the policy is asked."""
+
+    def test_every_project_exception_runs_on_the_pinned_claude_code(self):
+        errors = _unsupported(_canonical_exceptions(), _pinned_version(), prefix="")
+        self.assertEqual(errors, [], "\n".join(errors))
+
+    def test_an_exception_the_pin_cannot_run_is_refused_by_its_path(self):
+        # One release past the live pin, never a literal: `claude_code_pin.py
+        # apply` raises this file's pin, and a fixed floor it reaches stops
+        # being one the pin cannot run.
+        pinned = _pinned_version()
+        major, minor, patch = _version(pinned)
+        floor = f"{major}.{minor}.{patch + 1}"
+        AHEAD_OF_ADOPTION["claude-test-9"] = floor
+        try:
+            exceptions = {**_canonical_exceptions(),
+                          "projects.atlas.workhorse": ["claude-test-9"]}
+            errors = _unsupported(exceptions, pinned, prefix="")
+        finally:
+            del AHEAD_OF_ADOPTION["claude-test-9"]
+        self.assertEqual(len(errors), 1, errors)
+        self.assertTrue(errors[0].startswith(
+            f"projects.atlas.workhorse: claude-test-9 needs Claude Code {floor}"),
+            errors[0])
+        self.assertIn(pinned, errors[0])
 
 
 if __name__ == "__main__":

@@ -40,6 +40,12 @@ WHAT THIS PINS, one section per acceptance criterion of the card:
      DRE-6364, replayed from tests/fixtures/green-light-2026-10-10/ as the
      sweep parked them, write nothing; the same records without the
      decline are still nudged and capped.
+  8. Every other proof record at the cap (DRE-6841) is held In Review for
+     the operator, never parked in Green Light: the hold, the proof-record
+     question on the card and its blocker on the pull request, and no lane
+     move — DRE-6364's #844 replayed with the critic's verdict removed, and
+     with the gate's notes removed too. The same replay on a code branch
+     still parks, and a second sweep writes nothing.
 
 Run: cd bureau-pipeline && python3 -m pytest tests/test_review_cap_green_light.py -v
 """
@@ -515,6 +521,50 @@ def _owned(out: str) -> list:
             if OWNER in line and IDENT in line and f"#{NUMBER}" in line]
 
 
+#: The two Question lines a proof record at the cap is asked (DRE-6841).
+ACCEPT_OR_OBSERVE = ("Accept the unmet rows by operator decision, record the "
+                     "event with proof-observed, or drop the record?")
+START_AGAIN = ("Start the review again by hand, push the record to a new head, "
+               "or drop the record?")
+#: What the sweep's line ends with when it holds a proof record In Review.
+HELD_LINE = "held In Review for the operator, not parked"
+
+
+def _cap_question(bodies) -> str:
+    """The one `🚨 review-nudge-cap` question among `bodies`."""
+    asked = [b for b in bodies if b.startswith(f"🚨 {reconcile.REVIEW_NUDGE_CAP_KEY} ")]
+    assert len(asked) == 1, asked
+    return asked[0]
+
+
+def _question_of(text: str) -> str:
+    return console_escalation.parse(text).question
+
+
+def _finding_of(text: str) -> str:
+    return console_escalation.parse(text).finding
+
+
+def _assert_held_for_the_operator(state, labels, bodies, pr_notes, head,
+                                  question):
+    """Held In Review under the sweep's own `review-cap-spent` stamp on
+    `head`, with the proof-record question on the card and its blocker on
+    the pull request — never parked in Green Light, never the CEO's."""
+    assert state == reconcile.REVIEW_LANE
+    assert reconcile.HOLD_LABEL in labels
+    stamp = hold.read_stamp(list(bodies))
+    assert stamp["reason"] == "review-cap-spent" and stamp["at"] == head
+    asked = _cap_question(bodies)
+    assert console_escalation.problems(asked) == []
+    assert _question_of(asked) == question
+    assert len(pr_notes) == 1
+    assert pr_notes[0].startswith(f"{fix_context.BLOCKER_PREFIX} ")
+    assert _question_of(pr_notes[0]) == question
+    for text in (asked, pr_notes[0]):
+        assert "only the CEO can make" not in text
+        assert "CEO" not in text
+
+
 class TestASentBackProofRecordIsTheProofRuns:
     """The sweep stands down on a proof record whose critic verdict at the
     head is exactly REQUEST_CHANGES: no nudge, no receipt, no hold, no
@@ -543,17 +593,21 @@ class TestASentBackProofRecordIsTheProofRuns:
         assert f"{reconcile.REVIEW_NUDGE_KEY} @{HEAD} (1/3)" in posted[0]
         assert _owned(capsys.readouterr().out) == []
 
-    def test_no_verdict_at_all_still_reaches_a_person_at_the_cap(self):
+    def test_no_verdict_at_all_still_reaches_the_operator_held_in_review(
+            self, capsys):
         # DRE-5643's shape: the critic never answered on this head. The
-        # backstop is how that reaches a person, and it stays.
+        # backstop is how that reaches a person, and it stays — the operator,
+        # with the card held In Review (DRE-6841).
         board = _Board()
         pr = _record()
         for n in (1, 2, 3):
             _, _, posted = board.sweep(pr)
             assert f"{reconcile.REVIEW_NUDGE_KEY} @{HEAD} ({n}/3)" in posted[0]
-        board.sweep(pr)
-        assert board.state == "Green Light"
-        assert reconcile.HOLD_LABEL in board.labels
+        _, cmd_state, _ = board.sweep(pr)
+        cmd_state.assert_not_called()
+        _assert_held_for_the_operator(board.state, board.labels, board.comments,
+                                      board.pr_notes, HEAD, START_AGAIN)
+        assert HELD_LINE in capsys.readouterr().out
 
     def test_an_approve_at_the_head_is_the_merge_gates_as_today(self):
         board = _Board()
@@ -592,11 +646,13 @@ class TestTheParkItselfStandsDown:
         assert log[-1] == ("advance", IDENT, "Green Light", reconcile.REVIEW_LANE)
         assert ("pr", NUMBER) == log[-2][:2]
 
-    def test_a_record_with_no_verdict_at_its_head_still_parks(self):
+    def test_a_record_with_no_verdict_at_its_head_is_held_in_review(self):
         pr = {**_pr_with(), "headRefName": RECORD_BRANCH}
         log = _Writes().run(_held_card(), pr, tag=reconcile.REVIEW_NUDGE_KEY,
                             critic=f"REQUEST_CHANGES from earlier head {OLD_HEAD[:7]}")
-        assert log[-1] == ("advance", IDENT, "Green Light", reconcile.REVIEW_LANE)
+        assert [entry[0] for entry in log] == ["comment", "pr"], log
+        assert _question_of(log[0][2]) == START_AGAIN
+        assert _question_of(log[1][2]) == START_AGAIN
 
     def test_the_held_card_path_of_the_sweep_does_not_finish_the_park(self, capsys):
         board = _Board()
@@ -717,7 +773,7 @@ class TestAnApprovedRecordTheGateDeclinedIsTheProofRuns:
 
     @pytest.mark.parametrize("card, carried", [("DRE-6042", False),
                                                ("DRE-6364", True)])
-    def test_with_the_decline_removed_the_cap_still_parks(
+    def test_with_the_decline_removed_the_cap_still_holds_in_review(
             self, monkeypatch, capsys, card, carried):
         doc = _fixture(card)
         board, applied, _, posted, _ = _replay(
@@ -728,8 +784,11 @@ class TestAnApprovedRecordTheGateDeclinedIsTheProofRuns:
                                         "reconcile.py")
         assert len([b for b in posted if b.startswith(
             f"🚨 {reconcile.REVIEW_NUDGE_CAP_KEY} PR #{doc['pr']['number']} @{head}:")]) == 1
-        assert board.state == "Green Light"
-        assert _record_owned(capsys.readouterr().out, doc) == []
+        _assert_held_for_the_operator(board.state, board.labels, posted,
+                                      board.pr_notes, head, START_AGAIN)
+        out = capsys.readouterr().out
+        assert _record_owned(out, doc) == []
+        assert HELD_LINE in out
 
     @pytest.mark.parametrize("card, carried", [("DRE-6042", False),
                                                ("DRE-6364", True)])
@@ -743,25 +802,31 @@ class TestAnApprovedRecordTheGateDeclinedIsTheProofRuns:
         assert f"{reconcile.GATE_NUDGE_KEY} @{doc['pr']['headRefOid']} (1/3)" in posted[0]
         applied.assert_not_called()
 
-    def test_a_decline_for_another_reason_at_the_head_still_parks(self, monkeypatch):
+    def test_a_decline_for_another_reason_at_the_head_still_holds_in_review(
+            self, monkeypatch):
         doc = _fixture("DRE-6042")
         pr = _without_the_decline_at_the_head(doc["pr"])
-        pr["comments"].append({**doc["pr"]["comments"][-1], "body": (
-            f"⏸️ {reconcile.GATE_HOLD_NOTE_MARKER} @{pr['headRefOid']} — required "
-            "check tests concluded failure")})
-        board, applied, _, _, _ = _replay(monkeypatch, doc, pr=pr)
+        note = (f"⏸️ {reconcile.GATE_HOLD_NOTE_MARKER} @{pr['headRefOid']} — "
+                "required check tests concluded failure")
+        pr["comments"].append({**doc["pr"]["comments"][-1], "body": note})
+        board, applied, _, posted, _ = _replay(monkeypatch, doc, pr=pr)
         applied.assert_called_once()
-        assert board.state == "Green Light"
+        _assert_held_for_the_operator(board.state, board.labels, posted,
+                                      board.pr_notes, pr["headRefOid"],
+                                      START_AGAIN)
+        assert note in _finding_of(_cap_question(posted))
 
-    def test_a_decline_by_another_login_still_parks(self, monkeypatch):
+    def test_a_decline_by_another_login_still_holds_in_review(self, monkeypatch):
         doc = _fixture("DRE-6042")
         pr = json.loads(json.dumps(doc["pr"]))
         pr["comments"][-1]["author"] = {"login": "someone"}
-        board, applied, _, _, _ = _replay(monkeypatch, doc, pr=pr)
+        board, applied, _, posted, _ = _replay(monkeypatch, doc, pr=pr)
         applied.assert_called_once()
-        assert board.state == "Green Light"
+        _assert_held_for_the_operator(board.state, board.labels, posted,
+                                      board.pr_notes, pr["headRefOid"],
+                                      START_AGAIN)
 
-    def test_an_approve_not_bound_to_the_head_is_the_reviews_and_parks(
+    def test_an_approve_not_bound_to_the_head_is_the_reviews_and_holds_in_review(
             self, monkeypatch, capsys):
         # DRE-6364 with no carry: the APPROVE names an earlier head, so the
         # review budget is spent and the decline at the head does not stand
@@ -771,10 +836,14 @@ class TestAnApprovedRecordTheGateDeclinedIsTheProofRuns:
         doc["comments"] += [{"body": f"{review} ({n}/3) — re-triggered.",
                              "authored_by_pipeline": True,
                              "created_at": doc["as_of"]} for n in (1, 2, 3)]
-        board, applied, _, _, (tag, _) = _replay(monkeypatch, doc)
+        board, applied, _, posted, (tag, _) = _replay(monkeypatch, doc)
         assert tag == reconcile.REVIEW_NUDGE_KEY
         applied.assert_called_once()
-        assert board.state == "Green Light"
+        head = doc["pr"]["headRefOid"]
+        _assert_held_for_the_operator(board.state, board.labels, posted,
+                                      board.pr_notes, head, START_AGAIN)
+        assert f"no critic verdict at {head[:7]}" in _finding_of(
+            _cap_question(posted))
         assert _record_owned(capsys.readouterr().out, doc) == []
 
     def test_the_park_itself_stands_down_on_the_declined_record(self, capsys):
@@ -791,6 +860,208 @@ class TestAnApprovedRecordTheGateDeclinedIsTheProofRuns:
         _Writes().run(_card(), pr, critic="REQUEST_CHANGES")
         line = _owned(capsys.readouterr().out)[0]
         assert "the critic's send-back" in line and NOT_PROVEN_TRIGGER in line
+
+
+# --------------------------------------------------------------------------- #
+# 8. every other proof record at the cap is held In Review for the operator    #
+#    (DRE-6841) — DRE-6364's #844 replayed with its critic verdict removed     #
+# --------------------------------------------------------------------------- #
+
+#: What a gate hold note opens with, after its badge.
+GATE_NOTE_OPENING = f"⏸️ {reconcile.GATE_HOLD_NOTE_MARKER} @"
+
+
+def _pr_844(*, notes=True, branch=None) -> dict:
+    """DRE-6364's record pull request #844 with the critic's verdicts removed,
+    in memory: three gate-nudge re-triggers declined `proof record not
+    proven`, and no verdict bound to the head. `notes=False` removes the
+    gate's hold notes as well; `branch` puts the pull request on another
+    head branch."""
+    pr = json.loads(json.dumps(_fixture("DRE-6364")["pr"]))
+    pr["comments"] = [
+        c for c in pr["comments"]
+        if not c["body"].startswith("🔎 QA Critic")
+        and (notes or not c["body"].startswith(GATE_NOTE_OPENING))]
+    if branch:
+        pr["headRefName"] = branch
+    return pr
+
+
+def _card_6364(**over) -> dict:
+    """DRE-6364 as it stood at `as_of`: In Review, its labels and thread."""
+    doc = _fixture("DRE-6364")
+    card = {
+        "identifier": doc["card"],
+        "state": {"name": reconcile.REVIEW_LANE},
+        "labels": {"nodes": [{"name": n} for n in doc["labels"]]},
+        # The API's order — newest first; window_nodes reverses it.
+        "comments": {"nodes": [{"body": c["body"], "createdAt": c["created_at"]}
+                               for c in reversed(doc["comments"])]},
+    }
+    card.update(over)
+    return card
+
+
+def _replay_844(pr: dict, card: dict | None = None) -> list:
+    """`hand_review_nudge_to_person` over #844 on its gate-nudge budget,
+    with the verdicts read off the pull request as the sweep reads them."""
+    head = pr["headRefOid"]
+    critic = reconcile.standing_verdict(
+        reconcile.critic_comments(pr), reconcile.merge_gate.CRITIC_MARKER, head)
+    verifier = reconcile.standing_verdict(
+        reconcile.verifier_comments(pr), reconcile.merge_gate.VERIFIER_MARKER, head)
+    return _Writes().run(card or _card_6364(), pr, tag=reconcile.GATE_NUDGE_KEY,
+                         critic=critic, verifier=verifier)
+
+
+def _lane_writes(log) -> list:
+    return [entry for entry in log if entry[0] in ("advance", "state")]
+
+
+def _written(log) -> list:
+    """Every body the replay wrote, on the card and on the pull request."""
+    return [entry[-1] for entry in log if entry[0] in ("comment", "pr")]
+
+
+class TestAProofRecordAtTheCapIsHeldInReview:
+    def test_the_replay_holds_asks_the_operator_and_moves_nothing(self, capsys):
+        pr = _pr_844()
+        assert reconcile.critic_comments(pr) == []
+        log = _replay_844(pr)
+        head = pr["headRefOid"]
+        assert [entry[0] for entry in log] == ["label", "comment", "comment",
+                                               "pr"], log
+        assert log[0] == ("label", "DRE-6364", reconcile.HOLD_LABEL)
+        assert hold.read_stamp([log[1][2]])["reason"] == "review-cap-spent"
+        assert hold.read_stamp([log[1][2]])["at"] == head
+        assert _lane_writes(log) == []
+        assert not [e for e in log if "Green Light" in e[2:]]
+        out = capsys.readouterr().out
+        assert (f"review-nudge: DRE-6364 PR #844 is a proof record at the cap — "
+                f"{HELD_LINE}") in out
+
+    def test_the_question_quotes_the_not_proven_decline(self):
+        pr = _pr_844()
+        log = _replay_844(pr)
+        question, blocker = log[2][2], log[3][2]
+        assert console_escalation.problems(question) == []
+        esc = console_escalation.parse(question)
+        assert esc.question == ACCEPT_OR_OBSERVE
+        assert esc.recommendation and esc.why
+        assert "proof record not proven" in esc.finding
+        assert reconcile.gate_hold_note_line(pr) in esc.finding
+        assert "critic none, verifier none" in esc.finding
+        assert console_escalation.parse(blocker) == esc
+        assert blocker.startswith(f"{fix_context.BLOCKER_PREFIX} ")
+
+    def test_with_the_notes_removed_too_it_asks_to_start_again(self, capsys):
+        pr = _pr_844(notes=False)
+        assert reconcile.gate_hold_note_line(pr) is None
+        log = _replay_844(pr)
+        head = pr["headRefOid"]
+        assert [entry[0] for entry in log] == ["label", "comment", "comment",
+                                               "pr"], log
+        assert _lane_writes(log) == []
+        esc = console_escalation.parse(log[2][2])
+        assert esc.question == START_AGAIN
+        assert f"no critic verdict at {head[:7]}" in esc.finding
+        assert HELD_LINE in capsys.readouterr().out
+
+    @pytest.mark.parametrize("notes", [True, False])
+    def test_nothing_written_on_the_record_asks_the_ceo(self, notes):
+        for body in _written(_replay_844(_pr_844(notes=notes))):
+            assert "only the CEO can make" not in body
+            assert "CEO" not in body
+
+    def test_the_same_replay_on_a_code_branch_still_parks(self, capsys):
+        pr = _pr_844(branch="agent/DRE-6364-fix")
+        log = _replay_844(pr)
+        assert [entry[0] for entry in log] == ["label", "comment", "comment",
+                                               "pr", "advance"], log
+        assert log[-1] == ("advance", "DRE-6364", "Green Light",
+                           reconcile.REVIEW_LANE)
+        evidence = dict(card="DRE-6364", pr_number=844, head=pr["headRefOid"],
+                        tag=reconcile.GATE_NUDGE_KEY, critic="none",
+                        verifier="none", spent=3, hours=375 / 60,
+                        gate_note_line=reconcile.gate_hold_note_line(pr), cap=3)
+        assert log[2][2] == review_cap_question.compose(**evidence)
+        assert log[3][2] == review_cap_question.pr_blocker(**evidence)
+        assert HELD_LINE not in capsys.readouterr().out
+
+    def test_a_second_sweep_over_the_held_record_writes_nothing(self, capsys):
+        pr = _pr_844()
+        first = _replay_844(pr)
+        bodies = [entry[2] for entry in first if entry[0] == "comment"]
+        blocker = next(entry[2] for entry in first if entry[0] == "pr")
+        doc = _fixture("DRE-6364")
+        held = _card_6364(labels={"nodes": [
+            {"name": n} for n in doc["labels"] + [reconcile.HOLD_LABEL]]})
+        held["comments"]["nodes"] = [
+            {"body": b, "createdAt": "2026-10-10T10:00:00Z"}
+            for b in reversed(bodies)] + held["comments"]["nodes"]
+        again = {**pr, "comments": pr["comments"] + [_worker(blocker)]}
+        capsys.readouterr()
+        # The held-card path finds it — the stamp is live and the card is In
+        # Review — and the park itself reads it as finished.
+        assert reconcile.review_cap_park_unfinished(held) == pr["headRefOid"]
+        assert _replay_844(again, held) == []
+        assert (f"review-nudge: DRE-6364 already held and asked for "
+                f"{pr['headRefOid']} — not repeating") in capsys.readouterr().out
+
+    def test_a_lifted_label_on_the_held_record_is_re_held_not_parked(self):
+        pr = _pr_844()
+        first = _replay_844(pr)
+        bodies = [entry[2] for entry in first if entry[0] == "comment"]
+        blocker = next(entry[2] for entry in first if entry[0] == "pr")
+        back = _card_6364()
+        back["comments"]["nodes"] = [
+            {"body": b, "createdAt": "2026-10-10T10:00:00Z"}
+            for b in reversed(bodies)] + back["comments"]["nodes"]
+        log = _replay_844({**pr, "comments": pr["comments"] + [_worker(blocker)]},
+                          back)
+        assert [entry[0] for entry in log] == ["label", "comment"], log
+
+    def test_the_fixture_is_read_never_written(self):
+        path = FIXTURES / "dre-6364.json"
+        before = path.read_bytes()
+        _replay_844(_pr_844(notes=False))
+        assert path.read_bytes() == before
+        assert reconcile.critic_comments(_fixture("DRE-6364")["pr"])
+
+
+class TestTheWholeSweepLeavesAHeldRecordAlone:
+    def test_the_held_card_path_writes_nothing_on_the_next_sweeps(self, capsys):
+        board = _Board()
+        pr = _record()
+        for _ in range(4):
+            board.sweep(pr)
+        _assert_held_for_the_operator(board.state, board.labels, board.comments,
+                                      board.pr_notes, HEAD, START_AGAIN)
+        assert reconcile.review_cap_park_unfinished(board.card()) == HEAD
+        before = (list(board.comments), list(board.pr_notes), board.state,
+                  list(board.labels))
+        capsys.readouterr()
+        for _ in range(2):
+            nudge, cmd_state, posted = board.sweep(pr)
+            nudge.assert_not_called()
+            cmd_state.assert_not_called()
+            assert posted == []
+        assert (board.comments, board.pr_notes, board.state,
+                board.labels) == before
+        assert "not repeating" in capsys.readouterr().out
+
+    def test_a_blocker_that_did_not_post_is_posted_next_sweep_still_in_review(self):
+        board = _Board()
+        pr = _record()
+        for _ in range(3):
+            board.sweep(pr)
+        board.refuse_pr_notes = 1
+        board.sweep(pr)
+        assert board.state == reconcile.REVIEW_LANE and board.pr_notes == []
+        _, _, posted = board.sweep(pr)
+        assert posted == []  # the hold and the question are not repeated
+        _assert_held_for_the_operator(board.state, board.labels, board.comments,
+                                      board.pr_notes, HEAD, START_AGAIN)
 
 
 class TestTheSweepReadsTheDispatchersReader:

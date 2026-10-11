@@ -255,15 +255,16 @@ class CanonicalConfigTest(unittest.TestCase):
         self.assertNotIn(FABLE, workhorse)
         self.assertNotIn(judgement[0], workhorse)
 
-    def test_the_policy_refuses_the_planners_top_on_the_build_ladder(self):
+    def test_the_policy_allows_the_planners_top_on_the_build_ladder(self):
+        # Refused by rule 4 until the CEO's decision of 2026-10-10 (DRE-6785):
+        # a person may lead the build group with any priced model.
         cfg = model_fixture.fixture_config()
         top = model_fixture.ladder(cfg, mf.JUDGEMENT_KIND)[0]
         self.assertEqual(mf.policy_errors(cfg, model_fixture.fixture_prices()), [])
         cfg["ladders"][cfg["default_ladder"]].insert(
             0, {"model": top, "reason": "a build role on the planner's model"})
-        errors = mf.policy_errors(cfg, model_fixture.fixture_prices())
-        self.assertTrue(
-            any(f"{top} tops the judgement ladder" in e for e in errors), errors)
+        self.assertEqual(
+            mf.policy_errors(cfg, model_fixture.fixture_prices()), [])
 
     def test_no_pipeline_role_but_the_planner_is_a_judgement_role(self):
         # DRE-3015: judgement-heavy and LOW-VOLUME. A role that runs per card
@@ -387,6 +388,10 @@ class SelectResolvesFromConfigTest(unittest.TestCase):
             expected |= set(_ladder_models(rungs))
         expected |= set(_ladder_models(cfg.get("retired") or []))
         expected |= set(_ladder_models(cfg.get("excluded") or []))
+        # And every model a project names (DRE-6785): an exception may name a
+        # model on no ladder, and its builds' markers must still be read.
+        for entry in (cfg.get("projects") or {}).values():
+            expected |= set(entry.values())
         self.assertEqual(mf.KNOWN_MODELS, expected)
         # And attribution still works for an id that left the ladder.
         self.assertEqual(
