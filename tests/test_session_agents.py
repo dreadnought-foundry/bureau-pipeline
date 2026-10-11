@@ -288,7 +288,10 @@ def _assert_answered_as_unknown(tree: Path, agent: str, group: str, read: str):
     assert model == reads["default"][0], read
     assert (model, note) == (unknown_model,
                              unknown_note.replace("nosuchagent", agent)), read
-    assert model not in reads["judgement"][:1], read
+    # The planner's TOP may lead the builders since 2026-10-10 (DRE-6785);
+    # what a session agent never reaches is a Fable on the planner's ladder.
+    fables = [m for m in reads["judgement"] if m.startswith("claude-fable")]
+    assert model not in fables, read
 
 
 @pytest.mark.parametrize("agent", SESSION)
