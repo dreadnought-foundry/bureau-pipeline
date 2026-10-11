@@ -616,6 +616,14 @@ class ConfigDrivesTheFleetTest(unittest.TestCase):
             # rule describing an overlap that no longer exists is refused, so
             # the fleet can never inherit a stale guarantee. Still one file.
             cfg["review_separation"]["rules"] = []
+            # So does any project exception naming a rung the edit took off the
+            # ladder: an exception must sit on its own kind's ladder (DRE-6633),
+            # and the committed `projects` block holds whatever the console last
+            # saved.
+            for entry in (cfg.get("projects") or {}).values():
+                for kind in [k for k, m in entry.items()
+                             if cfg["kinds"][k]["ladder"] == advisory and m != SONNET]:
+                    del entry[kind]
             path.write_text(yaml.safe_dump(cfg, sort_keys=False))
             self.assertEqual(_cli_select(tree, "critic"), SONNET)
             # …and the build fleet is untouched by that edit.

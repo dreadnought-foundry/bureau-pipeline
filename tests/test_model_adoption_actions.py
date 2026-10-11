@@ -264,11 +264,14 @@ class TestApply:
                    if l.startswith("-") and not l.startswith("---")]
         added = [l[1:] for l in difflib.unified_diff(before, after, lineterm="", n=0)
                  if l.startswith("+") and not l.startswith("+++")]
-        # The ONLY lines that change are the rung ids and the separation rule
-        # that names the moved rung; everything else is added, never rewritten.
+        # The ONLY lines that change are the rung ids, the separation rule
+        # that names the moved rung and any project exception on a replaced
+        # rung (the committed `projects` block holds whatever the console last
+        # saved); everything else is added, never rewritten.
+        keys = "|".join(["model", "built_on", *yaml.safe_load("\n".join(before))["kinds"]])
         for line in removed:
             assert re.fullmatch(
-                r"\s*-?\s*(model|built_on): claude-sonnet-(5|4-6)", line), line
+                rf"\s*-?\s*({keys}): claude-sonnet-(5|4-6)", line), line
         assert all(not l.lstrip().startswith("#") for l in removed)
         assert all("reason:" not in l for l in removed)
         assert sum(1 for l in added if re.fullmatch(r"\s*- model: claude-sonnet-6", l)) == 3

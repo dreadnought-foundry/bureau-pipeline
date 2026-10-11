@@ -521,7 +521,9 @@ its model.
 ## The console's keys and the per-project exception (DRE-6633)
 
 The console's Settings › Agents & models page reads five more keys. Only
-`projects` reaches selection (DRE-6634, below), and it ships empty.
+`projects` reaches selection (DRE-6634, below). It shipped empty, and the
+console's Save changes writes it (DRE-6624), so the model tests read the
+committed map rather than assume one (DRE-6858).
 
 - **`kinds.<kind>.label`** and **`kinds.<kind>.purpose`** — the group's name on
   the page and the one line under it. `label` defaults to the key title-cased
