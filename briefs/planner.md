@@ -650,8 +650,8 @@ without writing, so your own check leaves the cards alone):
 Nine proofs stood open on 2026-10-10 because a criterion asked for something a
 dispatched proof run could never observe, or read the result of an operator
 step the proof was not blocked on — `standards/card-quality.md` names them and
-states the rule. The plan critic refuses that plan now, so write every
-criterion as a reading the run can make:
+states the rule. The plan critic refuses that plan, so write every criterion
+as a reading the run can make:
 
 - **Read `config/proof-reach.json` before you write one** (in a product repo,
   `.bureau-pipeline/config/proof-reach.json`). It declares what a proof run can

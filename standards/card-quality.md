@@ -501,8 +501,9 @@ DRE-5662, DRE-6204 and DRE-5409. Each epic built what it promised. Each proof
 then ended the same way — a record the critic approved, a gate that held it, a
 re-run that read the same thing, and a question for the CEO — because a
 criterion asked for something a dispatched proof run could never observe, or
-read the result of an operator step the proof was not blocked on. The
-criterion was wrong on the day it was written, so that is when it is caught.
+read the result of an operator step the proof was not blocked on. Nearly every
+one of those faults was readable on the day the card was written, so that is
+when it is caught.
 
 **What a proof run can read is declared once, in `config/proof-reach.json`**
 (DRE-6605), and `scripts/proof_reach.py` is its one reader. Read it there: what
