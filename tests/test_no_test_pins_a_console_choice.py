@@ -79,6 +79,10 @@ _FROZEN_CAUTIONS = (
 _FROZEN_AGENTS = (
     "The agents are read in the frozen fixture tree the test builds from "
     "tests/fixtures/model-config-frozen, which no console save touches.")
+_FROZEN_CHANGES = (
+    "The change set is applied to the frozen fixture's models.yaml of "
+    "2026-10-10 and the ids and projects are read back from the text it "
+    "writes, which no console save touches.")
 _ABSENT_KEY = (
     "The test deletes `projects` from a frozen-fixture config and asserts the "
     "normalizer's default for an absent key, not the committed map.")
@@ -148,6 +152,16 @@ ALLOWED: dict[str, str] = {
     "tests/test_model_caution.py::test_the_nine_cautioned_pairs_of_2026_10_10": _FROZEN_CAUTIONS,
     "tests/test_model_config.py::ConfigDrivesTheFleetTest.test_selector_degrades_to_the_mirror_when_the_config_is_unreadable":
         _FROZEN_AGENTS,
+    "tests/test_model_config_change.py::test_a_project_builder_on_a_reviewer_model_says_where_it_is_reviewed":
+        _FROZEN_CHANGES,
+    "tests/test_model_config_change.py::test_clearing_the_only_exception_leaves_projects_empty_and_sets_aside":
+        _FROZEN_CHANGES,
+    "tests/test_model_config_change.py::test_replacing_a_project_choice_sets_the_replaced_model_aside_again":
+        _FROZEN_CHANGES,
+    "tests/test_model_config_change.py::test_reviewers_on_opus_5_5_say_where_an_opus_build_is_reviewed":
+        _FROZEN_CHANGES,
+    "tests/test_model_config_change.py::test_the_dre_6789_ids_are_where_the_frozen_file_puts_them":
+        _FROZEN_CHANGES,
     "tests/test_model_effort.py::PriceTest.test_opus_5_5_is_declared_at_4_and_20": _PRICE,
     "tests/test_model_effort.py::PriceTest.test_sonnet_5_5_is_declared_at_the_price_of_sonnet_5":
         _PRICE,

@@ -261,10 +261,12 @@ CARD_PR_NO_PR_STUB = '''#!/usr/bin/env python3
 print("\\t")
 '''
 
-BLOCKER = "/tmp/agent-blocker.txt"
-ESCALATION = "/tmp/agent-escalation.txt"
-HANDBACK = "/tmp/agent-handback.txt"
-EXIT_FILES = (HANDBACK, ESCALATION, BLOCKER)
+#: The agent's notes, by name. The script reads them from `AGENT_NOTES_DIR`
+#: (DRE-6961), and each test points it at a directory of its own: a real run
+#: leaves it unset and reads /tmp, which two copies of this suite would share.
+BLOCKER = "agent-blocker.txt"
+ESCALATION = "agent-escalation.txt"
+HANDBACK = "agent-handback.txt"
 
 FIXTURES = os.path.join(ROOT, "tests", "fixtures", "blocker-reasons.json")
 PARKED = " — parked in Backlog"
@@ -275,10 +277,15 @@ ATTESTED = (
 )
 
 
-def _clear_exit_files():
-    for path in EXIT_FILES:
-        if os.path.exists(path):
-            os.remove(path)
+def notes_with(tc, notes: dict) -> str:
+    """A directory of this test's own holding `notes` (name → text), for the
+    script's `AGENT_NOTES_DIR`."""
+    directory = tempfile.mkdtemp()
+    tc.addCleanup(shutil.rmtree, directory, ignore_errors=True)
+    for name, text in notes.items():
+        with open(os.path.join(directory, name), "w", encoding="utf-8") as fh:
+            fh.write(text)
+    return directory
 
 
 def _quoted(comment: str) -> str:
@@ -291,12 +298,9 @@ class ABlockerIsClassifiedBeforeItParks(unittest.TestCase):
     """The blocker branch, driven through the file with no PR to report."""
 
     def _run(self, exit_files: dict):
-        _clear_exit_files()
-        self.addCleanup(_clear_exit_files)
-        for path, text in exit_files.items():
-            with open(path, "w", encoding="utf-8") as fh:
-                fh.write(text)
-        proc, journal = run_pr_opened(self, ["bash", SCRIPT], card_pr=CARD_PR_NO_PR_STUB)
+        self.notes = notes_with(self, exit_files)
+        proc, journal = run_pr_opened(self, ["bash", SCRIPT], card_pr=CARD_PR_NO_PR_STUB,
+                                      env_extra={"AGENT_NOTES_DIR": self.notes})
         self.assertEqual(0, proc.returncode, proc.stderr + proc.stdout)
         posted = [e["args"][1] for e in journal if e["op"] == "comment"]
         moved = [e["args"] for e in journal if e["op"] in ("advance", "state")]
@@ -385,7 +389,7 @@ class ABlockerIsClassifiedBeforeItParks(unittest.TestCase):
         self._assert_asked(posted, moved)
         self.assertIn("Which of A or B should ship first?", posted[0])
         self.assertNotIn("the API does not exist", posted[0])
-        with open(ESCALATION, encoding="utf-8") as fh:
+        with open(os.path.join(self.notes, ESCALATION), encoding="utf-8") as fh:
             self.assertEqual("Which of A or B should ship first?", fh.read())
 
     def test_a_question_with_nothing_to_ask_parks_for_the_sweep(self):

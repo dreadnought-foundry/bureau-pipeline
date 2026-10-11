@@ -374,13 +374,22 @@ set -e
 #   last-test-run` over the runs listing already read: the newest
 #   `pull_request` run at a non-review path, so a review run created later on
 #   `edited` never moves it. Its record does not name `main`'s tip, so the tip
-#   at its `created_at` is read (`commits?until=`), then the compare from it
-#   to `main`, handed over as --since-run-file. A head with no test run is
+#   at its `created_at` is read, then the compare from it to `main`, handed
+#   over as --since-run-file. A head with no test run is
 #   `{"no_test_run": true}`, which merges as today; a failed read is `{}`,
 #   which waits. The key off or absent reads nothing more. On `rule=new-tests`,
 #   read by its key because `prefix=` is empty there, the same pinned update
 #   runs and the note is `Merge gate: refreshed for new tests onto <tip>`,
 #   the receipt that holds the rule to one refresh per pull request.
+#
+# DRE-6966 (2026-10-11). bureau-pipeline #1032 merged without the refresh the
+#   rule owed it. The tip was read as the newest-dated commit `main` held
+#   before the run began, and #1029, merged during the run, had a branch
+#   commit written before it: that commit was read as the tip, and #1029's
+#   own change to scripts/reconcile.py dropped out of the comparison. The tip
+#   is now `merge_gate.py tip-at` over `main`'s commit listing, walked on its
+#   first-parent line, where every commit is a merge into `main` or a direct
+#   push. `sha=none` keeps `{}`, which waits.
 
 set -euo pipefail
 
@@ -656,9 +665,21 @@ if [ "$BEHIND" -gt 0 ] && [ -f .github/bureau/merge-recheck.json ]; then
     if [ "$ANCHOR" = "none" ]; then
       echo '{"no_test_run": true}' > /tmp/since-run.json
     elif [ -n "$ANCHOR" ]; then
-      TIP_THEN=$(gh api "repos/$REPO_FULL/commits?sha=$BASE&until=$ANCHOR&per_page=1" 2>/dev/null \
-        | python3 -c 'import json, re, sys; c = json.load(sys.stdin); s = c[0].get("sha") if isinstance(c, list) and c and isinstance(c[0], dict) else None; print(s if isinstance(s, str) and re.fullmatch("[0-9a-f]{40}", s) else "")' 2>/dev/null || true)
-      if [ -n "$TIP_THEN" ]; then
+      # $BASE's tip at the anchor, walked on its first-parent line (DRE-6966):
+      # 100 commits a page, a next page only while a full one has not reached
+      # the anchor, at most three. `sha=none` or a failed read leaves `{}`.
+      TIP_THEN=""
+      echo '[]' > /tmp/main-commits.json
+      for PAGE in 1 2 3; do
+        gh api "repos/$REPO_FULL/commits?sha=$BASE&per_page=100&page=$PAGE" > /tmp/main-commits-page.json 2>/dev/null || break
+        python3 -c 'import json, sys; page = json.load(open(sys.argv[2])); assert isinstance(page, list); json.dump(json.load(open(sys.argv[1])) + [page], open(sys.argv[1], "w"))' \
+          /tmp/main-commits.json /tmp/main-commits-page.json 2>/dev/null || break
+        TIP_THEN=$(python3 .bureau-pipeline/scripts/merge_gate.py tip-at --commits-file /tmp/main-commits.json --at "$ANCHOR" 2>/dev/null \
+          | grep -m1 '^sha=' | cut -d= -f2- || true)
+        [ "$TIP_THEN" = "none" ] || break
+        python3 -c 'import json, sys; sys.exit(0 if len(json.load(open(sys.argv[1]))) >= 100 else 1)' /tmp/main-commits-page.json 2>/dev/null || break
+      done
+      if [ -n "$TIP_THEN" ] && [ "$TIP_THEN" != "none" ]; then
         gh api "repos/$REPO_FULL/compare/$TIP_THEN...$BASE" > /tmp/since-run.json 2>/dev/null \
           || echo '{}' > /tmp/since-run.json
       fi
