@@ -102,6 +102,17 @@ fails the run, after every receipt is written. From 02:26 to 08:45 PT on
 2026-10-10 the check could not run at all, and every run held `stable` behind
 thirteen merges while finishing green — and nothing in this repository alarms
 on a quiet channel, so the red run is the signal.
+
+THE UNIT SUITE STARTS IT TOO (DRE-6993)
+---------------------------------------
+`with_unit_suite` (DRE-6968) refuses a commit whose own `Pipeline Tests` run
+on `main` is red, still running or unreadable, and since DRE-6993 the
+workflow hands it that run on every route and starts again when the suite
+ends. A run started by the suite carries the SUITE's conclusion, so
+`--woken-by` names the workflow that started it: for `UNIT_SUITE` the
+conclusion is not handed to `evaluate` — a red suite read as `harness-failed`
+would name the wrong run — and the harness proof is the commit's own
+`integration-harness` status, as on the by-hand route.
 """
 
 from __future__ import annotations
@@ -847,7 +858,21 @@ def main(argv: list[str] | None = None) -> int:
              "that is absent or not JSON proves nothing. Not given, the unit "
              "suite is not weighed.",
     )
+    parser.add_argument(
+        "--woken-by", default=None,
+        help=f"the name of the workflow whose run started this one (DRE-6993). "
+             f"{UNIT_SUITE!r} means --conclusion is the unit suite's, so it is "
+             "not read as the harness's: the harness proof is then the "
+             "commit's own status, as on the by-hand route. Absent, empty or "
+             "the harness's name, --conclusion is the harness run's.",
+    )
     args = parser.parse_args(argv)
+    # A unit-suite start (DRE-6993): the conclusion it carries says nothing
+    # about the harness, and a red suite reported as `harness-failed` would
+    # send a reader to the wrong run. `with_unit_suite` weighs the suite.
+    conclusion = args.conclusion or None
+    if (args.woken_by or "").strip() == UNIT_SUITE:
+        conclusion = None
 
     try:
         combined = json.loads(open(args.statuses_file).read() or "{}")
@@ -860,7 +885,7 @@ def main(argv: list[str] | None = None) -> int:
         args.sha,
         hold=args.hold,
         ancestry=args.ancestry,
-        conclusion=(args.conclusion or None),
+        conclusion=conclusion,
         branch=(args.branch or None),
         manual=args.manual,
         force=args.force,
