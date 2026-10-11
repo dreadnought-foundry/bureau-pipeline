@@ -87,6 +87,9 @@ _TREE_FILES = (
     # The generator judges each published move as the change script does, and
     # renders its reason with the change script's words (DRE-6833).
     "scripts/model_config_change.py",
+    # The words a group's choice is shown with (DRE-6786), which the
+    # generator imports.
+    "scripts/model_choice.py",
     "config/models.yaml",
     # Schema validation reads the DECLARED price of a rung sitting below the
     # workhorse fallback (DRE-3880), so the throwaway tree carries it too.

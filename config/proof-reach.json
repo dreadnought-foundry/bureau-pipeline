@@ -95,6 +95,12 @@
       "printed_by": "scripts/proof_browser.py",
       "constant": "SUMMARY",
       "when": "every proof run, in its log and its step summary, from proof-task.yml's local-run step"
+    },
+    {
+      "tag": "github-calls:",
+      "printed_by": "scripts/github_calls_reading.py",
+      "constant": "TAG",
+      "when": "every job a wiring card places the emit step in, one line per login, since DRE-6914"
     }
   ],
   "causes": [

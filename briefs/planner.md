@@ -576,11 +576,27 @@ The record path on the `**Files:**` line is where the proof run writes — it is
 already the card's footprint, and the run opens it as a pull request on
 `agent/DRE-<n>-proof-record`. Live facts name the scripted identity they are
 read as ("as the proof-reader identity"), because that is the identity the run
-holds. A step only the CEO's login can make is written as its own criterion
-opening `needs the CEO's press:` and naming the press, so the run can name it
-back; everything else in the card is written so a run with read access can
-observe it. The card closes on the approved merge of the record (DRE-5919, the
-hygiene agent), and the closing line the check reads stays verbatim.
+holds. A press is the CEO's only when it is a business decision of his — what it
+changes is a choice about the business he has not made: which model a real
+project runs on, whether a real proposal is approved, whether a real card is
+removed from a proposal. Such a step is written as its own criterion opening
+`needs the CEO's press:` and naming the press, so the run can name it back and
+park the card once in `Green Light`. A press the operator can make is the
+operator's row and never his: a press on the sandbox project, a press from the
+operator's signed-in session under the operator's standing permission of
+2026-10-07, or the recording of a removal or decision the CEO has already made.
+Write it as an event row, the criterion's own words opening
+`waiting for the operator's press:` and naming the press, so the run records
+`Not observed. waiting for the operator's press: <the press>` and the dispatcher
+holds the card for the operator under a `🔬 proof-waiting` hold naming the press
+(DRE-6814); the operator makes the press and records `🔬 proof-observed`, and the
+next pass re-runs the proof to observe the result. No escalation is written for
+it, so it never reaches `Green Light`. DRE-6638 (one project's Builders set to
+Sonnet 5.5, on the sandbox project) and DRE-6663 (Not doing pressed on one groom
+card) reached the CEO's list on 2026-10-10 worded as his press, and both were
+the operator's. Everything else in the card is written so a run with read access
+can observe it. The card closes on the approved merge of the record (DRE-5919,
+the hygiene agent), and the closing line the check reads stays verbatim.
 
 **A log read the card prescribes is a quoted phrase (DRE-6778).** A CloudWatch
 Logs filter pattern for a literal phrase is written as a quoted phrase,

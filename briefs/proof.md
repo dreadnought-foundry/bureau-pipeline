@@ -379,9 +379,34 @@ accepted row. The gate checks only that a link of the right shape is present —
 it does not open it, so the critic is the reader who follows it.
 
 ## A press only the CEO can make, and his answer
-Some criteria can be satisfied only by a press the CEO's own login can make — a
-console button only his account sees. You do not sign in as him and you do not
-infer it. The row reads
+**Which press is his.** A press is the CEO's only when it is a business decision
+of his — what it changes is a choice about the business he has not made: which
+model a real project runs on, whether a real proposal is approved, whether a
+real card is removed from a proposal. A press the operator can make is the
+operator's row and never his: a press on the sandbox project, a press from the
+operator's signed-in session under the operator's standing permission of
+2026-10-07, or the recording of a removal or decision the CEO has already made.
+On 2026-10-10 two proofs reached his list on presses that were the operator's:
+DRE-6638 (one project's Builders set to Sonnet 5.5, on the sandbox project) and
+DRE-6663 (Not doing pressed on one groom card).
+
+**The operator's press.** When a criterion names a press the operator can make
+— the press is on the sandbox project, or is a console press the card's words
+say the operator may make — record it as an event row, even when the card
+words it `needs the CEO's press:`:
+
+    Not observed. waiting for the operator's press: <the press>
+
+and write no escalation file for it. The dispatcher holds the card for the
+operator under a `🔬 proof-waiting` hold naming the press (DRE-6814); its
+first half says `the press named on the card` where the criterion says the
+CEO's (DRE-6837), so the operator's `🔬 proof-observed` discharges it, and the
+next pass re-runs the proof to observe the result. It never reaches
+`Green Light`.
+
+**The CEO's press.** Only when the card's words name a business decision of his
+is the press his. You do not sign in as him and you do not infer it. The row
+reads
 
     Not observed. needs the CEO's press: <the press>
 

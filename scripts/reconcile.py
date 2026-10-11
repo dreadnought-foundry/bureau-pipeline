@@ -2618,6 +2618,161 @@ def _hand_work_age(card: dict, reason: str) -> str:
     return f"; in Hand-work {hours}h, past {limit} — alarmed {dead_run.pacific(datetime.now(UTC))}"
 
 
+def _held_for_operator(card: dict) -> tuple[dict | None, str, str]:
+    """`(clock, kind, why_not)` for one proof card In Review, off its window.
+
+    `clock` is the comment that makes the card held for the operator and
+    `kind` names it — `cause hold`, `operator's-press hold` or
+    `review-cap-spent stamp`; with no such comment `clock` is None and
+    `why_not` says why ("" when the card carries no hold of any kind).
+
+    A `🔬 proof-waiting` hold is the operator's when its needs half — the text
+    after ` — needs ` — OPENS `proof_cause_park.CAUSE_HOLD_OPENING` (DRE-6837's
+    park) or `proof_dispatch.OPERATOR_PRESS` (the dispatcher's `_waiting` over
+    a `waiting for the operator's press` row). Only the opening is read: the
+    dispatcher joins several events with `; ` in the record's row order, so a
+    hold naming the operator's press first is the operator's and one naming a
+    dated event first is the event's. A needs half naming
+    `proof_record.CEO_PRESS` is the return branch's; any other is an event
+    wait, and neither alarms on its own.
+
+    The NEWEST operator's hold is the clock, and three things after it spend
+    it: a `🔬 proof-observed`, a newer operator's hold (which is then the
+    clock), and a `🔬 proof-run:` dispatch receipt (`proof_run_state.receipt`,
+    the re-run an amended record earned). A newer EVENT hold spends nothing —
+    in DRE-6694's shape the dispatcher posts it after the cause hold for the
+    record's other rows, and the operator's question still stands. A standing
+    `review-cap-spent` stamp (`hold.reason_of`, DRE-6841) holds too; when both
+    stand the newer of the two is the clock.
+    """
+    import proof_cause_park  # noqa: PLC0415 — the hold grammar, spelled once
+    import proof_dispatch  # noqa: PLC0415 — proof_dispatch imports this module
+    import proof_record  # noqa: PLC0415
+    import proof_run_state  # noqa: PLC0415
+
+    nodes = linear_ops.window_nodes(card.get("comments"))
+    first = lambda n: (n.get("body") or "").strip().split("\n", 1)[0].strip()  # noqa: E731
+    operator, spent, newest = None, "", None
+    for node in nodes:
+        line = first(node)
+        if line.startswith(proof_record.HOLD_MARK) and node.get("createdAt"):
+            needs = line.partition(" — needs ")[2].strip()
+            newest = needs
+            if needs.startswith(proof_cause_park.CAUSE_HOLD_OPENING):
+                operator, spent = (node, "cause hold"), ""
+            elif needs.startswith(proof_dispatch.OPERATOR_PRESS):
+                operator, spent = (node, "operator's-press hold"), ""
+        elif operator and line.startswith(proof_record.OBSERVED_MARK):
+            spent = "a 🔬 proof-observed followed it"
+        elif operator and proof_run_state.receipt(line) is not None:
+            spent = "re-run dispatched after it"
+    standing = [operator] if operator and not spent else []
+    labels = (card.get("labels") or {}).get("nodes") or []
+    bodies = [node.get("body") or "" for node in nodes]
+    if hold.reason_of(labels, bodies) == "review-cap-spent":
+        stamp = hold.read_stamp(bodies)["line"]
+        stamped = next((n for n in reversed(nodes) if first(n) == stamp), None)
+        if stamped is not None and stamped.get("createdAt"):
+            standing.append((stamped, "review-cap-spent stamp"))
+    if standing:
+        node, kind = max(standing, key=lambda held: held[0].get("createdAt") or "")
+        return node, kind, ""
+    if operator:
+        return None, "", f"its {operator[1]} of {_pt(operator[0]['createdAt'])} is spent: {spent}"
+    if newest is None:
+        return None, "", ""
+    if proof_record.CEO_PRESS in newest:
+        return None, "", "its hold waits on the CEO's press: the return branch's"
+    return None, "", f"its hold waits on an event ({newest}), not the operator"
+
+
+def alarm_held_proofs(cards: list[dict]) -> None:
+    """A `PROOF:` card held In Review for the operator gets the Hand-work bound
+    and the Hand-work receipt (DRE-6852).
+
+    DRE-6837, DRE-6841 and DRE-6842 leave a stopped proof card in `In Review`
+    for the operator — under a cause hold, a hold for the operator's press, or
+    the sweep's `review-cap-spent` stamp on a proof record — and `In Review`
+    had no clock: `WATCHDOG_LANES` does not hold it, and the review nudge reads
+    pull requests, not holds. So a held proof card could wait with nobody told.
+
+    `cards` is `main`'s `mine`, the board read's own cards: this repo's
+    `In Review` cards whose title opens `PROOF:` are read, off the comment
+    window that read carries — no request of its own. Which hold makes a card
+    held, and which spends it, is `_held_for_operator`'s; the clock is that
+    hold's own time, never the lane entry and never `updatedAt`. Past
+    `config/hand-work-age.json`'s `hours` (read on every call, as
+    `_hand_work_age` reads it) one `hand-work-overdue` comment is posted per
+    hold, for the operator — an alarm newer than the hold is the once. The
+    standing cards in that file and the CEO's own `HAND_BUILT_LABEL` card never
+    alarm, for the Hand-work clock's reason. No label, no lane move, nothing in
+    Green Light, and only a failed write counts against the sweep.
+
+    One `held-proof:` line per proof card with a hold, and `held-proof: nothing
+    held` when no card is held for the operator.
+    """
+    import proof_record  # noqa: PLC0415 — the one cut a proof line is quoted by
+
+    with open(HAND_WORK_AGE_CONFIG, encoding="utf-8") as fh:
+        rule = json.load(fh)
+    limit = int(rule["hours"])
+    standing = {s["card"] for s in rule["standing"]}
+    at = lambda iso: datetime.fromisoformat(iso.replace("Z", "+00:00"))  # noqa: E731
+    any_held = False
+    for card in cards:
+        if (card_repo(card) != REPO_SLUG
+                or (card.get("state") or {}).get("name") != REVIEW_LANE
+                or not proof_and_demo.is_proof(card.get("title"))):
+            continue
+        ident = card["identifier"]
+        clock, kind, why_not = _held_for_operator(card)
+        if clock is None:
+            if why_not:
+                print(f"held-proof: {ident} not held for the operator — {why_not}")
+            continue
+        any_held = True
+        held_at = clock["createdAt"]
+        hours = int(age_minutes(held_at) // 60)
+        marks = {(lbl.get("name") or "").lower()
+                 for lbl in (card.get("labels") or {}).get("nodes", [])}
+        exempt = ("a standing card" if ident in standing
+                  else "the CEO's own hand-built card" if HAND_BUILT_LABEL.lower() in marks
+                  else "")
+        if exempt:
+            print(f"held-proof: {ident} held In Review for the operator {hours}h — "
+                  f"never alarms ({exempt})")
+            continue
+        said = f"(clock: its {kind} of {_pt(held_at)})"
+        if age_minutes(held_at) < limit * 60:
+            due = dead_run.pacific(at(held_at) + timedelta(hours=limit))
+            print(f"held-proof: {ident} held In Review for the operator {hours}h of "
+                  f"{limit}, alarms at {due} {said}")
+            continue
+        nodes = linear_ops.window_nodes(card.get("comments"))
+        alarmed = [n["createdAt"] for n in nodes
+                   if (n.get("body") or "").lstrip().startswith("🚨 hand-work-overdue:")
+                   and n.get("createdAt") and at(n["createdAt"]) > at(held_at)]
+        past = f"held-proof: {ident} held In Review for the operator {hours}h, past {limit}"
+        if alarmed:
+            print(f"{past} — alarmed {_pt(alarmed[-1])} {said}")
+            continue
+        quoted = (clock.get("body") or "").strip().split("\n", 1)[0].strip()
+        try:
+            linear_ops.cmd_comment(ident, pipeline_act.receipt("hand-work-overdue", (
+                f"🚨 hand-work-overdue: {ident} has waited In Review for the operator "
+                f"{hours} hours, past its {limit} — the operator's to look at.\n"
+                f"Kind: a PROOF: card held for the operator — "
+                f"{proof_record._cut(quoted, 120)}.")))
+        except Exception as e:  # noqa: BLE001 — recorded like every other failed write
+            _write_failures.append(f"{ident} hand-work-overdue alarm: {e}")
+            print(f"ERROR: hand-work-overdue alarm on {ident}: {e}", file=sys.stderr)
+            print(f"{past} — the alarm could not be posted {said}")
+            continue
+        print(f"{past} — alarmed {dead_run.pacific(datetime.now(UTC))} {said}")
+    if not any_held:
+        print("held-proof: nothing held")
+
+
 def flag_stranded() -> set[str]:
     """DRE-1993 watchdog: flag active-lane cards with no evidence of work.
 
@@ -14722,6 +14877,17 @@ def main(
         # (BoardHeld) and the promotion is not entered at all.
         mine, epics = [], set()
     if not promote_only:
+        # A proof card held In Review for the operator gets the Hand-work bound
+        # (DRE-6852). AFTER `board_read` and over `mine`, so the pass reads only
+        # the cards that read already narrowed to this repo, with their comment
+        # windows, and spends no request: the one shared read stays charged to
+        # `board_read`, and a held or idle read hands it an empty list.
+        try:
+            with _phase("alarm_held_proofs"):
+                alarm_held_proofs(mine)
+        except Exception as e:  # noqa: BLE001 — one phase must not stop the sweep
+            _write_failures.append(f"held-proof alarm: {e}")
+            print(f"ERROR: alarm_held_proofs: {e}", file=sys.stderr)
         with _phase("close_finished_epics"):
             close_finished_epics(epics)
         # The epic line (DRE-5152): the label kept honest and the last starts

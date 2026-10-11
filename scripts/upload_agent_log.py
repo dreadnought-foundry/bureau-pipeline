@@ -77,7 +77,9 @@ so neither an `AWS_ENDPOINT_URL` export nor a `[default] endpoint_url` in
 the JWT and the transcript to whatever host it names — survives into it.
 `tests/test_agent_log_upload.py` pins every one of those claims against the
 real process, because a claim in a docstring that no test reads is a claim that
-stops being true quietly.
+stops being true quietly. That path is two functions, `oidc_credential` and
+`oidc_put`, exposed for import: `github_calls_reading.py` (DRE-6914) puts its
+reading through them rather than through a copy.
 
 WHAT IS STILL TRUE AND NOT CLOSED HERE: the agent's own shell runs in the same
 job, which holds `id-token: write`, and the upload role's trust carries no
@@ -304,7 +306,8 @@ def effort_metadata(value):
 
 def put_object(aws: str, body: Path, bucket: str, key: str, role: str,
                token_file: Path, region: str, session: str,
-               scratch_home: Path, effort=None) -> None:
+               scratch_home: Path, effort=None,
+               content_type: str = "application/gzip") -> None:
     """ONE single-part put, write-once. The CLI does the web-identity assume
     itself from the token file, so no credential is ever an argument.
 
@@ -315,7 +318,8 @@ def put_object(aws: str, body: Path, bucket: str, key: str, role: str,
 
     `effort`, already checked by `effort_metadata`, is one more argument on
     this same call — never a second write, which the write-once rule would
-    refuse anyway.
+    refuse anyway. `content_type` is the gzipped log's unless a caller of
+    `oidc_put` says otherwise (DRE-6914's JSON reading).
     """
     scratch_home.mkdir(parents=True, exist_ok=True)
     env = {name: os.environ[name] for name in AWS_ENV_KEEP if name in os.environ}
@@ -337,7 +341,7 @@ def put_object(aws: str, body: Path, bucket: str, key: str, role: str,
          "--key", key,
          "--body", str(body),
          "--if-none-match", "*",
-         "--content-type", "application/gzip",
+         "--content-type", content_type,
          *(["--metadata", f"effort={effort}"] if effort else []),
          "--output", "json"],
         capture_output=True, text=True, env=env)
@@ -364,7 +368,70 @@ def put_object(aws: str, body: Path, bucket: str, key: str, role: str,
             f"the store refused the put of {key}: "
             f"{detail[-1] if detail else f'exit {result.returncode}'}",
             loud=True)
-    print(f"agent log kept: s3://{bucket}/{key} ({body.stat().st_size} bytes gzipped)")
+
+
+def oidc_credential(environ=None) -> tuple[str, str, str]:
+    """`(token_url, request_token, aws)` for `oidc_put`, or a Gap naming which
+    is missing — the OIDC grant first, then the CLI, the order `upload` checks
+    them in. Both are ordinary gaps: the grant is the calling stub's to make,
+    and the self-hosted minis may have no CLI."""
+    environ = os.environ if environ is None else environ
+    token_url = environ.get("ACTIONS_ID_TOKEN_REQUEST_URL", "")
+    token_request = environ.get("ACTIONS_ID_TOKEN_REQUEST_TOKEN", "")
+    if not token_url or not token_request:
+        raise Gap("this job was given no OIDC token, so it cannot assume the "
+                  "upload role. The CALLING STUB grants `id-token: write` "
+                  "(DRE-4348); a stub that does not grant it reads this way")
+    aws = shutil.which("aws")
+    if not aws:
+        raise Gap("no AWS CLI on this runner (the self-hosted minis may not "
+                  "have one) — install it to keep this repo's agent logs")
+    return token_url, token_request, aws
+
+
+def oidc_put(*, body: Path, key: str, slug: str, session: str,
+             runner_temp: Path, token_url: str, token_request: str, aws: str,
+             content_type: str = "application/gzip", effort=None,
+             stem: str = "agent-log") -> None:
+    """ONE write-once put of `body` at `key`, on the repo's own upload role,
+    over the run's OIDC login — the whole credential path, exposed for import
+    (DRE-6914) so a second uploader reuses it rather than copying it.
+
+    The token file is `<stem>-oidc.jwt` and the scratch HOME `<stem>-home`,
+    both under `runner_temp`, and both are gone when this returns, whatever
+    happened. Every refusal raises Gap; nothing is printed on success, so each
+    caller says what it kept in its own words.
+    """
+    token_file = runner_temp / f"{stem}-oidc.jwt"
+    scratch_home = runner_temp / f"{stem}-home"
+    try:
+        # Created 0600 by the open itself, never written and then chmod'ed: on
+        # a shared self-hosted runner the gap between the two is long enough to
+        # read, and an existing file would keep its own mode through a truncate.
+        token = fetch_id_token(token_url, token_request)
+        token_file.unlink(missing_ok=True)
+        with os.fdopen(os.open(token_file, os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+                               0o600), "w") as handle:
+            handle.write(token)
+        put_object(
+            aws=aws, body=body, bucket=os.environ.get("BUREAU_AGENT_LOG_BUCKET") or BUCKET,
+            key=key,
+            role=role_arn(slug, os.environ.get("BUREAU_AGENT_LOG_ACCOUNT") or ACCOUNT),
+            token_file=token_file,
+            region=os.environ.get("BUREAU_AGENT_LOG_REGION") or REGION,
+            session=session,
+            scratch_home=scratch_home,
+            effort=effort,
+            content_type=content_type)
+    finally:
+        try:
+            token_file.unlink()
+        except OSError:
+            pass
+        # The scratch HOME holds the CLI's assumed-role credential cache. On a
+        # shared mini every job is the same unix user, so it goes with the
+        # token rather than waiting for the runner to be wiped.
+        shutil.rmtree(scratch_home, ignore_errors=True)
 
 
 def _summary(line: str) -> None:
@@ -437,17 +504,7 @@ def upload(args, secrets: str) -> None:
         raise Gap(f"{repository or 'this repo'} is not in config/repo-map.json, "
                   f"so it has no upload role")
 
-    token_url = os.environ.get("ACTIONS_ID_TOKEN_REQUEST_URL", "")
-    token_request = os.environ.get("ACTIONS_ID_TOKEN_REQUEST_TOKEN", "")
-    if not token_url or not token_request:
-        raise Gap("this job was given no OIDC token, so it cannot assume the "
-                  "upload role. The CALLING STUB grants `id-token: write` "
-                  "(DRE-4348); a stub that does not grant it reads this way")
-
-    aws = shutil.which("aws")
-    if not aws:
-        raise Gap("no AWS CLI on this runner (the self-hosted minis may not "
-                  "have one) — install it to keep this repo's agent logs")
+    token_url, token_request, aws = oidc_credential()
 
     staging = runner_temp / "agent-log"
     scrubbed = run_scrub(log, staging, secrets, SCRUB)
@@ -470,35 +527,12 @@ def upload(args, secrets: str) -> None:
             f"store refuses anything but a single-part put, so a log this big "
             f"is not uploaded", loud=True)
 
-    token_file = runner_temp / "agent-log-oidc.jwt"
-    scratch_home = runner_temp / "agent-log-home"
-    try:
-        # Created 0600 by the open itself, never written and then chmod'ed: on
-        # a shared self-hosted runner the gap between the two is long enough to
-        # read, and an existing file would keep its own mode through a truncate.
-        token = fetch_id_token(token_url, token_request)
-        token_file.unlink(missing_ok=True)
-        with os.fdopen(os.open(token_file, os.O_WRONLY | os.O_CREAT | os.O_EXCL,
-                               0o600), "w") as handle:
-            handle.write(token)
-        put_object(
-            aws=aws, body=body, bucket=os.environ.get("BUREAU_AGENT_LOG_BUCKET") or BUCKET,
-            key=key,
-            role=role_arn(slug, os.environ.get("BUREAU_AGENT_LOG_ACCOUNT") or ACCOUNT),
-            token_file=token_file,
-            region=os.environ.get("BUREAU_AGENT_LOG_REGION") or REGION,
-            session=f"agent-log-{job}-{run_id}",
-            scratch_home=scratch_home,
-            effort=effort_metadata(args.effort))
-    finally:
-        try:
-            token_file.unlink()
-        except OSError:
-            pass
-        # The scratch HOME holds the CLI's assumed-role credential cache. On a
-        # shared mini every job is the same unix user, so it goes with the
-        # token rather than waiting for the runner to be wiped.
-        shutil.rmtree(scratch_home, ignore_errors=True)
+    oidc_put(body=body, key=key, slug=slug, session=f"agent-log-{job}-{run_id}",
+             runner_temp=runner_temp, token_url=token_url,
+             token_request=token_request, aws=aws,
+             effort=effort_metadata(args.effort))
+    bucket = os.environ.get("BUREAU_AGENT_LOG_BUCKET") or BUCKET
+    print(f"agent log kept: s3://{bucket}/{key} ({body.stat().st_size} bytes gzipped)")
 
 
 def main(argv=None, stdin=None) -> int:

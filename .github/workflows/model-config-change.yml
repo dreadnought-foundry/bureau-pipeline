@@ -32,9 +32,14 @@
 #
 # The model tests run on the branch and their result is stated in the pull
 # request, never a reason to withhold it — exactly as model-adoption.yml runs
-# them. Several of them pin today's ladders (the workhorse ladder leads with
-# Opus 5.5, for one), so a legitimate change can turn one red; the critic and
-# the fix agent own that repair on an `agent/` branch.
+# them. No model test pins a choice the console can change: a rule is tested
+# against the frozen fixture at `tests/fixtures/model-config-frozen/`
+# (`model_fixture.FIXTURE_DIR`), and
+# `tests/test_console_change_keeps_the_suite_green.py` is written to prove every
+# operation leaves every model-reading test green (its per-case runs skip in the
+# unit parts and run in the `console change keeps the suite green` job once
+# DRE-6873 lands) — so a red result on a change pull request is a defect in the
+# change or in a test, never the expected cost of a change the console allows.
 #
 # It declares no act and posts no receipt (DRE-6582): it writes a branch and a
 # pull request and nothing else, and comments on neither.
@@ -191,8 +196,15 @@ jobs:
           python3 scripts/sync_model_config.py --check
 
       # INFORMATIONAL, as in model-adoption.yml. A red result is stated in the
-      # pull request, not a reason to withhold it: several of these pin
-      # today's ladders, and the critic and the fix agent own the repair.
+      # pull request, not a reason to withhold it. No model test pins a choice
+      # the console can change: a rule is tested against the frozen fixture at
+      # `tests/fixtures/model-config-frozen/` (`model_fixture.FIXTURE_DIR`), and
+      # `tests/test_console_change_keeps_the_suite_green.py` is written to prove
+      # every operation leaves every model-reading test green (its per-case
+      # runs skip in the unit parts and run in the `console change keeps the
+      # suite green` job once DRE-6873 lands) — so a red result on a change pull
+      # request is a defect in the change or in a test, never the expected cost
+      # of a change the console allows.
       - name: Run the model tests (informational)
         id: tests
         if: steps.open.outputs.existing == ''
@@ -251,6 +263,8 @@ jobs:
             echo "## Model tests"
             echo
             echo "\`tests/test_model_policy.py\`, \`tests/test_model_config.py\` and \`tests/test_model_choices.py\` on this branch: **${TESTS:-not run}**."
+            echo
+            echo "No model test pins a choice the console can change: a rule is tested against the frozen fixture at \`tests/fixtures/model-config-frozen/\` (\`model_fixture.FIXTURE_DIR\`), and \`tests/test_console_change_keeps_the_suite_green.py\` is written to prove every operation leaves every model-reading test green (its per-case runs skip in the unit parts and run in the \`console change keeps the suite green\` job once DRE-6873 lands) — so a red result on a change pull request is a defect in the change or in a test, never the expected cost of a change the console allows."
           } >> "$RUNNER_TEMP/pr-body.md"
           cat "$RUNNER_TEMP/pr-body.md"
           gh pr create --repo "$GITHUB_REPOSITORY" --base main --head "$BRANCH" \

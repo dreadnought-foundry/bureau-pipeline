@@ -431,10 +431,16 @@ record and nothing waits on him. The closing line on the card (condition 5)
 names who reads the record, not who moves the card, and stays verbatim. The
 card still routes `OPERATOR`, by its `agent:ops` label, and the five conditions
 do not change: the run does the operator's observing, and the operator and the CEO
-stay the accountable readers. A criterion only the CEO's own login can satisfy
-is written on the card in the words `needs the CEO's press: <the press>`; a run
-that meets one records everything else, parks the card once in Green Light
-naming the press, and nobody chases it.
+stay the accountable readers. A press is the CEO's only when it is a business
+decision of his — which model a real project runs on, whether a real proposal
+is approved, whether a real card is removed from a proposal — and it is written
+on the card in the words `needs the CEO's press: <the press>`; a run that meets
+one records everything else, parks the card once in Green Light naming the
+press, and nobody chases it. A press the operator can make — on the sandbox
+project, or under the operator's standing permission of 2026-10-07 — is the
+operator's event row and never his:
+`waiting for the operator's press: <the press>`, held for the operator and
+never parked in Green Light (`briefs/planner.md`).
 
 Five conditions, and each is checked on the planner's OUTPUT rather than on
 any document that states the convention — a convention nothing checks is a
