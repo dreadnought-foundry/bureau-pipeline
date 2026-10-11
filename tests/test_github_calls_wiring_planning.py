@@ -32,9 +32,12 @@ read a token across a model step — GitHub gives an installation token sixty
 minutes, and this job runs for up to 115. Every re-mint in the file is spent by
 the model step after it, so none of them can be handed to `emit`; the portal
 mint is pinned to its one checkout. So the plan job re-mints the READER's pool
-map once more, directly before `emit` (`app_calls`): the pool-selected app when
-a slot was chosen, slot 1 when none was (its map falls through to the original
-pair). The slot-1 bot is also handed `next_token` — the end-of-run mint for the
+map once more, directly before `emit` (`app_calls`) — the reader's installation
+again. The plan job's `before` carries the reader's own gate (a bounced,
+refused or unadmitted dispatch does no work and records nothing; and
+tests/test_plan_dispatch_dedupe.py lets no step after the guard run
+ungated), and the reading's mint and `emit` run only where `before` did.
+The slot-1 bot is also handed `next_token` — the end-of-run mint for the
 next card's owner — but only when GitHub says that mint reached the SAME
 installation, so another account's installation is never recorded as a meter
 this job read before.
@@ -373,6 +376,18 @@ class TheEmitStepHandsTheFreshestTokenPerInstallation(unittest.TestCase):
         last_model = max(i for i, s in enumerate(steps) if _action(s) == MODEL)
         self.assertGreater(at, last_model)
 
+    def test_the_plan_job_reads_only_where_the_reader_ran(self):
+        steps = _steps("plan.yml", "plan")
+        before = steps[_one(steps, BEFORE_CMD, "plan.yml:plan")]
+        reader = steps[_by_id(steps, "reader")]
+        self.assertTrue(str(reader.get("if") or "").strip())
+        self.assertEqual(before.get("if"), reader.get("if"))
+        took_it = "steps.calls_before.outcome == 'success'"
+        self.assertEqual(before.get("id"), "calls_before")
+        for step in (steps[_by_id(steps, PLAN_READING_MINT)],
+                     steps[_one(steps, EMIT_CMD, "plan.yml:plan")]):
+            self.assertIn(took_it, str(step.get("if")), step.get("name"))
+
     def test_no_plan_job_token_handed_to_emit_crossed_a_model_step(self):
         steps = _steps("plan.yml", "plan")
         emit = _one(steps, EMIT_CMD, "plan.yml:plan")
@@ -513,14 +528,13 @@ class TheStepsRecordAReading(unittest.TestCase):
         self.assertEqual([r["installation_id"] for r in doc["logins"]], [11])
         self.assertEqual(doc["logins"][0]["rise"], 300 - 100 - 1)
 
-    def test_a_bounced_plan_run_reads_slot_one_alone(self):
-        # The gate bounced: no pool selection, no reader. The reading's
-        # re-mint falls through the map to the original pair.
-        outputs = {"app": self._mint("agent-bureau-bot", 11, "tok-bot"),
-                   PLAN_READING_MINT: self._mint("agent-bureau-bot", 11, "tok-fresh")}
-        b_bot, b_pool = self._token_envs("plan.yml", "plan", BEFORE_CMD)
-        a_pool, a_next = self._token_envs("plan.yml", "plan", EMIT_CMD)
-        doc = self._reading("plan.yml", "plan", outputs, {b_bot: 10}, {a_pool: 15})
+    def test_a_debounced_repair_run_reads_the_bot_alone(self):
+        # The decide step said no: no pool selection, no worker mint, whose
+        # outputs render '' and name no login.
+        outputs = {"app": self._mint("agent-bureau-bot", 11, "tok-bot")}
+        b_bot, b_worker = self._token_envs("red-main-repair.yml", "repair", BEFORE_CMD)
+        a_worker, a_bot = self._token_envs("red-main-repair.yml", "repair", EMIT_CMD)
+        doc = self._reading("red-main-repair.yml", "repair", outputs, {b_bot: 10}, {a_bot: 15})
         self.assertEqual([(r["installation_id"], r["rise"]) for r in doc["logins"]],
                          [(11, 4)])
 
