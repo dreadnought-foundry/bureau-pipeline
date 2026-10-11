@@ -57,6 +57,7 @@ unreachable from a build ladder at any availability.
 These tests are the pin. Every one of them fails if its behaviour is removed.
 """
 
+import copy
 import glob
 import json
 import os
@@ -106,6 +107,9 @@ JUDGEMENT = "judgement"
 _TREE_FILES = (
     "scripts/model_fallback.py",
     "scripts/sync_model_config.py",
+    # The generator judges each published move as the change script does, and
+    # renders its reason with the change script's words (DRE-6833).
+    "scripts/model_config_change.py",
     "config/models.yaml",
     # Schema validation reads the DECLARED price of a rung sitting below the
     # workhorse fallback (DRE-3880), so the throwaway tree carries it too.
@@ -229,9 +233,17 @@ class RoleKindsTest(unittest.TestCase):
         # kind to classify; test_agents_registry.py holds it to that claim.
         registry = {a["name"] for a in yaml.safe_load(AGENTS.read_text())["agents"]
                     if not ("model" in a and a["model"] is None)}
-        self.assertEqual(
-            sorted(cfg["agents"]), sorted(registry),
+        # Every registry agent has a kind, and every name under `agents` is in
+        # the registry or is a session agent — one that has a group for the
+        # console and is never a pipeline role (DRE-6833).
+        session = set(cfg.get("session_agents") or [])
+        self.assertLessEqual(
+            registry, set(cfg["agents"]),
             "every agents.yaml role needs a kind in config/models.yaml",
+        )
+        self.assertLessEqual(
+            set(cfg["agents"]), registry | session,
+            "every name under `agents` is in agents.yaml or in `session_agents`",
         )
         for role, kind in cfg["agents"].items():
             self.assertIn(kind, cfg["kinds"], f"{role}: {kind!r} is not a role kind")
@@ -395,6 +407,55 @@ class JudgementKindTest(unittest.TestCase):
             "judgement is for judgement-heavy, LOW-VOLUME roles; a role that "
             "runs per card belongs on the workhorse ladder",
         )
+
+    def test_rule_10_exempts_a_session_agent_and_nobody_else(self):
+        # DRE-6833. A session agent's group selects nothing — the selector
+        # answers it as an unknown name — so a session agent in Planners puts
+        # no run on the strongest model, and rule 10 does not apply to it.
+        cfg = _canonical()
+        self.assertIn("designer", cfg["session_agents"])
+        rule_10 = "'judgement' is the planner's kind"
+
+        exempt = copy.deepcopy(cfg)
+        exempt["agents"]["designer"] = JUDGEMENT
+        exempt["ungrouped"].remove("designer")
+        errors = mf.policy_errors(exempt)
+        self.assertFalse([e for e in errors if rule_10 in e], errors)
+        self.assertEqual(errors, [])
+
+        not_session = copy.deepcopy(exempt)
+        not_session["session_agents"].remove("designer")
+        errors = mf.policy_errors(not_session)
+        self.assertTrue(
+            any(e.startswith("agents.designer: ") and rule_10 in e for e in errors),
+            errors,
+        )
+
+    def test_rule_10_still_refuses_every_pipeline_role(self):
+        cfg = _canonical()
+        for role in ("engineer", "medic", "critic"):
+            trial = copy.deepcopy(cfg)
+            trial["agents"][role] = JUDGEMENT
+            errors = mf.policy_errors(trial)
+            self.assertTrue(
+                any(e.startswith(f"agents.{role}: 'judgement' is the planner's kind")
+                    for e in errors),
+                (role, errors),
+            )
+        # A name under `agents` in neither JUDGEMENT_ROLES nor `session_agents`.
+        trial = copy.deepcopy(cfg)
+        trial["agents"]["stranger"] = JUDGEMENT
+        self.assertTrue(any(
+            e.startswith("agents.stranger: 'judgement' is the planner's kind")
+            for e in mf.policy_errors(trial)))
+
+    def test_a_session_agents_entry_for_nobody_is_refused(self):
+        cfg = _canonical()
+        trial = copy.deepcopy(cfg)
+        trial["session_agents"].append("nobody-at-all")
+        errors = mf.policy_errors(trial)
+        self.assertTrue(
+            any(e.startswith("session_agents.nobody-at-all: ") for e in errors), errors)
 
     def test_the_judgement_ladder_is_fable_first_then_the_degrade_rungs(self):
         # Data, so it is pinned as data: the strongest model, then the loud

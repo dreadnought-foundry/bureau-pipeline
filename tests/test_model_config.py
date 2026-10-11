@@ -85,6 +85,9 @@ REPAIR_COMMAND = "python3 scripts/sync_model_config.py"
 _TREE_FILES = (
     "scripts/model_fallback.py",
     "scripts/sync_model_config.py",
+    # The generator judges each published move as the change script does, and
+    # renders its reason with the change script's words (DRE-6833).
+    "scripts/model_config_change.py",
     "config/models.yaml",
     # Schema validation reads the DECLARED price of a rung sitting below the
     # workhorse fallback (DRE-3880), so the throwaway tree carries it too.
@@ -192,12 +195,27 @@ class CanonicalConfigTest(unittest.TestCase):
         # one and not the other is exactly the drift this card removes. Since
         # DRE-2317 the assignment is a KIND (workhorse/advisory), which is what
         # keeps a role from being pointed at an arbitrary ladder.
+        #
+        # Since DRE-6833 a session agent (`session_agents`) may sit under
+        # `agents` with no registry entry: it has a group for the console and
+        # is never a pipeline role. So the claim is one-directional plus the
+        # exemption: every registry agent has a kind, and every name under
+        # `agents` is in the registry or in `session_agents`.
         cfg = _canonical()
-        self.assertEqual(
-            sorted(cfg["agents"]),
-            sorted(_agents_registry()),
-            "config/models.yaml `agents:` must name every agents.yaml agent",
-        )
+        registry = set(_agents_registry())
+        session = set(cfg.get("session_agents") or [])
+        self.assertTrue(session, "config/models.yaml names its session agents")
+        for name in registry:
+            self.assertIn(
+                name, cfg["agents"],
+                "config/models.yaml `agents:` must name every agents.yaml agent",
+            )
+        for name in cfg["agents"]:
+            self.assertTrue(
+                name in registry or name in session,
+                f"{name} is under `agents` but is neither in agents.yaml nor a "
+                "session agent",
+            )
         for name, kind in cfg["agents"].items():
             self.assertIn(kind, cfg["kinds"], f"{name}: unknown kind {kind!r}")
 
@@ -420,6 +438,7 @@ class GeneratedMirrorTest(unittest.TestCase):
             },
         )
         self.assertEqual(mirror["ungrouped"], cfg["ungrouped"])
+        self.assertEqual(mirror["session_agents"], cfg["session_agents"])
         self.assertEqual(mirror["about"], cfg["about"])
         self.assertEqual(mirror["projects"], cfg["projects"])
 
