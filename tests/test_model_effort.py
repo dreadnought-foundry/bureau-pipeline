@@ -1,5 +1,5 @@
-"""Claude Opus 5.5 tops the workhorse ladder, and every run on it asks for
-effort `high` (DRE-4836).
+"""Every run asks for the effort level `config/models.yaml` declares for the
+model it runs on, and none for a model it declares nothing for (DRE-4836).
 
 What this pins shut
 -------------------
@@ -18,16 +18,23 @@ passes `--model` passes that argument beside it. A model with no declared
 effort gets no argument at all — the adoption changes Opus 5.5 and nothing
 else.
 
-`tests/test_model_config.py` is the sibling that pins the canonical file and
-its generated mirrors; this one pins the effort level and its wiring.
+Which model leads which ladder, and which level each declares, is the
+console's to change (DRE-6862). So the rule — the effort written is the one
+`effort:` declares for the model chosen, and empty for a model with no entry —
+is proved on the frozen fixture (`tests/model_fixture.py`) and its CLI, with
+every expected id and level read off that fixture. What still reads the
+committed file is what must hold for any saved state. `tests/test_model_config.py`
+is the sibling that pins the canonical file and its generated mirrors.
 """
 
+import copy
 import glob
 import json
 import os
 import re
 import subprocess
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -36,65 +43,58 @@ import yaml
 ROOT = Path(__file__).resolve().parents[1]
 CONFIG = ROOT / "config" / "models.yaml"
 PRICES = ROOT / "config" / "model-prices.yaml"
-MODEL_FALLBACK = ROOT / "scripts" / "model_fallback.py"
 WORKFLOWS = sorted(glob.glob(str(ROOT / ".github" / "workflows" / "*.yml")))
 
 sys.path.insert(0, str(ROOT / "scripts"))
+sys.path.insert(0, str(ROOT / "tests"))
 
 import model_fallback as mf  # noqa: E402
+import model_fixture  # noqa: E402
 
+# Ids priced in config/model-prices.yaml, which the console never writes: a
+# declared vendor price names the model it is the price of (PriceTest).
 OPUS55 = "claude-opus-5-5"
 OPUS = "claude-opus-5"
 SONNET5 = "claude-sonnet-5"
-# The advisory top and the workhorse Sonnet rung since DRE-5116 (2026-09-28).
 SONNET55 = "claude-sonnet-5-5"
-SONNET46 = "claude-sonnet-4-6"
-FABLE51 = "claude-fable-5-1"
 
-# The one level the CEO named. Spelled once here so a test that drifts to
-# another level is a diff a reviewer sees rather than a constant moving.
-HIGH = "high"
+# The frozen config every rule test reads its expected rungs and levels off.
+FIXTURE = model_fixture.fixture_config()
+
+# The selector loaded from a throwaway tree of the frozen files, and that
+# tree's CLI — set by setUpModule.
+fx = None
+FIXTURE_CLI = None
+_TREE = None
+
+
+def setUpModule():
+    global fx, FIXTURE_CLI, _TREE
+    _TREE = tempfile.TemporaryDirectory()
+    tree = model_fixture.fixture_tree(Path(_TREE.name) / "tree")
+    fx = model_fixture.fixture_module(tree)
+    FIXTURE_CLI = tree / "scripts" / "model_fallback.py"
+
+
+def tearDownModule():
+    _TREE.cleanup()
 
 
 def _canonical() -> dict:
     return yaml.safe_load(CONFIG.read_text())
 
 
-def _ladder(cfg: dict, name: str) -> list:
-    return [rung["model"] for rung in cfg["ladders"][name]]
+def _walk(role: str) -> list:
+    """The rungs `role` walks in the frozen config: its group's ladder."""
+    return model_fixture.ladder(FIXTURE, FIXTURE["agents"][role])
+
+
+def _fixture_rungs() -> set:
+    return {m for kind in FIXTURE["kinds"] for m in model_fixture.ladder(FIXTURE, kind)}
 
 
 class LadderTest(unittest.TestCase):
-    """The ladders as the card adopts them, and the file still validating."""
-
-    def test_workhorse_ladder_is_opus_5_5_then_opus_5_then_the_two_sonnets(self):
-        # The "newer versions auto" rule (CEO, 2026-09-14): a same-family newer
-        # version at the same or lower price is adopted through a normal PR.
-        # Opus 5 keeps the rung below Opus 5.5, so a run that cannot get 5.5
-        # falls back to the model the fleet has been building on; Sonnet 5.5
-        # went in directly above Sonnet 5 the same way (DRE-5116).
-        cfg = _canonical()
-        self.assertEqual(
-            _ladder(cfg, cfg["default_ladder"]), [OPUS55, OPUS, SONNET55, SONNET5]
-        )
-
-    def test_the_opus_rung_of_the_other_two_ladders_is_opus_5_5(self):
-        # Only the Opus fallback moved with DRE-4836. Sonnet 5.5 took the
-        # advisory top on 2026-09-28 (DRE-5116) with Sonnet 5 kept below it,
-        # and Fable 5.1 still tops the judgement one.
-        cfg = _canonical()
-        self.assertEqual(_ladder(cfg, "advisory"), [SONNET55, SONNET5, OPUS55])
-        self.assertEqual(_ladder(cfg, "judgement"), [FABLE51, OPUS55, SONNET46])
-
-    def test_review_separation_sends_a_sonnet_build_to_opus_5_5(self):
-        # DRE-3892's carry-forward, arriving: a same-family adoption moves the
-        # overlapping rung on both ladders at once, and a rule left naming the
-        # old id is refused as stale. Since DRE-5116 both Sonnet rungs sit on
-        # both ladders, so each carries a rule, and both name Opus 5.5.
-        cfg = _canonical()
-        rules = cfg["review_separation"]["rules"]
-        self.assertEqual([r["built_on"] for r in rules], [SONNET55, SONNET5])
-        self.assertEqual({r["reviewers_use"] for r in rules}, {OPUS55})
+    """What must hold for the committed file whatever the console saved."""
 
     def test_the_canonical_config_still_validates(self):
         self.assertEqual(mf.policy_errors(_canonical()), [])
@@ -109,30 +109,6 @@ class LadderTest(unittest.TestCase):
                     str(rung.get("reason") or "").strip(),
                     f"ladders.{name}: {rung.get('model')} has no reason",
                 )
-
-    def test_the_new_rungs_cite_the_card_and_the_price(self):
-        cfg = _canonical()
-        reasons = " ".join(
-            rung["reason"]
-            for rungs in cfg["ladders"].values()
-            for rung in rungs
-            if rung["model"] == OPUS55
-        )
-        self.assertIn("DRE-4836", reasons)
-        self.assertIn("$4", reasons)
-
-    def test_the_sonnet_5_5_rungs_cite_the_card_the_trial_and_the_rule(self):
-        cfg = _canonical()
-        reasons = " ".join(
-            " ".join(rung["reason"].split())
-            for rungs in cfg["ladders"].values()
-            for rung in rungs
-            if rung["model"] == SONNET55
-        )
-        self.assertIn("DRE-5116", reasons)
-        self.assertIn("actions/runs/36481112286", reasons)
-        self.assertIn("2026-09-14", reasons)
-        self.assertIn("$2/$10", reasons)
 
 
 class PriceTest(unittest.TestCase):
@@ -170,93 +146,109 @@ class PriceTest(unittest.TestCase):
 
 
 class DeclaredEffortTest(unittest.TestCase):
-    """The level itself: data in the canonical file, one reader."""
+    """The level itself: data in the config, one reader — proved on the
+    frozen fixture, every level read off its `effort:` block."""
 
-    def test_the_config_declares_high_for_opus_5_5(self):
-        cfg = _canonical()
-        self.assertEqual(cfg.get("effort", {}).get(OPUS55), HIGH)
+    def test_the_fixture_declares_a_level_and_leaves_a_rung_without_one(self):
+        # Guard: both halves of the rule below need a case to run on.
+        self.assertTrue(FIXTURE.get("effort"), "the fixture declares no effort")
+        self.assertTrue(_fixture_rungs() - set(FIXTURE["effort"]))
 
-    def test_effort_for_reads_it(self):
-        self.assertEqual(mf.effort_for(OPUS55), HIGH)
-
-    def test_the_config_declares_high_for_sonnet_5_5(self):
-        # DRE-5116: the level the fleet runs Sonnet 5 at (its default, `high`),
-        # written down because Sonnet 5.5's levels are recalibrated.
-        self.assertEqual(_canonical().get("effort", {}).get(SONNET55), HIGH)
-        self.assertEqual(mf.effort_for(SONNET55), HIGH)
-        self.assertEqual(mf._FALLBACK_MODEL_CONFIG["effort"].get(SONNET55), HIGH)
+    def test_effort_for_reads_the_declared_level_of_every_model(self):
+        for model, level in FIXTURE["effort"].items():
+            with self.subTest(model=model):
+                self.assertEqual(fx.effort_for(model), level)
 
     def test_a_model_with_no_declared_effort_gets_no_argument(self):
         # The adoption changes Opus 5.5 and nothing else: every other model
         # keeps whatever the harness would have used, so nobody's spend moves
         # on a card this one was not about.
-        for model in (SONNET5, OPUS, FABLE51, SONNET46):
-            self.assertIsNone(mf.effort_for(model), model)
+        for model in sorted(_fixture_rungs() - set(FIXTURE["effort"])):
+            with self.subTest(model=model):
+                self.assertIsNone(fx.effort_for(model))
 
-    def test_the_generated_mirror_carries_the_level(self):
+    def test_the_generated_mirror_carries_the_declared_levels(self):
         # The degrade path is the whole point of the mirror: a checkout whose
         # YAML will not parse still runs the ladders — and must still ask for
         # the level, or the fall-back-to-literal path silently drops to medium.
-        self.assertEqual(mf._FALLBACK_MODEL_CONFIG["effort"].get(OPUS55), HIGH)
+        self.assertEqual(fx._FALLBACK_MODEL_CONFIG["effort"], FIXTURE["effort"])
 
     def test_an_unknown_level_is_refused(self):
-        cfg = _canonical()
-        cfg["effort"] = {OPUS55: "maximum-effort"}
-        errors = mf.policy_errors(cfg)
+        cfg = copy.deepcopy(FIXTURE)
+        cfg["effort"] = {_walk("engineer")[0]: "maximum-effort"}
+        errors = fx.policy_errors(cfg)
         self.assertTrue(any("maximum-effort" in e for e in errors), errors)
 
     def test_an_effort_entry_for_a_model_nothing_runs_is_refused(self):
         # A level declared for an id no ladder names is a level nothing applies
         # — and the likeliest cause is a typo in the id the fleet is meant to
         # be running at `high`.
-        cfg = _canonical()
-        cfg["effort"] = dict(cfg.get("effort") or {}, **{"claude-opus-5-55": HIGH})
-        errors = mf.policy_errors(cfg)
+        cfg = copy.deepcopy(FIXTURE)
+        cfg["effort"] = dict(cfg.get("effort") or {}, **{"claude-opus-5-55": "high"})
+        errors = fx.policy_errors(cfg)
         self.assertTrue(any("claude-opus-5-55" in e for e in errors), errors)
 
 
 class SelectorCliTest(unittest.TestCase):
-    """The CLI the workflows actually call."""
+    """The CLI the workflows actually call, run in the fixture tree."""
 
     def _run(self, *args, available=None):
         env = dict(os.environ)
         env["BUREAU_FAKE_AVAILABLE"] = json.dumps(available or {})
         proc = subprocess.run(
-            [sys.executable, str(MODEL_FALLBACK), *args],
+            [sys.executable, str(FIXTURE_CLI), *args],
             capture_output=True, text=True, env=env,
         )
         self.assertEqual(proc.returncode, 0, proc.stderr)
         return proc.stdout.strip()
 
+    def _select_down_to(self, role, rung, path):
+        """`select <role> --effort-file <path>` with every rung above `rung`
+        on its walk unavailable, so the walk lands on `rung`."""
+        walk = _walk(role)
+        above = walk[:walk.index(rung)]
+        return self._run(
+            "select", role, "--effort-file", str(path),
+            available={m: m not in above for m in walk},
+        )
+
     def test_effort_command_prints_the_level(self):
-        self.assertEqual(self._run("effort", OPUS55), HIGH)
+        for model, level in FIXTURE["effort"].items():
+            with self.subTest(model=model):
+                self.assertEqual(self._run("effort", model), level)
 
     def test_effort_command_prints_nothing_for_an_undeclared_model(self):
         # Empty, exit 0 — the shell writes `effort_arg=` and the step passes no
         # argument, which is how a model with no declared level stays untouched.
-        self.assertEqual(self._run("effort", SONNET5), "")
+        for model in sorted(_fixture_rungs() - set(FIXTURE["effort"])):
+            with self.subTest(model=model):
+                self.assertEqual(self._run("effort", model), "")
         self.assertEqual(self._run("effort", "claude-who"), "")
 
     def test_select_writes_the_effort_of_the_model_it_chose(self):
-        with tempdir() as tmp:
-            path = tmp / "effort.txt"
-            model = self._run(
-                "select", "engineer", "--effort-file", str(path),
-                available={OPUS55: True},
-            )
-            self.assertEqual(model, OPUS55)
-            self.assertEqual(path.read_text().strip(), HIGH)
+        declared = [m for m in _walk("engineer") if m in FIXTURE["effort"]]
+        self.assertTrue(declared, "no rung of the walk declares a level")
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "effort.txt"
+            model = self._select_down_to("engineer", declared[0], path)
+            self.assertEqual(model, declared[0])
+            self.assertEqual(path.read_text().strip(), FIXTURE["effort"][declared[0]])
 
     def test_select_writes_an_empty_effort_when_it_fell_to_another_rung(self):
-        # The fall is the case that matters: Opus 5.5 unavailable, the run
-        # lands on Opus 5, and it must NOT inherit 5.5's level.
-        with tempdir() as tmp:
-            path = tmp / "effort.txt"
-            model = self._run(
-                "select", "engineer", "--effort-file", str(path),
-                available={OPUS55: False, OPUS: True},
-            )
-            self.assertEqual(model, OPUS)
+        # The fall is the case that matters: the run lands on a rung that
+        # declares no level, below one that does, and it must NOT inherit the
+        # level of anything above it.
+        walk = _walk("engineer")
+        bare = [
+            m for i, m in enumerate(walk)
+            if m not in FIXTURE["effort"]
+            and any(above in FIXTURE["effort"] for above in walk[:i])
+        ]
+        self.assertTrue(bare, "no undeclared rung sits below a declared one")
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "effort.txt"
+            model = self._select_down_to("engineer", bare[0], path)
+            self.assertEqual(model, bare[0])
             self.assertEqual(path.read_text().strip(), "")
 
 
@@ -342,21 +334,6 @@ class WorkflowWiringTest(unittest.TestCase):
                     f"{Path(path).name}:{i}: hardcoded effort level — declare it "
                     "in config/models.yaml and read it through model_fallback",
                 )
-
-
-class _tempdir:
-    def __enter__(self):
-        import tempfile
-        self._tmp = tempfile.TemporaryDirectory()
-        return Path(self._tmp.name)
-
-    def __exit__(self, *exc):
-        self._tmp.cleanup()
-        return False
-
-
-def tempdir():
-    return _tempdir()
 
 
 if __name__ == "__main__":
