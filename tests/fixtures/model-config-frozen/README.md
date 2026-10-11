@@ -33,7 +33,6 @@ request: when a tree no longer builds, every rule test fails with the sentence
 re-freeze it in this pull request". Copy the three files again from that
 branch, rewrite the sha and the date above, and nothing else moves, because
 every test reads the fixture through `tests/model_fixture.py` and derives every
-id from it. A
-schema addition the generator tolerates (a missing optional key) needs no
-re-freeze. The directory is named for what it is rather than for a date, so a
+id from it. A schema addition the generator tolerates (a missing optional key)
+needs no re-freeze. The directory is named for what it is rather than for a date, so a
 re-freeze overwrites it in place and renames nothing.
