@@ -548,10 +548,19 @@ def test_a_refused_change_set_ends_the_run_with_no_branch_and_no_pull_request(tm
     assert run.git("rev-parse", "origin/main").strip() == run.base
 
 
+def _builders_second_rung() -> str:
+    """The rung below the Builders' default in the committed file — a default
+    the console can always save from it, whichever model the CEO last saved
+    there (DRE-6899)."""
+    raw = yaml.safe_load((ROOT / "config" / "models.yaml").read_text())
+    return raw["ladders"][raw["kinds"]["workhorse"]["ladder"]][1]["model"]
+
+
 def test_a_valid_change_set_opens_one_pull_request_and_a_rerun_opens_none(tmp_path):
     run = _Run(tmp_path)
+    model = _builders_second_rung()
     change_set = _change_set(
-        VALID, {"op": "set_default_model", "group": "workhorse", "model": "claude-sonnet-5-5"})
+        VALID, {"op": "set_default_model", "group": "workhorse", "model": model})
     branch = mcc.branch_name(json.loads(change_set))
 
     ran, failed, log = run.dispatch(change_set)
@@ -565,7 +574,7 @@ def test_a_valid_change_set_opens_one_pull_request_and_a_rerun_opens_none(tmp_pa
     assert check.returncode == 0, check.stdout + check.stderr
     models = yaml.safe_load((run.work / "config/models.yaml").read_text())
     assert models["agents"]["proof"] == "advisory"
-    assert models["ladders"]["workhorse"][0]["model"] == "claude-sonnet-5-5"
+    assert models["ladders"]["workhorse"][0]["model"] == model
     creates = [call for call in run.gh_calls() if call.startswith("pr create")]
     assert len(creates) == 1
     assert f"--head {branch}" in creates[0] and "--base main" in creates[0]

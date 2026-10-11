@@ -31,10 +31,12 @@ CONFIG = ROOT / "config" / "models.yaml"
 PRICES = ROOT / "config" / "model-prices.yaml"
 
 sys.path.insert(0, str(ROOT / "scripts"))
+sys.path.insert(0, str(ROOT / "tests"))
 
 import model_config_change as mcc  # noqa: E402
 import model_fallback as mf  # noqa: E402
 import sync_model_config  # noqa: E402
+from model_config_fixture import fixture_config, fixture_path  # noqa: E402
 
 # A real slug of config/repo-map.json — the gate's own route, no probe.
 REAL_SLUG = "atlas"
@@ -46,6 +48,22 @@ def _choices() -> dict:
 
 def _raw() -> dict:
     return yaml.safe_load(CONFIG.read_text())
+
+
+def _fixture_raw() -> dict:
+    """The config/models.yaml of 2026-10-11 (DRE-6899)."""
+    return fixture_config()
+
+
+def _fixture_choices() -> dict:
+    """What today's renderer publishes for the 2026-10-11 config. A choice the
+    page shows is the CEO's to change from that page, so a test of WHICH
+    choices are allowed, and in what words a refusal is put, renders this file
+    rather than reading the committed one (DRE-6899)."""
+    raw = _fixture_raw()
+    cfg = sync_model_config.load_config(fixture_path("models.yaml"))
+    return json.loads(sync_model_config.render_choices(
+        raw, cfg, mf.declared_prices(fixture_path("model-prices.yaml"))))
 
 
 def _price_ids() -> list[str]:
@@ -181,14 +199,15 @@ def test_one_group_per_kind_with_its_words_and_ladder():
         assert group["default_model"] == ladder[0]
         assert group["fallbacks"] == ladder[1:]
         assert [c["model"] for c in group["choices"]] == [m["id"] for m in doc["models"]]
-    builders = _group(doc, "workhorse")
+    # The Builders' default is the CEO's to change; on 2026-10-11 it was this.
+    builders = _group(_fixture_choices(), "workhorse")
     assert builders["label"] == "Builders"
     assert builders["default_model"] == "claude-opus-5-5"
     assert builders["fallbacks"] == ["claude-opus-5", "claude-sonnet-5-5", "claude-sonnet-5"]
 
 
 def test_refused_and_allowed_choices():
-    doc = _choices()
+    doc = _fixture_choices()
     for model in ("claude-fable-5-1", "claude-sonnet-4-6"):
         choice = _choice(doc, "workhorse", model)
         assert choice["allowed"] is False
@@ -203,7 +222,7 @@ def test_refused_and_allowed_choices():
 
 
 def test_a_groups_allowed_choices_are_its_own_rungs():
-    doc = _choices()
+    doc = _fixture_choices()
     allowed = {
         g["key"]: [c["model"] for c in g["choices"] if c["allowed"]]
         for g in doc["groups"]
@@ -323,7 +342,7 @@ def test_projects_mirrors_the_map_in_file_order():
 
 
 def test_projects_lists_each_slug_in_file_order(tmp_path):
-    raw = _raw()
+    raw = _fixture_raw()
     raw["projects"] = {
         "portico": {"advisory": "claude-sonnet-5"},
         "atlas": {"workhorse": "claude-sonnet-5-5"},

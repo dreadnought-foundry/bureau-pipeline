@@ -54,6 +54,15 @@ sys.path.insert(0, str(ROOT / "scripts"))
 sys.path.insert(0, str(ROOT / "tests"))
 
 import model_fallback as mf  # noqa: E402
+from model_config_fixture import (  # noqa: E402
+    FIXTURE,
+    PLACES,
+    first_models,
+    fixture_config,
+    fixture_path,
+    fixture_prices,
+    fixture_tree,
+)
 from model_config_text import without_projects  # noqa: E402
 
 OPUS = "claude-opus-5"
@@ -110,6 +119,13 @@ def _copy_tree(tmp: Path) -> Path:
         dest.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy(ROOT / rel, dest)
     return tmp
+
+
+def _fixture_copy_tree(tmp: Path) -> Path:
+    """`_copy_tree`, with the 2026-10-11 model files in place of the committed
+    ones and the generated literal regenerated from them (DRE-6899) — the tree
+    a test of how an edit behaves on a known ladder runs in."""
+    return fixture_tree(tmp)
 
 
 def _run_sync(tree: Path, *args: str) -> subprocess.CompletedProcess:
@@ -228,12 +244,21 @@ class CanonicalConfigTest(unittest.TestCase):
         # `claude-fable-5-1` DRE-3015 put on the planner's ladder.
         # Opus 5.5 took the top rung on 2026-09-25 (DRE-4836); Opus 5 is the
         # rung below it, and tests/test_model_effort.py pins the whole order.
-        cfg = _canonical()
-        workhorse = _ladder_models(cfg["ladders"][cfg["default_ladder"]])
+        #
+        # Opus-first is a choice, so it is pinned on the files of 2026-10-11
+        # (DRE-6899): the CEO changes the Builders' default from the console.
+        # Fable-free is the rule, so it holds on the committed file too — the
+        # excluded id, and whatever model heads the planner's ladder.
+        fixture = fixture_config()
+        workhorse = _ladder_models(fixture["ladders"][fixture["default_ladder"]])
         self.assertEqual(workhorse[0], OPUS55)
         self.assertIn(OPUS, workhorse)
         self.assertNotIn(FABLE, workhorse)
         self.assertNotIn(FABLE51, workhorse)
+        cfg = _canonical()
+        workhorse = _ladder_models(cfg["ladders"][cfg["default_ladder"]])
+        self.assertNotIn(FABLE, workhorse)
+        self.assertNotIn(_ladder_for_role(cfg, "planner")[0], workhorse)
 
     def test_the_planner_is_the_only_judgement_role(self):
         # DRE-3015: judgement-heavy and LOW-VOLUME. A role that runs per card
@@ -248,7 +273,9 @@ class CanonicalConfigTest(unittest.TestCase):
                    if k == "judgement" and r not in session),
             ["planner"],
         )
-        self.assertEqual(_ladder_for_role(cfg, "planner")[0], FABLE51)
+        # Which model heads its ladder is the Planners' default — Fable 5.1 on
+        # the files of 2026-10-11 (DRE-6899).
+        self.assertEqual(_ladder_for_role(fixture_config(), "planner")[0], FABLE51)
 
     def test_review_agents_share_one_kind(self):
         # critic/verifier/medic were the three that bypassed selection with a
@@ -595,13 +622,16 @@ def _swap_workhorse(tree: Path) -> None:
 
 
 class ConfigDrivesTheFleetTest(unittest.TestCase):
-    """Editing ONLY config/models.yaml changes what the fleet runs on."""
+    """Editing ONLY config/models.yaml changes what the fleet runs on.
+
+    Each edit is made to the model files of 2026-10-11 (DRE-6899), so the
+    model before and after it is a known one whatever the CEO has saved since."""
 
     def test_config_edit_alone_changes_what_the_ci_path_selects(self):
         # No regeneration: the CI path READS the config, so the edit is live on
         # the next dispatch. (The generated mirror is only the degrade path.)
         with tempfile.TemporaryDirectory() as td:
-            tree = _copy_tree(Path(td))
+            tree = _fixture_copy_tree(Path(td))
             self.assertEqual(_cli_select(tree, "engineer"), OPUS55)
             _swap_workhorse(tree)
             self.assertEqual(
@@ -611,7 +641,7 @@ class ConfigDrivesTheFleetTest(unittest.TestCase):
 
     def test_config_edit_plus_generator_updates_every_mirror(self):
         with tempfile.TemporaryDirectory() as td:
-            tree = _copy_tree(Path(td))
+            tree = _fixture_copy_tree(Path(td))
             _swap_workhorse(tree)
             self.assertEqual(_run_sync(tree).returncode, 0)
             # The registry the console reads:
@@ -630,7 +660,7 @@ class ConfigDrivesTheFleetTest(unittest.TestCase):
         # Not just the build ladder: the critic/verifier/medic tier moves off
         # one file edit too — the whole point of folding them into selection.
         with tempfile.TemporaryDirectory() as td:
-            tree = _copy_tree(Path(td))
+            tree = _fixture_copy_tree(Path(td))
             path = tree / "config" / "models.yaml"
             cfg = yaml.safe_load(path.read_text())
             advisory = cfg["kinds"]["advisory"]["ladder"]
@@ -660,7 +690,7 @@ class ConfigDrivesTheFleetTest(unittest.TestCase):
         # The config ships in the public .bureau-pipeline checkout, so it is
         # normally there — but a truncated checkout must not strand a dispatch.
         with tempfile.TemporaryDirectory() as td:
-            tree = _copy_tree(Path(td))
+            tree = _fixture_copy_tree(Path(td))
             (tree / "config" / "models.yaml").write_text("{{ not yaml\n")
             self.assertEqual(_cli_select(tree, "engineer"), OPUS55)
             # Hardcoded on purpose: the mirror is GENERATED from models.yaml, so
@@ -673,6 +703,41 @@ class ConfigDrivesTheFleetTest(unittest.TestCase):
             # truncated checkout must not silently drop the planner back onto
             # the build model, which would look exactly like a healthy run.
             self.assertEqual(_cli_select(tree, "planner"), FABLE51)
+
+
+class FixtureRecordTest(unittest.TestCase):
+    """The frozen model files under tests/fixtures/model-config-2026-10-11/
+    (DRE-6899) are what their README says: a record of one day that every
+    behavior test above can trust."""
+
+    def test_the_readme_names_the_commit_and_every_file(self):
+        readme = fixture_path("README.md").read_text()
+        self.assertIn("480b5cf5a55d6865552a62e8a3a0e30a30db50ae", readme)
+        for name, rel in PLACES.items():
+            with self.subTest(name=name):
+                self.assertTrue((FIXTURE / name).is_file(), name)
+                self.assertIn(f"`{name}`", readme)
+                self.assertIn(f"`{rel}`", readme)
+
+    def test_the_copy_passes_the_policy_a_pull_request_meets(self):
+        self.assertEqual(mf.policy_errors(fixture_config(), fixture_prices()), [])
+
+    def test_the_generated_copies_agree_with_the_copy_of_the_config(self):
+        cfg = fixture_config()
+        tops = first_models(cfg)
+        choices = json.loads(fixture_path("model-choices.json").read_text())
+        self.assertEqual({g["key"]: g["default_model"] for g in choices["groups"]}, tops)
+        registry = _agents_registry(fixture_path("agents.yaml"))
+        for name, kind in cfg["agents"].items():
+            if name in registry:
+                with self.subTest(agent=name):
+                    self.assertEqual(registry[name]["model"], tops[kind])
+
+    def test_a_fixture_tree_is_in_sync(self):
+        with tempfile.TemporaryDirectory() as td:
+            tree = _fixture_copy_tree(Path(td))
+            proc = _run_sync(tree, "--check")
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
 
 
 class WorkflowModelPinTest(unittest.TestCase):

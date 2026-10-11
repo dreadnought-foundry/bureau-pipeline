@@ -83,7 +83,17 @@ sys.path.insert(0, str(ROOT / "tests"))
 
 import model_catalog as mc  # noqa: E402
 import model_fallback as mf  # noqa: E402
+from model_config_fixture import fixture_config, fixture_selector, fixture_tree  # noqa: E402
 from model_config_text import config_with_session_agents_ungrouped  # noqa: E402
+
+# The selector as it ran on the model files of 2026-10-11 (DRE-6899). The
+# committed config/models.yaml leads each ladder with whatever default the CEO
+# last saved from the console, so a test of how selection BEHAVES on a known
+# ladder — which rung a fall lands on, what the note says — drives this copy,
+# whose ladders the ids above describe. A test of the committed tree reads `mf`
+# and derives what it expects from config/models.yaml.
+fmf = fixture_selector()
+FIXTURE = fixture_config()
 
 OPUS = "claude-opus-5"
 # The workhorse primary since DRE-4836 (2026-09-25); OPUS is the rung below.
@@ -165,6 +175,13 @@ def _copy_tree(tmp: Path) -> Path:
         dest.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy(ROOT / rel, dest)
     return tmp
+
+
+def _fixture_copy_tree(tmp: Path) -> Path:
+    """`_copy_tree`, with the 2026-10-11 model files in place of the committed
+    ones and the generated literal regenerated from them — the tree a test
+    of how the selector behaves on a known ladder runs in."""
+    return fixture_tree(tmp)
 
 
 def _write_config(tree: Path, cfg: dict) -> None:
@@ -274,10 +291,15 @@ class RoleKindsTest(unittest.TestCase):
         # longer the strongest thing we can run, so a test asserting it is
         # would pin a premise we deliberately dropped. Sonnet 5 -> Sonnet 5.5
         # on 2026-09-28 (DRE-5116), a same-family, same-price adoption.
-        advisory = _advisory_ladder()
-        self.assertEqual(advisory[0], SONNET55)
+        #
+        # Derived since DRE-6899: the advisory top is whatever the CEO last
+        # saved as the Reviewers' default. On the 2026-10-11 files, where the
+        # advisory and build tops differ, the same walk lands on Sonnet 5.5.
         mf.clear_availability_cache()
-        self.assertEqual(mf.select("critic", probe=lambda m: True), SONNET55)
+        self.assertEqual(mf.select("critic", probe=lambda m: True), _advisory_ladder()[0])
+        fmf.clear_availability_cache()
+        self.assertEqual(_advisory_ladder(FIXTURE)[0], SONNET55)
+        self.assertEqual(fmf.select("critic", probe=lambda m: True), SONNET55)
 
     def test_the_excluded_model_is_on_no_ladder_at_all(self):
         # What survives the rename above. Fable came OFF every ladder rather
@@ -301,8 +323,10 @@ class RoleKindsTest(unittest.TestCase):
     def test_advisory_falls_back_onto_the_workhorse_model(self):
         # AC: exhaustion of the advisory model drops to the WORKHORSE model —
         # never to something weaker still, and never silently (see the note
-        # tests below). That fallback target is data, so it is pinned as data.
-        self.assertEqual(_advisory_ladder()[-1], _workhorse_ladder()[0])
+        # tests below). That fallback target is data, so it is pinned as data —
+        # on the files of 2026-10-11 (DRE-6899): it is a choice, and a Builders
+        # default saved from the console moves the workhorse top off it.
+        self.assertEqual(_advisory_ladder(FIXTURE)[-1], _workhorse_ladder(FIXTURE)[0])
 
 
 class IncidentConditionTest(unittest.TestCase):
@@ -311,9 +335,11 @@ class IncidentConditionTest(unittest.TestCase):
 
     def setUp(self):
         mf.clear_availability_cache()
+        fmf.clear_availability_cache()
 
     def tearDown(self):
         mf.clear_availability_cache()
+        fmf.clear_availability_cache()
 
     def test_no_build_role_reaches_the_strongest_model_at_full_availability(self):
         # The incident condition, on the model it was actually about: the
@@ -356,25 +382,40 @@ class IncidentConditionTest(unittest.TestCase):
         # edit is still refused. Proved in full in
         # tests/test_review_separation.py — this is the hinge, kept beside the
         # incident it used to be confused with.
-        cfg = _canonical()
-        overlap = set(_advisory_ladder(cfg)[:1]) & set(_workhorse_ladder(cfg))
+        #
+        # The overlap itself is a choice — the Reviewers' default the CEO saves
+        # from the console decides whether there is one — so it is pinned on
+        # the files of 2026-10-11 (DRE-6899). That a bare overlap is refused is
+        # the rule, and it is held on the committed file whenever it has one.
+        fixture = copy.deepcopy(FIXTURE)
+        overlap = set(_advisory_ladder(fixture)[:1]) & set(_workhorse_ladder(fixture))
         self.assertTrue(overlap, "the advisory top no longer overlaps the build path")
-        stripped = _canonical()
-        stripped.pop("review_separation", None)
+        fixture.pop("review_separation", None)
         self.assertTrue(
-            mf.policy_errors(stripped),
+            mf.policy_errors(fixture),
             "a bare overlap with no selection rule must still be refused",
         )
+        cfg = _canonical()
+        if set(_advisory_ladder(cfg)[:1]) & set(_workhorse_ladder(cfg)):
+            cfg.pop("review_separation", None)
+            self.assertTrue(mf.policy_errors(cfg), "a bare overlap must be refused")
 
     def test_the_cli_path_holds_the_same_line(self):
         # The workflows call the CLI, not the function. Probe says EVERYTHING
         # is available; the build path still resolves to the workhorse model,
         # and the two non-build kinds each reach their own top rung — the
         # planner's being the one this file spends most of its words guarding.
+        # On the committed tree each top is read off its ladder (DRE-6899); on
+        # the 2026-10-11 files, where the three tops differ, it is named.
+        all_up = {OPUS: True, SONNET: True, SONNET5: True, SONNET55: True,
+                  FABLE: True, FABLE51: True}
         with tempfile.TemporaryDirectory() as td:
             tree = _copy_tree(Path(td))
-            all_up = {OPUS: True, SONNET: True, SONNET5: True, SONNET55: True,
-                      FABLE: True, FABLE51: True}
+            self.assertEqual(_cli_select(tree, "engineer", all_up)[0], _workhorse_ladder()[0])
+            self.assertEqual(_cli_select(tree, "planner", all_up)[0], _judgement_ladder()[0])
+            self.assertEqual(_cli_select(tree, "critic", all_up)[0], _advisory_ladder()[0])
+        with tempfile.TemporaryDirectory() as td:
+            tree = _fixture_copy_tree(Path(td))
             self.assertEqual(_cli_select(tree, "engineer", all_up)[0], OPUS55)
             self.assertEqual(_cli_select(tree, "planner", all_up)[0], FABLE51)
             self.assertEqual(_cli_select(tree, "critic", all_up)[0], SONNET55)
@@ -383,11 +424,11 @@ class IncidentConditionTest(unittest.TestCase):
         # The other half of the rule: a probe may decide how far DOWN a ladder
         # we walk, never how far up. The rung below the top became OPUS on
         # 2026-09-25 (DRE-4836), when Opus 5.5 took the top and Opus 5 kept the
-        # rung under it; the rule is unchanged.
-        self.assertEqual(
-            mf.select("engineer", probe=lambda m: m != OPUS55), _workhorse_ladder()[1]
-        )
-        self.assertEqual(_workhorse_ladder()[1], OPUS)
+        # rung under it; the rule is unchanged. Whichever model the CEO last
+        # saved as the Builders' default is the top it falls from (DRE-6899).
+        top, below = _workhorse_ladder()[:2]
+        self.assertEqual(mf.select("engineer", probe=lambda m: m != top), below)
+        self.assertEqual(fmf.select("engineer", probe=lambda m: m != OPUS55), OPUS)
 
 
 class JudgementKindTest(unittest.TestCase):
@@ -397,9 +438,11 @@ class JudgementKindTest(unittest.TestCase):
 
     def setUp(self):
         mf.clear_availability_cache()
+        fmf.clear_availability_cache()
 
     def tearDown(self):
         mf.clear_availability_cache()
+        fmf.clear_availability_cache()
 
     def test_the_judgement_kind_holds_the_planner_alone(self):
         # Of the PIPELINE-run roles (DRE-6889): a session-run agent the CEO put
@@ -471,29 +514,36 @@ class JudgementKindTest(unittest.TestCase):
         # degrade onto the workhorse primary, then the last resort that exists
         # so a plan never blocks on availability. `claude-sonnet-4-6` left the
         # WORKHORSE ladder on 2026-09-16 (DRE-3880) and kept this rung — the
-        # CEO's answer says so in as many words: do not retire it.
-        self.assertEqual(_judgement_ladder(), [FABLE51, OPUS55, SONNET])
-        self.assertEqual(_judgement_ladder()[1], _workhorse_ladder()[0])
-        self.assertNotIn(SONNET, _workhorse_ladder())
+        # CEO's answer says so in as many words: do not retire it. A record of
+        # the files of 2026-10-11 (DRE-6899): the order is the CEO's to change
+        # from the console, and the rules that bound it are pinned beside it.
+        self.assertEqual(_judgement_ladder(FIXTURE), [FABLE51, OPUS55, SONNET])
+        self.assertEqual(_judgement_ladder(FIXTURE)[1], _workhorse_ladder(FIXTURE)[0])
+        self.assertNotIn(SONNET, _workhorse_ladder(FIXTURE))
 
     def test_the_planner_runs_on_fable_when_it_is_available(self):
+        # The planner runs the top of its own ladder — Fable 5.1 on the files of
+        # 2026-10-11, and whatever the CEO last saved as the Planners' default
+        # on the committed tree (DRE-6899).
         self.assertEqual(mf.kind_for("planner"), JUDGEMENT)
-        self.assertEqual(mf.select("planner", probe=lambda m: True), FABLE51)
+        self.assertEqual(mf.select("planner", probe=lambda m: True), _judgement_ladder()[0])
+        self.assertEqual(fmf.select("planner", probe=lambda m: True), FABLE51)
 
     def test_the_planner_reaches_fable_at_every_availability_that_allows_it(self):
         # The other side of the 08-09 pin. Whatever the rest of the ladder is
         # doing, an available Fable is the planner's model — that is the whole
         # decision, and a config edit that quietly stopped honouring it would
-        # look exactly like a healthy run.
+        # look exactly like a healthy run. On the 2026-10-11 files, where Fable
+        # 5.1 heads the planner's ladder (DRE-6899).
         for avail in (
             {FABLE51: True, OPUS: True, SONNET: True},
             {FABLE51: True, OPUS: False, SONNET: True},
             {FABLE51: True, OPUS: False, SONNET: False},
         ):
             with self.subTest(avail=avail):
-                mf.clear_availability_cache()
+                fmf.clear_availability_cache()
                 self.assertEqual(
-                    mf.select("planner", probe=lambda m: avail.get(m, True)),
+                    fmf.select("planner", probe=lambda m: avail.get(m, True)),
                     FABLE51,
                 )
 
@@ -502,11 +552,11 @@ class JudgementKindTest(unittest.TestCase):
         # what was skipped and why, on one line the workflow turns into a
         # ::warning::. A planner that quietly ran on Opus would be
         # indistinguishable from one that got what it was promised.
-        decision = mf.select_with_reasons("planner", probe=lambda m: m != FABLE51)
+        decision = fmf.select_with_reasons("planner", probe=lambda m: m != FABLE51)
         self.assertEqual(decision["model"], OPUS55)
         self.assertEqual(decision["kind"], JUDGEMENT)
         self.assertEqual([s["model"] for s in decision["skipped"]], [FABLE51])
-        note = mf.selection_note(decision)
+        note = fmf.selection_note(decision)
         self.assertEqual(len(note.splitlines()), 1)
         self.assertTrue(note.startswith("DEGRADED"), f"the fallback is silent: {note}")
         self.assertIn(FABLE51, note)
@@ -543,25 +593,33 @@ class JudgementKindTest(unittest.TestCase):
 
     def test_the_cli_holds_that_line_too(self):
         # The workflows call the CLI, not select(). Everything up, including
-        # both Fable ids.
+        # both Fable ids. Each top is read off the committed ladders
+        # (DRE-6899); the strongest model is never what a build role gets.
         with tempfile.TemporaryDirectory() as td:
             tree = _copy_tree(Path(td))
             all_up = {OPUS: True, SONNET: True, SONNET5: True, SONNET55: True,
                       FABLE: True, FABLE51: True}
+            strongest = _judgement_ladder()[0]
             for role in ("engineer", "frontend", "devops", "fixer", "repairer"):
                 with self.subTest(role=role):
-                    self.assertEqual(_cli_select(tree, role, all_up)[0], OPUS55)
-            self.assertEqual(_cli_select(tree, "planner", all_up)[0], FABLE51)
+                    got = _cli_select(tree, role, all_up)[0]
+                    self.assertEqual(got, _workhorse_ladder()[0])
+                    self.assertNotEqual(got, strongest)
+            self.assertEqual(_cli_select(tree, "planner", all_up)[0], strongest)
 
     def test_fable_on_a_build_ladder_is_still_rejected(self):
         # The judgement ladder is permission for the PLANNER, not for the model.
-        cfg = _canonical()
-        cfg["ladders"][cfg["kinds"][WORKHORSE]["ladder"]].insert(
-            0, {"model": FABLE51, "reason": "someone's well-meaning edit"}
-        )
-        errors = mf.policy_errors(cfg)
-        self.assertTrue(errors, "Fable must not reach a build ladder")
-        self.assertTrue(any(FABLE51 in e for e in errors), f"unhelpful: {errors}")
+        # Fable 5.1 led it on 2026-10-11; on the committed tree the model is
+        # whatever leads it now (DRE-6899) — the rule is about the top rung.
+        for cfg, strongest in ((copy.deepcopy(FIXTURE), FABLE51),
+                               (_canonical(), _judgement_ladder()[0])):
+            with self.subTest(strongest=strongest):
+                cfg["ladders"][cfg["kinds"][WORKHORSE]["ladder"]].insert(
+                    0, {"model": strongest, "reason": "someone's well-meaning edit"}
+                )
+                errors = mf.policy_errors(cfg)
+                self.assertTrue(errors, "Fable must not reach a build ladder")
+                self.assertTrue(any(strongest in e for e in errors), f"unhelpful: {errors}")
 
     def test_a_judgement_only_model_may_not_hide_below_the_fallback(self):
         # Rule 4 reads the TOP rung of a non-build ladder, so a premium model
@@ -578,9 +636,11 @@ class JudgementKindTest(unittest.TestCase):
         )
 
     def test_the_selector_degrades_rather_than_honouring_fable_on_the_build_path(self):
+        # On the 2026-10-11 files (DRE-6899): the last-known-good literal is
+        # generated from the config, so the model it degrades to is that day's.
         with tempfile.TemporaryDirectory() as td:
-            tree = _copy_tree(Path(td))
-            cfg = _canonical()
+            tree = _fixture_copy_tree(Path(td))
+            cfg = copy.deepcopy(FIXTURE)
             cfg["ladders"][cfg["kinds"][WORKHORSE]["ladder"]].insert(
                 0, {"model": FABLE51, "reason": "the incident, as a config edit"}
             )
@@ -623,7 +683,8 @@ class JudgementKindTest(unittest.TestCase):
             "planner"
         ]
         self.assertEqual(planner["kind"], JUDGEMENT)
-        self.assertEqual(planner["model"], FABLE51)
+        # The top of the planner's own ladder as committed (DRE-6899).
+        self.assertEqual(planner["model"], _judgement_ladder()[0])
 
     def test_fable_5_1_is_a_known_model_and_its_predecessor_still_is_too(self):
         # Attribution: markers in flight carry either id.
@@ -703,10 +764,10 @@ class SchemaRejectsAutoPromotionTest(unittest.TestCase):
     def test_the_selector_degrades_rather_than_honouring_a_rejected_config(self):
         # A config that violates policy is NOT loaded: the fleet keeps running
         # the last-known-good ladders (and says so) instead of adopting the
-        # thing the policy exists to prevent.
+        # thing the policy exists to prevent. On the 2026-10-11 files (DRE-6899).
         with tempfile.TemporaryDirectory() as td:
-            tree = _copy_tree(Path(td))
-            cfg = _canonical()
+            tree = _fixture_copy_tree(Path(td))
+            cfg = copy.deepcopy(FIXTURE)
             cfg["ladders"][cfg["kinds"][WORKHORSE]["ladder"]].insert(
                 0, {"model": FABLE, "reason": "the incident, as a config edit"}
             )
@@ -719,18 +780,21 @@ class SchemaRejectsAutoPromotionTest(unittest.TestCase):
 
 class SelectionIsRecordedTest(unittest.TestCase):
     """Every run records the model it used AND why anything above it was
-    skipped. A silently weakened advisory model is the failure this prevents."""
+    skipped. A silently weakened advisory model is the failure this prevents.
+
+    On the selector as it ran on the files of 2026-10-11 (DRE-6899): what a
+    fall records is the code's behavior, and those files name the rungs."""
 
     def setUp(self):
-        mf.clear_availability_cache()
+        fmf.clear_availability_cache()
 
     def tearDown(self):
-        mf.clear_availability_cache()
+        fmf.clear_availability_cache()
 
     def test_the_decision_records_every_skipped_rung_and_its_reason(self):
         # The unavailable rung is the advisory TOP, whatever it currently is —
         # SONNET55 since 2026-09-28, SONNET5 from 2026-08-12, FABLE before that.
-        decision = mf.select_with_reasons("critic", probe=lambda m: m != SONNET55)
+        decision = fmf.select_with_reasons("critic", probe=lambda m: m != SONNET55)
         self.assertEqual(decision["model"], SONNET5)
         self.assertEqual(decision["kind"], ADVISORY)
         self.assertEqual([s["model"] for s in decision["skipped"]], [SONNET55])
@@ -743,20 +807,20 @@ class SelectionIsRecordedTest(unittest.TestCase):
                 raise RuntimeError("probe blew up")
             return True
 
-        decision = mf.select_with_reasons("critic", probe=probe)
+        decision = fmf.select_with_reasons("critic", probe=probe)
         self.assertEqual(decision["model"], SONNET5)
         self.assertIn("inconclusive", decision["skipped"][0]["reason"].lower())
 
     def test_the_top_rung_records_that_nothing_was_skipped(self):
-        decision = mf.select_with_reasons("engineer", probe=lambda m: True)
+        decision = fmf.select_with_reasons("engineer", probe=lambda m: True)
         self.assertEqual(decision["model"], OPUS55)
         self.assertEqual(decision["skipped"], [])
         self.assertFalse(decision["degraded"])
-        self.assertIn("nothing", mf.selection_note(decision).lower())
+        self.assertIn("nothing", fmf.selection_note(decision).lower())
 
     def test_the_note_is_one_line_and_names_what_was_skipped_and_why(self):
-        decision = mf.select_with_reasons("critic", probe=lambda m: m != SONNET55)
-        note = mf.selection_note(decision)
+        decision = fmf.select_with_reasons("critic", probe=lambda m: m != SONNET55)
+        note = fmf.selection_note(decision)
         self.assertEqual(len(note.splitlines()), 1, "the note is a single line")
         self.assertIn(SONNET5, note)
         self.assertIn(SONNET55, note)
@@ -769,8 +833,8 @@ class SelectionIsRecordedTest(unittest.TestCase):
         # $5/$25), so this now reads "unexpected spend", not "quietly cheap".
         # Either way the run is worth looking at, which is why it stays loud —
         # and since DRE-5116 a fall from Sonnet 5.5 to Sonnet 5 is loud too.
-        decision = mf.select_with_reasons("critic", probe=lambda m: m != SONNET55)
-        note = mf.selection_note(decision)
+        decision = fmf.select_with_reasons("critic", probe=lambda m: m != SONNET55)
+        note = fmf.selection_note(decision)
         self.assertTrue(
             note.startswith("DEGRADED"),
             f"a weakened advisory model must be loud, got: {note}",
@@ -778,7 +842,7 @@ class SelectionIsRecordedTest(unittest.TestCase):
 
     def test_the_cli_writes_the_explanation_for_the_workflow(self):
         with tempfile.TemporaryDirectory() as td:
-            tree = _copy_tree(Path(td))
+            tree = _fixture_copy_tree(Path(td))
             model, note = _cli_select(
                 tree, "critic",
                 {OPUS: True, SONNET: True, SONNET55: False, SONNET5: True},

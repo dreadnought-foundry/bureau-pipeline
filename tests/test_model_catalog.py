@@ -52,6 +52,7 @@ import sys
 from pathlib import Path
 
 import pytest
+import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
@@ -62,15 +63,10 @@ import model_fallback as mf  # noqa: E402
 SNAPSHOT_PATH = ROOT / "models.json"
 AGENTS_YAML = ROOT / "agents.yaml"
 
+CONFIG_YAML = ROOT / "config" / "models.yaml"
+
 OPUS = "claude-opus-5"
-# The workhorse ladder's primary since DRE-4836 (2026-09-25).
-OPUS55 = "claude-opus-5-5"
 SONNET = "claude-sonnet-4-6"
-# The workhorse ladder's backup rung since 2026-09-16 (DRE-3880) — it replaced
-# SONNET there, which kept the judgement ladder's last rung.
-SONNET5 = "claude-sonnet-5"
-# The workhorse ladder's Sonnet rung since DRE-5116 (2026-09-28), above Sonnet 5.
-SONNET55 = "claude-sonnet-5-5"
 FABLE = "claude-fable-5"
 RETIRED_OPUS = "claude-opus-4-8"
 
@@ -456,12 +452,16 @@ def test_generating_the_snapshot_never_mutates_the_ladder_or_agents_yaml(tmp_pat
     )
 
     assert "claude-opus-99" in out.read_text(), "the snapshot did record it"
-    assert mf.LADDER == ladder_before == [OPUS55, OPUS, SONNET55, SONNET5]
+    # The ladder is whatever config/models.yaml holds — its order is the CEO's
+    # to change from the console (DRE-6899) — and the snapshot moved none of it.
+    committed = yaml.safe_load(CONFIG_YAML.read_text())
+    assert mf.LADDER == ladder_before == [
+        rung["model"] for rung in committed["ladders"][committed["default_ladder"]]]
     assert "claude-opus-99" not in mf.LADDER
     assert set(mf.KNOWN_MODELS) == known_before
     assert hashlib.sha256(AGENTS_YAML.read_bytes()).hexdigest() == yaml_before
     assert hashlib.sha256(fallback.read_bytes()).hexdigest() == fallback_before
-    assert mf.select("engineer", probe=lambda m: True, clock=lambda: 0.0) == OPUS55
+    assert mf.select("engineer", probe=lambda m: True, clock=lambda: 0.0) == ladder_before[0]
 
 
 def test_the_committed_snapshot_is_present_and_shaped():

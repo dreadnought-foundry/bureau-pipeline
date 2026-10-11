@@ -56,13 +56,18 @@ import model_fallback as mf  # noqa: E402
 import routing_verdict  # noqa: E402
 import sync_model_config  # noqa: E402
 import validate_card  # noqa: E402
-from model_config_text import config_without_projects  # noqa: E402
+from model_config_fixture import fixture_path, fixture_text  # noqa: E402
+from model_config_text import without_projects  # noqa: E402
 
 import model_adoption_actions as maa  # noqa: E402
 
 MODULE = ROOT / "scripts" / "model_adoption_actions.py"
-CONFIG_PATH = ROOT / "config" / "models.yaml"
-PRICES_PATH = ROOT / "config" / "model-prices.yaml"
+# The model files of 2026-10-11 (DRE-6899). The console saves each group's
+# default model into the committed config/models.yaml, and an adoption's edit
+# is proved on a file whose ladders these tests can name — so the classifier,
+# the edit and the policy all read the frozen copy, never the live file.
+CONFIG_PATH = fixture_path("models.yaml")
+PRICES_PATH = fixture_path("model-prices.yaml")
 SNAPSHOT_PATH = ROOT / "models.json"
 
 SONNET6 = "claude-sonnet-6"
@@ -99,6 +104,13 @@ SUCCESSORS = [
 ]
 
 
+def config_without_projects() -> str:
+    """The 2026-10-11 config with no project exceptions: a Planners exception
+    on Sonnet 4.6 turns a Sonnet adoption into a policy refusal, and the one
+    that moves with its rung is pinned on configs built for it, below."""
+    return without_projects(fixture_text())
+
+
 def snapshot_with(*entries) -> dict:
     snap = json.loads(SNAPSHOT_PATH.read_text())
     snap["models"] = list(entries) + list(snap["models"])
@@ -124,11 +136,11 @@ def decisions(**extra_prices) -> dict:
     """`{candidate: Decision}` from the real classifier over the snapshot plus
     the successors, against today's config and the given extra prices."""
     catalog = mc.snapshot_catalog(snapshot_with(*SUCCESSORS))
-    prices = ma.load_prices()
+    prices = ma.load_prices(PRICES_PATH)
     for key, (side_in, side_out) in extra_prices.items():
         prices[key.replace("_", "-")] = {"input": float(side_in),
                                          "output": float(side_out)}
-    found = ma.classify_catalog(catalog, ma.load_config(), prices)
+    found = ma.classify_catalog(catalog, ma.load_config(CONFIG_PATH), prices)
     return {d["candidate"]: json.loads(json.dumps(d)) for d in found}
 
 
@@ -322,7 +334,7 @@ class TestApply:
                         ignore=shutil.ignore_patterns("__pycache__"))
         shutil.copytree(ROOT / "config", tree / "config")
         (tree / "config" / "models.yaml").write_text(config_without_projects())
-        shutil.copy(ROOT / "agents.yaml", tree / "agents.yaml")
+        shutil.copy(fixture_path("agents.yaml"), tree / "agents.yaml")
         (tree / "config" / "model-prices.yaml").write_text(
             prices_text(claude_sonnet_6=(2, 10)))
         snap = write_json(tmp_path, "catalog.json", snapshot_with(*SUCCESSORS))
@@ -592,7 +604,9 @@ class TestQuestionBody:
         # nearest thing we run there — both read off the committed config, never
         # a literal (DRE-5138): `claude-sonnet-5` stopped being the advisory top
         # at DRE-5116 and this line only passed by being a prefix of the new one.
-        config = yaml.safe_load(CONFIG_PATH.read_text())
+        # The renderer reads the live file for this line, so this test does
+        # too — whatever Reviewers' default the CEO last saved (DRE-6899).
+        config = yaml.safe_load((ROOT / "config" / "models.yaml").read_text())
         ladder = config["discovery"]["on_new_model"]
         top = config["ladders"][ladder][0]["model"]
         price = ma.load_prices()[top]

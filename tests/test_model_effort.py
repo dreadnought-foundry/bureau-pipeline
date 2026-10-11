@@ -41,7 +41,10 @@ WORKFLOWS = sorted(glob.glob(str(ROOT / ".github" / "workflows" / "*.yml")))
 
 sys.path.insert(0, str(ROOT / "scripts"))
 
+sys.path.insert(0, str(ROOT / "tests"))
+
 import model_fallback as mf  # noqa: E402
+from model_config_fixture import fixture_config, shared_tree  # noqa: E402
 
 OPUS55 = "claude-opus-5-5"
 OPUS = "claude-opus-5"
@@ -65,7 +68,11 @@ def _ladder(cfg: dict, name: str) -> list:
 
 
 class LadderTest(unittest.TestCase):
-    """The ladders as the card adopts them, and the file still validating."""
+    """The ladders as the card adopts them, and the file still validating.
+
+    The order of a ladder is the CEO's to change from the console, so the
+    ladders as this card and DRE-5116 left them are pinned on the files of
+    2026-10-11 (DRE-6899); that the committed file validates is pinned on it."""
 
     def test_workhorse_ladder_is_opus_5_5_then_opus_5_then_the_two_sonnets(self):
         # The "newer versions auto" rule (CEO, 2026-09-14): a same-family newer
@@ -73,7 +80,7 @@ class LadderTest(unittest.TestCase):
         # Opus 5 keeps the rung below Opus 5.5, so a run that cannot get 5.5
         # falls back to the model the fleet has been building on; Sonnet 5.5
         # went in directly above Sonnet 5 the same way (DRE-5116).
-        cfg = _canonical()
+        cfg = fixture_config()
         self.assertEqual(
             _ladder(cfg, cfg["default_ladder"]), [OPUS55, OPUS, SONNET55, SONNET5]
         )
@@ -82,7 +89,7 @@ class LadderTest(unittest.TestCase):
         # Only the Opus fallback moved with DRE-4836. Sonnet 5.5 took the
         # advisory top on 2026-09-28 (DRE-5116) with Sonnet 5 kept below it,
         # and Fable 5.1 still tops the judgement one.
-        cfg = _canonical()
+        cfg = fixture_config()
         self.assertEqual(_ladder(cfg, "advisory"), [SONNET55, SONNET5, OPUS55])
         self.assertEqual(_ladder(cfg, "judgement"), [FABLE51, OPUS55, SONNET46])
 
@@ -216,13 +223,18 @@ class DeclaredEffortTest(unittest.TestCase):
 
 
 class SelectorCliTest(unittest.TestCase):
-    """The CLI the workflows actually call."""
+    """The CLI the workflows actually call. `select` runs in a tree holding the
+    model files of 2026-10-11 (DRE-6899), so the rung a fall lands on is a
+    known one; `effort` reads the committed effort table."""
 
     def _run(self, *args, available=None):
         env = dict(os.environ)
         env["BUREAU_FAKE_AVAILABLE"] = json.dumps(available or {})
+        script = MODEL_FALLBACK
+        if args[0] == "select":
+            script = shared_tree() / "scripts" / "model_fallback.py"
         proc = subprocess.run(
-            [sys.executable, str(MODEL_FALLBACK), *args],
+            [sys.executable, str(script), *args],
             capture_output=True, text=True, env=env,
         )
         self.assertEqual(proc.returncode, 0, proc.stderr)

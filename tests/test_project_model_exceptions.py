@@ -11,7 +11,9 @@ ladder.
 THE TREE
 --------
 Every scenario runs against a COPY of `scripts/` and `config/` in a temp
-directory whose models.yaml is the committed one plus
+directory whose models.yaml is the one of 2026-10-11 (DRE-6899: the console
+saves each group's default into the committed file, so the walk is proved on
+the frozen copy under tests/fixtures/model-config-2026-10-11/) plus
 `projects: {atlas: {workhorse: claude-sonnet-5-5}}` and nothing for `portico`.
 `model_fallback` reads its config off its own file's path, so the copy is the
 only way to drive the real CLI on a config the repo does not ship. The probe is
@@ -42,7 +44,8 @@ sys.path.insert(0, str(ROOT / "scripts"))
 sys.path.insert(0, str(ROOT / "tests"))
 
 import model_fallback as mf  # noqa: E402
-from model_config_text import config_with_session_agents_ungrouped  # noqa: E402
+from model_config_fixture import fixture_text  # noqa: E402
+from model_config_text import with_session_agents_ungrouped  # noqa: E402
 
 OPUS55 = "claude-opus-5-5"
 SONNET55 = "claude-sonnet-5-5"
@@ -50,13 +53,13 @@ PROJECTS = {"atlas": {"workhorse": SONNET55}}
 
 
 def make_tree(base: Path, projects: dict) -> Path:
-    """A copy of scripts/ and config/ whose models.yaml carries `projects`,
-    with every session-run agent in no group wherever the CEO last put them
+    """A copy of scripts/ and config/ whose models.yaml is the 2026-10-11 one
+    (DRE-6899) carrying `projects`, with every session-run agent in no group
     (DRE-6889) — the start the role-in-no-group case below needs."""
     ignore = shutil.ignore_patterns("__pycache__", "*.pyc")
     shutil.copytree(ROOT / "scripts", base / "scripts", ignore=ignore)
     shutil.copytree(ROOT / "config", base / "config", ignore=ignore)
-    cfg = yaml.safe_load(config_with_session_agents_ungrouped())
+    cfg = yaml.safe_load(with_session_agents_ungrouped(fixture_text()))
     cfg["projects"] = projects
     (base / "config" / "models.yaml").write_text(yaml.safe_dump(cfg, sort_keys=False))
     return base

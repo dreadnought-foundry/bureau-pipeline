@@ -106,13 +106,10 @@ CASES = {
         [[_set("agent-bureau-demo", "workhorse", "claude-sonnet-5-5")]],
         {"agent-bureau-demo": {"workhorse": "claude-sonnet-5-5"}},
     ),
-    # One project's builders and another project's reviewers.
-    "two-projects-two-groups": (
-        [[_set("agent-bureau-demo", "workhorse", "claude-sonnet-5-5"),
-          _set("portico", "advisory", "claude-sonnet-5")]],
-        {"agent-bureau-demo": {"workhorse": "claude-sonnet-5-5"},
-         "portico": {"advisory": "claude-sonnet-5"}},
-    ),
+    # "two-projects-two-groups" — one project's builders and another
+    # project's reviewers — is added below `accepted_models`, which picks the
+    # reviewers' model: which rung a Reviewers exception may name depends on
+    # the default the CEO last saved for that group (DRE-6899).
     # Set in one save, cleared in the next.
     "set-then-cleared": (
         [[_set("agent-bureau-demo", "workhorse", "claude-sonnet-5-5")],
@@ -144,6 +141,31 @@ def accepted_models(raw: dict, slug: str, kind: str) -> list[str]:
     return accepted
 
 
+def _two_projects_two_groups() -> None:
+    raw = yaml.safe_load(config_without_projects())
+    advisory = accepted_models(raw, "portico", "advisory")
+    if not advisory:
+        return
+    CASES["two-projects-two-groups"] = (
+        [[_set("agent-bureau-demo", "workhorse", "claude-sonnet-5-5"),
+          _set("portico", "advisory", advisory[0])]],
+        {"agent-bureau-demo": {"workhorse": "claude-sonnet-5-5"},
+         "portico": {"advisory": advisory[0]}},
+    )
+
+
+_two_projects_two_groups()
+
+
+def unofferable_kinds(raw: dict, slugs) -> set[str]:
+    """The kinds no project may take an exception for: every rung below the
+    first is refused for every slug. With Sonnet 4.6 saved as the Builders'
+    default, every other rung of the Planners' ladder is a build model, which
+    the policy refuses at the top of a judgement walk (DRE-6899)."""
+    return {kind for kind in raw["kinds"]
+            if not any(accepted_models(raw, slug, kind) for slug in slugs)}
+
+
 def grid() -> dict[str, tuple[str, str, str | None]]:
     """Case name → (project, group, model) for every pair `file_pairs` holds.
     A pair whose group accepts no model keeps None, so it is reported, never
@@ -162,7 +184,8 @@ def grid() -> dict[str, tuple[str, str, str | None]]:
 GRID = grid()
 
 for _name, (_slug, _kind, _model) in GRID.items():
-    CASES[_name] = ([[_set(_slug, _kind, _model)]], {_slug: {_kind: _model}})
+    if _model is not None:
+        CASES[_name] = ([[_set(_slug, _kind, _model)]], {_slug: {_kind: _model}})
 
 
 def copy_tree(base: Path) -> Path:
@@ -263,11 +286,17 @@ def test_the_walk_covers_every_project_and_every_group():
     walked = {(slug, kind) for slug, kind, _ in GRID.values()}
     assert walked == pairs
     assert len(GRID) == len(pairs)
-    unsaveable = [name for name, (_, _, model) in GRID.items() if model is None]
+    # A pair is left unsaved only when its group offers no exception to ANY
+    # project — never one project quietly skipped (DRE-6899).
+    raw = yaml.safe_load(config_without_projects())
+    closed = unofferable_kinds(raw, json.loads(REPO_MAP.read_text()))
+    assert closed != set(raw["kinds"]), "no group offers any project an exception"
+    unsaveable = [name for name, (_, kind, model) in GRID.items()
+                  if model is None and kind not in closed]
     assert unsaveable == [], (
         f"no model the policy accepts below the first rung for {unsaveable}")
-    for name in GRID:
-        assert name in CASES, name
+    for name, (_, kind, _) in GRID.items():
+        assert (name in CASES) == (kind not in closed), name
 
 
 def test_every_accepted_rung_of_every_group_is_saved_by_some_project():
@@ -288,7 +317,9 @@ def test_the_grid_reads_a_project_added_to_the_repo_map(monkeypatch, tmp_path):
     kinds = yaml.safe_load(MODELS.read_text())["kinds"]
     added = {name: case for name, case in grid().items() if case[0] == "newcomer"}
     assert {case[1] for case in added.values()} == set(kinds)
-    assert all(case[2] is not None for case in added.values()), added
+    closed = unofferable_kinds(yaml.safe_load(config_without_projects()), slugs)
+    assert all((case[2] is None) == (case[1] in closed)
+               for case in added.values()), added
 
 
 @pytest.mark.parametrize("name", list(CASES))

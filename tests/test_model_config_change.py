@@ -19,6 +19,12 @@ A change the validator refuses — `model_fallback.policy_errors`, the gate a pu
 request meets, plus the plain checks a change needs before it can be applied —
 is named with its reason, and nothing is written.
 
+THE FILE IS THE ONE OF 2026-10-11 (DRE-6899). The console saves into the
+committed file — a group's default model, an agent's group, a project's
+exception — so every test here edits the frozen copy under
+`tests/fixtures/model-config-2026-10-11/`, whose ladders the ids below name.
+What is proved is how the script edits; the copy is its input.
+
 Run: cd bureau-pipeline && python3 -m pytest tests/test_model_config_change.py -v
 """
 
@@ -35,7 +41,6 @@ import pytest
 import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
-CONFIG = ROOT / "config" / "models.yaml"
 AGENTS = ROOT / "agents.yaml"
 SCRIPT = ROOT / "scripts" / "model_config_change.py"
 
@@ -43,6 +48,7 @@ sys.path.insert(0, str(ROOT / "scripts"))
 sys.path.insert(0, str(ROOT / "tests"))
 
 import model_config_change as mcc  # noqa: E402
+from model_config_fixture import PLACES, fixture_path, fixture_text  # noqa: E402
 from model_config_text import (  # noqa: E402
     fresh_agent_name,
     with_session_agents_ungrouped,
@@ -62,10 +68,10 @@ SONNET5 = "claude-sonnet-5"
 # --------------------------------------------------------------------------- #
 
 def _text() -> str:
-    """A copy of the real file, read fresh for every test, with no project
-    exceptions and every session-run agent in no group — the console writes
-    both into the live file (DRE-6858, DRE-6889)."""
-    return without_projects(with_session_agents_ungrouped(CONFIG.read_text()))
+    """The file of 2026-10-11 (DRE-6899), read fresh for every test, with no
+    project exceptions and every session-run agent in no group — the starting
+    point the tests below describe (DRE-6858, DRE-6889)."""
+    return without_projects(with_session_agents_ungrouped(fixture_text()))
 
 
 #: Names `add_agent` takes — ones the file does not hold, whatever the CEO has
@@ -450,19 +456,20 @@ _TREE_FILES = (
     "scripts/sync_model_config.py",
     "scripts/model_config_change.py",
     "scripts/model_adoption_actions.py",
-    "config/models.yaml",
-    "config/model-prices.yaml",
     "config/repo-map.json",
-    "agents.yaml",
-    "config/model-choices.json",
 )
 
 
 def _tree(tmp_path: Path) -> Path:
+    """The scripts, with the model files of 2026-10-11 where they read them."""
     for rel in _TREE_FILES:
         dest = tmp_path / rel
         dest.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy(ROOT / rel, dest)
+    for name, rel in PLACES.items():
+        dest = tmp_path / rel
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy(fixture_path(name), dest)
     # The modules model_adoption_actions imports, so the tree is runnable alone.
     for path in (ROOT / "scripts").glob("*.py"):
         dest = tmp_path / "scripts" / path.name
@@ -504,7 +511,7 @@ def test_apply_check_prints_the_diff_and_writes_nothing(tmp_path):
     proc = _cli(tree, "apply", "--changes", str(changes), "--check")
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert "+  proof: advisory" in proc.stdout
-    assert (tree / "config/models.yaml").read_text() == CONFIG.read_text()
+    assert (tree / "config/models.yaml").read_text() == fixture_text()
 
 
 def test_a_refused_change_set_exits_2_names_each_reason_and_writes_nothing(tmp_path):
@@ -524,7 +531,7 @@ def test_a_refused_change_set_exits_2_names_each_reason_and_writes_nothing(tmp_p
     assert any("change 3" in e and "only the planner" in e for e in errors), proc.stdout
     assert "agents.engineer" in proc.stdout
     assert not any("change 1" in e for e in errors)
-    assert (tree / "config/models.yaml").read_text() == CONFIG.read_text()
+    assert (tree / "config/models.yaml").read_text() == fixture_text()
 
 
 def test_an_unreadable_change_set_exits_2(tmp_path):

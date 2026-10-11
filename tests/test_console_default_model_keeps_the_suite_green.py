@@ -36,6 +36,13 @@ model added later is walked the day it lands:
     combination of accepted models, group by group, that `apply` accepts as
     one change set.
 
+A group can have no model to move to: with Sonnet 4.6 saved as the Builders'
+default, every other rung of the Planners' ladder is a build model, which the
+policy refuses at its top. Such a group is not dropped quietly — the walk
+covers every group `apply --check` accepts a model for, and the test that
+asks the CLI about every group and every priced model proves the rest accept
+none.
+
 THE SUITE RUN INSIDE THE COPY
 -----------------------------
 The ten files the card names, then every other `tests/test_model_*.py`,
@@ -133,8 +140,9 @@ def cases(text: str) -> dict[str, list[dict]]:
     accepted = accepted_defaults(text)
     out = {f"{group}-default-{model}": [_default(group, model)]
            for group, models in accepted.items() for model in models}
-    for combo in itertools.product(*accepted.values()):
-        changes = [_default(group, model) for group, model in zip(accepted, combo)]
+    offered = {group: models for group, models in accepted.items() if models}
+    for combo in itertools.product(*offered.values()) if offered else ():
+        changes = [_default(group, model) for group, model in zip(offered, combo)]
         if _accepts(text, changes):
             out["every-group-at-once"] = changes
             break
@@ -208,7 +216,9 @@ def run_case(name: str, base: Path) -> dict:
         "models": yaml.safe_load((tree / "config" / "models.yaml").read_text()),
         "choices": json.loads((tree / "config" / "model-choices.json").read_text()),
         "returncode": proc.returncode,
-        "failed": re.findall(r"^FAILED (\S+)", proc.stdout, flags=re.M),
+        # A subtest's failure prints as `SUBFAILED(<params>) <nodeid>`.
+        "failed": re.findall(r"^(?:SUB)?FAILED(?:\(.*?\))? (tests/\S+)", proc.stdout,
+                             flags=re.M),
         "tail": proc.stdout[-4000:] + proc.stderr[-2000:],
     }
 
@@ -245,12 +255,18 @@ def test_only_the_tests_that_copy_the_tree_are_deselected():
 def test_the_walk_covers_every_group_the_file_holds():
     """A group the walk skips is a dropdown nobody proved — read straight off
     the file, without the case builder's help."""
-    raw = yaml.safe_load(MODELS.read_text())
-    walked = {changes[0]["group"] for changes in CASES.values() if len(changes) == 1}
-    assert walked == set(raw["kinds"]), sorted(set(raw["kinds"]) - walked)
+    text = MODELS.read_text()
+    raw = yaml.safe_load(text)
     assert len(raw["kinds"]) >= 3, raw["kinds"]
+    walked = {changes[0]["group"] for changes in CASES.values() if len(changes) == 1}
+    # A group left out is one the console offers no other default for — and
+    # that is asked of the policy model by model, not taken from the walk.
+    for group in set(raw["kinds"]) - walked:
+        for model in declared_prices():
+            assert not _accepts(text, [_default(group, model)]), (group, model)
+    assert walked, "no group has a default the console can save"
     at_once = CASES["every-group-at-once"]
-    assert [c["group"] for c in at_once] == list(raw["kinds"])
+    assert [c["group"] for c in at_once] == [g for g in raw["kinds"] if g in walked]
     assert all(c["op"] == "set_default_model" for c in at_once)
 
 
@@ -286,8 +302,11 @@ def test_the_cases_follow_the_default_the_file_holds():
     raw = yaml.safe_load(text)
     for group, spec in raw["kinds"].items():
         current = raw["ladders"][spec["ladder"]][0]["model"]
-        name, changes = next((n, c) for n, c in CASES.items()
-                             if len(c) == 1 and c[0]["group"] == group)
+        name, changes = next(((n, c) for n, c in CASES.items()
+                              if len(c) == 1 and c[0]["group"] == group),
+                             (None, None))
+        if changes is None:
+            continue
         saved, refusals = mcc.apply_change_set(
             text, {"requested_by": REQUESTER, "changes": changes}, today=TODAY)
         assert refusals == []

@@ -45,6 +45,7 @@ sys.path.insert(0, str(ROOT / "tests"))
 
 import model_fallback as mf  # noqa: E402
 import sync_model_config  # noqa: E402
+from model_config_fixture import fixture_config  # noqa: E402
 from model_config_text import config_with_session_agents_ungrouped  # noqa: E402
 
 CONFIG_PATH = ROOT / "config" / "models.yaml"
@@ -68,7 +69,11 @@ def slugs() -> set[str]:
 
 
 def with_projects(projects) -> dict:
-    cfg = committed()
+    """The config/models.yaml of 2026-10-11 carrying `projects` (DRE-6899).
+    Which models an exception may name, and the walk it makes, depend on the
+    order of each ladder — the defaults the CEO saves from the console — so
+    the rules are proved on the frozen copy, whose ladders the ids above name."""
+    cfg = fixture_config()
     cfg["projects"] = projects
     return cfg
 
@@ -335,8 +340,10 @@ class TestMalformedKeys:
 class TestOwnKindMembership:
     """The cross-ladder row DRE-6635's test reads the same way."""
 
-    def test_the_rows_preconditions_hold_on_the_committed_ladders(self):
-        cfg = committed()
+    def test_the_rows_preconditions_hold_on_the_2026_10_11_ladders(self):
+        # The files the rows below are proved on (DRE-6899); the committed
+        # ladders move with every default the console saves.
+        cfg = fixture_config()
         assert SONNET46 in ladder(cfg, "judgement")
         assert FABLE51 in ladder(cfg, "judgement")
         for model in (SONNET46, FABLE51):
