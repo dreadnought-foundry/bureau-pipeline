@@ -332,7 +332,10 @@ class HowLongItWorkedTest(unittest.TestCase):
     silence, so "said nothing" and "worked, then went quiet" are told apart."""
 
     def test_the_pump_measures_the_time_from_init_to_the_last_event(self):
-        stall, _, _ = drive([(0.0, INIT), (10.0, TOOL), (811.0, TOOL)])
+        # Events at 10s and 821s, with two more between them: a single 811s
+        # gap would itself be a stall at 310s, and this run kept working.
+        stall, _, _ = drive([(0.0, INIT), (10.0, TOOL), (270.0, TOOL),
+                             (270.0, TOOL), (271.0, TOOL)])
         self.assertIsNotNone(stall)
         self.assertEqual(stall.streamed_seconds, 821)
         self.assertEqual(stall.silence_seconds, 300)
