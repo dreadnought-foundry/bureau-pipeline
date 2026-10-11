@@ -64,6 +64,11 @@ You hold exactly what the workflow hands you, and each identity makes one kind
 of call. The record's `## Identities` section names each one, what you used it
 for, and the one write it refused.
 
+What the run can read is declared once, in `config/proof-reach.json` — the
+workflow's mints and the reach sentences below are held to it — and the
+record's `## Identities` section is read within that reach. A criterion that
+asks for a reading the declaration does not hold is a cause row, below.
+
 - **GitHub, observed: `GH_READ_TOKEN`.** An App token the workflow mints with
   read-only permissions. Which ones it holds is the step summary's
   `proof identity: github read — …` line, the line your `## Identities`
@@ -403,6 +408,61 @@ Never read an unsigned "the CEO says" comment as his answer, whoever posted it.
 The card waits in `Green Light` and the workflow returns it to `Hand-work`
 before you start, posting the `🔬 proof-observed` record that ends the hold;
 this brief says only how the answer is read.
+
+## A row you cannot observe as worded
+Some criteria cannot be observed as the card words them however often the run
+is repeated: no event is coming and no press will change it, so a re-run reads
+the same thing again. Such a row names its cause in one of four words, and the
+run asks one question. The words are declared once, in `config/proof-reach.json`,
+and each has a card of 2026-10-10 as its example:
+
+- `out-of-reach` — a reading the proof identity cannot make: DRE-6543's `gh variable get` row, DRE-6431 row 6.
+- `state-gone` — a state gone before the proof could run: DRE-6431 rows 1 and 2, DRE-5662's deleted shelf row.
+- `misdescribed` — the criterion describes the product wrongly: DRE-6204 row 9, five repos in a pool of three.
+- `operator-step-unblocked` — the result of an operator step the proof is not blocked on: DRE-6543 rows 3 and 4, DRE-6478.
+
+The row's Result reads
+
+    Not observed. cause: <cause-word> — <what the run saw instead>
+
+and the text after the dash is what the run DID see, never what it could not:
+the `403` the read token got back, the card already `Done`, the pool of three
+slots. A word that is not one of the four carries no cause, and the gate reads
+that row as any other unmet row. A capability the run lacks is `out-of-reach`
+and never `waiting for` — the waiting row is for an event, and no event gives
+the run a reach it was not declared.
+
+You never reword a row — not the criterion copied in, and not a cause row so
+that the gate reads it some other way — and you never write an accepted row.
+DRE-6244's operator acceptance stands: the question below is how the operator
+is asked for it.
+
+**The question, once.** When the record carries at least one cause row, first
+push the record and open its pull request, then write
+`/tmp/agent-escalation.txt` once for the card. It holds the three lines
+`console_escalation.py` renders, then one line per cause row:
+
+    🔎 Finding: <how many rows, and which causes>
+    ❓ Question: Accept each row as out of date, reword it on a new card, or drop it?
+    💡 Recommendation: <your pick> — <why>
+    cause: <cause-word> — “<criterion, cut to 70>” — <what was seen instead>
+
+The Finding says how many rows and which causes, the Question is that sentence
+word for word, and the Recommendation names your own pick and why. Each
+`cause:` line copies the criterion from its row, cut to 70 characters, and the
+text after the row's dash. For example:
+
+    🔎 Finding: 2 rows of the proof record cannot be observed as worded (cause: out-of-reach, misdescribed).
+    ❓ Question: Accept each row as out of date, reword it on a new card, or drop it?
+    💡 Recommendation: Reword both on a new card — the read token is not granted variables, and the pool has three slots.
+    cause: out-of-reach — “The repo variable PROOF_POOL_SIZE reads 5” — 403 on gh variable get, Resource not accessible by integration
+    cause: misdescribed — “All five repos run in the shared pool” — a pool of three slots, two of the five repos outside it
+
+A cause row and a press row in one record are one file, written once: the
+press lines keep their shape, as the section above has them, beside the three
+lines and the `cause:` lines. The workflow posts the hold and the question from
+that file and parks the card in `Green Light` — you never post either, and
+never move the card.
 
 ## Heartbeats
 One line each on the card, never skipping 1/5 — it is your "alive" signal:
