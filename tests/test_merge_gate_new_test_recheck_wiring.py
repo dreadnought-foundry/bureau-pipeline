@@ -26,6 +26,7 @@ Three halves:
     `merge_gate.py` that records every subcommand it is run with.
 """
 
+import hashlib
 import json
 import os
 import subprocess  # nosec B404 — fixed argv, our own workflow body
@@ -339,7 +340,7 @@ exec(compile(open(REAL).read(), REAL, "exec"))
 
 def entry(name, status="modified", patch=None, sha=None):
     row = {"filename": name, "status": status,
-           "sha": sha or (format(abs(hash(name)), "x") * 3)[:40]}
+           "sha": sha or hashlib.sha1(name.encode()).hexdigest()}  # nosec B324 — a fixture blob id
     if patch is not None:
         row["patch"] = patch
     return row
