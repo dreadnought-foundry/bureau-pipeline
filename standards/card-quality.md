@@ -493,6 +493,72 @@ named, the same way an epic with invalid children is. The enforcer is
 `scripts/proof_and_demo.py`, run over `linear_ops.py children-detail` in
 `plan.yml`; `briefs/planner.md` tells the planner how to satisfy it.
 
+### A PROOF criterion the run cannot observe is caught when the plan is written (DRE-6603)
+
+Nine proofs stood open on the night of 2026-10-09 to 2026-10-10, with four
+epics behind them: DRE-6543, DRE-6431, DRE-6442, DRE-6042, DRE-6364, DRE-5377,
+DRE-5662, DRE-6204 and DRE-5409. Each epic built what it promised. Each proof
+then ended the same way — a record the critic approved, a gate that held it, a
+re-run that read the same thing, and a question for the CEO — because a
+criterion asked for something a dispatched proof run could never observe, or
+read the result of an operator step the proof was not blocked on. The
+criterion was wrong on the day it was written, so that is when it is caught.
+
+**What a proof run can read is declared once, in `config/proof-reach.json`**
+(DRE-6605), and `scripts/proof_reach.py` is its one reader. Read it there: what
+follows is a summary that can drift, and the file is what the plan critic
+reads. In plain words:
+
+- The GitHub reads its token carries are the ones the file lists, and they
+  reach the caller's own organization only. A repo variable is among them only
+  where the installation grants `variables: read`, which no installation on
+  record does.
+- `make db-read` is not available to it — it runs under the operator's AWS
+  profile, which no proof run holds — and neither is a workflow run's step
+  summary. A tagged line is read from the run's log instead.
+- A `Local screen:` step shows only a page the repo's
+  `.github/bureau/proof-local.json` declares, named by its key.
+- The product's own scripted identity is held only where the calling repo
+  provides a role (`PROOF_ROLE_ARN`), and the queries it may make are the
+  product's script's to list (for Portico, `infra/scripts/proof-reader.ts`),
+  never a copy kept here.
+
+**The plan critic refuses a criterion the run cannot observe.** A plan whose
+PROOF criterion asks for a reading outside the declaration is refused, naming
+the criterion and the reading. A PROOF criterion that reads the result of an
+operator step — a variable set, a grant applied, a switch turned by hand — with
+no `blockedBy` to that operator card is refused, naming both cards. A PROOF
+card is never read as an operator step, its own or another's: it routes
+`OPERATOR` by its `agent:ops` label, but what it records is an observation and
+not a step's result, so the rule never asks a proof to be blocked on itself or
+on another proof.
+
+**A row the run still cannot observe as worded carries its cause**, written as
+one of four words, read off the declaration's `causes`:
+
+- `out-of-reach` — the criterion names a reading the proof identity cannot
+  make. DRE-6431 row 6 asked for repositories in another organization, which
+  the read token cannot reach.
+- `state-gone` — the criterion names a state that was gone before the proof
+  could run. DRE-5662 asked to see a shelf row deleted three days before the
+  card was filed.
+- `misdescribed` — the criterion describes the product wrongly. DRE-6204 row 9
+  said the emergency press names five private repos, where the pool can only
+  ever hold three.
+- `operator-step-unblocked` — the criterion reads the result of an operator
+  step the proof is not blocked on. DRE-6543 rows 3 and 4 read
+  `BUREAU_DOCKER_RUNS_ON` as set while setting it was still the open operator
+  card DRE-6478, with no `blockedBy` between them.
+
+**A record whose unmet rows all carry a cause is put to the CEO once, in
+Green Light.** The proof run or the dispatcher asks it, through one writer,
+under a hold that names the operator's decision it waits for: one plain-English
+question per card that quotes the criterion, says why it cannot be shown and
+says what was seen instead. The record is never re-run to read the same thing
+— a second run at the same head reads what the first one did. DRE-6244's rule
+on accepting such a row stands unchanged: a cause says why a row is unmet,
+never that it is accepted, and only the operator's linked decision accepts one.
+
 ## Mid-epic discovery (DRE-2739)
 A finding made **while building**, about an epic that is already approved and
 already running, does not go back to Intake. It is filed against the epic with
