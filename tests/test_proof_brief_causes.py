@@ -198,9 +198,27 @@ def test_a_cause_row_and_a_press_row_are_one_file():
     assert "the press lines keep their shape" in section
 
 
-def test_the_workflow_posts_the_question_and_parks_the_card():
+def test_the_workflow_holds_a_cause_card_in_review_for_the_operator():
     section = _flat(_causes())
-    assert "parks the card in `Green Light`" in section
+    assert ("Once the record pull request is open, the workflow holds the card "
+            "`In Review` for the operator and posts the operator's question") in section
+    assert "only a press or a decision parks the card in `Green Light`" in section
+    # The sentence DRE-6840 retired: a cause file no longer parks in Green Light.
+    assert ("posts the hold and the question from that file and parks the card in "
+            "`Green Light`") not in section
+
+
+def test_the_question_line_tells_a_cause_file_from_a_decision():
+    section = _flat(_causes())
+    assert ("That Question line, word for word, is what tells the workflow a cause "
+            "file from a decision") in section
+
+
+def test_the_lanes_paragraph_parks_only_a_press_or_a_decision():
+    lanes = _flat(_section(_text(), "## The lanes, which you never write"))
+    assert lanes, "briefs/proof.md has no lanes section"
+    assert ("your escalation file parks it in `Green Light`, the CEO's \"needs you\" "
+            "queue, only when it names a press or a decision") in lanes
 
 
 def test_the_identities_section_names_the_declaration():

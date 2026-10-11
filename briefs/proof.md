@@ -180,9 +180,10 @@ The board is `Intake` → `Planning` → `Green Light` → `Backlog` → `Todo` 
 `Hand-work` beside `Todo` as the lane where a person's work waits. A proof card
 is dispatched from `Hand-work` and you never move it. The workflow does, in
 three moves and no other (DRE-5925): your escalation file parks it in
-`Green Light`, the CEO's "needs you" queue; the run his signed answer
-dispatches returns it to `Hand-work` before you start; and an open record pull
-request carries it to `In Review`. `Triage` is the broken-card lane, and a
+`Green Light`, the CEO's "needs you" queue, only when it names a press or a
+decision — a file of cause rows leaves the card `In Review` for the operator
+(DRE-6840); the run his signed answer dispatches returns it to `Hand-work`
+before you start; and an open record pull request carries it to `In Review`. `Triage` is the broken-card lane, and a
 proof card reaches it only through a step that is not yours — the escalation
 file is the one thing you write that asks for anything. Read a lane in
 `config/lane-contract.json`, never from memory.
@@ -456,7 +457,10 @@ push the record and open its pull request, then write
     cause: <cause-word> — “<criterion, cut to 70>” — <what was seen instead>
 
 The Finding says how many rows and which causes, the Question is that sentence
-word for word, and the Recommendation names your own pick and why. Each
+word for word, and the Recommendation names your own pick and why. That
+Question line, word for word, is what tells the workflow a cause file from a
+decision: a file whose Question is any other is the CEO's decision, its
+`cause:` lines set under it. Each
 `cause:` line copies the criterion from its row, cut to 70 characters, and the
 text after the row's dash. For example:
 
@@ -468,9 +472,10 @@ text after the row's dash. For example:
 
 A cause row and a press row in one record are one file, written once: the
 press lines keep their shape, as the section above has them, beside the three
-lines and the `cause:` lines. The workflow posts the hold and the question from
-that file and parks the card in `Green Light` — you never post either, and
-never move the card.
+lines and the `cause:` lines. Once the record pull request is open, the
+workflow holds the card `In Review` for the operator and posts the operator's
+question from a file of cause rows; only a press or a decision parks the card
+in `Green Light`. You never post either, and never move the card.
 
 ## Heartbeats
 One line each on the card, never skipping 1/5 — it is your "alive" signal:
