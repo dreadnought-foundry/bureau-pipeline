@@ -83,7 +83,7 @@ def test_the_readme_carries_both_rules():
     assert "No test asserts a choice the console can change" in text
     # Rule 2: the refresh rule, in the words a stale fixture says.
     assert "the refresh rule" in text
-    assert "re-freeze it in this pull request" in text
+    assert "re-freeze it in this pull request" in README.read_text()
     assert "needs no re-freeze" in text
 
 
