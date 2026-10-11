@@ -573,11 +573,14 @@ class JudgementKindTest(unittest.TestCase):
     def test_the_cli_holds_that_line_too(self):
         # The workflows call the CLI, not select(). Everything up, including
         # both Fable ids.
+        strongest = _judgement_ladder()[0]
         with tempfile.TemporaryDirectory() as td:
             tree = _copy_tree(Path(td))
             for role in _roles_of(WORKHORSE):
                 with self.subTest(role=role):
-                    self.assertEqual(_cli_select(tree, role)[0], _workhorse_ladder()[0])
+                    model = _cli_select(tree, role)[0]
+                    self.assertNotEqual(model, strongest)
+                    self.assertEqual(model, _workhorse_ladder()[0])
             self.assertEqual(_cli_select(tree, _role_of(JUDGEMENT))[0],
                              _judgement_ladder()[0])
 
@@ -602,9 +605,12 @@ class JudgementKindTest(unittest.TestCase):
             {"model": build_rung, "reason": "the build model first"},
             {"model": strongest, "reason": "…and the premium one hidden below it"},
         ]
+        # The refusal names the hidden model: rule 4 refuses this ladder's
+        # build-model top on its own, and that is not the rule under test.
+        errors = fmf.policy_errors(cfg)
         self.assertTrue(
-            fmf.policy_errors(cfg),
-            "a premium model below the workhorse fallback must be rejected",
+            any(strongest in e for e in errors),
+            f"a premium model below the workhorse fallback must be rejected: {errors}",
         )
 
     def test_the_selector_degrades_rather_than_honouring_the_strongest_model_on_the_build_path(self):
