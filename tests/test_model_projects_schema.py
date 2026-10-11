@@ -212,7 +212,13 @@ class TestHelpers:
         fleet = mf._normalize_config(cfg)["ladders"]
         assert mf.effective_ladders(cfg, None) == fleet
         assert mf.effective_ladders(cfg, "portico") == fleet
-        assert mf.effective_ladders(mf.CONFIG, "atlas") == mf.LADDERS
+        # Atlas with no entry, on configs this test builds — never the
+        # committed file, which carries whatever the console last saved
+        # (DRE-6883): an empty map, and the normalized shape naming another
+        # project.
+        assert mf.effective_ladders(with_projects({}), "atlas") == fleet
+        norm = mf._normalize_config(with_projects({"portico": {"advisory": SONNET5}}))
+        assert mf.effective_ladders(norm, "atlas") == fleet
 
     def test_effective_ladders_reads_the_normalized_shape_too(self):
         cfg = mf._normalize_config(with_projects({"atlas": {"judgement": SONNET46}}))
