@@ -40,6 +40,7 @@ os.environ.setdefault("REPO", "dreadnought-foundry/bureau-pipeline")
 
 import hygiene_done  # noqa: E402
 import proof_dispatch  # noqa: E402
+import proof_reach  # noqa: E402
 import proof_record  # noqa: E402
 import spoken_thread  # noqa: E402
 
@@ -405,6 +406,119 @@ class TestARowWaitingOnAnEvent:
 
 
 # --------------------------------------------------------------------------
+# A row the run cannot observe as worded carries a cause (DRE-6607)
+# --------------------------------------------------------------------------
+CAUSES = list(proof_reach.causes())
+CAUSED = """# Proof: the reach
+
+| Criterion | Result |
+|---|---|
+| The briefing honours the preference | Met |
+| The nightly reads the repo variable | Not observed. cause: out-of-reach — `gh variable get` answered 403 |
+| The stale branch is deleted | Not observed. cause: state-gone — the branch was gone at 09:02 PT |
+"""
+
+
+def with_row(text: str, criterion: str, result: str) -> str:
+    return text + f"| {criterion} | {result} |\n"
+
+
+class TestARowWithACause:
+    def test_the_cause_words_are_proof_reachs_four(self):
+        assert CAUSES == ["out-of-reach", "state-gone", "misdescribed",
+                          "operator-step-unblocked"]
+        assert proof_record.CAUSE_OPENING == "Not observed. cause:"
+
+    @pytest.mark.parametrize("word", CAUSES)
+    @pytest.mark.parametrize("shape", [
+        "Not observed. cause: {w} — the run saw a 403",
+        "**Not observed.** cause: `{w}` — the run saw a 403",
+        "**Not observed. cause: {w}** — the run saw a 403",
+        "Not observed. cause: `{w}` — the run saw a 403",
+    ])
+    def test_each_of_the_four_words_is_read(self, word, shape):
+        assert proof_record.row_cause(shape.format(w=word)) == word
+
+    @pytest.mark.parametrize("result", [
+        "Not observed. waiting for the 2026-10-14 release",
+        "Not observed. needs the CEO's press: the Approve button on the plan",
+        "Not met.",
+        "Not observed.",
+        "Not observed. cause: impossible — the run saw a 403",
+        "Not observed. cause: state-gone",
+        "Not observed. cause: state-gone —",
+        "Not observed. cause: — the run saw a 403",
+        "Not observed. the run saw a 403, cause: state-gone — gone",
+        "Met. cause: state-gone — gone",
+        "cause: state-gone — gone",
+        "",
+    ])
+    def test_nothing_else_is_a_cause(self, result):
+        assert proof_record.row_cause(result) is None
+
+    def test_a_cause_row_is_neither_waiting_nor_accepted_nor_met(self):
+        result = "Not observed. cause: state-gone — the branch was gone"
+        assert proof_record.row_waiting(result) is None
+        assert proof_record.row_accepted(result) is False
+        assert proof_record.row_met(result) is False
+
+    def test_an_unknown_word_is_named_with_the_four(self):
+        said = proof_record.unmet_row("The branch is deleted",
+                                      "Not observed. cause: impossible — the run saw a 403")
+        assert "“impossible” is not one of the four" in said
+        assert ", ".join(CAUSES) in said
+        assert said.startswith("“The branch is deleted” reads “Not observed. cause: impossible")
+
+    def test_a_known_word_or_no_cause_adds_nothing(self):
+        for result in ("Not observed. cause: state-gone — gone", "Not observed.", "Not met."):
+            assert proof_record.unmet_row("c", result) == proof_record._row("c", result)
+
+    def test_the_caused_rows_are_read_and_still_unmet(self):
+        read = proof_record.reading(CAUSED)
+        assert len(read.unmet) == 2
+        assert read.caused == [("The nightly reads the repo variable", "out-of-reach"),
+                               ("The stale branch is deleted", "state-gone")]
+        assert proof_record.all_unmet_caused(read) is True
+
+    def test_shortfall_still_holds_the_caused_record_and_names_the_cause(self):
+        why = proof_record.shortfall(proof_record.Record(RECORD_PATH, CAUSED, None))
+        assert why is not None and "2 row(s) not met" in why
+        assert "reads “Not observed. cause: state-gone —" in why
+        assert "reads “Not observed. cause: out-of-reach —" in why
+
+    def test_the_summary_is_unchanged(self):
+        assert proof_record.summary(proof_record.reading(CAUSED)) == "1 rows met"
+
+    @pytest.mark.parametrize("result", [
+        "Not observed.",
+        "Not met.",
+        "Not observed. waiting for the 2026-10-14 release",
+        "Not observed. cause: impossible — the run saw a 403",
+        "ACCEPTED by operator decision — overtaken",
+    ])
+    def test_one_unmet_row_without_a_cause_makes_it_false(self, result):
+        read = proof_record.reading(with_row(CAUSED, "The console shows the order", result))
+        assert len(read.unmet) == 3
+        assert proof_record.all_unmet_caused(read) is False
+
+    def test_every_row_met_is_false(self):
+        read = proof_record.reading(MET)
+        assert read.unmet == [] and read.caused == []
+        assert proof_record.all_unmet_caused(read) is False
+
+    def test_no_table_is_false(self):
+        read = proof_record.reading(NO_TABLE)
+        assert read.caused == [] and proof_record.all_unmet_caused(read) is False
+
+    def test_an_accepted_row_beside_caused_ones_leaves_it_true(self):
+        accepted = ("ACCEPTED by operator decision — overtaken "
+                    "(https://linear.app/dreadnoughtfoundry/issue/DRE-6000/x#comment-abc)")
+        read = proof_record.reading(with_row(CAUSED, "The console shows the order", accepted))
+        assert len(read.accepted) == 1
+        assert proof_record.all_unmet_caused(read) is True
+
+
+# --------------------------------------------------------------------------
 # The hold-discharge reader
 # --------------------------------------------------------------------------
 def voice(kind, body):
@@ -568,6 +682,8 @@ nodes = [{"body": hold, "user": {"id": "pipeline"}, "createdAt": "2026-10-07T14:
           "createdAt": "2026-10-07T14:46:00Z"}]
 voices = spoken_thread.voices(nodes, "pipeline", card="DRE-5798")
 assert proof_record.open_holds(voices) == [hold]
+caused = proof_record.reading(sys.argv[3])
+assert proof_record.all_unmet_caused(caused), caused
 assert "reconcile" not in sys.modules and "hygiene" not in sys.modules, sorted(sys.modules)
 print("leaf ok")
 """
@@ -576,7 +692,7 @@ print("leaf ok")
 def test_it_imports_and_judges_without_repo_in_the_environment():
     env = {k: v for k, v in os.environ.items() if k not in ("REPO", "REPO_SLUG")}
     proc = subprocess.run(  # nosec B603 — fixed argv, our own probe
-        [sys.executable, "-c", LEAF_PROBE, str(SCRIPTS), NOT_OBSERVED],
+        [sys.executable, "-c", LEAF_PROBE, str(SCRIPTS), NOT_OBSERVED, CAUSED],
         capture_output=True, text=True, env=env, check=False,
     )
     assert proc.returncode == 0, proc.stderr

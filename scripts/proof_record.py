@@ -24,6 +24,10 @@ or read the hold. Both now do, through this module:
    says so. `summary` renders the reading as both PROOF closes post it.
    `row_waiting` (DRE-6488) names the event a `Not observed. waiting for …`
    row waits on, which the proof dispatch holds on instead of a re-run.
+   `row_cause` (DRE-6607) names the cause a `Not observed. cause: …` row
+   carries — one of `proof_reach.causes()` — and `all_unmet_caused` says
+   every unmet row carries one, which the dispatcher reads; the row stays
+   unmet, and `shortfall` still holds the record on it.
 3. **The hold-discharge reader** — `open_holds`, moved from `proof_dispatch`;
    `open_holds_at` is the same reading with each hold's time, for the PROOF
    close (DRE-6489).
@@ -39,7 +43,8 @@ reads with `--proof-record-file`, the same shape as `stacked_prs.py gather`.
 A LEAF, on purpose: `reconcile` reads `os.environ["REPO"]` when it is imported,
 and neither the merge gate's `Evaluate and merge` step nor linear-sync's
 `Card → Done` step sets `REPO`. This module imports nothing that imports
-`reconcile` or `hygiene`, and `tests/test_proof_record.py` imports it with
+`reconcile` or `hygiene` — `proof_reach`, for the cause words, is a leaf too —
+and `tests/test_proof_record.py` imports it with
 `REPO` unset.
 """
 
@@ -58,6 +63,7 @@ from urllib.parse import quote
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import linear_ops  # noqa: E402 — the proof line's mark and tags, spelled once
+import proof_reach  # noqa: E402 — the cause words, spelled once
 import spoken_thread  # noqa: E402 — who said each comment, signature checked
 
 # --------------------------------------------------------------------------- #
@@ -98,6 +104,10 @@ UNLINKED = "accepted without a linked decision"
 #: something no one on the card has to cause (DRE-6488): a release not yet
 #: cut, a date not yet reached, a scheduled run that has not fired.
 WAITING_OPENING = "Not observed. waiting for"
+#: A result cell opening with this, then one of `proof_reach.causes()`, then
+#: ` — ` and what the run saw instead, is a row the run cannot observe as the
+#: card words it (DRE-6607): a re-run would read the same thing again.
+CAUSE_OPENING = "Not observed. cause:"
 
 _FENCE = re.compile(r"^\s*(```|~~~)")
 _SEPARATOR_CELL = re.compile(r":?-+:?")
@@ -106,6 +116,9 @@ _MET = re.compile(rf"(?:{'|'.join(MET_WORDS)})\b")
 _HEDGED = re.compile(rf"(?:{'|'.join(MET_WORDS)})\b[\s,;:—–-]*(?:{'|'.join(HEDGES)})\b")
 _ACCEPTED = re.compile(rf"{ACCEPTED_OPENING}\b")
 _WAITING = re.compile(r"not observed\.\s+waiting for\s+(\S.*)", re.IGNORECASE | re.DOTALL)
+#: The word after `cause:`, known or not, and whether ` — <what it saw>` follows.
+_CAUSE = re.compile(r"not observed\.\s+cause:\s*([^\s—]+)(\s*—\s*\S)?",
+                    re.IGNORECASE | re.DOTALL)
 #: The written decision, bare or inside a markdown link: a Linear comment on a
 #: card or a GitHub comment on a pull request. Its SHAPE is all that is read —
 #: nothing fetches it, so nothing here says the comment exists, who wrote it,
@@ -123,8 +136,9 @@ _CLOSING_STEP = re.compile(r"\bthe (?:ceo|operator)\b[^.;:]*?\b(?:clos(?:es|ed|e
                            r"|the card|it)|reads? (?:the|this) (?:merged )?record)\b")
 
 #: `rows` is None when the record holds no criterion table; `met`, `unmet`
-#: and `accepted` are the (criterion, result) pairs that are not closing rows.
-Reading = namedtuple("Reading", "rows met unmet accepted")
+#: and `accepted` are the (criterion, result) pairs that are not closing rows;
+#: `caused` the (criterion, cause word) pairs of the unmet rows that carry one.
+Reading = namedtuple("Reading", "rows met unmet accepted caused")
 
 
 def _cells(line: str) -> list:
@@ -213,13 +227,47 @@ def row_waiting(result: str) -> str | None:
     return " ".join(found.group(1).split()) if found else None
 
 
+def _cause_said(result: str):
+    """The `_CAUSE` match on the cell, markup and backticks stripped."""
+    return _CAUSE.match(_plain(result).replace("`", ""))
+
+
+def row_cause(result: str) -> str | None:
+    """The cause word a `Not observed.` row carries, or None (DRE-6607).
+
+    Only a cell that opens `CAUSE_OPENING` (any case, markup and backticks
+    stripped), then one of `proof_reach.causes()`, then ` — ` and what the run
+    saw instead, carries a cause. A word that is not one of the four carries
+    none, and `unmet_row` says so. Only the cell's opening is read."""
+    found = _cause_said(result)
+    if found is None or found.group(2) is None:
+        return None
+    word = found.group(1)
+    return word if word in proof_reach.causes() else None
+
+
+def _unknown_cause(result: str) -> str | None:
+    """The word after `cause:` when it is not one of the four, else None."""
+    found = _cause_said(result)
+    if found is None:
+        return None
+    return None if found.group(1) in proof_reach.causes() else found.group(1)
+
+
 def reading(text: str) -> Reading:
     rows = criterion_rows(text)
     judged = [r for r in rows or [] if not is_closing_row(r[0])]
     accepted = [r for r in judged if row_accepted(r[1])]
-    return Reading(rows=rows, met=[r for r in judged if row_met(r[1])],
-                   unmet=[r for r in judged if not row_met(r[1]) and not row_accepted(r[1])],
-                   accepted=accepted)
+    unmet = [r for r in judged if not row_met(r[1]) and not row_accepted(r[1])]
+    caused = [(c, row_cause(r)) for c, r in unmet if row_cause(r)]
+    return Reading(rows=rows, met=[r for r in judged if row_met(r[1])], unmet=unmet,
+                   accepted=accepted, caused=caused)
+
+
+def all_unmet_caused(read: Reading) -> bool:
+    """Is there an unmet row, and does every unmet row carry a cause word?
+    The dispatcher reads it (DRE-6607); the record is still held on them."""
+    return bool(read.unmet) and len(read.caused) == len(read.unmet)
 
 
 def _cut(text: str, n: int) -> str:
@@ -233,10 +281,16 @@ def _row(criterion: str, result: str) -> str:
 
 def unmet_row(criterion: str, result: str) -> str:
     """An unmet row as `_row` renders it, with `UNLINKED` after it when the
-    row opened as accepted but linked no decision — the result kept, the
-    reason added."""
+    row opened as accepted but linked no decision, or the four cause words
+    when its `cause:` names a fifth — the result kept, the reason added."""
     said = _row(criterion, result)
-    return f"{said} — {UNLINKED}" if _opens_accepted(result) else said
+    if _opens_accepted(result):
+        return f"{said} — {UNLINKED}"
+    unknown = _unknown_cause(result)
+    if unknown is not None:
+        four = ", ".join(proof_reach.causes())
+        return f"{said} — the cause word “{unknown}” is not one of the four: {four}"
+    return said
 
 
 def summary(read: Reading) -> str:
