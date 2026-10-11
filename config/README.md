@@ -733,12 +733,23 @@ price in `model-prices.yaml` (label, price, and its `excluded` reason or
 — in a group or not — with a move per group it is not in and `runs_in`
 (`pipeline` or `session`, off `session_agents`), and the per-project
 exceptions. Every `allowed` and `reason` is `model_fallback.policy_errors`'
-answer on a copy of this file carrying that one option as a real entry — a
-project exception under `projects`; for a move, the edit the change script
-below would make (`model_config_change.edit_data`), after its own pre-flight
-checks — so the page is read off the same gate a pull request meets. A refused
-move's `reason` is the plain sentence the change script prints for it
-(DRE-6833). A missing or stale file is `STALE` under `--check`,
+answer on a copy of this file carrying that one option as a real entry — for a
+group's choice, the change the console would make: the model lifted from
+`excluded` and set as a project exception under `projects`; for a move, the
+edit the change script below would make (`model_config_change.edit_data`),
+after its own pre-flight checks — so the page is read off the same gate a pull
+request meets. A refused move's `reason` is the plain sentence the change
+script prints for it (DRE-6833).
+
+Since DRE-6786 every priced model is allowed for every group, and each choice is
+`{model, allowed, reason, caution}`: `caution` is one plain-English sentence
+with both prices where there is something to say — a model we set aside, or one
+dearer than the group's current model — and `null` otherwise or when the choice
+is refused. The sentences live once, in `scripts/model_choice.py`, which the
+console's change-writer imports too. The one choice still refused is a model the
+pinned Claude Code cannot run (`Our pinned Claude Code cannot run <model>
+yet.`), read off the floor tables in `tests/test_model_cli_support.py` through
+`claude_code_pin.model_floors`. A missing or stale file is `STALE` under `--check`,
 exactly like the two mirrors; `tests/test_model_choices.py` pins its content
 and recomputes every verdict through a real repo slug. The daily
 `.github/workflows/model-adoption.yml` is a writer too: it runs the generator

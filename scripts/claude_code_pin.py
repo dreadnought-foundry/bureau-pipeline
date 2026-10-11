@@ -787,22 +787,77 @@ def _pins_test_text(text: str, pin: dict) -> str:
 
 
 def _known_models(root: Path) -> set[str]:
-    """Every id the root's `config/models.yaml` knows — the ladders, `retired`
-    and `excluded`, the same union `model_fallback.KNOWN_MODELS` is. Empty when
-    the file cannot be read, which files the row ahead of adoption."""
+    """Every id the root's `config/models.yaml` knows — the ladders, `retired`,
+    `excluded` and every `projects.<slug>.<kind>`, the same four keys
+    `model_fallback.KNOWN_MODELS` and `model_adoption._known_ids` derive from
+    (DRE-6785, DRE-6786). A `{model, reason}` entry under the first three
+    gives its `model`, a bare string entry the string. Empty when the file
+    cannot be read, which files the row ahead of adoption."""
     import yaml
 
     try:
         config = yaml.safe_load((root / "config" / "models.yaml").read_text()) or {}
     except (OSError, yaml.YAMLError):
         return set()
-    known: set[str] = set()
-    for rungs in (config.get("ladders") or {}).values():
-        for rung in rungs or []:
-            known.add(str(rung.get("model") if isinstance(rung, Mapping) else rung))
+    entries = [rung for rungs in (config.get("ladders") or {}).values()
+               for rung in rungs or []]
     for key in ("retired", "excluded"):
-        known |= {str(model) for model in (config.get(key) or [])}
+        entries += list(config.get(key) or [])
+    known: set[str] = set()
+    for entry in entries:
+        known.add(str(entry.get("model") if isinstance(entry, Mapping) else entry))
+    for exceptions in (config.get("projects") or {}).values():
+        if isinstance(exceptions, Mapping):
+            known |= {str(model) for model in exceptions.values()}
     return known
+
+
+# One row of a floor table: `"<model id>": "<version>",`.
+_FLOOR_ROW = re.compile(r'^\s*"([^"]+)":\s*"([^"]+)",')
+
+
+def model_floors(root=ROOT) -> dict[str, str]:
+    """model id → the oldest Claude Code that runs it, read out of
+    `tests/test_model_cli_support.py`'s `MINIMUM_CLAUDE_CODE` and
+    `AHEAD_OF_ADOPTION` as `apply` edits them; a model in both is held to the
+    higher floor, as the ladder check there holds it (DRE-6786). Empty when the
+    tree carries no such file — a tree of scripts and config alone. Raises
+    `Refused` for a file whose tables cannot be read."""
+    path = Path(root) / SUPPORT_TEST
+    if not path.exists():
+        return {}
+    lines = path.read_text().splitlines()
+    floors: dict[str, str] = {}
+    for name in ("MINIMUM_CLAUDE_CODE", "AHEAD_OF_ADOPTION"):
+        first, close = _one_block(lines, f"{name} = {{", str(SUPPORT_TEST))
+        for line in lines[first + 1:close]:
+            row = _FLOOR_ROW.match(line)
+            if not row:
+                continue
+            model, floor = row.groups()
+            try:
+                higher = (model not in floors
+                          or version_key(floor) > version_key(floors[model]))
+            except ValueError as exc:
+                raise Refused(f"{SUPPORT_TEST}: {name}: {exc}") from exc
+            if higher:
+                floors[model] = floor
+    return floors
+
+
+def installed_claude_code(root=ROOT) -> str:
+    """The Claude Code version the shared install step pins — its `version`
+    input's default in `.github/actions/install-claude-code/action.yml`.
+    Raises `Refused` when it cannot be read as an exact version."""
+    import yaml
+
+    try:
+        action = yaml.safe_load((Path(root) / INSTALLER).read_text())
+        version = str(action["inputs"]["version"]["default"]).strip()
+        version_key(version)
+    except (OSError, KeyError, TypeError, ValueError, yaml.YAMLError) as exc:
+        raise Refused(f"cannot read the pinned Claude Code out of {INSTALLER} ({exc})") from exc
+    return version
 
 
 def _support_test_text(text: str, pin: dict, today: str, known: set[str]) -> str:

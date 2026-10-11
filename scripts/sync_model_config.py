@@ -22,7 +22,10 @@ A third target is a whole generated file (DRE-6635):
     allows, every agent with the moves it allows, and the per-project
     exceptions. Every ``allowed`` / ``reason`` is ``policy_errors``' answer on
     a copy of the canonical config carrying that one option as a real entry,
-    so the page is read off the gate a pull request meets. An agent's move is
+    so the page is read off the gate a pull request meets. Since DRE-6786 a
+    group's choice also carries a plain-English ``caution`` with both prices
+    (``scripts/model_choice.py``), and the one choice refused outright is a
+    model the pinned Claude Code cannot run. An agent's move is
     judged as ``model_config_change.py`` judges it, on the edit it would make,
     and a refused move publishes the plain line that script prints for it
     (DRE-6833).
@@ -44,7 +47,6 @@ from __future__ import annotations
 import argparse
 import copy
 import json
-import re
 import sys
 from pathlib import Path
 
@@ -58,12 +60,19 @@ from model_fallback import _normalize_separation  # noqa: E402
 from model_fallback import declared_prices  # noqa: E402
 from model_fallback import declared_repo_slugs  # noqa: E402
 from model_fallback import policy_errors as _policy_errors  # noqa: E402
+# The words a choice is shown with live once (DRE-6786): the console's
+# change-writer imports the same module, so the page and the pull request say
+# the same thing.
+from model_choice import caution_for, model_label  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
 CONFIG = ROOT / "config" / "models.yaml"
 FALLBACK_TARGET = ROOT / "scripts" / "model_fallback.py"
 REGISTRY_TARGET = ROOT / "agents.yaml"
 CHOICES_TARGET = ROOT / "config" / "model-choices.json"
+# The two floor tables the ladders are held to (MINIMUM_CLAUDE_CODE and
+# AHEAD_OF_ADOPTION), read through `claude_code_pin.model_floors` (DRE-6786).
+FLOORS_SOURCE = ROOT / "tests" / "test_model_cli_support.py"
 
 _PY_BEGIN = "BEGIN generated model config"
 _PY_END = "END generated model config"
@@ -272,14 +281,26 @@ def render_registry_model(cfg: dict, agent: str) -> str:
 
 
 def render_choices(raw: dict, cfg: dict, prices: dict,
-                   registry: set[str] | None = None) -> str:
+                   registry: set[str] | None = None, *,
+                   floors: dict[str, str] | None = None,
+                   installed: str | None = None) -> str:
     """config/model-choices.json, the console's contract (DRE-6635): key order
     fixed, 2-space indent, trailing newline.
 
     No rule is restated here. A group's choice is ``policy_errors``' answer on
-    a deep copy of ``raw`` carrying that model as an exception under
-    ``projects[PROBE_SLUG]``, filtered to that entry's own prefix so an error
-    elsewhere in the config never reaches it.
+    the change the console would make for it (DRE-6786): a deep copy of
+    ``raw`` with that model lifted from ``excluded`` and set as an exception
+    under ``projects[PROBE_SLUG]``, filtered to that entry's own prefix so an
+    error elsewhere in the config never reaches it. Each choice is
+    ``{model, allowed, reason, caution}``: ``caution`` is
+    ``model_choice.caution_for``'s sentence for an allowed choice and None for
+    a refused one.
+
+    A model the pinned Claude Code cannot run is refused before the policy is
+    asked, in one plain sentence. ``floors`` (model id → the oldest Claude
+    Code that runs it) and ``installed`` (the pinned version) are read off this
+    tree by ``claude_code_pin`` when not given — the tables
+    tests/test_model_cli_support.py holds the ladders to.
 
     An agent's move is judged as the change script judges it (DRE-6833): every
     agent, grouped or not, gets one move per group it is not in, and each is
@@ -296,6 +317,7 @@ def render_choices(raw: dict, cfg: dict, prices: dict,
 
     if registry is None:
         registry = mcc.registry_agents(REGISTRY_TARGET.read_text(encoding="utf-8"))
+    floors, installed = _claude_code_floors(floors, installed)
     excluded = {
         entry["model"]: entry.get("reason")
         for entry in raw.get("excluded") or []
@@ -305,7 +327,7 @@ def render_choices(raw: dict, cfg: dict, prices: dict,
     models = [
         {
             "id": model,
-            "label": _model_label(model),
+            "label": model_label(model),
             "input": price["input"],
             "output": price["output"],
             "excluded": excluded.get(model),
@@ -320,14 +342,25 @@ def render_choices(raw: dict, cfg: dict, prices: dict,
         prefix = f"projects.{PROBE_SLUG}.{kind}: "
         choices = []
         for model in models:
-            trial = copy.deepcopy(raw)
-            trial["projects"] = {PROBE_SLUG: {kind: model["id"]}}
-            refused = [
-                error[len(prefix):]
-                for error in _policy_errors(trial, prices, repo_slugs=probe_slugs)
-                if error.startswith(prefix)
-            ]
-            choices.append(_verdict("model", model["id"], refused))
+            refused = _cannot_run(model["id"], floors, installed)
+            if not refused:
+                trial = copy.deepcopy(raw)
+                trial["excluded"] = [
+                    entry for entry in trial.get("excluded") or []
+                    if _entry_id(entry) != model["id"]
+                ]
+                trial["projects"] = {PROBE_SLUG: {kind: model["id"]}}
+                refused = [
+                    error[len(prefix):]
+                    for error in _policy_errors(trial, prices, repo_slugs=probe_slugs)
+                    if error.startswith(prefix)
+                ]
+            choices.append({
+                "model": model["id"],
+                "allowed": not refused,
+                "reason": "; ".join(refused) if refused else None,
+                "caution": None if refused else caution_for(raw, prices, kind, model["id"]),
+            })
         groups.append({
             "key": kind,
             "label": words["label"],
@@ -375,25 +408,45 @@ def render_choices(raw: dict, cfg: dict, prices: dict,
     return json.dumps(document, indent=2, ensure_ascii=False) + "\n"
 
 
-_MODEL_ID = re.compile(r"claude-([a-z]+)-(\d+)(?:-(\d+))?")
+def _entry_id(entry) -> str | None:
+    """The model id of an `excluded` entry, `{model, reason}` or bare."""
+    return entry.get("model") if isinstance(entry, dict) else entry
 
 
-def _model_label(model: str) -> str:
-    """`claude-<family>-<major>-<minor>` → `<Family> <major>.<minor>`
-    (`claude-opus-5` → `Opus 5`). An id of any other shape is its own label."""
-    match = _MODEL_ID.fullmatch(model)
-    if not match:
-        return model
-    family, major, minor = match.groups()
-    return f"{family.title()} {major}" + (f".{minor}" if minor else "")
+def _claude_code_floors(floors: dict[str, str] | None,
+                        installed: str | None) -> tuple[dict[str, str], str | None]:
+    """(floors, installed), each read off this tree the way `claude_code_pin`
+    reads them for a pin raise when not given. A tree with no floor tables —
+    scripts and config alone — has no floors, and so no pinned version to
+    read."""
+    if floors is None and not FLOORS_SOURCE.exists():
+        return {}, installed
+    if floors == {}:
+        return floors, installed
+    # Imported here: a tree of scripts and config alone renders without it.
+    import claude_code_pin
+
+    try:
+        if floors is None:
+            floors = claude_code_pin.model_floors(ROOT)
+        if floors and installed is None:
+            installed = claude_code_pin.installed_claude_code(ROOT)
+    except claude_code_pin.Refused as exc:
+        raise SystemExit(f"cannot read the Claude Code floors: {exc}") from exc
+    return floors, installed
 
 
-def _verdict(key: str, value: str, refused: list[str]) -> dict:
-    return {
-        key: value,
-        "allowed": not refused,
-        "reason": "; ".join(refused) if refused else None,
-    }
+def _cannot_run(model: str, floors: dict[str, str], installed: str | None) -> list[str]:
+    """The one refusal a priced model still meets (DRE-6786): the pinned
+    Claude Code is older than its floor."""
+    floor = floors.get(model)
+    if not floor:
+        return []
+    import claude_code_pin
+
+    if claude_code_pin.version_key(installed) >= claude_code_pin.version_key(floor):
+        return []
+    return [f"Our pinned Claude Code cannot run {model_label(model)} yet."]
 
 
 def _agent_entry(cfg: dict, name: str, kind: str | None, moves: list) -> dict:
