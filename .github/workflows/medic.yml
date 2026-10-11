@@ -101,6 +101,21 @@
 # after the push, a pull request that would not open, a validator that threw
 # — keeps its retry and its failure card.
 #
+# EIGHTH EXCEPTION (DRE-6882): THE DEFAULT BRANCH HAS MOVED PAST THE RUN. On
+# 2026-10-10 the automatic retry of a failed agent-bureau `main` run finished
+# red at 23:47 PT, ten minutes after the fix (#3618) had merged — a fresh red
+# run on `main` for a commit that was no longer its tip, with the repair
+# already landed. A failed `push` run on the default branch whose commit is no
+# longer that branch's tip is not retried: the commit is no longer the
+# branch's tip, so a rerun's result, red or green, says nothing about `main`.
+# The gate step reads the tip (one call, and only for such a run), the retry
+# gate declines it (`rule == superseded-on-default`, medic_retry.py),
+# `retry_declined` and `diagnose` are gated off the same rule, and
+# `superseded` says so in one sentence in this run's summary and ENDS GREEN.
+# A commit still at the tip, a tip that could not be read (a ::warning:: on
+# the gate step), and every `pull_request`, `schedule` or `workflow_dispatch`
+# run keep the retry.
+#
 # Reusable workflow: the workflow_run trigger list (which workflows to watch)
 # lives in the calling stub — it can include product-specific CI workflows.
 name: Pipeline Medic (reusable)
@@ -142,7 +157,7 @@ jobs:
     if: (github.event.workflow_run.conclusion == 'failure' || github.event.workflow_run.conclusion == 'timed_out')
     # The SHORT-job lane (DRE-3887, widened to the sweeps by DRE-4276). Every
     # job in this file but `diagnose` is a sub-minute script — the classifier,
-    # one `gh run rerun`, and eight that write a note or a receipt and end — and
+    # one `gh run rerun`, and nine that write a note or a receipt and end — and
     # until now each drew from the same `BUREAU_RUNS_ON` pool as the 20-minute
     # agent, critic and verifier jobs: on 2026-09-18 at 13:47 PT the mini's six
     # runners were all busy, 38 jobs were queued, the oldest reviews had waited
@@ -255,6 +270,13 @@ jobs:
           # text.
           WORKFLOW_NAME: ${{ github.event.workflow_run.name }}
           GH_TOKEN: ${{ github.token }}
+          # DRE-6882: what the superseded rule reads — the event that started
+          # the failed run, its commit, and the repository's default branch
+          # (the field the `diagnose` job's target step reads). env, not
+          # inline (DRE-1996), like every run fact above.
+          EVENT: ${{ github.event.workflow_run.event }}
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
         run: |
           # DRE-6851: the failed step's name off the Jobs API — the same read
           # the limit step below makes — so a change set refused by its
@@ -264,6 +286,16 @@ jobs:
           FAILED_STEP=$(gh run view "$RUN_ID" --repo "$GITHUB_REPOSITORY" --json jobs \
             --jq '[.jobs[] | select(.conclusion=="failure") | .steps[] | select(.conclusion=="failure") | .name] | first // ""' \
             2>/dev/null) || FAILED_STEP=""
+          # DRE-6882: the default branch's tip, read only for a push run on
+          # that branch — a pull request, schedule or dispatch run makes no
+          # call. `|| TIP_SHA=""`: a failed read (a blip, or a stub whose
+          # token has no `contents: read`) is an empty value and never a
+          # failed step; the gate then keeps the retry and says so.
+          TIP_SHA=""
+          if [ "$EVENT" = "push" ] && [ -n "$DEFAULT_BRANCH" ] && [ "$HEAD_BRANCH" = "$DEFAULT_BRANCH" ]; then
+            TIP_SHA=$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/$DEFAULT_BRANCH" --jq .object.sha \
+              2>/dev/null) || TIP_SHA=""
+          fi
           # `|| OUT=""`: this gate must never be able to take the whole medic
           # down with it. Every job here `needs: classify`, so a step that
           # exits non-zero skips the back-offs and the diagnosis agent too —
@@ -275,6 +307,8 @@ jobs:
             --run-started-at "$RUN_STARTED_AT" \
             --run-id "$RUN_ID" --run-attempt "$RUN_ATTEMPT" \
             --workflow "$WORKFLOW_NAME" --failed-step "$FAILED_STEP" \
+            --event "$EVENT" --head-sha "$HEAD_SHA" \
+            --default-branch "$DEFAULT_BRANCH" --tip-sha "$TIP_SHA" \
             --snapshot "$RUNNER_TEMP/medic-card.json") || OUT=""
           if [ -z "$OUT" ]; then
             echo "::warning::The medic's retry gate gave no answer, so this run is handled the way it was before DRE-2954. If the card is parked, the retry it is about to take is the one that card exists to prevent."
@@ -418,6 +452,10 @@ jobs:
   # …and UNLESS the retry gate said no (DRE-2954): the card the run belongs to
   # is already parked for a human, or the run died of turn exhaustion, which is
   # deterministic on the card's size and cannot be re-run into success.
+  # …and UNLESS the run's commit is no longer the default branch's tip
+  # (DRE-6882, `rule == superseded-on-default`): a failed push run on the
+  # default branch that the branch has moved past is not retried, because a
+  # rerun of that commit, red or green, says nothing about the branch.
   # `!= 'false'` rather than `== 'true'` on purpose — the gate answers every
   # decision, so an ABSENT output means the step never ran at all, and that must
   # leave the long-standing behaviour of every watched workflow untouched.
@@ -476,6 +514,7 @@ jobs:
        needs.classify.outputs.rule == 'out-of-memory') &&
       needs.classify.outputs.retry == 'false' &&
       needs.classify.outputs.rule != 'refused-by-design' &&
+      needs.classify.outputs.rule != 'superseded-on-default' &&
       needs.classify.outputs.card != ''
     # The short lane, same as `classify` above (DRE-4276).
     runs-on: ${{ fromJSON(vars.BUREAU_SHORT_RUNS_ON || vars.BUREAU_RUNS_ON || '["ubuntu-latest"]') }}
@@ -774,6 +813,34 @@ jobs:
           printf '%s Failed run: %s\n' "$DETAIL" "$RUN_URL" >> "$GITHUB_STEP_SUMMARY"
           printf '%s\n' "$DETAIL"
 
+  # A failed default-branch run the branch has moved past (DRE-6882). The
+  # retry gate read the branch's tip, found it is no longer the run's commit,
+  # and declined the retry; `retry_declined` and `diagnose` are gated off the
+  # same rule, so no receipt is written and no diagnosis agent is spent on a
+  # fault the branch may already have fixed. Such a run has no card — `main`
+  # names none — so this job says so in ONE sentence in the medic's own run
+  # summary and as a ::notice::, the sentence the gate composed, and ENDS
+  # GREEN. No attempt gate: a person re-running the superseded run by hand
+  # gets the same answer and the same sentence.
+  superseded:
+    needs: classify
+    if: >
+      (github.event.workflow_run.conclusion == 'failure' || github.event.workflow_run.conclusion == 'timed_out') &&
+      needs.classify.outputs.rule == 'superseded-on-default'
+    # The short lane, same as `classify` above (DRE-4276).
+    runs-on: ${{ fromJSON(vars.BUREAU_SHORT_RUNS_ON || vars.BUREAU_RUNS_ON || '["ubuntu-latest"]') }}
+    timeout-minutes: 5
+    steps:
+      - name: Say the default branch has moved past this run — no rerun, no card
+        env:
+          # env, not inline ${{ }} (DRE-1996): keep run-supplied text out of
+          # the shell line.
+          DETAIL: ${{ needs.classify.outputs.detail }}
+          RUN_URL: ${{ github.event.workflow_run.html_url }}
+        run: |
+          printf '%s Failed run: %s\n' "$DETAIL" "$RUN_URL" >> "$GITHUB_STEP_SUMMARY"
+          printf '::notice::%s\n' "$DETAIL"
+
   # The second identical death, held (DRE-3430). The one automatic retry above
   # is untouched for this class: a transient blip deserves it, and the second
   # death of the same run at the same commit is the PROOF that the environment
@@ -854,6 +921,7 @@ jobs:
       needs.classify.outputs.class != 'linear_ratelimited' &&
       needs.classify.outputs.class != 'standing_defect' &&
       needs.classify.outputs.rule != 'refused-by-design' &&
+      needs.classify.outputs.rule != 'superseded-on-default' &&
       needs.classify.outputs.limit != 'true'
     # NOT the short lane (DRE-4276): this is the one job in the file that
     # spends a Claude run — the diagnosis agent below, up to twenty minutes
