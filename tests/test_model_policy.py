@@ -32,21 +32,20 @@ The third kind (DRE-3015)
 -------------------------
 `judgement` holds the planner alone. It runs ONCE PER EPIC, at a decision
 point, and every downstream build run is shaped by its output — an
-advisory-shaped cost profile that wore a workhorse label. It walks its own
-ladder, `claude-fable-5-1` → `claude-opus-5` → `claude-sonnet-4-6`, and falling
-to Opus is the LOUD (DEGRADED-prefixed) fallback the advisory ladder already
-does.
+advisory-shaped cost profile that wore a workhorse label. It walks a ladder of
+its own, strongest model first, and falling off that top rung is the LOUD
+(DEGRADED-prefixed) fallback the advisory ladder already does.
 
 What DID NOT change is the 08-09 guard, and it is pinned here from BOTH sides:
-the engineer's ladder cannot reach Fable at any availability, the planner's
-can, and a newly-discovered model may never land on either the build or the
-planning ladder by itself — `discovery.on_new_model: judgement` is refused
-exactly as `workhorse` is. A human editing config/models.yaml is the only way
-up.
+no build role's ladder can reach the judgement top at any availability, the
+planner's can, and a newly-discovered model may never land on either the build
+or the planning ladder by itself — `discovery.on_new_model: judgement` is
+refused exactly as `workhorse` is. A human editing config/models.yaml is the
+only way up.
 
 The advisory/workhorse overlap (DRE-3880, CEO decision 2026-09-16)
 ------------------------------------------------------------------
-`claude-sonnet-5` tops the advisory ladder AND backs the workhorse one, so the
+A Sonnet model may top the advisory ladder AND back the workhorse one, so the
 build/review fence is no longer bought by keeping the two lists disjoint — it
 is bought at SELECTION time, per pull request, and the schema permits the
 overlap only together with that rule. The tests for it live in
@@ -54,15 +53,25 @@ tests/test_review_separation.py; what stays here is everything that did not
 change, above all the 2026-08-09 guard: the strongest model we run is still
 unreachable from a build ladder at any availability.
 
+Which file each test reads (DRE-6860)
+-------------------------------------
+The console rewrites config/models.yaml on every save — which model leads a
+group, which group an agent is in, which agents exist — so no test here asserts
+a choice that file holds today. A RULE of the policy or of selection runs
+against the frozen model files (`model_fixture.FIXTURE_NAME`, through
+tests/model_fixture.py) or against a config the test builds from them, and
+reads every model id and every role it expects off the fixture through
+`model_fixture.ladder`, never from a literal. A test of the COMMITTED file
+checks only what must hold in any saved state, and derives whatever it expects
+from that file.
+
 These tests are the pin. Every one of them fails if its behaviour is removed.
 """
 
 import copy
-import glob
 import json
 import os
 import re
-import shutil
 import subprocess
 import sys
 import tempfile
@@ -83,41 +92,18 @@ sys.path.insert(0, str(ROOT / "tests"))
 
 import model_catalog as mc  # noqa: E402
 import model_fallback as mf  # noqa: E402
-from model_config_text import config_with_session_agents_ungrouped  # noqa: E402
+import model_fixture  # noqa: E402
+from model_config_text import with_session_agents_ungrouped  # noqa: E402
 
-OPUS = "claude-opus-5"
-# The workhorse primary since DRE-4836 (2026-09-25); OPUS is the rung below.
-OPUS55 = "claude-opus-5-5"
-SONNET = "claude-sonnet-4-6"
-SONNET5 = "claude-sonnet-5"
-# The advisory ladder's top rung since DRE-5116 (2026-09-28); SONNET5 is the
-# rung below it.
-SONNET55 = "claude-sonnet-5-5"
+# The predecessor Fable id, excluded from every ladder on cost policy
+# (2026-08-12) and kept readable for attribution. It is on no ladder, so no
+# console save can move it; the ids that ARE on a ladder are read off the
+# fixture below, never spelled here.
 FABLE = "claude-fable-5"
-# The CURRENT Fable id. `claude-fable-5` above is its predecessor, excluded from
-# every ladder on cost policy (2026-08-12) and kept readable for attribution;
-# `claude-fable-5-1` is a different model, and DRE-3015 puts it on the
-# judgement ladder — and nowhere else.
-FABLE51 = "claude-fable-5-1"
 
 WORKHORSE = "workhorse"
 ADVISORY = "advisory"
 JUDGEMENT = "judgement"
-
-# The files the generator + selector need to run against a throwaway tree, so
-# schema validation is exercised without ever mutating the working copy.
-_TREE_FILES = (
-    "scripts/model_fallback.py",
-    "scripts/sync_model_config.py",
-    # The generator judges each published move as the change script does, and
-    # renders its reason with the change script's words (DRE-6833).
-    "scripts/model_config_change.py",
-    "config/models.yaml",
-    # Schema validation reads the DECLARED price of a rung sitting below the
-    # workhorse fallback (DRE-3880), so the throwaway tree carries it too.
-    "config/model-prices.yaml",
-    "agents.yaml",
-)
 
 # Every workflow that selects a model, and the agent name it selects for.
 SELECTORS = {
@@ -146,25 +132,38 @@ KIND_DOCUMENTS = (
     WORKFLOWS / "agent-task.yml",
 )
 
+# One fixture tree for every rule test that only reads: today's scripts on the
+# frozen model files, and its selector imported as `fmf`. A test that edits a
+# config builds a tree of its own with `_copy_tree`.
+_SHARED = None
+fmf = None
 
-def _canonical(path: Path = CONFIG) -> dict:
-    with open(path) as f:
-        return yaml.safe_load(f)
+
+def setUpModule():
+    global _SHARED, fmf
+    _SHARED = tempfile.TemporaryDirectory()
+    fmf = model_fixture.fixture_module(
+        model_fixture.fixture_tree(Path(_SHARED.name) / "tree"))
 
 
-def _rung_ids(rungs) -> list:
-    out = []
-    for rung in rungs or []:
-        out.append(rung["model"] if isinstance(rung, dict) else rung)
-    return out
+def tearDownModule():
+    _SHARED.cleanup()
+
+
+def _canonical() -> dict:
+    """The frozen `models.yaml`, parsed afresh — a test may edit its copy."""
+    return model_fixture.fixture_config()
+
+
+def _committed() -> dict:
+    """The committed config/models.yaml, for the invariants every saved state
+    must hold. Nothing read from it is compared to a literal."""
+    return yaml.safe_load(CONFIG.read_text())
 
 
 def _copy_tree(tmp: Path) -> Path:
-    for rel in _TREE_FILES:
-        dest = tmp / rel
-        dest.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy(ROOT / rel, dest)
-    return tmp
+    """A throwaway tree of today's scripts on the frozen model files."""
+    return model_fixture.fixture_tree(tmp / "tree")
 
 
 def _write_config(tree: Path, cfg: dict) -> None:
@@ -179,12 +178,20 @@ def _run_sync(tree: Path, *args: str) -> subprocess.CompletedProcess:
     )
 
 
+def _all_up() -> dict:
+    """Every rung of every fixture ladder, and the excluded Fable, reported up."""
+    cfg = _canonical()
+    up = {m: True for kind in cfg["kinds"] for m in model_fixture.ladder(cfg, kind)}
+    up[FABLE] = True
+    return up
+
+
 def _cli_select(tree: Path, agent: str, available=None, explain=False):
     """Run the selector CLI in `tree` with a STUBBED availability probe. Returns
     (model, explanation) — the explanation is what the workflow records."""
     env = dict(os.environ)
     env["BUREAU_FAKE_AVAILABLE"] = json.dumps(
-        available if available is not None else {OPUS: True, SONNET: True, FABLE: True}
+        available if available is not None else _all_up()
     )
     argv = [sys.executable, str(tree / "scripts" / "model_fallback.py"), "select", agent]
     why_path = tree / "why.txt"
@@ -197,28 +204,42 @@ def _cli_select(tree: Path, agent: str, available=None, explain=False):
 
 
 def _advisory_ladder(cfg=None) -> list:
-    cfg = cfg or _canonical()
-    return _rung_ids(cfg["ladders"][cfg["kinds"][ADVISORY]["ladder"]])
+    return model_fixture.ladder(cfg or _canonical(), ADVISORY)
 
 
 def _workhorse_ladder(cfg=None) -> list:
-    cfg = cfg or _canonical()
-    return _rung_ids(cfg["ladders"][cfg["kinds"][WORKHORSE]["ladder"]])
+    return model_fixture.ladder(cfg or _canonical(), WORKHORSE)
 
 
 def _judgement_ladder(cfg=None) -> list:
-    cfg = cfg or _canonical()
-    return _rung_ids(cfg["ladders"][cfg["kinds"][JUDGEMENT]["ladder"]])
+    return model_fixture.ladder(cfg or _canonical(), JUDGEMENT)
+
+
+def _roles_of(kind: str) -> list:
+    """The fixture's PIPELINE roles of `kind`, in file order — a session agent
+    selects nothing, so it is never one of them."""
+    return [role for role, k in fmf.AGENT_KINDS.items() if k == kind]
+
+
+def _role_of(kind: str) -> str:
+    roles = _roles_of(kind)
+    assert roles, f"the fixture has no pipeline role of kind {kind!r}"
+    return roles[0]
 
 
 class RoleKindsTest(unittest.TestCase):
     """Three role kinds, and every role is classified into one of them."""
 
+    def setUp(self):
+        fmf.clear_availability_cache()
+
     def test_config_declares_exactly_the_three_kinds(self):
-        cfg = _canonical()
+        # The committed file, in any saved state: the kinds the code knows,
+        # each on a ladder of its own.
+        cfg = _committed()
         self.assertEqual(
-            sorted(cfg["kinds"]), [ADVISORY, JUDGEMENT, WORKHORSE],
-            "config/models.yaml declares exactly three role kinds",
+            sorted(cfg["kinds"]), sorted(mf.ROLE_KINDS),
+            "config/models.yaml declares exactly the role kinds the selector knows",
         )
         ladders = {kind: spec["ladder"] for kind, spec in cfg["kinds"].items()}
         for kind, ladder in ladders.items():
@@ -230,7 +251,7 @@ class RoleKindsTest(unittest.TestCase):
         )
 
     def test_every_agent_role_is_classified(self):
-        cfg = _canonical()
+        cfg = _committed()
         # A scripted entry (`model: null`, DRE-5369) runs no model and has no
         # kind to classify; test_agents_registry.py holds it to that claim.
         registry = {a["name"] for a in yaml.safe_load(AGENTS.read_text())["agents"]
@@ -250,70 +271,78 @@ class RoleKindsTest(unittest.TestCase):
         for role, kind in cfg["agents"].items():
             self.assertIn(kind, cfg["kinds"], f"{role}: {kind!r} is not a role kind")
 
-    def test_the_critic_and_verifier_are_advisory(self):
-        cfg = _canonical()
-        for role in ("critic", "verifier"):
-            self.assertEqual(cfg["agents"][role], ADVISORY, f"{role} must be advisory")
-
-    def test_the_build_roles_are_workhorse(self):
-        # The planner left this list on 2026-09-03 (DRE-3015) and is the ONLY
-        # role that may: it runs once per epic, not hundreds of turns per card.
-        # Every role that writes code stays here.
-        cfg = _canonical()
-        for role in ("engineer", "frontend", "devops", "database-architect",
-                     "fixer", "repairer"):
-            self.assertEqual(cfg["agents"][role], WORKHORSE, f"{role} builds")
+    def test_the_critic_and_verifier_may_be_nothing_but_advisory(self):
+        # Rule 3: the roles that gate unattended merges are advisory, and every
+        # other kind is refused for each of them.
+        self.assertIn("critic", fmf.BACKSTOP_ROLES)
+        self.assertIn("verifier", fmf.BACKSTOP_ROLES)
+        for role in fmf.BACKSTOP_ROLES:
+            self.assertEqual(fmf.kind_for(role), ADVISORY, role)
+            for kind in (WORKHORSE, JUDGEMENT):
+                with self.subTest(role=role, kind=kind):
+                    cfg = _canonical()
+                    cfg["agents"][role] = kind
+                    self.assertTrue(
+                        any(e.startswith(f"agents.{role}: must be 'advisory'")
+                            for e in fmf.policy_errors(cfg)),
+                        f"{role} moved to {kind} was not refused",
+                    )
 
     def test_the_critic_runs_the_advisory_model(self):
         # The critic resolves to the advisory ladder's top rung from config —
         # no hardcoded string anywhere.
         #
         # RENAMED 2026-08-12 (was ..._runs_the_strongest_model). The advisory
-        # ladder moved Fable -> Sonnet 5 on measured cost: 5.5x per review with
-        # the rejection-rate difference inside noise. The advisory model is no
-        # longer the strongest thing we can run, so a test asserting it is
-        # would pin a premise we deliberately dropped. Sonnet 5 -> Sonnet 5.5
-        # on 2026-09-28 (DRE-5116), a same-family, same-price adoption.
-        advisory = _advisory_ladder()
-        self.assertEqual(advisory[0], SONNET55)
-        mf.clear_availability_cache()
-        self.assertEqual(mf.select("critic", probe=lambda m: True), SONNET55)
+        # ladder moved off Fable on measured cost, so the advisory model is no
+        # longer the strongest thing we can run, and a test asserting it is
+        # would pin a premise we deliberately dropped.
+        self.assertEqual(fmf.select("critic", probe=lambda m: True),
+                         _advisory_ladder()[0])
 
     def test_the_excluded_model_is_on_no_ladder_at_all(self):
         # What survives the rename above. Fable came OFF every ladder rather
         # than moving down one, so the 2026-08-09 guarantee is now "excluded
         # means unreachable" — enforced by policy rule 7 rather than implied by
-        # Fable happening to be the advisory model.
-        self.assertIn(FABLE, mf.CONFIG["excluded"])
-        for name, models in mf.CONFIG["ladders"].items():
-            with self.subTest(ladder=name):
-                self.assertNotIn(FABLE, models, "an excluded model reached a ladder")
+        # Fable happening to be the advisory model. Held over the COMMITTED
+        # file: whatever it excludes is on none of its ladders.
+        excluded = mf.CONFIG["excluded"]
+        self.assertIn(FABLE, excluded)
+        for model in excluded:
+            for name, models in mf.CONFIG["ladders"].items():
+                with self.subTest(model=model, ladder=name):
+                    self.assertNotIn(model, models, "an excluded model reached a ladder")
 
     def test_an_unknown_role_gets_the_workhorse_kind(self):
         # select() must never block a build on a role it does not recognize —
         # and an unrecognized role must land on the CHEAP side of the fence.
         cfg = _canonical()
         self.assertEqual(cfg["kinds"][WORKHORSE]["ladder"], cfg["default_ladder"])
-        mf.clear_availability_cache()
-        self.assertEqual(mf.kind_for("no-such-role"), WORKHORSE)
-        self.assertEqual(mf.ladder_for("no-such-role"), _workhorse_ladder())
+        self.assertEqual(fmf.kind_for("no-such-role"), WORKHORSE)
+        self.assertEqual(fmf.ladder_for("no-such-role"), _workhorse_ladder())
 
     def test_advisory_falls_back_onto_the_workhorse_model(self):
-        # AC: exhaustion of the advisory model drops to the WORKHORSE model —
-        # never to something weaker still, and never silently (see the note
-        # tests below). That fallback target is data, so it is pinned as data.
-        self.assertEqual(_advisory_ladder()[-1], _workhorse_ladder()[0])
+        # AC: exhaustion of the advisory model drops to the ladder's last rung,
+        # the fixture's workhorse model — never to something weaker still, and
+        # never silently (see the note tests below).
+        advisory, workhorse = _advisory_ladder(), _workhorse_ladder()
+        self.assertEqual(advisory[-1], workhorse[0])
+        last = advisory[-1]
+        decision = fmf.select_with_reasons(
+            _role_of(ADVISORY), probe=lambda m: m == last)
+        self.assertEqual(decision["model"], workhorse[0])
+        self.assertEqual([s["model"] for s in decision["skipped"]], advisory[:-1])
+        self.assertTrue(fmf.selection_note(decision).startswith("DEGRADED"))
 
 
 class IncidentConditionTest(unittest.TestCase):
     """The pinned incident: every model available, and the build path STILL
-    cannot reach the advisory model."""
+    cannot reach the strongest model."""
 
     def setUp(self):
-        mf.clear_availability_cache()
+        fmf.clear_availability_cache()
 
     def tearDown(self):
-        mf.clear_availability_cache()
+        fmf.clear_availability_cache()
 
     def test_no_build_role_reaches_the_strongest_model_at_full_availability(self):
         # The incident condition, on the model it was actually about: the
@@ -321,32 +350,31 @@ class IncidentConditionTest(unittest.TestCase):
         # unreachable from the build path however available it looks.
         #
         # RESCOPED 2026-09-16 (DRE-3880). This used to read the ADVISORY top
-        # and that is no longer the same question: `claude-sonnet-5` tops the
-        # advisory ladder and backs the workhorse one on purpose, and the
-        # build/review fence it used to imply is now enforced per pull request
-        # at selection time (tests/test_review_separation.py). What the
-        # 2026-08-09 rule was ever about is a model promoting ITSELF onto the
-        # hot path, and that is the strongest rung, which the build path still
-        # cannot see.
+        # and that is no longer the same question: a Sonnet tops the advisory
+        # ladder and backs the workhorse one on purpose, and the build/review
+        # fence it used to imply is now enforced per pull request at selection
+        # time (tests/test_review_separation.py). What the 2026-08-09 rule was
+        # ever about is a model promoting ITSELF onto the hot path, and that is
+        # the strongest rung, which the build path still cannot see.
         strongest = _judgement_ladder()[0]
         everything_available = lambda model: True  # noqa: E731 — the probe 404s nothing
-        build_roles = [r for r, k in mf.AGENT_KINDS.items() if k == WORKHORSE]
+        build_roles = _roles_of(WORKHORSE)
         self.assertTrue(build_roles, "there are build roles to check")
         for role in build_roles:
             with self.subTest(role=role):
-                mf.clear_availability_cache()
+                fmf.clear_availability_cache()
                 self.assertNotIn(
-                    strongest, mf.ladder_for(role),
+                    strongest, fmf.ladder_for(role),
                     f"{role}'s ladder contains the strongest model",
                 )
                 self.assertNotEqual(
-                    mf.select(role, probe=everything_available), strongest,
+                    fmf.select(role, probe=everything_available), strongest,
                     f"{role} selected the strongest model — this is the "
                     "2026-08-09 incident",
                 )
         # An unrecognized role walks the default ladder — same guarantee.
         self.assertNotEqual(
-            mf.select("no-such-role", probe=everything_available), strongest
+            fmf.select("no-such-role", probe=everything_available), strongest
         )
 
     def test_the_advisory_overlap_is_declared_rather_than_incidental(self):
@@ -358,11 +386,12 @@ class IncidentConditionTest(unittest.TestCase):
         # incident it used to be confused with.
         cfg = _canonical()
         overlap = set(_advisory_ladder(cfg)[:1]) & set(_workhorse_ladder(cfg))
-        self.assertTrue(overlap, "the advisory top no longer overlaps the build path")
+        self.assertTrue(overlap, "the fixture's advisory top does not overlap the build path")
+        self.assertEqual(fmf.policy_errors(cfg), [])
         stripped = _canonical()
         stripped.pop("review_separation", None)
         self.assertTrue(
-            mf.policy_errors(stripped),
+            fmf.policy_errors(stripped),
             "a bare overlap with no selection rule must still be refused",
         )
 
@@ -373,43 +402,49 @@ class IncidentConditionTest(unittest.TestCase):
         # planner's being the one this file spends most of its words guarding.
         with tempfile.TemporaryDirectory() as td:
             tree = _copy_tree(Path(td))
-            all_up = {OPUS: True, SONNET: True, SONNET5: True, SONNET55: True,
-                      FABLE: True, FABLE51: True}
-            self.assertEqual(_cli_select(tree, "engineer", all_up)[0], OPUS55)
-            self.assertEqual(_cli_select(tree, "planner", all_up)[0], FABLE51)
-            self.assertEqual(_cli_select(tree, "critic", all_up)[0], SONNET55)
+            for kind in (WORKHORSE, JUDGEMENT, ADVISORY):
+                with self.subTest(kind=kind):
+                    self.assertEqual(
+                        _cli_select(tree, _role_of(kind))[0],
+                        model_fixture.ladder(_canonical(), kind)[0],
+                    )
+            self.assertNotEqual(
+                _cli_select(tree, _role_of(WORKHORSE))[0], _judgement_ladder()[0])
 
     def test_availability_still_only_walks_down(self):
         # The other half of the rule: a probe may decide how far DOWN a ladder
-        # we walk, never how far up. The rung below the top became OPUS on
-        # 2026-09-25 (DRE-4836), when Opus 5.5 took the top and Opus 5 kept the
-        # rung under it; the rule is unchanged.
-        self.assertEqual(
-            mf.select("engineer", probe=lambda m: m != OPUS55), _workhorse_ladder()[1]
-        )
-        self.assertEqual(_workhorse_ladder()[1], OPUS)
+        # we walk, never how far up. The top rung down and the one below it up
+        # lands on the one below; the top up lands on the top, whatever is
+        # below it.
+        role, workhorse = _role_of(WORKHORSE), _workhorse_ladder()
+        top, below = workhorse[0], workhorse[1]
+        self.assertEqual(fmf.select(role, probe=lambda m: m != top), below)
+        fmf.clear_availability_cache()
+        self.assertEqual(fmf.select(role, probe=lambda m: m != below), top)
 
 
 class JudgementKindTest(unittest.TestCase):
     """The third kind (DRE-3015): the planner runs on the strongest model, and
-    the 2026-08-09 guard is pinned from BOTH sides — the engineer's ladder still
-    cannot reach Fable at any availability, the planner's can."""
+    the 2026-08-09 guard is pinned from BOTH sides — no build role's ladder can
+    reach the judgement top at any availability, the planner's can."""
 
     def setUp(self):
-        mf.clear_availability_cache()
+        fmf.clear_availability_cache()
 
     def tearDown(self):
-        mf.clear_availability_cache()
+        fmf.clear_availability_cache()
 
-    def test_the_judgement_kind_holds_the_planner_alone(self):
-        # Of the PIPELINE-run roles (DRE-6889): a session-run agent the CEO put
-        # in Planners selects nothing from it (rule 10 exempts it, below).
-        cfg = _canonical()
+    def test_only_a_judgement_role_holds_the_judgement_kind(self):
+        # The committed file, in any saved state: of the PIPELINE-run roles
+        # (DRE-6889), only one rule 10 names may be in Planners — or none, the
+        # planner moving to a cheaper kind is admissible. A session-run agent
+        # the CEO put in Planners selects nothing from it (rule 10 exempts it).
+        cfg = _committed()
         session = set(cfg.get("session_agents") or [])
-        holders = sorted(r for r, k in cfg["agents"].items()
-                         if k == JUDGEMENT and r not in session)
-        self.assertEqual(
-            holders, ["planner"],
+        holders = {r for r, k in cfg["agents"].items()
+                   if k == JUDGEMENT and r not in session}
+        self.assertLessEqual(
+            holders, set(mf.JUDGEMENT_ROLES),
             "judgement is for judgement-heavy, LOW-VOLUME roles; a role that "
             "runs per card belongs on the workhorse ladder",
         )
@@ -418,178 +453,176 @@ class JudgementKindTest(unittest.TestCase):
         # DRE-6833. A session agent's group selects nothing — the selector
         # answers it as an unknown name — so a session agent in Planners puts
         # no run on the strongest model, and rule 10 does not apply to it.
-        # From the file with every session agent in no group (DRE-6889), so
-        # the move below is the one under test, wherever the CEO put it.
-        cfg = yaml.safe_load(config_with_session_agents_ungrouped())
-        self.assertIn("designer", cfg["session_agents"])
-        self.assertIn("designer", cfg["ungrouped"])
+        # From the fixture with every session agent in no group (DRE-6889), so
+        # the move below is the one under test.
+        cfg = yaml.safe_load(with_session_agents_ungrouped(model_fixture.fixture_text()))
+        self.assertTrue(cfg["session_agents"], "the fixture has a session agent")
+        agent = cfg["session_agents"][0]
+        self.assertIn(agent, cfg["ungrouped"])
         rule_10 = "'judgement' is the planner's kind"
 
         exempt = copy.deepcopy(cfg)
-        exempt["agents"]["designer"] = JUDGEMENT
-        exempt["ungrouped"].remove("designer")
-        errors = mf.policy_errors(exempt)
+        exempt["agents"][agent] = JUDGEMENT
+        exempt["ungrouped"].remove(agent)
+        errors = fmf.policy_errors(exempt)
         self.assertFalse([e for e in errors if rule_10 in e], errors)
         self.assertEqual(errors, [])
 
         not_session = copy.deepcopy(exempt)
-        not_session["session_agents"].remove("designer")
-        errors = mf.policy_errors(not_session)
+        not_session["session_agents"].remove(agent)
+        errors = fmf.policy_errors(not_session)
         self.assertTrue(
-            any(e.startswith("agents.designer: ") and rule_10 in e for e in errors),
+            any(e.startswith(f"agents.{agent}: ") and rule_10 in e for e in errors),
             errors,
         )
 
     def test_rule_10_still_refuses_every_pipeline_role(self):
+        # Every pipeline role of the fixture that rule 10 does not name.
         cfg = _canonical()
-        for role in ("engineer", "medic", "critic"):
-            trial = copy.deepcopy(cfg)
-            trial["agents"][role] = JUDGEMENT
-            errors = mf.policy_errors(trial)
-            self.assertTrue(
-                any(e.startswith(f"agents.{role}: 'judgement' is the planner's kind")
-                    for e in errors),
-                (role, errors),
-            )
+        others = [r for r in fmf.AGENT_KINDS if r not in fmf.JUDGEMENT_ROLES]
+        self.assertTrue(others)
+        for role in others:
+            with self.subTest(role=role):
+                trial = copy.deepcopy(cfg)
+                trial["agents"][role] = JUDGEMENT
+                errors = fmf.policy_errors(trial)
+                self.assertTrue(
+                    any(e.startswith(f"agents.{role}: 'judgement' is the planner's kind")
+                        for e in errors),
+                    (role, errors),
+                )
         # A name under `agents` in neither JUDGEMENT_ROLES nor `session_agents`.
         trial = copy.deepcopy(cfg)
         trial["agents"]["stranger"] = JUDGEMENT
         self.assertTrue(any(
             e.startswith("agents.stranger: 'judgement' is the planner's kind")
-            for e in mf.policy_errors(trial)))
+            for e in fmf.policy_errors(trial)))
 
     def test_a_session_agents_entry_for_nobody_is_refused(self):
-        cfg = _canonical()
-        trial = copy.deepcopy(cfg)
+        trial = _canonical()
         trial["session_agents"].append("nobody-at-all")
-        errors = mf.policy_errors(trial)
+        errors = fmf.policy_errors(trial)
         self.assertTrue(
             any(e.startswith("session_agents.nobody-at-all: ") for e in errors), errors)
 
-    def test_the_judgement_ladder_is_fable_first_then_the_degrade_rungs(self):
-        # Data, so it is pinned as data: the strongest model, then the loud
-        # degrade onto the workhorse primary, then the last resort that exists
-        # so a plan never blocks on availability. `claude-sonnet-4-6` left the
-        # WORKHORSE ladder on 2026-09-16 (DRE-3880) and kept this rung — the
-        # CEO's answer says so in as many words: do not retire it.
-        self.assertEqual(_judgement_ladder(), [FABLE51, OPUS55, SONNET])
-        self.assertEqual(_judgement_ladder()[1], _workhorse_ladder()[0])
-        self.assertNotIn(SONNET, _workhorse_ladder())
+    def test_the_planner_runs_on_the_strongest_model_when_it_is_available(self):
+        planner = _role_of(JUDGEMENT)
+        self.assertIn(planner, fmf.JUDGEMENT_ROLES)
+        self.assertEqual(fmf.select(planner, probe=lambda m: True),
+                         _judgement_ladder()[0])
 
-    def test_the_planner_runs_on_fable_when_it_is_available(self):
-        self.assertEqual(mf.kind_for("planner"), JUDGEMENT)
-        self.assertEqual(mf.select("planner", probe=lambda m: True), FABLE51)
-
-    def test_the_planner_reaches_fable_at_every_availability_that_allows_it(self):
+    def test_the_planner_reaches_the_strongest_model_at_every_availability_that_allows_it(self):
         # The other side of the 08-09 pin. Whatever the rest of the ladder is
-        # doing, an available Fable is the planner's model — that is the whole
-        # decision, and a config edit that quietly stopped honouring it would
-        # look exactly like a healthy run.
-        for avail in (
-            {FABLE51: True, OPUS: True, SONNET: True},
-            {FABLE51: True, OPUS: False, SONNET: True},
-            {FABLE51: True, OPUS: False, SONNET: False},
-        ):
+        # doing, an available judgement top is the planner's model — that is
+        # the whole decision, and a config edit that quietly stopped honouring
+        # it would look exactly like a healthy run.
+        planner = _role_of(JUDGEMENT)
+        top, *below = _judgement_ladder()
+        for down in range(len(below) + 1):
+            avail = {top: True, **{m: i >= down for i, m in enumerate(below)}}
             with self.subTest(avail=avail):
-                mf.clear_availability_cache()
+                fmf.clear_availability_cache()
                 self.assertEqual(
-                    mf.select("planner", probe=lambda m: avail.get(m, True)),
-                    FABLE51,
-                )
+                    fmf.select(planner, probe=lambda m: avail.get(m, True)), top)
 
-    def test_falling_to_opus_is_the_loud_fallback(self):
+    def test_falling_off_the_strongest_model_is_the_loud_fallback(self):
         # Exactly as the advisory ladder does it: DEGRADED-prefixed, naming
         # what was skipped and why, on one line the workflow turns into a
-        # ::warning::. A planner that quietly ran on Opus would be
+        # ::warning::. A planner that quietly ran on its fallback would be
         # indistinguishable from one that got what it was promised.
-        decision = mf.select_with_reasons("planner", probe=lambda m: m != FABLE51)
-        self.assertEqual(decision["model"], OPUS55)
+        top, fallback = _judgement_ladder()[:2]
+        decision = fmf.select_with_reasons(_role_of(JUDGEMENT), probe=lambda m: m != top)
+        self.assertEqual(decision["model"], fallback)
         self.assertEqual(decision["kind"], JUDGEMENT)
-        self.assertEqual([s["model"] for s in decision["skipped"]], [FABLE51])
-        note = mf.selection_note(decision)
+        self.assertEqual([s["model"] for s in decision["skipped"]], [top])
+        note = fmf.selection_note(decision)
         self.assertEqual(len(note.splitlines()), 1)
         self.assertTrue(note.startswith("DEGRADED"), f"the fallback is silent: {note}")
-        self.assertIn(FABLE51, note)
+        self.assertIn(top, note)
         self.assertIn(JUDGEMENT, note)
 
-    def test_no_workhorse_role_reaches_fable_at_any_availability(self):
-        # THE GUARD FROM 2026-08-09, unchanged. The probe reporting Fable up is
-        # precisely the incident condition, and it still buys nothing on the
-        # build path: every workhorse role's ladder does not contain it, so no
-        # combination of availabilities can select it.
-        build_roles = sorted(r for r, k in mf.AGENT_KINDS.items() if k == WORKHORSE)
-        self.assertIn("engineer", build_roles)
-        self.assertNotIn("planner", build_roles)
+    def test_no_workhorse_role_reaches_the_strongest_model_at_any_availability(self):
+        # THE GUARD FROM 2026-08-09, unchanged. The probe reporting the
+        # judgement top up is precisely the incident condition, and it still
+        # buys nothing on the build path: no workhorse role's ladder contains
+        # it, so no combination of availabilities can select it — not with
+        # every build rung up, nor with any run of them down from the top.
+        strongest = _judgement_ladder()[0]
+        build_roles = _roles_of(WORKHORSE)
+        self.assertTrue(build_roles)
+        self.assertFalse(set(build_roles) & set(fmf.JUDGEMENT_ROLES))
         workhorse = _workhorse_ladder()
         for role in build_roles:
-            for avail in (
-                {FABLE51: True, OPUS: True, SONNET: True},
-                {FABLE51: True, OPUS: False, SONNET: True},
-                {FABLE51: True, OPUS: True, SONNET: False},
-                {FABLE51: True, OPUS: False, SONNET: False},
-            ):
+            for down in range(len(workhorse) + 1):
+                avail = {strongest: True,
+                         **{m: i >= down for i, m in enumerate(workhorse)}}
                 with self.subTest(role=role, avail=avail):
-                    mf.clear_availability_cache()
-                    self.assertNotIn(FABLE51, mf.ladder_for(role))
-                    got = mf.select(role, probe=lambda m: avail.get(m, True))
+                    fmf.clear_availability_cache()
+                    self.assertNotIn(strongest, fmf.ladder_for(role))
+                    got = fmf.select(role, probe=lambda m: avail.get(m, True))
                     self.assertNotEqual(
-                        got, FABLE51,
-                        f"{role} reached Fable — this is the 2026-08-09 incident",
+                        got, strongest,
+                        f"{role} reached the strongest model — this is the "
+                        "2026-08-09 incident",
                     )
                     self.assertIn(got, workhorse)
         # An unrecognized role walks the default (workhorse) ladder: same line.
-        mf.clear_availability_cache()
-        self.assertNotEqual(mf.select("no-such-role", probe=lambda m: True), FABLE51)
+        fmf.clear_availability_cache()
+        self.assertNotEqual(fmf.select("no-such-role", probe=lambda m: True), strongest)
 
     def test_the_cli_holds_that_line_too(self):
         # The workflows call the CLI, not select(). Everything up, including
         # both Fable ids.
         with tempfile.TemporaryDirectory() as td:
             tree = _copy_tree(Path(td))
-            all_up = {OPUS: True, SONNET: True, SONNET5: True, SONNET55: True,
-                      FABLE: True, FABLE51: True}
-            for role in ("engineer", "frontend", "devops", "fixer", "repairer"):
+            for role in _roles_of(WORKHORSE):
                 with self.subTest(role=role):
-                    self.assertEqual(_cli_select(tree, role, all_up)[0], OPUS55)
-            self.assertEqual(_cli_select(tree, "planner", all_up)[0], FABLE51)
+                    self.assertEqual(_cli_select(tree, role)[0], _workhorse_ladder()[0])
+            self.assertEqual(_cli_select(tree, _role_of(JUDGEMENT))[0],
+                             _judgement_ladder()[0])
 
-    def test_fable_on_a_build_ladder_is_still_rejected(self):
+    def test_the_strongest_model_on_a_build_ladder_is_still_rejected(self):
         # The judgement ladder is permission for the PLANNER, not for the model.
         cfg = _canonical()
+        strongest = _judgement_ladder(cfg)[0]
         cfg["ladders"][cfg["kinds"][WORKHORSE]["ladder"]].insert(
-            0, {"model": FABLE51, "reason": "someone's well-meaning edit"}
+            0, {"model": strongest, "reason": "someone's well-meaning edit"}
         )
-        errors = mf.policy_errors(cfg)
-        self.assertTrue(errors, "Fable must not reach a build ladder")
-        self.assertTrue(any(FABLE51 in e for e in errors), f"unhelpful: {errors}")
+        errors = fmf.policy_errors(cfg)
+        self.assertTrue(errors, "the strongest model must not reach a build ladder")
+        self.assertTrue(any(strongest in e for e in errors), f"unhelpful: {errors}")
 
     def test_a_judgement_only_model_may_not_hide_below_the_fallback(self):
         # Rule 4 reads the TOP rung of a non-build ladder, so a premium model
         # parked BELOW the workhorse rungs would be invisible to it. Once a
         # ladder descends onto the build path it stays there.
         cfg = _canonical()
+        build_rung, strongest = _workhorse_ladder(cfg)[0], _judgement_ladder(cfg)[0]
         cfg["ladders"][cfg["kinds"][JUDGEMENT]["ladder"]] = [
-            {"model": OPUS, "reason": "the build model first"},
-            {"model": FABLE51, "reason": "…and the premium one hidden below it"},
+            {"model": build_rung, "reason": "the build model first"},
+            {"model": strongest, "reason": "…and the premium one hidden below it"},
         ]
         self.assertTrue(
-            mf.policy_errors(cfg),
+            fmf.policy_errors(cfg),
             "a premium model below the workhorse fallback must be rejected",
         )
 
-    def test_the_selector_degrades_rather_than_honouring_fable_on_the_build_path(self):
+    def test_the_selector_degrades_rather_than_honouring_the_strongest_model_on_the_build_path(self):
+        # The refused file is not loaded: the selector runs the tree's
+        # last-known-good ladders, generated from the fixture.
         with tempfile.TemporaryDirectory() as td:
             tree = _copy_tree(Path(td))
             cfg = _canonical()
+            strongest = _judgement_ladder(cfg)[0]
             cfg["ladders"][cfg["kinds"][WORKHORSE]["ladder"]].insert(
-                0, {"model": FABLE51, "reason": "the incident, as a config edit"}
+                0, {"model": strongest, "reason": "the incident, as a config edit"}
             )
             _write_config(tree, cfg)
-            model, _ = _cli_select(
-                tree, "engineer", {OPUS: True, SONNET: True, FABLE51: True}
-            )
+            model, _ = _cli_select(tree, _role_of(WORKHORSE))
+            self.assertNotEqual(model, strongest)
             self.assertEqual(
-                model, OPUS55, "a policy-violating config must not reach the build path"
+                model, _workhorse_ladder()[0],
+                "a policy-violating config must not reach the build path",
             )
 
     def test_discovery_may_not_target_the_judgement_ladder(self):
@@ -599,12 +632,12 @@ class JudgementKindTest(unittest.TestCase):
         # the most attractive place for an unattended promotion to land.
         cfg = _canonical()
         cfg["discovery"]["on_new_model"] = JUDGEMENT
-        errors = mf.policy_errors(cfg)
+        errors = fmf.policy_errors(cfg)
         self.assertTrue(errors, "on_new_model: judgement must be rejected")
         self.assertTrue(
             any("on_new_model" in e for e in errors), f"unhelpful errors: {errors}"
         )
-        self.assertNotIn(JUDGEMENT, mf.DISCOVERY_TARGETS)
+        self.assertNotIn(JUDGEMENT, fmf.DISCOVERY_TARGETS)
 
     def test_ci_goes_red_on_a_discovery_targeting_judgement(self):
         with tempfile.TemporaryDirectory() as td:
@@ -618,21 +651,25 @@ class JudgementKindTest(unittest.TestCase):
 
     def test_the_registry_shows_the_planners_kind_and_model(self):
         # The roster is the surface a human reads to ask "what is the planner
-        # running on, and why is it allowed to be the expensive one?"
-        planner = {a["name"]: a for a in yaml.safe_load(AGENTS.read_text())["agents"]}[
-            "planner"
-        ]
-        self.assertEqual(planner["kind"], JUDGEMENT)
-        self.assertEqual(planner["model"], FABLE51)
+        # running on, and why is it allowed to be the expensive one?" — the
+        # generator writes what the config it read says.
+        with tempfile.TemporaryDirectory() as td:
+            tree = _copy_tree(Path(td))
+            roster = {a["name"]: a
+                      for a in yaml.safe_load((tree / "agents.yaml").read_text())["agents"]}
+            planner = roster[_role_of(JUDGEMENT)]
+            self.assertEqual(planner["kind"], JUDGEMENT)
+            self.assertEqual(planner["model"], _judgement_ladder()[0])
 
-    def test_fable_5_1_is_a_known_model_and_its_predecessor_still_is_too(self):
+    def test_the_strongest_model_is_a_known_model_and_the_old_fable_still_is_too(self):
         # Attribution: markers in flight carry either id.
-        self.assertIn(FABLE51, mf.KNOWN_MODELS)
-        self.assertIn(FABLE, mf.KNOWN_MODELS)
-        self.assertEqual(mf.last_error_model([mf.error_marker(FABLE51)]), FABLE51)
-        self.assertEqual(mf.last_error_model([mf.error_marker(FABLE)]), FABLE)
+        strongest = _judgement_ladder()[0]
+        self.assertIn(strongest, fmf.KNOWN_MODELS)
+        self.assertIn(FABLE, fmf.KNOWN_MODELS)
+        self.assertEqual(fmf.last_error_model([fmf.error_marker(strongest)]), strongest)
+        self.assertEqual(fmf.last_error_model([fmf.error_marker(FABLE)]), FABLE)
         # And the predecessor is still on no ladder at all.
-        for name, models in mf.CONFIG["ladders"].items():
+        for name, models in fmf.CONFIG["ladders"].items():
             with self.subTest(ladder=name):
                 self.assertNotIn(FABLE, models)
 
@@ -642,43 +679,52 @@ class SchemaRejectsAutoPromotionTest(unittest.TestCase):
     by schema validation, and so is every other way to put the strongest model
     on the build path."""
 
-    def test_discovery_policy_is_advisory(self):
-        cfg = _canonical()
-        self.assertEqual(cfg["discovery"]["on_new_model"], ADVISORY)
+    def test_the_committed_discovery_policy_is_admissible_and_alerts(self):
+        # The committed file, in any saved state. Which admissible target it
+        # names is a choice; that `workhorse` and `judgement` are refused and
+        # `alert` must be true is the rule, proved on the fixture below.
+        cfg = _committed()
+        self.assertIn(cfg["discovery"]["on_new_model"], mf.DISCOVERY_TARGETS)
         self.assertIs(cfg["discovery"]["alert"], True)
 
     def test_on_new_model_workhorse_is_rejected(self):
         cfg = _canonical()
         cfg["discovery"]["on_new_model"] = WORKHORSE
-        errors = mf.policy_errors(cfg)
+        errors = fmf.policy_errors(cfg)
         self.assertTrue(errors, "on_new_model: workhorse must be rejected")
         self.assertTrue(
             any("on_new_model" in e for e in errors), f"unhelpful errors: {errors}"
         )
+
+    def test_a_silent_discovery_is_rejected(self):
+        cfg = _canonical()
+        cfg["discovery"]["alert"] = False
+        self.assertTrue(any(e.startswith("discovery.alert:")
+                            for e in fmf.policy_errors(cfg)))
 
     def test_the_allowed_discovery_policies_are_accepted(self):
         for value in (ADVISORY, "none"):
             cfg = _canonical()
             cfg["discovery"]["on_new_model"] = value
             with self.subTest(policy=value):
-                self.assertEqual(mf.policy_errors(cfg), [])
+                self.assertEqual(fmf.policy_errors(cfg), [])
 
     def test_todays_config_passes_validation(self):
-        self.assertEqual(mf.policy_errors(_canonical()), [])
+        self.assertEqual(mf.policy_errors(_committed()), [])
 
-    def test_the_advisory_model_on_a_build_ladder_is_rejected(self):
+    def test_the_excluded_fable_on_a_build_ladder_is_rejected(self):
         cfg = _canonical()
         cfg["ladders"][cfg["kinds"][WORKHORSE]["ladder"]].insert(
             0, {"model": FABLE, "reason": "someone's well-meaning edit"}
         )
-        errors = mf.policy_errors(cfg)
-        self.assertTrue(errors, "the strongest model must not reach a build ladder")
+        errors = fmf.policy_errors(cfg)
+        self.assertTrue(errors, "an excluded model must not reach a build ladder")
         self.assertTrue(any(FABLE in e for e in errors), f"unhelpful errors: {errors}")
 
     def test_demoting_the_critic_to_a_build_kind_is_rejected(self):
         cfg = _canonical()
         cfg["agents"]["critic"] = WORKHORSE
-        errors = mf.policy_errors(cfg)
+        errors = fmf.policy_errors(cfg)
         self.assertTrue(errors, "the critic must stay advisory")
         self.assertTrue(any("critic" in e for e in errors), f"unhelpful: {errors}")
 
@@ -686,9 +732,11 @@ class SchemaRejectsAutoPromotionTest(unittest.TestCase):
         # Roles are assigned KINDS, not ladders: that is what stops a future
         # edit from inventing a third ladder and quietly putting builds on it.
         cfg = _canonical()
-        cfg["agents"]["engineer"] = cfg["kinds"][ADVISORY]["ladder"] + "-copy"
-        cfg["ladders"][cfg["agents"]["engineer"]] = [{"model": FABLE, "reason": "x"}]
-        self.assertTrue(mf.policy_errors(cfg))
+        role = _role_of(WORKHORSE)
+        cfg["agents"][role] = cfg["kinds"][ADVISORY]["ladder"] + "-copy"
+        cfg["ladders"][cfg["agents"][role]] = [{"model": FABLE, "reason": "x"}]
+        self.assertTrue(
+            any(e.startswith(f"agents.{role}: ") for e in fmf.policy_errors(cfg)))
 
     def test_ci_goes_red_on_a_rejected_config(self):
         with tempfile.TemporaryDirectory() as td:
@@ -711,9 +759,11 @@ class SchemaRejectsAutoPromotionTest(unittest.TestCase):
                 0, {"model": FABLE, "reason": "the incident, as a config edit"}
             )
             _write_config(tree, cfg)
-            model, _ = _cli_select(tree, "engineer", {OPUS: True, SONNET: True, FABLE: True})
+            model, _ = _cli_select(tree, _role_of(WORKHORSE))
+            self.assertNotEqual(model, FABLE)
             self.assertEqual(
-                model, OPUS55, "a policy-violating config must not reach the build path"
+                model, _workhorse_ladder()[0],
+                "a policy-violating config must not reach the build path",
             )
 
 
@@ -722,72 +772,75 @@ class SelectionIsRecordedTest(unittest.TestCase):
     skipped. A silently weakened advisory model is the failure this prevents."""
 
     def setUp(self):
-        mf.clear_availability_cache()
+        fmf.clear_availability_cache()
 
     def tearDown(self):
-        mf.clear_availability_cache()
+        fmf.clear_availability_cache()
 
     def test_the_decision_records_every_skipped_rung_and_its_reason(self):
-        # The unavailable rung is the advisory TOP, whatever it currently is —
-        # SONNET55 since 2026-09-28, SONNET5 from 2026-08-12, FABLE before that.
-        decision = mf.select_with_reasons("critic", probe=lambda m: m != SONNET55)
-        self.assertEqual(decision["model"], SONNET5)
+        # The unavailable rung is the advisory TOP, whatever it is.
+        top, below = _advisory_ladder()[:2]
+        decision = fmf.select_with_reasons("critic", probe=lambda m: m != top)
+        self.assertEqual(decision["model"], below)
         self.assertEqual(decision["kind"], ADVISORY)
-        self.assertEqual([s["model"] for s in decision["skipped"]], [SONNET55])
+        self.assertEqual([s["model"] for s in decision["skipped"]], [top])
         self.assertTrue(decision["skipped"][0]["reason"])
         self.assertTrue(decision["degraded"])
 
     def test_an_inconclusive_probe_is_recorded_differently_from_a_404(self):
+        top, below = _advisory_ladder()[:2]
+
         def probe(model):
-            if model == SONNET55:
+            if model == top:
                 raise RuntimeError("probe blew up")
             return True
 
-        decision = mf.select_with_reasons("critic", probe=probe)
-        self.assertEqual(decision["model"], SONNET5)
+        decision = fmf.select_with_reasons("critic", probe=probe)
+        self.assertEqual(decision["model"], below)
         self.assertIn("inconclusive", decision["skipped"][0]["reason"].lower())
 
     def test_the_top_rung_records_that_nothing_was_skipped(self):
-        decision = mf.select_with_reasons("engineer", probe=lambda m: True)
-        self.assertEqual(decision["model"], OPUS55)
+        decision = fmf.select_with_reasons(_role_of(WORKHORSE), probe=lambda m: True)
+        self.assertEqual(decision["model"], _workhorse_ladder()[0])
         self.assertEqual(decision["skipped"], [])
         self.assertFalse(decision["degraded"])
-        self.assertIn("nothing", mf.selection_note(decision).lower())
+        self.assertIn("nothing", fmf.selection_note(decision).lower())
 
     def test_the_note_is_one_line_and_names_what_was_skipped_and_why(self):
-        decision = mf.select_with_reasons("critic", probe=lambda m: m != SONNET55)
-        note = mf.selection_note(decision)
+        top, below = _advisory_ladder()[:2]
+        decision = fmf.select_with_reasons("critic", probe=lambda m: m != top)
+        note = fmf.selection_note(decision)
         self.assertEqual(len(note.splitlines()), 1, "the note is a single line")
-        self.assertIn(SONNET5, note)
-        self.assertIn(SONNET55, note)
+        self.assertIn(below, note)
+        self.assertIn(top, note)
         self.assertIn("skip", note.lower())
 
     def test_a_weakened_advisory_model_is_marked_degraded_loudly(self):
         # The alert half of the AC: an advisory role that did not get its
         # INTENDED model announces it. NOTE the meaning inverted on 2026-08-12
-        # — falling from Sonnet 5 to Opus is falling UP in cost ($2/$10 ->
-        # $5/$25), so this now reads "unexpected spend", not "quietly cheap".
-        # Either way the run is worth looking at, which is why it stays loud —
-        # and since DRE-5116 a fall from Sonnet 5.5 to Sonnet 5 is loud too.
-        decision = mf.select_with_reasons("critic", probe=lambda m: m != SONNET55)
-        note = mf.selection_note(decision)
+        # — falling to Opus is falling UP in cost, so this reads "unexpected
+        # spend", not "quietly cheap". Either way the run is worth looking at,
+        # which is why it stays loud — and a fall to the rung below the top,
+        # one Sonnet to the next, is loud too.
+        top = _advisory_ladder()[0]
+        decision = fmf.select_with_reasons("critic", probe=lambda m: m != top)
+        note = fmf.selection_note(decision)
         self.assertTrue(
             note.startswith("DEGRADED"),
             f"a weakened advisory model must be loud, got: {note}",
         )
 
     def test_the_cli_writes_the_explanation_for_the_workflow(self):
+        top, below = _advisory_ladder()[:2]
         with tempfile.TemporaryDirectory() as td:
             tree = _copy_tree(Path(td))
             model, note = _cli_select(
-                tree, "critic",
-                {OPUS: True, SONNET: True, SONNET55: False, SONNET5: True},
-                explain=True,
+                tree, "critic", {**_all_up(), top: False}, explain=True,
             )
             # stdout stays exactly the model id — the workflows capture it.
-            self.assertEqual(model, SONNET5)
+            self.assertEqual(model, below)
             self.assertTrue(note.startswith("DEGRADED"), note)
-            self.assertIn(SONNET55, note)
+            self.assertIn(top, note)
 
     def test_every_selecting_workflow_records_the_explanation(self):
         for wf, agent in SELECTORS.items():
@@ -826,22 +879,28 @@ class DiscoveryJoinsAdvisoryOnlyTest(unittest.TestCase):
     a new model (DRE-3899); the 2026-08-09 schema guard is unchanged."""
 
     def test_a_model_absent_from_config_is_discovered(self):
+        known = _workhorse_ladder()[0]
         catalog = [
-            {"id": OPUS, "display_name": "Opus 5", "created_at": "2026-08-01T00:00:00Z"},
+            {"id": known, "display_name": "Known", "created_at": "2026-08-01T00:00:00Z"},
             {"id": "claude-nova-9", "display_name": "Nova 9",
              "created_at": "2026-09-01T00:00:00Z"},
         ]
-        found = [e["id"] for e in mc.new_models(catalog)]
+        found = [e["id"] for e in mc.new_models(catalog, known_ids=fmf.KNOWN_MODELS)]
         self.assertEqual(found, ["claude-nova-9"])
 
     def test_known_ids_and_dated_snapshots_are_not_discoveries(self):
+        # A rung, a retired id, an excluded id, and a dated snapshot of a rung.
+        cfg = _canonical()
+        retired = cfg["retired"][0]
+        excluded = cfg["excluded"][0]
+        excluded = excluded["model"] if isinstance(excluded, dict) else excluded
+        rung = _judgement_ladder(cfg)[-1]
         catalog = [
-            {"id": SONNET, "display_name": None, "created_at": None},
-            {"id": FABLE, "display_name": None, "created_at": None},
-            {"id": "claude-opus-4-8", "display_name": None, "created_at": None},
-            {"id": f"{OPUS}-20260801", "display_name": None, "created_at": None},
+            {"id": model, "display_name": None, "created_at": None}
+            for model in (rung, retired, excluded, FABLE,
+                          f"{_workhorse_ladder(cfg)[1]}-20260801")
         ]
-        self.assertEqual(mc.new_models(catalog), [])
+        self.assertEqual(mc.new_models(catalog, known_ids=fmf.KNOWN_MODELS), [])
 
     def test_a_model_we_have_already_seen_is_not_rediscovered(self):
         # "New" means new to US: an id already recorded in the committed
@@ -852,14 +911,15 @@ class DiscoveryJoinsAdvisoryOnlyTest(unittest.TestCase):
             {"id": "claude-nova-9", "display_name": None, "created_at": None},
             {"id": "claude-relic-2", "display_name": None, "created_at": None},
         ]
-        known = set(mf.KNOWN_MODELS) | {"claude-relic-2"}
+        known = set(fmf.KNOWN_MODELS) | {"claude-relic-2"}
         self.assertEqual(
             [e["id"] for e in mc.new_models(catalog, known_ids=known)],
             ["claude-nova-9"],
         )
 
-    def test_the_discovery_target_is_the_advisory_ladder(self):
-        self.assertEqual(mc.discovery_policy()["on_new_model"], ADVISORY)
+    def test_the_discovery_target_is_read_from_the_config(self):
+        # The catalog decides nothing: it reports what the committed file says.
+        self.assertEqual(mc.discovery_policy(), _committed()["discovery"])
 
     def test_the_discovery_targets_are_unchanged(self):
         # DRE-3899 removed the alert card, not the guard: a discovery may still
@@ -961,13 +1021,13 @@ class DocumentedPolicyTest(unittest.TestCase):
         # misspelled it.
         cfg = _canonical()
         cfg["kinds"]["judgment"] = cfg["kinds"].pop(JUDGEMENT)  # the typo itself
-        errors = mf.policy_errors(cfg)
+        errors = fmf.policy_errors(cfg)
         self.assertTrue(errors, "a misspelled kind must be rejected")
         rule = next((e for e in errors if e.startswith("kinds: must declare")), None)
         self.assertIsNotNone(rule, f"no rule-1 rejection: {errors}")
         _, _, prose = rule.partition("—")
         self.assertTrue(prose.strip(), f"the rejection carries no explanation: {rule}")
-        for kind in mf.ROLE_KINDS:
+        for kind in fmf.ROLE_KINDS:
             with self.subTest(kind=kind):
                 self.assertIn(
                     kind, prose, f"the explanation never names {kind!r}: {prose!r}"
