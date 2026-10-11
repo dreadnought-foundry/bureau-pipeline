@@ -63,8 +63,11 @@
 # safe because its one branch is named for the change set and every write is
 # looked up before it is made: an open pull request on that branch ends the
 # run, and a branch pushed with no pull request is reused, not re-cut. A set
-# the validator refused is red by design, and its retry is refused the same
-# way, writing nothing.
+# the validator refused is red by design, and it is not retried and gets no
+# failure card (DRE-6851): the medic reads the refusal off the "Validate the
+# change set" step, the person who asked was already told "Not applied" on
+# the Settings page, and the medic's run summary says so in one sentence. Any
+# other failure of that workflow is retried once and carded as before.
 name: Pipeline Medic
 
 on:
