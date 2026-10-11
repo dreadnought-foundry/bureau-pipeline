@@ -73,6 +73,9 @@ _OWN_LADDERS = (
 _FROZEN_LADDERS = (
     "The expected rungs are members of the frozen fixture's ladders, which the "
     "test classifies the candidate against and no console save touches.")
+_FROZEN_CAUTIONS = (
+    "The ids are read against the frozen fixture's ladders, prices and "
+    "set-aside list, the files of 2026-10-10, which no console save touches.")
 _FROZEN_AGENTS = (
     "The agents are read in the frozen fixture tree the test builds from "
     "tests/fixtures/model-config-frozen, which no console save touches.")
@@ -130,6 +133,19 @@ ALLOWED: dict[str, str] = {
         _FROZEN_LADDERS,
     "tests/test_model_adoption.py::test_the_newer_same_priced_sonnet_is_adopted_on_every_ladder":
         _FROZEN_LADDERS,
+    "tests/test_model_caution.py::test_a_dearer_model_names_both_prices": _FROZEN_CAUTIONS,
+    "tests/test_model_caution.py::test_a_standing_exception_is_current_when_given":
+        _FROZEN_CAUTIONS,
+    "tests/test_model_caution.py::test_dearer_on_one_side_is_dearer": _FROZEN_CAUTIONS,
+    "tests/test_model_caution.py::test_model_label_moved_and_the_generator_imports_it":
+        _OWN_INPUT,
+    "tests/test_model_caution.py::test_set_aside_date_is_the_first_date_in_the_excluded_reason":
+        _FROZEN_CAUTIONS,
+    "tests/test_model_caution.py::test_the_current_model_and_a_cheaper_one_carry_no_caution":
+        _FROZEN_CAUTIONS,
+    "tests/test_model_caution.py::test_the_dearest_model_for_builders_names_the_busiest_group":
+        _FROZEN_CAUTIONS,
+    "tests/test_model_caution.py::test_the_nine_cautioned_pairs_of_2026_10_10": _FROZEN_CAUTIONS,
     "tests/test_model_config.py::ConfigDrivesTheFleetTest.test_selector_degrades_to_the_mirror_when_the_config_is_unreadable":
         _FROZEN_AGENTS,
     "tests/test_model_effort.py::PriceTest.test_opus_5_5_is_declared_at_4_and_20": _PRICE,
