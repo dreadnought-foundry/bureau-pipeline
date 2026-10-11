@@ -566,6 +566,34 @@ jobs:
              || steps.pool.outputs.n == '4' && secrets.BUREAU_APP_PRIVATE_KEY_4
              || secrets.BUREAU_APP_PRIVATE_KEY }}
 
+      # THE GITHUB-CALLS READING, first point (DRE-6918, epic DRE-6911). One
+      # point on each pool login's hourly meter after the job's mints, taken by
+      # `github_calls_reading.py` (DRE-6914) — two counted calls per login. Each
+      # INSTALLATION is named once: the slot-1 bot, and the pool-selected app
+      # (the same installation when the pool chose slot 1, which the script
+      # folds into one). The probe tokens are never named, and every re-mint
+      # below reaches the reader's installation again, so nothing is missed.
+      # The reader's own gate: a bounced, refused or unadmitted dispatch does
+      # no work and records no reading. Tokens by NAME, never as arguments;
+      # `continue-on-error`, and the script exits 0 on every path, so the
+      # reading never changes this job's conclusion.
+      - name: GitHub calls — the first point on each pool login
+        id: calls_before
+        if: steps.gate.outputs.bounced != 'true' && steps.dedupe.outputs.skip != 'true' && steps.slot.outputs.admitted == 'true'
+        continue-on-error: true
+        env:
+          CALLS_BOT_APP: ${{ steps.app.outputs.app-slug }}
+          CALLS_BOT_INSTALLATION: ${{ steps.app.outputs.installation-id }}
+          CALLS_BOT_TOKEN: ${{ steps.app.outputs.token }}
+          CALLS_POOL_APP: ${{ steps.reader.outputs.app-slug }}
+          CALLS_POOL_INSTALLATION: ${{ steps.reader.outputs.installation-id }}
+          CALLS_POOL_TOKEN: ${{ steps.reader.outputs.token }}
+        run: |
+          python3 .bureau-pipeline/scripts/github_calls_reading.py before \
+            --out "${RUNNER_TEMP:-/tmp}/github-calls-before.json" \
+            --login "$CALLS_BOT_APP:$CALLS_BOT_INSTALLATION:CALLS_BOT_TOKEN" \
+            --login "$CALLS_POOL_APP:$CALLS_POOL_INSTALLATION:CALLS_POOL_TOKEN"
+
       # A review the PIPELINE asked for is not a card arriving at Planning
       # (DRE-5644). Its reason — `review`, `re-review` or `review-retry`, from
       # any lane — says the plan is written and the second critic is to read
@@ -5856,6 +5884,61 @@ jobs:
             break
           done
 
+      # THE GITHUB-CALLS READING, second point (DRE-6918). The reading needs
+      # a token that is still alive: this job runs for up to 115 minutes, an
+      # installation token lives for 60, and no token held across a model
+      # step may be spent (tests/test_plan_token_remint.py) — which is every
+      # re-mint above. So the reading takes its own re-mint of the reader's
+      # pool map, after the last model step — the reader's installation
+      # again, exactly as every re-mint renders — and only when the first
+      # point was taken. Not `continue-on-error`, as no re-mint in this job is.
+      - name: Re-mint bot token — the GitHub-calls reading
+        id: app_calls
+        if: always() && steps.calls_before.outcome == 'success'
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: >-
+            ${{ steps.pool.outputs.n == '2' && secrets.BUREAU_APP_ID_2
+             || steps.pool.outputs.n == '3' && secrets.BUREAU_APP_ID_3
+             || steps.pool.outputs.n == '4' && secrets.BUREAU_APP_ID_4
+             || secrets.BUREAU_APP_ID }}
+          private-key: >-
+            ${{ steps.pool.outputs.n == '2' && secrets.BUREAU_APP_PRIVATE_KEY_2
+             || steps.pool.outputs.n == '3' && secrets.BUREAU_APP_PRIVATE_KEY_3
+             || steps.pool.outputs.n == '4' && secrets.BUREAU_APP_PRIVATE_KEY_4
+             || secrets.BUREAU_APP_PRIVATE_KEY }}
+
+      # The second point on each login, the document, and its upload — one
+      # `github-calls:` line per login (DRE-6914). The freshest token per
+      # installation: the re-mint just above first; then the slot-1 bot via
+      # `next_token`, the end-of-run mint for the next card's owner, but ONLY
+      # when GitHub says it reached the slot-1 bot's own installation —
+      # another account's installation was never given a first point. With
+      # neither, slot 1's second point is recorded unread, never as 0. The
+      # start-of-job token and the portal mint's are pinned to their own
+      # consumers (tests/test_plan_token_remint.py) and are not handed here.
+      # `always()` + `continue-on-error`: never this job's conclusion. A run
+      # that took no first point has no reading to make.
+      - name: GitHub calls — the second point and the reading
+        id: calls
+        if: always() && steps.calls_before.outcome == 'success'
+        continue-on-error: true
+        env:
+          CALLS_POOL_APP: ${{ steps.app_calls.outputs.app-slug }}
+          CALLS_POOL_INSTALLATION: ${{ steps.app_calls.outputs.installation-id }}
+          CALLS_POOL_TOKEN: ${{ steps.app_calls.outputs.token }}
+          CALLS_NEXT_APP: ${{ steps.next_token.outputs.app-slug }}
+          CALLS_NEXT_INSTALLATION: ${{ steps.next_token.outputs.installation-id == steps.app.outputs.installation-id && steps.app.outputs.installation-id || '' }}
+          CALLS_NEXT_TOKEN: ${{ steps.next_token.outputs.token }}
+        run: |
+          python3 .bureau-pipeline/scripts/github_calls_reading.py emit \
+            --before "${RUNNER_TEMP:-/tmp}/github-calls-before.json" \
+            --out "${RUNNER_TEMP:-/tmp}/github-calls-reading.json" \
+            --workflow plan.yml \
+            --login "$CALLS_POOL_APP:$CALLS_POOL_INSTALLATION:CALLS_POOL_TOKEN" \
+            --login "$CALLS_NEXT_APP:$CALLS_NEXT_INSTALLATION:CALLS_NEXT_TOKEN" \
+            --github-output "$GITHUB_OUTPUT"
+
       # THE RUN'S WORKING LOG (DRE-4269, epic DRE-4267). The last model
       # step's transcript, by the action's design (the step above names it),
       # scrubbed and put straight into our own store over OIDC —
@@ -5972,6 +6055,23 @@ jobs:
           ref: ${{ inputs.pipeline_ref || 'main' }}
           path: .bureau-pipeline
 
+      # THE GITHUB-CALLS READING (DRE-6918): this job calls GitHub as the
+      # slot-1 bot only to check the portal out and push the page, so both
+      # points are taken only where a portal is named — the checkout's gate.
+      # `continue-on-error`, and the script exits 0 on every path.
+      - name: GitHub calls — the first point on each pool login
+        id: calls_before
+        if: vars.PLAN_PORTAL_REPO != ''
+        continue-on-error: true
+        env:
+          CALLS_BOT_APP: ${{ steps.app.outputs.app-slug }}
+          CALLS_BOT_INSTALLATION: ${{ steps.app.outputs.installation-id }}
+          CALLS_BOT_TOKEN: ${{ steps.app.outputs.token }}
+        run: |
+          python3 .bureau-pipeline/scripts/github_calls_reading.py before \
+            --out "${RUNNER_TEMP:-/tmp}/github-calls-before.json" \
+            --login "$CALLS_BOT_APP:$CALLS_BOT_INSTALLATION:CALLS_BOT_TOKEN"
+
       - name: Plan artifact — fetch source
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
@@ -6074,3 +6174,22 @@ jobs:
               MSG="📄 The plan artifact is built. No document portal URL is configured for this repo, so read it from the run: $RUN_URL" ;;
           esac
           python3 .bureau-pipeline/scripts/linear_ops.py comment "$EPIC" "$MSG"
+
+      # The second point and the reading (DRE-6918). This job keeps no
+      # working log, so it is the last step; ten minutes is inside the token's
+      # hour, so the start-of-job token is still the freshest.
+      - name: GitHub calls — the second point and the reading
+        id: calls
+        if: always() && vars.PLAN_PORTAL_REPO != ''
+        continue-on-error: true
+        env:
+          CALLS_BOT_APP: ${{ steps.app.outputs.app-slug }}
+          CALLS_BOT_INSTALLATION: ${{ steps.app.outputs.installation-id }}
+          CALLS_BOT_TOKEN: ${{ steps.app.outputs.token }}
+        run: |
+          python3 .bureau-pipeline/scripts/github_calls_reading.py emit \
+            --before "${RUNNER_TEMP:-/tmp}/github-calls-before.json" \
+            --out "${RUNNER_TEMP:-/tmp}/github-calls-reading.json" \
+            --workflow plan.yml \
+            --login "$CALLS_BOT_APP:$CALLS_BOT_INSTALLATION:CALLS_BOT_TOKEN" \
+            --github-output "$GITHUB_OUTPUT"
