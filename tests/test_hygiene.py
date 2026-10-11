@@ -1520,8 +1520,11 @@ class TestTheLaneContract:
             "move under a 🧹 receipt naming the evidence it read")
 
     def test_exactly_five_lanes_permit_it(self):
+        # Live lanes only: an arriving lane (Queued, DRE-6710) copies its
+        # writers from the lane it replaces, and no card can land there yet.
         permitting = {entry["name"] for entry in contract_doc()["lanes"]
-                      if "hygiene.py" in entry["clauses"]["writers"].get("who", [])}
+                      if entry["status"] == "live"
+                      and "hygiene.py" in entry["clauses"]["writers"].get("who", [])}
         assert permitting == {"Planning", "Backlog", "In Review", "Done", "Canceled"}
 
     def test_the_guard_admits_exactly_the_lanes_the_contract_permits(self):

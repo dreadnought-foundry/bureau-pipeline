@@ -332,8 +332,11 @@ class TestTheLaneContract:
         assert "nothing automatic applies it" in said
 
     def test_the_migration_is_a_writer_of_exactly_three_lanes(self):
+        # Live lanes only: an arriving lane (Queued, DRE-6710) copies its
+        # writers from the lane it replaces, and no card can land there yet.
         writing = [entry["name"] for entry in lane_contract.load()["lanes"]
-                   if MIGRATION in ((entry.get("clauses") or {}).get("writers") or {}).get("who", [])]
+                   if entry["status"] == "live"
+                   and MIGRATION in ((entry.get("clauses") or {}).get("writers") or {}).get("who", [])]
         assert sorted(writing) == ["Backlog", "Hand-work", "Planning"]
 
     @pytest.mark.parametrize("lane,phrase", [
