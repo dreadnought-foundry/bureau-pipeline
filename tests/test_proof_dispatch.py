@@ -2434,3 +2434,232 @@ def test_carried_the_not_proven_reader_is_public_and_the_sweeps():
     pr = doc["pr"]
     assert proof_dispatch.not_proven_at(pr, pr["headRefOid"])
     assert not proof_dispatch.not_proven_at(pr, "2ae86ef4977171b2be52ae4125bf87eafbcb6159")
+
+
+# --------------------------------------------------------------------------- #
+# DRE-6779: the re-run reads a carried APPROVE the way the gate does — through #
+# the REAL `reconcile.verdict_bound`, on a record shaped by `RECORD_FIELDS`    #
+# --------------------------------------------------------------------------- #
+#: The commit the critic approved, and the head a merge of main made of it —
+#: DRE-6597's shape on agent-bureau#3557 (f0fbe2f, then 6e2a4e6).
+APPROVED_AT = "f0fbe2f" + "1" * 33
+MERGED_HEAD = "6e2a4e6" + "2" * 33
+#: GitHub's three-dot compare of a record branch that adds its one file.
+CARRY_COMPARE = {"status": "diverged",
+                 "merge_base_commit": {"sha": "1d2b69f" + "3" * 33},
+                 "files": [{"filename": RECORD_PATH, "previous_filename": None,
+                            "status": "added", "sha": "a31fa62" + "4" * 33}]}
+#: bureau-pipeline#844 (DRE-6364) as GitHub answered it on 2026-10-11, its
+#: head still 5e558c8: the compare of main...5e558c8 and its commit record.
+#: The compare's content id is the one the critic's APPROVE at 2ae86ef names,
+#: 3ded90c8…, which is why the gate carried it.
+PR_844_BASE = "main"
+PR_844_COMPARE = {"status": "diverged",
+                  "merge_base_commit": {"sha": "1d2b69f76f4e041f06db51958c37c84eb909d812"},
+                  "files": [{"filename": "docs/hand-built-proof-2026-10.md",
+                             "previous_filename": None, "status": "added",
+                             "sha": "3575a32f363733ea0130b6bc6c184dbd596912fa"}]}
+PR_844_COMMITS = ["d66b2571225a93965d1746321f2509d566147b70",
+                  "89f489a882516c36b140c81e3831de6bd260391c",
+                  "a13567f1f5c04c043ec0706666709babdab8790b",
+                  "d80f4449c51a3d729fe9d437b8909b65dd631340",
+                  "2ae86ef4977171b2be52ae4125bf87eafbcb6159",
+                  "5e558c8cce360f851862841d829595c6bd5a2bb4"]
+#: The four readers the re-run's carry goes through, by name (DRE-6779).
+CARRY_READERS = {"verdict_bound", "has_verdict", "head_content_id_for",
+                 "pr_commit_shas_for"}
+
+
+def _record_fields() -> list:
+    return proof_dispatch.RECORD_FIELDS.split(",")
+
+
+class _GitHub:
+    """GitHub as the re-run meets it, and nothing stubbed above it.
+
+    `pr list` (the sweep's read seam, `reconcile.gh_read`) answers the whole
+    pull request projected onto the `--json` fields asked for, as gh does — so
+    the record is exactly what `record_pr` builds from `RECORD_FIELDS`. The
+    compare and commit reads (`reconcile.gh`, what `head_content_id_for` and
+    `pr_commit_shas_for` call) answer `compare` and `commits`."""
+
+    def __init__(self, monkeypatch, repo: str, pr: dict, *, base: str,
+                 compare: dict, commits: list):
+        import reconcile
+
+        self.pr, self.asked, self.listed = pr, [], []
+        self.answers = {
+            f"repos/{repo}/compare/{base}...{pr['headRefOid']}": compare,
+            f"repos/{repo}/pulls/{pr['number']}/commits?per_page=100":
+                [{"sha": sha} for sha in commits]}
+        monkeypatch.setattr(reconcile, "REPO", repo)
+        monkeypatch.setattr(reconcile, "gh", self.gh)
+        monkeypatch.setattr(reconcile, "gh_read", self.gh_read)
+
+    def gh(self, *args):
+        self.asked.append(args)
+        if args[0] == "api" and args[1] in self.answers:
+            return json.dumps(self.answers[args[1]])
+        return ""
+
+    def gh_read(self, *args):
+        assert args[:2] == ("pr", "list"), args
+        fields = args[list(args).index("--json") + 1].split(",")
+        self.listed.append(fields)
+        missing = [f for f in fields if f not in self.pr]
+        assert not missing, f"gh would answer {missing}; the fixture lacks them"
+        return json.dumps([{f: self.pr[f] for f in fields}])
+
+
+def _carried_pr(*, content_sha: str = CARRY_COMPARE["files"][0]["sha"]) -> dict:
+    """A record pull request whose critic approved APPROVED_AT, carrying the
+    content id of CARRY_COMPARE, and whose head is now MERGED_HEAD — every
+    field gh can answer, `baseRefName` among them."""
+    import verdict_content
+
+    approved = dict(CARRY_COMPARE, files=[dict(CARRY_COMPARE["files"][0],
+                                               sha=content_sha)])
+    content = verdict_content.content_id(approved)
+    approve = {"author": {"login": QA_BOT}, "createdAt": _at(200),
+               "body": f"🔎 QA Critic — VERDICT: APPROVE @{APPROVED_AT} "
+                       f"content:{content}\n\nThe findings."}
+    return dict(record(approve, gate_note(90, sha=MERGED_HEAD), head=MERGED_HEAD),
+                baseRefName="main", statusCheckRollup=[], isDraft=False,
+                title="PROOF record — DRE-5930")
+
+
+def test_carry_the_record_is_read_with_its_base_branch():
+    assert "baseRefName" in _record_fields()
+
+
+def test_carry_the_real_verdict_bound_carries_an_approve_across_a_merge_of_main(
+        monkeypatch):
+    """No stub between the record and the gate's reading: the record is the
+    one `record_pr` builds from `RECORD_FIELDS`, and `verdict_bound` resolves
+    the carry off the compare and commit reads."""
+    import reconcile
+
+    github = _GitHub(monkeypatch, REPO, _carried_pr(), base="main",
+                     compare=CARRY_COMPARE, commits=[APPROVED_AT, MERGED_HEAD])
+    pr = proof_dispatch.record_pr("DRE-5930", REPO)
+    assert set(pr) == set(_record_fields())
+    assert reconcile.critic_token(pr) == "APPROVE"
+    assert reconcile.verdict_bound(pr) is True
+    assert [a[1] for a in github.asked] == [
+        f"repos/{REPO}/compare/main...{MERGED_HEAD}",
+        f"repos/{REPO}/pulls/900/commits?per_page=100"]
+
+
+def test_carry_an_approve_whose_content_changed_at_the_head_is_not_bound(
+        monkeypatch):
+    import reconcile
+
+    _GitHub(monkeypatch, REPO, _carried_pr(content_sha="b" * 40), base="main",
+            compare=CARRY_COMPARE, commits=[APPROVED_AT, MERGED_HEAD])
+    pr = proof_dispatch.record_pr("DRE-5930", REPO)
+    assert reconcile.critic_token(pr) == "APPROVE"
+    assert reconcile.verdict_bound(pr) is False
+
+
+def _rerun_844(monkeypatch, *, compare: dict = PR_844_COMPARE):
+    """DRE-6364's re-run at its fixture's `as_of`, the record read the way
+    production reads it: `record_pr` over `RECORD_FIELDS`, and the REAL
+    `reconcile.verdict_bound` — the stub `_rerun_replay` puts in is taken
+    back out. GitHub answers what bureau-pipeline#844 answered."""
+    import reconcile
+
+    real = reconcile.verdict_bound
+    doc = _replayed("DRE-6364")
+    rows = [r for r in _rows_the_note_names(doc["pr"]) if r[1].startswith("Not met.")]
+    one, card, fetched, holds = _rerun_replay(monkeypatch, doc, rows)
+    monkeypatch.setattr(reconcile, "verdict_bound", real)
+    repo = "dreadnought-foundry/bureau-pipeline"
+    github = _GitHub(monkeypatch, repo, dict(doc["pr"], baseRefName=PR_844_BASE),
+                     base=PR_844_BASE, compare=compare, commits=PR_844_COMMITS)
+    one.find_record = lambda ident: proof_dispatch.record_pr(ident, repo)
+    return one, card, github, fetched, holds
+
+
+def test_carry_the_dre_6364_replay_takes_the_gates_trigger_through_the_real_reader(
+        monkeypatch):
+    one, card, github, fetched, holds = _rerun_844(monkeypatch)
+    reason, count = one.rerunning(card)
+    assert reason == "re-run after the gate's decline at 5e558c8"
+    assert count == "re-run 2 of 2"
+    assert github.listed == [_record_fields()]
+    assert [a[1] for a in github.asked] == [
+        "repos/dreadnought-foundry/bureau-pipeline/compare/main..."
+        "5e558c8cce360f851862841d829595c6bd5a2bb4",
+        "repos/dreadnought-foundry/bureau-pipeline/pulls/844/commits?per_page=100"]
+    assert fetched and holds == []
+
+
+def test_carry_the_dre_6364_replay_with_other_content_at_the_head_is_refused(
+        monkeypatch):
+    changed = dict(PR_844_COMPARE, files=[dict(PR_844_COMPARE["files"][0],
+                                               sha="c" * 40)])
+    one, card, _, fetched, holds = _rerun_844(monkeypatch, compare=changed)
+    with pytest.raises(proof_dispatch._Refused) as refused:
+        one.rerunning(card)
+    assert str(refused.value) == (
+        "re-run: the critic's newest verdict on #844 at 5e558c8 is APPROVE "
+        "from earlier head 2ae86ef — nothing to answer")
+    assert fetched == [] and holds == []
+
+
+def _fields_read_off_the_record(start: set) -> tuple:
+    """Every field the readers in `start`, and every reconcile function they
+    hand the record to, read off it — discovered from the source, never
+    listed. Returns `(readers, fields, unread)`: `unread` is each use of the
+    record that is neither a constant `.get`/subscript nor a hand-on as the
+    first argument of a reconcile function, which this scan cannot follow."""
+    import ast
+
+    import reconcile
+
+    tree = ast.parse(Path(reconcile.__file__).read_text(encoding="utf-8"))
+    functions = {n.name: n for n in tree.body if isinstance(n, ast.FunctionDef)}
+    readers, fields, unread, todo = set(), set(), [], list(start)
+    while todo:
+        name = todo.pop()
+        if name in readers:
+            continue
+        assert name in functions, f"reconcile has no function {name}"
+        readers.add(name)
+        fn = functions[name]
+        param = fn.args.args[0].arg
+        understood = set()
+        for node in ast.walk(fn):
+            if (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+                    and node.func.attr == "get"
+                    and isinstance(node.func.value, ast.Name)
+                    and node.func.value.id == param
+                    and node.args and isinstance(node.args[0], ast.Constant)):
+                fields.add(node.args[0].value)
+                understood.add(id(node.func.value))
+            elif (isinstance(node, ast.Subscript) and isinstance(node.value, ast.Name)
+                    and node.value.id == param
+                    and isinstance(node.slice, ast.Constant)):
+                fields.add(node.slice.value)
+                understood.add(id(node.value))
+            elif (isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+                    and node.func.id in functions
+                    and node.args and isinstance(node.args[0], ast.Name)
+                    and node.args[0].id == param):
+                todo.append(node.func.id)
+                understood.add(id(node.args[0]))
+        unread += [f"{name}:{n.lineno}" for n in ast.walk(fn)
+                   if isinstance(n, ast.Name) and n.id == param
+                   and isinstance(n.ctx, ast.Load) and id(n) not in understood]
+    return readers, fields, unread
+
+
+def test_carry_every_field_the_carry_reads_off_the_record_is_asked_for():
+    readers, fields, unread = _fields_read_off_the_record({"verdict_bound"})
+    assert CARRY_READERS <= readers, readers
+    assert unread == []
+    # The scan finds what the readers are known to read — never nothing.
+    assert {"baseRefName", "headRefOid", "number", "comments"} <= fields, fields
+    missing = sorted(fields - set(_record_fields()))
+    assert missing == [], (f"RECORD_FIELDS lacks {missing}, which "
+                           f"{sorted(readers)} read off the record")
