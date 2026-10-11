@@ -260,6 +260,23 @@ class WhatAnOperatorCardIs(unittest.TestCase):
                    labels=["agent:devops"])
         self.assertEqual([], self.one([sib, proof("DRE-7009", self.CRITERION)]))
 
+    def test_a_plain_word_in_backticks_is_not_a_token(self):
+        # DRE-6431 row 6 backticks `main` and `stable`; an operator title that
+        # backticks the same word is not the step the criterion reads.
+        criterion = ("Live: for each repo, the pipeline ref its stub runs "
+                     "(`main` or `stable`) is quoted, with `v4` and `repo-map.json`.")
+        for word in ("stable", "main", "v4", "repo-map.json"):
+            sib = card("DRE-7005", f"[OPERATOR] agent-bureau: pin the stub to `{word}`",
+                       labels=["operator-step", "no-code"])
+            self.assertEqual([], self.one([sib, proof("DRE-7009", criterion)]), word)
+            self.assertEqual([], self.one([proof("DRE-7009", criterion)], [sib]), word)
+        # A variable-style name in the same title still is.
+        sib = card("DRE-7005", "[OPERATOR] agent-bureau: pin `stable` and set "
+                   "`BUREAU_DOCKER_RUNS_ON`", labels=["operator-step", "no-code"])
+        got = self.one([sib, proof("DRE-7009", criterion + " " + self.CRITERION)])
+        self.assertEqual(1, len(got), got)
+        self.assertIn("DRE-7005", got[0])
+
     def test_naming_the_id_is_the_same_as_sharing_the_token(self):
         sib = card("DRE-7004", "agent-bureau: rotate the key", labels=["no-code"])
         criterion = "Live: the key DRE-7004 rotated answers the probe."
