@@ -227,8 +227,13 @@ class TestApply:
     """`apply` on today's config, with a Sonnet 6 the rule says to adopt."""
 
     def _setup(self, tmp_path, *, sonnet6_price=(2, 10), config_text=None):
+        # The committed config with NO project exceptions (DRE-6883): the
+        # committed `projects` block holds whatever the console last saved,
+        # and a Planners exception on Sonnet 4.6 turns this adoption into a
+        # policy refusal. An exception moving with its rung is pinned on
+        # configs built for it, below.
         config = tmp_path / "models.yaml"
-        config.write_text(config_text or CONFIG_PATH.read_text())
+        config.write_text(config_text or config_without_projects())
         prices = tmp_path / "model-prices.yaml"
         prices.write_text(prices_text(claude_sonnet_6=sonnet6_price))
         snap = write_json(tmp_path, "catalog.json", snapshot_with(*SUCCESSORS))
@@ -264,14 +269,12 @@ class TestApply:
                    if l.startswith("-") and not l.startswith("---")]
         added = [l[1:] for l in difflib.unified_diff(before, after, lineterm="", n=0)
                  if l.startswith("+") and not l.startswith("+++")]
-        # The ONLY lines that change are the rung ids, the separation rule
-        # that names the moved rung and any project exception on a replaced
-        # rung (the committed `projects` block holds whatever the console last
-        # saved); everything else is added, never rewritten.
-        keys = "|".join(["model", "built_on", *yaml.safe_load("\n".join(before))["kinds"]])
+        # The ONLY lines that change are the rung ids and the separation rule
+        # that names the moved rung; everything else is added, never rewritten.
+        # The config carries no project exception (`_setup`), so none moves.
         for line in removed:
             assert re.fullmatch(
-                rf"\s*-?\s*({keys}): claude-sonnet-(5|4-6)", line), line
+                r"\s*-?\s*(model|built_on): claude-sonnet-(5|4-6)", line), line
         assert all(not l.lstrip().startswith("#") for l in removed)
         assert all("reason:" not in l for l in removed)
         assert sum(1 for l in added if re.fullmatch(r"\s*- model: claude-sonnet-6", l)) == 3
@@ -318,6 +321,7 @@ class TestApply:
         shutil.copytree(ROOT / "scripts", tree / "scripts",
                         ignore=shutil.ignore_patterns("__pycache__"))
         shutil.copytree(ROOT / "config", tree / "config")
+        (tree / "config" / "models.yaml").write_text(config_without_projects())
         shutil.copy(ROOT / "agents.yaml", tree / "agents.yaml")
         (tree / "config" / "model-prices.yaml").write_text(
             prices_text(claude_sonnet_6=(2, 10)))
@@ -390,7 +394,7 @@ class TestApply:
             self, tmp_path, capsys):
         # An effort level declared for the rung being replaced: after the edit
         # it names a model on no ladder, which `policy_errors` refuses.
-        text = CONFIG_PATH.read_text().replace(
+        text = config_without_projects().replace(
             "effort:\n  claude-opus-5-5: high\n",
             "effort:\n  claude-opus-5-5: high\n  claude-sonnet-5: high\n",
         )
