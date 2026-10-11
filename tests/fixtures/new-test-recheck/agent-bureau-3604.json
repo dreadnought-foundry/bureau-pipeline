@@ -1,5 +1,5 @@
 {
-  "$note": "agent-bureau #3604. The file names are the pull request's: main had gained console/web/src/components/oneriver/RiverRow.fold.test.ts (the path as agent-bureau CI run 38115044206 reports it) and the pull request changed greenLightGrid.ts beside it. agent-bureau was not readable from the run that wrote this fixture, so the test's text is reconstructed around its naming of `greenLightGrid` and the describe/it titles that CI run logged. The shas and counts are synthetic.",
+  "$note": "agent-bureau #3604 (DRE-6820). The file names are the pull request's: main had gained console/web/src/components/oneriver/RiverRow.fold.test.ts (added by #3598, DRE-6703, +234 −0) and the pull request changed greenLightGrid.ts beside it, where its line 113 moved ACTIONS_UNDER_ON_PHONE from row-start-2 to row-start-3. The patch is the real hunk header and the first nine added lines of that test as it stood on agent-bureau main at 0e0479c73, the commit #3604 merged onto, which hold its naming line `import { ACTIONS_UNDER_ON_PHONE, PHONE_LINE_PX, SHOWS_FLEX, WRAPS_ON_PHONE } from './greenLightGrid'`. The remaining 225 added lines are left out on purpose: agent-bureau is private and this repository is public, so only an excerpt belongs here (operator decision on bureau-pipeline #1008, 2026-10-11). The assertion that broke is at lines 174-175, verbatim: expect(fold.ACTION_UNDER_ON_PHONE).toBe(`${ACTIONS_UNDER_ON_PHONE} ${WRAPS_ON_PHONE}`) and expect(ACTIONS_UNDER_ON_PHONE.split(' ')).toEqual([ . The shas and counts are synthetic.",
   "declaration": {
     "recheck_new_tests": true,
     "order_sensitive_paths": [
@@ -32,7 +32,7 @@
       {
         "filename": "console/web/src/components/oneriver/RiverRow.fold.test.ts",
         "status": "added",
-        "patch": "@@ -0,0 +1,9 @@\n+import { describe, expect, it } from \"vitest\";\n+\n+import { greenLightGrid } from \"./greenLightGrid\";\n+\n+describe(\"under the phone line the pill and the action take a line of their own\", () => {\n+  it(\"the action cell stands under the row, the whole row wide — Green Light’s own rule\", () => {\n+    expect(greenLightGrid(\"phone\").action).toBe(\"1 / -1\");\n+  });\n+});"
+        "patch": "@@ -0,0 +1,234 @@\n+import { readFileSync } from 'node:fs'\n+import { dirname, join } from 'node:path'\n+import { fileURLToPath } from 'node:url'\n+\n+import { describe, expect, it } from 'vitest'\n+\n+import { FOLD_LINE_PX, FOLDS_UNDER_FOLD_LINE } from '../molecules/PanelHeader'\n+import { ACTIONS_UNDER_ON_PHONE, PHONE_LINE_PX, SHOWS_FLEX, WRAPS_ON_PHONE } from './greenLightGrid'\n+import * as row from './RiverRow'"
       }
     ]
   },
@@ -41,7 +41,7 @@
       {
         "filename": "console/web/src/components/oneriver/RiverRow.fold.test.ts",
         "status": "added",
-        "patch": "@@ -0,0 +1,9 @@\n+import { describe, expect, it } from \"vitest\";\n+\n+import { greenLightGrid } from \"./greenLightGrid\";\n+\n+describe(\"under the phone line the pill and the action take a line of their own\", () => {\n+  it(\"the action cell stands under the row, the whole row wide — Green Light’s own rule\", () => {\n+    expect(greenLightGrid(\"phone\").action).toBe(\"1 / -1\");\n+  });\n+});"
+        "patch": "@@ -0,0 +1,234 @@\n+import { readFileSync } from 'node:fs'\n+import { dirname, join } from 'node:path'\n+import { fileURLToPath } from 'node:url'\n+\n+import { describe, expect, it } from 'vitest'\n+\n+import { FOLD_LINE_PX, FOLDS_UNDER_FOLD_LINE } from '../molecules/PanelHeader'\n+import { ACTIONS_UNDER_ON_PHONE, PHONE_LINE_PX, SHOWS_FLEX, WRAPS_ON_PHONE } from './greenLightGrid'\n+import * as row from './RiverRow'"
       }
     ]
   },
