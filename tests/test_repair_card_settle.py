@@ -1022,12 +1022,21 @@ class TheSeamsMatchSettlesCallsTest(unittest.TestCase):
         self.assertLessEqual(
             {"branch_heads", "pulls_for_head", "compare"}, _settle_ops_calls())
 
+    def test_settle_calls_the_flaky_test_seams(self):
+        # DRE-6870: the earlier cards' read, and the fix card's search and
+        # write, all reach settle through `ops`.
+        self.assertLessEqual(
+            {"repair_card_history", "find_open", "create_card"},
+            _settle_ops_calls())
+
     def test_the_sweep_seam_carries_every_method_settle_calls(self):
         import reconcile
 
         settle_only = _settle_ops_calls() - {
-            # `open_card`'s Linear seam, not settle's.
-            "find_open", "create_card", "stamp_card"}
+            # `open_card`'s Linear seam, not settle's. `find_open` and
+            # `create_card` were excluded here too until DRE-6870 had settle
+            # file a flaky test's fix card through them.
+            "stamp_card"}
         for name in sorted(settle_only):
             with self.subTest(name=name):
                 self.assertTrue(
@@ -1215,6 +1224,378 @@ class TheSweepSaysItEndToEndTest(unittest.TestCase):
         self.assertEqual(identifier, UNLANDED["card"])
         self.assertTrue(body.startswith(repair_card.UNLANDED_MARKER))
         self.assertIn(UNLANDED_BRANCH, body)
+
+
+# --------------------------------------------------------------------------- #
+# DRE-6870 — the second time a test turns main red and goes green unfixed      #
+# --------------------------------------------------------------------------- #
+#
+# bureau-pipeline, 2026-10-10: a stale-timestamp test turned main red at 00:21
+# PT, its repair was closed unmerged because the next run went green, and the
+# same test turned main red again nine hours later. The repair card names its
+# failing tests; the second green cancel of a card naming the same test files
+# one card to fix the test.
+
+from datetime import UTC, datetime, timedelta  # noqa: E402
+
+import linear_ops  # noqa: E402
+import routing_verdict  # noqa: E402
+import validate_card  # noqa: E402
+
+NOW = datetime(2026, 10, 11, 15, 0, tzinfo=UTC)
+FLAKY_TEST = "tests/test_heartbeat.py::test_a_stale_stamp_reads_as_stale"
+OTHER_TEST = "tests/test_record.py::test_the_gap_is_named"
+
+#: The second failure — the card this pass is about to cancel.
+SECOND = {
+    "card": "DRE-6900",
+    "sha": "9f1c2d3e4a5b" + "1" * 28,
+    "workflow": "Pipeline Tests",
+    "repo": "bureau-pipeline",
+    "run_url": ("https://github.com/dreadnought-foundry/bureau-pipeline/"
+                "actions/runs/38100000002"),
+    "filed": NOW - timedelta(hours=1),
+}
+#: The first failure — an earlier repair card of the same repo.
+FIRST = {
+    "card": "DRE-6880",
+    "sha": "1a2b3c4d5e6f" + "2" * 28,
+    "workflow": "Pipeline Tests",
+    "repo": "bureau-pipeline",
+    "run_url": ("https://github.com/dreadnought-foundry/bureau-pipeline/"
+                "actions/runs/38100000001"),
+}
+FIX_TITLE = (f"bureau-pipeline: flaky test turned main red twice in 14 days — "
+             f"{FLAKY_TEST}")
+GREEN_URL = ("https://github.com/dreadnought-foundry/bureau-pipeline/"
+             "actions/runs/38100000003")
+
+
+def _iso(when: datetime) -> str:
+    return when.strftime("%Y-%m-%dT%H:%M:%S.000Z")
+
+
+def flaky_body(case: dict, tests) -> str:
+    """A repair card's body as `open` writes it with a log — the shipped
+    writer, so a change to it moves this fixture."""
+    return repair_card.card_body(
+        workflow_name=case["workflow"], run_url=case["run_url"],
+        head_sha=case["sha"], repo_slug=case["repo"], attempt=1,
+        failing_tests=list(tests))
+
+
+def history_row(case: dict, *, tests=(FLAKY_TEST,), state="Canceled",
+                filed=NOW - timedelta(days=2)) -> dict:
+    """One card of the earlier-cards read, in the shape the seam answers."""
+    return {"identifier": case["card"], "description": flaky_body(case, tests),
+            "state": state, "createdAt": _iso(filed)}
+
+
+class FlakyOps(FakeGitHubAndLinear):
+    """`FakeGitHubAndLinear` plus the three seams DRE-6870 adds, recorded."""
+
+    def __init__(self, *, tests=(FLAKY_TEST,), history=(), history_error=None,
+                 open_fix=None, create_error=None, refs=(), runs=None,
+                 with_section=True):
+        card = {
+            "identifier": SECOND["card"],
+            "title": repair_card.card_title(SECOND["workflow"], SECOND["sha"]),
+            "description": (flaky_body(SECOND, tests) if with_section else
+                            repair_card.card_body(
+                                workflow_name=SECOND["workflow"],
+                                run_url=SECOND["run_url"],
+                                head_sha=SECOND["sha"],
+                                repo_slug=SECOND["repo"], attempt=1)),
+            "state": "In Progress",
+            "repo": SECOND["repo"],
+            "comments": [],
+            "created_at": _iso(SECOND["filed"]),
+        }
+        super().__init__(
+            cards=[card], refs=list(refs),
+            runs=([run_record("e" * 40, url=GREEN_URL)] if runs is None
+                  else runs))
+        self._history = history
+        self.history_error = history_error
+        self.open_fix = open_fix
+        self.create_error = create_error
+        self.history_reads: list = []
+        self.searched: list = []
+        self.created: list = []
+
+    def repair_card_history(self, repo_slug, since):
+        self.history_reads.append((repo_slug, since))
+        if self.history_error:
+            raise self.history_error
+        return self._history
+
+    def find_open(self, title):
+        self.searched.append(title)
+        return self.open_fix
+
+    def create_card(self, title, description, *, repo_slug, labels=(),
+                    lane=linear_ops.CREATE_LANE):
+        if self.create_error:
+            raise self.create_error
+        self.created.append({"title": title, "description": description,
+                             "repo_slug": repo_slug, "labels": list(labels),
+                             "lane": lane})
+        return {"identifier": "DRE-6950",
+                "url": "https://linear.app/x/issue/DRE-6950"}
+
+
+def settle_at_now(ops):
+    return settle(ops, repo_slug="bureau-pipeline", now=NOW)
+
+
+def second_time_ops(**kw) -> FlakyOps:
+    """The criterion's reading: T listed, main green, no repair pull request,
+    and an earlier Canceled card of this repo, filed two days ago, listing T.
+    The card being canceled is in the read too, as Linear would answer."""
+    return FlakyOps(history=[
+        history_row(FIRST),
+        history_row(SECOND, state="In Progress", filed=SECOND["filed"]),
+    ], **kw)
+
+
+class TheSecondTimeFilesAFixCardTest(unittest.TestCase):
+    """One pass, one fix card, and the repair card still Canceled."""
+
+    def setUp(self):
+        self.ops = second_time_ops()
+        self.report, self.log = settle_at_now(self.ops)
+
+    def test_exactly_one_fix_card_in_the_create_lane(self):
+        self.assertEqual(1, len(self.ops.created), self.log)
+        made = self.ops.created[0]
+        self.assertEqual(linear_ops.CREATE_LANE, made["lane"])
+        self.assertEqual("bureau-pipeline", made["repo_slug"])
+        self.assertEqual({"repo:bureau-pipeline", "agent:engineer", "Bug"},
+                         set(made["labels"]))
+        self.assertEqual(FIX_TITLE, made["title"])
+
+    def test_the_fix_card_names_both_failures(self):
+        import dead_run
+
+        body = self.ops.created[0]["description"]
+        self.assertIn(FLAKY_TEST, body)
+        for case, filed in ((FIRST, NOW - timedelta(days=2)),
+                            (SECOND, SECOND["filed"])):
+            with self.subTest(card=case["card"]):
+                self.assertIn(case["sha"], body)
+                self.assertIn(case["run_url"], body)
+                self.assertIn(case["card"], body)
+                self.assertIn(dead_run.pacific(filed), body)
+                self.assertTrue(dead_run.pacific(filed).endswith(" PT"))
+
+    def test_the_fix_card_says_it_is_a_flaky_test_to_fix(self):
+        body = self.ops.created[0]["description"].lower()
+        self.assertIn("flaky test to fix", body)
+        self.assertIn("never an incident to close", body)
+
+    def test_the_fix_card_passes_the_live_card_gate(self):
+        made = self.ops.created[0]
+        self.assertEqual(
+            [], validate_card.missing(made["description"], made["labels"]))
+        self.assertEqual(
+            3, len(routing_verdict.acceptance_criteria(made["description"])))
+
+    def test_the_repair_card_is_canceled_with_one_comment_naming_the_fix(self):
+        self.assertEqual([SECOND["card"]], self.ops.canceled)
+        self.assertEqual(1, len(self.ops.comments))
+        identifier, body = self.ops.comments[0]
+        self.assertEqual(SECOND["card"], identifier)
+        self.assertTrue(body.startswith(repair_card.SETTLE_MARKER))
+        self.assertIn("DRE-6950", body)
+        self.assertEqual(
+            [repair_card.SETTLED_GREEN],
+            [d.decision for d in self.report.decisions])
+
+    def test_the_fix_card_is_searched_for_by_its_title_first(self):
+        self.assertEqual([FIX_TITLE], self.ops.searched)
+
+    def test_the_read_asks_for_this_repo_over_the_last_14_days(self):
+        self.assertEqual(1, len(self.ops.history_reads))
+        repo, since = self.ops.history_reads[0]
+        self.assertEqual("bureau-pipeline", repo)
+        self.assertEqual(NOW - timedelta(days=14), since)
+
+    def test_a_long_test_id_is_cut_to_150_characters_in_the_title(self):
+        long_id = "tests/test_a.py::test_" + "y" * 250
+        ops = FlakyOps(tests=[long_id], history=[
+            history_row(FIRST, tests=[long_id])])
+        settle_at_now(ops)
+        self.assertEqual(
+            "bureau-pipeline: flaky test turned main red twice in 14 days — "
+            + long_id[:150],
+            ops.created[0]["title"])
+
+
+class NoFixCardTest(unittest.TestCase):
+    """Every reading that is not "twice in 14 days, green both times"."""
+
+    def _assert_todays_cancel(self, ops):
+        self.assertEqual([], ops.created)
+        self.assertEqual([SECOND["card"]], ops.canceled)
+        self.assertEqual(1, len(ops.comments))
+        self.assertEqual(
+            repair_card.settle_note(SECOND["workflow"],
+                                    run_record("e" * 40, url=GREEN_URL)),
+            ops.comments[0][1])
+
+    def test_the_first_time_cancels_with_todays_comment(self):
+        ops = FlakyOps(history=[
+            history_row(SECOND, state="In Progress", filed=SECOND["filed"])])
+        settle_at_now(ops)
+        self._assert_todays_cancel(ops)
+
+    def test_an_earlier_card_listing_another_test(self):
+        ops = FlakyOps(history=[history_row(FIRST, tests=[OTHER_TEST])])
+        settle_at_now(ops)
+        self._assert_todays_cancel(ops)
+
+    def test_an_earlier_card_filed_15_days_ago(self):
+        ops = FlakyOps(history=[
+            history_row(FIRST, filed=NOW - timedelta(days=15))])
+        settle_at_now(ops)
+        self._assert_todays_cancel(ops)
+
+    def test_an_earlier_card_that_is_done(self):
+        # A Done repair merged a fix: that failure was not forgotten.
+        ops = FlakyOps(history=[history_row(FIRST, state="Done")])
+        settle_at_now(ops)
+        self._assert_todays_cancel(ops)
+
+
+class AFixCardAlreadyOpenTest(unittest.TestCase):
+
+    def test_none_is_filed_and_the_comment_names_the_open_one(self):
+        ops = second_time_ops(open_fix="DRE-6930")
+        settle_at_now(ops)
+        self.assertEqual([], ops.created)
+        self.assertEqual([SECOND["card"]], ops.canceled)
+        self.assertEqual(1, len(ops.comments))
+        self.assertIn("DRE-6930", ops.comments[0][1])
+
+
+class TheEarlierCardsCannotBeReadTest(unittest.TestCase):
+    """UNKNOWN: the repair card is left exactly as it is for this pass."""
+
+    def _assert_untouched(self, ops, report, log):
+        self.assertEqual([], ops.canceled)
+        self.assertEqual([], ops.comments)
+        self.assertEqual([], ops.created)
+        self.assertIn(f"UNKNOWN {SECOND['card']}", log)
+        self.assertEqual([repair_card.SETTLED_UNKNOWN],
+                         [d.decision for d in report.decisions])
+
+    def test_a_read_that_answers_nothing(self):
+        ops = FlakyOps(history=None)
+        report, log = settle_at_now(ops)
+        self._assert_untouched(ops, report, log)
+
+    def test_a_read_that_raises(self):
+        ops = FlakyOps(history_error=RuntimeError("Linear says 502"))
+        report, log = settle_at_now(ops)
+        self._assert_untouched(ops, report, log)
+
+
+class TheFixCardWriteFailsTest(unittest.TestCase):
+    """Fix card first, cancel second — so a failure between them heals."""
+
+    def test_the_card_is_not_canceled_and_the_next_pass_files_nothing_twice(self):
+        ops = second_time_ops(create_error=RuntimeError("Linear says 500"))
+        report, _ = settle_at_now(ops)
+        self.assertEqual([], ops.canceled)
+        self.assertEqual([], ops.comments)
+        self.assertTrue(report.failures)
+
+        # The next pass: the create had landed after all, and the fix card is
+        # now found by its title.
+        ops.create_error = None
+        ops.open_fix = "DRE-6950"
+        settle_at_now(ops)
+        self.assertEqual([], ops.created)
+        self.assertEqual([SECOND["card"]], ops.canceled)
+        self.assertEqual(1, len(ops.comments))
+        self.assertIn("DRE-6950", ops.comments[0][1])
+
+
+class NoReadOfEarlierCardsTest(unittest.TestCase):
+    """The new read is made only where a card listing tests is canceled."""
+
+    def test_a_card_with_no_failing_tests_section(self):
+        ops = second_time_ops(with_section=False)
+        settle_at_now(ops)
+        self.assertEqual([], ops.history_reads)
+        self.assertEqual([SECOND["card"]], ops.canceled)
+
+    def test_a_card_whose_repair_pull_request_is_open(self):
+        ref = red_main_repair.repair_branch(SECOND["sha"], 1, card=SECOND["card"])
+        ops = second_time_ops(refs=[ref])
+        settle_at_now(ops)
+        self.assertEqual([], ops.history_reads)
+        self.assertEqual([], ops.canceled)
+
+    def test_a_card_whose_main_is_still_red(self):
+        ops = second_time_ops(
+            runs=[run_record(SECOND["sha"], conclusion="failure")])
+        settle_at_now(ops)
+        self.assertEqual([], ops.history_reads)
+        self.assertEqual([], ops.canceled)
+
+
+class TheEarlierCardsReadTest(unittest.TestCase):
+    """`linear_ops`'s one new read: this repo's repair cards, any state, since
+    a moment — and the two seams that hand it to settle."""
+
+    def test_the_query_filters_on_repo_title_and_time_and_not_state(self):
+        from unittest.mock import patch
+
+        asked: list = []
+
+        def gql(query, variables=None, **kw):
+            asked.append((query, variables))
+            return {"issues": {"nodes": [{
+                "identifier": FIRST["card"], "description": "d",
+                "createdAt": "2026-10-09T15:00:00.000Z",
+                "state": {"name": "Canceled"}}]}}
+
+        since = NOW - timedelta(days=14)
+        with patch.object(linear_ops, "gql", gql):
+            got = linear_ops.repo_cards_by_title_prefix(
+                repair_card.TITLE_ANCHOR, repo_slug="bureau-pipeline",
+                since=since)
+        self.assertEqual(
+            [{"identifier": FIRST["card"], "description": "d",
+              "state": "Canceled", "createdAt": "2026-10-09T15:00:00.000Z"}],
+            got)
+        query, variables = asked[0]
+        self.assertEqual(repair_card.TITLE_ANCHOR, variables["prefix"])
+        self.assertEqual("repo:bureau-pipeline", variables["label"])
+        self.assertEqual(since.isoformat(), variables["since"])
+        self.assertIn("startsWith", query)
+        self.assertIn("createdAt: {gte:", query)
+        self.assertNotIn("state: {", query)
+
+    def test_both_seams_hand_settle_the_read(self):
+        from unittest.mock import patch
+
+        import reconcile
+
+        since = NOW - timedelta(days=14)
+        for seam in (reconcile._RepairSettleOps(),
+                     repair_card._SettleOps("dreadnought-foundry/bureau-pipeline")):
+            with self.subTest(seam=type(seam).__name__):
+                seen: list = []
+                with patch.object(
+                        linear_ops, "repo_cards_by_title_prefix",
+                        lambda prefix, **kw: (seen.append((prefix, kw)), [])[1]):
+                    self.assertEqual(
+                        [], seam.repair_card_history("bureau-pipeline", since))
+                self.assertEqual(
+                    [(repair_card.TITLE_ANCHOR,
+                      {"repo_slug": "bureau-pipeline", "since": since})], seen)
 
 
 if __name__ == "__main__":
