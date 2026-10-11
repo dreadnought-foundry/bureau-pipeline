@@ -88,6 +88,19 @@
 # the medic run ENDS GREEN. The sweep's own run stays red — a board that is
 # stuck must still say so.
 #
+# SEVENTH EXCEPTION (DRE-6851): A CHANGE SET REFUSED BY DESIGN. A `Model config
+# change` run that fails at "Validate the change set" with the validator's
+# `change set refused` line in its log has answered the person who asked —
+# Settings › Agents & models already told them "Not applied". On 2026-10-10
+# run 38114763170 was retried, refused again, and diagnosed, and the diagnosis
+# filed a "Pipeline failure" card that planning parked in Green Light as a
+# question for the CEO. The retry gate now declines it (`rule ==
+# refused-by-design`, medic_retry.py), `diagnose` is gated off the same rule
+# so no card is filed, and `refused_by_design` says so in one sentence in this
+# run's summary and ENDS GREEN. Any other failure of that workflow — a crash
+# after the push, a pull request that would not open, a validator that threw
+# — keeps its retry and its failure card.
+#
 # Reusable workflow: the workflow_run trigger list (which workflows to watch)
 # lives in the calling stub — it can include product-specific CI workflows.
 name: Pipeline Medic (reusable)
@@ -241,7 +254,16 @@ jobs:
           # env, not inline (DRE-1996): the run name is agent-influenced
           # text.
           WORKFLOW_NAME: ${{ github.event.workflow_run.name }}
+          GH_TOKEN: ${{ github.token }}
         run: |
+          # DRE-6851: the failed step's name off the Jobs API — the same read
+          # the limit step below makes — so a change set refused by its
+          # "Validate the change set" step is told from a crash after it. An
+          # unreadable API leaves it empty, and the log's own step field
+          # decides instead.
+          FAILED_STEP=$(gh run view "$RUN_ID" --repo "$GITHUB_REPOSITORY" --json jobs \
+            --jq '[.jobs[] | select(.conclusion=="failure") | .steps[] | select(.conclusion=="failure") | .name] | first // ""' \
+            2>/dev/null) || FAILED_STEP=""
           # `|| OUT=""`: this gate must never be able to take the whole medic
           # down with it. Every job here `needs: classify`, so a step that
           # exits non-zero skips the back-offs and the diagnosis agent too —
@@ -252,7 +274,7 @@ jobs:
             --branch "$HEAD_BRANCH" --log /tmp/medic-log.txt \
             --run-started-at "$RUN_STARTED_AT" \
             --run-id "$RUN_ID" --run-attempt "$RUN_ATTEMPT" \
-            --workflow "$WORKFLOW_NAME" \
+            --workflow "$WORKFLOW_NAME" --failed-step "$FAILED_STEP" \
             --snapshot "$RUNNER_TEMP/medic-card.json") || OUT=""
           if [ -z "$OUT" ]; then
             echo "::warning::The medic's retry gate gave no answer, so this run is handled the way it was before DRE-2954. If the card is parked, the retry it is about to take is the one that card exists to prevent."
@@ -453,6 +475,7 @@ jobs:
        needs.classify.outputs.rule == 'stalled-no-stream-repeat' ||
        needs.classify.outputs.rule == 'out-of-memory') &&
       needs.classify.outputs.retry == 'false' &&
+      needs.classify.outputs.rule != 'refused-by-design' &&
       needs.classify.outputs.card != ''
     # The short lane, same as `classify` above (DRE-4276).
     runs-on: ${{ fromJSON(vars.BUREAU_SHORT_RUNS_ON || vars.BUREAU_RUNS_ON || '["ubuntu-latest"]') }}
@@ -724,6 +747,33 @@ jobs:
         run: |
           echo "::notice::Standing card defect — ${FAILED_WORKFLOW} is red because a card defect it reported is still standing, and nothing the sweep tried failed. This is the alarm, not a crash: not retrying (the rerun reports the same defect) and not diagnosing (there is no crash to diagnose). The ERROR lines in the failed run name the cards, and a person must act on them; the run goes green once they are fixed. Failed run: ${RUN_URL}"
 
+  # A change set refused by design (DRE-6851). The retry gate read a `Model
+  # config change` run that failed at "Validate the change set" with the
+  # validator's refusal in its log, and declined the retry; `diagnose` is gated
+  # off the same rule, so no failure card is filed — the refusal is an answer
+  # to the person who asked, already shown on the Settings page. This job says
+  # so in ONE sentence in the medic's own run summary, the sentence the gate
+  # composed, and ENDS GREEN. No attempt gate: a person re-running the refused
+  # run by hand gets the same answer and the same sentence.
+  refused_by_design:
+    needs: classify
+    if: >
+      (github.event.workflow_run.conclusion == 'failure' || github.event.workflow_run.conclusion == 'timed_out') &&
+      needs.classify.outputs.rule == 'refused-by-design'
+    # The short lane, same as `classify` above (DRE-4276).
+    runs-on: ${{ fromJSON(vars.BUREAU_SHORT_RUNS_ON || vars.BUREAU_RUNS_ON || '["ubuntu-latest"]') }}
+    timeout-minutes: 5
+    steps:
+      - name: Say the change set was refused by design — no rerun, no card
+        env:
+          # env, not inline ${{ }} (DRE-1996): the sentence quotes the
+          # validator's reason, which carries the change set's own text.
+          DETAIL: ${{ needs.classify.outputs.detail }}
+          RUN_URL: ${{ github.event.workflow_run.html_url }}
+        run: |
+          printf '%s Failed run: %s\n' "$DETAIL" "$RUN_URL" >> "$GITHUB_STEP_SUMMARY"
+          printf '%s\n' "$DETAIL"
+
   # The second identical death, held (DRE-3430). The one automatic retry above
   # is untouched for this class: a transient blip deserves it, and the second
   # death of the same run at the same commit is the PROOF that the environment
@@ -803,6 +853,7 @@ jobs:
       needs.classify.outputs.class != 'upstream_5xx' &&
       needs.classify.outputs.class != 'linear_ratelimited' &&
       needs.classify.outputs.class != 'standing_defect' &&
+      needs.classify.outputs.rule != 'refused-by-design' &&
       needs.classify.outputs.limit != 'true'
     # NOT the short lane (DRE-4276): this is the one job in the file that
     # spends a Claude run — the diagnosis agent below, up to twenty minutes
