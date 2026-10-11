@@ -21,6 +21,12 @@ runs against the copy's config. The scripts read their config off their own
 file's path, so the copy is the only way to run the real tools on a file the
 repo does not ship.
 
+The copy starts from NO exceptions: its `projects` block is reset to
+`projects: {}` and the mirrors regenerated before the first save. The committed
+file carries whatever the CEO last saved — #993 itself, once it merged — and a
+case that re-applies a save already in the tree is refused as a no-op before
+the suite ever runs.
+
 The three cases run their suites side by side: each is the whole model suite,
 and one after another they would cost three times the wall clock.
 
@@ -42,6 +48,9 @@ import pytest
 import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "tests"))
+
+from model_config_text import without_projects  # noqa: E402
 
 #: The six files #993 turned red, named by the card.
 NAMED = (
@@ -104,6 +113,14 @@ def copy_tree(base: Path) -> Path:
     return base
 
 
+def reset_projects(tree: Path) -> None:
+    """Empty the copy's `projects` block and regenerate its mirrors."""
+    config = tree / "config" / "models.yaml"
+    config.write_text(without_projects(config.read_text()))
+    proc = _run(tree, "scripts/sync_model_config.py")
+    assert proc.returncode == 0, (proc.stdout, proc.stderr)
+
+
 def _run(tree: Path, *args: str) -> subprocess.CompletedProcess:
     env = dict(os.environ, PYTHONDONTWRITEBYTECODE="1")
     return subprocess.run([sys.executable, *args], capture_output=True,
@@ -137,6 +154,7 @@ def suite_files(tree: Path) -> list[str]:
 def run_case(name: str, base: Path) -> dict:
     saves, _ = CASES[name]
     tree = copy_tree(base / "tree")
+    reset_projects(tree)
     for i, changes in enumerate(saves):
         work = base / f"save-{i}"
         work.mkdir()
