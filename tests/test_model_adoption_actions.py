@@ -423,9 +423,15 @@ class TestApply:
 
     @staticmethod
     def _with_projects(block: str) -> str:
-        text = CONFIG_PATH.read_text()
-        assert "\nprojects: {}\n" in text
-        return text.replace("\nprojects: {}\n", f"\nprojects:\n{block}")
+        """The committed file with its `projects` block — empty or carrying
+        whatever exceptions the console has set (DRE-6857) — replaced."""
+        text, count = re.subn(
+            r"^projects:(?: \{\}\n|\n(?:  .*\n)*)",
+            f"projects:\n{block}" if block else "projects: {}\n",
+            CONFIG_PATH.read_text(), flags=re.M,
+        )
+        assert count == 1
+        return text
 
     @staticmethod
     def _narrowed(decision, *ladders):
@@ -449,7 +455,7 @@ class TestApply:
         assert judgement in result
         # The only line that differs from the same edit with `projects: {}`
         # is the exception that moved.
-        plain = maa.apply_text(CONFIG_PATH.read_text(), decision, "2026-11-02")
+        plain = maa.apply_text(self._with_projects(""), decision, "2026-11-02")
         removed = [l for l in difflib.unified_diff(
             plain.splitlines(), result.splitlines(), lineterm="", n=0)
             if l[:1] in "+-" and l[:3] not in ("+++", "---")]

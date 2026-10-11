@@ -60,6 +60,15 @@ def _text() -> str:
     return CONFIG.read_text()
 
 
+def _no_projects() -> str:
+    """A copy of the real file with its `projects` block emptied — whatever
+    exceptions the console has set in the live map (DRE-6857)."""
+    text, count = re.subn(r"^projects:(?: \{\}\n|\n(?:  .*\n)*)",
+                          "projects: {}\n", _text(), flags=re.M)
+    assert count == 1
+    return text
+
+
 def _comments(text: str) -> list[str]:
     """Every comment line, in order — the record a YAML re-dump would lose."""
     return [line.strip() for line in text.splitlines()
@@ -173,15 +182,24 @@ def test_set_default_model_inserts_a_model_not_on_the_ladder_at_the_front():
 
 
 def test_set_project_model_sets_an_exception_on_an_empty_projects_block():
-    assert yaml.safe_load(_text())["projects"] == {}
+    empty = _no_projects()
+    assert yaml.safe_load(empty)["projects"] == {}
+    _, doc = _edit({"op": "set_project_model", "project": "atlas",
+                    "group": "workhorse", "model": SONNET55}, empty)
+    assert doc["projects"] == {"atlas": {"workhorse": SONNET55}}
+
+
+def test_set_project_model_keeps_the_exceptions_the_live_file_carries():
+    before = yaml.safe_load(_text())["projects"]
     _, doc = _edit({"op": "set_project_model", "project": "atlas",
                     "group": "workhorse", "model": SONNET55})
-    assert doc["projects"] == {"atlas": {"workhorse": SONNET55}}
+    assert doc["projects"] == {
+        **before, "atlas": {**before.get("atlas", {}), "workhorse": SONNET55}}
 
 
 def test_set_project_model_adds_a_second_kind_and_replaces_an_existing_one():
     text, _ = _edit({"op": "set_project_model", "project": "atlas",
-                     "group": "workhorse", "model": SONNET55})
+                     "group": "workhorse", "model": SONNET55}, _no_projects())
     text, doc = _edit({"op": "set_project_model", "project": "atlas",
                        "group": "advisory", "model": SONNET5}, text)
     assert doc["projects"] == {"atlas": {"workhorse": SONNET55, "advisory": SONNET5}}
@@ -196,7 +214,7 @@ def test_set_project_model_adds_a_second_kind_and_replaces_an_existing_one():
 
 def test_clear_project_model_removes_one_exception_and_keeps_the_others():
     text, _ = _edit({"op": "set_project_model", "project": "atlas",
-                     "group": "workhorse", "model": SONNET55})
+                     "group": "workhorse", "model": SONNET55}, _no_projects())
     text, _ = _edit({"op": "set_project_model", "project": "atlas",
                      "group": "advisory", "model": SONNET5}, text)
     _, doc = _edit({"op": "clear_project_model", "project": "atlas",
@@ -207,11 +225,12 @@ def test_clear_project_model_removes_one_exception_and_keeps_the_others():
 def test_clearing_the_last_exception_restores_the_file_byte_for_byte():
     set_one = {"op": "set_project_model", "project": "atlas",
                "group": "workhorse", "model": SONNET55}
-    text, _ = _edit(set_one)
+    empty = _no_projects()
+    text, _ = _edit(set_one, empty)
     restored, doc = _edit({"op": "clear_project_model", "project": "atlas",
                            "group": "workhorse"}, text)
     assert doc["projects"] == {}
-    assert restored == _text()
+    assert restored == empty
 
 
 def test_every_operation_touches_only_the_lines_it_names():
@@ -234,6 +253,7 @@ def test_a_valid_change_set_is_applied_and_passes_the_policy_a_pull_request_meet
         {"op": "add_agent", "agent": "data-analyst", "about": "Answers questions from our data"},
         {"op": "set_default_model", "group": "workhorse", "model": SONNET55},
         {"op": "set_project_model", "project": "atlas", "group": "workhorse", "model": OPUS55},
+        text=_no_projects(),
     )
     assert refusals == []
     doc = yaml.safe_load(text)

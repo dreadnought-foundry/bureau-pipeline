@@ -5,9 +5,11 @@ honor, and `policy_errors` refuses a malformed one in plain English.
 WHAT CHANGES, AND WHAT DOES NOT
 -------------------------------
 The file gains `kinds.<kind>.label` / `kinds.<kind>.purpose`, `ungrouped`,
-`about` and `projects`. It ships with `projects: {}`, so NOTHING any run selects
-changes: `SelectionIsUnchangedTest` pins every role's pick, read off the
-ladders rather than hardcoded.
+`about` and `projects`. It shipped with `projects: {}`, and the console sets
+exceptions in it since (DRE-6624), so a repo with no exception selects exactly
+what it did: `SelectionIsUnchangedTest` pins every role's pick, read off the
+ladders rather than hardcoded, and every test here holds whatever exceptions
+the committed file carries (DRE-6857).
 
 THE OWN-KIND READING (pinned here so this card and DRE-6635 agree)
 ------------------------------------------------------------------
@@ -31,6 +33,7 @@ Run: cd bureau-pipeline && python3 -m pytest tests/test_model_projects_schema.py
 
 from __future__ import annotations
 
+import ast
 import json
 import sys
 from pathlib import Path
@@ -109,8 +112,18 @@ class TestCommittedData:
         assert cfg["about"]["engineer"] == "Builds a card and opens the PR"
         assert cfg["about"]["designer"] == "Designs screens and systems"
 
-    def test_projects_ships_empty(self):
-        assert committed()["projects"] == {}
+    def test_every_committed_exception_names_a_repo_a_kind_and_its_own_rung(self):
+        # Holds for any content: the console adds exceptions here (DRE-6624).
+        cfg = committed()
+        projects = cfg["projects"]
+        assert isinstance(projects, dict)
+        for slug, entry in projects.items():
+            assert slug in slugs(), slug
+            assert isinstance(entry, dict) and entry, slug
+            for kind, model in entry.items():
+                assert kind in cfg["kinds"], (slug, kind)
+                assert model in ladder(cfg, kind), (slug, kind, model)
+        assert not [e for e in errors(cfg) if e.startswith("projects")]
 
     def test_the_committed_config_validates_clean_with_the_real_repo_map(self):
         assert mf.policy_errors(committed()) == []
@@ -138,7 +151,7 @@ class TestNormalizedShape:
         }
         assert cfg["ungrouped"] == INTERACTIVE
         assert cfg["about"] == committed()["about"]
-        assert cfg["projects"] == {}
+        assert cfg["projects"] == committed()["projects"]
 
     def test_a_kind_with_no_label_or_purpose_gets_the_defaults(self):
         raw = committed()
@@ -172,7 +185,9 @@ class TestNormalizedShape:
         at = [literal.index(f'\n    "{key}": ') for key in
               ("review_separation", "groups", "ungrouped", "about", "projects")]
         assert at == sorted(at)
-        assert '\n    "projects": {},' in literal
+        # Whatever exceptions the file carries, in the file's order.
+        projects = ast.literal_eval(literal.split("=", 1)[1])["projects"]
+        assert list(projects.items()) == list(committed()["projects"].items())
 
 
 # --------------------------------------------------------------------------- #
@@ -283,7 +298,7 @@ class TestMalformedKeys:
             "projects.atlas", "projects.portico"]
         assert all("config/repo-map.json" in e for e in found)
         # …and an empty `projects` never needs the map at all.
-        assert mf.policy_errors(committed()) == []
+        assert mf.policy_errors(with_projects({})) == []
 
     def test_a_kind_that_is_not_declared_is_refused(self):
         found = errors(with_projects({"atlas": {"builders": SONNET55}}))
@@ -451,9 +466,16 @@ class TestSelectionIsUnchanged:
             mf.clear_availability_cache()
             assert mf.select(role, probe=lambda m: True) == ladder(cfg, kind)[0], role
 
-    def test_no_repo_walks_anything_but_the_fleet_ladders(self):
+    def test_a_repo_walks_the_fleet_ladders_but_for_its_own_exceptions(self):
+        # Holds for any committed `projects`: a kind with no exception is the
+        # fleet ladder, and a kind with one is that ladder led by it.
         for slug in sorted(slugs()):
-            assert mf.effective_ladders(mf.CONFIG, slug) == mf.LADDERS, slug
+            entry = mf.CONFIG["projects"].get(slug, {})
+            walks = mf.effective_ladders(mf.CONFIG, slug)
+            assert walks.keys() == mf.LADDERS.keys(), slug
+            for kind, name in mf.KINDS.items():
+                assert walks[name] == mf.project_walk(
+                    mf.LADDERS[name], entry.get(kind)), (slug, kind)
 
 
 # --------------------------------------------------------------------------- #
@@ -473,6 +495,7 @@ class TestDocumented:
 
     def test_the_yaml_shows_the_projects_shape_in_a_comment(self):
         lines = CONFIG_PATH.read_text().splitlines()
-        at = lines.index("projects: {}")
+        # The key's own line, whatever exceptions the console has set under it.
+        (at,) = [i for i, l in enumerate(lines) if l.startswith("projects:")]
         above = " ".join(l for l in lines[max(0, at - 30):at] if l.lstrip().startswith("#"))
         assert "atlas:" in above and "workhorse:" in above

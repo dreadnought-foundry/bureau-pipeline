@@ -325,15 +325,20 @@ def test_an_unknown_value_cannot_put_a_quote_in_the_note(tree):
 
 
 # --------------------------------------------------------------------------- #
-# The committed config: no project changes anything                            #
+# The committed config: only a committed exception changes a pick              #
 # --------------------------------------------------------------------------- #
 
-def test_every_role_on_every_repo_selects_the_fleet_pick_on_the_committed_config():
+def test_every_role_on_every_repo_selects_the_fleet_pick_or_its_exception():
+    """Holds for any committed `projects` (DRE-6857): a repo with no exception
+    for a role's kind selects the fleet pick, and one with an exception selects
+    that exception — the console sets them in the live map (DRE-6624)."""
     repo_map = json.loads((ROOT / "config" / "repo-map.json").read_text())
     probe = lambda m: True  # noqa: E731
     assert mf.AGENT_KINDS
-    for role in mf.AGENT_KINDS:
+    for role, kind in mf.AGENT_KINDS.items():
         fleet = mf.select(role, probe=probe)
         for slug in repo_map:
+            exception = (mf.CONFIG["projects"].get(slug) or {}).get(kind)
             mf.clear_availability_cache()
-            assert mf.select(role, repo=slug, probe=probe) == fleet, (role, slug)
+            assert mf.select(role, repo=slug, probe=probe) == (
+                exception or fleet), (role, slug)
