@@ -68,7 +68,7 @@ def escalation_branch() -> str:
     """The escalate-by-exception branch — the shell that actually runs when an
     agent stops to ask the CEO a question."""
     m = re.search(
-        r"elif \[ -f /tmp/agent-escalation\.txt \](.*?)\n\s*elif \[ -f /tmp/agent-blocker\.txt \]",
+        r'elif \[ -f "\$NOTES_DIR"/agent-escalation\.txt \](.*?)\n\s*elif \[ -f "\$NOTES_DIR"/agent-blocker\.txt \]',
         report_step(),
         re.S,
     )

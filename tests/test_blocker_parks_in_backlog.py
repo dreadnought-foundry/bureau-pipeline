@@ -28,7 +28,7 @@ WORKFLOW = os.path.join(
 
 def blocker_branch() -> str:
     src = step_shell.workflow_source(WORKFLOW)
-    m = re.search(r"elif \[ -f /tmp/agent-blocker\.txt \]; then(.*?)\n\s*else\b", src, re.S)
+    m = re.search(r'elif \[ -f "\$NOTES_DIR"/agent-blocker\.txt \]; then(.*?)\n\s*else\b', src, re.S)
     if not m:
         raise AssertionError("blocker branch not found in agent-task.yml")
     return m.group(1)
@@ -50,7 +50,7 @@ def escalation_branch() -> str:
     ask the CEO a decision and the workflow parks the card in Green Light."""
     src = report_step()
     m = re.search(
-        r"elif \[ -f /tmp/agent-escalation\.txt \](.*?)\n\s*elif \[ -f /tmp/agent-blocker\.txt \]",
+        r'elif \[ -f "\$NOTES_DIR"/agent-escalation\.txt \](.*?)\n\s*elif \[ -f "\$NOTES_DIR"/agent-blocker\.txt \]',
         src,
         re.S,
     )

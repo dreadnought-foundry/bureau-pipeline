@@ -77,6 +77,13 @@ AGENT_TIMEOUT_SECONDS = 2700.0
 ESCALATION_PATH = "/tmp/agent-escalation.txt"  # nosec B108 — the prompt's own path
 BLOCKER_PATH = "/tmp/agent-blocker.txt"  # nosec B108 — the prompt's own path
 
+
+def _hatch(path: str) -> str:
+    """`path`, or its name in `AGENT_NOTES_DIR` when that is set. Only a test
+    sets it (DRE-6961): two copies of the suite on one machine share /tmp."""
+    notes = os.environ.get("AGENT_NOTES_DIR")
+    return os.path.join(notes, os.path.basename(path)) if notes else path
+
 _EXPRESSION_RE = re.compile(r"\$\{\{(.*?)\}\}", re.DOTALL)
 
 # The prompt's process step 1 (DRE-4368): resume the dead run's branch, or
@@ -340,8 +347,8 @@ def run_agent(
         default_branch=default_branch,
     )
 
-    _clear(ESCALATION_PATH)
-    _clear(BLOCKER_PATH)
+    _clear(_hatch(ESCALATION_PATH))
+    _clear(_hatch(BLOCKER_PATH))
 
     cli = shlex.split(os.environ.get("HARNESS_AGENT_CLI", DEFAULT_AGENT_CLI))
     model = os.environ.get("HARNESS_AGENT_MODEL") or _select_model(
@@ -391,8 +398,8 @@ def run_agent(
         log(f"agent: timed out after {timeout:.0f}s — the scenario still asserts "
             "on what the sandbox shows")
 
-    result.escalation = _read_hatch(ESCALATION_PATH)
-    result.blocker = _read_hatch(BLOCKER_PATH)
+    result.escalation = _read_hatch(_hatch(ESCALATION_PATH))
+    result.blocker = _read_hatch(_hatch(BLOCKER_PATH))
     result.seconds = time.monotonic() - started
     log(
         f"agent: finished in {result.seconds:.0f}s (exit {result.returncode}"
