@@ -17,10 +17,11 @@ renamed for the direction.
 
 DRE-5320 used that mechanism exactly once: the operator created the `Hand-work`
 state on the board, then flipped the entry to live, deleting the three arriving
-keys and changing nothing else. The shipped contract therefore no longer
-carries an arriving lane, so the tests of the MECHANISM below run against
+keys and changing nothing else. The tests of the MECHANISM below run against
 `arriving_doc()`, the shipped contract with Hand-work put back the way DRE-5315
-declared it. The tests of the SHIPPED entry say it is live.
+declared it. The tests of the SHIPPED entry say it is live. The shipped file
+may carry other arriving lanes — `Queued` since DRE-6710, pinned in
+tests/test_queued_lane.py — so nothing here assumes Hand-work is the only one.
 """
 
 import copy
@@ -103,8 +104,8 @@ def live_board(doc, *extra):
 
 
 class TestTheHandWorkEntry:
-    def test_it_is_live_and_nothing_is_arriving(self):
-        assert lane_contract.lane_names("arriving", shipped()) == ()
+    def test_it_is_live_and_no_longer_arriving(self):
+        assert HAND_WORK not in lane_contract.lane_names("arriving", shipped())
         assert HAND_WORK in lane_contract.lane_names()
         assert lane_contract.lane(HAND_WORK)["status"] == "live"
 
@@ -201,7 +202,7 @@ class TestTheArrivingEntry:
     def test_the_fixture_is_the_arriving_declaration(self):
         doc = arriving_doc()
         lane_contract._validate(doc, "<arriving>")
-        assert lane_contract.lane_names("arriving", doc) == (HAND_WORK,)
+        assert HAND_WORK in lane_contract.lane_names("arriving", doc)
         step = raw_lane(doc, HAND_WORK)["board_action"]
         for phrase in ("`Hand-work`", "`unstarted`", "DRE team", "immediately after `Todo`"):
             assert phrase in step, phrase
@@ -384,7 +385,7 @@ class TestTheDocument:
         flow = text.split("## The flow", 1)[1].split("## Off the flow", 1)[0]
         assert f"| {HAND_WORK} | work |" in flow
         assert f"### {HAND_WORK}\n" in text
-        assert "## Arriving" not in text
+        assert f"### {HAND_WORK} — arriving" not in text
 
     def test_the_rewritten_clauses_are_rendered(self):
         text = self.committed()
@@ -401,7 +402,9 @@ class TestTheDocument:
         assert HAND_WORK not in flow
 
     def test_the_section_is_absent_when_nothing_is_arriving(self):
-        assert "## Arriving" not in lane_contract.render_markdown(shipped())
+        doc = copy.deepcopy(shipped())
+        doc["lanes"] = [e for e in doc["lanes"] if e["status"] != "arriving"]
+        assert "## Arriving" not in lane_contract.render_markdown(doc)
 
 
 # --------------------------------------------------------------------------- #
