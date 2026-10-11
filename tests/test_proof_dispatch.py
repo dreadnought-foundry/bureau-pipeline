@@ -2829,3 +2829,208 @@ def test_sent_back_waiting_hold_in_the_dry_run_writes_nothing(monkeypatch, capsy
     h, _ = _critic_pass(monkeypatch, text=record_md(WAITING_ROW), live=False)
     assert h.fired == [] and h.posted == [] and h.holds == []
     assert f"would: hold DRE-5930 — {WAITING[0]}" in _lines(capsys)
+
+
+# DRE-6610: a declined record whose unmet rows ALL carry a cause word          #
+# --------------------------------------------------------------------------- #
+
+import green_light_rows  # noqa: E402
+import lane_contract  # noqa: E402
+import proof_cause_park  # noqa: E402
+
+CAUSE_ROW = ("The nightly reads the repo variable",
+             "Not observed. cause: out-of-reach — `gh variable get` answered 403")
+GONE_ROW = ("The stale branch is deleted",
+            "Not observed. cause: state-gone — the repository was closed before the run")
+CAUSED = record_md(MET_ROW, CAUSE_ROW, GONE_ROW)
+CAUSE_ROWS = proof_cause_park.rows_of(CAUSED)
+CAUSE_HOLD = proof_cause_park.hold(CAUSE_ROWS)
+CAUSE_QUESTION = proof_cause_park.question(CAUSE_ROWS)
+CAUSE_MOVE = ("cmd_advance", ("DRE-5930", "Green Light", "Hand-work,In Review"))
+CAUSE_REFUSAL = (f"re-run: 2 row(s) of the record at {SHA7} cannot be observed as "
+                 "worded (cause: out-of-reach, state-gone) — ")
+NEVER_AGAIN = ", never re-run to read the same thing"
+
+
+class _Moves:
+    """Every lane and label write: the park's move answers `ok`, the rest are
+    logged so a test can say none was made."""
+
+    def __init__(self, monkeypatch, ok=True):
+        self.log: list = []
+        for name in ("cmd_state", "add_label", "remove_label"):
+            monkeypatch.setattr(linear_ops, name,
+                                lambda *a, _n=name, **k: self.log.append((_n, a)))
+
+        def advance(*args, **kw):
+            self.log.append(("cmd_advance", args))
+            return ok
+
+        monkeypatch.setattr(linear_ops, "cmd_advance", advance)
+
+
+def _cause_pass(monkeypatch, *, thread, text=CAUSED, pr=None, lane="In Review",
+                live=True, moved=True):
+    card = lane_card("DRE-5930", state=lane, window=thread)
+    board = Board(review=[card] if lane == "In Review" else [],
+                  green=[card] if lane == "Green Light" else [],
+                  threads={"DRE-5930": thread})
+    moves = _Moves(monkeypatch, ok=moved)
+    h = Harness(monkeypatch, board, records={"DRE-5930": pr or _declined()},
+                texts={900: text},
+                states={"DRE-5930": state("finished", dispatches=1,
+                                          record={"number": 900, "state": "open"})})
+    tally = h.sweep(live=live)
+    return h, tally, moves
+
+
+def test_cause_the_hold_names_the_criteria_and_the_cause_words_and_no_press():
+    observed, needs = CAUSE_HOLD
+    assert CAUSE_ROW[0] in observed and GONE_ROW[0] in observed
+    assert "out-of-reach" in needs and "state-gone" in needs
+    assert proof_record.CEO_PRESS not in observed + needs
+
+
+def test_cause_a_record_whose_unmet_rows_all_carry_a_cause_is_parked_once_never_re_run(
+        monkeypatch, capsys):
+    h, tally, moves = _cause_pass(monkeypatch, thread=_sent_back())
+    lines = _about(_lines(capsys), "DRE-5930")
+    assert h.fired == []
+    assert h.holds == [("DRE-5930", *CAUSE_HOLD)]
+    assert len(h.posted) == 1
+    assert h.posted[0][1].startswith("🙋 The proof run cannot observe")
+    assert h.order == [("hold", "DRE-5930"), ("comment", "DRE-5930")]
+    assert moves.log == [CAUSE_MOVE]
+    assert tally.held == 1 and tally.dispatched == 0 and tally.failures == []
+    assert any(f"{CAUSE_REFUSAL}held, asked, parked{NEVER_AGAIN}" in line
+               for line in lines), lines
+    assert h.text_reads == [(900, HEAD)]
+
+
+def test_cause_the_next_pass_in_green_light_is_no_re_run_candidate(monkeypatch, capsys):
+    parked = _sent_back(hold(*CAUSE_HOLD, 80), comment(CAUSE_QUESTION, 79))
+    h, tally, moves = _cause_pass(monkeypatch, thread=parked, lane="Green Light")
+    assert h.fired == [] and h.holds == [] and h.posted == [] and moves.log == []
+    assert h.record_reads == [] and h.text_reads == []
+    assert tally.eligible == tally.held == tally.refused == 0
+    assert not any(read[0] == "thread" for read in h.board.reads)
+
+
+def test_cause_the_next_pass_still_in_review_moves_it_and_posts_nothing(
+        monkeypatch, capsys):
+    parked = _sent_back(hold(*CAUSE_HOLD, 80), comment(CAUSE_QUESTION, 79))
+    h, tally, moves = _cause_pass(monkeypatch, thread=parked)
+    lines = _about(_lines(capsys), "DRE-5930")
+    assert h.fired == [] and h.holds == [] and h.posted == []
+    assert moves.log == [CAUSE_MOVE]
+    assert tally.held == 1
+    assert any(f"{CAUSE_REFUSAL}already asked — parked{NEVER_AGAIN}" in line
+               for line in lines), lines
+
+
+def test_cause_the_runs_own_park_on_the_thread_is_only_moved(monkeypatch, capsys):
+    """The run held and asked, and its move was refused: nothing new is
+    posted, and the dispatcher makes the move."""
+    asked = proof_cause_park.question(CAUSE_ROWS, run_url="https://github.com/x/y/runs/1")
+    parked = _sent_back(hold(*CAUSE_HOLD, 2490), comment(asked, 2489))
+    h, tally, moves = _cause_pass(monkeypatch, thread=parked)
+    lines = _about(_lines(capsys), "DRE-5930")
+    assert h.fired == [] and h.holds == [] and h.posted == []
+    assert moves.log == [CAUSE_MOVE]
+    assert tally.held == 1
+    assert any(CAUSE_REFUSAL in line and NEVER_AGAIN in line for line in lines), lines
+
+
+def test_cause_a_refused_move_is_a_failure_and_still_never_a_re_run(monkeypatch, capsys):
+    h, tally, moves = _cause_pass(monkeypatch, thread=_sent_back(), moved=False)
+    lines = _about(_lines(capsys), "DRE-5930")
+    assert h.fired == []
+    assert len(h.holds) == 1 and len(h.posted) == 1
+    assert moves.log == [CAUSE_MOVE]
+    assert tally.held == 1 and len(tally.failures) == 1
+    assert "refused" in tally.failures[0]
+    assert any(CAUSE_REFUSAL in line and "refused" in line and NEVER_AGAIN in line
+               for line in lines), lines
+
+
+def test_cause_another_open_hold_still_holds_and_nothing_is_parked(monkeypatch, capsys):
+    held = _sent_back(hold(*GATE_UNANSWERED, 50))
+    h, tally, moves = _cause_pass(monkeypatch, thread=held)
+    lines = _about(_lines(capsys), "DRE-5930")
+    assert h.fired == [] and h.holds == [] and h.posted == [] and moves.log == []
+    assert tally.held == 1
+    assert any("held by 🔬 proof-waiting: the re-run finished" in line
+               for line in lines), lines
+
+
+def test_cause_one_caused_row_and_one_plain_row_is_re_run_as_today(monkeypatch, capsys):
+    h, tally, moves = _cause_pass(monkeypatch, thread=_sent_back(),
+                                  text=record_md(CAUSE_ROW, BROWSER_ROW))
+    assert h.fired == [("DRE-5930", REPO, GATE_RERUN, "proof-execute")]
+    assert h.posted[0][1].split("\n", 1)[0].endswith(f" — {GATE_RERUN} (re-run 1 of 2)")
+    assert h.holds == [] and moves.log == []
+
+
+def test_cause_one_caused_row_and_one_waiting_row_is_held_for_the_event(
+        monkeypatch, capsys):
+    h, tally, moves = _cause_pass(monkeypatch, thread=_sent_back(),
+                                  text=record_md(CAUSE_ROW, WAITING_ROW))
+    assert h.fired == [] and h.posted == [] and moves.log == []
+    assert h.holds == [("DRE-5930", *WAITING)]
+    assert tally.held == 1
+
+
+def test_cause_the_dry_run_prints_would_park_and_writes_nothing(monkeypatch, capsys):
+    h, tally, moves = _cause_pass(monkeypatch, thread=_sent_back(), live=False)
+    lines = _lines(capsys)
+    assert h.fired == [] and h.posted == [] and h.holds == [] and moves.log == []
+    assert f"would: park DRE-5930 — {CAUSE_HOLD[1]}" in lines
+    assert any(CAUSE_REFUSAL in line and "would: park" in line for line in lines), lines
+
+
+def test_cause_a_signed_answer_after_the_cause_hold_is_no_return(monkeypatch, capsys):
+    parked = _sent_back(hold(*CAUSE_HOLD, 80), comment(CAUSE_QUESTION, 79), answer(30))
+    card = lane_card("DRE-5930", state="Green Light", window=parked)
+    board = Board(green=[card], threads={"DRE-5930": parked})
+    h = Harness(monkeypatch, board)
+    one = proof_dispatch._Pass(
+        REPO, SLUG, live=True, linear=board, read=lambda path: None,
+        find_pr=h.find_pr, run_state=h.run_state, release=h.release, fire=h.fire,
+        voices=fake_voices, now=NOW, find_record=h.find_record,
+        read_record=h.read_record)
+    assert one.is_return(card) is False
+    with pytest.raises(proof_dispatch._Refused) as refused:
+        one.returning(card)
+    assert "no signed answer of the CEO's follows a park naming his press" in \
+        refused.value.line
+
+
+def test_cause_the_critics_request_changes_still_re_runs(monkeypatch, capsys):
+    h, tally, moves = _cause_pass(
+        monkeypatch, thread=_sent_back(),
+        pr=_declined(approve=verdict("REQUEST_CHANGES", 100)))
+    assert [f[2] for f in h.fired] == [RERUN]
+    # The critic's trigger reads the record for a waiting row (DRE-6814), never to park it.
+    assert h.holds == [] and moves.log == []
+
+
+def _cause_record(contract: dict) -> dict:
+    lane = next(l for l in contract["lanes"]
+                if l.get("name") == green_light_rows.lane_name(contract))
+    return next(r for r in lane["clauses"]["entrance"]["arrivals"]
+                if r["where"] == green_light_rows.PROOF_CAUSE_SITE)
+
+
+def test_cause_park_caused_is_the_declared_caller_of_the_one_writer():
+    import copy
+
+    unit = "proof_dispatch.py#park_caused"
+    contract = copy.deepcopy(lane_contract.load())
+    assert unit in _cause_record(contract)["callers"]
+    assert not any(unit in p for p in green_light_rows.problems(contract=contract))
+
+    _cause_record(contract)["callers"].remove(unit)
+    found = green_light_rows.problems(contract=contract)
+    assert any(p.startswith(f"{unit} calls {green_light_rows.PROOF_CAUSE_SITE}")
+               for p in found), found
+

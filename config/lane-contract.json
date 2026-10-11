@@ -437,7 +437,7 @@
               "where": "proof_cause_park.py#park",
               "evidence": "the 🔬 proof-waiting hold naming the operator's decision on the cause rows, then the 🙋 The proof run cannot observe question carrying the three lines console_escalation.render writes and one cause: line per row, both posted before the move",
               "card": "DRE-6612",
-              "callers": []
+              "callers": ["proof_dispatch.py#park_caused"]
             }
           ],
           "enforced_from": "5",
