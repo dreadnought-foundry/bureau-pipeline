@@ -100,6 +100,44 @@ class TheScriptReadsTheVariable(unittest.TestCase):
         self.assertIn('--handback-file "$NOTES_DIR"/agent-handback.txt', text)
 
 
+class TheHarnessReadsTheVariable(unittest.TestCase):
+    """`scripts/harness/agent_run.py` clears and reads two of the notes around
+    the agent it runs; its tests run it with a stand-in agent, so it honors
+    the same variable and never deletes a /tmp note during the suite."""
+
+    def test_a_stale_note_is_cleared_and_the_new_one_read_from_the_directory(self):
+        from types import SimpleNamespace
+
+        sys.path.insert(0, os.path.join(ROOT, "scripts"))
+        from harness import agent_run
+
+        with tempfile.TemporaryDirectory() as td:
+            notes = os.path.join(td, "notes")
+            os.makedirs(notes)
+            with open(os.path.join(notes, "agent-blocker.txt"), "w") as fh:
+                fh.write("a stale note from an earlier scenario")
+
+            def runner(argv, **kwargs):
+                if argv[0] == "git":
+                    if argv[1] == "clone":
+                        os.makedirs(argv[-1], exist_ok=True)
+                else:
+                    with open(os.path.join(notes, "agent-escalation.txt"), "w") as fh:
+                        fh.write("Which of A or B?")
+                return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+            card = agent_run.SeededCard(identifier="DRE-6961", title="t",
+                                        description="d", url="https://x")
+            with mock.patch.dict(os.environ, {VARIABLE: notes,
+                                              "HARNESS_AGENT_MODEL": "claude-opus-5"}):
+                result = agent_run.run_agent(
+                    card, repo="dreadnought-foundry/bureau-harness", token="t",
+                    workdir=os.path.join(td, "clone"), pipeline_root=ROOT,
+                    runner=runner, log=lambda *a, **k: None)
+        self.assertEqual("Which of A or B?", result.escalation)
+        self.assertEqual("", result.blocker)
+
+
 class NoWorkflowSetsIt(unittest.TestCase):
 
     def test_no_workflow_file_names_the_variable(self):
