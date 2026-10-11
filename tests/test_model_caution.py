@@ -14,6 +14,7 @@ Two shapes of test, as `tests/test_model_choices.py` explains (DRE-6861):
     read off the frozen fixture (`tests/model_fixture.py`), a byte copy of the
     files of 2026-10-10. A console save changes which model leads a group, so
     a sentence pinned to the committed file would turn red on a legitimate save.
+    The ids those sentences name are read off the fixture too, never spelled.
   * What must hold for any saved state — every choice allowed, the cautions in
     the file being exactly what `caution_for` derives, every sentence in plain
     words — is read off the committed file, and every expected value is derived
@@ -47,14 +48,16 @@ import model_fixture  # noqa: E402
 import sync_model_config  # noqa: E402
 import test_model_cli_support as cli_support  # noqa: E402
 
-# The ids the card's sentences are about, read on the frozen fixture.
-OPUS_55 = "claude-opus-5-5"
-OPUS_5 = "claude-opus-5"
-SONNET_55 = "claude-sonnet-5-5"
-SONNET_46 = "claude-sonnet-4-6"
-HAIKU_55 = "claude-haiku-5-5"
-FABLE_51 = "claude-fable-5-1"
-FABLE_5 = "claude-fable-5"
+#: The ids the card's sentences are about, read off the frozen fixture's
+#: ladders and its set-aside list, never spelled (DRE-6962): a console save
+#: can put any of them on a ladder or take it off one, and the guard in
+#: tests/test_no_test_pins_a_console_choice.py refuses a spelled one.
+FROZEN = model_fixture.fixture_config()
+OPUS_55 = model_fixture.ladder(FROZEN, "workhorse")[0]     # the Builders' top
+OPUS_5 = model_fixture.ladder(FROZEN, "workhorse")[1]      # the Builders' fallback
+SONNET_46 = model_fixture.ladder(FROZEN, "judgement")[-1]  # the Planners' last rung
+FABLE_51 = model_fixture.ladder(FROZEN, "judgement")[0]    # the Planners' top
+HAIKU_55, FABLE_5 = (e["model"] for e in FROZEN["excluded"])  # the two set aside
 
 REFUSAL = "Our pinned Claude Code cannot run {label} yet."
 
