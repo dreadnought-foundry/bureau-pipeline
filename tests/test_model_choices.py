@@ -14,6 +14,14 @@ repo slug's exception written under ``projects``, an agent moved under
 ``agents``, ``policy_errors`` with the real repo map and prices — so the page
 and the gate cannot disagree, and the renderer cannot drift from the gate on
 its own.
+
+A test here reads the committed file for what must hold in ANY state the
+console can save, and derives every expected value from that file: a group's
+``default_model`` is the first rung of its ladder as written, an agent's
+``group`` its ``agents:`` entry as written, ``projects`` the committed map's
+slugs in file order. A rule of the renderer is proved on the frozen fixture
+(``tests/model_fixture.py``) instead. Neither shape names a rung id, pairs an
+agent with a group, lists agents or expects an empty map (DRE-6861).
 """
 
 from __future__ import annotations
@@ -35,6 +43,9 @@ sys.path.insert(0, str(ROOT / "scripts"))
 import model_config_change as mcc  # noqa: E402
 import model_fallback as mf  # noqa: E402
 import sync_model_config  # noqa: E402
+
+sys.path.insert(0, str(ROOT / "tests"))
+import model_fixture  # noqa: E402
 
 # A real slug of config/repo-map.json — the gate's own route, no probe.
 REAL_SLUG = "atlas"
@@ -66,6 +77,26 @@ def _agent(doc: dict, name: str) -> dict:
 
 def _move(doc: dict, name: str, kind: str) -> dict:
     return next(m for m in _agent(doc, name)["moves"] if m["group"] == kind)
+
+
+def _rungs(raw: dict, kind: str) -> list[str]:
+    """The rung ids of `kind`'s ladder in the raw config, as written."""
+    return model_fixture.ladder(raw, kind)
+
+
+def _fixture_choices(tmp_path, raw: dict | None = None) -> tuple[dict, dict]:
+    """`(raw, page)`: the frozen fixture's config — or `raw`, a config built
+    from it — and the page the renderer writes for it, against the fixture's
+    prices and its registry."""
+    raw = model_fixture.fixture_config() if raw is None else raw
+    path = tmp_path / "models.yaml"
+    path.write_text(yaml.safe_dump(raw, sort_keys=False))
+    registry = mcc.registry_agents(
+        (model_fixture.FIXTURE_DIR / "agents.yaml").read_text())
+    page = sync_model_config.render_choices(
+        raw, sync_model_config.load_config(path), model_fixture.fixture_prices(),
+        registry)
+    return raw, json.loads(page)
 
 
 # --------------------------------------------------------------------------- #
@@ -116,10 +147,6 @@ def test_entry_keys_in_the_contract_order():
 def test_models_are_exactly_the_priced_ids_in_price_file_order():
     ids = [m["id"] for m in _choices()["models"]]
     assert ids == _price_ids()
-    assert ids == [
-        "claude-opus-5-5", "claude-opus-5", "claude-sonnet-5-5", "claude-sonnet-5",
-        "claude-haiku-5-5", "claude-sonnet-4-6", "claude-fable-5-1",
-    ]
 
 
 def test_an_excluded_id_with_no_price_is_never_offered():
@@ -133,16 +160,18 @@ def test_an_excluded_id_with_no_price_is_never_offered():
 
 
 def test_model_labels_follow_the_one_rule():
-    labels = {m["id"]: m["label"] for m in _choices()["models"]}
-    assert labels == {
-        "claude-opus-5-5": "Opus 5.5",
-        "claude-opus-5": "Opus 5",
-        "claude-sonnet-5-5": "Sonnet 5.5",
-        "claude-sonnet-5": "Sonnet 5",
-        "claude-haiku-5-5": "Haiku 5.5",
-        "claude-sonnet-4-6": "Sonnet 4.6",
-        "claude-fable-5-1": "Fable 5.1",
-    }
+    # The rule, on ids no ladder names: `claude-<family>-<major>[-<minor>]` is
+    # `<Family> <major>[.<minor>]`, and an id of any other shape is its own.
+    label = sync_model_config._model_label
+    assert label("claude-haiku-5-5") == "Haiku 5.5"
+    assert label("claude-fable-5") == "Fable 5"
+    assert label("claude-opus-4-8") == "Opus 4.8"
+    assert label("claude-opus-10") == "Opus 10"
+    assert label("not-a-claude-id") == "not-a-claude-id"
+    # And every model the page offers carries it.
+    for model in _choices()["models"]:
+        assert model["label"] == label(model["id"]), model["id"]
+        assert model["label"] != model["id"], model["id"]
 
 
 def test_model_prices_are_the_declared_numbers():
@@ -170,65 +199,53 @@ def test_only_haiku_carries_an_excluded_reason():
 # --------------------------------------------------------------------------- #
 
 def test_one_group_per_kind_with_its_words_and_ladder():
+    # Each group's leader and fallbacks are its ladder AS WRITTEN — whichever
+    # model the console last put first (DRE-6861).
     doc = _choices()
+    raw = _raw()
     cfg = sync_model_config.load_config()
-    assert [g["key"] for g in doc["groups"]] == ["workhorse", "advisory", "judgement"]
+    assert [g["key"] for g in doc["groups"]] == list(raw["kinds"])
     for group in doc["groups"]:
         kind = group["key"]
         assert group["label"] == cfg["groups"][kind]["label"]
         assert group["purpose"] == cfg["groups"][kind]["purpose"]
-        ladder = cfg["ladders"][cfg["kinds"][kind]]
-        assert group["default_model"] == ladder[0]
-        assert group["fallbacks"] == ladder[1:]
+        assert group["default_model"] == _rungs(raw, kind)[0]
+        assert group["fallbacks"] == _rungs(raw, kind)[1:]
         assert [c["model"] for c in group["choices"]] == [m["id"] for m in doc["models"]]
-    builders = _group(doc, "workhorse")
-    assert builders["label"] == "Builders"
-    assert builders["default_model"] == "claude-opus-5-5"
-    assert builders["fallbacks"] == ["claude-opus-5", "claude-sonnet-5-5", "claude-sonnet-5"]
 
 
-def test_refused_and_allowed_choices():
+def test_every_priced_model_but_an_excluded_one_is_allowed_everywhere(tmp_path):
     # DRE-6785 (the CEO, 2026-10-10): any priced model may lead any group, so
-    # the rows the own-kind rule, rule 4 and rule 4b refused are allowed now.
-    doc = _choices()
-    for model in ("claude-fable-5-1", "claude-sonnet-4-6"):
-        assert _choice(doc, "workhorse", model) == {
-            "model": model, "allowed": True, "reason": None,
-        }
-    assert _choice(doc, "judgement", "claude-sonnet-4-6")["allowed"] is True
-    assert _choice(doc, "workhorse", "claude-sonnet-5-5") == {
-        "model": "claude-sonnet-5-5", "allowed": True, "reason": None,
-    }
-
-
-def test_every_priced_model_but_the_excluded_one_is_allowed_everywhere():
-    doc = _choices()
-    allowed = {
-        g["key"]: [c["model"] for c in g["choices"] if c["allowed"]]
-        for g in doc["groups"]
-    }
-    everything_but_haiku = [m for m in _price_ids() if m != "claude-haiku-5-5"]
-    assert allowed == {kind: everything_but_haiku
-                       for kind in ("workhorse", "advisory", "judgement")}
+    # the own-kind rule, rule 4 and rule 4b refuse nothing now; what is left
+    # refused is a model the file excludes. A rule of the renderer, on the
+    # frozen fixture.
+    raw, doc = _fixture_choices(tmp_path)
+    excluded = {e["model"] for e in raw["excluded"]}
+    assert excluded, "the fixture excludes a model"
     for group in doc["groups"]:
+        for choice in group["choices"]:
+            model = choice["model"]
+            if model in excluded:
+                assert choice["allowed"] is False, (group["key"], model)
+                assert f"{model} is excluded" in choice["reason"]
+            else:
+                assert choice == {"model": model, "allowed": True, "reason": None}, (
+                    group["key"], model)
+
+
+def test_a_groups_leader_is_always_allowed_and_a_reason_never_names_a_project():
+    # Any state of the file the console can save.
+    doc = _choices()
+    for group in doc["groups"]:
+        allowed = [c["model"] for c in group["choices"] if c["allowed"]]
+        assert group["default_model"] in allowed, group["key"]
         for choice in group["choices"]:
             if choice["allowed"]:
                 assert choice["reason"] is None
             else:
                 assert isinstance(choice["reason"], str) and choice["reason"]
                 assert not choice["reason"].startswith("projects.")
-    # Opus 5.5 may lead the reviewers and the planners (refused by rules 4
-    # and 4b until 2026-10-10).
-    for kind in ("advisory", "judgement"):
-        assert _choice(doc, kind, "claude-opus-5-5") == {
-            "model": "claude-opus-5-5", "allowed": True, "reason": None,
-        }
-    # Haiku 5.5 stays set aside by rule 7 until the probe lifts its exclusion
-    # (the next card's work).
-    for kind in ("workhorse", "advisory", "judgement"):
-        haiku = _choice(doc, kind, "claude-haiku-5-5")
-        assert haiku["allowed"] is False
-        assert "claude-haiku-5-5 is excluded" in haiku["reason"]
+
 
 
 def test_an_error_elsewhere_in_the_config_never_reaches_a_choice():
@@ -249,19 +266,25 @@ def test_an_error_elsewhere_in_the_config_never_reaches_a_choice():
 
 def test_agents_in_file_order_then_the_ungrouped():
     # The committed file in any state the page can save (DRE-6889): its own
-    # `agents`, then its own `ungrouped`, each in file order.
+    # `agents`, then its own `ungrouped`, each in file order. Which agents those
+    # are, and in which groups, is the console's choice (DRE-6861).
     raw = _raw()
     doc = _choices()
     assert [a["name"] for a in doc["agents"]] == list(raw["agents"]) + raw["ungrouped"]
     for agent in doc["agents"]:
         assert agent["about"] == raw["about"].get(agent["name"])
         assert agent["group"] == raw["agents"].get(agent["name"])
-    assert _agent(doc, "ux-ui-engineer")["label"] == "Ux Ui Engineer"
-    engineer = _agent(doc, "engineer")
-    assert engineer["label"] == "Engineer"
-    assert engineer["about"] == "Builds a card and opens the PR"
-    assert engineer["group"] == "workhorse"
-    assert _agent(doc, "plan-critic-pre")["label"] == "Plan Critic Pre"
+        # The one label rule: the name, its hyphens spaces, each word capitalized.
+        assert agent["label"] == agent["name"].replace("-", " ").title()
+
+
+def test_every_runs_in_is_what_session_agents_says():
+    # DRE-6833: `session` for a name under `session_agents`, `pipeline` for
+    # every other — wherever the console last put either.
+    session = set(_raw()["session_agents"])
+    for agent in _choices()["agents"]:
+        expected = "session" if agent["name"] in session else "pipeline"
+        assert agent["runs_in"] == expected, agent["name"]
 
 
 def test_the_ungrouped_agents_have_no_group_and_no_moves():
@@ -281,37 +304,48 @@ def test_the_ungrouped_agents_have_no_group_and_no_moves():
         assert [m["group"] for m in agent["moves"]] == [
             k for k in raw["kinds"] if k != agent["group"]]
         assert all(m["allowed"] and m["reason"] is None for m in agent["moves"])
-    assert _agent(doc, "designer")["about"] == "Designs screens and systems"
 
 
 def test_a_grouped_agent_has_one_move_per_other_kind():
     doc = _choices()
+    kinds = list(_raw()["kinds"])
     for agent in doc["agents"]:
         if agent["group"] is None:
             continue
-        others = [k for k in ("workhorse", "advisory", "judgement") if k != agent["group"]]
+        others = [k for k in kinds if k != agent["group"]]
         assert [m["group"] for m in agent["moves"]] == others
 
 
 def test_refused_and_allowed_moves():
+    # The CEO's sample rows, on whatever the file holds: a pipeline-run role
+    # outside the planners' kind is refused it (rule 10), a merge-gating
+    # reviewer is refused every move, and each refusal is the change script's
+    # plain line naming the group by its label. A session-run agent is exempt,
+    # and the CEO may have put one anywhere.
+    raw = _raw()
     doc = _choices()
-    # The CEO's sample row: refused because the gate refuses it (rule 10).
-    engineer = _move(doc, "engineer", "judgement")
-    assert engineer["allowed"] is False
-    assert "only the planner may be in the Planners group" in engineer["reason"]
-    critic = _move(doc, "critic", "workhorse")
-    assert critic["allowed"] is False
-    assert "critic must stay in the Reviewers group" in critic["reason"]
-    assert _move(doc, "engineer", "advisory") == {
-        "group": "advisory", "allowed": True, "reason": None,
-    }
-    assert _move(doc, "planner", "advisory")["allowed"] is True
-    # Every PIPELINE-run role outside Planners is refused it (rule 10). A
-    # session-run agent is exempt, and the CEO may have put one anywhere.
-    session = _raw()["session_agents"]
-    for name, kind in _raw()["agents"].items():
-        if kind != "judgement" and name != "planner" and name not in session:
-            assert _move(doc, name, "judgement")["allowed"] is False, name
+    groups = sync_model_config.load_config()["groups"]
+    planners = groups[mf.JUDGEMENT_KIND]["label"]
+    reviewers = groups[mf.ADVISORY_KIND]["label"]
+    owners = " and ".join(mf.JUDGEMENT_ROLES)
+    session = set(raw["session_agents"])
+    for agent in doc["agents"]:
+        name = agent["name"]
+        for move in agent["moves"]:
+            if move["allowed"]:
+                assert move["reason"] is None, (name, move["group"])
+            else:
+                assert move["reason"].startswith(f"Move {name} from the "), move
+        if name in session:
+            continue
+        if name in mf.BACKSTOP_ROLES:
+            for move in agent["moves"]:
+                assert move["allowed"] is False, (name, move["group"])
+                assert f"{name} must stay in the {reviewers} group" in move["reason"]
+        elif name not in mf.JUDGEMENT_ROLES and agent["group"] != mf.JUDGEMENT_KIND:
+            move = _move(doc, name, mf.JUDGEMENT_KIND)
+            assert move["allowed"] is False, name
+            assert f"only the {owners} may be in the {planners} group" in move["reason"]
 
 
 def test_projects_mirrors_the_map_in_file_order():
@@ -327,18 +361,19 @@ def test_projects_mirrors_the_map_in_file_order():
 
 
 def test_projects_lists_each_slug_in_file_order(tmp_path):
-    raw = _raw()
+    # A rule of the renderer, on a config built from the frozen fixture: two
+    # exceptions, each a rung of its own kind's ladder, out of slug order.
+    raw = model_fixture.fixture_config()
+    reviewers = _rungs(raw, mf.ADVISORY_KIND)[1]
+    builders = _rungs(raw, mf.WORKHORSE_KIND)[-1]
     raw["projects"] = {
-        "portico": {"advisory": "claude-sonnet-5"},
-        "atlas": {"workhorse": "claude-sonnet-5-5"},
+        "portico": {mf.ADVISORY_KIND: reviewers},
+        "atlas": {mf.WORKHORSE_KIND: builders},
     }
-    path = tmp_path / "models.yaml"
-    path.write_text(yaml.safe_dump(raw, sort_keys=False))
-    cfg = sync_model_config.load_config(path)
-    doc = json.loads(sync_model_config.render_choices(raw, cfg, mf.declared_prices()))
+    _, doc = _fixture_choices(tmp_path, raw)
     assert doc["projects"] == [
-        {"slug": "portico", "exceptions": {"advisory": "claude-sonnet-5"}},
-        {"slug": "atlas", "exceptions": {"workhorse": "claude-sonnet-5-5"}},
+        {"slug": "portico", "exceptions": {mf.ADVISORY_KIND: reviewers}},
+        {"slug": "atlas", "exceptions": {mf.WORKHORSE_KIND: builders}},
     ]
 
 
@@ -351,13 +386,13 @@ def _answer(errors: list[str], prefix: str) -> tuple[bool, str | None]:
     return (not mine, "; ".join(mine) if mine else None)
 
 
-def test_every_choice_is_the_gates_answer_for_a_real_project():
-    raw = _raw()
-    prices = mf.declared_prices()
+def _check_choices(raw: dict, doc: dict, prices: dict) -> int:
+    """Every choice on `doc` is `policy_errors`' answer for a real project
+    carrying it as an exception of `raw`; the number checked."""
     slugs = mf.declared_repo_slugs()
     assert REAL_SLUG in slugs
     checked = 0
-    for group in _choices()["groups"]:
+    for group in doc["groups"]:
         kind = group["key"]
         for choice in group["choices"]:
             trial = copy.deepcopy(raw)
@@ -369,21 +404,20 @@ def test_every_choice_is_the_gates_answer_for_a_real_project():
             assert (choice["allowed"], choice["reason"]) == (allowed, reason), (
                 kind, choice["model"])
             checked += 1
-    assert checked == 3 * len(_price_ids())
+    assert checked == len(raw["kinds"]) * len(prices)
+    return checked
 
 
-def test_every_move_is_the_gates_answer():
-    """Every agent, grouped or not, probed through the change script's own edit
-    (`edit_data`) and judged as the change script judges it: its pre-flight
-    checks, then the findings `policy_errors` ADDS. The published reason is the
-    plain line the change script prints for those findings (DRE-6833)."""
-    raw = _raw()
-    prices = mf.declared_prices()
+def _check_moves(raw: dict, doc: dict, prices: dict, registry: set[str]) -> int:
+    """Every agent's move on `doc`, grouped or not, probed through the change
+    script's own edit (`edit_data`) on `raw` and judged as the change script
+    judges it: its pre-flight checks, then the findings `policy_errors` ADDS.
+    The published reason is the plain line the change script prints for those
+    findings (DRE-6833). The number checked."""
     slugs = mf.declared_repo_slugs()
-    registry = mcc.registry_agents((ROOT / "agents.yaml").read_text())
     baseline = set(mf.policy_errors(raw, prices, repo_slugs=slugs))
     checked = 0
-    for agent in _choices()["agents"]:
+    for agent in doc["agents"]:
         for move in agent["moves"]:
             change = {"op": "move_agent", "agent": agent["name"], "group": move["group"]}
             added = mcc._problems(change, raw, prices, registry) or [
@@ -395,4 +429,33 @@ def test_every_move_is_the_gates_answer():
             assert move["reason"] == (
                 " ".join(mcc.plain_lines(change, added, raw)) if added else None)
             checked += 1
-    assert checked == 2 * len(raw["agents"]) + 3 * len(raw["ungrouped"])
+    groups = len(raw["kinds"])
+    assert checked == (groups - 1) * len(raw["agents"]) + groups * len(raw["ungrouped"])
+    return checked
+
+
+def test_every_choice_is_the_gates_answer_for_a_real_project():
+    _check_choices(_raw(), _choices(), mf.declared_prices())
+
+
+def test_every_move_is_the_gates_answer():
+    registry = mcc.registry_agents((ROOT / "agents.yaml").read_text())
+    _check_moves(_raw(), _choices(), mf.declared_prices(), registry)
+
+
+def test_the_renderer_writes_the_gates_answer_for_every_choice_and_move(tmp_path):
+    # The same two checks on the page the renderer writes for the frozen
+    # fixture: the committed page is checked above, and this is what fails
+    # when the RENDERER disagrees with the gate, whatever the committed file
+    # holds (DRE-6861).
+    raw, doc = _fixture_choices(tmp_path)
+    prices = model_fixture.fixture_prices()
+    registry = mcc.registry_agents(
+        (model_fixture.FIXTURE_DIR / "agents.yaml").read_text())
+    assert _check_choices(raw, doc, prices)
+    assert _check_moves(raw, doc, prices, registry)
+    # Both answers occur, so a renderer that allowed everything — or nothing —
+    # could not pass.
+    verdicts = {c["allowed"] for g in doc["groups"] for c in g["choices"]}
+    verdicts &= {m["allowed"] for a in doc["agents"] for m in a["moves"]}
+    assert verdicts == {True, False}

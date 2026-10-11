@@ -45,7 +45,10 @@ rung of every group is saved by some project.
 
 The cases run their suites side by side, as many at once as the machine has
 cores: each is the whole model suite, and one after another they would cost
-the sum of their wall clocks.
+the sum of their wall clocks. The copy, the save and the inner run are
+`tests/console_change_walk.py`'s, shared by every walk, and the inner run
+holds no walk (DRE-6909). The walks run in their own job
+(`scripts/unit_test_parts.py run-walks`), never in a numbered part.
 
 Run: cd bureau-pipeline && python3 -m pytest tests/test_console_project_model_keeps_the_suite_green.py -q
 """
@@ -53,12 +56,8 @@ Run: cd bureau-pipeline && python3 -m pytest tests/test_console_project_model_ke
 from __future__ import annotations
 
 import json
-import os
 import re
-import shutil
-import subprocess
 import sys
-from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import pytest
@@ -68,6 +67,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "tests"))
 sys.path.insert(0, str(ROOT / "scripts"))
 
+import console_change_walk as walk  # noqa: E402
 import model_fallback as mf  # noqa: E402
 from model_config_text import config_without_projects, without_projects  # noqa: E402
 
@@ -83,11 +83,6 @@ NAMED = (
     "tests/test_model_config_change.py",
     "tests/test_model_adoption_actions.py",
 )
-
-#: Not copied: the repository's history, and the pipeline checkout a workflow
-#: run puts beside the tree (it is not this repository's code).
-SKIPPED = {".git", ".bureau-pipeline", ".pytest_cache"}
-
 
 def _set(project: str, group: str, model: str) -> dict:
     return {"op": "set_project_model", "project": project, "group": group,
@@ -165,85 +160,36 @@ for _name, (_slug, _kind, _model) in GRID.items():
     CASES[_name] = ([[_set(_slug, _kind, _model)]], {_slug: {_kind: _model}})
 
 
-def copy_tree(base: Path) -> Path:
-    ignore = shutil.ignore_patterns("__pycache__", "*.pyc", ".pytest_cache")
-    base.mkdir(parents=True)
-    for entry in ROOT.iterdir():
-        if entry.name in SKIPPED:
-            continue
-        if entry.is_dir():
-            shutil.copytree(entry, base / entry.name, ignore=ignore)
-        else:
-            shutil.copy2(entry, base / entry.name)
-    return base
-
-
 def reset_projects(tree: Path) -> None:
     """Empty the copy's `projects` block and regenerate its mirrors."""
     config = tree / "config" / "models.yaml"
     config.write_text(without_projects(config.read_text()))
-    proc = _run(tree, "scripts/sync_model_config.py")
-    assert proc.returncode == 0, (proc.stdout, proc.stderr)
-
-
-def _run(tree: Path, *args: str) -> subprocess.CompletedProcess:
-    env = dict(os.environ, PYTHONDONTWRITEBYTECODE="1")
-    return subprocess.run([sys.executable, *args], capture_output=True,
-                          text=True, cwd=tree, env=env)
-
-
-def save(tree: Path, changes: list[dict], tmp: Path) -> None:
-    """What `model-config-change.yml` does with one Save changes."""
-    change_set = tmp / "change-set.json"
-    change_set.write_text(json.dumps(
-        {"requested_by": "ceo@example.com", "changes": changes}))
-    for args in (
-        ("scripts/model_config_change.py", "apply", "--changes", str(change_set)),
-        ("scripts/sync_model_config.py",),
-        ("scripts/sync_model_config.py", "--check"),
-    ):
-        proc = _run(tree, *args)
-        assert proc.returncode == 0, (args, proc.stdout, proc.stderr)
+    walk.regenerate(tree)
 
 
 def suite_files(tree: Path) -> list[str]:
-    """The six named files plus every other `tests/test_model_*.py`."""
-    files = list(NAMED)
-    for path in sorted((tree / "tests").glob("test_model_*.py")):
-        rel = path.relative_to(tree).as_posix()
-        if rel not in files:
-            files.append(rel)
-    return files
+    """The six named files plus every other `tests/test_model_*.py` — no
+    walk."""
+    return walk.inner_files(tree, NAMED, ("test_model_*.py",))
 
 
 def run_case(name: str, base: Path) -> dict:
     saves, _ = CASES[name]
-    tree = copy_tree(base / "tree")
+    tree = walk.copy_tree(base / "tree")
     reset_projects(tree)
-    for i, changes in enumerate(saves):
-        work = base / f"save-{i}"
-        work.mkdir()
-        save(tree, changes, work)
-    proc = _run(tree, "-m", "pytest", *suite_files(tree), "-q", "-rf",
-                "-p", "no:cacheprovider")
+    walk.apply_saves(tree, saves, base)
     return {
         "projects": yaml.safe_load(
             (tree / "config" / "models.yaml").read_text())["projects"],
         "choices": json.loads(
             (tree / "config" / "model-choices.json").read_text())["projects"],
-        "returncode": proc.returncode,
-        "failed": re.findall(r"^FAILED (\S+)", proc.stdout, flags=re.M),
-        "tail": proc.stdout[-4000:] + proc.stderr[-2000:],
+        **walk.run_suite(tree, suite_files(tree)),
     }
 
 
 @pytest.fixture(scope="module")
 def results(tmp_path_factory) -> dict:
-    base = tmp_path_factory.mktemp("dre6858")
-    with ThreadPoolExecutor(max_workers=os.cpu_count() or 2) as pool:
-        futures = {name: pool.submit(run_case, name, base / name)
-                   for name in CASES}
-        return {name: future.result() for name, future in futures.items()}
+    return walk.run_all(CASES, run_case, tmp_path_factory.mktemp("dre6858"))
 
 
 def test_the_suite_covers_the_six_files_and_every_model_test():

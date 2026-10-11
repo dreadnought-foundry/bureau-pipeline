@@ -54,21 +54,16 @@ sys.path.insert(0, str(ROOT / "scripts"))
 sys.path.insert(0, str(ROOT / "tests"))
 
 import model_fallback as mf  # noqa: E402
+import model_fixture  # noqa: E402
 from model_config_text import without_projects  # noqa: E402
 
-OPUS = "claude-opus-5"
-SONNET = "claude-sonnet-4-6"
-SONNET5 = "claude-sonnet-5"
-# The advisory ladder's top rung and the workhorse ladder's Sonnet rung since
-# DRE-5116 (2026-09-28) — Sonnet 5 keeps the rung below it on both.
-SONNET55 = "claude-sonnet-5-5"
-# The workhorse ladder's primary since DRE-4836 (2026-09-25) — Opus 5 keeps
-# the rung below it.
-OPUS55 = "claude-opus-5-5"
+# Ids on no ladder, so naming one pins no choice the console can change: the
+# id excluded by policy (a different model from the `claude-fable-5-1` the
+# planner's ladder may carry), and one that rotated out of every ladder. A
+# rung id is never written here — a test derives it from the committed file or
+# from the frozen fixture (`tests/model_fixture.py`), whatever the console last
+# saved (DRE-6861).
 FABLE = "claude-fable-5"
-# The current Fable id — the judgement ladder's top rung since DRE-3015. A
-# different model from the excluded `claude-fable-5` above.
-FABLE51 = "claude-fable-5-1"
 RETIRED_OPUS = "claude-opus-4-8"
 
 # The marker phrases the generator splices on — same shape as the repo-map
@@ -82,8 +77,10 @@ YAML_END = "END generated model"
 # verbatim so the fix is copy-pasteable out of the CI log.
 REPAIR_COMMAND = "python3 scripts/sync_model_config.py"
 
-# The minimal tree the generator + selector need, so writer mode is exercised
-# without ever mutating the real working copy.
+# The minimal tree the generator + selector need, copied from the COMMITTED
+# files, so the no-op test regenerates today's tree without ever mutating the
+# real working copy. Every other generator test runs on the frozen fixture
+# (`_fixture_tree`, DRE-6861).
 _TREE_FILES = (
     "scripts/model_fallback.py",
     "scripts/sync_model_config.py",
@@ -98,8 +95,8 @@ _TREE_FILES = (
     # so the throwaway tree carries the map to validate one against.
     "config/repo-map.json",
     "agents.yaml",
-    # The console's page reads this generated file (DRE-6635), so the no-op,
-    # `--check` and writer tests below cover it beside the two mirrors.
+    # The console's page reads this generated file (DRE-6635), so the no-op
+    # test below covers it beside the two mirrors.
     "config/model-choices.json",
 )
 
@@ -125,9 +122,8 @@ def _cli_select(tree: Path, agent: str, available=None) -> str:
     BUREAU_FAKE_AVAILABLE hook) — the workflows call this entry point, and no
     test may touch the network."""
     env = dict(os.environ)
-    env["BUREAU_FAKE_AVAILABLE"] = json.dumps(
-        available if available is not None else {OPUS: True, SONNET: True, FABLE: True}
-    )
+    # An id the table does not name is available, so `{}` is "every model up".
+    env["BUREAU_FAKE_AVAILABLE"] = json.dumps(available if available is not None else {})
     proc = subprocess.run(
         [sys.executable, str(tree / "scripts" / "model_fallback.py"), "select", agent],
         capture_output=True,
@@ -153,6 +149,29 @@ def _agents_registry(path: Path = AGENTS) -> dict:
 def _canonical(path: Path = CONFIG) -> dict:
     with open(path) as f:
         return yaml.safe_load(f)
+
+
+def _fixture_tree(td: str) -> Path:
+    """A throwaway tree running today's code on the frozen model files, its
+    mirrors regenerated from them — where a rule of the generator is proved, so
+    a console save to the committed file cannot turn it red (DRE-6861)."""
+    return model_fixture.fixture_tree(Path(td) / "tree")
+
+
+def _mirror(tree: Path) -> dict:
+    """`_FALLBACK_MODEL_CONFIG` as `tree`'s generator last wrote it. The tree's
+    bytecode cache goes first: a regeneration that keeps the file's size inside
+    the same second (a reversed ladder) would otherwise import the mirror the
+    tree was built with."""
+    shutil.rmtree(tree / "scripts" / "__pycache__", ignore_errors=True)
+    return model_fixture.fixture_module(tree)._FALLBACK_MODEL_CONFIG
+
+
+def _pipeline_roles(cfg: dict) -> list:
+    """The names under `agents` a workflow selects for: every one but a
+    session-run agent (DRE-6833), in file order."""
+    session = set(cfg.get("session_agents") or [])
+    return [name for name in cfg["agents"] if name not in session]
 
 
 def _ladder_for_role(cfg: dict, role: str) -> list:
@@ -221,41 +240,59 @@ class CanonicalConfigTest(unittest.TestCase):
         for name, kind in cfg["agents"].items():
             self.assertIn(kind, cfg["kinds"], f"{name}: unknown kind {kind!r}")
 
-    def test_workhorse_ladder_is_opus_first_and_fable_free(self):
-        # The 2026-08-09 policy survives the move: builds start at Opus and
-        # Fable is not reachable from a build ladder at any availability.
-        # Both Fable ids — the excluded `claude-fable-5` and the
-        # `claude-fable-5-1` DRE-3015 put on the planner's ladder.
-        # Opus 5.5 took the top rung on 2026-09-25 (DRE-4836); Opus 5 is the
-        # rung below it, and tests/test_model_effort.py pins the whole order.
+    def test_the_build_ladder_holds_neither_fable_nor_the_planners_top(self):
+        # The 2026-08-09 policy, on whatever the console last saved: Fable is
+        # not reachable from the build ladder at any availability — neither the
+        # excluded `claude-fable-5` nor the model topping the planner's ladder
+        # as the file is written (DRE-3015). Which model LEADS the builders is
+        # the console's choice, and no test of the committed file pins it
+        # (DRE-6861); the rule that refuses the move is proved on the fixture
+        # below.
         cfg = _canonical()
         workhorse = _ladder_models(cfg["ladders"][cfg["default_ladder"]])
-        self.assertEqual(workhorse[0], OPUS55)
-        self.assertIn(OPUS, workhorse)
+        judgement = _ladder_models(
+            cfg["ladders"][cfg["kinds"][mf.JUDGEMENT_KIND]["ladder"]])
         self.assertNotIn(FABLE, workhorse)
-        self.assertNotIn(FABLE51, workhorse)
+        self.assertNotIn(judgement[0], workhorse)
 
-    def test_the_planner_is_the_only_judgement_role(self):
-        # DRE-3015: judgement-heavy and LOW-VOLUME. A role that runs per card
-        # belongs on the workhorse ladder however carefully it thinks. The
-        # only PIPELINE-run role in Planners (DRE-6889): a session-run agent
-        # the CEO puts there selects as an unknown name, never from Planners.
-        cfg = _canonical()
-        session = set(cfg.get("session_agents") or [])
-        self.assertEqual(cfg["agents"]["planner"], "judgement")
+    def test_the_policy_allows_the_planners_top_on_the_build_ladder(self):
+        # Refused by rule 4 until the CEO's decision of 2026-10-10 (DRE-6785):
+        # a person may lead the build group with any priced model.
+        cfg = model_fixture.fixture_config()
+        top = model_fixture.ladder(cfg, mf.JUDGEMENT_KIND)[0]
+        self.assertEqual(mf.policy_errors(cfg, model_fixture.fixture_prices()), [])
+        cfg["ladders"][cfg["default_ladder"]].insert(
+            0, {"model": top, "reason": "a build role on the planner's model"})
         self.assertEqual(
-            sorted(r for r, k in cfg["agents"].items()
-                   if k == "judgement" and r not in session),
-            ["planner"],
-        )
-        self.assertEqual(_ladder_for_role(cfg, "planner")[0], FABLE51)
+            mf.policy_errors(cfg, model_fixture.fixture_prices()), [])
 
-    def test_review_agents_share_one_kind(self):
-        # critic/verifier/medic were the three that bypassed selection with a
-        # hardcoded string. They read and judge rather than build — one kind.
+    def test_no_pipeline_role_but_the_planner_is_a_judgement_role(self):
+        # DRE-3015: judgement-heavy and LOW-VOLUME. A role that runs per card
+        # belongs on the workhorse ladder however carefully it thinks. Of the
+        # PIPELINE-run roles (DRE-6889): a session-run agent the CEO puts there
+        # selects as an unknown name, never from Planners. Whether the planner
+        # is there today is the console's choice (DRE-6861).
         cfg = _canonical()
-        tiers = {cfg["agents"][name] for name in ("critic", "verifier", "medic")}
-        self.assertEqual(tiers, {"advisory"}, f"review agents split across {tiers}")
+        judged = {role for role in _pipeline_roles(cfg)
+                  if cfg["agents"][role] == mf.JUDGEMENT_KIND}
+        self.assertLessEqual(judged, set(mf.JUDGEMENT_ROLES))
+
+    def test_the_policy_refuses_a_per_card_role_in_the_judgement_kind(self):
+        cfg = model_fixture.fixture_config()
+        role = next(r for r in _pipeline_roles(cfg) if r not in mf.JUDGEMENT_ROLES)
+        cfg["agents"][role] = mf.JUDGEMENT_KIND
+        errors = mf.policy_errors(cfg, model_fixture.fixture_prices())
+        self.assertTrue(
+            any(e.startswith(f"agents.{role}: {mf.JUDGEMENT_KIND!r} is the ")
+                for e in errors), errors)
+
+    def test_the_merge_gating_reviewers_stay_advisory(self):
+        # critic/verifier/medic were the three that bypassed selection with a
+        # hardcoded string. The two that gate an unattended merge stay in one
+        # kind whatever the console saves; the medic may move (DRE-6861).
+        cfg = _canonical()
+        for name in mf.BACKSTOP_ROLES:
+            self.assertEqual(cfg["agents"][name], mf.ADVISORY_KIND, name)
 
     def test_retired_and_excluded_ids_are_readable_not_selectable(self):
         # `model-attempt:`/`model-error:` markers on in-flight cards must keep
@@ -269,11 +306,10 @@ class CanonicalConfigTest(unittest.TestCase):
         # `claude-fable-5` went back to read-only on 2026-08-12, when the
         # advisory ladder moved to Sonnet 5 on measured cost: excluded from
         # every ladder, still readable so in-flight markers attribute. Its
-        # SUCCESSOR `claude-fable-5-1` is a different id and is selectable —
-        # on the judgement ladder only (DRE-3015).
+        # SUCCESSOR `claude-fable-5-1` is a different id — selectable wherever
+        # the file puts it, which the loop below holds for every rung.
         self.assertIn(FABLE, readable)
         self.assertIn(FABLE, mf.KNOWN_MODELS)
-        self.assertNotIn(FABLE51, readable)
         for name, rungs in cfg["ladders"].items():
             for model in _ladder_models(rungs):
                 self.assertNotIn(
@@ -329,15 +365,21 @@ class SelectResolvesFromConfigTest(unittest.TestCase):
 
     def test_review_agents_select_their_own_tier_not_the_workhorse(self):
         # The regression this card exists to prevent: the critic must not
-        # silently ride the build ladder (or vice versa).
+        # silently ride the build ladder (or vice versa). Each selects the top
+        # of its OWN kind's ladder as the file is written — the medic is in
+        # whatever group the console last put it in (DRE-6861) — and the two
+        # that gate a merge never walk the build ladder.
         cfg = _canonical()
-        reviewer = _ladder_for_role(cfg, "critic")
         for name in ("critic", "verifier", "medic"):
             with self.subTest(agent=name):
                 mf.clear_availability_cache()
                 self.assertEqual(
-                    mf.select(name, probe=lambda m: True), reviewer[0]
+                    mf.select(name, probe=lambda m: True),
+                    _ladder_for_role(cfg, name)[0],
                 )
+        build = cfg["kinds"][mf.WORKHORSE_KIND]["ladder"]
+        for name in mf.BACKSTOP_ROLES:
+            self.assertNotEqual(cfg["kinds"][cfg["agents"][name]]["ladder"], build, name)
 
     def test_known_models_are_derived_from_the_config(self):
         cfg = _canonical()
@@ -480,9 +522,10 @@ class GeneratedMirrorTest(unittest.TestCase):
     def test_the_plain_run_writes_only_the_three_targets(self):
         # DRE-6635 adds the console's file as the third target, and the daily
         # adoption workflow stages it beside the two mirrors — a fourth would
-        # be left out of its commit.
+        # be left out of its commit. A rule of the generator, so it runs on
+        # the frozen fixture (DRE-6861).
         with tempfile.TemporaryDirectory() as td:
-            tree = _copy_tree(Path(td))
+            tree = _fixture_tree(td)
             proc = _run_sync(tree)
             self.assertEqual(proc.returncode, 0, proc.stderr)
             self.assertEqual(
@@ -496,26 +539,25 @@ class GeneratedMirrorTest(unittest.TestCase):
 
     def test_check_fails_on_a_missing_choices_file_and_names_the_repair(self):
         with tempfile.TemporaryDirectory() as td:
-            tree = _copy_tree(Path(td))
-            (tree / "config" / "model-choices.json").unlink()
+            tree = _fixture_tree(td)
+            choices = tree / "config" / "model-choices.json"
+            written = choices.read_bytes()
+            choices.unlink()
             proc = _run_sync(tree, "--check")
             self.assertEqual(proc.returncode, 1, proc.stdout + proc.stderr)
             self.assertIn("STALE: config/model-choices.json", proc.stderr)
             self.assertIn(REPAIR_COMMAND, proc.stderr)
-            self.assertFalse((tree / "config" / "model-choices.json").exists())
+            self.assertFalse(choices.exists())
             write = _run_sync(tree)
             self.assertEqual(write.returncode, 0, write.stderr)
             self.assertIn("wrote: config/model-choices.json", write.stdout)
-            self.assertEqual(
-                (tree / "config" / "model-choices.json").read_bytes(),
-                (ROOT / "config" / "model-choices.json").read_bytes(),
-            )
+            self.assertEqual(choices.read_bytes(), written)
 
     def test_check_fails_when_only_the_choices_file_is_stale(self):
         # An excluded model's reason reaches no mirror but the console's file,
         # so this edit leaves exactly one target stale.
         with tempfile.TemporaryDirectory() as td:
-            tree = _copy_tree(Path(td))
+            tree = _fixture_tree(td)
             path = tree / "config" / "models.yaml"
             text = path.read_text()
             self.assertIn("used by no agent or reviewer", text)
@@ -531,24 +573,23 @@ class GeneratedMirrorTest(unittest.TestCase):
     def test_a_project_exception_validates_and_mirrors_in_the_tree(self):
         # The tree carries config/repo-map.json, so a real slug validates and
         # rides into the mirror; a slug the map does not name fails the check.
+        # On the fixture, with a rung of its own build ladder (DRE-6861).
+        kind = mf.WORKHORSE_KIND
+        model = model_fixture.ladder(model_fixture.fixture_config(), kind)[-1]
         with tempfile.TemporaryDirectory() as td:
-            tree = _copy_tree(Path(td))
+            tree = _fixture_tree(td)
             path = tree / "config" / "models.yaml"
-            # Start from no exceptions, whatever the console has put in the
-            # live map, then add one.
-            path.write_text(without_projects(path.read_text()))
-            self.assertEqual(_run_sync(tree).returncode, 0)
-            text = path.read_text()
-            self.assertIn("\nprojects: {}\n", text)
-            path.write_text(text.replace(
+            # Start from no exceptions, whatever the fixture was frozen with,
+            # then add one.
+            path.write_text(without_projects(path.read_text()).replace(
                 "\nprojects: {}\n",
-                f"\nprojects:\n  atlas:\n    workhorse: {SONNET55}\n",
+                f"\nprojects:\n  atlas:\n    {kind}: {model}\n",
             ))
-            self.assertEqual(_run_sync(tree).returncode, 0)
-            self.assertIn(
-                f'"atlas": {{"workhorse": "{SONNET55}"}},',
-                (tree / "scripts" / "model_fallback.py").read_text(),
-            )
+            self.assertEqual(
+                yaml.safe_load(path.read_text())["projects"], {"atlas": {kind: model}})
+            sync = _run_sync(tree)
+            self.assertEqual(sync.returncode, 0, sync.stdout + sync.stderr)
+            self.assertEqual(_mirror(tree)["projects"], {"atlas": {kind: model}})
             self.assertEqual(_run_sync(tree, "--check").returncode, 0)
             path.write_text(path.read_text().replace("  atlas:", "  nowhere:"))
             check = _run_sync(tree, "--check")
@@ -565,7 +606,7 @@ class GeneratedMirrorTest(unittest.TestCase):
 
     def test_check_fails_on_a_config_only_edit_and_names_the_repair(self):
         with tempfile.TemporaryDirectory() as td:
-            tree = _copy_tree(Path(td))
+            tree = _fixture_tree(td)
             _swap_workhorse(tree)
             proc = _run_sync(tree, "--check")
             self.assertNotEqual(
@@ -575,7 +616,7 @@ class GeneratedMirrorTest(unittest.TestCase):
 
     def test_writer_repairs_a_stale_mirror(self):
         with tempfile.TemporaryDirectory() as td:
-            tree = _copy_tree(Path(td))
+            tree = _fixture_tree(td)
             _swap_workhorse(tree)
             write = _run_sync(tree)
             self.assertEqual(
@@ -599,84 +640,105 @@ def _swap_workhorse(tree: Path) -> None:
 
 
 class ConfigDrivesTheFleetTest(unittest.TestCase):
-    """Editing ONLY config/models.yaml changes what the fleet runs on."""
+    """Editing ONLY config/models.yaml changes what the fleet runs on.
+
+    Rules of the selector and the generator, so they run on the frozen fixture
+    and every id they expect is read off its ladders — never a literal, and
+    never what the console last saved to the committed file (DRE-6861).
+    """
+
+    def setUp(self):
+        self.cfg = model_fixture.fixture_config()
+        # The build role the edits below move: the fixture puts it on the
+        # default ladder, which is the ladder `_swap_workhorse` reverses.
+        self.assertEqual(
+            self.cfg["kinds"][self.cfg["agents"]["engineer"]]["ladder"],
+            self.cfg["default_ladder"],
+        )
+        self.build = _ladder_models(self.cfg["ladders"][self.cfg["default_ladder"]])
+
+    def _top(self, agent: str) -> str:
+        """The first rung of `agent`'s ladder in the fixture, as written."""
+        return model_fixture.ladder(self.cfg, self.cfg["agents"][agent])[0]
 
     def test_config_edit_alone_changes_what_the_ci_path_selects(self):
         # No regeneration: the CI path READS the config, so the edit is live on
         # the next dispatch. (The generated mirror is only the degrade path.)
         with tempfile.TemporaryDirectory() as td:
-            tree = _copy_tree(Path(td))
-            self.assertEqual(_cli_select(tree, "engineer"), OPUS55)
+            tree = _fixture_tree(td)
+            self.assertEqual(_cli_select(tree, "engineer"), self.build[0])
             _swap_workhorse(tree)
+            self.assertNotEqual(self.build[-1], self.build[0])
             self.assertEqual(
-                _cli_select(tree, "engineer"), SONNET5,
+                _cli_select(tree, "engineer"), self.build[-1],
                 "editing config/models.yaml did not change the selected model",
             )
 
     def test_config_edit_plus_generator_updates_every_mirror(self):
+        swapped = list(reversed(self.build))
         with tempfile.TemporaryDirectory() as td:
-            tree = _copy_tree(Path(td))
+            tree = _fixture_tree(td)
             _swap_workhorse(tree)
             self.assertEqual(_run_sync(tree).returncode, 0)
             # The registry the console reads:
             self.assertEqual(
-                _agents_registry(tree / "agents.yaml")["engineer"]["model"], SONNET5
+                _agents_registry(tree / "agents.yaml")["engineer"]["model"], swapped[0]
             )
             # The Python degrade path:
-            self.assertIn(
-                f'"{SONNET5}", "{SONNET55}", "{OPUS}"',
-                (tree / "scripts" / "model_fallback.py").read_text(),
-            )
+            self.assertEqual(_mirror(tree)["ladders"][self.cfg["default_ladder"]], swapped)
             # And the CI path agrees.
-            self.assertEqual(_cli_select(tree, "engineer"), SONNET5)
+            self.assertEqual(_cli_select(tree, "engineer"), swapped[0])
 
     def test_review_tier_is_editable_the_same_way(self):
         # Not just the build ladder: the critic/verifier/medic tier moves off
         # one file edit too — the whole point of folding them into selection.
+        # The new tier is the planner ladder's last rung: on no build ladder,
+        # so the edit needs no separation rule of its own.
+        lone = model_fixture.ladder(self.cfg, mf.JUDGEMENT_KIND)[-1]
+        self.assertNotIn(lone, self.build)
         with tempfile.TemporaryDirectory() as td:
-            tree = _copy_tree(Path(td))
+            tree = _fixture_tree(td)
             path = tree / "config" / "models.yaml"
             cfg = yaml.safe_load(path.read_text())
-            advisory = cfg["kinds"]["advisory"]["ladder"]
+            advisory = cfg["kinds"][mf.ADVISORY_KIND]["ladder"]
             # A human moving the advisory tier in a reviewed PR is the
             # SANCTIONED path — what policy validation blocks is the reverse
             # direction (the strongest model landing on a build ladder).
-            cfg["ladders"][advisory] = [{"model": SONNET, "reason": "one-file edit"}]
+            cfg["ladders"][advisory] = [{"model": lone, "reason": "one-file edit"}]
             # Moving the advisory tier OFF the overlapping model takes the
             # selection rule that covered that overlap with it (DRE-3880): a
             # rule describing an overlap that no longer exists is refused, so
             # the fleet can never inherit a stale guarantee. Still one file.
             cfg["review_separation"]["rules"] = []
             # So does any project exception naming a rung the edit took off the
-            # ladder: an exception must sit on its own kind's ladder (DRE-6633),
-            # and the committed `projects` block holds whatever the console last
-            # saved.
+            # ladder: an exception must sit on its own kind's ladder (DRE-6633).
             for entry in (cfg.get("projects") or {}).values():
                 for kind in [k for k, m in entry.items()
-                             if cfg["kinds"][k]["ladder"] == advisory and m != SONNET]:
+                             if cfg["kinds"][k]["ladder"] == advisory and m != lone]:
                     del entry[kind]
             path.write_text(yaml.safe_dump(cfg, sort_keys=False))
-            self.assertEqual(_cli_select(tree, "critic"), SONNET)
+            self.assertEqual(_cli_select(tree, "critic"), lone)
             # …and the build fleet is untouched by that edit.
-            self.assertEqual(_cli_select(tree, "engineer"), OPUS55)
+            self.assertEqual(_cli_select(tree, "engineer"), self.build[0])
 
     def test_selector_degrades_to_the_mirror_when_the_config_is_unreadable(self):
         # The config ships in the public .bureau-pipeline checkout, so it is
         # normally there — but a truncated checkout must not strand a dispatch.
+        # The mirror is GENERATED from the fixture's models.yaml, so each role
+        # lands on the top of its own ladder there: the degrade path carries
+        # every ladder, the advisory and the JUDGEMENT one too (DRE-3015) — a
+        # truncated checkout must not silently drop the planner back onto the
+        # build model, which would look exactly like a healthy run.
         with tempfile.TemporaryDirectory() as td:
-            tree = _copy_tree(Path(td))
+            tree = _fixture_tree(td)
             (tree / "config" / "models.yaml").write_text("{{ not yaml\n")
-            self.assertEqual(_cli_select(tree, "engineer"), OPUS55)
-            # Hardcoded on purpose: the mirror is GENERATED from models.yaml, so
-            # asserting it against a literal is the canary that catches a mirror
-            # change nobody meant. Moved fable-5 -> sonnet-5 on 2026-08-12 with
-            # the advisory ladder itself, and sonnet-5 -> sonnet-5-5 on
-            # 2026-09-28 (DRE-5116).
-            self.assertEqual(_cli_select(tree, "critic"), SONNET55)
-            # The degrade path carries the JUDGEMENT ladder too (DRE-3015): a
-            # truncated checkout must not silently drop the planner back onto
-            # the build model, which would look exactly like a healthy run.
-            self.assertEqual(_cli_select(tree, "planner"), FABLE51)
+            for agent in ("engineer", "critic", "planner"):
+                with self.subTest(agent=agent):
+                    self.assertEqual(_cli_select(tree, agent), self._top(agent))
+            # Three ladders, three different first rungs, so a degrade path that
+            # collapsed them onto one would fail above.
+            self.assertEqual(
+                len({self._top(a) for a in ("engineer", "critic", "planner")}), 3)
 
 
 class WorkflowModelPinTest(unittest.TestCase):
