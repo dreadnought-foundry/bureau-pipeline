@@ -128,8 +128,6 @@ ALLOWED: dict[str, str] = {
     "tests/test_model_adoption.py::test_load_prices_rejects_an_entry_missing_a_side": _OWN_INPUT,
     "tests/test_model_adoption.py::test_the_newer_opus_with_no_declared_price_is_ask":
         _FROZEN_LADDERS,
-    "tests/test_model_adoption.py::test_the_newer_same_priced_sonnet_is_adopted_on_every_ladder":
-        _FROZEN_LADDERS,
     "tests/test_model_config.py::ConfigDrivesTheFleetTest.test_selector_degrades_to_the_mirror_when_the_config_is_unreadable":
         _FROZEN_AGENTS,
     "tests/test_model_effort.py::PriceTest.test_opus_5_5_is_declared_at_4_and_20": _PRICE,
