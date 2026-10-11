@@ -528,11 +528,11 @@ reads. In plain words:
 PROOF criterion asks for a reading outside the declaration is refused, naming
 the criterion and the reading. A PROOF criterion that reads the result of an
 operator step — a variable set, a grant applied, a switch turned by hand — with
-no `blockedBy` to that operator card is refused, naming both cards. A PROOF
-card is never read as an operator step, its own or another's: it routes
-`OPERATOR` by its `agent:ops` label, but what it records is an observation and
-not a step's result, so the rule never asks a proof to be blocked on itself or
-on another proof.
+no `blockedBy` to that operator card is refused, naming the PROOF card and the
+operator card. A PROOF card is never read as an operator step, its own or
+another's: it routes `OPERATOR` by its `agent:ops` label, but what it records is
+an observation and not a step's result, so the rule never asks a proof to be
+blocked on itself or on another proof.
 
 **A row the run still cannot observe as worded carries its cause**, written as
 one of four words, read off the declaration's `causes`:

@@ -669,8 +669,8 @@ as a reading the run can make:
 - **A PROOF criterion that reads an operator step's result carries a
   `**Blocked by:**` naming that card**, even across epics — the card that sets
   the variable, applies the grant or turns the switch. Without it the critic
-  refuses the plan, naming both cards. A PROOF card is never an operator step
-  for this rule, its own or another's.
+  refuses the plan, naming the PROOF card and the operator card. A PROOF card
+  is never an operator step for this rule, its own or another's.
 
 A row the run still cannot observe as worded comes back with one of four
 causes — `out-of-reach`, `state-gone`, `misdescribed` or
