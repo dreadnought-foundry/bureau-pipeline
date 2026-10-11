@@ -625,7 +625,7 @@ else
   POST_SHA=$(gh pr view "$PR" --repo $REPO --json headRefOid --jq .headRefOid)
   if [ -n "$PRE_SHA" ] && [ "$POST_SHA" = "$PRE_SHA" ]; then
     # Death or no progress: fix_dead_run.py decides over every page (DRE-2018, DRE-4139).
-    [ -n "$EXEC_FILE" ] || EXEC_FILE=/home/runner/work/_temp/claude-execution-output.json
+    [ -n "$EXEC_FILE" ] || EXEC_FILE="${RUNNER_TEMP:-/tmp}/claude-execution-output.json"
     COMMENTS_JSON=$(mktemp)
     gh api --paginate --slurp \
       "repos/$REPO/issues/$PR/comments?per_page=100" \

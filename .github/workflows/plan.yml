@@ -1543,7 +1543,7 @@ jobs:
           case "${{ steps.oocritic.outcome }}" in
             success|failure)
               EXEC_FILE="${{ steps.oocritic.outputs.execution_file }}"
-              [ -n "$EXEC_FILE" ] || EXEC_FILE=/home/runner/work/_temp/claude-execution-output.json
+              [ -n "$EXEC_FILE" ] || EXEC_FILE="${RUNNER_TEMP:-/tmp}/claude-execution-output.json"
               ;;
           esac
           # --with-authors: the round record this writes is a credential, and a
@@ -1595,7 +1595,7 @@ jobs:
         run: |
           CARD="${{ github.event.client_payload.identifier }}"
           EXEC_FILE="${{ steps.oocritic.outputs.execution_file }}"
-          [ -n "$EXEC_FILE" ] || EXEC_FILE=/home/runner/work/_temp/claude-execution-output.json
+          [ -n "$EXEC_FILE" ] || EXEC_FILE="${RUNNER_TEMP:-/tmp}/claude-execution-output.json"
           python3 .bureau-pipeline/scripts/plan_critic.py died \
             --stage one-off \
             --epic "$CARD" \
@@ -2529,7 +2529,7 @@ jobs:
         run: |
           EPIC="${{ github.event.client_payload.identifier }}"
           EXEC_FILE="$EXEC_FILE_USED"
-          [ -n "$EXEC_FILE" ] || EXEC_FILE=/home/runner/work/_temp/claude-execution-output.json
+          [ -n "$EXEC_FILE" ] || EXEC_FILE="${RUNNER_TEMP:-/tmp}/claude-execution-output.json"
           DEATH_CLASS=$(python3 .bureau-pipeline/scripts/check_agent_result.py classify "$EXEC_FILE" || echo none)
           if [ "$DEATH_CLASS" = "api_death" ]; then
             RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
@@ -4001,7 +4001,7 @@ jobs:
           # The same file and the same fallback the tombstone step reads, for
           # an action version that moved its output.
           EXEC_FILE="${{ steps.posta.outputs.execution_file }}"
-          [ -n "$EXEC_FILE" ] || EXEC_FILE=/home/runner/work/_temp/claude-execution-output.json
+          [ -n "$EXEC_FILE" ] || EXEC_FILE="${RUNNER_TEMP:-/tmp}/claude-execution-output.json"
           # Counted again here for the same reason the ceiling step counts it:
           # `steps.kids` exists only on the plan route. An unreadable count is
           # `children=?`, never 0.
@@ -4125,7 +4125,7 @@ jobs:
         run: |
           EPIC="${{ github.event.client_payload.identifier }}"
           EXEC_FILE="${{ steps.posta.outputs.execution_file }}"
-          [ -n "$EXEC_FILE" ] || EXEC_FILE=/home/runner/work/_temp/claude-execution-output.json
+          [ -n "$EXEC_FILE" ] || EXEC_FILE="${RUNNER_TEMP:-/tmp}/claude-execution-output.json"
           RECORD="${{ runner.temp }}/plan-critic-death-record.txt"
           python3 .bureau-pipeline/scripts/plan_critic.py died \
             --stage post \
@@ -5780,7 +5780,7 @@ jobs:
           CARD: ${{ github.event.client_payload.identifier }}
           CLAUDE_AUTH_MODE: ${{ vars.CLAUDE_AUTH_MODE }}
         run: |
-          EXEC_FILE="${CLAUDE_EXECUTION_FILE:-/home/runner/work/_temp/claude-execution-output.json}"
+          EXEC_FILE="${CLAUDE_EXECUTION_FILE:-${RUNNER_TEMP:-/tmp}/claude-execution-output.json}"
           python3 .bureau-pipeline/scripts/death_receipt.py emit \
             --execution-file "$EXEC_FILE" \
             --out "${RUNNER_TEMP:-/tmp}/death-receipt.json" \
