@@ -41,6 +41,7 @@ import groom_readiness  # noqa: E402
 from test_groomer_population import CYCLES, card  # noqa: E402
 
 FIXTURE = ROOT / "tests" / "fixtures" / "groom-page-ab09ece4ddee.json"
+OLD_FIXTURE = ROOT / "tests" / "fixtures" / "groom-rewrite-first-a4f198411b02.json"
 DOC = ROOT / "docs" / "groomer.md"
 NOT_NOW_HEADING = "## Not now — and when to come back"
 HELD = ["DRE-2709", "DRE-5700"]
@@ -163,13 +164,24 @@ def test_a_morning_with_no_partly_solved_spare_prints_the_count_and_no_note():
                    for line in text.splitlines())
 
 
-def test_a_record_written_before_the_rewrite_list_prints_its_count_as_before():
-    prop = _fixture()["proposal"]
-    del prop["outcomes"]["rewrite"]
-    text = _page(prop)
-    assert _printed(text, "partly-solved") == 4
-    assert not any(line.startswith("Not counted as partly-solved")
-                   for line in text.splitlines())
+def test_a_record_written_before_the_rewrite_list_counts_its_batch_cards():
+    """The morning of 2026-10-10 (a4f198411b02) predates the Rewrite first
+    list: its five partly-solved Planning cards stayed in the batch, each
+    with its verdict under `## Why each card is in the batch`, and its two
+    partly-solved spares were on no list. Its record counted seven."""
+    old = json.loads(OLD_FIXTURE.read_text(encoding="utf-8"))["proposal"]
+    assert old["verify"]["counts"]["partly-solved"] == 7
+    assert "rewrite" not in old["outcomes"]
+    text = _page(old)
+    batch = groomer._section(text, groomer.BATCH_REASONS_HEADING)
+    listed = [line for line in batch
+              if line == "Verified against main: **partly-solved**"
+              or line.startswith("Verified against main: **partly-solved** ")]
+    assert _printed(text, "partly-solved") == len(listed) == 5
+    [line] = [x for x in text.splitlines()
+              if x.startswith("Not counted as partly-solved")]
+    assert line.startswith("Not counted as partly-solved above: "
+                           "DRE-3751, DRE-3603 — ")
 
 
 # --------------------------------------------------------------------------
