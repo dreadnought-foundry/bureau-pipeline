@@ -5639,7 +5639,8 @@ def hand_review_nudge_to_person(
     card: dict, pr: dict, tag: str, critic: str, verifier: str
 ) -> None:
     """REVIEW_NUDGE_CAP is spent on this head: dispatch nothing, hold the card,
-    ask a person, and park it In Review → Green Light (DRE-5231, DRE-6181).
+    ask a person, and park it In Review → Green Light (DRE-5231, DRE-6181) —
+    or, on a proof record, hold it In Review for the operator (DRE-6841).
 
     The writes, in order, each once:
 
@@ -5675,9 +5676,21 @@ def hand_review_nudge_to_person(
     not proven (`proof_record_owned_by_proof_run`, DRE-6406, DRE-6650): the
     loop does not come here for one, and neither does the held-card path
     finishing an older park.
+
+    Every other proof record (`agent/DRE-<n>-proof-record`) at the cap — no
+    critic verdict at the head, a decline for another reason, a verdict the
+    carry cannot bind — is the operator's, never the CEO's (DRE-6841): the
+    hold and the blocker are written as above, the question and the blocker
+    are `review_cap_question`'s proof-record variant, and there is no park.
+    The card stays In Review under the hold, where held() keeps the nudge
+    loop off it, and a held, asked record In Review is a finished hold — the
+    held-card path that brings it back here writes nothing on it.
     """
     if proof_record_owned_by_proof_run(card, pr, tag, critic):
         return
+    import proof_record  # noqa: PLC0415 — see proof_record_owned_by_proof_run
+
+    record = proof_record.proof_record_branch(pr.get("headRefName"))
     ident = card["identifier"]
     number = pr["number"]
     head = pr.get("headRefOid") or ""
@@ -5707,7 +5720,7 @@ def hand_review_nudge_to_person(
         for lbl in (card.get("labels") or {}).get("nodes") or []
     )
     lane = (card.get("state") or {}).get("name") or ""
-    if asked and labeled and lane != REVIEW_LANE:
+    if asked and labeled and (lane != REVIEW_LANE or record):
         print(f"review-nudge: {ident} already held and asked for {head} — not repeating")
         return
     # On the door's reading, the lane is confirmed live BEFORE the first write
@@ -5737,14 +5750,24 @@ def hand_review_nudge_to_person(
         if told:
             print(f"review-nudge: {ident} already asked on the card for {head}")
         else:
-            review_question = review_cap_question.compose(**evidence)
+            review_question = (
+                review_cap_question.compose_proof_record(**evidence) if record
+                else review_cap_question.compose(**evidence))
             linear_ops.cmd_comment(ident, review_question)
         if not asked:
-            review_blocker = review_cap_question.pr_blocker(**evidence)
+            review_blocker = (
+                review_cap_question.pr_blocker_proof_record(**evidence)
+                if record else review_cap_question.pr_blocker(**evidence))
             if not _post_pr_note(number, review_blocker):
                 print(f"review-nudge: {ident} PR #{number} blocker did not post — "
                       "held In Review, not parked; the next sweep posts it")
                 return
+    if record:
+        # DRE-6841: a proof record's refusal is "proof record not proven",
+        # the operator's to answer — the card stays In Review under the hold.
+        print(f"review-nudge: {ident} PR #{number} is a proof record at the "
+              "cap — held In Review for the operator, not parked")
+        return
     # From In Review only: a card already in Green Light gets nothing twice.
     linear_ops.cmd_advance(ident, "Green Light", REVIEW_LANE)
 
@@ -5758,6 +5781,13 @@ def review_cap_park_unfinished(card: dict) -> str | None:
     with the label left on, which the park puts back. The nudge loop skips a
     held card, so this is how main() finds it to finish. Asked only of a card
     held() already answered, so its comments are read no earlier than before.
+
+    A proof record held In Review for the operator (DRE-6841) is a finished
+    hold, not a park to complete, and the card alone cannot tell it from one
+    whose blocker did not post: so its head is answered here too, and
+    `hand_review_nudge_to_person`, reading the pull request, finds it held
+    and asked and writes nothing — or posts the blocker that is missing, and
+    still moves nothing.
     """
     if (card.get("state") or {}).get("name") != REVIEW_LANE:
         return None
