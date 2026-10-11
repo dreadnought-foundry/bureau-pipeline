@@ -323,13 +323,13 @@ def test_the_model_tests_run_and_their_result_reaches_the_pull_request():
 #: the console can change, so a red result is a defect, never the price of a
 #: change. Compared with backticks, comment marks and line breaks taken out.
 NO_PIN = (
-    "No model test pins a choice this page can change: a rule is tested against "
+    "No model test pins a choice the console can change: a rule is tested against "
     "the frozen fixture at tests/fixtures/model-config-frozen/ "
     "(model_fixture.FIXTURE_DIR), and "
     "tests/test_console_change_keeps_the_suite_green.py proves every operation "
     "leaves every model-reading test green — so a red result on a change pull "
     "request is a defect in the change or in a test, never the expected cost of "
-    "a change this page allows."
+    "a change the console allows."
 )
 #: What it said before: that a legitimate change could turn the tests red, and
 #: that the critic and the fix agent owned that repair.
