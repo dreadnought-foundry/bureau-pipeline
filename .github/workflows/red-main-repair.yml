@@ -186,46 +186,59 @@ jobs:
             --out /tmp/repair-history.json
 
       # The attempt record (guardrails 2+3): existing repair/* branches and
-      # repair/* PRs of ANY state ARE the state — no external store. A fetch
-      # failure writes a non-JSON marker, which the decide step reads as
-      # records-unreadable and fails CLOSED (no dispatch; the next failure
-      # event retries with fresh records).
+      # repair/* PRs of ANY state ARE the state — no external store. A read
+      # that never comes back writes a non-JSON marker, which the decide step
+      # reads as records-unreadable and fails CLOSED (no dispatch).
+      #
+      # DRE-6963: the reads wait out the call limit, say why, and a read that
+      # never comes back fails the run. On 2026-10-11 the login ran out of
+      # calls, run 38169396180 said only "unreadable" and ended green, and
+      # nothing else starts this repair while main is red — no pull request
+      # merges onto a red main, so no next failure event comes. Now
+      # `gather-records` prints one line per failed read (which read, the HTTP
+      # status, the message's first line — never the token), reads the
+      # login's own rate limit and waits until its reset plus ten seconds
+      # (two minutes when that read fails too), and reads again: at most three
+      # tries and twenty minutes, inside the job's 45. A read that never comes
+      # back exits 1 with "the repair could not read its attempt records after
+      # N tries: <reason>", so the run ends red for the medic and the alerts;
+      # the decide step still runs (`!cancelled()`) and answers
+      # records-unreadable, and every step that acts is gated on its go.
       - name: Gather repair attempt records
         env:
           GH_TOKEN: ${{ steps.app.outputs.token }}
         run: |
-          gh api "repos/${{ github.repository }}/git/matching-refs/heads/repair/" \
-            > /tmp/repair-refs.json 2>/dev/null || echo 'FETCH-FAILED' > /tmp/repair-refs.json
-          gh api "repos/${{ github.repository }}/pulls?state=all&per_page=100" \
-            > /tmp/repair-pulls.json 2>/dev/null || echo 'FETCH-FAILED' > /tmp/repair-pulls.json
+          python3 .bureau-pipeline/scripts/red_main_repair.py gather-records \
+            --repo "$GITHUB_REPOSITORY" \
+            --refs-out /tmp/repair-refs.json \
+            --pulls-out /tmp/repair-pulls.json
 
       # DRE-6526: is a record branch a fix the agent pushed and left? For each
-      # ref that IS an attempt at the failing sha — `record-refs` prints them,
-      # so the rule lives once, in the script — the comparison with the
-      # default branch, as `{"<ref>": {status, ahead_by} | null}`. A compare
-      # that fails is null for its ref and a file that will not parse is the
-      # FETCH-FAILED marker; the decide step reads either as "nothing known"
-      # and answers duplicate-event, never finish-unlanded. The ref names are
-      # `_sha_record_re` matches (`repair/`, `DRE-<n>`, hex, `-<n>`), so they
-      # need no escaping as JSON keys. Boot token, like the records step.
+      # ref that IS an attempt at the failing sha — `record_refs`, so the rule
+      # lives once, in the script — the comparison with the default branch,
+      # as `{"<ref>": {status, ahead_by} | null}`. A compare that never comes
+      # back is null for its ref; the decide step reads that as "nothing
+      # known" and answers duplicate-event, never finish-unlanded. The reads
+      # ride the same wait-and-retry as the records (DRE-6963), and the step
+      # runs after a failed records gather so the decision still answers —
+      # but with records unreadable it makes no call and no wait (the
+      # decision is records-unreadable whatever it would read), so the job
+      # waits out the limit once, not twice, inside its 45 minutes.
+      # Boot token, like the records step.
       - name: Gather repair branch comparisons (pushed and never opened?)
+        if: ${{ !cancelled() }}
         env:
           GH_TOKEN: ${{ steps.app.outputs.token }}
           HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
         run: |
-          REFS=$(python3 .bureau-pipeline/scripts/red_main_repair.py record-refs \
-            --refs-file /tmp/repair-refs.json --head-sha "$HEAD_SHA") || REFS=''
-          ENTRIES=''
-          for REF in $REFS; do
-            COMPARE=$(gh api "repos/$GITHUB_REPOSITORY/compare/$DEFAULT_BRANCH...$REF" \
-              --jq '{status: .status, ahead_by: .ahead_by}' 2>/dev/null) || COMPARE=''
-            ENTRIES="$ENTRIES${ENTRIES:+,}\"$REF\":${COMPARE:-null}"
-          done
-          printf '{%s}\n' "$ENTRIES" > /tmp/repair-compares.json
-          python3 -c 'import json, sys; json.load(open(sys.argv[1]))' /tmp/repair-compares.json \
-            2>/dev/null || echo 'FETCH-FAILED' > /tmp/repair-compares.json
-          echo "compared $(printf '%s\n' $REFS | grep -c . || true) repair branch(es) with $DEFAULT_BRANCH"
+          python3 .bureau-pipeline/scripts/red_main_repair.py gather-compares \
+            --repo "$GITHUB_REPOSITORY" \
+            --default-branch "$DEFAULT_BRANCH" \
+            --head-sha "$HEAD_SHA" \
+            --refs-file /tmp/repair-refs.json \
+            --pulls-file /tmp/repair-pulls.json \
+            --out /tmp/repair-compares.json
 
       # DRE-1996 discipline: head_branch is on the pinned-fields list (it is
       # only trusted here BECAUSE the job `if:` proved it equals the default
@@ -238,6 +251,8 @@ jobs:
       # never judged).
       - name: Decide — classify, debounce, budget (before any agent)
         id: decide
+        # DRE-6963: answers records-unreadable after a failed records gather.
+        if: ${{ !cancelled() }}
         env:
           CONCLUSION: ${{ github.event.workflow_run.conclusion }}
           HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
