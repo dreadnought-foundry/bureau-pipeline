@@ -553,7 +553,10 @@ paths, from four sources in order:
 
 The variable sits below the stub on purpose: setting it changes nothing while
 a project's stubs still pass a literal, and removing the literal from all
-three stubs hands the number to the variable. A non-empty value at any source
+three stubs hands the number to the variable. This repo's own three `self-`
+stubs pass none (DRE-6783), as atlas's and deltasolv's do, so its number is
+its `BUREAU_MAX_WIP` variable — the default 8 while that is unset. A
+non-empty value at any source
 that is not a whole number of 0 or more (`"lots"`, `"-1"`, `"12.0"`) is
 skipped to the next source with one `promotion: ignored <source> = <value>`
 line in the run log; an empty one is the normal "not set" and says nothing.

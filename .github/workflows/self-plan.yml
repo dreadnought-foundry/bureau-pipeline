@@ -3,8 +3,10 @@
 # @main on purpose: this repo is the canary channel; the fleet rides tags.
 #
 # The activate route promotes cards, so this stub is one of the repo's three
-# WIP-cap paths. It passes the same max_wip as self-reconcile and
-# self-linear-sync — all three or none (DRE-2529).
+# WIP-cap paths. Like self-reconcile and self-linear-sync it passes no
+# max_wip — all three or none (DRE-2529) — so the number is this repo's
+# BUREAU_MAX_WIP Actions variable, which the console writes, and default 8
+# while it is unset (DRE-6783).
 name: Agent Plan
 
 on:
@@ -27,5 +29,4 @@ jobs:
     uses: dreadnought-foundry/bureau-pipeline/.github/workflows/plan.yml@main
     with:
       pipeline_ref: main
-      max_wip: "8"
     secrets: inherit
