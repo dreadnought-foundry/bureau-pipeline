@@ -219,7 +219,7 @@ _FALLBACK_MODEL_CONFIG = {
     "ladders": {
         "workhorse": ["claude-opus-5-5", "claude-opus-5", "claude-sonnet-5-5", "claude-sonnet-5"],
         "advisory": ["claude-sonnet-5-5", "claude-sonnet-5", "claude-opus-5-5"],
-        "judgement": ["claude-fable-5-1", "claude-opus-5-5", "claude-sonnet-4-6"],
+        "judgement": ["claude-opus-5-5", "claude-fable-5-1", "claude-sonnet-4-6"],
     },
     "agents": {
         "engineer": "workhorse",
