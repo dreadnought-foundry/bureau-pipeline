@@ -5,7 +5,7 @@
 
 This is one file, carried in two repositories: bureau-pipeline's
 `scripts/check_action_pins.py` and agent-bureau's file of the same name are
-the same bytes. Each repository's CI checks out only itself, so each carries
+meant to be the same bytes. Each repository's CI checks out only itself, so each carries
 its own copy (the two-copies rule, DRE-3440), and agent-bureau's parity test
 compares its copy byte for byte against the `.bureau-pipeline` checkout at
 `stable`. Before `stable` moves, `scripts/mirror_check.py` runs that parity
@@ -18,6 +18,8 @@ The two halves of the surface both live here. bureau-pipeline's callers read
 positional CLI; agent-bureau's fleet sweep reads `UsesRef`, `uses_refs`,
 `floating`, `problems`, `scan(root)`, `--root` and `--list`. Both read one
 exemption rule and one version-comment rule.
+
+## Why it exists (DRE-3418)
 
 2026-09-08 15:15–16:27 PT, Anthropic moved the floating `claude-code-action`
 `v1` tag to v1.0.218, whose Claude Code installer leaves no launcher. Every
