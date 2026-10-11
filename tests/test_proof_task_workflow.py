@@ -260,10 +260,12 @@ class ReadOnlyIdentityTest(unittest.TestCase):
     NARROW = "Mint the read-only proof identity without variables"
     HAND = "Hand the read-only proof identity to the agent"
     RECORD = "Record the read-only proof identity"
-    FIVE = {"permission-contents", "permission-actions",
-            "permission-pull-requests", "permission-metadata",
-            "permission-variables"}
-    FOUR = FIVE - {"permission-variables"}
+    # Derived from `config/proof-reach.json` (DRE-6605), never restated here:
+    # the narrow mint asks for `permissions`, the wide one for those and
+    # `optional_permissions` too.
+    _REACH = json.loads((ROOT / "config" / "proof-reach.json").read_text())["github"]
+    FOUR = {f"permission-{k}" for k in _REACH["permissions"]}
+    FIVE = FOUR | {f"permission-{k}" for k in _REACH["optional_permissions"]}
 
     def _mints(self) -> list[dict]:
         return [_step(self.MINT), _step(self.NARROW)]

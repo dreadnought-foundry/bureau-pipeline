@@ -1,0 +1,106 @@
+{
+  "github": {
+    "workflow": ".github/workflows/proof-task.yml",
+    "mints": {
+      "wide": "Mint the read-only proof identity",
+      "narrow": "Mint the read-only proof identity without variables"
+    },
+    "owner": "${{ github.repository_owner }}",
+    "permissions": {
+      "contents": "read",
+      "actions": "read",
+      "pull-requests": "read",
+      "metadata": "read"
+    },
+    "optional_permissions": {
+      "variables": "read"
+    }
+  },
+  "readings": [
+    {
+      "id": "repo-variable",
+      "held": "optional",
+      "held_for": [],
+      "what": "a repository variable read with `gh variable get`, which needs `variables: read`",
+      "names": ["gh variable", "repository variable", "repo variable", "BUREAU_[A-Z_]*RUNS_ON"],
+      "why": "DRE-6543 and DRE-6478: the wide mint asks for `variables: read`, no installation on record grants it, and the narrow mint reads no variable",
+      "brief": "It reads repo variables (`gh variable get`) only where the installation grants `variables: read`"
+    },
+    {
+      "id": "db-read",
+      "held": false,
+      "what": "the console database read through `make db-read`",
+      "names": ["make db-read", "db-read", "the read-only door"],
+      "why": "DRE-6543: `make db-read` runs under the operator's AWS profile, which the workflow never hands a proof run",
+      "brief": "You hold exactly what the workflow hands you"
+    },
+    {
+      "id": "step-summary",
+      "held": false,
+      "what": "a workflow run's step summary",
+      "names": ["step summar(?:y|ies)"],
+      "why": "DRE-6543 row 4: a step summary is not among the GitHub reads the proof identity makes; a tagged line is read from the run's log instead",
+      "brief": "Every observation of GitHub — a run's status, a tag, a pull request's checks and verdicts, a repo variable — is made as this token"
+    },
+    {
+      "id": "other-organization",
+      "held": false,
+      "what": "a repository in another organization",
+      "names": ["each repo in", "every repo in", "per roster repo", "every slug in"],
+      "why": "DRE-6431 row 6 and DRE-6442 row 6: the read token reaches the caller's own organization only",
+      "brief": "It does not reach a repository in other organizations"
+    },
+    {
+      "id": "local-screen",
+      "held": true,
+      "what": "a `Local screen:` page the repo's `.github/bureau/proof-local.json` does not declare",
+      "names": ["local screen:"],
+      "why": "briefs/proof.md: the local run opens only the pages the repo declares, by key",
+      "brief": "The criterion names a page by its key in that file."
+    },
+    {
+      "id": "product-identity",
+      "held": "optional",
+      "held_for": ["portico"],
+      "what": "the product's own scripted proof identities, reached through the caller's `PROOF_ROLE_ARN`",
+      "names": ["infra/scripts/proof-reader\\.ts", "proof-moderator", "mcp-token", "PROOF_ROLE_ARN", "hosted sign-in"],
+      "why": "briefs/proof.md: only a caller that provides `PROOF_ROLE_ARN` hands the run an AWS session, and portico is the one that does today",
+      "brief": "When no caller provides one, the Identities section records `aws: none`",
+      "queries_declared_by": {
+        "portico": "infra/scripts/proof-reader.ts"
+      }
+    }
+  ],
+  "log_lines": [
+    {
+      "tag": "proof-release:",
+      "printed_by": "scripts/proof_release.py",
+      "constant": "TAG",
+      "when": "every reading since DRE-6516"
+    },
+    {
+      "tag": "proof-dispatch:",
+      "printed_by": "scripts/proof_dispatch.py",
+      "constant": "PREFIX",
+      "when": "full passes only"
+    },
+    {
+      "tag": "proof identity:",
+      "printed_by": ".github/workflows/proof-task.yml",
+      "constant": null,
+      "when": "every proof run, in its log and its step summary"
+    },
+    {
+      "tag": "proof local run:",
+      "printed_by": "scripts/proof_browser.py",
+      "constant": "SUMMARY",
+      "when": "every proof run, in its log and its step summary, from proof-task.yml's local-run step"
+    }
+  ],
+  "causes": [
+    {"word": "out-of-reach", "meaning": "the criterion names a reading the proof identity cannot make"},
+    {"word": "state-gone", "meaning": "the criterion names a state that was gone before the proof could run"},
+    {"word": "misdescribed", "meaning": "the criterion describes the product wrongly"},
+    {"word": "operator-step-unblocked", "meaning": "the criterion reads the result of an operator step the proof is not blocked on"}
+  ]
+}
