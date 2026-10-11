@@ -19,15 +19,22 @@ already `claude-opus-5`, the workhorse PRIMARY, so reviewer and worker have
 coincided whenever the critic falls back. This card makes the guarantee
 explicit per-run instead of incidental.
 
+DRE-6785 (the CEO's decision of 2026-10-10) stopped refusing a BARE overlap.
+The separation no longer needs a written rule: the reviewer's walk loses the
+model that built the pull request and the next model leads, and a declared
+rule only says which model leads instead. A reviewer never falls back onto the
+build model, even when every other model on its walk is unavailable. The
+classes below that used to pin the bare-overlap refusal now pin that a config
+without the rule validates AND still separates.
+
 WHAT THESE TESTS HOLD
 --------------------
   1. The committed ladders are selectable as written: every rung is in
      neither `retired` nor `excluded`, and every overlap they carry is
      declared. Which model sits where is the console's choice (DRE-6863).
-  2. The schema rule that forbade one model on both the advisory and the
-     workhorse ladder now permits it ONLY together with a declared selection
-     rule. A BARE overlap — the same edit with no rule — is still refused, and
-     the judgement ladder gets no such exemption at all.
+  2. The schema permits one model on both the advisory and the workhorse
+     ladder, with or without a declared selection rule (DRE-6785), and still
+     refuses a declared rule that is malformed or stale.
   3. A Sonnet-5 build is never reviewed by Sonnet 5, at any availability, for
      either reviewer role, through the function AND through the CLI the
      workflows actually call.
@@ -285,8 +292,8 @@ class LaddersAsDataTest(unittest.TestCase):
 
 
 class SchemaPermitsTheOverlapOnlyWithTheRuleTest(unittest.TestCase):
-    """The schema rule that forbade the overlap now permits it WITH the
-    selection rule — and still refuses a bare one."""
+    """The schema permits the overlap with or without a rule since 2026-10-10
+    (DRE-6785), and still refuses a declared rule that is malformed."""
 
     def assertRefused(self, cfg, needle):
         errors = fmf.policy_errors(cfg)
@@ -296,19 +303,23 @@ class SchemaPermitsTheOverlapOnlyWithTheRuleTest(unittest.TestCase):
             f"errors do not name {needle!r}: {errors}",
         )
 
-    def test_a_bare_overlap_with_no_selection_rule_is_refused(self):
-        # The same ladders, the declaration deleted. This is the edit the old
-        # rule refused outright and it must still be refused.
+    def test_a_bare_overlap_with_no_selection_rule_is_admitted_and_separated(self):
+        # The same ladders, the declaration deleted: refused until 2026-10-10,
+        # admitted since, because the reviewer still skips the build model.
         cfg = _fixture()
         cfg.pop("review_separation", None)
-        self.assertRefused(cfg, LOWER)
-        self.assertRefused(cfg, UPPER)
+        self.assertEqual(fmf.policy_errors(cfg), [])
+        for model in (LOWER, UPPER):
+            with self.subTest(built_on=model):
+                walk = fmf.reviewers_for(cfg, model)
+                self.assertNotIn(model, walk)
+                self.assertTrue(walk)
 
-    def test_an_empty_rule_list_is_still_a_bare_overlap(self):
+    def test_an_empty_rule_list_is_admitted_too(self):
         cfg = _fixture()
         cfg["review_separation"]["rules"] = []
-        self.assertRefused(cfg, LOWER)
-        self.assertRefused(cfg, UPPER)
+        self.assertEqual(fmf.policy_errors(cfg), [])
+        self.assertNotIn(LOWER, fmf.reviewers_for(cfg, LOWER))
 
     def test_a_rule_that_reviews_on_the_build_model_is_refused(self):
         # A "rule" that sends the reviewer back to the model the build ran on
@@ -350,85 +361,75 @@ class SchemaPermitsTheOverlapOnlyWithTheRuleTest(unittest.TestCase):
         cfg["review_separation"]["roles"] = list(REVIEWER_ROLES) + [NOT_ADVISORY]
         self.assertRefused(cfg, NOT_ADVISORY)
 
-    def test_the_judgement_ladders_top_rung_gets_no_such_exemption(self):
-        # The separation is about REVIEWERS. Declaring one buys nothing for
-        # the planner's model: it on a build ladder is still the 2026-08-09
-        # incident, whatever `review_separation` says.
+    def test_a_rule_for_a_model_off_the_advisory_ladder_is_stale(self):
+        # The planner's model on the build ladder is a person's choice since
+        # 2026-10-10; a rule for it describes no overlap (it is not a reviewer
+        # rung), so the RULE is refused as stale, and naming the model.
         cfg = _fixture()
         cfg["ladders"][cfg["kinds"][WORKHORSE]["ladder"]].append(
-            {"model": PLAN_TOP, "reason": "someone's well-meaning edit"}
+            {"model": PLAN_TOP, "reason": "the CEO's choice"}
         )
         cfg["review_separation"]["rules"].append(
-            {"built_on": PLAN_TOP, "reviewers_use": BUILD_ONLY, "reason": "not a licence"}
+            {"built_on": PLAN_TOP, "reviewers_use": BUILD_ONLY, "reason": "stale"}
         )
         self.assertRefused(cfg, PLAN_TOP)
+        cfg["review_separation"]["rules"].pop()
+        self.assertEqual(fmf.policy_errors(cfg), [])
 
-    def test_ci_goes_red_on_a_bare_overlap(self):
+    def test_ci_accepts_a_bare_overlap(self):
         with tempfile.TemporaryDirectory() as td:
             tree = _copy_tree(Path(td))
             cfg = _fixture()
             cfg.pop("review_separation", None)
             _write_config(tree, cfg)
             proc = _run_sync(tree, "--check")
-            self.assertNotEqual(proc.returncode, 0, "CI must fail on a bare overlap")
-            self.assertIn(LOWER, proc.stdout + proc.stderr)
+            self.assertNotIn("rejected by model policy", proc.stdout + proc.stderr)
 
-    def test_the_selector_refuses_a_bare_overlap_and_degrades(self):
-        # A config that violates policy is never loaded: the fleet keeps the
-        # last-known-good ladders rather than review a build on the model it
-        # ran on because somebody deleted the rule.
+    def test_the_selector_separates_a_bare_overlap_with_no_rule(self):
+        # The config loads (it validates), and the reviewer of a build on the
+        # lower overlap still never runs on it: the separation is derived.
         with tempfile.TemporaryDirectory() as td:
             tree = _copy_tree(Path(td))
             cfg = _fixture()
             cfg.pop("review_separation", None)
             _write_config(tree, cfg)
-            model, _ = _cli_select(
+            model, note = _cli_select(
                 tree, REVIEWER_ROLES[0], "--built-on", LOWER,
                 available={BUILD_ONLY: True, LOWER: True},
             )
             self.assertNotEqual(model, LOWER)
+            self.assertIn(f"this build ran on {LOWER}", note)
 
 
 class BelowTheFallbackTest(unittest.TestCase):
-    """Rule 4's second half, restated on the DECLARED PRICE it always meant.
-
-    The rule reads the TOP rung of a non-build ladder, so a premium model
-    parked BELOW the workhorse rungs would be invisible to it. It used to be
-    spelled "every rung below the fallback must be a workhorse model", which
-    was a proxy for "no DEARER model hides down there" — a proxy that stopped
-    working the moment `claude-sonnet-4-6` left the build ladder and stayed
-    the planner's last resort.
+    """What is left of rule 4b since 2026-10-10 (DRE-6785): every rung has a
+    DECLARED PRICE. It used to refuse a dearer model below a non-build
+    ladder's fallback as well; a person may now put any priced model there.
     """
 
-    def test_the_planners_last_resort_is_allowed_because_it_is_cheaper(self):
-        # The frozen judgement ladder's last rung is on no build ladder, and
-        # cheaper than the rung it sits below.
-        prices = fmf.declared_prices()
-        fallback = _PLAN[_PLAN.index(PLAN_LAST) - 1]
-        self.assertLessEqual(prices[PLAN_LAST]["input"], prices[fallback]["input"])
-        self.assertLessEqual(prices[PLAN_LAST]["output"], prices[fallback]["output"])
+    def test_the_planners_last_resort_is_allowed(self):
         self.assertEqual(fmf.policy_errors(_fixture()), [])
 
-    def test_a_dearer_model_may_not_hide_below_the_workhorse_fallback(self):
+    def test_a_dearer_model_below_the_workhorse_fallback_is_a_persons_choice(self):
         cfg = _fixture()
         cfg["ladders"][cfg["kinds"][JUDGEMENT]["ladder"]] = [
             {"model": BUILD_ONLY, "reason": "the build model first"},
-            {"model": PLAN_TOP, "reason": "…and the premium one hidden below it"},
+            {"model": PLAN_TOP, "reason": "…and the premium one below it"},
         ]
-        errors = fmf.policy_errors(cfg)
-        self.assertTrue(errors, "a dearer model below the fallback must be refused")
-        self.assertTrue(any(PLAN_TOP in e for e in errors), f"unhelpful: {errors}")
+        self.assertEqual(fmf.policy_errors(cfg), [])
 
-    def test_an_unpriced_model_below_the_fallback_is_refused(self):
-        # A price is never guessed, so an unpriced rung cannot be shown to be
-        # no dearer than the fallback — fail closed.
+    def test_an_unpriced_rung_is_refused_in_plain_words(self):
+        # A price is never guessed — fail closed, on any rung of any ladder.
         cfg = _fixture()
         cfg["ladders"][cfg["kinds"][JUDGEMENT]["ladder"]] = [
             {"model": PLAN_TOP, "reason": "the planner's model"},
             {"model": BUILD_ONLY, "reason": "the loud fallback"},
             {"model": SONNET6, "reason": "priced nowhere"},
         ]
-        self.assertTrue(fmf.policy_errors(cfg), "an unpriced rung must be refused")
+        self.assertEqual(fmf.policy_errors(cfg), [
+            f"ladders.{cfg['kinds'][JUDGEMENT]['ladder']}: {SONNET6} has no "
+            "declared price, so it cannot be chosen."
+        ])
 
     def test_every_ladder_rung_still_has_a_declared_price(self):
         declared = set(yaml.safe_load(PRICES.read_text())["prices"])
@@ -474,6 +475,30 @@ class ASonnetFiveBuildIsNeverReviewedBySonnetFiveTest(unittest.TestCase):
                     self.assertEqual(
                         got, instead if avail.get(instead, True) else UPPER
                     )
+
+    def test_a_build_top_build_is_never_reviewed_on_it_when_every_overlap_is_down(self):
+        # DRE-6785: the reviewer never falls back onto the build model. With
+        # every other model on the walk down it is exhausted onto its last
+        # model, loudly, and the note says the build model was skipped.
+        down = {UPPER: False, LOWER: False}
+        walk = [m for m in _ADVICE if m != BUILD_TOP]
+        for role in REVIEWER_ROLES:
+            with self.subTest(role=role):
+                fmf.clear_availability_cache()
+                decision = fmf.select_with_reasons(
+                    role, probe=lambda m: down.get(m, True), built_on=BUILD_TOP)
+                self.assertNotEqual(decision["model"], BUILD_TOP)
+                self.assertEqual(decision["ladder"], walk)
+                self.assertEqual(decision["separated"], [BUILD_TOP])
+                self.assertTrue(decision["exhausted"])
+                note = fmf.selection_note(decision)
+                self.assertTrue(note.startswith("DEGRADED"), note)
+                self.assertIn(
+                    f"build/review separation: this build ran on {BUILD_TOP}", note)
+                fmf.clear_availability_cache()
+                self.assertNotEqual(
+                    fmf.select(role, probe=lambda m: down.get(m, True),
+                               built_on=BUILD_TOP), BUILD_TOP)
 
     def test_an_unknown_build_model_still_never_reviews_on_an_overlap_model(self):
         # Fail CLOSED. A card we could not read is not evidence the build ran
@@ -730,25 +755,25 @@ class CarriedForwardToDre3892Test(unittest.TestCase):
         return cfg
 
     def test_adopting_the_rung_without_the_rule_is_refused(self):
+        # Still refused, on the stale rule left behind and the unpriced rung
+        # (an unpriced rung is refused on every ladder since DRE-6785).
         cfg = self._adopt(_fixture(), SONNET6)
         errors = fmf.policy_errors(cfg)
         self.assertTrue(errors, "an adoption that drops the rule must be refused")
-        self.assertTrue(
-            any(SONNET6 in e for e in errors),
-            f"the new rung is not named as a bare overlap: {errors}",
-        )
         self.assertTrue(
             any(LOWER in e for e in errors),
             f"the stale rule is not named: {errors}",
         )
 
     def test_adopting_the_rung_WITH_the_rule_is_accepted(self):
+        # The adoption declares the candidate's price, so price it here too.
         cfg = self._adopt(_fixture(), SONNET6)
         for rule in cfg["review_separation"]["rules"]:
             if rule["built_on"] == LOWER:
                 rule["built_on"] = SONNET6
                 rule["reason"] = "carried forward"
-        self.assertEqual(fmf.policy_errors(cfg), [])
+        prices = {**fmf.declared_prices(), SONNET6: {"input": 2.0, "output": 10.0}}
+        self.assertEqual(fmf.policy_errors(cfg, prices), [])
 
     def test_ci_goes_red_on_an_adoption_that_drops_the_rule(self):
         with tempfile.TemporaryDirectory() as td:
@@ -813,26 +838,21 @@ class TwoSonnetsOnBothLaddersTest(unittest.TestCase):
         errors = fmf.policy_errors(_fixture())
         self.assertEqual(errors, [])
 
-    def test_dropping_the_lower_overlap_rule_is_a_bare_overlap(self):
+    def test_dropping_the_lower_overlap_rule_is_admitted_and_still_separates(self):
         cfg = _fixture()
         cfg["review_separation"]["rules"] = [
             r for r in cfg["review_separation"]["rules"] if r["built_on"] != LOWER
         ]
-        errors = fmf.policy_errors(cfg)
-        self.assertTrue(
-            any(LOWER in e and "BARE" in e and "last rung" in e for e in errors),
-            f"a lower overlap with no rule must be refused by name: {errors}",
-        )
+        self.assertEqual(fmf.policy_errors(cfg), [])
+        self.assertNotIn(LOWER, fmf.reviewers_for(cfg, LOWER))
 
-    def test_the_top_still_needs_its_rule(self):
+    def test_dropping_the_top_rule_is_admitted_and_still_separates(self):
         cfg = _fixture()
         cfg["review_separation"]["rules"] = [
             r for r in cfg["review_separation"]["rules"] if r["built_on"] != UPPER
         ]
-        errors = fmf.policy_errors(cfg)
-        self.assertTrue(
-            any(UPPER in e and "tops" in e for e in errors), errors
-        )
+        self.assertEqual(fmf.policy_errors(cfg), [])
+        self.assertNotIn(UPPER, fmf.reviewers_for(cfg, UPPER))
 
     def test_the_last_rung_needs_no_rule_but_may_carry_one(self):
         # The advisory ladder's last rung is also the build ladder's top: the

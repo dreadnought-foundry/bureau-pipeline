@@ -377,23 +377,23 @@ class IncidentConditionTest(unittest.TestCase):
             fmf.select("no-such-role", probe=everything_available), strongest
         )
 
-    def test_the_advisory_overlap_is_declared_rather_than_incidental(self):
+    def test_the_advisory_overlap_is_separated_at_selection_time(self):
         # The other half of what DRE-3880 changed. A model on BOTH the
-        # advisory and a workhorse ladder is admissible only because
-        # config/models.yaml declares what the reviewers run instead; the bare
-        # edit is still refused. Proved in full in
-        # tests/test_review_separation.py — this is the hinge, kept beside the
-        # incident it used to be confused with.
+        # advisory and a workhorse ladder is admissible, and since 2026-10-10
+        # (DRE-6785) it needs no declaration: the reviewer skips the build
+        # model when it is selected. Proved in full in
+        # tests/test_review_separation.py and tests/test_model_choice_policy.py
+        # — this is the hinge, kept beside the incident it used to be confused
+        # with.
         cfg = _canonical()
         overlap = set(_advisory_ladder(cfg)[:1]) & set(_workhorse_ladder(cfg))
         self.assertTrue(overlap, "the fixture's advisory top does not overlap the build path")
         self.assertEqual(fmf.policy_errors(cfg), [])
         stripped = _canonical()
         stripped.pop("review_separation", None)
-        self.assertTrue(
-            fmf.policy_errors(stripped),
-            "a bare overlap with no selection rule must still be refused",
-        )
+        self.assertEqual(fmf.policy_errors(stripped), [])
+        top = _advisory_ladder(cfg)[0]
+        self.assertNotEqual(fmf.reviewers_for(stripped, top)[0], top)
 
     def test_the_cli_path_holds_the_same_line(self):
         # The workflows call the CLI, not the function. Probe says EVERYTHING
@@ -584,52 +584,41 @@ class JudgementKindTest(unittest.TestCase):
             self.assertEqual(_cli_select(tree, _role_of(JUDGEMENT))[0],
                              _judgement_ladder()[0])
 
-    def test_the_strongest_model_on_a_build_ladder_is_still_rejected(self):
-        # The judgement ladder is permission for the PLANNER, not for the model.
+    def test_the_strongest_model_on_a_build_ladder_is_a_persons_choice_since_2026_10_10(self):
+        # Refused by rule 4 until the CEO's decision of 2026-10-10 (DRE-6785):
+        # an explicit choice of any priced model is admissible for any group.
+        # What still guards the incident is that nothing AUTOMATIC climbs — see
+        # test_no_build_role_reaches_the_strongest_model_at_full_availability.
         cfg = _canonical()
         strongest = _judgement_ladder(cfg)[0]
         cfg["ladders"][cfg["kinds"][WORKHORSE]["ladder"]].insert(
-            0, {"model": strongest, "reason": "someone's well-meaning edit"}
+            0, {"model": strongest, "reason": "the CEO's choice"}
         )
-        errors = fmf.policy_errors(cfg)
-        self.assertTrue(errors, "the strongest model must not reach a build ladder")
-        self.assertTrue(any(strongest in e for e in errors), f"unhelpful: {errors}")
+        self.assertEqual(fmf.policy_errors(cfg), [])
 
-    def test_a_judgement_only_model_may_not_hide_below_the_fallback(self):
-        # Rule 4 reads the TOP rung of a non-build ladder, so a premium model
-        # parked BELOW the workhorse rungs would be invisible to it. Once a
-        # ladder descends onto the build path it stays there.
+    def test_a_dearer_model_below_the_fallback_is_a_persons_choice_too(self):
+        # Rule 4b refused this until 2026-10-10; what is left of it is the
+        # price, and both rungs here have one.
         cfg = _canonical()
         build_rung, strongest = _workhorse_ladder(cfg)[0], _judgement_ladder(cfg)[0]
         cfg["ladders"][cfg["kinds"][JUDGEMENT]["ladder"]] = [
             {"model": build_rung, "reason": "the build model first"},
-            {"model": strongest, "reason": "…and the premium one hidden below it"},
+            {"model": strongest, "reason": "…and the premium one below it"},
         ]
-        # The refusal names the hidden model: rule 4 refuses this ladder's
-        # build-model top on its own, and that is not the rule under test.
-        errors = fmf.policy_errors(cfg)
-        self.assertTrue(
-            any(strongest in e for e in errors),
-            f"a premium model below the workhorse fallback must be rejected: {errors}",
-        )
+        self.assertEqual(fmf.policy_errors(cfg), [])
 
-    def test_the_selector_degrades_rather_than_honouring_the_strongest_model_on_the_build_path(self):
-        # The refused file is not loaded: the selector runs the tree's
-        # last-known-good ladders, generated from the fixture.
+    def test_the_selector_honours_a_chosen_strongest_model_on_the_build_path(self):
+        # The choice validates, so the selector loads it rather than degrading.
         with tempfile.TemporaryDirectory() as td:
             tree = _copy_tree(Path(td))
             cfg = _canonical()
             strongest = _judgement_ladder(cfg)[0]
             cfg["ladders"][cfg["kinds"][WORKHORSE]["ladder"]].insert(
-                0, {"model": strongest, "reason": "the incident, as a config edit"}
+                0, {"model": strongest, "reason": "the CEO's choice"}
             )
             _write_config(tree, cfg)
             model, _ = _cli_select(tree, _role_of(WORKHORSE))
-            self.assertNotEqual(model, strongest)
-            self.assertEqual(
-                model, _workhorse_ladder()[0],
-                "a policy-violating config must not reach the build path",
-            )
+            self.assertEqual(model, strongest)
 
     def test_discovery_may_not_target_the_judgement_ladder(self):
         # A newly-discovered model may never land on a BUILD **or a PLANNING**
