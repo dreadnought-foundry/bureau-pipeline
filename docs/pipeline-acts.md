@@ -360,13 +360,15 @@ event>` — and nothing else — is waiting on something no one on the card has 
 cause: on either trigger, beside any other unmet row, the card is held with
 `🔬 proof-waiting: <the waiting criteria> — needs <their events>` instead of a
 re-run, and is re-run once the operator posts `proof-observed` (DRE-6488, and
-for the critic's trigger DRE-6814). A record the gate declined whose unmet rows
-all carry a cause word (DRE-6607) is never re-run at that head, since a re-run
-would read the same thing: the dispatcher puts it to the operator once through
-`proof_cause_park.park` (DRE-6612) — its hold, its question and its move to
-Green Light, each skipped when the thread already carries it — and a caused row
-beside a plain one is re-run as before (DRE-6610). It is read after the first
-runs, under the same one-per-pass cap, and moves nothing but that park.
+for the critic's trigger DRE-6814). A record the gate declined, or the critic
+sent back, whose unmet rows all carry a cause word (DRE-6607) is never re-run
+at that head, since a re-run would read the same thing: the dispatcher puts it
+to the operator once through `proof_cause_park.park` (DRE-6612) — its hold and
+its question, each skipped when the thread already carries it — and leaves the
+card In Review for the operator (DRE-6837); a caused row beside a plain one is
+re-run as before (DRE-6610). The park's own hold never holds the card off the
+record at its head: the operator's amendment discharges it. It is read after
+the first runs, under the same one-per-pass cap, and moves nothing.
 
 The receipt is posted only after `plan_run.fire` confirms the dispatch:
 

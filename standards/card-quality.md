@@ -551,12 +551,14 @@ one of four words, read off the declaration's `causes`:
   `BUREAU_DOCKER_RUNS_ON` as set while setting it was still the open operator
   card DRE-6478, with no `blockedBy` between them.
 
-**A record whose unmet rows all carry a cause is put to the CEO once, in
-Green Light.** The proof run or the dispatcher asks it, through one writer,
-under a hold that names the operator's decision it waits for: one plain-English
-question per card that quotes the criterion, says why it cannot be shown and
-says what was seen instead. The record is never re-run to read the same thing
-— a second run at the same head reads what the first one did. DRE-6244's rule
+**A record whose unmet rows all carry a cause is put to the operator once, in
+In Review (DRE-6837).** The proof run or the dispatcher asks it, through one
+writer, under a hold that names the operator's decision it waits for: one
+plain-English question per card, addressed to the operator, that quotes the
+criterion, says why it cannot be shown and says what was seen instead. The card
+stays in In Review, where its open record pull request puts it — never to the
+CEO in Green Light. The record is never re-run to read the same thing — a
+second run at the same head reads what the first one did. DRE-6244's rule
 on accepting such a row stands unchanged: a cause says why a row is unmet,
 never that it is accepted, and only the operator's linked decision accepts one.
 

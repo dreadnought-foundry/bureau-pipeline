@@ -1179,7 +1179,7 @@
       "tag": "hand-work-overdue",
       "adopted": true,
       "kind": "hold",
-      "means": "A person's card has waited in Hand-work past the hours config/hand-work-age.json declares — an operator-step card, a WORKBENCH card with no mark, or a PROOF: card whose proof run is not in flight — and the sweep says so once, for the operator.",
+      "means": "A person's card has waited in Hand-work past the hours config/hand-work-age.json declares — an operator-step card, a WORKBENCH card with no mark, or a PROOF: card whose proof run is not in flight — and the sweep says so once, for the operator. A fourth kind shares those hours: a PROOF: card held In Review for the operator under the operator's newest 🔬 proof-waiting hold (DRE-6837) — not live until DRE-6852.",
       "state": "unchanged",
       "next_actor": "operator",
       "discharges": null,
@@ -1849,14 +1849,14 @@
       "file": "scripts/reconcile.py",
       "anchor": "cmd_comment(ident, review_question)",
       "kind": "not-an-act",
-      "means": "A review-lane nudge that has spent REVIEW_NUDGE_CAP on one head asks a person, on the card and once per head, the question `review_cap_question.compose` builds from the evidence in hand — what stands on the head, how many re-triggers were spent over how long, the gate's hold note — in the one Green Light format, before the card is parked In Review → Green Light (DRE-6181).",
+      "means": "A review-lane nudge that has spent REVIEW_NUDGE_CAP on one head asks a person, on the card and once per head, the question `review_cap_question.compose` builds from the evidence in hand — what stands on the head, how many re-triggers were spent over how long, the gate's hold note — in the one Green Light format, before the card is parked In Review → Green Light (DRE-6181). On a proof-record pull request the question is the proof-record variant, for the operator, and the card is held `In Review`, not parked — not live until DRE-6841.",
       "why": "A question is not an act: it asks a person to decide rather than announcing something the pipeline did, the same reason the planner's escalation note asks rather than announces. The act this park is — the hold — is said by the `🔒 hold:` stamp `hold.apply` posts just before it. Its key, `review-nudge-cap` with the PR number and the head sha, is the once-per-head key the sweep reads before posting it again."
     },
     {
       "file": "scripts/reconcile.py",
       "anchor": "_post_pr_note(number, review_blocker)",
       "kind": "not-an-act",
-      "means": "The same question on the pull request, posted once per head as a fix-loop blocker (`review_cap_question.pr_blocker`): its first line opens the 🛑 blocker prefix, so a person's Operator decision after it is read by the sweep's answered-blocker restart and by agent-fix.yml's comment-started run (DRE-6181).",
+      "means": "The same question on the pull request, posted once per head as a fix-loop blocker (`review_cap_question.pr_blocker`): its first line opens the 🛑 blocker prefix, so a person's Operator decision after it is read by the sweep's answered-blocker restart and by agent-fix.yml's comment-started run (DRE-6181). On a proof-record pull request the blocker is the proof-record variant and the card is held `In Review`, not parked — not live until DRE-6841.",
       "why": "A question is not an act, for the reason the card-side question above gives: the hold is said by the stamp, and this comment only makes the decision that answers it reachable — without a blocker on the thread `fix_context.operator_decision` reads nothing. Its last line, `review-nudge-cap @<head>`, on a worker-bot comment, is the once-per-head key the sweep reads off the pull request before posting it again."
     },
     {
@@ -2144,7 +2144,7 @@
       "anchor": "proof-escalation-comment.md",
       "step": "Report proof result to Linear",
       "kind": "not-an-act",
-      "means": "The proof runner's question for the CEO — a press only his own login can make, asked after the record's pull request is open (DRE-5924). The hold in Green Light is DRE-5925's.",
+      "means": "The proof runner's question — a press or a decision the escalation file names, asked after the record's pull request is open (DRE-5924); a press only the CEO's own login can make is his, and the hold in Green Light is DRE-5925's. Cause rows never reach it: the step hands them to scripts/proof_cause_park.py, which holds the card In Review for the operator — not live until DRE-6840.",
       "why": "A VERDICT, not an act. It is a judgement about the WORK, where an act is something the pipeline did about the work on its own. It has its own writer, its own vocabulary and its own readers, and a second grammar on the same comment would give them two keys to disagree over. A question is the opposite of an act: the pipeline did nothing precisely because it would not guess."
     },
     {
@@ -2960,8 +2960,8 @@
       "file": "scripts/proof_cause_park.py",
       "anchor": "cmd_comment(identifier, body)",
       "kind": "not-an-act",
-      "means": "A proof card whose record's unmet rows carry cause words (DRE-6607) is asked once, `proof_cause_park.question`: the 🙋 The proof run cannot observe first line, the Finding, Question and Recommendation lines `console_escalation.render` writes, one `cause:` line per row and the run, after the 🔬 proof-waiting hold and before the card is moved to Green Light (DRE-6612).",
-      "why": "A question is not an act: it asks the operator to decide rather than announcing something the pipeline did, the same reason the sweep's blocker ask and review-cap question ask rather than announce. The hold posted before it is the `proof-observation-pending` act's receipt and carries its trailer; this question is found again by its 🙋 first line after that hold, so a second park over the same thread never posts it twice."
+      "means": "A proof card whose record's unmet rows carry cause words (DRE-6607) is asked once, `proof_cause_park.question`: the 🙋 For the operator — the proof run cannot observe first line, the Finding, Question and Recommendation lines `console_escalation.render` writes, what the operator does next, one `cause:` line per row and the run, posted after the 🔬 proof-waiting hold (DRE-6612). The card is left In Review for the operator — no lane is written (DRE-6837).",
+      "why": "A question is not an act: it asks the operator to decide rather than announcing something the pipeline did, the same reason the sweep's blocker ask and review-cap question ask rather than announce. The hold posted before it is the `proof-observation-pending` act's receipt and carries its trailer, and names the operator as the next actor; this question is found again by its 🙋 first line after the newest such hold, so a second park over the same thread never posts it twice. It is the operator's because the operator, never the CEO, writes an accepted row (DRE-6244)."
     }
   ]
 }

@@ -135,20 +135,37 @@ the note; a record not read there is refused. Then, after the stops:
      naming the waiting rows and their events, and nothing is dispatched. The
      operator's `🔬 proof-observed` discharges it, and the next pass re-runs.
      The same rule holds a record the critic sent back (DRE-6814), except
-     that there an unread record holds nothing.
+     that there an unread record holds nothing. A row waiting on `the
+     operator's press` under a criterion still worded with
+     `proof_record.CEO_PRESS` has that phrase written
+     `proof_cause_park.PRESS_NAMED` in the hold (DRE-6837), so the hold is
+     the operator's to discharge and never waits on the CEO.
   2. A record whose unmet rows ALL carry a cause word
      (`proof_record.all_unmet_caused`, DRE-6607) is never re-run at that head
      (DRE-6610): a re-run would read the same 403, Done card or closed
-     repository again. `park_caused` puts it to the operator once, through
-     the one writer `proof_cause_park.park` (DRE-6612) — the hold, the
-     question and the move to Green Light out of `In Review`, each skipped
-     when the thread already carries it, so a record the run parked but could
-     not move is only moved. Its own hold does not hold an `In Review` card
-     off the park; any other open hold still does. The line reads `re-run:
-     <n> row(s) of the record at <sha7> cannot be observed as worded (cause:
-     …) — <what the park did>, never re-run to read the same thing`, counted
-     held. One caused row beside a plain unmet row is re-run, because the
-     plain row may read differently.
+     repository again. Under either trigger (DRE-6837), `park_caused` puts it
+     to the operator once, through the one writer `proof_cause_park.park`
+     (DRE-6612) — the hold and the question, each skipped when the thread
+     already carries it — and the card is left in the lane it was read in,
+     `In Review`: nothing here moves it. The line reads `re-run: <n> row(s)
+     of the record at <sha7> cannot be observed as worded (cause: …) — <what
+     the park did>, left <card> in <lane> for the operator, never re-run to
+     read the same thing`, counted held. One caused row beside a plain unmet
+     row is re-run, because the plain row may read differently; a caused row
+     beside a waiting row is held for the event by step 1 and asked nothing
+     here — the proof run's own park asks it (DRE-6840).
+
+     A cause hold never holds the card off this reading of the record at its
+     head (DRE-6837): for a card in `In Review` whose record was read at the
+     head, every hold whose `needs` half opens
+     `proof_cause_park.CAUSE_HOLD_OPENING` is the park's own and is dropped
+     from the holds read (`_past_cause_hold`) — a receipt for the operator
+     and a clock for the sweep's alarm (DRE-6852), not a hold on this phase.
+     The operator's amendment is what discharges it: the record at the new
+     head, still all cause rows, is asked again on its new rows (or posts
+     nothing on the same ones); with any other unmet row it goes to step 1
+     and then the re-run. Any other open hold still holds, and a record the
+     critic sent back that could not be read drops nothing (DRE-6814).
   3. Otherwise the run is dispatched, `re-run after the gate's decline at
      <sha7>`, under the same rule for a newer receipt as the critic's.
   4. The one budget: two re-runs per record pull request, whichever trigger
@@ -233,7 +250,7 @@ import merge_gate  # noqa: E402 — the critic's marker for `standing_verdict`
 import pipeline_act  # noqa: E402
 import plan_run  # noqa: E402
 import proof_and_demo  # noqa: E402
-import proof_cause_park  # noqa: E402 — the one Green Light write for cause rows (DRE-6612)
+import proof_cause_park  # noqa: E402 — the one writer for cause rows (DRE-6612, DRE-6837)
 import proof_record  # noqa: E402 — the record at the head, read as the gate reads it
 import proof_release  # noqa: E402
 # The branch rule and the hold reader live once, in the leaf the merge gate and
@@ -704,26 +721,34 @@ UNCHECKED_NOTE = ("a console answer after it COULD NOT BE CHECKED (the "
                   "until a pass that can check it")
 
 
-def _past_cause_hold(holds: list, text: str) -> list:
-    """`holds` without the cause park's own hold, when every unmet row of the
-    record carries a cause word — the park reads that hold itself and only
-    moves the card (DRE-6610). Any other open hold still holds."""
-    read = proof_record.reading(text)
-    if not proof_record.all_unmet_caused(read):
-        return holds
-    line = linear_ops.proof_waiting_line(
-        *proof_cause_park.hold(proof_cause_park.rows_of(text)))
-    return [h for h in holds if not h.startswith(line)]
+def _past_cause_hold(holds: list) -> list:
+    """`holds` without the cause park's own holds — every one whose `needs`
+    half opens `proof_cause_park.CAUSE_HOLD_OPENING` (DRE-6837). The record at
+    the head decides instead; any other open hold still holds."""
+    return [h for h in holds if not proof_cause_park.is_cause_hold(h)]
 
 
-def park_caused(one: "_Pass", ident: str, text: str, voices: list) -> str:
+#: A waiting row's event that names the operator's press (DRE-6837).
+OPERATOR_PRESS = "the operator's press"
+
+
+def _waiting_criterion(criterion: str, event: str) -> str:
+    """The criterion as a waiting hold names it: one waiting on the
+    operator's press never says `proof_record.CEO_PRESS`, which
+    `proof_record.open_holds` would keep through a `🔬 proof-observed`."""
+    if event.startswith(OPERATOR_PRESS):
+        return criterion.replace(CEO_PRESS, proof_cause_park.PRESS_NAMED)
+    return criterion
+
+
+def park_caused(one: "_Pass", ident: str, text: str, voices: list, lane: str) -> str:
     """The dispatcher's cause park (DRE-6610): the record's cause rows handed
-    to `proof_cause_park.park`, the one Green Light write for them, and what
-    it did. Declared on the lane contract as that writer's caller; it makes
-    no lane write of its own. Not live, it prints `would: park` and writes
-    nothing."""
+    to `proof_cause_park.park`, the one writer for them, with the lane the
+    card was read in, and what it did. It makes no lane write (DRE-6837). Not
+    live, it prints `would:` lines and writes nothing."""
     rows = proof_cause_park.rows_of(text)
-    return proof_cause_park.park(ident, rows, voices=voices, live=one.live)
+    return proof_cause_park.park(ident, rows, voices=voices, lane=lane,
+                                 live=one.live)
 
 
 class _Pass:
@@ -1022,12 +1047,16 @@ class _Pass:
         comments, viewer, voices = self._thread(card)
         self._parked_on(card, comments, number, head)
         holds = _open_holds(voices)
+        lane = (card.get("state") or {}).get("name")
         text = None
-        if holds and trigger.gate and (card.get("state") or {}).get("name") == RERUN_LANE:
-            # The cause park's own hold on a card its move left in `In Review`
-            # does not hold it off the park that moves it (DRE-6610).
+        if holds and lane == RERUN_LANE:
+            # A cause hold is a receipt for the operator, never a hold on this
+            # reading: under either trigger, once the record at the head is
+            # read, it decides (DRE-6837). Unread under the critic's trigger,
+            # every hold stands (DRE-6814).
             text = self._record_at_head(ident, pr, number, head, trigger)
-            holds = _past_cause_hold(holds, text)
+            if text is not None:
+                holds = _past_cause_hold(holds)
         if holds:
             note = f"; {UNCHECKED_NOTE}" if _unchecked_after_hold(voices) else ""
             raise _Refused(f"re-run: held by {holds[-1]}{note}", "held")
@@ -1044,8 +1073,9 @@ class _Pass:
             text = self._record_at_head(ident, pr, number, head, trigger)
         read = proof_record.reading(text) if text is not None else None
         self._waiting(ident, voices, trigger, read.unmet if read else [], head)
-        if trigger.gate and proof_record.all_unmet_caused(read):
-            self._caused(ident, text, read, voices, head)
+        # Under either trigger (DRE-6837): a re-run would read the same thing.
+        if read is not None and proof_record.all_unmet_caused(read):
+            self._caused(ident, text, read, voices, head, lane)
 
         # A receipt with no readable time is read as the newer, and counted:
         # unread never answers "nothing has been sent" or "budget left".
@@ -1155,16 +1185,17 @@ class _Pass:
                            f"at {head[:7]} — {detail}; nothing dispatched")
         return found.text
 
-    def _caused(self, ident: str, text: str, read, voices: list, head: str) -> None:
+    def _caused(self, ident: str, text: str, read, voices: list, head: str,
+                lane: str) -> None:
         """Behavior 2 (DRE-6610): every unmet row carries a cause word, so a
-        re-run would read the same thing. The card is parked through
-        `park_caused` and never re-run at this head; a park that failed is a
-        failure of the pass, and still never a re-run."""
+        re-run would read the same thing. The card is held and asked through
+        `park_caused`, left in `lane`, and never re-run at this head; a park
+        that failed is a failure of the pass, and still never a re-run."""
         words = ", ".join(dict.fromkeys(word for _, word in read.caused))
         said = (f"re-run: {len(read.caused)} row(s) of the record at {head[:7]} "
                 f"cannot be observed as worded (cause: {words}) — ")
         try:
-            said += park_caused(self, ident, text, voices)
+            said += park_caused(self, ident, text, voices, lane)
         except Exception as error:  # noqa: BLE001
             self.tally.failures.append(f"{ident}: the cause park was not "
                                        f"completed: {error}")
@@ -1183,7 +1214,8 @@ class _Pass:
                    if (event := proof_record.row_waiting(result))]
         if not waiting:
             return
-        observed = "; ".join(proof_record._cut(c, 70) for c, _ in waiting)
+        observed = "; ".join(proof_record._cut(_waiting_criterion(c, event), 70)
+                             for c, event in waiting)
         needs = "; ".join(event for _, event in waiting)
         line = linear_ops.proof_waiting_line(observed, needs)
         posted = [_when(v.created_at) for v in voices

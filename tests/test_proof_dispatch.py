@@ -3143,7 +3143,7 @@ def test_amendment_a_two_cause_rows_where_one_stood_are_asked_again(
     lines = _about(_lines(capsys), "DRE-6772")
     assert h.fired == [] and moves.log == []
     assert h.holds == [("DRE-6772", *proof_cause_park.hold(TWO_CAUSED_ROWS))]
-    assert h.holds[0][3].startswith("the operator's decision on 2 row(s)")
+    assert h.holds[0][2].startswith("the operator's decision on 2 row(s)")
     assert [b for _, b in h.posted] == [proof_cause_park.question(TWO_CAUSED_ROWS)]
     assert h.order == [("hold", "DRE-6772"), ("comment", "DRE-6772")]
     assert tally.held == 1 and tally.dispatched == 0
@@ -3233,7 +3233,7 @@ def test_press_dre_6638_is_held_on_a_line_that_names_no_ceos_press(monkeypatch, 
     [(ident, observed, needs)] = h.holds
     line = linear_ops.proof_waiting_line(observed, needs)
     assert proof_record.CEO_PRESS not in line
-    assert observed == f"needs the press named on the card: {PRESS}"
+    assert observed == proof_record._cut(f"needs the press named on the card: {PRESS}", 70)
     assert needs.startswith("the operator's press:")
     assert needs == f"the operator's press: {PRESS}"
 

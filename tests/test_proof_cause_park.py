@@ -133,6 +133,8 @@ class TestTheContract:
         assert "proof_cause_park.py" in kind_d
         # DRE-6837: the cause park never enters this lane, and kind (d) says so.
         assert "never enters this lane" in kind_d and "DRE-6837" in kind_d
+        rendered = (ROOT / "docs" / "lane-contract.md").read_text(encoding="utf-8")
+        assert kind_d in rendered
 
 
 def _lane(name: str) -> dict:
@@ -232,8 +234,6 @@ class TestTheContractSaysInReview:
         said = doc[at:at + 400]
         assert "Green Light" not in said, said
         assert "In Review" in said
-        rendered = (ROOT / "docs" / "lane-contract.md").read_text(encoding="utf-8")
-        assert kind_d in rendered
 
 
 # --------------------------------------------------------------------------- #
@@ -699,7 +699,9 @@ class TestCli:
         cli = source[source.index("# the CLI "):]
         assert "cmd_advance" not in cli and "cmd_state" not in cli
         # `park` is the one writer the CLI reaches, and only from `park`.
-        assert cli.count("park(") == 1
+        import re
+
+        assert len(re.findall(r"(?<![\w.])park\(", cli)) == 1
 
 
 #: The escalation file the proof run writes for cause rows: the three lines,
