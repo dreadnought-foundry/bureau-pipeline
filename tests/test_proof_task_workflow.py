@@ -41,12 +41,16 @@ import re
 import shutil
 import subprocess
 import tempfile
+import sys
 import unittest
 from pathlib import Path
 
 import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "scripts"))
+import step_shell  # noqa: E402 — a moved step's shell, where it now lives (DRE-3488)
+
 WORKFLOWS = ROOT / ".github" / "workflows"
 PROOF_TASK = WORKFLOWS / "proof-task.yml"
 AGENT_TASK = WORKFLOWS / "agent-task.yml"
@@ -110,7 +114,13 @@ def _agent_steps() -> list[tuple[int, dict]]:
 
 
 def _runs() -> str:
-    return "\n".join(str(s.get("run") or "") for s in _steps())
+    return "\n".join(step_shell.step_shell(s) for s in _steps() if s.get("run"))
+
+
+def _source() -> str:
+    """The file with each delegation line expanded to its script, so a check
+    on the file's text still reads the shell `step_shell.py move` took out."""
+    return step_shell.workflow_source(PROOF_TASK)
 
 
 class ProofTaskContractTest(unittest.TestCase):
@@ -166,7 +176,7 @@ class ProofRoleTest(unittest.TestCase):
         self.assertIn("spoken_thread.py people", runs)
 
     def test_the_model_is_selected_for_role_proof_and_none_is_pinned(self):
-        src = PROOF_TASK.read_text()
+        src = _source()
         self.assertRegex(_runs(), r"model_fallback\.py select proof\b")
         self.assertNotRegex(src, r"--model\s+claude-")
         for _i, step in _agent_steps():
@@ -204,11 +214,11 @@ class ProofRoleTest(unittest.TestCase):
         ):
             self.assertIn(phrase, prompt)
         # Not a build prompt: no TDD process, no split hand-back.
-        self.assertNotIn("agent-handback.txt", PROOF_TASK.read_text())
+        self.assertNotIn("agent-handback.txt", _source())
         self.assertNotIn("TDD", prompt)
 
     def test_no_turn_rung_and_no_role_from_labels(self):
-        src = PROOF_TASK.read_text()
+        src = _source()
         self.assertNotIn("turn_budget.py", src)
         self.assertNotIn("steps.gate.outputs.role", src)
         self.assertNotIn("validate_card.py", src)
@@ -504,7 +514,7 @@ class WritesOnlyItsThreeLanesTest(unittest.TestCase):
         self.assertNotIn("Card → In Progress", names)
 
     def test_never_the_build_report_or_the_dead_run_budget(self):
-        src = PROOF_TASK.read_text()
+        src = _source()
         self.assertNotIn("report_agent_result.sh", src)
         self.assertNotIn("dead_run.py", src)
 
@@ -527,13 +537,13 @@ class WritesOnlyItsThreeLanesTest(unittest.TestCase):
 
     def test_each_write_sits_in_its_own_step(self):
         def advances(name):
-            return set(_ADVANCE.findall(str(_step(name).get("run") or "")))
+            return set(_ADVANCE.findall(step_shell.step_shell(_step(name))))
         self.assertEqual({("Hand-work", "Green Light")}, advances(RETURN_STEP))
         self.assertEqual({("Green Light", "Hand-work,In Review"),
                           ("In Review", "Hand-work")}, advances(RESULT_STEP))
 
     def test_never_the_dispatch_receipts_tag(self):
-        self.assertNotIn("🔬 proof-run", PROOF_TASK.read_text())
+        self.assertNotIn("🔬 proof-run", _source())
 
 
 # --- the result step, executed -------------------------------------------
@@ -617,7 +627,7 @@ class _StepHarness(unittest.TestCase):
 
     def _exec(self, env: dict) -> tuple:
         step = _step(self.STEP)
-        script = step["run"]
+        script = step_shell.step_shell(step)
         self.assertNotIn("${{", script, "the step reads env, never interpolates")
         env = {"PATH": os.environ["PATH"], "CALLS": str(self.calls),
                "RUNNER_TEMP": str(self.tmp),
@@ -953,7 +963,7 @@ class ParkCompletesThreeLinesTest(unittest.TestCase):
     leaves a declared file alone and finishes a prose one with `none given`."""
 
     def _run_lines(self) -> list[str]:
-        return str(_step(RESULT_STEP)["run"]).split("\n")
+        return step_shell.step_shell(_step(RESULT_STEP)).split("\n")
 
     def _line(self, needle: str, start: int = 0) -> int:
         lines = self._run_lines()

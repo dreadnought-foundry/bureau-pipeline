@@ -286,7 +286,7 @@ class CauseParkStepSourceTest(unittest.TestCase):
     """What the step runs, read off its own lines."""
 
     def _run_text(self) -> str:
-        return str(ptw._step(ptw.RESULT_STEP)["run"])
+        return ptw.step_shell.step_shell(ptw._step(ptw.RESULT_STEP))
 
     def test_the_module_is_run_for_the_hold_and_the_question(self):
         run = self._run_text()
