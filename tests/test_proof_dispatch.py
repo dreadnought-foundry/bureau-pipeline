@@ -2832,10 +2832,9 @@ def test_sent_back_waiting_hold_in_the_dry_run_writes_nothing(monkeypatch, capsy
 
 
 # DRE-6610: a declined record whose unmet rows ALL carry a cause word          #
+# DRE-6837: held In Review for the operator, never moved to Green Light        #
 # --------------------------------------------------------------------------- #
 
-import green_light_rows  # noqa: E402
-import lane_contract  # noqa: E402
 import proof_cause_park  # noqa: E402
 
 CAUSE_ROW = ("The nightly reads the repo variable",
@@ -2846,40 +2845,36 @@ CAUSED = record_md(MET_ROW, CAUSE_ROW, GONE_ROW)
 CAUSE_ROWS = proof_cause_park.rows_of(CAUSED)
 CAUSE_HOLD = proof_cause_park.hold(CAUSE_ROWS)
 CAUSE_QUESTION = proof_cause_park.question(CAUSE_ROWS)
-CAUSE_MOVE = ("cmd_advance", ("DRE-5930", "Green Light", "Hand-work,In Review"))
 CAUSE_REFUSAL = (f"re-run: 2 row(s) of the record at {SHA7} cannot be observed as "
                  "worded (cause: out-of-reach, state-gone) — ")
 NEVER_AGAIN = ", never re-run to read the same thing"
+LEFT = "left DRE-5930 in In Review for the operator"
 
 
 class _Moves:
-    """Every lane and label write: the park's move answers `ok`, the rest are
-    logged so a test can say none was made."""
+    """Every lane and label write, logged so a test can say none was made:
+    the cause park makes none (DRE-6837)."""
 
-    def __init__(self, monkeypatch, ok=True):
+    def __init__(self, monkeypatch):
         self.log: list = []
-        for name in ("cmd_state", "add_label", "remove_label"):
+        for name in ("cmd_state", "cmd_advance", "add_label", "remove_label"):
             monkeypatch.setattr(linear_ops, name,
                                 lambda *a, _n=name, **k: self.log.append((_n, a)))
 
-        def advance(*args, **kw):
-            self.log.append(("cmd_advance", args))
-            return ok
-
-        monkeypatch.setattr(linear_ops, "cmd_advance", advance)
-
 
 def _cause_pass(monkeypatch, *, thread, text=CAUSED, pr=None, lane="In Review",
-                live=True, moved=True):
-    card = lane_card("DRE-5930", state=lane, window=thread)
+                live=True, ident="DRE-5930", comment=None):
+    card = lane_card(ident, state=lane, window=thread)
     board = Board(review=[card] if lane == "In Review" else [],
                   green=[card] if lane == "Green Light" else [],
-                  threads={"DRE-5930": thread})
-    moves = _Moves(monkeypatch, ok=moved)
-    h = Harness(monkeypatch, board, records={"DRE-5930": pr or _declined()},
+                  threads={ident: thread})
+    moves = _Moves(monkeypatch)
+    h = Harness(monkeypatch, board, records={ident: pr or _declined(ident=ident)},
                 texts={900: text},
-                states={"DRE-5930": state("finished", dispatches=1,
-                                          record={"number": 900, "state": "open"})})
+                states={ident: state("finished", dispatches=1,
+                                     record={"number": 900, "state": "open"})})
+    if comment is not None:
+        monkeypatch.setattr(linear_ops, "cmd_comment", comment)
     tally = h.sweep(live=live)
     return h, tally, moves
 
@@ -2888,26 +2883,29 @@ def test_cause_the_hold_names_the_criteria_and_the_cause_words_and_no_press():
     observed, needs = CAUSE_HOLD
     assert CAUSE_ROW[0] in observed and GONE_ROW[0] in observed
     assert "out-of-reach" in needs and "state-gone" in needs
+    assert needs.startswith(proof_cause_park.CAUSE_HOLD_OPENING)
     assert proof_record.CEO_PRESS not in observed + needs
 
 
-def test_cause_a_record_whose_unmet_rows_all_carry_a_cause_is_parked_once_never_re_run(
+def test_cause_a_record_whose_unmet_rows_all_carry_a_cause_is_held_and_asked_never_re_run(
         monkeypatch, capsys):
     h, tally, moves = _cause_pass(monkeypatch, thread=_sent_back())
     lines = _about(_lines(capsys), "DRE-5930")
     assert h.fired == []
     assert h.holds == [("DRE-5930", *CAUSE_HOLD)]
     assert len(h.posted) == 1
-    assert h.posted[0][1].startswith("🙋 The proof run cannot observe")
+    assert h.posted[0][1].startswith(proof_cause_park.QUESTION_OPENING)
     assert h.order == [("hold", "DRE-5930"), ("comment", "DRE-5930")]
-    assert moves.log == [CAUSE_MOVE]
+    assert moves.log == []
     assert tally.held == 1 and tally.dispatched == 0 and tally.failures == []
-    assert any(f"{CAUSE_REFUSAL}held, asked, parked{NEVER_AGAIN}" in line
+    assert any(f"{CAUSE_REFUSAL}held, asked, {LEFT}{NEVER_AGAIN}" in line
                for line in lines), lines
     assert h.text_reads == [(900, HEAD)]
 
 
 def test_cause_the_next_pass_in_green_light_is_no_re_run_candidate(monkeypatch, capsys):
+    # A card the writer parked there before DRE-6837 is not read here: the
+    # Green Light read admits only the sweep's review-cap park, unwidened.
     parked = _sent_back(hold(*CAUSE_HOLD, 80), comment(CAUSE_QUESTION, 79))
     h, tally, moves = _cause_pass(monkeypatch, thread=parked, lane="Green Light")
     assert h.fired == [] and h.holds == [] and h.posted == [] and moves.log == []
@@ -2916,40 +2914,40 @@ def test_cause_the_next_pass_in_green_light_is_no_re_run_candidate(monkeypatch, 
     assert not any(read[0] == "thread" for read in h.board.reads)
 
 
-def test_cause_the_next_pass_still_in_review_moves_it_and_posts_nothing(
+def test_cause_the_next_pass_still_in_review_posts_nothing_and_moves_nothing(
         monkeypatch, capsys):
     parked = _sent_back(hold(*CAUSE_HOLD, 80), comment(CAUSE_QUESTION, 79))
     h, tally, moves = _cause_pass(monkeypatch, thread=parked)
     lines = _about(_lines(capsys), "DRE-5930")
     assert h.fired == [] and h.holds == [] and h.posted == []
-    assert moves.log == [CAUSE_MOVE]
+    assert moves.log == []
     assert tally.held == 1
-    assert any(f"{CAUSE_REFUSAL}already asked — parked{NEVER_AGAIN}" in line
+    assert any(f"{CAUSE_REFUSAL}already asked, {LEFT}{NEVER_AGAIN}" in line
                for line in lines), lines
 
 
-def test_cause_the_runs_own_park_on_the_thread_is_only_moved(monkeypatch, capsys):
-    """The run held and asked, and its move was refused: nothing new is
-    posted, and the dispatcher makes the move."""
+def test_cause_the_runs_own_park_on_the_thread_is_already_asked(monkeypatch, capsys):
+    """The run held and asked: nothing new is posted, and nothing moves."""
     asked = proof_cause_park.question(CAUSE_ROWS, run_url="https://github.com/x/y/runs/1")
     parked = _sent_back(hold(*CAUSE_HOLD, 2490), comment(asked, 2489))
     h, tally, moves = _cause_pass(monkeypatch, thread=parked)
     lines = _about(_lines(capsys), "DRE-5930")
     assert h.fired == [] and h.holds == [] and h.posted == []
-    assert moves.log == [CAUSE_MOVE]
+    assert moves.log == []
     assert tally.held == 1
-    assert any(CAUSE_REFUSAL in line and NEVER_AGAIN in line for line in lines), lines
+    assert any(f"{CAUSE_REFUSAL}already asked, {LEFT}{NEVER_AGAIN}" in line
+               for line in lines), lines
 
 
-def test_cause_a_refused_move_is_a_failure_and_still_never_a_re_run(monkeypatch, capsys):
-    h, tally, moves = _cause_pass(monkeypatch, thread=_sent_back(), moved=False)
+def test_cause_a_full_thread_is_a_failure_and_still_never_a_re_run(monkeypatch, capsys):
+    h, tally, moves = _cause_pass(monkeypatch, thread=_sent_back(),
+                                  comment=lambda *a, **k: linear_ops.COMMENT_CAP_CONDITION)
     lines = _about(_lines(capsys), "DRE-5930")
     assert h.fired == []
-    assert len(h.holds) == 1 and len(h.posted) == 1
-    assert moves.log == [CAUSE_MOVE]
+    assert len(h.holds) == 1 and moves.log == []
     assert tally.held == 1 and len(tally.failures) == 1
-    assert "refused" in tally.failures[0]
-    assert any(CAUSE_REFUSAL in line and "refused" in line and NEVER_AGAIN in line
+    assert "full" in tally.failures[0]
+    assert any(CAUSE_REFUSAL in line and "full" in line and NEVER_AGAIN in line
                for line in lines), lines
 
 
@@ -2980,12 +2978,15 @@ def test_cause_one_caused_row_and_one_waiting_row_is_held_for_the_event(
     assert tally.held == 1
 
 
-def test_cause_the_dry_run_prints_would_park_and_writes_nothing(monkeypatch, capsys):
+def test_cause_the_dry_run_prints_would_hold_and_writes_nothing(monkeypatch, capsys):
     h, tally, moves = _cause_pass(monkeypatch, thread=_sent_back(), live=False)
     lines = _lines(capsys)
     assert h.fired == [] and h.posted == [] and h.holds == [] and moves.log == []
-    assert f"would: park DRE-5930 — {CAUSE_HOLD[1]}" in lines
-    assert any(CAUSE_REFUSAL in line and "would: park" in line for line in lines), lines
+    hold_line = linear_ops.proof_waiting_line(*CAUSE_HOLD)
+    assert f"would: hold DRE-5930 — {hold_line}" in lines
+    assert f"would: ask DRE-5930 — {CAUSE_QUESTION.split(chr(10), 1)[0]}" in lines
+    assert any(f"{CAUSE_REFUSAL}would: leave DRE-5930 in In Review for the operator"
+               f"{NEVER_AGAIN}" in line for line in lines), lines
 
 
 def test_cause_a_signed_answer_after_the_cause_hold_is_no_return(monkeypatch, capsys):
@@ -3005,32 +3006,287 @@ def test_cause_a_signed_answer_after_the_cause_hold_is_no_return(monkeypatch, ca
         refused.value.line
 
 
-def test_cause_the_critics_request_changes_still_re_runs(monkeypatch, capsys):
+def test_cause_the_critics_request_changes_is_held_and_asked_too(monkeypatch, capsys):
+    """Under either trigger (DRE-6837): a cause-only record the critic sent
+    back is never re-dispatched to read the same thing."""
     h, tally, moves = _cause_pass(
         monkeypatch, thread=_sent_back(),
         pr=_declined(approve=verdict("REQUEST_CHANGES", 100)))
-    assert [f[2] for f in h.fired] == [RERUN]
-    # The critic's trigger reads the record for a waiting row (DRE-6814), never to park it.
-    assert h.holds == [] and moves.log == []
+    lines = _about(_lines(capsys), "DRE-5930")
+    assert h.fired == [] and moves.log == []
+    assert h.holds == [("DRE-5930", *CAUSE_HOLD)]
+    assert [b.split("\n", 1)[0] for _, b in h.posted] == [
+        CAUSE_QUESTION.split("\n", 1)[0]]
+    assert any(f"{CAUSE_REFUSAL}held, asked, {LEFT}{NEVER_AGAIN}" in line
+               for line in lines), lines
 
 
-def _cause_record(contract: dict) -> dict:
-    lane = next(l for l in contract["lanes"]
-                if l.get("name") == green_light_rows.lane_name(contract))
-    return next(r for r in lane["clauses"]["entrance"]["arrivals"]
-                if r["where"] == green_light_rows.PROOF_CAUSE_SITE)
+# --------------------------------------------------------------------------- #
+# DRE-6837: the records of 2026-10-10, replayed from the epic's description    #
+# --------------------------------------------------------------------------- #
+
+WEEKLY = "the weekly report of 2026-10-18"
+DRE_6694_ROWS = (
+    ("The console's weekly page reads the fleet's spend",
+     "Not observed. cause: out-of-reach — the console's admin read answered 403"),
+    *((f"The weekly report {what}", f"Not observed. waiting for {WEEKLY}")
+      for what in ("names every repo", "counts the week's merges",
+                   "counts the week's escalations", "names the slowest card",
+                   "is filed for the CEO")),
+)
+MISDESCRIBED_ROW = ("The emergency press names five private repos",
+                    "Not observed. cause: misdescribed — the pool holds three repos, "
+                    "never five")
+DRE_6772 = record_md(MET_ROW, MISDESCRIBED_ROW)
+DRE_6772_ROWS = proof_cause_park.rows_of(DRE_6772)
 
 
-def test_cause_park_caused_is_the_declared_caller_of_the_one_writer():
-    import copy
+def test_replay_dre_6694_through_the_dispatcher_is_held_for_the_event_and_asked_nothing(
+        monkeypatch, capsys):
+    """The waiting-first order of DRE-6814: a record with rows waiting on an
+    event beside its cause row is held for the event; the cause question is
+    the proof run's own to ask (DRE-6840), never the dispatcher's here."""
+    h, tally, moves = _cause_pass(monkeypatch, thread=_sent_back(), ident="DRE-6694",
+                                  text=record_md(MET_ROW, *DRE_6694_ROWS))
+    lines = _about(_lines(capsys), "DRE-6694")
+    assert h.fired == [] and h.posted == [] and moves.log == []
+    assert len(h.holds) == 1 and h.holds[0][2] == "; ".join([WEEKLY] * 5)
+    assert not h.holds[0][2].startswith(proof_cause_park.CAUSE_HOLD_OPENING)
+    assert tally.held == 1
+    assert any(f"5 row(s) of the record at {SHA7} wait on an event — held for {WEEKLY}"
+               in line for line in lines), lines
 
-    unit = "proof_dispatch.py#park_caused"
-    contract = copy.deepcopy(lane_contract.load())
-    assert unit in _cause_record(contract)["callers"]
-    assert not any(unit in p for p in green_light_rows.problems(contract=contract))
 
-    _cause_record(contract)["callers"].remove(unit)
-    found = green_light_rows.problems(contract=contract)
-    assert any(p.startswith(f"{unit} calls {green_light_rows.PROOF_CAUSE_SITE}")
-               for p in found), found
+def test_replay_dre_6694_after_the_runs_cause_park_is_held_for_the_event(
+        monkeypatch, capsys):
+    """The thread carries the proof run's cause hold and question first; the
+    dispatcher reads past its own writer's hold and holds for the event."""
+    rows = proof_cause_park.rows_of(record_md(MET_ROW, *DRE_6694_ROWS))
+    parked = _sent_back(hold(*proof_cause_park.hold(rows), 80),
+                        comment(proof_cause_park.question(rows), 79))
+    h, tally, moves = _cause_pass(monkeypatch, thread=parked, ident="DRE-6694",
+                                  text=record_md(MET_ROW, *DRE_6694_ROWS))
+    assert h.fired == [] and h.posted == [] and moves.log == []
+    assert [x[2] for x in h.holds] == ["; ".join([WEEKLY] * 5)]
 
+
+def test_replay_dre_6772_through_the_dispatcher_is_held_and_asked_for_the_operator(
+        monkeypatch, capsys):
+    h, tally, moves = _cause_pass(monkeypatch, thread=_sent_back(), ident="DRE-6772",
+                                  text=DRE_6772)
+    lines = _about(_lines(capsys), "DRE-6772")
+    assert h.fired == [] and moves.log == []
+    assert h.holds == [("DRE-6772", *proof_cause_park.hold(DRE_6772_ROWS))]
+    assert [b for _, b in h.posted] == [proof_cause_park.question(DRE_6772_ROWS)]
+    assert h.posted[0][1].startswith(
+        "🙋 For the operator — the proof run cannot observe 1 row(s) as worded")
+    assert any(line.startswith("proof-dispatch:") and line.endswith(
+        "held, asked, left DRE-6772 in In Review for the operator, never re-run "
+        "to read the same thing") for line in lines), lines
+
+
+def test_replay_dre_6772_with_proof_observed_after_the_hold_is_refused_again(
+        monkeypatch, capsys):
+    """Why the question never tells the operator to record `🔬 proof-observed`
+    for a cause row: it discharges the hold, and the record at the head is
+    still caused, so the dispatcher refuses again and asks nothing twice."""
+    parked = _sent_back(
+        hold(*proof_cause_park.hold(DRE_6772_ROWS), 80),
+        comment(proof_cause_park.question(DRE_6772_ROWS), 79),
+        comment(linear_ops.proof_observed_line("the pool page read at 09:00 PT"),
+                30, PERSON))
+    h, tally, moves = _cause_pass(monkeypatch, thread=parked, ident="DRE-6772",
+                                  text=DRE_6772)
+    lines = _about(_lines(capsys), "DRE-6772")
+    assert h.fired == [] and h.posted == [] and h.holds == [] and moves.log == []
+    assert any(line.endswith("already asked, left DRE-6772 in In Review for the "
+                             "operator, never re-run to read the same thing")
+               for line in lines), lines
+
+
+# --------------------------------------------------------------------------- #
+# DRE-6837: the operator's amendment discharges the cause hold                 #
+# --------------------------------------------------------------------------- #
+
+GONE_6772 = ("The release notes name the pool's owner",
+             "Not observed. cause: state-gone — the notes page was deleted before the run")
+ACCEPTED_6772 = (MISDESCRIBED_ROW[0],
+                 "ACCEPTED by operator decision — the pool holds three by design "
+                 "(https://linear.app/dreadnoughtfoundry/issue/DRE-6772/x#comment-abc123)")
+NOT_MET_6772 = ("The release notes name the pool's owner",
+                "Not met. the notes name no owner")
+TWO_CAUSED = record_md(MET_ROW, MISDESCRIBED_ROW, GONE_6772)
+TWO_CAUSED_ROWS = proof_cause_park.rows_of(TWO_CAUSED)
+LEFT_6772 = "left DRE-6772 in In Review for the operator"
+
+
+def _first_head_park(minutes_ago: float = 80) -> list:
+    """The thread of the first head: its cause hold and its question."""
+    return [hold(*proof_cause_park.hold(DRE_6772_ROWS), minutes_ago),
+            comment(proof_cause_park.question(DRE_6772_ROWS), minutes_ago - 1)]
+
+
+CRITIC = verdict("REQUEST_CHANGES", 100)
+
+
+@pytest.mark.parametrize("pr", [None, "critic"], ids=["gate", "critic"])
+def test_amendment_a_two_cause_rows_where_one_stood_are_asked_again(
+        monkeypatch, capsys, pr):
+    """Case (a), under either trigger: the record at the new head names two
+    cause rows where the first named one. The old hold no longer matches, and
+    neither the drop nor the park waits on the gate's trigger: a new hold and
+    a new question follow it, and nothing is dispatched."""
+    h, tally, moves = _cause_pass(
+        monkeypatch, thread=_sent_back(*_first_head_park()), ident="DRE-6772",
+        text=TWO_CAUSED,
+        pr=_declined(ident="DRE-6772", approve=CRITIC) if pr else None)
+    lines = _about(_lines(capsys), "DRE-6772")
+    assert h.fired == [] and moves.log == []
+    assert h.holds == [("DRE-6772", *proof_cause_park.hold(TWO_CAUSED_ROWS))]
+    assert h.holds[0][3].startswith("the operator's decision on 2 row(s)")
+    assert [b for _, b in h.posted] == [proof_cause_park.question(TWO_CAUSED_ROWS)]
+    assert h.order == [("hold", "DRE-6772"), ("comment", "DRE-6772")]
+    assert tally.held == 1 and tally.dispatched == 0
+    assert any(line.endswith(f"held, asked, {LEFT_6772}{NEVER_AGAIN}")
+               for line in lines), lines
+
+
+def test_amendment_b_one_row_accepted_and_one_not_met_is_re_run(monkeypatch, capsys):
+    """Case (b): the operator accepted the cause row and a plain row still
+    reads `Not met.` — no hold, no question, and the re-run is dispatched on
+    its budget. The amendment discharged the hold; nothing was recorded."""
+    h, tally, moves = _cause_pass(
+        monkeypatch, thread=_sent_back(*_first_head_park()), ident="DRE-6772",
+        text=record_md(MET_ROW, ACCEPTED_6772, NOT_MET_6772), live=False)
+    lines = _lines(capsys)
+    assert h.holds == [] and h.posted == [] and moves.log == []
+    assert f"would: dispatch DRE-6772 — {GATE_RERUN}" in lines
+    assert tally.dispatched == 1
+
+
+def test_amendment_c_the_same_rows_at_the_same_head_post_nothing(monkeypatch, capsys):
+    """Case (c): nothing changed — nothing is posted and nothing dispatched."""
+    h, tally, moves = _cause_pass(
+        monkeypatch, thread=_sent_back(*_first_head_park()), ident="DRE-6772",
+        text=DRE_6772)
+    lines = _about(_lines(capsys), "DRE-6772")
+    assert h.fired == [] and h.holds == [] and h.posted == [] and moves.log == []
+    assert tally.held == 1 and tally.dispatched == 0
+    assert any(line.endswith(f"already asked, {LEFT_6772}{NEVER_AGAIN}")
+               for line in lines), lines
+
+
+def test_amendment_unread_under_the_critics_trigger_the_old_hold_stands(
+        monkeypatch, capsys):
+    """DRE-6814's rule, unchanged: the critic's findings with the record not
+    read at the head drop no hold — the cause hold of the first head holds
+    the card, and no park is posted."""
+    h, tally, moves = _cause_pass(
+        monkeypatch, thread=_sent_back(*_first_head_park()), ident="DRE-6772",
+        text=RuntimeError("HTTP 502"), pr=_declined(ident="DRE-6772", approve=CRITIC))
+    lines = _about(_lines(capsys), "DRE-6772")
+    assert h.fired == [] and h.holds == [] and h.posted == [] and moves.log == []
+    assert tally.held == 1
+    first = linear_ops.proof_waiting_line(*proof_cause_park.hold(DRE_6772_ROWS))
+    assert any(f"re-run: held by {first}" in line for line in lines), lines
+    assert any("could not be read" in line and "answered as before" in line
+               for line in lines), lines
+
+
+def test_amendment_the_cause_hold_is_the_parks_own_by_its_opening():
+    line = linear_ops.proof_waiting_line(*proof_cause_park.hold(DRE_6772_ROWS))
+    assert proof_cause_park.is_cause_hold(line)
+    assert not proof_cause_park.is_cause_hold(
+        linear_ops.proof_waiting_line(*WAITING))
+    assert not proof_cause_park.is_cause_hold(
+        linear_ops.proof_waiting_line("x", f"{proof_record.CEO_PRESS}: y"))
+    assert proof_dispatch._past_cause_hold([line, "🔬 proof-waiting: x — needs y"]) == [
+        "🔬 proof-waiting: x — needs y"]
+
+
+def test_rerunning_conditions_neither_the_drop_nor_the_park_on_the_gate():
+    """Named so a builder removes them rather than reads around them: the two
+    `trigger.gate` conditions DRE-6837 removed from `rerunning`."""
+    import inspect
+
+    source = inspect.getsource(proof_dispatch._Pass.rerunning)
+    assert "trigger.gate" not in source
+
+
+# --------------------------------------------------------------------------- #
+# DRE-6837 change 11: a hold for the operator's press never names the CEO's    #
+# --------------------------------------------------------------------------- #
+
+PRESS = "set the sandbox project's Builders to Sonnet 5.5"
+DRE_6638_ROW = (f"needs the CEO's press: {PRESS}",
+                f"Not observed. waiting for the operator's press: {PRESS}")
+DRE_6638 = record_md(MET_ROW, DRE_6638_ROW)
+
+
+def _press_pass(monkeypatch, *, thread, text=DRE_6638, live=True):
+    return _cause_pass(monkeypatch, thread=thread, text=text, live=live)
+
+
+def test_press_dre_6638_is_held_on_a_line_that_names_no_ceos_press(monkeypatch, capsys):
+    h, tally, moves = _press_pass(monkeypatch, thread=_sent_back())
+    assert h.fired == [] and h.posted == [] and moves.log == []
+    [(ident, observed, needs)] = h.holds
+    line = linear_ops.proof_waiting_line(observed, needs)
+    assert proof_record.CEO_PRESS not in line
+    assert observed == f"needs the press named on the card: {PRESS}"
+    assert needs.startswith("the operator's press:")
+    assert needs == f"the operator's press: {PRESS}"
+
+
+def test_press_dre_6638_is_discharged_by_proof_observed_and_re_run(monkeypatch, capsys):
+    h, _, _ = _press_pass(monkeypatch, thread=_sent_back())
+    [(_, observed, needs)] = h.holds
+    held = hold(observed, needs, 60)
+    seen = comment(linear_ops.proof_observed_line(
+        "the Builders read Sonnet 5.5 at 09:10 PT"), 30, PERSON)
+    thread = _sent_back(held, seen)
+    assert proof_record.open_holds(fake_voices(thread, VIEWER, card="DRE-5930")) == []
+    capsys.readouterr()
+    h, tally, moves = _press_pass(monkeypatch, thread=thread, live=False)
+    assert f"would: dispatch DRE-5930 — {GATE_RERUN}" in _lines(capsys)
+    assert h.holds == [] and h.posted == [] and moves.log == []
+    assert tally.dispatched == 1
+
+
+def test_press_the_hold_is_posted_once(monkeypatch, capsys):
+    h, _, _ = _press_pass(monkeypatch, thread=_sent_back())
+    [(_, observed, needs)] = h.holds
+    h, tally, _ = _press_pass(monkeypatch, thread=_sent_back(hold(observed, needs, 60)))
+    assert h.holds == [] and h.fired == [] and tally.held == 1
+
+
+def test_press_a_press_parks_hold_still_waits_on_his_signed_answer():
+    press = hold("Approve the release", "the CEO's press: Approve the release in the console",
+                 60)
+    seen = comment(linear_ops.proof_observed_line("pressed at 09:10 PT"), 30, PERSON)
+    voices = fake_voices(_sent_back(press, seen), VIEWER, card="DRE-5930")
+    assert proof_record.open_holds(voices) == [press["body"]]
+    voices = fake_voices(_sent_back(press, seen, answer(10)), VIEWER, card="DRE-5930")
+    assert voices[-1].kind == spoken_thread.CEO_VIA_CONSOLE
+    assert proof_record.open_holds(voices) == []
+
+
+def test_press_the_cut_comes_after_the_rewording(monkeypatch, capsys):
+    long = f"needs the CEO's press: {PRESS} and then the console's badge turns green"
+    assert len(long) > 70
+    row = (long, f"Not observed. waiting for the operator's press: {PRESS}")
+    h, _, _ = _press_pass(monkeypatch, thread=_sent_back(), text=record_md(MET_ROW, row))
+    [(_, observed, _)] = h.holds
+    assert len(observed) <= 70
+    assert proof_record.CEO_PRESS not in observed
+    assert observed == proof_record._cut(
+        long.replace(proof_record.CEO_PRESS, "the press named on the card"), 70)
+
+
+def test_press_a_row_waiting_on_anything_else_keeps_its_line_byte_for_byte(
+        monkeypatch, capsys):
+    row = ("After the CEO's press the weekly report names every repo",
+           f"Not observed. waiting for {WEEKLY}")
+    h, _, _ = _press_pass(monkeypatch, thread=_sent_back(), text=record_md(MET_ROW, row))
+    assert h.holds == [("DRE-5930", proof_record._cut(row[0], 70), WEEKLY)]
+    assert proof_record.CEO_PRESS in h.holds[0][1]

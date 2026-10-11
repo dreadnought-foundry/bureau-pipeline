@@ -442,8 +442,11 @@ class TestTheProofRunsLaneWrites:
             "writer": PROOF_RUN,
             "where": PROOF_PARK_STEP,
             "evidence": (
-                "the proof run's escalation text, naming the press, posted "
-                "before the move, beside a 🔬 proof-waiting hold"
+                "the proof run's escalation text, naming the press or the "
+                "decision, posted before the move, beside a 🔬 proof-waiting "
+                "hold — reached only for a press or a decision the file names, "
+                "never for cause rows, which the step hands to "
+                "scripts/proof_cause_park.py (not live until DRE-6840)"
             ),
             "card": PROOF_CARD,
         }]
