@@ -3,9 +3,8 @@
 # the run's escalation file, sorted by what it names (DRE-6840).
 #
 #   1. A press — a `needs the CEO's press:` criterion the file quotes, or a
-#      line of its own saying the CEO's press: the hold, the
-#      `🙋 The proof run met a press only the CEO can make, and asks:`
-#      question and the move to `Green Light`.
+#      line of its own saying the CEO's press: the hold, the press's
+#      question and the move to `Green Light`, as before.
 #   2. Cause rows and nothing else — the three declared lines, the Question
 #      `proof_cause_park.QUESTION` word for word, and `cause:` lines — with
 #      the record pull request OPEN: handed to the one writer,
@@ -23,9 +22,9 @@
 #      where a pull request does exist, the dispatcher's own cause park.
 #   3. Anything else — no press and no cause line, a Question of the run's
 #      own beside cause rows, or prose of its own — is a decision for the
-#      CEO: the press's hold, the
-#      `🙋 The proof run asks a decision only the CEO can make:` question and
-#      the move to `Green Light`.
+#      CEO: the press's hold, the question under the decision's own opening
+#      (a park mark of `spoken_thread.PROOF_PARK_MARKS`) and the move to
+#      `Green Light`.
 set -e
 RUN_URL="$BUREAU_SERVER_URL/$BUREAU_REPOSITORY/actions/runs/$BUREAU_RUN_ID"
 # Exits 1 and 2: the one PR-existence predicate (DRE-2316). Exit 3
