@@ -151,12 +151,13 @@ class TestNormalizedShape:
         for spec in raw["kinds"].values():
             spec.pop("label")
             spec.pop("purpose")
-        for key in ("ungrouped", "about", "projects"):
+        for key in ("ungrouped", "session_agents", "about", "projects"):
             raw.pop(key)
         cfg = mf._normalize_config(raw)
         assert cfg["groups"]["workhorse"] == {"label": "Workhorse", "purpose": ""}
         assert cfg["groups"]["judgement"] == {"label": "Judgement", "purpose": ""}
         assert (cfg["ungrouped"], cfg["about"], cfg["projects"]) == ([], {}, {})
+        assert cfg["session_agents"] == []
         assert errors(raw) == []
 
     def test_projects_normalize_to_slug_kind_model(self):

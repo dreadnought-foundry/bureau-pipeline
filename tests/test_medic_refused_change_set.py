@@ -190,15 +190,18 @@ class RefusedByDesignDecisionTest(unittest.TestCase):
         """Every refusal `model_config_change.py apply --check` really prints,
         on both of its refusal paths, as the step's log would carry it."""
         with tempfile.TemporaryDirectory() as tmp:
-            unregistered = os.path.join(tmp, "unregistered.json")
-            with open(unregistered, "w") as f:
+            # A move the gate still refuses: a session agent such as
+            # product-lead may join any group since DRE-6833, a pipeline
+            # role may not leave its kind's rule.
+            refused = os.path.join(tmp, "refused.json")
+            with open(refused, "w") as f:
                 json.dump({"requested_by": "the CEO", "changes": [
-                    {"op": "move_agent", "agent": "product-lead",
-                     "group": "workhorse"}]}, f)
+                    {"op": "move_agent", "agent": "engineer",
+                     "group": "judgement"}]}, f)
             malformed = os.path.join(tmp, "malformed.json")
             with open(malformed, "w") as f:
                 f.write("{not json")
-            for changes in (unregistered, malformed):
+            for changes in (refused, malformed):
                 with self.subTest(changes=os.path.basename(changes)):
                     printed = io.StringIO()
                     with contextlib.redirect_stdout(printed), \
