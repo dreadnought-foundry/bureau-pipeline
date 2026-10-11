@@ -81,6 +81,7 @@ rewrites every sha:
   * there is none — a merged or closed one does not count — today's delivery.
 
 An unreadable listing is not "none": nothing is delivered and the job goes red.
+Nor is one cut at its limit — the card's pull request could be past the cut.
 
 The grammar is here and nowhere else. `parse_marker()` reads exactly what
 `announcement()` writes, so the reconcile sweep's re-check (reconcile.py's
@@ -153,7 +154,9 @@ OUTCOME_ALREADY_UP = "already-up"
 OUTCOME_ONTO_OPEN_PR = "onto-open-pull-request"
 
 #: How many open pull requests the card-wide listing reads. Filtered here by
-#: head, so this bounds the repository's open pull requests, not the card's.
+#: head, so this bounds the repository's open pull requests, not the card's —
+#: and a listing that reaches it may have cut the card's off, so it is an
+#: error, never "none".
 _OPEN_PR_LIMIT = 200
 
 #: The sidecar's keys, exactly — the contract with push_rescue.py (DRE-6348).
@@ -705,7 +708,8 @@ def open_card_pull_requests(card: str, repo: str, token: str, *, run,
     — the build route's and the repair route's — whoever authored them, so the
     listing names no author. The state is checked here as well as asked for:
     a merged or closed pull request is not the work being up. An unreadable
-    listing is an error, never an empty one (DRE-2034).
+    listing is an error, never an empty one (DRE-2034), and so is one that
+    reached `_OPEN_PR_LIMIT`: what lies past the cut is unread.
     """
     code, out, err = run(
         ["gh", "pr", "list", "--repo", repo, "--state", "open",
@@ -722,6 +726,9 @@ def open_card_pull_requests(card: str, repo: str, token: str, *, run,
         rows = None
     if not isinstance(rows, list):
         return [], f"could not parse the open pull request listing for {card}"
+    if len(rows) >= _OPEN_PR_LIMIT:
+        return [], (f"the open pull request listing was truncated at "
+                    f"{_OPEN_PR_LIMIT}, so {card}'s may be past the cut")
     head = re.compile(rf"(?:agent|repair)/{re.escape(card)}-")
     found = []
     for row in rows:

@@ -47,8 +47,10 @@ NEW_PR_URL = "https://github.com/dreadnought-foundry/bureau-pipeline/pull/998"
 # narrowed to `--head` when one is asked for (as GitHub narrows it) and to
 # nothing else — a state filter is the code's to apply, so a closed row reaches
 # it. `fail` breaks only the card-wide listing (no `--head`), so the read on
-# the rescued-delivery branch still answers. `pr create` answers a new pull
-# request's url.
+# the rescued-delivery branch still answers. `--limit` cuts the listing as
+# GitHub cuts it, and `filler` puts that many other cards' open pull requests
+# ahead of the fixture's rows, so a busy repository can be laid out. `pr
+# create` answers a new pull request's url.
 GH_STUB = '''#!/usr/bin/env python3
 import json, os, sys
 argv = sys.argv[1:]
@@ -59,10 +61,14 @@ if argv[:2] == ["pr", "list"]:
     if fx.get("fail") and "--head" not in argv:
         sys.stderr.write("HTTP 401: Bad credentials\\n")
         sys.exit(1)
-    rows = fx.get("rows", [])
+    rows = [{"number": 2000 + n, "headRefName": f"agent/DRE-1{n:04d}-filler",
+             "state": "OPEN", "url": ""} for n in range(fx.get("filler", 0))]
+    rows += fx.get("rows", [])
     if "--head" in argv:
         head = argv[argv.index("--head") + 1]
         rows = [r for r in rows if r.get("headRefName") == head]
+    if "--limit" in argv:
+        rows = rows[:int(argv[argv.index("--limit") + 1])]
     print(json.dumps(rows))
 elif argv[:2] == ["pr", "create"]:
     print(fx.get("created", ""))
@@ -184,9 +190,33 @@ class _Rescue:
         self.git("checkout", "-q", AGENT_BRANCH)
         return tip
 
-    def answer(self, rows, *, fail: bool = False):
+    def push_part_of_the_work(self, branch: str) -> str:
+        """An open pull request that carries the build's FIRST commit under a
+        new sha, and lacks the second."""
+        self.git("checkout", "-qb", f"part-{branch.replace('/', '-')}", self.base)
+        later = {**self.env(), "GIT_COMMITTER_NAME": "someone else",
+                 "GIT_COMMITTER_DATE": "2026-10-11T07:05:00Z"}
+        self.git("cherry-pick", self.shas[0], env=later)
+        tip = self.rev("HEAD")
+        self.git("push", "-q", "origin", f"{tip}:refs/heads/{branch}")
+        self.git("checkout", "-q", AGENT_BRANCH)
+        return tip
+
+    def push_conflicting_work(self, branch: str) -> str:
+        """An open pull request whose own change to `a.txt` the build's first
+        commit cannot apply over."""
+        self.git("checkout", "-qb", f"clash-{branch.replace('/', '-')}", self.base)
+        (self.runner / "a.txt").write_text("base\na different line\n")
+        self.git("commit", "-qam", f"feat({CARD}): a clashing attempt")
+        tip = self.rev("HEAD")
+        self.git("push", "-q", "origin", f"{tip}:refs/heads/{branch}")
+        self.git("checkout", "-q", AGENT_BRANCH)
+        return tip
+
+    def answer(self, rows, *, fail: bool = False, filler: int = 0):
         self.fixture.write_text(json.dumps(
-            {"fail": fail, "rows": rows, "created": NEW_PR_URL}))
+            {"fail": fail, "rows": rows, "filler": filler,
+             "created": NEW_PR_URL}))
 
     def gh_calls(self) -> list[list[str]]:
         return [json.loads(line) for line in self.gh_log.read_text().splitlines()]
@@ -381,6 +411,85 @@ class AnOpenPullRequestLacksTheWork(_BuildRunCase):
 
 
 # --------------------------------------------------------------------------
+# 2b. an open pull request carries part of the work — only the rest lands
+# --------------------------------------------------------------------------
+class AnOpenPullRequestCarriesPartOfTheWork(_BuildRunCase):
+    def setUp(self):
+        super().setUp()
+        self.before = self.r.push_part_of_the_work(AGENT_BRANCH)
+        self.r.answer([_row(OPEN_PR, AGENT_BRANCH)])
+
+    def test_only_the_missing_commit_lands(self):
+        self.assertEqual(self.apply(), 0, self.calls)
+        tip = self.r.remote_head(AGENT_BRANCH)
+        self.assertEqual(self.r.rev(f"{tip}~1", cwd=self.r.origin), self.before)
+        landed = self.r.git("log", "--format=%s", f"{self.before}..{tip}",
+                            cwd=self.r.origin).splitlines()
+        self.assertEqual(landed, self.r.subjects[1:])
+        self.assertEqual(self.r.patch_ids(f"{self.before}..{tip}", cwd=self.r.origin),
+                         self.r.patch_ids(f"{self.r.shas[0]}..{self.r.head}"))
+
+    def test_the_receipt_is_the_onto_open_pull_request_one(self):
+        self.apply()
+        body = self.receipt()
+        self.assertIn(f"#{OPEN_PR}", body)
+        self.assertNotIn("already up", body)
+        self.assertEqual(self.r.pr_creates(), [], self.r.gh_calls())
+
+    def test_the_outcome_says_so(self):
+        out = deliver_rescue.deliver(
+            CARD, repo=REPO, run_id=RUN_ID, patch_dir=str(self.r.download),
+            base="main", artifact=ARTIFACT, workdir=str(self.r.work),
+            post=self.posted.append)
+        self.assertEqual(out.outcome, deliver_rescue.OUTCOME_ONTO_OPEN_PR)
+        self.assertTrue(out.pushed)
+
+
+# --------------------------------------------------------------------------
+# 2c. several open pull requests for the card
+# --------------------------------------------------------------------------
+class SeveralOpenPullRequestsForTheCard(_BuildRunCase):
+    OLDER = f"agent/{CARD}-an-earlier-attempt"
+
+    def test_when_none_carries_the_work_it_lands_on_the_newest(self):
+        """`gh` lists newest first, so the first row is the one joined."""
+        newest = self.r.push_other_work(AGENT_BRANCH)
+        older = self.r.push_other_work(self.OLDER)
+        self.r.answer([_row(OPEN_PR, AGENT_BRANCH), _row(990, self.OLDER)])
+        self.assertEqual(self.apply(), 0, self.calls)
+        tip = self.r.remote_head(AGENT_BRANCH)
+        self.assertEqual(self.r.rev(f"{tip}~2", cwd=self.r.origin), newest)
+        self.assertEqual(self.r.remote_head(self.OLDER), older)
+        self.assertEqual(self.r.pr_creates(), [], self.r.gh_calls())
+        self.assertIn(f"#{OPEN_PR}", self.receipt())
+
+    def test_when_the_second_carries_the_work_nothing_is_pushed(self):
+        newest = self.r.push_other_work(AGENT_BRANCH)
+        older = self.r.push_the_same_work_under_new_shas(self.OLDER)
+        self.r.answer([_row(OPEN_PR, AGENT_BRANCH), _row(990, self.OLDER)])
+        self.assertEqual(self.apply(), 0, self.calls)
+        self.assertEqual(self.git_pushes(), [], self.calls)
+        self.assertEqual(self.r.remote_head(AGENT_BRANCH), newest)
+        self.assertEqual(self.r.remote_head(self.OLDER), older)
+        self.assertEqual(self.r.pr_creates(), [], self.r.gh_calls())
+        body = self.receipt()
+        self.assertIn("already up", body)
+        self.assertIn("#990", body)
+        self.assertIn(self.OLDER, body)
+
+    def test_a_conflicting_replay_is_red_and_delivers_nothing(self):
+        before = self.r.push_conflicting_work(AGENT_BRANCH)
+        self.r.answer([_row(OPEN_PR, AGENT_BRANCH)])
+        self.assertEqual(self.apply(), 1)
+        self.assertIn(["git", "-C", str(self.r.work), "cherry-pick", "--abort"],
+                      self.calls)
+        self.assertEqual(self.git_pushes(), [], self.calls)
+        self.assertEqual(self.r.remote_head(AGENT_BRANCH), before)
+        self.assertEqual(self.r.pr_creates(), [], self.r.gh_calls())
+        self.assertFalse(any(deliver_rescue.DELIVERED_TAG in b for b in self.posted))
+
+
+# --------------------------------------------------------------------------
 # 3. no open pull request for the card — today's delivery, unchanged
 # --------------------------------------------------------------------------
 class NoOpenPullRequestForTheCard(_BuildRunCase):
@@ -405,6 +514,30 @@ class NoOpenPullRequestForTheCard(_BuildRunCase):
         self.assertEqual(self.git_pushes(), [], self.calls)
         self.assertEqual(self.r.pr_creates(), [])
         self.assertEqual(self.r.remote_branches(), ["main"])
+
+    def test_a_listing_cut_at_the_limit_is_not_none(self):
+        """A repository with the limit's worth of open pull requests or more:
+        the card's could be past the cut, so the listing cannot say "none"."""
+        self.r.answer([], filler=deliver_rescue._OPEN_PR_LIMIT)
+        self.assertEqual(self.apply(), 1)
+        self.assertEqual(self.git_pushes(), [], self.calls)
+        self.assertEqual(self.r.pr_creates(), [], self.r.gh_calls())
+        self.assertEqual(self.r.remote_branches(), ["main"])
+
+    def test_the_cards_pull_request_past_the_cut_is_not_missed(self):
+        self.r.push_the_same_work_under_new_shas(AGENT_BRANCH)
+        self.r.answer([_row(OPEN_PR, AGENT_BRANCH)],
+                      filler=deliver_rescue._OPEN_PR_LIMIT)
+        self.assertEqual(self.apply(), 1)
+        self.assertEqual(self.git_pushes(), [], self.calls)
+        self.assertEqual(self.r.pr_creates(), [], self.r.gh_calls())
+        self.assertNotIn(deliver_rescue.delivery_branch(CARD),
+                         self.r.remote_branches())
+
+    def test_a_listing_one_short_of_the_limit_is_complete(self):
+        self.r.answer([], filler=deliver_rescue._OPEN_PR_LIMIT - 1)
+        self.assertEqual(self.apply(), 0, self.calls)
+        self.assert_todays_delivery()
 
 
 # --------------------------------------------------------------------------
