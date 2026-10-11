@@ -1,5 +1,5 @@
 {
-  "measured": "CI run 38082387546 (PR #956, 2026-10-10, head e5629d2), jobs 114304866472, 114304867288, 114304867599 and 114304867574: the suite in four parts, every test green but the durations-coverage check this record fixes; seconds per file from the runner's timestamps on each pytest -v result line; plus tests/test_console_project_model_keeps_the_suite_green.py alone, measured locally for DRE-6883 (2026-10-11, 4 cores, 442.62 s for its 46 tests once it walks every project and every group), because no CI run had timed that file yet; and tests/test_console_agent_move_keeps_the_suite_green.py alone, measured locally for DRE-6889 (2026-10-11, 4 cores, 633.36 s for its 46 tests: 20 agent-move cases, each the whole model, session and console suite in a copy of the tree)",
+  "measured": "CI run 38082387546 (PR #956, 2026-10-10, head e5629d2), jobs 114304866472, 114304867288, 114304867599 and 114304867574: the suite in four parts, every test green but the durations-coverage check this record fixes; seconds per file from the runner's timestamps on each pytest -v result line; plus tests/test_console_project_model_keeps_the_suite_green.py alone, measured locally for DRE-6883 (2026-10-11, 4 cores, 442.62 s for its 46 tests once it walks every project and every group), because no CI run had timed that file yet; and tests/test_console_agent_move_keeps_the_suite_green.py alone, measured locally for DRE-6889 (2026-10-11, 4 cores, 633.36 s for its 46 tests: 20 agent-move cases, each the whole model, session and console suite in a copy of the tree); and tests/test_console_every_default_keeps_the_suite_green.py alone, measured locally for DRE-6935 (2026-10-11, 4 cores, 553.73 s for its 41 tests: 19 cases, every default model the console offers and every move between two groups it allows, each the model, project-model and session suite in a copy of the tree)",
   "seconds": {
     "tests/fixtures/mirror-check/agent-bureau/console/backend/tests/test_unrelated.py": 0.01,
     "tests/test_absent_workflow_is_not_unreadable.py": 0.12,
@@ -81,6 +81,7 @@
     "tests/test_console_agent_move_keeps_the_suite_green.py": 633.36,
     "tests/test_console_answer_receipt.py": 0.15,
     "tests/test_console_escalation.py": 0.56,
+    "tests/test_console_every_default_keeps_the_suite_green.py": 553.73,
     "tests/test_console_honesty_wiring.py": 0.02,
     "tests/test_console_project_model_keeps_the_suite_green.py": 442.62,
     "tests/test_console_receipt.py": 0.11,

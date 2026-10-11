@@ -203,8 +203,9 @@ jobs:
   #
   # 45 minutes: on 2026-10-11 the two walks took 633 and 443 seconds run
   # alone on four cores (`config/unit-test-durations.json`), 18 minutes
-  # together, and 45 is over 2x that. Read the times this job prints before
-  # adding a walk that would spend the margin.
+  # together, and 45 is over 2x that. DRE-6935's third walk took 554 seconds
+  # the same way, 27 minutes for the three. Read the times this job prints
+  # before adding a walk that would spend the margin.
   walks:
     name: scripts unit tests (walks)
     runs-on: ${{ fromJSON(vars.BUREAU_CI_RUNS_ON || vars.BUREAU_RUNS_ON || '["ubuntu-latest"]') }}
