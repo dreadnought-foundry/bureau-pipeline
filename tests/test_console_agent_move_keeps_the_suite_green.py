@@ -35,14 +35,17 @@ added later is walked the day it lands:
 
 THE SUITE RUN INSIDE THE COPY
 -----------------------------
-The eight files the card names, then every other `tests/test_model_*.py`,
-`tests/test_session_*.py` and `tests/test_console_*.py`. Two of those — this
-file and DRE-6858's — are themselves copy-and-run harnesses: inside the copy
-their cheap tests run, and the two tests each that build the copies are
-deselected, since nesting them would run the whole walk again per case. What
-DRE-6858's harness proves inside such a tree is the last case above.
+The seven files the card names, then every other `tests/test_model_*.py`,
+`tests/test_session_*.py` and `tests/test_console_*.py` — less every walk
+(DRE-6909). A walk never runs a walk: on 2026-10-11 this list held DRE-6858's
+walk and this file, and twenty copies of the tree each ran both again, which
+put `scripts unit tests (part 1)` past its 30-minute limit. What DRE-6858's
+walk proves inside such a tree is the last case above. The copy, the save and
+the inner run are `tests/console_change_walk.py`'s, shared by every walk.
 
-The cases run side by side, as many at once as the machine has cores.
+The cases run side by side, as many at once as the machine has cores, in the
+walks' own job (`scripts/unit_test_parts.py run-walks`), never in a numbered
+part.
 
 Run: cd bureau-pipeline && python3 -m pytest tests/test_console_agent_move_keeps_the_suite_green.py -q
 """
@@ -50,12 +53,7 @@ Run: cd bureau-pipeline && python3 -m pytest tests/test_console_agent_move_keeps
 from __future__ import annotations
 
 import json
-import os
-import re
-import shutil
-import subprocess
 import sys
-from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import pytest
@@ -65,6 +63,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "tests"))
 sys.path.insert(0, str(ROOT / "scripts"))
 
+import console_change_walk as walk  # noqa: E402
 import model_config_change as mcc  # noqa: E402
 from model_config_text import (  # noqa: E402
     fresh_agent_name,
@@ -73,10 +72,11 @@ from model_config_text import (  # noqa: E402
 )
 
 MODELS = ROOT / "config" / "models.yaml"
-SELF = "tests/test_console_agent_move_keeps_the_suite_green.py"
 PROJECT_HARNESS = "tests/test_console_project_model_keeps_the_suite_green.py"
 
 #: The files the card names: the ones the console's agent moves turned red.
+#: DRE-6889 named an eighth, DRE-6858's walk, which a walk never runs
+#: (DRE-6909).
 NAMED = (
     "tests/test_session_agents.py",
     "tests/test_model_choices.py",
@@ -85,21 +85,10 @@ NAMED = (
     "tests/test_model_policy.py",
     "tests/test_model_config.py",
     "tests/test_project_model_exceptions.py",
-    PROJECT_HARNESS,
 )
 
-#: The tests that copy the tree and run the suite again — deselected inside
-#: a copy, so no case runs the whole walk a second time.
-NESTED = (
-    f"{PROJECT_HARNESS}::test_the_saved_change_is_in_the_tree",
-    f"{PROJECT_HARNESS}::test_every_model_test_passes_after_the_save",
-    f"{SELF}::test_the_saved_change_is_in_the_tree",
-    f"{SELF}::test_every_test_passes_after_the_save",
-)
-
-#: Not copied: the repository's history, and the pipeline checkout a workflow
-#: run puts beside the tree (it is not this repository's code).
-SKIPPED = {".git", ".bureau-pipeline", ".pytest_cache"}
+#: What the inner run collects beyond the named files, walks left out.
+PATTERNS = ("test_model_*.py", "test_session_*.py", "test_console_*.py")
 
 #: The exact change set of bureau-pipeline #993 (DRE-6858's first case).
 PR_993 = {"op": "set_project_model", "project": "agent-bureau-demo",
@@ -153,88 +142,34 @@ def cases(text: str) -> dict:
 CASES = cases(MODELS.read_text())
 
 
-def copy_tree(base: Path) -> Path:
-    ignore = shutil.ignore_patterns("__pycache__", "*.pyc", ".pytest_cache")
-    base.mkdir(parents=True)
-    for entry in ROOT.iterdir():
-        if entry.name in SKIPPED:
-            continue
-        if entry.is_dir():
-            shutil.copytree(entry, base / entry.name, ignore=ignore)
-        else:
-            shutil.copy2(entry, base / entry.name)
-    return base
-
-
-def _run(tree: Path, *args: str) -> subprocess.CompletedProcess:
-    env = dict(os.environ, PYTHONDONTWRITEBYTECODE="1")
-    env.pop("GITHUB_STEP_SUMMARY", None)
-    return subprocess.run([sys.executable, *args], capture_output=True,
-                          text=True, cwd=tree, env=env)
-
-
 def reset(tree: Path) -> None:
     """Put the copy where the file stood before any save, and regenerate its
     mirrors."""
     config = tree / "config" / "models.yaml"
     config.write_text(start_text(config.read_text()))
-    proc = _run(tree, "scripts/sync_model_config.py")
-    assert proc.returncode == 0, (proc.stdout, proc.stderr)
-
-
-def save(tree: Path, changes: list[dict], tmp: Path) -> None:
-    """What `model-config-change.yml` does with one Save changes."""
-    change_set = tmp / "change-set.json"
-    change_set.write_text(json.dumps(
-        {"requested_by": "ceo@example.com", "changes": changes}))
-    for args in (
-        ("scripts/model_config_change.py", "apply", "--changes", str(change_set)),
-        ("scripts/sync_model_config.py",),
-        ("scripts/sync_model_config.py", "--check"),
-    ):
-        proc = _run(tree, *args)
-        assert proc.returncode == 0, (args, proc.stdout, proc.stderr)
+    walk.regenerate(tree)
 
 
 def suite_files(tree: Path) -> list[str]:
     """The named files plus every other `tests/test_model_*.py`,
-    `tests/test_session_*.py` and `tests/test_console_*.py`."""
-    files = list(NAMED)
-    for pattern in ("test_model_*.py", "test_session_*.py", "test_console_*.py"):
-        for path in sorted((tree / "tests").glob(pattern)):
-            rel = path.relative_to(tree).as_posix()
-            if rel not in files:
-                files.append(rel)
-    return files
+    `tests/test_session_*.py` and `tests/test_console_*.py` — no walk."""
+    return walk.inner_files(tree, NAMED, PATTERNS)
 
 
 def run_case(name: str, base: Path) -> dict:
-    saves = CASES[name][0]
-    tree = copy_tree(base / "tree")
+    tree = walk.copy_tree(base / "tree")
     reset(tree)
-    for i, changes in enumerate(saves):
-        work = base / f"save-{i}"
-        work.mkdir()
-        save(tree, changes, work)
-    deselect = [arg for nodeid in NESTED for arg in ("--deselect", nodeid)]
-    proc = _run(tree, "-m", "pytest", *suite_files(tree), *deselect, "-q", "-rf",
-                "-p", "no:cacheprovider")
+    walk.apply_saves(tree, CASES[name][0], base)
     return {
         "models": yaml.safe_load((tree / "config" / "models.yaml").read_text()),
         "choices": json.loads((tree / "config" / "model-choices.json").read_text()),
-        "returncode": proc.returncode,
-        "failed": re.findall(r"^FAILED (\S+)", proc.stdout, flags=re.M),
-        "tail": proc.stdout[-4000:] + proc.stderr[-2000:],
+        **walk.run_suite(tree, suite_files(tree)),
     }
 
 
 @pytest.fixture(scope="module")
 def results(tmp_path_factory) -> dict:
-    base = tmp_path_factory.mktemp("dre6889")
-    with ThreadPoolExecutor(max_workers=os.cpu_count() or 2) as pool:
-        futures = {name: pool.submit(run_case, name, base / name)
-                   for name in CASES}
-        return {name: future.result() for name, future in futures.items()}
+    return walk.run_all(CASES, run_case, tmp_path_factory.mktemp("dre6889"))
 
 
 def test_the_suite_covers_the_named_files_and_every_model_session_and_console_test():
@@ -242,19 +177,18 @@ def test_the_suite_covers_the_named_files_and_every_model_session_and_console_te
     assert files[:len(NAMED)] == list(NAMED)
     for rel in NAMED:
         assert (ROOT / rel).is_file(), rel
-    assert SELF in files
-    for pattern in ("test_model_*.py", "test_session_*.py", "test_console_*.py"):
+    for pattern in PATTERNS:
         for path in (ROOT / "tests").glob(pattern):
-            assert path.relative_to(ROOT).as_posix() in files, path
+            rel = path.relative_to(ROOT).as_posix()
+            assert (rel in files) != walk.is_walk(rel), rel
 
 
-def test_only_the_tests_that_copy_the_tree_are_deselected():
-    """A deselected test is one no case runs; only the nested walks may be."""
-    for nodeid in NESTED:
-        rel, name = nodeid.split("::")
-        assert rel in (SELF, PROJECT_HARNESS), nodeid
-        assert re.search(rf"^def {name}\(results\b", (ROOT / rel).read_text(),
-                         flags=re.M), nodeid
+def test_the_inner_run_holds_no_walk():
+    """DRE-6909: this list held DRE-6858's walk and this file on 2026-10-11."""
+    files = suite_files(ROOT)
+    assert PROJECT_HARNESS not in files
+    assert Path(__file__).resolve().relative_to(ROOT).as_posix() not in files
+    assert not [rel for rel in files if walk.is_walk(rel)], files
 
 
 def test_the_walk_covers_every_session_agent_and_every_group():
