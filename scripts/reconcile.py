@@ -1887,6 +1887,13 @@ _epic_record_gaps: dict[str, str] = {}
 _blocker_epics: dict[str, dict] = {}
 _blocker_epic_gaps: dict[str, str] = {}
 
+# This repo's epics the promotion phase read in Backlog, less the ones it
+# closed — the set `return_waiting_epics` is handed (DRE-6653) — and the epics
+# this pass already returned to Planning, so the hook and the pass never move
+# one twice. Both reset with the epic record.
+_backlog_epics: set[str] = set()
+_returned_epics: set[str] = set()
+
 # ── The read door's per-pass state (Stage 2 #6a) ────────────────────────────
 # Which cards this pass decided on the DOOR's facts rather than Linear's. Every
 # state write about one of them is from-lane-conditional (item 33), and every
@@ -1949,7 +1956,8 @@ class BoardIdle(BoardNotRead):
 def reset_sweep_cards() -> None:
     """Drop the sweep's board snapshot — and with it the pass's comment cache
     in linear_ops (DRE-3236), the sweep's open-PR listing (DRE-3435), its epic
-    records (DRE-3642) and blocker epics (DRE-6407), its workflows listing
+    records (DRE-3642), blocker epics (DRE-6407) and waiting epics (DRE-6653),
+    its workflows listing
     (DRE-4378) and its in-flight build runs (DRE-4830). Called once at the top
     of main()."""
     global _swept_cards, _pr_listing, _workflows_listing
@@ -1975,6 +1983,8 @@ def reset_sweep_cards() -> None:
     _epic_record_gaps.clear()
     _blocker_epics.clear()
     _blocker_epic_gaps.clear()
+    _backlog_epics.clear()
+    _returned_epics.clear()
     _inverse_topup_refused.clear()
     linear_ops.reset_pass_cache()
 
@@ -6693,7 +6703,8 @@ def epic_blockers_unmet(epic_identifier: str, *, release_at_build_done: bool = T
     system holds two answers to "is prose authoritative" — the drift this work
     exists to end. What differs is the ESCALATION. A card is routed to Triage;
     an epic is not moved at all, because `advance_unblocked_epics` moves an epic
-    to Triage to trigger the planner and a planning run cannot fix a sentence.
+    to Planning to dispatch the planner (DRE-6653) and a planning run cannot
+    fix a sentence.
     The epic's escalation is time: `_report_epic_prose_defect` turns the run red
     once the defect has stood for PROSE_DEFECT_RED_MINUTES.
 
@@ -6706,7 +6717,8 @@ def epic_blockers_unmet(epic_identifier: str, *, release_at_build_done: bool = T
         the proof those cards would otherwise wait on confirms the blocker's
         own work, not theirs, and a card that really needs an earlier one
         carries a card-level `blockedBy` relation the card gate still reads;
-      * `release_at_build_done=False` — the auto-advance. Its dependent is an
+      * `release_at_build_done=False` — the auto-advance and the return pass
+        (`return_waiting_epics`, DRE-6653). Its dependent is an
         epic still to be PLANNED, against what the blocker's proof observed
         (the seam, DRE-3244), so every blocker must be Done, as before.
 
@@ -6822,15 +6834,22 @@ def advance_unblocked_epics(done_epic: str) -> None:
     the pipeline (DRE-1772, auto-advance).
 
     For each epic that `done_epic` `blocks` (its forward `relations`): if ALL of
-    that epic's own blocker epics are now Done AND it is still in Backlog, move
-    it to **Triage** (which triggers the planner). Every dependent takes that
-    one path — the wave route that sent some elsewhere is retired (DRE-4700).
-    NEVER to In Progress — the Green Light approval gate stays human-owned.
-    Idempotent and safe:
+    that epic's own blockers are now Done AND it is still in Backlog, return it
+    to **Planning**, whose arrival dispatches the planner (DRE-6653). Triage
+    was the planner's trigger once; it is the broken-card lane now, and the
+    relay's dispatch on entering it is refused by the plan gate (DRE-5277).
+    Every dependent takes that one path — the wave route that sent some
+    elsewhere is retired (DRE-4700). NEVER to In Progress — the Green Light
+    approval gate stays human-owned. Idempotent and safe:
       * only acts on epics still in Backlog (never re-advances one already past
         it, never thrashes an operator-parked or already-running epic);
       * never revives a Canceled/Duplicate/Done dependent;
       * fails SAFE on unreadable relation data (advances nothing).
+
+    This is the merge-time hook, and it fires only when the sweep itself
+    closes a blocker epic. `return_waiting_epics` is the full sweep's backstop
+    for every other way a blocker closes; both move through
+    `_return_epic_to_planning`, so both post the one receipt.
     """
     try:
         data = linear_ops.gql(
@@ -6858,13 +6877,93 @@ def advance_unblocked_epics(done_epic: str) -> None:
         # planned, so an In Progress blocker holds it whatever is left to build.
         if epic_blockers_unmet(dep, release_at_build_done=False):
             continue  # another blocker epic isn't Done yet — hold
-        linear_ops.cmd_advance(dep, "Triage", "Backlog")
-        linear_ops.cmd_comment(
-            dep,
-            f"🧹 Auto-advanced Backlog → Triage: blocker epic {done_epic} is Done "
-            "and all blocker epics are now complete. The planner will take it from "
-            "here; a human still approves the plan (→ In Progress).",
-        )
+        _return_epic_to_planning(dep, f"blocker epic {done_epic} is Done")
+
+
+def _return_epic_to_planning(dep: str, because: str) -> None:
+    """Move waiting epic `dep` Backlog → Planning and post the one receipt
+    that says so (DRE-6653). `because` names the blocker(s) that released it.
+
+    The ONE site for both writers — the hook and the full sweep's pass — on
+    purpose: `config/pipeline-acts.json` carries an `unconverted` row anchored
+    on this receipt's first line, and that row must match exactly one site.
+    The move is from Backlog alone, so an epic somebody moved meanwhile is
+    left where it is; the pass remembers what it moved, so the hook and the
+    pass never move one twice in a sweep.
+    """
+    if dep in _returned_epics:
+        return
+    linear_ops.cmd_advance(dep, "Planning", "Backlog")
+    _returned_epics.add(dep)
+    linear_ops.cmd_comment(
+        dep,
+        f"🧹 Auto-advanced Backlog → Planning: {because}, and every blocker is "
+        "now closed.\n\nThe epic is back in Planning, and its arrival there "
+        "dispatches the planner; a person still approves the plan (→ In Progress).",
+    )
+
+
+def _released_by(states: dict[str, str]) -> str:
+    """The blockers that released a waiting epic, for its receipt's first line."""
+    if len(states) == 1:
+        (blocker, state), = states.items()
+        return f"blocker {blocker} is {state}"
+    named = ", ".join(f"{blocker} ({states[blocker]})" for blocker in sorted(states))
+    return f"blockers {named} are closed"
+
+
+def return_waiting_epics(epics: set[str]) -> None:
+    """Return this repo's Backlog epics whose blockers are all terminal to
+    Planning (DRE-6653) — the full sweep's backstop for the auto-advance.
+
+    `advance_unblocked_epics` fires only when the sweep itself closes a
+    blocker EPIC. A blocker that is an ordinary card, an epic a person closed
+    by hand, or a blocker that was Canceled never fires it, and the dependent
+    waited in Backlog forever. This pass reads the lane and the formal
+    `blockedBy` relations and nothing else — never whether an `⏸️ epic-waits:`
+    receipt stands — so it covers DRE-6591's placement, DRE-6651's wait and
+    every one of those blockers alike.
+
+    `epics` is this repo's Backlog epics off the promotion phase's read, the
+    set `closable_epics(cards, BACKLOG_LANE)` hands `close_finished_epics`.
+    Their relations come off the pass's epic record — one read for them all,
+    and none at all when the close already made it. An epic moves when:
+      * the record still reads it in Backlog;
+      * it carries at least one formal `blockedBy` relation — an epic nothing
+        blocks has nothing to wait for, and a roll-up child waiting for its
+        parent's activation is the split's to send (DRE-6591);
+      * `epic_blockers_unmet(epic, release_at_build_done=False)` is False, the
+        strict rule: every blocker in `prose_blockers.TERMINAL`.
+
+    Per-epic isolation, as `close_finished_epics` has it (DRE-3148): one epic
+    that cannot be read or moved is logged and skipped, and the rest are swept.
+    Never on the merge path (`--close-only`), which keeps the hook alone.
+    """
+    waiting = sorted(epics)
+    if waiting:
+        epic_records(waiting)  # ONE read for every epic below (DRE-3642)
+    for epic in waiting:
+        try:
+            if epic in _returned_epics:
+                continue  # the hook returned it this pass
+            record = epic_records([epic]).get(epic)
+            relations = _fetch_epic_relations(epic)
+            if record is None or relations is None:
+                print(f"epic-return: {epic} could not be read — left in Backlog this sweep")
+                continue
+            if ((record.get("state") or {}).get("name")) != BACKLOG_LANE:
+                continue  # moved since the promotion read: not waiting here
+            states = prose_blockers.blocker_states(relations)
+            if not states:
+                continue  # nothing blocks it: it was never waiting on a blocker
+            if epic_blockers_unmet(epic, release_at_build_done=False):
+                continue  # the gate's own `epic-gate:` line says which holds
+            _return_epic_to_planning(epic, _released_by(states))
+        except Exception as exc:  # noqa: BLE001 — isolate one epic, sweep the rest
+            print(
+                f"epic-return: could not return {epic} ({exc}) — skipped this sweep",
+                file=sys.stderr,
+            )
 
 
 def open_agent_blocker(card: dict) -> blocker_class.Blocker | None:
@@ -7484,10 +7583,12 @@ def promote_ready(
                        int(c["identifier"].split("-")[1])),
     )
     if close_epics:
-        closed = set(
-            close_finished_epics(closable_epics(candidates, BACKLOG_LANE)) or ()
-        )
+        backlog_epics = closable_epics(candidates, BACKLOG_LANE)
+        closed = set(close_finished_epics(backlog_epics) or ())
         candidates = [c for c in candidates if c["identifier"] not in closed]
+        # The same set, less what just closed, for the full sweep's return
+        # pass (DRE-6653): an epic waiting on a blocker is one of these.
+        _backlog_epics.update(backlog_epics - closed)
     # ONE read for every epic this gate will ask about (DRE-3642), before the
     # loop rather than inside it: `epic_gate` above already made it one read
     # per EPIC per sweep, and on a board with nine active epics that was still
@@ -8155,7 +8256,8 @@ def _close_epic_if_finished(epic: str) -> bool:
         )
         # This epic just shipped — pull the next epics in the dependency
         # chain into the pipeline (DRE-1772). Merge-time hook; the full
-        # sweep is the backstop.
+        # sweep is the backstop: `return_waiting_epics`, its own phase, which
+        # returns a waiting epic however its blocker closed (DRE-6653).
         advance_unblocked_epics(epic)
         return True
     return False
@@ -14601,6 +14703,12 @@ def main(
                 f"{len(_stale_defects)} unfixed card defect(s) — see ERROR lines above"
             )
         return
+    # The auto-advance's backstop (DRE-6653): a Backlog epic whose blockers
+    # are all terminal goes back to Planning, whoever closed the blocker. Off
+    # the promotion phase's Backlog read, so after it; full sweeps only — the
+    # merge path's `--close-only` keeps the hook alone and has returned above.
+    with _phase("return_waiting_epics"):
+        return_waiting_epics(set(_backlog_epics))
     # BEFORE the nudge loop, and that order is load-bearing (DRE-4356): this
     # pass moves a hand-built card into the review lane off its open pull
     # request, and updates the snapshot when it does — so the loop below reads
