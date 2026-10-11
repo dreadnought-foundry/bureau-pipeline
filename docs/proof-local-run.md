@@ -165,16 +165,33 @@ printed, never put on a command line, and removed at the end of the run —
 `PROOF_LOGIN_FILE`, whichever kind wrote it. The sign-in ration is still drawn
 once per sign-in: `command` is what draws it, and it runs once.
 
-What the run step does with it: with the browser on the local run's own origin
-and before the first declared page is opened, it sets each declared
-`local_storage` entry and cookie from the file's `session` values, then opens
-the page, with no form filled. That step is `screenshot --signed-in` of
-`scripts/proof_session.py` (DRE-6047), and planting a session in it is a
-follow-up card to DRE-6536. Until that follow-up lands, a `session` declaration
-is checked by `proof_local.py check`, `proof_session.py login` runs its command
-once and checks the file carries `identity`, `ration` and a `session` object of
-strings, and `screenshot --signed-in` refuses the declaration in one line and
-opens no page. The follow-up is what applies it.
+What the run step does with it: `screenshot --signed-in` of
+`scripts/proof_session.py` (DRE-6047, DRE-6818), while the browser has no saved
+state yet, reads the login file `login` wrote and hands chromium each declared
+`local_storage` entry on the local run's own origin — the scheme, host and port
+of `PROOF_LOCAL_URL` — and each declared cookie on that origin's host, filled
+from the file's `session` values. They are set before the first declared page
+is opened, so the page's first request already carries them, and no form is
+filled. A cookie has no port, so a planted cookie is a host-only cookie on the
+local run's host and on no other. The values go to the browser as data: never
+on a command line, never in a third file. Then the step opens the page, shoots
+it and writes the request sidecar exactly as for the `form` kind, saves the
+browser's state (0600), and overwrites and deletes the login file; a second
+`screenshot --signed-in` in the same run reuses the saved state. A file whose
+`session` lacks a field the declaration names is refused before any page is
+opened, in one line naming the entry and the field and never a value —
+`` proof-screenshot: the login file's session has no string `id_token`, which
+login.session.local_storage[0] (app_id_token) is filled from — no page was
+opened ``.
+
+`proof_session.py login` checks first that the screen can be drawn: the
+declared kind is one the browser step applies (`BROWSER_LOGIN_KINDS` in
+`scripts/proof_session.py`, which holds every kind `proof_local.LOGIN_KINDS`
+accepts), `PROOF_LOCAL_URL` is set, and the browser's interpreter exists at
+`$PROOF_PYTHON`. When one is not so, it runs no command, writes no marker,
+exits 1 and prints one line,
+`proof-login: not run — <reason>; no hosted sign-in was spent`. The same run
+may call it again once the cause is fixed.
 
 `proof_local.load()` returns `login` for this kind as `{"command": …,
 "session": {"local_storage": [...], "cookies": [...]}}`, both lists present,

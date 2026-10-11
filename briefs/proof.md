@@ -156,14 +156,17 @@ asks for a reading the declaration does not hold is a cause row, below.
 
   Beside that rule, the browser route is not the run typing a sign-in:
   `screenshot --signed-in`
-  fills the form from the file the repo's declared `login.command` wrote after
-  that command reserved the sign-in. You never read, hold or type the
-  password, and the sign-in the record counts is the one `login` made. Copy
+  fills the form or plants the declared session from the file the repo's
+  declared `login.command` wrote after that command reserved the sign-in. You
+  never read, hold or type the password or the session, and the sign-in the
+  record counts is the one `login` made. Copy
   the line `login` printed into `## Identities` beside the identity —
   `proof-login: <identity> — <the last line of the command's standard output,
   which is the product's ration status line>`, for Portico DRE-6033's
   `hosted sign-in ration: …` line. A refused reserve is `Not observed.` with
-  the `proof-login: refused — …` line.
+  the `proof-login: refused — …` line. A `proof-login: not run — …` line means
+  `login` found the screen could not be drawn and ran nothing: the row is
+  `Not observed.` with that line quoted and no sign-in counted.
 
   The login file at `$PROOF_LOGIN_FILE` and the browser's state file are read
   by `login` and `screenshot --signed-in` and by nothing else. A run never
@@ -202,8 +205,8 @@ run of the released commit. The planner writes them as two criteria.
   once: it runs the repo's declared `login.command` and is the run's one
   sign-in. Then
   `python3 .bureau-pipeline/scripts/proof_session.py screenshot --page <key> --out <png> --signed-in`,
-  which signs the browser in from the file that step wrote and then deletes
-  that file. `screenshot --signed-in` never signs in by itself. With no login
+  which fills the declared form or plants the declared session from the file
+  that step wrote, and then deletes that file. `screenshot --signed-in` never signs in by itself. With no login
   file it exits naming it —
   `proof-screenshot: no login file at <path> — run proof_session.py login first`
   — which is the line a run that skipped the first command sees. A page that
