@@ -29,8 +29,16 @@ The six, by their arrival in Green Light (PT):
 
 Every fixture is driven through the mechanism its `arrival` names, with the
 siblings' own harnesses, and over every one of them no stubbed lane write —
-`linear_ops.cmd_state` or `cmd_advance` — names `Green Light`. The test id is
-the card id, so a failure reads as the card.
+`linear_ops.cmd_state` or `cmd_advance` — names `Green Light`. What the rule
+writes instead is read off the mechanism, never the fixture, and must name
+the fixture's `for` the way `NAMES` spells it: the bound's rewrite receipt
+names the planner, the epic's wait reason says it is planned when its
+blockers are Done, the re-run's receipt is the proof run's own, and the
+switch card's routing verdict names the operator as its actor. DRE-6042 is
+the one whose answer is not a fresh write: its proof run had spent its
+re-runs, so what stands is that run's own `🔬 proof-waiting` hold, which
+hands the reading to an operator. The test id is the card id, so a failure
+reads as the card.
 
 This module writes no fixture and edits no sibling's test file: it reads the
 directory by glob, and the contract it checks each file against is the one
@@ -108,6 +116,16 @@ EXTRAS = {
     "review-cap": ("pr", "rebuilt"),
     "blocked-epic": ("relations",),
     "switch-card": ("filed",),
+}
+
+#: How the text a rule writes instead of Green Light names each recipient,
+#: in the words the pipeline itself writes: the planner, by name in the
+#: rewrite receipt and as "planned" in the epic's wait; the proof run, by its
+#: own `🔬 proof-` voice; the operator, as the actor of the routing verdict.
+NAMES = {
+    "planner": re.compile(r"\bplann(?:er|ed)\b"),
+    "proof-run": re.compile(rf"^{linear_ops.PROOF_MARK} proof-(?:run|waiting):", re.M),
+    "operator": re.compile(r"\*\*Who handles it there:\*\* operator\."),
 }
 
 #: A row the gate's decline note quotes: “criterion…” reads “result…”.
@@ -190,19 +208,22 @@ class _Lanes:
 # --------------------------------------------------------------------------- #
 
 
-def _plan_bound(monkeypatch, doc: dict, lanes: _Lanes) -> None:
+def _plan_bound(monkeypatch, doc: dict, lanes: _Lanes) -> str:
+    """The bound's exit over the thread; returns the receipt it posts."""
     card, comments = doc["card"], doc["comments"]
     found = plan_bound.findings(comments, card, "one-off")
     assert found, f"{card}: the bound read no finding off its own thread"
     outcome, why = plan_bound.decide(found, plan_bound.granted(comments), "one-off")
-    assert outcome in (plan_bound.REWRITE, plan_bound.PARK), (
+    # The planner's own rewrite: neither the question to the CEO nor a park
+    # in Triage for an operator.
+    assert outcome == plan_bound.REWRITE, (
         f"{card}: the one-off bound answered {outcome!r} — {why}")
-    assert outcome != plan_bound.QUESTION
     assert plan_bound.decision_findings(found, "one-off") == []
 
     # The exit itself over the same thread. The escalation is stubbed to park
     # where the real one parks — the lane `planning_escalation.destination()`
-    # names — so a question reaches the lane writes this module reads.
+    # names. That write goes through the stub alone, never `linear_ops`, so on
+    # this path the guard is `asked == []`, not `to_green_light()`.
     asked: list = []
 
     def escalate(lops, ident, reason, *args, **kwargs):
@@ -211,17 +232,21 @@ def _plan_bound(monkeypatch, doc: dict, lanes: _Lanes) -> None:
         return planning_escalation.Outcome(parked=True, posted=True, stood_down=None)
 
     dispatched: list = []
+    posted: list[str] = []
     monkeypatch.setattr(plan_bound.linear_ops, "comment_records",
                         lambda ident, *, whole_thread=False: list(comments))
     monkeypatch.setattr(plan_bound.linear_ops, "cmd_comment",
-                        lambda ident, body, *flags: None)
+                        lambda ident, body, *flags: posted.append(body))
     monkeypatch.setattr(plan_bound.planning_escalation, "escalate", escalate)
     monkeypatch.setattr(plan_bound.review_rerun, "_cmd_dispatch",
-                        lambda args: dispatched.append(args.epic) or 0)
+                        lambda args: dispatched.append((args.epic, args.route)) or 0)
     plan_bound.run_exit(card, "one-off", "dreadnought-foundry/" + _repo_label(doc))
     assert asked == [], f"{card}: the bound asked the CEO"
-    if outcome == plan_bound.REWRITE:
-        assert dispatched == [card], "the rewrite went back to the planner"
+    assert dispatched == [(card, plan_bound.DISPATCH_ROUTE)], (
+        "the rewrite went back to the planner")
+    receipts = [b for b in posted if b.startswith(plan_bound.RECEIPT_KEY)]
+    assert len(receipts) == 1, f"{card}: the rewrite posted {posted!r}"
+    return receipts[0]
 
 
 def _repo_label(doc: dict) -> str:
@@ -308,12 +333,14 @@ def _gate_note_timed(pr: dict, as_of: str) -> dict:
     return pr
 
 
-def _rerun(monkeypatch, doc: dict) -> None:
+def _rerun(monkeypatch, doc: dict) -> str:
     """`ProofDispatch.rerunning` over the same pull request, its record the
     rows the gate's note names: the proof run's re-run, never "nothing to
-    answer". On DRE-6042 the proof run had already spent its two re-runs on
-    2026-10-09 and posted its own `🔬 proof-waiting` hold, so there the
-    answer is that hold — still the proof run's, still not the CEO's."""
+    answer" — and the receipt its dispatch posts, which this returns. On
+    DRE-6042 the proof run had already spent its two re-runs on 2026-10-09
+    and posted its own `🔬 proof-waiting` hold, so there the answer is that
+    hold, returned as it stands — still the proof run's, still not the
+    CEO's; it names an operator as the one to read it next."""
     pr = _gate_note_timed(copy.deepcopy(doc["pr"]), doc["as_of"])
     head = pr["headRefOid"]
     repo = "/".join(pr["url"].split("/")[3:5])
@@ -334,14 +361,20 @@ def _rerun(monkeypatch, doc: dict) -> None:
             return list(doc["comments"]), dispatch_tests.VIEWER
 
     holds: list = []
+    posted: list[str] = []
+    fired: list = []
     monkeypatch.setattr(proof_record, "fetch", fetch)
     monkeypatch.setattr(reconcile, "verdict_bound", lambda pr_: True)
     monkeypatch.setattr(linear_ops, "cmd_proof_waiting", lambda *args: holds.append(args))
+    monkeypatch.setattr(linear_ops, "cmd_comment",
+                        lambda ident, body, *flags: posted.append(body))
     one = proof_dispatch._Pass(
         repo, repo.split("/")[1], live=True, linear=Thread(),
         read=lambda path: None, find_pr=None,
         run_state=lambda *a, **k: dispatch_tests.state("finished", dispatches=1),
-        release=None, fire=None, voices=voices,
+        release=None,
+        fire=lambda card_, repo_, **kw: fired.append(kw) or (True, None),
+        voices=voices,
         now=datetime.fromisoformat(doc["as_of"].replace("Z", "+00:00")),
         find_record=lambda ident: pr,
         read_record=lambda pr_, h: proof_dispatch.record_at(repo, pr_, h))
@@ -350,7 +383,7 @@ def _rerun(monkeypatch, doc: dict) -> None:
     standing = proof_record.open_holds(
         voices(doc["comments"], dispatch_tests.VIEWER, card=doc["card"]))
     try:
-        reason, _ = one.rerunning(card)
+        reason, count = one.rerunning(card)
     except proof_dispatch._Refused as refused:
         assert "nothing to answer" not in str(refused), refused
         assert standing, (
@@ -358,17 +391,23 @@ def _rerun(monkeypatch, doc: dict) -> None:
         assert refused.bucket == "held"
         assert standing[-1] in str(refused)
         assert standing[-1].startswith("🔬 proof-waiting:")
+        written = standing[-1]
     else:
         assert not standing
         assert reason == proof_dispatch.GATE_RERUN_REASON.format(sha7=head[:7])
+        one.dispatch(card, reason, count)
+        assert [kw["reason"] for kw in fired] == [reason]
+        assert len(posted) == 1, f"{doc['card']}: the re-run posted {posted!r}"
+        written = posted[0]
     assert holds == []
+    return written
 
 
-def _review_cap(monkeypatch, doc: dict, lanes: _Lanes) -> None:
+def _review_cap(monkeypatch, doc: dict, lanes: _Lanes) -> str:
     assert set(doc["rebuilt"]) <= set(doc["pr"]), (
         f"{doc['card']}: 'rebuilt' names a field the pr does not carry")
     _sweep(monkeypatch, doc, lanes)
-    _rerun(monkeypatch, doc)
+    return _rerun(monkeypatch, doc)
 
 
 # --------------------------------------------------------------------------- #
@@ -376,7 +415,9 @@ def _review_cap(monkeypatch, doc: dict, lanes: _Lanes) -> None:
 # --------------------------------------------------------------------------- #
 
 
-def _blocked_epic(monkeypatch, doc: dict, lanes: _Lanes, tmp_path: Path) -> None:
+def _blocked_epic(monkeypatch, doc: dict, lanes: _Lanes, tmp_path: Path,
+                  capsys) -> str:
+    """The planning route's decision; returns the reason it gives the wait."""
     relations = doc["relations"]
     assert relations["blocked_by"], f"{doc['card']}: no blocker to wait on"
     card = route_tests._Card(
@@ -386,6 +427,7 @@ def _blocked_epic(monkeypatch, doc: dict, lanes: _Lanes, tmp_path: Path) -> None
         has_children=relations["has_children"],
         history=relations["history"])
     out = tmp_path / "out.txt"
+    capsys.readouterr()
     assert card.run(lambda: planning_route._cmd_decide(doc["card"], str(out))) == 0
     lanes.writes += [("cmd_state", ident, lane) for ident, lane in card.states]
     written = dict(line.split("=", 1) for line in out.read_text().splitlines() if line)
@@ -393,6 +435,10 @@ def _blocked_epic(monkeypatch, doc: dict, lanes: _Lanes, tmp_path: Path) -> None
     assert written["wait"] == "true"
     for row in relations["blocked_by"]:
         assert f"{row['identifier']} ({row['state']})" in written["waits_on"], row
+    printed = capsys.readouterr().out
+    decided = json.loads(printed[printed.index("{\n"):])
+    assert decided["wait"] is True
+    return decided["wait_reason"]
 
 
 # --------------------------------------------------------------------------- #
@@ -400,7 +446,9 @@ def _blocked_epic(monkeypatch, doc: dict, lanes: _Lanes, tmp_path: Path) -> None
 # --------------------------------------------------------------------------- #
 
 
-def _switch_card(monkeypatch, doc: dict, lanes: _Lanes) -> None:
+def _switch_card(monkeypatch, doc: dict, lanes: _Lanes) -> str:
+    """The classifier's stamp and the routing verdict it implies; returns
+    both, as the card would carry them."""
     now = doc["filed"]["now"]
     probe = {"card": doc["card"], "title": now["title"], "body": now["body"],
              "labels": list(now["labels"])}
@@ -423,6 +471,8 @@ def _switch_card(monkeypatch, doc: dict, lanes: _Lanes) -> None:
     routed = routing_verdict.route(now["title"], now["body"], now["labels"])
     assert routed.verdict == "OPERATOR"
     assert routed.source == "label"
+    return "\n\n".join(lops.bodies + [
+        routing_verdict.verdict_comment(routed.verdict, routed.reason)])
 
 
 # --------------------------------------------------------------------------- #
@@ -439,7 +489,7 @@ def test_the_directory_holds_the_six_cards():
 
 
 @pytest.mark.parametrize("path", _paths(), ids=_card_id)
-def test_the_card_does_not_land_in_green_light(monkeypatch, tmp_path, path):
+def test_the_card_does_not_land_in_green_light(monkeypatch, tmp_path, capsys, path):
     doc = json.loads(path.read_text(encoding="utf-8"))
     problems = _shape_problems(path, doc)
     assert problems == [], f"{path.name}: " + "; ".join(problems)
@@ -449,16 +499,19 @@ def test_the_card_does_not_land_in_green_light(monkeypatch, tmp_path, path):
     lanes = _Lanes(monkeypatch)
     arrival = doc["arrival"]
     if arrival == "plan-bound":
-        _plan_bound(monkeypatch, doc, lanes)
+        written = _plan_bound(monkeypatch, doc, lanes)
     elif arrival == "review-cap":
-        _review_cap(monkeypatch, doc, lanes)
+        written = _review_cap(monkeypatch, doc, lanes)
     elif arrival == "blocked-epic":
-        _blocked_epic(monkeypatch, doc, lanes, tmp_path)
+        written = _blocked_epic(monkeypatch, doc, lanes, tmp_path, capsys)
     else:
-        _switch_card(monkeypatch, doc, lanes)
+        written = _switch_card(monkeypatch, doc, lanes)
 
     assert lanes.to_green_light() == [], (
         f"{doc['card']} was written to Green Light: {lanes.to_green_light()}")
+    assert NAMES[doc["for"]].search(written), (
+        f"{doc['card']}: what the rule writes instead does not name the "
+        f"{doc['for']} — {written!r}")
 
 
 if __name__ == "__main__":
