@@ -2012,3 +2012,116 @@ class TestAHandStampSurvivesAReturnReceipt:
         bodies = [_planner_stamp("epic"), _hand_stamp("one-off"), receipt]
         assert planning_shape.shapes_on(bodies) == ("one-off",)
         assert planning_shape.fault("DRE-3018", bodies) is None
+
+
+# ===========================================================================
+# DRE-6654: a card whose role label routes it to a person asks no model
+# ===========================================================================
+GREEN_LIGHT_6636 = ROOT / "tests" / "fixtures" / "green-light-2026-10-10" / "dre-6636.json"
+
+
+def _filed(key: str) -> dict:
+    """DRE-6636 as filed, in the probe shape `_Lops` reads — `now` is the
+    operator step DRE-6652 files, `original` the alarm that went to the CEO."""
+    with open(GREEN_LIGHT_6636, encoding="utf-8") as fh:
+        doc = json.load(fh)
+    filed = doc["filed"][key]
+    return {"card": doc["card"], "title": filed["title"], "body": filed["body"],
+            "labels": list(filed["labels"])}
+
+
+def _model_forbidden():
+    """A call that raises if invoked, and remembers that it was — `classify`
+    reads any exception as a refusal, so the raise alone would be swallowed."""
+    seen: list[tuple] = []
+
+    def call(model, prompt):  # pragma: no cover - the assertion is the point
+        seen.append((model, prompt))
+        raise AssertionError("the model was asked about a card its label routes to a person")
+
+    call.seen = seen
+    return call
+
+
+class TestALabelRoutedCardAsksNoModel:
+    """On 2026-10-10 at 09:54 PT the classifier read the switch-reason alarm
+    DRE-6636, answered `decision: true`, and the card went to the CEO as a
+    question. Precedence 1 of the routing rule asks no model of a card whose
+    explicit role label says who acts on it (`config/routing-verdicts.json`),
+    and the critic already honors it (DRE-5805). The classifier now does too:
+    it reads `routing_verdict.route` before it calls anything."""
+
+    def test_the_operator_step_is_stamped_without_a_model(self):
+        probe = _filed("now")
+        lops = _Lops(probe)
+        call = _model_forbidden()
+        decision = planning_classify.run(lops, probe["card"], call=call, model=MODEL)
+        assert call.seen == [], "the model was asked about a label-routed card"
+        assert decision.answered is False
+        assert decision.model is None and decision.asked is None
+        assert decision.shape == "one-off"
+        assert not decision.escalates and not decision.requeue
+        stamps = [c for c in lops.comments if c.lstrip().startswith(
+            f"{planning_shape.SHAPE_MARK} {planning_shape.SHAPE_TAG}:")]
+        assert len(stamps) == 1, lops.comments
+        assert planning_shape.shape_on(lops.bodies) == "one-off"
+        why = next(line for line in stamps[0].splitlines()
+                   if line.startswith("**Why:**"))
+        assert "`no-code`" in why
+        assert "OPERATOR" in why
+        assert "precedence 1" in why
+        assert "DRE-5805" in why
+        assert planning_shape.stamped_by(lops.bodies)[0] == planning_shape.BY_PLANNER
+
+    def test_the_label_is_read_through_routing_verdict_not_spelled_here(self):
+        """Every key of the label map routes, and `agent:ops` the same way."""
+        import routing_verdict
+
+        for label in routing_verdict.label_map():
+            probe = dict(_filed("original"), labels=["repo:portico", label])
+            lops = _Lops(probe)
+            call = _model_forbidden()
+            decision = planning_classify.run(lops, probe["card"], call=call, model=MODEL)
+            assert call.seen == [], label
+            assert decision.shape == "one-off" and decision.answered is False, label
+            assert f"`{label}`" in lops.comments[0], label
+
+    def test_the_original_alarm_is_still_read_by_the_model(self):
+        """Same title, same kind of body, no role label: the rule reads the
+        label and not the title."""
+        probe = _filed("original")
+        assert probe["labels"] == ["repo:portico"]
+        lops = _Lops(probe)
+        call = _caller(_answer(shape="one-off"))
+        decision = planning_classify.run(lops, probe["card"], call=call, model=MODEL)
+        assert len(call.seen) == 1, "the model was not asked about an unlabeled card"
+        assert decision.answered is True
+
+    def test_an_epic_the_epic_branch_claims_still_goes_to_the_model(self):
+        probe = dict(_filed("now"), title="[EPIC] " + _filed("now")["title"])
+        lops = _Lops(probe)
+        call = _caller(_answer(shape="epic", tells=(1, 3)))
+        decision = planning_classify.run(lops, probe["card"], call=call, model=MODEL)
+        assert len(call.seen) == 1, "an epic was routed on its label"
+        assert decision.answered is True
+
+    def test_no_heartbeat_names_a_model_for_it(self, monkeypatch, tmp_path):
+        """The `🧠 model-attempt` heartbeat in plan.yml is gated on `answered`,
+        and the step outputs this card writes say false, with no model."""
+        probe = _filed("now")
+        monkeypatch.setitem(sys.modules, "linear_ops", _Lops(probe))
+        call = _model_forbidden()
+        monkeypatch.setattr(planning_classify, "_call_real", call)
+        out = tmp_path / "out"
+        planning_classify._cmd_classify(probe["card"], str(out), None)
+        assert call.seen == []
+        pairs = dict(line.split("=", 1) for line in out.read_text().splitlines())
+        assert pairs["answered"] == "false"
+        assert pairs["shape"] == "one-off"
+        assert pairs["model"] == "" and pairs["asked"] == ""
+        steps = yaml.safe_load(WF.read_text())["jobs"]
+        heartbeat = next(
+            step for job in steps.values() for step in job.get("steps", [])
+            if "model-attempt" in str(step.get("run", ""))
+            and "planning classifier" in str(step.get("run", "")))
+        assert heartbeat["if"] == "steps.classify.outputs.answered == 'true'"
