@@ -466,5 +466,12 @@
       "moves": []
     }
   ],
-  "projects": []
+  "projects": [
+    {
+      "slug": "agent-bureau-demo",
+      "exceptions": {
+        "workhorse": "claude-sonnet-5-5"
+      }
+    }
+  ]
 }
