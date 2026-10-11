@@ -653,6 +653,80 @@ def test_apply_puts_a_known_models_row_in_the_minimum_table(tmp_path):
     assert support.count('"claude-fable-5-1": "') == 1
 
 
+# `_known_models` (DRE-6786): the ids under the ladders, `retired`, `excluded`
+# and `projects.<slug>.<kind>` — the four keys `model_fallback.KNOWN_MODELS`
+# derives from. Read on the frozen fixture, a byte copy of the committed
+# `config/models.yaml` of 2026-10-10, with `projects` emptied as it stood then.
+HAIKU_55 = "claude-haiku-5-5"
+_EMPTY_TABLES = "MINIMUM_CLAUDE_CODE = {\n}\n\nAHEAD_OF_ADOPTION = {\n}\n"
+
+
+def _models_tree(tmp_path: Path, edit=None) -> Path:
+    sys.path.insert(0, str(ROOT / "tests"))
+    import model_fixture
+
+    raw = model_fixture.fixture_config()
+    raw["projects"] = {}
+    if edit:
+        edit(raw)
+    (tmp_path / "config").mkdir(parents=True)
+    (tmp_path / "config" / "models.yaml").write_text(yaml.safe_dump(raw, sort_keys=False))
+    return tmp_path
+
+
+def _table_of(text: str, model: str) -> str:
+    """The table `model`'s row was written into."""
+    minimum = text[text.index("MINIMUM_CLAUDE_CODE = {"):]
+    ahead = text[text.index("AHEAD_OF_ADOPTION = {"):]
+    if f'"{model}":' in minimum[:minimum.index("}")]:
+        return "MINIMUM_CLAUDE_CODE"
+    assert f'"{model}":' in ahead[:ahead.index("}")], text
+    return "AHEAD_OF_ADOPTION"
+
+
+def test_known_models_are_ids_on_todays_file(tmp_path):
+    root = _models_tree(tmp_path)
+    raw = yaml.safe_load((root / "config" / "models.yaml").read_text())
+    rungs = {r["model"] for rungs in raw["ladders"].values() for r in rungs}
+    assert ccp._known_models(root) == rungs | {
+        "claude-opus-4-8", HAIKU_55, "claude-fable-5"}
+    assert len(ccp._known_models(root)) == 9
+
+
+def test_a_pin_raise_for_an_excluded_model_writes_the_minimum_table(tmp_path):
+    root = _models_tree(tmp_path)
+    pin = {"model": HAIKU_55, "from": {"claude_code": "2.1.284"}, "to": NEW}
+    text = ccp._support_test_text(_EMPTY_TABLES, pin, "2026-10-11",
+                                  ccp._known_models(root))
+    assert _table_of(text, HAIKU_55) == "MINIMUM_CLAUDE_CODE"
+
+
+def test_a_model_only_a_project_names_is_known(tmp_path):
+    def edit(raw):
+        raw["excluded"] = [e for e in raw["excluded"] if e["model"] != HAIKU_55]
+        raw["projects"] = {"atlas": {"workhorse": HAIKU_55}}
+
+    root = _models_tree(tmp_path, edit)
+    raw = yaml.safe_load((root / "config" / "models.yaml").read_text())
+    named = {r["model"] for rungs in raw["ladders"].values() for r in rungs}
+    named |= {e["model"] for e in raw["retired"] + raw["excluded"]}
+    assert HAIKU_55 not in named, "on no ladder, not retired, not excluded"
+    assert HAIKU_55 in ccp._known_models(root)
+    pin = {"model": HAIKU_55, "from": {"claude_code": "2.1.284"}, "to": NEW}
+    text = ccp._support_test_text(_EMPTY_TABLES, pin, "2026-10-11",
+                                  ccp._known_models(root))
+    assert _table_of(text, HAIKU_55) == "MINIMUM_CLAUDE_CODE"
+
+
+def test_known_models_still_reads_a_bare_string_entry(tmp_path):
+    def edit(raw):
+        raw["retired"] = ["claude-opus-4-8"]
+        raw["excluded"] = [HAIKU_55, {"model": "claude-fable-5", "reason": "x"}]
+
+    assert {"claude-opus-4-8", HAIKU_55, "claude-fable-5"} <= ccp._known_models(
+        _models_tree(tmp_path, edit))
+
+
 def test_apply_updates_an_existing_minimum_row_rather_than_adding_a_second(tmp_path):
     repo = _copy_repo(tmp_path)
     pin = dict(FOUND, **{"from": _live_pin(), "to": NEW})

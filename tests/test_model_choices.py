@@ -40,6 +40,8 @@ PRICES = ROOT / "config" / "model-prices.yaml"
 
 sys.path.insert(0, str(ROOT / "scripts"))
 
+import claude_code_pin as ccp  # noqa: E402
+import model_choice  # noqa: E402
 import model_config_change as mcc  # noqa: E402
 import model_fallback as mf  # noqa: E402
 import sync_model_config  # noqa: E402
@@ -133,7 +135,9 @@ def test_entry_keys_in_the_contract_order():
             "key", "label", "purpose", "default_model", "fallbacks", "choices"
         ]
         for choice in group["choices"]:
-            assert list(choice) == ["model", "allowed", "reason"]
+            # `caution` is the fourth key (DRE-6786): a reader of the old shape
+            # still reads the first three.
+            assert list(choice) == ["model", "allowed", "reason", "caution"]
     for agent in doc["agents"]:
         assert list(agent) == ["name", "label", "about", "group", "runs_in", "moves"]
         for move in agent["moves"]:
@@ -162,7 +166,10 @@ def test_an_excluded_id_with_no_price_is_never_offered():
 def test_model_labels_follow_the_one_rule():
     # The rule, on ids no ladder names: `claude-<family>-<major>[-<minor>]` is
     # `<Family> <major>[.<minor>]`, and an id of any other shape is its own.
-    label = sync_model_config._model_label
+    # It lives in scripts/model_choice.py since DRE-6786, beside the words the
+    # change-writer shares, and the generator imports it from there.
+    label = model_choice.model_label
+    assert sync_model_config.model_label is label
     assert label("claude-haiku-5-5") == "Haiku 5.5"
     assert label("claude-fable-5") == "Fable 5"
     assert label("claude-opus-4-8") == "Opus 4.8"
@@ -214,23 +221,25 @@ def test_one_group_per_kind_with_its_words_and_ladder():
         assert [c["model"] for c in group["choices"]] == [m["id"] for m in doc["models"]]
 
 
-def test_every_priced_model_but_an_excluded_one_is_allowed_everywhere(tmp_path):
+def test_every_priced_model_is_allowed_everywhere_with_its_caution(tmp_path):
     # DRE-6785 (the CEO, 2026-10-10): any priced model may lead any group, so
-    # the own-kind rule, rule 4 and rule 4b refuse nothing now; what is left
-    # refused is a model the file excludes. A rule of the renderer, on the
-    # frozen fixture.
+    # the own-kind rule, rule 4 and rule 4b refuse nothing now. DRE-6786: a
+    # model the file excludes is allowed too — the probe is the change the
+    # console would make, which lifts the exclusion — and it carries the
+    # set-aside caution instead. A rule of the renderer, on the frozen fixture.
     raw, doc = _fixture_choices(tmp_path)
-    excluded = {e["model"] for e in raw["excluded"]}
-    assert excluded, "the fixture excludes a model"
+    prices = model_fixture.fixture_prices()
+    excluded = {e["model"] for e in raw["excluded"]} & set(prices)
+    assert excluded, "the fixture excludes a priced model"
     for group in doc["groups"]:
         for choice in group["choices"]:
             model = choice["model"]
+            assert choice == {
+                "model": model, "allowed": True, "reason": None,
+                "caution": model_choice.caution_for(raw, prices, group["key"], model),
+            }, (group["key"], model)
             if model in excluded:
-                assert choice["allowed"] is False, (group["key"], model)
-                assert f"{model} is excluded" in choice["reason"]
-            else:
-                assert choice == {"model": model, "allowed": True, "reason": None}, (
-                    group["key"], model)
+                assert "set aside" in choice["caution"], (group["key"], model)
 
 
 def test_a_groups_leader_is_always_allowed_and_a_reason_never_names_a_project():
@@ -245,6 +254,7 @@ def test_a_groups_leader_is_always_allowed_and_a_reason_never_names_a_project():
             else:
                 assert isinstance(choice["reason"], str) and choice["reason"]
                 assert not choice["reason"].startswith("projects.")
+                assert choice["caution"] is None
 
 
 
@@ -387,22 +397,38 @@ def _answer(errors: list[str], prefix: str) -> tuple[bool, str | None]:
 
 
 def _check_choices(raw: dict, doc: dict, prices: dict) -> int:
-    """Every choice on `doc` is `policy_errors`' answer for a real project
-    carrying it as an exception of `raw`; the number checked."""
+    """Every choice on `doc` is the gate's answer for the change the console
+    makes for it (DRE-6786): the model lifted from `excluded` and written as a
+    real project's exception of `raw`. A model the pinned Claude Code cannot
+    run is refused before the policy is asked. An allowed choice carries
+    `caution_for`'s sentence and a refused one none. The number checked."""
     slugs = mf.declared_repo_slugs()
     assert REAL_SLUG in slugs
+    floors = ccp.model_floors(ROOT)
+    installed = ccp.installed_claude_code(ROOT) if floors else None
     checked = 0
     for group in doc["groups"]:
         kind = group["key"]
         for choice in group["choices"]:
+            model = choice["model"]
             trial = copy.deepcopy(raw)
-            trial["projects"] = {REAL_SLUG: {kind: choice["model"]}}
-            allowed, reason = _answer(
-                mf.policy_errors(trial, prices, repo_slugs=slugs),
-                f"projects.{REAL_SLUG}.{kind}: ",
-            )
-            assert (choice["allowed"], choice["reason"]) == (allowed, reason), (
-                kind, choice["model"])
+            trial["excluded"] = [
+                e for e in trial.get("excluded") or []
+                if (e.get("model") if isinstance(e, dict) else e) != model]
+            trial["projects"] = {REAL_SLUG: {kind: model}}
+            floor = floors.get(model)
+            if floor and ccp.version_key(installed) < ccp.version_key(floor):
+                allowed, reason = False, (
+                    f"Our pinned Claude Code cannot run {model_choice.model_label(model)} yet.")
+            else:
+                allowed, reason = _answer(
+                    mf.policy_errors(trial, prices, repo_slugs=slugs),
+                    f"projects.{REAL_SLUG}.{kind}: ",
+                )
+            caution = (model_choice.caution_for(raw, prices, kind, model)
+                       if allowed else None)
+            assert (choice["allowed"], choice["reason"], choice["caution"]) == (
+                allowed, reason, caution), (kind, model)
             checked += 1
     assert checked == len(raw["kinds"]) * len(prices)
     return checked
@@ -454,8 +480,9 @@ def test_the_renderer_writes_the_gates_answer_for_every_choice_and_move(tmp_path
         (model_fixture.FIXTURE_DIR / "agents.yaml").read_text())
     assert _check_choices(raw, doc, prices)
     assert _check_moves(raw, doc, prices, registry)
-    # Both answers occur, so a renderer that allowed everything — or nothing —
-    # could not pass.
-    verdicts = {c["allowed"] for g in doc["groups"] for c in g["choices"]}
-    verdicts &= {m["allowed"] for a in doc["agents"] for m in a["moves"]}
-    assert verdicts == {True, False}
+    # Both answers occur among the moves, and both a caution and none among the
+    # choices — every choice is allowed since DRE-6786 — so a renderer that
+    # allowed every move, or cautioned every choice or none, could not pass.
+    assert {m["allowed"] for a in doc["agents"] for m in a["moves"]} == {True, False}
+    cautions = {c["caution"] is None for g in doc["groups"] for c in g["choices"]}
+    assert cautions == {True, False}
