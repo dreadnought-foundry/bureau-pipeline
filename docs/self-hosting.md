@@ -94,10 +94,16 @@ agent-bureau repo; the third clause added by DRE-2103).
   made and written here, `vN` is the only fleet-facing channel.
 - **Vendor actions ride the same channel, by SHA (DRE-3418).** Every
   third-party `uses:` in `.github/workflows` and `.github/actions` is pinned
-  to a 40-char commit sha with its release in a trailing `# v<version>`
-  comment; `scripts/check_action_pins.py` runs in `tests.yml` and fails on
-  any that is not. Our own `dreadnought-foundry/*` references are exempt by
-  name — they ARE the channel described above. So a vendor release reaches
+  to a 40-char commit sha with its release in a trailing `# vX.Y.Z`
+  comment (exactly three components); `scripts/check_action_pins.py` runs in
+  `tests.yml` and fails on any that is not. Our own `dreadnought-foundry/*`
+  references are exempt by name — they ARE the channel described above — and
+  so are local `./` paths and `docker://` images. The checker is one file
+  carried in two repositories (DRE-6770): agent-bureau runs the same bytes
+  over its own tree and its scaffold stubs, its parity test compares its copy
+  byte for byte against `stable`, and `scripts/mirror_check.py` runs that
+  test before `stable` moves — so change it here, and agent-bureau copies
+  it. So a vendor release reaches
   the fleet exactly the way our own code does: **Dependabot proposes, the
   harness proves, the channel carries.** The bump arrives as a PR the critic
   reviews and the harness exercises against the real action, and only then
