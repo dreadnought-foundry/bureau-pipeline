@@ -182,6 +182,10 @@ import model_fallback  # noqa: E402 — after the path insert, by design
 # prints into the log, and the one reader of it. Import-safe: no I/O at import.
 import credential_rotation  # noqa: E402 — after the path insert, by design
 
+# A run the stream watchdog stopped for going silent (DRE-6974): the one reader
+# of the line it writes. Stdlib-only at module level, so no import cycle.
+import stream_watchdog  # noqa: E402 — after the path insert, by design
+
 DEAD_TAG = "dead-run-requeue"
 HOLD_LABEL = "needs-human"
 # The clock on every limit-death marker (DRE-4208): a marker nothing has
@@ -418,10 +422,23 @@ def limit_kind(text: str) -> str | None:
     GitHub echoes into every planner run's log. The evidence is the receipt
     step's printed line (`credential_rotation.in_log`), because the 401 itself
     never reaches the log. Linear is untouched, as it is by the turn cap.
+
+    THE STALL VETO (DRE-6974) is the third, on the same side. A run the stream
+    watchdog stopped for going silent hit no wall, and it is owed the medic's
+    one retry. Planner run 38170959772 went quiet 13 minutes in and was marked
+    `kind=claude … assumed=yes` off that same echoed plan.yml comment, so the
+    marker skipped the retry the card's stall record promised. The evidence is
+    the watchdog's own line (`stream_watchdog.stall_from_log`), which reads
+    only a real, unquoted stall — prose that mentions one changes nothing. A
+    real wall behind a stall dies at the retry's first model call, with no
+    stall line, and is marked then. Linear is untouched, as above.
     """
     text = text or ""
-    if not turn_cap_in_text(text) and not credential_rotation.in_log(text) and any(
-        sig in text.lower() for sig in _CLAUDE_LIMIT_SIGNATURES
+    if (
+        not turn_cap_in_text(text)
+        and not credential_rotation.in_log(text)
+        and stream_watchdog.stall_from_log(text) is None
+        and any(sig in text.lower() for sig in _CLAUDE_LIMIT_SIGNATURES)
     ):
         return "claude"
     for sig in LIMIT_SIGNATURES:
