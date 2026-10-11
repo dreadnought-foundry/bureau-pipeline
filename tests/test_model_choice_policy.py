@@ -15,12 +15,24 @@ strands a project's choice, and a model a project names stays a known model.
 
 THE TREE
 --------
-Every scenario is an edit of a COPY of today's `config/models.yaml`, judged
-against today's `config/model-prices.yaml`, in a copied tree of `scripts/` and
-`config/` — the pattern tests/test_project_model_exceptions.py uses.
-`model_fallback` reads its config off its own path, so the copy is the only way
-to drive the real selector and CLI on a config the repo does not ship. The
-probe is stubbed (`BUREAU_FAKE_AVAILABLE`, or a lambda in-process): no network.
+Every scenario is an edit of the FROZEN `models.yaml`, judged against the frozen
+`model-prices.yaml` (`tests/model_fixture.py`), in a tree of today's `scripts/`
+on those files (`model_fixture.fixture_tree`) — the pattern
+tests/test_project_model_exceptions.py uses. `model_fallback` reads its config
+off its own path, so the tree is the only way to drive the real selector and
+CLI on a config the repo does not ship. The probe is stubbed
+(`BUREAU_FAKE_AVAILABLE`, or a lambda in-process): no network.
+
+WHAT IS NEVER READ OFF THE COMMITTED FILE (DRE-6935)
+----------------------------------------------------
+The console rewrites `config/models.yaml` on every save, and this file first
+tested its rules against that file as it stood on 2026-10-10: every one of the
+fifteen default changes the page offered turned it red. So every model id a
+scenario names is read off the fixture's ladders by the part it plays —
+`BUILD_TOP` leads the Builders and is the Reviewers' last rung, and so on —
+and `test_the_fixture_holds_the_scenario` says what each must be. Only the
+tests named `test_todays_*`, and the one that never climbs, read the committed
+file, and each checks what must hold for any state the console can save.
 
 Run: cd bureau-pipeline && python3 -m pytest tests/test_model_choice_policy.py -q
 """
@@ -31,7 +43,6 @@ import copy
 import hashlib
 import json
 import os
-import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -41,23 +52,46 @@ import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
+sys.path.insert(0, str(ROOT / "tests"))
 
 import model_adoption as ma  # noqa: E402
 import model_adoption_actions as maa  # noqa: E402
 import model_fallback as mf  # noqa: E402
+import model_fixture  # noqa: E402
 
 CONFIG_PATH = ROOT / "config" / "models.yaml"
 REPO_MAP_PATH = ROOT / "config" / "repo-map.json"
 
-OPUS55 = "claude-opus-5-5"
-OPUS5 = "claude-opus-5"
-SONNET55 = "claude-sonnet-5-5"
-SONNET5 = "claude-sonnet-5"
-SONNET46 = "claude-sonnet-4-6"
-FABLE51 = "claude-fable-5-1"
-HAIKU55 = "claude-haiku-5-5"
-
 REVIEWERS = ("critic", "verifier")
+
+# --------------------------------------------------------------------------- #
+# The models every scenario names, each read off the frozen ladders by the     #
+# part it plays (`test_the_fixture_holds_the_scenario` says what that is)      #
+# --------------------------------------------------------------------------- #
+
+_FX = model_fixture.fixture_config()
+BUILD = model_fixture.ladder(_FX, "workhorse")
+REVIEW = model_fixture.ladder(_FX, "advisory")
+PLAN = model_fixture.ladder(_FX, "judgement")
+_RULES = {r["built_on"]: r["reviewers_use"] for r in _FX["review_separation"]["rules"]}
+
+#: Leads the Builders, and is the Reviewers' last rung.
+BUILD_TOP = BUILD[0]
+#: A Builders rung on no Reviewers rung.
+BUILD_ONLY = next(m for m in BUILD if m not in REVIEW)
+#: Leads the Reviewers, and is a Builders rung with a declared rule.
+REVIEW_TOP = REVIEW[0]
+#: The Reviewers' second rung.
+REVIEW_NEXT = REVIEW[1]
+#: Leads the Planners, on no Builders rung.
+PLAN_TOP = PLAN[0]
+#: The Planners' last rung, on neither the Builders' nor the Reviewers' ladder.
+PLAN_LAST = PLAN[-1]
+#: The frozen prices, for the adoption's reader.
+FROZEN_PRICES = model_fixture.FIXTURE_DIR / "model-prices.yaml"
+#: An excluded model with a declared price.
+EXCLUDED = next(e["model"] for e in _FX["excluded"]
+                if e["model"] in model_fixture.fixture_prices())
 
 
 # --------------------------------------------------------------------------- #
@@ -65,11 +99,17 @@ REVIEWERS = ("critic", "verifier")
 # --------------------------------------------------------------------------- #
 
 def committed() -> dict:
+    """The committed file, for what must hold in any state the console saves."""
     return yaml.safe_load(CONFIG_PATH.read_text())
 
 
+def frozen() -> dict:
+    """The frozen `models.yaml`, parsed afresh — a test may edit its copy."""
+    return model_fixture.fixture_config()
+
+
 def prices() -> dict:
-    return mf.declared_prices()
+    return model_fixture.fixture_prices()
 
 
 def slugs() -> set[str]:
@@ -105,11 +145,11 @@ def with_project(cfg: dict, slug: str, entry: dict) -> dict:
 
 
 def make_tree(base: Path, cfg: dict) -> Path:
-    ignore = shutil.ignore_patterns("__pycache__", "*.pyc")
-    shutil.copytree(ROOT / "scripts", base / "scripts", ignore=ignore)
-    shutil.copytree(ROOT / "config", base / "config", ignore=ignore)
-    (base / "config" / "models.yaml").write_text(yaml.safe_dump(cfg, sort_keys=False))
-    return base
+    """Today's scripts on the frozen files, `cfg` as its models.yaml."""
+    model_fixture.fixture_tree(base / "tree")
+    (base / "tree" / "config" / "models.yaml").write_text(
+        yaml.safe_dump(cfg, sort_keys=False))
+    return base / "tree"
 
 
 def env(available: dict | None = None) -> dict:
@@ -165,16 +205,32 @@ def decision(tree: Path, role: str, **kwargs) -> dict:
 # Four choices, each admitted and each leading its walk                        #
 # --------------------------------------------------------------------------- #
 
+def test_the_fixture_holds_the_scenario():
+    """Each name above plays the part its comment says, or every scenario
+    below would pass for the wrong reason."""
+    assert BUILD_TOP in REVIEW and BUILD_TOP != REVIEW_TOP
+    assert BUILD_TOP not in _RULES
+    assert BUILD_ONLY not in REVIEW
+    assert REVIEW_TOP in BUILD and REVIEW_TOP in _RULES
+    assert set(REVIEW) <= set(BUILD), "every Reviewers rung also builds"
+    assert PLAN_TOP not in BUILD
+    assert PLAN_LAST not in BUILD + REVIEW and PLAN_LAST != PLAN_TOP
+    assert EXCLUDED not in BUILD + REVIEW + PLAN
+    assert len({BUILD_TOP, BUILD_ONLY, REVIEW_TOP, REVIEW_NEXT, PLAN_TOP,
+                PLAN_LAST, EXCLUDED}) == 7
+    assert errors(frozen()) == []
+
+
 CHOICES = {
-    "planners-opus55": (lambda: lead_with(committed(), "judgement", OPUS55),
-                        "planner", None, OPUS55),
-    "builders-fable51": (lambda: lead_with(committed(), "workhorse", FABLE51),
-                         "engineer", None, FABLE51),
-    "reviewers-opus55": (lambda: lead_with(committed(), "advisory", OPUS55),
-                         "critic", None, OPUS55),
-    "atlas-builders-sonnet46": (
-        lambda: with_project(committed(), "atlas", {"workhorse": SONNET46}),
-        "engineer", "atlas", SONNET46),
+    "planners-build-top": (lambda: lead_with(frozen(), "judgement", BUILD_TOP),
+                           "planner", None, BUILD_TOP),
+    "builders-planners-top": (lambda: lead_with(frozen(), "workhorse", PLAN_TOP),
+                              "engineer", None, PLAN_TOP),
+    "reviewers-build-top": (lambda: lead_with(frozen(), "advisory", BUILD_TOP),
+                            "critic", None, BUILD_TOP),
+    "atlas-builders-off-ladder": (
+        lambda: with_project(frozen(), "atlas", {"workhorse": PLAN_LAST}),
+        "engineer", "atlas", PLAN_LAST),
 }
 
 
@@ -193,24 +249,24 @@ def test_a_choice_is_admitted_and_leads_its_walk(name, tmp_path):
 
 
 def test_the_reviewers_choice_needs_no_declared_rule():
-    cfg = lead_with(committed(), "advisory", OPUS55)
+    cfg = lead_with(frozen(), "advisory", BUILD_TOP)
     rules = {r["built_on"] for r in cfg["review_separation"]["rules"]}
-    assert OPUS55 not in rules
-    assert OPUS55 in ladder(cfg, "workhorse")
+    assert BUILD_TOP not in rules
+    assert BUILD_TOP in ladder(cfg, "workhorse")
     assert errors(cfg) == []
 
 
 def test_a_project_exception_off_its_ladder_walks_it_first_then_the_ladder(tmp_path):
-    cfg = with_project(committed(), "atlas", {"workhorse": SONNET46})
-    assert SONNET46 not in ladder(cfg, "workhorse")
-    want = [SONNET46, OPUS55, OPUS5, SONNET55, SONNET5]
+    cfg = with_project(frozen(), "atlas", {"workhorse": PLAN_LAST})
+    assert PLAN_LAST not in ladder(cfg, "workhorse")
+    want = [PLAN_LAST, *BUILD]
     assert mf.effective_ladders(cfg, "atlas")["workhorse"] == want
     tree = make_tree(tmp_path, cfg)
     got = py(tree, "print(json.dumps([mf.ladder_for('engineer', 'atlas'), "
-                   "mf.fallback_for('engineer', 'claude-sonnet-4-6', 'atlas'), "
+                   f"mf.fallback_for('engineer', {PLAN_LAST!r}, 'atlas'), "
                    "mf.select_with_reasons('engineer', repo='atlas', "
                    "probe=probe)['exception']]))")
-    assert got == [want, OPUS55, SONNET46]
+    assert got == [want, BUILD_TOP, PLAN_LAST]
 
 
 # --------------------------------------------------------------------------- #
@@ -219,21 +275,23 @@ def test_a_project_exception_off_its_ladder_walks_it_first_then_the_ladder(tmp_p
 
 SEPARATIONS = {
     # (a) the fleet's Reviewers lead with the fleet's build model.
-    "a-fleet-reviewers-opus55": (
-        lambda: lead_with(committed(), "advisory", OPUS55), None, OPUS55, SONNET55),
-    # (b) atlas builds on the model the fleet's reviewers lead with.
-    "b-atlas-builds-sonnet55": (
-        lambda: with_project(committed(), "atlas", {"workhorse": SONNET55}),
-        "atlas", SONNET55, OPUS55),
+    "a-fleet-reviewers-build-top": (
+        lambda: lead_with(frozen(), "advisory", BUILD_TOP), None, BUILD_TOP,
+        REVIEW_TOP),
+    # (b) atlas builds on the model the fleet's reviewers lead with, which the
+    # declared rule sends to its own substitute.
+    "b-atlas-builds-review-top": (
+        lambda: with_project(frozen(), "atlas", {"workhorse": REVIEW_TOP}),
+        "atlas", REVIEW_TOP, _RULES[REVIEW_TOP]),
     # (c) atlas's reviewers lead with the model atlas builds on.
-    "c-atlas-reviewers-opus55": (
-        lambda: with_project(committed(), "atlas", {"advisory": OPUS55}),
-        "atlas", OPUS55, SONNET55),
+    "c-atlas-reviewers-build-top": (
+        lambda: with_project(frozen(), "atlas", {"advisory": BUILD_TOP}),
+        "atlas", BUILD_TOP, REVIEW_TOP),
     # (d) atlas builds AND reviews on the same off-ladder model.
-    "d-atlas-both-sonnet46": (
-        lambda: with_project(committed(), "atlas",
-                             {"workhorse": SONNET46, "advisory": SONNET46}),
-        "atlas", SONNET46, SONNET55),
+    "d-atlas-both-off-ladder": (
+        lambda: with_project(frozen(), "atlas",
+                             {"workhorse": PLAN_LAST, "advisory": PLAN_LAST}),
+        "atlas", PLAN_LAST, REVIEW_TOP),
 }
 
 
@@ -258,57 +316,70 @@ def test_a_reviewer_is_separated_from_the_build_model(name, tmp_path):
 
 
 def test_reviewers_for_reads_the_raw_and_the_normalized_shape():
-    # Only atlas carries an entry: the committed map is whatever the console
-    # last saved (DRE-6858), and portico must be a project with none here.
-    cfg = committed()
-    cfg["projects"] = {"atlas": {"advisory": OPUS55}}
+    # Only atlas carries an entry, and portico must be a project with none.
+    cfg = frozen()
+    cfg["projects"] = {"atlas": {"advisory": BUILD_TOP}}
     norm = mf._normalize_config(cfg)
-    assert mf.reviewers_for(cfg, OPUS55, "atlas") == \
-        mf.reviewers_for(norm, OPUS55, "atlas") == [SONNET55, SONNET5]
+    # atlas walks its choice, then the fleet's Reviewers, less the build model.
+    want = [m for m in REVIEW if m != BUILD_TOP]
+    assert len(want) == 2
+    assert mf.reviewers_for(cfg, BUILD_TOP, "atlas") == \
+        mf.reviewers_for(norm, BUILD_TOP, "atlas") == want
     # No slug, or one with no entry, is the fleet's walk.
     fleet = ladder(cfg, "advisory")
     assert mf.reviewers_for(cfg, None) == fleet
-    assert mf.reviewers_for(cfg, OPUS5, "portico") == fleet
-    assert mf.reviewers_for(cfg, SONNET55, "nowhere") == [OPUS55, SONNET5]
+    assert mf.reviewers_for(cfg, BUILD_ONLY, "portico") == fleet
+    # A build on a model with a declared rule leads with the rule's substitute.
+    substitute = _RULES[REVIEW_TOP]
+    assert mf.reviewers_for(cfg, REVIEW_TOP, "nowhere") == [
+        substitute, *[m for m in fleet if m not in (REVIEW_TOP, substitute)]]
 
 
 # --------------------------------------------------------------------------- #
-# The unknown build model, on today's file and on the Reviewers → Opus 5.5 one  #
+# The unknown build model, on the frozen file and with the Reviewers led by    #
+# the build model                                                              #
 # --------------------------------------------------------------------------- #
 
-def test_an_unknown_build_still_lands_on_opus55_on_todays_config():
+def test_an_unknown_build_lands_on_the_reviewers_last_rung_on_the_frozen_config(tmp_path):
+    # Every Reviewers rung also builds, so none is left, and the walk keeps
+    # its last.
+    tree = make_tree(tmp_path, frozen())
     for role in REVIEWERS:
-        mf.clear_availability_cache()
-        assert mf.select(role, probe=lambda m: True, built_on_unknown=True) == OPUS55
+        got = decision(tree, role, built_on_unknown=True)
+        assert got["model"] == REVIEW[-1], role
+        assert cli(tree, role, "--built-on-unknown")[0] == REVIEW[-1], role
 
 
-def test_the_unknown_case_on_reviewers_opus55_keeps_the_last_rung_and_says_so(tmp_path):
-    cfg = lead_with(committed(), "advisory", OPUS55)
-    assert ladder(cfg, "advisory") == [OPUS55, SONNET55, SONNET5]
+def test_the_unknown_case_on_reviewers_led_by_the_build_top_keeps_the_last_rung_and_says_so(
+        tmp_path):
+    cfg = lead_with(frozen(), "advisory", BUILD_TOP)
+    walk = ladder(cfg, "advisory")
+    assert walk == [BUILD_TOP, *[m for m in REVIEW if m != BUILD_TOP]]
+    last = walk[-1]
     tree = make_tree(tmp_path, cfg)
     for role in REVIEWERS:
         got = decision(tree, role, built_on_unknown=True)
-        assert got["model"] == SONNET5, role
-        assert sorted(got["separated"]) == sorted([OPUS55, SONNET55])
-        assert (f"; {SONNET5}, the walk's last rung, also builds for the fleet "
+        assert got["model"] == last, role
+        assert sorted(got["separated"]) == sorted(walk[:-1])
+        assert (f"; {last}, the walk's last rung, also builds for the fleet "
                 "and reviews this one because nothing else was left") in got["note"]
         assert len(got["note"].splitlines()) == 1
         model, note = cli(tree, role, "--built-on-unknown")
-        assert model == SONNET5
-        # Read off the card, the same file reviews an Opus 5.5 build on Sonnet 5.5.
-        assert decision(tree, role, built_on=OPUS55)["model"] == SONNET55
-        assert cli(tree, role, "--built-on", OPUS55)[0] == SONNET55
+        assert model == last
+        # The same file reviews a build on its top rung on the rung below it.
+        assert decision(tree, role, built_on=BUILD_TOP)["model"] == walk[1]
+        assert cli(tree, role, "--built-on", BUILD_TOP)[0] == walk[1]
 
 
 def test_the_unknown_case_reads_the_projects_build_walk(tmp_path):
     """A project whose Builders walk adds a model its reviewers lead with: the
     unknown case takes it off, which the fleet's build walk alone would not."""
-    cfg = with_project(committed(), "atlas",
-                       {"workhorse": SONNET46, "advisory": SONNET46})
+    cfg = with_project(frozen(), "atlas",
+                       {"workhorse": PLAN_LAST, "advisory": PLAN_LAST})
     tree = make_tree(tmp_path, cfg)
     on_atlas = decision(tree, "critic", repo="atlas", built_on_unknown=True)
-    assert SONNET46 in on_atlas["separated"]
-    assert on_atlas["model"] == OPUS55
+    assert PLAN_LAST in on_atlas["separated"]
+    assert on_atlas["model"] == REVIEW[-1]
     assert "also builds for atlas" in on_atlas["note"]
 
 
@@ -317,7 +388,7 @@ def test_the_unknown_case_reads_the_projects_build_walk(tmp_path):
 # --------------------------------------------------------------------------- #
 
 def test_an_unpriced_exception_is_refused_in_plain_words():
-    cfg = with_project(committed(), "atlas", {"workhorse": "claude-nova-9"})
+    cfg = with_project(frozen(), "atlas", {"workhorse": "claude-nova-9"})
     assert errors(cfg) == [
         "projects.atlas.workhorse: claude-nova-9 has no declared price, so it "
         "cannot be chosen."
@@ -326,7 +397,7 @@ def test_an_unpriced_exception_is_refused_in_plain_words():
 
 def test_an_unpriced_rung_is_refused_with_the_same_sentence():
     for kind in ("workhorse", "advisory", "judgement"):
-        cfg = committed()
+        cfg = frozen()
         cfg["ladders"][ladder_name(cfg, kind)].append(
             {"model": "claude-nova-9", "reason": "priced nowhere"})
         assert errors(cfg) == [
@@ -343,37 +414,39 @@ def test_the_unpriced_sentence_carries_no_engineering_words():
 
 
 def test_an_excluded_model_on_a_ladder_is_still_refused():
-    cfg = lead_with(committed(), "workhorse", HAIKU55)
+    cfg = lead_with(frozen(), "workhorse", EXCLUDED)
     found = errors(cfg)
-    assert any(e.startswith(f"ladders.workhorse: {HAIKU55} is excluded")
+    assert any(e.startswith(f"ladders.workhorse: {EXCLUDED} is excluded")
                for e in found), found
 
 
 @pytest.mark.parametrize("edit, needle", [
     (lambda c: c["review_separation"]["rules"].append(
-        {"built_on": OPUS5, "reviewers_use": SONNET55, "reason": "stale"}), "STALE"),
+        {"built_on": BUILD_ONLY, "reviewers_use": REVIEW_TOP, "reason": "stale"}),
+     "STALE"),
     (lambda c: c["review_separation"]["rules"][0].update(
         reviewers_use=c["review_separation"]["rules"][0]["built_on"]),
      "sends the reviewer back"),
-    (lambda c: c["review_separation"]["rules"][0].update(reviewers_use=SONNET46),
+    (lambda c: c["review_separation"]["rules"][0].update(reviewers_use=PLAN_LAST),
      "is not on the advisory ladder"),
 ], ids=["stale", "back-to-build", "off-advisory"])
 def test_a_malformed_declared_rule_is_still_refused(edit, needle):
-    cfg = committed()
+    cfg = frozen()
     edit(cfg)
     found = errors(cfg)
     assert any(needle in e for e in found), found
 
 
 def test_a_fourth_kind_is_still_refused_in_rule_1s_words():
-    cfg = committed()
+    cfg = frozen()
     cfg["kinds"]["designers"] = {"ladder": ladder_name(cfg, "workhorse")}
     found = errors(cfg)
     assert len(found) == 1 and found[0].startswith("kinds: must declare exactly ")
 
 
 def test_todays_config_still_passes_with_no_rung_moved():
-    assert errors(committed()) == []
+    assert mf.policy_errors(committed(), mf.declared_prices(),
+                            repo_slugs=slugs()) == []
     assert mf.policy_errors(committed()) == []
 
 
@@ -382,7 +455,7 @@ def test_todays_config_still_passes_with_no_rung_moved():
 # --------------------------------------------------------------------------- #
 
 def test_a_retired_id_on_a_ladder_is_refused_in_the_ladder_form():
-    cfg = committed()
+    cfg = frozen()
     retired = cfg["retired"][0]["model"]
     cfg["ladders"][ladder_name(cfg, "judgement")].append(
         {"model": retired, "reason": "still here"})
@@ -396,7 +469,8 @@ def test_a_retired_id_on_a_ladder_is_refused_in_the_ladder_form():
 
 
 def test_todays_config_names_no_retired_id():
-    assert not [e for e in errors(committed()) if e.startswith("retired:")]
+    found = mf.policy_errors(committed(), mf.declared_prices(), repo_slugs=slugs())
+    assert not [e for e in found if e.startswith("retired:")]
 
 
 # --------------------------------------------------------------------------- #
@@ -416,9 +490,9 @@ def _adopt(candidate: str, replaces: str, *ladders: str) -> dict:
 
 
 def _config_text(projects: dict) -> str:
-    """Today's config/models.yaml TEXT with its `projects:` block replaced —
+    """The frozen models.yaml TEXT with its `projects:` block replaced —
     `apply_text` edits text, never a re-dump."""
-    lines = CONFIG_PATH.read_text().splitlines(keepends=True)
+    lines = model_fixture.fixture_text().splitlines(keepends=True)
     start = next(i for i, l in enumerate(lines) if l.startswith("projects:"))
     end = next(i for i in range(start + 1, len(lines))
                if lines[i].strip() and not lines[i][0].isspace())
@@ -429,33 +503,42 @@ def _config_text(projects: dict) -> str:
     return "".join(lines[:start] + block + ["\n"] + lines[end:])
 
 
+def _successor(model: str) -> str:
+    """An id the catalog could publish next in `model`'s family."""
+    return f"claude-{ma.family(model)}-99"
+
+
 def test_an_adoption_never_strands_a_non_rung_exception():
-    candidate = "claude-sonnet-4-7"
-    text = _config_text({"atlas": {"workhorse": SONNET46}})
+    # The Planners' last rung, which no Builders rung is: atlas names it as a
+    # Builders choice off that group's ladder, and its successor replaces it
+    # on the Planners' ladder only.
+    candidate = _successor(PLAN_LAST)
+    text = _config_text({"atlas": {"workhorse": PLAN_LAST}})
     assert errors(yaml.safe_load(text)) == []
-    result = maa.apply_text(text, _adopt(candidate, SONNET46, "judgement"),
+    result = maa.apply_text(text, _adopt(candidate, PLAN_LAST, "judgement"),
                             "2026-10-11")
     after = yaml.safe_load(result)
-    assert after["projects"]["atlas"]["workhorse"] == SONNET46
+    assert after["projects"]["atlas"]["workhorse"] == PLAN_LAST
     assert ladder(after, "judgement")[-1] == candidate
-    assert SONNET46 in [r["model"] for r in after["retired"]]
+    assert PLAN_LAST in [r["model"] for r in after["retired"]]
     with_candidate = {**prices(), candidate: {"input": 1.0, "output": 5.0}}
     assert errors(after, with_candidate) == [
-        "retired: claude-sonnet-4-6 is retired and is still named by "
+        f"retired: {PLAN_LAST} is retired and is still named by "
         "projects.atlas.workhorse — a retired model is never selectable, so "
         "nothing was written. The operator changes or clears that choice on "
         "Settings › Agents & models, and the next daily run retires "
-        "claude-sonnet-4-6."
+        f"{PLAN_LAST}."
     ]
 
 
 def test_an_adoption_still_moves_an_exception_on_its_own_kinds_rung():
-    candidate = "claude-sonnet-5-6"
-    text = _config_text({"atlas": {"workhorse": SONNET55}})
-    # Sonnet 5.5 is a rung of both the Builders' and the Reviewers' ladder,
-    # so a same-family successor replaces it on both, as the classifier says.
+    candidate = _successor(REVIEW_TOP)
+    text = _config_text({"atlas": {"workhorse": REVIEW_TOP}})
+    # The Reviewers' top is a rung of both the Builders' and the Reviewers'
+    # ladder, so a same-family successor replaces it on both, as the
+    # classifier says.
     result = maa.apply_text(
-        text, _adopt(candidate, SONNET55, "workhorse", "advisory"), "2026-10-11")
+        text, _adopt(candidate, REVIEW_TOP, "workhorse", "advisory"), "2026-10-11")
     after = yaml.safe_load(result)
     assert after["projects"]["atlas"]["workhorse"] == candidate
     # The exception moved with its rung, so nothing refuses it and nothing is
@@ -469,41 +552,42 @@ def test_an_adoption_still_moves_an_exception_on_its_own_kinds_rung():
 # A model only a project names is still a known model                          #
 # --------------------------------------------------------------------------- #
 
-def _haiku_for_atlas() -> dict:
-    cfg = committed()
-    cfg["excluded"] = [e for e in cfg["excluded"] if e["model"] != HAIKU55]
-    return with_project(cfg, "atlas", {"workhorse": HAIKU55})
+def _excluded_for_atlas() -> dict:
+    cfg = frozen()
+    cfg["excluded"] = [e for e in cfg["excluded"] if e["model"] != EXCLUDED]
+    return with_project(cfg, "atlas", {"workhorse": EXCLUDED})
 
 
 def test_a_model_only_a_project_names_validates():
-    cfg = _haiku_for_atlas()
-    assert not any(HAIKU55 in ids for ids in mf._normalize_config(cfg)["ladders"].values())
+    cfg = _excluded_for_atlas()
+    assert not any(EXCLUDED in ids for ids in mf._normalize_config(cfg)["ladders"].values())
     assert errors(cfg) == []
 
 
 def test_the_adoption_never_asks_about_a_model_a_project_chose():
-    cfg = _haiku_for_atlas()
-    assert HAIKU55 in ma._known_ids(cfg)
+    cfg = _excluded_for_atlas()
+    assert EXCLUDED in ma._known_ids(cfg)
     catalog = [
-        {"id": HAIKU55, "display_name": "Claude Haiku 5.5",
+        {"id": EXCLUDED, "display_name": "The excluded model",
          "created_at": "2026-10-01T00:00:00Z"},
-        {"id": f"{HAIKU55}-20261001", "display_name": "Claude Haiku 5.5",
+        {"id": f"{EXCLUDED}-20261001", "display_name": "The excluded model",
          "created_at": "2026-10-01T00:00:00Z"},
     ]
-    found = ma.classify_catalog(catalog, cfg, ma.load_prices())
-    assert not [d for d in found if d["candidate"].startswith(HAIKU55)], found
+    found = ma.classify_catalog(catalog, cfg, ma.load_prices(FROZEN_PRICES))
+    assert not [d for d in found if d["candidate"].startswith(EXCLUDED)], found
 
 
 def test_a_build_on_a_model_only_a_project_names_is_read_off_its_marker(tmp_path):
-    tree = make_tree(tmp_path, _haiku_for_atlas())
+    tree = make_tree(tmp_path, _excluded_for_atlas())
     got = py(tree, (
-        "print(json.dumps(['claude-haiku-5-5' in mf.KNOWN_MODELS, "
-        "mf.last_attempt_model([mf.attempt_marker('claude-haiku-5-5')]), "
-        "mf.select('critic', repo='atlas', built_on='claude-haiku-5-5', probe=probe), "
-        "mf.select_with_reasons('critic', repo='atlas', built_on='claude-haiku-5-5', "
+        f"m = {EXCLUDED!r}\n"
+        "print(json.dumps([m in mf.KNOWN_MODELS, "
+        "mf.last_attempt_model([mf.attempt_marker(m)]), "
+        "mf.select('critic', repo='atlas', built_on=m, probe=probe), "
+        "mf.select_with_reasons('critic', repo='atlas', built_on=m, "
         "probe=probe)['built_on_unknown']]))"
     ))
-    assert got == [True, HAIKU55, ladder(_haiku_for_atlas(), "advisory")[0], False]
+    assert got == [True, EXCLUDED, ladder(_excluded_for_atlas(), "advisory")[0], False]
 
 
 def test_todays_known_sets_carry_every_project_id():
@@ -516,7 +600,7 @@ def test_todays_known_sets_carry_every_project_id():
 # --------------------------------------------------------------------------- #
 
 def test_the_automatic_paths_never_climb():
-    everything_up = {m: True for m in prices()}
+    everything_up = {m: True for m in mf.declared_prices()}
     for role in mf.AGENT_KINDS:
         mf.clear_availability_cache()
         got = mf.select(role, probe=lambda m: everything_up.get(m, True))
@@ -525,7 +609,7 @@ def test_the_automatic_paths_never_climb():
 
 
 def test_discover_writes_no_file(tmp_path):
-    tree = make_tree(tmp_path, committed())
+    tree = make_tree(tmp_path, frozen())
 
     def digest() -> dict:
         return {str(p.relative_to(tree)): hashlib.sha256(p.read_bytes()).hexdigest()
@@ -541,8 +625,9 @@ def test_discover_writes_no_file(tmp_path):
 def test_a_new_family_is_never_adopted():
     catalog = [{"id": "claude-corvid-1", "display_name": "Claude Corvid 1",
                 "created_at": "2026-11-10T00:00:00Z"}]
-    cheap = {**ma.load_prices(), "claude-corvid-1": {"input": 0.1, "output": 0.5}}
-    for cfg in (committed(), lead_with(committed(), "workhorse", FABLE51),
-                _haiku_for_atlas()):
+    cheap = {**ma.load_prices(FROZEN_PRICES),
+             "claude-corvid-1": {"input": 0.1, "output": 0.5}}
+    for cfg in (frozen(), lead_with(frozen(), "workhorse", PLAN_TOP),
+                _excluded_for_atlas()):
         found = ma.classify_catalog(catalog, copy.deepcopy(cfg), cheap)
         assert found and all(d["rule"] != ma.RULE_ADOPT for d in found), found
