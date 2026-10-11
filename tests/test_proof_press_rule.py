@@ -133,11 +133,15 @@ class EveryDocumentSaysWhosePressTest(unittest.TestCase):
                               f"{name} no longer says the CEO's press is a {BUSINESS}")
 
     def test_the_operators_row_is_quoted_in_the_waiting_grammar(self):
+        """Quoted inline in backticks, or as an indented code line the way
+        `briefs/proof.md` quotes its other rows."""
         for name in TEACHERS:
-            text = _flat(PASSAGES[name]())
+            raw = PASSAGES[name]()
+            quoted = (f"`{OPERATOR_GRAMMAR}`" in _flat(raw)
+                      or f"\n    {OPERATOR_GRAMMAR}\n" in raw)
             with self.subTest(name):
-                self.assertIn(f"`{OPERATOR_GRAMMAR}`", text,
-                              f"{name} does not quote the operator's row as `{OPERATOR_GRAMMAR}`")
+                self.assertTrue(quoted,
+                                f"{name} does not quote the operator's row as `{OPERATOR_GRAMMAR}`")
 
     def test_the_planner_names_the_two_presses_that_were_the_operators(self):
         text = _flat(PASSAGES["briefs/planner.md"]())
