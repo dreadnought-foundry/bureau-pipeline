@@ -121,6 +121,7 @@ def test_add_agent_puts_a_new_name_in_ungrouped_with_its_about_line():
     assert doc["about"]["data-analyst"] == "Answers questions from our data"
     assert {k: v for k, v in doc["about"].items() if k != "data-analyst"} == before["about"]
     assert "data-analyst" not in doc["agents"]
+    assert doc["session_agents"] == before["session_agents"] + ["data-analyst"]
 
 
 def test_add_agent_keeps_an_about_line_that_needs_quoting():
@@ -321,11 +322,16 @@ def test_the_policy_gate_refuses_an_unknown_project():
 
 
 def test_an_ungrouped_agent_with_no_registry_entry_cannot_join_a_group():
-    """`sync_model_config.py` needs an agents.yaml region for every agent in
-    `agents`; the interactive agents have none, so the move is refused here
-    rather than failing the regeneration on the branch."""
-    _, refusals = _apply({"op": "move_agent", "agent": "product-lead", "group": "workhorse"})
-    assert "agents.yaml" in _reasons(refusals)
+    """INVERTED by DRE-6833. The interactive agents have no agents.yaml region,
+    and they are named under `session_agents`: such an agent joins a group with
+    no registry entry, because `sync_model_config.py` never writes one for it.
+    A name in neither the registry nor `session_agents` is still refused
+    (tests/test_session_agents.py)."""
+    text, refusals = _apply({"op": "move_agent", "agent": "product-lead", "group": "workhorse"})
+    assert refusals == [], _reasons(refusals)
+    doc = yaml.safe_load(text)
+    assert doc["agents"]["product-lead"] == "workhorse"
+    assert "product-lead" in doc["session_agents"]
 
 
 def test_each_refused_change_is_named_and_the_admitted_ones_are_not():
@@ -499,7 +505,10 @@ def test_a_refused_change_set_exits_2_names_each_reason_and_writes_nothing(tmp_p
     assert proc.returncode == 2
     errors = [line for line in proc.stdout.splitlines() if line.startswith("::error::")]
     assert any("change 2" in e and "no agent named nobody" in e for e in errors), proc.stdout
-    assert any("change 3" in e and "agents.engineer" in e for e in errors), proc.stdout
+    # The line is plain words since DRE-6833; the validator's own text
+    # (`agents.engineer: …`) reaches the run log as ordinary output.
+    assert any("change 3" in e and "only the planner" in e for e in errors), proc.stdout
+    assert "agents.engineer" in proc.stdout
     assert not any("change 1" in e for e in errors)
     assert (tree / "config/models.yaml").read_text() == _text()
 
