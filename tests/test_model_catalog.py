@@ -62,15 +62,14 @@ import model_fallback as mf  # noqa: E402
 SNAPSHOT_PATH = ROOT / "models.json"
 AGENTS_YAML = ROOT / "agents.yaml"
 
-OPUS = "claude-opus-5"
-# The workhorse ladder's primary since DRE-4836 (2026-09-25).
-OPUS55 = "claude-opus-5-5"
-SONNET = "claude-sonnet-4-6"
-# The workhorse ladder's backup rung since 2026-09-16 (DRE-3880) — it replaced
-# SONNET there, which kept the judgement ladder's last rung.
-SONNET5 = "claude-sonnet-5"
-# The workhorse ladder's Sonnet rung since DRE-5116 (2026-09-28), above Sonnet 5.
-SONNET55 = "claude-sonnet-5-5"
+# Catalog entries for the synthetic catalogs below: what the parser, the
+# staleness ranking and the snapshot are fed, never compared with a committed
+# ladder. Which models the ladders hold is the console's choice, and no test
+# here reads it off a literal (DRE-6861).
+# Ids on no ladder, made up for the purpose: a rung id here would read as a pin
+# of the committed ladders to the guard (DRE-6866) when it is only test data.
+OPUS = "claude-opus-7"
+SONNET = "claude-sonnet-4-1"
 FABLE = "claude-fable-5"
 RETIRED_OPUS = "claude-opus-4-8"
 
@@ -116,7 +115,7 @@ def test_parse_returns_id_display_name_and_created_at():
         payload(
             {
                 "id": OPUS,
-                "display_name": "Claude Opus 5",
+                "display_name": "Claude Opus 7",
                 "created_at": "2026-08-01T00:00:00Z",
             }
         )
@@ -124,7 +123,7 @@ def test_parse_returns_id_display_name_and_created_at():
     assert out == [
         {
             "id": OPUS,
-            "display_name": "Claude Opus 5",
+            "display_name": "Claude Opus 7",
             "created_at": "2026-08-01T00:00:00Z",
         }
     ]
@@ -208,7 +207,7 @@ def test_catalog_fetch_without_a_token_is_empty_not_a_crash(monkeypatch):
 
 def test_fetch_catalog_parses_an_injected_payload():
     catalog = mc.fetch_catalog(
-        fetch=lambda: payload({"id": OPUS, "display_name": "Claude Opus 5"}),
+        fetch=lambda: payload({"id": OPUS, "display_name": "Claude Opus 7"}),
         clock=lambda: 0.0,
     )
     assert [m["id"] for m in catalog] == [OPUS]
@@ -262,7 +261,10 @@ def test_a_catalog_outage_never_blocks_a_dispatch():
     catalog = mc.fetch_catalog(fetch=boom, clock=lambda: 0.0)
     assert catalog == []
     assert mc.stale_ladder(mf.LADDER, catalog) == []
-    assert mf.select("engineer", probe=lambda m: True, clock=lambda: 0.0) == mf.LADDER[0]
+    # The top of the role's own ladder, in whichever group the console last
+    # put it (DRE-6861).
+    assert (mf.select("engineer", probe=lambda m: True, clock=lambda: 0.0)
+            == mf.ladder_for("engineer")[0])
 
 
 # --------------------------------------------------------------------------- #
@@ -271,13 +273,13 @@ def test_a_catalog_outage_never_blocks_a_dispatch():
 
 def test_model_ids_do_not_sort():
     # The trap, pinned as documentation: a lexical sort ranks Opus 10 BELOW
-    # Opus 5. Everything below must rank by created_at instead.
-    assert "claude-opus-10" < "claude-opus-5"
+    # Opus 7. Everything below must rank by created_at instead.
+    assert "claude-opus-10" < OPUS
 
 
 def test_opus_10_is_newer_than_opus_5_by_created_at():
     catalog = [
-        model(OPUS, "Claude Opus 5", "2026-08-01T00:00:00Z"),
+        model(OPUS, "Claude Opus 7", "2026-08-01T00:00:00Z"),
         model("claude-opus-10", "Claude Opus 10", "2027-02-01T00:00:00Z"),
     ]
     findings = mc.stale_ladder([OPUS], catalog)
@@ -288,7 +290,7 @@ def test_opus_10_is_newer_than_opus_5_by_created_at():
 
 def test_the_newest_pin_is_not_stale():
     catalog = [
-        model(OPUS, "Claude Opus 5", "2026-08-01T00:00:00Z"),
+        model(OPUS, "Claude Opus 7", "2026-08-01T00:00:00Z"),
         model(RETIRED_OPUS, "Claude Opus 4.8", "2026-05-01T00:00:00Z"),
     ]
     assert mc.stale_ladder([OPUS], catalog) == []
@@ -299,8 +301,8 @@ def test_a_newer_model_in_another_family_does_not_flag_a_tier():
     # would report "Opus is newer" every single week, forever, and the alert
     # would be trained into noise on day one.
     catalog = [
-        model(SONNET, "Claude Sonnet 4.6", "2026-06-01T00:00:00Z"),
-        model(OPUS, "Claude Opus 5", "2026-08-01T00:00:00Z"),
+        model(SONNET, "Claude Sonnet 4.1", "2026-06-01T00:00:00Z"),
+        model(OPUS, "Claude Opus 7", "2026-08-01T00:00:00Z"),
     ]
     assert mc.stale_ladder([SONNET], catalog) == []
 
@@ -313,30 +315,30 @@ def test_a_pin_absent_from_the_catalog_is_not_flagged():
 
 def test_entries_without_created_at_are_never_ranked():
     catalog = [
-        model(OPUS, "Claude Opus 5", "2026-08-01T00:00:00Z"),
+        model(OPUS, "Claude Opus 7", "2026-08-01T00:00:00Z"),
         model("claude-opus-10", "Claude Opus 10", None),
     ]
     assert mc.stale_ladder([OPUS], catalog) == []
 
 
 def test_a_dated_snapshot_of_the_pinned_alias_is_not_drift():
-    # `claude-opus-5-20260915` IS `claude-opus-5` — the dated form of the same
+    # `claude-opus-7-20260915` IS `claude-opus-7` — the dated form of the same
     # alias. Reporting it as a newer model would fire a card for a no-op.
     catalog = [
-        model(OPUS, "Claude Opus 5", "2026-08-01T00:00:00Z"),
-        model("claude-opus-5-20260915", "Claude Opus 5", "2026-09-15T00:00:00Z"),
+        model(OPUS, "Claude Opus 7", "2026-08-01T00:00:00Z"),
+        model("claude-opus-7-20260915", "Claude Opus 7", "2026-09-15T00:00:00Z"),
     ]
     assert mc.stale_ladder([OPUS], catalog) == []
 
 
 def test_a_point_release_alias_is_drift():
-    # `claude-opus-5-1` is a different model that merely shares the prefix.
+    # `claude-opus-7-1` is a different model that merely shares the prefix.
     catalog = [
-        model(OPUS, "Claude Opus 5", "2026-08-01T00:00:00Z"),
-        model("claude-opus-5-1", "Claude Opus 5.1", "2026-11-01T00:00:00Z"),
+        model(OPUS, "Claude Opus 7", "2026-08-01T00:00:00Z"),
+        model("claude-opus-7-1", "Claude Opus 7.1", "2026-11-01T00:00:00Z"),
     ]
     findings = mc.stale_ladder([OPUS], catalog)
-    assert [f["newer"][0]["id"] for f in findings] == ["claude-opus-5-1"]
+    assert [f["newer"][0]["id"] for f in findings] == ["claude-opus-7-1"]
 
 
 def test_an_empty_catalog_is_never_stale():
@@ -347,9 +349,9 @@ def test_every_tier_of_the_ladder_is_checked_not_a_named_subset():
     # The generalised lesson from the missed `repairer`: enumerate the ladder,
     # never a hand-written list of tiers.
     catalog = [
-        model(OPUS, "Claude Opus 5", "2026-08-01T00:00:00Z"),
+        model(OPUS, "Claude Opus 7", "2026-08-01T00:00:00Z"),
         model("claude-opus-10", "Claude Opus 10", "2027-02-01T00:00:00Z"),
-        model(SONNET, "Claude Sonnet 4.6", "2026-06-01T00:00:00Z"),
+        model(SONNET, "Claude Sonnet 4.1", "2026-06-01T00:00:00Z"),
         model("claude-sonnet-9", "Claude Sonnet 9", "2027-01-01T00:00:00Z"),
     ]
     findings = mc.stale_ladder([OPUS, SONNET], catalog)
@@ -360,7 +362,7 @@ def test_stale_ladder_accepts_the_agents_yaml_ladder_shape():
     # agents.yaml stores a ladder as [{model:, reason:}] — the console reads it
     # from there, so the same normalization model_fallback does applies here.
     catalog = [
-        model(OPUS, "Claude Opus 5", "2026-08-01T00:00:00Z"),
+        model(OPUS, "Claude Opus 7", "2026-08-01T00:00:00Z"),
         model("claude-opus-10", "Claude Opus 10", "2027-02-01T00:00:00Z"),
     ]
     findings = mc.stale_ladder([{"model": OPUS, "reason": "preferred"}], catalog)
@@ -373,12 +375,12 @@ def test_stale_ladder_accepts_the_agents_yaml_ladder_shape():
 
 def test_snapshot_entry_shape():
     snap = mc.build_snapshot(
-        [model(OPUS, "Claude Opus 5", "2026-08-01T00:00:00Z")], known_ids=()
+        [model(OPUS, "Claude Opus 7", "2026-08-01T00:00:00Z")], known_ids=()
     )
     assert snap["models"] == [
         {
             "id": OPUS,
-            "display_name": "Claude Opus 5",
+            "display_name": "Claude Opus 7",
             "created_at": "2026-08-01T00:00:00Z",
             "in_catalog": True,
         }
@@ -397,7 +399,7 @@ def test_snapshot_keeps_ids_that_rotated_out_of_the_api():
         ]
     }
     snap = mc.build_snapshot(
-        [model(OPUS, "Claude Opus 5", "2026-08-01T00:00:00Z")],
+        [model(OPUS, "Claude Opus 7", "2026-08-01T00:00:00Z")],
         previous=previous,
         known_ids=(),
     )
@@ -412,15 +414,15 @@ def test_snapshot_keeps_ids_that_rotated_out_of_the_api():
 def test_snapshot_carries_every_id_the_code_knows():
     # KNOWN_MODELS is the superset the markers validate against, retired ids
     # included; the snapshot must never drop one the pipeline can still read.
-    snap = mc.build_snapshot([model(OPUS, "Claude Opus 5", "2026-08-01T00:00:00Z")])
+    snap = mc.build_snapshot([model(OPUS, "Claude Opus 7", "2026-08-01T00:00:00Z")])
     assert set(mf.KNOWN_MODELS) <= {m["id"] for m in snap["models"]}
 
 
 def test_snapshot_is_ordered_newest_first_and_deterministic():
     catalog = [
-        model(SONNET, "Claude Sonnet 4.6", "2026-06-01T00:00:00Z"),
+        model(SONNET, "Claude Sonnet 4.1", "2026-06-01T00:00:00Z"),
         model("claude-opus-10", "Claude Opus 10", "2027-02-01T00:00:00Z"),
-        model(OPUS, "Claude Opus 5", "2026-08-01T00:00:00Z"),
+        model(OPUS, "Claude Opus 7", "2026-08-01T00:00:00Z"),
     ]
     first = mc.build_snapshot(catalog, known_ids=())
     assert [m["id"] for m in first["models"]] == ["claude-opus-10", OPUS, SONNET]
@@ -430,7 +432,7 @@ def test_snapshot_is_ordered_newest_first_and_deterministic():
 
 def test_write_snapshot_reports_no_change_on_identical_content(tmp_path):
     out = tmp_path / "models.json"
-    snap = mc.build_snapshot([model(OPUS, "Claude Opus 5", "2026-08-01T00:00:00Z")])
+    snap = mc.build_snapshot([model(OPUS, "Claude Opus 7", "2026-08-01T00:00:00Z")])
     assert mc.write_snapshot(out, snap) is True
     before = out.read_bytes()
     assert mc.write_snapshot(out, snap) is False
@@ -442,6 +444,11 @@ def test_generating_the_snapshot_never_mutates_the_ladder_or_agents_yaml(tmp_pat
     a brand-new model is by far the newest, and prove nothing selectable moved.
     """
     ladder_before = list(mf.LADDER)
+    ladders_before = {name: list(rungs) for name, rungs in mf.LADDERS.items()}
+    selected_before = {
+        role: mf.select(role, probe=lambda m: True, clock=lambda: 0.0)
+        for role in mf.AGENT_KINDS
+    }
     known_before = set(mf.KNOWN_MODELS)
     yaml_before = hashlib.sha256(AGENTS_YAML.read_bytes()).hexdigest()
     fallback = ROOT / "scripts" / "model_fallback.py"
@@ -456,12 +463,18 @@ def test_generating_the_snapshot_never_mutates_the_ladder_or_agents_yaml(tmp_pat
     )
 
     assert "claude-opus-99" in out.read_text(), "the snapshot did record it"
-    assert mf.LADDER == ladder_before == [OPUS55, OPUS, SONNET55, SONNET5]
-    assert "claude-opus-99" not in mf.LADDER
+    # Nothing selectable moved, measured against itself before the write —
+    # never against today's ladder, which is the console's choice (DRE-6861).
+    assert mf.LADDER == ladder_before
+    assert mf.LADDERS == ladders_before
+    assert all("claude-opus-99" not in rungs for rungs in mf.LADDERS.values())
     assert set(mf.KNOWN_MODELS) == known_before
     assert hashlib.sha256(AGENTS_YAML.read_bytes()).hexdigest() == yaml_before
     assert hashlib.sha256(fallback.read_bytes()).hexdigest() == fallback_before
-    assert mf.select("engineer", probe=lambda m: True, clock=lambda: 0.0) == OPUS55
+    mf.clear_availability_cache()
+    assert selected_before, "the registry names no role to select for"
+    for role, model_id in selected_before.items():
+        assert mf.select(role, probe=lambda m: True, clock=lambda: 0.0) == model_id, role
 
 
 def test_the_committed_snapshot_is_present_and_shaped():
@@ -494,18 +507,18 @@ def _fake_catalog_env(monkeypatch, *models):
 def test_cli_snapshot_writes_the_file(monkeypatch, tmp_path):
     _fake_catalog_env(
         monkeypatch,
-        {"id": OPUS, "display_name": "Claude Opus 5", "created_at": "2026-08-01T00:00:00Z"},
+        {"id": OPUS, "display_name": "Claude Opus 7", "created_at": "2026-08-01T00:00:00Z"},
     )
     out = tmp_path / "models.json"
     assert mc.main(["snapshot", str(out)]) == 0
     written = json.loads(out.read_text())
-    assert {"id": OPUS, "display_name": "Claude Opus 5"}.items() <= written["models"][0].items()
+    assert {"id": OPUS, "display_name": "Claude Opus 7"}.items() <= written["models"][0].items()
 
 
 def test_cli_snapshot_on_an_outage_leaves_a_good_file_alone(monkeypatch, tmp_path):
     _fake_catalog_env(
         monkeypatch,
-        {"id": OPUS, "display_name": "Claude Opus 5", "created_at": "2026-08-01T00:00:00Z"},
+        {"id": OPUS, "display_name": "Claude Opus 7", "created_at": "2026-08-01T00:00:00Z"},
     )
     out = tmp_path / "models.json"
     mc.main(["snapshot", str(out)])
@@ -544,7 +557,7 @@ def test_the_snapshot_command_still_works_from_the_command_line(tmp_path):
     env = dict(
         os.environ,
         BUREAU_FAKE_CATALOG=json.dumps(
-            payload(model(OPUS, "Claude Opus 5", "2026-08-01T00:00:00Z"))
+            payload(model(OPUS, "Claude Opus 7", "2026-08-01T00:00:00Z"))
         ),
     )
     proc = subprocess.run(
