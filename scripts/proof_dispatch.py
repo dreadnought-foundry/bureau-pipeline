@@ -98,7 +98,9 @@ newest critic verdict's token is `APPROVE` (`reconcile.critic_token`) and
 a merge of main (DRE-2340, DRE-6650). On DRE-6364 the verdict was carried,
 the standing reading said `APPROVE from earlier head 2ae86ef`, and the branch
 refused with "nothing to answer" while the sweep parked the record on its
-review cap.
+review cap. The carry compares the head against the record's `baseRefName`,
+so `RECORD_FIELDS` asks for it and for every field the carry reads; without
+it DRE-6650 still refused DRE-6364 and DRE-6597 on `stable` (DRE-6779).
 
 The contract with the sweep, one sentence in both files: a proof record the
 critic sent back at its head, or one whose `APPROVE` is bound to the head and
@@ -320,10 +322,12 @@ PROMOTED_MARK = f"🧹 Auto-promoted Backlog → {FIRST_RUN_LANE}"
 PR_FIELDS = "number,url,headRefName,state,mergeCommit"
 #: The fields the re-run reads off the record pull request: its head, when it
 #: opened, the comments the critic's verdict and the gate's note are read
-#: from, the files the record is found among (DRE-6488), and the head's checks
-#: a record red on one is read off (DRE-6571).
-RECORD_FIELDS = ("number,url,headRefName,state,headRefOid,createdAt,comments,"
-                 "files,statusCheckRollup")
+#: from, the files the record is found among (DRE-6488), the head's checks
+#: a record red on one is read off (DRE-6571), and the base branch
+#: `reconcile.verdict_bound` compares the head against to carry an APPROVE —
+#: without it the carry returns False before any read (DRE-6779).
+RECORD_FIELDS = ("number,url,headRefName,baseRefName,state,headRefOid,createdAt,"
+                 "comments,files,statusCheckRollup")
 
 #: The card's epic, its siblings and its blocking relations, in one read.
 CARD_QUERY = """query($id: String!) { issue(id: $id) {
