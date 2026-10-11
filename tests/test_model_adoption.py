@@ -64,6 +64,10 @@ import model_fixture  # noqa: E402
 
 MODULE = ROOT / "scripts" / "model_adoption.py"
 CONFIG_PATH = ROOT / "config" / "models.yaml"
+# The ladders the fixture catalog is classified against: the frozen copy
+# (DRE-6859), because a console save can add a rung to a ladder of the
+# committed file and so change what a candidate replaces (DRE-6866).
+FROZEN_CONFIG_PATH = model_fixture.FIXTURE_DIR / "models.yaml"
 PRICES_PATH = ROOT / "config" / "model-prices.yaml"
 
 OPUS = "claude-opus-5"
@@ -201,19 +205,13 @@ def _write_fixture(tmp_path):
 
 
 def _classify_fixture(tmp_path):
-    """The fixture catalog classified against the FROZEN ladders
-    (tests/model_fixture.py): which rung a candidate replaces is a rule of the
-    classifier, and the committed file's ladders are the console's to change
-    (DRE-6935)."""
     catalog_file, prices_file = _write_fixture(tmp_path)
-    config_file = tmp_path / "models.yaml"
-    config_file.write_text(model_fixture.fixture_text())
     proc = run_cli(
         "classify",
         "--snapshot",
         str(catalog_file),
         "--config",
-        str(config_file),
+        str(FROZEN_CONFIG_PATH),
         "--prices",
         str(prices_file),
     )

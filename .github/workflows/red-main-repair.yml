@@ -434,6 +434,30 @@ jobs:
              || steps.pool.outputs.n == '4' && secrets.BUREAU_APP_PRIVATE_KEY_4
              || secrets.BUREAU_APP_PRIVATE_KEY }}
 
+      # THE GITHUB-CALLS READING, first point (DRE-6918, epic DRE-6911). One
+      # point on each pool login's hourly meter after the job's mints, taken by
+      # `github_calls_reading.py` (DRE-6914) — two counted calls per login. Each
+      # INSTALLATION is named once: the boot bot and the selected worker (the
+      # same installation when the pool chose slot 1, which the script folds
+      # into one). The probe tokens are never named. A debounced run mints no
+      # worker, which renders '' and is no login. Tokens by NAME, never as
+      # arguments; `continue-on-error`, and the script exits 0 on every path.
+      - name: GitHub calls — the first point on each pool login
+        id: calls_before
+        continue-on-error: true
+        env:
+          CALLS_BOT_APP: ${{ steps.app.outputs.app-slug }}
+          CALLS_BOT_INSTALLATION: ${{ steps.app.outputs.installation-id }}
+          CALLS_BOT_TOKEN: ${{ steps.app.outputs.token }}
+          CALLS_WORKER_APP: ${{ steps.worker.outputs.app-slug }}
+          CALLS_WORKER_INSTALLATION: ${{ steps.worker.outputs.installation-id }}
+          CALLS_WORKER_TOKEN: ${{ steps.worker.outputs.token }}
+        run: |
+          python3 .bureau-pipeline/scripts/github_calls_reading.py before \
+            --out "${RUNNER_TEMP:-/tmp}/github-calls-before.json" \
+            --login "$CALLS_BOT_APP:$CALLS_BOT_INSTALLATION:CALLS_BOT_TOKEN" \
+            --login "$CALLS_WORKER_APP:$CALLS_WORKER_INSTALLATION:CALLS_WORKER_TOKEN"
+
       # ---- The repair's card, filed BEFORE the agent (DRE-3533) ----
       # Everything the board tracks has a card; repair PRs did not. The branch
       # this prints — repair/DRE-<n>-<sha12> — is what closes that card on
@@ -817,6 +841,32 @@ jobs:
           path: ${{ steps.death.outputs.path }}
           if-no-files-found: warn
           retention-days: 90
+
+      # The second point on each login, the document, and its upload — one
+      # `github-calls:` line per login (DRE-6914). Each token is its
+      # installation's only mint, and the job's 45 minutes are inside the
+      # token's hour. The worker is handed first, so where the pool chose slot
+      # 1 the one installation is read on the newer token. `always()` +
+      # `continue-on-error`: the Report's red above stays the medic's signal.
+      - name: GitHub calls — the second point and the reading
+        id: calls
+        if: always()
+        continue-on-error: true
+        env:
+          CALLS_WORKER_APP: ${{ steps.worker.outputs.app-slug }}
+          CALLS_WORKER_INSTALLATION: ${{ steps.worker.outputs.installation-id }}
+          CALLS_WORKER_TOKEN: ${{ steps.worker.outputs.token }}
+          CALLS_BOT_APP: ${{ steps.app.outputs.app-slug }}
+          CALLS_BOT_INSTALLATION: ${{ steps.app.outputs.installation-id }}
+          CALLS_BOT_TOKEN: ${{ steps.app.outputs.token }}
+        run: |
+          python3 .bureau-pipeline/scripts/github_calls_reading.py emit \
+            --before "${RUNNER_TEMP:-/tmp}/github-calls-before.json" \
+            --out "${RUNNER_TEMP:-/tmp}/github-calls-reading.json" \
+            --workflow red-main-repair.yml \
+            --login "$CALLS_WORKER_APP:$CALLS_WORKER_INSTALLATION:CALLS_WORKER_TOKEN" \
+            --login "$CALLS_BOT_APP:$CALLS_BOT_INSTALLATION:CALLS_BOT_TOKEN" \
+            --github-output "$GITHUB_OUTPUT"
 
       # THE RUN'S WORKING LOG (DRE-5353, after DRE-4269). The repair agent's
       # transcript, scrubbed and put straight into our own store over OIDC —
