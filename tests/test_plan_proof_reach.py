@@ -419,8 +419,10 @@ class TheFindingsCommand(_Cli):
         verdict, _ = plan_critic.read_result(rewritten)
         self.assertEqual(plan_critic.SEND_BACK, verdict)
         found = plan_critic.all_findings(rewritten)
-        self.assertTrue(any(seam in f for f in found), found)
-        self.assertTrue(any(lines[1] in f for f in found), found)
+        self.assertEqual(2, len(found), found)
+        self.assertTrue(found[0].endswith(seam), found)
+        self.assertTrue(found[1].startswith("DRE-6543: criterion"), found)
+        self.assertIn(lines[1], rewritten)
 
     def test_an_empty_structural_file_stays_empty(self):
         structural = self.write("structural.txt", "")

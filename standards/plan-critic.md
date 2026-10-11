@@ -62,6 +62,30 @@ blocked on this epic's PROOF card. See
 `When a plan is two epics — the observation-gated seam (DRE-3244)` in
 `standards/card-quality.md` for the shape.
 
+**A PROOF criterion the proof run cannot read is a send-back at this critic
+too, and so is one reading an operator step the PROOF card is not blocked by**
+(DRE-6606). DRE-6543 asked for repository variables the read token answers 403
+to, DRE-6431 asked for repos in organizations the token cannot reach, DRE-6042
+asked for a log line nothing printed yet, and DRE-6543 read a variable as set
+while setting it was the open operator card DRE-6478 — every one readable off
+the plan before the CEO approved it. The reader is `scripts/plan_proof_reach.py`,
+run straight after the seam in the same step: it reads each open PROOF child's
+acceptance criteria (closing rows skipped) against `config/proof-reach.json`
+through `scripts/proof_reach.py`, and against every open operator card — a
+sibling, or any open card on the board wearing an operator label, read by its
+own `operator-cards` command — that the criterion names by id or by a
+backticked token in that card's title. A PROOF card is never an operator card,
+so a proof never flags itself or another proof. The findings are appended to
+the seam's structural file, so the same gate makes the round a `SEND_BACK`, one
+sentence each:
+
+    {proof}: criterion “{criterion}” asks for a reading the proof run cannot make — {what} ({why}); write it as what the run can observe, or drop it.
+    {proof}: criterion “{criterion}” reads the result of operator step {operator} (“{title}”) and is not blocked by it — add the blockedBy relation, or reword the criterion.
+
+The re-plan answers the first by rewriting the criterion as what the run can
+observe, and the second with the formal `blockedBy` relation. On the review
+route the same check appends to the mechanical note only, as input.
+
 **The cost of leaving it to judgement was DRE-3164**: fifteen cards, two critics
 reading them across six rounds, and neither ever named the seam. What that
 bought was a collision at the second critic, a plan drifting out of date over
