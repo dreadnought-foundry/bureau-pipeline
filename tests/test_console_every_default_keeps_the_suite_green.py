@@ -18,11 +18,22 @@ Read from the tree's `config/model-choices.json`, never typed, so a choice the
 page newly offers is walked the day it lands:
 
   * for each group, every choice marked `allowed` that is not the group's
-    `default_model` — one `set_default_model` save each;
+    `default_model` — one `set_default_model` save each — less a model the
+    tree's `config/models.yaml` lists under `excluded`;
   * for each (from-group, to-group) pair an agent in a group may make, the
     first agent in the file allowed to make it — one `move_agent` save each.
     A session-run agent is in no group; its moves are
     `tests/test_console_agent_move_keeps_the_suite_green.py`'s.
+
+SET ASIDE
+---------
+Since DRE-6786 the choices file offers a model we set aside (one under
+`excluded`) to every group, with a caution, but `model_config_change.py
+apply` still refuses to put it on a ladder, so its save opens no pull request
+and has no suite to turn red. Those choices are `set_aside`, read off the same
+two files: the coverage test counts them beside the walked cases, and
+`test_a_set_aside_choice_is_refused_so_it_opens_no_pull_request` fails the day
+the change script accepts one — the day the walk must start saving it.
 
 THE SUITE RUN INSIDE THE COPY
 -----------------------------
@@ -46,10 +57,13 @@ import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "tests"))
+sys.path.insert(0, str(ROOT / "scripts"))
 
 import console_change_walk as walk  # noqa: E402
+import model_config_change as mcc  # noqa: E402
 
 CHOICES = ROOT / "config" / "model-choices.json"
+MODELS = ROOT / "config" / "models.yaml"
 
 #: The files the card names: the ones a default change turned red.
 NAMED = (
@@ -73,6 +87,11 @@ def offered_defaults(choices: dict) -> list[tuple[str, str]]:
             if choice["allowed"] and choice["model"] != group["default_model"]]
 
 
+def set_aside(models: dict) -> set[str]:
+    """The models `config/models.yaml` lists under `excluded`."""
+    return {entry["model"] for entry in models.get("excluded") or []}
+
+
 def allowed_moves(choices: dict) -> dict:
     """(from-group, to-group) → the first agent in a group the file lets make
     that move, in the file's order."""
@@ -86,10 +105,12 @@ def allowed_moves(choices: dict) -> dict:
     return pairs
 
 
-def cases(choices: dict) -> dict:
+def cases(choices: dict, models: dict) -> dict:
     """Case name → the one change its save carries."""
     out = {}
     for group, model in offered_defaults(choices):
+        if model in set_aside(models):
+            continue
         out[f"default-{group}-{model}"] = {
             "op": "set_default_model", "group": group, "model": model}
     for (frm, to), agent in allowed_moves(choices).items():
@@ -98,7 +119,7 @@ def cases(choices: dict) -> dict:
     return out
 
 
-CASES = cases(json.loads(CHOICES.read_text()))
+CASES = cases(json.loads(CHOICES.read_text()), yaml.safe_load(MODELS.read_text()))
 
 
 def suite_files(tree: Path) -> list[str]:
@@ -125,6 +146,7 @@ def test_the_walk_covers_every_offered_default_and_every_allowed_move():
     """Counted straight off the file, without the case builder's help: a walk
     that covers fewer cases than the page offers fails here."""
     choices = json.loads(CHOICES.read_text())
+    aside = {e["model"] for e in yaml.safe_load(MODELS.read_text())["excluded"]}
     defaults = {(group["key"], choice["model"])
                 for group in choices["groups"] for choice in group["choices"]
                 if choice["allowed"] and choice["model"] != group["default_model"]}
@@ -138,26 +160,52 @@ def test_the_walk_covers_every_offered_default_and_every_allowed_move():
     home = {agent["name"]: agent.get("group") for agent in choices["agents"]}
     walked_pairs = {(home[c["agent"]], c["group"]) for c in CASES.values()
                     if c["op"] == "move_agent"}
-    assert walked_defaults == defaults, sorted(defaults ^ walked_defaults)
+    skipped = {(g, m) for g, m in defaults if m in aside}
+    assert walked_defaults == defaults - skipped, sorted(defaults ^ walked_defaults)
     assert walked_pairs == pairs, sorted(pairs ^ walked_pairs)
-    assert len(CASES) == len(defaults) + len(pairs)
+    assert len(CASES) == len(defaults) - len(skipped) + len(pairs)
 
 
 def test_the_cases_read_a_choice_the_file_newly_offers():
     """The walk is the file's: a choice allowed later is walked the day it
     lands, and the default itself never is."""
     choices = json.loads(CHOICES.read_text())
+    models = yaml.safe_load(MODELS.read_text())
     group = choices["groups"][0]
     refused = next((c for c in group["choices"] if not c["allowed"]), None)
     if refused is None:
         refused = {"model": "claude-newcomer-1", "allowed": False, "reason": "x"}
         group["choices"].append(refused)
-    assert f"default-{group['key']}-{refused['model']}" not in cases(choices)
+    assert f"default-{group['key']}-{refused['model']}" not in cases(choices, models)
     refused["allowed"], refused["reason"] = True, None
-    got = cases(choices)
+    got = cases(choices, models)
     assert got[f"default-{group['key']}-{refused['model']}"] == {
         "op": "set_default_model", "group": group["key"], "model": refused["model"]}
     assert f"default-{group['key']}-{group['default_model']}" not in got
+
+
+def test_a_set_aside_choice_is_refused_so_it_opens_no_pull_request():
+    """Every offered default the walk leaves out is one the change script
+    refuses, and every one it walks is accepted — so the walk skips nothing a
+    save could turn into a pull request."""
+    choices = json.loads(CHOICES.read_text())
+    text = MODELS.read_text()
+    aside = set_aside(yaml.safe_load(text))
+
+    def refusals(group: str, model: str) -> list:
+        return mcc.apply_change_set(
+            text, {"requested_by": "ceo@example.com", "changes": [
+                {"op": "set_default_model", "group": group, "model": model}]},
+            today="2026-10-11")[1]
+
+    for group, model in offered_defaults(choices):
+        found = refusals(group, model)
+        if model in aside:
+            assert found and any(f"{model} is excluded" in reason
+                                 for r in found for reason in r["reasons"]), (
+                f"the change script now accepts {model} for {group}: walk it")
+        else:
+            assert found == [], (group, model, found)
 
 
 def test_the_suite_covers_the_named_files_and_every_model_and_session_test():
