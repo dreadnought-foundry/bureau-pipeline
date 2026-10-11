@@ -22,8 +22,25 @@ nothing on the 2026-10-09 case: the summary job's `failure` dispatches by
 itself. So the head's red checks are grouped by the workflow run each belongs
 to, read off `details_url` (`…/actions/runs/<run id>/job/<job id>`), and a run
 holding any `cancelled` check is UNKNOWN as a whole — a `failure` beside it
-included. A run with red checks and no `cancelled` one is red exactly as
-before, and a red check with no run to read (another app's check) is too.
+included, with one exception below. A run with red checks and no `cancelled`
+one is red exactly as before, and a red check with no run to read (another
+app's check) is too.
+
+FAIL-FAST COLLATERAL (DRE-6780). agent-bureau #3563, 2026-10-10, head
+1d7a19445: `Console web (vitest) (1)` failed at 16:17:01 PT and the matrix's
+fail-fast canceled its sibling `(2)` 22 seconds later, nothing near a limit.
+The run read as UNKNOWN, a person was told it was "canceled again", and two
+ordinary test failures sat red for 85 minutes with no fix agent. So a canceled
+check is collateral when another check in its run concluded `failure` with a
+`completed_at` strictly earlier than its own (parsed instants; an equal one is
+not earlier) AND its own annotations name no time limit (`limit`). A collateral
+check is neither red nor unknown: it is dropped, and its run is red on its
+failures. The signal is finish order, never a job name or a matrix field —
+GitHub's records carry none. Fail closed: no `completed_at`, no earlier
+failure, annotations not read, or a limit named, and the check is UNKNOWN as
+before. On 2026-10-09 the shard was canceled FIRST and named its 15-minute
+limit, so that case is unchanged. The annotations are read by the caller, only
+for `collateral_candidates`, and handed in to `split` — this module stays pure.
 
 WHAT HAPPENS TO AN UNKNOWN RUN (`decide`):
 
@@ -45,11 +62,13 @@ rule, and a run it re-ran is on attempt 2 here, so it is never re-run twice.
 from __future__ import annotations
 
 import re
+from datetime import datetime
 from typing import NamedTuple
 
 #: What the sweep has always counted as red on an approved head.
 RED_CONCLUSIONS = ("failure", "timed_out", "cancelled")
 CANCELLED = "cancelled"
+FAILURE = "failure"
 
 #: The two acts (config/pipeline-acts.json). Each tag is the idempotency key:
 #: a worker-bot receipt carrying it beside the head sha and the run id is the
@@ -98,8 +117,19 @@ def run_of(check: dict) -> int | None:
     return int(found.group(1)) if found else None
 
 
-def split(check_runs) -> Split:
-    """The head's red checks, split into red runs and unknown runs."""
+def _finished(check: dict) -> datetime | None:
+    """A check run's `completed_at` as an instant, or None when it has none
+    or it does not parse — as `merge_gate._completed_at` reads it."""
+    try:
+        at = datetime.fromisoformat(
+            str(check.get("completed_at") or "").replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return at if at.tzinfo is not None else None
+
+
+def _red_by_run(check_runs) -> dict:
+    """The head's red checks, review checks left out, keyed by run id."""
     by_run: dict = {}
     for check in check_runs or ():
         if not isinstance(check, dict) or is_review(check):
@@ -107,9 +137,50 @@ def split(check_runs) -> Split:
         if (check.get("conclusion") or "") not in RED_CONCLUSIONS:
             continue
         by_run.setdefault(run_of(check), []).append(check)
+    return by_run
+
+
+def _after_a_failure(check: dict, checks) -> bool:
+    """Whether `check` finished strictly after a `failure` in its own run."""
+    at = _finished(check)
+    if at is None:
+        return False
+    for other in checks:
+        if other is check or other.get("conclusion") != FAILURE:
+            continue
+        before = _finished(other)
+        if before is not None and before < at:
+            return True
+    return False
+
+
+def collateral_candidates(check_runs) -> tuple:
+    """The canceled checks that finished after a `failure` in their own
+    workflow run (DRE-6780) — the only ones whose annotations the caller reads
+    to learn whether they are fail-fast collateral."""
+    found: list = []
+    for run_id, checks in _red_by_run(check_runs).items():
+        if run_id is None:
+            continue
+        found.extend(c for c in checks if c.get("conclusion") == CANCELLED
+                     and _after_a_failure(c, checks))
+    return tuple(found)
+
+
+def split(check_runs, limits=None) -> Split:
+    """The head's red checks, split into red runs and unknown runs.
+
+    `limits` maps a collateral candidate's check id to the time limit its
+    annotations name, or None when they name none; a check missing from it
+    had annotations that could not be read. A candidate mapped to None is
+    fail-fast collateral and dropped (DRE-6780); anything else is as before."""
+    limits = limits or {}
+    collateral = {id(c) for c in collateral_candidates(check_runs)
+                  if c.get("id") in limits and not limits[c.get("id")]}
     red: list = []
     unknown: dict = {}
-    for run_id, checks in by_run.items():
+    for run_id, checks in _red_by_run(check_runs).items():
+        checks = [c for c in checks if id(c) not in collateral]
         canceled = [c for c in checks if c.get("conclusion") == CANCELLED]
         if canceled and run_id is None:
             # No run to group by: each canceled check is unknown on its own,

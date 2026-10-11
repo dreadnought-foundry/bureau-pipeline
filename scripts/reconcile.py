@@ -10474,23 +10474,53 @@ def _tell_record_red(pr: dict, red: list) -> None:
               f"went to the fix agent: {error}")
 
 
+#: `_read_job_limit`'s answer for annotations that could not be read.
+_LIMIT_UNREAD = object()
+
+
+def _read_job_limit(check: dict):
+    """The time limit one job's annotations name ("15-minute"), None when they
+    name none, or `_LIMIT_UNREAD` when they could not be read. A job's id IS
+    its check run's id; silent `gh()`, on GH_TOKEN, as `_check_run_annotations`
+    reads — an empty answer is a failed read, since an empty list is `[]`."""
+    notes = gh("api", f"repos/{REPO}/check-runs/{check.get('id')}"
+               "/annotations?per_page=100")
+    if not notes:
+        return _LIMIT_UNREAD
+    try:
+        return canceled_check.limit(json.loads(notes))
+    except (ValueError, AttributeError, TypeError):
+        return _LIMIT_UNREAD
+
+
 def _canceled_job_limit(checks) -> str | None:
     """The time limit a canceled job's annotations name ("15-minute"), for the
     re-run receipt's wording only — so an unreadable answer is None and the
-    receipt reads "canceled, re-running" (DRE-3072). A job's id IS its check
-    run's id; silent `gh()`, on GH_TOKEN, as `_check_run_annotations` reads."""
+    receipt reads "canceled, re-running" (DRE-3072)."""
     for check in checks:
         if check.get("conclusion") != canceled_check.CANCELLED:
             continue
-        notes = gh("api", f"repos/{REPO}/check-runs/{check.get('id')}"
-                   "/annotations?per_page=100")
-        try:
-            limit = canceled_check.limit(json.loads(notes or "[]"))
-        except (ValueError, AttributeError, TypeError):
-            limit = None
-        if limit:
+        limit = _read_job_limit(check)
+        if limit and limit is not _LIMIT_UNREAD:
             return limit
     return None
+
+
+def _collateral_limits(runs) -> dict:
+    """The limits `canceled_check.split` reads fail-fast collateral off
+    (DRE-6780): check id → the time limit its annotations name, or None when
+    they name none. Read only for a canceled check that finished after a
+    `failure` in its own run, so a pass with no such run reads nothing new. A
+    read that failed is left out, and the check stays UNKNOWN as before."""
+    limits: dict = {}
+    for check in canceled_check.collateral_candidates(runs):
+        limit = _read_job_limit(check)
+        if limit is _LIMIT_UNREAD:
+            print(f"canceled-check: the annotations of {check.get('name')!r} "
+                  "could not be read — its run stays unknown this sweep")
+            continue
+        limits[check.get("id")] = limit
+    return limits
 
 
 def _tend_canceled_runs(pr: dict, sha: str, unknown: dict) -> bool:
@@ -10571,7 +10601,9 @@ def fix_approved_but_red() -> None:
 
     A canceled check is not red (DRE-3072): a workflow run holding one is
     re-run once, or told once on a later attempt, and never counted toward a
-    fix dispatch — the rule is `canceled_check`'s."""
+    fix dispatch — the rule is `canceled_check`'s. Except a check canceled by
+    its run's fail-fast after a sibling failed (DRE-6780): it is dropped, and
+    the run is red on the failures beside it."""
     import proof_dispatch  # noqa: PLC0415 — proof_dispatch imports this module
 
     # Unreadable answers BUSY (gh_actions_read): the App token 403s on this
@@ -10600,7 +10632,12 @@ def fix_approved_but_red() -> None:
         # red — a `failure` beside it included, because a canceled shard turns
         # its summary job red (agent-bureau #3502, 2026-10-09). It is re-run
         # once, or told once on a later attempt, and never sent a fix agent.
-        split = canceled_check.split(runs)
+        # DRE-6780's one exception: a check canceled AFTER a `failure` in its
+        # own run finished, whose annotations name no time limit, is the
+        # matrix's fail-fast collateral (agent-bureau #3563, 2026-10-10). It is
+        # dropped, the run is red on its failures, and it is neither re-run
+        # nor told — the gates below decide the fix dispatch as for any red.
+        split = canceled_check.split(runs, _collateral_limits(runs))
         if not _tend_canceled_runs(pr, sha, split.unknown):
             continue  # a refused re-run never falls through to a fix dispatch
         failed = list(dict.fromkeys(
