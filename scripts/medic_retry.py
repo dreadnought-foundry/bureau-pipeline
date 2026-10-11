@@ -602,7 +602,7 @@ _WHY_NOT = {
         "the second run in a row on this card that started up and then went "
         "quiet. Two in a row is not a passing blip, so no third build was "
         "started and nothing more was charged to this card. Nothing is wrong "
-        "with the work — the agent never got as far as reading the code — "
+        "with the work — nothing was reviewed and nothing was rejected — "
         "and nothing else is coming until someone looks at why the runs are "
         "going silent."
     ),
@@ -760,9 +760,20 @@ def repeat_stall(stall, receipt_bodies, *, run_id: str, attempt: str) -> str:
     )
     if not earlier:
         return ""
+    # What was measured, and nothing more (DRE-6995): "after it started up"
+    # only when nothing arrived after `system/init`, the time it worked when
+    # the stall carries it, and neither when the log predates the measure.
+    streamed = stall.streamed_seconds
+    if streamed is None:
+        quiet = f"emitted nothing for {stall.silence_seconds} seconds"
+    elif streamed > 0:
+        quiet = (f"had been working for {streamed / 60.0:.1f} minutes and "
+                 f"then emitted nothing for {stall.silence_seconds} seconds")
+    else:
+        quiet = (f"emitted nothing for {stall.silence_seconds} seconds after "
+                 f"it started up")
     return (
-        f"this run went silent too: “{stall.step}” emitted nothing for "
-        f"{stall.silence_seconds} seconds after it started up, and this card "
+        f"this run went silent too: “{stall.step}” {quiet}, and this card "
         f"already carries {len(earlier)} stall record(s) from an earlier run"
     )
 
