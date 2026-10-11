@@ -277,6 +277,17 @@ ATTESTED = (
 )
 
 
+def notes_with(tc, notes: dict) -> str:
+    """A directory of this test's own holding `notes` (name → text), for the
+    script's `AGENT_NOTES_DIR`."""
+    directory = tempfile.mkdtemp()
+    tc.addCleanup(shutil.rmtree, directory, ignore_errors=True)
+    for name, text in notes.items():
+        with open(os.path.join(directory, name), "w", encoding="utf-8") as fh:
+            fh.write(text)
+    return directory
+
+
 def _quoted(comment: str) -> str:
     """What the marker quotes: after the `·`, up to the LAST parked clause."""
     rest = comment.split(" · ", 1)[1]
@@ -287,11 +298,7 @@ class ABlockerIsClassifiedBeforeItParks(unittest.TestCase):
     """The blocker branch, driven through the file with no PR to report."""
 
     def _run(self, exit_files: dict):
-        self.notes = tempfile.mkdtemp()
-        self.addCleanup(shutil.rmtree, self.notes, ignore_errors=True)
-        for name, text in exit_files.items():
-            with open(os.path.join(self.notes, name), "w", encoding="utf-8") as fh:
-                fh.write(text)
+        self.notes = notes_with(self, exit_files)
         proc, journal = run_pr_opened(self, ["bash", SCRIPT], card_pr=CARD_PR_NO_PR_STUB,
                                       env_extra={"AGENT_NOTES_DIR": self.notes})
         self.assertEqual(0, proc.returncode, proc.stderr + proc.stdout)

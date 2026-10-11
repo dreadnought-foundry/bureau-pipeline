@@ -372,14 +372,14 @@ def _outputs(out) -> dict:
 
 def _report(tc, out, note: str, *, card_pr: str):
     """Run the real Report script with the rescue's outputs wired the way
-    agent-task.yml wires them, and the agent's note at its real path."""
-    report_file._clear_exit_files()
-    tc.addCleanup(report_file._clear_exit_files)
-    Path(report_file.BLOCKER).write_text(note, encoding="utf-8")
+    agent-task.yml wires them, and the agent's note in a notes directory of
+    this test's own (DRE-6961)."""
+    notes = report_file.notes_with(tc, {report_file.BLOCKER: note})
     values = _outputs(out)
     proc, journal = report_file.run_pr_opened(
         tc, ["bash", report_file.SCRIPT], card_pr=card_pr,
         env_extra={
+            "AGENT_NOTES_DIR": notes,
             "RESCUE_LOCAL_WORK": values["local_work"],
             "RESCUE_PUSHED": values["pushed"],
             "RESCUE_PUSH_STATUS": values["push_status"],
@@ -531,12 +531,11 @@ class Run38041502892Replayed(unittest.TestCase):
 
     def test_the_card_gets_the_pull_request_and_no_blocker(self):
         out = self.fx.outputs()
-        report_file._clear_exit_files()
-        self.addCleanup(report_file._clear_exit_files)
-        Path(report_file.BLOCKER).write_text(NOTE_401, encoding="utf-8")
+        notes = report_file.notes_with(self, {report_file.BLOCKER: NOTE_401})
         proc, journal = report_file.run_pr_opened(
             self, ["bash", report_file.SCRIPT], card_pr=CARD_PR_UNREADABLE,
             env_extra={
+                "AGENT_NOTES_DIR": notes,
                 "RESCUE_LOCAL_WORK": out["local_work"],
                 "RESCUE_PUSHED": out["pushed"],
                 "RESCUE_PUSH_STATUS": out["push_status"],
