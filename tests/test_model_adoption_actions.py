@@ -36,7 +36,6 @@ import copy
 import difflib
 import json
 import re
-import shutil
 import subprocess
 import sys
 from datetime import datetime, timezone
@@ -56,7 +55,8 @@ import model_fallback as mf  # noqa: E402
 import routing_verdict  # noqa: E402
 import sync_model_config  # noqa: E402
 import validate_card  # noqa: E402
-from model_config_text import config_without_projects  # noqa: E402
+import model_fixture  # noqa: E402
+from model_config_text import without_projects  # noqa: E402
 
 import model_adoption_actions as maa  # noqa: E402
 
@@ -65,11 +65,17 @@ CONFIG_PATH = ROOT / "config" / "models.yaml"
 PRICES_PATH = ROOT / "config" / "model-prices.yaml"
 SNAPSHOT_PATH = ROOT / "models.json"
 
+#: The frozen model config (DRE-6864). The Decisions below are classified
+#: against it and `apply` edits it, never the committed file: a console save
+#: that put Sonnet 4.6 at the Planners' top turned every adoption here into a
+#: refusal. The ids it holds are read off its ladders, never spelled.
+FROZEN = model_fixture.fixture_config()
+SONNET5 = model_fixture.ladder(FROZEN, "workhorse")[-1]   # the Builders' last rung
+SONNET46 = model_fixture.ladder(FROZEN, "judgement")[-1]  # the Planners' last rung
+OPUS55 = model_fixture.ladder(FROZEN, "workhorse")[0]     # the Builders' top
+
 SONNET6 = "claude-sonnet-6"
-SONNET5 = "claude-sonnet-5"
-SONNET46 = "claude-sonnet-4-6"
 OPUS6 = "claude-opus-6"
-OPUS55 = "claude-opus-5-5"
 CORVID = "claude-corvid-1"
 CARD = "DRE-9001"
 RUN_URL = "https://github.com/dreadnought-foundry/bureau-pipeline/actions/runs/123"
@@ -87,8 +93,8 @@ VERDICT_MARKERS = ("VERDICT:", "QA Critic", "QA Verifier")
 # --------------------------------------------------------------------------- #
 
 #: The successors a test adds to the committed catalog snapshot. Every rung on
-#: every ladder today is dated by that snapshot, so the classifier ranks these
-#: against the real ladders.
+#: every frozen ladder is dated by that snapshot, so the classifier ranks these
+#: against the frozen ladders.
 SUCCESSORS = [
     {"id": SONNET6, "display_name": "Claude Sonnet 6",
      "created_at": "2026-11-01T00:00:00Z", "in_catalog": True},
@@ -122,13 +128,13 @@ def prices_text(**extra) -> str:
 
 def decisions(**extra_prices) -> dict:
     """`{candidate: Decision}` from the real classifier over the snapshot plus
-    the successors, against today's config and the given extra prices."""
+    the successors, against the frozen config and the given extra prices."""
     catalog = mc.snapshot_catalog(snapshot_with(*SUCCESSORS))
     prices = ma.load_prices()
     for key, (side_in, side_out) in extra_prices.items():
         prices[key.replace("_", "-")] = {"input": float(side_in),
                                          "output": float(side_out)}
-    found = ma.classify_catalog(catalog, ma.load_config(), prices)
+    found = ma.classify_catalog(catalog, model_fixture.fixture_config(), prices)
     return {d["candidate"]: json.loads(json.dumps(d)) for d in found}
 
 
@@ -224,16 +230,15 @@ class FakeOps:
 # --------------------------------------------------------------------------- #
 
 class TestApply:
-    """`apply` on today's config, with a Sonnet 6 the rule says to adopt."""
+    """`apply` on the frozen config, with a Sonnet 6 the rule says to adopt."""
 
     def _setup(self, tmp_path, *, sonnet6_price=(2, 10), config_text=None):
-        # The committed config with NO project exceptions (DRE-6883): the
-        # committed `projects` block holds whatever the console last saved,
-        # and a Planners exception on Sonnet 4.6 turns this adoption into a
-        # policy refusal. An exception moving with its rung is pinned on
-        # configs built for it, below.
+        # The frozen text, never the committed file (DRE-6864): the console
+        # rewrites that one, and a Planners top or exception on Sonnet 4.6
+        # turns this adoption into a refusal. An exception moving with its
+        # rung is pinned on configs built for it, below.
         config = tmp_path / "models.yaml"
-        config.write_text(config_text or config_without_projects())
+        config.write_text(config_text or model_fixture.fixture_text())
         prices = tmp_path / "model-prices.yaml"
         prices.write_text(prices_text(claude_sonnet_6=sonnet6_price))
         snap = write_json(tmp_path, "catalog.json", snapshot_with(*SUCCESSORS))
@@ -250,7 +255,7 @@ class TestApply:
         rc, _ = self._apply(capsys, config, prices, snap)
         assert rc == 0
         after = yaml.safe_load(config.read_text())
-        before = yaml.safe_load(CONFIG_PATH.read_text())
+        before = model_fixture.fixture_config()
         for rung in adopt_sonnet6["replaces"]:
             ids = [r["model"] for r in after["ladders"][rung["ladder"]]]
             was = [r["model"] for r in before["ladders"][rung["ladder"]]]
@@ -260,7 +265,7 @@ class TestApply:
         assert SONNET5 not in on_a_ladder and SONNET46 not in on_a_ladder
 
     def test_every_comment_and_reason_line_survives_byte_for_byte(self, tmp_path,
-                                                                  capsys):
+                                                                  capsys, adopt_sonnet6):
         config, prices, snap = self._setup(tmp_path)
         before = config.read_text().splitlines()
         assert self._apply(capsys, config, prices, snap)[0] == 0
@@ -271,13 +276,19 @@ class TestApply:
                  if l.startswith("+") and not l.startswith("+++")]
         # The ONLY lines that change are the rung ids and the separation rule
         # that names the moved rung; everything else is added, never rewritten.
-        # The config carries no project exception (`_setup`), so none moves.
+        # The frozen config's project exceptions name no replaced rung
+        # (asserted here), so none moves.
+        replaced = {r["model"] for r in adopt_sonnet6["replaces"]}
+        assert not replaced & {m for kinds in FROZEN["projects"].values()
+                               for m in kinds.values()}
+        olds = "|".join(re.escape(m) for m in sorted(replaced))
         for line in removed:
-            assert re.fullmatch(
-                r"\s*-?\s*(model|built_on): claude-sonnet-(5|4-6)", line), line
+            assert re.fullmatch(rf"\s*-?\s*(model|built_on): ({olds})", line), line
         assert all(not l.lstrip().startswith("#") for l in removed)
         assert all("reason:" not in l for l in removed)
-        assert sum(1 for l in added if re.fullmatch(r"\s*- model: claude-sonnet-6", l)) == 3
+        assert sum(1 for l in added
+                   if re.fullmatch(rf"\s*- model: {re.escape(SONNET6)}", l)) == len(
+            adopt_sonnet6["replaces"])
         # Every original comment line is still there, in order.
         comments = [l for l in before if l.lstrip().startswith("#")]
         assert comments == [l for l in after if l.lstrip().startswith("#")]
@@ -301,28 +312,24 @@ class TestApply:
         assert self._apply(capsys, config, prices, snap)[0] == 0
         after = yaml.safe_load(config.read_text())
         assert mf.policy_errors(after, ma.load_prices(prices)) == []
-        # Read off the committed config, never a literal (DRE-5138): a rule
+        # Read off the frozen config, never a literal (DRE-5138): a rule
         # naming a rung that left every ladder moves to the candidate, and a
         # rule naming a rung still on both ladders — Sonnet 5.5 since DRE-5116 —
         # still describes a real overlap and stays, or policy refuses the bare
         # overlap it leaves behind.
         on_a_ladder = {r["model"] for rungs in after["ladders"].values() for r in rungs}
         gone = {r["model"] for r in adopt_sonnet6["replaces"]} - on_a_ladder
-        was = yaml.safe_load(CONFIG_PATH.read_text())["review_separation"]["rules"]
+        was = FROZEN["review_separation"]["rules"]
         assert any(r["built_on"] in gone for r in was), "a rule has to move"
         rules = after["review_separation"]["rules"]
         assert [r["built_on"] for r in rules] == [
             SONNET6 if r["built_on"] in gone else r["built_on"] for r in was]
 
     def test_sync_model_config_regenerates_both_mirrors(self, tmp_path, capsys):
-        # A throwaway copy of the tree the generator writes into, so the
-        # committed mirrors are never touched.
-        tree = tmp_path / "tree"
-        shutil.copytree(ROOT / "scripts", tree / "scripts",
-                        ignore=shutil.ignore_patterns("__pycache__"))
-        shutil.copytree(ROOT / "config", tree / "config")
-        (tree / "config" / "models.yaml").write_text(config_without_projects())
-        shutil.copy(ROOT / "agents.yaml", tree / "agents.yaml")
+        # A throwaway tree on the frozen files the generator writes into, so
+        # the committed mirrors are never touched.
+        tree = model_fixture.fixture_tree(tmp_path / "tree")
+        before = self._agent_tops(tree / "config" / "models.yaml")
         (tree / "config" / "model-prices.yaml").write_text(
             prices_text(claude_sonnet_6=(2, 10)))
         snap = write_json(tmp_path, "catalog.json", snapshot_with(*SUCCESSORS))
@@ -337,7 +344,6 @@ class TestApply:
         # agents.yaml mirrors each agent's ladder TOP, so it is rewritten only
         # when the adoption moved a top — read off the two configs, never a
         # literal (DRE-5138: since DRE-5116 Sonnet 5 is no ladder's top).
-        before = self._agent_tops(CONFIG_PATH)
         after = self._agent_tops(tree / "config" / "models.yaml")
         registry = {a["name"]: a["model"] for a in
                     yaml.safe_load((tree / "agents.yaml").read_text())["agents"]}
@@ -394,16 +400,17 @@ class TestApply:
             self, tmp_path, capsys):
         # An effort level declared for the rung being replaced: after the edit
         # it names a model on no ladder, which `policy_errors` refuses.
-        text = config_without_projects().replace(
-            "effort:\n  claude-opus-5-5: high\n",
-            "effort:\n  claude-opus-5-5: high\n  claude-sonnet-5: high\n",
+        text = model_fixture.fixture_text().replace(
+            f"effort:\n  {OPUS55}: high\n",
+            f"effort:\n  {OPUS55}: high\n  {SONNET5}: high\n",
         )
+        assert text != model_fixture.fixture_text()
         assert mf.policy_errors(yaml.safe_load(text)) == []
         config, prices, snap = self._setup(tmp_path, config_text=text)
         rc, out = self._apply(capsys, config, prices, snap)
         assert rc == 2
         assert config.read_text() == text
-        assert "effort.claude-sonnet-5" in out.out
+        assert f"effort.{SONNET5}" in out.out
 
     def test_apply_text_is_a_text_edit_of_exactly_the_named_ladder(self,
                                                                   adopt_sonnet6):
@@ -413,12 +420,11 @@ class TestApply:
         decision["replaces"] = [r for r in decision["replaces"]
                                 if r["ladder"] == "workhorse"]
         (old,) = [r["model"] for r in decision["replaces"]]
-        before = yaml.safe_load(CONFIG_PATH.read_text())
-        advisory = [r["model"] for r in before["ladders"]["advisory"]]
+        advisory = [r["model"] for r in FROZEN["ladders"]["advisory"]]
         assert old in advisory, "the workhorse rung is on the advisory ladder too"
-        text = maa.apply_text(CONFIG_PATH.read_text(), decision, "2026-11-02")
+        text = maa.apply_text(model_fixture.fixture_text(), decision, "2026-11-02")
         after = yaml.safe_load(text)
-        # The advisory ladder is read off the committed config, never a literal
+        # The advisory ladder is read off the frozen config, never a literal
         # top (DRE-5138), and comes through untouched, rung for rung.
         assert [r["model"] for r in after["ladders"]["advisory"]] == advisory
         assert SONNET6 in [r["model"] for r in after["ladders"]["workhorse"]]
@@ -432,7 +438,7 @@ class TestApply:
 
     @staticmethod
     def _with_projects(block: str) -> str:
-        text = config_without_projects()
+        text = without_projects(model_fixture.fixture_text())
         assert "\nprojects: {}\n" in text
         return text.replace("\nprojects: {}\n", f"\nprojects:\n{block}")
 
@@ -458,7 +464,8 @@ class TestApply:
         assert judgement in result
         # The only line that differs from the same edit with `projects: {}`
         # is the exception that moved.
-        plain = maa.apply_text(config_without_projects(), decision, "2026-11-02")
+        plain = maa.apply_text(without_projects(model_fixture.fixture_text()),
+                               decision, "2026-11-02")
         removed = [l for l in difflib.unified_diff(
             plain.splitlines(), result.splitlines(), lineterm="", n=0)
             if l[:1] in "+-" and l[:3] not in ("+++", "---")]

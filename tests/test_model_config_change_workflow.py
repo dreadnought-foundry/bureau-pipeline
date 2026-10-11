@@ -548,10 +548,21 @@ def test_a_refused_change_set_ends_the_run_with_no_branch_and_no_pull_request(tm
     assert run.git("rev-parse", "origin/main").strip() == run.base
 
 
+def _another_builders_choice() -> str:
+    """A Builders model the console offers that is not today's default, read
+    off the committed `config/model-choices.json` — the scenario runs the
+    workflow against today's files, so it can name no literal model."""
+    choices = json.loads((ROOT / "config" / "model-choices.json").read_text())
+    group = next(g for g in choices["groups"] if g["key"] == "workhorse")
+    return next(c["model"] for c in group["choices"]
+                if c["allowed"] and c["model"] != group["default_model"])
+
+
 def test_a_valid_change_set_opens_one_pull_request_and_a_rerun_opens_none(tmp_path):
     run = _Run(tmp_path)
+    model = _another_builders_choice()
     change_set = _change_set(
-        VALID, {"op": "set_default_model", "group": "workhorse", "model": "claude-sonnet-5-5"})
+        VALID, {"op": "set_default_model", "group": "workhorse", "model": model})
     branch = mcc.branch_name(json.loads(change_set))
 
     ran, failed, log = run.dispatch(change_set)
@@ -564,8 +575,8 @@ def test_a_valid_change_set_opens_one_pull_request_and_a_rerun_opens_none(tmp_pa
                            cwd=run.work, capture_output=True, text=True)
     assert check.returncode == 0, check.stdout + check.stderr
     models = yaml.safe_load((run.work / "config/models.yaml").read_text())
-    assert models["agents"]["proof"] == "advisory"
-    assert models["ladders"]["workhorse"][0]["model"] == "claude-sonnet-5-5"
+    assert models["agents"][VALID["agent"]] == VALID["group"]
+    assert models["ladders"]["workhorse"][0]["model"] == model
     creates = [call for call in run.gh_calls() if call.startswith("pr create")]
     assert len(creates) == 1
     assert f"--head {branch}" in creates[0] and "--base main" in creates[0]
