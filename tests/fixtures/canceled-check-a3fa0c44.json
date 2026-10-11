@@ -11,7 +11,10 @@
     "which this repository's token cannot read, and nothing the rule decides",
     "turns on them. Two of them belong to other workflow runs, the critic's",
     "review check among them, because a head's check runs come from more than",
-    "one run."
+    "one run.",
+    "DRE-6780 added `completed_at` to the two that decide it, from the times",
+    "above written in UTC (PT is UTC minus seven hours): the shard was canceled",
+    "before the summary failed, so no check here is fail-fast collateral."
   ],
   "repo": "dreadnought-foundry/agent-bureau",
   "pr": 3502,
@@ -39,8 +42,8 @@
     ]
   },
   "check_runs": [
-    {"id": 114131786651, "name": "Console backend (pytest)", "status": "completed", "conclusion": "failure", "details_url": "https://github.com/dreadnought-foundry/agent-bureau/actions/runs/38023358661/job/114131786651"},
-    {"id": 114129034599, "name": "Console backend shard 1", "status": "completed", "conclusion": "cancelled", "details_url": "https://github.com/dreadnought-foundry/agent-bureau/actions/runs/38023358661/job/114129034599"},
+    {"id": 114131786651, "name": "Console backend (pytest)", "status": "completed", "conclusion": "failure", "details_url": "https://github.com/dreadnought-foundry/agent-bureau/actions/runs/38023358661/job/114131786651", "completed_at": "2026-10-10T04:31:23Z"},
+    {"id": 114129034599, "name": "Console backend shard 1", "status": "completed", "conclusion": "cancelled", "details_url": "https://github.com/dreadnought-foundry/agent-bureau/actions/runs/38023358661/job/114129034599", "completed_at": "2026-10-10T04:30:38Z"},
     {"id": 114129034601, "name": "Console backend shard 2", "status": "completed", "conclusion": "success", "details_url": "https://github.com/dreadnought-foundry/agent-bureau/actions/runs/38023358661/job/114129034601"},
     {"id": 114129034603, "name": "Console backend shard 3", "status": "completed", "conclusion": "success", "details_url": "https://github.com/dreadnought-foundry/agent-bureau/actions/runs/38023358661/job/114129034603"},
     {"id": 114129034605, "name": "Console backend shard 4", "status": "completed", "conclusion": "success", "details_url": "https://github.com/dreadnought-foundry/agent-bureau/actions/runs/38023358661/job/114129034605"},
