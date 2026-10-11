@@ -646,6 +646,37 @@ without writing, so your own check leaves the cards alone):
       | python3 .bureau-pipeline/scripts/proof_and_demo.py check --epic <EPIC> \
           --no-stamp
 
+### Write every PROOF criterion as a reading the run can make (DRE-6603)
+Nine proofs stood open on 2026-10-10 because a criterion asked for something a
+dispatched proof run could never observe, or read the result of an operator
+step the proof was not blocked on — `standards/card-quality.md` names them and
+states the rule. The plan critic refuses that plan, so write every criterion
+as a reading the run can make:
+
+- **Read `config/proof-reach.json` before you write one** (in a product repo,
+  `.bureau-pipeline/config/proof-reach.json`). It declares what a proof run can
+  read, and this brief does not restate it.
+- **Never write a criterion over a repository in another organization, a repo
+  variable or a workflow run's step summary.** The read token reaches the
+  caller's own organization only, no installation on record grants it
+  `variables: read`, and a step summary is not among its reads — quote a
+  tagged line from the run's log instead. `make db-read` is the operator's,
+  never the run's.
+- **Never write a row that waits on an event outside the epic** — another
+  epic's release, a person's decision, a date that has not come. An event the
+  row must wait for belongs to a card this proof is blocked by, or the plan is
+  two epics (the observation-gated seam, DRE-3244).
+- **A PROOF criterion that reads an operator step's result carries a
+  `**Blocked by:**` naming that card**, even across epics — the card that sets
+  the variable, applies the grant or turns the switch. Without it the critic
+  refuses the plan, naming the PROOF card and the operator card. A PROOF card
+  is never an operator step for this rule, its own or another's.
+
+A row the run still cannot observe as worded comes back with one of four
+causes — `out-of-reach`, `state-gone`, `misdescribed` or
+`operator-step-unblocked` — and is put to the CEO as a question in Green Light.
+Every one of them is a criterion written wrong when the plan was written.
+
 ## The plan artifact (what the CEO green-lights) — and the roll-up split
 Every epic produces ONE artifact — business case, KPIs as structured data,
 risk assessment, outcome, visual model, the cards, proof and demo — written
