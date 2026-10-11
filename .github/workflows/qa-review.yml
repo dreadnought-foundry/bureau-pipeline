@@ -522,6 +522,35 @@ jobs:
              || steps.pool.outputs.n == '4' && secrets.BUREAU_APP_PRIVATE_KEY_4
              || secrets.BUREAU_QA_APP_PRIVATE_KEY }}
 
+      # THE GITHUB CALLS THIS RUN MAKES, PER POOL LOGIN (DRE-6917, epic
+      # DRE-6911). The first of two points on each login's hourly meter, taken
+      # once the job's work tokens are minted; `emit` before the working log
+      # takes the second. Two logins, each installation once: the qa App
+      # (`app`), whose hour the verdict and its status writes spend, and the
+      # pool-selected `reader`, whose hour the critic's reads spend. When the
+      # pool fell back to slot 1 they are one installation and the script
+      # keeps it once. The probe tokens are never listed — their whole spend
+      # is the one call `dispatch_pool.py select` made. The `console` and
+      # `checks_app` mints below are the main bot, a different App, so they
+      # are neither a second `before` nor a token for these logins: what they
+      # spend is the console's `unattributed` remainder for that login
+      # (DRE-6915). `scripts/github_calls_reading.py` exits 0 on every path;
+      # tokens reach it as NAMED env variables, never as arguments.
+      - name: Take the GitHub-calls before points
+        continue-on-error: true
+        env:
+          QA_APP: ${{ steps.app.outputs.app-slug }}
+          QA_INSTALLATION: ${{ steps.app.outputs.installation-id }}
+          QA_TOKEN: ${{ steps.app.outputs.token }}
+          READ_APP: ${{ steps.reader.outputs.app-slug }}
+          READ_INSTALLATION: ${{ steps.reader.outputs.installation-id }}
+          READ_TOKEN: ${{ steps.reader.outputs.token }}
+        run: |
+          python3 "$PIPELINE_DIR"/scripts/github_calls_reading.py before \
+            --out "${RUNNER_TEMP:-/tmp}/github-calls-before.json" \
+            --login "$QA_APP:$QA_INSTALLATION:QA_TOKEN" \
+            --login "$READ_APP:$READ_INSTALLATION:READ_TOKEN"
+
       - name: Resolve PR
         if: steps.decide.outputs.review == 'true'
         id: pr
@@ -2106,6 +2135,32 @@ jobs:
           path: ${{ steps.death.outputs.path }}
           if-no-files-found: warn
           retention-days: 90
+
+      # The second point on each login's meter (DRE-6917), the document put in
+      # the agent-log store over this run's OIDC login. The `reader` login is
+      # named FIRST: the script keeps the first `--login` per installation,
+      # and where the pool fell back to slot 1 the reader's token is the
+      # fresher of the two on that one meter. `always()` + `continue-on-error`:
+      # the runs worth reading are the ones that died, and a reading never
+      # changes this job's conclusion.
+      - name: Record the GitHub calls per pool login
+        if: always()
+        continue-on-error: true
+        env:
+          QA_APP: ${{ steps.app.outputs.app-slug }}
+          QA_INSTALLATION: ${{ steps.app.outputs.installation-id }}
+          QA_TOKEN: ${{ steps.app.outputs.token }}
+          READ_APP: ${{ steps.reader.outputs.app-slug }}
+          READ_INSTALLATION: ${{ steps.reader.outputs.installation-id }}
+          READ_TOKEN: ${{ steps.reader.outputs.token }}
+        run: |
+          python3 "$PIPELINE_DIR"/scripts/github_calls_reading.py emit \
+            --before "${RUNNER_TEMP:-/tmp}/github-calls-before.json" \
+            --out "${RUNNER_TEMP:-/tmp}/github-calls-reading.json" \
+            --login "$READ_APP:$READ_INSTALLATION:READ_TOKEN" \
+            --login "$QA_APP:$QA_INSTALLATION:QA_TOKEN" \
+            --workflow qa-review.yml \
+            --github-output "$GITHUB_OUTPUT"
 
       # THE RUN'S WORKING LOG (DRE-4269, epic DRE-4267). The critic's
       # transcript, scrubbed and put straight into our own store over OIDC —
