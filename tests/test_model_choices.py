@@ -301,9 +301,16 @@ def test_refused_and_allowed_moves():
             assert _move(doc, name, "judgement")["allowed"] is False, name
 
 
-def test_projects_is_empty_while_the_map_is():
-    assert _raw()["projects"] == {}
-    assert _choices()["projects"] == []
+def test_projects_mirrors_the_map_in_file_order():
+    # Holds for any state of the live map: the console writes exceptions here.
+    projects = _raw()["projects"]
+    assert _choices()["projects"] == [
+        {"slug": slug, "exceptions": exceptions}
+        for slug, exceptions in projects.items()
+    ]
+    slugs = mf.declared_repo_slugs()
+    for slug in projects:
+        assert slug in slugs, slug
 
 
 def test_projects_lists_each_slug_in_file_order(tmp_path):

@@ -5,9 +5,10 @@ honor, and `policy_errors` refuses a malformed one in plain English.
 WHAT CHANGES, AND WHAT DOES NOT
 -------------------------------
 The file gains `kinds.<kind>.label` / `kinds.<kind>.purpose`, `ungrouped`,
-`about` and `projects`. It ships with `projects: {}`, so NOTHING any run selects
-changes: `SelectionIsUnchangedTest` pins every role's pick, read off the
-ladders rather than hardcoded.
+`about` and `projects`. It shipped with `projects: {}`, so NOTHING any run
+selected changed: `SelectionIsUnchangedTest` pins every role's pick, read off
+the ladders rather than hardcoded, and every repo the console has given no
+exception still walks the fleet ladders.
 
 THE OWN-KIND READING (pinned here so this card and DRE-6635 agree)
 ------------------------------------------------------------------
@@ -109,8 +110,13 @@ class TestCommittedData:
         assert cfg["about"]["engineer"] == "Builds a card and opens the PR"
         assert cfg["about"]["designer"] == "Designs screens and systems"
 
-    def test_projects_ships_empty(self):
-        assert committed()["projects"] == {}
+    def test_every_project_exception_names_a_declared_repo(self):
+        # The console writes exceptions here (DRE-6624); each one is a repo
+        # the repo map declares and a kind the file declares.
+        cfg = committed()
+        for slug, entry in cfg["projects"].items():
+            assert slug in slugs(), slug
+            assert set(entry) <= set(cfg["kinds"]), slug
 
     def test_the_committed_config_validates_clean_with_the_real_repo_map(self):
         assert mf.policy_errors(committed()) == []
@@ -138,7 +144,7 @@ class TestNormalizedShape:
         }
         assert cfg["ungrouped"] == INTERACTIVE
         assert cfg["about"] == committed()["about"]
-        assert cfg["projects"] == {}
+        assert cfg["projects"] == committed()["projects"]
 
     def test_a_kind_with_no_label_or_purpose_gets_the_defaults(self):
         raw = committed()
@@ -168,11 +174,13 @@ class TestNormalizedShape:
             assert cfg[key] == mf.CONFIG[key], key
 
     def test_the_mirror_writes_them_after_review_separation_in_order(self):
-        literal = sync_model_config.render_literal(sync_model_config.load_config())
+        cfg = sync_model_config.load_config()
+        literal = sync_model_config.render_literal(cfg)
         at = [literal.index(f'\n    "{key}": ') for key in
               ("review_separation", "groups", "ungrouped", "about", "projects")]
         assert at == sorted(at)
-        assert '\n    "projects": {},' in literal
+        cfg["projects"] = {}
+        assert '\n    "projects": {},' in sync_model_config.render_literal(cfg)
 
 
 # --------------------------------------------------------------------------- #
@@ -283,7 +291,7 @@ class TestMalformedKeys:
             "projects.atlas", "projects.portico"]
         assert all("config/repo-map.json" in e for e in found)
         # …and an empty `projects` never needs the map at all.
-        assert mf.policy_errors(committed()) == []
+        assert mf.policy_errors(with_projects({})) == []
 
     def test_a_kind_that_is_not_declared_is_refused(self):
         found = errors(with_projects({"atlas": {"builders": SONNET55}}))
@@ -451,8 +459,8 @@ class TestSelectionIsUnchanged:
             mf.clear_availability_cache()
             assert mf.select(role, probe=lambda m: True) == ladder(cfg, kind)[0], role
 
-    def test_no_repo_walks_anything_but_the_fleet_ladders(self):
-        for slug in sorted(slugs()):
+    def test_no_repo_without_an_exception_walks_anything_but_the_fleet_ladders(self):
+        for slug in sorted(slugs() - set(mf.CONFIG["projects"])):
             assert mf.effective_ladders(mf.CONFIG, slug) == mf.LADDERS, slug
 
 
@@ -473,6 +481,6 @@ class TestDocumented:
 
     def test_the_yaml_shows_the_projects_shape_in_a_comment(self):
         lines = CONFIG_PATH.read_text().splitlines()
-        at = lines.index("projects: {}")
+        at = next(i for i, l in enumerate(lines) if l.startswith("projects:"))
         above = " ".join(l for l in lines[max(0, at - 30):at] if l.lstrip().startswith("#"))
         assert "atlas:" in above and "workhorse:" in above

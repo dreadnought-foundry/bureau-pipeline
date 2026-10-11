@@ -220,10 +220,12 @@ class DiscoveryTest(unittest.TestCase):
         # build. It has to be here, because this sweep IS the channel gate,
         # and on 2026-09-09 the workflow that builds every card was the one
         # workflow nothing in the sweep ever installed or fired.
+        # proof_task_parses joined with DRE-6045: the same job-start check,
+        # fired at proof-task.yml through the sandbox stub DRE-6034 installed.
         self.assertEqual(
             default,
             ["agent_task_parses", "bot_pr_flow", "dependabot_flow",
-             "gate_paths", "lane_contract"],
+             "gate_paths", "lane_contract", "proof_task_parses"],
         )
 
     def test_the_opt_in_flag_is_the_scenario_s_own_declaration(self):

@@ -696,7 +696,7 @@ class _FakeParent:
         self.comments = list(comments)
         self.created: list = []
 
-    def _gql(self, query, variables=None):
+    def _gql(self, query, variables=None, **_kw):
         self.created.append(variables)
         return {
             "issueCreate": {
@@ -777,7 +777,7 @@ class _GrowthEpic:
         self.writes: list[str] = []
         self.comments: list[tuple[str, str]] = []
 
-    def gql(self, query, variables=None):
+    def gql(self, query, variables=None, **_kw):
         history = ([{"createdAt": self.green_lit_at, "toState": {"name": "In Progress"}}]
                    if self.green_lit_at else [])
         return {"issue": {

@@ -322,6 +322,11 @@ Since DRE-3651 that read is made as the `bureau-sandbox` seat, not as the fleet:
   reports a MISSING STUB rather than a parse failure when it is absent. The
   full intended set, and what each stub covers, is
   `docs/harness.md`.
+* A **`proof-task.yml` stub** on `repository_dispatch: [proof-execute]`,
+  same shape as the `agent-task.yml` stub, installed under DRE-6034
+  (bureau-harness PR #3551). `proof_task_parses` fires it on every default
+  sweep and reports a MISSING STUB rather than a parse failure when it is
+  absent.
 * For `dependabot_flow` (DRE-2100): a reconcile stub on its ~15-min cron
   (the workflow_dispatch review route under test) and a stale pinned
   dependency that keeps a genuine Dependabot PR filed — chosen

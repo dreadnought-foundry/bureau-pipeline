@@ -478,7 +478,9 @@ about:
 # The walk an exception makes is then held to the same rules as the fleet's
 # ladders (`model_fallback.policy_errors`), and the daily adoption moves an
 # exception with the rung it names when a same-family successor replaces it.
-projects: {}
+projects:
+  agent-bureau-demo:
+    workhorse: claude-sonnet-5-5
 
 # THE BUILD/REVIEW FENCE, DECLARED (DRE-3880, CEO decision 2026-09-16)
 # --------------------------------------------------------------------
