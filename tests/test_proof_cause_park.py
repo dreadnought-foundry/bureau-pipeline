@@ -25,7 +25,7 @@ sys.path.insert(0, str(ROOT / "scripts"))
 # `proof_dispatch` imports `reconcile`, which reads these at import.
 os.environ.setdefault("LINEAR_API_KEY", "test-key")
 os.environ.setdefault("REPO", "dreadnought-foundry/bureau-pipeline")
-os.environ.setdefault("REPO_SLUG", "bureau-pipeline")
+os.environ.setdefault("REPO_SLUG", "agent-bureau")
 os.environ.setdefault("GH_TOKEN", "x")
 
 import console_escalation  # noqa: E402
@@ -150,6 +150,17 @@ class TestHold:
         assert observed == ("The nightly reads the repo variable; "
                             "The stale branch is deleted")
         assert needs == NEEDS
+
+    def test_both_readers_compose_the_same_hold_on_a_long_criterion(self):
+        # The dispatcher reads the record; the proof run reads its escalation
+        # file. One hold line between them is what keeps the park to one.
+        long = "The nightly reads the repo variable " + "and then much more " * 6
+        record = RECORD.replace("The nightly reads the repo variable", long.strip())
+        from_record = pcp.rows_of(record)
+        from_file = pcp.rows_from_lines(pcp.question(from_record).splitlines())
+        assert from_record[0].criterion != from_file[0].criterion
+        assert pcp.hold(from_record) == pcp.hold(from_file)
+        assert pcp.question(from_record) == pcp.question(from_file)
 
     def test_the_cause_words_are_distinct_and_in_row_order(self):
         rows = [ROWS[1], ROWS[0], ROWS[1]._replace(criterion="Another gone thing")]
@@ -407,6 +418,6 @@ class TestCli:
 
     def test_no_subcommand_moves_a_card(self):
         source = SCRIPT.read_text(encoding="utf-8")
-        cli = source[source.index("def main("):]
+        cli = source[source.index("# the CLI "):]
         assert "park(" not in cli
-        assert "cmd_" not in cli
+        assert "linear_ops" not in cli
