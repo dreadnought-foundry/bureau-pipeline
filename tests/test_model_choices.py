@@ -188,31 +188,28 @@ def test_one_group_per_kind_with_its_words_and_ladder():
 
 
 def test_refused_and_allowed_choices():
+    # DRE-6785 (the CEO, 2026-10-10): any priced model may lead any group, so
+    # the rows the own-kind rule, rule 4 and rule 4b refused are allowed now.
     doc = _choices()
     for model in ("claude-fable-5-1", "claude-sonnet-4-6"):
-        choice = _choice(doc, "workhorse", model)
-        assert choice["allowed"] is False
-        assert f"{model} is not on the workhorse ladder" in choice["reason"]
-    # The cross-ladder row: Sonnet 4.6 sits only on the judgement ladder.
-    assert "it sits on the judgement ladder" in _choice(
-        doc, "workhorse", "claude-sonnet-4-6")["reason"]
+        assert _choice(doc, "workhorse", model) == {
+            "model": model, "allowed": True, "reason": None,
+        }
     assert _choice(doc, "judgement", "claude-sonnet-4-6")["allowed"] is True
     assert _choice(doc, "workhorse", "claude-sonnet-5-5") == {
         "model": "claude-sonnet-5-5", "allowed": True, "reason": None,
     }
 
 
-def test_a_groups_allowed_choices_are_its_own_rungs():
+def test_every_priced_model_but_the_excluded_one_is_allowed_everywhere():
     doc = _choices()
     allowed = {
         g["key"]: [c["model"] for c in g["choices"] if c["allowed"]]
         for g in doc["groups"]
     }
-    assert allowed == {
-        "workhorse": ["claude-opus-5-5", "claude-opus-5", "claude-sonnet-5-5", "claude-sonnet-5"],
-        "advisory": ["claude-sonnet-5-5", "claude-sonnet-5"],
-        "judgement": ["claude-sonnet-4-6", "claude-fable-5-1"],
-    }
+    everything_but_haiku = [m for m in _price_ids() if m != "claude-haiku-5-5"]
+    assert allowed == {kind: everything_but_haiku
+                       for kind in ("workhorse", "advisory", "judgement")}
     for group in doc["groups"]:
         for choice in group["choices"]:
             if choice["allowed"]:
@@ -220,11 +217,18 @@ def test_a_groups_allowed_choices_are_its_own_rungs():
             else:
                 assert isinstance(choice["reason"], str) and choice["reason"]
                 assert not choice["reason"].startswith("projects.")
-    # Opus 5.5 is a reviewer rung but may not lead the reviewers (rule 4), nor
-    # the planners (rules 4 and 4b).
-    assert "tops the advisory ladder" in _choice(doc, "advisory", "claude-opus-5-5")["reason"]
-    planners = _choice(doc, "judgement", "claude-opus-5-5")["reason"]
-    assert "tops the judgement ladder" in planners and "rule 4b" in planners
+    # Opus 5.5 may lead the reviewers and the planners (refused by rules 4
+    # and 4b until 2026-10-10).
+    for kind in ("advisory", "judgement"):
+        assert _choice(doc, kind, "claude-opus-5-5") == {
+            "model": "claude-opus-5-5", "allowed": True, "reason": None,
+        }
+    # Haiku 5.5 stays set aside by rule 7 until the probe lifts its exclusion
+    # (the next card's work).
+    for kind in ("workhorse", "advisory", "judgement"):
+        haiku = _choice(doc, kind, "claude-haiku-5-5")
+        assert haiku["allowed"] is False
+        assert "claude-haiku-5-5 is excluded" in haiku["reason"]
 
 
 def test_an_error_elsewhere_in_the_config_never_reaches_a_choice():

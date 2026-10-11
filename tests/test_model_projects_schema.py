@@ -10,18 +10,18 @@ selected changed: `SelectionIsUnchangedTest` pins every role's pick, read off
 the ladders rather than hardcoded, and every repo the console has given no
 exception still walks the fleet ladders.
 
-THE OWN-KIND READING (pinned here so this card and DRE-6635 agree)
-------------------------------------------------------------------
-`projects.<slug>.<kind>: <model>` puts one of that KIND'S OWN rungs first. It
-never adds a model to a kind: a model joins a ladder only through a reviewed
-pull request to config/models.yaml (availability is not permission,
-2026-08-09). So `claude-sonnet-4-6` — on the judgement ladder only since
-2026-09-16 — is refused as a workhorse exception with ONE reason naming where
-it sits, and admitted as a judgement exception.
+ANY PRICED MODEL (DRE-6785, the CEO's decision of 2026-10-10)
+-------------------------------------------------------------
+`projects.<slug>.<kind>: <model>` puts that model first. It was the own-kind
+reading until 2026-10-10 — the model had to be a rung of that kind's own
+ladder — and the CEO lifted it: "I should be able to set it to anything I
+want." So `claude-sonnet-4-6` and `claude-fable-5-1` are admitted as workhorse
+exceptions, and so is a priced model on no ladder; a model with no declared
+price is refused with one plain sentence.
 
-An admissible-by-membership exception is then held to rules 4, 4b, 7 and 8 on
-the walk it makes, each finding prefixed `projects.<slug>.<kind>: ` — the
-prefix DRE-6635's renderer filters on.
+An admitted exception is then held to rules 7 and 8 on the walk it makes, each
+finding prefixed `projects.<slug>.<kind>: ` — the prefix DRE-6635's renderer
+filters on.
 
 RULE 10 — `judgement` is the planner's kind. Nothing enforced the "ONE role,
 deliberately" comment, so `agents.engineer: judgement` validated clean and
@@ -329,11 +329,12 @@ class TestMalformedKeys:
 
 
 # --------------------------------------------------------------------------- #
-# Validation — the own-kind membership rule                                    #
+# Validation — any priced model (the own-kind rule lifted, DRE-6785)           #
 # --------------------------------------------------------------------------- #
 
 class TestOwnKindMembership:
-    """The cross-ladder row DRE-6635's test reads the same way."""
+    """The cross-ladder row DRE-6635's test reads the same way — admitted
+    since 2026-10-10."""
 
     def test_the_rows_preconditions_hold_on_the_committed_ladders(self):
         cfg = committed()
@@ -343,34 +344,39 @@ class TestOwnKindMembership:
             assert model not in ladder(cfg, "workhorse")
             assert model not in ladder(cfg, "advisory")
 
-    def test_sonnet_4_6_is_refused_as_a_workhorse_exception_with_one_reason(self):
-        found = errors(with_projects({"atlas": {"workhorse": SONNET46}}))
-        assert found == [
-            "projects.atlas.workhorse: claude-sonnet-4-6 is not on the workhorse "
-            "ladder (it sits on the judgement ladder) — an exception reorders a "
-            "kind's own ladder and never adds a model to it; a model joins a "
-            "ladder only through a reviewed pull request to config/models.yaml"
-        ]
+    def test_sonnet_4_6_is_admitted_as_a_workhorse_exception(self):
+        cfg = with_projects({"atlas": {"workhorse": SONNET46}})
+        assert errors(cfg) == []
+        assert mf.effective_ladders(cfg, "atlas")["workhorse"] == [
+            SONNET46, OPUS55, OPUS5, SONNET55, SONNET5]
 
-    def test_fable_is_refused_as_a_workhorse_exception_with_one_reason(self):
-        found = errors(with_projects({"atlas": {"workhorse": FABLE51}}))
-        assert len(found) == 1, found
-        assert found[0].startswith(
-            "projects.atlas.workhorse: claude-fable-5-1 is not on the workhorse "
-            "ladder (it sits on the judgement ladder)")
+    def test_fable_is_admitted_as_a_workhorse_exception(self):
+        cfg = with_projects({"atlas": {"workhorse": FABLE51}})
+        assert errors(cfg) == []
+        assert mf.effective_ladders(cfg, "atlas")["workhorse"][0] == FABLE51
 
     def test_the_same_model_on_its_own_kinds_ladder_is_admitted(self):
         assert errors(with_projects({"atlas": {"judgement": SONNET46}})) == []
 
-    def test_a_model_on_no_ladder_says_so(self):
-        found = errors(with_projects({"atlas": {"advisory": "claude-opus-4-8"}}))
-        assert len(found) == 1, found
-        assert "(it is on no ladder)" in found[0]
-        assert found[0].startswith("projects.atlas.advisory: ")
+    def test_a_priced_model_on_no_ladder_is_admitted(self):
+        cfg = committed()
+        cfg["excluded"] = [e for e in cfg["excluded"]
+                           if e["model"] != "claude-haiku-5-5"]
+        cfg["projects"] = {"atlas": {"advisory": "claude-haiku-5-5"}}
+        for ids in mf._normalize_config(cfg)["ladders"].values():
+            assert "claude-haiku-5-5" not in ids
+        assert errors(cfg) == []
+
+    def test_a_model_with_no_declared_price_says_so_and_only_that(self):
+        found = errors(with_projects({"atlas": {"advisory": "claude-nova-9"}}))
+        assert found == [
+            "projects.atlas.advisory: claude-nova-9 has no declared price, so it "
+            "cannot be chosen."
+        ]
 
 
 # --------------------------------------------------------------------------- #
-# Validation — rules 4, 4b, 7, 8 on the walk an exception makes                #
+# Validation — rules 7 and 8 on the walk an exception makes                   #
 # --------------------------------------------------------------------------- #
 
 class TestExceptionsRunThePolicy:
@@ -378,21 +384,25 @@ class TestExceptionsRunThePolicy:
     def test_a_workhorse_reorder_is_admissible(self):
         assert errors(with_projects({"atlas": {"workhorse": SONNET55}})) == []
 
-    def test_opus_on_top_of_the_judgement_walk_is_refused(self):
-        found = errors(with_projects({"atlas": {"judgement": OPUS55}}))
-        assert found, "a build model may not top the judgement walk"
-        assert all(e.startswith("projects.atlas.judgement: ") for e in found), found
-        assert any("rule 4 " in e and "tops the judgement ladder" in e
-                   for e in found), found
-        assert any("rule 4b " in e and FABLE51 in e for e in found), found
+    def test_opus_on_top_of_the_judgement_walk_is_admitted(self):
+        # Refused by rules 4 and 4b until 2026-10-10 (DRE-6785).
+        cfg = with_projects({"atlas": {"judgement": OPUS55}})
+        assert errors(cfg) == []
+        assert mf.effective_ladders(cfg, "atlas")["judgement"] == [
+            OPUS55, FABLE51, SONNET46]
 
-    def test_opus_on_top_of_the_advisory_walk_is_refused(self):
-        found = errors(with_projects({"atlas": {"advisory": OPUS55}}))
+    def test_opus_on_top_of_the_advisory_walk_is_admitted(self):
+        # Refused as a bare overlap until 2026-10-10: the reviewer now skips
+        # the build model at selection time instead (DRE-6785).
+        cfg = with_projects({"atlas": {"advisory": OPUS55}})
+        assert errors(cfg) == []
+        assert mf.reviewers_for(cfg, OPUS55, "atlas")[0] == SONNET55
+
+    def test_an_excluded_model_on_the_walk_is_refused_by_rule_7(self):
+        found = errors(with_projects({"atlas": {"advisory": "claude-haiku-5-5"}}))
         assert found
         assert all(e.startswith("projects.atlas.advisory: ") for e in found), found
-        assert any("rule 8 " in e and "BARE overlap" in e for e in found), found
-        assert any("rule 4 " in e and "tops the advisory ladder" in e
-                   for e in found), found
+        assert any("rule 7 " in e and "is excluded" in e for e in found), found
 
     def test_the_fleets_own_findings_are_not_repeated_per_project(self):
         # A finding the fleet config already carries is the fleet's, not the
@@ -407,7 +417,8 @@ class TestExceptionsRunThePolicy:
 
     def test_every_exception_is_judged_on_its_own(self):
         found = errors(with_projects({"atlas": {
-            "workhorse": SONNET55, "judgement": SONNET46, "advisory": OPUS55}}))
+            "workhorse": SONNET55, "judgement": SONNET46,
+            "advisory": "claude-haiku-5-5"}}))
         assert found
         assert all(e.startswith("projects.atlas.advisory: ") for e in found), found
 

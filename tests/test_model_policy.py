@@ -113,9 +113,12 @@ _TREE_FILES = (
     # renders its reason with the change script's words (DRE-6833).
     "scripts/model_config_change.py",
     "config/models.yaml",
-    # Schema validation reads the DECLARED price of a rung sitting below the
-    # workhorse fallback (DRE-3880), so the throwaway tree carries it too.
+    # Schema validation reads the DECLARED price of every rung (DRE-3880,
+    # DRE-6785), so the throwaway tree carries it too.
     "config/model-prices.yaml",
+    # …and checks `projects` against the repo map: without it a config naming
+    # a project is refused and the selector degrades to the mirror.
+    "config/repo-map.json",
     "agents.yaml",
 )
 
@@ -349,22 +352,22 @@ class IncidentConditionTest(unittest.TestCase):
             mf.select("no-such-role", probe=everything_available), strongest
         )
 
-    def test_the_advisory_overlap_is_declared_rather_than_incidental(self):
+    def test_the_advisory_overlap_is_separated_at_selection_time(self):
         # The other half of what DRE-3880 changed. A model on BOTH the
-        # advisory and a workhorse ladder is admissible only because
-        # config/models.yaml declares what the reviewers run instead; the bare
-        # edit is still refused. Proved in full in
-        # tests/test_review_separation.py — this is the hinge, kept beside the
-        # incident it used to be confused with.
+        # advisory and a workhorse ladder is admissible, and since 2026-10-10
+        # (DRE-6785) it needs no declaration: the reviewer skips the build
+        # model when it is selected. Proved in full in
+        # tests/test_review_separation.py and tests/test_model_choice_policy.py
+        # — this is the hinge, kept beside the incident it used to be confused
+        # with.
         cfg = _canonical()
         overlap = set(_advisory_ladder(cfg)[:1]) & set(_workhorse_ladder(cfg))
         self.assertTrue(overlap, "the advisory top no longer overlaps the build path")
         stripped = _canonical()
         stripped.pop("review_separation", None)
-        self.assertTrue(
-            mf.policy_errors(stripped),
-            "a bare overlap with no selection rule must still be refused",
-        )
+        self.assertEqual(mf.policy_errors(stripped), [])
+        top = _advisory_ladder(cfg)[0]
+        self.assertNotEqual(mf.reviewers_for(stripped, top)[0], top)
 
     def test_the_cli_path_holds_the_same_line(self):
         # The workflows call the CLI, not the function. Probe says EVERYTHING
@@ -553,44 +556,40 @@ class JudgementKindTest(unittest.TestCase):
                     self.assertEqual(_cli_select(tree, role, all_up)[0], OPUS55)
             self.assertEqual(_cli_select(tree, "planner", all_up)[0], FABLE51)
 
-    def test_fable_on_a_build_ladder_is_still_rejected(self):
-        # The judgement ladder is permission for the PLANNER, not for the model.
+    def test_fable_on_a_build_ladder_is_a_persons_choice_since_2026_10_10(self):
+        # Refused by rule 4 until the CEO's decision of 2026-10-10 (DRE-6785):
+        # an explicit choice of any priced model is admissible for any group.
+        # What still guards the incident is that nothing AUTOMATIC climbs — see
+        # test_no_workhorse_role_reaches_fable_at_any_availability above.
         cfg = _canonical()
         cfg["ladders"][cfg["kinds"][WORKHORSE]["ladder"]].insert(
-            0, {"model": FABLE51, "reason": "someone's well-meaning edit"}
+            0, {"model": FABLE51, "reason": "the CEO's choice"}
         )
-        errors = mf.policy_errors(cfg)
-        self.assertTrue(errors, "Fable must not reach a build ladder")
-        self.assertTrue(any(FABLE51 in e for e in errors), f"unhelpful: {errors}")
+        self.assertEqual(mf.policy_errors(cfg), [])
 
-    def test_a_judgement_only_model_may_not_hide_below_the_fallback(self):
-        # Rule 4 reads the TOP rung of a non-build ladder, so a premium model
-        # parked BELOW the workhorse rungs would be invisible to it. Once a
-        # ladder descends onto the build path it stays there.
+    def test_a_dearer_model_below_the_fallback_is_a_persons_choice_too(self):
+        # Rule 4b refused this until 2026-10-10; what is left of it is the
+        # price, and both rungs here have one.
         cfg = _canonical()
         cfg["ladders"][cfg["kinds"][JUDGEMENT]["ladder"]] = [
             {"model": OPUS, "reason": "the build model first"},
-            {"model": FABLE51, "reason": "…and the premium one hidden below it"},
+            {"model": FABLE51, "reason": "…and the premium one below it"},
         ]
-        self.assertTrue(
-            mf.policy_errors(cfg),
-            "a premium model below the workhorse fallback must be rejected",
-        )
+        self.assertEqual(mf.policy_errors(cfg), [])
 
-    def test_the_selector_degrades_rather_than_honouring_fable_on_the_build_path(self):
+    def test_the_selector_honours_a_chosen_fable_on_the_build_path(self):
+        # The choice validates, so the selector loads it rather than degrading.
         with tempfile.TemporaryDirectory() as td:
             tree = _copy_tree(Path(td))
             cfg = _canonical()
             cfg["ladders"][cfg["kinds"][WORKHORSE]["ladder"]].insert(
-                0, {"model": FABLE51, "reason": "the incident, as a config edit"}
+                0, {"model": FABLE51, "reason": "the CEO's choice"}
             )
             _write_config(tree, cfg)
             model, _ = _cli_select(
                 tree, "engineer", {OPUS: True, SONNET: True, FABLE51: True}
             )
-            self.assertEqual(
-                model, OPUS55, "a policy-violating config must not reach the build path"
-            )
+            self.assertEqual(model, FABLE51)
 
     def test_discovery_may_not_target_the_judgement_ladder(self):
         # A newly-discovered model may never land on a BUILD **or a PLANNING**

@@ -346,6 +346,10 @@ class SelectResolvesFromConfigTest(unittest.TestCase):
             expected |= set(_ladder_models(rungs))
         expected |= set(_ladder_models(cfg.get("retired") or []))
         expected |= set(_ladder_models(cfg.get("excluded") or []))
+        # And every model a project names (DRE-6785): an exception may name a
+        # model on no ladder, and its builds' markers must still be read.
+        for entry in (cfg.get("projects") or {}).values():
+            expected |= set(entry.values())
         self.assertEqual(mf.KNOWN_MODELS, expected)
         # And attribution still works for an id that left the ladder.
         self.assertEqual(
