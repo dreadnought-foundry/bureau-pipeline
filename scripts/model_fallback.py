@@ -236,6 +236,11 @@ _FALLBACK_MODEL_CONFIG = {
         "medic": "advisory",
         "plan-critic-pre": "advisory",
         "plan-critic-post": "advisory",
+        "fullstack-engineer": "workhorse",
+        "ux-ui-engineer": "workhorse",
+        "designer": "advisory",
+        "mobile": "workhorse",
+        "product-lead": "judgement",
     },
     "effort": {
         "claude-opus-5-5": "high",
@@ -254,7 +259,7 @@ _FALLBACK_MODEL_CONFIG = {
         "advisory": {"label": "Reviewers", "purpose": "Judge a pull request, a plan or a failed run."},
         "judgement": {"label": "Planners", "purpose": "Turn an epic into the cards the fleet builds."},
     },
-    "ungrouped": ["designer", "ux-ui-engineer", "fullstack-engineer", "mobile", "product-lead"],
+    "ungrouped": [],
     "session_agents": ["designer", "ux-ui-engineer", "fullstack-engineer", "mobile", "product-lead"],
     "about": {
         "engineer": "Builds a card and opens the PR",
