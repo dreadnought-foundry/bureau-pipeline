@@ -193,10 +193,10 @@ def test_the_helper_reports_a_failing_inner_run(tmp_path):
 
 
 def test_no_numbered_part_collects_a_walk():
-    for part in range(1, len(_jobs()[PARTS_JOB]["strategy"]["matrix"]["part"]) + 1):
-        handed = parts.part_files(ROOT, part, len(
-            _jobs()[PARTS_JOB]["strategy"]["matrix"]["part"]),
-            parts.load_weights(parts.DURATIONS))
+    of = len(_jobs()[PARTS_JOB]["strategy"]["matrix"]["part"])
+    measured = parts.load_weights(parts.DURATIONS)
+    for part in range(1, of + 1):
+        handed = parts.part_files(ROOT, part, of, measured)
         assert [f for f in handed if parts.is_walk(f)] == [], part
 
 

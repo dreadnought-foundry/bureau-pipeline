@@ -114,7 +114,8 @@ def test_discovery_finds_the_files_pytest_collects(tmp_path):
 def test_discovery_on_the_live_tree_matches_a_plain_glob():
     found = parts.discover(ROOT)
     assert found, "the live tree has no test files?"
-    assert set(found) >= {
+    # Less the walks, which run in their own job (DRE-6909).
+    assert set(found) | set(parts.walks(ROOT)) >= {
         p.relative_to(ROOT).as_posix() for p in (ROOT / "tests").glob("test_*.py")
     }
     assert "tests/test_unit_test_parts.py" in found
