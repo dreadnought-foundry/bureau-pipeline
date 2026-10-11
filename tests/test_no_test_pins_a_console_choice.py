@@ -70,10 +70,9 @@ _PRICE = (
 _OWN_LADDERS = (
     "The ladders, the catalog and the prices are built by the test itself, so "
     "the id is its own fixture and not the committed config.")
-_LADDER_MEMBERS = (
-    "The expected rungs are the committed ladders' members, and every choice "
-    "config/model-choices.json offers only reorders rungs within a ladder, so "
-    "no console save today changes which rungs a candidate replaces.")
+_FROZEN_LADDERS = (
+    "The expected rungs are members of the frozen fixture's ladders, which the "
+    "test classifies the candidate against and no console save touches.")
 _FROZEN_AGENTS = (
     "The agents are read in the frozen fixture tree the test builds from "
     "tests/fixtures/model-config-frozen, which no console save touches.")
@@ -128,9 +127,9 @@ ALLOWED: dict[str, str] = {
     "tests/test_model_adoption.py::test_load_prices_reads_the_committed_file": _PRICE,
     "tests/test_model_adoption.py::test_load_prices_rejects_an_entry_missing_a_side": _OWN_INPUT,
     "tests/test_model_adoption.py::test_the_newer_opus_with_no_declared_price_is_ask":
-        _LADDER_MEMBERS,
+        _FROZEN_LADDERS,
     "tests/test_model_adoption.py::test_the_newer_same_priced_sonnet_is_adopted_on_every_ladder":
-        _LADDER_MEMBERS,
+        _FROZEN_LADDERS,
     "tests/test_model_config.py::ConfigDrivesTheFleetTest.test_selector_degrades_to_the_mirror_when_the_config_is_unreadable":
         _FROZEN_AGENTS,
     "tests/test_model_effort.py::PriceTest.test_opus_5_5_is_declared_at_4_and_20": _PRICE,

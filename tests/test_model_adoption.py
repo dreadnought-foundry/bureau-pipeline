@@ -55,13 +55,19 @@ import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
+sys.path.insert(0, str(ROOT / "tests"))
 
 import model_adoption as ma  # noqa: E402
 import model_catalog as mc  # noqa: E402
 import model_fallback as mf  # noqa: E402
+import model_fixture  # noqa: E402
 
 MODULE = ROOT / "scripts" / "model_adoption.py"
 CONFIG_PATH = ROOT / "config" / "models.yaml"
+# The ladders the fixture catalog is classified against: the frozen copy
+# (DRE-6859), because a console save can add a rung to a ladder of the
+# committed file and so change what a candidate replaces (DRE-6866).
+FROZEN_CONFIG_PATH = model_fixture.FIXTURE_DIR / "models.yaml"
 PRICES_PATH = ROOT / "config" / "model-prices.yaml"
 
 OPUS = "claude-opus-5"
@@ -205,7 +211,7 @@ def _classify_fixture(tmp_path):
         "--snapshot",
         str(catalog_file),
         "--config",
-        str(CONFIG_PATH),
+        str(FROZEN_CONFIG_PATH),
         "--prices",
         str(prices_file),
     )
