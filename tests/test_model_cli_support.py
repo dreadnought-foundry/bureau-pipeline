@@ -238,8 +238,13 @@ class ProjectExceptionSupportTest(unittest.TestCase):
         self.assertEqual(errors, [], "\n".join(errors))
 
     def test_an_exception_the_pin_cannot_run_is_refused_by_its_path(self):
-        AHEAD_OF_ADOPTION["claude-test-9"] = "2.1.290"
+        # One release past the live pin, never a literal: `claude_code_pin.py
+        # apply` raises this file's pin, and a fixed floor it reaches stops
+        # being one the pin cannot run.
         pinned = _pinned_version()
+        major, minor, patch = _version(pinned)
+        floor = f"{major}.{minor}.{patch + 1}"
+        AHEAD_OF_ADOPTION["claude-test-9"] = floor
         try:
             exceptions = {**_canonical_exceptions(),
                           "projects.atlas.workhorse": ["claude-test-9"]}
@@ -248,7 +253,7 @@ class ProjectExceptionSupportTest(unittest.TestCase):
             del AHEAD_OF_ADOPTION["claude-test-9"]
         self.assertEqual(len(errors), 1, errors)
         self.assertTrue(errors[0].startswith(
-            "projects.atlas.workhorse: claude-test-9 needs Claude Code 2.1.290"),
+            f"projects.atlas.workhorse: claude-test-9 needs Claude Code {floor}"),
             errors[0])
         self.assertIn(pinned, errors[0])
 
