@@ -501,6 +501,15 @@ class GeneratedMirrorTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             tree = _copy_tree(Path(td))
             path = tree / "config" / "models.yaml"
+            # Start from no exceptions, whatever the console has put in the
+            # live map, then add one.
+            text, count = re.subn(
+                r"^projects:(?: \{\}\n|\n(?:  .*\n)*)", "projects: {}\n",
+                path.read_text(), flags=re.M,
+            )
+            self.assertEqual(count, 1)
+            path.write_text(text)
+            self.assertEqual(_run_sync(tree).returncode, 0)
             text = path.read_text()
             self.assertIn("\nprojects: {}\n", text)
             path.write_text(text.replace(
