@@ -471,8 +471,8 @@ def test_an_epic_prose_defect_comments_once_across_sweeps():
 
 
 def test_an_epic_prose_defect_never_moves_the_epics_lane():
-    """`advance_unblocked_epics` moves an epic to Triage to TRIGGER THE PLANNER,
-    and a planning run cannot fix a sentence. Filing a separate Triage card is
+    """`advance_unblocked_epics` moves an epic to Planning to DISPATCH THE
+    PLANNER, and a planning run cannot fix a sentence. Filing a separate Triage card is
     banned outright, so the epic stays exactly where it is."""
     with patch.object(reconcile, "_fetch_epic_relations",
                       return_value=_epic("**Blocked by:** DRE-700")), \

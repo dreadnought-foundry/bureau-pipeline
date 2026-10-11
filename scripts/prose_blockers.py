@@ -61,8 +61,8 @@ proceed as written"*. Not Green Light: a malformed sentence is a mechanical
 fix, not a CEO decision, and Green Light is the queue that costs CEO time.
 
 An EPIC gets `epic_refusal()` and is **not moved at all**. `reconcile.
-advance_unblocked_epics` moves an epic to Triage to *trigger the planner*, and
-a planning run cannot fix a sentence; filing a separate Triage card is banned
+advance_unblocked_epics` moves an epic to Planning to *dispatch the planner*
+(DRE-6653), and a planning run cannot fix a sentence; filing a separate Triage card is banned
 outright (`CLAUDE.md`: *"Do not file notifications as Triage cards"*). So the
 epic's escalation is time: past `reconcile.PROSE_DEFECT_RED_MINUTES` the sweep
 run goes red through its existing exit-1 ledger and medic picks it up.
