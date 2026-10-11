@@ -2762,6 +2762,7 @@ jobs:
         env:
           LINEAR_API_KEY: ${{ secrets.LINEAR_PLANNER_KEY || secrets.LINEAR_API_KEY }}
           LINEAR_API_KEY_FALLBACK: ${{ secrets.LINEAR_API_KEY }}
+          REPO_SLUG: ${{ steps.repo.outputs.slug }}
         run: |
           EPIC="${{ github.event.client_payload.identifier }}"
           NOTE="${{ runner.temp }}/plan-mechanical.md"
@@ -2780,6 +2781,18 @@ jobs:
           # so this step is what makes a two-epic plan a send-back.
           python3 .bureau-pipeline/scripts/plan_seam.py findings \
               --detail-file "$DETAIL" \
+              --structural-file "${{ runner.temp }}/plan-structural.txt" \
+              --note-file "$NOTE" < "$CHILDREN"
+          # A PROOF criterion the proof run cannot read, or one reading an
+          # operator step it is not blocked by (DRE-6606), APPENDED to the same
+          # structural file, so the gate sends the round back on it too. The
+          # open operator cards are read first, so a cross-epic one is seen.
+          python3 .bureau-pipeline/scripts/plan_proof_reach.py operator-cards \
+              --out "${{ runner.temp }}/plan-operator-cards.json"
+          python3 .bureau-pipeline/scripts/plan_proof_reach.py findings \
+              --detail-file "$DETAIL" \
+              --operator-cards-file "${{ runner.temp }}/plan-operator-cards.json" \
+              --caller "$REPO_SLUG" \
               --structural-file "${{ runner.temp }}/plan-structural.txt" \
               --note-file "$NOTE" < "$CHILDREN"
           # The same file the critic is handed, so the list on the epic is
@@ -3218,6 +3231,7 @@ jobs:
         env:
           LINEAR_API_KEY: ${{ secrets.LINEAR_PLANNER_KEY || secrets.LINEAR_API_KEY }}
           LINEAR_API_KEY_FALLBACK: ${{ secrets.LINEAR_API_KEY }}
+          REPO_SLUG: ${{ steps.repo.outputs.slug }}
         run: |
           EPIC="${{ github.event.client_payload.identifier }}"
           NOTE="${{ runner.temp }}/plan-mechanical.md"
@@ -3233,6 +3247,16 @@ jobs:
           # the seam by splitting the epic passes round 2 with no seam at all.
           python3 .bureau-pipeline/scripts/plan_seam.py findings \
               --detail-file "$DETAIL" \
+              --structural-file "${{ runner.temp }}/plan-structural.txt" \
+              --note-file "$NOTE" < "$CHILDREN"
+          # The proof-reach check against the revision, appended after the seam
+          # (DRE-6606) — the same two reads as round 1's step above.
+          python3 .bureau-pipeline/scripts/plan_proof_reach.py operator-cards \
+              --out "${{ runner.temp }}/plan-operator-cards.json"
+          python3 .bureau-pipeline/scripts/plan_proof_reach.py findings \
+              --detail-file "$DETAIL" \
+              --operator-cards-file "${{ runner.temp }}/plan-operator-cards.json" \
+              --caller "$REPO_SLUG" \
               --structural-file "${{ runner.temp }}/plan-structural.txt" \
               --note-file "$NOTE" < "$CHILDREN"
           python3 .bureau-pipeline/scripts/linear_ops.py comment "$EPIC" \
@@ -4850,13 +4874,29 @@ jobs:
         env:
           LINEAR_API_KEY: ${{ secrets.LINEAR_PLANNER_KEY || secrets.LINEAR_API_KEY }}
           LINEAR_API_KEY_FALLBACK: ${{ secrets.LINEAR_API_KEY }}
+          REPO_SLUG: ${{ steps.repo.outputs.slug }}
         run: |
           EPIC="${{ github.event.client_payload.identifier }}"
           NOTE="${{ runner.temp }}/plan-mechanical.md"
-          python3 .bureau-pipeline/scripts/linear_ops.py children-json "$EPIC" \
-            | python3 .bureau-pipeline/scripts/plan_critic.py mechanical \
-                --surfaces-dir console/design/images/screens \
-                --note-file "$NOTE"
+          CHILDREN="${{ runner.temp }}/plan-review-children.json"
+          DETAIL="${{ runner.temp }}/plan-review-children-detail.json"
+          python3 .bureau-pipeline/scripts/linear_ops.py children-json "$EPIC" > "$CHILDREN"
+          python3 .bureau-pipeline/scripts/plan_critic.py mechanical \
+              --surfaces-dir console/design/images/screens \
+              --note-file "$NOTE" < "$CHILDREN"
+          # The proof-reach check (DRE-6606), on the note only: this route
+          # writes no structural file, so its findings are the critic's input.
+          if python3 .bureau-pipeline/scripts/linear_ops.py children-detail "$EPIC" > "$DETAIL"; then
+            python3 .bureau-pipeline/scripts/plan_proof_reach.py operator-cards \
+                --out "${{ runner.temp }}/plan-operator-cards.json"
+            python3 .bureau-pipeline/scripts/plan_proof_reach.py findings \
+                --detail-file "$DETAIL" \
+                --operator-cards-file "${{ runner.temp }}/plan-operator-cards.json" \
+                --caller "$REPO_SLUG" \
+                --note-file "$NOTE" < "$CHILDREN"
+          else
+            echo "::warning::the children's detail could not be read, so the proof-reach check did not run"
+          fi
           python3 .bureau-pipeline/scripts/linear_ops.py comment "$EPIC" \
             "$(cat "$NOTE")"
 

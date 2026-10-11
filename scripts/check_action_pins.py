@@ -1,6 +1,26 @@
 #!/usr/bin/env python3
 """Third-party action pin check (DRE-3418).
 
+## One file, carried in two repositories (DRE-6770)
+
+This is one file, carried in two repositories: bureau-pipeline's
+`scripts/check_action_pins.py` and agent-bureau's file of the same name are
+meant to be the same bytes. Each repository's CI checks out only itself, so each carries
+its own copy (the two-copies rule, DRE-3440), and agent-bureau's parity test
+compares its copy byte for byte against the `.bureau-pipeline` checkout at
+`stable`. Before `stable` moves, `scripts/mirror_check.py` runs that parity
+test against the candidate, so a change here that agent-bureau's copy does not
+carry is refused at promotion rather than found by every agent-bureau pull
+request at once (DRE-6765). Change it here; agent-bureau copies it.
+
+The two halves of the surface both live here. bureau-pipeline's callers read
+`references(path)`, `iter_files`, `check_paths`, `resolve_tag` and the
+positional CLI; agent-bureau's fleet sweep reads `UsesRef`, `uses_refs`,
+`floating`, `problems`, `scan(root)`, `--root` and `--list`. Both read one
+exemption rule and one version-comment rule.
+
+## Why it exists (DRE-3418)
+
 2026-09-08 15:15–16:27 PT, Anthropic moved the floating `claude-code-action`
 `v1` tag to v1.0.218, whose Claude Code installer leaves no launcher. Every
 Claude-running job in the fleet died for 72 minutes (DRE-3416, upstream
@@ -48,31 +68,52 @@ Nothing is cached between runs and nothing is written anywhere.
 
 ## What is scanned, and what is exempt
 
-Scanned: `.github/workflows/*.yml` and the composite actions under
-`.github/actions/*/action.yml`. The composite actions are included because
+Scanned, relative to a root (`--root`, default the parent of `scripts/`):
+`SCANNED_DIRS` — `.github/workflows`, `.github/actions` and
+`scaffold/customer-repo/.github/workflows`, the stubs agent-bureau installs in
+product repositories. A directory that is not there is skipped silently (this
+repository has no `scaffold/`). Workflow directories are read one level deep,
+the way GitHub reads them, plus every `action.yml` / `action.yaml` beneath
+them — which is how `.github/actions` is walked recursively. The composite actions are included because
 `actions/setup-python@v7` inside `setup-python-cached` floats exactly the way a
 workflow-level reference does, and the same tag move reaches it — a guard that
 stopped at the workflow directory would leave the hole this card exists to
 close. (Whether Dependabot proposes bumps for nested composite actions is the
 vendor's business; a stale pin is strictly safer than a moving tag either way.)
 
-EXEMPT, by name: `dreadnought-foundry/*`. Those are OUR OWN reusable workflows
-and actions riding OUR OWN release channel — `@main` on the canaries, `@vN` and
-`@stable` for the fleet, each already gated by the integration harness and by
-human release promotion (docs/self-hosting.md). Pinning them to a SHA would
-defeat the channel, which is the mechanism this card is arguing for, not
-against. Local `./…` path references are the repository's own files at the
-checked-out sha and are not a supply-chain edge at all.
+A site is third-party unless its `uses:` starts with one of `EXEMPT_PREFIXES`:
+
+  * `dreadnought-foundry/` — OUR OWN reusable workflows and actions riding OUR
+    OWN release channel: `@main` on the canaries, `@vN` and `@stable` for the
+    fleet, each already gated by the integration harness and by human release
+    promotion (docs/self-hosting.md). Pinning them to a SHA would defeat the
+    channel, which is the mechanism this card is arguing for, not against.
+  * `./` — the repository's own files at the checked-out sha; not a
+    supply-chain edge at all.
+  * `docker://` — a container image, not an action release; Dependabot's
+    github-actions ecosystem proposes nothing for it and the version-comment
+    rule has nothing to read.
+
+The version comment is exactly three numeric components, `# vX.Y.Z`
+(`VERSION_COMMENT_RE`, the release its capture group 1). `# v7` is the
+floating tag written down and `# v7.1` names no release Dependabot writes —
+the stricter of the two copies' old rules, kept when they became one.
 
 Deterministic, stdlib-only, line-based on purpose: YAML parsing discards the
 `# v<version>` comment, and a violation has to be reported with the LINE the
 operator must edit. Run from anywhere:
 
-    python3 scripts/check_action_pins.py [--resolve] [dir_or_file ...]
+    python3 scripts/check_action_pins.py [--resolve] [--list] [--root DIR] [dir_or_file ...]
+
+Positional paths win over `--root` when both are given. `--list` prints every
+site first, one per line as `<label> <path>:<line>: <uses>` with the label
+`pinned`, `floating` or `exempt`, after a line naming the exempt prefixes;
+the check then runs as it would without it. Exit codes: 0 clean, 1 a defect
+(an unknown option included), 2 only `--resolve` unknowns.
 
 tests/test_check_action_pins.py exercises it against synthetic workflows (one
-per violation class) and against the LIVE tree, so a diff that reintroduces a
-floating tag turns Pipeline Tests red.
+per violation class), scratch trees and the LIVE tree, so a diff that
+reintroduces a floating tag turns Pipeline Tests red.
 """
 
 import json
@@ -80,16 +121,25 @@ import re
 import subprocess
 import sys
 from collections import namedtuple
+from dataclasses import dataclass
 from pathlib import Path
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
-DEFAULT_PATHS = (
-    REPO_ROOT / ".github" / "workflows",
-    REPO_ROOT / ".github" / "actions",
+DEFAULT_ROOT = Path(__file__).resolve().parent.parent
+REPO_ROOT = DEFAULT_ROOT
+
+#: What is scanned, relative to a root. A directory that is absent is skipped.
+SCANNED_DIRS = (
+    ".github/workflows",
+    ".github/actions",
+    "scaffold/customer-repo/.github/workflows",
 )
+DEFAULT_PATHS = tuple(REPO_ROOT / d for d in SCANNED_DIRS)
 
 # Our own org — see the module docstring for why this exemption exists.
 EXEMPT_OWNER = "dreadnought-foundry"
+
+#: A `uses:` starting with one of these is not third-party.
+EXEMPT_PREFIXES = ("./", "docker://", f"{EXEMPT_OWNER}/")
 
 # A `uses:` STEP key, not the word in prose or in a comment: only whitespace
 # and an optional list dash may precede it. `jobs.<id>.uses` (a reusable
@@ -99,71 +149,152 @@ USES_RE = re.compile(r"^\s*(?:-\s+)?uses:\s*(?P<value>\S+)\s*(?P<comment>#.*)?$"
 # A commit sha as GitHub writes one: 40 lowercase hex characters.
 SHA_RE = re.compile(r"[0-9a-f]{40}")
 
-# The version the SHA is, leading the comment. At least two numeric components:
-# `# v7` is the floating tag written down and names no release, which is
-# exactly the thing the pin replaces. Only the leading version is read, so
-# prose after it passes here — but Dependabot rewrites the comment only when
-# nothing follows the version (#452), so prose leaves a stale comment behind
-# the sha it moves, and it is `--resolve` that catches the disagreement.
-VERSION_COMMENT_RE = re.compile(r"#\s*(v\d+(?:\.\d+)+)")
+# Something that was meant to be a sha and is not one GitHub writes: short, or
+# uppercase. Reported as such rather than as a floating tag.
+_SHA_LIKE_RE = re.compile(r"[0-9a-fA-F]{7,40}")
+
+# The version the SHA is, leading the comment: exactly three numeric
+# components, the release as group 1. `# v7` is the floating tag written down
+# and names no release, which is exactly the thing the pin replaces. Only the
+# leading version is read, so prose after it passes here — but Dependabot
+# rewrites the comment only when nothing follows the version (#452), so prose
+# leaves a stale comment behind the sha it moves, and it is `--resolve` that
+# catches the disagreement.
+VERSION_COMMENT_RE = re.compile(r"#\s*(v\d+\.\d+\.\d+)")
+
+
+@dataclass(frozen=True)
+class UsesRef:
+    """One `uses:` site. `ref` is the text after the last `@` (empty when
+    there is none); `comment` the trailing `# …`, or "" when absent."""
+
+    path: str
+    line: int
+    uses: str
+    ref: str
+    comment: str = ""
+
 
 Reference = namedtuple(
     "Reference", "path line uses action ref comment local exempt"
 )
 
 
+def is_third_party(uses):
+    """False for a `uses:` starting with one of `EXEMPT_PREFIXES`."""
+    return not uses.startswith(EXEMPT_PREFIXES)
+
+
+def is_pinned(ref):
+    """True only for a full commit sha: exactly 40 lowercase hex characters."""
+    return SHA_RE.fullmatch(ref) is not None
+
+
 def parse_uses(line):
     """(action, ref, comment) for a `uses:` step line, or None.
 
-    `action` is the owner/repo[/subpath] half, `ref` whatever follows `@`
+    `action` is everything before the last `@`, `ref` whatever follows it
     (empty for a local path reference), `comment` the trailing `# …` or None.
     """
     match = USES_RE.match(line)
     if not match:
         return None
     value = match.group("value").strip("\"'")
-    action, _, ref = value.partition("@")
-    return action, ref, match.group("comment")
+    action, at, ref = value.rpartition("@")
+    if not at:
+        action, ref = value, ""
+    comment = match.group("comment")
+    return action, ref, comment.rstrip() if comment else None
 
 
-def references(path):
-    """Every `uses:` reference in one YAML file, in file order.
+def uses_refs(text, path=""):
+    """Every `uses:` site in one file's text, exempt ones included, in line
+    order.
 
     Comment lines are dropped first: `tdd-commit-check/action.yml` documents a
     caller snippet inside a comment block, and a checker that flagged it would
     be unfixable without deleting the documentation.
     """
     found = []
-    path = Path(path)
-    for number, line in enumerate(path.read_text().splitlines(), start=1):
+    for number, line in enumerate(text.splitlines(), start=1):
         if line.lstrip().startswith("#"):
             continue
         parsed = parse_uses(line)
         if parsed is None:
             continue
         action, ref, comment = parsed
-        local = action.startswith(".")
-        found.append(Reference(
+        found.append(UsesRef(
             path=path,
             line=number,
             uses=f"{action}@{ref}" if ref else action,
-            action=action,
             ref=ref,
-            comment=comment,
+            comment=comment or "",
+        ))
+    return found
+
+
+def floating(text, path=""):
+    """Third-party sites whose ref is not a sha. Never reads the comment."""
+    return [site for site in uses_refs(text, path)
+            if is_third_party(site.uses) and not is_pinned(site.ref)]
+
+
+def problems_for(ref):
+    """What is wrong with one site, as `<path>:<line>: <uses> — <reason>`
+    lines. Empty for an exempt site and for a clean pin."""
+    if not is_third_party(ref.uses):
+        return []
+    where = f"{ref.path}:{ref.line}: {ref.uses}"
+    if is_pinned(ref.ref):
+        if VERSION_COMMENT_RE.match(ref.comment):
+            return []
+        return [f"{where} — pinned, but carries no `# vX.Y.Z` version comment; "
+                f"Dependabot reads it to know which release the sha is"]
+    if _SHA_LIKE_RE.fullmatch(ref.ref):
+        return [f"{where} — short or uppercase SHA; pin the full 40-character "
+                f"lowercase commit sha"]
+    return [f"{where} — floating ref `{ref.ref or '(none)'}`; pin it to the "
+            f"40-character commit sha of its release, with `# vX.Y.Z` after it"]
+
+
+def problems(text, path=""):
+    """`problems_for` over every site in one file's text, in line order."""
+    return [line for site in uses_refs(text, path) for line in problems_for(site)]
+
+
+def references(path):
+    """Every `uses:` reference in one YAML file, in file order — the sites of
+    `uses_refs`, with the `Path` and the fields this repository's callers read.
+    """
+    path = Path(path)
+    found = []
+    for site in uses_refs(path.read_text(), str(path)):
+        local = site.uses.startswith("./")
+        found.append(Reference(
+            path=path,
+            line=site.line,
+            uses=site.uses,
+            action=site.uses[:-len(site.ref) - 1] if site.ref else site.uses,
+            ref=site.ref,
+            comment=site.comment or None,
             local=local,
-            exempt=not local and action.split("/")[0] == EXEMPT_OWNER,
+            exempt=not local and not is_third_party(site.uses),
         ))
     return found
 
 
 def check_file(path):
-    """Violation strings for one file. Empty list == clean."""
+    """Violation strings for one file. Empty list == clean.
+
+    Which sites fail is `problems_for`'s answer; the wording is this
+    repository's, which `tests.yml` and its tests read."""
     violations = []
     for ref in references(path):
-        if ref.local or ref.exempt:
+        site = UsesRef(str(ref.path), ref.line, ref.uses, ref.ref, ref.comment or "")
+        if not problems_for(site):
             continue
         where = f"{ref.path.name}:{ref.line}"
-        if not SHA_RE.fullmatch(ref.ref):
+        if not is_pinned(ref.ref):
             owner_repo = "/".join(ref.action.split("/")[:2])
             violations.append(
                 f"{where}: `uses: {ref.uses}` floats — pin it to the 40-char "
@@ -171,7 +302,7 @@ def check_file(path):
                 f"`# v<version>` after it (gh api repos/{owner_repo}"
                 f"/git/ref/tags/{ref.ref or '<tag>'})"
             )
-        elif not VERSION_COMMENT_RE.match(ref.comment or ""):
+        else:
             violations.append(
                 f"{where}: `uses: {ref.uses}` is pinned but carries no "
                 f"`# v<version>` version comment — Dependabot reads that "
@@ -182,14 +313,17 @@ def check_file(path):
 
 
 def iter_files(paths):
-    """The YAML files under each given path, deduplicated and sorted."""
+    """The YAML files under each given path, deduplicated and sorted.
+
+    A directory gives its own `*.yml` / `*.yaml` and every `action.yml` /
+    `action.yaml` beneath it; a path that does not exist gives nothing."""
     seen = []
     for path in paths:
         path = Path(path)
         if path.is_dir():
             candidates = sorted(path.glob("*.yml")) + sorted(path.glob("*.yaml"))
-            candidates += sorted(path.glob("*/action.yml"))
-            candidates += sorted(path.glob("*/action.yaml"))
+            candidates += sorted(path.glob("*/**/action.yml"))
+            candidates += sorted(path.glob("*/**/action.yaml"))
         elif path.exists():
             candidates = [path]
         else:
@@ -200,6 +334,32 @@ def iter_files(paths):
     return sorted(seen)
 
 
+def scanned_files(root):
+    """Every file the scan reads under `root`: `iter_files` over
+    `SCANNED_DIRS`, an absent directory skipped."""
+    root = Path(root)
+    return iter_files([root / d for d in SCANNED_DIRS])
+
+
+def _relative(path, root):
+    """`path` relative to `root`, posix — or as given when it is not under it."""
+    try:
+        return Path(path).resolve().relative_to(Path(root).resolve()).as_posix()
+    except ValueError:
+        return Path(path).as_posix()
+
+
+def _sites(files, root):
+    """Every site in `files`, its path relative to `root`."""
+    return [site for path in files
+            for site in uses_refs(Path(path).read_text(), _relative(path, root))]
+
+
+def scan(root):
+    """Every site under `root`'s scanned set, `.path` relative to `root`."""
+    return _sites(scanned_files(root), root)
+
+
 def check_paths(paths):
     """Every violation across every YAML file under `paths`."""
     violations = []
@@ -208,7 +368,7 @@ def check_paths(paths):
     return violations
 
 
-def scan(paths):
+def _tally(paths):
     """(violations, stats). stats guards against a silently vacuous run: a pin
     checker that inspected nothing must not report green."""
     files = iter_files(paths)
@@ -326,11 +486,58 @@ def resolve_paths(paths, read=gh_read):
     return fails, unknowns, agreed
 
 
+USAGE = ("usage: check_action_pins.py [--resolve] [--list] [--root DIR] "
+         "[dir_or_file ...]")
+
+
+def _parse(args):
+    """(online, listing, root, paths) from the arguments, or a usage error.
+
+    Parsed by hand rather than by argparse, whose usage errors exit 2 — and 2
+    here means only that `--resolve` left something unknown."""
+    online = listing = False
+    root, paths = None, []
+    args = list(args)
+    while args:
+        arg = args.pop(0)
+        if arg == "--resolve":
+            online = True
+        elif arg == "--list":
+            listing = True
+        elif arg == "--root":
+            if not args:
+                raise ValueError("--root needs a directory")
+            root = Path(args.pop(0))
+        elif arg.startswith("--root="):
+            root = Path(arg.split("=", 1)[1])
+        elif arg.startswith("-") and arg != "-":
+            raise ValueError(f"unknown option {arg}")
+        else:
+            paths.append(Path(arg))
+    return online, listing, root, paths
+
+
+def _label(site):
+    """`exempt`, `pinned` or `floating` — what `--list` calls one site."""
+    if not is_third_party(site.uses):
+        return "exempt"
+    return "pinned" if is_pinned(site.ref) else "floating"
+
+
 def main(argv, read=gh_read):
-    args = argv[1:]
-    online = "--resolve" in args
-    paths = [Path(a) for a in args if a != "--resolve"] or list(DEFAULT_PATHS)
-    violations, stats = scan(paths)
+    try:
+        online, listing, root, paths = _parse(argv[1:])
+    except ValueError as error:
+        print(f"{error}\n{USAGE}", file=sys.stderr)
+        return 1
+    root = root if root is not None else DEFAULT_ROOT
+    if not paths:
+        paths = [root / d for d in SCANNED_DIRS]
+    if listing:
+        print(f"exempt prefixes (not third-party): {', '.join(EXEMPT_PREFIXES)}")
+        for site in _sites(iter_files(paths), root):
+            print(f"{_label(site)} {site.path}:{site.line}: {site.uses}")
+    violations, stats = _tally(paths)
     print(
         f"checked {stats['files']} files: {stats['third_party']} third-party "
         f"action references, {stats['exempt']} {EXEMPT_OWNER}/* (exempt — our "

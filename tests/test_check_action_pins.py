@@ -771,5 +771,400 @@ class PinLedgerTest(unittest.TestCase):
         self.assertEqual(drifted, {}, f"one action, two version comments: {drifted}")
 
 
+# --------------------------------------------------------------------------
+# DRE-6770 — one file, carried in two repositories.
+#
+# agent-bureau carries a file of the same name (the two-copies rule, DRE-3440)
+# and its fleet sweep imports a different surface from it: `UsesRef`,
+# `uses_refs`, `floating`, `problems`, `scan(root)`, `--root`, `--list`, the
+# `docker://` exemption and the scaffold directory. The classes below pin that
+# half, so the file agent-bureau copies byte for byte carries what its callers
+# read. The contract is spelled out on DRE-6770, shared with DRE-6769.
+# --------------------------------------------------------------------------
+
+CONTRACT_NAMES = (
+    "UsesRef", "uses_refs", "is_third_party", "is_pinned", "floating",
+    "problems", "problems_for", "SCANNED_DIRS", "DEFAULT_ROOT",
+    "EXEMPT_PREFIXES", "scanned_files", "scan", "references", "iter_files",
+    "DEFAULT_PATHS", "check_paths", "resolve_tag", "resolve_paths",
+    "Unresolved", "main", "VERSION_COMMENT_RE", "SHA_RE", "EXEMPT_OWNER",
+)
+
+SITES = textwrap.dedent(f"""
+    jobs:
+      a:
+        steps:
+          # - uses: actions/checkout@v5
+          - uses: actions/checkout@{SHA} # v7.0.1
+          - uses: "actions/setup-python@v7"
+          - uses: './.github/actions/setup-python-cached'
+          - uses: docker://alpine:3.20
+      b:
+        uses: dreadnought-foundry/bureau-pipeline/.github/workflows/plan.yml@stable
+""").lstrip("\n")
+
+
+class SurfaceTest(unittest.TestCase):
+    """Every name both repositories' callers import, present and shaped."""
+
+    def test_the_whole_contract_is_importable(self):
+        missing = [n for n in CONTRACT_NAMES if not hasattr(check_action_pins, n)]
+        self.assertEqual(missing, [])
+
+    def test_the_constants_are_the_contract(self):
+        self.assertEqual(check_action_pins.SCANNED_DIRS, (
+            ".github/workflows", ".github/actions",
+            "scaffold/customer-repo/.github/workflows"))
+        self.assertEqual(check_action_pins.EXEMPT_PREFIXES,
+                         ("./", "docker://", "dreadnought-foundry/"))
+        self.assertEqual(check_action_pins.DEFAULT_ROOT, ROOT)
+        self.assertEqual(check_action_pins.REPO_ROOT, ROOT)
+
+    def test_default_paths_are_derived_from_the_scanned_dirs(self):
+        """One list, never two: the positional default is the scanned set."""
+        self.assertEqual(
+            tuple(check_action_pins.DEFAULT_PATHS),
+            tuple(ROOT / d for d in check_action_pins.SCANNED_DIRS))
+
+    def test_uses_ref_is_a_frozen_dataclass_with_the_contract_fields(self):
+        import dataclasses
+        self.assertEqual(
+            [f.name for f in dataclasses.fields(check_action_pins.UsesRef)],
+            ["path", "line", "uses", "ref", "comment"])
+        site = check_action_pins.UsesRef("w.yml", 1, "a/b@v1", "v1", "")
+        with self.assertRaises(dataclasses.FrozenInstanceError):
+            site.line = 2
+
+    def test_the_file_imports_only_the_standard_library(self):
+        import ast
+        tree = ast.parse(CHECKER.read_text())
+        modules = set()
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                modules.update(a.name.split(".")[0] for a in node.names)
+            elif isinstance(node, ast.ImportFrom):
+                modules.add((node.module or "").split(".")[0])
+        self.assertEqual(sorted(modules - set(sys.stdlib_module_names)), [])
+
+    def test_the_docstring_says_it_is_one_file_in_two_repositories(self):
+        doc = " ".join((check_action_pins.__doc__ or "").split())
+        for phrase in ("one file", "two repositories", "agent-bureau",
+                       "parity test", "scripts/mirror_check.py", "byte for byte"):
+            self.assertIn(phrase, doc)
+
+
+class UsesRefsTest(unittest.TestCase):
+    """`uses_refs(text, path)` — every site in one file's text, in line order."""
+
+    def test_a_site_records_path_line_uses_ref_and_comment(self):
+        sites = check_action_pins.uses_refs(SITES, "w.yml")
+        self.assertEqual(sites[0], check_action_pins.UsesRef(
+            path="w.yml", line=5, uses=f"actions/checkout@{SHA}", ref=SHA,
+            comment="# v7.0.1"))
+
+    def test_every_site_exempt_ones_included_in_line_order(self):
+        sites = check_action_pins.uses_refs(SITES, "w.yml")
+        self.assertEqual([(s.line, s.uses) for s in sites], [
+            (5, f"actions/checkout@{SHA}"),
+            (6, "actions/setup-python@v7"),
+            (7, "./.github/actions/setup-python-cached"),
+            (8, "docker://alpine:3.20"),
+            (10, "dreadnought-foundry/bureau-pipeline/.github/workflows/plan.yml@stable"),
+        ])
+
+    def test_a_commented_out_line_is_not_a_site(self):
+        sites = check_action_pins.uses_refs(SITES)
+        self.assertNotIn(4, [s.line for s in sites])
+        self.assertEqual(check_action_pins.uses_refs(
+            "    # - uses: actions/checkout@v5\n#uses: a/b@v1\n"), [])
+
+    def test_a_quoted_value_is_read_without_quotes(self):
+        sites = check_action_pins.uses_refs(SITES)
+        self.assertEqual(sites[1].uses, "actions/setup-python@v7")
+        self.assertEqual(sites[1].ref, "v7")
+        self.assertEqual(sites[2].uses, "./.github/actions/setup-python-cached")
+
+    def test_an_absent_comment_is_empty_and_the_path_defaults_empty(self):
+        (site,) = check_action_pins.uses_refs("- uses: actions/checkout@v7\n")
+        self.assertEqual(site.comment, "")
+        self.assertEqual(site.path, "")
+
+    def test_the_ref_is_the_text_after_the_last_at(self):
+        (site,) = check_action_pins.uses_refs(
+            "- uses: docker://alpine@sha256:0123abcd\n")
+        self.assertEqual(site.ref, "sha256:0123abcd")
+        (site,) = check_action_pins.uses_refs(f"- uses: a/b@c@{SHA}\n")
+        self.assertEqual(site.ref, SHA)
+
+    def test_references_carry_the_same_sites(self):
+        """The two readers are one: `references(path)` is `uses_refs` on the
+        file's text, with this repository's extra fields."""
+        tmp = Path(self.enterContext(tempfile.TemporaryDirectory()))
+        path = tmp / "w.yml"
+        path.write_text(SITES)
+        refs = check_action_pins.references(path)
+        sites = check_action_pins.uses_refs(SITES, str(path))
+        self.assertEqual([(r.line, r.uses, r.ref) for r in refs],
+                         [(s.line, s.uses, s.ref) for s in sites])
+
+
+class ExemptionTest(unittest.TestCase):
+    """One rule: third-party unless `./`, `docker://` or `dreadnought-foundry/`."""
+
+    def test_the_three_exempt_prefixes_are_not_third_party(self):
+        for uses in ("./x", "./.github/actions/setup-python-cached",
+                     "docker://alpine:3.20",
+                     "dreadnought-foundry/bureau-pipeline/.github/workflows/plan.yml@stable"):
+            with self.subTest(uses=uses):
+                self.assertFalse(check_action_pins.is_third_party(uses))
+
+    def test_everything_else_is_third_party(self):
+        for uses in ("actions/checkout@v7", "dreadnought-foundryx/a@v1",
+                     "evil/dreadnought-foundry@v1", "../x", "docker/login-action@v3"):
+            with self.subTest(uses=uses):
+                self.assertTrue(check_action_pins.is_third_party(uses))
+
+    def test_a_docker_reference_is_exempt_in_this_repository_too(self):
+        """`Reference.exempt` / `.local` derive from the same rule, so the
+        checker this repository runs exempts `docker://` like agent-bureau's."""
+        tmp = Path(self.enterContext(tempfile.TemporaryDirectory()))
+        path = write_workflow(tmp, "w.yml", f"""
+            jobs:
+              a:
+                steps:
+                  - uses: docker://alpine:3.20
+                  - uses: ./x
+                  - uses: actions/checkout@{SHA} # v7.0.1
+        """)
+        refs = check_action_pins.references(path)
+        self.assertEqual([(r.local, r.exempt) for r in refs],
+                         [(False, True), (True, False), (False, False)])
+        self.assertEqual(check_action_pins.check_paths([path]), [])
+
+
+class PinnedAndFloatingTest(unittest.TestCase):
+
+    def test_is_pinned_is_exactly_forty_lowercase_hex(self):
+        self.assertTrue(check_action_pins.is_pinned(SHA))
+        for ref in (SHA.upper(), SHA[:7], SHA + "0", "z" * 40, "v7", ""):
+            with self.subTest(ref=ref):
+                self.assertFalse(check_action_pins.is_pinned(ref))
+
+    def test_floating_is_third_party_sites_whose_ref_is_not_a_sha(self):
+        found = check_action_pins.floating(SITES, "w.yml")
+        self.assertEqual([(s.line, s.uses) for s in found],
+                         [(6, "actions/setup-python@v7")])
+
+    def test_floating_never_reads_the_comment(self):
+        """A bare sha with no comment is not floating, and a floating tag under
+        a perfect comment — even one that names a sha — still is."""
+        text = textwrap.dedent(f"""
+            - uses: actions/checkout@{SHA}
+            - uses: actions/cache@v6 # v6.1.0
+            - uses: actions/setup-node@v4 # {SHA}
+        """)
+        self.assertEqual([s.line for s in check_action_pins.floating(text)], [3, 4])
+
+
+class ProblemsTest(unittest.TestCase):
+    """`problems()` — agent-bureau's line shape, `<path>:<line>: <uses> — <reason>`."""
+
+    def _one(self, line, path="w.yml"):
+        found = check_action_pins.problems(f"- uses: {line}\n", path)
+        self.assertEqual(len(found), 1, found)
+        return found[0]
+
+    def test_a_floating_tag_names_its_site_and_says_floating(self):
+        problem = self._one("actions/checkout@v7")
+        self.assertTrue(problem.startswith("w.yml:1: actions/checkout@v7 — "), problem)
+        self.assertIn("floating", problem)
+
+    def test_a_short_or_uppercase_sha_says_so(self):
+        for ref in (SHA[:7], SHA.upper()):
+            with self.subTest(ref=ref):
+                problem = self._one(f"actions/checkout@{ref} # v7.0.1")
+                self.assertIn("short or uppercase SHA", problem)
+
+    def test_a_pin_without_a_version_comment_says_version_comment(self):
+        self.assertIn("version comment", self._one(f"actions/checkout@{SHA}"))
+
+    def test_a_two_component_version_comment_is_a_problem(self):
+        """The stricter rule of the two copies: exactly three components."""
+        self.assertIn("version comment", self._one(f"actions/checkout@{SHA} # v7.1"))
+
+    def test_a_clean_pin_and_every_exempt_site_have_none(self):
+        text = SITES.replace('"actions/setup-python@v7"',
+                             f'"actions/setup-python@{SHA}" # v7.0.1')
+        self.assertEqual(check_action_pins.problems(text, "w.yml"), [])
+
+    def test_problems_is_problems_for_over_every_site(self):
+        text = textwrap.dedent(f"""
+            - uses: actions/checkout@v7
+            - uses: actions/cache@{SHA}
+            - uses: docker://alpine:3.20
+        """)
+        expected = [p for s in check_action_pins.uses_refs(text, "w.yml")
+                    for p in check_action_pins.problems_for(s)]
+        self.assertEqual(len(expected), 2)
+        self.assertEqual(check_action_pins.problems(text, "w.yml"), expected)
+
+
+class VersionCommentRuleTest(unittest.TestCase):
+    """One rule for the version comment: exactly three numeric components."""
+
+    def test_the_release_is_capture_group_one(self):
+        match = check_action_pins.VERSION_COMMENT_RE.match("# v1.2.3 (DRE-3416)")
+        self.assertEqual(match.group(1), "v1.2.3")
+
+    def test_two_components_name_no_release(self):
+        self.assertIsNone(check_action_pins.VERSION_COMMENT_RE.match("# v1.2"))
+
+    def test_this_repositorys_check_fails_a_two_component_comment(self):
+        """Before DRE-6770 this repository's copy accepted `# v7.1`; the two
+        rules are one now, and a pin it accepts agent-bureau accepts."""
+        tmp = Path(self.enterContext(tempfile.TemporaryDirectory()))
+        path = write_workflow(tmp, "w.yml", f"""
+            jobs:
+              a:
+                steps:
+                  - uses: actions/checkout@{SHA} # v7.1
+        """)
+        violations = check_action_pins.check_paths([path])
+        self.assertEqual(len(violations), 1, violations)
+        self.assertIn("w.yml:4", violations[0])
+
+
+def make_tree(root: Path, scaffold=True) -> Path:
+    """A scratch repository with a site in every scanned directory."""
+    files = {
+        ".github/workflows/ci.yml": f"""
+            jobs:
+              a:
+                steps:
+                  - uses: actions/checkout@{SHA} # v7.0.1
+                  - uses: ./.github/actions/local
+        """,
+        ".github/actions/local/action.yml": """
+            runs:
+              steps:
+                - uses: docker://alpine:3.20
+        """,
+        ".github/actions/group/nested/action.yaml": f"""
+            runs:
+              steps:
+                - uses: actions/cache@{SHA} # v6.1.0
+        """,
+    }
+    if scaffold:
+        files["scaffold/customer-repo/.github/workflows/stub.yml"] = """
+            jobs:
+              a:
+                uses: dreadnought-foundry/bureau-pipeline/.github/workflows/plan.yml@stable
+        """
+    for rel, body in files.items():
+        path = root / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(textwrap.dedent(body).lstrip("\n"))
+    return root
+
+
+class ScanRootTest(unittest.TestCase):
+    """`scan(root)` / `scanned_files(root)` — the scanned set, read off a root."""
+
+    def setUp(self):
+        self.tmp = Path(self.enterContext(tempfile.TemporaryDirectory()))
+
+    def test_scan_reads_all_three_scanned_dirs_relative_and_posix(self):
+        root = make_tree(self.tmp)
+        sites = check_action_pins.scan(root)
+        self.assertEqual(sorted((s.path, s.line) for s in sites), [
+            (".github/actions/group/nested/action.yaml", 3),
+            (".github/actions/local/action.yml", 3),
+            (".github/workflows/ci.yml", 4),
+            (".github/workflows/ci.yml", 5),
+            ("scaffold/customer-repo/.github/workflows/stub.yml", 3),
+        ])
+        self.assertTrue(all(isinstance(s, check_action_pins.UsesRef) for s in sites))
+
+    def test_scanned_files_walks_the_actions_directory_recursively(self):
+        root = make_tree(self.tmp)
+        files = check_action_pins.scanned_files(root)
+        self.assertIn(root / ".github/actions/group/nested/action.yaml", files)
+        self.assertEqual(len(files), 4, files)
+
+    def test_an_absent_scaffold_directory_is_skipped_silently(self):
+        root = make_tree(self.tmp, scaffold=False)
+        sites = check_action_pins.scan(root)
+        self.assertEqual(len(sites), 4)
+        self.assertFalse(any(s.path.startswith("scaffold/") for s in sites))
+
+
+class RootAndListCliTest(unittest.TestCase):
+    """`--root DIR` and `--list`, end to end through the real CLI."""
+
+    def setUp(self):
+        self.tmp = Path(self.enterContext(tempfile.TemporaryDirectory()))
+
+    def _run(self, *args):
+        return subprocess.run(
+            [sys.executable, str(CHECKER), *args],
+            capture_output=True, text=True, cwd=self.tmp,
+        )
+
+    def _dirty(self, root):
+        path = root / ".github/workflows/dirty.yml"
+        path.write_text("jobs:\n  a:\n    steps:\n      - uses: actions/setup-node@v4\n")
+        return path
+
+    def test_root_scans_another_tree(self):
+        root = make_tree(self.tmp / "repo")
+        proc = self._run("--root", str(root))
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        self.assertIn("checked 4 files: 2 third-party", proc.stdout)
+        self._dirty(root)
+        proc = self._run("--root", str(root))
+        self.assertEqual(proc.returncode, 1, proc.stdout + proc.stderr)
+        self.assertIn("FAIL dirty.yml:4", proc.stdout)
+
+    def test_positional_paths_win_over_root(self):
+        clean = make_tree(self.tmp / "clean")
+        dirty = self._dirty(make_tree(self.tmp / "other"))
+        proc = self._run("--root", str(clean), str(dirty))
+        self.assertEqual(proc.returncode, 1, proc.stdout + proc.stderr)
+        self.assertIn("checked 1 files", proc.stdout)
+
+    def test_list_labels_every_site_and_names_the_exempt_prefixes(self):
+        root = make_tree(self.tmp / "repo")
+        self._dirty(root)
+        proc = self._run("--root", str(root), "--list")
+        lines = proc.stdout.splitlines()
+        for prefix in ("./", "docker://", "dreadnought-foundry/"):
+            self.assertIn(prefix, lines[0])
+        for expected in (
+            f"pinned .github/workflows/ci.yml:4: actions/checkout@{SHA}",
+            "exempt .github/workflows/ci.yml:5: ./.github/actions/local",
+            "floating .github/workflows/dirty.yml:4: actions/setup-node@v4",
+            "exempt .github/actions/local/action.yml:3: docker://alpine:3.20",
+            f"pinned .github/actions/group/nested/action.yaml:3: actions/cache@{SHA}",
+            "exempt scaffold/customer-repo/.github/workflows/stub.yml:3: "
+            "dreadnought-foundry/bureau-pipeline/.github/workflows/plan.yml@stable",
+        ):
+            self.assertIn(expected, lines)
+        self.assertEqual(proc.returncode, 1, proc.stdout + proc.stderr)
+
+    def test_list_over_a_clean_tree_exits_zero(self):
+        root = make_tree(self.tmp / "repo")
+        proc = self._run("--root", str(root), "--list")
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        labels = [line.split()[0] for line in proc.stdout.splitlines()[1:6]]
+        self.assertEqual(sorted(labels),
+                         ["exempt", "exempt", "exempt", "pinned", "pinned"])
+
+    def test_an_unknown_option_is_a_defect_not_an_unknown(self):
+        """Exit 2 means only `--resolve` unknowns; a typo is exit 1."""
+        proc = self._run("--resovle")
+        self.assertEqual(proc.returncode, 1, proc.stdout + proc.stderr)
+
+
 if __name__ == "__main__":
     unittest.main()
