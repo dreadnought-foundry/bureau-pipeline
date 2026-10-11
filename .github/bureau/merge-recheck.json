@@ -1,0 +1,4 @@
+{
+  "$schema_note": "Read by the merge gate through scripts/order_sensitive_refresh.py (DRE-6871, DRE-6875). recheck_new_tests: when main gained a new test since the pull request's last test run began and that test names a file the pull request changes (or the pull request adds a new test naming a file main changed), the merge gate refreshes the branch from main once, so the tests run on the combined result before it decides again. bureau-pipeline has no order-sensitive paths, so order_sensitive_paths is absent and reads as empty.",
+  "recheck_new_tests": true
+}
