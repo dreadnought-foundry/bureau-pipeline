@@ -289,7 +289,7 @@ class FakeLinear:
         }
 
     # -- the seam -----------------------------------------------------------
-    def gql(self, query, variables=None):
+    def gql(self, query, variables=None, **_kw):
         v = variables or {}
         self.queries.append((query, v))
         q = " ".join(query.split())

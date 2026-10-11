@@ -517,7 +517,11 @@ def test_every_create_is_sent_with_landed_or_named_as_left_blind():
 
     offenders, guarded, seen = [], set(), set()
     for path in sorted(SCRIPTS.glob("*.py")):
-        with_landed, found = _creates_in(ast.parse(path.read_text()))
+        try:
+            source = path.read_text()
+        except FileNotFoundError:
+            continue  # a probe another test wrote into scripts/ and removed
+        with_landed, found = _creates_in(ast.parse(source))
         for line, field, node_id in found:
             seen.add(field)
             if node_id in with_landed:
