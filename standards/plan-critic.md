@@ -167,6 +167,27 @@ so the epic hit the bound and parked with `needs-human` on a finding that was
 not a gap. A false hold spends one of the two rounds and a re-plan; two of
 them park a sound plan.
 
+## A PROOF card's log read is a quoted phrase (DRE-6778)
+
+**Both critics read a PROOF card's log filter pattern**, because a proof card
+is an epic's child and reaches the first critic and the second alike. The rule
+the card must follow:
+
+A CloudWatch Logs filter pattern for a literal phrase is written as a quoted
+phrase, `'"system-alert"'`, never bare. A pattern containing a hyphen, colon or
+other non-alphanumeric character is never written bare. An empty log read is
+recorded as none only after the same pattern form has found one known-present
+line in a wider window — a positive control — and is otherwise recorded as
+`Not observed.` A PROOF card that prescribes a bare log filter pattern
+containing such a character is sent back when the plan is written.
+
+The finding names the card and the pattern. The cost of passing one: DRE-6597's
+card prescribed `--filter-pattern system-alert`, and on 2026-10-10 that read 0
+events on the console backend's log where the quoted form read 2 — a proof run
+following the card would have recorded "none was raised" on an empty list that
+was wrong (`briefs/proof.md` has the measurement). No script reads this yet;
+it is the critic's to catch.
+
 ## The second critic reviews a frozen one, before the CEO does
 
 **Question: given this is now the specification, what is missing?**

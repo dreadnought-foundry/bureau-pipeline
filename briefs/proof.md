@@ -280,6 +280,31 @@ sweep reads this shape and nothing else: a record the gate declines with a
 waiting row is held with `🔬 proof-waiting` naming the event, and is re-run
 once the operator records that it happened; any other unmet row is re-run.
 
+**A log read is a quoted phrase, and an empty one needs a control
+(DRE-6778).** A CloudWatch Logs filter pattern for a literal phrase is written
+as a quoted phrase, `'"system-alert"'`, never bare. A pattern containing a
+hyphen, colon or other non-alphanumeric character is never written bare. An
+empty log read is recorded as none only after the same pattern form has found
+one known-present line in a wider window — a positive control — and is
+otherwise recorded as `Not observed.` with that reason. A PROOF card that
+prescribes a bare log filter pattern containing such a character is sent back
+when the plan is written. A card that reaches you carrying one anyway is read
+with the quoted form, and the row says which form you ran.
+
+The example is DRE-6597, on 2026-10-10: the card prescribed
+`aws logs filter-log-events --filter-pattern system-alert` on the console
+backend's application log group, and the bare form read nothing where the
+quoted one, `--filter-pattern '"system-alert"'`, read the lines that were there.
+Why the bare form misses was not looked into, only that it does.
+
+| Window (PT) | `--filter-pattern system-alert` | `--filter-pattern '"system-alert"'` |
+| -- | -- | -- |
+| 11:45 to 11:55 | 0 events | 2 events |
+| 11:35 to 12:00 | 0 events | 6 events |
+
+The same held for `runner-service-health`. A run that followed the card would
+have written "none was raised" on an empty list that was wrong.
+
 **A record with any row not met does not merge (DRE-6141).** The merge gate
 reads the table at your pull request's head and holds it open while any judged
 row reads `Not observed.` or `Not met.` — the closing row is not judged. The

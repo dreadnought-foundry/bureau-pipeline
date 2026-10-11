@@ -582,6 +582,19 @@ back; everything else in the card is written so a run with read access can
 observe it. The card closes on the approved merge of the record (DRE-5919, the
 hygiene agent), and the closing line the check reads stays verbatim.
 
+**A log read the card prescribes is a quoted phrase (DRE-6778).** A CloudWatch
+Logs filter pattern for a literal phrase is written as a quoted phrase,
+`'"system-alert"'`, never bare. A pattern containing a hyphen, colon or other
+non-alphanumeric character is never written bare. An empty log read is
+recorded as none only after the same pattern form has found one known-present
+line in a wider window — a positive control — and is otherwise recorded as
+`Not observed.` So a criterion that says something was not raised names the
+known-present line and the wider window its control reads. A PROOF card that
+prescribes a bare log filter pattern containing such a character is sent back
+when the plan is written. DRE-6597's card prescribed
+`--filter-pattern system-alert`, and on 2026-10-10 that read 0 events where the
+quoted form read 2 (`briefs/proof.md` has the measurement).
+
 Five conditions, all checked on the cards you create:
 
 1. **Last.** It is the epic's last child.
