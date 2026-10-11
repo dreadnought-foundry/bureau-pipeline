@@ -284,6 +284,34 @@ jobs:
              || steps.pool.outputs.n == '4' && secrets.BUREAU_APP_PRIVATE_KEY_4
              || secrets.BUREAU_APP_PRIVATE_KEY }}
 
+      # THE GITHUB CALLS BEFORE POINT (DRE-6916, epic DRE-6911). GitHub meters
+      # calls per installation, not per job, so github_calls_reading.py takes
+      # one point on each login's hourly meter here, after the mints, and one
+      # at the end of the job (`emit`, beside the working log); the console
+      # attributes the climb between them. Every login this job WORKS with,
+      # each installation once: the worker first, because when the pool picks
+      # slot 1 the two are one installation and the script keeps the first
+      # one named. The pool probe tokens are never listed — their whole spend
+      # is the one call `dispatch_pool.py select` makes. Each token is handed
+      # as a NAMED env var, never an argument (the process table is readable
+      # on a shared runner), and every `${{ }}` is in env:. continue-on-error:
+      # a point not taken is a log line, never a red build. Pinned by
+      # tests/test_github_calls_wiring_agents.py.
+      - name: Take the GitHub calls before point
+        continue-on-error: true
+        env:
+          GH_CALLS_WORKER_APP: ${{ steps.worker.outputs.app-slug }}
+          GH_CALLS_WORKER_INSTALLATION: ${{ steps.worker.outputs.installation-id }}
+          GH_CALLS_WORKER_TOKEN: ${{ steps.worker.outputs.token }}
+          GH_CALLS_BOT_APP: ${{ steps.app.outputs.app-slug }}
+          GH_CALLS_BOT_INSTALLATION: ${{ steps.app.outputs.installation-id }}
+          GH_CALLS_BOT_TOKEN: ${{ steps.app.outputs.token }}
+        run: |
+          python3 .bureau-pipeline/scripts/github_calls_reading.py before \
+            --out "${RUNNER_TEMP:-/tmp}/github-calls-before.json" \
+            --login "$GH_CALLS_WORKER_APP:$GH_CALLS_WORKER_INSTALLATION:GH_CALLS_WORKER_TOKEN" \
+            --login "$GH_CALLS_BOT_APP:$GH_CALLS_BOT_INSTALLATION:GH_CALLS_BOT_TOKEN"
+
       # Product-specific environment setup (submodules, toolchains, test DB).
       # Optional by design: a repo that needs nothing ships no setup.sh.
       - name: Product environment setup (optional)
@@ -1476,6 +1504,37 @@ jobs:
           path: ${{ steps.death.outputs.path }}
           if-no-files-found: warn
           retention-days: 90
+
+      # THE GITHUB CALLS READING (DRE-6916): the after point on the same
+      # logins as `Take the GitHub calls before point`, written as one document
+      # and put in the agent-log store over the run's OIDC login — the same
+      # trust the working log below uses. The freshest token per installation:
+      # the DRE-3043 re-mint's when it ran, else the worker's. The re-mint is
+      # BELOW this step, so today it has not run and the worker's token is the
+      # one read; a run past the hour reads its end point as unread, with a
+      # reason, never as 0. `always()` + `continue-on-error`, and the script
+      # exits 0 on every path: keeping a reading never changes the job's
+      # conclusion. `--workflow` names this reusable, because inside a called
+      # workflow `$GITHUB_WORKFLOW_REF` names the caller's stub.
+      - name: Keep the run's GitHub calls reading
+        id: github_calls
+        if: always()
+        continue-on-error: true
+        env:
+          GH_CALLS_WORKER_APP: ${{ steps.worker.outputs.app-slug }}
+          GH_CALLS_WORKER_INSTALLATION: ${{ steps.worker.outputs.installation-id }}
+          GH_CALLS_WORKER_TOKEN: ${{ steps.pushtoken.outputs.token || steps.worker.outputs.token }}
+          GH_CALLS_BOT_APP: ${{ steps.app.outputs.app-slug }}
+          GH_CALLS_BOT_INSTALLATION: ${{ steps.app.outputs.installation-id }}
+          GH_CALLS_BOT_TOKEN: ${{ steps.app.outputs.token }}
+        run: |
+          python3 .bureau-pipeline/scripts/github_calls_reading.py emit \
+            --before "${RUNNER_TEMP:-/tmp}/github-calls-before.json" \
+            --out "${RUNNER_TEMP:-/tmp}/github-calls-reading.json" \
+            --login "$GH_CALLS_WORKER_APP:$GH_CALLS_WORKER_INSTALLATION:GH_CALLS_WORKER_TOKEN" \
+            --login "$GH_CALLS_BOT_APP:$GH_CALLS_BOT_INSTALLATION:GH_CALLS_BOT_TOKEN" \
+            --workflow agent-task.yml \
+            --github-output "$GITHUB_OUTPUT"
 
       # THE RUN'S WORKING LOG (DRE-4269, epic DRE-4267). The engineer's
       # transcript, scrubbed and put straight into our own store over OIDC —

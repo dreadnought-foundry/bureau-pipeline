@@ -461,6 +461,41 @@ class TurnCapIsNotALimitDeathTest(unittest.TestCase):
         self.assertIn("requeue", result["text"], "the ordinary medic handling")
 
 
+STALL_LOG = (ROOT / "tests" / "fixtures"
+             / "stalled-plan-38170959772.log").read_text(encoding="utf-8")
+
+
+class StallIsNotALimitDeathTest(unittest.TestCase):
+    """DRE-6974, through the step's own shell and the REAL classifier.
+
+    On 2026-10-11 at 20:28Z this step posted `🪦 limit-death: kind=claude
+    stage=plan … assumed=yes` on epic DRE-6936 for run 38170959772. The
+    planner had gone silent and the stream watchdog stopped it; nothing hit a
+    wall. The log carried "monthly spend limit" because GitHub echoes
+    plan.yml's own comments into every planner log — and the marker skipped
+    the one retry the stall record on the same card promised.
+
+    The fixture is that run's two deciding lines, as `--log-failed` printed them.
+    """
+
+    def test_the_card_is_resolvable_so_the_absence_of_a_marker_is_the_verdict(self):
+        self.assertEqual("DRE-6936", medic_retry.card_for_run("main", STALL_LOG))
+
+    def test_the_step_publishes_false_and_posts_no_marker(self):
+        result = run_step(decision=None, log_text=STALL_LOG, payload=PLANNER,
+                          failed_step="Plan epic — finished?")
+        self.assertEqual(0, result["rc"], result["text"])
+        self.assertIn("limit=false", result["outputs"])
+        self.assertNotIn("limit=true", result["outputs"])
+        self.assertEqual([], _comment_calls(result), result["calls"])
+        self.assertNotIn("🪦 limit-death:", result["text"])
+
+    def test_the_step_says_the_death_is_not_a_limit_death(self):
+        result = run_step(decision=None, log_text=STALL_LOG, payload=PLANNER,
+                          failed_step="Plan epic — finished?")
+        self.assertIn("not a limit death", result["text"])
+
+
 class CardResolutionTest(unittest.TestCase):
     """One function, two sources — and the log source is structural."""
 

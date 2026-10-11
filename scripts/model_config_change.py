@@ -46,7 +46,8 @@ REFUSED WHOLE, WITH A REASON PER CHANGE
 ---------------------------------------
 Each change is judged against the file as the changes before it left it: first
 the plain checks a change needs before it can be made at all (the agent exists,
-the group exists, the model has a declared price), then
+the group exists, the model is not retired and has a declared price, the pinned
+Claude Code can run it), then
 `model_fallback.policy_errors` — the gate `sync_model_config.py --check` holds
 every pull request to — on the result. A change is refused for exactly the
 findings it ADDS, so each refusal names its own reasons. One refusal refuses the
@@ -70,6 +71,26 @@ refusal word for word, so each is one plain sentence: the change in
 engineers — go to the run log as ordinary output, and
 `sync_model_config.py` publishes the same plain line as a refused move's
 `reason` in `config/model-choices.json`.
+
+A CHOICE IS COMPLETE (DRE-6789)
+-------------------------------
+The CEO, 2026-10-10: a choice from the console is complete, and he never has to
+know a rule exists. So a `set_default_model` or `set_project_model` naming a
+model under `excluded` removes that entry in the same change (the last one gone
+leaves `excluded: []`), and a `clear_project_model`, or a `set_project_model`
+that replaces a standing exception, sets the model it took off aside again —
+appended under `excluded` with a dated reason — when no ladder, other project,
+`retired` or `excluded` names it any more. Every model the file ever named stays
+under one of those four keys, the ones the known models are read from. No
+`review_separation` rule is ever written: the selector keeps a reviewer off the
+build model by itself (DRE-6785).
+
+The pull request says each of these in plain words, from `model_choice` and
+`model_fallback` and never restated: a choice's line ends on its
+`model_choice.caution_for` sentence, read against the file just before it,
+and is followed by the set-aside line, the line naming where a pull request
+built on a model that now builds and reviews is reviewed (a Builders or
+Reviewers choice only), and the set-aside-again line, as they apply.
 
 THE BRANCH IS THE CHANGE SET
 ----------------------------
@@ -96,8 +117,12 @@ from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+import model_choice  # noqa: E402
 from model_fallback import ADVISORY_KIND, JUDGEMENT_KIND, JUDGEMENT_ROLES  # noqa: E402
-from model_fallback import declared_prices, policy_errors  # noqa: E402
+from model_fallback import WORKHORSE_KIND  # noqa: E402
+from model_fallback import _project_ids, _unpriced  # noqa: E402
+from model_fallback import declared_prices, effective_ladders, policy_errors  # noqa: E402
+from model_fallback import reviewers_for  # noqa: E402
 from sync_model_config import _YAML_BEGIN as REGISTRY_REGION  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -287,9 +312,73 @@ def pr_title(change_set) -> str:
             f"({digest(change_set)})")
 
 
-def pr_body(change_set, config=None) -> str:
+def _whom(config, change: dict) -> str:
+    """`Builders`, or `atlas's Builders` for a project's choice."""
+    label = _label(config, change["group"])
+    return f"{change['project']}'s {label}" if change.get("project") else label
+
+
+def _separation_note(change: dict, after) -> str | None:
+    """Where a pull request built on the chosen model is reviewed, when the
+    choice puts it on both the build walk and the reviewers' walk of its
+    scope (DRE-6789). Said, never written: the selector takes the build model
+    off the reviewers' walk by itself (DRE-6785). The planning model neither
+    builds nor reviews a pull request, so a Planners choice says nothing."""
+    if change["group"] not in (WORKHORSE_KIND, ADVISORY_KIND):
+        return None
+    chosen, slug = change["model"], change.get("project")
+    walks = effective_ladders(after, slug)
+    on_both = all(chosen in walks.get(_ladder_name(after, kind), [])
+                  for kind in (WORKHORSE_KIND, ADVISORY_KIND))
+    reviewers = reviewers_for(after, chosen, slug) if on_both else []
+    if not reviewers or reviewers[0] == chosen:
+        return None
+    return (f"{model_choice.model_label(chosen)} now builds and reviews; a pull "
+            "request built on it is reviewed on "
+            f"{model_choice.model_label(reviewers[0])}.")
+
+
+def _change_lines(change: dict, before, after, prices) -> list[str]:
+    """The `## What changes` lines for one change, read against the file just
+    before it (`before`) and just after it (`after`): its line, ending on its
+    caution when it has one, then the set-aside, separation and set-aside-again
+    lines that belong to it (DRE-6789)."""
+    line = describe(change, before)
+    notes = []
+    if change["op"] in CHOICE_OPS and after is not None:
+        model = change["model"]
+        current = _standing(before, change) if change["op"] == "set_project_model" else None
+        try:
+            caution = model_choice.caution_for(before, prices, change["group"], model,
+                                               current=current)
+        except KeyError:  # a change apply refuses; render stays total
+            caution = None
+        if caution:
+            line = f"{line} {caution}"
+        if _lifts(before, change):
+            date = model_choice.set_aside_date(before, model)
+            on = f" on {date}" if date else ""
+            notes.append(f"{model_choice.model_label(model)} was set aside{on} and "
+                         f"is brought back by this choice for {_whom(before, change)}.")
+        separation = _separation_note(change, after)
+        if separation:
+            notes.append(separation)
+    left = _leaving(before, change) if after is not None else None
+    if (left is not None and left not in _rung_ids(before.get("excluded"))
+            and left in _rung_ids(after.get("excluded"))):
+        notes.append(f"{model_choice.model_label(left)} is set aside: no group or "
+                     "project runs on it now, and it can be chosen again from the "
+                     "console.")
+    # The notes are the change's own bullet, continued: one `- ` line per change.
+    return [f"- {line}"] + [f"  {note}" for note in notes]
+
+
+def pr_body(change_set, config=None, *, prices=None, today: str | None = None) -> str:
     """Who asked and what changes, one line per change. No verdict marker,
-    whatever the console sent (standards/untrusted-content.md)."""
+    whatever the console sent (standards/untrusted-content.md).
+
+    Each change is read against the file as the changes before it left it,
+    replayed with `edit_data` from `config` — the file before the set."""
     # Imported here, not at the top: `sync_model_config` imports this module
     # to judge the console's moves (DRE-6833), and needs none of this.
     from model_adoption_actions import WHATS_NEW_NONE, _quiet
@@ -298,7 +387,16 @@ def pr_body(change_set, config=None) -> str:
         import yaml
 
         config = yaml.safe_load(CONFIG_PATH.read_text()) or {}
-    lines = [f"- {describe(change, config)}" for change in change_set["changes"]]
+    prices = declared_prices() if prices is None else prices
+    today = today or datetime.now(timezone.utc).date().isoformat()
+    lines, state = [], config
+    for change in change_set["changes"]:
+        try:
+            after = edit_data(state, change, today)
+        except (KeyError, TypeError, AttributeError):  # a change apply refuses
+            after = None
+        lines += _change_lines(change, state, after, prices)
+        state = state if after is None else after
     body = "\n\n".join([
         WHATS_NEW_NONE,
         f"{change_set['requested_by']} asked for this from the console's "
@@ -329,9 +427,58 @@ def _rung_reason(change: dict, config, today: str) -> str:
             f"the console on {today}")
 
 
+#: The two operations that choose a model for a group or a project.
+CHOICE_OPS = ("set_default_model", "set_project_model")
+
+
+def _standing(raw, change: dict) -> str | None:
+    """The project's standing exception for the change's group, or None."""
+    projects = (raw or {}).get("projects") or {}
+    entry = projects.get(change["project"]) if isinstance(projects, Mapping) else None
+    return entry.get(change["group"]) if isinstance(entry, Mapping) else None
+
+
+def _lifts(raw, change: dict) -> bool:
+    """A choice of a model under `excluded` brings it back (DRE-6789)."""
+    return (change["op"] in CHOICE_OPS
+            and change["model"] in _rung_ids((raw or {}).get("excluded")))
+
+
+def _leaving(raw, change: dict) -> str | None:
+    """The model a clear, or a set that replaces a standing exception, takes
+    off `projects.<slug>.<kind>`."""
+    if change["op"] not in ("set_project_model", "clear_project_model"):
+        return None
+    current = _standing(raw, change)
+    return current if current is not None and current != change.get("model") else None
+
+
+def _named(doc) -> set[str]:
+    """Every id the file names under a ladder, `projects`, `retired` or
+    `excluded` — the four keys the known models are read from (DRE-6785)."""
+    doc = doc or {}
+    ids = {m for rungs in (doc.get("ladders") or {}).values() for m in _rung_ids(rungs)}
+    return (ids | _project_ids(doc) | set(_rung_ids(doc.get("retired")))
+            | set(_rung_ids(doc.get("excluded"))))
+
+
+def _set_aside_reason(raw, change: dict, today: str) -> str:
+    """The `excluded` reason of a model a project's choice leaves on nothing.
+    Opens with the date, so `model_choice.set_aside_date` reads it, and is in
+    plain words, so the console can show it as written."""
+    until = ("that choice was cleared" if change["op"] == "clear_project_model"
+             else f"{model_choice.model_label(change['model'])} replaced it")
+    return (f"set aside on {today}: {change['project']}'s "
+            f"{_label(raw, change['group'])} ran on it from the console until "
+            f"{until}, and no group or project names it now.")
+
+
 def edit_data(raw, change: dict, today: str) -> dict:
     doc = copy.deepcopy(raw)
     op = change["op"]
+    if _lifts(raw, change):
+        doc["excluded"] = [e for e in doc.get("excluded") or []
+                           if _rung_ids([e]) != [change["model"]]]
     if op == "move_agent":
         agents = doc.get("agents") or {}
         if change["agent"] not in agents:
@@ -371,6 +518,10 @@ def edit_data(raw, change: dict, today: str) -> dict:
         if not entry:
             del projects[change["project"]]
         doc["projects"] = projects
+    left = _leaving(raw, change)
+    if left is not None and left not in _named(doc):
+        doc["excluded"] = list(doc.get("excluded") or []) + [
+            {"model": left, "reason": _set_aside_reason(raw, change, today)}]
     return doc
 
 
@@ -667,6 +818,42 @@ def _clear_project_model(lines, change, raw):
     return lines
 
 
+_EXCLUDED_ITEM = re.compile(r"^(\s*)-\s+(?:model:\s*)?(['\"]?)([^'\"\s#]+)\2\s*(?:#.*)?$")
+
+
+def _lift_excluded(lines, model: str):
+    """`model`'s `excluded` entry removed — its `- model:` line and every line
+    indented past its dash. The last entry gone leaves `excluded: []`, the way
+    `_clear_project_model` leaves `projects: {}`."""
+    start, end, _ = _block(lines, "excluded", "[]")
+    rows = [i for i in range(start + 1, end) if _content(lines[i])]
+    dash = _indent(lines[rows[0]]) if rows else 0
+    for i in rows:
+        found = _EXCLUDED_ITEM.match(_body(lines[i]))
+        if _indent(lines[i]) != dash or not found or found.group(3) != model:
+            continue
+        last = i
+        for j in range(i + 1, end):
+            if not _body(lines[j]).strip():
+                continue
+            if _indent(lines[j]) <= dash:
+                break
+            last = j
+        del lines[i:last + 1]
+        return _lift_excluded(lines, model)
+    if not any(_content(lines[i]) for i in range(start + 1, end)):
+        _, comment = _top_value(lines, start)
+        lines[start] = f"excluded: []{comment}{_ending(lines[start])}"
+    return lines
+
+
+def _set_aside(lines, model: str, reason: str):
+    """`model` appended under `excluded` as its last entry, with `reason`."""
+    pad = " " * _child_indent(lines, "excluded", "[]")
+    return _grow(lines, "excluded", "[]",
+                 [f"{pad}- model: {model}", f"{pad}  reason: {_scalar(reason)}"])
+
+
 def edit_text(text: str, change: dict, today: str) -> str:
     """`text` with one change made, as a text edit of the lines it names."""
     import yaml
@@ -674,6 +861,8 @@ def edit_text(text: str, change: dict, today: str) -> str:
     raw = yaml.safe_load(text) or {}
     lines = text.splitlines(keepends=True)
     op = change["op"]
+    if _lifts(raw, change):
+        lines = _lift_excluded(lines, change["model"])
     if op == "move_agent":
         lines = _move_agent(lines, change, raw)
     elif op == "add_agent":
@@ -688,6 +877,11 @@ def edit_text(text: str, change: dict, today: str) -> str:
         lines = _clear_project_model(lines, change, raw)
     else:
         raise Refused(f"unknown op {op!r}")
+    # Read against the file as written so far, not against `edit_data`, so
+    # the comparison in `apply_change_set` still judges this half.
+    left = _leaving(raw, change)
+    if left is not None and left not in _named(yaml.safe_load("".join(lines))):
+        lines = _set_aside(lines, left, _set_aside_reason(raw, change, today))
     return "".join(lines)
 
 
@@ -727,14 +921,14 @@ def _problems(change: dict, raw, prices, registry: set[str]) -> list[str]:
                         f"{', '.join(kinds)}")
         return problems
 
+    # Retired first (DRE-6789): a retired id may keep a price or lose it, and
+    # either way it is refused as what it is.
     model = change.get("model")
     if model is not None:
-        if model not in prices:
-            problems.append(f"{model} has no declared price in "
-                            "config/model-prices.yaml, so it cannot be offered — "
-                            "a price is never guessed")
-        elif model in retired:
+        if model in retired:
             problems.append(f"{model} is retired — kept readable, never selectable")
+        elif model not in prices:
+            problems.append(_unpriced(model))
 
     if op == "move_agent":
         agent = change["agent"]
@@ -776,11 +970,31 @@ _UNEDITABLE = "config/models.yaml could not be edited for it"
 _UNINTENDED = "the edit to config/models.yaml did not produce the intended change"
 
 
+def _cannot_run(model: str, floors, installed) -> tuple[list[str], dict, str | None]:
+    """`(reasons, floors, installed)`: the generator's one sentence when the
+    pinned Claude Code is older than `model`'s floor (DRE-6789), with the
+    floors and the pinned version read off this tree the way the generator
+    reads them when not given."""
+    from sync_model_config import _cannot_run as cannot_run
+    from sync_model_config import _claude_code_floors
+
+    try:
+        floors, installed = _claude_code_floors(floors, installed)
+    except SystemExit as exc:
+        raise Refused(str(exc)) from exc
+    return cannot_run(model, floors, installed), floors, installed
+
+
 def apply_change_set(text: str, change_set, *, today: str, prices=None,
-                     repo_slugs=None, registry: set[str] | None = None):
+                     repo_slugs=None, registry: set[str] | None = None,
+                     floors: dict[str, str] | None = None,
+                     installed: str | None = None):
     """`(text, refusals)`. With no refusal, `text` is the file with every change
     made; with any, it is the file unchanged and `refusals` names each refused
-    change — `{"index", "change", "reasons"}` — and only those."""
+    change — `{"index", "change", "reasons"}` — and only those.
+
+    `floors` (model id → the oldest Claude Code that runs it) and `installed`
+    (the pinned version) are read off this tree when not given."""
     import yaml
 
     change_set = check_change_set(change_set)
@@ -798,6 +1012,8 @@ def apply_change_set(text: str, change_set, *, today: str, prices=None,
     refusals = []
     for n, change in enumerate(change_set["changes"], 1):
         reasons = _problems(change, state, prices, registry)
+        if not reasons and change["op"] in CHOICE_OPS:
+            reasons, floors, installed = _cannot_run(change["model"], floors, installed)
         if not reasons:
             try:
                 after = edit_text(state_text, change, today)

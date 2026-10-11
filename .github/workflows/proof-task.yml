@@ -874,10 +874,16 @@ jobs:
                the brief says — only if none is open for the branch. Post
                `⏳ 5/5 PR opened`, and again on every amended push.
             4. A criterion only the CEO's own press can satisfy: never sign in
-               as him and never wait for it. Its row reads
-               `Not observed. needs the CEO's press: <the press>`. AFTER the
-               pull request is open, write one plain sentence naming the press
-               and the one decision asked, with your recommendation, to
+               as him and never wait for it. That is a press that is a business
+               decision of his, and only its row reads
+               `Not observed. needs the CEO's press: <the press>`. A press on
+               the sandbox project, or one the card's words say the operator may
+               make under the operator's standing permission of 2026-10-07, is
+               the operator's row instead, with no escalation file:
+               `Not observed. waiting for the operator's press: <the press>`.
+               briefs/proof.md says which press is whose. For the CEO's press,
+               AFTER the pull request is open, write one plain sentence naming
+               the press and the one decision asked, with your recommendation, to
                /tmp/agent-escalation.txt. Never ask twice for a press already
                asked and not yet answered.
             5. A row you cannot observe as worded reads
@@ -1086,10 +1092,16 @@ jobs:
                the brief says — only if none is open for the branch. Post
                `⏳ 5/5 PR opened`, and again on every amended push.
             4. A criterion only the CEO's own press can satisfy: never sign in
-               as him and never wait for it. Its row reads
-               `Not observed. needs the CEO's press: <the press>`. AFTER the
-               pull request is open, write one plain sentence naming the press
-               and the one decision asked, with your recommendation, to
+               as him and never wait for it. That is a press that is a business
+               decision of his, and only its row reads
+               `Not observed. needs the CEO's press: <the press>`. A press on
+               the sandbox project, or one the card's words say the operator may
+               make under the operator's standing permission of 2026-10-07, is
+               the operator's row instead, with no escalation file:
+               `Not observed. waiting for the operator's press: <the press>`.
+               briefs/proof.md says which press is whose. For the CEO's press,
+               AFTER the pull request is open, write one plain sentence naming
+               the press and the one decision asked, with your recommendation, to
                /tmp/agent-escalation.txt. Never ask twice for a press already
                asked and not yet answered.
             5. A row you cannot observe as worded reads
@@ -1296,10 +1308,16 @@ jobs:
                the brief says — only if none is open for the branch. Post
                `⏳ 5/5 PR opened`, and again on every amended push.
             4. A criterion only the CEO's own press can satisfy: never sign in
-               as him and never wait for it. Its row reads
-               `Not observed. needs the CEO's press: <the press>`. AFTER the
-               pull request is open, write one plain sentence naming the press
-               and the one decision asked, with your recommendation, to
+               as him and never wait for it. That is a press that is a business
+               decision of his, and only its row reads
+               `Not observed. needs the CEO's press: <the press>`. A press on
+               the sandbox project, or one the card's words say the operator may
+               make under the operator's standing permission of 2026-10-07, is
+               the operator's row instead, with no escalation file:
+               `Not observed. waiting for the operator's press: <the press>`.
+               briefs/proof.md says which press is whose. For the CEO's press,
+               AFTER the pull request is open, write one plain sentence naming
+               the press and the one decision asked, with your recommendation, to
                /tmp/agent-escalation.txt. Never ask twice for a press already
                asked and not yet answered.
             5. A row you cannot observe as worded reads

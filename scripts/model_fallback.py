@@ -36,8 +36,10 @@ assigned a kind — never a raw ladder name:
   * `judgement` — the planner, alone. One run per epic, at a decision point,
     and the plan it writes is the specification every child card is built
     from — so a bad output costs a fix loop per child rather than a retry. Low
-    volume, highest leverage: it gets the STRONGEST model
-    (`claude-fable-5-1`), falling LOUDLY to the workhorse rungs beneath it.
+    volume, highest leverage: its own ladder, chosen in the console. Since
+    2026-10-11 it starts on `claude-opus-5-5` and falls LOUDLY to
+    `claude-fable-5-1` (the STRONGEST model, and its primary from 2026-09-03),
+    then to `claude-sonnet-4-6`.
 
 Before DRE-2317 the allocation was exactly inverted: the critic ran on the
 cheapest model we had while build agents walked a ladder topped by the most
@@ -90,10 +92,9 @@ the workhorse ladder. Since 2026-10-10 (DRE-6785) no overlap needs a written
 rule: the reviewer skips the build model on the walk that project's reviewers
 really make, and never falls back onto it.
 
-None of that touches the 2026-08-09 rule as the fleet runs today: the
-STRONGEST model we run — the top of the judgement ladder — is on no build
-ladder, and only a person's choice in a reviewed pull request could put it
-there.
+None of that touches the 2026-08-09 rule as the fleet runs today: Fable —
+the STRONGEST model we run, on the judgement ladder — is on no build ladder,
+and only a person's choice in a reviewed pull request could put it there.
 
 Why this replaced DRE-1354's per-role pair
 -------------------------------------------
@@ -219,7 +220,7 @@ _FALLBACK_MODEL_CONFIG = {
     "ladders": {
         "workhorse": ["claude-opus-5-5", "claude-opus-5", "claude-sonnet-5-5", "claude-sonnet-5"],
         "advisory": ["claude-sonnet-5-5", "claude-sonnet-5", "claude-opus-5-5"],
-        "judgement": ["claude-fable-5-1", "claude-opus-5-5", "claude-sonnet-4-6"],
+        "judgement": ["claude-opus-5-5", "claude-fable-5-1", "claude-sonnet-4-6"],
     },
     "agents": {
         "engineer": "workhorse",
@@ -235,6 +236,11 @@ _FALLBACK_MODEL_CONFIG = {
         "medic": "advisory",
         "plan-critic-pre": "advisory",
         "plan-critic-post": "advisory",
+        "fullstack-engineer": "workhorse",
+        "ux-ui-engineer": "workhorse",
+        "designer": "advisory",
+        "mobile": "workhorse",
+        "product-lead": "judgement",
     },
     "effort": {
         "claude-opus-5-5": "high",
@@ -253,7 +259,7 @@ _FALLBACK_MODEL_CONFIG = {
         "advisory": {"label": "Reviewers", "purpose": "Judge a pull request, a plan or a failed run."},
         "judgement": {"label": "Planners", "purpose": "Turn an epic into the cards the fleet builds."},
     },
-    "ungrouped": ["designer", "ux-ui-engineer", "fullstack-engineer", "mobile", "product-lead"],
+    "ungrouped": [],
     "session_agents": ["designer", "ux-ui-engineer", "fullstack-engineer", "mobile", "product-lead"],
     "about": {
         "engineer": "Builds a card and opens the PR",

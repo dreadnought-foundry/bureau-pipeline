@@ -87,6 +87,9 @@ _TREE_FILES = (
     # The generator judges each published move as the change script does, and
     # renders its reason with the change script's words (DRE-6833).
     "scripts/model_config_change.py",
+    # The words a group's choice is shown with (DRE-6786), which the
+    # generator imports.
+    "scripts/model_choice.py",
     "config/models.yaml",
     # Schema validation reads the DECLARED price of a rung sitting below the
     # workhorse fallback (DRE-3880), so the throwaway tree carries it too.
@@ -240,20 +243,23 @@ class CanonicalConfigTest(unittest.TestCase):
         for name, kind in cfg["agents"].items():
             self.assertIn(kind, cfg["kinds"], f"{name}: unknown kind {kind!r}")
 
-    def test_the_build_ladder_holds_neither_fable_nor_the_planners_top(self):
+    def test_the_build_ladder_holds_no_fable(self):
         # The 2026-08-09 policy, on whatever the console last saved: Fable is
         # not reachable from the build ladder at any availability — neither the
-        # excluded `claude-fable-5` nor the model topping the planner's ladder
-        # as the file is written (DRE-3015). Which model LEADS the builders is
-        # the console's choice, and no test of the committed file pins it
-        # (DRE-6861); the rule that refuses the move is proved on the fixture
-        # below.
+        # excluded `claude-fable-5` nor any Fable on the planner's ladder,
+        # wherever on it the console put it (DRE-3015). The planner's TOP is
+        # not pinned off the build ladder: since 2026-10-10 (DRE-6785) a person
+        # may lead the builders with it, proved on the fixture below. Which
+        # model LEADS the builders is the console's choice, and no test of the
+        # committed file pins it (DRE-6861).
         cfg = _canonical()
         workhorse = _ladder_models(cfg["ladders"][cfg["default_ladder"]])
         judgement = _ladder_models(
             cfg["ladders"][cfg["kinds"][mf.JUDGEMENT_KIND]["ladder"]])
         self.assertNotIn(FABLE, workhorse)
-        self.assertNotIn(judgement[0], workhorse)
+        fables = [m for m in judgement if m.startswith("claude-fable")]
+        for model in fables:
+            self.assertNotIn(model, workhorse)
 
     def test_the_policy_allows_the_planners_top_on_the_build_ladder(self):
         # Refused by rule 4 until the CEO's decision of 2026-10-10 (DRE-6785):

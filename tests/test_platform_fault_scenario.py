@@ -257,12 +257,11 @@ def run_report(
             fh.write(pre_agent_log)
 
     # The three stop-before-a-PR notes the step checks for. None of them
-    # exists in any of these scenarios, and a leftover from another test would
-    # silently take the branch — so they are cleared, not assumed absent.
-    for path in ("/tmp/agent-handback.txt", "/tmp/agent-escalation.txt",
-                 "/tmp/agent-blocker.txt"):
-        if os.path.exists(path):
-            os.remove(path)
+    # exists in any of these scenarios, and a note from another test — or
+    # another copy of this suite — would silently take the branch. So the step
+    # reads them from an empty directory of this run's own (DRE-6961).
+    notes = os.path.join(td, "notes")
+    os.makedirs(notes)
 
     # DRE-3484: the Report block carries NO `${{ }}` any more. Its five values
     # arrive as env instead (below), because a run block containing even one
@@ -283,6 +282,7 @@ def run_report(
         env=dict(
             os.environ,
             PATH=binary + os.pathsep + os.environ["PATH"],
+            AGENT_NOTES_DIR=notes,
             CARD=CARD,
             MODEL_USED="claude-opus-5",
             CLAUDE_OUTCOME=claude_outcome,

@@ -747,7 +747,11 @@ def last_test_run(workflow_runs,
     `created_at` among the head's `pull_request` runs at no review path, or
     None when there is none. It is the anchor of the new-test rule
     (order_sensitive_refresh.py, DRE-6871): `main`'s tip when it was created
-    is the `main` its result was earned against.
+    is the `main` its result was earned against. That tip is read on `main`'s
+    first-parent line (`tip_at`, DRE-6966), never as the newest-dated commit
+    before the run: a pull request that merged after the run began but was
+    written before it put a side-branch commit there, and bureau-pipeline
+    #1032 merged without the refresh it was owed.
 
     The review exclusion is `unfinished_runs`'s, because a review run is
     created later than the tests whenever a description is edited or a draft
@@ -764,6 +768,55 @@ def last_test_run(workflow_runs,
     if not candidates:
         return None
     return max(candidates, key=lambda r: str(r.get("created_at") or ""))
+
+
+def _instant(value) -> Optional[datetime]:
+    """An ISO-8601 timestamp carrying its offset, or None."""
+    if not isinstance(value, str):
+        return None
+    try:
+        moment = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return moment if moment.tzinfo is not None else None
+
+
+def tip_at(commits, start, at) -> Optional[str]:
+    """`main`'s tip at `at` (DRE-6966): the first commit on the first-parent
+    line from `start` whose committer date is not later than `at`, or None.
+
+    `commits` is GitHub's commit listing for the branch, in page order. Every
+    commit on `main`'s first-parent line is a merge into `main` or a direct
+    push, so the first one dated by then is the tip `main` stood at. The
+    listing's own order is no answer: it holds every commit reachable from
+    the branch, side branches included, so the newest-dated commit before
+    `at` is a side branch's whenever a pull request merged later was written
+    earlier (bureau-pipeline #1032).
+
+    None when the walk leaves the listing before it finds one, when a commit
+    on the way has no parents, or when a date cannot be read — the gate then
+    waits rather than merging on a tip it could not find.
+    """
+    when = _instant(at)
+    if when is None:
+        return None
+    by_sha = {c["sha"]: c for c in commits
+              if isinstance(c, dict) and isinstance(c.get("sha"), str)}
+    sha, seen = start, set()
+    while isinstance(sha, str) and sha in by_sha and sha not in seen:
+        seen.add(sha)
+        entry = by_sha[sha]
+        committer = (entry.get("commit") or {}).get("committer") or {}
+        dated = _instant(committer.get("date"))
+        if dated is None:
+            return None
+        if dated <= when:
+            return sha
+        parents = entry.get("parents") or []
+        if not isinstance(parents[0] if parents else None, dict):
+            return None
+        sha = parents[0].get("sha")
+    return None
 
 
 def owning_run(check_run, workflow_runs) -> Optional[dict]:
@@ -1798,6 +1851,23 @@ def build_last_test_run_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def build_tip_at_parser() -> argparse.ArgumentParser:
+    """`merge_gate.py tip-at`: `main`'s tip when the last test run began."""
+    parser = argparse.ArgumentParser(
+        prog="merge_gate.py tip-at",
+        description="Print the commit the branch's tip stood at a moment, "
+                    "walked on its first-parent line from the listing's "
+                    "first commit (DRE-6966), as sha=<40 hex>, or sha=none.",
+    )
+    parser.add_argument("--commits-file", required=True,
+                        help="raw REST payload of GET commits?sha=<branch>: "
+                             "one page, or an array of pages in order; a "
+                             "file that cannot be read exits 2 with no line")
+    parser.add_argument("--at", required=True,
+                        help="the moment — the last test run's created_at")
+    return parser
+
+
 def _die(msg: str) -> "NoReturn":  # noqa: F821
     print(f"merge_gate: {msg}", file=sys.stderr)
     sys.exit(2)
@@ -1893,12 +1963,40 @@ def last_test_run_main(argv) -> int:
     return 0
 
 
+def tip_at_main(argv) -> int:
+    """Exit 0 with `sha=<40 hex>` or `sha=none`. A listing that cannot be
+    read, or a tip that is not a full sha, exits 2 and prints no line: the
+    gate then keeps `{}`, and the decision waits (DRE-6966)."""
+    args = build_tip_at_parser().parse_args(argv)
+    try:
+        with open(args.commits_file) as f:
+            payload = json.load(f)
+    except (OSError, json.JSONDecodeError) as e:
+        _die(f"cannot read the commit listing: {e}")
+    if not isinstance(payload, list):
+        _die("the commit listing is not an array")
+    if payload and all(isinstance(page, list) for page in payload):
+        payload = [c for page in payload for c in page]
+    start = payload[0].get("sha") if payload and isinstance(payload[0], dict) else None
+    tip = tip_at(payload, start, args.at)
+    if tip is None:
+        print("sha=none")
+        return 0
+    # It goes into the compare's URL, so only a full sha passes.
+    if not _HEAD_SHA_RE.match(tip):
+        _die(f"the tip the walk found is not a full sha: {tip!r}")
+    print(f"sha={tip}")
+    return 0
+
+
 def main(argv=None) -> int:
     argv = sys.argv[1:] if argv is None else list(argv)
     if argv[:1] == ["precheck"]:
         return precheck_main(argv[1:])
     if argv[:1] == ["last-test-run"]:
         return last_test_run_main(argv[1:])
+    if argv[:1] == ["tip-at"]:
+        return tip_at_main(argv[1:])
     args = build_parser().parse_args(argv)
 
     if not _HEAD_SHA_RE.match(args.head_sha or ""):

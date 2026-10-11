@@ -950,6 +950,27 @@ jobs:
           ref: ${{ inputs.pipeline_ref || 'main' }}
           path: .bureau-pipeline
 
+      # THE GITHUB CALLS BEFORE POINT (DRE-6916, epic DRE-6911): agent-task.yml's
+      # step, on the one login this job mints — the main bot, `Mint bot token`
+      # on `BUREAU_APP_ID` (agent-bureau-bot, the login that reached 4,999 on
+      # 2026-10-10). After the checkouts rather than directly after the mint,
+      # because the script lives in the pipeline checkout. One point on the
+      # meter here and one at the end of the job (`emit`, beside the working
+      # log); the console attributes the climb between them. The token is a
+      # NAMED env var, never an argument, and every `${{ }}` is in env:.
+      # continue-on-error: a point not taken is a log line, never a red job.
+      # Pinned by tests/test_github_calls_wiring_agents.py.
+      - name: Take the GitHub calls before point
+        continue-on-error: true
+        env:
+          GH_CALLS_BOT_APP: ${{ steps.app.outputs.app-slug }}
+          GH_CALLS_BOT_INSTALLATION: ${{ steps.app.outputs.installation-id }}
+          GH_CALLS_BOT_TOKEN: ${{ steps.app.outputs.token }}
+        run: |
+          python3 .bureau-pipeline/scripts/github_calls_reading.py before \
+            --out "${RUNNER_TEMP:-/tmp}/github-calls-before.json" \
+            --login "$GH_CALLS_BOT_APP:$GH_CALLS_BOT_INSTALLATION:GH_CALLS_BOT_TOKEN"
+
       # Assemble the medic's context = the engineering standard (to ground its
       # diagnosis) + the comms standard (its report is CEO-facing) (DRE-1646).
       # assemble_context.py reads the files from this checkout at run time, so a
@@ -1283,6 +1304,30 @@ jobs:
           path: ${{ steps.death.outputs.path }}
           if-no-files-found: warn
           retention-days: 90
+
+      # THE GITHUB CALLS READING (DRE-6916): the after point on the main bot,
+      # written as one document and put in the agent-log store over the run's
+      # OIDC login. This job is capped at twenty minutes and has no re-mint, so
+      # the bot's own token is the freshest there is. `always()` +
+      # `continue-on-error`, and the script exits 0 on every path: keeping a
+      # reading never changes the job's conclusion. `--workflow` names this
+      # reusable, because inside a called workflow `$GITHUB_WORKFLOW_REF`
+      # names the caller's stub.
+      - name: Keep the run's GitHub calls reading
+        id: github_calls
+        if: always()
+        continue-on-error: true
+        env:
+          GH_CALLS_BOT_APP: ${{ steps.app.outputs.app-slug }}
+          GH_CALLS_BOT_INSTALLATION: ${{ steps.app.outputs.installation-id }}
+          GH_CALLS_BOT_TOKEN: ${{ steps.app.outputs.token }}
+        run: |
+          python3 .bureau-pipeline/scripts/github_calls_reading.py emit \
+            --before "${RUNNER_TEMP:-/tmp}/github-calls-before.json" \
+            --out "${RUNNER_TEMP:-/tmp}/github-calls-reading.json" \
+            --login "$GH_CALLS_BOT_APP:$GH_CALLS_BOT_INSTALLATION:GH_CALLS_BOT_TOKEN" \
+            --workflow medic.yml \
+            --github-output "$GITHUB_OUTPUT"
 
       # THE RUN'S WORKING LOG (DRE-4269, epic DRE-4267). The medic's diagnosis
       # transcript, scrubbed and put straight into our own store over OIDC —

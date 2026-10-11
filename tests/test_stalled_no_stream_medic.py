@@ -63,6 +63,30 @@ def stalled_log(extra: str = "") -> str:
 
 INIT_LINE = '{"type":"system","subtype":"init","session_id":"s1"}'
 
+# GitHub prints a step's script into the log before it runs it, comments and
+# all, and plan.yml carries a comment saying "monthly spend limit" — one of
+# the Claude wall's own sentences. So every real planner log has the words
+# (DRE-6974), and a stalled log without them proves nothing about a stall.
+ECHOED_SPEND_LIMIT_LINE = (
+    "repair\tRun claude\t2026-09-15T05:04:00.0000000Z "
+    "\x1b[36;1m# for every model — so Fable refusing on a monthly spend limit was\x1b[0m\n"
+)
+
+# Run 38170959772's two deciding lines (DRE-6974), as `gh run view
+# --log-failed` printed them: the echoed comment and the watchdog's stall.
+REAL_STALL = (ROOT / "tests" / "fixtures"
+              / "stalled-plan-38170959772.log").read_text(encoding="utf-8")
+REAL_RUN_ID = "38170959772"
+LINEAR_WALL_LINE = (
+    "call / bureau-card: DRE-6936\tUNKNOWN STEP\t2026-10-11T20:28:22.0000000Z "
+    "linear_ops.LinearRateLimited: rate limited: 2500 requests/hour exhausted\n"
+)
+
+
+def without_the_stall(log: str) -> str:
+    return "".join(line for line in log.splitlines(keepends=True)
+                   if stream_watchdog.STALL_SLUG not in line)
+
 
 class LogFileMixin:
     """The classifier and the retry gate both take a log FILE, as medic.yml
@@ -93,8 +117,14 @@ class TheClassIsItsOwnTest(LogFileMixin, unittest.TestCase):
         # A limit death is a WAIT (DRE-3171) and is never retried. A stall is
         # retried once, so reading one as the other loses the retry — and the
         # marker would tell the sweep to re-enter a stage once a wall that was
-        # never hit comes down.
-        self.assertIsNone(dead_run.limit_kind(stalled_log()))
+        # never hit comes down. The log carries the echoed "monthly spend
+        # limit" line every real planner log has (DRE-6974), so the stall is
+        # what decides it — not the absence of the words.
+        log = stalled_log(extra=ECHOED_SPEND_LIMIT_LINE)
+        self.assertEqual("claude", dead_run.limit_kind(without_the_stall(log)),
+                         "the echoed line alone must read as a wall, or this "
+                         "test passes for the wrong reason")
+        self.assertIsNone(dead_run.limit_kind(log))
 
     def test_a_stalled_REVIEW_is_not_read_as_a_rate_limit(self):
         # The DRE-3428 ordering lesson, exactly: a crashed qa-review posts its
@@ -239,6 +269,80 @@ class OneRetryThenOneNoticeTest(LogFileMixin, unittest.TestCase):
                     "--log", path, "--run-id", "349", "--run-attempt", "1",
                 ])
         self.assertIn("retry=true", buf.getvalue())
+
+
+class AStallIsNeverAUsageLimitTest(LogFileMixin, unittest.TestCase):
+    """DRE-6974, on run 38170959772's own log lines.
+
+    The planner went silent 13 minutes in, the watchdog stopped it, and the
+    medic classified it `stalled_no_stream` with `retry=true` — then marked it
+    `limit-death: kind=claude … assumed=yes`, because the log carried "monthly
+    spend limit" in GitHub's echo of plan.yml. The limit marker skipped the
+    retry job while the stall record promised one. A stall is never a Claude
+    usage limit, whatever else the log says.
+    """
+
+    def test_the_fixture_names_its_card(self):
+        # So a test that finds no marker is reading a verdict, not a log with
+        # no card to mark.
+        self.assertEqual("DRE-6936", medic_retry.card_for_run("main", REAL_STALL))
+
+    def test_without_its_stall_line_the_log_reads_as_a_claude_wall(self):
+        # The defect, pinned: the echoed comment alone reads `claude`. If this
+        # ever stops holding, the test below stops proving anything.
+        self.assertIsNone(stream_watchdog.stall_from_log(without_the_stall(REAL_STALL)))
+        self.assertEqual("claude", dead_run.limit_kind(without_the_stall(REAL_STALL)))
+
+    def test_the_stalled_run_is_not_a_limit(self):
+        self.assertIsNotNone(stream_watchdog.stall_from_log(REAL_STALL))
+        self.assertIsNone(dead_run.limit_kind(REAL_STALL))
+
+    def test_the_decide_cli_writes_no_marker(self):
+        path = self.write_log(REAL_STALL)
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            dead_run.main([
+                "decide", "0", "--limit-log", path, "--workflow", "Agent Plan",
+                "--run-id", REAL_RUN_ID, "--now", "2026-10-11T20:28:39Z",
+                "--failed-step", "Plan epic — finished?",
+            ])
+        out = buf.getvalue()
+        self.assertNotEqual("limit", out.splitlines()[0] if out else "")
+        self.assertNotIn("limit-death", out)
+
+    def test_a_real_linear_wall_beside_the_stall_is_still_linear(self):
+        # The stall vetoes the Claude phrases only — Linear is another vendor
+        # refusing a request, exactly as for the turn-cap and rotation vetoes.
+        self.assertEqual("linear", dead_run.limit_kind(REAL_STALL + LINEAR_WALL_LINE))
+
+    def test_the_first_stall_is_classified_and_retried(self):
+        self.assertEqual("stalled_no_stream",
+                         medic_classify.classify("Agent Plan", REAL_STALL))
+        stall = stream_watchdog.stall_from_log(REAL_STALL)
+        detail = medic_retry.repeat_stall(stall, [], run_id=REAL_RUN_ID, attempt="1")
+        self.assertEqual("", detail)
+        self.assertTrue(medic_retry.decide(repeat_stall=detail).retry)
+        # …and the medic's retry job is the one that runs once the limit step
+        # answers false: attempt 1, not a limit, and a rerun of the failed jobs.
+        job = yaml.safe_load(MEDIC.read_text())["jobs"]["retry"]
+        self.assertIn("github.event.workflow_run.run_attempt == 1", job["if"])
+        self.assertIn("needs.classify.outputs.limit != 'true'", job["if"])
+        self.assertEqual(1, len(job["steps"]))
+        self.assertIn("gh run rerun", job["steps"][0]["run"])
+        self.assertIn("--failed", job["steps"][0]["run"])
+
+    def test_the_second_stall_is_declined_and_is_still_not_a_limit(self):
+        stall = stream_watchdog.stall_from_log(REAL_STALL)
+        earlier = stream_watchdog.stall_record(
+            stall, run_id=REAL_RUN_ID, attempt="1",
+            run_url=f"https://github.com/o/r/actions/runs/{REAL_RUN_ID}")
+        detail = medic_retry.repeat_stall(
+            stall, [earlier], run_id=REAL_RUN_ID, attempt="2")
+        self.assertTrue(detail)
+        decision = medic_retry.decide(repeat_stall=detail)
+        self.assertEqual(medic_retry.DECLINE, decision.action)
+        self.assertEqual(medic_retry.RULE_STALLED_REPEAT, decision.rule)
+        self.assertIsNone(dead_run.limit_kind(REAL_STALL))
 
 
 class TheMedicIsWiredToItTest(unittest.TestCase):
