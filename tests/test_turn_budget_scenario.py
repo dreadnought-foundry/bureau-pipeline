@@ -469,9 +469,10 @@ REQUEUE_PREFIX = "🪦 turn-exhaustion-requeue:"
 REPLAN_PREFIX = "✂️ turn-exhaustion-requeue → Planning:"
 HOLD_PREFIX = "🚨 held-for-human (turn-exhaustion-requeue cap reached)"
 
-#: The agent's own exit files, which the Report step reads at fixed paths.
-EXIT_FILES = ("/tmp/agent-handback.txt", "/tmp/agent-escalation.txt",
-              "/tmp/agent-blocker.txt")
+#: The agent's own exit files, by name. A real run reads them from /tmp; each
+#: run here reads them from a directory of its own through `AGENT_NOTES_DIR`
+#: (DRE-6961), so two copies of this suite never read each other's notes.
+EXIT_FILES = ("agent-handback.txt", "agent-escalation.txt", "agent-blocker.txt")
 
 #: A card_pr.py whose answer the test picks: exit 3 is "GitHub would not say".
 CARD_PR_EXIT_STUB = '''#!/usr/bin/env python3
@@ -483,19 +484,13 @@ sys.exit(code)
 '''
 
 
-def _clear_exit_files():
-    for path in EXIT_FILES:
-        if os.path.exists(path):
-            os.remove(path)
-
-
 def run_report(tc, thread, *, prior="0", claude_outcome="failure",
                fail="", exit_files=None, card_pr_exit="0"):
     """Drive the real `Report result to Linear` block on a turn-cap death.
 
     `exit_files` maps one of EXIT_FILES to the text the agent wrote there
-    before it died; they live at fixed /tmp paths because that is where both
-    the agent and the step put them.
+    before it died. They are written to this run's own notes directory, which
+    the step reads through `AGENT_NOTES_DIR`.
     """
     td = tempfile.mkdtemp()
     tc.addCleanup(shutil.rmtree, td, ignore_errors=True)
@@ -505,10 +500,11 @@ def run_report(tc, thread, *, prior="0", claude_outcome="failure",
     exec_file = os.path.join(td, "claude-execution-output.json")
     with open(exec_file, "w", encoding="utf-8") as fh:
         json.dump(TURN_CAP_DEATH, fh)
-    _clear_exit_files()
-    tc.addCleanup(_clear_exit_files)
-    for path, text in (exit_files or {}).items():
-        with open(path, "w", encoding="utf-8") as fh:
+    notes = os.path.join(td, "notes")
+    os.makedirs(notes)
+    for name, text in (exit_files or {}).items():
+        assert name in EXIT_FILES, name
+        with open(os.path.join(notes, name), "w", encoding="utf-8") as fh:
             fh.write(text)
     # DRE-3484: the Report block carries no `${{ }}` — its values arrive as
     # env below. The empty table is the guard, not an omission: substitute()
@@ -519,6 +515,7 @@ def run_report(tc, thread, *, prior="0", claude_outcome="failure",
         os.environ,
         PATH=_git_stub(td) + os.pathsep + os.environ["PATH"],
         RUNNER_TEMP=td,
+        AGENT_NOTES_DIR=notes,
         CARD=CARD,
         MODEL_USED="claude-opus-5",
         CLAUDE_OUTCOME=claude_outcome,
@@ -632,7 +629,7 @@ class HandBackBeforeDyingScenario(unittest.TestCase):
     def test_the_replan_receipt_attaches_the_hand_back(self):
         _, journal = run_report(
             self, _this_run(1),
-            exit_files={"/tmp/agent-handback.txt": self.NOTE})
+            exit_files={"agent-handback.txt": self.NOTE})
         posted = comments(journal)
         self.assertEqual(1, len(posted), posted)
         self.assertTrue(posted[0].startswith(REPLAN_PREFIX), posted[0])
@@ -666,7 +663,7 @@ class EveryTurnDeathLeavesTheTagScenario(unittest.TestCase):
     def test_an_escalation_written_before_dying_keeps_its_exit_and_the_tag(self):
         _, journal = run_report(
             self, _this_run(2),
-            exit_files={"/tmp/agent-escalation.txt": "Which of A or B?"})
+            exit_files={"agent-escalation.txt": "Which of A or B?"})
         posted = comments(journal)
         self.assertEqual(2, len(posted), posted)
         self.assertIn("Which of A or B?", posted[0])
@@ -677,7 +674,7 @@ class EveryTurnDeathLeavesTheTagScenario(unittest.TestCase):
     def test_a_blocker_written_before_dying_keeps_its_exit_and_the_tag(self):
         _, journal = run_report(
             self, _this_run(2),
-            exit_files={"/tmp/agent-blocker.txt":
+            exit_files={"agent-blocker.txt":
                         "blocker-class: branch-without-pr\n"
                         "the work is pushed and no pull request was opened\n"})
         posted = comments(journal)
@@ -689,7 +686,7 @@ class EveryTurnDeathLeavesTheTagScenario(unittest.TestCase):
         branch asks it in Green Light, and the death still leaves its tag."""
         _, journal = run_report(
             self, _this_run(2),
-            exit_files={"/tmp/agent-blocker.txt": "the API does not exist"})
+            exit_files={"agent-blocker.txt": "the API does not exist"})
         posted = comments(journal)
         self.assertEqual(1, len(self._tagged(posted)), posted)
         self.assertIn(("advance", "Green Light", "In Progress,Todo"),
@@ -715,7 +712,7 @@ class EveryTurnDeathLeavesTheTagScenario(unittest.TestCase):
         try:
             _, journal = run_report(
                 self, _this_run(1),
-                exit_files={"/tmp/agent-handback.txt": "1. a piece\n"})
+                exit_files={"agent-handback.txt": "1. a piece\n"})
         finally:
             TURN_CAP_DEATH = saved
         posted = comments(journal)

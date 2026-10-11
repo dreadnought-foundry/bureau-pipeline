@@ -130,8 +130,8 @@ class BlockerParksInBacklogTest(unittest.TestCase):
     def test_the_class_comes_from_the_one_reader(self):
         # The script restates no phrase list and no stamp grammar (DRE-6438).
         src = report_step()
-        self.assertIn("blocker_class.py classify /tmp/agent-blocker.txt", src)
-        self.assertIn("blocker_class.py reason /tmp/agent-blocker.txt", src)
+        self.assertIn('blocker_class.py classify "$NOTES_DIR"/agent-blocker.txt', src)
+        self.assertIn('blocker_class.py reason "$NOTES_DIR"/agent-blocker.txt', src)
         self.assertNotIn("blocker-class:", src)
 
     def test_dead_run_branch_still_requeues_to_todo(self):

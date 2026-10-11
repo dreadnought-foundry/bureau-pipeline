@@ -236,8 +236,10 @@ class HumanParkGateTest(unittest.TestCase):
         )
 
 
-#: The file the agent writes its question to, and the one the branch completes.
-ESCALATION_FILE = "/tmp/agent-escalation.txt"  # nosec B108 — the prompt's own path
+#: The file the agent writes its question to, and the one the branch completes,
+#: as the branch names it: in the notes directory, which is /tmp unless
+#: `AGENT_NOTES_DIR` moves it (DRE-6961).
+ESCALATION_FILE = '"$NOTES_DIR"/agent-escalation.txt'
 
 #: Who the completed Recommendation line says stated nothing (DRE-3911).
 BUILD_AGENT = "the build agent"
@@ -290,7 +292,7 @@ class TheQuestionCarriesTheThreeLinesTest(unittest.TestCase):
         words = shlex.split(complete_command().split("||")[0])
         self.assertEqual(
             ["python3", ".bureau-pipeline/scripts/console_escalation.py",
-             "complete", ESCALATION_FILE], words[:4])
+             "complete", *shlex.split(ESCALATION_FILE)], words[:4])
         self.assertEqual(BUILD_AGENT, words[words.index("--who") + 1])
         self.assertTrue(words[words.index("--question") + 1].endswith("?"))
 
