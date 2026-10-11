@@ -40,8 +40,8 @@ What's new: <kind>, <audience>: <sentence> [<second sentence>] [(open: </path>)]
 - A head branch starting `dependabot/`, `repair/` or `bot/` owes none — it is
   machine-written, nothing a person sees, and counts as `none` (`required_for`).
 - The model adoption workflow's pull requests — `agent/<card>-adopt-<candidate>`,
-  `agent/model-adoption-<candidate>` and `agent/claude-code-pin-<version>` —
-  carry `What's new: none`, written by their own body renderers (DRE-5573).
+  `agent/model-adoption-<candidate>`, `agent/claude-code-pin-<version>` — and the
+  console's `agent/model-config-<digest>` (DRE-6624) carry `What's new: none`.
 - The two rescue pull requests carry no line: `scripts/push_rescue.py` opens one
   on an agent's own `agent/` branch, `scripts/deliver_rescue.py` one on
   `agent/<card>-rescued-delivery`. Both bodies are machine-written because the

@@ -681,6 +681,22 @@ and recomputes every verdict through a real repo slug. The daily
 after it applies an adoption and stages `config/model-choices.json` beside
 `config/models.yaml`, `agents.yaml` and `scripts/model_fallback.py`.
 
+The console WRITES this file too, without ever editing YAML itself (DRE-6624).
+Save changes on Settings › Agents & models dispatches
+`.github/workflows/model-config-change.yml` with a change set — move an agent,
+add an agent, add a group, set a group's default model, set or clear a
+project's exception — and `scripts/model_config_change.py` makes each change as
+a text edit that keeps every comment, the way an adoption does. Every change is
+judged by `model_fallback.policy_errors` before anything is written: one
+refusal fails the run with each refused change's reason and opens no branch.
+An accepted set is regenerated with the generator above and opened as ONE pull
+request on `agent/model-config-<digest>`, the same changes always naming the
+same branch, so pressing Save twice opens one pull request. Two refusals follow
+from the rules as they stand: `kinds` admits exactly the three kinds, so a new
+group is refused until that rule changes, and an interactive agent with no
+`agents.yaml` entry cannot join a group, because the generator writes a model
+for every name in `agents`.
+
 ## The effort level (DRE-4836)
 
 `models.yaml` carries an `effort:` block — model id → the level every run on

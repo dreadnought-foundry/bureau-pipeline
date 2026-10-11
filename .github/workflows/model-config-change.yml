@@ -1,0 +1,258 @@
+# Model config change (DRE-6624) — a change set from the console becomes ONE
+# reviewed pull request to config/models.yaml.
+#
+# The CEO approved Settings › Agents & models on 2026-10-10. On that page an
+# admin moves agents between groups, sets each group's default model and gives
+# a project an exception, then presses Save changes. The console never edits
+# YAML itself: it dispatches this workflow with one input, the CHANGE SET —
+#
+#   {"requested_by": "<the admin's sign-in>",
+#    "changes": [{"op": "move_agent", "agent": "proof", "group": "advisory"}, …]}
+#
+# — and `scripts/model_config_change.py` (its docstring names the six
+# operations) does the rest:
+#
+#   1. names the branch, `agent/model-config-<digest of the changes>`, and
+#      stops — green — when a pull request on it is already open, so pressing
+#      Save twice opens one pull request;
+#   2. VALIDATES the whole set before anything is written: each change is
+#      judged by `model_fallback.policy_errors`, the gate every pull request
+#      meets, plus the plain checks a change needs to be made at all. A refused
+#      set fails the run with one `::error::` line per reason and the same lines
+#      on the run's summary page, before any branch exists — no branch, no pull
+#      request;
+#   3. applies the changes to config/models.yaml as a text edit that keeps
+#      every comment, regenerates every generated file
+#      (`scripts/sync_model_config.py`: agents.yaml, scripts/model_fallback.py,
+#      config/model-choices.json) and holds them to `--check`;
+#   4. opens ONE pull request as the bureau App, the way model-adoption.yml
+#      opens its own: an `agent/` branch, a commit of only the four model-config
+#      files, and a body that opens with the `What's new:` line the merge gate
+#      reads and says who asked and what changes, one line per change.
+#
+# The model tests run on the branch and their result is stated in the pull
+# request, never a reason to withhold it — exactly as model-adoption.yml runs
+# them. Several of them pin today's ladders (the workhorse ladder leads with
+# Opus 5.5, for one), so a legitimate change can turn one red; the critic and
+# the fix agent own that repair on an `agent/` branch.
+#
+# It declares no act and posts no receipt (DRE-6582): it writes a branch and a
+# pull request and nothing else, and comments on neither.
+#
+# NO ${{ }} INSIDE A `run:` BLOCK (DRE-3484): the change set arrives through
+# `env:` once, is written to $RUNNER_TEMP/change-set.json, and travels as that
+# file after that. tests/test_model_config_change_workflow.py executes the
+# scripts below as written.
+#
+# Vendor boundary (standards/vendor-boundaries.md):
+#   Q1 actor — the console's dispatch initiates the run as whichever identity
+#      holds the token it dispatched with; nothing here reads that actor. Every
+#      push and the pull request are made with the bureau App token minted
+#      first, so the branch and the pull request are `agent-bureau-bot`'s, an
+#      identity qa-review.yml's `allowed_bots` already admits: the critic runs
+#      on `pull_request` and the merge gate merges an `agent/*` head.
+#   Q2 secrets — a dispatched run reads the repo's normal secrets store, never
+#      the Dependabot one, so the App id and key resolve. No Anthropic or Linear
+#      credential is used: this workflow runs no model and files no card.
+#   Q3 re-run — the branch is a digest of the changes, so the same set always
+#      names the same branch: an open pull request on it is found and nothing is
+#      opened, and the pull request step asks again just before it creates. A
+#      set already merged reads as "already" refusals, never a second edit.
+#   Q4 command limits — `gh pr create` needs the branch pushed and a token that
+#      may push it, which is why the App token is minted before checkout. A
+#      `workflow_dispatch` string input is capped at 65,535 characters, far
+#      above any change set a page of toggles can produce.
+#   Q5 our crash — a crash between the push and `gh pr create` leaves a branch
+#      with no pull request. The next run finds the branch, reuses it as it
+#      stands and opens the pull request; nothing else was recorded to unstick.
+#      A red run goes to the medic (self-medic.yml); a refused set is red by
+#      design, and the medic's one retry is refused the same way.
+name: Model config change
+
+on:
+  workflow_dispatch:
+    inputs:
+      change_set:
+        description: >-
+          The console's change set, as JSON: {"requested_by": "...",
+          "changes": [{"op": "move_agent", ...}, ...]}.
+        type: string
+        required: true
+
+# One run at a time, and a queued one waits rather than cancelling a run that
+# may be between a push and its pull request.
+concurrency:
+  group: model-config-change
+  cancel-in-progress: false
+
+# The App token does every write to GitHub; this run's own token only reads
+# the repo and the open pull requests.
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  change:
+    runs-on: ${{ fromJSON(vars.BUREAU_SHORT_RUNS_ON || vars.BUREAU_RUNS_ON || '["ubuntu-latest"]') }}
+    timeout-minutes: 30
+    steps:
+      # Minted FIRST: the checkout's push credential and `gh pr create` both
+      # need it, and a pull request authored by the App is one the critic runs
+      # on (Q1, Q4).
+      - name: Mint bot token
+        id: app
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: ${{ secrets.BUREAU_APP_ID }}
+          private-key: ${{ secrets.BUREAU_APP_PRIVATE_KEY }}
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          token: ${{ steps.app.outputs.token }}
+          fetch-depth: 0
+
+      - name: Install the pipeline's Python tooling (cached)
+        uses: ./.github/actions/setup-python-cached
+        with:
+          python-version: "3.12"
+          requirements: |
+            requirements-dev.txt
+
+      # The one place the input is read. A set that is not one — not JSON, an
+      # unknown op, a missing field — fails here, before anything else runs.
+      - name: Read the change set and name its branch
+        id: read
+        env:
+          CHANGE_SET: ${{ inputs.change_set }}
+        run: |
+          printf '%s' "$CHANGE_SET" > "$RUNNER_TEMP/change-set.json"
+          python3 scripts/model_config_change.py branch --changes "$RUNNER_TEMP/change-set.json" >> "$GITHUB_OUTPUT"
+
+      # Q3: the same changes name the same branch, so an open pull request on
+      # it is this change set's, already opened. The run stops green.
+      - name: Is its pull request already open
+        id: open
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BRANCH: ${{ steps.read.outputs.branch }}
+        run: |
+          EXISTING=$(gh pr list --repo "$GITHUB_REPOSITORY" --head "$BRANCH" --state open \
+            --json url --jq '.[0].url // ""')
+          if [ -n "$EXISTING" ]; then
+            line="This change set is already open as $EXISTING — no second pull request."
+          else
+            line="No pull request is open for this change set yet."
+          fi
+          echo "existing=$EXISTING" >> "$GITHUB_OUTPUT"
+          echo "$line"
+          printf '\n%s\n' "$line" >> "${GITHUB_STEP_SUMMARY:-/dev/null}"
+
+      # Every change judged, nothing written. A refusal exits 2 with one
+      # `::error::` line per reason, which fails the run here — before the
+      # branch step, so a refused set leaves no branch and no pull request.
+      # The file it judged is kept: the pull request describes each change
+      # against the file as it stood before the set.
+      - name: Validate the change set
+        id: validate
+        if: steps.open.outputs.existing == ''
+        run: |
+          cp config/models.yaml "$RUNNER_TEMP/models-before.yaml"
+          python3 scripts/model_config_change.py apply --changes "$RUNNER_TEMP/change-set.json" --check
+
+      # Q5: a branch that already exists with no pull request is a run that
+      # crashed after its push. It is reused as it stands, and the pull request
+      # is opened below.
+      - name: Create the branch off origin/main, or reuse it
+        id: branch
+        if: steps.open.outputs.existing == ''
+        env:
+          BRANCH: ${{ steps.read.outputs.branch }}
+        run: |
+          [ -n "$BRANCH" ] || { echo "::error::the read step named no branch"; exit 1; }
+          git fetch --quiet origin main
+          if git ls-remote --exit-code --heads origin "$BRANCH" > /dev/null; then
+            git fetch --quiet origin "$BRANCH"
+            git checkout -B "$BRANCH" "origin/$BRANCH"
+            echo "reuse=true" >> "$GITHUB_OUTPUT"
+            echo "$BRANCH already exists — reusing it as it stands"
+          else
+            git checkout -B "$BRANCH" origin/main
+            echo "reuse=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Apply the change set to config/models.yaml
+        if: steps.open.outputs.existing == '' && steps.branch.outputs.reuse != 'true'
+        run: python3 scripts/model_config_change.py apply --changes "$RUNNER_TEMP/change-set.json"
+
+      - name: Regenerate the generated model files
+        if: steps.open.outputs.existing == '' && steps.branch.outputs.reuse != 'true'
+        run: |
+          python3 scripts/sync_model_config.py
+          python3 scripts/sync_model_config.py --check
+
+      # INFORMATIONAL, as in model-adoption.yml. A red result is stated in the
+      # pull request, not a reason to withhold it: several of these pin
+      # today's ladders, and the critic and the fix agent own the repair.
+      - name: Run the model tests (informational)
+        id: tests
+        if: steps.open.outputs.existing == ''
+        run: |
+          set +e
+          python3 -m pytest tests/test_model_policy.py tests/test_model_config.py tests/test_model_choices.py -q \
+            > "$RUNNER_TEMP/model-tests.txt" 2>&1
+          rc=$?
+          set -e
+          tail -n 40 "$RUNNER_TEMP/model-tests.txt"
+          if [ "$rc" -eq 0 ]; then result=passed; else result=failed; fi
+          echo "result=$result" >> "$GITHUB_OUTPUT"
+          echo "model tests: $result"
+
+      # The staged set is PROVED before the commit: config/models.yaml,
+      # agents.yaml, the generated region of scripts/model_fallback.py and the
+      # generated config/model-choices.json, and nothing else — the four paths
+      # the TDD gate reads as data and a generated region (DRE-3896).
+      - name: Commit and push the branch
+        if: steps.open.outputs.existing == '' && steps.branch.outputs.reuse != 'true'
+        env:
+          BRANCH: ${{ steps.read.outputs.branch }}
+          DIGEST: ${{ steps.read.outputs.digest }}
+        run: |
+          git add -- config/models.yaml agents.yaml scripts/model_fallback.py config/model-choices.json
+          STAGED=$(git diff --cached --name-only)
+          for path in $STAGED; do
+            case "$path" in
+              config/models.yaml|agents.yaml|scripts/model_fallback.py|config/model-choices.json) ;;
+              *) echo "::error::refusing to commit $path — a model config change touches only the model config"; exit 1 ;;
+            esac
+          done
+          [ -n "$STAGED" ] || { echo "::error::the change set changed nothing"; exit 1; }
+          git -c user.name="agent-bureau-bot[bot]" \
+            -c user.email="agent-bureau-bot[bot]@users.noreply.github.com" \
+            commit --quiet -m "chore(models): model config change $DIGEST from the console"
+          git push origin "HEAD:refs/heads/$BRANCH"
+
+      - name: Open the pull request
+        if: steps.open.outputs.existing == ''
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+          BRANCH: ${{ steps.read.outputs.branch }}
+          TESTS: ${{ steps.tests.outputs.result }}
+        run: |
+          EXISTING=$(gh pr list --repo "$GITHUB_REPOSITORY" --head "$BRANCH" --state open \
+            --json url --jq '.[0].url // ""')
+          if [ -n "$EXISTING" ]; then
+            echo "already open as $EXISTING — not duplicating"
+            exit 0
+          fi
+          python3 scripts/model_config_change.py render pr-body --changes "$RUNNER_TEMP/change-set.json" \
+            --config "$RUNNER_TEMP/models-before.yaml" > "$RUNNER_TEMP/pr-body.md"
+          {
+            echo
+            echo "## Model tests"
+            echo
+            echo "\`tests/test_model_policy.py\`, \`tests/test_model_config.py\` and \`tests/test_model_choices.py\` on this branch: **${TESTS:-not run}**."
+          } >> "$RUNNER_TEMP/pr-body.md"
+          cat "$RUNNER_TEMP/pr-body.md"
+          gh pr create --repo "$GITHUB_REPOSITORY" --base main --head "$BRANCH" \
+            --title "$(python3 scripts/model_config_change.py render pr-title --changes "$RUNNER_TEMP/change-set.json")" \
+            --body-file "$RUNNER_TEMP/pr-body.md"
