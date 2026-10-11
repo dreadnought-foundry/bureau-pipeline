@@ -390,6 +390,9 @@ class FinishUnlandedWiringTest(unittest.TestCase):
         self.assertIn('--head-sha "$HEAD_SHA"', run)
         self.assertIn('--default-branch "$DEFAULT_BRANCH"', run)
         self.assertIn("--out /tmp/repair-compares.json", run)
+        # DRE-6963: the records' pulls file too, so a failed records gather
+        # costs no second wait here (the decision is already made).
+        self.assertIn("--pulls-file /tmp/repair-pulls.json", run)
         self.assertNotIn("gh api", run)
         self.assertNotIn("2>/dev/null", run)
         # The regex lives once, in the script.

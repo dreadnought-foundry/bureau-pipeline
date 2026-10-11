@@ -89,7 +89,8 @@ CLI (stdout appends verbatim to $GITHUB_OUTPUT; humans read stderr):
         --refs-out <f> --pulls-out <f>
 
     red_main_repair.py gather-compares --repo <owner/name> \
-        --default-branch <d> --head-sha <sha> --refs-file <f> --out <f>
+        --default-branch <d> --head-sha <sha> --refs-file <f> \
+        --pulls-file <f> --out <f>
 
   --refs-file  raw REST payload of GET git/matching-refs/heads/repair/
   --pulls-file raw REST payload of GET pulls?state=all&per_page=100
@@ -116,7 +117,7 @@ prints nothing; exit 0 either way.
 `gather_reads` (the retry above, its sleeps injected so it is tested without
 waiting); exit 1 when a read never came back. `gather-compares` writes the
 `--compares-file` document the same way, a comparison that never came back
-null for its ref; exit 0. Their stdout is the job log, not $GITHUB_OUTPUT.
+null for its ref, and makes no call when the records are unreadable; exit 0. Their stdout is the job log, not $GITHUB_OUTPUT.
 
 Emits go=, branch=, attempt=, escalate=, reason=, the timeout_* detail
 (job / step / limit / commits) and superseded_by= (the green run's id, empty
@@ -880,13 +881,21 @@ def gather_reads(reads: dict, *, reader, sleep, now, say,
         pending = still
         if not pending or attempt == tries:
             break
-        wait, why = rate_limit_wait(reader, now)
-        wait = max(min(wait, budget - waited), 0)
+        wanted, why = rate_limit_wait(reader, now)
+        wait = max(min(wanted, budget - waited), 0)
+        if wanted > wait:
+            # The reset lies past what is left of the budget, so the next try
+            # comes before it — said, never a "waiting 0s".
+            why += (f" — past the {budget - waited}s left of the {budget}s"
+                    f" wait budget")
+        if not wait:
+            say(f"repair gather: try {attempt + 1}/{tries} now, without "
+                f"waiting — {why}")
+            continue
         say(f"repair gather: waiting {wait}s before try {attempt + 1}/"
             f"{tries} — {why}")
-        if wait:
-            sleep(wait)
-            waited += wait
+        sleep(wait)
+        waited += wait
     return {"bodies": bodies, "failed": failed, "tries": attempt,
             "waited": waited}
 
@@ -921,13 +930,23 @@ def gather_records(repo: str, refs_out: str, pulls_out: str, *, reader,
 
 
 def gather_compares(repo: str, default_branch: str, head_sha: str,
-                    refs_file: str, out: str, *, reader, sleep, now,
-                    say) -> int:
+                    refs_file: str, pulls_file: str, out: str, *, reader,
+                    sleep, now, say) -> int:
     """Each record branch at `head_sha` compared with the default branch, as
     `{"<ref>": {status, ahead_by} | null}` into `out`. A comparison that
     never comes back is null for its ref, which `decide` reads as "nothing
-    known" — `duplicate-event`, never `finish-unlanded` (DRE-6526). Exit 0."""
+    known" — `duplicate-event`, never `finish-unlanded` (DRE-6526). Exit 0.
+
+    Records that cannot be read (`_load_records` is None — the refs read
+    came back and the pulls read did not, say) make no call and no wait:
+    `decide` answers `records-unreadable` whatever the comparisons hold, and
+    a second twenty minutes of waiting would only spend the job's 45."""
     refs = record_refs(refs_file, head_sha)
+    if _load_records(refs_file, pulls_file) is None:
+        _write(out, json.dumps({ref: None for ref in refs}) + "\n")
+        say("compared no repair branch: the attempt records are unreadable,"
+            " so the decision is records-unreadable whatever they would say")
+        return 0
     result = gather_reads(
         {ref: f"repos/{repo}/compare/{default_branch}...{ref}" for ref in refs},
         reader=reader, sleep=sleep, now=now, say=say)
@@ -1005,6 +1024,7 @@ def main(argv: list[str]) -> int:
     c.add_argument("--default-branch", required=True)
     c.add_argument("--head-sha", required=True)
     c.add_argument("--refs-file", required=True)
+    c.add_argument("--pulls-file", required=True)
     c.add_argument("--out", required=True)
     args = parser.parse_args(argv)
 
@@ -1021,7 +1041,8 @@ def main(argv: list[str]) -> int:
                               **live)
     if args.cmd == "gather-compares":
         return gather_compares(args.repo, args.default_branch, args.head_sha,
-                               args.refs_file, args.out, **live)
+                               args.refs_file, args.pulls_file, args.out,
+                               **live)
 
     # Stdout is the output FILE for this step, so the decision is made with
     # that channel shut: anything this module or anything it imports prints

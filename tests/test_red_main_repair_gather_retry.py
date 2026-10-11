@@ -230,6 +230,25 @@ class NeverSucceedsTest(unittest.TestCase):
         self.assertFalse([s for s in said if s.startswith("::error::")])
 
 
+class NoZeroSecondWaitTest(unittest.TestCase):
+    """A try the budget leaves no wait for is said as one, never "waiting 0s"."""
+
+    def test_a_reset_past_the_budget_says_so(self):
+        clock = Clock()
+        reader = FakeReader({REFS_PATH: [LIMITED]},
+                            rate_limit=lambda: rate_limit_answer(NOW + 3600))
+        result, said = gather({"refs": REFS_PATH}, reader, clock)
+        self.assertEqual(clock.sleeps, [1200])
+        self.assertFalse([s for s in said if "waiting 0s" in s], said)
+        waits = [s for s in said if s.startswith("repair gather: waiting")
+                 or "without waiting" in s]
+        self.assertEqual(len(waits), 2, said)
+        self.assertIn("past the 1200s left of the 1200s wait budget",
+                      waits[0])
+        self.assertIn("try 3/3 now, without waiting", waits[1])
+        self.assertIn("past the 0s left", waits[1])
+
+
 class RateLimitReadFailsTest(unittest.TestCase):
     """AC 3: no rate limit to read means a two-minute wait."""
 
@@ -333,19 +352,22 @@ class ComparesRideTheSameRetryTest(unittest.TestCase):
 
     COMPARE = f"repos/{REPO}/compare/main...{RECORD}"
 
-    def _run(self, compare_answers, rate_limit):
+    def _run(self, compare_answers, rate_limit, pulls_body="[]\n"):
         clock = Clock()
         reader = FakeReader({self.COMPARE: compare_answers},
                             rate_limit=rate_limit)
         said = []
         with tempfile.TemporaryDirectory() as td:
             refs = os.path.join(td, "refs.json")
+            pulls = os.path.join(td, "pulls.json")
             out = os.path.join(td, "compares.json")
             with open(refs, "w") as fh:
                 json.dump([{"ref": f"refs/heads/{RECORD}"},
                            {"ref": "refs/heads/repair/" + "b" * 40}], fh)
+            with open(pulls, "w") as fh:
+                fh.write(pulls_body)
             rc = red_main_repair.gather_compares(
-                REPO, "main", SHA, refs, out, reader=reader,
+                REPO, "main", SHA, refs, pulls, out, reader=reader,
                 sleep=clock.sleep, now=clock.now, say=said.append)
             with open(out) as fh:
                 doc = json.load(fh)
@@ -381,15 +403,54 @@ class ComparesRideTheSameRetryTest(unittest.TestCase):
         reader = FakeReader({}, rate_limit=lambda: LIMITED)
         with tempfile.TemporaryDirectory() as td:
             refs = os.path.join(td, "refs.json")
+            pulls = os.path.join(td, "pulls.json")
             out = os.path.join(td, "compares.json")
-            with open(refs, "w") as fh:
-                fh.write("FETCH-FAILED\n")
+            for path in (refs, pulls):
+                with open(path, "w") as fh:
+                    fh.write("FETCH-FAILED\n")
             rc = red_main_repair.gather_compares(
-                REPO, "main", SHA, refs, out, reader=reader,
+                REPO, "main", SHA, refs, pulls, out, reader=reader,
                 sleep=clock.sleep, now=clock.now, say=lambda _l: None)
             with open(out) as fh:
                 doc = json.load(fh)
         self.assertEqual((rc, doc, reader.calls, clock.sleeps), (0, {}, [], []))
+
+    def test_unreadable_pulls_make_no_call_and_no_wait(self):
+        # The limit was spent between the two record reads: the refs came
+        # back, the pulls never did. The decision is records-unreadable
+        # whatever the comparisons hold, so they wait out nothing — the job
+        # waits the limit out once, not twice, inside its 45 minutes.
+        rc, doc, reader, clock, said = self._run(
+            [LIMITED], rate_limit=lambda: rate_limit_answer(NOW + 3600),
+            pulls_body="FETCH-FAILED\n")
+        self.assertEqual(rc, 0)
+        self.assertEqual(doc, {RECORD: None})
+        self.assertEqual((reader.calls, clock.sleeps), ([], []))
+        self.assertTrue([s for s in said if "records are unreadable" in s],
+                        said)
+
+    def test_the_command_takes_the_pulls_file(self):
+        # End to end, as the workflow calls it: no `gh` is ever run when the
+        # records are unreadable, so the command needs no token and no PATH.
+        with tempfile.TemporaryDirectory() as td:
+            refs = os.path.join(td, "refs.json")
+            pulls = os.path.join(td, "pulls.json")
+            out = os.path.join(td, "compares.json")
+            with open(refs, "w") as fh:
+                json.dump([{"ref": f"refs/heads/{RECORD}"}], fh)
+            with open(pulls, "w") as fh:
+                fh.write("FETCH-FAILED\n")
+            done = subprocess.run(
+                [sys.executable, os.path.join(SCRIPTS, "red_main_repair.py"),
+                 "gather-compares", "--repo", REPO, "--default-branch",
+                 "main", "--head-sha", SHA, "--refs-file", refs,
+                 "--pulls-file", pulls, "--out", out],
+                capture_output=True, text=True, timeout=60,
+                env={**os.environ, "PATH": td})
+            with open(out) as fh:
+                doc = json.load(fh)
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertEqual(doc, {RECORD: None})
 
 
 class DecideSaysTheRunFailedTest(unittest.TestCase):

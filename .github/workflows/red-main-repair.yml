@@ -220,7 +220,10 @@ jobs:
       # back is null for its ref; the decide step reads that as "nothing
       # known" and answers duplicate-event, never finish-unlanded. The reads
       # ride the same wait-and-retry as the records (DRE-6963), and the step
-      # runs after a failed records gather so the decision still answers.
+      # runs after a failed records gather so the decision still answers —
+      # but with records unreadable it makes no call and no wait (the
+      # decision is records-unreadable whatever it would read), so the job
+      # waits out the limit once, not twice, inside its 45 minutes.
       # Boot token, like the records step.
       - name: Gather repair branch comparisons (pushed and never opened?)
         if: ${{ !cancelled() }}
@@ -234,6 +237,7 @@ jobs:
             --default-branch "$DEFAULT_BRANCH" \
             --head-sha "$HEAD_SHA" \
             --refs-file /tmp/repair-refs.json \
+            --pulls-file /tmp/repair-pulls.json \
             --out /tmp/repair-compares.json
 
       # DRE-1996 discipline: head_branch is on the pinned-fields list (it is
