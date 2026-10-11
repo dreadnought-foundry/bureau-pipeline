@@ -1478,6 +1478,13 @@
       "why": "A draft is a proposal, not something the pipeline did on its own — the same reading the proposal_comment(proposal) row above gives the proposal itself. Nothing was refused, recovered or held and no state moved, so a trailer would announce a recovery that has not happened and name a next actor the pipeline has not chosen. One renderer at one call site in post_record, so a draft carries one shape."
     },
     {
+      "file": "scripts/groomer.py",
+      "anchor": "rewritten_note(",
+      "kind": "not-an-act",
+      "means": "The body a card carried before the drain wrote the CEO's accepted rewrite over it, on the card itself under `## Body before the rewrite`, posted just before the description changes and naming the proposal and the draft it came from (DRE-6667).",
+      "why": "The CEO decided this, not the pipeline: the CEO accepted the draft by name, so the note is bookkeeping of that acceptance — the same reading the moved_note(record[\"id\"], position=row[\"position\"] row gives the moved card's note. Nothing was refused, recovered or held, so a trailer would announce a recovery that has not happened and name a next actor nobody chose. One renderer at one call site in _drain, so the record carries one shape."
+    },
+    {
       "file": "scripts/reconcile.py",
       "anchor": "groomer.released_record(list(changes.values()))",
       "kind": "not-an-act",

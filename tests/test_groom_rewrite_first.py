@@ -431,7 +431,8 @@ def test_render_and_parse_round_trip_the_rewrite_first_table():
     after["outcomes"]["rewrite"][1]["summary"] = "A summary | with a pipe"
     parsed = groomer.parse_proposal_comment(groomer.proposal_comment(after))
     assert parsed["rewrite"] == [{"identifier": r["identifier"],
-                                  "position": r["position"]}
+                                  "position": r["position"],
+                                  "repo": r["repo"]}
                                  for r in after["outcomes"]["rewrite"]]
     assert parsed["batch"] and [r["identifier"] for r in parsed["batch"]] == KEPT
     assert [r["identifier"] for r in parsed["cancel"]] == ["DRE-3703"]

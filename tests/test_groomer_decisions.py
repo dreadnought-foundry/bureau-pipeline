@@ -179,9 +179,12 @@ def test_the_vocabulary_carries_every_marker_the_console_mirrors():
     # `groom-held` is Hold, beside Don't do (DRE-4966) — a contract with the
     # console character for character, written by DRE-4979/DRE-4980.
     assert groomer.HOLD_TAG == "groom-held"
+    # `groom-rewrite-accepted` accepts a Rewrite first draft (DRE-6667),
+    # typed by hand on the standing card.
     assert groomer.DECISION_TAGS == (
         groomer.APPROVAL_TAG, groomer.DECLINE_TAG,
-        groomer.EXCLUDE_TAG, groomer.ADD_TAG, groomer.HOLD_TAG)
+        groomer.EXCLUDE_TAG, groomer.ADD_TAG, groomer.HOLD_TAG,
+        groomer.REWRITE_ACCEPT_TAG)
 
 
 @pytest.mark.parametrize("tag", ["groom-approved", "groom-declined",
@@ -487,7 +490,8 @@ def test_every_row_carries_one_of_the_six_outcomes():
     groomer.drain(ops, card=PROPOSAL_CARD)
     body = _sole_record(ops)
     assert groomer.DRAIN_OUTCOMES == ("moved", "held back", "added",
-                                      "cancelled", "refused", "already gone")
+                                      "cancelled", "refused", "already gone",
+                                      "rewritten")
     for identifier in _batch_ids(proposal):
         assert _outcome(body, identifier) in groomer.DRAIN_OUTCOMES
 

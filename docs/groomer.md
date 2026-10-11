@@ -755,9 +755,10 @@ card)` when this run posted the draft, `(draft of <PT date> stands on the
 card)` when an earlier one still matches the card, or `(no draft — the agent
 wrote none)`. The section is absent on a morning with none, so that page
 renders byte for byte as before, and `parse_proposal_comment` reads it back as
-`rewrite`, the first two cells load-bearing. The line telling the CEO how to
-accept a draft, and the `groom-rewrite-accepted` marker it names, are
-DRE-6667's.
+`rewrite`, the first two cells load-bearing, with the fourth, the repo, read
+too (DRE-6667). Under the table one line, opening `To accept a draft:`, tells
+the CEO the exact marker to type, and what the drain does with the acceptance is
+[Accepting a Rewrite first draft](#accepting-a-rewrite-first-draft-dre-6667).
 
 **One draft per body, not one per morning.** After the proposal comment,
 `post` puts one comment on each Rewrite first card whose draft exists:
@@ -856,9 +857,11 @@ batch that was right apart from two rows.
 | `🧺 groom-excluded: <id> DRE-N[ — <reason>]` | the CEO | per card — **Don't do**: held back from this drain, and never proposed again until `groom-added` names it (DRE-4966) |
 | `🧺 groom-held: <id> DRE-N[ — <reason>]` | the CEO (the console, DRE-4979/DRE-4980) | per card — **Hold**: held back from this drain exactly as an exclusion is; a later proposal may offer it again, ranked after every card never held (DRE-4966) |
 | `🧺 groom-added: <id> DRE-N[ — <reason>]` | the CEO | per card |
-| `🧺 groom-drained: <id>` + `moved: n · held back: n · added: n · cancelled: n · refused: n → Planning at <time PT>` + table | the drain | one per drain |
+| `🧺 groom-rewrite-accepted: <id> DRE-N` | the CEO, typed by hand on the standing card — the console offers no control for it; one that writes the marker is a later card in the console's repository, not in this epic | per card — accepts the draft the pipeline posted on card DRE-N, which the drain writes as its body before moving it to Planning (DRE-6667) |
+| `🧺 groom-drained: <id>` + `moved: n · held back: n · added: n · cancelled: n · refused: n → Planning at <time PT>` + table | the drain | one per drain; `rewritten: n · ` follows `moved: n · ` only on a drain that wrote an accepted draft (DRE-6667) |
 | `🧺 groom-drain-refused: <id> — <reason>` | the drain | one per refusal |
 | `🧺 groom-cancelled: <id> — <reason>` | the drain, on the card it cancels | one per cancelled card, written before the card moves to `Canceled` |
+| `🧺 groom-rewritten: <id> from draft <draft id>` + `## Body before the rewrite` | the drain, on the card whose accepted draft it writes | one per rewritten card, written before its description changes; carries the old body verbatim (DRE-6667) |
 | `🧺 groom-moved: <id> — <verdict> · <from> → <to> · by <writer> · record on <batch card>` | the drain, and the reconcile sweep's queue release, on the card each moves | one per card moved into `Planning`, written before its lane changes; `<verdict>` is `position <n> of <m> on the approved Planning list` or `added by the CEO, no position`, `<writer>` is `the drain` or `the sweep's queue release, place <p>`, and `<batch card>` is the card the proposal record stands on (DRE-3326) |
 | `🧺 groom-queued: <id>` + `\| place \| card \| repo \|` table | the drain; the reconcile sweep's repair | one per drain that queued a card, written just before the drained record — the cards past the free planner slots, in place order (DRE-5435); and one per batch whose cards a `groom-released` row wrongly recorded as taken out by hand, same id, original places (DRE-6640) |
 | `🧺 groom-released: <id> — released: DRE-A, DRE-B · left the lane: DRE-C[ · taken out by hand: DRE-D]` | the reconcile sweep | one comment per pass that changed the queue, a line per batch it touched; pipeline-authored only, like `groom-queued` |
@@ -928,6 +931,10 @@ What each one does:
   card on the Cancel list moves it to Planning and it is not cancelled. It must
   be in the lane already: an addition naming a card that has left the lane is
   an `already gone` row naming the lane it is in now, and the rest still moves.
+- **rewrite-accepted** — the Rewrite first card it names gets the draft the
+  pipeline posted on it as its body, and moves to `Planning` after the
+  additions (DRE-6667, below). One naming a card not on the Rewrite first
+  table is ignored and named in the record.
 - A card named by both **excluded** and **added** follows the **newest
   comment** — the same "last word wins" the approval has always used, which is
   also how an approval that follows a decline still approves.
@@ -1114,6 +1121,91 @@ approved in one sitting — can each see the same free slots before the first
 drain's planners claim them. The queue still runs no more than the cap at once,
 so this only lengthens the line and does not spend the key.
 
+### Accepting a Rewrite first draft (DRE-6667)
+
+The Rewrite first list puts a drafted body on each partly-solved card for the
+CEO to accept. The acceptance is one comment per card on the standing card:
+
+```
+🧺 groom-rewrite-accepted: <id> DRE-N
+```
+
+**How the CEO writes it.** The CEO types it by hand on the standing card,
+exactly as `groom-added` and `groom-excluded` can be typed, because the
+console offers no control for it — DRE-6645 adds Not doing, Move to Cancel,
+Hold until and Agree, and no accept. A console control that writes the marker
+is a later card in the console's repository, not in this epic. The page says
+what to type twice: a clause on the "To say more than yes" line, with the
+proposal id filled in, and a `To accept a draft:` line under the Rewrite
+first table, rendered only when the table is.
+
+**Who may write it.** It is honored on the same terms as every per-card
+marker: a person's own Linear account, or the console's key with a receipt
+that verifies, never the pipeline's key without one, and only for the
+approved batch. `read_decisions` returns it under `rewritten`, and the newest
+marker about a card still wins between this one and the others.
+
+**What the drain does with it.** For each accepted card on the record's
+Rewrite first table, before anything is written, the drain reads the card's
+description and its whole thread (`comment_records(card, whole_thread=True)`)
+for the newest `🧺 groom-rewrite-draft:` comment the pipeline's own identity
+wrote (`authored_by_pipeline` on the record) whose `body=` digest equals the
+digest of the card's current description — whatever proposal id that comment
+names, so the draft was written against the body it replaces. Then it posts
+the `groom-rewritten` record, writes the draft as the description, then moves
+the card to Planning as an addition does:
+
+```
+🧺 groom-rewritten: <id> from draft <draft id>
+
+The CEO accepted the drafted rewrite of this card on proposal `<id>`, …
+
+## Body before the rewrite
+
+<the previous body, verbatim>
+```
+
+`<draft id>` is the proposal id the draft comment names. The order of the
+three writes is fixed, so a crash leaves a card in Intake with its old body,
+or with the new body and a record naming the old one — never a moved card
+nobody can explain. The move is the drain's own: the rewritten card travels
+in the plan's `moving` list after the batch and the additions, with outcome
+`rewritten`, so it is rationed by the free planner slots with the rest and
+moved by the same lane write, its `groom-moved` note reading as an
+addition's, `added by the CEO, no position`, because it was never on the
+Planning list. One past the slots is queued like any other
+card, with its new body already written, and the `groom-queued` record lists
+it. The note is rendered by `groomer.rewritten_note` and posted from one call
+site in `_drain`, declared `not-an-act` in `config/pipeline-acts.json` beside
+the draft's own row: the CEO decided this, and the note is bookkeeping.
+
+**Who wrote the draft is the gate.** A draft-shaped comment from any other
+account is data, not a draft (`standards/untrusted-content.md`): anyone who
+can comment on an Intake card can open a comment with
+`🧺 groom-rewrite-draft:` and a digest computed from the card's public body,
+and if the drain read it, the CEO's acceptance would make that person's text
+the card's specification. On the operator's machine the viewer is
+`bureau-tools`, so a pipeline-written draft reads as someone else's there and
+the drain refuses it — the safe direction.
+
+The rows it writes:
+
+- an accepted card it rewrote and moved — `rewritten`, why
+  ``proposal `<id>` Rewrite first position <n> — draft `<draft id>` ``;
+- one queued past the slots — `held back`, why
+  ``groom-queued: place <n> of <m> — rewritten from draft `<draft id>` ``;
+- an accepted card with no matching draft the pipeline wrote, or only a
+  draft-shaped comment from another account — `refused`, why
+  `no draft of the pipeline's own for the card's current body`, and nothing is
+  written to it;
+- a Rewrite first card with no acceptance — `held back`, why
+  `rewrite not accepted`, and nothing is written to it;
+- an acceptance naming a card not on the Rewrite first table — ignored, named
+  on that card's row, or as a `refused` row of its own when it is on no list;
+- an exclusion or a hold on a Rewrite first card holds it back as on the other
+  lists, a switched-off repo holds it back by the table's Repo cell, and a
+  card that left Intake is `already gone`.
+
 ### What the drain wrote down
 
 Afterwards the drain posts ONE comment to the proposal card (DRE-3326,
@@ -1141,7 +1233,11 @@ agent-bureau): `moved: n · held back: n · added: n · cancelled: n · refused:
 → Planning at <time PT>`. It is the line as it was before DRE-4733 with one
 clause, `cancelled:`, placed before `refused:`; the reader takes that clause as
 optional and reads the other four exactly as they always read, so no clause is
-reordered, respelled or added beside it.
+reordered, respelled or added beside it. The one exception is `rewritten: n · `
+right after `moved: n · ` (DRE-6667), written only on a drain that wrote an
+accepted Rewrite first draft, so every other drain's line reads exactly as
+before; the console's reader takes the clause on its own card. It counts the
+cards whose body the drain wrote — moved, or queued with the new body.
 
 A decision about the drained batch that names no card is a `refused` row, as it
 always was, and is also quoted under `## Decisions I could not read` AFTER the
@@ -1156,8 +1252,9 @@ or what the free planner slots could not take (DRE-5326) and is queued for them
 counts the *decisions* the drain would not honour — a marker the pipeline wrote,
 a decline with no reason, an exclusion naming a card on neither list. `#` is the
 order the cards moved to Planning in; a card that did not move there carries
-`—`. There is one row per card on either list, and each row's outcome is one of
-six: `moved`, `held back`, `added`, `cancelled`, `refused`, `already gone`. An
+`—`. There is one row per card on any list, and each row's outcome is one of
+seven: `moved`, `held back`, `added`, `cancelled`, `refused`, `already gone`,
+and `rewritten` (DRE-6667). An
 `already gone` card had left Intake before the drain reached it; its why is the
 lane it is in now, and it is counted on no clause of the summary line. No card
 gets two rows: a refused decision about a card that moved anyway is named on

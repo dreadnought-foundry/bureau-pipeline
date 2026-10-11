@@ -457,9 +457,15 @@ ADD_TAG = "groom-added"              # `<id> DRE-N[ — <reason>]`, per card
 # The console writes it (DRE-4979/DRE-4980); the string is a contract with the
 # console, character for character.
 HOLD_TAG = "groom-held"              # `<id> DRE-N[ — <reason>]`, per card
-DECISION_TAGS = (APPROVAL_TAG, DECLINE_TAG, EXCLUDE_TAG, ADD_TAG, HOLD_TAG)
+# The CEO's acceptance of a Rewrite first draft (DRE-6667): the drain writes
+# the draft the pipeline posted on card DRE-N as its body and moves it to
+# Planning. The console has no control for it, so it is typed by hand on the
+# standing card, exactly as `groom-added` and `groom-excluded` can be.
+REWRITE_ACCEPT_TAG = "groom-rewrite-accepted"   # `<id> DRE-N`, per card
+DECISION_TAGS = (APPROVAL_TAG, DECLINE_TAG, EXCLUDE_TAG, ADD_TAG, HOLD_TAG,
+                 REWRITE_ACCEPT_TAG)
 # The per-card markers, and the ones that keep a card out of the drain.
-PER_CARD_TAGS = (EXCLUDE_TAG, ADD_TAG, HOLD_TAG)
+PER_CARD_TAGS = (EXCLUDE_TAG, ADD_TAG, HOLD_TAG, REWRITE_ACCEPT_TAG)
 HELD_BACK_TAGS = (EXCLUDE_TAG, HOLD_TAG)
 # Where a per-card marker naming no card is quoted, on the next proposal and in
 # the drain's record (DRE-6642) — said, never dropped.
@@ -544,24 +550,34 @@ QUEUED_LABEL = "groom-queued"
 # standing only when the pipeline's own identity wrote it.
 REWRITE_DRAFT_TAG = "groom-rewrite-draft"
 
+# The note on a card whose accepted draft the drain wrote (DRE-6667):
+# `🧺 groom-rewritten: <proposal id> from draft <draft's proposal id>`, then
+# the body the card carried before, verbatim under `## Body before the
+# rewrite`. Written on the card itself BEFORE its description changes, so a
+# rewritten body never stands without the one it replaced on record.
+REWRITTEN_TAG = "groom-rewritten"
+
 # Every marker this module writes or reads, in one tuple — the set a decline's
 # reason is defanged against (DRE-3373). A reason is CEO-written free text that
 # `propose` renders back into a Linear comment, and a Linear comment is exactly
 # where all of these are read from.
 ALL_MARKERS = (PROPOSAL_TAG, *DECISION_TAGS, *REPO_TAGS, DRAINED_TAG,
                DRAIN_REFUSED_TAG, CANCELLED_TAG, MOVED_TAG, QUEUED_TAG,
-               RELEASED_TAG, REWRITE_DRAFT_TAG, console_receipt.TAG)
+               RELEASED_TAG, REWRITE_DRAFT_TAG, REWRITTEN_TAG,
+               console_receipt.TAG)
 
 # The answering paragraph's opener (DRE-3373). A constant because the console
 # finds the answer by this string, so a rename here is a rename there.
 ANSWER_OPENER = "**Answering your decline of"
 
-# The six outcomes a card can carry in the drain's record. Data, so the render
+# The seven outcomes a card can carry in the drain's record. Data, so the render
 # and the console mirror one list rather than two spellings of it. `already
 # gone` is a card that left the lane after the proposal (DRE-4733): a ROW, and
-# never a clause on the summary line the console parses.
+# never a clause on the summary line the console parses. `rewritten` is a
+# Rewrite first card whose accepted draft the drain wrote as its body and
+# moved to Planning (DRE-6667).
 DRAIN_OUTCOMES = ("moved", "held back", "added", "cancelled", "refused",
-                  "already gone")
+                  "already gone", "rewritten")
 
 # The id a refusal names when the run could not read one at all — no approval,
 # and no proposal comment on the card either. Deliberately NOT id-shaped
@@ -2323,6 +2339,51 @@ def standing_draft(records: list[dict], digest: str) -> dict | None:
     return None
 
 
+def accepted_draft(lops, identifier: str) -> dict | None:
+    """The draft the drain writes over an accepted card's body (DRE-6667):
+    `{"draft", "draft_pid", "previous"}`, or None when there is none.
+
+    Two reads, and nothing written: the card's current description, and its
+    WHOLE thread, for the newest `groom-rewrite-draft` the pipeline's own
+    identity wrote whose `body=` digest is that description's
+    (`standing_draft`), whatever proposal id it names — so the draft was
+    written against the body it replaces. A draft-shaped comment anybody
+    else wrote is data, not a draft (`standards/untrusted-content.md`): if
+    the drain took it, the CEO's acceptance would make a stranger's text the
+    card's specification. An empty draft is no draft either — writing it
+    would blank the card."""
+    issue = (lops.gql(DESCRIPTION_QUERY, {"id": identifier})
+             or {}).get("issue") or {}
+    previous = issue.get("description") or ""
+    found = standing_draft(lops.comment_records(identifier, whole_thread=True),
+                           body_digest(previous))
+    if found is None:
+        return None
+    body = found.get("body") or ""
+    _, _, rest = body.lstrip().partition("\n")
+    draft = rest[1:] if rest.startswith("\n") else rest
+    if not draft.strip():
+        return None
+    return {"draft": draft,
+            "draft_pid": _REWRITE_DRAFT_LINE.match(body).group(1),
+            "previous": previous}
+
+
+def rewritten_note(pid: str, draft_pid: str, previous_body: str) -> str:
+    """The ONE renderer of the note on a card whose accepted draft the drain
+    writes (DRE-6667): `🧺 groom-rewritten: <proposal id> from draft <draft's
+    proposal id>`, then the body the card carried, verbatim under `## Body
+    before the rewrite`, so nothing is lost. Posted BEFORE the description
+    changes."""
+    return (f"{MARK} {REWRITTEN_TAG}: {pid} from draft {draft_pid}\n\n"
+            f"The CEO accepted the drafted rewrite of this card on proposal "
+            f"`{pid}`, so the drain wrote the draft posted under proposal "
+            f"`{draft_pid}` as the card's description. The body it replaced "
+            f"follows, verbatim.\n\n"
+            f"## Body before the rewrite\n\n"
+            f"{previous_body or '(the card had no description)'}\n")
+
+
 def already_proposed(proposal: dict, records: list[dict]) -> bool:
     """Is THIS batch already proposed on the card?
 
@@ -2662,7 +2723,9 @@ def render_proposal(proposal: dict) -> str:
           "that mentions the marker — leaves both lists where they are.")
     add("")
     # The rest of the vocabulary, at the one place the CEO is deciding
-    # (DRE-3370). A marker nobody is told about is a marker nobody writes.
+    # (DRE-3370). A marker nobody is told about is a marker nobody writes —
+    # least of all the Rewrite first acceptance (DRE-6667), which the console
+    # has no control for and the CEO types by hand.
     add(f"**To say more than yes:** `{MARK} {DECLINE_TAG}: {proposal['id']} — "
         f"<reason>` declines the batch (the reason is required); "
         f"`{MARK} {EXCLUDE_TAG}: {proposal['id']} DRE-N` keeps a card on "
@@ -2670,7 +2733,10 @@ def render_proposal(proposal: dict) -> str:
         f"`{MARK} {HOLD_TAG}: {proposal['id']} DRE-N` keeps it in Intake and "
         f"ranks it last next time (hold); "
         f"`{MARK} {ADD_TAG}: {proposal['id']} DRE-N` pulls one in, after the "
-        f"batch. One comment each, and the newest one about a card wins.")
+        f"batch; `{MARK} {REWRITE_ACCEPT_TAG}: {proposal['id']} DRE-N` accepts "
+        f"the draft posted on card DRE-N and sends it to Planning with the "
+        f"new body. One comment each, and the newest one about a card "
+        f"wins.")
     add("")
     add("## The population")
     add("")
@@ -3221,6 +3287,12 @@ def _render_rewrite(proposal: dict) -> list:
                  f"{row.get('epic') or '—'} | {_cell(row.get('title'))} | "
                  f"{_what_remains(row)} |")
     w.append("")
+    # What to type, because the console has no control for it (DRE-6667).
+    w.append(f"To accept a draft: comment `{MARK} {REWRITE_ACCEPT_TAG}: "
+             f"{proposal['id']} DRE-N` on this card, with the card's number "
+             f"in place of DRE-N; the draft is the newest `{MARK} "
+             f"{REWRITE_DRAFT_TAG}` comment on that card.")
+    w.append("")
     return w
 
 
@@ -3657,7 +3729,10 @@ def read_decisions(records: list[dict]) -> dict:
     honour, each with the reason, so the record can say what it dropped;
     `drained` is every batch a `groom-drained` record already stands for;
     `unreadable_decisions` is the first line of every per-card marker about
-    the approved batch that names no card (DRE-6642).
+    the approved batch that names no card (DRE-6642); `rewritten` maps a card
+    to the `groom-rewrite-accepted` marker that named it last (DRE-6667) —
+    the CEO's acceptance of the draft posted on it, and the newest marker
+    about a card still wins between that one and the others.
 
     The NEWEST human decision wins, for the approval as it always has and for
     the decline beside it — a thread carries several as batches are re-proposed
@@ -3734,7 +3809,7 @@ def read_decisions(records: list[dict]) -> dict:
     approved, problem = _current_decision(approvals, declines,
                                           by_pipeline_approval,
                                           approval_receipt_refused)
-    excluded, added = {}, {}
+    excluded, added, rewritten = {}, {}, {}
     for tag, pid, identifier, reason in per_card:
         if approved and pid != approved:
             ignored.append(_ignored(
@@ -3748,15 +3823,17 @@ def read_decisions(records: list[dict]) -> dict:
         # which is `standing_decisions`' question, not the drain's.
         excluded.pop(identifier, None)
         added.pop(identifier, None)
-        (excluded if tag in HELD_BACK_TAGS else added)[identifier] = {
-            "tag": tag, "reason": reason}
+        rewritten.pop(identifier, None)
+        bucket = (excluded if tag in HELD_BACK_TAGS
+                  else rewritten if tag == REWRITE_ACCEPT_TAG else added)
+        bucket[identifier] = {"tag": tag, "reason": reason}
     # A decider's per-card marker that names no card, about the approved
     # batch: quoted in the drain's record under its own heading (DRE-6642),
     # beside the `refused` row it has always had.
     unreadable = [line for p, line in unread if approved and p == approved]
     return {"approved": approved, "problem": problem, "excluded": excluded,
-            "added": added, "ignored": ignored, "drained": drained,
-            "unreadable_decisions": unreadable}
+            "added": added, "rewritten": rewritten, "ignored": ignored,
+            "drained": drained, "unreadable_decisions": unreadable}
 
 
 def standing_decisions(records: list[dict]) -> dict:
@@ -3770,7 +3847,8 @@ def standing_decisions(records: list[dict]) -> dict:
 
       * `groom-excluded` is Don't do — the card is not proposed again;
       * `groom-held` is Hold — it may be proposed again, ranked last;
-      * `groom-added` brings a card back from either.
+      * `groom-added` brings a card back from either, and so does
+        `groom-rewrite-accepted` (DRE-6667), the newest word about it.
 
     The newest marker per card wins, on whichever proposal it was written,
     and only a decider's marker counts (`_decides`, DRE-2721 / DRE-3754): the
@@ -4038,7 +4116,9 @@ def parse_proposal_comment(body: str | None) -> dict | None:
 
     Since DRE-6666 it also carries `"rewrite": [{"identifier", "position"}]`,
     read from the table under `REWRITE_HEADING` — the first two cells
-    load-bearing. No section reads as `[]`.
+    load-bearing. No section reads as `[]`. Each row also carries `repo`, its
+    fourth cell (DRE-6667), so a repo the CEO switched off holds a rewrite
+    back as it holds any other card.
     """
     text = body or ""
     marker = _PROPOSAL_LINE.match(text.strip())
@@ -4090,8 +4170,10 @@ def parse_proposal_comment(body: str | None) -> dict | None:
     for line in _section(text, REWRITE_HEADING):
         row = _BATCH_ROW.match(line.strip())
         if row:
+            cells = [c.strip() for c in _UNESCAPED_PIPE.split(line.strip())[1:-1]]
             rewrite.append({"identifier": row.group(2),
-                            "position": int(row.group(1))})
+                            "position": int(row.group(1)),
+                            "repo": cells[3] if len(cells) > 3 else ""})
     return {
         "id": marker.group(1),
         "lane": lane.group(1).strip() if lane else None,
@@ -4311,11 +4393,31 @@ def _drain(lops, *, card: str, lane: str = "Intake", to: str = DRAIN_TO) -> dict
         now = ((issue or {}).get("state") or {}).get("name")
         if now != lane:
             gone[row["identifier"]] = now or "a lane this run could not read"
+    # Each accepted rewrite's draft (DRE-6667), read before anything is
+    # written: the card's description and its whole thread, for the newest
+    # draft the pipeline wrote against that very body. None is a refused
+    # row, never a write.
+    drafts = {row["identifier"]: accepted_draft(lops, row["identifier"])
+              for row in plan["moving"]
+              if row["outcome"] == "rewritten" and row["identifier"] not in gone}
     # The same pure plan with any gone card taken out of the writes, so each
     # one's row says what happened to it and nothing is written to it — and
     # the Planning list rationed to the free slots, the rest of it queued.
     plan = _drain_plan(record, decisions, lane=lane, held=held, gone=gone,
-                       slots=slots)
+                       slots=slots, drafts=drafts)
+
+    rewritten = []
+    for row in plan["moving"] + plan["queued"]:
+        if row.get("outcome") != "rewritten":
+            continue
+        # The old body on record first, then the new body, and only then the
+        # lane below — or the queue's label. A crash leaves a card in Intake
+        # with its old body, or with the new one and a note naming the old,
+        # never a moved card nobody can explain.
+        lops.cmd_comment(row["identifier"], rewritten_note(
+            record["id"], row["draft_pid"], row["previous"]))
+        lops.set_description(row["identifier"], row["draft"])
+        rewritten.append(row["identifier"])
 
     moved = []
     for row in plan["moving"]:
@@ -4365,6 +4467,7 @@ def _drain(lops, *, card: str, lane: str = "Intake", to: str = DRAIN_TO) -> dict
               "held_back": [r["identifier"] for r in plan["held_back"]],
               "added": [r["identifier"] for r in plan["moving"]
                         if r["outcome"] == "added"],
+              "rewritten": rewritten,
               "cancelled": cancelled,
               "queued": queued,
               "slots": slots,
@@ -4379,7 +4482,8 @@ def _drain(lops, *, card: str, lane: str = "Intake", to: str = DRAIN_TO) -> dict
 
 def _drain_plan(record: dict, decisions: dict, *, lane: str, held=(),
                 gone: dict | None = None,
-                slots: tuple[int, int] | None = None) -> dict:
+                slots: tuple[int, int] | None = None,
+                drafts: dict | None = None) -> dict:
     """Both lists minus the exclusions and the held repos, plus the additions,
     and the table row every card involved gets.
 
@@ -4403,14 +4507,32 @@ def _drain_plan(record: dict, decisions: dict, *, lane: str, held=(),
     every card past that is queued (DRE-5435) — a `held back` row whose why
     is `groom-queued: place N of M`, and listed again under `queued` in place
     order. None rations nothing. The Cancel list never takes a slot.
+
+    The Rewrite first table (DRE-6667) follows the additions. A card on it
+    the CEO accepted moves as an addition does — into `moving`, after the
+    batch and the additions, with `"outcome": "rewritten"` and its draft,
+    rationed with the rest — and one with no acceptance is `held back`,
+    `rewrite not accepted`. `drafts` maps an accepted card to
+    `accepted_draft`'s answer: None there is a `refused` row, `no draft of
+    the pipeline's own for the card's current body`, and no write. `drafts`
+    None is the first, unrationed pass, before any draft is read: every
+    accepted card is taken to have one, so its lane is read. An acceptance
+    naming a card not on the table is ignored, as a stray exclusion is.
     """
     excluded, added = decisions["excluded"], dict(decisions["added"])
+    accepted = decisions.get("rewritten") or {}
+    to_rewrite = record.get("rewrite") or []
+    on_rewrite = {row["identifier"] for row in to_rewrite}
     gone = gone or {}
     switched_off = set(held)
     in_batch = {row["identifier"] for row in record["batch"]}
     to_cancel = record.get("cancel") or []
-    on_a_list = in_batch | {row["identifier"] for row in to_cancel}
+    on_a_list = (in_batch | {row["identifier"] for row in to_cancel}
+                 | on_rewrite)
     ignored = list(decisions["ignored"])
+    # Accepted cards with no draft to write — counted with the refused
+    # decisions, but each already has its own row.
+    no_draft: list[dict] = []
 
     # An exclusion can only take a card OFF a list. One naming a card on
     # neither holds nothing back — and reading it as a decision would let a
@@ -4421,6 +4543,14 @@ def _drain_plan(record: dict, decisions: dict, *, lane: str, held=(),
                 mark["tag"],
                 f"`{mark['tag']}` names a card on neither approved list, so "
                 f"there was nothing to hold back", identifier))
+    # An acceptance can only take a card off the Rewrite first table: one
+    # naming any other card has no draft the CEO was shown to accept.
+    for identifier, mark in accepted.items():
+        if identifier not in on_rewrite:
+            ignored.append(_ignored(
+                mark["tag"],
+                f"`{mark['tag']}` names a card not on the Rewrite first "
+                f"table, so there was no draft to accept", identifier))
 
     moving, cancelling, held_back, queued, rows = [], [], [], [], []
 
@@ -4488,11 +4618,51 @@ def _drain_plan(record: dict, decisions: dict, *, lane: str, held=(),
         rows.append({"identifier": identifier, "outcome": "added",
                      "why": _marker_why(mark)})
 
+    for row in to_rewrite:
+        identifier = row["identifier"]
+        if identifier in added:
+            # Its row is the addition's, written above: the CEO's newest word
+            # about it moved it with the body it has.
+            continue
+        if kept(row):
+            continue
+        if identifier not in accepted:
+            held_back.append(row)
+            rows.append({"identifier": identifier, "outcome": "held back",
+                         "why": "rewrite not accepted"})
+            continue
+        if left(identifier):
+            continue
+        draft = drafts.get(identifier) if drafts is not None else {}
+        if draft is None:
+            no_draft.append(_ignored(
+                accepted[identifier]["tag"],
+                "no draft of the pipeline's own for the card's current body",
+                identifier))
+            rows.append({"identifier": identifier, "outcome": "refused",
+                         "why": no_draft[-1]["why"]})
+            continue
+        # No position: the card was never on the Planning list, so its
+        # `groom-moved` note says what an addition's says.
+        writing = {**row, **draft, "position": None, "outcome": "rewritten"}
+        if full(writing):
+            continue
+        moving.append(writing)
+        rows.append({"identifier": identifier, "outcome": "rewritten",
+                     "why": f"proposal `{record['id']}` Rewrite first "
+                            f"position {row['position']} — draft "
+                            f"`{draft.get('draft_pid')}`"})
+
     places = {row["identifier"]: n for n, row in enumerate(queued, 1)}
+    rewriting = {row["identifier"]: row for row in queued
+                 if row.get("outcome") == "rewritten"}
     for row in rows:
         if row["identifier"] in places and row["outcome"] == "held back":
             row["why"] = (f"{QUEUED_TAG}: place {places[row['identifier']]} "
                           f"of {len(queued)}")
+            if row["identifier"] in rewriting:
+                row["why"] += (f" — rewritten from draft "
+                               f"`{rewriting[row['identifier']]['draft_pid']}`")
 
     for row in to_cancel:
         identifier = row["identifier"]
@@ -4517,7 +4687,7 @@ def _drain_plan(record: dict, decisions: dict, *, lane: str, held=(),
         rows.append({"identifier": mark["identifier"] or "—",
                      "outcome": "refused", "why": mark["why"]})
     return {"moving": moving, "cancelling": cancelling, "held_back": held_back,
-            "queued": queued, "rows": rows, "ignored": ignored,
+            "queued": queued, "rows": rows, "ignored": ignored + no_draft,
             "lane": lane}
 
 
@@ -4598,12 +4768,22 @@ def drained_record(result: dict) -> str:
     and not of rows, because a refused decision about a card that moved anyway
     is named on that card's own row: no card gets two. A card that had
     already left the lane is an `already gone` row and is counted on no clause.
+
+    `rewritten: N`, right after `moved:` and ONLY on a drain that wrote an
+    accepted Rewrite first draft (DRE-6667), counts the cards whose body this
+    drain wrote: each moved one is a `rewritten` row, and one past the free
+    slots is a queued `held back` row whose new body is already written. A
+    drain that rewrote nothing writes the line exactly as before.
     """
     pid = result["proposal"]
     rows = result["rows"]
     counts = Counter(row["outcome"] for row in rows)
+    # Only on a drain that rewrote a card (DRE-6667), so every other drain's
+    # line reads byte for byte as before.
+    wrote = (f"rewritten: {len(result['rewritten'])} · "
+             if result.get("rewritten") else "")
     w = [f"{MARK} {DRAINED_TAG}: {pid}", "",
-         f"moved: {counts['moved']} · held back: {counts['held back']} · "
+         f"moved: {counts['moved']} · {wrote}held back: {counts['held back']} · "
          f"added: {counts['added']} · cancelled: {counts['cancelled']} · "
          f"refused: {len(result['refused'])} → "
          f"{result['to']} at {dead_run.pacific(datetime.now(timezone.utc))}",
