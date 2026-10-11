@@ -219,9 +219,15 @@ def test_an_undeclared_group_is_a_key_error_naming_it():
     raw, prices = _fixture()
     with pytest.raises(KeyError, match="product-design"):
         mc.caution_for(raw, prices, "product-design", OPUS_55)
-    # And on the committed file, whatever it holds.
-    with pytest.raises(KeyError, match="product-design"):
-        mc.caution_for(_raw(), mf.declared_prices(), "product-design", OPUS_55)
+    # And on the committed file, whatever it holds — a save may have added
+    # `product-design` itself since DRE-6834, so the name is one it does not.
+    committed = _raw()
+    name, n = "product-design", 1
+    while name in committed["kinds"]:
+        n += 1
+        name = f"product-design-{n}"
+    with pytest.raises(KeyError, match=name):
+        mc.caution_for(committed, mf.declared_prices(), name, OPUS_55)
 
 
 def test_the_nine_cautioned_pairs_of_2026_10_10():
