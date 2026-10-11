@@ -118,12 +118,11 @@ class TheClassIsItsOwnTest(LogFileMixin, unittest.TestCase):
         # retried once, so reading one as the other loses the retry — and the
         # marker would tell the sweep to re-enter a stage once a wall that was
         # never hit comes down. The log carries the echoed "monthly spend
-        # limit" line every real planner log has (DRE-6974), so the stall is
-        # what decides it — not the absence of the words.
+        # limit" line every real planner log has (DRE-6974). Since DRE-6985 an
+        # echoed script line is not the run speaking, so the line alone reads
+        # None too.
         log = stalled_log(extra=ECHOED_SPEND_LIMIT_LINE)
-        self.assertEqual("claude", dead_run.limit_kind(without_the_stall(log)),
-                         "the echoed line alone must read as a wall, or this "
-                         "test passes for the wrong reason")
+        self.assertIsNone(dead_run.limit_kind(without_the_stall(log)))
         self.assertIsNone(dead_run.limit_kind(log))
 
     def test_a_stalled_REVIEW_is_not_read_as_a_rate_limit(self):
@@ -287,11 +286,12 @@ class AStallIsNeverAUsageLimitTest(LogFileMixin, unittest.TestCase):
         # no card to mark.
         self.assertEqual("DRE-6936", medic_retry.card_for_run("main", REAL_STALL))
 
-    def test_without_its_stall_line_the_log_reads_as_a_claude_wall(self):
-        # The defect, pinned: the echoed comment alone reads `claude`. If this
-        # ever stops holding, the test below stops proving anything.
+    def test_without_its_stall_line_the_log_is_no_claude_wall(self):
+        # The echoed comment alone read `claude` until DRE-6985: an echoed
+        # script line is not the run speaking, so without its stall line the
+        # log carries no wall at all.
         self.assertIsNone(stream_watchdog.stall_from_log(without_the_stall(REAL_STALL)))
-        self.assertEqual("claude", dead_run.limit_kind(without_the_stall(REAL_STALL)))
+        self.assertIsNone(dead_run.limit_kind(without_the_stall(REAL_STALL)))
 
     def test_the_stalled_run_is_not_a_limit(self):
         self.assertIsNotNone(stream_watchdog.stall_from_log(REAL_STALL))
