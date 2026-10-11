@@ -12,8 +12,15 @@ the mirror). bureau-pipeline #871 is the shape: `main` gained
 The rule reads a payload the fork refresh does not: what `main` gained since
 the ANCHOR run was created — the head's newest `pull_request` run at a
 non-review workflow path, `merge_gate.last_test_run`. The gate reads `main`'s
-tip at that moment (`commits?sha=main&until=<created_at>`) and the compare
-from it to `main`, and hands that to the decision as `--since-run-file`.
+tip at that moment — walked on `main`'s first-parent line by `merge_gate.py
+tip-at` over the commit listing, 100 a page and at most three pages
+(DRE-6966) — and the compare from it to `main`, and hands that to the
+decision as `--since-run-file`.
+
+The listing here is the shape that broke bureau-pipeline #1032: `main`'s tip
+is a merge made after the run began whose side branch was written before it,
+so the newest-dated commit before the run (the `until=` read DRE-6966
+retired) is SIDE, and `main`'s tip at the run is TIP_THEN.
 
 Three halves:
 
@@ -57,6 +64,7 @@ REFRESHED_HEAD = "871b22ce0de5ea1b2c3d4e5f60718293a4b5c6d7"
 MERGE_BASE = "86fb0115a3b1e0f2c3d4e5f60718293a4b5c6d7e"
 TIP_THEN = "8700c0de5ea1b2c3d4e5f60718293a4b5c6d7e8f"
 TIP = "8775c0de5ea1b2c3d4e5f60718293a4b5c6d7e8f"
+SIDE = "8710b4a9c5ea1b2c3d4e5f60718293a4b5c6d7e8f"
 BRANCH = "agent/DRE-6801-planning-escalation-answer"
 CARD = "DRE-6801"
 REPO = "dreadnought-foundry/bureau-pipeline"
@@ -89,6 +97,32 @@ def run(path, event, created_at, suite, status="completed"):
 
 
 TEST_RUN = run(TESTS_YML, "pull_request", T_NEWEST, 1)
+
+
+def commit(sha, date, *parents):
+    """One entry of GitHub's commit listing for `main`."""
+    return {"sha": sha, "commit": {"committer": {"date": date}},
+            "parents": [{"sha": p} for p in parents]}
+
+
+# `main` at TIP, as GitHub lists it: TIP merged a branch after the newest
+# test run began, and the branch's commit, SIDE, was written before it.
+MAIN_LISTING = [
+    commit(TIP, "2026-10-10T20:05:00Z", TIP_THEN, SIDE),
+    commit(SIDE, "2026-10-10T19:20:00Z", MERGE_BASE),
+    commit(TIP_THEN, "2026-10-10T19:10:00Z", MERGE_BASE),
+    commit(MERGE_BASE, "2026-10-10T16:00:00Z", "8600" + "0" * 36),
+]
+
+
+def first_parent_chain(count, start):
+    """`count` merges into `main`, each the first parent of the one before,
+    all dated after every test run here; the last one's first parent is
+    the sha `start` names."""
+    shas = [f"{n + 1:040x}" for n in range(count)] + [start]
+    return [commit(shas[n], f"2026-10-11T{n // 3600:02d}:{n // 60 % 60:02d}:"
+                            f"{n % 60:02d}Z", shas[n + 1])
+            for n in range(count)]
 
 
 def evaluate_step() -> dict:
@@ -205,6 +239,25 @@ class WiringTest(unittest.TestCase):
             "--workflow-runs-file /tmp/workflow-runs.json --review-workflows "
             '"$REVIEW_WORKFLOWS"', self.body)
 
+    def test_the_tip_is_no_longer_the_newest_dated_commit_before_the_run(self):
+        """DRE-6966: the `until=`, `per_page=1` read answered a side branch's
+        commit whenever a pull request merged after the run began was
+        written before it (bureau-pipeline #1032)."""
+        self.assertNotIn("until=", self.body)
+        self.assertNotIn("per_page=1\"", self.body)
+        self.assertNotIn("per_page=1&", self.body)
+
+    def test_the_tip_is_asked_of_merge_gate_tip_at(self):
+        self.assertIn(
+            "python3 .bureau-pipeline/scripts/merge_gate.py tip-at "
+            '--commits-file /tmp/main-commits.json --at "$ANCHOR"', self.body)
+        self.assertIn(
+            'commits?sha=$BASE&per_page=100&page=$PAGE', self.body)
+        self.assertIn("for PAGE in 1 2 3; do", self.body)
+        tip = self.body[self.body.find("TIP_THEN=$("):]
+        tip = tip[:tip.find("\n")]
+        self.assertIn("merge_gate.py tip-at", tip)
+
     def test_the_header_names_the_third_exception(self):
         header = step_shell.workflow_source(WORKFLOW).split("\nname:", 1)[0]
         flat = " ".join(header.replace("#", " ").split())
@@ -304,10 +357,12 @@ if args[0] == "api":
             fail()
         emit({"total_count": len(fx["workflow_runs"]),
               "workflow_runs": fx["workflow_runs"]})
-    if "/commits?" in path and "until=" in path:
-        if fx["tip_then_fails"]:
+    if "/commits?sha=" in path:
+        if fx["listing_fails"]:
             fail()
-        emit([{"sha": fx["tip_then"]}])
+        page = int(path.split("page=")[-1]) if "&page=" in path else 1
+        pages = fx["main_pages"]
+        emit(pages[page - 1] if page <= len(pages) else [])
     if "/commits" in path:
         emit(fx["pr_commits"])
     if "/issues/" in path and "/comments" in path:
@@ -386,6 +441,10 @@ class ShippedStepResult:
         return [c for c in self.calls if any("until=" in a for a in c)]
 
     @property
+    def listing_reads(self):
+        return [c for c in self.calls if any("/commits?sha=" in a for a in c)]
+
+    @property
     def since_run_reads(self):
         return [c for c in self.calls
                 if any(f"/compare/{TIP_THEN}..." in a for a in c)]
@@ -393,6 +452,10 @@ class ShippedStepResult:
     @property
     def last_test_run_calls(self):
         return [c for c in self.gate_calls if c[:1] == ["last-test-run"]]
+
+    @property
+    def tip_at_calls(self):
+        return [c for c in self.gate_calls if c[:1] == ["tip-at"]]
 
     @property
     def advances(self):
@@ -423,7 +486,8 @@ def declaration(recheck=True, paths=None):
 
 
 def run_shipped_step(*, declared=None, workflow_runs=None, since_run=SINCE_RUN,
-                     tip_then_fails=False, pr_files=None, main_files=None,
+                     listing_fails=False, main_pages=None,
+                     pr_files=None, main_files=None,
                      behind_by=4, head=HEAD, seed_comments=None,
                      pr_commits=None, verdict=None, refresh_stub=None,
                      runs_unreadable=False) -> ShippedStepResult:
@@ -451,7 +515,8 @@ def run_shipped_step(*, declared=None, workflow_runs=None, since_run=SINCE_RUN,
         "base_advance": {"status": "ahead", "ahead_by": behind_by,
                          "files": main_files or [entry("README.md")]},
         "tip_then": TIP_THEN,
-        "tip_then_fails": tip_then_fails,
+        "main_pages": [MAIN_LISTING] if main_pages is None else main_pages,
+        "listing_fails": listing_fails,
         "since_run": since_run,
         "pr_commits": pr_commits or [{"sha": head,
                                       "commit": {"message": "feat"}}],
@@ -555,7 +620,7 @@ def todays_calls(*, base_advance):
 class SwitchOffCostsNothingTest(unittest.TestCase):
     """Criterion 1: with no declaration, or one without
     `"recheck_new_tests": true`, the gate makes today's `gh` calls and no
-    others — no `last-test-run`, no `commits?until`, no second compare."""
+    others — no `last-test-run`, no commit listing, no second compare."""
 
     def assert_today(self, result, *, base_advance):
         self.assertEqual(result.proc.returncode, 0, result.explain())
@@ -563,8 +628,10 @@ class SwitchOffCostsNothingTest(unittest.TestCase):
                          todays_calls(base_advance=base_advance),
                          result.explain())
         self.assertEqual(result.until_reads, [])
+        self.assertEqual(result.listing_reads, [])
         self.assertEqual(result.since_run_reads, [])
         self.assertEqual(result.last_test_run_calls, [], result.explain())
+        self.assertEqual(result.tip_at_calls, [], result.explain())
         self.assertEqual(result.since_run, {}, result.explain())
 
     def test_no_declaration(self):
@@ -584,24 +651,29 @@ class SwitchOffCostsNothingTest(unittest.TestCase):
         result = run_shipped_step(declared=declaration(), behind_by=0)
         self.assertEqual(result.last_test_run_calls, [], result.explain())
         self.assertEqual(result.until_reads, [])
+        self.assertEqual(result.listing_reads, [])
         self.assertEqual(result.since_run_reads, [])
         self.assertEqual(len(result.merges), 1, result.explain())
 
 
+LISTING_PAGE_1 = ["api", f"repos/{REPO}/commits?sha=main&per_page=100&page=1"]
+
+
 class TheAnchorIsTheLastTestRunTest(unittest.TestCase):
     """Criterion 3: with the key on and the branch behind, exactly two more
-    reads — `main`'s tip at the anchor's `created_at`, and the compare from
-    that tip to `main` — and the `until` read carries the anchor's time."""
+    reads — `main`'s commit listing, from which `merge_gate.py tip-at` walks
+    the tip at the anchor's `created_at`, and the compare from that tip to
+    `main`. The tip is TIP_THEN on the first-parent line, never SIDE, the
+    newest-dated commit before the run (DRE-6966)."""
 
-    def until_of(self, result):
-        self.assertEqual(len(result.until_reads), 1, result.explain())
-        call = result.until_reads[0]
-        path = next(a for a in call if "until=" in a)
+    def at_of(self, result):
+        self.assertEqual(len(result.tip_at_calls), 1, result.explain())
+        call = result.tip_at_calls[0]
         self.assertEqual(
-            path, f"repos/{REPO}/commits?sha=main&until="
-                  f"{path.split('until=', 1)[1].split('&', 1)[0]}"
-                  f"&per_page=1", call)
-        return path.split("until=", 1)[1].split("&", 1)[0]
+            call[:4], ["tip-at", "--commits-file", "/tmp/main-commits.json",
+                       "--at"], call)
+        self.assertEqual(len(call), 5, call)
+        return call[4]
 
     def assert_two_extra_reads(self, result):
         # Every read beyond today's, leaving out the refresh's own writes:
@@ -612,10 +684,12 @@ class TheAnchorIsTheLastTestRunTest(unittest.TestCase):
                  and not any(f"/issues/{PR}/comments" in a for a in c)]
         self.assertEqual(
             extra,
-            [["api", f"repos/{REPO}/commits?sha=main&until="
-                     f"{self.until_of(result)}&per_page=1"],
+            [LISTING_PAGE_1,
              ["api", f"repos/{REPO}/compare/{TIP_THEN}...main"]],
             result.explain())
+        self.assertEqual(result.until_reads, [], result.explain())
+        self.assertNotIn(["api", f"repos/{REPO}/compare/{SIDE}...main"],
+                         result.calls)
         self.assertEqual(result.since_run, SINCE_RUN)
         self.assertEqual(len(result.last_test_run_calls), 1)
         self.assertEqual(
@@ -628,21 +702,78 @@ class TheAnchorIsTheLastTestRunTest(unittest.TestCase):
             run(TESTS_YML, "pull_request", T_SECOND, 2),
             run(TESTS_YML, "pull_request", T_NEWEST, 1),
             run(TESTS_YML, "pull_request", T_FIRST, 3)])
-        self.assertEqual(self.until_of(result), T_NEWEST)
+        self.assertEqual(self.at_of(result), T_NEWEST)
         self.assert_two_extra_reads(result)
 
     def test_a_later_review_run_is_not_the_anchor(self):
         for review in (PR_REVIEW, QA_REVIEW):
             result = run_shipped_step(declared=declaration(), workflow_runs=[
                 TEST_RUN, run(review, "pull_request", T_REVIEW, 9)])
-            self.assertEqual(self.until_of(result), T_NEWEST, review)
+            self.assertEqual(self.at_of(result), T_NEWEST, review)
             self.assert_two_extra_reads(result)
 
     def test_a_later_push_run_is_not_the_anchor(self):
         result = run_shipped_step(declared=declaration(), workflow_runs=[
             TEST_RUN, run(TESTS_YML, "push", T_PUSH, 8)])
-        self.assertEqual(self.until_of(result), T_NEWEST)
+        self.assertEqual(self.at_of(result), T_NEWEST)
         self.assert_two_extra_reads(result)
+
+
+class TheListingIsReadAPageAtATimeTest(unittest.TestCase):
+    """DRE-6966: 100 commits a page, a next page only while the walk has not
+    reached the anchor and the last page was full, and never a fourth."""
+
+    def test_a_second_page_when_the_first_does_not_reach_the_run(self):
+        page_1 = [commit(TIP, "2026-10-11T23:00:00Z", f"{1:040x}")]
+        page_1 += first_parent_chain(99, TIP_THEN)
+        page_2 = MAIN_LISTING[2:]
+        result = run_shipped_step(declared=declaration(),
+                                  main_pages=[page_1, page_2])
+        self.assertEqual(
+            result.listing_reads,
+            [LISTING_PAGE_1,
+             ["api", f"repos/{REPO}/commits?sha=main&per_page=100&page=2"]],
+            result.explain())
+        self.assertEqual(len(result.tip_at_calls), 2, result.explain())
+        self.assertEqual(result.since_run_reads,
+                         [["api", f"repos/{REPO}/compare/{TIP_THEN}...main"]])
+        self.assertEqual(result.since_run, SINCE_RUN)
+
+    def test_three_full_pages_and_no_tip_waits(self):
+        chain = first_parent_chain(300, "8600" + "0" * 36)
+        result = run_shipped_step(
+            declared=declaration(),
+            main_pages=[chain[:100], chain[100:200], chain[200:], chain[:1]])
+        self.assertEqual(
+            [c[1].rsplit("page=", 1)[1] for c in result.listing_reads],
+            ["1", "2", "3"], result.explain())
+        self.assertEqual(result.since_run, {}, result.explain())
+        self.assertEqual(result.since_run_reads, [], result.explain())
+        self.assertEqual(result.merges, [], result.explain())
+        self.assertIn("fork-refresh: decision=wait", result.proc.stdout)
+
+
+class ATipNotFoundWaitsTest(unittest.TestCase):
+    """`tip-at` answering `sha=none` leaves `/tmp/since-run.json` as `{}`,
+    which the decision answers `wait`: the gate never merges on a tip it
+    could not find. A short page is the whole of `main`, so no second read."""
+
+    def test_sha_none_leaves_the_since_run_record_empty(self):
+        result = run_shipped_step(declared=declaration(), main_pages=[
+            [commit(TIP, "2026-10-10T20:05:00Z", TIP_THEN)]])
+        self.assertEqual(result.proc.returncode, 0, result.explain())
+        self.assertEqual(result.listing_reads, [LISTING_PAGE_1])
+        self.assertEqual(len(result.tip_at_calls), 1, result.explain())
+        self.assertEqual(result.since_run, {}, result.explain())
+        self.assertEqual(result.since_run_reads, [], result.explain())
+        self.assertEqual(
+            [c for c in result.calls if any("/compare/" in a for a in c)
+             and c[1] not in (f"repos/{REPO}/compare/main...{HEAD}",
+                              f"repos/{REPO}/compare/{MERGE_BASE}...main")],
+            [], result.explain())
+        self.assertEqual(result.merges, [], result.explain())
+        self.assertEqual(result.puts, [], result.explain())
+        self.assertIn("fork-refresh: decision=wait", result.proc.stdout)
 
 
 class NoTestRunMergesAsTodayTest(unittest.TestCase):
@@ -660,6 +791,8 @@ class NoTestRunMergesAsTodayTest(unittest.TestCase):
             self.assertEqual(result.since_run, {"no_test_run": True},
                              result.explain())
             self.assertEqual(result.until_reads, [], result.explain())
+            self.assertEqual(result.listing_reads, [], result.explain())
+            self.assertEqual(result.tip_at_calls, [], result.explain())
             self.assertEqual(result.since_run_reads, [], result.explain())
             self.assertEqual(len(result.merges), 1, result.explain())
             self.assertEqual(result.puts, [], result.explain())
@@ -668,7 +801,7 @@ class NoTestRunMergesAsTodayTest(unittest.TestCase):
 
 
 class AFailedReadWaitsTest(unittest.TestCase):
-    """Criterion 4, second half: a failed `commits?until` or compare read
+    """Criterion 4, second half: a failed commit-listing or compare read
     writes `{}`, and the gate exits without merging or updating. An
     unreadable listing never reaches the block: condition 1 waits on it."""
 
@@ -679,9 +812,12 @@ class AFailedReadWaitsTest(unittest.TestCase):
         self.assertEqual(result.advances, [], result.explain())
         self.assertEqual(result.new_tests_notes, [])
 
-    def test_a_failed_until_read(self):
-        result = run_shipped_step(declared=declaration(), tip_then_fails=True)
+    def test_a_failed_listing_read(self):
+        result = run_shipped_step(declared=declaration(), listing_fails=True)
         self.assert_waited(result)
+        self.assertEqual(result.listing_reads, [LISTING_PAGE_1],
+                         result.explain())
+        self.assertEqual(result.tip_at_calls, [], result.explain())
         self.assertEqual(result.since_run, {}, result.explain())
         self.assertEqual(result.since_run_reads, [], result.explain())
         self.assertIn("fork-refresh: decision=wait", result.proc.stdout)
@@ -689,14 +825,20 @@ class AFailedReadWaitsTest(unittest.TestCase):
     def test_a_failed_compare_read(self):
         result = run_shipped_step(declared=declaration(), since_run=None)
         self.assert_waited(result)
+        self.assertEqual(result.listing_reads, [LISTING_PAGE_1],
+                         result.explain())
         self.assertEqual(result.since_run, {}, result.explain())
-        self.assertEqual(len(result.since_run_reads), 1, result.explain())
+        self.assertEqual(
+            result.since_run_reads,
+            [["api", f"repos/{REPO}/compare/{TIP_THEN}...main"]],
+            result.explain())
         self.assertIn("fork-refresh: decision=wait", result.proc.stdout)
 
     def test_an_unreadable_listing(self):
         result = run_shipped_step(declared=declaration(), runs_unreadable=True)
         self.assert_waited(result)
         self.assertEqual(result.until_reads, [], result.explain())
+        self.assertEqual(result.listing_reads, [], result.explain())
         self.assertIn("decision=wait", result.proc.stdout)
 
 
