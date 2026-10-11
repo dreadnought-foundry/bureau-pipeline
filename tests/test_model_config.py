@@ -51,8 +51,10 @@ AGENTS = ROOT / "agents.yaml"
 WORKFLOWS = sorted(glob.glob(str(ROOT / ".github" / "workflows" / "*.yml")))
 
 sys.path.insert(0, str(ROOT / "scripts"))
+sys.path.insert(0, str(ROOT / "tests"))
 
 import model_fallback as mf  # noqa: E402
+from model_config_text import without_projects  # noqa: E402
 
 OPUS = "claude-opus-5"
 SONNET = "claude-sonnet-4-6"
@@ -501,6 +503,10 @@ class GeneratedMirrorTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             tree = _copy_tree(Path(td))
             path = tree / "config" / "models.yaml"
+            # Start from no exceptions, whatever the console has put in the
+            # live map, then add one.
+            path.write_text(without_projects(path.read_text()))
+            self.assertEqual(_run_sync(tree).returncode, 0)
             text = path.read_text()
             self.assertIn("\nprojects: {}\n", text)
             path.write_text(text.replace(
