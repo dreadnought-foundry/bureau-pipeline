@@ -24,6 +24,7 @@ import ast
 import http.server
 import json
 import os
+import re
 import socket
 import stat
 import subprocess
@@ -46,6 +47,12 @@ except ImportError as exc:  # pragma: no cover — the message is the point
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "scripts" / "proof_session.py"
+BRIEF = ROOT / "briefs" / "proof.md"
+
+sys.path.insert(0, str(ROOT / "scripts"))
+
+import proof_local  # noqa: E402
+import proof_session  # noqa: E402
 
 RELEASE = {"surfaces": {"web": {"tag_series": ["web-v*"], "paths": []}}}
 PAGES = {"home": "/", "items": "/items"}
@@ -55,10 +62,14 @@ FORM = {"username": "input[name=user]", "password": "input[name=pass]",
 USERNAME = "proof-bot-user-7f3a"
 PASSWORD = "pw-never-printed-91c2"
 IDENTITY = "proof-bot"
-#: The `session` kind (DRE-6536): the declared entries, and the one value the
-#: stub's session file carries for them.
-SESSION = {"local_storage": [{"key": "app_id_token", "from": "id_token"}]}
+#: The `session` kind (DRE-6536): the declared entries, and the values the
+#: stub's session file carries for them. The names are placeholders, never a
+#: product's (DRE-6818).
+SESSION = {"local_storage": [{"key": "app_id_token", "from": "id_token"}],
+           "cookies": [{"name": "app_session", "from": "session_cookie"}]}
 TOKEN = "tok-never-printed-4d1e"
+COOKIE_TOKEN = "ck-never-printed-82b0"
+SECRETS = (TOKEN, COOKIE_TOKEN)
 STATUS = "hosted sign-in ration: 1 of 5 spent today (2026-10-10 PT), 4 remaining"
 REFUSAL = "hosted sign-in ration: 5 of 5 spent today (2026-10-10 PT), 0 remaining"
 NOISE = ("added 212 packages, and audited 213 packages in 3s",
@@ -87,9 +98,11 @@ data = {"username": %(username)r, "password": %(password)r,
         "ration": {"spent": 1, "cap": 5, "remaining": 4, "date": "2026-10-10"}}
 if mode.startswith("session"):
     del data["username"], data["password"]
-    data["session"] = {"id_token": %(token)r}
+    data["session"] = {"id_token": %(token)r, "session_cookie": %(cookie)r}
     if mode.startswith("session-number"):
         data["session"]["id_token"] = 7
+    if mode.startswith("session-short-"):
+        del data["session"][mode[len("session-short-"):]]
 for key in mode.split(",")[1:]:
     data.pop(key)
 file_mode = 0o644 if mode.startswith("wide") else 0o600
@@ -101,7 +114,7 @@ print(%(status)r)
 print("")
 """ % {"noise": NOISE, "stderr": STDERR_LINE, "refusal": REFUSAL,
        "username": USERNAME, "password": PASSWORD, "identity": IDENTITY,
-       "status": STATUS, "token": TOKEN}
+       "status": STATUS, "token": TOKEN, "cookie": COOKIE_TOKEN}
 
 #: Stands in for the venv's interpreter: records the argv it was handed.
 REEXEC_STUB = """\
@@ -109,6 +122,16 @@ REEXEC_STUB = """\
 import json, sys
 with open({record!r}, "w", encoding="utf-8") as fh:
     json.dump(sys.argv, fh)
+"""
+
+#: Stands in for the venv's interpreter and IS one: records the argv it was
+#: handed, one JSON line per call, then runs the real interpreter with it.
+RECORDING_PYTHON = """\
+#!{python}
+import json, os, sys
+with open({record!r}, "a", encoding="utf-8") as fh:
+    fh.write(json.dumps(sys.argv) + "\\n")
+os.execv({python!r}, [{python!r}, *sys.argv[1:]])
 """
 
 
@@ -119,6 +142,8 @@ with open({record!r}, "w", encoding="utf-8") as fh:
 APP_HTML = b"""<!doctype html><title>stub app</title>
 <h1 id="ready">signed in</h1>
 <script>
+const planted = localStorage.getItem('app_id_token');
+if (planted !== null) fetch('/api/seen', {method: 'POST', body: planted});
 fetch('/api/items?token=secret-123#frag').then(r => r.json()).then(j => {
   const p = document.createElement('p');
   p.id = 'loaded';
@@ -136,11 +161,15 @@ LOGIN_HTML = b"""<!doctype html><title>stub sign-in</title>
 
 class Site:
     """The stub app and its stub sign-in. `requests` is every request the
-    server saw (method and raw path), `submits` every sign-in form posted."""
+    server saw (method and raw path), `cookies` the same requests' `Cookie`
+    headers, `submits` every sign-in form posted, and `storage_reads` every
+    value the page's own script read from `localStorage` and posted back."""
 
     def __init__(self):
         self.requests: list = []
+        self.cookies: list = []
         self.submits: list = []
+        self.storage_reads: list = []
         site = self
 
         class Handler(http.server.BaseHTTPRequestHandler):
@@ -153,10 +182,13 @@ class Site:
                 self.wfile.write(body)
 
             def _signed_in(self):
-                return "session=ok" in (self.headers.get("Cookie") or "")
+                cookie = self.headers.get("Cookie") or ""
+                return ("session=ok" in cookie
+                        or f"app_session={COOKIE_TOKEN}" in cookie)
 
             def do_GET(self):
                 site.requests.append(("GET", self.path))
+                site.cookies.append(("GET", self.path, self.headers.get("Cookie") or ""))
                 path = urllib.parse.urlsplit(self.path).path
                 if path in PAGES.values():
                     if self._signed_in():
@@ -176,7 +208,12 @@ class Site:
 
             def do_POST(self):
                 site.requests.append(("POST", self.path))
+                site.cookies.append(("POST", self.path, self.headers.get("Cookie") or ""))
                 body = self.rfile.read(int(self.headers.get("Content-Length") or 0))
+                if self.path == "/api/seen":
+                    site.storage_reads.append(body.decode())
+                    self._send(204)
+                    return
                 site.submits.append(dict(urllib.parse.parse_qsl(body.decode())))
                 self._send(302, headers=[("Location", "/callback?code=abc123&state=xyz")])
 
@@ -293,6 +330,27 @@ class Run:
                        "identity": IDENTITY,
                        "ration": {"spent": 1, "cap": 5, "remaining": 4,
                                   "date": "2026-10-10"}}, fh)
+
+    def recording_env(self, **extra) -> dict:
+        """`env()` with `$PROOF_PYTHON` a real interpreter that records every
+        argv it is handed in `self.reexec_record`."""
+        self.reexec_record = self.records / "reexec-argv.jsonl"
+        python = self.tmp / "venv" / "bin" / "python"
+        python.parent.mkdir(parents=True, exist_ok=True)
+        python.write_text(RECORDING_PYTHON.format(python=sys.executable,
+                                                  record=str(self.reexec_record)),
+                          encoding="utf-8")
+        python.chmod(0o755)
+        return self.env(PROOF_PYTHON=str(python), **extra)
+
+    def reexec_argv(self) -> list:
+        if not self.reexec_record.exists():
+            return []
+        return [json.loads(line) for line in
+                self.reexec_record.read_text(encoding="utf-8").splitlines()]
+
+    def marker(self) -> Path:
+        return self.login_file.with_name(self.login_file.name + ".ran")
 
     def screenshot(self, key, *extra, env=None):
         png = self.shots / f"{key}.png"
@@ -579,24 +637,221 @@ def test_signed_in_with_no_login_file_and_no_state_never_signs_in_by_itself(
     assert not run.state.exists()
 
 
-def test_signed_in_with_a_session_declaration_refuses_before_any_page(site, tmp_path):
-    # Planting a declared session is the follow-up to DRE-6536; until it
-    # lands the step names the kind and opens nothing, never a KeyError.
-    run = Run(tmp_path, url=site.url)
-    run.declare(mode="session", kind="session")
-    assert run.run("login").returncode == 0
+# The `session` kind in the browser (DRE-6818): `screenshot --signed-in`
+# plants the declared entries from the login file's `session` values on the
+# local run's own origin, before the page makes its first request, and fills
+# no form. No value it plants is ever said, recorded or put on a command line.
 
-    done, png, sidecar = run.screenshot("home", "--signed-in")
+def _said_nothing_secret(run, *texts, reexecuted=True) -> None:
+    argv = run.reexec_argv()
+    if reexecuted:
+        assert argv, "the run was never re-executed under $PROOF_PYTHON"
+    for text in (*texts, json.dumps(argv)):
+        for secret in SECRETS:
+            assert secret not in text, secret
+
+
+def _session_run(tmp_path, site, mode="session"):
+    run = Run(tmp_path, url=site.url)
+    run.declare(mode=mode, kind="session")
+    env = run.recording_env()
+    login = run.run("login", env=env)
+    assert login.returncode == 0, login.stdout + login.stderr
+    return run, env, login
+
+
+def test_signed_in_plants_a_declared_session_and_fills_no_form(
+        chromium, site, tmp_path):
+    run, env, login = _session_run(tmp_path, site)
+
+    done, png, sidecar = run.screenshot("home", "--signed-in", "--wait-for", "#loaded",
+                                        env=env)
+
+    assert done.returncode == 0, done.stdout + done.stderr
+    assert done.stdout == (f"proof-screenshot: home — {site.url}/ at {COMMIT[:7]}, "
+                           f"{png}, requests {sidecar}\n")
+    assert png.read_bytes().startswith(b"\x89PNG\r\n\x1a\n")
+    # The first request for the declared page already carried the cookie.
+    first = next(cookie for method, path, cookie in site.cookies
+                 if (method, path) == ("GET", "/"))
+    assert f"app_session={COOKIE_TOKEN}" in first
+    # The page's own script read the declared localStorage key.
+    assert site.storage_reads == [TOKEN]
+    # No form was filled, and the sign-in page was never opened.
+    assert site.submits == []
+    assert ("GET", "/login") not in site.requests
+    assert len(run.login_calls()) == 1
+    _said_nothing_secret(run, login.stdout, login.stderr, done.stdout, done.stderr,
+                         sidecar.read_text(encoding="utf-8"))
+
+
+def test_after_the_first_planted_page_the_state_carries_the_session(
+        chromium, site, tmp_path):
+    run, env, login = _session_run(tmp_path, site)
+
+    first, _, first_sidecar = run.screenshot("home", "--signed-in", "--wait-for",
+                                             "#loaded", env=env)
+    assert first.returncode == 0, first.stdout + first.stderr
+    assert not run.login_file.exists(), "the login file outlived the first page"
+    assert run.state.exists()
+    assert stat.S_IMODE(run.state.stat().st_mode) == 0o600
+
+    second, png, second_sidecar = run.screenshot("items", "--signed-in", "--wait-for",
+                                                 "#loaded", env=env)
+    assert second.returncode == 0, second.stdout + second.stderr
+    assert png.exists()
+    items = next(cookie for method, path, cookie in site.cookies
+                 if (method, path) == ("GET", "/items"))
+    assert f"app_session={COOKIE_TOKEN}" in items
+    assert site.submits == []
+    assert len(run.login_calls()) == 1
+    _said_nothing_secret(run, login.stdout, login.stderr, first.stdout, first.stderr,
+                         second.stdout, second.stderr,
+                         first_sidecar.read_text(encoding="utf-8"),
+                         second_sidecar.read_text(encoding="utf-8"))
+
+
+@pytest.mark.parametrize("when", ["after login", "after the first page"])
+def test_stop_after_a_session_kind_run_leaves_no_session_file(
+        chromium, site, tmp_path, when):
+    run, env, login = _session_run(tmp_path, site)
+    said = [login.stdout, login.stderr]
+    if when == "after the first page":
+        done, _, sidecar = run.screenshot("home", "--signed-in", "--wait-for",
+                                          "#loaded", env=env)
+        assert done.returncode == 0, done.stdout + done.stderr
+        assert run.state.exists()
+        said += [done.stdout, done.stderr, sidecar.read_text(encoding="utf-8")]
+    else:
+        assert run.login_file.exists()
+
+    stop = subprocess.run([sys.executable, str(ROOT / "scripts" / "proof_browser.py"),
+                           "stop"], cwd=run.checkout, env=env,
+                          capture_output=True, text=True, timeout=60)
+
+    assert stop.returncode == 0, stop.stdout + stop.stderr
+    assert not run.login_file.exists()
+    assert not run.state.exists()
+    _said_nothing_secret(run, *said, stop.stdout, stop.stderr,
+                         reexecuted=when != "after login")
+
+
+@pytest.mark.parametrize("field, entry", [
+    ("id_token", "login.session.local_storage[0]"),
+    ("session_cookie", "login.session.cookies[0]"),
+])
+def test_a_login_file_short_a_named_field_is_refused_by_entry_and_field(
+        site, tmp_path, field, entry):
+    run, env, login = _session_run(tmp_path, site, mode=f"session-short-{field}")
+
+    done, png, sidecar = run.screenshot("home", "--signed-in", env=env)
 
     assert done.returncode == 1
     assert done.stdout.startswith("proof-screenshot: "), done.stdout
-    assert "`session`" in done.stdout
+    assert done.stdout.count("\n") == 1
+    assert entry in done.stdout
+    assert field in done.stdout
     assert "Traceback" not in done.stderr
-    assert TOKEN not in done.stdout + done.stderr
     assert site.requests == [], "a page was opened"
     assert not png.exists()
-    assert run.login_file.exists()
+    assert not sidecar.exists()
+    _said_nothing_secret(run, login.stdout, login.stderr, done.stdout, done.stderr)
 
+
+# `login` checks before it spends (DRE-6818): a screen the run cannot draw
+# never costs a hosted sign-in.
+
+NOT_RUN = re.compile(r"proof-login: not run — (.+); no hosted sign-in was spent\n")
+
+
+def _login_in_process(run, monkeypatch, env) -> tuple:
+    for key in list(os.environ):
+        if key.startswith("PROOF_"):
+            monkeypatch.delenv(key)
+    for key, value in env.items():
+        if key.startswith("PROOF_") or key == "RUNNER_TEMP":
+            monkeypatch.setenv(key, value)
+    monkeypatch.chdir(run.checkout)
+    said: list = []
+    code = proof_session.login(out=said.append)
+    return code, "".join(line + "\n" for line in said)
+
+
+def test_login_refuses_a_kind_the_browser_step_does_not_apply(tmp_path, monkeypatch):
+    run = Run(tmp_path)
+    run.declare(mode="session", kind="session")
+    monkeypatch.setattr(proof_session, "BROWSER_LOGIN_KINDS", ("form",))
+
+    code, said = _login_in_process(run, monkeypatch, run.env())
+
+    assert code == 1
+    found = NOT_RUN.fullmatch(said)
+    assert found, said
+    assert "`session`" in found.group(1)
+    assert run.login_calls() == [], "the sign-in command ran"
+    assert not run.marker().exists()
+    assert not run.login_file.exists()
+
+
+@pytest.mark.parametrize("kind", ["form", "session"])
+def test_login_with_no_local_run_spends_nothing_and_runs_once_there_is_one(
+        tmp_path, kind):
+    run = Run(tmp_path)
+    run.declare(mode="session" if kind == "session" else "ok", kind=kind)
+
+    done = run.run("login", env=run.env(PROOF_LOCAL_URL="", PROOF_LOCAL_STATUS="failed"))
+
+    assert done.returncode == 1
+    found = NOT_RUN.fullmatch(done.stdout)
+    assert found, done.stdout
+    assert "PROOF_LOCAL_URL" in found.group(1)
+    assert run.login_calls() == [], "the sign-in command ran"
+    assert not run.marker().exists()
+
+    fixed = run.run("login")
+    assert fixed.returncode == 0, fixed.stdout + fixed.stderr
+    assert len(run.login_calls()) == 1
+
+
+@pytest.mark.parametrize("kind", ["form", "session"])
+def test_login_with_no_browser_interpreter_spends_nothing_and_runs_once_there_is_one(
+        tmp_path, kind):
+    run = Run(tmp_path)
+    run.declare(mode="session" if kind == "session" else "ok", kind=kind)
+    missing = tmp_path / "no-venv" / "bin" / "python"
+
+    done = run.run("login", env=run.env(PROOF_PYTHON=str(missing)))
+
+    assert done.returncode == 1
+    found = NOT_RUN.fullmatch(done.stdout)
+    assert found, done.stdout
+    assert str(missing) in found.group(1)
+    assert run.login_calls() == [], "the sign-in command ran"
+    assert not run.marker().exists()
+
+    fixed = run.run("login")
+    assert fixed.returncode == 0, fixed.stdout + fixed.stderr
+    assert len(run.login_calls()) == 1
+
+
+def test_every_declared_login_kind_is_one_the_browser_step_applies():
+    # `login` and `screenshot` both read this one constant; a kind the
+    # declaration accepts and the browser cannot apply is a sign-in spent on a
+    # screen that cannot be drawn.
+    missing = set(proof_local.LOGIN_KINDS) - set(proof_session.BROWSER_LOGIN_KINDS)
+    assert not missing, (f"proof_local.LOGIN_KINDS names {missing}, which the "
+                         f"browser step does not apply")
+
+
+def test_the_session_kind_is_no_longer_refused_as_unbuilt():
+    assert "not built yet" not in SCRIPT.read_text(encoding="utf-8")
+
+
+def test_the_proof_brief_says_what_signed_in_does_and_what_not_run_means():
+    brief = " ".join(BRIEF.read_text(encoding="utf-8").split())
+    assert "fills the form or plants the declared session" in brief
+    assert "proof-login: not run —" in brief
+    assert "no sign-in counted" in brief
 
 # ---------------------------------------------------------------------------
 # The module's imports
