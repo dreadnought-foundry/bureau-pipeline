@@ -211,6 +211,19 @@ class EmitStep(unittest.TestCase):
         self.assertIn(_expr("steps.pushtoken.outputs.token || steps.worker.outputs.token"),
                       (step.get("env") or {}).values())
 
+    def test_the_agent_fix_re_mint_stands_in_for_the_bot_never_the_worker(self):
+        # agent-fix.yml's DRE-6350 re-mint is the BOOT App's pair, so its token
+        # belongs to the bot's installation; handed as the worker's it would
+        # read another login's meter.
+        steps = _steps("agent-fix.yml")
+        remint = steps[_step_id(steps, "pushtoken")]
+        app = steps[_step_id(steps, "app")]
+        self.assertEqual(remint["with"]["app-id"], app["with"]["app-id"])
+        step = steps[_index(steps, "agent-fix.yml", "emit")]
+        values = (step.get("env") or {}).values()
+        self.assertIn(_expr("steps.pushtoken.outputs.token || steps.app.outputs.token"), values)
+        self.assertIn(_expr("steps.worker.outputs.token"), values)
+
     def test_the_emit_step_names_its_reusable_and_writes_its_outputs(self):
         for name in WIRED:
             with self.subTest(workflow=name):
