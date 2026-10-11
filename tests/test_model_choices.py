@@ -39,8 +39,6 @@ import sync_model_config  # noqa: E402
 # A real slug of config/repo-map.json — the gate's own route, no probe.
 REAL_SLUG = "atlas"
 
-UNGROUPED = ["designer", "ux-ui-engineer", "fullstack-engineer", "mobile", "product-lead"]
-
 
 def _choices() -> dict:
     return json.loads(CHOICES.read_text(encoding="utf-8"))
@@ -246,9 +244,11 @@ def test_an_error_elsewhere_in_the_config_never_reaches_a_choice():
 # --------------------------------------------------------------------------- #
 
 def test_agents_in_file_order_then_the_ungrouped():
+    # The committed file in any state the page can save (DRE-6889): its own
+    # `agents`, then its own `ungrouped`, each in file order.
     raw = _raw()
     doc = _choices()
-    assert [a["name"] for a in doc["agents"]] == list(raw["agents"]) + UNGROUPED
+    assert [a["name"] for a in doc["agents"]] == list(raw["agents"]) + raw["ungrouped"]
     for agent in doc["agents"]:
         assert agent["about"] == raw["about"].get(agent["name"])
         assert agent["group"] == raw["agents"].get(agent["name"])
@@ -263,13 +263,19 @@ def test_agents_in_file_order_then_the_ungrouped():
 def test_the_ungrouped_agents_have_no_group_and_no_moves():
     # Three moves each since DRE-6833: they are session agents, and a session
     # agent may join any group. The test keeps its name; its claim about
-    # moves inverted with the card.
+    # moves inverted with the card. Since DRE-6889 it reads the session agents
+    # off the file, wherever the CEO last put them: one in no group may join
+    # every group, one in a group every other group.
+    raw = _raw()
     doc = _choices()
-    for name in UNGROUPED:
+    assert raw["session_agents"]
+    for name in raw["session_agents"]:
         agent = _agent(doc, name)
-        assert agent["group"] is None
+        assert agent["group"] == raw["agents"].get(name)
+        assert (agent["group"] is None) is (name in raw["ungrouped"])
         assert agent["runs_in"] == "session"
-        assert [m["group"] for m in agent["moves"]] == ["workhorse", "advisory", "judgement"]
+        assert [m["group"] for m in agent["moves"]] == [
+            k for k in raw["kinds"] if k != agent["group"]]
         assert all(m["allowed"] and m["reason"] is None for m in agent["moves"])
     assert _agent(doc, "designer")["about"] == "Designs screens and systems"
 
@@ -296,8 +302,11 @@ def test_refused_and_allowed_moves():
         "group": "advisory", "allowed": True, "reason": None,
     }
     assert _move(doc, "planner", "advisory")["allowed"] is True
+    # Every PIPELINE-run role outside Planners is refused it (rule 10). A
+    # session-run agent is exempt, and the CEO may have put one anywhere.
+    session = _raw()["session_agents"]
     for name, kind in _raw()["agents"].items():
-        if kind != "judgement" and name != "planner":
+        if kind != "judgement" and name != "planner" and name not in session:
             assert _move(doc, name, "judgement")["allowed"] is False, name
 
 

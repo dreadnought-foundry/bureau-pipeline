@@ -26,6 +26,13 @@ THE FIX, as this file pins it:
     `add_agent` is a plain sentence, and the generator publishes the same
     sentence as the move's `reason`.
 
+WHERE THE FILE STANDS (DRE-6889). The CEO saves moves and new agents from the
+page, so the committed file holds the session-run agents wherever he last put
+them. A test of how the tools behave starts from `_start()` — the committed
+file with every session-run agent back in no group — and adds an agent under
+a name the file does not hold; a test of the committed tree reads its agents
+and groups off the committed files.
+
 Run: cd bureau-pipeline && python3 -m pytest tests/test_session_agents.py -q
 """
 
@@ -49,16 +56,33 @@ CHOICES = ROOT / "config" / "model-choices.json"
 SCRIPT = ROOT / "scripts" / "model_config_change.py"
 
 sys.path.insert(0, str(ROOT / "scripts"))
+sys.path.insert(0, str(ROOT / "tests"))
 
 import model_config_change as mcc  # noqa: E402
 import model_fallback as mf  # noqa: E402
 import proof_and_demo  # noqa: E402
 import sync_model_config  # noqa: E402
+from model_config_text import (  # noqa: E402
+    config_with_session_agents_ungrouped,
+    fresh_agent_name,
+)
 
 TODAY = "2026-10-11"
-SESSION = ["designer", "ux-ui-engineer", "fullstack-engineer", "mobile", "product-lead"]
-GROUPS = ["workhorse", "advisory", "judgement"]
 REQUESTED_BY = "ceo@example.com"
+
+
+def _start() -> str:
+    """The tools' starting file: the committed one, every session-run agent in
+    no group."""
+    return config_with_session_agents_ungrouped()
+
+
+_START = yaml.safe_load(_start())
+#: The session-run agents and the groups, read off the file.
+SESSION = list(_START["session_agents"])
+GROUPS = list(_START["kinds"])
+#: A name `add_agent` takes — one the file does not hold yet.
+NEW = fresh_agent_name(_START)
 
 
 # --------------------------------------------------------------------------- #
@@ -117,7 +141,7 @@ def _move(agent: str, group: str) -> dict:
 
 def _apply(*changes: dict, text: str | None = None):
     return mcc.apply_change_set(
-        _text() if text is None else text,
+        _start() if text is None else text,
         {"requested_by": REQUESTED_BY, "changes": list(changes)}, today=TODAY)
 
 
@@ -131,6 +155,12 @@ def _env(**extra: str) -> dict:
     env.pop("GITHUB_STEP_SUMMARY", None)
     env.update(extra)
     return env
+
+
+def _start_file(tmp_path: Path) -> Path:
+    path = tmp_path / "start.yaml"
+    path.write_text(_start())
+    return path
 
 
 def _cli_apply(tmp_path: Path, *changes: dict, config: Path | None = None):
@@ -164,10 +194,16 @@ def _refusal_lines(errors: list[str]) -> list[str]:
 # 1. The replay of run 38114763170                                            #
 # --------------------------------------------------------------------------- #
 
-def test_the_real_file_names_the_five_session_agents():
+def test_every_session_agent_is_in_a_group_or_in_none_and_only_they_are_in_none():
+    """The committed file in any state the page can save: a session-run agent
+    is under `agents` or `ungrouped`, and a name under `ungrouped` is
+    session-run."""
     raw = yaml.safe_load(_text())
-    assert raw["session_agents"] == SESSION
-    assert raw["ungrouped"] == SESSION
+    assert raw["session_agents"], "the file names its session-run agents"
+    for name in raw["session_agents"]:
+        assert name in raw["agents"] or name in raw["ungrouped"], name
+    for name in raw["ungrouped"]:
+        assert name in raw["session_agents"], name
     assert mf.policy_errors(raw) == []
 
 
@@ -182,7 +218,8 @@ def test_the_change_set_of_run_38114763170_validates_and_applies():
 
 
 def test_the_cli_accepts_the_change_set_of_run_38114763170(tmp_path):
-    proc, errors, _ = _cli_apply(tmp_path, _move("designer", "workhorse"))
+    proc, errors, _ = _cli_apply(tmp_path, _move("designer", "workhorse"),
+                                 config=_start_file(tmp_path))
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert errors == []
     assert "+  designer: workhorse" in proc.stdout
@@ -334,7 +371,7 @@ def test_a_grouped_session_agent_is_in_no_list_the_pipeline_dispatches(tmp_path)
 
 
 def test_splice_registry_skips_a_grouped_session_agent():
-    raw = yaml.safe_load(_text())
+    raw = yaml.safe_load(_start())
     raw["agents"]["designer"] = "advisory"
     raw["ungrouped"].remove("designer")
     cfg = mf._normalize_config(raw)
@@ -356,33 +393,34 @@ def test_splice_registry_refuses_a_session_agent_with_a_generated_region():
 
 def test_add_agent_then_move_agent_in_one_change_set_applies():
     text, refusals = _apply(
-        {"op": "add_agent", "agent": "data-analyst",
+        {"op": "add_agent", "agent": NEW,
          "about": "Answers questions from our data"},
-        _move("data-analyst", "workhorse"))
+        _move(NEW, "workhorse"))
     assert refusals == [], _reasons(refusals)
     doc = yaml.safe_load(text)
-    assert doc["agents"]["data-analyst"] == "workhorse"
-    assert "data-analyst" not in doc["ungrouped"]
-    assert doc["session_agents"] == SESSION + ["data-analyst"]
+    assert doc["agents"][NEW] == "workhorse"
+    assert NEW not in doc["ungrouped"]
+    assert doc["session_agents"] == SESSION + [NEW]
     assert mf.policy_errors(doc) == []
 
 
 def test_add_agent_alone_puts_the_agent_in_session_agents():
-    text, refusals = _apply({"op": "add_agent", "agent": "data-analyst",
+    text, refusals = _apply({"op": "add_agent", "agent": NEW,
                              "about": "Answers questions from our data"})
     assert refusals == []
     doc = yaml.safe_load(text)
-    assert doc["ungrouped"] == SESSION + ["data-analyst"]
-    assert doc["session_agents"] == SESSION + ["data-analyst"]
+    assert doc["ungrouped"] == SESSION + [NEW]
+    assert doc["session_agents"] == SESSION + [NEW]
 
 
 def test_move_agent_before_add_agent_is_refused_in_plain_words(tmp_path):
     proc, errors, bullets = _cli_apply(
-        tmp_path, _move("data-analyst", "workhorse"),
-        {"op": "add_agent", "agent": "data-analyst", "about": "Answers questions"})
+        tmp_path, _move(NEW, "workhorse"),
+        {"op": "add_agent", "agent": NEW, "about": "Answers questions"},
+        config=_start_file(tmp_path))
     assert proc.returncode == 2
     lines = _refusal_lines(errors)
-    assert lines and any("there is no agent named data-analyst — add it first" in line
+    assert lines and any(f"there is no agent named {NEW} — add it first" in line
                          for line in lines), errors
     for line in errors + bullets:
         assert_plain(line)
@@ -394,7 +432,7 @@ def test_move_agent_before_add_agent_is_refused_in_plain_words(tmp_path):
 
 def _hand_edited(tmp_path: Path, edit) -> Path:
     path = tmp_path / "models.yaml"
-    path.write_text(edit(_text()))
+    path.write_text(edit(_start()))
     return path
 
 
@@ -469,7 +507,7 @@ def test_a_file_that_already_fails_sends_its_findings_to_the_log_only(tmp_path):
 
 
 def test_the_registry_line_still_refuses_a_name_that_is_in_neither(tmp_path):
-    raw_text = _with_ghost(_text())
+    raw_text = _with_ghost(_start())
     _, refusals = _apply(_move("ghost", "workhorse"), text=raw_text)
     assert refusals and refusals[0]["index"] == 1
     assert "session_agents" in _reasons(refusals)
@@ -489,20 +527,24 @@ def _choices() -> dict:
 
 
 def test_every_agent_carries_runs_in_in_the_contract_order():
+    session = yaml.safe_load(_text())["session_agents"]
     for agent in _choices()["agents"]:
         assert list(agent) == ["name", "label", "about", "group", "runs_in", "moves"]
-        expected = "session" if agent["name"] in SESSION else "pipeline"
+        expected = "session" if agent["name"] in session else "pipeline"
         assert agent["runs_in"] == expected, agent["name"]
 
 
 def test_every_agent_has_a_move_for_every_group_it_is_not_in():
+    raw = yaml.safe_load(_text())
+    groups = list(raw["kinds"])
     for agent in _choices()["agents"]:
-        others = [g for g in GROUPS if g != agent["group"]]
+        others = [g for g in groups if g != agent["group"]]
         assert [m["group"] for m in agent["moves"]] == others, agent["name"]
         assert agent["moves"], agent["name"]
-    for name in SESSION:
+    for name in raw["session_agents"]:
         agent = next(a for a in _choices()["agents"] if a["name"] == name)
-        assert len(agent["moves"]) == 3
+        assert agent["group"] == raw["agents"].get(name), agent
+        assert len(agent["moves"]) == len(groups) - (agent["group"] is not None)
         assert all(m["allowed"] for m in agent["moves"]), agent
 
 
@@ -523,4 +565,5 @@ def test_every_published_move_is_what_apply_check_answers(tmp_path):
                 assert_plain(move["reason"])
             checked += 1
     raw = yaml.safe_load(_text())
-    assert checked == len(raw["agents"]) * 2 + len(SESSION) * 3
+    groups = len(raw["kinds"])
+    assert checked == len(raw["agents"]) * (groups - 1) + len(raw["ungrouped"]) * groups

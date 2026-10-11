@@ -39,8 +39,10 @@ import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
+sys.path.insert(0, str(ROOT / "tests"))
 
 import model_fallback as mf  # noqa: E402
+from model_config_text import config_with_session_agents_ungrouped  # noqa: E402
 
 OPUS55 = "claude-opus-5-5"
 SONNET55 = "claude-sonnet-5-5"
@@ -48,11 +50,13 @@ PROJECTS = {"atlas": {"workhorse": SONNET55}}
 
 
 def make_tree(base: Path, projects: dict) -> Path:
-    """A copy of scripts/ and config/ whose models.yaml carries `projects`."""
+    """A copy of scripts/ and config/ whose models.yaml carries `projects`,
+    with every session-run agent in no group wherever the CEO last put them
+    (DRE-6889) — the start the role-in-no-group case below needs."""
     ignore = shutil.ignore_patterns("__pycache__", "*.pyc")
     shutil.copytree(ROOT / "scripts", base / "scripts", ignore=ignore)
     shutil.copytree(ROOT / "config", base / "config", ignore=ignore)
-    cfg = yaml.safe_load((ROOT / "config" / "models.yaml").read_text())
+    cfg = yaml.safe_load(config_with_session_agents_ungrouped())
     cfg["projects"] = projects
     (base / "config" / "models.yaml").write_text(yaml.safe_dump(cfg, sort_keys=False))
     return base
@@ -242,6 +246,7 @@ def test_no_project_walks_the_fleet_ladder(tree, tmp_path, args):
 
 def test_a_role_in_no_group_keeps_the_default_ladder_on_every_project(tree, tmp_path):
     cfg = tree_config(tree)
+    assert "designer" in cfg["ungrouped"]
     assert "designer" not in cfg["agents"]
     default_top = [r["model"] for r in cfg["ladders"][cfg["default_ladder"]]][0]
     for repo in ("atlas", "EveryBite/atlas", "portico"):
