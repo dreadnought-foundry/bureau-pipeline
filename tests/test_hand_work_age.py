@@ -465,3 +465,397 @@ def test_the_lane_contract_says_so():
     assert "config/hand-work-age.json" in text
     assert "`hand-work-overdue`" in text
     assert "standing card" in text and "`hand-built`" in text
+
+
+# --------------------------------------------------------------------------- #
+# DRE-6852: a PROOF: card held In Review for the operator                     #
+# --------------------------------------------------------------------------- #
+#
+# DRE-6837, DRE-6841 and DRE-6842 leave a stopped proof card in `In Review`
+# for the operator, and `In Review` had no clock: `WATCHDOG_LANES` is Todo,
+# Hand-work and In Progress, and the review nudge reads pull requests, not
+# holds. `alarm_held_proofs` gives a held proof card the Hand-work bound and
+# the Hand-work receipt, off the comment window the board read carries.
+
+import hold  # noqa: E402
+import linear_ops  # noqa: E402
+import proof_cause_park  # noqa: E402
+import proof_record  # noqa: E402
+
+REVIEW = "In Review"
+CAUSE_NEEDS = (f"{proof_cause_park.CAUSE_HOLD_OPENING} 1 row(s) the run cannot "
+               "observe as worded (cause: out-of-reach)")
+PRESS_NEEDS = "the operator's press: set the sandbox project's Builders to Sonnet 5.5"
+EVENT_NEEDS = "the weekly report of 2026-10-18"
+CEO_NEEDS = f"{proof_record.CEO_PRESS}: approve the release on the console"
+OBSERVED = linear_ops.proof_observed_line("the board showed the age at 09:00 PT")
+RERUN = ("🔬 proof-run: dispatched a proof run at 09:00 PT — the record was "
+         "amended (re-run 1 of 2)")
+HEAD = "a" * 40
+STAMP = hold.stamp_line("review-cap-spent", HEAD, "reconcile.py")
+HELD_OPENING = "🚨 hand-work-overdue: DRE-7001 has waited In Review for the operator"
+
+
+def _hold(needs: str, hours_ago: float, observed="the board shows the age") -> dict:
+    return _node(linear_ops.proof_waiting_line(observed, needs), hours_ago)
+
+
+def _first(node: dict) -> str:
+    return node["body"].split("\n", 1)[0]
+
+
+def _review_card(identifier="DRE-7001", *, nodes=(), labels=("repo:portico", NO_CODE),
+                 title="PROOF: the board shows the age", state=REVIEW) -> dict:
+    """A proof card In Review, its window holding `nodes` (oldest first) and
+    no promotion receipt — the In Review clock never reads one."""
+    return _card(identifier, labels=labels, title=title, state=state,
+                 nodes=list(nodes), entered=None)
+
+
+def _clock(node: dict) -> datetime:
+    return datetime.fromisoformat(node["createdAt"].replace("Z", "+00:00"))
+
+
+def _held_sweep(cards, capsys, *, comment_effect=None):
+    """Run `alarm_held_proofs` over `cards`, the way `main` hands it `mine`.
+    Every Linear read is a failure here: the pass reads only the window."""
+    gql = mock.Mock(side_effect=AssertionError("no Linear read of its own"))
+    thread = mock.Mock(side_effect=AssertionError("no thread read of its own"))
+    lane_moves = mock.Mock(side_effect=AssertionError("no history read of its own"))
+    with patch.object(reconcile.linear_ops, "cmd_comment",
+                      side_effect=comment_effect) as comment, \
+         patch.object(reconcile.linear_ops, "add_label") as add_label, \
+         patch.object(reconcile.linear_ops, "remove_label") as remove_label, \
+         patch.object(reconcile.linear_ops, "cmd_advance") as advance, \
+         patch.object(reconcile.linear_ops, "cmd_state") as state, \
+         patch.object(reconcile.linear_ops, "_thread_and_viewer", thread), \
+         patch.object(reconcile.linear_ops, "comment_bodies", thread), \
+         patch.object(reconcile.linear_ops, "gql", gql), \
+         patch.object(routing_verdict, "lane_moves", lane_moves):
+        reconcile.alarm_held_proofs(list(cards))
+    out = [ln for ln in capsys.readouterr().out.splitlines()
+           if ln.startswith("held-proof:")]
+    return SimpleNamespace(
+        comment=comment, add_label=add_label, remove_label=remove_label,
+        advance=advance, state=state, gql=gql, thread=thread, out=out,
+        lines={c["identifier"]: [ln for ln in out
+                                 if ln.startswith(f"held-proof: {c['identifier']} ")]
+               for c in cards},
+    )
+
+
+def _held_line(got, ident="DRE-7001") -> str:
+    (line,) = got.lines[ident]
+    return line
+
+
+def _wrote_nothing(got):
+    got.comment.assert_not_called()
+    got.add_label.assert_not_called()
+    got.remove_label.assert_not_called()
+    got.advance.assert_not_called()
+    got.state.assert_not_called()
+
+
+def _kind(line: str) -> str:
+    return f"Kind: a PROOF: card held for the operator — {proof_record._cut(line, 120)}."
+
+
+def _alarmed_once(got, held_by: dict, hours=25):
+    got.comment.assert_called_once()
+    ident, body = got.comment.call_args.args
+    assert ident == "DRE-7001"
+    first, second, *_ = body.split("\n")
+    assert first == (f"{HELD_OPENING} {hours} hours, past its 24 — the "
+                     "operator's to look at.")
+    assert second == _kind(_first(held_by))
+    assert body.endswith(pipeline_act.trailer(ACT))
+    got.add_label.assert_not_called()
+    got.remove_label.assert_not_called()
+    got.advance.assert_not_called()
+    got.state.assert_not_called()
+
+
+class TestAHeldProofAlarms:
+    def test_a_cause_hold_past_24_hours_alarms_once(self, capsys):
+        cause = _hold(CAUSE_NEEDS, 25.5)
+        got = _held_sweep([_review_card(nodes=[cause])], capsys)
+        _alarmed_once(got, cause)
+        line = _held_line(got)
+        assert line.startswith("held-proof: DRE-7001 held In Review for the "
+                               "operator 25h, past 24 — alarmed ")
+        assert line.endswith(f"(clock: its cause hold of {reconcile._pt(cause['createdAt'])})")
+
+    def test_the_second_pass_writes_nothing(self, capsys):
+        cause = _hold(CAUSE_NEEDS, 25.5)
+        alarm = _node(pipeline_act.receipt(ACT, f"{HELD_OPENING} 25 hours, past its 24 "
+                                                "— the operator's to look at."), 1.0)
+        got = _held_sweep([_review_card(nodes=[cause, alarm])], capsys)
+        _wrote_nothing(got)
+        assert (f"25h, past 24 — alarmed {reconcile._pt(alarm['createdAt'])}"
+                in _held_line(got))
+
+    def test_an_alarm_older_than_the_hold_belongs_to_another_wait(self, capsys):
+        cause = _hold(CAUSE_NEEDS, 25.5)
+        got = _held_sweep([_review_card(nodes=[_alarm("DRE-7001", 40.0), cause])], capsys)
+        _alarmed_once(got, cause)
+
+    def test_at_23_hours_it_waits_and_says_when(self, capsys):
+        cause = _hold(CAUSE_NEEDS, 23.5)
+        got = _held_sweep([_review_card(nodes=[cause])], capsys)
+        _wrote_nothing(got)
+        due = dead_run.pacific(_clock(cause) + timedelta(hours=24))
+        assert _held_line(got) == (
+            f"held-proof: DRE-7001 held In Review for the operator 23h of 24, "
+            f"alarms at {due} (clock: its cause hold of {reconcile._pt(cause['createdAt'])})")
+
+    def test_the_bound_is_the_hand_work_files_number(self, tmp_path, monkeypatch, capsys):
+        doc = json.loads(CONFIG.read_text())
+        doc["hours"] = 30
+        moved = tmp_path / "hand-work-age.json"
+        moved.write_text(json.dumps(doc))
+        monkeypatch.setattr(reconcile, "HAND_WORK_AGE_CONFIG", str(moved))
+        got = _held_sweep([_review_card(nodes=[_hold(CAUSE_NEEDS, 25.5)])], capsys)
+        _wrote_nothing(got)
+        assert " 25h of 30, alarms at " in _held_line(got)
+
+    def test_a_standing_review_cap_stamp_alarms(self, capsys):
+        stamp = _node(STAMP, 25.5)
+        card = _review_card(nodes=[stamp], labels=("repo:portico", hold.HOLD_LABEL))
+        got = _held_sweep([card], capsys)
+        _alarmed_once(got, stamp)
+        assert _held_line(got).endswith(
+            f"(clock: its review-cap-spent stamp of {reconcile._pt(stamp['createdAt'])})")
+
+    def test_a_spent_review_cap_stamp_does_not(self, capsys):
+        lifted = _node(hold.lift_line("review-cap-spent", "new-head", "reconcile.py"), 2.0)
+        for labels in (("repo:portico",), ("repo:portico", hold.HOLD_LABEL)):
+            card = _review_card(nodes=[_node(STAMP, 25.5), lifted], labels=labels)
+            got = _held_sweep([card], capsys)
+            _wrote_nothing(got)
+            assert got.out == ["held-proof: nothing held"]
+
+    def test_an_operators_press_hold_alarms(self, capsys):
+        press = _hold(PRESS_NEEDS, 25.5)
+        got = _held_sweep([_review_card(nodes=[press])], capsys)
+        _alarmed_once(got, press)
+        assert _held_line(got).endswith(
+            f"(clock: its operator's-press hold of {reconcile._pt(press['createdAt'])})")
+
+    def test_a_hold_naming_the_operators_press_first_is_the_operators(self, capsys):
+        """The dispatcher joins several events with `; ` in row order: the
+        needs half is read by its opening only."""
+        press = _hold(f"{PRESS_NEEDS}; {EVENT_NEEDS}", 25.5)
+        got = _held_sweep([_review_card(nodes=[press])], capsys)
+        _alarmed_once(got, press)
+
+
+class TestAnEventHold:
+    def test_an_event_hold_never_alarms(self, capsys):
+        got = _held_sweep([_review_card(nodes=[_hold(EVENT_NEEDS, 25.5)])], capsys)
+        _wrote_nothing(got)
+        assert _held_line(got) == (
+            "held-proof: DRE-7001 not held for the operator — its hold waits on "
+            f"an event ({EVENT_NEEDS}), not the operator")
+        assert got.out[-1] == "held-proof: nothing held"
+
+    def test_a_hold_naming_an_event_first_is_the_events(self, capsys):
+        mixed = _hold(f"{EVENT_NEEDS}; {PRESS_NEEDS}", 25.5)
+        got = _held_sweep([_review_card(nodes=[mixed])], capsys)
+        _wrote_nothing(got)
+        assert "waits on an event" in _held_line(got)
+
+    @pytest.mark.parametrize("needs,kind", [(CAUSE_NEEDS, "cause hold"),
+                                            (PRESS_NEEDS, "operator's-press hold")])
+    def test_dre_6694s_shape_alarms_on_the_operators_hold(self, needs, kind, capsys):
+        """The cause (or press) hold first, the dispatcher's event hold after
+        it: the newer event hold neither replaces the clock nor spends it."""
+        first = _hold(needs, 25.5)
+        event = _hold(EVENT_NEEDS, 24.5)
+        got = _held_sweep([_review_card(nodes=[first, event])], capsys)
+        _alarmed_once(got, first)
+        assert _held_line(got).endswith(
+            f"(clock: its {kind} of {reconcile._pt(first['createdAt'])})")
+
+    def test_dre_6694s_shape_under_the_bound_alarms_on_neither_pass(self, capsys):
+        cause = _hold(CAUSE_NEEDS, 23.5)
+        event = _hold(EVENT_NEEDS, 22.5)
+        due = dead_run.pacific(_clock(cause) + timedelta(hours=24))
+        for _ in range(2):
+            got = _held_sweep([_review_card(nodes=[cause, event])], capsys)
+            _wrote_nothing(got)
+            assert _held_line(got) == (
+                f"held-proof: DRE-7001 held In Review for the operator 23h of 24, "
+                f"alarms at {due} (clock: its cause hold of "
+                f"{reconcile._pt(cause['createdAt'])})")
+
+
+class TestASpentHold:
+    def test_an_observation_after_the_hold_spends_it(self, capsys):
+        cause = _hold(CAUSE_NEEDS, 25.5)
+        got = _held_sweep([_review_card(nodes=[cause, _node(OBSERVED, 3.0)])], capsys)
+        _wrote_nothing(got)
+        assert _held_line(got) == (
+            "held-proof: DRE-7001 not held for the operator — its cause hold of "
+            f"{reconcile._pt(cause['createdAt'])} is spent: a 🔬 proof-observed "
+            "followed it")
+
+    def test_a_re_run_after_the_hold_spends_it(self, capsys):
+        assert proof_run_state.receipt(RERUN) is not None
+        cause = _hold(CAUSE_NEEDS, 30.0)
+        got = _held_sweep([_review_card(nodes=[cause, _node(RERUN, 20.0)])], capsys)
+        _wrote_nothing(got)
+        assert _held_line(got) == (
+            "held-proof: DRE-7001 not held for the operator — its cause hold of "
+            f"{reconcile._pt(cause['createdAt'])} is spent: re-run dispatched after it")
+
+    def test_a_re_run_spends_an_operators_press_hold_too(self, capsys):
+        press = _hold(PRESS_NEEDS, 30.0)
+        got = _held_sweep([_review_card(nodes=[press, _node(RERUN, 20.0)])], capsys)
+        _wrote_nothing(got)
+        assert _held_line(got).endswith("is spent: re-run dispatched after it")
+
+    def test_a_newer_cause_hold_is_the_clock(self, capsys):
+        old = _hold(CAUSE_NEEDS, 30.0)
+        new = _hold(CAUSE_NEEDS, 5.0, observed="the second row")
+        got = _held_sweep([_review_card(nodes=[old, _node(RERUN, 20.0), new])], capsys)
+        _wrote_nothing(got)
+        due = dead_run.pacific(_clock(new) + timedelta(hours=24))
+        assert _held_line(got) == (
+            f"held-proof: DRE-7001 held In Review for the operator 5h of 24, "
+            f"alarms at {due} (clock: its cause hold of {reconcile._pt(new['createdAt'])})")
+
+    def test_a_newer_operators_hold_with_no_re_run_is_the_clock(self, capsys):
+        old = _hold(CAUSE_NEEDS, 30.0)
+        new = _hold(PRESS_NEEDS, 5.0)
+        got = _held_sweep([_review_card(nodes=[old, new])], capsys)
+        _wrote_nothing(got)
+        assert " 5h of 24, alarms at " in _held_line(got)
+
+
+class TestNeverAlarmsInReview:
+    def test_a_hold_on_the_ceos_press_is_the_return_branchs(self, capsys):
+        got = _held_sweep([_review_card(nodes=[_hold(CEO_NEEDS, 25.5)])], capsys)
+        _wrote_nothing(got)
+        assert _held_line(got) == (
+            "held-proof: DRE-7001 not held for the operator — its hold waits on "
+            "the CEO's press: the return branch's")
+
+    @pytest.mark.parametrize("ident,labels,why", [
+        ("DRE-4541", ("repo:portico", NO_CODE), "a standing card"),
+        ("DRE-7001", ("repo:portico", HAND_BUILT), "the CEO's own hand-built card"),
+    ])
+    def test_a_standing_or_hand_built_card(self, ident, labels, why, capsys):
+        card = _review_card(ident, nodes=[_hold(CAUSE_NEEDS, 25.5)], labels=labels)
+        got = _held_sweep([card], capsys)
+        _wrote_nothing(got)
+        assert _held_line(got, ident) == (
+            f"held-proof: {ident} held In Review for the operator 25h — never "
+            f"alarms ({why})")
+        assert "held-proof: nothing held" not in got.out
+
+    def test_no_card_held_says_so(self, capsys):
+        got = _held_sweep([_review_card(nodes=[_node("a plain comment", 30.0)])], capsys)
+        _wrote_nothing(got)
+        assert got.out == ["held-proof: nothing held"]
+        got = _held_sweep([], capsys)
+        assert got.out == ["held-proof: nothing held"]
+
+    @pytest.mark.parametrize("state", ["In Progress", "Green Light", HAND_WORK])
+    def test_another_lane_is_not_this_pass(self, state, capsys):
+        card = _review_card(nodes=[_hold(CAUSE_NEEDS, 25.5)], state=state)
+        got = _held_sweep([card], capsys)
+        _wrote_nothing(got)
+        assert got.out == ["held-proof: nothing held"]
+
+    def test_a_card_that_is_not_a_proof_is_not_this_pass(self, capsys):
+        card = _review_card(nodes=[_hold(CAUSE_NEEDS, 25.5)], title="a feature")
+        got = _held_sweep([card], capsys)
+        _wrote_nothing(got)
+        assert got.out == ["held-proof: nothing held"]
+
+
+class TestHeldProofScope:
+    def test_another_repos_card_is_neither_read_nor_written(self, capsys):
+        card = _review_card(nodes=[_hold(CAUSE_NEEDS, 25.5)],
+                            labels=("repo:atlas", NO_CODE))
+        got = _held_sweep([card], capsys)
+        _wrote_nothing(got)
+        got.gql.assert_not_called()
+        got.thread.assert_not_called()
+        assert got.out == ["held-proof: nothing held"]
+
+    def test_the_pass_makes_no_linear_read(self, capsys):
+        got = _held_sweep([_review_card(nodes=[_hold(CAUSE_NEEDS, 25.5)])], capsys)
+        got.comment.assert_called_once()
+        got.gql.assert_not_called()
+        got.thread.assert_not_called()
+
+    def test_an_alarm_adds_no_failure_and_no_defect(self, capsys):
+        got = _held_sweep([_review_card(nodes=[_hold(CAUSE_NEEDS, 25.5)])], capsys)
+        got.comment.assert_called_once()
+        assert reconcile._write_failures == []
+        assert reconcile._stale_defects == []
+
+    def test_a_failed_alarm_write_is_a_write_failure(self, capsys):
+        got = _held_sweep([_review_card(nodes=[_hold(CAUSE_NEEDS, 25.5)])], capsys,
+                          comment_effect=reconcile.linear_ops.LinearError("refused"))
+        got.comment.assert_called_once()
+        assert len(reconcile._write_failures) == 1
+        assert "DRE-7001" in reconcile._write_failures[0]
+        assert reconcile._stale_defects == []
+        assert " 25h, past 24 — the alarm could not be posted" in _held_line(got)
+
+
+class TestTheSweepRunsIt:
+    def test_main_runs_it_after_the_board_read_over_mine(self, monkeypatch, capsys):
+        """A full sweep: the pass runs after `board_read`, is handed this repo's
+        cards, spends no request, and posts the one alarm."""
+        import test_sweep_spend_lines as spend
+
+        cause = _hold(CAUSE_NEEDS, 25.5)
+        ours = _review_card(nodes=[cause])
+        theirs = _review_card("DRE-7002", nodes=[_hold(CAUSE_NEEDS, 25.5)],
+                              labels=("repo:atlas", NO_CODE))
+        fake = spend.FakeLinear([ours, theirs])
+        events: list = []
+        real_epics, real_pass = reconcile.repo_epics, reconcile.alarm_held_proofs
+
+        def epics(cards):
+            events.append("board_read")
+            return real_epics(cards)
+
+        def held_pass(cards):
+            before = fake.requests
+            events.append(("alarm_held_proofs", [c["identifier"] for c in cards]))
+            try:
+                return real_pass(cards)
+            finally:
+                events.append(("spent", fake.requests - before))
+
+        monkeypatch.setattr(reconcile, "repo_epics", epics)
+        monkeypatch.setattr(reconcile, "alarm_held_proofs", held_pass)
+        monkeypatch.setattr(reconcile, "_idle_pass", [])
+        monkeypatch.setattr(reconcile, "sweep_idle", lambda: None)
+        with patch.object(reconcile.linear_ops, "cmd_comment") as comment:
+            spend._run_sweep(fake, mocks=("flag_stranded", "hand_built_to_review",
+                                          "move_hand_built_to_review"))
+            alarms = [c.args for c in comment.call_args_list
+                      if HELD_OPENING in c.args[1]]
+        assert ("alarm_held_proofs", ["DRE-7001"]) in events
+        called = events.index(("alarm_held_proofs", ["DRE-7001"]))
+        assert "board_read" in events[:called]
+        assert ("spent", 0) in events
+        assert len(alarms) == 1 and alarms[0][0] == "DRE-7001"
+
+    def test_main_wraps_it_in_its_own_phase_after_board_read(self):
+        source = (ROOT / "scripts" / "reconcile.py").read_text()
+        body = source[source.index("\ndef main("):]
+        assert body.index('_phase("board_read"') < body.index('_phase("alarm_held_proofs")')
+
+
+def test_the_config_readme_names_the_in_review_kind():
+    readme = json.loads(CONFIG.read_text())["_readme"]
+    assert "In Review" in readme
+    assert "`PROOF:` card held `In Review` for the operator" in readme
+    assert "alarm_held_proofs" in readme
