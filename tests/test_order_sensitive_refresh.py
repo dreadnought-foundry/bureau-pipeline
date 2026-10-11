@@ -20,6 +20,7 @@ Every rule's test is written so removing that rule turns it red.
 import contextlib
 import io
 import json
+import posixpath
 import shutil
 import sys
 import tempfile
@@ -858,6 +859,68 @@ class NewTestsFixtureTest(unittest.TestCase):
             "names scripts/planning_escalation.py, changed by this pull "
             "request", got.reason)
 
+    def _decide_1030(self, *, exchanged=False, **overrides):
+        fixture = json.loads((FIXTURES / "bureau-pipeline-1030.json")
+                             .read_text(encoding="utf-8"))
+        ours = fixture["compare"]["files"]
+        theirs = fixture["since_run"]["files"]
+        if exchanged:
+            ours, theirs = theirs, ours
+        kwargs = {"compare": dict(fixture["compare"], files=ours),
+                  "base_advance": fixture["base_advance"],
+                  "declaration": fixture["declaration"],
+                  "receipts": fixture["receipts"],
+                  "since_run": dict(fixture["since_run"], files=theirs)}
+        kwargs.update(overrides)
+        return fixture, osr.decide(**kwargs)
+
+    def test_bureau_pipeline_1030_refreshes(self):
+        # DRE-6967: #1030's guard polices other tests, and main gained #1031's
+        # test file while #1030's tests were running.
+        fixture, got = self._decide_1030()
+        self.assertEqual(osr.REFRESH, got.decision)
+        self.assertEqual(osr.RULE_NEW_TESTS, got.rule)
+        opens = ("this pull request adds "
+                 "tests/test_no_test_pins_a_console_choice.py, which polices "
+                 "other tests (it names ")
+        ends = (" of them), and main added tests/test_model_caution.py since "
+                "this head's last test run")
+        self.assertTrue(got.reason.startswith(opens), got.reason)
+        self.assertTrue(got.reason.endswith(ends), got.reason)
+        count = int(got.reason[len(opens):-len(ends)])
+        self.assertGreaterEqual(count, 3)
+        self.assertEqual(fixture["expect"]["named"], count)
+        self.assertEqual(28, count)
+
+    def test_bureau_pipeline_1030_with_the_sides_exchanged_refreshes(self):
+        _fixture, got = self._decide_1030(exchanged=True)
+        self.assertEqual(osr.REFRESH, got.decision)
+        self.assertEqual(osr.RULE_NEW_TESTS, got.rule)
+        self.assertTrue(got.reason.startswith(
+            "main added tests/test_no_test_pins_a_console_choice.py, which "
+            "polices other tests"), got.reason)
+        self.assertEqual(
+            "main added tests/test_no_test_pins_a_console_choice.py, which "
+            "polices other tests (it names 28 of them), and this pull request "
+            "adds tests/test_model_caution.py", got.reason)
+
+    def test_bureau_pipeline_1030_with_the_switch_off_proceeds(self):
+        _fixture, got = self._decide_1030(
+            declaration={"recheck_new_tests": False,
+                         "order_sensitive_paths": []},
+            since_run=Untouchable())
+        self.assertEqual(osr.PROCEED, got.decision)
+        self.assertEqual("", got.rule)
+
+    def test_bureau_pipeline_1030_after_one_refresh_proceeds(self):
+        _fixture, got = self._decide_1030(receipts=[
+            f"♻️ {osr.new_tests_receipt_marker(OLD_TIP)} — why"])
+        self.assertEqual(osr.PROCEED, got.decision)
+        self.assertEqual(
+            "behind `main` by 12, but no declared prefix was added to on both "
+            "sides, and this pull request was already refreshed once for new "
+            "tests — never a second time", got.reason)
+
     def test_each_fixture_is_quiet_with_the_switch_off(self):
         # The clash is caught by the new rule alone, never by the old one.
         for name in ("agent-bureau-3604.json", "bureau-pipeline-871.json"):
@@ -872,6 +935,189 @@ class NewTestsFixtureTest(unittest.TestCase):
                                  receipts=fixture["receipts"],
                                  since_run=Untouchable())
                 self.assertEqual(osr.PROCEED, got.decision)
+
+
+GUARD = "tests/test_guard_reads_the_folder.py"
+OTHER_TEST = "tests/test_other_side.py"
+UNNAMED_SOURCE = "scripts/unrelated_module.py"
+
+
+def policing_patch(count, *, own=None, added=True):
+    """A patch whose added lines name `count` other test files, the way an
+    allow-list does."""
+    mark = "+" if added else "-"
+    lines = ["@@ -0,0 +1,9 @@", f"{mark}ALLOWED = {{"]
+    lines += [f'{mark}    "tests/test_allowed_{n}.py",' for n in range(count)]
+    if own:
+        lines += [f"{mark}# {own} {own} tests/{own}"]
+    lines.append(f"{mark}}}")
+    return "\n".join(lines)
+
+
+def policing(**overrides):
+    """The switch on, a guard on one side and a new test file on the other;
+    by default the pull request adds the guard."""
+    kwargs = {
+        "compare": compare([added_test(GUARD, policing_patch(3)),
+                            changed("tests/test_touched.py")]),
+        "base_advance": advance([added_test(OTHER_TEST, "+import os")]),
+        "declaration": recheck(),
+        "since_run": since([added_test(OTHER_TEST, "+import os"),
+                            changed(UNNAMED_SOURCE)]),
+    }
+    kwargs.update(overrides)
+    return decide(**kwargs)
+
+
+class NewTestsPolicingTest(unittest.TestCase):
+    """Rule 6f (DRE-6967): a new test that polices other tests meets a new
+    test file from the other side — #1030 and #1031."""
+
+    def test_the_threshold_is_one_named_constant_of_three(self):
+        self.assertEqual(3, osr.POLICING_MIN_NAMED)
+
+    def test_a_guard_in_this_pull_request_meets_a_new_test_on_main(self):
+        got = policing()
+        self.assertEqual(osr.REFRESH, got.decision)
+        self.assertEqual(osr.RULE_NEW_TESTS, got.rule)
+        self.assertEqual("", got.prefix)
+        self.assertEqual(
+            f"this pull request adds {GUARD}, which polices other tests (it "
+            f"names 3 of them), and main added {OTHER_TEST} since this head's "
+            f"last test run", got.reason)
+
+    def test_a_guard_on_main_meets_a_new_test_in_this_pull_request(self):
+        got = policing(compare=compare([added_test(OTHER_TEST, "+import os"),
+                                        changed(UNNAMED_SOURCE)]),
+                       since_run=since([added_test(GUARD, policing_patch(4))]))
+        self.assertEqual(osr.REFRESH, got.decision)
+        self.assertEqual(osr.RULE_NEW_TESTS, got.rule)
+        self.assertEqual(
+            f"main added {GUARD}, which polices other tests (it names 4 of "
+            f"them), and this pull request adds {OTHER_TEST}", got.reason)
+
+    def test_naming_two_other_tests_proceeds_and_three_refreshes(self):
+        for count, word in ((0, osr.PROCEED), (2, osr.PROCEED),
+                            (3, osr.REFRESH), (28, osr.REFRESH)):
+            with self.subTest(count=count):
+                got = policing(compare=compare(
+                    [added_test(GUARD, policing_patch(count))]))
+                self.assertEqual(word, got.decision)
+                got = policing(
+                    compare=compare([added_test(OTHER_TEST, "+import os")]),
+                    since_run=since([added_test(GUARD,
+                                                policing_patch(count))]))
+                self.assertEqual(word, got.decision)
+
+    def test_a_guard_with_no_new_test_file_on_the_other_side_proceeds(self):
+        for label, others in {
+            "nothing": [],
+            "a source": [changed(UNNAMED_SOURCE)],
+            "a modified test": [changed(OTHER_TEST)],
+            "a removed test": [changed(OTHER_TEST, status="removed")],
+            "a new source": [changed(UNNAMED_SOURCE, status="added")],
+        }.items():
+            with self.subTest(label):
+                got = policing(since_run=since(others))
+                self.assertEqual(osr.PROCEED, got.decision)
+                got = policing(compare=compare(others),
+                               since_run=since([added_test(
+                                   GUARD, policing_patch(5))]))
+                self.assertEqual(osr.PROCEED, got.decision)
+
+    def test_a_renamed_test_file_on_the_other_side_counts(self):
+        got = policing(since_run=since([added_test(OTHER_TEST, "+import os",
+                                                   status="renamed")]))
+        self.assertEqual(osr.REFRESH, got.decision)
+        self.assertIn(OTHER_TEST, got.reason)
+
+    def test_the_tests_own_basename_does_not_count(self):
+        own = posixpath.basename(GUARD)
+        got = policing(compare=compare(
+            [added_test(GUARD, policing_patch(2, own=own))]))
+        self.assertEqual(osr.PROCEED, got.decision)
+        got = policing(compare=compare(
+            [added_test(GUARD, policing_patch(3, own=own))]))
+        self.assertIn("(it names 3 of them)", got.reason)
+
+    def test_each_distinct_name_counts_once(self):
+        patch = "+" + " ".join(["tests/test_one.py"] * 3 + ["test_two.py"] * 2)
+        got = policing(compare=compare([added_test(GUARD, patch)]))
+        self.assertEqual(osr.PROCEED, got.decision)
+
+    def test_only_the_lines_the_patch_adds_count(self):
+        removed = policing_patch(5, added=False)
+        context = "\n".join(" " + line[1:] for line in
+                            policing_patch(5).splitlines()[1:])
+        for patch in (removed, "@@ -1,7 +1,7 @@\n" + context):
+            with self.subTest(patch=patch[:20]):
+                got = policing(compare=compare([added_test(GUARD, patch)]))
+                self.assertEqual(osr.PROCEED, got.decision)
+
+    def test_a_name_is_a_whole_run_with_trailing_dots_dropped(self):
+        got = policing(compare=compare([added_test(
+            GUARD, "+see test_a.py, b_test.py and RiverRow.fold.test.ts.")]))
+        self.assertEqual(osr.REFRESH, got.decision)
+        self.assertIn("(it names 3 of them)", got.reason)
+        # Inside a longer run, a test-shaped piece is not a name.
+        got = policing(compare=compare([added_test(
+            GUARD, "+test_a.pyc test_b.py-old xtest_c.py test_d.pyz")]))
+        self.assertEqual(osr.PROCEED, got.decision)
+
+    def test_a_guard_with_no_patch_proceeds_and_is_named(self):
+        got = policing(compare=compare([added_test(GUARD, patch=None)]))
+        self.assertEqual(osr.PROCEED, got.decision)
+        self.assertIn(f"could not read {GUARD}", got.reason)
+        got = policing(compare=compare([added_test(OTHER_TEST, "+import os")]),
+                       since_run=since([added_test(GUARD, patch=None)]))
+        self.assertEqual(osr.PROCEED, got.decision)
+        self.assertIn(f"could not read {GUARD}", got.reason)
+
+    def test_todays_arms_are_tried_first(self):
+        # The guard also names a source file main changed: the naming arm's
+        # reason, not this one's.
+        patch = policing_patch(3) + "\n+import unrelated_module"
+        got = policing(compare=compare([added_test(GUARD, patch)]))
+        self.assertEqual(osr.REFRESH, got.decision)
+        self.assertEqual(f"this pull request adds {GUARD}, which names "
+                         f"{UNNAMED_SOURCE}, changed on main", got.reason)
+
+    def test_the_pull_requests_guard_is_read_before_mains(self):
+        guard_two = "tests/test_second_guard.py"
+        got = policing(since_run=since([
+            added_test(guard_two, policing_patch(3))]))
+        self.assertEqual(osr.REFRESH, got.decision)
+        self.assertTrue(got.reason.startswith(
+            f"this pull request adds {GUARD}"), got.reason)
+        self.assertIn(f"main added {guard_two} since", got.reason)
+
+    def test_the_switch_off_never_reaches_the_arm(self):
+        got = policing(declaration={"recheck_new_tests": False,
+                                    "order_sensitive_paths": []},
+                       since_run=Untouchable())
+        self.assertEqual(osr.PROCEED, got.decision)
+        got = policing(declaration={"order_sensitive_paths": []},
+                       since_run=Untouchable())
+        self.assertEqual(osr.PROCEED, got.decision)
+
+    def test_one_refresh_per_pull_request_still_holds(self):
+        got = policing(receipts=[osr.new_tests_receipt_marker(OLD_TIP)])
+        self.assertEqual(osr.PROCEED, got.decision)
+        self.assertIn("already refreshed once for new tests", got.reason)
+
+    def test_the_reason_is_one_line(self):
+        hostile = "tests/test_a\nrule=order-sensitive.py"
+        got = policing(since_run=since([added_test(hostile, "+import os")]))
+        self.assertEqual(osr.REFRESH, got.decision)
+        self.assertNotIn("\n", got.reason)
+
+    def test_the_module_docstring_states_step_f(self):
+        doc = " ".join((osr.__doc__ or "").split())
+        self.assertIn("DRE-6967", doc)
+        self.assertIn("#1030", doc)
+        self.assertIn("#1031", doc)
+        self.assertLess(doc.index(" e. `refresh`"), doc.index(" f. "))
+        self.assertLess(doc.index(" f. "), doc.index("Known limit"))
 
 
 class NewTestsReasonTest(unittest.TestCase):
