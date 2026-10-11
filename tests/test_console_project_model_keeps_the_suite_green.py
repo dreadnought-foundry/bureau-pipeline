@@ -27,8 +27,25 @@ file carries whatever the CEO last saved — #993 itself, once it merged — and
 case that re-applies a save already in the tree is refused as a no-op before
 the suite ever runs.
 
-The three cases run their suites side by side: each is the whole model suite,
-and one after another they would cost three times the wall clock.
+EVERY PROJECT, EVERY GROUP (DRE-6883)
+-------------------------------------
+The three cases above tried agent-bureau-demo and portico, and both went green
+while a save for atlas, or for any project's Planners, still turned the suite
+red. So the walk also covers the whole grid: every repo slug in
+config/repo-map.json × every kind in config/models.yaml, each pair saved alone
+into its own copy. The grid is READ from those two files, never written here,
+so a project or a group added later is walked the day it is added.
+
+Each pair's model is one the policy accepts as that project's exception for
+that group — a rung of the group's own ladder below its first, for which
+`model_fallback.policy_errors` raises nothing under that pair's key. Where a
+group accepts more than one, the projects take them in turn (the i-th project
+in sorted order takes the i-th accepted rung, wrapping), so every accepted
+rung of every group is saved by some project.
+
+The cases run their suites side by side, as many at once as the machine has
+cores: each is the whole model suite, and one after another they would cost
+the sum of their wall clocks.
 
 Run: cd bureau-pipeline && python3 -m pytest tests/test_console_project_model_keeps_the_suite_green.py -q
 """
@@ -49,8 +66,13 @@ import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "tests"))
+sys.path.insert(0, str(ROOT / "scripts"))
 
-from model_config_text import without_projects  # noqa: E402
+import model_fallback as mf  # noqa: E402
+from model_config_text import config_without_projects, without_projects  # noqa: E402
+
+REPO_MAP = ROOT / "config" / "repo-map.json"
+MODELS = ROOT / "config" / "models.yaml"
 
 #: The six files #993 turned red, named by the card.
 NAMED = (
@@ -98,6 +120,49 @@ CASES = {
         {},
     ),
 }
+
+
+def file_pairs() -> set[tuple[str, str]]:
+    """Every (project, group) pair the two files hold, read without the grid's
+    help: the repo-map's keys × the models file's kinds."""
+    slugs = json.loads(REPO_MAP.read_text())
+    kinds = yaml.safe_load(MODELS.read_text())["kinds"]
+    return {(slug, kind) for slug in slugs for kind in kinds}
+
+
+def accepted_models(raw: dict, slug: str, kind: str) -> list[str]:
+    """The rungs below the first of `kind`'s own ladder that the policy
+    accepts as `slug`'s exception for `kind`, in ladder order."""
+    cfg = mf._normalize_config(raw)
+    ladder = cfg["ladders"][cfg["kinds"][kind]]
+    prefix = f"projects.{slug}.{kind}: "
+    accepted = []
+    for model in ladder[1:]:
+        trial = dict(raw, projects={slug: {kind: model}})
+        if not any(error.startswith(prefix) for error in mf.policy_errors(trial)):
+            accepted.append(model)
+    return accepted
+
+
+def grid() -> dict[str, tuple[str, str, str | None]]:
+    """Case name → (project, group, model) for every pair `file_pairs` holds.
+    A pair whose group accepts no model keeps None, so it is reported, never
+    dropped."""
+    raw = yaml.safe_load(config_without_projects())
+    slugs = sorted(json.loads(REPO_MAP.read_text()))
+    pairs = {}
+    for i, slug in enumerate(slugs):
+        for kind in raw["kinds"]:
+            accepted = accepted_models(raw, slug, kind)
+            model = accepted[i % len(accepted)] if accepted else None
+            pairs[f"{slug}-{kind}"] = (slug, kind, model)
+    return pairs
+
+
+GRID = grid()
+
+for _name, (_slug, _kind, _model) in GRID.items():
+    CASES[_name] = ([[_set(_slug, _kind, _model)]], {_slug: {_kind: _model}})
 
 
 def copy_tree(base: Path) -> Path:
@@ -175,7 +240,7 @@ def run_case(name: str, base: Path) -> dict:
 @pytest.fixture(scope="module")
 def results(tmp_path_factory) -> dict:
     base = tmp_path_factory.mktemp("dre6858")
-    with ThreadPoolExecutor(max_workers=len(CASES)) as pool:
+    with ThreadPoolExecutor(max_workers=os.cpu_count() or 2) as pool:
         futures = {name: pool.submit(run_case, name, base / name)
                    for name in CASES}
         return {name: future.result() for name, future in futures.items()}
@@ -189,6 +254,41 @@ def test_the_suite_covers_the_six_files_and_every_model_test():
     assert len(files) > len(NAMED)
     assert all(re.fullmatch(r"tests/test_(model_\w+|project_model_exceptions)\.py", f)
                for f in files), files
+
+
+def test_the_walk_covers_every_project_and_every_group():
+    """DRE-6883: a project or a group the walk skips is one nobody proved."""
+    pairs = file_pairs()
+    assert len(pairs) >= 2 * 3, pairs
+    walked = {(slug, kind) for slug, kind, _ in GRID.values()}
+    assert walked == pairs
+    assert len(GRID) == len(pairs)
+    unsaveable = [name for name, (_, _, model) in GRID.items() if model is None]
+    assert unsaveable == [], (
+        f"no model the policy accepts below the first rung for {unsaveable}")
+    for name in GRID:
+        assert name in CASES, name
+
+
+def test_every_accepted_rung_of_every_group_is_saved_by_some_project():
+    raw = yaml.safe_load(config_without_projects())
+    saved = {(kind, model) for _, kind, model in GRID.values()}
+    for slug, kind in file_pairs():
+        for model in accepted_models(raw, slug, kind):
+            assert (kind, model) in saved, (kind, model)
+
+
+def test_the_grid_reads_a_project_added_to_the_repo_map(monkeypatch, tmp_path):
+    """The grid is the files', so a new project is walked the day it lands."""
+    repo_map = tmp_path / "repo-map.json"
+    slugs = dict(json.loads(REPO_MAP.read_text()), newcomer="example/newcomer")
+    repo_map.write_text(json.dumps(slugs))
+    monkeypatch.setattr(sys.modules[__name__], "REPO_MAP", repo_map)
+    monkeypatch.setattr(mf, "declared_repo_slugs", lambda path=None: set(slugs))
+    kinds = yaml.safe_load(MODELS.read_text())["kinds"]
+    added = {name: case for name, case in grid().items() if case[0] == "newcomer"}
+    assert {case[1] for case in added.values()} == set(kinds)
+    assert all(case[2] is not None for case in added.values()), added
 
 
 @pytest.mark.parametrize("name", list(CASES))
