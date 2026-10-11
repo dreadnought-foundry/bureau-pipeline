@@ -17,6 +17,10 @@ on Fable whenever Fable works.
 
 These tests run the step's REAL shell against the real selector, with the
 Linear read stubbed, so the wiring is proven by execution rather than by grep.
+The selector reads the frozen model files (tests/model_fixture.py, DRE-6884),
+so a console save that moves the planner or reorders its ladder leaves these
+rules standing: every model id below is a rung read off the fixture's
+judgement ladder, named for its place on it.
 """
 
 import json
@@ -32,13 +36,14 @@ import yaml
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 WF = os.path.join(ROOT, ".github", "workflows", "plan.yml")
 sys.path.insert(0, os.path.join(ROOT, "scripts"))
+sys.path.insert(0, os.path.join(ROOT, "tests"))
 
 import model_fallback as mf  # noqa: E402
+import model_fixture  # noqa: E402
 
-FABLE51 = "claude-fable-5-1"
-# The planner ladder's Opus rung — `claude-opus-5-5` since DRE-4836.
-OPUS55 = "claude-opus-5-5"
-SONNET = "claude-sonnet-4-6"
+# The planner's walk in the frozen files: the top rung, and the one below it.
+JUDGEMENT = model_fixture.ladder(model_fixture.fixture_config(), "judgement")
+TOP, SECOND = JUDGEMENT[0], JUDGEMENT[1]
 
 HEARTBEAT_NEEDLE = "planner agent starting"
 
@@ -85,8 +90,11 @@ class SelectModelStepRunsTest(unittest.TestCase):
         scripts = os.path.join(self.tmp, ".bureau-pipeline", "scripts")
         os.makedirs(scripts)
         shutil.copy(os.path.join(ROOT, "scripts", "model_fallback.py"), scripts)
-        shutil.copytree(os.path.join(ROOT, "config"),
-                        os.path.join(self.tmp, ".bureau-pipeline", "config"))
+        config = os.path.join(self.tmp, ".bureau-pipeline", "config")
+        os.makedirs(config)
+        for name in ("models.yaml", "model-prices.yaml"):
+            shutil.copy(model_fixture.FIXTURE_DIR / name, config)
+        shutil.copy(os.path.join(ROOT, "config", "repo-map.json"), config)
         with open(os.path.join(scripts, "linear_ops.py"), "w") as fh:
             fh.write(STUB_LINEAR_OPS)
         self.log = os.path.join(self.tmp, "linear.log")
@@ -109,7 +117,7 @@ class SelectModelStepRunsTest(unittest.TestCase):
             "STUB_THREAD": json.dumps(thread),
             "STUB_LINEAR_LOG": self.log,
             "BUREAU_FAKE_AVAILABLE": json.dumps(
-                available or {FABLE51: True, OPUS55: True, SONNET: True}
+                available or {model: True for model in JUDGEMENT}
             ),
         })
         if linear_fails:
@@ -130,34 +138,36 @@ class SelectModelStepRunsTest(unittest.TestCase):
         return ("🪦 planner died with API/model error (is_error) on "
                 f"{model}\n{mf.error_marker(model)}")
 
-    def test_a_death_on_fable_in_the_last_attempt_moves_the_planner_to_opus(self):
-        # DRE-3693's thread at 14:28 PT on 2026-09-13, in shape.
-        out = self.run_step([self.heartbeat(FABLE51), self.death(FABLE51)])
-        self.assertEqual(out["model"], OPUS55)
+    def test_a_death_on_the_top_rung_in_the_last_attempt_moves_the_planner_down(self):
+        # DRE-3693's thread at 14:28 PT on 2026-09-13, in shape: Fable died,
+        # and the rerun planned on Opus, the rung below it.
+        out = self.run_step([self.heartbeat(TOP), self.death(TOP)])
+        self.assertEqual(out["model"], SECOND)
         self.assertTrue(out["why"].startswith("DEGRADED"), out["why"])
 
-    def test_a_card_with_no_death_stays_on_fable(self):
-        out = self.run_step([self.heartbeat(FABLE51)])
-        self.assertEqual(out["model"], FABLE51)
+    def test_a_card_with_no_death_stays_on_the_top_rung(self):
+        out = self.run_step([self.heartbeat(TOP)])
+        self.assertEqual(out["model"], TOP)
 
-    def test_an_old_fable_death_before_a_later_attempt_does_not_hold_fable_off(self):
-        # Fable died once, Opus planned after it: the next plan tries Fable again.
+    def test_an_old_death_before_a_later_attempt_does_not_hold_the_top_rung_off(self):
+        # The top rung died once, the rung below planned after it: the next
+        # plan tries the top again.
         out = self.run_step([
-            self.heartbeat(FABLE51), self.death(FABLE51), self.heartbeat(OPUS55),
+            self.heartbeat(TOP), self.death(TOP), self.heartbeat(SECOND),
         ])
-        self.assertEqual(out["model"], FABLE51)
+        self.assertEqual(out["model"], TOP)
 
     def test_a_linear_failure_keeps_the_first_choice(self):
-        out = self.run_step([self.heartbeat(FABLE51), self.death(FABLE51)],
+        out = self.run_step([self.heartbeat(TOP), self.death(TOP)],
                             linear_fails=True)
-        self.assertEqual(out["model"], FABLE51)
+        self.assertEqual(out["model"], TOP)
 
     def test_the_read_asks_for_the_chosen_model_since_the_last_heartbeat(self):
         self.run_step([])
         calls = [json.loads(l) for l in open(self.log).read().splitlines()]
         self.assertEqual(calls, [{
             "card": "DRE-3693",
-            "needle": mf.error_marker(FABLE51),
+            "needle": mf.error_marker(TOP),
             "since": HEARTBEAT_NEEDLE,
         }])
 
@@ -175,7 +185,7 @@ class TheTwoHalvesAgreeTest(unittest.TestCase):
     def test_the_death_step_writes_the_marker_the_select_step_reads(self):
         record = step("Record is_error death")["run"]
         self.assertIn("error_marker", record)
-        self.assertEqual(mf.error_marker(OPUS55), f"model-error: {OPUS55}")
+        self.assertEqual(mf.error_marker(SECOND), f"model-error: {SECOND}")
         self.assertIn('"model-error: $MODEL"', step("Select model")["run"])
 
 
