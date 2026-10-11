@@ -44,6 +44,17 @@ this module is where the medic asks them:
      gives it no diagnosis and no failure card either. Every other failure of
      that workflow, a crashed validator included, keeps both.
 
+  5. **THE DEFAULT BRANCH HAS MOVED PAST THE RUN** (DRE-6882). A failed `push`
+     run on the default branch whose commit is no longer that branch's tip is
+     not retried: the commit is no longer the branch's tip, so a rerun's
+     result, red or green, says nothing about `main` — on 2026-10-10 the
+     retry of a red agent-bureau `main` run finished red ten minutes after the
+     fix (#3618) had merged. medic.yml reads the tip (one call, only for such
+     a run) and says the skip in its own run summary; it files no receipt and
+     no failure card. A commit still at the tip, a tip that could not be read
+     (said as a warning), and every `pull_request`, `schedule` or
+     `workflow_dispatch` run keep the retry.
+
 Rule 1 is for runs that START WORK (Stage 2 fix #23). A build, a fix or a plan
 rerun is new agent work on a card a person has said stop to. A Linear Sync
 rerun starts no agent: it finishes bookkeeping for work that already merged.
@@ -104,7 +115,9 @@ CLI:
     python3 medic_retry.py decide --branch <head-ref> --log <file> \
         [--run-started-at <iso>] [--workflow <failed workflow's name>] \
         [--failed-step <failed step's name>] \
-        [--snapshot <file to leave the card read in>]
+        [--snapshot <file to leave the card read in>] \
+        [--event <event>] [--head-sha <sha>] [--default-branch <name>] \
+        [--tip-sha <the default branch's tip>]
     python3 medic_retry.py post --card <DRE-N> --rule <rule> --detail <text> \
         [--run-url <url>]
     python3 medic_retry.py diagnosis-target --branch <head-ref> \
@@ -183,6 +196,21 @@ RULE_OUT_OF_MEMORY = "out-of-memory"
 # which planning parked in Green Light as a question for the CEO. A refusal is
 # neither retried nor carded; medic.yml says so in its own run summary.
 RULE_REFUSED_BY_DESIGN = "refused-by-design"
+# DRE-6882. The SIXTH rule: the run's commit is no longer the default branch's
+# tip. On 2026-10-10 the retry of a failed agent-bureau `main` run finished red
+# at 23:47 PT, ten minutes after the fix (#3618) had merged — a fresh red run
+# on `main` for a commit that was no longer its tip. A rerun of a superseded
+# commit says nothing about the branch, red or green; medic.yml says the skip
+# in its own run summary, because a run on the default branch has no card.
+RULE_SUPERSEDED = "superseded-on-default"
+
+# The one event the superseded rule reads. A `pull_request` run's commit is the
+# PR's own, and a `schedule` or `workflow_dispatch` run asks about the branch
+# as it stood when it started, so neither is "behind" anything.
+SUPERSEDED_EVENT = "push"
+
+# How much of a commit the sentence names — red_main_repair.SHA_CHARS's width.
+SHORT_SHA = 12
 
 # The workflow and the step the fifth rule is about, by their own names in
 # `.github/workflows/model-config-change.yml` — tests/test_medic_refused_change_set.py
@@ -444,6 +472,42 @@ def change_set_refusal(log_text: str, *, workflow, failed_step: str = "") -> str
     )
 
 
+def reads_the_tip(event, branch, default_branch) -> bool:
+    """Is this a run the superseded rule reads — a `push` run on the default
+    branch?
+
+    The one question medic.yml's gate step asks before it makes the tip read,
+    so a `pull_request`, `schedule` or `workflow_dispatch` run costs no call.
+    """
+    default = (default_branch or "").strip()
+    return ((event or "").strip() == SUPERSEDED_EVENT
+            and bool(default) and (branch or "").strip() == default)
+
+
+def superseded_on_default(event, branch, default_branch, head_sha, tip_sha, *,
+                          run_id="") -> str:
+    """The one sentence that says this run's commit is no longer the default
+    branch's tip, or "" when the run keeps its retry (DRE-6882).
+
+    Fails toward the retry: an empty commit or tip (a read that did not
+    answer) is "", never a guess — `_decide_cli` says that case out loud.
+    """
+    head = (head_sha or "").strip().lower()
+    tip = (tip_sha or "").strip().lower()
+    if not reads_the_tip(event, branch, default_branch) or not head or not tip:
+        return ""
+    if head == tip:
+        return ""
+    default = default_branch.strip()
+    run = f"Run {run_id}".strip() if str(run_id or "").strip() else "This run"
+    return (
+        f"{run} failed on commit {head[:SHORT_SHA]}, which is no longer the "
+        f"tip of {default} (now {tip[:SHORT_SHA]}): a rerun of a commit "
+        f"{default} has moved past says nothing about {default}, red or "
+        f"green, so it was not retried."
+    )
+
+
 def decide(
     *,
     parked_because: str = "",
@@ -452,6 +516,7 @@ def decide(
     repeat_stall: str = "",
     out_of_memory: str = "",
     refused_by_design: str = "",
+    superseded: str = "",
 ) -> Decision:
     """Retry this failed run, or decline and say why.
 
@@ -469,6 +534,10 @@ def decide(
     # DRE-6851: not a failure at all, so no other rule's finding applies.
     if refused_by_design:
         return Decision(DECLINE, RULE_REFUSED_BY_DESIGN, refused_by_design)
+    # DRE-6882: the branch has moved on, so no finding about THIS commit's
+    # death — a stall, a kill, a turn cap — is worth a rerun either.
+    if superseded:
+        return Decision(DECLINE, RULE_SUPERSEDED, superseded)
     if repeat_stall:
         return Decision(DECLINE, RULE_STALLED_REPEAT, repeat_stall)
     # `out_of_memory` here is the REFUSAL SENTENCE (empty when the kill still
@@ -1117,7 +1186,25 @@ def _decide_cli(args) -> int:
         refused_by_design=change_set_refusal(
             log_text, workflow=args.workflow, failed_step=args.failed_step
         ),
+        # DRE-6882: the default branch's tip, read by medic.yml's gate step
+        # for a push run on that branch and handed over as a flag.
+        superseded=superseded_on_default(
+            args.event, args.branch, args.default_branch, args.head_sha,
+            args.tip_sha, run_id=args.run_id,
+        ),
     )
+    if (decision.retry
+            and reads_the_tip(args.event, args.branch, args.default_branch)
+            and args.head_sha.strip() and not args.tip_sha.strip()):
+        # Fail OPEN, out loud, the way an unreadable card is said above: a
+        # blip in one read must not silence a retry.
+        print(
+            f"::warning::medic retry gate: run {args.run_id or '?'} on commit "
+            f"{args.head_sha.strip()[:SHORT_SHA]} — the "
+            f"{args.default_branch.strip()} branch's tip could not be read, "
+            f"so the retry was taken.",
+            file=sys.stderr,
+        )
     print(f"retry={'true' if decision.retry else 'false'}")
     print(f"rule={decision.rule}")
     print(f"card={card or ''}")
@@ -1154,6 +1241,14 @@ def main(argv=None) -> int:
     # Stage 2 fix #23. Where to leave the card read for the limit step, so it
     # does not ask Linear for the same comments again (`write_snapshot`).
     gate.add_argument("--snapshot", default="")
+    # DRE-6882. The facts the superseded rule reads: the event that started
+    # the failed run, its commit, the repository's default branch and that
+    # branch's tip, which medic.yml reads only for a push run on it. Absent
+    # means the rule does not apply.
+    gate.add_argument("--event", default="")
+    gate.add_argument("--head-sha", default="")
+    gate.add_argument("--default-branch", default="")
+    gate.add_argument("--tip-sha", default="")
 
     # Stage 2 fix #23: the diagnosis agent's card, read before it starts.
     target = sub.add_parser("diagnosis-target")
