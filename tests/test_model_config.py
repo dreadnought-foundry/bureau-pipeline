@@ -237,11 +237,15 @@ class CanonicalConfigTest(unittest.TestCase):
 
     def test_the_planner_is_the_only_judgement_role(self):
         # DRE-3015: judgement-heavy and LOW-VOLUME. A role that runs per card
-        # belongs on the workhorse ladder however carefully it thinks.
+        # belongs on the workhorse ladder however carefully it thinks. The
+        # only PIPELINE-run role in Planners (DRE-6889): a session-run agent
+        # the CEO puts there selects as an unknown name, never from Planners.
         cfg = _canonical()
+        session = set(cfg.get("session_agents") or [])
         self.assertEqual(cfg["agents"]["planner"], "judgement")
         self.assertEqual(
-            sorted(r for r, k in cfg["agents"].items() if k == "judgement"),
+            sorted(r for r, k in cfg["agents"].items()
+                   if k == "judgement" and r not in session),
             ["planner"],
         )
         self.assertEqual(_ladder_for_role(cfg, "planner")[0], FABLE51)
@@ -303,11 +307,15 @@ class SelectResolvesFromConfigTest(unittest.TestCase):
         )
 
     def test_ladder_for_resolves_each_agents_assignment(self):
+        # Each pipeline-run role's assignment. A session-run agent the CEO put
+        # in a group walks the default ladder, as an unknown name does
+        # (DRE-6833), whatever its group.
         cfg = _canonical()
+        session = set(cfg.get("session_agents") or [])
         for name in cfg["agents"]:
             self.assertEqual(
                 mf.ladder_for(name),
-                _ladder_for_role(cfg, name),
+                mf.LADDER if name in session else _ladder_for_role(cfg, name),
                 f"{name}: ladder_for() != its config assignment",
             )
 

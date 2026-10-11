@@ -41,9 +41,11 @@ import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
+sys.path.insert(0, str(ROOT / "tests"))
 
 import model_fallback as mf  # noqa: E402
 import sync_model_config  # noqa: E402
+from model_config_text import config_with_session_agents_ungrouped  # noqa: E402
 
 CONFIG_PATH = ROOT / "config" / "models.yaml"
 REPO_MAP_PATH = ROOT / "config" / "repo-map.json"
@@ -55,9 +57,6 @@ SONNET55 = "claude-sonnet-5-5"
 SONNET5 = "claude-sonnet-5"
 SONNET46 = "claude-sonnet-4-6"
 FABLE51 = "claude-fable-5-1"
-
-INTERACTIVE = ["designer", "ux-ui-engineer", "fullstack-engineer", "mobile",
-               "product-lead"]
 
 
 def committed() -> dict:
@@ -96,9 +95,15 @@ class TestCommittedData:
             "judgement": ("Planners", "Turn an epic into the cards the fleet builds."),
         }
 
-    def test_ungrouped_is_the_five_interactive_agents(self):
+    def test_every_session_agent_is_in_a_group_or_in_none_and_only_they_are_in_none(self):
+        # DRE-6889: the CEO moves these agents into groups and adds new ones,
+        # so the claim is the one that holds for any saved state — every
+        # session-run agent is in a group or in none, and only they are in none.
         cfg = committed()
-        assert cfg["ungrouped"] == INTERACTIVE
+        assert cfg["session_agents"]
+        for name in cfg["session_agents"]:
+            assert name in cfg["agents"] or name in cfg["ungrouped"], name
+        assert set(cfg["ungrouped"]) <= set(cfg["session_agents"])
         assert not set(cfg["ungrouped"]) & set(cfg["agents"])
 
     def test_about_has_one_line_for_every_agent_and_every_ungrouped_name(self):
@@ -142,12 +147,14 @@ class TestNormalizedShape:
             "judgement": {"label": "Planners",
                           "purpose": "Turn an epic into the cards the fleet builds."},
         }
-        assert cfg["ungrouped"] == INTERACTIVE
+        assert cfg["ungrouped"] == committed()["ungrouped"]
         assert cfg["about"] == committed()["about"]
         assert cfg["projects"] == committed()["projects"]
 
     def test_a_kind_with_no_label_or_purpose_gets_the_defaults(self):
-        raw = committed()
+        # From a file with no session-run agent in a group: with
+        # `session_agents` popped, one the CEO grouped would be a stranger.
+        raw = yaml.safe_load(config_with_session_agents_ungrouped())
         for spec in raw["kinds"].values():
             spec.pop("label")
             spec.pop("purpose")
@@ -460,11 +467,20 @@ class TestSelectionIsUnchanged:
         mf.clear_availability_cache()
 
     def test_every_role_selects_the_top_of_its_kinds_ladder(self):
+        # Every pipeline-run role, read off the file. A session-run agent the
+        # CEO put in a group selects as an unknown name — the default ladder's
+        # top — whatever its group (DRE-6833).
         cfg = committed()
-        assert len(cfg["agents"]) == 13
-        for role, kind in cfg["agents"].items():
+        session = set(cfg["session_agents"])
+        roles = {r: k for r, k in cfg["agents"].items() if r not in session}
+        assert len(roles) == 13
+        for role, kind in roles.items():
             mf.clear_availability_cache()
             assert mf.select(role, probe=lambda m: True) == ladder(cfg, kind)[0], role
+        default_top = [r["model"] for r in cfg["ladders"][cfg["default_ladder"]]][0]
+        for role in session & set(cfg["agents"]):
+            mf.clear_availability_cache()
+            assert mf.select(role, probe=lambda m: True) == default_top, role
 
     def test_no_repo_without_an_exception_walks_anything_but_the_fleet_ladders(self):
         for slug in sorted(slugs() - set(mf.CONFIG["projects"])):

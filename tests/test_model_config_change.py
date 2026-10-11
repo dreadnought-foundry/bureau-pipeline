@@ -43,7 +43,11 @@ sys.path.insert(0, str(ROOT / "scripts"))
 sys.path.insert(0, str(ROOT / "tests"))
 
 import model_config_change as mcc  # noqa: E402
-from model_config_text import config_without_projects  # noqa: E402
+from model_config_text import (  # noqa: E402
+    fresh_agent_name,
+    with_session_agents_ungrouped,
+    without_projects,
+)
 from model_fallback import policy_errors  # noqa: E402
 
 TODAY = "2026-10-11"
@@ -59,8 +63,15 @@ SONNET5 = "claude-sonnet-5"
 
 def _text() -> str:
     """A copy of the real file, read fresh for every test, with no project
-    exceptions — the console writes those into the live file."""
-    return config_without_projects()
+    exceptions and every session-run agent in no group — the console writes
+    both into the live file (DRE-6858, DRE-6889)."""
+    return without_projects(with_session_agents_ungrouped(CONFIG.read_text()))
+
+
+#: Names `add_agent` takes — ones the file does not hold, whatever the CEO has
+#: added since.
+NEW = fresh_agent_name(yaml.safe_load(_text()))
+NEW_2 = fresh_agent_name(yaml.safe_load(_text()), "data-scientist")
 
 
 def _comments(text: str) -> list[str]:
@@ -118,19 +129,19 @@ def test_move_agent_takes_an_ungrouped_agent_off_the_ungrouped_list():
 
 def test_add_agent_puts_a_new_name_in_ungrouped_with_its_about_line():
     before = yaml.safe_load(_text())
-    _, doc = _edit({"op": "add_agent", "agent": "data-analyst",
+    _, doc = _edit({"op": "add_agent", "agent": NEW,
                     "about": "Answers questions from our data"})
-    assert doc["ungrouped"] == before["ungrouped"] + ["data-analyst"]
-    assert doc["about"]["data-analyst"] == "Answers questions from our data"
-    assert {k: v for k, v in doc["about"].items() if k != "data-analyst"} == before["about"]
-    assert "data-analyst" not in doc["agents"]
-    assert doc["session_agents"] == before["session_agents"] + ["data-analyst"]
+    assert doc["ungrouped"] == before["ungrouped"] + [NEW]
+    assert doc["about"][NEW] == "Answers questions from our data"
+    assert {k: v for k, v in doc["about"].items() if k != NEW} == before["about"]
+    assert NEW not in doc["agents"]
+    assert doc["session_agents"] == before["session_agents"] + [NEW]
 
 
 def test_add_agent_keeps_an_about_line_that_needs_quoting():
     line = 'Reads "the numbers": every #metric, verbatim'
-    _, doc = _edit({"op": "add_agent", "agent": "data-analyst", "about": line})
-    assert doc["about"]["data-analyst"] == line
+    _, doc = _edit({"op": "add_agent", "agent": NEW, "about": line})
+    assert doc["about"][NEW] == line
 
 
 def test_add_group_adds_a_kind_and_a_ladder_of_the_same_name():
@@ -235,7 +246,7 @@ def test_every_operation_touches_only_the_lines_it_names():
 def test_a_valid_change_set_is_applied_and_passes_the_policy_a_pull_request_meets():
     text, refusals = _apply(
         {"op": "move_agent", "agent": "proof", "group": "advisory"},
-        {"op": "add_agent", "agent": "data-analyst", "about": "Answers questions from our data"},
+        {"op": "add_agent", "agent": NEW, "about": "Answers questions from our data"},
         {"op": "set_default_model", "group": "workhorse", "model": SONNET55},
         {"op": "set_project_model", "project": "atlas", "group": "workhorse", "model": OPUS55},
     )
@@ -243,7 +254,7 @@ def test_a_valid_change_set_is_applied_and_passes_the_policy_a_pull_request_meet
     doc = yaml.safe_load(text)
     assert policy_errors(doc) == []
     assert doc["agents"]["proof"] == "advisory"
-    assert "data-analyst" in doc["ungrouped"]
+    assert NEW in doc["ungrouped"]
     assert _ladder(doc, "workhorse")[0] == SONNET55
     assert doc["projects"] == {"atlas": {"workhorse": OPUS55}}
     assert _comments(text) == _comments(_text())
@@ -260,11 +271,11 @@ def test_a_set_and_its_clear_in_one_change_set_cancel_out():
 
 def test_a_later_change_sees_an_earlier_one():
     text, refusals = _apply(
-        {"op": "add_agent", "agent": "data-analyst", "about": "Answers questions"},
-        {"op": "add_agent", "agent": "data-scientist", "about": "Models our data"},
+        {"op": "add_agent", "agent": NEW, "about": "Answers questions"},
+        {"op": "add_agent", "agent": NEW_2, "about": "Models our data"},
     )
     assert refusals == []
-    assert yaml.safe_load(text)["ungrouped"][-2:] == ["data-analyst", "data-scientist"]
+    assert yaml.safe_load(text)["ungrouped"][-2:] == [NEW, NEW_2]
 
 
 @pytest.mark.parametrize("change, phrase", [

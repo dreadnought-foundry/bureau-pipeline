@@ -79,9 +79,11 @@ MODEL_CATALOG = ROOT / "scripts" / "model_catalog.py"
 WORKFLOWS = ROOT / ".github" / "workflows"
 
 sys.path.insert(0, str(ROOT / "scripts"))
+sys.path.insert(0, str(ROOT / "tests"))
 
 import model_catalog as mc  # noqa: E402
 import model_fallback as mf  # noqa: E402
+from model_config_text import config_with_session_agents_ungrouped  # noqa: E402
 
 OPUS = "claude-opus-5"
 # The workhorse primary since DRE-4836 (2026-09-25); OPUS is the rung below.
@@ -400,8 +402,12 @@ class JudgementKindTest(unittest.TestCase):
         mf.clear_availability_cache()
 
     def test_the_judgement_kind_holds_the_planner_alone(self):
+        # Of the PIPELINE-run roles (DRE-6889): a session-run agent the CEO put
+        # in Planners selects nothing from it (rule 10 exempts it, below).
         cfg = _canonical()
-        holders = sorted(r for r, k in cfg["agents"].items() if k == JUDGEMENT)
+        session = set(cfg.get("session_agents") or [])
+        holders = sorted(r for r, k in cfg["agents"].items()
+                         if k == JUDGEMENT and r not in session)
         self.assertEqual(
             holders, ["planner"],
             "judgement is for judgement-heavy, LOW-VOLUME roles; a role that "
@@ -412,8 +418,11 @@ class JudgementKindTest(unittest.TestCase):
         # DRE-6833. A session agent's group selects nothing — the selector
         # answers it as an unknown name — so a session agent in Planners puts
         # no run on the strongest model, and rule 10 does not apply to it.
-        cfg = _canonical()
+        # From the file with every session agent in no group (DRE-6889), so
+        # the move below is the one under test, wherever the CEO put it.
+        cfg = yaml.safe_load(config_with_session_agents_ungrouped())
         self.assertIn("designer", cfg["session_agents"])
+        self.assertIn("designer", cfg["ungrouped"])
         rule_10 = "'judgement' is the planner's kind"
 
         exempt = copy.deepcopy(cfg)
