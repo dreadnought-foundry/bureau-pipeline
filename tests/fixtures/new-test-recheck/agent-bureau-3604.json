@@ -1,0 +1,55 @@
+{
+  "$note": "agent-bureau #3604. The file names are the pull request's: main had gained console/web/src/components/oneriver/RiverRow.fold.test.ts (the path as agent-bureau CI run 38115044206 reports it) and the pull request changed greenLightGrid.ts beside it. agent-bureau was not readable from the run that wrote this fixture, so the test's text is reconstructed around its naming of `greenLightGrid` and the describe/it titles that CI run logged. The shas and counts are synthetic.",
+  "declaration": {
+    "recheck_new_tests": true,
+    "order_sensitive_paths": [
+      "console/backend/alembic/versions/"
+    ]
+  },
+  "compare": {
+    "status": "diverged",
+    "ahead_by": 3,
+    "behind_by": 5,
+    "merge_base_commit": {
+      "sha": "3333333333333333333333333333333333333333"
+    },
+    "base_commit": {
+      "sha": "4444444444444444444444444444444444444444"
+    },
+    "files": [
+      {
+        "filename": "console/web/src/components/oneriver/greenLightGrid.ts",
+        "status": "modified"
+      },
+      {
+        "filename": "console/web/src/components/oneriver/RiverRow.tsx",
+        "status": "modified"
+      }
+    ]
+  },
+  "base_advance": {
+    "files": [
+      {
+        "filename": "console/web/src/components/oneriver/RiverRow.fold.test.ts",
+        "status": "added",
+        "patch": "@@ -0,0 +1,9 @@\n+import { describe, expect, it } from \"vitest\";\n+\n+import { greenLightGrid } from \"./greenLightGrid\";\n+\n+describe(\"under the phone line the pill and the action take a line of their own\", () => {\n+  it(\"the action cell stands under the row, the whole row wide — Green Light’s own rule\", () => {\n+    expect(greenLightGrid(\"phone\").action).toBe(\"1 / -1\");\n+  });\n+});"
+      }
+    ]
+  },
+  "since_run": {
+    "files": [
+      {
+        "filename": "console/web/src/components/oneriver/RiverRow.fold.test.ts",
+        "status": "added",
+        "patch": "@@ -0,0 +1,9 @@\n+import { describe, expect, it } from \"vitest\";\n+\n+import { greenLightGrid } from \"./greenLightGrid\";\n+\n+describe(\"under the phone line the pill and the action take a line of their own\", () => {\n+  it(\"the action cell stands under the row, the whole row wide — Green Light’s own rule\", () => {\n+    expect(greenLightGrid(\"phone\").action).toBe(\"1 / -1\");\n+  });\n+});"
+      }
+    ]
+  },
+  "receipts": [],
+  "expect": {
+    "decision": "refresh",
+    "rule": "new-tests",
+    "test_file": "console/web/src/components/oneriver/RiverRow.fold.test.ts",
+    "source_file": "console/web/src/components/oneriver/greenLightGrid.ts"
+  }
+}
