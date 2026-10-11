@@ -22,7 +22,10 @@ A third target is a whole generated file (DRE-6635):
     allows, every agent with the moves it allows, and the per-project
     exceptions. Every ``allowed`` / ``reason`` is ``policy_errors``' answer on
     a copy of the canonical config carrying that one option as a real entry,
-    so the page is read off the gate a pull request meets.
+    so the page is read off the gate a pull request meets. An agent's move is
+    judged as ``model_config_change.py`` judges it, on the edit it would make,
+    and a refused move publishes the plain line that script prints for it
+    (DRE-6833).
 
 Usage:
 
@@ -156,6 +159,7 @@ def load_config(path: Path = CONFIG) -> dict:
         "review_separation": _normalize_separation(raw.get("review_separation")),
         "groups": console["groups"],
         "ungrouped": console["ungrouped"],
+        "session_agents": console["session_agents"],
         "about": console["about"],
         "projects": console["projects"],
         "retired": ids(raw.get("retired")),
@@ -219,6 +223,8 @@ def render_literal(cfg: dict) -> str:
     lines.append("    },")
     rendered = ", ".join(f'"{name}"' for name in cfg["ungrouped"])
     lines.append(f'    "ungrouped": [{rendered}],')
+    rendered = ", ".join(f'"{name}"' for name in cfg["session_agents"])
+    lines.append(f'    "session_agents": [{rendered}],')
     lines.append('    "about": {')
     for name, line in cfg["about"].items():
         lines.append(f'        "{name}": {_text(line)},')
@@ -261,16 +267,31 @@ def render_registry_model(cfg: dict, agent: str) -> str:
     )
 
 
-def render_choices(raw: dict, cfg: dict, prices: dict) -> str:
+def render_choices(raw: dict, cfg: dict, prices: dict,
+                   registry: set[str] | None = None) -> str:
     """config/model-choices.json, the console's contract (DRE-6635): key order
     fixed, 2-space indent, trailing newline.
 
     No rule is restated here. A group's choice is ``policy_errors``' answer on
     a deep copy of ``raw`` carrying that model as an exception under
     ``projects[PROBE_SLUG]``, filtered to that entry's own prefix so an error
-    elsewhere in the config never reaches it; an agent's move is the errors a
-    copy with that agent reassigned ADDS to the canonical config's own.
+    elsewhere in the config never reaches it.
+
+    An agent's move is judged as the change script judges it (DRE-6833): every
+    agent, grouped or not, gets one move per group it is not in, and each is
+    ``model_config_change``'s pre-flight checks, else the errors its own edit
+    (``edit_data`` of that ``move_agent``, which edits a deep copy of ``raw``)
+    ADDS to the canonical config's. A bare ``agents[name] = group`` would leave an
+    ungrouped agent in ``ungrouped`` too, which the validator refuses. A
+    refused move's ``reason`` is the plain line the change script prints for
+    it. ``registry`` is the agents.yaml names with a generated region, read
+    off ``REGISTRY_TARGET`` when not given.
     """
+    # The change script imports this module, so this one imports it late.
+    import model_config_change as mcc
+
+    if registry is None:
+        registry = mcc.registry_agents(REGISTRY_TARGET.read_text(encoding="utf-8"))
     excluded = {
         entry["model"]: entry.get("reason")
         for entry in raw.get("excluded") or []
@@ -315,22 +336,27 @@ def render_choices(raw: dict, cfg: dict, prices: dict) -> str:
     repo_slugs = declared_repo_slugs()
     baseline = set(_policy_errors(raw, prices, repo_slugs=repo_slugs))
     agents = []
-    for name, kind in cfg["agents"].items():
+    roster = [(name, kind) for name, kind in cfg["agents"].items()]
+    roster += [(name, None) for name in cfg["ungrouped"]]
+    for name, kind in roster:
         moves = []
         for other in cfg["groups"]:
             if other == kind:
                 continue
-            trial = copy.deepcopy(raw)
-            trial["agents"][name] = other
-            added = [
+            change = {"op": "move_agent", "agent": name, "group": other}
+            refused = mcc._problems(change, raw, prices, registry) or [
                 error
-                for error in _policy_errors(trial, prices, repo_slugs=repo_slugs)
+                for error in _policy_errors(
+                    mcc.edit_data(raw, change, ""), prices, repo_slugs=repo_slugs)
                 if error not in baseline
             ]
-            moves.append(_verdict("group", other, added))
+            moves.append({
+                "group": other,
+                "allowed": not refused,
+                "reason": " ".join(mcc.plain_lines(change, refused, raw))
+                if refused else None,
+            })
         agents.append(_agent_entry(cfg, name, kind, moves))
-    for name in cfg["ungrouped"]:
-        agents.append(_agent_entry(cfg, name, None, []))
 
     document = {
         "generated_from": "config/models.yaml",
@@ -372,6 +398,9 @@ def _agent_entry(cfg: dict, name: str, kind: str | None, moves: list) -> dict:
         "label": name.replace("-", " ").title(),
         "about": cfg["about"].get(name),
         "group": kind,
+        # Where it runs (DRE-6833): `session` for a name in `session_agents`,
+        # whose group the console shows and nothing selects on.
+        "runs_in": "session" if name in cfg["session_agents"] else "pipeline",
         "moves": moves,
     }
 
@@ -404,7 +433,13 @@ def splice_registry(text: str, cfg: dict) -> str:
     preceded it, so the writer never depends on entry order and an agent added
     to the registry without a config entry is a loud failure rather than a
     silent default.
+
+    A session agent (``session_agents``, DRE-6833) has no region and needs
+    none, in a group or not: it is never a pipeline role. One that HAS a
+    region is refused — an agent runs in a pipeline workflow or in a person's
+    session, never both.
     """
+    session = set(cfg.get("session_agents") or [])
     lines = text.splitlines(keepends=True)
     out: list[str] = []
     i = 0
@@ -419,6 +454,13 @@ def splice_registry(text: str, cfg: dict) -> str:
             if agent is None:
                 raise SystemExit(
                     f"{REGISTRY_TARGET}: generated model region before any `- name:`"
+                )
+            if agent in session:
+                raise SystemExit(
+                    f"{REGISTRY_TARGET}: agent {agent!r} has a generated model "
+                    f"region and is listed under `session_agents` in "
+                    f"{CONFIG.name} — an agent runs in a pipeline workflow or in "
+                    "a person's session, never both"
                 )
             if agent not in cfg["agents"]:
                 raise SystemExit(
@@ -443,7 +485,7 @@ def splice_registry(text: str, cfg: dict) -> str:
             continue
         out.append(line)
         i += 1
-    missing = [a for a in cfg["agents"] if a not in seen]
+    missing = [a for a in cfg["agents"] if a not in seen and a not in session]
     if missing:
         raise SystemExit(
             f"{REGISTRY_TARGET}: no generated model region for {missing} — "
