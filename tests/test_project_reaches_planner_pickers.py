@@ -14,9 +14,11 @@ ranking call serves every repo in its census. tests/test_groom_judgement.py
 passes unchanged, and `test_the_groomer_still_picks_with_no_repo` pins the
 omission.
 
-Same temp tree as tests/test_project_model_exceptions.py, with
-`projects: {atlas: {judgement: claude-sonnet-4-6}}`. Expected ids are read off
-the tree's judgement ladder rather than typed.
+The temp tree is today's scripts on the frozen model files
+(tests/model_fixture.py, DRE-6884) with `projects: {atlas: {judgement: <the
+fixture judgement ladder's last rung>}}` — the last rung, so with no project it
+has nowhere to fall and on atlas's walk it falls to the fleet's top. Expected
+ids are read off the tree's judgement ladder rather than typed.
 
 Run: cd bureau-pipeline && python3 -m pytest tests/test_project_reaches_planner_pickers.py -q
 """
@@ -32,11 +34,17 @@ import sys
 from pathlib import Path
 
 import pytest
+import yaml
 
-from test_project_model_exceptions import ROOT, ladder, make_tree, tree_config
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "tests"))
 
-SONNET46 = "claude-sonnet-4-6"
-PROJECTS = {"atlas": {"judgement": SONNET46}}
+import model_fixture  # noqa: E402
+from model_fixture import ladder  # noqa: E402
+
+# atlas's planner leads with the fleet's last rung, its exception.
+EXCEPTION = ladder(model_fixture.fixture_config(), "judgement")[-1]
+PROJECTS = {"atlas": {"judgement": EXCEPTION}}
 SPEND_LIMIT = ("You've hit your monthly spend limit. Switch to another model to "
                "continue.")
 
@@ -46,6 +54,27 @@ def _refusal(model):
             {"type": "result", "subtype": "success", "is_error": True,
              "num_turns": 1, "total_cost_usd": 0, "duration_ms": 646,
              "result": SPEND_LIMIT}]
+
+
+def make_tree(base: Path, projects: dict) -> Path:
+    """Today's scripts on the frozen model files whose models.yaml carries
+    `projects`, regenerated, with the rest of the repo's config beside them."""
+    tree = model_fixture.fixture_tree(base)
+    cfg = tree_config(tree)
+    cfg["projects"] = projects
+    (tree / "config" / "models.yaml").write_text(yaml.safe_dump(cfg, sort_keys=False))
+    proc = subprocess.run(
+        [sys.executable, str(tree / "scripts" / "sync_model_config.py")],
+        cwd=tree, capture_output=True, text=True)
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    for path in sorted((ROOT / "config").iterdir()):
+        if path.is_file() and not (tree / "config" / path.name).exists():
+            shutil.copy2(path, tree / "config" / path.name)
+    return tree
+
+
+def tree_config(tree: Path) -> dict:
+    return yaml.safe_load((tree / "config" / "models.yaml").read_text())
 
 
 def env() -> dict:
@@ -87,13 +116,14 @@ def fleet(tree) -> list[str]:
 
 @pytest.fixture(scope="module")
 def walk(fleet) -> list[str]:
-    return [SONNET46] + [m for m in fleet if m != SONNET46]
+    """atlas's walk: its exception, then the fleet ladder without it."""
+    return [EXCEPTION] + [m for m in fleet if m != EXCEPTION]
 
 
 def test_the_tree_s_config_loads_with_its_project_entry(tree, fleet, walk):
     assert py(tree, "print(json.dumps(model_fallback.CONFIG['projects']))") == PROJECTS
-    assert fleet[-1] == SONNET46, "Sonnet 4.6 must be the fleet ladder's last rung"
-    assert walk == ["claude-sonnet-4-6", "claude-fable-5-1", "claude-opus-5-5"]
+    assert fleet[-1] == EXCEPTION, "the exception must be the fleet ladder's last rung"
+    assert walk[0] != fleet[0], "the project's walk must lead with another rung"
 
 
 # --------------------------------------------------------------------------- #
@@ -113,17 +143,17 @@ def test_capacity_fallback_falls_to_the_rung_below_on_the_project_walk(tree, wal
 seen = []
 def call(model, prompt, **kwargs):
     seen.append([model, sorted(kwargs)])
-    if model == {SONNET46!r}:
+    if model == {EXCEPTION!r}:
         raise planning_classify.TransportError(
             "the classification call reported subtype 'success', is_error "
             "True: " + {SPEND_LIMIT!r}, "success")
     return planning_classify.Answer(text="ok", model=model)
 answer, on, fell_from, because, calls = planning_classify.call_with_capacity_fallback(
-    call, {SONNET46!r}, "p", repo="atlas")
+    call, {EXCEPTION!r}, "p", repo="atlas")
 print(json.dumps([on, fell_from, calls, seen]))
 """)
     # `repo` steers the walk and is never handed to the transport.
-    assert got == [walk[1], SONNET46, 2, [[SONNET46, []], [walk[1], []]]]
+    assert got == [walk[1], EXCEPTION, 2, [[EXCEPTION, []], [walk[1], []]]]
 
 
 def test_with_no_repo_the_last_fleet_rung_has_nowhere_to_fall(tree):
@@ -131,7 +161,7 @@ def test_with_no_repo_the_last_fleet_rung_has_nowhere_to_fall(tree):
 def call(model, prompt, **kwargs):
     raise planning_classify.TransportError("x: " + {SPEND_LIMIT!r}, "success")
 try:
-    planning_classify.call_with_capacity_fallback(call, {SONNET46!r}, "p")
+    planning_classify.call_with_capacity_fallback(call, {EXCEPTION!r}, "p")
     print(json.dumps("answered"))
 except planning_classify.TransportError:
     print(json.dumps("raised"))
@@ -206,27 +236,27 @@ print(json.dumps(seen))
 
 def test_decide_retries_on_the_rung_below_on_the_project_walk(tree, walk):
     got = py(tree, f"""
-rec = {json.dumps(_refusal(SONNET46)[-1])!r}
+rec = {json.dumps(_refusal(EXCEPTION)[-1])!r}
 import json as j
 rec = j.loads(rec)
-print(json.dumps([planner_capacity.decide(rec, {SONNET46!r}, repo="EveryBite/atlas"),
-                  planner_capacity.decide(rec, {SONNET46!r})]))
+print(json.dumps([planner_capacity.decide(rec, {EXCEPTION!r}, repo="EveryBite/atlas"),
+                  planner_capacity.decide(rec, {EXCEPTION!r})]))
 """)
     with_repo, without = got
     assert with_repo["retry"] == "true"
-    assert with_repo["model"] == walk[1] == "claude-fable-5-1"
+    assert with_repo["model"] == walk[1]
     assert without["retry"] == "false"
 
 
 def test_the_decide_command_writes_the_same_answer(tree, tmp_path, walk):
     record = tmp_path / "exec.json"
-    record.write_text(json.dumps(_refusal(SONNET46)))
+    record.write_text(json.dumps(_refusal(EXCEPTION)))
     outputs = {}
     for name, extra in (("atlas", ["--repo", "atlas"]), ("none", [])):
         out = tmp_path / f"out-{name}"
         proc = subprocess.run(
             [sys.executable, str(tree / "scripts" / "planner_capacity.py"),
-             "decide", str(record), "--model", SONNET46, *extra,
+             "decide", str(record), "--model", EXCEPTION, *extra,
              "--github-output", str(out)],
             capture_output=True, text=True, env=env(), cwd=tree,
         )
