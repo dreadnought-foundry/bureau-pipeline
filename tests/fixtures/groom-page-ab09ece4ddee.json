@@ -1,0 +1,4560 @@
+{
+  "_note": "The proposal record of the morning of 2026-10-11, exactly as the groomer wrote it: the groom-proposal-verified artifact (proposal-verified.json) of Groomer run 38141699804, proposal ab09ece4ddee, cycle 15, posted on DRE-4541 at 06:13 PT. Nothing is added or altered. Its page names DRE-2709 and DRE-5700, both on the Not ready table, as sequenced normally, and prints partly-solved: 4 over a Rewrite first list of three — the fourth, DRE-2982, a spare with no Planning slot (DRE-6910).",
+  "source": {
+    "run": 38141699804,
+    "artifact": "groom-proposal-verified",
+    "file": "proposal-verified.json",
+    "workflow": "self-groomer.yml",
+    "proposal_id": "ab09ece4ddee"
+  },
+  "proposal": {
+    "generated_at": "2026-10-11T13:09:49.798896Z",
+    "lane": "Intake",
+    "population": 69,
+    "census": {
+      "agent-bureau": 36,
+      "portico": 21,
+      "bureau-pipeline": 11,
+      "(no repo label)": 1
+    },
+    "held_repos": [],
+    "offered": 62,
+    "held_blockers": [],
+    "capacity": 20,
+    "cycle_days": 14,
+    "window_days": 14,
+    "older_than_window": {
+      "days": 14,
+      "cards": 0,
+      "line": ""
+    },
+    "batch": {
+      "cycles": [
+        15
+      ],
+      "cards": 14
+    },
+    "repo_order": [
+      "agent-bureau",
+      "bureau-pipeline",
+      "portico",
+      "(no repo label)"
+    ],
+    "sequence": [
+      {
+        "identifier": "DRE-6894",
+        "title": "agent-bureau: four tests in test_planner_run.py fail whenever their shard runs longer than ten minutes, on any pull request",
+        "position": 1,
+        "unit": "DRE-6894",
+        "epic": null,
+        "repo": "agent-bureau",
+        "project": null,
+        "band": 1,
+        "deferred": false,
+        "open_children": 0,
+        "cycle": null,
+        "cycle_id": null,
+        "projected": false,
+        "outcome": "dead",
+        "reason": "The merged red-main fix \"re-read the real clock per test\" in the planner-run tests, on agent-bureau's main today",
+        "trigger": null,
+        "evidence": "The merged red-main fix \"re-read the real clock per test\" in the planner-run tests, on agent-bureau's main today",
+        "judged": true,
+        "reasons": {},
+        "source": "judgement"
+      },
+      {
+        "identifier": "DRE-6855",
+        "title": "A change sent from the console to bureau-pipeline carries no personal identity: the public pull request says \"a console admin\", and the console's own record keeps who it was",
+        "position": 2,
+        "unit": "DRE-6855",
+        "epic": null,
+        "repo": "agent-bureau",
+        "project": null,
+        "band": 1,
+        "deferred": false,
+        "open_children": 0,
+        "cycle": 15,
+        "cycle_id": "0d7758e5-cacd-48e4-a50f-16126809568c",
+        "projected": false,
+        "outcome": "now",
+        "reason": "The console-to-pipeline save path was built this week and is still being shaped, so what identity it carries should be settled while it is fresh",
+        "trigger": null,
+        "evidence": null,
+        "judged": true,
+        "reasons": {
+          "why now": "the Agents & models save path shipped days ago and its sibling cards are still landing",
+          "value": "the public record names no person and the console's own record still says who it was",
+          "effort": "a day",
+          "if skipped": "every save from the console keeps naming a person in public pull requests",
+          "depends on": "nothing"
+        },
+        "verify": {
+          "verdict": "still-needed",
+          "summary": "The console still sends the signed-in admin's login (their email when the session has one) as requested_by in the change set, and joins the logins of every queued change for a set the background tick sends. Nothing sends the fixed words \"a console admin\", and the existing tests pin an email in the dispatched payload.",
+          "proof": [
+            {
+              "file": "console/backend/agents_models_graphql.py",
+              "line": 480,
+              "quote": "change, requested_by=None if person is None else person.login, now=now,"
+            },
+            {
+              "file": "console/backend/model_changes.py",
+              "line": 964,
+              "quote": "change_set = {\"requested_by\": \", \".join(dict.fromkeys(c.requested_by for c in queued)),"
+            },
+            {
+              "file": "console/backend/tests/test_model_changes_press.py",
+              "line": 303,
+              "quote": "assert github.sets == [{\"requested_by\": \"ceo@example.com\", \"changes\": [sent]}], ("
+            }
+          ],
+          "reason": null,
+          "cost_usd": 0.1675418,
+          "duration_ms": 37284,
+          "model": "claude-sonnet-5-5"
+        }
+      },
+      {
+        "identifier": "DRE-6767",
+        "title": "A project's settings say \"Not connected\", \"No keys set\" and no agents enabled for every project, because nothing reads those facts any more",
+        "position": 3,
+        "unit": "DRE-6767",
+        "epic": null,
+        "repo": "agent-bureau",
+        "project": null,
+        "band": 1,
+        "deferred": false,
+        "open_children": 0,
+        "cycle": null,
+        "cycle_id": null,
+        "projected": false,
+        "reconsidered_in": null,
+        "outcome": "not-ready"
+      },
+      {
+        "identifier": "DRE-4666",
+        "title": "[EPIC] agent-bureau: the console stops pulling from GitHub and Linear what it already has or can remember — idle GitHub load from ~300–390 to ~10–60 calls an hour, Linear from ~19% of the shared budget to ~4%, and the usage recorded so we can prove it",
+        "position": 4,
+        "unit": "DRE-4666",
+        "epic": null,
+        "repo": "agent-bureau",
+        "project": null,
+        "band": 1,
+        "deferred": false,
+        "open_children": 3,
+        "cycle": null,
+        "cycle_id": null,
+        "projected": false,
+        "reconsidered_in": null,
+        "outcome": "not-ready"
+      },
+      {
+        "identifier": "DRE-5727",
+        "title": "agent-bureau: make deploy-console rolls the backend and website out at the same time (no FrontendStack→BackendStack dependency, cdk --concurrency 2) and runs its pre-flight suites side by side — about 13–16 min down to 9–11",
+        "position": 5,
+        "unit": "DRE-5727",
+        "epic": null,
+        "repo": "agent-bureau",
+        "project": null,
+        "band": 2,
+        "deferred": false,
+        "open_children": 0,
+        "cycle": null,
+        "cycle_id": null,
+        "projected": false,
+        "reconsidered_in": null,
+        "outcome": "not-ready"
+      },
+      {
+        "identifier": "DRE-5700",
+        "title": "Pipeline failure: Red-Main Repair",
+        "position": 6,
+        "unit": "DRE-5700",
+        "epic": null,
+        "repo": "bureau-pipeline",
+        "project": null,
+        "band": 2,
+        "deferred": false,
+        "open_children": 0,
+        "cycle": null,
+        "cycle_id": null,
+        "projected": false,
+        "reconsidered_in": null,
+        "outcome": "not-ready"
+      },
+      {
+        "identifier": "DRE-4829",
+        "title": "bureau-harness: dependabot.yml takes the house shape — monthly, one minor/patch group, semver-major ignored for \"*\"",
+        "position": 7,
+        "unit": "DRE-4829",
+        "epic": null,
+        "repo": "(no repo label)",
+        "project": null,
+        "band": 2,
+        "deferred": false,
+        "open_children": 0,
+        "cycle": null,
+        "cycle_id": null,
+        "projected": false,
+        "outcome": "not-now",
+        "reason": "excluded without judgement: repo not in config/repo-map.json: none",
+        "trigger": null,
+        "evidence": null,
+        "judged": false,
+        "reasons": {},
+        "verify": {
+          "verdict": "excluded",
+          "summary": "Not judged: the card was excluded before any agent read it.",
+          "proof": [],
+          "reason": "repo not in config/repo-map.json: none",
+          "cost_usd": null,
+          "duration_ms": null,
+          "model": null
+        }
+      },
+      {
+        "identifier": "DRE-4434",
+        "title": "[OPERATOR] portico: bring the Atlas portal live — cert, DNS, CDN behaviours, grants and the first publish on atlas.everybite.com",
+        "position": 8,
+        "unit": "DRE-4434",
+        "epic": null,
+        "repo": "portico",
+        "project": null,
+        "band": 2,
+        "deferred": false,
+        "open_children": 0,
+        "cycle": null,
+        "cycle_id": null,
+        "projected": false,
+        "outcome": "not-now",
+        "reason": "excluded without judgement: operator-step",
+        "trigger": null,
+        "evidence": null,
+        "judged": false,
+        "reasons": {},
+        "verify": {
+          "verdict": "excluded",
+          "summary": "Not judged: the card was excluded before any agent read it.",
+          "proof": [],
+          "reason": "operator-step",
+          "cost_usd": null,
+          "duration_ms": null,
+          "model": null
+        }
+      },
+      {
+        "identifier": "DRE-4159",
+        "title": "[EPIC] portico: the design system's 2026-09-17 additions — Activity as a sortable, filterable table; the New folder sheet; renaming in place; the toolbar's form button",
+        "position": 9,
+        "unit": "DRE-4159",
+        "epic": null,
+        "repo": "portico",
+        "project": null,
+        "band": 2,
+        "deferred": false,
+        "open_children": 1,
+        "cycle": null,
+        "cycle_id": null,
+        "projected": false,
+        "outcome": "not-now",
+        "reason": "excluded without judgement: parent epic with 1 open child",
+        "trigger": null,
+        "evidence": null,
+        "judged": false,
+        "reasons": {},
+        "verify": {
+          "verdict": "excluded",
+          "summary": "Not judged: the card was excluded before any agent read it.",
+          "proof": [],
+          "reason": "parent epic with 1 open child",
+          "cost_usd": null,
+          "duration_ms": null,
+          "model": null
+        }
+      },
+      {
+        "identifier": "DRE-3966",
+        "title": "[EPIC] portico: Source list rebuild, part 4b-3 — Manage moves over",
+        "position": 10,
+        "unit": "DRE-3966",
+        "epic": null,
+        "repo": "portico",
+        "project": null,
+        "band": 2,
+        "deferred": false,
+        "open_children": 3,
+        "cycle": null,
+        "cycle_id": null,
+        "projected": false,
+        "outcome": "not-now",
+        "reason": "excluded without judgement: parent epic with 3 open children",
+        "trigger": null,
+        "evidence": null,
+        "judged": false,
+        "reasons": {},
+        "verify": {
+          "verdict": "excluded",
+          "summary": "Not judged: the card was excluded before any agent read it.",
+          "proof": [],
+          "reason": "parent epic with 3 open children",
+          "cost_usd": null,
+          "duration_ms": null,
+          "model": null
+        }
+      },
+      {
+        "identifier": "DRE-3238",
+        "title": "agent-bureau: the terminal deploy-lag report reads its surfaces from release.json across the fleet — the CLI literal goes, after One River's capacity strip is built and observed against today's rows",
+        "position": 11,
+        "unit": "DRE-3245",
+        "epic": "DRE-3245",
+        "repo": "agent-bureau",
+        "project": null,
+        "band": 2,
+        "deferred": false,
+        "open_children": 0,
+        "cycle": null,
+        "cycle_id": null,
+        "projected": false,
+        "reconsidered_in": null,
+        "outcome": "not-ready"
+      },
+      {
+        "identifier": "DRE-3245",
+        "title": "[EPIC] The fleet joins the release train — portico, the relay, the website and the deploy-lag readers ride it after the console has run clean (part 2 of DRE-3164)",
+        "position": 12,
+        "unit": "DRE-3245",
+        "epic": "DRE-3245",
+        "repo": "agent-bureau",
+        "project": null,
+        "band": 2,
+        "deferred": false,
+        "open_children": 1,
+        "cycle": null,
+        "cycle_id": null,
+        "projected": false,
+        "outcome": "not-now",
+        "reason": "excluded without judgement: parent epic with 1 open child",
+        "trigger": null,
+        "evidence": null,
+        "judged": false,
+        "reasons": {},
+        "verify": {
+          "verdict": "excluded",
+          "summary": "Not judged: the card was excluded before any agent read it.",
+          "proof": [],
+          "reason": "parent epic with 1 open child",
+          "cost_usd": null,
+          "duration_ms": null,
+          "model": null
+        }
+      },
+      {
+        "identifier": "DRE-3751",
+        "title": "The New Project design becomes one screen — name, company, colour — with a Settings → New projects defaults page, the project's Settings tab, and a setup screen that reads live state, plus the walkthrough, in console/design",
+        "position": 13,
+        "unit": "DRE-2284",
+        "epic": "DRE-2284",
+        "repo": "agent-bureau",
+        "project": null,
+        "band": 2,
+        "deferred": false,
+        "open_children": 0,
+        "cycle": null,
+        "cycle_id": null,
+        "projected": false,
+        "reconsidered_in": null,
+        "outcome": "not-ready"
+      },
+      {
+        "identifier": "DRE-2284",
+        "title": "[EPIC] A new project is set up once, in the console — and is born on the release train with its own Portico share",
+        "position": 14,
+        "unit": "DRE-2284",
+        "epic": "DRE-2284",
+        "repo": "agent-bureau",
+        "project": null,
+        "band": 2,
+        "deferred": false,
+        "open_children": 3,
+        "cycle": null,
+        "cycle_id": null,
+        "projected": false,
+        "reconsidered_in": null,
+        "outcome": "not-ready"
+      },
+      {
+        "identifier": "DRE-3603",
+        "title": "The Alerts feed keeps no history — a resolved alert cannot be read back, so a CRITICAL that clears itself minutes later (a failed release, a refused run) is unprovable after the fact",
+        "position": 15,
+        "unit": "DRE-3603",
+        "epic": null,
+        "repo": "agent-bureau",
+        "project": null,
+        "band": 2,
+        "deferred": false,
+        "open_children": 0,
+        "cycle": null,
+        "cycle_id": null,
+        "projected": false,
+        "outcome": "rewrite",
+        "reason": "The memory outage of 2026-10-10 is being investigated through the alert feed, and an alert that clears itself cannot be read back",
+        "trigger": null,
+        "evidence": null,
+        "judged": true,
+        "reasons": {
+          "why now": "DRE-6585 needs to prove what the feed said during an outage after the fact",
+          "value": "a cleared alert can be read back as evidence",
+          "effort": "a day",
+          "if skipped": "every self-clearing alert stays unprovable",
+          "depends on": "nothing"
+        },
+        "verify": {
+          "verdict": "partly-solved",
+          "summary": "The log-line part is solved: system alerts now write `system-alert raised/resolved` lines, and Done no longer clears an alert for good (DRE-6762). The history part remains: the feed serves only OPEN alerts, `alertFeed` has no `state` argument, and the Resolved view still says it is not on this read.",
+          "proof": [
+            {
+              "file": "console/backend/system_alerts.py",
+              "line": 288,
+              "quote": "log.info(\"system-alert resolved kind=%s severity=%s open_since=%s title=%s\","
+            },
+            {
+              "file": "console/backend/system_alerts.py",
+              "line": 212,
+              "quote": "log.info(\"system-alert raised kind=%s severity=%s title=%s\","
+            },
+            {
+              "file": "console/web/src/components/oneriver/alertsTabModel.test.ts",
+              "line": 141,
+              "quote": "expect(NOT_ON_THIS_READ.RESOLVED).not.toMatch(/for good/i)"
+            },
+            {
+              "file": "console/web/schema.graphql",
+              "line": 6598,
+              "quote": "alertFeed(offset: Int! = 0, limit: Int! = 20): AlertFeed!"
+            },
+            {
+              "file": "console/backend/store.py",
+              "line": 4353,
+              "quote": "query serves — resolved alerts never appear.\"\"\""
+            },
+            {
+              "file": "console/web/src/components/oneriver/alertsTabModel.test.ts",
+              "line": 137,
+              "quote": "expect(NOT_ON_THIS_READ.RESOLVED).toMatch(/not on this read/i)"
+            }
+          ],
+          "reason": null,
+          "cost_usd": 0.2615922,
+          "duration_ms": 39661,
+          "model": "claude-sonnet-5-5"
+        }
+      },
+      {
+        "identifier": "DRE-3711",
+        "title": "[EPIC] Every pull request has a card — a PR with no card id cannot merge, and the four legitimate kinds of automation PR each carry a card or a named exemption",
+        "position": 16,
+        "unit": "DRE-3711",
+        "epic": null,
+        "repo": "bureau-pipeline",
+        "project": null,
+        "band": 2,
+        "deferred": false,
+        "open_children": 10,
+        "cycle": null,
+        "cycle_id": null,
+        "projected": false,
+        "outcome": "not-now",
+        "reason": "excluded without judgement: parent epic with 10 open children",
+        "trigger": null,
+        "evidence": null,
+        "judged": false,
+        "reasons": {},
+        "verify": {
+          "verdict": "excluded",
+          "summary": "Not judged: the card was excluded before any agent read it.",
+          "proof": [],
+          "reason": "parent epic with 10 open children",
+          "cost_usd": null,
+          "duration_ms": null,
+          "model": null
+        }
+      },
+      {
+        "identifier": "DRE-3600",
+        "title": "apply_branch_protection.py's full PUT answers HTTP 500 from GitHub; write the required-check list through the PATCH endpoint, and drop the expired TDD grace window from the config",
+        "position": 17,
+        "unit": "DRE-3600",
+        "epic": null,
+        "repo": "agent-bureau",
+        "project": null,
+        "band": 2,
+        "deferred": false,
+        "open_children": 0,
+        "cycle": 15,
+        "cycle_id": "0d7758e5-cacd-48e4-a50f-16126809568c",
+        "projected": false,
+        "outcome": "now",
+        "reason": "The branch-protection tool fails every time the operator runs it, and the red-main work may need the required-check list changed soon",
+        "trigger": null,
+        "evidence": null,
+        "judged": true,
+        "reasons": {
+          "why now": "DRE-6869 may change which checks a merge requires, and the tool to apply them is broken",
+          "value": "the operator can apply branch protection again",
+          "effort": "an afternoon",
+          "if skipped": "protection changes are made by hand in GitHub's settings",
+          "depends on": "nothing"
+        },
+        "verify": {
+          "verdict": "still-needed",
+          "summary": "All four parts of the card can still be seen on main: apply_branch_protection.py still writes with one full PUT and prints only gh's output on failure, the expired TDD window is still in config/branch-protection.json, and the guard's expired-window message still has no blast-radius line. The newly declared Console speed gate carries the same kind of window, which ends 2026-10-16, so the same outage can repeat.",
+          "proof": [
+            {
+              "file": "scripts/apply_branch_protection.py",
+              "line": 171,
+              "quote": "[\"gh\", \"api\", \"-X\", \"PUT\", f\"repos/{repo}/branches/{branch}/protection\","
+            },
+            {
+              "file": "scripts/apply_branch_protection.py",
+              "line": 176,
+              "quote": "return proc.returncode, (proc.stderr or proc.stdout or \"\").strip()"
+            },
+            {
+              "file": "config/branch-protection.json",
+              "line": 18,
+              "quote": "\"awaiting_operator_apply_until\": \"2026-09-10\""
+            },
+            {
+              "file": "config/branch-protection.json",
+              "line": 24,
+              "quote": "\"awaiting_operator_apply_until\": \"2026-10-16\""
+            },
+            {
+              "file": "scripts/check_branch_protection.py",
+              "line": 370,
+              "quote": "f\" its window expired \""
+            }
+          ],
+          "reason": null,
+          "cost_usd": 0.1665372,
+          "duration_ms": 17995,
+          "model": "claude-sonnet-5-5"
+        }
+      },
+      {
+        "identifier": "DRE-3591",
+        "title": "[EPIC] Role routing — 14 agent:* labels route nowhere, there is no agent:database label, and two of the three roles the CEO named cannot be addressed",
+        "position": 18,
+        "unit": "DRE-3591",
+        "epic": null,
+        "repo": "agent-bureau",
+        "project": null,
+        "band": 2,
+        "deferred": false,
+        "open_children": 0,
+        "cycle": null,
+        "cycle_id": null,
+        "projected": false,
+        "reconsidered_in": null,
+        "outcome": "not-ready"
+      },
+      {
+        "identifier": "DRE-3589",
+        "title": "The pen switch says the act and its consequence — \"Open the pen — releases 41 cards\", never a bare Open or Close",
+        "position": 19,
+        "unit": "DRE-3589",
+        "epic": null,
+        "repo": "agent-bureau",
+        "project": null,
+        "band": 2,
+        "deferred": false,
+        "open_children": 0,
+        "cycle": 15,
+        "cycle_id": "0d7758e5-cacd-48e4-a50f-16126809568c",
+        "projected": false,
+        "outcome": "now",
+        "reason": "A small copy change to Green Light's pen switch, best made once the sideways audit is gating that route",
+        "trigger": null,
+        "evidence": null,
+        "judged": true,
+        "reasons": {},
+        "verify": {
+          "verdict": "still-needed",
+          "summary": "The pen switch is still a bare verb: the console sets the verb to 'Open' or 'Close' and prints it as the button text, with no consequence or card count. The design HTML and the design test still pin the same bare 'Open'/'Close', so the card's problem is untouched on main.",
+          "proof": [
+            {
+              "file": "console/web/src/components/oneriver/capacityModel.ts",
+              "line": 2036,
+              "quote": "const verb: PenVerb = pen.closed ? 'Open' : 'Close'"
+            },
+            {
+              "file": "console/web/src/components/oneriver/CapacityStrip.tsx",
+              "line": 1906,
+              "quote": "{pen.verb}"
+            },
+            {
+              "file": "console/design/screens/web-dashboard-one-river-2026-09-03.html",
+              "line": 1562,
+              "quote": "function penVerb(p){return p.open ? 'Close' : 'Open';}"
+            },
+            {
+              "file": "scripts/test_one_river_design.py",
+              "line": 1163,
+              "quote": "assert re.search(r\"penVerb\\(PEN\\)[^\\n]*'Open'\", src) or \"p.open ? 'Close' : 'Open'\" in src"
+            }
+          ],
+          "reason": null,
+          "cost_usd": 0.13914680000000001,
+          "duration_ms": 19625,
+          "model": "claude-sonnet-5-5"
+        }
+      },
+      {
+        "identifier": "DRE-3576",
+        "title": "The refutation receipt says \"state: dispatched · next: qa-review.yml\" when the dispatch 403'd and the run parked for a human",
+        "position": 20,
+        "unit": "DRE-3576",
+        "epic": null,
+        "repo": "bureau-pipeline",
+        "project": null,
+        "band": 2,
+        "deferred": false,
+        "open_children": 0,
+        "cycle": 15,
+        "cycle_id": "0d7758e5-cacd-48e4-a50f-16126809568c",
+        "projected": false,
+        "outcome": "now",
+        "reason": "A receipt that says a run was dispatched when it parked for a human sends the operator to the wrong place",
+        "trigger": null,
+        "evidence": null,
+        "judged": true,
+        "reasons": {
+          "why now": "the review path is being relied on unattended and the receipt is the only word the operator reads",
+          "value": "the receipt says parked when the run parked",
+          "effort": "an afternoon",
+          "if skipped": "the next refused dispatch is read as a run in progress",
+          "depends on": "nothing"
+        },
+        "verify": {
+          "verdict": "still-needed",
+          "summary": "The refutation receipt (state: dispatched, next: qa-review.yml) is still posted to the PR before the qa-review dispatch is tried, and the failed-dispatch branch only warns, comments on the card and parks it; it never posts an escalated receipt, so the PR comment still promises a re-review that will not run.",
+          "proof": [
+            {
+              "file": "scripts/report_fix_result.sh",
+              "line": 549,
+              "quote": "python3 .bureau-pipeline/scripts/pipeline_act.py receipt fix-finding-refuted \\"
+            },
+            {
+              "file": "scripts/report_fix_result.sh",
+              "line": 552,
+              "quote": "# Posted before the dispatch: the re-review reads it off the thread."
+            },
+            {
+              "file": "scripts/report_fix_result.sh",
+              "line": 568,
+              "quote": "echo \"::warning::could not dispatch $REVIEW_WF for PR #$PR — this repo's agent-fix stub needs \\`actions: write\\`; parking for a human instead of promising a re-review that will not run\""
+            },
+            {
+              "file": "config/pipeline-acts.json",
+              "line": 510,
+              "quote": "\"state\": \"dispatched\","
+            },
+            {
+              "file": "tests/test_refuted_verdict_rereview.py",
+              "line": 498,
+              "quote": "self.assertIn(\"::warning::\", proc.stdout)"
+            }
+          ],
+          "reason": null,
+          "cost_usd": 0.17075780000000002,
+          "duration_ms": 25472,
+          "model": "claude-sonnet-5-5"
+        }
+      },
+      {
+        "identifier": "DRE-3567",
+        "title": "The runner-pool monitor logs a full HTTP 403 traceback every tick for atlas and deltasolv — repos the bot App is not installed on read as an error, not as UNKNOWN",
+        "position": 21,
+        "unit": "DRE-3567",
+        "epic": null,
+        "repo": "agent-bureau",
+        "project": null,
+        "band": 2,
+        "deferred": false,
+        "open_children": 0,
+        "cycle": null,
+        "cycle_id": null,
+        "projected": false,
+        "reconsidered_in": null,
+        "outcome": "not-ready"
+      },
+      {
+        "identifier": "DRE-3550",
+        "title": "One River's Pull Requests tab carries no read age — the only tab whose freshness the CEO cannot tell from the screen",
+        "position": 22,
+        "unit": "DRE-3550",
+        "epic": null,
+        "repo": "agent-bureau",
+        "project": null,
+        "band": 2,
+        "deferred": false,
+        "open_children": 0,
+        "cycle": 15,
+        "cycle_id": "0d7758e5-cacd-48e4-a50f-16126809568c",
+        "projected": false,
+        "outcome": "now",
+        "reason": "The Pull Requests tab's age is best shown once it reads from our database, where the age is known",
+        "trigger": null,
+        "evidence": null,
+        "judged": true,
+        "reasons": {},
+        "verify": {
+          "verdict": "still-needed",
+          "summary": "The Pull Requests tab still has no read-age line: PullRequestsTab.tsx never mentions ReadAgeLabel, readAge or freshness. prove_phase.py's READ_AGE_SURFACES still lists the same four surfaces, and the tab is not among them.",
+          "proof": [
+            {
+              "file": "console/web/src/components/oneriver/PullRequestsTab.tsx",
+              "line": 132,
+              "quote": "export function PullRequestsTab() {"
+            },
+            {
+              "file": "scripts/prove_phase.py",
+              "line": 2991,
+              "quote": "READ_AGE_SURFACES = ("
+            },
+            {
+              "file": "scripts/prove_phase.py",
+              "line": 2999,
+              "quote": "\"console/web/src/pages/ProjectOverview.tsx\","
+            }
+          ],
+          "reason": null,
+          "cost_usd": 0.1471602,
+          "duration_ms": 19821,
+          "model": "claude-sonnet-5-5"
+        }
+      },
+      {
+        "identifier": "DRE-3549",
+        "title": "The One River home page has no error boundary — one unexpected payload in any of its ~10 reads blanks the whole console instead of one panel",
+        "position": 23,
+        "unit": "DRE-3549",
+        "epic": null,
+        "repo": "agent-bureau",
+        "project": null,
+        "band": 2,
+        "deferred": false,
+        "open_children": 0,
+        "cycle": null,
+        "cycle_id": null,
+        "projected": false,
+        "outcome": "rewrite",
+        "reason": "One bad payload blanks the whole console, and the outage of 2026-10-10 showed how often a read can fail",
+        "trigger": null,
+        "evidence": null,
+        "judged": true,
+        "reasons": {
+          "why now": "the backend has been failing under memory pressure and the home page has no way to lose one panel instead of all",
+          "value": "a failed read blanks one panel and the rest of the console stays usable",
+          "effort": "a day",
+          "if skipped": "the next bad payload takes the whole console down for the CEO",
+          "depends on": "nothing"
+        },
+        "verify": {
+          "verdict": "partly-solved",
+          "summary": "A reusable PartBoundary and a whole-app AppBoundary now exist, so a throw no longer leaves a white page, and the Runners tab is wrapped part by part. The One River page itself is not: the capacity strip, ribbon, routed tab and CardFlyoutHost are unwrapped, so one bad read still replaces the whole console with 'The console failed to draw'. A caught throw is only written to the browser console, never to the alerts path.",
+          "proof": [
+            {
+              "file": "console/web/src/pages/OneRiver.tsx",
+              "line": 349,
+              "quote": "<CapacityStrip"
+            },
+            {
+              "file": "console/web/src/pages/OneRiver.tsx",
+              "line": 380,
+              "quote": "<Ribbon {...sources} loading={ribbonLoading} />"
+            },
+            {
+              "file": "console/web/src/pages/OneRiver.tsx",
+              "line": 418,
+              "quote": "<Outlet"
+            },
+            {
+              "file": "console/web/src/components/AppShell.tsx",
+              "line": 130,
+              "quote": "<CardFlyoutHost />"
+            },
+            {
+              "file": "console/web/src/components/molecules/PartBoundary.tsx",
+              "line": 66,
+              "quote": "console.error(`${this.props.name} failed to draw`, error, info.componentStack)"
+            },
+            {
+              "file": "console/web/src/main.tsx",
+              "line": 43,
+              "quote": "<AppBoundary>"
+            },
+            {
+              "file": "console/web/src/components/oneriver/RunnersPage.tsx",
+              "line": 241,
+              "quote": "<PartBoundary name=\"The figures\" testid=\"runners-boundary-figures\">"
+            }
+          ],
+          "reason": null,
+          "cost_usd": 0.22740600000000002,
+          "duration_ms": 34124,
+          "model": "claude-sonnet-5-5"
+        }
+      },
+      {
+        "identifier": "DRE-3545",
+        "title": "Three operator cards were closed Done from the console with nothing done (DRE-3497 09-09 13:35 PT, DRE-3494 09-09 13:35 PT, DRE-3155 no code on main) — a `no-code` / OPERATOR card must not close from the queue without its record",
+        "position": 24,
+        "unit": "DRE-3545",
+        "epic": null,
+        "repo": "agent-bureau",
+        "project": null,
+        "band": 2,
+        "deferred": false,
+        "open_children": 0,
+        "cycle": 15,
+        "cycle_id": "0d7758e5-cacd-48e4-a50f-16126809568c",
+        "projected": false,
+        "outcome": "now",
+        "reason": "Three operator cards were closed Done with nothing done, and the console's reading of operator cards is being redone right now",
+        "trigger": null,
+        "evidence": null,
+        "judged": true,
+        "reasons": {
+          "why now": "DRE-6232 is deciding how the console treats an operator card, and closing rules belong with it",
+          "value": "an operator card cannot close without its record",
+          "effort": "a day",
+          "if skipped": "more operator cards close Done with no work behind them",
+          "depends on": "DRE-6232"
+        },
+        "verify": {
+          "verdict": "still-needed",
+          "summary": "Neither half of the fix is on main. The console's completeOperatorCard takes only a card id and writes Done with no recorded outcome (no 'Record the outcome' path exists anywhere), and the lane guard still only reports a Done card with a gap and never moves a no-code card back to Backlog.",
+          "proof": [
+            {
+              "file": "console/backend/schema.py",
+              "line": 17050,
+              "quote": "self, info: strawberry.Info, card_id: str"
+            },
+            {
+              "file": "console/backend/operator_complete.py",
+              "line": 364,
+              "quote": "write_state(identifier, DONE_STATE)"
+            },
+            {
+              "file": "console/web/src/lib/completeOperatorCard.ts",
+              "line": 34,
+              "quote": "export async function completeOperatorCard("
+            },
+            {
+              "file": "cloud/relay/lane_guard.py",
+              "line": 611,
+              "quote": "if name == \"Done\":"
+            },
+            {
+              "file": "cloud/relay/lane_guard.py",
+              "line": 616,
+              "quote": "\"report\", None, gaps,"
+            },
+            {
+              "file": "cloud/relay/lane_guard.py",
+              "line": 515,
+              "quote": "if name == \"Done\" and merged is False:"
+            }
+          ],
+          "reason": null,
+          "cost_usd": 0.262852,
+          "duration_ms": 28616,
+          "model": "claude-sonnet-5-5"
+        }
+      },
+      {
+        "identifier": "DRE-3539",
+        "title": "Nothing detects a dependency cycle between an epic-level gate and the card-level gates beneath it — DRE-3420/3421 held ten cards for 38 hours while both sweeps printed a correct \"held by\" line every pass",
+        "position": 25,
+        "unit": "DRE-3539",
+        "epic": null,
+        "repo": "bureau-pipeline",
+        "project": null,
+        "band": 2,
+        "deferred": false,
+        "open_children": 0,
+        "cycle": null,
+        "cycle_id": null,
+        "projected": false,
+        "reconsidered_in": null,
+        "outcome": "not-ready"
+      },
+      {
+        "identifier": "DRE-3535",
+        "title": "bureau-harness's dependabot.yml is not the house shape — weekly, no `version-update:semver-major` ignore, no minor/patch group — so the sandbox files majors the merge gate holds forever (PR #1, pytest 7→9, 51 days)",
+        "position": 26,
+        "unit": "DRE-3535",
+        "epic": null,
+        "repo": "bureau-pipeline",
+        "project": null,
+        "band": 2,
+        "deferred": false,
+        "open_children": 0,
+        "cycle": null,
+        "cycle_id": null,
+        "projected": false,
+        "outcome": "not-now",
+        "reason": "not verified: no proof",
+        "trigger": null,
+        "evidence": null,
+        "judged": false,
+        "reasons": {},
+        "verify": {
+          "verdict": "unverified",
+          "summary": "The file this card is about, bureau-harness/.github/dependabot.yml, is not in target/ (which is bureau-pipeline's main), so whether it still lacks the house shape cannot be read here. Newer card DRE-4829 (Intake) asks for the same change on bureau-harness, so this card likely duplicates it.",
+          "proof": [],
+          "reason": "no proof",
+          "cost_usd": 0.138751,
+          "duration_ms": 21807,
+          "model": "claude-sonnet-5-5"
+        }
+      },
+      {
+        "identifier": "DRE-3514",
+        "title": "Product repos have no `deliver-rescue.yml`, so the rescue's delivery follow-up is refused with 403 in every repo but bureau-pipeline — the scaffold ships the stub and the operator installs it fleet-wide",
+        "position": 27,
+        "unit": "DRE-3514",
+        "epic": null,
+        "repo": "bureau-pipeline",
+        "project": null,
+        "band": 2,
+        "deferred": false,
+        "open_children": 0,
+        "cycle": null,
+        "cycle_id": null,
+        "projected": false,
+        "outcome": "rewrite",
+        "reason": "The rescue's delivery was refined this week, yet it is still refused in every repo but one because the stub was never installed",
+        "trigger": null,
+        "evidence": null,
+        "judged": true,
+        "reasons": {
+          "why now": "DRE-6868 just merged a fix to rescue delivery that only one repo can use",
+          "value": "a rescued build is delivered in every repo",
+          "effort": "a day plus an operator install",
+          "if skipped": "every rescue outside bureau-pipeline keeps failing at the last step",
+          "depends on": "nothing"
+        },
+        "verify": {
+          "verdict": "partly-solved",
+          "summary": "The reusable deliver-rescue.yml the stub would call now exists and the README documents the product-repo stub, but the 'could NOT be dispatched' comment still prints only GitHub's raw error and never says whether the workflow is missing or the token was refused. The scaffold stub, the fleet check and the operator install live in agent-bureau and cannot be seen from this checkout.",
+          "proof": [
+            {
+              "file": "scripts/deliver_rescue.py",
+              "line": 430,
+              "quote": "f\"(`{workflow}` on `{repo}`: {detail or 'no reason given'}), so this \""
+            },
+            {
+              "file": "scripts/deliver_rescue.py",
+              "line": 377,
+              "quote": "`deliver-rescue` stub answers 404 to the dispatch, and in that repo the"
+            },
+            {
+              "file": ".github/workflows/deliver-rescue.yml",
+              "line": 49,
+              "quote": "workflow_call:"
+            },
+            {
+              "file": "README.md",
+              "line": 332,
+              "quote": "### The `deliver-rescue` stub (DRE-3262)"
+            }
+          ],
+          "reason": null,
+          "cost_usd": 0.205931,
+          "duration_ms": 38300,
+          "model": "claude-sonnet-5-5"
+        }
+      },
+      {
+        "identifier": "DRE-3454",
+        "title": "The Mac mini runner pool runs under a dedicated standard account, not the CEO's admin login — bootstrap moves cleanly between users, and the runbook says how",
+        "position": 28,
+        "unit": "DRE-3454",
+        "epic": null,
+        "repo": "agent-bureau",
+        "project": "Bureau: Unattended Operation",
+        "band": 2,
+        "deferred": false,
+        "open_children": 0,
+        "cycle": null,
+        "cycle_id": null,
+        "projected": false,
+        "reconsidered_in": null,
+        "outcome": "not-ready"
+      },
+      {
+        "identifier": "DRE-3449",
+        "title": "A sent-back epic with no children yet is a Green Light row — today the tab hides it as \"no plan to approve\"",
+        "position": 29,
+        "unit": "DRE-3449",
+        "epic": null,
+        "repo": "agent-bureau",
+        "project": "Bureau: One River",
+        "band": 2,
+        "deferred": false,
+        "open_children": 0,
+        "cycle": 15,
+        "cycle_id": "0d7758e5-cacd-48e4-a50f-16126809568c",
+        "projected": false,
+        "outcome": "now",
+        "reason": "Which rows reach Green Light is being decided by the epic in flight, and a sent-back epic may be the planner's turn rather than the CEO's",
+        "trigger": null,
+        "evidence": null,
+        "judged": true,
+        "reasons": {},
+        "verify": {
+          "verdict": "still-needed",
+          "summary": "greenLightRows() still drops every epic with zero children as \"no plan to approve\" without looking at its receipts, so an epic sent back by the critic before any child exists gets no Green Light row. The epic loop has no sent-back fallback, and the later loop skips epics outright.",
+          "proof": [
+            {
+              "file": "console/web/src/components/oneriver/greenLightModel.ts",
+              "line": 932,
+              "quote": "// An epic with no children has no plan to approve — there is nothing to"
+            },
+            {
+              "file": "console/web/src/components/oneriver/greenLightModel.ts",
+              "line": 934,
+              "quote": "if (!awaitsPlanApproval(epic) || epicGroup.children.length === 0) continue"
+            },
+            {
+              "file": "console/web/src/components/oneriver/greenLightModel.ts",
+              "line": 958,
+              "quote": "if (card.isEpic) continue"
+            }
+          ],
+          "reason": null,
+          "cost_usd": 0.1540052,
+          "duration_ms": 18591,
+          "model": "claude-sonnet-5-5"
+        }
+      },
+      {
+        "identifier": "DRE-3408",
+        "title": "No token ever enters a runner container — the host mints a just-in-time runner config per container from the org API, so a job with sudo finds nothing in /proc/1/environ worth taking",
+        "position": 30,
+        "unit": "DRE-3408",
+        "epic": null,
+        "repo": "agent-bureau",
+        "project": "Bureau: Unattended Operation",
+        "band": 2,
+        "deferred": false,
+        "open_children": 0,
+        "cycle": null,
+        "cycle_id": null,
+        "projected": false,
+        "reconsidered_in": null,
+        "outcome": "not-ready"
+      },
+      {
+        "identifier": "DRE-3386",
+        "title": "The console shows a hand-built card in Todo as the operator's turn, not as queued for the pipeline",
+        "position": 31,
+        "unit": "DRE-3386",
+        "epic": null,
+        "repo": "agent-bureau",
+        "project": null,
+        "band": 2,
+        "deferred": false,
+        "open_children": 0,
+        "cycle": null,
+        "cycle_id": null,
+        "projected": false,
+        "outcome": "dead",
+        "reason": "DRE-6232 in progress decides hand-built means the CEO's hand, not the operator's turn",
+        "trigger": null,
+        "evidence": "DRE-6232 in progress decides hand-built means the CEO's hand, not the operator's turn",
+        "judged": true,
+        "reasons": {},
+        "source": "judgement"
+      },
+      {
+        "identifier": "DRE-3333",
+        "title": "Virtual company — phase 1: the organisation on paper, the design-critic lens, and a real org seed",
+        "position": 32,
+        "unit": "DRE-3333",
+        "epic": null,
+        "repo": "agent-bureau",
+        "project": null,
+        "band": 2,
+        "deferred": false,
+        "open_children": 0,
+        "cycle": null,
+        "cycle_id": null,
+        "projected": false,
+        "outcome": "dead",
+        "reason": "already done — the merged pull request https://github.com/dreadnought-foundry/agent-bureau/pull/2383 is for this card",
+        "trigger": null,
+        "evidence": "already done — the merged pull request https://github.com/dreadnought-foundry/agent-bureau/pull/2383 is for this card",
+        "judged": false,
+        "reasons": {},
+        "source": "check"
+      },
+      {
+        "identifier": "DRE-3104",
+        "title": "The shelf lists the templates this build carries, and one button puts a template on the shelf — no file, no terminal, no token",
+        "position": 33,
+        "unit": "DRE-3104",
+        "epic": null,
+        "repo": "portico",
+        "project": null,
+        "band": 2,
+        "deferred": false,
+        "open_children": 0,
+        "cycle": 15,
+        "cycle_id": "0d7758e5-cacd-48e4-a50f-16126809568c",
+        "projected": false,
+        "outcome": "now",
+        "reason": "The operator asked for this after putting a template on a shelf by hand with a token, and nothing in flight touches the shelf",
+        "trigger": null,
+        "evidence": null,
+        "judged": true,
+        "reasons": {
+          "why now": "each new shelf still needs a terminal and a token copied by hand",
+          "value": "a template goes on a shelf with one button",
+          "effort": "a few days",
+          "if skipped": "every new shelf is set up by hand the way the operator objected to",
+          "depends on": "nothing"
+        },
+        "verify": {
+          "verdict": "still-needed",
+          "summary": "The server half exists (POST /library/forms/builtin and the --builtin CLI flag), but nothing in the client calls it: formTransport.ts has no shelfBuiltinTemplate, its header still says to write no template wrapper until the authoring UI, and forms/README.md still carries the hand-kept 'on which shelf' table. The card names FormShelfRegion.tsx, which was since deleted, so the builder must put the 'From the Foundry' group on the Forms place or TemplateShelf instead.",
+          "proof": [
+            {
+              "file": "client/app/src/features/forms/formTransport.ts",
+              "line": 19,
+              "quote": "* NO createFormTemplate HERE, deliberately. `POST /library/forms` exists on the"
+            },
+            {
+              "file": "client/app/src/features/forms/formTransport.ts",
+              "line": 85,
+              "quote": "export function fetchFormTemplates(project: string): Promise<{ templates: WireFormTemplate[] }> {"
+            },
+            {
+              "file": "forms/README.md",
+              "line": 71,
+              "quote": "| template | what | on which shelf | since |"
+            },
+            {
+              "file": "infra/lambda/routes/library.ts",
+              "line": 1956,
+              "quote": "'POST /library/forms/builtin': async (event) => {"
+            },
+            {
+              "file": "client/app/src/app/legacyGone.test.ts",
+              "line": 44,
+              "quote": "\"features/forms/FormShelfRegion.tsx\","
+            }
+          ],
+          "reason": null,
+          "cost_usd": 0.31352019999999997,
+          "duration_ms": 33587,
+          "model": "claude-sonnet-5-5"
+        }
+      },
+      {
+        "identifier": "DRE-3009",
+        "title": "Every behaviour-changing commit needs a preceding RED test — tighten the TDD floor from once-per-branch to once-per-change",
+        "position": 34,
+        "unit": "DRE-3009",
+        "epic": null,
+        "repo": "bureau-pipeline",
+        "project": "Bureau: Unattended Operation",
+        "band": 2,
+        "deferred": false,
+        "open_children": 0,
+        "cycle": 15,
+        "cycle_id": "0d7758e5-cacd-48e4-a50f-16126809568c",
+        "projected": false,
+        "outcome": "now",
+        "reason": "in the batch by the rules — newest first, position 9",
+        "trigger": null,
+        "evidence": null,
+        "judged": true,
+        "reasons": {},
+        "verify": {
+          "verdict": "still-needed",
+          "summary": "The gap is unchanged on main: check_tdd_commits.py still enforces one RED test commit before the FIRST code commit, not one before each behaviour change, and the standard still tells reviewers that the once-per-branch rule is the only rule. There is no exemption config file, no per-commit classifier and no exemption named in the failure message.",
+          "proof": [
+            {
+              "file": "scripts/check_tdd_commits.py",
+              "line": 13,
+              "quote": "• At least one commit touching files under `tests/` must appear STRICTLY"
+            },
+            {
+              "file": "scripts/check_tdd_commits.py",
+              "line": 565,
+              "quote": "first_code = next("
+            },
+            {
+              "file": "scripts/check_tdd_commits.py",
+              "line": 571,
+              "quote": "if any(\"test\" in commit_categories(c) for c in commits[:first_code]):"
+            },
+            {
+              "file": "scripts/check_tdd_commits.py",
+              "line": 145,
+              "quote": "FAILURE_MESSAGE = ("
+            },
+            {
+              "file": "scripts/check_tdd_commits.py",
+              "line": 146,
+              "quote": "\"no test commit precedes the implementation — commit the RED test first\""
+            },
+            {
+              "file": "standards/engineering.md",
+              "line": 22,
+              "quote": "**STRICTLY BEFORE** the first commit that changes non-test code.* One RED"
+            },
+            {
+              "file": "standards/engineering.md",
+              "line": 23,
+              "quote": "commit before the FIRST implementation commit — **not one before every"
+            },
+            {
+              "file": "standards/engineering.md",
+              "line": 55,
+              "quote": "and an operator decision (DRE-3005). Whether to tighten what is enforced is"
+            }
+          ],
+          "reason": null,
+          "cost_usd": 0.22091100000000002,
+          "duration_ms": 24283,
+          "model": "claude-sonnet-5-5"
+        }
+      },
+      {
+        "identifier": "DRE-2994",
+        "title": "A comment on the form's construction cannot be anchored to a question — only answers have anchors",
+        "position": 35,
+        "unit": "DRE-2994",
+        "epic": null,
+        "repo": "portico",
+        "project": null,
+        "band": 2,
+        "deferred": false,
+        "open_children": 0,
+        "cycle": 15,
+        "cycle_id": "0d7758e5-cacd-48e4-a50f-16126809568c",
+        "projected": false,
+        "outcome": "now",
+        "reason": "in the batch by the rules — newest first, position 10",
+        "trigger": null,
+        "evidence": null,
+        "judged": true,
+        "reasons": {},
+        "verify": {
+          "verdict": "still-needed",
+          "summary": "The problem is still there on main, in the replacement Comments panel rather than the legacy rail the card names. On a form the panel offers no way to anchor a comment to a question, and any anchored thread is classed as an answer thread, so a question-wording comment would read as a comment on somebody's answer.",
+          "proof": [
+            {
+              "file": "client/app/src/features/viewer/sourcelist/panels/CommentsPanel.tsx",
+              "line": 157,
+              "quote": "return \"These comments are on the form. A comment about one answer sits under that answer.\";"
+            },
+            {
+              "file": "client/app/src/features/viewer/sourcelist/panels/CommentsPanel.tsx",
+              "line": 179,
+              "quote": "if (artifact.state === \"absent\" && artifact.reason === \"form\") {"
+            },
+            {
+              "file": "client/app/src/features/viewer/sourcelist/panels/CommentsPanel.tsx",
+              "line": 180,
+              "quote": "return { state: \"answer\", ...none, quote: anchor };"
+            },
+            {
+              "file": "client/app/src/features/viewer/comments/commentThreads.ts",
+              "line": 61,
+              "quote": "export type AnchorState = \"located\" | \"orphaned\" | \"doc-level\" | \"unknown\" | \"answer\";"
+            }
+          ],
+          "reason": null,
+          "cost_usd": 0.34831779999999996,
+          "duration_ms": 36641,
+          "model": "claude-sonnet-5-5"
+        }
+      },
+      {
+        "identifier": "DRE-2982",
+        "title": "Two popovers now sit two rows apart in the specimen — converge Tip and AccessPeek, or say why not",
+        "position": 36,
+        "unit": "DRE-2982",
+        "epic": null,
+        "repo": "portico",
+        "project": null,
+        "band": 2,
+        "deferred": false,
+        "open_children": 0,
+        "cycle": 16,
+        "cycle_id": "0b2a7e97-a09d-4df8-8e51-5c49ca2b2871",
+        "projected": false,
+        "outcome": "not-now",
+        "reason": "A design convergence that should be judged on the viewer after it moves to the new look",
+        "trigger": "DRE-3919 moves the viewer over",
+        "evidence": null,
+        "judged": true,
+        "reasons": {},
+        "verify": {
+          "verdict": "partly-solved",
+          "summary": "The duplication is still in the code: Tip and AccessPeek each carry their own portal, placement and capture-phase Escape listener, and each still has its own specimen row. But the premise has shifted: AccessPeek now has no production consumer (only its test and the specimen), so the 'three library surfaces' to protect are gone, and Tip's placement no longer matches AccessPeek's (above vs below).",
+          "proof": [
+            {
+              "file": "client/app/src/components/molecules/Tip.tsx",
+              "line": 150,
+              "quote": "document.addEventListener(\"keydown\", onKey, true);"
+            },
+            {
+              "file": "client/app/src/components/molecules/AccessPeek.tsx",
+              "line": 128,
+              "quote": "document.addEventListener(\"keydown\", onKey, true);"
+            },
+            {
+              "file": "client/app/src/components/molecules/Tip.tsx",
+              "line": 128,
+              "quote": "const top = above < 0 ? anchor.bottom + GAP : above;"
+            },
+            {
+              "file": "client/app/src/components/molecules/AccessPeek.tsx",
+              "line": 107,
+              "quote": "const top = flip ? chip.top - GAP - size.height : below;"
+            },
+            {
+              "file": "client/app/src/components/molecules/AccessPeek.tsx",
+              "line": 39,
+              "quote": "* THE ONE POPOVER. There was no general tooltip primitive in this app before"
+            },
+            {
+              "file": "client/app/src/components/molecules/AccessPeek.tsx",
+              "line": 198,
+              "quote": "FolderCard's too, until DRE-5210 deleted it). */"
+            },
+            {
+              "file": "client/app/src/components/molecules/Tip.tsx",
+              "line": 241,
+              "quote": "export const specimen: { states: { label: string; props: TipProps }[] } = {"
+            },
+            {
+              "file": "client/app/src/components/molecules/AccessPeek.tsx",
+              "line": 180,
+              "quote": "export const specimen = {"
+            }
+          ],
+          "reason": null,
+          "cost_usd": 0.36341999999999997,
+          "duration_ms": 46398,
+          "model": "claude-sonnet-5-5"
+        }
+      },
+      {
+        "identifier": "DRE-2963",
+        "title": "SECURITY (detector gap) · The §7 conformance suite does not catch a route with NO read gate at all",
+        "position": 37,
+        "unit": "DRE-2963",
+        "epic": null,
+        "repo": "portico",
+        "project": null,
+        "band": 2,
+        "deferred": false,
+        "open_children": 0,
+        "cycle": 15,
+        "cycle_id": "0d7758e5-cacd-48e4-a50f-16126809568c",
+        "projected": false,
+        "outcome": "now",
+        "reason": "in the batch by the rules — newest first, position 11",
+        "trigger": null,
+        "evidence": null,
+        "judged": true,
+        "reasons": {},
+        "verify": {
+          "verdict": "still-needed",
+          "summary": "The §7 conformance suite still only compares a hidden id against a ghost id (status, headers, body); no assertion anywhere in it requires that an unauthorised caller is refused at all, so a route with its read gate removed can still pass. Even the newer §2b ordinary-document oracle ends in the same relative comparison, and the header does not name the two properties.",
+          "proof": [
+            {
+              "file": "infra/test/section_7_conformance.test.ts",
+              "line": 1073,
+              "quote": "assert.equal(onReal.statusCode, onGhost.statusCode, `${label}: status codes differ — the split IS the oracle`);"
+            },
+            {
+              "file": "infra/test/section_7_conformance.test.ts",
+              "line": 1094,
+              "quote": "assertIndistinguishable(onTemplate, onGhost, w.templateId, `${route} / ${shape}`);"
+            },
+            {
+              "file": "infra/test/section_7_conformance.test.ts",
+              "line": 1181,
+              "quote": "assertIndistinguishable(onHidden, onGhost, hiddenId, `${route} / ${who} / ${hidden}`);"
+            }
+          ],
+          "reason": null,
+          "cost_usd": 0.3586294,
+          "duration_ms": 29582,
+          "model": "claude-sonnet-5-5"
+        }
+      },
+      {
+        "identifier": "DRE-2822",
+        "title": "[EPIC] The system can be read — what is happening, who acts next, and what is merely quiet",
+        "position": 38,
+        "unit": "DRE-2822",
+        "epic": null,
+        "repo": "agent-bureau",
+        "project": "Bureau: Unattended Operation",
+        "band": 2,
+        "deferred": false,
+        "open_children": 4,
+        "cycle": null,
+        "cycle_id": null,
+        "projected": false,
+        "outcome": "not-now",
+        "reason": "excluded without judgement: parent epic with 4 open children",
+        "trigger": null,
+        "evidence": null,
+        "judged": false,
+        "reasons": {},
+        "verify": {
+          "verdict": "excluded",
+          "summary": "Not judged: the card was excluded before any agent read it.",
+          "proof": [],
+          "reason": "parent epic with 4 open children",
+          "cost_usd": null,
+          "duration_ms": null,
+          "model": null
+        }
+      },
+      {
+        "identifier": "DRE-2747",
+        "title": "Alerts leave Linear for the console — deferred out of Wave 1.5, behind DRE-2535",
+        "position": 39,
+        "unit": "DRE-2747",
+        "epic": null,
+        "repo": "agent-bureau",
+        "project": null,
+        "band": 2,
+        "deferred": false,
+        "open_children": 0,
+        "cycle": 15,
+        "cycle_id": "0d7758e5-cacd-48e4-a50f-16126809568c",
+        "projected": false,
+        "outcome": "now",
+        "reason": "in the batch by the rules — newest first, position 12",
+        "trigger": null,
+        "evidence": null,
+        "judged": true,
+        "reasons": {},
+        "verify": {
+          "verdict": "still-needed",
+          "summary": "Pipeline-failure notices are still filed as Linear cards: this repo's medic stub still calls bureau-pipeline's medic, and the console still reads the 'Pipeline failure:' cards it files. The gate (DRE-2535) has landed — the email and push senders now log at ERROR instead of skipping quietly — so the move to console alerts is unblocked but not done. The medic's card-filing code itself lives in bureau-pipeline, not in this repo.",
+          "proof": [
+            {
+              "file": ".github/workflows/medic.yml",
+              "line": 31,
+              "quote": "uses: dreadnought-foundry/bureau-pipeline/.github/workflows/medic.yml@stable"
+            },
+            {
+              "file": "console/backend/morning_briefing_tag.py",
+              "line": 53,
+              "quote": "\"Pipeline failure:\", # bureau-pipeline's medic.yml files its diagnosis card under this heading"
+            },
+            {
+              "file": "console/web/src/components/oneriver/greenLightModel.ts",
+              "line": 329,
+              "quote": "/** The title the medic gives the card it files (`medic.yml`). */"
+            },
+            {
+              "file": "console/backend/delivery.py",
+              "line": 218,
+              "quote": "log.error("
+            }
+          ],
+          "reason": null,
+          "cost_usd": 0.2443598,
+          "duration_ms": 34634,
+          "model": "claude-sonnet-5-5"
+        }
+      },
+      {
+        "identifier": "DRE-2709",
+        "title": "Two bureau-pipeline docs still say the fleet rides vN — and a guard test requires the false sentence, so fixing them fails CI",
+        "position": 40,
+        "unit": "DRE-2709",
+        "epic": null,
+        "repo": "bureau-pipeline",
+        "project": null,
+        "band": 2,
+        "deferred": false,
+        "open_children": 0,
+        "cycle": null,
+        "cycle_id": null,
+        "projected": false,
+        "reconsidered_in": null,
+        "outcome": "not-ready"
+      },
+      {
+        "identifier": "DRE-2663",
+        "title": "Three pool alert kinds are unclassified, so a WARN saying \"nothing to do\" arrives as HIGH",
+        "position": 41,
+        "unit": "DRE-2663",
+        "epic": null,
+        "repo": "agent-bureau",
+        "project": "Bureau: Unattended Operation",
+        "band": 2,
+        "deferred": false,
+        "open_children": 0,
+        "cycle": 15,
+        "cycle_id": "0d7758e5-cacd-48e4-a50f-16126809568c",
+        "projected": false,
+        "outcome": "now",
+        "reason": "in the batch by the rules — newest first, position 13",
+        "trigger": null,
+        "evidence": null,
+        "judged": true,
+        "reasons": {},
+        "verify": {
+          "verdict": "still-needed",
+          "summary": "The three pool kinds (claude_pool_failover:*, claude_pool_credential_refused, claude_pool_exhausted) are still absent from _SYSTEM_CATEGORY, so they fall back to NEEDS_HUMAN, and urgency_for returns NEEDS_HUMAN's fixed HIGH whatever the row's severity. A WARN failover row therefore still reads HIGH, as it did on 2026-08-22.",
+          "proof": [
+            {
+              "file": "console/backend/alerts_v2.py",
+              "line": 834,
+              "quote": "category = _SYSTEM_CATEGORY.get(prefix, AlertCategory.NEEDS_HUMAN)"
+            },
+            {
+              "file": "console/backend/alerts_v2.py",
+              "line": 169,
+              "quote": "AlertCategory.NEEDS_HUMAN: AlertUrgency.HIGH,"
+            },
+            {
+              "file": "console/backend/alerts_v2.py",
+              "line": 216,
+              "quote": "return _CATEGORY_URGENCY[category]"
+            },
+            {
+              "file": "console/backend/claude_pool.py",
+              "line": 157,
+              "quote": "# One alert per ORIGIN account whose repos the pool has moved. WARN while the pool"
+            },
+            {
+              "file": "console/backend/claude_pool.py",
+              "line": 160,
+              "quote": "FAILOVER_KIND_PREFIX = \"claude_pool_failover\""
+            }
+          ],
+          "reason": null,
+          "cost_usd": 0.2375568,
+          "duration_ms": 26372,
+          "model": "claude-sonnet-5-5"
+        }
+      },
+      {
+        "identifier": "DRE-2657",
+        "title": "bureau-harness sits outside the credential fan-out and its token is 32 days old — establish whether the repo that gates the channel can still run",
+        "position": 42,
+        "unit": "DRE-2657",
+        "epic": null,
+        "repo": "bureau-pipeline",
+        "project": "Bureau: Unattended Operation",
+        "band": 2,
+        "deferred": false,
+        "open_children": 0,
+        "cycle": 16,
+        "cycle_id": "0b2a7e97-a09d-4df8-8e51-5c49ca2b2871",
+        "projected": false,
+        "outcome": "not-now",
+        "reason": "Bureau-harness is plainly running: its probe runs merged on main several times today",
+        "trigger": "when cycle 16 opens",
+        "evidence": null,
+        "judged": true,
+        "reasons": {},
+        "verify": {
+          "verdict": "unverified",
+          "summary": "The credential fan-out the card is about (the console rotation, scripts/swap-claude-account.sh, POOL_EXTRA_REPOS and config/pipeline-channel.json) is not in bureau-pipeline's main, so whether bureau-harness joined it or was given a named owner cannot be read from target/. The only in-repo mention, docs/groomer-judged-batch.md:171, calls the decision undecided, and config/repo-map.json has no bureau-harness entry, which settles nothing either way.",
+          "proof": [],
+          "reason": "no proof",
+          "cost_usd": 0.2603008,
+          "duration_ms": 38395,
+          "model": "claude-sonnet-5-5"
+        }
+      },
+      {
+        "identifier": "DRE-2558",
+        "title": "Injected context has no ceiling and no writer — portico's CLAUDE.md is 491 lines and grew six times in four days",
+        "position": 43,
+        "unit": "DRE-2558",
+        "epic": null,
+        "repo": "agent-bureau",
+        "project": "Bureau: Unattended Operation",
+        "band": 2,
+        "deferred": false,
+        "open_children": 0,
+        "cycle": 15,
+        "cycle_id": "0d7758e5-cacd-48e4-a50f-16126809568c",
+        "projected": false,
+        "outcome": "now",
+        "reason": "in the batch by the rules — newest first, position 14",
+        "trigger": null,
+        "evidence": null,
+        "judged": true,
+        "reasons": {},
+        "verify": {
+          "verdict": "still-needed",
+          "summary": "Nothing in this repo caps a CLAUDE.md or counts them: the census and the line-ceiling test the card asks for do not exist, and agent-bureau's own CLAUDE.md has grown from 130 lines (card, 2026-08-19) to 291 with no gate. Portico's 491-line file and project-template are not in this checkout, so those parts could not be read; the scaffold ships only the card-standard pointer block, not a baseline CLAUDE.md.",
+          "proof": [
+            {
+              "file": "CLAUDE.md",
+              "line": 291,
+              "quote": "<!-- bureau:card-standard:end -->"
+            },
+            {
+              "file": "scaffold/README.md",
+              "line": 88,
+              "quote": "repo's `CLAUDE.md` (appended to one that exists, or a new file holding only the"
+            }
+          ],
+          "reason": null,
+          "cost_usd": 0.21579720000000002,
+          "duration_ms": 42096,
+          "model": "claude-sonnet-5-5"
+        }
+      },
+      {
+        "identifier": "DRE-2503",
+        "title": "Flip the portal CSP from Report-Only to enforcing — author the policy, hand the operator the command",
+        "position": 44,
+        "unit": "DRE-2503",
+        "epic": null,
+        "repo": "portico",
+        "project": null,
+        "band": 2,
+        "deferred": false,
+        "open_children": 0,
+        "cycle": 16,
+        "cycle_id": "0b2a7e97-a09d-4df8-8e51-5c49ca2b2871",
+        "projected": false,
+        "outcome": "not-now",
+        "reason": "Flipping the policy to enforcing before reading the report-only violations would break the portal",
+        "trigger": "A report-only period is read and shows no violations",
+        "evidence": null,
+        "judged": true,
+        "reasons": {}
+      },
+      {
+        "identifier": "DRE-2498",
+        "title": "The share panel tells the truth about documents Portico cannot gate",
+        "position": 45,
+        "unit": "DRE-2498",
+        "epic": null,
+        "repo": "portico",
+        "project": null,
+        "band": 2,
+        "deferred": false,
+        "open_children": 0,
+        "cycle": 16,
+        "cycle_id": "0b2a7e97-a09d-4df8-8e51-5c49ca2b2871",
+        "projected": false,
+        "outcome": "not-now",
+        "reason": "The share panel sits in the viewer that is about to move to the new look",
+        "trigger": "DRE-3919 moves the viewer over",
+        "evidence": null,
+        "judged": true,
+        "reasons": {}
+      },
+      {
+        "identifier": "DRE-2497",
+        "title": "Add-document: paste a Google link and choose to link to it, not copy it",
+        "position": 46,
+        "unit": "DRE-2497",
+        "epic": null,
+        "repo": "portico",
+        "project": null,
+        "band": 2,
+        "deferred": false,
+        "open_children": 0,
+        "cycle": 16,
+        "cycle_id": "0b2a7e97-a09d-4df8-8e51-5c49ca2b2871",
+        "projected": false,
+        "outcome": "not-now",
+        "reason": "The add-document form is about to move to the new look",
+        "trigger": "DRE-3919 moves the forms over",
+        "evidence": null,
+        "judged": true,
+        "reasons": {}
+      },
+      {
+        "identifier": "DRE-2397",
+        "title": "A bounced notification email can silently lock someone out of sign-in",
+        "position": 47,
+        "unit": "DRE-2397",
+        "epic": null,
+        "repo": "portico",
+        "project": "Portico: Drive-style document library",
+        "band": 2,
+        "deferred": false,
+        "open_children": 0,
+        "cycle": 16,
+        "cycle_id": "0b2a7e97-a09d-4df8-8e51-5c49ca2b2871",
+        "projected": false,
+        "outcome": "not-now",
+        "reason": "A bounced email can lock someone out of sign-in with nobody told, a risk the shipping agent itself flagged",
+        "trigger": "when cycle 16 opens",
+        "evidence": null,
+        "judged": true,
+        "reasons": {}
+      },
+      {
+        "identifier": "DRE-1984",
+        "title": "Console & infra production-readiness hardening (auth expiry, DB recovery, tenant-scoped chat tools, prod image)",
+        "position": 48,
+        "unit": "DRE-1984",
+        "epic": null,
+        "repo": "agent-bureau",
+        "project": null,
+        "band": 2,
+        "deferred": false,
+        "open_children": 0,
+        "cycle": null,
+        "cycle_id": null,
+        "projected": false,
+        "outcome": "not-now",
+        "reason": "could not rank — needs a person",
+        "trigger": null,
+        "evidence": null,
+        "judged": false,
+        "reasons": {}
+      },
+      {
+        "identifier": "DRE-5726",
+        "title": "agent-bureau: a runner machine may declare up to 14 heavy and 8 light runners — compose services, start-runners limits and the split rule raised together, so the 30-core Mac Studio can run its planned 14 + 8 + 3",
+        "position": 49,
+        "unit": "DRE-5726",
+        "epic": null,
+        "repo": "agent-bureau",
+        "project": null,
+        "band": 2,
+        "deferred": false,
+        "open_children": 0,
+        "held": true,
+        "cycle": 16,
+        "cycle_id": "0b2a7e97-a09d-4df8-8e51-5c49ca2b2871",
+        "projected": false,
+        "outcome": "not-now",
+        "reason": "The limits only matter once the Mac Studio is on the bench, and the runner fleet's shape is being decided right now",
+        "trigger": "The Mac Studio arrives and DRE-6535 settles which machines carry CI",
+        "evidence": null,
+        "judged": true,
+        "reasons": {}
+      },
+      {
+        "identifier": "DRE-5483",
+        "title": "[EPIC] What's New: one button in every product that shows what changed since you last looked",
+        "position": 50,
+        "unit": "DRE-5483",
+        "epic": null,
+        "repo": "bureau-pipeline",
+        "project": null,
+        "band": 2,
+        "deferred": false,
+        "open_children": 0,
+        "held": true,
+        "cycle": null,
+        "cycle_id": null,
+        "projected": false,
+        "reconsidered_in": null,
+        "outcome": "not-ready"
+      },
+      {
+        "identifier": "DRE-5199",
+        "title": "portico: four defects the MCP and portal proofs found on v1.0.70 — an MCP delete leaves no change-log entry, the log's people count reads one low, upload_document's description is stale, the inspector's History lags until reload",
+        "position": 51,
+        "unit": "DRE-5199",
+        "epic": null,
+        "repo": "portico",
+        "project": null,
+        "band": 2,
+        "deferred": false,
+        "open_children": 0,
+        "held": true,
+        "cycle": 16,
+        "cycle_id": "0b2a7e97-a09d-4df8-8e51-5c49ca2b2871",
+        "projected": false,
+        "outcome": "not-now",
+        "reason": "Four verified defects on the live Portico portal, each small and each still there since the September proofs",
+        "trigger": "when cycle 16 opens",
+        "evidence": null,
+        "judged": true,
+        "reasons": {}
+      },
+      {
+        "identifier": "DRE-4874",
+        "title": "[EPIC] Every product the fleet deploys releases through the train and shows in Linear Releases: DeltaSolv, Atlas, agent-bureau-demo and the GitHub relay",
+        "position": 52,
+        "unit": "DRE-4874",
+        "epic": null,
+        "repo": "agent-bureau",
+        "project": null,
+        "band": 2,
+        "deferred": false,
+        "open_children": 3,
+        "held": true,
+        "cycle": 16,
+        "cycle_id": "0b2a7e97-a09d-4df8-8e51-5c49ca2b2871",
+        "projected": false,
+        "outcome": "not-now",
+        "reason": "The CEO wants every release visible in Linear, but the fleet's own surfaces have to ride the train before DeltaSolv and Atlas can",
+        "trigger": "DRE-3245 lands and the fleet's surfaces release through the train cleanly",
+        "evidence": null,
+        "judged": true,
+        "reasons": {}
+      },
+      {
+        "identifier": "DRE-4206",
+        "title": "portico: the document route loads on demand — draw what a reader sees while it arrives, get Sid's yes, then split it out of the initial download",
+        "position": 53,
+        "unit": "DRE-4206",
+        "epic": null,
+        "repo": "portico",
+        "project": null,
+        "band": 2,
+        "deferred": false,
+        "open_children": 0,
+        "held": true,
+        "cycle": 16,
+        "cycle_id": "0b2a7e97-a09d-4df8-8e51-5c49ca2b2871",
+        "projected": false,
+        "outcome": "not-now",
+        "reason": "Split out to follow its parent, which measures what the portal actually serves before anything is split out of the download",
+        "trigger": "DRE-4204 lands and Sid has seen the on-demand drawing",
+        "evidence": null,
+        "judged": true,
+        "reasons": {}
+      },
+      {
+        "identifier": "DRE-4204",
+        "title": "portico: the initial download — measure what is actually served, ship only the look a portal renders, and split the document route so a feature stops costing every reader",
+        "position": 54,
+        "unit": "DRE-4204",
+        "epic": null,
+        "repo": "portico",
+        "project": null,
+        "band": 2,
+        "deferred": false,
+        "open_children": 0,
+        "held": true,
+        "cycle": 16,
+        "cycle_id": "0b2a7e97-a09d-4df8-8e51-5c49ca2b2871",
+        "projected": false,
+        "outcome": "not-now",
+        "reason": "Sid asked for this outright after the download ceiling was raised again, and nothing in flight touches Portico's build",
+        "trigger": "when cycle 16 opens",
+        "evidence": null,
+        "judged": true,
+        "reasons": {}
+      },
+      {
+        "identifier": "DRE-4072",
+        "title": "Capacity folds into the KPI tiles — one header carrying both what needs the CEO and what the machine has left, at no extra height",
+        "position": 55,
+        "unit": "DRE-4072",
+        "epic": null,
+        "repo": "agent-bureau",
+        "project": null,
+        "band": 2,
+        "deferred": false,
+        "open_children": 0,
+        "held": true,
+        "cycle": null,
+        "cycle_id": null,
+        "projected": false,
+        "reconsidered_in": null,
+        "outcome": "not-ready"
+      },
+      {
+        "identifier": "DRE-4054",
+        "title": "Every card read drags 3.3 KB of Linear description per row whether the view wants it or not",
+        "position": 56,
+        "unit": "DRE-4054",
+        "epic": null,
+        "repo": "agent-bureau",
+        "project": null,
+        "band": 2,
+        "deferred": false,
+        "open_children": 0,
+        "held": true,
+        "cycle": 16,
+        "cycle_id": "0b2a7e97-a09d-4df8-8e51-5c49ca2b2871",
+        "projected": false,
+        "outcome": "not-now",
+        "reason": "The backend is being killed for memory, and every card read drags a full description into memory several times a page for views that never show it",
+        "trigger": "when cycle 16 opens",
+        "evidence": null,
+        "judged": true,
+        "reasons": {}
+      },
+      {
+        "identifier": "DRE-3919",
+        "title": "[EPIC] portico: Source list rebuild, part 4b — the viewer, forms and Manage move over, and the old parts go",
+        "position": 57,
+        "unit": "DRE-3919",
+        "epic": null,
+        "repo": "portico",
+        "project": null,
+        "band": 2,
+        "deferred": false,
+        "open_children": 0,
+        "held": true,
+        "cycle": 16,
+        "cycle_id": "0b2a7e97-a09d-4df8-8e51-5c49ca2b2871",
+        "projected": false,
+        "outcome": "not-now",
+        "reason": "The half that finishes Portico's move to the new look, wanted, but it should start once the first half is confirmed merged and Sid has signed off the templates it builds on",
+        "trigger": "The first half of the rebuild is confirmed merged and Sid has approved the part-3 templates",
+        "evidence": null,
+        "judged": true,
+        "reasons": {}
+      },
+      {
+        "identifier": "DRE-3857",
+        "title": "agent-bureau's console, website and relay write their Linear releases through the train's shared step instead of each surface script",
+        "position": 58,
+        "unit": "DRE-3857",
+        "epic": null,
+        "repo": "agent-bureau",
+        "project": null,
+        "band": 2,
+        "deferred": false,
+        "open_children": 0,
+        "held": true,
+        "cycle": null,
+        "cycle_id": null,
+        "projected": false,
+        "reconsidered_in": null,
+        "outcome": "not-ready"
+      },
+      {
+        "identifier": "DRE-3749",
+        "title": "Every new project is born on the release train — its first lane is added from a template when there's something to release, switched off, with the one card that turns it on",
+        "position": 59,
+        "unit": "DRE-2284",
+        "epic": "DRE-2284",
+        "repo": "agent-bureau",
+        "project": null,
+        "band": 2,
+        "deferred": false,
+        "open_children": 0,
+        "held": true,
+        "cycle": null,
+        "cycle_id": null,
+        "projected": false,
+        "reconsidered_in": null,
+        "outcome": "not-ready"
+      },
+      {
+        "identifier": "DRE-3750",
+        "title": "Every new company gets its Portico share when its first project is set up — created by portico's own deploy, not by a script outside the repo",
+        "position": 60,
+        "unit": "DRE-2284",
+        "epic": "DRE-2284",
+        "repo": "portico",
+        "project": null,
+        "band": 2,
+        "deferred": false,
+        "open_children": 0,
+        "held": true,
+        "cycle": null,
+        "cycle_id": null,
+        "projected": false,
+        "reconsidered_in": null,
+        "outcome": "not-ready"
+      },
+      {
+        "identifier": "DRE-3701",
+        "title": "qa-review posts a STALE verdict with no @sha when Resolve PR dies on a transient GitHub error — the critic never ran, the old verdict file was still on the runner's /tmp, and the fix agent was dispatched at a phantom",
+        "position": 61,
+        "unit": "DRE-3701",
+        "epic": null,
+        "repo": "bureau-pipeline",
+        "project": null,
+        "band": 2,
+        "deferred": false,
+        "open_children": 0,
+        "held": true,
+        "cycle": 17,
+        "cycle_id": null,
+        "projected": true,
+        "outcome": "not-now",
+        "reason": "A stale verdict with no commit sent a fix agent after a phantom, and the pipeline runs unattended, so a lying verdict wastes a run nobody watches",
+        "trigger": "when cycle 17 opens",
+        "evidence": null,
+        "judged": true,
+        "reasons": {}
+      },
+      {
+        "identifier": "DRE-3602",
+        "title": "The console release row follows the NEWEST train run, so a hold run three minutes behind a release hides the release's verify/live stages and its version",
+        "position": 62,
+        "unit": "DRE-3602",
+        "epic": null,
+        "repo": "agent-bureau",
+        "project": null,
+        "band": 2,
+        "deferred": false,
+        "open_children": 0,
+        "held": true,
+        "cycle": 17,
+        "cycle_id": null,
+        "projected": true,
+        "outcome": "not-now",
+        "reason": "The release row is about to be answered from our database rather than the newest train run, which may fix this on its own",
+        "trigger": "DRE-6390 lands, then check whether the release row still follows a hold run",
+        "evidence": null,
+        "judged": true,
+        "reasons": {}
+      }
+    ],
+    "outcomes": {
+      "now": [
+        {
+          "identifier": "DRE-6855",
+          "title": "A change sent from the console to bureau-pipeline carries no personal identity: the public pull request says \"a console admin\", and the console's own record keeps who it was",
+          "position": 1,
+          "cycle": 15,
+          "cycle_id": "0d7758e5-cacd-48e4-a50f-16126809568c",
+          "unit": "DRE-6855",
+          "epic": null,
+          "repo": "agent-bureau",
+          "projected": false,
+          "band": 1,
+          "open_children": 0,
+          "reason": "The console-to-pipeline save path was built this week and is still being shaped, so what identity it carries should be settled while it is fresh",
+          "trigger": null,
+          "evidence": null,
+          "judged": true,
+          "reasons": {
+            "why now": "the Agents & models save path shipped days ago and its sibling cards are still landing",
+            "value": "the public record names no person and the console's own record still says who it was",
+            "effort": "a day",
+            "if skipped": "every save from the console keeps naming a person in public pull requests",
+            "depends on": "nothing"
+          },
+          "verify": {
+            "verdict": "still-needed",
+            "summary": "The console still sends the signed-in admin's login (their email when the session has one) as requested_by in the change set, and joins the logins of every queued change for a set the background tick sends. Nothing sends the fixed words \"a console admin\", and the existing tests pin an email in the dispatched payload.",
+            "proof": [
+              {
+                "file": "console/backend/agents_models_graphql.py",
+                "line": 480,
+                "quote": "change, requested_by=None if person is None else person.login, now=now,"
+              },
+              {
+                "file": "console/backend/model_changes.py",
+                "line": 964,
+                "quote": "change_set = {\"requested_by\": \", \".join(dict.fromkeys(c.requested_by for c in queued)),"
+              },
+              {
+                "file": "console/backend/tests/test_model_changes_press.py",
+                "line": 303,
+                "quote": "assert github.sets == [{\"requested_by\": \"ceo@example.com\", \"changes\": [sent]}], ("
+              }
+            ],
+            "reason": null,
+            "cost_usd": 0.1675418,
+            "duration_ms": 37284,
+            "model": "claude-sonnet-5-5"
+          }
+        },
+        {
+          "identifier": "DRE-3600",
+          "title": "apply_branch_protection.py's full PUT answers HTTP 500 from GitHub; write the required-check list through the PATCH endpoint, and drop the expired TDD grace window from the config",
+          "position": 2,
+          "cycle": 15,
+          "cycle_id": "0d7758e5-cacd-48e4-a50f-16126809568c",
+          "unit": "DRE-3600",
+          "epic": null,
+          "repo": "agent-bureau",
+          "projected": false,
+          "band": 2,
+          "open_children": 0,
+          "reason": "The branch-protection tool fails every time the operator runs it, and the red-main work may need the required-check list changed soon",
+          "trigger": null,
+          "evidence": null,
+          "judged": true,
+          "reasons": {
+            "why now": "DRE-6869 may change which checks a merge requires, and the tool to apply them is broken",
+            "value": "the operator can apply branch protection again",
+            "effort": "an afternoon",
+            "if skipped": "protection changes are made by hand in GitHub's settings",
+            "depends on": "nothing"
+          },
+          "verify": {
+            "verdict": "still-needed",
+            "summary": "All four parts of the card can still be seen on main: apply_branch_protection.py still writes with one full PUT and prints only gh's output on failure, the expired TDD window is still in config/branch-protection.json, and the guard's expired-window message still has no blast-radius line. The newly declared Console speed gate carries the same kind of window, which ends 2026-10-16, so the same outage can repeat.",
+            "proof": [
+              {
+                "file": "scripts/apply_branch_protection.py",
+                "line": 171,
+                "quote": "[\"gh\", \"api\", \"-X\", \"PUT\", f\"repos/{repo}/branches/{branch}/protection\","
+              },
+              {
+                "file": "scripts/apply_branch_protection.py",
+                "line": 176,
+                "quote": "return proc.returncode, (proc.stderr or proc.stdout or \"\").strip()"
+              },
+              {
+                "file": "config/branch-protection.json",
+                "line": 18,
+                "quote": "\"awaiting_operator_apply_until\": \"2026-09-10\""
+              },
+              {
+                "file": "config/branch-protection.json",
+                "line": 24,
+                "quote": "\"awaiting_operator_apply_until\": \"2026-10-16\""
+              },
+              {
+                "file": "scripts/check_branch_protection.py",
+                "line": 370,
+                "quote": "f\" its window expired \""
+              }
+            ],
+            "reason": null,
+            "cost_usd": 0.1665372,
+            "duration_ms": 17995,
+            "model": "claude-sonnet-5-5"
+          }
+        },
+        {
+          "identifier": "DRE-3589",
+          "title": "The pen switch says the act and its consequence — \"Open the pen — releases 41 cards\", never a bare Open or Close",
+          "position": 3,
+          "cycle": 15,
+          "cycle_id": "0d7758e5-cacd-48e4-a50f-16126809568c",
+          "unit": "DRE-3589",
+          "epic": null,
+          "repo": "agent-bureau",
+          "projected": false,
+          "band": 2,
+          "open_children": 0,
+          "reason": "A small copy change to Green Light's pen switch, best made once the sideways audit is gating that route",
+          "trigger": null,
+          "evidence": null,
+          "judged": true,
+          "reasons": {},
+          "verify": {
+            "verdict": "still-needed",
+            "summary": "The pen switch is still a bare verb: the console sets the verb to 'Open' or 'Close' and prints it as the button text, with no consequence or card count. The design HTML and the design test still pin the same bare 'Open'/'Close', so the card's problem is untouched on main.",
+            "proof": [
+              {
+                "file": "console/web/src/components/oneriver/capacityModel.ts",
+                "line": 2036,
+                "quote": "const verb: PenVerb = pen.closed ? 'Open' : 'Close'"
+              },
+              {
+                "file": "console/web/src/components/oneriver/CapacityStrip.tsx",
+                "line": 1906,
+                "quote": "{pen.verb}"
+              },
+              {
+                "file": "console/design/screens/web-dashboard-one-river-2026-09-03.html",
+                "line": 1562,
+                "quote": "function penVerb(p){return p.open ? 'Close' : 'Open';}"
+              },
+              {
+                "file": "scripts/test_one_river_design.py",
+                "line": 1163,
+                "quote": "assert re.search(r\"penVerb\\(PEN\\)[^\\n]*'Open'\", src) or \"p.open ? 'Close' : 'Open'\" in src"
+              }
+            ],
+            "reason": null,
+            "cost_usd": 0.13914680000000001,
+            "duration_ms": 19625,
+            "model": "claude-sonnet-5-5"
+          }
+        },
+        {
+          "identifier": "DRE-3576",
+          "title": "The refutation receipt says \"state: dispatched · next: qa-review.yml\" when the dispatch 403'd and the run parked for a human",
+          "position": 4,
+          "cycle": 15,
+          "cycle_id": "0d7758e5-cacd-48e4-a50f-16126809568c",
+          "unit": "DRE-3576",
+          "epic": null,
+          "repo": "bureau-pipeline",
+          "projected": false,
+          "band": 2,
+          "open_children": 0,
+          "reason": "A receipt that says a run was dispatched when it parked for a human sends the operator to the wrong place",
+          "trigger": null,
+          "evidence": null,
+          "judged": true,
+          "reasons": {
+            "why now": "the review path is being relied on unattended and the receipt is the only word the operator reads",
+            "value": "the receipt says parked when the run parked",
+            "effort": "an afternoon",
+            "if skipped": "the next refused dispatch is read as a run in progress",
+            "depends on": "nothing"
+          },
+          "verify": {
+            "verdict": "still-needed",
+            "summary": "The refutation receipt (state: dispatched, next: qa-review.yml) is still posted to the PR before the qa-review dispatch is tried, and the failed-dispatch branch only warns, comments on the card and parks it; it never posts an escalated receipt, so the PR comment still promises a re-review that will not run.",
+            "proof": [
+              {
+                "file": "scripts/report_fix_result.sh",
+                "line": 549,
+                "quote": "python3 .bureau-pipeline/scripts/pipeline_act.py receipt fix-finding-refuted \\"
+              },
+              {
+                "file": "scripts/report_fix_result.sh",
+                "line": 552,
+                "quote": "# Posted before the dispatch: the re-review reads it off the thread."
+              },
+              {
+                "file": "scripts/report_fix_result.sh",
+                "line": 568,
+                "quote": "echo \"::warning::could not dispatch $REVIEW_WF for PR #$PR — this repo's agent-fix stub needs \\`actions: write\\`; parking for a human instead of promising a re-review that will not run\""
+              },
+              {
+                "file": "config/pipeline-acts.json",
+                "line": 510,
+                "quote": "\"state\": \"dispatched\","
+              },
+              {
+                "file": "tests/test_refuted_verdict_rereview.py",
+                "line": 498,
+                "quote": "self.assertIn(\"::warning::\", proc.stdout)"
+              }
+            ],
+            "reason": null,
+            "cost_usd": 0.17075780000000002,
+            "duration_ms": 25472,
+            "model": "claude-sonnet-5-5"
+          }
+        },
+        {
+          "identifier": "DRE-3550",
+          "title": "One River's Pull Requests tab carries no read age — the only tab whose freshness the CEO cannot tell from the screen",
+          "position": 5,
+          "cycle": 15,
+          "cycle_id": "0d7758e5-cacd-48e4-a50f-16126809568c",
+          "unit": "DRE-3550",
+          "epic": null,
+          "repo": "agent-bureau",
+          "projected": false,
+          "band": 2,
+          "open_children": 0,
+          "reason": "The Pull Requests tab's age is best shown once it reads from our database, where the age is known",
+          "trigger": null,
+          "evidence": null,
+          "judged": true,
+          "reasons": {},
+          "verify": {
+            "verdict": "still-needed",
+            "summary": "The Pull Requests tab still has no read-age line: PullRequestsTab.tsx never mentions ReadAgeLabel, readAge or freshness. prove_phase.py's READ_AGE_SURFACES still lists the same four surfaces, and the tab is not among them.",
+            "proof": [
+              {
+                "file": "console/web/src/components/oneriver/PullRequestsTab.tsx",
+                "line": 132,
+                "quote": "export function PullRequestsTab() {"
+              },
+              {
+                "file": "scripts/prove_phase.py",
+                "line": 2991,
+                "quote": "READ_AGE_SURFACES = ("
+              },
+              {
+                "file": "scripts/prove_phase.py",
+                "line": 2999,
+                "quote": "\"console/web/src/pages/ProjectOverview.tsx\","
+              }
+            ],
+            "reason": null,
+            "cost_usd": 0.1471602,
+            "duration_ms": 19821,
+            "model": "claude-sonnet-5-5"
+          }
+        },
+        {
+          "identifier": "DRE-3545",
+          "title": "Three operator cards were closed Done from the console with nothing done (DRE-3497 09-09 13:35 PT, DRE-3494 09-09 13:35 PT, DRE-3155 no code on main) — a `no-code` / OPERATOR card must not close from the queue without its record",
+          "position": 6,
+          "cycle": 15,
+          "cycle_id": "0d7758e5-cacd-48e4-a50f-16126809568c",
+          "unit": "DRE-3545",
+          "epic": null,
+          "repo": "agent-bureau",
+          "projected": false,
+          "band": 2,
+          "open_children": 0,
+          "reason": "Three operator cards were closed Done with nothing done, and the console's reading of operator cards is being redone right now",
+          "trigger": null,
+          "evidence": null,
+          "judged": true,
+          "reasons": {
+            "why now": "DRE-6232 is deciding how the console treats an operator card, and closing rules belong with it",
+            "value": "an operator card cannot close without its record",
+            "effort": "a day",
+            "if skipped": "more operator cards close Done with no work behind them",
+            "depends on": "DRE-6232"
+          },
+          "verify": {
+            "verdict": "still-needed",
+            "summary": "Neither half of the fix is on main. The console's completeOperatorCard takes only a card id and writes Done with no recorded outcome (no 'Record the outcome' path exists anywhere), and the lane guard still only reports a Done card with a gap and never moves a no-code card back to Backlog.",
+            "proof": [
+              {
+                "file": "console/backend/schema.py",
+                "line": 17050,
+                "quote": "self, info: strawberry.Info, card_id: str"
+              },
+              {
+                "file": "console/backend/operator_complete.py",
+                "line": 364,
+                "quote": "write_state(identifier, DONE_STATE)"
+              },
+              {
+                "file": "console/web/src/lib/completeOperatorCard.ts",
+                "line": 34,
+                "quote": "export async function completeOperatorCard("
+              },
+              {
+                "file": "cloud/relay/lane_guard.py",
+                "line": 611,
+                "quote": "if name == \"Done\":"
+              },
+              {
+                "file": "cloud/relay/lane_guard.py",
+                "line": 616,
+                "quote": "\"report\", None, gaps,"
+              },
+              {
+                "file": "cloud/relay/lane_guard.py",
+                "line": 515,
+                "quote": "if name == \"Done\" and merged is False:"
+              }
+            ],
+            "reason": null,
+            "cost_usd": 0.262852,
+            "duration_ms": 28616,
+            "model": "claude-sonnet-5-5"
+          }
+        },
+        {
+          "identifier": "DRE-3449",
+          "title": "A sent-back epic with no children yet is a Green Light row — today the tab hides it as \"no plan to approve\"",
+          "position": 7,
+          "cycle": 15,
+          "cycle_id": "0d7758e5-cacd-48e4-a50f-16126809568c",
+          "unit": "DRE-3449",
+          "epic": null,
+          "repo": "agent-bureau",
+          "projected": false,
+          "band": 2,
+          "open_children": 0,
+          "reason": "Which rows reach Green Light is being decided by the epic in flight, and a sent-back epic may be the planner's turn rather than the CEO's",
+          "trigger": null,
+          "evidence": null,
+          "judged": true,
+          "reasons": {},
+          "verify": {
+            "verdict": "still-needed",
+            "summary": "greenLightRows() still drops every epic with zero children as \"no plan to approve\" without looking at its receipts, so an epic sent back by the critic before any child exists gets no Green Light row. The epic loop has no sent-back fallback, and the later loop skips epics outright.",
+            "proof": [
+              {
+                "file": "console/web/src/components/oneriver/greenLightModel.ts",
+                "line": 932,
+                "quote": "// An epic with no children has no plan to approve — there is nothing to"
+              },
+              {
+                "file": "console/web/src/components/oneriver/greenLightModel.ts",
+                "line": 934,
+                "quote": "if (!awaitsPlanApproval(epic) || epicGroup.children.length === 0) continue"
+              },
+              {
+                "file": "console/web/src/components/oneriver/greenLightModel.ts",
+                "line": 958,
+                "quote": "if (card.isEpic) continue"
+              }
+            ],
+            "reason": null,
+            "cost_usd": 0.1540052,
+            "duration_ms": 18591,
+            "model": "claude-sonnet-5-5"
+          }
+        },
+        {
+          "identifier": "DRE-3104",
+          "title": "The shelf lists the templates this build carries, and one button puts a template on the shelf — no file, no terminal, no token",
+          "position": 8,
+          "cycle": 15,
+          "cycle_id": "0d7758e5-cacd-48e4-a50f-16126809568c",
+          "unit": "DRE-3104",
+          "epic": null,
+          "repo": "portico",
+          "projected": false,
+          "band": 2,
+          "open_children": 0,
+          "reason": "The operator asked for this after putting a template on a shelf by hand with a token, and nothing in flight touches the shelf",
+          "trigger": null,
+          "evidence": null,
+          "judged": true,
+          "reasons": {
+            "why now": "each new shelf still needs a terminal and a token copied by hand",
+            "value": "a template goes on a shelf with one button",
+            "effort": "a few days",
+            "if skipped": "every new shelf is set up by hand the way the operator objected to",
+            "depends on": "nothing"
+          },
+          "verify": {
+            "verdict": "still-needed",
+            "summary": "The server half exists (POST /library/forms/builtin and the --builtin CLI flag), but nothing in the client calls it: formTransport.ts has no shelfBuiltinTemplate, its header still says to write no template wrapper until the authoring UI, and forms/README.md still carries the hand-kept 'on which shelf' table. The card names FormShelfRegion.tsx, which was since deleted, so the builder must put the 'From the Foundry' group on the Forms place or TemplateShelf instead.",
+            "proof": [
+              {
+                "file": "client/app/src/features/forms/formTransport.ts",
+                "line": 19,
+                "quote": "* NO createFormTemplate HERE, deliberately. `POST /library/forms` exists on the"
+              },
+              {
+                "file": "client/app/src/features/forms/formTransport.ts",
+                "line": 85,
+                "quote": "export function fetchFormTemplates(project: string): Promise<{ templates: WireFormTemplate[] }> {"
+              },
+              {
+                "file": "forms/README.md",
+                "line": 71,
+                "quote": "| template | what | on which shelf | since |"
+              },
+              {
+                "file": "infra/lambda/routes/library.ts",
+                "line": 1956,
+                "quote": "'POST /library/forms/builtin': async (event) => {"
+              },
+              {
+                "file": "client/app/src/app/legacyGone.test.ts",
+                "line": 44,
+                "quote": "\"features/forms/FormShelfRegion.tsx\","
+              }
+            ],
+            "reason": null,
+            "cost_usd": 0.31352019999999997,
+            "duration_ms": 33587,
+            "model": "claude-sonnet-5-5"
+          }
+        },
+        {
+          "identifier": "DRE-3009",
+          "title": "Every behaviour-changing commit needs a preceding RED test — tighten the TDD floor from once-per-branch to once-per-change",
+          "cycle": 15,
+          "cycle_id": "0d7758e5-cacd-48e4-a50f-16126809568c",
+          "unit": "DRE-3009",
+          "epic": null,
+          "repo": "bureau-pipeline",
+          "projected": false,
+          "band": 2,
+          "position": 9,
+          "trigger": null,
+          "evidence": null,
+          "judged": false,
+          "reasons": {},
+          "reason": "in the batch by the rules — newest first, position 9",
+          "verify": {
+            "verdict": "still-needed",
+            "summary": "The gap is unchanged on main: check_tdd_commits.py still enforces one RED test commit before the FIRST code commit, not one before each behaviour change, and the standard still tells reviewers that the once-per-branch rule is the only rule. There is no exemption config file, no per-commit classifier and no exemption named in the failure message.",
+            "proof": [
+              {
+                "file": "scripts/check_tdd_commits.py",
+                "line": 13,
+                "quote": "• At least one commit touching files under `tests/` must appear STRICTLY"
+              },
+              {
+                "file": "scripts/check_tdd_commits.py",
+                "line": 565,
+                "quote": "first_code = next("
+              },
+              {
+                "file": "scripts/check_tdd_commits.py",
+                "line": 571,
+                "quote": "if any(\"test\" in commit_categories(c) for c in commits[:first_code]):"
+              },
+              {
+                "file": "scripts/check_tdd_commits.py",
+                "line": 145,
+                "quote": "FAILURE_MESSAGE = ("
+              },
+              {
+                "file": "scripts/check_tdd_commits.py",
+                "line": 146,
+                "quote": "\"no test commit precedes the implementation — commit the RED test first\""
+              },
+              {
+                "file": "standards/engineering.md",
+                "line": 22,
+                "quote": "**STRICTLY BEFORE** the first commit that changes non-test code.* One RED"
+              },
+              {
+                "file": "standards/engineering.md",
+                "line": 23,
+                "quote": "commit before the FIRST implementation commit — **not one before every"
+              },
+              {
+                "file": "standards/engineering.md",
+                "line": 55,
+                "quote": "and an operator decision (DRE-3005). Whether to tighten what is enforced is"
+              }
+            ],
+            "reason": null,
+            "cost_usd": 0.22091100000000002,
+            "duration_ms": 24283,
+            "model": "claude-sonnet-5-5"
+          }
+        },
+        {
+          "identifier": "DRE-2994",
+          "title": "A comment on the form's construction cannot be anchored to a question — only answers have anchors",
+          "cycle": 15,
+          "cycle_id": "0d7758e5-cacd-48e4-a50f-16126809568c",
+          "unit": "DRE-2994",
+          "epic": null,
+          "repo": "portico",
+          "projected": false,
+          "band": 2,
+          "position": 10,
+          "trigger": null,
+          "evidence": null,
+          "judged": false,
+          "reasons": {},
+          "reason": "in the batch by the rules — newest first, position 10",
+          "verify": {
+            "verdict": "still-needed",
+            "summary": "The problem is still there on main, in the replacement Comments panel rather than the legacy rail the card names. On a form the panel offers no way to anchor a comment to a question, and any anchored thread is classed as an answer thread, so a question-wording comment would read as a comment on somebody's answer.",
+            "proof": [
+              {
+                "file": "client/app/src/features/viewer/sourcelist/panels/CommentsPanel.tsx",
+                "line": 157,
+                "quote": "return \"These comments are on the form. A comment about one answer sits under that answer.\";"
+              },
+              {
+                "file": "client/app/src/features/viewer/sourcelist/panels/CommentsPanel.tsx",
+                "line": 179,
+                "quote": "if (artifact.state === \"absent\" && artifact.reason === \"form\") {"
+              },
+              {
+                "file": "client/app/src/features/viewer/sourcelist/panels/CommentsPanel.tsx",
+                "line": 180,
+                "quote": "return { state: \"answer\", ...none, quote: anchor };"
+              },
+              {
+                "file": "client/app/src/features/viewer/comments/commentThreads.ts",
+                "line": 61,
+                "quote": "export type AnchorState = \"located\" | \"orphaned\" | \"doc-level\" | \"unknown\" | \"answer\";"
+              }
+            ],
+            "reason": null,
+            "cost_usd": 0.34831779999999996,
+            "duration_ms": 36641,
+            "model": "claude-sonnet-5-5"
+          }
+        },
+        {
+          "identifier": "DRE-2963",
+          "title": "SECURITY (detector gap) · The §7 conformance suite does not catch a route with NO read gate at all",
+          "cycle": 15,
+          "cycle_id": "0d7758e5-cacd-48e4-a50f-16126809568c",
+          "unit": "DRE-2963",
+          "epic": null,
+          "repo": "portico",
+          "projected": false,
+          "band": 2,
+          "position": 11,
+          "trigger": null,
+          "evidence": null,
+          "judged": false,
+          "reasons": {},
+          "reason": "in the batch by the rules — newest first, position 11",
+          "verify": {
+            "verdict": "still-needed",
+            "summary": "The §7 conformance suite still only compares a hidden id against a ghost id (status, headers, body); no assertion anywhere in it requires that an unauthorised caller is refused at all, so a route with its read gate removed can still pass. Even the newer §2b ordinary-document oracle ends in the same relative comparison, and the header does not name the two properties.",
+            "proof": [
+              {
+                "file": "infra/test/section_7_conformance.test.ts",
+                "line": 1073,
+                "quote": "assert.equal(onReal.statusCode, onGhost.statusCode, `${label}: status codes differ — the split IS the oracle`);"
+              },
+              {
+                "file": "infra/test/section_7_conformance.test.ts",
+                "line": 1094,
+                "quote": "assertIndistinguishable(onTemplate, onGhost, w.templateId, `${route} / ${shape}`);"
+              },
+              {
+                "file": "infra/test/section_7_conformance.test.ts",
+                "line": 1181,
+                "quote": "assertIndistinguishable(onHidden, onGhost, hiddenId, `${route} / ${who} / ${hidden}`);"
+              }
+            ],
+            "reason": null,
+            "cost_usd": 0.3586294,
+            "duration_ms": 29582,
+            "model": "claude-sonnet-5-5"
+          }
+        },
+        {
+          "identifier": "DRE-2747",
+          "title": "Alerts leave Linear for the console — deferred out of Wave 1.5, behind DRE-2535",
+          "cycle": 15,
+          "cycle_id": "0d7758e5-cacd-48e4-a50f-16126809568c",
+          "unit": "DRE-2747",
+          "epic": null,
+          "repo": "agent-bureau",
+          "projected": false,
+          "band": 2,
+          "position": 12,
+          "trigger": null,
+          "evidence": null,
+          "judged": false,
+          "reasons": {},
+          "reason": "in the batch by the rules — newest first, position 12",
+          "verify": {
+            "verdict": "still-needed",
+            "summary": "Pipeline-failure notices are still filed as Linear cards: this repo's medic stub still calls bureau-pipeline's medic, and the console still reads the 'Pipeline failure:' cards it files. The gate (DRE-2535) has landed — the email and push senders now log at ERROR instead of skipping quietly — so the move to console alerts is unblocked but not done. The medic's card-filing code itself lives in bureau-pipeline, not in this repo.",
+            "proof": [
+              {
+                "file": ".github/workflows/medic.yml",
+                "line": 31,
+                "quote": "uses: dreadnought-foundry/bureau-pipeline/.github/workflows/medic.yml@stable"
+              },
+              {
+                "file": "console/backend/morning_briefing_tag.py",
+                "line": 53,
+                "quote": "\"Pipeline failure:\", # bureau-pipeline's medic.yml files its diagnosis card under this heading"
+              },
+              {
+                "file": "console/web/src/components/oneriver/greenLightModel.ts",
+                "line": 329,
+                "quote": "/** The title the medic gives the card it files (`medic.yml`). */"
+              },
+              {
+                "file": "console/backend/delivery.py",
+                "line": 218,
+                "quote": "log.error("
+              }
+            ],
+            "reason": null,
+            "cost_usd": 0.2443598,
+            "duration_ms": 34634,
+            "model": "claude-sonnet-5-5"
+          }
+        },
+        {
+          "identifier": "DRE-2663",
+          "title": "Three pool alert kinds are unclassified, so a WARN saying \"nothing to do\" arrives as HIGH",
+          "cycle": 15,
+          "cycle_id": "0d7758e5-cacd-48e4-a50f-16126809568c",
+          "unit": "DRE-2663",
+          "epic": null,
+          "repo": "agent-bureau",
+          "projected": false,
+          "band": 2,
+          "position": 13,
+          "trigger": null,
+          "evidence": null,
+          "judged": false,
+          "reasons": {},
+          "reason": "in the batch by the rules — newest first, position 13",
+          "verify": {
+            "verdict": "still-needed",
+            "summary": "The three pool kinds (claude_pool_failover:*, claude_pool_credential_refused, claude_pool_exhausted) are still absent from _SYSTEM_CATEGORY, so they fall back to NEEDS_HUMAN, and urgency_for returns NEEDS_HUMAN's fixed HIGH whatever the row's severity. A WARN failover row therefore still reads HIGH, as it did on 2026-08-22.",
+            "proof": [
+              {
+                "file": "console/backend/alerts_v2.py",
+                "line": 834,
+                "quote": "category = _SYSTEM_CATEGORY.get(prefix, AlertCategory.NEEDS_HUMAN)"
+              },
+              {
+                "file": "console/backend/alerts_v2.py",
+                "line": 169,
+                "quote": "AlertCategory.NEEDS_HUMAN: AlertUrgency.HIGH,"
+              },
+              {
+                "file": "console/backend/alerts_v2.py",
+                "line": 216,
+                "quote": "return _CATEGORY_URGENCY[category]"
+              },
+              {
+                "file": "console/backend/claude_pool.py",
+                "line": 157,
+                "quote": "# One alert per ORIGIN account whose repos the pool has moved. WARN while the pool"
+              },
+              {
+                "file": "console/backend/claude_pool.py",
+                "line": 160,
+                "quote": "FAILOVER_KIND_PREFIX = \"claude_pool_failover\""
+              }
+            ],
+            "reason": null,
+            "cost_usd": 0.2375568,
+            "duration_ms": 26372,
+            "model": "claude-sonnet-5-5"
+          }
+        },
+        {
+          "identifier": "DRE-2558",
+          "title": "Injected context has no ceiling and no writer — portico's CLAUDE.md is 491 lines and grew six times in four days",
+          "cycle": 15,
+          "cycle_id": "0d7758e5-cacd-48e4-a50f-16126809568c",
+          "unit": "DRE-2558",
+          "epic": null,
+          "repo": "agent-bureau",
+          "projected": false,
+          "band": 2,
+          "position": 14,
+          "trigger": null,
+          "evidence": null,
+          "judged": false,
+          "reasons": {},
+          "reason": "in the batch by the rules — newest first, position 14",
+          "verify": {
+            "verdict": "still-needed",
+            "summary": "Nothing in this repo caps a CLAUDE.md or counts them: the census and the line-ceiling test the card asks for do not exist, and agent-bureau's own CLAUDE.md has grown from 130 lines (card, 2026-08-19) to 291 with no gate. Portico's 491-line file and project-template are not in this checkout, so those parts could not be read; the scaffold ships only the card-standard pointer block, not a baseline CLAUDE.md.",
+            "proof": [
+              {
+                "file": "CLAUDE.md",
+                "line": 291,
+                "quote": "<!-- bureau:card-standard:end -->"
+              },
+              {
+                "file": "scaffold/README.md",
+                "line": 88,
+                "quote": "repo's `CLAUDE.md` (appended to one that exists, or a new file holding only the"
+              }
+            ],
+            "reason": null,
+            "cost_usd": 0.21579720000000002,
+            "duration_ms": 42096,
+            "model": "claude-sonnet-5-5"
+          }
+        }
+      ],
+      "not-now": [
+        {
+          "identifier": "DRE-2982",
+          "title": "Two popovers now sit two rows apart in the specimen — converge Tip and AccessPeek, or say why not",
+          "repo": "portico",
+          "reconsidered_in": 16,
+          "projected": false,
+          "older_than_window": false,
+          "open_children": 0,
+          "reason": "A design convergence that should be judged on the viewer after it moves to the new look",
+          "trigger": "DRE-3919 moves the viewer over",
+          "evidence": null,
+          "judged": true,
+          "reasons": {},
+          "verify": {
+            "verdict": "partly-solved",
+            "summary": "The duplication is still in the code: Tip and AccessPeek each carry their own portal, placement and capture-phase Escape listener, and each still has its own specimen row. But the premise has shifted: AccessPeek now has no production consumer (only its test and the specimen), so the 'three library surfaces' to protect are gone, and Tip's placement no longer matches AccessPeek's (above vs below).",
+            "proof": [
+              {
+                "file": "client/app/src/components/molecules/Tip.tsx",
+                "line": 150,
+                "quote": "document.addEventListener(\"keydown\", onKey, true);"
+              },
+              {
+                "file": "client/app/src/components/molecules/AccessPeek.tsx",
+                "line": 128,
+                "quote": "document.addEventListener(\"keydown\", onKey, true);"
+              },
+              {
+                "file": "client/app/src/components/molecules/Tip.tsx",
+                "line": 128,
+                "quote": "const top = above < 0 ? anchor.bottom + GAP : above;"
+              },
+              {
+                "file": "client/app/src/components/molecules/AccessPeek.tsx",
+                "line": 107,
+                "quote": "const top = flip ? chip.top - GAP - size.height : below;"
+              },
+              {
+                "file": "client/app/src/components/molecules/AccessPeek.tsx",
+                "line": 39,
+                "quote": "* THE ONE POPOVER. There was no general tooltip primitive in this app before"
+              },
+              {
+                "file": "client/app/src/components/molecules/AccessPeek.tsx",
+                "line": 198,
+                "quote": "FolderCard's too, until DRE-5210 deleted it). */"
+              },
+              {
+                "file": "client/app/src/components/molecules/Tip.tsx",
+                "line": 241,
+                "quote": "export const specimen: { states: { label: string; props: TipProps }[] } = {"
+              },
+              {
+                "file": "client/app/src/components/molecules/AccessPeek.tsx",
+                "line": 180,
+                "quote": "export const specimen = {"
+              }
+            ],
+            "reason": null,
+            "cost_usd": 0.36341999999999997,
+            "duration_ms": 46398,
+            "model": "claude-sonnet-5-5"
+          }
+        },
+        {
+          "identifier": "DRE-2822",
+          "title": "[EPIC] The system can be read — what is happening, who acts next, and what is merely quiet",
+          "repo": "agent-bureau",
+          "reconsidered_in": null,
+          "projected": false,
+          "older_than_window": false,
+          "open_children": 4,
+          "reason": "excluded without judgement: parent epic with 4 open children",
+          "trigger": null,
+          "evidence": null,
+          "judged": false,
+          "reasons": {},
+          "cycle": null,
+          "cycle_id": null,
+          "verify": {
+            "verdict": "excluded",
+            "summary": "Not judged: the card was excluded before any agent read it.",
+            "proof": [],
+            "reason": "parent epic with 4 open children",
+            "cost_usd": null,
+            "duration_ms": null,
+            "model": null
+          }
+        },
+        {
+          "identifier": "DRE-2657",
+          "title": "bureau-harness sits outside the credential fan-out and its token is 32 days old — establish whether the repo that gates the channel can still run",
+          "repo": "bureau-pipeline",
+          "reconsidered_in": 16,
+          "projected": false,
+          "older_than_window": false,
+          "open_children": 0,
+          "reason": "Bureau-harness is plainly running: its probe runs merged on main several times today",
+          "trigger": "when cycle 16 opens",
+          "evidence": null,
+          "judged": true,
+          "reasons": {},
+          "verify": {
+            "verdict": "unverified",
+            "summary": "The credential fan-out the card is about (the console rotation, scripts/swap-claude-account.sh, POOL_EXTRA_REPOS and config/pipeline-channel.json) is not in bureau-pipeline's main, so whether bureau-harness joined it or was given a named owner cannot be read from target/. The only in-repo mention, docs/groomer-judged-batch.md:171, calls the decision undecided, and config/repo-map.json has no bureau-harness entry, which settles nothing either way.",
+            "proof": [],
+            "reason": "no proof",
+            "cost_usd": 0.2603008,
+            "duration_ms": 38395,
+            "model": "claude-sonnet-5-5"
+          }
+        },
+        {
+          "identifier": "DRE-2503",
+          "title": "Flip the portal CSP from Report-Only to enforcing — author the policy, hand the operator the command",
+          "repo": "portico",
+          "reconsidered_in": 16,
+          "projected": false,
+          "older_than_window": false,
+          "open_children": 0,
+          "reason": "Flipping the policy to enforcing before reading the report-only violations would break the portal",
+          "trigger": "A report-only period is read and shows no violations",
+          "evidence": null,
+          "judged": true,
+          "reasons": {}
+        },
+        {
+          "identifier": "DRE-2498",
+          "title": "The share panel tells the truth about documents Portico cannot gate",
+          "repo": "portico",
+          "reconsidered_in": 16,
+          "projected": false,
+          "older_than_window": false,
+          "open_children": 0,
+          "reason": "The share panel sits in the viewer that is about to move to the new look",
+          "trigger": "DRE-3919 moves the viewer over",
+          "evidence": null,
+          "judged": true,
+          "reasons": {}
+        },
+        {
+          "identifier": "DRE-2497",
+          "title": "Add-document: paste a Google link and choose to link to it, not copy it",
+          "repo": "portico",
+          "reconsidered_in": 16,
+          "projected": false,
+          "older_than_window": false,
+          "open_children": 0,
+          "reason": "The add-document form is about to move to the new look",
+          "trigger": "DRE-3919 moves the forms over",
+          "evidence": null,
+          "judged": true,
+          "reasons": {}
+        },
+        {
+          "identifier": "DRE-2397",
+          "title": "A bounced notification email can silently lock someone out of sign-in",
+          "repo": "portico",
+          "reconsidered_in": 16,
+          "projected": false,
+          "older_than_window": false,
+          "open_children": 0,
+          "reason": "A bounced email can lock someone out of sign-in with nobody told, a risk the shipping agent itself flagged",
+          "trigger": "when cycle 16 opens",
+          "evidence": null,
+          "judged": true,
+          "reasons": {}
+        },
+        {
+          "identifier": "DRE-1984",
+          "title": "Console & infra production-readiness hardening (auth expiry, DB recovery, tenant-scoped chat tools, prod image)",
+          "repo": "agent-bureau",
+          "reconsidered_in": null,
+          "projected": false,
+          "older_than_window": false,
+          "open_children": 0,
+          "reason": "could not rank — needs a person",
+          "trigger": null,
+          "evidence": null,
+          "judged": false,
+          "reasons": {}
+        },
+        {
+          "identifier": "DRE-5726",
+          "title": "agent-bureau: a runner machine may declare up to 14 heavy and 8 light runners — compose services, start-runners limits and the split rule raised together, so the 30-core Mac Studio can run its planned 14 + 8 + 3",
+          "repo": "agent-bureau",
+          "reconsidered_in": 16,
+          "projected": false,
+          "older_than_window": false,
+          "open_children": 0,
+          "reason": "The limits only matter once the Mac Studio is on the bench, and the runner fleet's shape is being decided right now",
+          "trigger": "The Mac Studio arrives and DRE-6535 settles which machines carry CI",
+          "evidence": null,
+          "judged": true,
+          "reasons": {}
+        },
+        {
+          "identifier": "DRE-5199",
+          "title": "portico: four defects the MCP and portal proofs found on v1.0.70 — an MCP delete leaves no change-log entry, the log's people count reads one low, upload_document's description is stale, the inspector's History lags until reload",
+          "repo": "portico",
+          "reconsidered_in": 16,
+          "projected": false,
+          "older_than_window": false,
+          "open_children": 0,
+          "reason": "Four verified defects on the live Portico portal, each small and each still there since the September proofs",
+          "trigger": "when cycle 16 opens",
+          "evidence": null,
+          "judged": true,
+          "reasons": {}
+        },
+        {
+          "identifier": "DRE-4874",
+          "title": "[EPIC] Every product the fleet deploys releases through the train and shows in Linear Releases: DeltaSolv, Atlas, agent-bureau-demo and the GitHub relay",
+          "repo": "agent-bureau",
+          "reconsidered_in": 16,
+          "projected": false,
+          "older_than_window": false,
+          "open_children": 3,
+          "reason": "The CEO wants every release visible in Linear, but the fleet's own surfaces have to ride the train before DeltaSolv and Atlas can",
+          "trigger": "DRE-3245 lands and the fleet's surfaces release through the train cleanly",
+          "evidence": null,
+          "judged": true,
+          "reasons": {}
+        },
+        {
+          "identifier": "DRE-4206",
+          "title": "portico: the document route loads on demand — draw what a reader sees while it arrives, get Sid's yes, then split it out of the initial download",
+          "repo": "portico",
+          "reconsidered_in": 16,
+          "projected": false,
+          "older_than_window": false,
+          "open_children": 0,
+          "reason": "Split out to follow its parent, which measures what the portal actually serves before anything is split out of the download",
+          "trigger": "DRE-4204 lands and Sid has seen the on-demand drawing",
+          "evidence": null,
+          "judged": true,
+          "reasons": {}
+        },
+        {
+          "identifier": "DRE-4204",
+          "title": "portico: the initial download — measure what is actually served, ship only the look a portal renders, and split the document route so a feature stops costing every reader",
+          "repo": "portico",
+          "reconsidered_in": 16,
+          "projected": false,
+          "older_than_window": false,
+          "open_children": 0,
+          "reason": "Sid asked for this outright after the download ceiling was raised again, and nothing in flight touches Portico's build",
+          "trigger": "when cycle 16 opens",
+          "evidence": null,
+          "judged": true,
+          "reasons": {}
+        },
+        {
+          "identifier": "DRE-4054",
+          "title": "Every card read drags 3.3 KB of Linear description per row whether the view wants it or not",
+          "repo": "agent-bureau",
+          "reconsidered_in": 16,
+          "projected": false,
+          "older_than_window": false,
+          "open_children": 0,
+          "reason": "The backend is being killed for memory, and every card read drags a full description into memory several times a page for views that never show it",
+          "trigger": "when cycle 16 opens",
+          "evidence": null,
+          "judged": true,
+          "reasons": {}
+        },
+        {
+          "identifier": "DRE-3919",
+          "title": "[EPIC] portico: Source list rebuild, part 4b — the viewer, forms and Manage move over, and the old parts go",
+          "repo": "portico",
+          "reconsidered_in": 16,
+          "projected": false,
+          "older_than_window": false,
+          "open_children": 0,
+          "reason": "The half that finishes Portico's move to the new look, wanted, but it should start once the first half is confirmed merged and Sid has signed off the templates it builds on",
+          "trigger": "The first half of the rebuild is confirmed merged and Sid has approved the part-3 templates",
+          "evidence": null,
+          "judged": true,
+          "reasons": {}
+        },
+        {
+          "identifier": "DRE-3701",
+          "title": "qa-review posts a STALE verdict with no @sha when Resolve PR dies on a transient GitHub error — the critic never ran, the old verdict file was still on the runner's /tmp, and the fix agent was dispatched at a phantom",
+          "repo": "bureau-pipeline",
+          "reconsidered_in": 17,
+          "projected": true,
+          "older_than_window": false,
+          "open_children": 0,
+          "reason": "A stale verdict with no commit sent a fix agent after a phantom, and the pipeline runs unattended, so a lying verdict wastes a run nobody watches",
+          "trigger": "when cycle 17 opens",
+          "evidence": null,
+          "judged": true,
+          "reasons": {}
+        },
+        {
+          "identifier": "DRE-3602",
+          "title": "The console release row follows the NEWEST train run, so a hold run three minutes behind a release hides the release's verify/live stages and its version",
+          "repo": "agent-bureau",
+          "reconsidered_in": 17,
+          "projected": true,
+          "older_than_window": false,
+          "open_children": 0,
+          "reason": "The release row is about to be answered from our database rather than the newest train run, which may fix this on its own",
+          "trigger": "DRE-6390 lands, then check whether the release row still follows a hold run",
+          "evidence": null,
+          "judged": true,
+          "reasons": {}
+        },
+        {
+          "identifier": "DRE-4829",
+          "title": "bureau-harness: dependabot.yml takes the house shape — monthly, one minor/patch group, semver-major ignored for \"*\"",
+          "repo": "(no repo label)",
+          "older_than_window": false,
+          "reason": "excluded without judgement: repo not in config/repo-map.json: none",
+          "cycle": null,
+          "cycle_id": null,
+          "projected": false,
+          "trigger": null,
+          "evidence": null,
+          "judged": false,
+          "reasons": {},
+          "reconsidered_in": null,
+          "verify": {
+            "verdict": "excluded",
+            "summary": "Not judged: the card was excluded before any agent read it.",
+            "proof": [],
+            "reason": "repo not in config/repo-map.json: none",
+            "cost_usd": null,
+            "duration_ms": null,
+            "model": null
+          }
+        },
+        {
+          "identifier": "DRE-4434",
+          "title": "[OPERATOR] portico: bring the Atlas portal live — cert, DNS, CDN behaviours, grants and the first publish on atlas.everybite.com",
+          "repo": "portico",
+          "older_than_window": false,
+          "reason": "excluded without judgement: operator-step",
+          "cycle": null,
+          "cycle_id": null,
+          "projected": false,
+          "trigger": null,
+          "evidence": null,
+          "judged": false,
+          "reasons": {},
+          "reconsidered_in": null,
+          "verify": {
+            "verdict": "excluded",
+            "summary": "Not judged: the card was excluded before any agent read it.",
+            "proof": [],
+            "reason": "operator-step",
+            "cost_usd": null,
+            "duration_ms": null,
+            "model": null
+          }
+        },
+        {
+          "identifier": "DRE-4159",
+          "title": "[EPIC] portico: the design system's 2026-09-17 additions — Activity as a sortable, filterable table; the New folder sheet; renaming in place; the toolbar's form button",
+          "repo": "portico",
+          "older_than_window": false,
+          "reason": "excluded without judgement: parent epic with 1 open child",
+          "cycle": null,
+          "cycle_id": null,
+          "projected": false,
+          "trigger": null,
+          "evidence": null,
+          "judged": false,
+          "reasons": {},
+          "reconsidered_in": null,
+          "verify": {
+            "verdict": "excluded",
+            "summary": "Not judged: the card was excluded before any agent read it.",
+            "proof": [],
+            "reason": "parent epic with 1 open child",
+            "cost_usd": null,
+            "duration_ms": null,
+            "model": null
+          }
+        },
+        {
+          "identifier": "DRE-3966",
+          "title": "[EPIC] portico: Source list rebuild, part 4b-3 — Manage moves over",
+          "repo": "portico",
+          "older_than_window": false,
+          "reason": "excluded without judgement: parent epic with 3 open children",
+          "cycle": null,
+          "cycle_id": null,
+          "projected": false,
+          "trigger": null,
+          "evidence": null,
+          "judged": false,
+          "reasons": {},
+          "reconsidered_in": null,
+          "verify": {
+            "verdict": "excluded",
+            "summary": "Not judged: the card was excluded before any agent read it.",
+            "proof": [],
+            "reason": "parent epic with 3 open children",
+            "cost_usd": null,
+            "duration_ms": null,
+            "model": null
+          }
+        },
+        {
+          "identifier": "DRE-3245",
+          "title": "[EPIC] The fleet joins the release train — portico, the relay, the website and the deploy-lag readers ride it after the console has run clean (part 2 of DRE-3164)",
+          "repo": "agent-bureau",
+          "older_than_window": false,
+          "reason": "excluded without judgement: parent epic with 1 open child",
+          "cycle": null,
+          "cycle_id": null,
+          "projected": false,
+          "trigger": null,
+          "evidence": null,
+          "judged": false,
+          "reasons": {},
+          "reconsidered_in": null,
+          "verify": {
+            "verdict": "excluded",
+            "summary": "Not judged: the card was excluded before any agent read it.",
+            "proof": [],
+            "reason": "parent epic with 1 open child",
+            "cost_usd": null,
+            "duration_ms": null,
+            "model": null
+          }
+        },
+        {
+          "identifier": "DRE-3711",
+          "title": "[EPIC] Every pull request has a card — a PR with no card id cannot merge, and the four legitimate kinds of automation PR each carry a card or a named exemption",
+          "repo": "bureau-pipeline",
+          "older_than_window": false,
+          "reason": "excluded without judgement: parent epic with 10 open children",
+          "cycle": null,
+          "cycle_id": null,
+          "projected": false,
+          "trigger": null,
+          "evidence": null,
+          "judged": false,
+          "reasons": {},
+          "reconsidered_in": null,
+          "verify": {
+            "verdict": "excluded",
+            "summary": "Not judged: the card was excluded before any agent read it.",
+            "proof": [],
+            "reason": "parent epic with 10 open children",
+            "cost_usd": null,
+            "duration_ms": null,
+            "model": null
+          }
+        },
+        {
+          "identifier": "DRE-3535",
+          "title": "bureau-harness's dependabot.yml is not the house shape — weekly, no `version-update:semver-major` ignore, no minor/patch group — so the sandbox files majors the merge gate holds forever (PR #1, pytest 7→9, 51 days)",
+          "repo": "bureau-pipeline",
+          "older_than_window": false,
+          "reason": "not verified: no proof",
+          "cycle": null,
+          "cycle_id": null,
+          "projected": false,
+          "trigger": null,
+          "evidence": null,
+          "judged": false,
+          "reasons": {},
+          "reconsidered_in": null,
+          "verify": {
+            "verdict": "unverified",
+            "summary": "The file this card is about, bureau-harness/.github/dependabot.yml, is not in target/ (which is bureau-pipeline's main), so whether it still lacks the house shape cannot be read here. Newer card DRE-4829 (Intake) asks for the same change on bureau-harness, so this card likely duplicates it.",
+            "proof": [],
+            "reason": "no proof",
+            "cost_usd": 0.138751,
+            "duration_ms": 21807,
+            "model": "claude-sonnet-5-5"
+          }
+        }
+      ],
+      "dead": [
+        {
+          "identifier": "DRE-6894",
+          "title": "agent-bureau: four tests in test_planner_run.py fail whenever their shard runs longer than ten minutes, on any pull request",
+          "repo": "agent-bureau",
+          "superseded_by": null,
+          "source": "judgement",
+          "position": 1,
+          "epic": null,
+          "band": 1,
+          "open_children": 0,
+          "reason": "The merged red-main fix \"re-read the real clock per test\" in the planner-run tests, on agent-bureau's main today",
+          "trigger": null,
+          "evidence": "The merged red-main fix \"re-read the real clock per test\" in the planner-run tests, on agent-bureau's main today",
+          "judged": true,
+          "reasons": {}
+        },
+        {
+          "identifier": "DRE-3386",
+          "title": "The console shows a hand-built card in Todo as the operator's turn, not as queued for the pipeline",
+          "repo": "agent-bureau",
+          "superseded_by": null,
+          "source": "judgement",
+          "position": 2,
+          "epic": null,
+          "band": 2,
+          "open_children": 0,
+          "reason": "DRE-6232 in progress decides hand-built means the CEO's hand, not the operator's turn",
+          "trigger": null,
+          "evidence": "DRE-6232 in progress decides hand-built means the CEO's hand, not the operator's turn",
+          "judged": true,
+          "reasons": {}
+        },
+        {
+          "identifier": "DRE-3333",
+          "title": "Virtual company — phase 1: the organisation on paper, the design-critic lens, and a real org seed",
+          "repo": "agent-bureau",
+          "superseded_by": null,
+          "source": "check",
+          "check_reason": "already done — the merged pull request https://github.com/dreadnought-foundry/agent-bureau/pull/2383 is for this card",
+          "position": 3,
+          "epic": null,
+          "band": 2,
+          "open_children": 0,
+          "reason": "already done — the merged pull request https://github.com/dreadnought-foundry/agent-bureau/pull/2383 is for this card",
+          "trigger": null,
+          "evidence": "already done — the merged pull request https://github.com/dreadnought-foundry/agent-bureau/pull/2383 is for this card",
+          "judged": false,
+          "reasons": {}
+        }
+      ],
+      "not-ready": [
+        {
+          "identifier": "DRE-6767",
+          "title": "A project's settings say \"Not connected\", \"No keys set\" and no agents enabled for every project, because nothing reads those facts any more",
+          "repo": "agent-bureau",
+          "epic": null,
+          "band": 1,
+          "rule": "read-waits-on-open-card",
+          "names": [
+            "DRE-6781"
+          ],
+          "reason": "its ranked read waits on DRE-6781 (Green Light), an epic with work left to build",
+          "condition": "DRE-6781 is built out or Done",
+          "position": 1
+        },
+        {
+          "identifier": "DRE-6767",
+          "title": "A project's settings say \"Not connected\", \"No keys set\" and no agents enabled for every project, because nothing reads those facts any more",
+          "repo": "agent-bureau",
+          "epic": null,
+          "band": 1,
+          "rule": "file-named-by-in-flight-card",
+          "names": [
+            "DRE-6902"
+          ],
+          "reason": "names `schema.py`, which DRE-6902 (In Progress) also names",
+          "condition": "DRE-6902 is Done",
+          "position": 2
+        },
+        {
+          "identifier": "DRE-4666",
+          "title": "[EPIC] agent-bureau: the console stops pulling from GitHub and Linear what it already has or can remember — idle GitHub load from ~300–390 to ~10–60 calls an hour, Linear from ~19% of the shared budget to ~4%, and the usage recorded so we can prove it",
+          "repo": "agent-bureau",
+          "epic": null,
+          "band": 1,
+          "rule": "roll-up-parent",
+          "names": [
+            "DRE-4720",
+            "DRE-4721",
+            "DRE-4722",
+            "DRE-4723"
+          ],
+          "reason": "a roll-up parent — its child epics: DRE-4720, DRE-4721, DRE-4722, DRE-4723",
+          "condition": "never — its child epics are offered on their own",
+          "position": 3
+        },
+        {
+          "identifier": "DRE-5727",
+          "title": "agent-bureau: make deploy-console rolls the backend and website out at the same time (no FrontendStack→BackendStack dependency, cdk --concurrency 2) and runs its pre-flight suites side by side — about 13–16 min down to 9–11",
+          "repo": "agent-bureau",
+          "epic": null,
+          "band": 2,
+          "rule": "file-named-by-in-flight-card",
+          "names": [
+            "DRE-5997"
+          ],
+          "reason": "names `deploy-console.sh`, `release-console.sh`, which DRE-5997 (In Progress) also names",
+          "condition": "DRE-5997 is Done",
+          "position": 4
+        },
+        {
+          "identifier": "DRE-5700",
+          "title": "Pipeline failure: Red-Main Repair",
+          "repo": "bureau-pipeline",
+          "epic": null,
+          "band": 2,
+          "rule": "read-waits-on-open-card",
+          "names": [
+            "DRE-6869"
+          ],
+          "reason": "its ranked read waits on DRE-6869 (Green Light), an epic with work left to build",
+          "condition": "DRE-6869 is built out or Done",
+          "position": 5
+        },
+        {
+          "identifier": "DRE-5700",
+          "title": "Pipeline failure: Red-Main Repair",
+          "repo": "bureau-pipeline",
+          "epic": null,
+          "band": 2,
+          "rule": "file-named-by-in-flight-card",
+          "names": [
+            "DRE-6870"
+          ],
+          "reason": "names `red-main-repair.yml`, `red_main_repair.py`, which DRE-6870 (In Review) also names",
+          "condition": "DRE-6870 is Done",
+          "position": 6
+        },
+        {
+          "identifier": "DRE-3238",
+          "title": "agent-bureau: the terminal deploy-lag report reads its surfaces from release.json across the fleet — the CLI literal goes, after One River's capacity strip is built and observed against today's rows",
+          "repo": "agent-bureau",
+          "epic": "DRE-3245",
+          "band": 2,
+          "rule": "child-of-epic-not-in-progress",
+          "names": [
+            "DRE-3245"
+          ],
+          "reason": "its epic DRE-3245 is in Intake, not In Progress",
+          "condition": "DRE-3245 is In Progress",
+          "position": 7
+        },
+        {
+          "identifier": "DRE-3751",
+          "title": "The New Project design becomes one screen — name, company, colour — with a Settings → New projects defaults page, the project's Settings tab, and a setup screen that reads live state, plus the walkthrough, in console/design",
+          "repo": "agent-bureau",
+          "epic": "DRE-2284",
+          "band": 2,
+          "rule": "child-of-epic-not-in-progress",
+          "names": [
+            "DRE-2284"
+          ],
+          "reason": "its epic DRE-2284 is in Intake, not In Progress",
+          "condition": "DRE-2284 is In Progress",
+          "position": 8
+        },
+        {
+          "identifier": "DRE-2284",
+          "title": "[EPIC] A new project is set up once, in the console — and is born on the release train with its own Portico share",
+          "repo": "agent-bureau",
+          "epic": "DRE-2284",
+          "band": 2,
+          "rule": "file-named-by-in-flight-card",
+          "names": [
+            "DRE-5997"
+          ],
+          "reason": "names `release-console.sh`, which DRE-5997 (In Progress) also names",
+          "condition": "DRE-5997 is Done",
+          "position": 9
+        },
+        {
+          "identifier": "DRE-3591",
+          "title": "[EPIC] Role routing — 14 agent:* labels route nowhere, there is no agent:database label, and two of the three roles the CEO named cannot be addressed",
+          "repo": "agent-bureau",
+          "epic": null,
+          "band": 2,
+          "rule": "file-named-by-in-flight-card",
+          "names": [
+            "DRE-6057",
+            "DRE-4669"
+          ],
+          "reason": "names `linear-workspace.json`, which DRE-6057 (In Progress) also names; names `linear-workspace.json`, which DRE-4669 (In Progress) also names",
+          "condition": "DRE-6057 is Done and DRE-4669 is Done",
+          "position": 10
+        },
+        {
+          "identifier": "DRE-3567",
+          "title": "The runner-pool monitor logs a full HTTP 403 traceback every tick for atlas and deltasolv — repos the bot App is not installed on read as an error, not as UNKNOWN",
+          "repo": "agent-bureau",
+          "epic": null,
+          "band": 2,
+          "rule": "file-named-by-in-flight-card",
+          "names": [
+            "DRE-4723"
+          ],
+          "reason": "names `runner_pool.py`, which DRE-4723 (In Progress) also names",
+          "condition": "DRE-4723 is Done",
+          "position": 11
+        },
+        {
+          "identifier": "DRE-3539",
+          "title": "Nothing detects a dependency cycle between an epic-level gate and the card-level gates beneath it — DRE-3420/3421 held ten cards for 38 hours while both sweeps printed a correct \"held by\" line every pass",
+          "repo": "bureau-pipeline",
+          "epic": null,
+          "band": 2,
+          "rule": "file-named-by-in-flight-card",
+          "names": [
+            "DRE-6639",
+            "DRE-6870"
+          ],
+          "reason": "names `reconcile.py`, which DRE-6639 (In Progress) also names; names `reconcile.py`, which DRE-6870 (In Review) also names",
+          "condition": "DRE-6639 is Done and DRE-6870 is Done",
+          "position": 12
+        },
+        {
+          "identifier": "DRE-3454",
+          "title": "The Mac mini runner pool runs under a dedicated standard account, not the CEO's admin login — bootstrap moves cleanly between users, and the runbook says how",
+          "repo": "agent-bureau",
+          "epic": null,
+          "band": 2,
+          "rule": "file-named-by-in-flight-card",
+          "names": [
+            "DRE-6902",
+            "DRE-6535"
+          ],
+          "reason": "names `README.md`, which DRE-6902 (In Progress) also names; names `README.md`, which DRE-6535 (In Progress) also names",
+          "condition": "DRE-6902 is Done and DRE-6535 is Done",
+          "position": 13
+        },
+        {
+          "identifier": "DRE-3408",
+          "title": "No token ever enters a runner container — the host mints a just-in-time runner config per container from the org API, so a job with sudo finds nothing in /proc/1/environ worth taking",
+          "repo": "agent-bureau",
+          "epic": null,
+          "band": 2,
+          "rule": "file-named-by-in-flight-card",
+          "names": [
+            "DRE-6902",
+            "DRE-6535"
+          ],
+          "reason": "names `README.md`, which DRE-6902 (In Progress) also names; names `README.md`, which DRE-6535 (In Progress) also names",
+          "condition": "DRE-6902 is Done and DRE-6535 is Done",
+          "position": 14
+        },
+        {
+          "identifier": "DRE-2709",
+          "title": "Two bureau-pipeline docs still say the fleet rides vN — and a guard test requires the false sentence, so fixing them fails CI",
+          "repo": "bureau-pipeline",
+          "epic": null,
+          "band": 2,
+          "rule": "file-named-by-in-flight-card",
+          "names": [
+            "DRE-6899"
+          ],
+          "reason": "names `README.md`, which DRE-6899 (In Progress) also names",
+          "condition": "DRE-6899 is Done",
+          "position": 15
+        },
+        {
+          "identifier": "DRE-5483",
+          "title": "[EPIC] What's New: one button in every product that shows what changed since you last looked",
+          "repo": "bureau-pipeline",
+          "epic": null,
+          "band": 2,
+          "rule": "roll-up-parent",
+          "names": [
+            "DRE-5484",
+            "DRE-5485",
+            "DRE-5486"
+          ],
+          "reason": "a roll-up parent — its child epics: DRE-5484, DRE-5485, DRE-5486",
+          "condition": "never — its child epics are offered on their own",
+          "position": 16
+        },
+        {
+          "identifier": "DRE-4072",
+          "title": "Capacity folds into the KPI tiles — one header carrying both what needs the CEO and what the machine has left, at no extra height",
+          "repo": "agent-bureau",
+          "epic": null,
+          "band": 2,
+          "rule": "undecided-question",
+          "names": [],
+          "reason": "open question: \"Whether the twelve tiles are one rank or two ranks of six, …\" (+2 more) under \"What to decide before building\"",
+          "condition": "that section is settled on the card",
+          "position": 17
+        },
+        {
+          "identifier": "DRE-3857",
+          "title": "agent-bureau's console, website and relay write their Linear releases through the train's shared step instead of each surface script",
+          "repo": "agent-bureau",
+          "epic": null,
+          "band": 2,
+          "rule": "undecided-question",
+          "names": [],
+          "reason": "open question: \"The console uses a pipeline access key and a two-phase cut …\" (+1 more) under \"To decide before building\"",
+          "condition": "that section is settled on the card",
+          "position": 18
+        },
+        {
+          "identifier": "DRE-3749",
+          "title": "Every new project is born on the release train — its first lane is added from a template when there's something to release, switched off, with the one card that turns it on",
+          "repo": "agent-bureau",
+          "epic": "DRE-2284",
+          "band": 2,
+          "rule": "file-named-by-in-flight-card",
+          "names": [
+            "DRE-5997"
+          ],
+          "reason": "names `release-console.sh`, which DRE-5997 (In Progress) also names",
+          "condition": "DRE-5997 is Done",
+          "position": 19
+        },
+        {
+          "identifier": "DRE-3749",
+          "title": "Every new project is born on the release train — its first lane is added from a template when there's something to release, switched off, with the one card that turns it on",
+          "repo": "agent-bureau",
+          "epic": "DRE-2284",
+          "band": 2,
+          "rule": "child-of-epic-not-in-progress",
+          "names": [
+            "DRE-2284"
+          ],
+          "reason": "its epic DRE-2284 is in Intake, not In Progress",
+          "condition": "DRE-2284 is In Progress",
+          "position": 20
+        },
+        {
+          "identifier": "DRE-3750",
+          "title": "Every new company gets its Portico share when its first project is set up — created by portico's own deploy, not by a script outside the repo",
+          "repo": "portico",
+          "epic": "DRE-2284",
+          "band": 2,
+          "rule": "child-of-epic-not-in-progress",
+          "names": [
+            "DRE-2284"
+          ],
+          "reason": "its epic DRE-2284 is in Intake, not In Progress",
+          "condition": "DRE-2284 is In Progress",
+          "position": 21
+        }
+      ],
+      "rewrite": [
+        {
+          "identifier": "DRE-3603",
+          "title": "The Alerts feed keeps no history — a resolved alert cannot be read back, so a CRITICAL that clears itself minutes later (a failed release, a refused run) is unprovable after the fact",
+          "repo": "agent-bureau",
+          "epic": null,
+          "band": 2,
+          "position": 1,
+          "summary": "The log-line part is solved: system alerts now write `system-alert raised/resolved` lines, and Done no longer clears an alert for good (DRE-6762). The history part remains: the feed serves only OPEN alerts, `alertFeed` has no `state` argument, and the Resolved view still says it is not on this read.",
+          "draft": "**Observed 2026-09-11 17:38 PT, in the CEO's signed-in production session (console v1.6.43), while closing** [DRE-3239](https://linear.app/dreadnoughtfoundry/issue/DRE-3239/proof-the-release-train-observed-live-on-the-console-the-unattended)**.** A CRITICAL that clears itself minutes later (a failed release, a refused run) cannot be proven after the fact: the Alerts feed keeps no readable history.\n\n## Already solved\n\n* Raise and resolve each write a structured log line: `console/backend/system_alerts.py:212` (`system-alert raised kind=… severity=… title=…`) and `:288` (`system-alert resolved kind=… severity=… open_since=… title=…`), pinned by `test_system_alerts.py`.\n* Marking a system alert done no longer clears it for good (DRE-6762); `alertsTabModel.test.ts:141` asserts the Resolved copy no longer says \"for good\".\n\n## What to build\n\n1. `alertFeed` grows a `state: OPEN | SNOOZED | RESOLVED | ALL` argument (default OPEN, so nothing today changes) and `UnifiedAlert` grows `resolvedAt`. Today `console/web/schema.graphql:6598` is `alertFeed(offset: Int! = 0, limit: Int! = 20)` and the store serves OPEN rows only (`console/backend/store.py:4353`).\n2. The Alerts tab's Resolved view lists resolved alerts (newest first, 30 days) with the Open row shape plus `raisedAt`, `resolvedAt` and the resolution reason (\"cleared by run N's successor\", \"marked done by Sid\"). It still says \"not on this read\" (`alertsTabModel.test.ts:137`).\n3. [DRE-3239](https://linear.app/dreadnoughtfoundry/issue/DRE-3239/proof-the-release-train-observed-live-on-the-console-the-unattended) rule 7 is answered from the first failed release after this ships, read from the Resolved view.\n\n## Acceptance criteria\n\n- [ ] A resolved alert is readable on the Resolved view and through `alertFeed(state: RESOLVED)` with `raisedAt` and `resolvedAt` (backend test on the feed; vitest on the view)\n- [ ] Open-state behaviour, counts and the Needs You tile are unchanged (existing tests stay green)\n- [ ] The next failed release's CRITICAL alert is read from the Resolved view and posted on DRE-3239 with PT times\n\nRewritten from the groom verify read of 2026-10-11: log lines and non-destructive Done have landed; the Resolved view, `alertFeed(state:)` and `resolvedAt` have not.",
+          "body_digest": "37fadff01aa2",
+          "verify": {
+            "verdict": "partly-solved",
+            "summary": "The log-line part is solved: system alerts now write `system-alert raised/resolved` lines, and Done no longer clears an alert for good (DRE-6762). The history part remains: the feed serves only OPEN alerts, `alertFeed` has no `state` argument, and the Resolved view still says it is not on this read.",
+            "proof": [
+              {
+                "file": "console/backend/system_alerts.py",
+                "line": 288,
+                "quote": "log.info(\"system-alert resolved kind=%s severity=%s open_since=%s title=%s\","
+              },
+              {
+                "file": "console/backend/system_alerts.py",
+                "line": 212,
+                "quote": "log.info(\"system-alert raised kind=%s severity=%s title=%s\","
+              },
+              {
+                "file": "console/web/src/components/oneriver/alertsTabModel.test.ts",
+                "line": 141,
+                "quote": "expect(NOT_ON_THIS_READ.RESOLVED).not.toMatch(/for good/i)"
+              },
+              {
+                "file": "console/web/schema.graphql",
+                "line": 6598,
+                "quote": "alertFeed(offset: Int! = 0, limit: Int! = 20): AlertFeed!"
+              },
+              {
+                "file": "console/backend/store.py",
+                "line": 4353,
+                "quote": "query serves — resolved alerts never appear.\"\"\""
+              },
+              {
+                "file": "console/web/src/components/oneriver/alertsTabModel.test.ts",
+                "line": 137,
+                "quote": "expect(NOT_ON_THIS_READ.RESOLVED).toMatch(/not on this read/i)"
+              }
+            ],
+            "reason": null,
+            "cost_usd": 0.2615922,
+            "duration_ms": 39661,
+            "model": "claude-sonnet-5-5"
+          }
+        },
+        {
+          "identifier": "DRE-3549",
+          "title": "The One River home page has no error boundary — one unexpected payload in any of its ~10 reads blanks the whole console instead of one panel",
+          "repo": "agent-bureau",
+          "epic": null,
+          "band": 2,
+          "position": 2,
+          "summary": "A reusable PartBoundary and a whole-app AppBoundary now exist, so a throw no longer leaves a white page, and the Runners tab is wrapped part by part. The One River page itself is not: the capacity strip, ribbon, routed tab and CardFlyoutHost are unwrapped, so one bad read still replaces the whole console with 'The console failed to draw'. A caught throw is only written to the browser console, never to the alerts path.",
+          "draft": "**Repo:** agent-bureau\n\n## What happened\n\nOne River is the console's front door. A render throw from one unexpected read (e.g. a `{}` where the SDL promises non-null fields) in its capacity strip, ribbon, routed tab or the card flyout host still reaches only the app-level boundary (`main.tsx:43`), so the CEO sees 'The console failed to draw' instead of one failed panel.\n\nAlready solved: `PartBoundary` and `AppBoundary` exist (`components/molecules/PartBoundary.tsx`), and `RunnersPage.tsx:241` wraps its sections in them.\n\n## What to build\n\n* Wrap each One River panel in `PartBoundary`: `CapacityStrip` (`OneRiver.tsx:349`), `Ribbon` (`:380`), the routed tab `<Outlet>` (`:418`, one boundary per tab, reset on route change) and `CardFlyoutHost` (`AppShell.tsx:130`).\n* Report a caught throw once through the console's alert path, not only `console.error` (`PartBoundary.tsx:66`).\n* Test-first: mount `AppRoutes` with one panel's read stubbed to throw; the other panels and the tile show, and the deep-link dialog still opens.\n\n## Acceptance criteria\n\n- [ ] A throwing panel renders its tile; the page, ribbon and flyout host survive (mount test).\n- [ ] The throw is reported once on the alerts path.\n- [ ] Design amended per the DESIGNER role decision (2026-09-07) and the design critic passes it.\n\n## Not in this card\n\n* Fixing individual reads' shapes.\n\nRewritten from the groom verify read of 2026-10-11: PartBoundary exists and covers the Runners tab, but the One River strip, ribbon, routed tab and flyout host are unwrapped and a caught throw is not reported to alerts.",
+          "body_digest": "071d2c5c3884",
+          "verify": {
+            "verdict": "partly-solved",
+            "summary": "A reusable PartBoundary and a whole-app AppBoundary now exist, so a throw no longer leaves a white page, and the Runners tab is wrapped part by part. The One River page itself is not: the capacity strip, ribbon, routed tab and CardFlyoutHost are unwrapped, so one bad read still replaces the whole console with 'The console failed to draw'. A caught throw is only written to the browser console, never to the alerts path.",
+            "proof": [
+              {
+                "file": "console/web/src/pages/OneRiver.tsx",
+                "line": 349,
+                "quote": "<CapacityStrip"
+              },
+              {
+                "file": "console/web/src/pages/OneRiver.tsx",
+                "line": 380,
+                "quote": "<Ribbon {...sources} loading={ribbonLoading} />"
+              },
+              {
+                "file": "console/web/src/pages/OneRiver.tsx",
+                "line": 418,
+                "quote": "<Outlet"
+              },
+              {
+                "file": "console/web/src/components/AppShell.tsx",
+                "line": 130,
+                "quote": "<CardFlyoutHost />"
+              },
+              {
+                "file": "console/web/src/components/molecules/PartBoundary.tsx",
+                "line": 66,
+                "quote": "console.error(`${this.props.name} failed to draw`, error, info.componentStack)"
+              },
+              {
+                "file": "console/web/src/main.tsx",
+                "line": 43,
+                "quote": "<AppBoundary>"
+              },
+              {
+                "file": "console/web/src/components/oneriver/RunnersPage.tsx",
+                "line": 241,
+                "quote": "<PartBoundary name=\"The figures\" testid=\"runners-boundary-figures\">"
+              }
+            ],
+            "reason": null,
+            "cost_usd": 0.22740600000000002,
+            "duration_ms": 34124,
+            "model": "claude-sonnet-5-5"
+          }
+        },
+        {
+          "identifier": "DRE-3514",
+          "title": "Product repos have no `deliver-rescue.yml`, so the rescue's delivery follow-up is refused with 403 in every repo but bureau-pipeline — the scaffold ships the stub and the operator installs it fleet-wide",
+          "repo": "bureau-pipeline",
+          "epic": null,
+          "band": 2,
+          "position": 3,
+          "summary": "The reusable deliver-rescue.yml the stub would call now exists and the README documents the product-repo stub, but the 'could NOT be dispatched' comment still prints only GitHub's raw error and never says whether the workflow is missing or the token was refused. The scaffold stub, the fleet check and the operator install live in agent-bureau and cannot be seen from this checkout.",
+          "draft": "**Repo:** bureau-pipeline\n\n## What happened\n\nWhen a rescue push is refused, agent-task.yml's fallback dispatches a delivery workflow in the product repo. In a repo with no `deliver-rescue.yml`, GitHub answers an App token's dispatch with `HTTP 403: Resource not accessible by integration`, which reads as a permissions problem and is not one. On 2026-09-09 all three of agent-bureau's refusals ended with \"the delivery follow-up could NOT be dispatched … so this card needs a human\".\n\n**Already solved on main:** the reusable `.github/workflows/deliver-rescue.yml` exists (`workflow_call`, line 49), `self-deliver-rescue.yml` calls it, and README.md:332 documents the product-repo stub.\n\n## What to build\n\n* `scripts/deliver_rescue.py` `handoff()` (the two \"could NOT be dispatched\" branches, around lines 412 and 429) tells a missing workflow from a refused token. It prints only the last line of GitHub's error today, so the comment says which it is and which fix applies: install the stub, or change the secrets.\n* Not checkable from bureau-pipeline's main, so confirm in agent-bureau before building: `scaffold/` carries a `deliver-rescue.yml` stub, `make check-channel-fleet` reports it per repo, and the stub count is ten.\n* **[OPERATOR]** install the stub on `main` of every building repo in `config/repo-map.json`, re-run `make check-channel-fleet` and record the rows here.\n\n## Acceptance criteria\n\n- [ ] The \"could NOT be dispatched\" comment says whether the workflow is missing or the token was refused.\n- [ ] A rescue refusal in a product repo with the stub installed ends with `🚚 rescue-delivery-dispatched` and a PR — PROOF on one real run, with run id and PT time.\n- [ ] Every building repo in the roster shows the stub present after the operator install.\n\nRewritten from the groom verify read of 2026-10-11: the reusable workflow and README stub exist, but the dispatch-failure comment still cannot tell a missing workflow from a refused token.",
+          "body_digest": "65f86bff1232",
+          "verify": {
+            "verdict": "partly-solved",
+            "summary": "The reusable deliver-rescue.yml the stub would call now exists and the README documents the product-repo stub, but the 'could NOT be dispatched' comment still prints only GitHub's raw error and never says whether the workflow is missing or the token was refused. The scaffold stub, the fleet check and the operator install live in agent-bureau and cannot be seen from this checkout.",
+            "proof": [
+              {
+                "file": "scripts/deliver_rescue.py",
+                "line": 430,
+                "quote": "f\"(`{workflow}` on `{repo}`: {detail or 'no reason given'}), so this \""
+              },
+              {
+                "file": "scripts/deliver_rescue.py",
+                "line": 377,
+                "quote": "`deliver-rescue` stub answers 404 to the dispatch, and in that repo the"
+              },
+              {
+                "file": ".github/workflows/deliver-rescue.yml",
+                "line": 49,
+                "quote": "workflow_call:"
+              },
+              {
+                "file": "README.md",
+                "line": 332,
+                "quote": "### The `deliver-rescue` stub (DRE-3262)"
+              }
+            ],
+            "reason": null,
+            "cost_usd": 0.205931,
+            "duration_ms": 38300,
+            "model": "claude-sonnet-5-5"
+          }
+        }
+      ]
+    },
+    "collisions": {
+      "pairs": [
+        {
+          "before": "DRE-3238",
+          "after": "DRE-2284",
+          "files": [
+            "release.json"
+          ],
+          "why": "both touch release.json; newer card first, and the order is recorded"
+        },
+        {
+          "before": "DRE-3749",
+          "after": "DRE-2284",
+          "files": [
+            "onboard-customer.py",
+            "release-console.sh",
+            "release-relay.sh",
+            "release-website.sh",
+            "release.json"
+          ],
+          "why": "both touch onboard-customer.py, release-console.sh, release-relay.sh, release-website.sh, release.json; newer card first, and the order is recorded"
+        },
+        {
+          "before": "DRE-3751",
+          "after": "DRE-2284",
+          "files": [
+            "web-new-project.html"
+          ],
+          "why": "both touch web-new-project.html; newer card first, and the order is recorded"
+        },
+        {
+          "before": "DRE-3857",
+          "after": "DRE-2284",
+          "files": [
+            "release-relay.sh",
+            "release-website.sh"
+          ],
+          "why": "both touch release-relay.sh, release-website.sh; newer card first, and the order is recorded"
+        },
+        {
+          "before": "DRE-4874",
+          "after": "DRE-2284",
+          "files": [
+            "pipeline-channel.json",
+            "release.json"
+          ],
+          "why": "both touch pipeline-channel.json, release.json; newer card first, and the order is recorded"
+        },
+        {
+          "before": "DRE-5727",
+          "after": "DRE-2284",
+          "files": [
+            "release-console.sh"
+          ],
+          "why": "both touch release-console.sh; newer card first, and the order is recorded"
+        },
+        {
+          "before": "DRE-2498",
+          "after": "DRE-2497",
+          "files": [
+            "linear-sync.yml"
+          ],
+          "why": "both touch linear-sync.yml; newer card first, and the order is recorded"
+        },
+        {
+          "before": "DRE-2994",
+          "after": "DRE-2497",
+          "files": [
+            "items_lib.ts"
+          ],
+          "why": "both touch items_lib.ts; newer card first, and the order is recorded"
+        },
+        {
+          "before": "DRE-2709",
+          "after": "DRE-2657",
+          "files": [
+            "pipeline-channel.json"
+          ],
+          "why": "both touch pipeline-channel.json; newer card first, and the order is recorded"
+        },
+        {
+          "before": "DRE-3514",
+          "after": "DRE-2657",
+          "files": [
+            "pipeline-channel.json",
+            "repo-map.json"
+          ],
+          "why": "both touch pipeline-channel.json, repo-map.json; newer card first, and the order is recorded"
+        },
+        {
+          "before": "DRE-3009",
+          "after": "DRE-2709",
+          "files": [
+            "engineering.md"
+          ],
+          "why": "both touch engineering.md; newer card first, and the order is recorded"
+        },
+        {
+          "before": "DRE-3514",
+          "after": "DRE-2709",
+          "files": [
+            "pipeline-channel.json"
+          ],
+          "why": "both touch pipeline-channel.json; newer card first, and the order is recorded"
+        },
+        {
+          "before": "DRE-3750",
+          "after": "DRE-3104",
+          "files": [
+            "README.md"
+          ],
+          "why": "both touch README.md; newer card first, and the order is recorded"
+        },
+        {
+          "before": "DRE-3749",
+          "after": "DRE-3238",
+          "files": [
+            "release.json"
+          ],
+          "why": "both touch release.json; newer card first, and the order is recorded"
+        },
+        {
+          "before": "DRE-4874",
+          "after": "DRE-3238",
+          "files": [
+            "release.json"
+          ],
+          "why": "both touch release.json; newer card first, and the order is recorded"
+        },
+        {
+          "before": "DRE-3591",
+          "after": "DRE-3333",
+          "files": [
+            "roles.md"
+          ],
+          "why": "both touch roles.md; newer card first, and the order is recorded"
+        },
+        {
+          "before": "DRE-3449",
+          "after": "DRE-3386",
+          "files": [
+            "oneRiverFixture.ts"
+          ],
+          "why": "both touch oneRiverFixture.ts; newer card first, and the order is recorded"
+        },
+        {
+          "before": "DRE-3454",
+          "after": "DRE-3408",
+          "files": [
+            "README.md",
+            "test_runners_bootstrap.py"
+          ],
+          "why": "both touch README.md, test_runners_bootstrap.py; newer card first, and the order is recorded"
+        },
+        {
+          "before": "DRE-5726",
+          "after": "DRE-3408",
+          "files": [
+            "docker-compose.yml",
+            "start-runners.sh"
+          ],
+          "why": "both touch docker-compose.yml, start-runners.sh; newer card first, and the order is recorded"
+        },
+        {
+          "before": "DRE-3857",
+          "after": "DRE-3749",
+          "files": [
+            "release-relay.sh",
+            "release-website.sh"
+          ],
+          "why": "both touch release-relay.sh, release-website.sh; newer card first, and the order is recorded"
+        },
+        {
+          "before": "DRE-4874",
+          "after": "DRE-3749",
+          "files": [
+            "release.json"
+          ],
+          "why": "both touch release.json; newer card first, and the order is recorded"
+        },
+        {
+          "before": "DRE-5727",
+          "after": "DRE-3749",
+          "files": [
+            "release-console.sh"
+          ],
+          "why": "both touch release-console.sh; newer card first, and the order is recorded"
+        },
+        {
+          "before": "DRE-4434",
+          "after": "DRE-3750",
+          "files": [
+            "auth-gate.html",
+            "provision-project-grants.ts"
+          ],
+          "why": "both touch auth-gate.html, provision-project-grants.ts; newer card first, and the order is recorded"
+        },
+        {
+          "before": "DRE-4874",
+          "after": "DRE-3857",
+          "files": [
+            "release_linear.py"
+          ],
+          "why": "both touch release_linear.py; newer card first, and the order is recorded"
+        },
+        {
+          "before": "DRE-3966",
+          "after": "DRE-3919",
+          "files": [
+            "index.html"
+          ],
+          "why": "both touch index.html; newer card first, and the order is recorded"
+        },
+        {
+          "before": "DRE-4206",
+          "after": "DRE-3919",
+          "files": [
+            "index.html"
+          ],
+          "why": "both touch index.html; newer card first, and the order is recorded"
+        },
+        {
+          "before": "DRE-4206",
+          "after": "DRE-3966",
+          "files": [
+            "index.html"
+          ],
+          "why": "both touch index.html; newer card first, and the order is recorded"
+        }
+      ],
+      "boilerplate": {},
+      "unreadable": [
+        "DRE-2822",
+        "DRE-3245",
+        "DRE-3549",
+        "DRE-3603",
+        "DRE-3711",
+        "DRE-4072",
+        "DRE-4666",
+        "DRE-6855"
+      ]
+    },
+    "unhonoured_constraints": [],
+    "unstated_supersessions": [
+      "DRE-2709",
+      "DRE-5700"
+    ],
+    "cancels_refused": [
+      {
+        "identifier": "DRE-4159",
+        "refusal": "DRE-4159 is an epic with 1 open child",
+        "source": "check"
+      }
+    ],
+    "excluded_before": [
+      "DRE-2441",
+      "DRE-2456",
+      "DRE-2457",
+      "DRE-4049",
+      "DRE-4417",
+      "DRE-5656",
+      "DRE-5657"
+    ],
+    "held_before": [
+      "DRE-3602",
+      "DRE-3701",
+      "DRE-3749",
+      "DRE-3750",
+      "DRE-3857",
+      "DRE-3919",
+      "DRE-4054",
+      "DRE-4072",
+      "DRE-4204",
+      "DRE-4206",
+      "DRE-4874",
+      "DRE-5199",
+      "DRE-5483",
+      "DRE-5726"
+    ],
+    "stale_priorities": [
+      {
+        "identifier": "DRE-2397",
+        "priority": "High",
+        "set_at": "2026-08-11T22:33:09.979Z",
+        "days": 60
+      },
+      {
+        "identifier": "DRE-2497",
+        "priority": "High",
+        "set_at": "2026-08-18T02:55:27.050Z",
+        "days": 54
+      },
+      {
+        "identifier": "DRE-2498",
+        "priority": "High",
+        "set_at": "2026-08-18T02:55:48.020Z",
+        "days": 54
+      },
+      {
+        "identifier": "DRE-2503",
+        "priority": "High",
+        "set_at": "2026-08-18T03:41:07.746Z",
+        "days": 54
+      },
+      {
+        "identifier": "DRE-2558",
+        "priority": "High",
+        "set_at": "2026-08-20T00:13:23.037Z",
+        "days": 52
+      },
+      {
+        "identifier": "DRE-2657",
+        "priority": "High",
+        "set_at": "2026-08-23T00:10:14.684Z",
+        "days": 49
+      },
+      {
+        "identifier": "DRE-2709",
+        "priority": "High",
+        "set_at": "2026-08-25T00:46:11.828Z",
+        "days": 47
+      },
+      {
+        "identifier": "DRE-2963",
+        "priority": "High",
+        "set_at": "2026-09-02T07:01:28.845Z",
+        "days": 39
+      },
+      {
+        "identifier": "DRE-2994",
+        "priority": "High",
+        "set_at": "2026-09-02T20:54:44.980Z",
+        "days": 38
+      },
+      {
+        "identifier": "DRE-3009",
+        "priority": "High",
+        "set_at": "2026-09-03T17:30:53.216Z",
+        "days": 37
+      },
+      {
+        "identifier": "DRE-3104",
+        "priority": "High",
+        "set_at": "2026-09-04T19:52:36.975Z",
+        "days": 36
+      },
+      {
+        "identifier": "DRE-3245",
+        "priority": "High",
+        "set_at": "2026-09-06T14:37:40.750Z",
+        "days": 34
+      },
+      {
+        "identifier": "DRE-3408",
+        "priority": "High",
+        "set_at": "2026-09-08T21:50:33.757Z",
+        "days": 32
+      },
+      {
+        "identifier": "DRE-3449",
+        "priority": "High",
+        "set_at": "2026-09-09T00:35:39.151Z",
+        "days": 32
+      },
+      {
+        "identifier": "DRE-3514",
+        "priority": "High",
+        "set_at": "2026-09-10T00:03:36.080Z",
+        "days": 31
+      },
+      {
+        "identifier": "DRE-3545",
+        "priority": "High",
+        "set_at": "2026-09-10T14:08:32.852Z",
+        "days": 30
+      },
+      {
+        "identifier": "DRE-3549",
+        "priority": "High",
+        "set_at": "2026-09-10T14:37:22.801Z",
+        "days": 30
+      },
+      {
+        "identifier": "DRE-3589",
+        "priority": "High",
+        "set_at": "2026-09-11T04:12:59.399Z",
+        "days": 30
+      }
+    ],
+    "deprioritised": [],
+    "judgement": {
+      "enabled": true,
+      "calls": 1,
+      "model_asked": "claude-fable-5-1",
+      "model_answered": "claude-fable-5-1",
+      "receipt": "claude-fable-5-1 (asked) / claude-fable-5-1 (answered)",
+      "pack": {
+        "epics_in_progress": 20,
+        "initiatives": 5,
+        "merged_prs": 2788,
+        "closed_cards": 60,
+        "truncated": [
+          "closed_cards",
+          "epics_in_progress",
+          "merged_prs"
+        ],
+        "cuts": {
+          "closed_cards": {
+            "kept": 60,
+            "of": 3384
+          },
+          "epics_in_progress": {
+            "kept": 20,
+            "of": 35
+          },
+          "merged_prs": {
+            "kept": 40,
+            "of": 2788
+          }
+        },
+        "unread": []
+      },
+      "unranked": [
+        "DRE-1984"
+      ],
+      "withheld": [],
+      "problem": null,
+      "output_budget": 14140,
+      "truncated": false,
+      "ranked": 61,
+      "accounting": {
+        "ranked": 61,
+        "declined": 1,
+        "garbled": 0,
+        "omitted": 0,
+        "ceiling": 0
+      },
+      "continuations": 1,
+      "depends_on_missing": 0
+    },
+    "id": "ab09ece4ddee",
+    "verification": {
+      "spare": 10,
+      "cards": [
+        {
+          "identifier": "DRE-6855",
+          "list": "planning",
+          "verdict": "clean",
+          "source": null,
+          "evidence": [],
+          "unread": [],
+          "acted": false
+        },
+        {
+          "identifier": "DRE-4829",
+          "list": "planning",
+          "verdict": "clean",
+          "source": null,
+          "evidence": [],
+          "unread": [],
+          "acted": false
+        },
+        {
+          "identifier": "DRE-4434",
+          "list": "planning",
+          "verdict": "clean",
+          "source": null,
+          "evidence": [],
+          "unread": [],
+          "acted": false
+        },
+        {
+          "identifier": "DRE-4159",
+          "list": "planning",
+          "verdict": "cancel",
+          "source": "merged_prs",
+          "evidence": [
+            {
+              "source": "merged_prs",
+              "url": "https://github.com/dreadnought-foundry/portico/pull/598",
+              "title": "docs(DRE-4159): the Activity table at 390px, which the drawing never had",
+              "text": "already done — the merged pull request https://github.com/dreadnought-foundry/portico/pull/598 is for this card"
+            },
+            {
+              "source": "merged_prs",
+              "url": "https://github.com/dreadnought-foundry/portico/pull/585",
+              "title": "docs(DRE-4159): Activity as a table, the New folder sheet, renaming in place, and a way to find any of it",
+              "text": "already done — the merged pull request https://github.com/dreadnought-foundry/portico/pull/585 is for this card"
+            }
+          ],
+          "unread": [],
+          "acted": true
+        },
+        {
+          "identifier": "DRE-3966",
+          "list": "planning",
+          "verdict": "clean",
+          "source": null,
+          "evidence": [],
+          "unread": [],
+          "acted": false
+        },
+        {
+          "identifier": "DRE-3245",
+          "list": "planning",
+          "verdict": "clean",
+          "source": null,
+          "evidence": [],
+          "unread": [],
+          "acted": false
+        },
+        {
+          "identifier": "DRE-3603",
+          "list": "planning",
+          "verdict": "clean",
+          "source": null,
+          "evidence": [],
+          "unread": [],
+          "acted": false
+        },
+        {
+          "identifier": "DRE-3711",
+          "list": "planning",
+          "verdict": "clean",
+          "source": null,
+          "evidence": [],
+          "unread": [],
+          "acted": false
+        },
+        {
+          "identifier": "DRE-3600",
+          "list": "planning",
+          "verdict": "clean",
+          "source": null,
+          "evidence": [],
+          "unread": [],
+          "acted": false
+        },
+        {
+          "identifier": "DRE-3589",
+          "list": "planning",
+          "verdict": "clean",
+          "source": null,
+          "evidence": [],
+          "unread": [],
+          "acted": false
+        },
+        {
+          "identifier": "DRE-3576",
+          "list": "planning",
+          "verdict": "clean",
+          "source": null,
+          "evidence": [],
+          "unread": [],
+          "acted": false
+        },
+        {
+          "identifier": "DRE-3550",
+          "list": "planning",
+          "verdict": "clean",
+          "source": null,
+          "evidence": [],
+          "unread": [],
+          "acted": false
+        },
+        {
+          "identifier": "DRE-3549",
+          "list": "planning",
+          "verdict": "clean",
+          "source": null,
+          "evidence": [],
+          "unread": [],
+          "acted": false
+        },
+        {
+          "identifier": "DRE-3545",
+          "list": "planning",
+          "verdict": "clean",
+          "source": null,
+          "evidence": [],
+          "unread": [],
+          "acted": false
+        },
+        {
+          "identifier": "DRE-3514",
+          "list": "planning",
+          "verdict": "clean",
+          "source": null,
+          "evidence": [],
+          "unread": [],
+          "acted": false
+        },
+        {
+          "identifier": "DRE-3449",
+          "list": "planning",
+          "verdict": "clean",
+          "source": null,
+          "evidence": [],
+          "unread": [],
+          "acted": false
+        },
+        {
+          "identifier": "DRE-3333",
+          "list": "planning",
+          "verdict": "cancel",
+          "source": "merged_prs",
+          "evidence": [
+            {
+              "source": "merged_prs",
+              "url": "https://github.com/dreadnought-foundry/agent-bureau/pull/2383",
+              "title": "docs(DRE-3461): the virtual company on one page — roles, the product role, the first personas (phase 1 of DRE-3333)",
+              "text": "already done — the merged pull request https://github.com/dreadnought-foundry/agent-bureau/pull/2383 is for this card"
+            }
+          ],
+          "unread": [],
+          "acted": true
+        },
+        {
+          "identifier": "DRE-3104",
+          "list": "spare",
+          "verdict": "clean",
+          "source": null,
+          "evidence": [],
+          "unread": [],
+          "acted": false
+        },
+        {
+          "identifier": "DRE-3009",
+          "list": "spare",
+          "verdict": "clean",
+          "source": null,
+          "evidence": [],
+          "unread": [],
+          "acted": false
+        },
+        {
+          "identifier": "DRE-2994",
+          "list": "spare",
+          "verdict": "clean",
+          "source": null,
+          "evidence": [],
+          "unread": [],
+          "acted": false
+        },
+        {
+          "identifier": "DRE-2982",
+          "list": "spare",
+          "verdict": "clean",
+          "source": null,
+          "evidence": [],
+          "unread": [],
+          "acted": false
+        },
+        {
+          "identifier": "DRE-2963",
+          "list": "spare",
+          "verdict": "clean",
+          "source": null,
+          "evidence": [],
+          "unread": [],
+          "acted": false
+        },
+        {
+          "identifier": "DRE-2822",
+          "list": "spare",
+          "verdict": "cancel",
+          "source": "merged_prs",
+          "evidence": [
+            {
+              "source": "merged_prs",
+              "url": "https://github.com/dreadnought-foundry/agent-bureau/pull/2189",
+              "title": "feat(DRE-2841): the chain file is nine phases, matching the board",
+              "text": "already done — the merged pull request https://github.com/dreadnought-foundry/agent-bureau/pull/2189 is for this card"
+            },
+            {
+              "source": "merged_prs",
+              "url": "https://github.com/dreadnought-foundry/agent-bureau/pull/2190",
+              "title": "feat(DRE-2841): land DRE-2822's nine-phase chain file, reconciled onto main",
+              "text": "already done — the merged pull request https://github.com/dreadnought-foundry/agent-bureau/pull/2190 is for this card"
+            }
+          ],
+          "unread": [],
+          "acted": false
+        },
+        {
+          "identifier": "DRE-2747",
+          "list": "spare",
+          "verdict": "clean",
+          "source": null,
+          "evidence": [],
+          "unread": [],
+          "acted": false
+        },
+        {
+          "identifier": "DRE-2663",
+          "list": "spare",
+          "verdict": "clean",
+          "source": null,
+          "evidence": [],
+          "unread": [],
+          "acted": false
+        },
+        {
+          "identifier": "DRE-2657",
+          "list": "spare",
+          "verdict": "clean",
+          "source": null,
+          "evidence": [],
+          "unread": [],
+          "acted": false
+        },
+        {
+          "identifier": "DRE-2558",
+          "list": "spare",
+          "verdict": "clean",
+          "source": null,
+          "evidence": [],
+          "unread": [],
+          "acted": false
+        },
+        {
+          "identifier": "DRE-6894",
+          "list": "cancel",
+          "verdict": "cancel-kept",
+          "source": "replacement",
+          "evidence": [
+            {
+              "source": "replacement",
+              "target": null,
+              "text": "it names no replacement card or pull request the check can read"
+            }
+          ],
+          "unread": [],
+          "acted": false
+        },
+        {
+          "identifier": "DRE-3535",
+          "list": "cancel",
+          "verdict": "cancel-rejected",
+          "source": "replacement",
+          "evidence": [
+            {
+              "source": "replacement",
+              "target": "DRE-4829",
+              "text": "DRE-4829 is in Intake and has not been approved"
+            }
+          ],
+          "unread": [],
+          "acted": true
+        },
+        {
+          "identifier": "DRE-3386",
+          "list": "cancel",
+          "verdict": "cancel-stands",
+          "source": "replacement",
+          "evidence": [
+            {
+              "source": "replacement",
+              "target": "DRE-6232",
+              "text": "DRE-6232 is approved and in In Progress"
+            }
+          ],
+          "unread": [],
+          "acted": false
+        }
+      ],
+      "unread": {},
+      "moved_to_cancel": [
+        "DRE-3333"
+      ],
+      "cancels_rejected": [
+        "DRE-3535"
+      ],
+      "not_checked": [],
+      "merged_prs_searched": [
+        "DeltaSolv",
+        "EveryBite",
+        "dreadnought-foundry"
+      ]
+    },
+    "verify": {
+      "cards": 27,
+      "counts": {
+        "still-needed": 14,
+        "partly-solved": 4,
+        "done-elsewhere": 0,
+        "obsolete": 0,
+        "not-worth-it": 0,
+        "unverified": 2,
+        "excluded": 7
+      },
+      "cost_usd": 4.604494,
+      "wall_clock_seconds": 72,
+      "unverified": [
+        "DRE-3535",
+        "DRE-2657"
+      ],
+      "excluded": [
+        {
+          "identifier": "DRE-4829",
+          "reason": "repo not in config/repo-map.json: none"
+        },
+        {
+          "identifier": "DRE-4434",
+          "reason": "operator-step"
+        },
+        {
+          "identifier": "DRE-4159",
+          "reason": "parent epic with 1 open child"
+        },
+        {
+          "identifier": "DRE-3966",
+          "reason": "parent epic with 3 open children"
+        },
+        {
+          "identifier": "DRE-3245",
+          "reason": "parent epic with 1 open child"
+        },
+        {
+          "identifier": "DRE-3711",
+          "reason": "parent epic with 10 open children"
+        },
+        {
+          "identifier": "DRE-2822",
+          "reason": "parent epic with 4 open children"
+        }
+      ],
+      "slots_unfilled": 0,
+      "lookups_failed": [],
+      "all_lookups_failed": false,
+      "merged_prs_unread": false,
+      "not_posted_why": null
+    }
+  }
+}

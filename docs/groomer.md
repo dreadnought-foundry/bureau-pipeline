@@ -506,7 +506,12 @@ else is the evidence the ranked read named — or, when the plain-English guard
 refused that evidence, the withheld sentence, never an empty cell. A
 `Superseded by:` line that names nothing checkable is reported as a gap and the
 card is sequenced normally: a recommendation nobody can check is one nobody
-should act on. The recommendation, the decision and the execution stay three
+should act on. The page's `Named nothing:` line says so, and it names only a
+card on the Planning list or waiting under Not now (DRE-6910): a card the page
+holds Not ready, sends to Rewrite first or puts on the Cancel list is on a
+table that says otherwise, and is left out of the line. On 2026-10-11 it named
+DRE-2709 and DRE-5700 as sequenced normally while the Not ready table held
+both. The recommendation, the decision and the execution stay three
 separate steps — the groomer proposes, the CEO agrees or excludes, the drain
 cancels — because in the 2026-08-22 sweep the executing agent caught an error
 in its own brief precisely because it was working from an explicit list rather
@@ -604,7 +609,16 @@ summary.
 When the record carries a `verify` block — written by
 `groom_verify_agent.py apply` — the page adds `## Verified against main` after
 the Cancel list: one line per verdict count (`still-needed`, `partly-solved`,
-`done-elsewhere`, `obsolete`, `not-worth-it`, `unverified`, `excluded`), each
+`done-elsewhere`, `obsolete`, `not-worth-it`, `unverified`, `excluded`), where
+`partly-solved` counts the Rewrite first list only (DRE-6910): a
+`partly-solved` spare held no Planning slot, is not on the Rewrite first list
+and got no draft,
+so it is left out of the count and named once on its own line,
+`Not counted as partly-solved above: DRE-N — …` (on 2026-10-11 the page said
+4 over a list of three; the fourth was the spare DRE-2982). On a record
+written before the Rewrite first list existed, a partly-solved card left on
+the Planning list is counted too: its verdict is under its entry in
+`## Why each card is in the batch`. Then each
 card excluded without judgement by id with its reason, one line `Verify step: <N> cards, $<X.XX>, <M> min
 <S> s wall clock`, and each unverified card by id with its reason, under
 `Not verified — not in the batch, each stays in Intake:`. A Cancel
@@ -731,7 +745,9 @@ therefore posts the cards it could check, and nothing it could not.
 `proposal["outcomes"]["rewrite"]`, in the rules' order and numbered from 1, and
 the slot it empties is filled by the next still-needed spare, like a Cancel's.
 A `partly-solved` spare is not listed, gets no draft, and stays a `not-now`
-row exactly as it was — `apply` only ever promotes a `still-needed` spare. Each
+row exactly as it was — `apply` only ever promotes a `still-needed` spare. The
+page's `partly-solved:` count leaves it out and names it on its own line
+(DRE-6910), so the number matches the Rewrite first list under it. Each
 row is `{"identifier", "title", "repo", "epic", "band", "position", "summary",
 "draft", "body_digest", "verify"}`. On a `partly-solved` answer only the agent
 also writes `rewrite`, the card's updated body (`briefs/groom-verify.md` says

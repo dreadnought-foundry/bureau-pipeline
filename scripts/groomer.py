@@ -2870,9 +2870,13 @@ def render_proposal(proposal: dict) -> str:
            f"in." if scheduled else ""))
     add("")
     w.extend(_render_not_now(proposal))
-    if proposal["unstated_supersessions"]:
+    # Only a card the page in fact sequences normally (DRE-6910): one held
+    # Not ready, sent to Rewrite first or on the Cancel list is on a table
+    # that says otherwise, and naming it here told the reader both.
+    unstated = _sequenced_normally(proposal, proposal["unstated_supersessions"])
+    if unstated:
         add("Named nothing: "
-            + ", ".join(proposal["unstated_supersessions"])
+            + ", ".join(unstated)
             + " say they are superseded without naming what replaced them, so "
               "they are sequenced normally rather than proposed for Cancel.")
         add("")
@@ -2885,6 +2889,19 @@ def render_proposal(proposal: dict) -> str:
     add(CYCLE_IS_NOT_SPRINT_PLANNING)
     add("")
     return "\n".join(w)
+
+
+def _sequenced_normally(proposal: dict, identifiers: list) -> list:
+    """`identifiers`, kept only where the page puts the card on the Planning
+    list or leaves it waiting in `not-now` — read off the lists themselves,
+    after the verify step has moved what it moved (DRE-6910). A card also on
+    a list that says otherwise — Not ready, Rewrite first, Cancel — is not."""
+    def ids(*names) -> set:
+        return {row["identifier"] for name in names
+                for row in proposal["outcomes"].get(name) or []}
+
+    placed = ids("now", "not-now") - ids(NOT_READY, REWRITE, "dead")
+    return [i for i in identifiers if i in placed]
 
 
 def _render_stale_priorities(proposal: dict) -> list:
@@ -3359,9 +3376,32 @@ def _render_verified(proposal: dict) -> list:
              "Intake; a card excluded without judgement is dropped from the "
              "batch and stays where it is on the board.")
     w.append("")
+    # `partly-solved` counts the cards the page lists for it and nothing else
+    # (DRE-6910): the Rewrite first list — and, on a record written before
+    # that list existed, a partly-solved card left on the Planning list. A
+    # partly-solved spare held no Planning slot, so it got no draft and is not
+    # on the Rewrite first list: it is named once, below, as left out of the
+    # count.
+    def partly(name: str) -> list:
+        return [r["identifier"] for r in proposal["outcomes"].get(name) or []
+                if (r.get("verify") or {}).get("verdict")
+                == groom_verify_agent.PARTLY_SOLVED]
+
+    listed = ([r["identifier"] for r in proposal["outcomes"].get(REWRITE)
+               or []] + partly("now"))
+    spares = [i for i in partly("not-now") if i not in listed]
     for verdict in groom_verify_agent.VERDICTS:
-        w.append(f"- {verdict}: {int(counts.get(verdict) or 0)}")
+        n = (len(listed) if verdict == groom_verify_agent.PARTLY_SOLVED
+             else int(counts.get(verdict) or 0))
+        w.append(f"- {verdict}: {n}")
     w.append("")
+    if spares:
+        w.append(f"Not counted as partly-solved above: {', '.join(spares)} — "
+                 f"the agent found each partly solved, but as a spare with no "
+                 f"Planning slot it is not on the Rewrite first list and no "
+                 f"draft was written; it stays where the order put it. The "
+                 f"count above is only the cards listed as partly solved.")
+        w.append("")
     excluded = block.get("excluded") or []
     if excluded:
         w.append("Excluded without judgement — each stays where it is on the "
