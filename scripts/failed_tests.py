@@ -50,8 +50,10 @@ _LOG_PREFIX = reviewer_environment._LOG_PREFIX
 _COLOR = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
 
 #: pytest's summary line. The id must look like a test id, so `FAILED to fetch
-#: the artifact - 502` is not one.
-_PYTEST = re.compile(r"^FAILED\s+(?P<rest>[\w./\\-]+\.py::\S.*)$")
+#: the artifact - 502` is not one. Its `path.py::` head is the filter's own,
+#: never a second copy of it.
+_PYTEST = re.compile(
+    r"^FAILED\s+(?P<rest>" + reviewer_environment.PYTEST_ID_HEAD + r"\S.*)$")
 
 #: vitest's failure line: a file path, then at least one ` > `.
 _VITEST = re.compile(r"^FAIL\s+(?P<id>\S+\s+>\s+.+)$")

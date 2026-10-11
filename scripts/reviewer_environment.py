@@ -281,10 +281,15 @@ _QUOTATION_LINE = re.compile(r"^\s*[+\->|]")
 # explanation of a failure, which prints the very fixture log it was handed. A
 # parametrized test id carries whole action lines in its brackets, so no
 # signature's own pattern can tell those apart from the real thing.
+#
+# `PYTEST_ID_HEAD` is the `path.py::` a pytest id opens with. It lives here
+# once: `failed_tests.py` reads the failing ids out of the same lines this
+# filter throws away, and builds its pattern from this one (DRE-6870).
+PYTEST_ID_HEAD = r"[\w./\\-]+\.py::"
 _TEST_REPORT_LINE = re.compile(
     r"^\s*(?:"
     r"(?:\[[^\]]*\]\s*|(?:PASSED|FAILED|ERROR|SKIPPED|XFAIL|XPASS)\s+)*"
-    r"[\w./\\-]+\.py::"
+    + PYTEST_ID_HEAD +
     r"|test\w* \([\w.]+\) \.\.\. "
     r"|E {2,}"
     r")"
