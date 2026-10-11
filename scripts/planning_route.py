@@ -104,6 +104,16 @@ record, every verdict written before the card re-entered Planning
 when the new one does not, and then decides and stamps exactly as for a card
 on its first trip.
 
+## An epic still to be planned waits on its open blocker (DRE-6651)
+
+DRE-6589 reached Planning with a formal `blockedBy` relation on an In Progress
+card, and the planner could only ask the CEO "wait, or plan now?" — a question
+the board already answered. So `decide`, on an epic, also reads its formal
+blockers, its children and its lane history, and writes `wait=true` with
+`waits_on` when a blocker is open, it has no children and it was never moved to
+In Progress. `plan.yml` then posts the `epic-waits` receipt, moves it to Backlog
+and dispatches no planner. Any read that fails writes `wait=false`.
+
 CLI:
 
     python3 scripts/planning_route.py check          # validate the routes
@@ -467,6 +477,101 @@ def _read_returned_child(lops, identifier: str, comment_bodies,
     return returned_child(comment_bodies, parent, has_children=has_children, doc=doc)
 
 
+@dataclass(frozen=True)
+class EpicWait:
+    """Does this epic wait in Backlog on its formal blockers (DRE-6651)?
+    `waits_on` names each open blocker with its state when it does, else ""."""
+
+    wait: bool
+    waits_on: str
+    reason: str
+
+
+def _no_wait(reason: str) -> EpicWait:
+    return EpicWait(wait=False, waits_on="", reason=reason)
+
+
+def epic_wait(card: dict, history) -> EpicWait:
+    """Does an epic still to be PLANNED wait on an open formal blocker?
+
+    `card` carries the epic's `inverseRelations` and `has_children`; `history`
+    is `linear_ops.lane_history`'s list, newest first. It waits only when all
+    three say it has not been planned yet:
+
+      * at least one `blocks` relation is not in `prose_blockers.TERMINAL` —
+        the reading `reconcile.epic_blockers_unmet(...,
+        release_at_build_done=False)` makes for an epic still to be planned;
+      * it has no children;
+      * no entry of its history moves it to `In Progress` — that move is its
+        green light.
+
+    An epic with children or an earlier green light is one DRE-6407 released
+    at its blocker's build-done and `mid_epic.py discovery --kind amendment`
+    sent back to be re-planned. Holding it in Backlog would park running work
+    with nothing to bring it back, so it is planned and the reason says why.
+    """
+    import prose_blockers
+
+    if prose_blockers.relations_unknown(card):
+        return _no_wait(
+            "its relations were not read to the end, so its blockers are unknown "
+            "and nothing is held on half a page"
+        )
+    states = prose_blockers.blocker_states(card)
+    open_ids = sorted(prose_blockers.relation_blockers(card))
+    if not open_ids:
+        return _no_wait("it has no open formal blocker")
+    planned = []
+    if card.get("has_children"):
+        planned.append("it has children")
+    if any(((row.get("toState") or {}).get("name")) == "In Progress"
+           for row in history or ()):
+        planned.append("its lane history moves it to In Progress (an earlier green light)")
+    waits_on = ", ".join(f"{i} ({states[i]})" for i in open_ids)
+    if planned:
+        return _no_wait(
+            f"{' and '.join(planned)}, so it was planned before and is re-planned "
+            f"rather than held on {waits_on}"
+        )
+    return EpicWait(
+        wait=True,
+        waits_on=waits_on,
+        reason=f"it waits on {waits_on} and is planned when every one is Done",
+    )
+
+
+#: The epic wait's one single-issue read: its formal relations with their
+#: states, and whether it has children (`critic_score.read_card`'s reading).
+_WAIT_QUERY = """query($id: String!) { issue(id: $id) {
+  identifier
+  children(first: 1) { nodes { id } }
+  inverseRelations(first: 50) {
+    pageInfo { hasNextPage }
+    nodes { type issue { identifier state { name } } }
+  }
+} }"""
+
+
+def _read_epic_wait(lops, identifier: str) -> EpicWait:
+    """`epic_wait` for a live epic. Fails open: a relation, children or history
+    read that fails holds nothing, so an unreadable board never parks an epic
+    the planner could plan."""
+    try:
+        issue = (lops.gql(_WAIT_QUERY, {"id": identifier}) or {}).get("issue") or {}
+    except Exception as exc:  # noqa: BLE001 — an unread board holds nothing
+        return _no_wait(f"its relations and children could not be read ({exc})")
+    card = {
+        "identifier": issue.get("identifier") or identifier,
+        "inverseRelations": issue.get("inverseRelations"),
+        "has_children": bool((issue.get("children") or {}).get("nodes")),
+    }
+    try:
+        history = lops.lane_history(identifier)
+    except Exception as exc:  # noqa: BLE001 — an unread board holds nothing
+        return _no_wait(f"its lane history could not be read ({exc})")
+    return epic_wait(card, history)
+
+
 # --------------------------------------------------------------------------- #
 # leaving Planning                                                             #
 # --------------------------------------------------------------------------- #
@@ -796,13 +901,23 @@ def _cmd_decide(identifier: str, github_output: str | None) -> int:
             ("refused", "true"), ("route", ""),
             ("returned_child", "false"), ("parent", ""),
             (PERSON_OUTPUT, ""),
+            ("wait", "false"), ("waits_on", ""),
         ])
         print(refusal.notice, file=sys.stderr)
         return 0
 
+    import mid_epic
+
     child = _read_returned_child(linear_ops, identifier, bodies)
     person = _read_person_verdict(linear_ops, identifier) \
         if route.shape == ONE_OFF_SHAPE else ""
+    # DRE-6651: only an epic reads its blockers — every other route never waits.
+    if route.shape == mid_epic.EPIC_SHAPE:
+        waiting = _read_epic_wait(linear_ops, identifier)
+        print(f"planning route: {identifier} "
+              f"{'waits in Backlog' if waiting.wait else 'is planned'} — {waiting.reason}")
+    else:
+        waiting = _no_wait(f"it is shaped {route.shape}, and only an epic waits")
     _write_outputs(github_output, [
         ("refused", "false"),
         ("route", route.shape),
@@ -815,6 +930,9 @@ def _cmd_decide(identifier: str, github_output: str | None) -> int:
         ("parent", child.parent),
         # DRE-5805: the one-off critic is skipped, and the exit run, on this.
         (PERSON_OUTPUT, person),
+        # DRE-6651: plan.yml's wait step parks the epic in Backlog on this.
+        ("wait", "true" if waiting.wait else "false"),
+        ("waits_on", waiting.waits_on),
     ])
     print(json.dumps({
         "shape": route.shape,
@@ -828,6 +946,9 @@ def _cmd_decide(identifier: str, github_output: str | None) -> int:
         "parent": child.parent,
         "returned_child_reason": child.reason,
         PERSON_OUTPUT: person,
+        "wait": waiting.wait,
+        "waits_on": waiting.waits_on,
+        "wait_reason": waiting.reason,
     }, indent=2))
     return 0
 

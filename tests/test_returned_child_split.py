@@ -210,14 +210,14 @@ def _family(parent_identifier=PARENT, *, title="[EPIC] bureau-pipeline: the work
 
 def _decide(tmp_path, threads: dict, family: dict):
     """Run `decide CARD --github-output F` against a faked Linear, returning
-    `(outputs, gql calls)`."""
+    `(outputs, the queries gql was asked)`."""
     import linear_ops
 
     out = tmp_path / "out.txt"
     calls: list = []
 
     def gql(query, variables=None):
-        calls.append(variables)
+        calls.append(query)
         return family
 
     with patch.object(linear_ops, "comment_bodies",
@@ -252,10 +252,11 @@ class TestDecideWritesTheStepOutputs:
 
     def test_an_unreturned_epic_is_false_and_costs_no_family_read(self, tmp_path):
         """Every epic passes through `decide`; only a returned one pays for the
-        parent read."""
+        parent read. Every epic does pay for its blockers read (DRE-6651), so
+        the family query is the one this counts."""
         outputs, calls = _decide(tmp_path, {CARD: [_planner_stamp("epic")]}, _family())
         assert outputs["returned_child"] == "false"
-        assert calls == []
+        assert planning_route._FAMILY_QUERY not in calls
 
     def test_a_refused_card_is_false(self, tmp_path):
         outputs, _ = _decide(tmp_path, {CARD: []}, _family())

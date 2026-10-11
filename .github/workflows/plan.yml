@@ -749,6 +749,27 @@ jobs:
             "${{ github.event.client_payload.identifier }}" \
             --github-output "$GITHUB_OUTPUT"
 
+      # An epic still to be planned whose formal blocker is open waits in
+      # Backlog (DRE-6651): `decide` read the relation, the children and the
+      # lane history and wrote `wait=true`. One receipt, then the move — and
+      # `Route` carries `wait != 'true'`, so no planner, no attempt boundary,
+      # no heartbeat and no critic follow. The slot is still released by the
+      # `always()` step at the end. The auto-advance brings it back (DRE-6653).
+      - name: Epic waits on its blocker — Backlog, no planner
+        if: steps.shape.outputs.route == 'epic' && steps.shape.outputs.wait == 'true'
+        env:
+          LINEAR_API_KEY: ${{ secrets.LINEAR_PLANNER_KEY || secrets.LINEAR_API_KEY }}
+          LINEAR_API_KEY_FALLBACK: ${{ secrets.LINEAR_API_KEY }}
+          EPIC: ${{ github.event.client_payload.identifier }}
+          # Through env, never interpolated into the shell line.
+          WAITS_ON: ${{ steps.shape.outputs.waits_on }}
+        run: |
+          WAITS="⏸️ epic-waits: $EPIC waits in Backlog on its formal blocker(s) $WAITS_ON. It is planned when every one is Done — nothing is asked of anyone until then."
+          python3 .bureau-pipeline/scripts/linear_ops.py comment "$EPIC" "$WAITS" --act=epic-waits-on-blocker
+          python3 .bureau-pipeline/scripts/linear_ops.py state "$EPIC" "Backlog"
+          echo "$WAITS"
+          echo "$WAITS" >> "$GITHUB_STEP_SUMMARY"
+
       # The slug this repo's cards route by. `subissue` inherits the
       # `repo:<slug>` LABEL from the epic (DRE-1699 — the label is canonical
       # and the `**Repo:**` body stamp is a deprecated legacy fallback); the
@@ -889,7 +910,7 @@ jobs:
       # pipeline reason — exactly as the activate route does.
       - name: Route — plan or activate
         id: route
-        if: steps.gate.outputs.bounced != 'true' && steps.dedupe.outputs.skip != 'true' && steps.slot.outputs.admitted == 'true' && steps.shape.outputs.route == 'epic'
+        if: steps.gate.outputs.bounced != 'true' && steps.dedupe.outputs.skip != 'true' && steps.slot.outputs.admitted == 'true' && steps.shape.outputs.route == 'epic' && steps.shape.outputs.wait != 'true'
         env:
           LINEAR_API_KEY: ${{ secrets.LINEAR_PLANNER_KEY || secrets.LINEAR_API_KEY }}
           LINEAR_API_KEY_FALLBACK: ${{ secrets.LINEAR_API_KEY }}

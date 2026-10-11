@@ -1,0 +1,35 @@
+{
+  "card": "DRE-6589",
+  "arrival": "blocked-epic",
+  "for": "planner",
+  "as_of": "2026-10-10T09:49:41.305Z",
+  "lane": "Planning",
+  "labels": [
+    "repo:agent-bureau",
+    "initiative:bureau",
+    "agent:planner"
+  ],
+  "comments": [
+    {
+      "body": "🎟️ planner-slot: claimed · card DRE-6589 · run 38042688582 · repo dreadnought-foundry/agent-bureau · trigger planning · at 2026-10-10T09:49:16Z",
+      "authored_by_pipeline": true,
+      "created_at": "2026-10-10T09:49:16.717Z"
+    },
+    {
+      "body": "🧩 planning-shape: **epic** — A set of cards that ship separately under one parent, with a plan the CEO approves before any of them run.\n\n**Why:** Several cards that ship separately under one parent — one per site the diagnostic reading names, a possible stall card, a conditional operator stack card in a different tier, and a closing PROOF card — none of which is one pull request, and nothing here waits on an observation inside this epic itself (its only gate, DRE-6587, is outside it). — size tests checked: 1 contracts between the pieces, 2 two languages or two tiers, 3 a criterion counting something never enumerated, 6 cut on file footprint, not only on concern\n\n**Stamped by:** `planner` · **model:** `claude-fable-5-1`\n\n**Where it goes:** Green Light. **Who handles it there:** operator.\n**Marked:** `agent:planner`.\nThe sweep does not promote a card of this shape — it is moved by whoever approves it.",
+      "authored_by_pipeline": true,
+      "created_at": "2026-10-10T09:49:41.305Z"
+    }
+  ],
+  "relations": {
+    "parent": "DRE-6585",
+    "has_children": false,
+    "history": [],
+    "blocked_by": [
+      {
+        "identifier": "DRE-6587",
+        "state": "In Progress"
+      }
+    ]
+  }
+}
