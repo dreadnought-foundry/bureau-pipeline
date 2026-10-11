@@ -369,6 +369,90 @@ jobs:
           fi
           echo "every unit test part and every walk passed"
 
+  # EVERY CONSOLE CHANGE KEEPS THE SUITE GREEN (DRE-6873). The harness
+  # (`tests/test_console_change_keeps_the_suite_green.py`, DRE-6865) derives one
+  # case per change the console can save, applies it to a copy of the tree and
+  # runs every test that can read the model files inside the copy — about ten
+  # minutes of pytest a case. In the unit parts and the walks' job
+  # `BUREAU_SUITE_GREEN_RUN` is unset and those cases skip; here they run, half
+  # the cases on each part (`BUREAU_SUITE_GREEN_PART` of `_OF`), side by side
+  # through the harness's own thread pool. Those three names are set in this
+  # job's pytest step and nowhere else.
+  #
+  # NARROWED PER CHANGE, WHOLE EVERY NIGHT (`standards/engineering.md`). The
+  # reach step asks `scripts/suite_green_reach.py` whether this run's changed
+  # files can reach the model tests — the harness's own rule — and every step
+  # after it is gated on the answer, so a run that cannot reach them concludes
+  # success in under a minute. A script, never an `on: paths:` filter, which
+  # would create no check run at all. No job-level `if:`: a schedule run has no
+  # range to compare, answers `run`, and runs every case.
+  #
+  # Not in `unit-result`'s `needs`: branch protection requires that check for
+  # the unit parts alone, and the merge gate reads this job as a check of its
+  # own. `tests/test_suite_green_job.py` holds all of it.
+  suite-green:
+    name: console change keeps the suite green (part ${{ matrix.part }})
+    runs-on: ${{ fromJSON(vars.BUREAU_CI_RUNS_ON || vars.BUREAU_RUNS_ON || '["ubuntu-latest"]') }}
+    strategy:
+      # One red part must not cancel the other: a canceled part hides its own
+      # failures behind somebody else's.
+      fail-fast: false
+      matrix:
+        part: [1, 2]
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # FAIL CLOSED, as the act-registry step below: if the changed files
+      # cannot be read the answer is `run`. A rename lists its old name too,
+      # because a `.py` the tree no longer holds reaches. The system python3
+      # reads the list — the cached install is the first gated step — and the
+      # script answers `run` if it cannot read `config/models.yaml`.
+      - name: Can this run reach the model tests?
+        id: reach
+        env:
+          GH_TOKEN: ${{ github.token }}
+          # A schedule run has no `github.event.before`, so BASE is empty and
+          # the answer is `run`: the nightly runs every case.
+          BASE: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event.before }}
+          HEAD: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+        run: |
+          changed="$RUNNER_TEMP/suite-green-changed.txt"
+          if [ -n "$BASE" ] && gh api --paginate "repos/$GITHUB_REPOSITORY/compare/$BASE...$HEAD" \
+               --jq '.files[] | .filename, (.previous_filename // empty)' > "$changed"; then
+            decision=$(python3 scripts/suite_green_reach.py decide --changed "$changed" --tree . || echo run)
+            echo "$decision"
+            if [ "$(printf '%s\n' "$decision" | head -n1)" = skip ]; then
+              echo "run=false" >> "$GITHUB_OUTPUT"
+              echo "no changed file can reach the model tests — the cases are not run"
+            else
+              echo "run=true" >> "$GITHUB_OUTPUT"
+            fi
+          else
+            echo "run=true" >> "$GITHUB_OUTPUT"
+            echo "could not read this run's changed files — running every case"
+          fi
+      - name: Install test tooling (cached)
+        if: steps.reach.outputs.run == 'true'
+        uses: ./.github/actions/setup-python-cached
+        with:
+          python-version: "3.12"
+          requirements: |
+            requirements-dev.txt
+      # The inner runs inherit this environment: the parts' `Unit tests`
+      # environment, less BUREAU_REQUIRE_GIT_HISTORY — a case's copy of the
+      # tree carries no `.git`, so a test that reads history skips there.
+      - name: Every console change keeps the model tests green
+        if: steps.reach.outputs.run == 'true'
+        env:
+          LINEAR_API_KEY: test-key
+          REPO: test/test
+          GH_TOKEN: test
+          REPO_SLUG: agent-bureau
+          BUREAU_SUITE_GREEN_RUN: "1"
+          BUREAU_SUITE_GREEN_PART: ${{ matrix.part }}
+          BUREAU_SUITE_GREEN_OF: "2"
+        run: python3 -m pytest tests/test_console_change_keeps_the_suite_green.py -v
+
   # The act registry's CONSUMER (DRE-3091). Its own job, because it is the one
   # check here that leaves the repository: it reads the console's `ACTS` out of
   # agent-bureau and fails when this repo declares an act the console cannot

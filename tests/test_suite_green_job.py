@@ -42,6 +42,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "tests"))
 sys.path.insert(0, str(ROOT / "scripts"))
 
+import console_change_walk as walk  # noqa: E402
 import model_fixture  # noqa: E402
 import suite_green_reach as reach  # noqa: E402
 
@@ -217,15 +218,18 @@ def test_the_six_names_are_the_ones_model_fixture_reads():
 
 def test_the_rule_is_model_reading_tests_on_the_real_tree():
     """Every test file `model_fixture.model_reading_tests` derives reaches, and
-    no other `tests/test_*.py` does — the same rule, so a test that joins the
-    derived set reaches the moment it is added."""
+    no other `tests/test_*.py` does but the walks — the same rule, so a test
+    that joins the derived set reaches the moment it is added. The derived set
+    leaves the walks out because a walk never runs a walk; a change to one
+    still reaches here, and the harness itself is one."""
     derived = {p.relative_to(ROOT).as_posix()
                for p in model_fixture.model_reading_tests(ROOT)}
     assert derived, "the derived set is empty — the comparison went vacuous"
     tokens = reach.tokens(ROOT)
     every = sorted(p.relative_to(ROOT).as_posix() for p in (ROOT / "tests").glob("test_*.py"))
     reaching = {rel for rel in every if reach.reaches(rel, ROOT, tokens)}
-    assert reaching == derived & set(every)
+    assert HARNESS in reaching and walk.is_walk(HARNESS)
+    assert {rel for rel in reaching if not walk.is_walk(rel)} == derived & set(every)
 
 
 def test_the_cli_prints_the_answer_on_its_first_line_and_exits_0(tmp_path):
