@@ -3705,6 +3705,42 @@ def find_open_prefix(prefix: str) -> dict | None:
     return {**nodes[0], "duplicates": nodes[1:]}
 
 
+def repo_cards_by_title_prefix(prefix: str, *, repo_slug: str,
+                               since: datetime) -> list[dict]:
+    """Every DRE card carrying `repo:<repo_slug>` whose title STARTS WITH
+    `prefix` and that was created at or after `since`, in ANY state.
+
+    `[{"identifier", "description", "state", "createdAt"}]`, `state` as its
+    name. The repair sweep's memory of earlier failures (DRE-6870): a repair
+    card lists the tests that failed, and a Canceled one is a failure main
+    passed on its own — so every state on purpose, unlike `find_open_prefix`.
+
+    `first: 50`: one repo's repair cards over two weeks. Measured 2026-10-06
+    to 10-10, the two busiest repos had 27 red mains between them in five
+    days; a listing that ever filled this would itself be the finding.
+    """
+    data = gql(
+        """query($prefix: String!, $label: String!, $since: DateTimeOrDuration!) {
+             issues(first: 50, filter: {
+               team: {key: {eq: "DRE"}},
+               title: {startsWith: $prefix},
+               labels: {name: {eqIgnoreCase: $label}},
+               createdAt: {gte: $since}
+             }) { nodes { identifier description createdAt state { name } } } }""",
+        {"prefix": prefix, "label": f"repo:{repo_slug}",
+         "since": since.isoformat()},
+    )
+    return [
+        {
+            "identifier": node.get("identifier") or "",
+            "description": node.get("description") or "",
+            "state": (node.get("state") or {}).get("name") or "",
+            "createdAt": node.get("createdAt") or "",
+        }
+        for node in (data.get("issues") or {}).get("nodes") or []
+    ]
+
+
 def find_by_pr_url(pr_url: str) -> str | None:
     """The OLDEST DRE card whose description carries `pr_url`, in ANY state, or
     None — the idempotency key of the dependabot filer (DRE-3665).

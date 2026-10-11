@@ -61,7 +61,13 @@ name and the failing sha back off the card and decides, IN THIS ORDER:
      workflow on the default branch concluded `success` — → **Cancel**, with
      one plain-English comment naming the run that proves it. Canceled, never
      Done: nothing was delivered under the card, and a blocker clears at
-     Canceled;
+     Canceled. A card whose body lists `## Failing tests` (DRE-6870, written
+     by `open --log-file`) first reads this repo's repair cards of the last
+     14 days: when an earlier Canceled one lists the same test, that test
+     has turned main red twice and gone green unfixed both times, and ONE
+     fix card is filed in Planning — before the cancel, found by its title
+     so it is never filed twice — and the cancel comment names it. That
+     read failing is an UNKNOWN like any other;
   3. main is still red and no pull request is open → leave the card's lane
      alone. That is the existing "the repair budget is spent, a human needs to
      look" path in `red-main-repair.yml`, and this does not touch it. One
@@ -98,6 +104,7 @@ from typing import NamedTuple
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import dependabot_card  # noqa: E402
+import failed_tests  # noqa: E402
 import github_output  # noqa: E402
 import red_main_repair  # noqa: E402
 
@@ -208,6 +215,55 @@ def card_failing_sha(description: str) -> str | None:
     return found.group(1) if found else None
 
 
+#: The failed run's link as `card_body` writes it.
+_BODY_RUN_URL = re.compile(r"^- The failed run: (\S+)$", re.MULTILINE)
+
+
+def card_run_url(description: str) -> str:
+    """The failed run's link off the card's body, or ""."""
+    found = _BODY_RUN_URL.search(description or "")
+    return found.group(1) if found else ""
+
+
+#: The heading `card_body` lists the failing test ids under (DRE-6870). That
+#: section is the WHOLE record of which test failed — no file, no variable,
+#: no standing card — and `settle` reads it back off the cards.
+FAILING_TESTS_HEADING = "## Failing tests"
+
+#: One listed id: `- ` and the id as inline code, its fence one backtick
+#: longer than any run of backticks inside it.
+_LISTED_TEST = re.compile(r"^- (?P<fence>`+)(?P<id>.*)(?P=fence)$")
+
+
+def _code(text: str) -> str:
+    """`text` as inline code that survives a backtick inside it."""
+    longest = max((len(run) for run in re.findall(r"`+", text)), default=0)
+    fence = "`" * (longest + 1)
+    return f"{fence} {text} {fence}" if longest else f"{fence}{text}{fence}"
+
+
+def card_failing_tests(description: str) -> list[str]:
+    """The failing test ids off a repair card's body, in the order listed, or
+    [] when the card has no `## Failing tests` section — which is every card
+    filed before DRE-6870, and every one whose log named no test."""
+    out: list[str] = []
+    inside = False
+    for line in (description or "").splitlines():
+        if line.strip() == FAILING_TESTS_HEADING:
+            inside = True
+            continue
+        if inside and line.startswith("#"):
+            break
+        found = _LISTED_TEST.match(line.strip()) if inside else None
+        if found:
+            test_id = found.group("id")
+            if len(found.group("fence")) > 1 and test_id.startswith(" ") \
+                    and test_id.endswith(" "):
+                test_id = test_id[1:-1]
+            out.append(test_id)
+    return out
+
+
 def card_labels(repo_slug: str) -> list[str]:
     """Every label the card carries, `repo:<slug>` first — the whole answer in
     one place, so a reader never has to know that `create_card` prepends the
@@ -216,8 +272,15 @@ def card_labels(repo_slug: str) -> list[str]:
 
 
 def card_body(*, workflow_name: str, run_url: str, head_sha: str,
-              repo_slug: str, attempt: int) -> str:
-    """The card, in the plain English a person reads on the board."""
+              repo_slug: str, attempt: int, failing_tests=()) -> str:
+    """The card, in the plain English a person reads on the board.
+
+    `failing_tests` are the ids `failed_tests.failed_tests` read off the
+    failed log (DRE-6870). With none, the body is exactly what it was before
+    they were read."""
+    listed = [FAILING_TESTS_HEADING, "",
+              *(f"- {_code(test_id)}" for test_id in failing_tests),
+              ""] if failing_tests else []
     return "\n".join([
         f"**Repo:** {repo_slug}",
         "",
@@ -236,6 +299,7 @@ def card_body(*, workflow_name: str, run_url: str, head_sha: str,
         "it opens with the work, carries the pull request, and closes when that "
         "pull request merges.",
         "",
+        *listed,
         "## Acceptance criteria",
         "",
         "- [ ] The repair pull request merges and main is green again.",
@@ -270,12 +334,15 @@ def attempt_note(run_url: str, attempt: int) -> str:
 
 def open_card(*, repo_slug: str, workflow_name: str, head_sha: str,
               run_url: str, attempt: int, fallback_branch: str,
-              ops=None) -> dict:
+              ops=None, failing_tests=()) -> dict:
     """File (or find) the repair's card and name its branch. NEVER raises.
 
     Returns `{card, card_url, branch, card_owed, note}`. `card_owed` is the
     honest half: with it true the repair still happens, on `fallback_branch`,
     and the pull request says the card is owed.
+
+    `failing_tests` ride into a NEW card's body (DRE-6870). A card found open
+    is attempt 2 at the same commit, and keeps the list attempt 1 wrote.
     """
     ops = ops or _Ops()
     title = card_title(workflow_name, head_sha)
@@ -299,7 +366,8 @@ def open_card(*, repo_slug: str, workflow_name: str, head_sha: str,
         issue = ops.create_card(
             title,
             card_body(workflow_name=workflow_name, run_url=run_url,
-                      head_sha=head_sha, repo_slug=repo_slug, attempt=attempt),
+                      head_sha=head_sha, repo_slug=repo_slug, attempt=attempt,
+                      failing_tests=failing_tests),
             repo_slug=repo_slug,
             labels=card_labels(repo_slug),
             lane=LANE,
@@ -412,9 +480,13 @@ def newest_completed_run(runs) -> dict | None:
     return None
 
 
-def settle_note(workflow_name: str, run: dict) -> str:
+def settle_note(workflow_name: str, run: dict, fix=None) -> str:
     """The ONE comment a settled card gets: what proves main is green, and
-    that nothing was delivered under the card."""
+    that nothing was delivered under the card.
+
+    `fix` is the flaky test's fix card (DRE-6870), when this is the second
+    time its test turned main red and went green unfixed. It adds one
+    sentence naming that card; without it the comment is unchanged."""
     where = run.get("url") or ""
     at = (run.get("headSha") or "")[:red_main_repair.SHA_CHARS]
     proof = f"**{workflow_name or 'CI'}**"
@@ -422,6 +494,13 @@ def settle_note(workflow_name: str, run: dict) -> str:
         proof += f" at commit `{at}`"
     if where:
         proof += f" — {where}"
+    flaky = ""
+    if fix is not None:
+        flaky = (
+            f"\n\nThe test {_code(fix.test)} has now turned main red twice in "
+            f"{FLAKY_WINDOW_DAYS} days and passed on its own both times, so it "
+            f"is a flaky test to fix — {fix.card} carries that work."
+        )
     return (
         f"{SETTLE_MARKER}. The newest completed run of {proof} concluded "
         "success on the default branch, so there is nothing left to repair.\n\n"
@@ -431,7 +510,185 @@ def settle_note(workflow_name: str, run: dict) -> str:
         "work this card was blocking.\n\n"
         "If the branch goes red again, the repair loop files a fresh card for "
         "that commit."
+        f"{flaky}"
     )
+
+
+# --------------------------------------------------------------------------- #
+# The flaky test's fix card — the second green cancel (DRE-6870)               #
+# --------------------------------------------------------------------------- #
+
+#: How far back `settle` looks for an earlier repair card naming the same
+#: failing test.
+FLAKY_WINDOW_DAYS = 14
+
+#: The fix card's title carries at most this much of the test id.
+FIX_TITLE_ID_CHARS = 150
+
+
+class FlakyFix(NamedTuple):
+    """The fix card a settled repair card's comment names, and its test."""
+
+    card: str
+    test: str
+
+
+class _Failure(NamedTuple):
+    """One of the two failures a fix card names."""
+
+    card: str
+    sha: str
+    run_url: str
+    filed: object  # datetime | None
+
+
+def fix_card_title(repo_slug: str, test_id: str) -> str:
+    """The fix card's title — and its idempotency key, through `find_open`."""
+    return (f"{repo_slug}: flaky test turned main red twice in "
+            f"{FLAKY_WINDOW_DAYS} days — {test_id[:FIX_TITLE_ID_CHARS]}")
+
+
+def fix_card_labels(repo_slug: str) -> list[str]:
+    """The fix card's labels: the repo, the engineer's role, and `Bug`."""
+    return [f"repo:{repo_slug}", ROLE_LABEL, "Bug"]
+
+
+def _when(stamp) -> object:
+    """A Linear `createdAt` as an aware datetime, or None."""
+    from datetime import datetime
+
+    try:
+        when = datetime.fromisoformat((stamp or "").replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return when if when.tzinfo is not None else None
+
+
+def _filed(when) -> str:
+    """The time a card was filed, as a person reads it — Pacific."""
+    if when is None:
+        return "at a time Linear did not answer"
+    import dead_run
+
+    return dead_run.pacific(when)
+
+
+def fix_card_body(*, test_id: str, first: _Failure, second: _Failure) -> str:
+    """The fix card, in plain English: the test, the two failures, and what a
+    fix has to show."""
+    def failure(which: str, f: _Failure) -> str:
+        return (f"- The {which} failure: commit `{f.sha}`, failed run "
+                f"{f.run_url or '(not on its repair card)'}, repair card "
+                f"{f.card}, filed {_filed(f.filed)}.")
+
+    return "\n".join([
+        "## What happened",
+        "",
+        f"The test {_code(test_id)} turned this repo's main branch red twice "
+        f"in {FLAKY_WINDOW_DAYS} days, and both times main went green again "
+        "with nothing fixed — a re-run or a later commit passed, and the "
+        "repair card was canceled. A failure seen twice that passed on its "
+        "own both times is a flaky test to fix, never an incident to close.",
+        "",
+        failure("first", first),
+        failure("second", second),
+        "",
+        "## Acceptance criteria",
+        "",
+        "- [ ] The pull request says why the test fails now and then, with "
+        "evidence from the two failed runs named above.",
+        "- [ ] The test no longer depends on that cause, and it is not "
+        "skipped, marked as expected to fail, wrapped in a retry or given a "
+        "looser assertion.",
+        "- [ ] The pull request names this card.",
+        "",
+        "## Not in this card",
+        "",
+        "- Any other test. Each one gets its own card the second time it "
+        "turns main red and passes on its own.",
+    ]) + "\n"
+
+
+def _earlier_failure(history, identifier: str, tests, since):
+    """`(test_id, card)` for the first listed test an earlier Canceled repair
+    card of this repo, filed since `since`, also lists — the newest such card
+    — or None."""
+    def within(row) -> bool:
+        filed = _when(row.get("createdAt"))
+        return filed is not None and filed >= since
+
+    for test_id in tests:
+        found = [
+            row for row in history
+            if (row.get("identifier") or "") != identifier
+            and (row.get("state") or "") == "Canceled"
+            and within(row)
+            and test_id in card_failing_tests(row.get("description") or "")
+        ]
+        if found:
+            return test_id, max(found, key=lambda row: row.get("createdAt") or "")
+    return None
+
+
+def _flaky_fix(card: dict, identifier: str, head_sha: str, tests, repo_slug,
+               ops, now, fatal):
+    """The fix card for a repair card about to be canceled green, or None the
+    first time, or a string naming what could not be read.
+
+    Files the card when none of that title is open — BEFORE the caller
+    cancels, so a pass that dies between the two finds it by its title next
+    time and files nothing twice. A create Linear refuses raises, and the
+    caller then cancels nothing this pass.
+    """
+    from datetime import timedelta
+
+    since = now - timedelta(days=FLAKY_WINDOW_DAYS)
+    try:
+        history = ops.repair_card_history(repo_slug, since)
+    except Exception as exc:  # noqa: BLE001 — an unreadable read is an UNKNOWN
+        if fatal and isinstance(exc, tuple(fatal)):
+            raise
+        return f"the earlier repair cards could not be read ({exc})"
+    if history is None:
+        return "the earlier repair cards could not be read"
+    earlier = _earlier_failure(history, identifier, tests, since)
+    if earlier is None:
+        return None
+    test_id, first = earlier
+
+    title = fix_card_title(repo_slug, test_id)
+    try:
+        existing = ops.find_open(title)
+    except Exception as exc:  # noqa: BLE001
+        if fatal and isinstance(exc, tuple(fatal)):
+            raise
+        return f"whether a fix card is already open could not be read ({exc})"
+    if existing:
+        return FlakyFix(existing, test_id)
+
+    import linear_ops
+
+    filed = _when(card.get("created_at")) or next(
+        (_when(row.get("createdAt")) for row in history
+         if (row.get("identifier") or "") == identifier), None)
+    description = card.get("description") or ""
+    first_body = first.get("description") or ""
+    issue = ops.create_card(
+        title,
+        fix_card_body(
+            test_id=test_id,
+            first=_Failure(first.get("identifier") or "",
+                           card_failing_sha(first_body) or "(not on its card)",
+                           card_run_url(first_body),
+                           _when(first.get("createdAt"))),
+            second=_Failure(identifier, head_sha, card_run_url(description),
+                            filed),
+        ),
+        repo_slug=repo_slug,
+        labels=fix_card_labels(repo_slug),
+        lane=linear_ops.CREATE_LANE,
+    )
+    return FlakyFix(issue["identifier"], test_id)
 
 
 def unlanded_note(branch: str, head_sha: str, base: str) -> str:
@@ -488,7 +745,7 @@ def _unlanded_branches(identifier: str, head_sha: str, ops, base: str):
 
 
 def _settle_one(card: dict, repo_slug: str, ops, log,
-                base: str = "main") -> Settled | None:
+                base: str = "main", now=None, fatal=()) -> Settled | None:
     """Decide one card, and act. None when the card is not this pass's."""
     identifier = card.get("identifier") or ""
 
@@ -567,13 +824,28 @@ def _settle_one(card: dict, repo_slug: str, ops, log,
         log(f"repair settle: {identifier} left alone — {why}")
         return Settled(identifier, SETTLED_RED, why)
 
+    # The second green cancel of a card naming the same failing test files
+    # that test's fix card FIRST (DRE-6870). The read is made only here, so a
+    # card with no `## Failing tests` section — or one rule 1 or rule 3 left
+    # alone — pays for nothing.
+    fix = None
+    tests = card_failing_tests(card.get("description") or "")
+    if tests:
+        fix = _flaky_fix(card, identifier, head_sha, tests, repo_slug, ops,
+                         now, fatal)
+        if isinstance(fix, str):
+            return _unknown(identifier, fix, log)
+
     # Cancel FIRST, then say why: a comment claiming a cancellation that
     # Linear refused is the DRE-1254 shape, and the state change is the half
     # the board, the console and the blocker gates actually read.
     ops.cancel(identifier)
-    ops.cmd_comment(identifier, settle_note(workflow_name, run))
+    ops.cmd_comment(identifier, settle_note(workflow_name, run, fix))
     why = (f"main is green again — {run.get('url') or 'the newest completed run'}"
            " concluded success, and no repair pull request was ever opened")
+    if fix is not None:
+        why += (f"; {fix.test} turned main red twice in {FLAKY_WINDOW_DAYS} "
+                f"days, and {fix.card} is its fix card")
     log(f"repair settle: {identifier} Canceled — {why}")
     return Settled(identifier, SETTLED_GREEN, why)
 
@@ -586,7 +858,7 @@ def _unknown(identifier: str, why: str, log) -> Settled:
 
 
 def settle(*, repo_slug: str, ops, log=print, fatal=(),
-           base: str = "main") -> SettleReport:
+           base: str = "main", now=None) -> SettleReport:
     """Close every repair card whose repair is over by other means.
 
     One pass over the cards `ops.repair_cards()` hands back — the sweep's own
@@ -600,7 +872,12 @@ def settle(*, repo_slug: str, ops, log=print, fatal=(),
     would not write must not cost the others their reading.
 
     `base` is the default branch rule 3 compares a repair branch against.
+    `now` is the clock the flaky test's 14-day window is read on (DRE-6870).
     """
+    if now is None:
+        from datetime import UTC, datetime
+
+        now = datetime.now(UTC)
     try:
         cards = list(ops.repair_cards())
     except Exception as exc:  # noqa: BLE001
@@ -618,7 +895,8 @@ def settle(*, repo_slug: str, ops, log=print, fatal=(),
     for card in cards:
         identifier = card.get("identifier") or "?"
         try:
-            settled = _settle_one(card, repo_slug, ops, log, base)
+            settled = _settle_one(card, repo_slug, ops, log, base, now,
+                                  fatal)
         except Exception as exc:  # noqa: BLE001
             if fatal and isinstance(exc, tuple(fatal)):
                 raise
@@ -663,7 +941,7 @@ class _SettleOps:
            title: {startsWith: $prefix},
            state: {type: {nin: ["completed", "canceled"]}}
          }) { nodes {
-           identifier title description
+           identifier title description createdAt
            state { name } labels { nodes { name } }
            %s
          } } }"""
@@ -685,6 +963,7 @@ class _SettleOps:
                 "description": card.get("description") or "",
                 "state": ((card.get("state") or {}).get("name") or ""),
                 "repo": _label_repo(card),
+                "created_at": card.get("createdAt") or "",
                 "comments": [
                     node.get("body") or ""
                     for node in linear_ops.window_nodes(card.get("comments"))
@@ -742,6 +1021,27 @@ class _SettleOps:
 
         linear_ops.cmd_state(identifier, "Canceled")
 
+    def repair_card_history(self, repo_slug: str, since):
+        """This repo's repair cards filed since `since`, in any state
+        (DRE-6870) — read only when a card listing failing tests is about to
+        be canceled green."""
+        import linear_ops
+
+        return linear_ops.repo_cards_by_title_prefix(
+            TITLE_ANCHOR, repo_slug=repo_slug, since=since)
+
+    def find_open(self, title: str):
+        import linear_ops
+
+        return linear_ops.find_open(title)
+
+    def create_card(self, title, description, *, repo_slug, labels=(),
+                    lane="Planning"):
+        import linear_ops
+
+        return linear_ops.create_card(title, description, repo_slug=repo_slug,
+                                      labels=labels, lane=lane)
+
     # Named for the seam it IS, exactly as `_Ops.cmd_comment` above is: the
     # completeness guard (scripts/check_act_receipts.py) reads a function
     # called `cmd_comment` as a pass-through it cannot judge, and reads its
@@ -794,6 +1094,22 @@ def outputs(result: dict) -> str:
     ])
 
 
+def _logged_failing_tests(path: str) -> list[str]:
+    """The failing test ids in the saved log at `path`, or [] — never a
+    raise: a log the fetch step could not write must not cost the repair its
+    card."""
+    if not path:
+        return []
+    try:
+        with open(path, encoding="utf-8", errors="replace") as handle:
+            log_text = handle.read()
+    except OSError as exc:
+        print(f"repair card: the failed log {path} could not be read ({exc}) "
+              "— no failing test is listed", file=sys.stderr)
+        return []
+    return failed_tests.failed_tests(log_text)
+
+
 def _settle_cli(args) -> int:
     """`settle` by hand. Exit 1 only on a write the board refused — an UNKNOWN
     is a reading this run did not get, said out loud, and not a failure."""
@@ -817,6 +1133,9 @@ def main(argv: list[str]) -> int:
     o.add_argument("--fallback-branch", required=True)
     o.add_argument("--workflow-name", default="")
     o.add_argument("--attempt", type=int, default=1)
+    o.add_argument("--log-file", default="",
+                   help="the failed run's saved log; its failing test ids "
+                        "are listed on a new card (DRE-6870)")
     s = sub.add_parser("settle")
     s.add_argument("--repo", required=True, help="the card's repo slug")
     s.add_argument("--github-repo", default=os.environ.get("REPO", ""),
@@ -839,6 +1158,7 @@ def main(argv: list[str]) -> int:
             repo_slug=args.repo, workflow_name=args.workflow_name,
             head_sha=args.head_sha, run_url=args.run_url, attempt=args.attempt,
             fallback_branch=args.fallback_branch,
+            failing_tests=_logged_failing_tests(args.log_file),
         )
     sys.stdout.write(outputs(result))
     print(
