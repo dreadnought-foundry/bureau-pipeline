@@ -6842,7 +6842,12 @@ def advance_unblocked_epics(done_epic: str) -> None:
     elsewhere is retired (DRE-4700). NEVER to In Progress — the Green Light
     approval gate stays human-owned. Idempotent and safe:
       * only acts on epics still in Backlog (never re-advances one already past
-        it, never thrashes an operator-parked or already-running epic);
+        it, never moves an epic parked in Green Light or Triage, or one already
+        running). It reads the lane and the relations and nothing else, so an
+        epic a person sent to Backlog — a rejected plan, a hand park — whose
+        blockers are all closed is returned to Planning too: the planner plans
+        it again and a person still approves it. Dropping an epic is
+        Canceled, which nothing here revives (DRE-6653);
       * never revives a Canceled/Duplicate/Done dependent;
       * fails SAFE on unreadable relation data (advances nothing).
 
@@ -6889,11 +6894,16 @@ def _return_epic_to_planning(dep: str, because: str) -> None:
     on this receipt's first line, and that row must match exactly one site.
     The move is from Backlog alone, so an epic somebody moved meanwhile is
     left where it is; the pass remembers what it moved, so the hook and the
-    pass never move one twice in a sweep.
+    pass never move one twice in a sweep. The receipt says the epic is back
+    in Planning, so it is posted only when `cmd_advance` reports the move
+    written — a refused move posts nothing (`standards/console-honesty.md`),
+    and the next sweep tries it again.
     """
     if dep in _returned_epics:
         return
-    linear_ops.cmd_advance(dep, "Planning", "Backlog")
+    if not linear_ops.cmd_advance(dep, "Planning", "Backlog"):
+        print(f"epic-return: {dep} was not moved to Planning — no receipt posted")
+        return
     _returned_epics.add(dep)
     linear_ops.cmd_comment(
         dep,

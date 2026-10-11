@@ -21,7 +21,7 @@ This module TDDs two additive behaviors:
      it to Planning, whose arrival dispatches the planner (DRE-6653 — Triage
      is the broken-card lane now). NEVER to In Progress — the Green Light
      approval gate is preserved. Idempotent: never re-advance an epic already
-     past Backlog; never thrash an operator-parked epic. Fails SAFE.
+     past Backlog; never move one parked in Green Light or Triage. Fails SAFE.
 
   3. THE RETURN PASS (DRE-6653) — the full sweep's backstop for the hook:
      `return_waiting_epics` reads every Backlog epic of this repo's formal
@@ -469,6 +469,62 @@ def test_the_pass_leaves_an_epic_past_backlog():
     comment.assert_not_called()
 
 
+@pytest.mark.parametrize("parked_in", ["Green Light", "Triage"])
+def test_the_pass_leaves_an_epic_parked_outside_backlog(parked_in):
+    """An epic a person parked for a decision or a fix is not waiting on a
+    blocker, whatever its blockers say: the pass reads the lane first."""
+    linear = _EpicRecords(_backlog_epic("DRE-800", ("DRE-700", "Done"), state=parked_in))
+    advance, comment = _return_pass(linear, {"DRE-800"})
+    advance.assert_not_called()
+    comment.assert_not_called()
+
+
+def test_the_pass_returns_an_epic_a_person_sent_to_backlog():
+    """The card's reading (DRE-6653): the pass reads the lane and the formal
+    relation and nothing else — never an `⏸️ epic-waits:` receipt. So an epic
+    whose plan a person sent back to Backlog, or parked there by hand, with
+    every blocker closed is returned to Planning like any waiting epic: the
+    planner plans it again and the receipt says a person still approves it.
+    Dropping an epic is Canceled, which nothing revives."""
+    rejected = _backlog_epic("DRE-800", ("DRE-700", "Done"))
+    rejected["history"] = {"nodes": [
+        {"createdAt": "2026-10-02T00:00:00Z", "toState": {"name": "Backlog"}},
+        {"createdAt": "2026-10-01T00:00:00Z", "toState": {"name": "Green Light"}},
+    ]}
+    linear = _EpicRecords(rejected)
+    advance, comment = _return_pass(linear, {"DRE-800"})
+    advance.assert_called_once_with("DRE-800", "Planning", "Backlog")
+    assert "a person still approves the plan" in comment.call_args.args[1]
+
+
+def test_the_pass_posts_no_receipt_when_the_move_is_refused(capsys):
+    """`cmd_advance` refuses a move whose from-lane check fails, or whose
+    guarded write is refused, and says so without raising. The receipt says
+    the epic is back in Planning, so a refused move posts none — and a pass
+    that runs every sweep never repeats a false receipt."""
+    linear = _EpicRecords(_backlog_epic("DRE-800", ("DRE-700", "Done")))
+    advance, comment = _return_pass(linear, {"DRE-800"}, lambda *_: False)
+    advance.assert_called_once_with("DRE-800", "Planning", "Backlog")
+    comment.assert_not_called()
+    assert "DRE-800" in capsys.readouterr().out
+    assert "DRE-800" not in reconcile._returned_epics
+
+
+def test_the_hook_posts_no_receipt_when_the_move_is_refused():
+    """The merge-time hook goes through the same helper, so the same holds."""
+    with patch.object(reconcile.linear_ops, "gql", return_value=_forward_blocks("DRE-700", "DRE-800")), \
+        patch.object(reconcile.linear_ops, "comment_bodies", return_value=[]), \
+        patch.object(reconcile, "card_state", return_value="Backlog"), \
+        patch.object(reconcile, "epic_blockers_unmet", return_value=False), \
+        patch.object(reconcile.linear_ops, "cmd_advance", return_value=False) as advance, \
+        patch.object(reconcile.linear_ops, "cmd_comment") as comment:
+        reconcile.reset_sweep_cards()
+        reconcile.advance_unblocked_epics("DRE-700")
+    reconcile.reset_sweep_cards()
+    advance.assert_called_once_with("DRE-800", "Planning", "Backlog")
+    comment.assert_not_called()
+
+
 def test_the_pass_leaves_an_epic_it_cannot_read(capsys):
     """An unreadable read advances nothing and says which epic."""
     linear = _EpicRecords()  # Linear answers for no epic at all
@@ -497,6 +553,7 @@ def test_the_pass_isolates_a_failure_to_one_epic(capsys):
     def fail_first(identifier, *_):
         if identifier == "DRE-800":
             raise reconcile.linear_ops.LinearError("The read operation timed out")
+        return True
 
     advance, comment = _return_pass(linear, {"DRE-800", "DRE-801"}, fail_first)
     assert [c.args[0] for c in advance.call_args_list] == ["DRE-800", "DRE-801"]

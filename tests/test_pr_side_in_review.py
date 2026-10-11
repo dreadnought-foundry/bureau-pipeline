@@ -458,6 +458,26 @@ class AdvanceFromAPreReviewLaneTest(unittest.TestCase):
         self.assertEqual(fake.updates, [])
 
 
+class AdvanceReportsWhetherItMovedTest(unittest.TestCase):
+    """`cmd_advance` returns whether the move was written (DRE-6653): a
+    caller that says the card moved reads it before saying so."""
+
+    def _moved(self, fake, *args):
+        linear_ops._card_memo.clear()
+        with patch.object(linear_ops, "gql", side_effect=fake.gql), \
+                redirect_stdout(io.StringIO()):
+            return linear_ops.cmd_advance(CARD, REVIEW_LANE, _from_lanes_csv(), *args)
+
+    def test_a_written_move_reports_true(self):
+        self.assertIs(self._moved(_Linear("Intake")), True)
+
+    def test_a_card_out_of_the_from_lanes_reports_false(self):
+        self.assertIs(self._moved(_Linear("Done")), False)
+
+    def test_a_refused_epic_reports_false(self):
+        self.assertIs(self._moved(_Linear("Intake", children=("child-1",)), "--not-epic"), False)
+
+
 class AnEpicIsNeverMovedTest(unittest.TestCase):
     def test_an_epic_with_children_is_refused(self):
         fake = _Linear("Intake", children=("child-1",))
