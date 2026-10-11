@@ -46,10 +46,174 @@ AGENT_GROUP = "agent-to-group pair"
 AGENT_LIST = "list of agents"
 EMPTY_PROJECTS = "empty projects"
 
+# Why a literal is not a pin, one sentence per kind of test that holds one.
+_OWN_INPUT = (
+    "The id is the test's own input, handed to the code under test as an "
+    "argument, an environment value or a recorded run and read back from its "
+    "output, so no console save reaches it.")
+_ABSENT = (
+    "The id is asserted absent: the text under test must name no model, and "
+    "no console save can make it name one.")
+_SAMPLE_REGION = (
+    "The id sits in a sample generated region the test writes as its own diff "
+    "for the commit-order check, which reads that text and never a model file.")
+_CLI_TABLE = (
+    "The id is the model the test asks the Claude Code pin tool about, "
+    "answered from a pinned release's own model table or a faked Models API "
+    "reply, and neither is a console choice.")
+_CLI_RECORD = (
+    "The id is the one the test's own pin record names, written into the "
+    "minimum-version table of a copied tree and read back from it.")
+_PRICE = (
+    "The id keys config/model-prices.yaml, the declared vendor price list, "
+    "which the console reads and never writes.")
+_OWN_LADDERS = (
+    "The ladders, the catalog and the prices are built by the test itself, so "
+    "the id is its own fixture and not the committed config.")
+_LADDER_MEMBERS = (
+    "The expected rungs are the committed ladders' members, and every choice "
+    "config/model-choices.json offers only reorders rungs within a ladder, so "
+    "no console save today changes which rungs a candidate replaces.")
+_FROZEN_AGENTS = (
+    "The agents are read in the frozen fixture tree the test builds from "
+    "tests/fixtures/model-config-frozen, which no console save touches.")
+_ABSENT_KEY = (
+    "The test deletes `projects` from a frozen-fixture config and asserts the "
+    "normalizer's default for an absent key, not the committed map.")
+_OWN_MOVE = (
+    "The agent and group are the move the test's own change set makes, read "
+    "back from the file that change set wrote.")
+
 # `"tests/<file>.py::<Class.test_name or test_name>"` -> why the literal in
 # that test is not a pin. One entry per test; every entry is checked to still
 # produce a finding.
-ALLOWED: dict[str, str] = {}
+ALLOWED: dict[str, str] = {
+    "tests/test_agents_registry.py::AgentsRegistryTest.test_only_a_present_null_model_is_scripted":
+        _OWN_INPUT,
+    "tests/test_card_snapshot.py::test_off_answers_what_the_two_reads_answered": _OWN_INPUT,
+    "tests/test_claude_code_pin.py::test_apply_puts_a_known_models_row_in_the_minimum_table":
+        _CLI_RECORD,
+    "tests/test_claude_code_pin.py::test_apply_updates_an_existing_minimum_row_rather_than_adding_a_second":
+        _CLI_RECORD,
+    "tests/test_claude_code_pin.py::test_latest_supporting_finds_2_1_284_and_v1_0_236": _CLI_TABLE,
+    "tests/test_claude_code_pin.py::test_limits_prints_the_models_api_numbers": _CLI_TABLE,
+    "tests/test_claude_code_pin.py::test_limits_that_cannot_be_read_are_unknown": _CLI_TABLE,
+    "tests/test_claude_code_pin.py::test_strength_at_full_limits_is_full": _CLI_TABLE,
+    "tests/test_claude_code_pin.py::test_strength_uses_the_one_modelusage_seam": _CLI_TABLE,
+    "tests/test_claude_code_pin.py::test_strength_without_both_halves_is_unknown": _CLI_TABLE,
+    "tests/test_claude_code_pin.py::test_supports_answers_no_on_2_1_282": _CLI_TABLE,
+    "tests/test_claude_code_pin.py::test_the_2_1_282_table_does_not_list_sonnet_5_5": _CLI_TABLE,
+    "tests/test_claude_code_pin.py::test_the_2_1_284_table_lists_sonnet_5_5_at_1m_and_128k":
+        _CLI_TABLE,
+    "tests/test_claude_code_pin.py::test_the_decoy_picker_list_is_not_read_as_the_registry":
+        _CLI_TABLE,
+    "tests/test_credential_expiry_scenario.py::TheReportStepSaysCredentialNotDied.test_it_records_no_model_as_having_failed":
+        _ABSENT,
+    "tests/test_dead_run_split_first.py::TestTheOtherClassesStillHold.test_an_api_death_holds_with_main_s_text":
+        _OWN_INPUT,
+    "tests/test_groom_verify_agent.py::test_cost_duration_and_model_come_from_the_execution_file":
+        _OWN_INPUT,
+    "tests/test_groomer_receipt.py::BudgetAndCutTest.test_both_keys_read_in_the_contracted_order":
+        _OWN_INPUT,
+    "tests/test_groomer_receipt.py::ShippedKeysOnlyTest.test_a_degraded_receipt_travels_verbatim":
+        _OWN_INPUT,
+    "tests/test_groomer_receipt.py::ShippedKeysOnlyTest.test_the_line_names_the_model_that_answered_and_the_call_count":
+        _OWN_INPUT,
+    "tests/test_harness_agent_run_prompt.py::TestThePromptDoesNotTransitArgv.test_the_argv_carries_the_bounds_and_not_the_prompt":
+        _OWN_INPUT,
+    "tests/test_model_adoption.py::test_a_dearer_side_is_ask_not_adopt": _OWN_LADDERS,
+    "tests/test_model_adoption.py::test_a_ladder_pinned_to_an_alias_resolves_through_its_dated_snapshot":
+        _OWN_LADDERS,
+    "tests/test_model_adoption.py::test_an_extra_entry_for_a_retired_id_is_allowed": _PRICE,
+    "tests/test_model_adoption.py::test_load_prices_reads_the_committed_file": _PRICE,
+    "tests/test_model_adoption.py::test_load_prices_rejects_an_entry_missing_a_side": _OWN_INPUT,
+    "tests/test_model_adoption.py::test_the_newer_opus_with_no_declared_price_is_ask":
+        _LADDER_MEMBERS,
+    "tests/test_model_adoption.py::test_the_newer_same_priced_sonnet_is_adopted_on_every_ladder":
+        _LADDER_MEMBERS,
+    "tests/test_model_config.py::ConfigDrivesTheFleetTest.test_selector_degrades_to_the_mirror_when_the_config_is_unreadable":
+        _FROZEN_AGENTS,
+    "tests/test_model_effort.py::PriceTest.test_opus_5_5_is_declared_at_4_and_20": _PRICE,
+    "tests/test_model_effort.py::PriceTest.test_sonnet_5_5_is_declared_at_the_price_of_sonnet_5":
+        _PRICE,
+    "tests/test_model_projects_schema.py::TestNormalizedShape.test_a_kind_with_no_label_or_purpose_gets_the_defaults":
+        _ABSENT_KEY,
+    "tests/test_model_trial.py::test_the_degraded_summary_names_both_numbers_on_both_sides":
+        _OWN_INPUT,
+    "tests/test_model_trial.py::test_the_same_run_at_full_limits_passes": _OWN_INPUT,
+    "tests/test_plan_critic.py::TheReviewTurnsCli.test_it_prints_the_one_line_for_the_run_that_was_cut_off":
+        _OWN_INPUT,
+    "tests/test_plan_critic.py::TheReviewTurnsReceipt.test_it_parses_back_oldest_to_newest":
+        _OWN_INPUT,
+    "tests/test_plan_critic.py::TheReviewTurnsReceipt.test_the_line_carries_the_four_facts_in_order":
+        _OWN_INPUT,
+    "tests/test_plan_critic.py::TheTwoProbeBodiesRunTheRoute.test_fd_6_is_stamped_one_off_and_the_critic_still_stops_it":
+        _OWN_INPUT,
+    "tests/test_plan_critic_wiring.py::TheReviewSaysWhatItSpent.test_the_posted_body_is_the_receipt_line_and_nothing_else":
+        _OWN_INPUT,
+    "tests/test_planning_classify.py::TestThePromptDoesNotTransitArgv.test_the_argv_carries_the_bounds_and_not_the_prompt":
+        _OWN_INPUT,
+    "tests/test_planning_classify.py::TestTheSeamReportsACut.test_an_ordinary_api_answer_is_not_cut":
+        _OWN_INPUT,
+    "tests/test_planning_classify.py::TestTheSeamReportsACut.test_the_api_path_reads_the_cut_off_its_stop_reason":
+        _OWN_INPUT,
+    "tests/test_planning_classify.py::TestTheTransport.test_the_claude_code_call_is_bounded_and_carries_no_tools":
+        _OWN_INPUT,
+    "tests/test_planning_classify.py::TestTheTransport.test_the_model_that_actually_answered_is_what_is_recorded":
+        _OWN_INPUT,
+    "tests/test_planning_classify.py::TestTheTwoReasons.test_the_one_off_probe_that_started_this_is_stamped_one_off":
+        _OWN_INPUT,
+    "tests/test_planning_classify.py::TestWhoStampedIt.test_the_planner_stamp_carries_by_and_the_model":
+        _OWN_INPUT,
+    "tests/test_planning_classify_continuation.py::test_a_one_message_stream_reads_exactly_as_before":
+        _OWN_INPUT,
+    "tests/test_platform_fault_not_a_model_death.py::PreAgentDecisionTest.test_it_wins_over_the_turn_and_api_classes":
+        _OWN_INPUT,
+    "tests/test_platform_fault_not_a_model_death.py::PreAgentDecisionTest.test_it_writes_no_model_error_marker":
+        _ABSENT,
+    "tests/test_platform_fault_scenario.py::PlatformFaultScenario.test_the_receipt_names_no_model_as_having_failed":
+        _ABSENT,
+    "tests/test_qa_review_model_note.py::LinearCopyCarriesTheModelTest.test_the_linear_copy_carries_the_model_and_the_reason":
+        _OWN_INPUT,
+    "tests/test_qa_review_model_note.py::PrCopyIsUntouchedTest.test_the_model_line_never_reaches_the_pr_comment":
+        _ABSENT,
+    "tests/test_session_agents.py::test_a_session_agent_can_be_moved_again_from_group_to_group":
+        _OWN_MOVE,
+    "tests/test_session_agents.py::test_the_change_set_of_run_38114763170_validates_and_applies":
+        _OWN_MOVE,
+    "tests/test_tdd_commit_check.py::ClassifyPathGeneratedRegionTest.test_a_path_with_no_proving_generator_stays_code":
+        _SAMPLE_REGION,
+    "tests/test_tdd_commit_check.py::ClassifyPathGeneratedRegionTest.test_generated_region_change_classifies_as_docs":
+        _SAMPLE_REGION,
+    "tests/test_tdd_commit_check.py::ClassifyPathGeneratedRegionTest.test_marker_edit_stays_code":
+        _SAMPLE_REGION,
+    "tests/test_tdd_commit_check.py::ClassifyPathGeneratedRegionTest.test_region_plus_an_outside_line_stays_code":
+        _SAMPLE_REGION,
+    "tests/test_tdd_commit_check.py::GeneratedRegionChangeTest.test_a_line_outside_the_region_is_not":
+        _SAMPLE_REGION,
+    "tests/test_tdd_commit_check.py::GeneratedRegionChangeTest.test_a_neighbour_of_a_proved_file_is_not_covered":
+        _SAMPLE_REGION,
+    "tests/test_tdd_commit_check.py::GeneratedRegionChangeTest.test_a_region_with_no_closing_marker_is_not":
+        _SAMPLE_REGION,
+    "tests/test_tdd_commit_check.py::GeneratedRegionChangeTest.test_added_file_has_no_base_version_and_is_not_generated":
+        _SAMPLE_REGION,
+    "tests/test_tdd_commit_check.py::GeneratedRegionChangeTest.test_deleted_file_has_no_head_version_and_is_not_generated":
+        _SAMPLE_REGION,
+    "tests/test_tdd_commit_check.py::GeneratedRegionChangeTest.test_deleting_the_region_is_not":
+        _SAMPLE_REGION,
+    "tests/test_tdd_commit_check.py::GeneratedRegionChangeTest.test_editing_a_marker_line_is_not":
+        _SAMPLE_REGION,
+    "tests/test_tdd_commit_check.py::GeneratedRegionChangeTest.test_regenerated_region_is_a_generated_change":
+        _SAMPLE_REGION,
+    "tests/test_tdd_commit_check.py::GeneratedRegionChangeTest.test_unparseable_after_fails_closed_to_code":
+        _SAMPLE_REGION,
+    "tests/test_turn_exhaustion_not_outage.py::BuildRunTurnExhaustionTest.test_api_death_path_unchanged":
+        _OWN_INPUT,
+    "tests/test_turn_exhaustion_not_outage.py::BuildRunTurnExhaustionTest.test_model_fallback_cannot_fire_on_an_exhaustion_receipt":
+        _OWN_INPUT,
+    "tests/test_turn_exhaustion_not_outage.py::BuildRunTurnExhaustionTest.test_requeue_records_no_model_error_marker":
+        _ABSENT,
+}
 
 
 @dataclass(frozen=True)
