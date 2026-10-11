@@ -411,6 +411,10 @@ STDOUT_WRITERS = {
     # `supports` writes one `github_output.render` block of three values, and
     # its one human line goes to stderr; it calls no module that talks.
     "claude_code_pin.py": "safe",
+    # `branch` writes one `github_output.render` block of two values — an
+    # `agent/` branch name and its hex digest — and every refusal goes to
+    # stderr; it calls no module that talks (DRE-6624).
+    "model_config_change.py": "safe",
 }
 
 #: The ones above that render through the safe writer. Named, because "it

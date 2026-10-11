@@ -519,7 +519,19 @@ def test_branch_prints_the_branch_and_title_as_step_outputs(tmp_path):
     path.write_text(json.dumps(CHANGE_SET))
     proc = _cli(tree, "branch", "--changes", str(path))
     assert proc.returncode == 0, proc.stderr
-    assert f"branch={mcc.branch_name(CHANGE_SET)}" in proc.stdout.splitlines()
+    # Stdout IS the step's output file: nothing but the two values may reach it.
+    assert proc.stdout.splitlines() == [f"branch={mcc.branch_name(CHANGE_SET)}",
+                                        f"digest={mcc.digest(CHANGE_SET)}"]
+
+
+def test_a_refused_branch_read_writes_nothing_to_stdout(tmp_path):
+    tree = _tree(tmp_path / "tree")
+    path = tmp_path / "set.json"
+    path.write_text(json.dumps({"requested_by": "x", "changes": [{"op": "nope"}]}))
+    proc = _cli(tree, "branch", "--changes", str(path))
+    assert proc.returncode == 2
+    assert proc.stdout == ""
+    assert "unknown op" in proc.stderr
 
 
 def test_render_prints_the_title_and_the_body(tmp_path):
