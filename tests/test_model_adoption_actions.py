@@ -47,6 +47,7 @@ import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
+sys.path.insert(0, str(ROOT / "tests"))
 
 import dependabot_card  # noqa: E402
 import model_adoption as ma  # noqa: E402
@@ -55,6 +56,7 @@ import model_fallback as mf  # noqa: E402
 import routing_verdict  # noqa: E402
 import sync_model_config  # noqa: E402
 import validate_card  # noqa: E402
+from model_config_text import config_without_projects  # noqa: E402
 
 import model_adoption_actions as maa  # noqa: E402
 
@@ -423,7 +425,7 @@ class TestApply:
 
     @staticmethod
     def _with_projects(block: str) -> str:
-        text = CONFIG_PATH.read_text()
+        text = config_without_projects()
         assert "\nprojects: {}\n" in text
         return text.replace("\nprojects: {}\n", f"\nprojects:\n{block}")
 
@@ -449,7 +451,7 @@ class TestApply:
         assert judgement in result
         # The only line that differs from the same edit with `projects: {}`
         # is the exception that moved.
-        plain = maa.apply_text(CONFIG_PATH.read_text(), decision, "2026-11-02")
+        plain = maa.apply_text(config_without_projects(), decision, "2026-11-02")
         removed = [l for l in difflib.unified_diff(
             plain.splitlines(), result.splitlines(), lineterm="", n=0)
             if l[:1] in "+-" and l[:3] not in ("+++", "---")]

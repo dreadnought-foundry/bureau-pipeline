@@ -325,15 +325,23 @@ def test_an_unknown_value_cannot_put_a_quote_in_the_note(tree):
 
 
 # --------------------------------------------------------------------------- #
-# The committed config: no project changes anything                            #
+# The committed config: only a project the console named changes anything      #
 # --------------------------------------------------------------------------- #
 
-def test_every_role_on_every_repo_selects_the_fleet_pick_on_the_committed_config():
+def test_every_role_on_every_repo_selects_its_walk_top_on_the_committed_config():
+    # Holds for any exceptions the console has written: a repo with none
+    # selects the fleet pick, a repo with one selects the top of its walk.
     repo_map = json.loads((ROOT / "config" / "repo-map.json").read_text())
+    projects = mf.CONFIG["projects"]
     probe = lambda m: True  # noqa: E731
     assert mf.AGENT_KINDS
-    for role in mf.AGENT_KINDS:
+    for role, kind in mf.AGENT_KINDS.items():
+        name = mf.CONFIG["kinds"][kind]
         fleet = mf.select(role, probe=probe)
         for slug in repo_map:
             mf.clear_availability_cache()
-            assert mf.select(role, repo=slug, probe=probe) == fleet, (role, slug)
+            walk = mf.effective_ladders(mf.CONFIG, slug)[name]
+            if kind not in projects.get(slug, {}):
+                assert walk == mf.LADDERS[name], (role, slug)
+                assert walk[0] == fleet, (role, slug)
+            assert mf.select(role, repo=slug, probe=probe) == walk[0], (role, slug)

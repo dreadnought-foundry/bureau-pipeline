@@ -40,8 +40,10 @@ AGENTS = ROOT / "agents.yaml"
 SCRIPT = ROOT / "scripts" / "model_config_change.py"
 
 sys.path.insert(0, str(ROOT / "scripts"))
+sys.path.insert(0, str(ROOT / "tests"))
 
 import model_config_change as mcc  # noqa: E402
+from model_config_text import config_without_projects  # noqa: E402
 from model_fallback import policy_errors  # noqa: E402
 
 TODAY = "2026-10-11"
@@ -56,8 +58,9 @@ SONNET5 = "claude-sonnet-5"
 # --------------------------------------------------------------------------- #
 
 def _text() -> str:
-    """A copy of the real file, read fresh for every test."""
-    return CONFIG.read_text()
+    """A copy of the real file, read fresh for every test, with no project
+    exceptions — the console writes those into the live file."""
+    return config_without_projects()
 
 
 def _comments(text: str) -> list[str]:
@@ -484,7 +487,7 @@ def test_apply_check_prints_the_diff_and_writes_nothing(tmp_path):
     proc = _cli(tree, "apply", "--changes", str(changes), "--check")
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert "+  proof: advisory" in proc.stdout
-    assert (tree / "config/models.yaml").read_text() == _text()
+    assert (tree / "config/models.yaml").read_text() == CONFIG.read_text()
 
 
 def test_a_refused_change_set_exits_2_names_each_reason_and_writes_nothing(tmp_path):
@@ -501,7 +504,7 @@ def test_a_refused_change_set_exits_2_names_each_reason_and_writes_nothing(tmp_p
     assert any("change 2" in e and "no agent named nobody" in e for e in errors), proc.stdout
     assert any("change 3" in e and "agents.engineer" in e for e in errors), proc.stdout
     assert not any("change 1" in e for e in errors)
-    assert (tree / "config/models.yaml").read_text() == _text()
+    assert (tree / "config/models.yaml").read_text() == CONFIG.read_text()
 
 
 def test_an_unreadable_change_set_exits_2(tmp_path):
