@@ -13790,6 +13790,7 @@ class _RepairSettleOps:
                 "description": card.get("description") or "",
                 "state": (card.get("state") or {}).get("name") or "",
                 "repo": card_repo(card),
+                "created_at": card.get("createdAt") or "",
                 "comments": card_comment_bodies(card),
             }
             for card in found
@@ -13925,6 +13926,31 @@ class _RepairSettleOps:
     # caller, which is where the body is composed.
     def cmd_comment(self, identifier: str, body: str) -> None:
         linear_ops.cmd_comment(identifier, body)
+
+    def repair_card_history(self, repo_slug: str, since):
+        """This repo's repair cards filed since `since`, in any state, or None
+        (DRE-6870). One Linear read, made only when a card listing failing
+        tests is about to be canceled green — a pass with nothing to cancel
+        sends no request. A spent quota is the run's own exit code."""
+        try:
+            return linear_ops.repo_cards_by_title_prefix(
+                repair_card.TITLE_ANCHOR, repo_slug=repo_slug, since=since)
+        except linear_ops.LinearRateLimited:
+            raise
+        except Exception as e:  # noqa: BLE001 — an unreadable answer is UNKNOWN
+            _degrade("repair settle", "the earlier repair cards", e,
+                     then=_SETTLE_DEGRADE_THEN)
+            return None
+
+    def find_open(self, title: str):
+        """A flaky test's fix card already open by `title` (DRE-6870)."""
+        return linear_ops.find_open(title)
+
+    def create_card(self, title, description, *, repo_slug, labels=(),
+                    lane=linear_ops.CREATE_LANE):
+        """A flaky test's fix card, through the one create seam (DRE-6870)."""
+        return linear_ops.create_card(title, description, repo_slug=repo_slug,
+                                      labels=labels, lane=lane)
 
 
 def settle_repair_cards() -> None:

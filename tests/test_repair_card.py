@@ -371,6 +371,111 @@ class WorkflowWiringTest(unittest.TestCase):
         self.assertNotIn("A repair PR is cardless by design", self.body)
 
 
+#: Two failing pytest ids, as `gh run view --log-failed` saves them (DRE-6870).
+FAILING_IDS = ["tests/test_clock.py::test_the_stamp_is_fresh",
+               "tests/test_record.py::test_the_gap_is_named"]
+FAILED_LOG = "\n".join([
+    "unit\tRun tests\t2026-10-10T07:20:59.1000000Z tests/test_clock.py::"
+    "test_the_stamp_is_fresh FAILED [ 40%]",
+    "unit\tRun tests\t2026-10-10T07:21:00.1000000Z FAILED "
+    f"{FAILING_IDS[0]} - AssertionError: 61 > 60",
+    "unit\tRun tests\t2026-10-10T07:21:00.2000000Z FAILED "
+    f"{FAILING_IDS[1]} - RecordGap: the heartbeat has not been seen",
+    "unit\tRun tests\t2026-10-10T07:21:00.3000000Z ==== 2 failed, 98 passed ====",
+])
+NO_FAILING_TEST_LOG = (
+    "unit\tInstall\t2026-10-10T07:21:00.1000000Z npm ERR! code ECONNRESET\n")
+
+
+class FailingTestsSectionTest(unittest.TestCase):
+    """The repair card records the failing test ids — and only when there are
+    some (DRE-6870)."""
+
+    def _main(self, *extra):
+        import contextlib
+        import io
+        from unittest.mock import patch
+
+        ops = FakeOps()
+        with patch.object(repair_card, "_Ops", lambda: ops), \
+             contextlib.redirect_stdout(io.StringIO()), \
+             contextlib.redirect_stderr(io.StringIO()):
+            rc = repair_card.main([
+                "open", "--repo", SLUG, "--head-sha", SHA, "--run-url", RUN_URL,
+                "--workflow-name", WF_NAME, "--attempt", "1",
+                "--fallback-branch", red_main_repair.repair_branch(SHA, 1),
+                *extra,
+            ])
+        self.assertEqual(0, rc)
+        self.assertEqual(1, len(ops.created))
+        return ops.created[0]["description"]
+
+    def _log(self, text):
+        import tempfile
+
+        handle = tempfile.NamedTemporaryFile(
+            "w", suffix=".txt", delete=False, encoding="utf-8")
+        handle.write(text)
+        handle.close()
+        self.addCleanup(os.unlink, handle.name)
+        return handle.name
+
+    def _today(self):
+        return repair_card.card_body(workflow_name=WF_NAME, run_url=RUN_URL,
+                                     head_sha=SHA, repo_slug=SLUG, attempt=1)
+
+    def test_two_failing_ids_are_listed_under_the_heading(self):
+        body = self._main("--log-file", self._log(FAILED_LOG))
+        self.assertIn("\n## Failing tests\n", body)
+        section = body.split("\n## Failing tests\n", 1)[1].split("\n## ", 1)[0]
+        listed = [line for line in section.splitlines() if line.strip()]
+        self.assertEqual(2, len(listed), section)
+        for test_id, line in zip(FAILING_IDS, listed):
+            self.assertIn(test_id, line)
+        self.assertEqual(FAILING_IDS, repair_card.card_failing_tests(body))
+
+    def test_a_log_with_no_failing_test_line_writes_todays_body(self):
+        body = self._main("--log-file", self._log(NO_FAILING_TEST_LOG))
+        self.assertEqual(self._today(), body)
+
+    def test_no_log_file_writes_todays_body(self):
+        self.assertEqual(self._today(), self._main())
+
+    def test_a_log_file_that_is_not_there_writes_todays_body(self):
+        # A log the fetch step never wrote must never cost the repair its card.
+        self.assertEqual(
+            self._today(), self._main("--log-file", "/nonexistent/red-main.txt"))
+
+    def test_the_card_with_its_tests_still_passes_the_live_card_gate(self):
+        body = repair_card.card_body(workflow_name=WF_NAME, run_url=RUN_URL,
+                                     head_sha=SHA, repo_slug=SLUG, attempt=1,
+                                     failing_tests=FAILING_IDS)
+        self.assertEqual([], validate_card.missing(body, repair_card.card_labels(SLUG)))
+        # The section adds no acceptance box and moves no read-back.
+        self.assertEqual(
+            routing_verdict.acceptance_criteria(self._today()),
+            routing_verdict.acceptance_criteria(body))
+        self.assertEqual(SHA, repair_card.card_failing_sha(body))
+        self.assertEqual(RUN_URL, repair_card.card_run_url(body))
+
+    def test_a_body_with_no_section_lists_no_test(self):
+        self.assertEqual([], repair_card.card_failing_tests(self._today()))
+        self.assertEqual([], repair_card.card_failing_tests(""))
+
+    def test_an_id_with_a_backtick_reads_back_whole(self):
+        odd = "src/a.test.ts > renders `code` > the tick"
+        body = repair_card.card_body(workflow_name=WF_NAME, run_url=RUN_URL,
+                                     head_sha=SHA, repo_slug=SLUG, attempt=1,
+                                     failing_tests=[odd])
+        self.assertEqual([odd], repair_card.card_failing_tests(body))
+
+    def test_the_workflow_step_passes_the_saved_log(self):
+        body = wf("red-main-repair.yml")
+        start = body.index("- name: File the repair's card")
+        step = body[start:body.index("- name:", start + 1)]
+        self.assertIn("--log-file /tmp/red-main-log.txt", step)
+
+
 class CriticStillReadsTheFailingLogTest(unittest.TestCase):
     """qa-review.yml fetches the ORIGINAL failing run by sha. A 12-character
     sha is not a head_sha the runs API answers (it returns 0), so the short

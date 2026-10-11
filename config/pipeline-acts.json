@@ -1651,9 +1651,9 @@
     },
     {
       "file": "scripts/repair_card.py",
-      "anchor": "settle_note(workflow_name, run)",
+      "anchor": "settle_note(workflow_name, run, fix)",
       "kind": "not-an-act",
-      "means": "A repair card whose main is green again records that the repair is over, that no pull request was ever opened under it, and which completed run proves it — beside the move to Canceled (DRE-4411).",
+      "means": "A repair card whose main is green again records that the repair is over, that no pull request was ever opened under it, and which completed run proves it — beside the move to Canceled (DRE-4411). When its failing test turned main red and went green unfixed once before in 14 days, one more sentence names that test's fix card (DRE-6870).",
       "why": "It reports an OUTCOME of the work — a flake that passed on its re-run, or somebody else's merge turning main green — rather than a refusal, a recovery, a hold or a progress act the pipeline chose for itself. The same class as the dependabot card's `cancel_note` two rows on, and as the merge→Done seam's `✅ Merged` line from the other end: its only reader is a person looking at the card, and the state change beside it is the machine-readable half. It carries its own idempotency key (repair_card.SETTLE_MARKER), read back off the card's own comments so a second sweep over a card whose cancel landed and whose comment did not writes nothing; a trailer beside that key would be a second grammar over a comment whose presence is load-bearing."
     },
     {

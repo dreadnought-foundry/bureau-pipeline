@@ -467,6 +467,7 @@ jobs:
             --workflow-name "$WF_NAME" \
             --run-url "$RUN_URL" \
             --attempt "$ATTEMPT" \
+            --log-file /tmp/red-main-log.txt \
             --fallback-branch "$FALLBACK" >> "$GITHUB_OUTPUT"
 
       # Product-specific environment setup (submodules, toolchains, test DB).
