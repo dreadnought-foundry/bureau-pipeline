@@ -1,0 +1,60 @@
+{
+  "$note": "bureau-pipeline #871 (DRE-6490), merged 2026-10-09 22:45 UTC. The pull request's files and the new test's name and text are the real ones: the patch is the first 56 lines of tests/test_planning_escalation_prior_answer.py as DRE-6358 (commit 0eedb6a1) added it, which hold its naming line `import planning_escalation  # noqa: E402`. The shas and counts are synthetic.",
+  "declaration": {
+    "recheck_new_tests": true
+  },
+  "compare": {
+    "status": "diverged",
+    "ahead_by": 4,
+    "behind_by": 2,
+    "merge_base_commit": {
+      "sha": "1111111111111111111111111111111111111111"
+    },
+    "base_commit": {
+      "sha": "2222222222222222222222222222222222222222"
+    },
+    "files": [
+      {
+        "filename": "scripts/linear_ops.py",
+        "status": "modified"
+      },
+      {
+        "filename": "scripts/planning_escalation.py",
+        "status": "modified"
+      },
+      {
+        "filename": "tests/test_planning_escalation.py",
+        "status": "modified"
+      },
+      {
+        "filename": "tests/test_planning_route.py",
+        "status": "modified"
+      }
+    ]
+  },
+  "base_advance": {
+    "files": [
+      {
+        "filename": "tests/test_planning_escalation_prior_answer.py",
+        "status": "added",
+        "patch": "@@ -0,0 +1,694 @@\n+\"\"\"RED-first tests: a question parked for the CEO says whether he has already\n+answered on this card, and that the question in front of him is a new one\n+(DRE-6358).\n+\n+On DRE-3879 five different objections reached him reading as one question\n+asked five times, and rounds 4 and 5 arrived 4 and 10 minutes after his\n+13:12 PT answer; on 2026-10-08 DRE-6288 was parked back in his queue twice\n+within a minute of each answer with no new question at all. Two changes, one\n+section each:\n+\n+  1. Every note `escalate()` posts for a park carries one block directly under\n+     the Recommendation line — his earlier signed answer, quoted, on the\n+     record and older than the question above; or that there is none; or that\n+     it could not be checked. It is read off the WHOLE thread by its own read,\n+     never the fifty-newest window `escalate()` holds for its attempt count.\n+  2. When the reason declared no Question line, the one completed is no longer\n+     one fixed sentence: it is the reason's own question when it ends in one,\n+     else a question that names the Finding — so two findings never read as\n+     one question asked twice.\n+\n+Run: cd bureau-pipeline && python3 -m pytest tests/test_planning_escalation_prior_answer.py -v\n+\"\"\"\n+from __future__ import annotations\n+\n+import dataclasses\n+import inspect\n+import os\n+import re\n+import sys\n+from pathlib import Path\n+from unittest.mock import patch\n+\n+import pytest\n+\n+ROOT = Path(__file__).resolve().parent.parent\n+sys.path.insert(0, str(ROOT / \"scripts\"))\n+sys.path.insert(0, str(ROOT / \"tests\"))\n+os.environ.setdefault(\"LINEAR_API_KEY\", \"test-key\")\n+os.environ.setdefault(\"REPO\", \"dreadnought-foundry/bureau-pipeline\")\n+os.environ.setdefault(\"REPO_SLUG\", \"bureau-pipeline\")\n+os.environ.setdefault(\"GH_TOKEN\", \"x\")\n+\n+import console_escalation  # noqa: E402\n+import console_receipt  # noqa: E402\n+import hygiene_green_light  # noqa: E402\n+import planning_classify  # noqa: E402\n+import planning_escalation  # noqa: E402\n+import sanitize_untrusted  # noqa: E402\n+import spoken_thread  # noqa: E402\n+\n+CARD = \"DRE-6288\"\n+\n+#: DRE-6288's real answer: signed 2026-10-08 11:09 PT, posted seconds later.\n+ANSWER_WORDS = \"go ahead and add it but we are not using it currently\"\n+ANSWER_SIGNED = \"2026-10-08T18:09:04Z\"\n+ANSWER_POSTED = \"2026-10-08T18:09:09.000Z\""
+      }
+    ]
+  },
+  "since_run": {
+    "files": [
+      {
+        "filename": "tests/test_planning_escalation_prior_answer.py",
+        "status": "added",
+        "patch": "@@ -0,0 +1,694 @@\n+\"\"\"RED-first tests: a question parked for the CEO says whether he has already\n+answered on this card, and that the question in front of him is a new one\n+(DRE-6358).\n+\n+On DRE-3879 five different objections reached him reading as one question\n+asked five times, and rounds 4 and 5 arrived 4 and 10 minutes after his\n+13:12 PT answer; on 2026-10-08 DRE-6288 was parked back in his queue twice\n+within a minute of each answer with no new question at all. Two changes, one\n+section each:\n+\n+  1. Every note `escalate()` posts for a park carries one block directly under\n+     the Recommendation line — his earlier signed answer, quoted, on the\n+     record and older than the question above; or that there is none; or that\n+     it could not be checked. It is read off the WHOLE thread by its own read,\n+     never the fifty-newest window `escalate()` holds for its attempt count.\n+  2. When the reason declared no Question line, the one completed is no longer\n+     one fixed sentence: it is the reason's own question when it ends in one,\n+     else a question that names the Finding — so two findings never read as\n+     one question asked twice.\n+\n+Run: cd bureau-pipeline && python3 -m pytest tests/test_planning_escalation_prior_answer.py -v\n+\"\"\"\n+from __future__ import annotations\n+\n+import dataclasses\n+import inspect\n+import os\n+import re\n+import sys\n+from pathlib import Path\n+from unittest.mock import patch\n+\n+import pytest\n+\n+ROOT = Path(__file__).resolve().parent.parent\n+sys.path.insert(0, str(ROOT / \"scripts\"))\n+sys.path.insert(0, str(ROOT / \"tests\"))\n+os.environ.setdefault(\"LINEAR_API_KEY\", \"test-key\")\n+os.environ.setdefault(\"REPO\", \"dreadnought-foundry/bureau-pipeline\")\n+os.environ.setdefault(\"REPO_SLUG\", \"bureau-pipeline\")\n+os.environ.setdefault(\"GH_TOKEN\", \"x\")\n+\n+import console_escalation  # noqa: E402\n+import console_receipt  # noqa: E402\n+import hygiene_green_light  # noqa: E402\n+import planning_classify  # noqa: E402\n+import planning_escalation  # noqa: E402\n+import sanitize_untrusted  # noqa: E402\n+import spoken_thread  # noqa: E402\n+\n+CARD = \"DRE-6288\"\n+\n+#: DRE-6288's real answer: signed 2026-10-08 11:09 PT, posted seconds later.\n+ANSWER_WORDS = \"go ahead and add it but we are not using it currently\"\n+ANSWER_SIGNED = \"2026-10-08T18:09:04Z\"\n+ANSWER_POSTED = \"2026-10-08T18:09:09.000Z\""
+      }
+    ]
+  },
+  "receipts": [],
+  "expect": {
+    "decision": "refresh",
+    "rule": "new-tests",
+    "test_file": "tests/test_planning_escalation_prior_answer.py",
+    "source_file": "scripts/planning_escalation.py"
+  }
+}
