@@ -162,7 +162,10 @@ def proof_cards(records) -> list[dict]:
 
 
 def _title_tokens(title: str) -> set:
-    return ({t.strip() for t in _BACKTICKED.findall(title or "")}
+    """Backticked or bare, a title token is a variable-style name: one with
+    an underscore. A plain word — `main`, `stable`, `v4` — never counts."""
+    spans = {t.strip() for t in _BACKTICKED.findall(title or "")}
+    return ({t for t in spans if "_" in t}
             | set(_BARE_NAME.findall(title or "")))
 
 
