@@ -611,8 +611,8 @@ class TestTheAgentEscalationGate:
         root = _copy_repo(tmp_path)
         _edit(root / self.REPORT_SCRIPT,
               'python3 .bureau-pipeline/scripts/linear_ops.py comment "$CARD" \\\n'
-              '    "$(cat /tmp/escalation-comment.md)"',
-              'cat /tmp/escalation-comment.md')
+              '    "$(cat "${RUNNER_TEMP:-/tmp}/escalation-comment.md")"',
+              'cat "${RUNNER_TEMP:-/tmp}/escalation-comment.md"')
         found = grl.problems(str(root))
         assert _named(found, "agent-task.yml#Report result to Linear",
                       "agent-escalation"), found

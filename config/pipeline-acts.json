@@ -2069,7 +2069,7 @@
     },
     {
       "file": ".github/workflows/agent-task.yml",
-      "anchor": "/tmp/handback-comment.md",
+      "anchor": "/handback-comment.md",
       "step": "Report result to Linear",
       "kind": "not-an-act",
       "means": "The agent found an epic where a one-off was dispatched, and hands the card back for decomposition.",
@@ -2077,7 +2077,7 @@
     },
     {
       "file": ".github/workflows/agent-task.yml",
-      "anchor": "/tmp/escalation-comment.md",
+      "anchor": "/escalation-comment.md",
       "step": "Report result to Linear",
       "kind": "not-an-act",
       "means": "The agent's question for the CEO — the decision it could not safely make for itself.",

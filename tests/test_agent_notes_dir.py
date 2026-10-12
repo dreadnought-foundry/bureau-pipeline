@@ -21,6 +21,7 @@ from __future__ import annotations
 import ast
 import glob
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -98,6 +99,35 @@ class TheScriptReadsTheVariable(unittest.TestCase):
             text = fh.read()
         self.assertIn(f'"${{{VARIABLE}:-/tmp}}"', text)
         self.assertIn('--handback-file "$NOTES_DIR"/agent-handback.txt', text)
+
+
+class TheCommentDraftsAreTheRunsOwn(unittest.TestCase):
+    """The hand-back and the escalation are drafted in `RUNNER_TEMP` before
+    they are posted (DRE-6873): a draft at a fixed /tmp path was truncated by
+    another copy of the suite, and the question was posted empty."""
+
+    def _draft(self, note: str, text: str) -> str:
+        runner_temp = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, runner_temp, ignore_errors=True)
+        with mock.patch.dict(os.environ):
+            os.environ.pop(VARIABLE, None)
+            proc, journal = report.run_pr_opened(
+                self, ["bash", SCRIPT], card_pr=report.CARD_PR_NO_PR_STUB,
+                env_extra={VARIABLE: report.notes_with(self, {note: text}),
+                           "RUNNER_TEMP": runner_temp})
+        self.assertEqual(0, proc.returncode, proc.stderr[-4000:])
+        posted = [e["args"][1] for e in journal if e["op"] == "comment"]
+        self.assertEqual(1, len(posted), posted)
+        self.assertIn(text, posted[0])
+        return runner_temp
+
+    def test_the_escalation_is_drafted_in_runner_temp(self):
+        runner_temp = self._draft("agent-escalation.txt", "Which of A or B?")
+        self.assertTrue(os.path.isfile(os.path.join(runner_temp, "escalation-comment.md")))
+
+    def test_the_hand_back_is_drafted_in_runner_temp(self):
+        runner_temp = self._draft("agent-handback.txt", "1. the ledger counter")
+        self.assertTrue(os.path.isfile(os.path.join(runner_temp, "handback-comment.md")))
 
 
 class TheHarnessReadsTheVariable(unittest.TestCase):

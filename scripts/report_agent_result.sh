@@ -243,6 +243,11 @@ set -e
 #   drove this script wrote and deleted the notes at their /tmp paths, so two
 #   copies of the suite on one machine read each other's notes and failed.
 #   Each test now names a directory of its own, and a real run reads /tmp.
+# 2026-10-12, DRE-6873. The hand-back and escalation comments are drafted in
+#   RUNNER_TEMP, as the proof escalation's is. Drafted at fixed /tmp paths,
+#   one copy of the suite truncated the draft another was about to post, and
+#   the suite-green job, which runs its cases side by side, posted an empty
+#   question.
 # The agent's three notes sit where the prompt tells it to write them, /tmp.
 # AGENT_NOTES_DIR moves them, and only a test sets it (DRE-6961).
 NOTES_DIR="${AGENT_NOTES_DIR:-/tmp}"
@@ -337,9 +342,9 @@ elif [ "$DEATH_CLASS" != "turn_exhaustion" ] && [ -f "$NOTES_DIR"/agent-handback
     cat "$NOTES_DIR"/agent-handback.txt
     echo ""
     echo "Run: $RUN_URL"
-  } > /tmp/handback-comment.md
+  } > "${RUNNER_TEMP:-/tmp}/handback-comment.md"
   python3 .bureau-pipeline/scripts/linear_ops.py comment "$CARD" \
-    "$(cat /tmp/handback-comment.md)"
+    "$(cat "${RUNNER_TEMP:-/tmp}/handback-comment.md")"
   python3 .bureau-pipeline/scripts/linear_ops.py advance "$CARD" "Planning" "In Progress,Todo" || true
 elif [ -f "$NOTES_DIR"/agent-escalation.txt ] && [ -s "$NOTES_DIR"/agent-escalation.txt ]; then
   # Escalation to Green Light, checked before the blocker (DRE-1655, DRE-2776).
@@ -350,10 +355,10 @@ elif [ -f "$NOTES_DIR"/agent-escalation.txt ] && [ -s "$NOTES_DIR"/agent-escalat
     python3 .bureau-pipeline/scripts/console_escalation.py complete "$NOTES_DIR"/agent-escalation.txt --question "Which way should this build go?" --who "the build agent" || cat "$NOTES_DIR"/agent-escalation.txt
     echo ""
     echo "Answer here, then move this card to **Todo** to proceed (the agent picks up your guidance), or to **Backlog** to drop it. Run: $RUN_URL"
-  } > /tmp/escalation-comment.md
+  } > "${RUNNER_TEMP:-/tmp}/escalation-comment.md"
   EXIT_TAKEN="escalation"
   python3 .bureau-pipeline/scripts/linear_ops.py comment "$CARD" \
-    "$(cat /tmp/escalation-comment.md)"
+    "$(cat "${RUNNER_TEMP:-/tmp}/escalation-comment.md")"
   python3 .bureau-pipeline/scripts/linear_ops.py advance "$CARD" "Green Light" "In Progress,Todo" || \
     python3 .bureau-pipeline/scripts/linear_ops.py state "$CARD" "Green Light" || true
 elif [ -f "$NOTES_DIR"/agent-blocker.txt ]; then
