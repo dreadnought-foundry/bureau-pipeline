@@ -27,7 +27,8 @@ with the home's clause (`selection_note`).
 The choices still written in `config/models.yaml` are never read by the
 selector: the home or the defaults, nothing between. That file is read for the
 CODE-SIDE FACTS (`effort`, `review_separation`, `discovery`, `retired`,
-`excluded`, `session_agents`, `about`), a FILE in the public bureau-pipeline
+`excluded`, `session_agents`, `about`, and the `rules` behind `BACKSTOP_ROLES`
+and `JUDGEMENT_ROLES`), a FILE in the public bureau-pipeline
 checkout the product-repo workflows already do (`.bureau-pipeline`), the same
 shape as `config/repo-map.json` (see config/README.md). Until DRE-6982 its
 old save route regenerates the literal below from it on every merged save, so
@@ -189,16 +190,6 @@ ROLE_KINDS = (WORKHORSE_KIND, ADVISORY_KIND, JUDGEMENT_KIND)
 # with a letter, and it walks the ladder of its own name.
 ADDED_GROUP_NAME = re.compile(r"[a-z][a-z0-9-]*")
 
-# The roles that MUST stay advisory: they are the correctness backstop for a
-# pipeline where no human reads a diff. Demoting either is a config error.
-BACKSTOP_ROLES = ("critic", "verifier")
-
-# The roles that may be assigned `judgement` (rule 10, DRE-6633). The kind
-# admits a role that runs once per epic; a role that runs per card on the
-# strongest model is the 2026-08-09 incident. config/models.yaml has said "ONE
-# role, deliberately" since DRE-3015, and nothing enforced it until this.
-JUDGEMENT_ROLES = ("planner",)
-
 # What `discovery.on_new_model` may say. `workhorse` is deliberately absent —
 # auto-promoting a newly seen model onto the build path IS the 2026-08-09
 # incident, so the schema rejects it rather than trusting a reviewer to notice.
@@ -229,6 +220,68 @@ _PRICES_PATH = Path(__file__).resolve().parent.parent / "config" / "model-prices
 # `projects:` key in the model config must be one of its slugs — an exception
 # for a repo the pipeline does not route to is a typo nobody would see.
 _REPO_MAP_PATH = Path(__file__).resolve().parent.parent / "config" / "repo-map.json"
+
+# The rules the console's page offers by (DRE-6992): config/models.yaml's
+# top-level `rules:` block, which the console reads through the contents API.
+# Not the `rules` map under `review_separation` — a different key. Each value
+# here is today's, and is what a file with no block reads (the frozen fixture,
+# DRE-6859). A session agent may hold any group (rule 10), and the block does
+# not restate that.
+_RULES_DEFAULTS = {
+    "reviewers_only": ("critic", "verifier"),
+    "planners_may_hold": ("planner",),
+}
+
+
+def _load_rules(path: Path | None = None) -> dict[str, tuple[str, ...]]:
+    """The `rules:` block of config/models.yaml, each list as a tuple. A key
+    that is absent reads today's value; a block or a key of the wrong shape —
+    anything but a non-empty list of names — reads today's value too, on
+    stderr. Degrades, never raises: it is read when the module loads, on the
+    dispatch path of every card."""
+    rules = dict(_RULES_DEFAULTS)
+    path = Path(path or _CONFIG_PATH)
+    try:
+        import yaml
+
+        raw = yaml.safe_load(path.read_text())
+    except Exception as exc:  # missing / unreadable / malformed / no PyYAML
+        print(f"model_fallback: could not read the rules block of {path} ({exc}); "
+              "using today's rules", file=sys.stderr)
+        return rules
+    block = raw.get("rules") if isinstance(raw, Mapping) else None
+    if block is None:
+        return rules
+    if not isinstance(block, Mapping):
+        print(f"model_fallback: rules in {path} is not a mapping; using today's rules",
+              file=sys.stderr)
+        return rules
+    for key in _RULES_DEFAULTS:
+        names = block.get(key)
+        if names is None:
+            continue
+        if (isinstance(names, list) and names
+                and all(isinstance(n, str) and n.strip() for n in names)):
+            rules[key] = tuple(names)
+        else:
+            print(f"model_fallback: rules.{key} in {path} is not a list of agent "
+                  f"names; using today's {list(_RULES_DEFAULTS[key])}", file=sys.stderr)
+    return rules
+
+
+_RULES = _load_rules()
+
+# The roles that MUST stay advisory: they are the correctness backstop for a
+# pipeline where no human reads a diff. Demoting either is a config error.
+# `rules.reviewers_only` (DRE-6992).
+BACKSTOP_ROLES: tuple[str, ...] = _RULES["reviewers_only"]
+
+# The roles that may be assigned `judgement` (rule 10, DRE-6633). The kind
+# admits a role that runs once per epic; a role that runs per card on the
+# strongest model is the 2026-08-09 incident. config/models.yaml has said "ONE
+# role, deliberately" since DRE-3015, and nothing enforced it until this.
+# `rules.planners_may_hold` (DRE-6992).
+JUDGEMENT_ROLES: tuple[str, ...] = _RULES["planners_may_hold"]
 
 # The defaults in the code (DRE-6939): the choices every run makes when the
 # home is not set or cannot be read, read through `code_defaults()` and by
@@ -1446,11 +1499,13 @@ RETIRED_MODELS = set(CONFIG["retired"])
 # daily adoption must never ask about a model a person just chose.
 #
 # Built at import from the defaults in the code, and NOT rebuilt by `use_home`
-# (DRE-6939): its readers (`last_attempt_model`, `last_error_model`, and the
-# no-read `build-model` command) must not read the home. That is safe while
-# every priced model is on a default ladder, excluded, retired or a project's
-# — true today. A home naming a priced model outside all four would read its
-# builds as unknown; keeping such a model attributable is DRE-6992's.
+# (DRE-6939): its readers (`attributable`, and through it `last_attempt_model`,
+# `last_error_model` and the no-read `build-model` command) must not read the
+# home. A home naming a priced model outside all four sets stays attributable
+# through its declared price (`attributable`, DRE-6992). This set does NOT
+# grow to every priced id, on purpose: `model_adoption._known_ids` reads it as
+# the models already adopted, and an adoption needs a declared price, so such
+# a set would read every adoptable model as adopted already.
 KNOWN_MODELS = (
     {m for models in LADDERS.values() for m in models}
     | RETIRED_MODELS
@@ -2185,16 +2240,31 @@ def select(
 # Heartbeat + is_error markers (preserved from DRE-1354)                       #
 # --------------------------------------------------------------------------- #
 
+def attributable(model) -> bool:
+    """Whether a marker naming `model` counts as naming a model (DRE-6992):
+    an id in `KNOWN_MODELS`, or one with a declared price.
+
+    The home may name a model the defaults do not — the daily adoption's swap
+    writes exactly that — and a death or an attempt on it must still read as
+    that model, or every review of its builds runs as built on an unknown one.
+    The prices are read only for an id outside `KNOWN_MODELS`, and at most
+    once per process (`declared_prices` keeps what it read)."""
+    if not isinstance(model, str) or not model:
+        return False
+    return model in KNOWN_MODELS or model in declared_prices()
+
+
 def last_error_model(comment_bodies: list[str | None]) -> str | None:
     """The model id from the MOST RECENT is_error death marker, or None.
 
     `comment_bodies` is oldest→newest (Linear's natural order); we scan from the
-    end so the latest death wins. Only a KNOWN model id counts. Retained so the
-    board/console can attribute the last is_error death to a model."""
+    end so the latest death wins. Only an `attributable` model id counts.
+    Retained so the board/console can attribute the last is_error death to a
+    model."""
     for body in reversed(comment_bodies):
         for found in _ERROR_MARKER_RE.findall(body or ""):
             model = found.lower()
-            if model in KNOWN_MODELS:
+            if attributable(model):
                 return model
     return None
 
@@ -2206,8 +2276,9 @@ def last_attempt_model(comment_bodies) -> str | None:
     already written on every attempt, so the reviewer reads the build's model
     off the card rather than out of a second record that could disagree with
     it. Same shape as `last_error_model` — oldest→newest in, scanned from the
-    end, and only a KNOWN model id counts, so an unrecognized payload reads as
-    "we do not know" (which the caller fails CLOSED on) rather than as a model.
+    end, and only an `attributable` model id counts, so an unrecognized payload
+    reads as "we do not know" (which the caller fails CLOSED on) rather than as
+    a model.
 
     A `model-error:` marker is NOT an attempt: a death says which model died,
     not which one the build that produced this diff ran on.
@@ -2215,7 +2286,7 @@ def last_attempt_model(comment_bodies) -> str | None:
     for body in reversed(list(comment_bodies or [])):
         for found in _ATTEMPT_MARKER_RE.findall(body or ""):
             model = found.lower()
-            if model in KNOWN_MODELS:
+            if attributable(model):
                 return model
     return None
 

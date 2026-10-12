@@ -163,7 +163,9 @@ def test_a_reviewer_the_block_adds_is_held_to_rule_3(tree):
     assert tuple(seen["judgement"]) == TODAY_JUDGEMENT
     assert ("agents.groomer: must be 'advisory' (it gates unattended merges), "
             "got 'workhorse'") in seen["errors"]
-    assert "REFUSING" not in seen["stderr"]
+    # Rule 8 follows the block too: the separation must bind the new reviewer.
+    assert any(e.startswith("review_separation.roles: must bind 'groomer'")
+               for e in seen["errors"])
 
 
 def test_a_planner_the_block_admits_may_hold_the_judgement_kind(tree):

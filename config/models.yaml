@@ -477,6 +477,19 @@ session_agents:
   - mobile
   - product-lead
 
+# THE RULES THE PAGE OFFERS BY (DRE-6992)
+# ---------------------------------------
+# Which agents must stay Reviewers (rule 3: they review before an unattended
+# merge) and which may sit with the Planners (rule 10: the Planners run once per
+# epic on the strongest model). `model_fallback` reads both lists when it loads
+# — `BACKSTOP_ROLES` and `JUDGEMENT_ROLES` — and the console reads them to know
+# what its page may offer. A name in `session_agents` may hold any group, and
+# this block does not restate that. Not the `rules` under `review_separation`,
+# below: a different key. A file with no block reads exactly these values.
+rules:
+  reviewers_only: [critic, verifier]
+  planners_may_hold: [planner]
+
 # One line per agent, in `agents` or `ungrouped`, for the page to show beside
 # its name. A line for a name in neither is refused.
 about:
