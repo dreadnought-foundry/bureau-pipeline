@@ -68,11 +68,17 @@
 # change set" step, the person who asked was already told "Not applied" on
 # the Settings page, and the medic's run summary says so in one sentence. Any
 # other failure of that workflow is retried once and carded as before.
+#
+# Model home carry (DRE-6986) is watched on the same terms. Retrying it is
+# safe because a re-run keeps the push it was started by, the home is read
+# afresh and again just before its one write, and a setting the home already
+# holds is not written again. A carried document the home's rules refuse is
+# refused again on the retry, and the failure card names the rule.
 name: Pipeline Medic
 
 on:
   workflow_run:
-    workflows: [Pipeline Tests, Agent Task, Agent Plan, QA Review, Merge Gate, Linear Sync, Reconcile, Agent Fix, Red-Main Repair, Integration Harness, Release Gate, Smoke · setup-node-cached, Smoke · setup-python-cached, Promote Channel, Nightly Watch, Groomer, Deliver Rescue, Model adoption, Hygiene, Proof Task, Model config change]
+    workflows: [Pipeline Tests, Agent Task, Agent Plan, QA Review, Merge Gate, Linear Sync, Reconcile, Agent Fix, Red-Main Repair, Integration Harness, Release Gate, Smoke · setup-node-cached, Smoke · setup-python-cached, Promote Channel, Nightly Watch, Groomer, Deliver Rescue, Model adoption, Hygiene, Proof Task, Model config change, Model home carry]
     types: [completed]
 
 permissions:
