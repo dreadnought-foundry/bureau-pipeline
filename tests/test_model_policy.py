@@ -620,6 +620,9 @@ class JudgementKindTest(unittest.TestCase):
                 0, {"model": strongest, "reason": "the CEO's choice"}
             )
             _write_config(tree, cfg)
+            # The selector runs on the code's defaults, never the file's
+            # choices (DRE-6939), so the generator carries the choice there.
+            self.assertEqual(_run_sync(tree).returncode, 0)
             model, _ = _cli_select(tree, _role_of(WORKHORSE))
             self.assertEqual(model, strongest)
 

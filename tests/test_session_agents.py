@@ -328,14 +328,18 @@ def test_a_session_agent_joins_any_group_and_selects_like_an_unknown_name(
     assert agent in doc["session_agents"]
 
     tree = _frozen_tree(tmp_path / "tree", text)
-    _assert_answered_as_unknown(tree, agent, group, "from the YAML")
-
-    # The degrade mirror: regenerate the literal in the copy, then take the
-    # YAML away so `_load_config` falls back to it.
+    # The selector runs on the defaults in the code, never on the choices in
+    # the YAML (DRE-6939): regenerate the literal in the copy first. Its old
+    # bytecode goes with it, since the rewrite may keep the file's size.
     sync = subprocess.run(
         [sys.executable, str(tree / "scripts" / "sync_model_config.py")],
         capture_output=True, text=True, cwd=tree)
     assert sync.returncode == 0, sync.stdout + sync.stderr
+    shutil.rmtree(tree / "scripts" / "__pycache__", ignore_errors=True)
+    _assert_answered_as_unknown(tree, agent, group, "with the YAML")
+
+    # The degrade mirror: take the YAML away so `_load_config` falls back to
+    # the literal for the code-side facts too.
     (tree / "config" / "models.yaml").unlink()
     _assert_answered_as_unknown(tree, agent, group, "from the mirror")
 

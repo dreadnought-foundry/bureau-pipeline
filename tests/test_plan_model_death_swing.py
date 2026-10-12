@@ -89,7 +89,10 @@ class SelectModelStepRunsTest(unittest.TestCase):
         self.tmp = tempfile.mkdtemp()
         scripts = os.path.join(self.tmp, ".bureau-pipeline", "scripts")
         os.makedirs(scripts)
-        shutil.copy(os.path.join(ROOT, "scripts", "model_fallback.py"), scripts)
+        # The selector of a frozen fixture tree: its defaults in the code are
+        # the frozen files' choices, which it runs on with no home (DRE-6939).
+        frozen = model_fixture.fixture_tree(os.path.join(self.tmp, "frozen"))
+        shutil.copy(frozen / "scripts" / "model_fallback.py", scripts)
         config = os.path.join(self.tmp, ".bureau-pipeline", "config")
         os.makedirs(config)
         for name in ("models.yaml", "model-prices.yaml"):

@@ -35,6 +35,7 @@ import copy
 import hashlib
 import json
 import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -134,6 +135,10 @@ def regenerate(tree: Path) -> None:
         cwd=tree, capture_output=True, text=True,
     )
     assert proc.returncode == 0, proc.stdout + proc.stderr
+    # The rewrite can keep the file's size and land in the second its bytecode
+    # was written (two rungs trading places), and then an import would run the
+    # bytecode of the literal it replaced.
+    shutil.rmtree(tree / "scripts" / "__pycache__", ignore_errors=True)
 
 
 def env(available: dict | None = None) -> dict:
