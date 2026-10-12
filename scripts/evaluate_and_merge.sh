@@ -28,6 +28,7 @@ set -e
 #   LINEAR_API_KEY  for the card writes linear_ops.py and code_owner_hold.py
 #                   make.
 # Its pauses, from the env too, each with a default; the tests set them to 0:
+#   READ_RETRY_SECONDS                15, before the one read's one retry (step 0).
 #   MERGE_RETRY_SECONDS               15, before a merge's one retry (step 7).
 #   FIX_LANE_RECHECK_SECONDS          15, between Agent Fix lane re-reads (step 3).
 #   FIX_LANE_RECHECK_CEILING_SECONDS  60, the most those re-reads wait in all.
@@ -38,7 +39,8 @@ set -e
 # In order, it:
 #  0. Reads the pull request ONCE, every field in one `gh pr view`, into
 #     /tmp/pr-view.json. A failed read kills the step, and so does a field a
-#     decision is made on that comes back absent or null.
+#     decision is made on that comes back absent or null. GitHub's own server
+#     error earns one more read first (DRE-7026).
 #  1. Stops at a pull request that is not open, or whose branch is not one of
 #     the pipeline's own: agent/* (card work), repair/* (red-main repair),
 #     dependabot/* (dependency bumps), and the scheduled branch
@@ -390,12 +392,28 @@ set -e
 #   is now `merge_gate.py tip-at` over `main`'s commit listing, walked on its
 #   first-parent line, where every commit is a merge into `main` or a direct
 #   push. `sha=none` keeps `{}`, which waits.
+#
+# DRE-7026 (2026-10-12). The sandbox gate woke on the critic's APPROVE on
+#   bureau-harness #4440, green, and its one read of the pull request answered
+#   DRE-6242's server error. The step died before deciding anything, and
+#   main's harness waited 1200s for the merge. That text on the one read now
+#   earns ONE more read, the same read, after READ_RETRY_SECONDS (15 by
+#   default). GitHub's error still goes to the log. Any other failure, and a
+#   second failure of any kind, kills the step as before.
 
 set -euo pipefail
 
 # ONE read of the pull request (Stage 2 #19). No fallback: a failed read kills
-# the step, as each of the eight reads it replaces did.
-gh pr view "$PR" --json headRefName,state,mergeStateStatus,isDraft,headRefOid,baseRefName,body,createdAt,author,url,files > /tmp/pr-view.json
+# the step, as each of the eight reads it replaces did. GitHub's own server
+# error is not an answer about the pull request: one more read, the same read,
+# and any second failure kills the step (DRE-7026).
+if ! gh pr view "$PR" --json headRefName,state,mergeStateStatus,isDraft,headRefOid,baseRefName,body,createdAt,author,url,files > /tmp/pr-view.json 2>/tmp/pr-view-error.txt; then
+  cat /tmp/pr-view-error.txt >&2
+  grep -qF 'Something went wrong while executing your query' /tmp/pr-view-error.txt || exit 1
+  echo "GitHub answered the read with its own server error — reading once more"
+  sleep "${READ_RETRY_SECONDS:-15}"
+  gh pr view "$PR" --json headRefName,state,mergeStateStatus,isDraft,headRefOid,baseRefName,body,createdAt,author,url,files > /tmp/pr-view.json
+fi
 # A field a decision is made on: absent or null kills the step, never an empty value (DRE-3467).
 pr_field() {
   jq -r --arg f "$1" 'if .[$f] == null then empty else .[$f] | tostring end' /tmp/pr-view.json | grep . \
