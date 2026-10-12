@@ -19,8 +19,8 @@ bouncing (the original behavior). It:
      the deprecated `**Repo:**` stamp).
 On a successful repair the card PROCEEDS (no bounce) and gets a 🔧 comment.
 It is BOUNCED to Planning ONLY when the repo cannot be inferred (no initiative
-label) or the inference yields a slug that isn't a real repo — the one case
-where a fix would be a wrong-repo guess. See infer_repo / VALID_SLUGS for the
+label that names a repo) or the inference yields a slug that isn't a real repo —
+the one case where a fix would be a wrong-repo guess. See infer_repo / VALID_SLUGS for the
 mapping (mirrors the relay's REPO_MAP, single source).
 
 One other card is stopped, and before any repair: an EPIC in Todo (DRE-5319).
@@ -376,6 +376,14 @@ VALID_SLUGS = set(_REPO_MAP)
 # Byte-aligned with the relay's _INITIATIVE_ALIAS.
 _INITIATIVE_ALIAS = {"bureau": "agent-bureau"}
 
+# Initiatives that name no single repo, so identity must not apply (DRE-7075).
+# `initiative:foundry` tags the whole Dreadnought Foundry initiative, which
+# spans several products — and `foundry` is ALSO a repo slug since DRE-7075.
+# Without this set every card carrying the initiative label alone would be
+# auto-fixed to `repo:foundry` and built there. Such a label is skipped, so a
+# card that names nothing else is bounced for its repo, never guessed at.
+_NON_REPO_INITIATIVES = frozenset({"foundry"})
+
 # There is no second alias table here, and its absence is deliberate (DRE-2874).
 # A map from a Linear project's NAME prefix ("Bureau: Console" → agent-bureau)
 # used to sit beside this one and feed a second inference route. It is gone with
@@ -445,20 +453,23 @@ def infer_repo(labels: list[str]) -> tuple[str | None, str | None]:
     the auto-fix comment, or (None, None) when the repo cannot be inferred.
 
     ONE route (rule 2 of DRE-1405, narrowed by DRE-2874): an `initiative:<x>`
-    label, aliased bureau→agent-bureau and identity otherwise. The card's Linear
+    label, aliased bureau→agent-bureau and identity otherwise. An initiative in
+    `_NON_REPO_INITIATIVES` names no single repo and is skipped (DRE-7075):
+    `initiative:foundry` must not resolve to the `foundry` repo it shares a
+    slug with. The card's Linear
     project name used to be a second route and is not read here any more — see
     the note above `_INITIATIVE_PREFIX`. Labels, and only labels, decide.
 
     The returned candidate is NOT yet validated against VALID_SLUGS — the caller
     (cmd_gate) does that, so a candidate that is a real-looking slug but not a
-    real repo (e.g. initiative:foundry → "foundry") is rejected as a wrong-repo
-    guess rather than silently treated as "uninferable".
+    real repo (e.g. a typo'd initiative:atlass → "atlass") is rejected as a
+    wrong-repo guess rather than silently treated as "uninferable".
     """
     for label in labels or []:
         low = label.lower()
         if low.startswith(_INITIATIVE_PREFIX):
             raw = low[len(_INITIATIVE_PREFIX):].strip()
-            if raw:
+            if raw and raw not in _NON_REPO_INITIATIVES:
                 slug = _INITIATIVE_ALIAS.get(raw, raw)
                 return slug, f"initiative:{raw}"
     return None, None
@@ -562,7 +573,7 @@ def cmd_gate(identifier: str) -> None:
             why = (
                 f"inferred repo {slug!r} is not a known repo"
                 if slug is not None
-                else "could not infer a repo (no initiative label)"
+                else "could not infer a repo (no initiative label names one)"
             )
             # Break glass (DRE-2737): the ONE sanctioned way past this gate at
             # 2am. An operator-applied `break-glass` marker suppresses the
