@@ -83,9 +83,10 @@ CHECKOUT_ACTION = "actions/checkout"
 # The model home's read tokens (DRE-6940): mints, not re-mints of the reader —
 # they are for the dreadnought-foundry installation's `variables: read` and
 # nothing else, and are held by tests/test_model_home_scope.py. `model_home` is
-# minted once, with no `if:` so it runs on every route; each `model_home_<id>`
-# mints it again directly before a home-reading step that follows a model step,
-# gated as that step is, so no model run ages the token those steps read.
+# minted once, up front, for the steps before the first model step; each
+# `model_home_<id>` mints it again directly before a home-reading step that
+# follows a model step, gated as that step is, so no model run ages the token
+# those steps read.
 MODEL_HOME_MINT_PREFIX = "model_home"
 
 
