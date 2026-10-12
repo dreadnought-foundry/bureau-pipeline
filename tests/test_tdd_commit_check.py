@@ -984,7 +984,11 @@ class GitCliTest(GitRepoMixin, unittest.TestCase):
         p = self.run_check(head_ref="bot/standards-sync", author="mallory")
         self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
         self.assertIn(check_tdd_commits.FAILURE_MESSAGE, p.stdout)
-        self.assertNotIn("exempt", p.stdout)
+        # Every exemption verdict opens `exempt:`. The bare word no longer
+        # works as the pin: since DRE-3009 every run names the exemption list
+        # it read, and a red run lists what a later commit could claim.
+        self.assertNotIn("exempt:", p.stdout)
+        self.assertNotIn("standards-sync PR", p.stdout)
 
     def test_sync_branch_with_a_foreign_commit_is_still_checked(self):
         # Every commit: one by somebody else and the gate is back, even when
