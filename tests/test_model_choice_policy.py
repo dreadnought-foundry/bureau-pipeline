@@ -466,6 +466,23 @@ def test_a_retired_id_on_a_ladder_is_refused_in_the_ladder_form():
     ]
 
 
+def test_a_retired_id_a_project_names_is_refused_in_the_project_form():
+    # The daily adoption retires nothing since DRE-6943, so the sentence
+    # promises no run that will retire it.
+    cfg = frozen()
+    retired = cfg["retired"][0]["model"]
+    slug = next(iter(cfg["projects"]))
+    cfg["projects"][slug]["workhorse"] = retired
+    found = [e for e in errors(cfg, {**prices(), retired: {"input": 1.0, "output": 2.0}})
+             if e.startswith("retired:")]
+    assert found == [
+        f"retired: {retired} is retired and is still named by "
+        f"projects.{slug}.workhorse — a retired model is never selectable, so "
+        "nothing was written. The operator changes or clears that choice on "
+        "Settings › Agents & models, or does not retire it."
+    ]
+
+
 def test_todays_config_names_no_retired_id():
     assert not [e for e in errors(committed(), mf.declared_prices())
                 if e.startswith("retired:")]

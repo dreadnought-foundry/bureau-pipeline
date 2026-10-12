@@ -52,6 +52,7 @@ sys.path.insert(0, str(ROOT / "scripts"))
 sys.path.insert(0, str(ROOT / "tests"))
 
 import dependabot_card  # noqa: E402
+import lane_contract  # noqa: E402
 import model_adoption as ma  # noqa: E402
 import model_catalog as mc  # noqa: E402
 import model_fallback as mf  # noqa: E402
@@ -370,6 +371,18 @@ class TestApply:
         after = stub.document()
         assert after["projects"][DEMO] == {"workhorse": OPUS56, "advisory": OPUS56}
         assert after["projects"]["portico"] == {"workhorse": "claude-opus-5"}
+
+    def test_a_project_choice_moves_whichever_group_it_is_for(self):
+        # On purpose, and not the kind-scoped move the retired YAML edit made
+        # (DRE-6633): the card says "in every project choice that names it",
+        # so a choice for a group whose ladder keeps the old id moves too.
+        doc = model_fixture.with_project(opus_home(), DEMO, "judgement", OPUS55)
+        decision = {"candidate": OPUS56, "rule": ma.RULE_ADOPT,
+                    "replaces": [{"ladder": "workhorse", "model": OPUS55}]}
+        after = maa.adopted_document(doc, decision, "2026-11-02T07:40:00Z")
+        assert OPUS55 in after["groups"]["judgement"]["models"]
+        assert OPUS56 not in after["groups"]["judgement"]["models"]
+        assert after["projects"][DEMO] == {"workhorse": OPUS56, "judgement": OPUS56}
 
     def test_only_an_old_id_left_on_nothing_is_said(
             self, tmp_path, monkeypatch, capsys, stub):
@@ -795,6 +808,46 @@ class TestOpenRecordCard:
             adopt_sonnet6, run_url=RUN_URL, trial=TRIAL, applied=self.APPLIED)
         assert maa.not_retired_sentence(SONNET5) in made["description"]
         assert ops.described == [], "the body is whole at creation"
+
+    @pytest.mark.parametrize("applied", [
+        {"outcome": "home-changed", "written_at": "2026-11-02T07:41:00Z",
+         "sentences": [maa.home_changed_sentence("2026-11-02T07:41:00Z")]},
+        {"outcome": "unread", "written_at": None,
+         "sentences": [maa.unread_sentence("HTTP 502")]},
+        {"outcome": "already", "written_at": "2026-11-02T07:40:00Z",
+         "sentences": [maa.already_sentence(SONNET6, "2026-11-02T07:40:00Z")]},
+        {"outcome": "unknown", "written_at": None,
+         "sentences": ["what the write did was not recorded by this run"]},
+        None,
+    ], ids=["home-changed", "unread", "already", "unknown", "no-result"])
+    def test_a_record_of_nothing_written_is_canceled_never_done(
+            self, adopt_sonnet6, applied):
+        # Done says the change was made; a run that wrote nothing made none,
+        # and Done is terminal, so its record goes to Canceled with its
+        # sentence on it, and the next daily run sorts the candidate again.
+        ops = FakeOps()
+        result = maa.open_record_card(adopt_sonnet6, run_url=RUN_URL, ops=ops,
+                                      trial=TRIAL, applied=applied)
+        (made,) = ops.created
+        assert made["lane"] == "Canceled"
+        assert made["lane"] == maa.UNWRITTEN_LANE
+        assert result["card"] == CARD
+        for sentence in (applied or {}).get("sentences") or []:
+            assert sentence in made["description"]
+        assert "- [x]" not in made["description"]
+
+    @pytest.mark.parametrize("lane", ["Done", "Canceled"])
+    def test_the_lane_contract_admits_the_adoption_to_the_lanes_it_files_into(
+            self, lane):
+        # A lane names its writers by key (config/lane-contract.json), and the
+        # record card is created straight into one of these two.
+        assert {maa.RECORD_LANE, maa.UNWRITTEN_LANE} == {"Done", "Canceled"}
+        assert "model-adoption.yml" in lane_contract.lane_writers(lane)
+        writer = lane_contract.writers()["model-adoption.yml"]
+        assert writer["path"] == ".github/workflows/model-adoption.yml"
+        clauses = lane_contract.lane(lane)["clauses"]
+        assert "model-adoption.yml" in clauses["writers"]["text"]
+        assert "daily model adoption" in clauses["entrance"]["text"]
 
     def test_the_record_passes_the_live_card_gate(self, adopt_sonnet6):
         ops = FakeOps()
