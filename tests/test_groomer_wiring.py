@@ -780,6 +780,11 @@ class JudgedReadReachableTest(unittest.TestCase):
         )
 
 
+# The model home's read token (DRE-6940): a mint in the groom job, but not a
+# merged-PR read — see tests/test_model_home_scope.py.
+MODEL_HOME_MINT_ID = "model_home"
+
+
 class MergedPrTokenTest(unittest.TestCase):
     """DRE-4964: the context pack's merged-PR read has a token to read with —
     and since DRE-5746, one per owner.
@@ -808,8 +813,12 @@ class MergedPrTokenTest(unittest.TestCase):
         self.groom = _step(self.doc, GROOM_STEP)
 
     def _mints(self) -> list:
+        """The merged-PR read mints — not the model home's read token
+        (DRE-6940), which reads one repository's variables, is handed to the
+        drain too, and is held by tests/test_model_home_scope.py."""
         return [s for s in self.steps
-                if str(s.get("uses") or "").startswith(self.ACTION)]
+                if str(s.get("uses") or "").startswith(self.ACTION)
+                and s.get("id") != MODEL_HOME_MINT_ID]
 
     def _mint(self, owner: str) -> dict:
         found = [s for s in self._mints()
@@ -915,6 +924,7 @@ def groomer_owner_wiring_gaps(doc: dict, owners) -> list:
         mints = [s for s in steps
                  if str(s.get("uses") or "").startswith(
                      "actions/create-github-app-token@")
+                 and s.get("id") != MODEL_HOME_MINT_ID
                  and (s.get("with") or {}).get("owner") == owner]
         if len(mints) != 1 or not mints[0].get("id"):
             gaps.append(f"{owner}: {len(mints)} mint step(s) with an id")

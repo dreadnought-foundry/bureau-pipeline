@@ -80,6 +80,16 @@ OWNER_MINT_IDS = {"next_token"}
 PORTAL_MINT_IDS = {"app_portal"}
 PORTAL_CHECKOUT = "Plan artifact — portal checkout (review)"
 CHECKOUT_ACTION = "actions/checkout"
+# The model home's read token (DRE-6940): a mint, not a re-mint — minted once
+# per job, with no `if:` so it runs on every route, for the dreadnought-foundry
+# installation's `variables: read` and nothing else, and held by
+# tests/test_model_home_scope.py. It is the one token this file lets a model
+# step age: the reader never raises (`model_home.read`), so a token past its
+# hour costs the steps after a long model run a selection on the defaults in
+# the code — named in the note's `model-home: unreadable` clause and raised as
+# the step's `::warning::` — and never a step that dies on `Bad credentials`,
+# which is what this file exists to stop.
+MODEL_HOME_MINT_IDS = {"model_home"}
 # The second critic's own route (DRE-5280), as the step gates spell it.
 REVIEW_MODE = "steps.route.outputs.mode == 'review'"
 
@@ -143,6 +153,8 @@ class NoTokenOutlivesAModelRun(unittest.TestCase):
         steps = _steps()
         offenders = []
         for i, step, step_id in _consumers():
+            if step_id in MODEL_HOME_MINT_IDS:
+                continue
             mint = _index_of_id(step_id)
             between = [
                 _label(j, steps[j]) for j in range(mint + 1, i)
@@ -228,6 +240,7 @@ class EveryReMintIsTheReaderMintAgain(unittest.TestCase):
             and s.get("id") not in POOL_STEP_IDS
             and s.get("id") not in OWNER_MINT_IDS
             and s.get("id") not in PORTAL_MINT_IDS
+            and s.get("id") not in MODEL_HOME_MINT_IDS
         ]
 
     def test_there_are_re_mints(self):
