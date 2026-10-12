@@ -146,6 +146,14 @@ class DeclarationTest(unittest.TestCase):
         self.assertEqual(("scripts/model_home.py", "TAG"),
                          (tags["model-home:"]["printed_by"], tags["model-home:"]["constant"]))
         self.assertIn("DRE-6939", tags["model-home:"]["when"])
+        # DRE-6986: the carry's line, in model-home-carry.yml's carry step.
+        self.assertEqual(("scripts/model_home_carry.py", "TAG"),
+                         (tags["model-home-carry:"]["printed_by"],
+                          tags["model-home-carry:"]["constant"]))
+        self.assertIn("DRE-6986", tags["model-home-carry:"]["when"])
+        self.assertIn("model-home-carry.yml", tags["model-home-carry:"]["when"])
+        self.assertIn("Carry the merged choices into the home",
+                      tags["model-home-carry:"]["when"])
         for entry in tags.values():
             self.assertEqual(["tag", "printed_by", "constant", "when"], list(entry))
 

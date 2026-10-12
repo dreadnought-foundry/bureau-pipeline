@@ -107,6 +107,12 @@
       "printed_by": "scripts/model_home.py",
       "constant": "TAG",
       "when": "every selecting run since DRE-6939: the selector reads the home when it first answers a choice, before it prints the model id, and the reader prints the line to stderr, so it is in the `Select model` step's log above the note"
+    },
+    {
+      "tag": "model-home-carry:",
+      "printed_by": "scripts/model_home_carry.py",
+      "constant": "TAG",
+      "when": "every run of `model-home-carry.yml` since DRE-6986, in its `Carry the merged choices into the home` step's log"
     }
   ],
   "causes": [

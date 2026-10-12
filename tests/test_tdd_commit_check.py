@@ -265,7 +265,8 @@ class ClassifyPathTest(unittest.TestCase):
                 self.assertEqual(check_tdd_commits.classify_path(path), "docs")
 
     def test_a_top_level_design_directory_is_docs_too(self):
-        # project-template (what every new repo is built from) and deltasolv
+        # Foundry (the design master), every repo built from Foundry's
+        # templates/company/ (what every new repo is built from) and deltasolv
         # keep the same record at the repo root, not under console/.
         self.assertEqual(
             check_tdd_commits.classify_path("design/screens/web-dashboard.html"),

@@ -30,6 +30,7 @@ stub's trigger list, the reusable's job gate, and the real decision code, and
 asserts a repair is dispatched instead of skipped.
 """
 
+import re
 import shutil
 import sys
 import tempfile
@@ -47,6 +48,11 @@ import red_main_repair  # noqa: E402
 
 REPAIR_STUB = "self-red-main-repair.yml"
 HARNESS_WORKFLOW_NAME = "Integration Harness"
+
+
+def _append_watched(text: str, name: str) -> str:
+    """`text` with `name` appended to its `workflows: [...]` list."""
+    return re.sub(r"(workflows: \[[^\]]*)\]", rf"\1, {name}]", text, count=1)
 
 # The 2026-08-29 failure, VERBATIM from run 33233917939's `--log-failed`
 # output (Integration Harness, push, main, 04:28:55Z). It named both stale
@@ -220,16 +226,15 @@ class NewWorkflowCannotSlipThroughTest(unittest.TestCase):
             "jobs:\n  go:\n    runs-on: ubuntu-latest\n"
             "    steps:\n      - run: 'true'\n",
         )
-        stub = (self.dir / REPAIR_STUB).read_text().replace(
-            f"workflows: [Pipeline Tests, {HARNESS_WORKFLOW_NAME}]",
-            f"workflows: [Pipeline Tests, {HARNESS_WORKFLOW_NAME}, "
-            "Brand New Gate]",
-        )
+        # Each list gains the new gate at its end, whatever it ends with today
+        # (DRE-6986 added Model home carry to both).
+        repair = (self.dir / REPAIR_STUB).read_text()
+        stub = _append_watched(repair, "Brand New Gate")
+        self.assertNotEqual(repair, stub, "the repair rail's watch list did not take the new gate")
         (self.dir / REPAIR_STUB).write_text(stub)
         # The medic must also see it — a red commit AND a crashed run.
         before = (self.dir / "self-medic.yml").read_text()
-        medic = before.replace("Model config change]",
-                                "Model config change, Brand New Gate]")
+        medic = _append_watched(before, "Brand New Gate")
         # Guards the fixture: a replace that matches nothing leaves the medic
         # blind to the new gate, and the test then passes on the repair rail
         # alone (it did, silently, from the day the list stopped ending in the

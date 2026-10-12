@@ -1,0 +1,116 @@
+# Model home carry (DRE-6986) — a merged change to config/models.yaml's
+# choices is carried into the home, setting by setting.
+#
+# Until the console writes the one home for model choices itself (DRE-6976),
+# Settings › Agents & models saves by today's route: model-config-change.yml
+# opens a pull request editing config/models.yaml, and the merge puts the
+# change in force. Once the operator seeds the home (DRE-6945) every run reads
+# the home (the repository variable BUREAU_MODEL_CHOICES) and not that file, so
+# this workflow carries a merged change into it within minutes, the way the
+# page says a save takes effect after review. `scripts/model_home_carry.py`
+# (its docstring names what is carried and what never is) compares the file's
+# choices at the push's `before` commit — or at the head of this workflow's
+# last green run, when that is older — with its `after` commit, and writes the
+# difference into a fresh read of the home with one PATCH. It is a bridge, removed with
+# the route it serves (DRE-6981).
+#
+# The `paths:` filter is acceptable here, where standards/engineering.md
+# refuses it for test narrowing: nothing requires this run as a check, so a
+# push it skips leaves no gate waiting.
+#
+# Every run prints one line tagged `model-home-carry:` (config/proof-reach.json).
+#
+# Vendor boundary (standards/vendor-boundaries.md):
+#   Q1 actor — a push to main is a merge by the gate's identity or a person;
+#      nothing here reads the actor. The home is read and written with bureau
+#      App tokens minted for dreadnought-foundry/bureau-pipeline alone.
+#   Q2 secrets — a push run reads the repo's normal secrets store, so the App
+#      id and key resolve. No Anthropic or Linear credential is used.
+#   Q3 re-run — a failed run is re-run from its Actions page, and a re-run
+#      keeps the push it was started by. A setting the home already holds is
+#      not written again, so re-running a run that wrote writes nothing.
+#      A queued run is not kept: GitHub cancels a pending run in the
+#      concurrency group when a newer push takes its place, and a cancelled
+#      run is red to nobody. So each run compares from the head of this
+#      workflow's last green run when that is older than the push's `before`
+#      (`gh run list`, with this run's `actions: read`), and the cancelled
+#      push is carried with the newer one. A red run's push is carried again
+#      by the next run the same way; runs that cannot be read are red.
+#   Q4 command limits — the variable is under 48 KB (model_home.MAX_BYTES),
+#      and the write token needs `variables: write` on the installation.
+#   Q5 our crash — nothing is written until the last step's one PATCH, and
+#      the home is read again just before it: a crash leaves the home as it
+#      was, and a refused write permission is red, so a person sees it. A run
+#      that crashed is not green, so the next run compares from before it.
+name: Model home carry
+
+on:
+  push:
+    branches: [main]
+    paths: [config/models.yaml]
+
+# One run at a time: a running carry is never cancelled between its read and
+# its write. At most one run waits — a newer push cancels it and takes its
+# place, and the newer run carries both pushes (Q3 above).
+concurrency:
+  group: model-home-carry
+  cancel-in-progress: false
+
+# The App tokens read and write the home; this run's own token reads the repo,
+# the pull request the pushed commit came from, and this workflow's runs.
+permissions:
+  actions: read
+  contents: read
+  pull-requests: read
+
+jobs:
+  carry:
+    runs-on: ${{ fromJSON(vars.BUREAU_SHORT_RUNS_ON || vars.BUREAU_RUNS_ON || '["ubuntu-latest"]') }}
+    timeout-minutes: 10
+    steps:
+      # The whole history: the push's `before` commit, or the last green run's
+      # head, is read with `git show`.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - name: Install the pipeline's Python tooling (cached)
+        uses: ./.github/actions/setup-python-cached
+        with:
+          python-version: "3.12"
+          requirements: |
+            requirements-dev.txt
+
+      # DRE-6940's read mint. A refused permission leaves the token empty, and
+      # the carry step fails red on an empty token rather than guessing.
+      - name: Mint the model-home read token
+        id: model_home
+        continue-on-error: true
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: ${{ secrets.BUREAU_APP_ID }}
+          private-key: ${{ secrets.BUREAU_APP_PRIVATE_KEY }}
+          owner: dreadnought-foundry
+          repositories: bureau-pipeline
+          permission-variables: read
+
+      # No continue-on-error: a refused write permission is red, so a person
+      # sees it.
+      - name: Mint the model-home write token
+        id: model_home_write
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: ${{ secrets.BUREAU_APP_ID }}
+          private-key: ${{ secrets.BUREAU_APP_PRIVATE_KEY }}
+          owner: dreadnought-foundry
+          repositories: bureau-pipeline
+          permission-variables: write
+
+      - name: Carry the merged choices into the home
+        env:
+          BUREAU_MODEL_HOME_TOKEN: ${{ steps.model_home.outputs.token }}
+          BUREAU_MODEL_HOME_WRITE_TOKEN: ${{ steps.model_home_write.outputs.token }}
+          GH_TOKEN: ${{ github.token }}
+          BEFORE: ${{ github.event.before }}
+          AFTER: ${{ github.event.after }}
+        run: python3 scripts/model_home_carry.py carry --before "$BEFORE" --after "$AFTER"

@@ -242,9 +242,10 @@ _DOCS_PREFIXES = ("docs/",)
 #
 # Two limits keep this fail-closed. The directory is matched by PREFIX, not by
 # segment the way test trees are: `console/design/` is agent-bureau's shape and
-# a root `design/` is project-template's (what new repos are built from) and
-# deltasolv's, while a `design/` folder inside application source is part of the
-# app. And the EXTENSION decides, not the directory: `tokens.css` feeds the app
+# a root `design/` is Foundry's (the design master), deltasolv's, and that of every
+# repo built from Foundry's `templates/company/` (what new repos are built from),
+# while a `design/` folder inside application source is part of the app. And the
+# EXTENSION decides, not the directory: `tokens.css` feeds the app
 # build and `.ts`/`.tsx`/`.js`/`.py` are source wherever they sit, so only the
 # record formats below move out of `code` — everything else there stays code.
 #
