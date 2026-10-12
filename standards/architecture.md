@@ -33,9 +33,9 @@ Linear card → relay Lambda → repository_dispatch on the product repo
 
 ## The board (the lane contract)
 ```
-Intake → Planning → Green Light → Backlog → Todo → Hand-work → In Progress → In Review → Done
-                                                   off to the side: Triage
-                                                   terminal:  Canceled · Duplicate
+Intake → Planning → Green Light → Backlog → Queued → Todo → Hand-work → In Progress → In Review → Done
+                                                            off to the side: Triage
+                                                            terminal:  Canceled · Duplicate
 ```
 - **`Intake`** — every writer that creates work writes here first.
 - **`Planning`** — the card owes a decomposition; a build run that finds an epic
@@ -53,6 +53,11 @@ Intake → Planning → Green Light → Backlog → Todo → Hand-work → In Pr
   So is a card sent back since its verdict — one that has been in Intake,
   Green Light, Triage or a closed lane since — because a verdict approves one
   trip through Planning (`stale-verdict`, DRE-4962).
+- **`Queued`** — the queue that replaces `Backlog` (DRE-4125), a lane of type
+  `unstarted` because Linear draws a `backlog`-type column first whatever its
+  position. Live on the board since DRE-6740, with `Backlog`'s clauses; nothing
+  routes to it yet — every writer still writes `Backlog` until the cutover
+  moves them.
 - **`Hand-work`** — the person-work lane (DRE-5240): a card a person builds,
   never dispatched, never reported stalled, carried to `In Review` when its pull
   request opens. WORKBENCH and OPERATOR land here (DRE-5321), which leaves
