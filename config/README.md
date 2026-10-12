@@ -454,17 +454,14 @@ but not selectable* (retired ids, and ids excluded by cost policy or because
 the CEO has said we do not use them).
 
 A retired id is named by no ladder and by no `projects.<slug>.<kind>` entry —
-`policy_errors` refuses one that is (DRE-6785) — so **an adoption never retires
-a model a project still names**. When the daily adoption would, it is refused
-and writes nothing: the operator changes or clears that project's choice on
-Settings › Agents & models, and the next daily run retires the model. The
-operator hears of it from the red `Model adoption` run, which the medic retries
-once, and from the medic's one `Pipeline failure: Model adoption` card in
-Planning, deduplicated on that title. Until then each day it stands costs one
-trial run, one refused apply, the medic's retry (another trial run) and every
-other adoption that day — the run acts on the first `adopt` decision only — and
-nothing bounds how long it stands but the operator's act: the choice is a
-person's, and nothing automatic overrides one.
+`policy_errors` refuses one that is (DRE-6785). **The daily adoption retires
+nothing** (DRE-6943): it writes the home and edits no file, because this file's
+ladders are still today's route's and still name the old id after the home has
+moved on, so an id appended under `retired:` would turn `policy_errors`, the
+generator's `--check` and the model tests red. The old id stays priced and
+unretired. When it has left every group and every project of the home, the
+adoption's record card says so in one sentence, and retiring it is a code
+change a person makes once part 3 has taken the choices out of this file.
 
 ## The role kinds — workhorse, advisory, judgement
 
@@ -583,9 +580,12 @@ catalog offers that no ladder names into exactly one of three:
   a lower declared price in `config/model-prices.yaml` (input *and* output),
   replaces that family's rung automatically. The daily
   `.github/workflows/model-adoption.yml` gives it one real agent run on the new
-  model (`.github/workflows/model-trial.yml`), then opens an ordinary pull
-  request to this file that the critic reviews and the merge gate lands. No
-  human decision — the rule was the decision.
+  model (`.github/workflows/model-trial.yml`), then writes the home — the
+  ladders it read the candidate against — under its own name,
+  `daily-adoption`, and files a record card saying what moved where (DRE-6943).
+  It reads the home again right before the write and writes nothing when a
+  console save moved it during the trial. No human decision — the rule was the
+  decision.
 - **`ignore`** — a model older than, or superseded by, what we run gets nothing:
   a line in the run summary, no card, no pull request.
 - **`ask`** — a new family, a model whose declared price is above the rung it
@@ -754,14 +754,11 @@ until the same change lifts it from `excluded`. A model the pinned Claude Code
 cannot run is caught in CI by
 `tests/test_model_cli_support.py::ProjectExceptionSupportTest`.
 
-The daily adoption carries an exception with its rung
-(`model_adoption_actions._move_projects`): when a same-family successor
-replaces a rung, every `projects.<slug>.<kind>` naming that rung of that kind's
-ladder moves to the successor too, as a text edit. An exception for a kind
-whose ladder the adoption does not touch is left alone — and if the adoption
-would retire the model it names, the write is refused (see `retired`, above). The edit reads the
-block shape shown in `models.yaml`'s comment; anything it could not move is
-caught by the edit's own closing comparison, and nothing is written.
+The daily adoption carries a project's choice with its rung, in the home
+(`model_adoption_actions.adopted_document`, DRE-6943): when a same-family
+successor replaces a rung, every project choice naming a replaced id moves to
+the successor too. The document it would write is judged by
+`model_home.home_errors` first, and a refused one is never written.
 
 **Rule 10 — `judgement` is the planner's kind.** `JUDGEMENT_ROLES` in
 `scripts/model_fallback.py` is `("planner",)`, read from `rules.planners_may_hold`
@@ -872,9 +869,8 @@ yet.`), read off the floor tables in `tests/test_model_cli_support.py` through
 `claude_code_pin.model_floors`. A missing or stale file is `STALE` under `--check`,
 exactly like the two mirrors; `tests/test_model_choices.py` pins its content
 and recomputes every verdict through a real repo slug. The daily
-`.github/workflows/model-adoption.yml` is a writer too: it runs the generator
-after it applies an adoption and stages `config/model-choices.json` beside
-`config/models.yaml`, `agents.yaml` and `scripts/model_fallback.py`.
+`.github/workflows/model-adoption.yml` no longer writes it: an adoption writes
+the home and edits no file (DRE-6943).
 
 The console WRITES this file too, without ever editing YAML itself (DRE-6624).
 Save changes on Settings › Agents & models dispatches
@@ -979,13 +975,15 @@ that is not on a ladder is never selected, however available it becomes. Ladder
 membership is the spend decision, and it is made here — in this file, in a
 reviewed pull request.
 
-One kind of edit is made for you: the `adopt` rule above. The daily model
+One kind of change is made for you: the `adopt` rule above. The daily model
 adoption workflow (`.github/workflows/model-adoption.yml`, DRE-3898) trials a
-same-family successor at the same or a lower declared price and proposes it as
-an ordinary pull request editing this file, which the critic and the merge gate
-review like any other. Every other ladder change — a new family, a pricier tier,
-an unpriced model — waits on the CEO's answer to the one question that workflow
-files.
+same-family successor at the same or a lower declared price and writes it into
+the home under its own name, `daily-adoption` (DRE-6943); the console's history
+shows the write, and its record card says what moved where. It edits no file.
+Every other ladder change — a new family, a pricier tier, an unpriced model —
+waits on the CEO's answer to the one question that workflow files, which he can
+give on Settings › Agents & models, where the model is offered the day it is
+priced.
 
 ---
 
