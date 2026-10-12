@@ -57,6 +57,14 @@ gathers the inputs from GitHub's own records and acts on the output:
     is the record's own order (`created_at`, which a re-run keeps), never a
     comparison of sha strings. A later run still in progress, cancelled or
     failed does not count: the same fault may still stand.
+  * …asked twice (DRE-5700). The rule runs here once, before the agent, and
+    a fix that merges while the agent works is invisible to it. The agent
+    may then say so — one line in `/tmp/repair-superseded.txt`, no pull
+    request — and the Report step re-gathers the listing and asks the same
+    rule through `superseded` before it believes it. On 2026-10-03 repair run
+    37092915226 decided before main went green, its agent rightly opened
+    nothing, and the Report step failed the run as a dead agent 41 seconds
+    after main went green on 44eb259.
   * Fail-closed. Unreadable attempt records mean NO dispatch (a blind
     dispatch could double-run a repair), and only a validated full 40-hex
     SHA ever becomes a branch name.
@@ -92,6 +100,8 @@ CLI (stdout appends verbatim to $GITHUB_OUTPUT; humans read stderr):
         --default-branch <d> --head-sha <sha> --refs-file <f> \
         --pulls-file <f> --out <f>
 
+    red_main_repair.py superseded --history-file <f>
+
   --refs-file  raw REST payload of GET git/matching-refs/heads/repair/
   --pulls-file raw REST payload of GET pulls?state=all&per_page=100
   --workflow-name  which workflow went red; scopes the harness's
@@ -118,6 +128,12 @@ prints nothing; exit 0 either way.
 waiting); exit 1 when a read never came back. `gather-compares` writes the
 `--compares-file` document the same way, a comparison that never came back
 null for its ref, and makes no call when the records are unreadable; exit 0. Their stdout is the job log, not $GITHUB_OUTPUT.
+
+`superseded` reads a `--history-file` through `superseding_run` — the same
+rule `decide` asks — and prints the green run's id with exit 0, or says why
+not on stderr and exits 1. A missing, marker-filled or malformed file exits 1:
+unreadable is never green. Its stdout is the run id alone, not
+$GITHUB_OUTPUT.
 
 Emits go=, branch=, attempt=, escalate=, reason=, the timeout_* detail
 (job / step / limit / commits) and superseded_by= (the green run's id, empty
@@ -468,6 +484,35 @@ def superseding_run(history) -> str:
         if run.get("run_id"):
             return str(run["run_id"])
     return ""
+
+
+def superseded(history_file: str, *, say=None) -> tuple[int, str]:
+    """The Report step's check of an agent that says the fault is gone (DRE-5700).
+
+    The decide step asks `superseding_run` once, before the agent; a fix that
+    lands while the agent works is invisible to it. On 2026-10-03 repair run
+    37092915226 decided at 03:21 UTC, main went green on 44eb259 at 04:00:14Z,
+    and the agent correctly opened nothing — which the Report step, 41 seconds
+    later, reported as a dead agent. So the agent may now say the fault is gone
+    (`/tmp/repair-superseded.txt`), and the step asks the SAME rule again on a
+    freshly gathered listing rather than believing it.
+
+    `(0, <green run id>)` when the rule names a run; `(1, "")` otherwise — a
+    history the gather could not read included, because unreadable is never
+    green.
+    """
+    say = say or (lambda line: print(line, file=sys.stderr))
+    history = load_history(history_file)
+    if history is None:
+        say("repair superseded: the run listing could not be read — the "
+            "agent's claim is not verified")
+        return 1, ""
+    green = superseding_run(history)
+    if not green:
+        say("repair superseded: no later green run of this workflow on another "
+            "commit of the default branch — the agent's claim is not verified")
+        return 1, ""
+    return 0, green
 
 
 def load_history(path: str):
@@ -1026,7 +1071,17 @@ def main(argv: list[str]) -> int:
     c.add_argument("--refs-file", required=True)
     c.add_argument("--pulls-file", required=True)
     c.add_argument("--out", required=True)
+    # DRE-5700: the Report step's re-ask of the superseded rule. Prints the
+    # green run's id and exits 0, or exits 1.
+    s = sub.add_parser("superseded")
+    s.add_argument("--history-file", required=True)
     args = parser.parse_args(argv)
+
+    if args.cmd == "superseded":
+        code, green = superseded(args.history_file)
+        if green:
+            print(green)
+        return code
 
     if args.cmd == "record-refs":
         for name in record_refs(args.refs_file, args.head_sha):
