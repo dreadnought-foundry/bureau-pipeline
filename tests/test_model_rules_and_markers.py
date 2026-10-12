@@ -286,6 +286,8 @@ def test_an_unknown_marker_reads_the_prices(monkeypatch):
 
 _IMPORT_COUNT = textwrap.dedent("""
     import json, sys
+    from pathlib import Path
+    import yaml
     sys.path.insert(0, sys.argv[1])
     callers = []
     def profile(frame, event, arg):
@@ -294,20 +296,39 @@ _IMPORT_COUNT = textwrap.dedent("""
             callers.append(frame.f_back.f_code.co_name)
     sys.setprofile(profile)
     import model_fallback as mf
+    at_import = list(callers)
+    raw = yaml.safe_load((Path(sys.argv[1]).parent / "config" / "models.yaml").read_text())
+    raw["ladders"]["workhorse"].append(sys.argv[2])
+    errors = mf.policy_errors(raw)
     sys.setprofile(None)
-    print(json.dumps({"callers": callers, "known": sorted(mf.KNOWN_MODELS)}))
+    print(json.dumps({"at_import": at_import, "after": callers[len(at_import):],
+                      "errors": errors, "known": sorted(mf.KNOWN_MODELS)}))
 """)
 
 
-def test_importing_adds_no_price_read_of_its_own():
-    """Counted in a fresh process. The one call the import makes is the
-    load-time policy check's (rule 4b), which `main` made before this card;
-    building `KNOWN_MODELS` and the rules block add none."""
+def _import_count() -> dict:
     proc = subprocess.run(
-        [sys.executable, "-c", _IMPORT_COUNT, str(ROOT / "scripts")],
+        [sys.executable, "-c", _IMPORT_COUNT, str(ROOT / "scripts"), UNLADDERED],
         capture_output=True, text=True, timeout=120,
     )
     assert proc.returncode == 0, proc.stderr
-    seen = json.loads(proc.stdout)
-    assert seen["callers"] == ["policy_errors"]
+    return json.loads(proc.stdout)
+
+
+def test_importing_never_reads_the_prices():
+    """Counted in a fresh process. The import judges config/models.yaml for
+    the code-side facts it keeps; the price rule (4b) is about the ladders and
+    projects, which are choices the import does not keep, so it reads no
+    price."""
+    seen = _import_count()
+    assert seen["at_import"] == []
     assert set(seen["known"]) == mf.KNOWN_MODELS
+
+
+def test_the_price_rule_still_refuses_an_unpriced_rung_after_the_import():
+    """Rule 4b is not lost with the import's read: the first `policy_errors`
+    that judges a ladder reads the prices then, and refuses a rung with none."""
+    seen = _import_count()
+    assert seen["after"] == ["policy_errors"]
+    assert (f"ladders.workhorse: {UNLADDERED} has no declared price, so it "
+            "cannot be chosen.") in seen["errors"]
