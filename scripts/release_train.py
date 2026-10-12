@@ -331,6 +331,18 @@ DEFERRAL_RE_ARM = re.compile(r"\s—\sre-arm in (\d+) minutes$")
 #: constant to what promote-channel.yml actually listens to.
 CHANNEL_GATE = "harness.yml"
 
+#: The commit's own unit suite (DRE-6993): `promote-channel.yml` refuses a
+#: commit whose `Pipeline Tests` push run on the default branch is red or
+#: proves nothing, so a green gate beside such a run is not promotion coming.
+#: `UNIT_SUITE_SCENARIO` is the token the receipt's `scenarios=` names it by.
+UNIT_GATE = "tests.yml"
+UNIT_SUITE_SCENARIO = "unit-suite"
+UNIT_RED_CONCLUSIONS = ("failure", "timed_out")
+
+#: `read_channel`'s "the unit suite was not read" — distinct from `None`,
+#: which is "read, and no run on record".
+_UNIT_NOT_READ = object()
+
 #: The channel row's states. `unknown` is the fourth, by console-honesty rule
 #: 1 — an unreadable answer is never `current` or `advancing`.
 CHANNEL_CURRENT = "current"
@@ -819,7 +831,33 @@ def harness_failures(log_text) -> tuple:
     return tuple(found)
 
 
-def read_channel(*, head, ref, compare, run, log_text=None) -> Channel:
+def _unit_hold(unit) -> tuple | None:
+    """`(gate url or None, detail)` when the commit's own unit suite holds
+    the channel (DRE-6993), else None.
+
+    Running or queued is a wait — promote-channel starts again when it ends —
+    and green is no hold. Red is a hold on the suite's run; no record, or a
+    run that ended with no verdict (GitHub's `cancelled`), proves nothing,
+    and the promotion refuses that too.
+    """
+    record = unit if isinstance(unit, dict) else {}
+    status = record.get("status") or ""
+    conclusion = record.get("conclusion") or ""
+    url = record.get("html_url") or None
+    if status and status != "completed":
+        return None
+    if status == "completed" and conclusion == "success":
+        return None
+    if status == "completed" and conclusion in UNIT_RED_CONCLUSIONS:
+        return url, f"its own unit suite ({UNIT_GATE}) ended {conclusion}"
+    if not record:
+        return None, f"no {UNIT_GATE} push run is on record for it"
+    return url, (f"its own unit suite ({UNIT_GATE}) proves nothing — "
+                 f"status={status or 'none'}, conclusion={conclusion or 'none'}")
+
+
+def read_channel(*, head, ref, compare, run, log_text=None,
+                 unit=_UNIT_NOT_READ) -> Channel:
     """One `Channel` from the four reads — pure, so the fixture drives it.
 
     `ref` is `git/ref/tags/<channel>`'s object (`sha`), or None when the ref
@@ -829,14 +867,23 @@ def read_channel(*, head, ref, compare, run, log_text=None) -> Channel:
     `head_sha`), or None when there is none; `log_text` is that run's
     `--log-failed` output when it concluded anything but success.
 
+    `unit` is that run's commit's own `tests.yml` push run (`status`,
+    `conclusion`, `html_url`), or None when there is none on record
+    (DRE-6993). It is read only where the gate is green past the channel,
+    and NOT PASSING IT answers exactly as before it existed.
+
     The states, in the order they are decided:
       unknown    — the ref or the compare was not read (rule 1: never a green)
       current    — the ref is at the head, or the head is inside it
       advancing  — behind, and the gate is running, or green on a commit
-                   PAST the channel: promotion is coming
+                   PAST the channel whose own unit suite is green or still
+                   running: promotion is coming
       blocked    — behind, and the gate's latest run failed or was cancelled,
                    or there is no run past the channel at all (the
-                   Actions-budget-block shape: nothing is judging the head)
+                   Actions-budget-block shape: nothing is judging the head),
+                   or the gate is green and that commit's own unit suite is
+                   red, missing or ended with no verdict — `scenarios` is
+                   then `unit-suite` and the gate link is the suite's run
     """
     if not ref or not isinstance(ref, dict) or not ref.get("sha"):
         return Channel(CHANNEL_UNKNOWN, None, None, None, head, None, (),
@@ -873,6 +920,13 @@ def read_channel(*, head, ref, compare, run, log_text=None) -> Channel:
                 f"the gate's latest run proved {_short(run_sha)}, the commit "
                 f"the channel already sits on — no harness run has judged "
                 f"any of the {behind} commits since")
+        held = None if unit is _UNIT_NOT_READ else _unit_hold(unit)
+        if held:
+            unit_url, why = held
+            return Channel(
+                CHANNEL_BLOCKED, behind, since, tag_sha, head, unit_url or url,
+                (UNIT_SUITE_SCENARIO,),
+                f"the gate concluded success on {_short(run_sha)}, and {why}")
         return Channel(
             CHANNEL_ADVANCING, behind, since, tag_sha, head, url, (),
             f"the gate concluded success on {_short(run_sha)}")
@@ -924,7 +978,9 @@ def default_branch_head(repo: str, branch: str) -> str:
 def fetch_channel(repo: str, surface, head: str, gate_run=None,
                   default_branch: str = "main") -> Channel:
     """The channel's four reads, at most: the ref, the compare, the gate's
-    run and — only when that run concluded anything but success — its log.
+    run and — only when that run concluded anything but success — its log,
+    or, only when it concluded success on a commit past the channel, that
+    commit's own `tests.yml` push run (DRE-6993).
     Read-only, and every read is `gh`, so a test puts a fake on PATH.
 
     THE REF IS READ THROUGH THE API, NOT THE CHECKOUT'S TAGS, on purpose:
@@ -986,6 +1042,22 @@ def fetch_channel(repo: str, surface, head: str, gate_run=None,
                 f"gh could not read the log of run {run.get('id')}: "
                 f"{done.stderr.strip()}")
         log_text = done.stdout
+    if run and run.get("status") == "completed" \
+            and run.get("conclusion") == "success" \
+            and run.get("head_sha") and run.get("head_sha") != ref.get("sha"):
+        # DRE-6993: a green gate past the channel is promotion coming only if
+        # that commit's own unit suite is green or still running — the
+        # promotion refuses it otherwise. Its push run on the default branch,
+        # the record promote-channel weighs; `null` when there is none.
+        unit = _gh_json(
+            f"repos/{repo}/actions/workflows/{UNIT_GATE}/runs"
+            f"?head_sha={run['head_sha']}&branch={default_branch}"
+            f"&event=push&per_page=1",
+            ".workflow_runs[0] | if . then {id, html_url, status, conclusion} "
+            "else null end",
+            f"the {UNIT_GATE} run of {_short(run['head_sha'])}")
+        return read_channel(head=head, ref=ref, compare=compare, run=run,
+                            log_text=log_text, unit=unit)
     return read_channel(head=head, ref=ref, compare=compare, run=run,
                         log_text=log_text)
 
@@ -2349,8 +2421,13 @@ _ORDER = (
      "train never runs it, and since DRE-3568 the row says where it is: "
      "`current` at the head; `advancing` when behind with the gate "
      f"(`{CHANNEL_GATE}` on the default branch) running or green past the "
-     "channel; `blocked` when behind and the gate's latest run failed, was "
-     "cancelled or has judged nothing since the channel — this one names the "
+     "channel with that commit's own unit suite green or still running; "
+     "`blocked` when behind and the gate's latest run failed, was "
+     "cancelled or has judged nothing since the channel, or is green beside "
+     f"a `Pipeline Tests` push run (`{UNIT_GATE}`) on that commit that is red, "
+     "missing or ended with no verdict — the row names that run where there is "
+     f"one, and `{UNIT_SUITE_SCENARIO}` as its one scenario (DRE-6993) — this "
+     "one names the "
      "run, its failing scenarios and how long the channel has been behind, and "
      "raises a `::warning::` and a `## Blocked` step summary; `unknown` when a "
      "read failed, which warns too and is never a green. Each prints one "

@@ -243,23 +243,20 @@ class CanonicalConfigTest(unittest.TestCase):
         for name, kind in cfg["agents"].items():
             self.assertIn(kind, cfg["kinds"], f"{name}: unknown kind {kind!r}")
 
-    def test_the_build_ladder_holds_no_fable(self):
-        # The 2026-08-09 policy, on whatever the console last saved: Fable is
-        # not reachable from the build ladder at any availability — neither the
-        # excluded `claude-fable-5` nor any Fable on the planner's ladder,
-        # wherever on it the console put it (DRE-3015). The planner's TOP is
-        # not pinned off the build ladder: since 2026-10-10 (DRE-6785) a person
-        # may lead the builders with it, proved on the fixture below. Which
-        # model LEADS the builders is the console's choice, and no test of the
-        # committed file pins it (DRE-6861).
+    def test_no_ladder_holds_an_excluded_model(self):
+        # The 2026-08-09 policy, on whatever the console last saved: the
+        # excluded `claude-fable-5` is not reachable from any ladder at any
+        # availability, and neither is any other excluded model. Which model
+        # LEADS a group is the console's choice, and no test of the committed
+        # file pins it (DRE-6861). The Planners' top on the build ladder was
+        # rule 4 until DRE-6785 retired it; the test below proves the new rule
+        # on the fixture, and since DRE-6935 nothing here compares the two.
         cfg = _canonical()
-        workhorse = _ladder_models(cfg["ladders"][cfg["default_ladder"]])
-        judgement = _ladder_models(
-            cfg["ladders"][cfg["kinds"][mf.JUDGEMENT_KIND]["ladder"]])
-        self.assertNotIn(FABLE, workhorse)
-        fables = [m for m in judgement if m.startswith("claude-fable")]
-        for model in fables:
-            self.assertNotIn(model, workhorse)
+        excluded = {entry["model"] for entry in cfg["excluded"]}
+        self.assertIn(FABLE, excluded)
+        for name, rungs in cfg["ladders"].items():
+            self.assertFalse(excluded & set(_ladder_models(rungs)),
+                             f"ladders.{name} holds an excluded model")
 
     def test_the_policy_allows_the_planners_top_on_the_build_ladder(self):
         # Refused by rule 4 until the CEO's decision of 2026-10-10 (DRE-6785):

@@ -276,7 +276,7 @@ fi
 
 # How the run died, from the one shared classifier (DRE-2312, DRE-2695).
 EXEC_FILE="$CLAUDE_EXECUTION_FILE"
-[ -n "$EXEC_FILE" ] || EXEC_FILE=/home/runner/work/_temp/claude-execution-output.json
+[ -n "$EXEC_FILE" ] || EXEC_FILE="${RUNNER_TEMP:-/tmp}/claude-execution-output.json"
 # --work-on-runner: committed work GitHub does not have, from the disk (DRE-3043).
 LOCAL_WORK="$RESCUE_LOCAL_WORK"
 DEATH_CLASS=$(python3 .bureau-pipeline/scripts/check_agent_result.py classify "$EXEC_FILE" \

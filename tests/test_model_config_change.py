@@ -340,14 +340,20 @@ def test_the_policy_gate_refuses_a_per_card_role_on_the_planners_kind():
     assert "planner" in _reasons(refusals)
 
 
-def test_the_policy_gate_refuses_a_fourth_group():
-    """`policy_errors` admits exactly the three kinds today; a group the console
-    adds is refused with that rule's own words until the policy changes."""
-    _, refusals = _apply({"op": "add_group", "group": "product-design",
-                          "label": "Product & design",
-                          "purpose": "Decide what to build and how it looks.",
-                          "model": TOP})
-    assert "kinds: must declare exactly" in _reasons(refusals)
+def test_the_policy_gate_admits_an_added_group():
+    """DRE-6834, in the place of DRE-6624's refusal of the same change: a group
+    the console adds is a build group beside the three, and the policy takes
+    it — its own kind, its own ladder, the chosen model first."""
+    before = yaml.safe_load(_text())
+    text, refusals = _apply({"op": "add_group", "group": "product-design",
+                             "label": "Product & design",
+                             "purpose": "Decide what to build and how it looks.",
+                             "model": TOP})
+    assert refusals == [], _reasons(refusals)
+    doc = yaml.safe_load(text)
+    assert list(doc["kinds"]) == list(before["kinds"]) + ["product-design"]
+    assert _ladder(doc, "product-design") == [TOP]
+    assert _comments(text) == _comments(_text())
 
 
 def test_choosing_an_excluded_model_lifts_its_exclusion_and_says_so():
@@ -696,6 +702,13 @@ def test_the_set_aside_line_drops_the_date_when_the_reason_has_none():
             "Builders.") in _body(BUILDERS_HAIKU, config=config)
 
 
+def test_an_added_group_on_a_set_aside_model_says_it_is_brought_back():
+    change = {"op": "add_group", "group": "product-design", "label": "Product & design",
+              "purpose": "Decide what to build and how it looks.", "model": HAIKU}
+    assert ("Haiku 5.5 was set aside on 2026-10-08 and is brought back by this "
+            "choice for Product & design.") in _body(change)
+
+
 def test_a_model_not_excluded_writes_no_set_aside_line():
     assert not any("was set aside" in line for line in _body(BUILDERS_FABLE))
 
@@ -783,23 +796,49 @@ def test_a_project_replacing_its_exception_is_cautioned_against_that_exception()
         "tokens.")
 
 
-# -- item 4: a fourth group is refused first and composes nothing -------------
+def _new_group(model: str) -> dict:
+    return {"op": "add_group", "group": "product-design", "label": "Product & design",
+            "purpose": "Decide what to build and how it looks.", "model": model}
+
+
+def test_an_added_group_on_fable_5_1_is_cautioned_against_the_builders_default():
+    """DRE-6834: a new group has no model of its own yet, so its first one is
+    priced against the Builders' default, the group it is built beside — and
+    the Builders' busiest-group words are not said of it."""
+    assert _line_for(_new_group(FABLE_5_1)).endswith(
+        "Fable 5.1 costs more than Opus 5.5: $10/$50 against $4/$20 per million "
+        "tokens.")
+
+
+def test_an_added_group_on_a_set_aside_model_says_it_comes_back_for_that_group():
+    line = _line_for(_new_group(HAIKU))
+    assert (f"{model_choice.model_label(HAIKU)} is a model we set aside; choosing it "
+            "brings it back for Product & design") in line, line
+    assert "against Opus 5.5 at $4/$20" in line, line
+
+
+def test_an_added_group_on_the_builders_default_carries_no_caution():
+    change = _new_group(OPUS_5_5)
+    assert _line_for(change) == f"- {mcc.describe(change, yaml.safe_load(_text()))}"
+
+
+# -- item 4: an added group's model is a choice, and a choice is complete -----
 
 @pytest.mark.parametrize("model", [HAIKU, OPUS_5_5])
-def test_a_fourth_group_is_refused_before_anything_is_composed(model, monkeypatch):
-    calls = []
-    for owner, name in ((model_choice, "caution_for"), (mcc, "describe"),
-                        (mcc, "pr_body")):
-        real = getattr(owner, name)
-        monkeypatch.setattr(owner, name,
-                            lambda *a, _n=name, _r=real, **k: calls.append(_n) or _r(*a, **k))
+def test_an_added_groups_model_is_a_complete_choice(model):
+    """DRE-6834, in the place of DRE-6789's pin that a fourth group is refused
+    before anything is composed: the group is added, and an excluded model
+    chosen for it is lifted in the same change, as a Builders choice lifts it."""
+    before = yaml.safe_load(_text())
     change = {"op": "add_group", "group": "product-design", "label": "Product & design",
               "purpose": "Decide what to build and how it looks.", "model": model}
     text, refusals = _apply(change)
-    assert text == _text()
-    assert "kinds: must declare exactly" in _reasons(refusals)
-    assert HAIKU in _excluded(yaml.safe_load(text))
-    assert calls == []
+    assert refusals == [], _reasons(refusals)
+    doc = yaml.safe_load(text)
+    assert _ladder(doc, "product-design") == [model]
+    assert model not in _excluded(doc)
+    assert _excluded(doc) == [m for m in _excluded(before) if m != model]
+    assert _comments(text) == _comments(_text())
 
 
 # -- item 5: what is still refused, plainly ----------------------------------
@@ -846,9 +885,9 @@ def test_a_retired_model_is_refused_as_retired_whether_or_not_it_has_a_price(pri
 @pytest.mark.parametrize("change", [
     {"op": "set_default_model", "group": "workhorse", "model": "claude-nonesuch-9"},
     {"op": "set_default_model", "group": "workhorse", "model": "claude-opus-4-8"},
-    {"op": "add_group", "group": "product-design", "label": "Product & design",
+    {"op": "add_group", "group": "workhorse", "label": "Product & design",
      "purpose": "Decide what to build and how it looks.", "model": HAIKU},
-], ids=["unpriced", "retired", "fourth-group"])
+], ids=["unpriced", "retired", "taken-group-name"])
 def test_a_refused_choice_exits_2_and_writes_nothing(tmp_path, change):
     tree = _tree(tmp_path / "tree")
     proc = _cli(tree, "apply", "--changes", str(_write_set(tmp_path, change)))
@@ -939,6 +978,10 @@ SCENARIOS = {
                                      project="atlas")),
     "atlas-haiku-cleared": ((ATLAS_HAIKU,), ATLAS_CLEAR),
     "atlas-haiku-replaced": ((ATLAS_HAIKU,), ATLAS_SONNET_4_6),
+    "added-group-haiku": ((), {"op": "add_group", "group": "product-design",
+                               "label": "Product & design",
+                               "purpose": "Decide what to build and how it looks.",
+                               "model": HAIKU}),
 }
 
 

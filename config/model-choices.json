@@ -216,6 +216,10 @@
       ]
     }
   ],
+  "add_group": {
+    "allowed": true,
+    "reason": null
+  },
   "agents": [
     {
       "name": "engineer",

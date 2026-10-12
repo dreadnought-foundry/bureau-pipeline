@@ -118,12 +118,11 @@ class TheClassIsItsOwnTest(LogFileMixin, unittest.TestCase):
         # retried once, so reading one as the other loses the retry — and the
         # marker would tell the sweep to re-enter a stage once a wall that was
         # never hit comes down. The log carries the echoed "monthly spend
-        # limit" line every real planner log has (DRE-6974), so the stall is
-        # what decides it — not the absence of the words.
+        # limit" line every real planner log has (DRE-6974). Since DRE-6985 an
+        # echoed script line is not the run speaking, so the line alone reads
+        # None too.
         log = stalled_log(extra=ECHOED_SPEND_LIMIT_LINE)
-        self.assertEqual("claude", dead_run.limit_kind(without_the_stall(log)),
-                         "the echoed line alone must read as a wall, or this "
-                         "test passes for the wrong reason")
+        self.assertIsNone(dead_run.limit_kind(without_the_stall(log)))
         self.assertIsNone(dead_run.limit_kind(log))
 
     def test_a_stalled_REVIEW_is_not_read_as_a_rate_limit(self):
@@ -287,11 +286,12 @@ class AStallIsNeverAUsageLimitTest(LogFileMixin, unittest.TestCase):
         # no card to mark.
         self.assertEqual("DRE-6936", medic_retry.card_for_run("main", REAL_STALL))
 
-    def test_without_its_stall_line_the_log_reads_as_a_claude_wall(self):
-        # The defect, pinned: the echoed comment alone reads `claude`. If this
-        # ever stops holding, the test below stops proving anything.
+    def test_without_its_stall_line_the_log_is_no_claude_wall(self):
+        # The echoed comment alone read `claude` until DRE-6985: an echoed
+        # script line is not the run speaking, so without its stall line the
+        # log carries no wall at all.
         self.assertIsNone(stream_watchdog.stall_from_log(without_the_stall(REAL_STALL)))
-        self.assertEqual("claude", dead_run.limit_kind(without_the_stall(REAL_STALL)))
+        self.assertIsNone(dead_run.limit_kind(without_the_stall(REAL_STALL)))
 
     def test_the_stalled_run_is_not_a_limit(self):
         self.assertIsNotNone(stream_watchdog.stall_from_log(REAL_STALL))
@@ -393,6 +393,102 @@ class TheMedicIsWiredToItTest(unittest.TestCase):
         # posted two comments is noise on the card the CEO reads.
         self.assertIn(medic_retry.RULE_STALLED_REPEAT,
                       self.jobs["stall_record"]["if"])
+
+
+WORKED = stream_watchdog.Stall("Agent Plan / plan", "2026-10-11T20:23:21Z",
+                               300, 821)
+
+
+def _collapsed(text: str) -> str:
+    return " ".join((text or "").split())
+
+
+def _unwrapped(value: str) -> str:
+    """An `env:` value's expression without its `${{ }}` wrapper."""
+    value = _collapsed(value)
+    assert value.startswith("${{") and value.endswith("}}"), value
+    return _collapsed(value[3:-2])
+
+
+class TheNotePromisesOnlyTheRetryThatRunsTest(unittest.TestCase):
+    """DRE-6995: the record job posts in more cases than the retry job runs,
+    so the record is TOLD whether the retry is starting rather than assuming
+    it."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.jobs = yaml.safe_load(MEDIC.read_text())["jobs"]
+        steps = [s for s in cls.jobs["stall_record"]["steps"]
+                 if s.get("name") == "Record the stall on the card"]
+        assert len(steps) == 1
+        cls.step = steps[0]
+
+    def test_retrying_is_the_retry_jobs_own_condition(self):
+        self.assertEqual(_unwrapped(self.step["env"]["RETRYING"]),
+                         _collapsed(self.jobs["retry"]["if"]))
+
+    def test_limit_is_the_classifiers_limit(self):
+        self.assertEqual(_collapsed(self.step["env"]["LIMIT"]),
+                         "${{ needs.classify.outputs.limit }}")
+
+    def test_the_script_passes_both(self):
+        self.assertIn('--retrying "$RETRYING"', self.step["run"])
+        self.assertIn('--limit "$LIMIT"', self.step["run"])
+
+    def context(self, **changes):
+        context = {
+            "github.event.workflow_run.conclusion": "failure",
+            "github.event.workflow_run.run_attempt": 1,
+            "needs.classify.outputs.infra_crash": "false",
+            "needs.classify.outputs.class": "stalled_no_stream",
+            "needs.classify.outputs.limit": "false",
+            "needs.classify.outputs.retry": "true",
+            "needs.classify.outputs.rule": "",
+            "needs.classify.outputs.card": "DRE-6936",
+        }
+        context.update(changes)
+        return context
+
+    def fired(self, context):
+        from test_medic_environment_hold import fires
+
+        retrying = fires(_unwrapped(self.step["env"]["RETRYING"]), context)
+        retry = fires(self.jobs["retry"]["if"], context)
+        self.assertEqual(retrying, retry,
+                         "the note's RETRYING must be what the retry job did")
+        return retry, fires(self.jobs["stall_record"]["if"], context)
+
+    def test_a_first_stall_retries_and_records(self):
+        self.assertEqual((True, True), self.fired(self.context()))
+
+    def test_a_record_with_no_retry_beside_it(self):
+        for changes in (
+            {"github.event.workflow_run.run_attempt": 2},
+            {"needs.classify.outputs.limit": "true"},
+            {"needs.classify.outputs.retry": "false",
+             "needs.classify.outputs.rule": medic_retry.RULE_PARKED},
+        ):
+            with self.subTest(**changes):
+                self.assertEqual((False, True),
+                                 self.fired(self.context(**changes)))
+
+
+class TheRepeatNoticeTest(unittest.TestCase):
+    """The repeat notice says how long the run worked, and no longer claims
+    the code was never read (DRE-6995)."""
+
+    def test_the_detail_says_how_long_it_worked(self):
+        earlier = stream_watchdog.stall_record(
+            WORKED, run_id="1", attempt="1", run_url="https://x/1")
+        detail = medic_retry.repeat_stall(WORKED, [earlier],
+                                          run_id="1", attempt="2")
+        self.assertIn("13.7 minutes", detail)
+
+    def test_the_notice_no_longer_says_the_code_was_never_read(self):
+        decision = medic_retry.decide(repeat_stall="this run went quiet too")
+        notice = medic_retry.declined_comment(decision, run_url="https://x/1")
+        self.assertNotIn("never got as far", notice)
+        self.assertIn(f"Rule applied: {medic_retry.RULE_STALLED_REPEAT}", notice)
 
 
 if __name__ == "__main__":  # pragma: no cover

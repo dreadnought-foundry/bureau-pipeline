@@ -195,20 +195,58 @@ jobs:
   # agent-move walk, whose twenty copies each ran the other walk and itself,
   # while parts 2 to 4 took 20 to 24 minutes, against 11 to 16 the day
   # before. So no part collects a walk (`unit_test_parts.py list` leaves them
-  # out), and this job runs every one of them, found by their file name alone
-  # — a walk added later needs no edit here — and prints how long each took.
-  # A run with no walk is red, never a silent green. `unit-result` waits on
-  # this job and fails when it did not succeed, so a red walk still fails the
-  # pull request; `tests/test_tests_workflow_parts.py` holds all of it.
+  # out), and the jobs below run every one of them, found by their file name
+  # alone — a walk added later needs no edit here — and print how long each
+  # took. A run with no walk is red, never a silent green. `unit-result` waits
+  # on the walks and fails when one did not succeed, so a red walk still fails
+  # the pull request; `tests/test_tests_workflow_parts.py` holds all of it.
   #
-  # 45 minutes: on 2026-10-11 the two walks took 633 and 443 seconds run
-  # alone on four cores (`config/unit-test-durations.json`), 18 minutes
-  # together, and 45 is over 2x that. Read the times this job prints before
-  # adding a walk that would spend the margin.
-  walks:
-    name: scripts unit tests (walks)
+  # ONE WALK, ONE JOB (DRE-6935). The four walks shared one 45-minute job
+  # until run 38178110152 canceled it twice at that limit: the agent-move walk
+  # took 17m45s, the change walk 0m12s, the every-default walk 20m42s, and
+  # the project walk was cut off 6m25s in. The eight green main runs before it
+  # put the project walk at 8m00s to 14m48s. `walk-list` reads the walks off
+  # the tree (`walks --json`, red with none) and `walks` runs one of them per
+  # job, so the every-default walk, which grows with every model the page
+  # offers, spends no other walk's clock.
+  walk-list:
+    name: scripts unit tests (walk list)
     runs-on: ${{ fromJSON(vars.BUREAU_CI_RUNS_ON || vars.BUREAU_RUNS_ON || '["ubuntu-latest"]') }}
-    timeout-minutes: 45
+    timeout-minutes: 5
+    outputs:
+      walks: ${{ steps.list.outputs.walks }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: List the walks
+        id: list
+        run: |
+          walks=$(python3 scripts/unit_test_parts.py walks --json)
+          echo "walks=$walks" >> "$GITHUB_OUTPUT"
+          echo "walks: $walks"
+
+  # EACH WALK ON ITS OWN CLOCK, AND THE CLOCK FROM WHAT THE JOB MEASURED
+  # (DRE-7016). The ten finished main runs read at 16:15 PT on 2026-10-11 ran
+  # the three walks of the day in one job in 16m28s (run 38174492643) to 32m26s
+  # (run 38178153419), on nothing but the machine GitHub handed them: the
+  # agent-move walk took 8m40s on the first and 17m31s on the second, the
+  # project-model walk 7m11s and 14m34s. The slowest walk seen anywhere, the
+  # every-default walk's 20m42s in job 114591044631, is 2.13 times the 583
+  # seconds it took at a desk on four cores. So the limit is a walk's desk
+  # seconds (`config/unit-test-durations.json`), times 2.13, doubled: 2 x 2.13
+  # x 633.36 for the agent-move walk is 2,698 seconds, and 50 minutes rounds
+  # that up to the next ten. `tests/test_walks_time_budget.py` holds every
+  # walk on the tree to it and names the walk that no longer fits: split it,
+  # or raise this from a new measurement.
+  walks:
+    name: scripts unit tests (walk ${{ matrix.walk }})
+    needs: walk-list
+    runs-on: ${{ fromJSON(vars.BUREAU_CI_RUNS_ON || vars.BUREAU_RUNS_ON || '["ubuntu-latest"]') }}
+    strategy:
+      # One red walk must not cancel the others, as with the parts.
+      fail-fast: false
+      matrix:
+        walk: ${{ fromJSON(needs.walk-list.outputs.walks) }}
+    timeout-minutes: 50
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -223,20 +261,23 @@ jobs:
             requirements-dev.txt
       # The parts' `Unit tests` environment, exactly: a walk imports the same
       # modules a part does, and must not pass or fail on which job ran it.
-      - name: Console-change walks
+      # Plus the walk this entry runs, through the environment, never written
+      # into the shell line.
+      - name: Console-change walk
         env:
           LINEAR_API_KEY: test-key
           REPO: test/test
           GH_TOKEN: test
           REPO_SLUG: agent-bureau
           BUREAU_REQUIRE_GIT_HISTORY: "1"
-        run: python3 scripts/unit_test_parts.py run-walks
+          WALK: ${{ matrix.walk }}
+        run: python3 scripts/unit_test_parts.py run-walks --only "$WALK"
 
   # The ONE result the merge gate and branch protection read (DRE-5838). Branch
   # protection on `main` requires a check named exactly `scripts unit tests`;
   # the parts report as `scripts unit tests (part N)`, so this job keeps the
   # name, and it passes only when every part passed AND every test file ran in
-  # exactly one of them AND the walks' job passed (DRE-6909). `always()` is
+  # exactly one of them AND every walk's job passed (DRE-6909). `always()` is
   # load-bearing: without it GitHub SKIPS this job when a part or the walks
   # fail, and a skipped required check counts as passing.
   # The repository checks that used to follow the suite in the single job run
@@ -361,7 +402,7 @@ jobs:
             red=1
           fi
           if [ "$WALKS" != "success" ]; then
-            echo "::error::the walks finished '$WALKS', not 'success' — see the scripts unit tests (walks) job"
+            echo "::error::the walks finished '$WALKS', not 'success' — see the scripts unit tests (walk ...) jobs"
             red=1
           fi
           if [ "$red" = 1 ]; then

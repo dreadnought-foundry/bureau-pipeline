@@ -1,5 +1,5 @@
 {
-  "measured": "CI run 38082387546 (PR #956, 2026-10-10, head e5629d2), jobs 114304866472, 114304867288, 114304867599 and 114304867574: the suite in four parts, every test green but the durations-coverage check this record fixes; seconds per file from the runner's timestamps on each pytest -v result line; plus tests/test_console_project_model_keeps_the_suite_green.py alone, measured locally for DRE-6883 (2026-10-11, 4 cores, 442.62 s for its 46 tests once it walks every project and every group), because no CI run had timed that file yet; and tests/test_console_agent_move_keeps_the_suite_green.py alone, measured locally for DRE-6889 (2026-10-11, 4 cores, 633.36 s for its 46 tests: 20 agent-move cases, each the whole model, session and console suite in a copy of the tree)",
+  "measured": "CI run 38082387546 (PR #956, 2026-10-10, head e5629d2), jobs 114304866472, 114304867288, 114304867599 and 114304867574: the suite in four parts, every test green but the durations-coverage check this record fixes; seconds per file from the runner's timestamps on each pytest -v result line; plus tests/test_console_project_model_keeps_the_suite_green.py alone, measured locally for DRE-6883 (2026-10-11, 4 cores, 442.62 s for its 46 tests once it walks every project and every group), because no CI run had timed that file yet; and tests/test_console_agent_move_keeps_the_suite_green.py alone, measured locally for DRE-6889 (2026-10-11, 4 cores, 633.36 s for its 46 tests: 20 agent-move cases, each the whole model, session and console suite in a copy of the tree); and tests/test_console_every_default_keeps_the_suite_green.py alone, measured locally for DRE-6935 (2026-10-11, 4 cores, 583 s for its 42 tests); every walk (tests/*_keeps_the_suite_green.py) is recorded at those desk seconds, which tests/test_walks_time_budget.py multiplies by 2.13, the slowest CI walk over its desk record (the every-default walk's 1,241.31 s in job 114591044631, run 38178110152), to hold the walks job's clock (DRE-7016); and tests/test_console_change_keeps_the_suite_green.py, which has no desk measurement because its slow cases skip in the walks job, at 29 s, the longest the walks job has taken for it (0m29s in job 114573848564, run 38174492643, 2026-10-11)",
   "seconds": {
     "tests/fixtures/mirror-check/agent-bureau/console/backend/tests/test_unrelated.py": 0.01,
     "tests/test_absent_workflow_is_not_unreadable.py": 0.12,
@@ -80,7 +80,9 @@
     "tests/test_conflicts_only.py": 3.89,
     "tests/test_console_agent_move_keeps_the_suite_green.py": 633.36,
     "tests/test_console_answer_receipt.py": 0.15,
+    "tests/test_console_change_keeps_the_suite_green.py": 29.0,
     "tests/test_console_escalation.py": 0.56,
+    "tests/test_console_every_default_keeps_the_suite_green.py": 583.0,
     "tests/test_console_honesty_wiring.py": 0.02,
     "tests/test_console_project_model_keeps_the_suite_green.py": 442.62,
     "tests/test_console_receipt.py": 0.11,

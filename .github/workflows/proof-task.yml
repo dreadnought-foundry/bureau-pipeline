@@ -927,7 +927,7 @@ jobs:
           # probe asks about the first name on it.
           ALLOWED_BOTS: agent-bureau-bot,agent-bureau-bot-2,agent-bureau-bot-3,agent-bureau-bot-4,github-actions
         run: |
-          EXEC_FILE="${CLAUDE_EXECUTION_FILE:-/home/runner/work/_temp/claude-execution-output.json}"
+          EXEC_FILE="${CLAUDE_EXECUTION_FILE:-${RUNNER_TEMP:-/tmp}/claude-execution-output.json}"
           # A pushed branch is the other proof the agent ran, and it is read
           # the same way agent-task.yml's Report step reads it. A record branch a
           # previous run left reads as "ran", which only ever costs a retry.
@@ -967,7 +967,7 @@ jobs:
           DELAY: ${{ steps.retry1.outputs.delay }}
           CLAUDE_EXECUTION_FILE: ${{ steps.claude.outputs.execution_file }}
         run: |
-          EXEC_FILE="${CLAUDE_EXECUTION_FILE:-/home/runner/work/_temp/claude-execution-output.json}"
+          EXEC_FILE="${CLAUDE_EXECUTION_FILE:-${RUNNER_TEMP:-/tmp}/claude-execution-output.json}"
           rm -f "$EXEC_FILE"
           echo "waiting ${DELAY:-60}s, then agent attempt 2 of 3"
           sleep "${DELAY:-60}"
@@ -1145,7 +1145,7 @@ jobs:
           # probe asks about the first name on it.
           ALLOWED_BOTS: agent-bureau-bot,agent-bureau-bot-2,agent-bureau-bot-3,agent-bureau-bot-4,github-actions
         run: |
-          EXEC_FILE="${CLAUDE_EXECUTION_FILE:-/home/runner/work/_temp/claude-execution-output.json}"
+          EXEC_FILE="${CLAUDE_EXECUTION_FILE:-${RUNNER_TEMP:-/tmp}/claude-execution-output.json}"
           # A pushed branch is the other proof the agent ran, and it is read
           # the same way agent-task.yml's Report step reads it. A record branch a
           # previous run left reads as "ran", which only ever costs a retry.
@@ -1183,7 +1183,7 @@ jobs:
           DELAY: ${{ steps.retry2.outputs.delay }}
           CLAUDE_EXECUTION_FILE: ${{ steps.claude_retry1.outputs.execution_file }}
         run: |
-          EXEC_FILE="${CLAUDE_EXECUTION_FILE:-/home/runner/work/_temp/claude-execution-output.json}"
+          EXEC_FILE="${CLAUDE_EXECUTION_FILE:-${RUNNER_TEMP:-/tmp}/claude-execution-output.json}"
           rm -f "$EXEC_FILE"
           echo "waiting ${DELAY:-60}s, then agent attempt 3 of 3"
           sleep "${DELAY:-60}"
@@ -1400,7 +1400,7 @@ jobs:
           # reading at all. The account itself stays unattributed.
           CLAUDE_AUTH_MODE: ${{ vars.CLAUDE_AUTH_MODE }}
         run: |
-          EXEC_FILE="${CLAUDE_EXECUTION_FILE:-/home/runner/work/_temp/claude-execution-output.json}"
+          EXEC_FILE="${CLAUDE_EXECUTION_FILE:-${RUNNER_TEMP:-/tmp}/claude-execution-output.json}"
           python3 .bureau-pipeline/scripts/usage_reading.py emit \
             --execution-file "$EXEC_FILE" \
             --out "${RUNNER_TEMP:-/tmp}/claude-usage-reading.json" \
@@ -1456,7 +1456,7 @@ jobs:
           CARD: ${{ github.event.client_payload.identifier }}
           CLAUDE_AUTH_MODE: ${{ vars.CLAUDE_AUTH_MODE }}
         run: |
-          EXEC_FILE="${CLAUDE_EXECUTION_FILE:-/home/runner/work/_temp/claude-execution-output.json}"
+          EXEC_FILE="${CLAUDE_EXECUTION_FILE:-${RUNNER_TEMP:-/tmp}/claude-execution-output.json}"
           python3 .bureau-pipeline/scripts/death_receipt.py emit \
             --execution-file "$EXEC_FILE" \
             --out "${RUNNER_TEMP:-/tmp}/death-receipt.json" \
