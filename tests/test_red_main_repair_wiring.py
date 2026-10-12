@@ -635,6 +635,127 @@ class AlreadyOpenIsSafeToRepeatTest(unittest.TestCase):
         self.assertEqual(created, [])
 
 
+class SupersededExitWiringTest(unittest.TestCase):
+    """DRE-5700: the agent's third ending — the fault is already gone from the
+    default branch — and the Report step's exit for it, which re-asks the
+    superseded rule (DRE-5069) instead of believing the agent."""
+
+    NOTE = "/tmp/repair-superseded.txt"
+    ERROR_LINE = ReportFinishesTheRepairTest.ERROR_LINE
+
+    @staticmethod
+    def _steps():
+        return doc(REUSABLE)["jobs"]["repair"]["steps"]
+
+    @classmethod
+    def _report(cls):
+        found = [s for s in cls._steps() if s.get("name") == "Report"]
+        assert len(found) == 1, "exactly one Report step"
+        return found[0]
+
+    @classmethod
+    def _prompt(cls):
+        return [s for s in cls._steps()
+                if "claude-code-action" in (s.get("uses") or "")][0]["with"]["prompt"]
+
+    def test_the_agent_has_a_numbered_seventh_step_for_it(self):
+        prompt = self._prompt()
+        self.assertIn("6. ESCALATE instead", prompt)
+        self.assertIn("\n7. ", prompt.replace("\n            ", "\n"))
+        step7 = prompt[prompt.index("7. "):]
+        self.assertIn(self.NOTE, step7)
+        self.assertIn("open NO PR", step7)
+        self.assertIn("push NOTHING", step7)
+        self.assertIn("stop", step7)
+        self.assertIn("already gone from the default branch", step7)
+        self.assertLess(prompt.index("6. ESCALATE instead"),
+                        prompt.index("7. "))
+
+    def test_the_three_exits_are_read_in_order_before_the_failure(self):
+        run = self._report()["run"]
+        pr = run.index("card_pr.py find")
+        escalation = run.index("/tmp/repair-escalation.txt")
+        superseded = run.index(self.NOTE)
+        failure = run.index(self.ERROR_LINE)
+        self.assertLess(pr, escalation)
+        self.assertLess(escalation, superseded)
+        self.assertLess(superseded, failure)
+        # A branch the agent pushed is real work: it is opened before the
+        # note is read, so the note can never orphan a pushed fix.
+        self.assertLess(run.index("repair_finish.py finish"), superseded)
+
+    def test_the_exit_is_taken_only_on_a_non_empty_note(self):
+        run = self._report()["run"]
+        self.assertIn(f"elif [ -f {self.NOTE} ] && [ -s {self.NOTE} ]; then", run)
+
+    def test_the_failure_branch_is_still_present(self):
+        run = self._report()["run"]
+        self.assertIn(self.ERROR_LINE, run)
+        self.assertIn("exit 1", run[run.index(self.ERROR_LINE):])
+
+    def test_the_report_step_re_gathers_the_run_listing(self):
+        run = self._report()["run"]
+        exit_ = run[run.index(self.NOTE):run.index(self.ERROR_LINE)]
+        self.assertIn("repair_history.py gather", exit_)
+        # The same call the "Gather repair history" step makes, flag for flag.
+        for flag in ('--repo "$GITHUB_REPOSITORY"',
+                     '--workflow-id "$WORKFLOW_ID"', '--run-id "$RUN_ID"',
+                     '--run-attempt "$RUN_ATTEMPT"',
+                     '--run-created-at "$RUN_CREATED_AT"',
+                     '--branch "$DEFAULT_BRANCH"',
+                     '--workflow-path "$WORKFLOW_PATH"',
+                     '--head-sha "$HEAD_SHA"'):
+            self.assertIn(flag, exit_)
+        # Its own file: the decide step's listing is the one that was too early.
+        self.assertIn("--out /tmp/repair-history-report.json", exit_)
+        self.assertNotIn("--out /tmp/repair-history.json", exit_)
+
+    def test_the_gather_env_is_the_earlier_gather_steps_env(self):
+        earlier = [s for s in self._steps()
+                   if s.get("name", "").startswith("Gather repair history")][0]
+        env = self._report().get("env") or {}
+        for key in ("WORKFLOW_ID", "RUN_ID", "RUN_ATTEMPT", "RUN_CREATED_AT",
+                    "WORKFLOW_PATH", "HEAD_SHA", "DEFAULT_BRANCH"):
+            self.assertEqual(env.get(key), earlier["env"][key], key)
+        # actions:read lives on github.token, which the App lacks (DRE-1346);
+        # the step's own GH_TOKEN stays the worker's for the PR reads.
+        self.assertEqual(env.get("HISTORY_GH_TOKEN"), earlier["env"]["GH_TOKEN"])
+        self.assertEqual(env.get("GH_TOKEN"), "${{ steps.worker.outputs.token }}")
+        self.assertIn('GH_TOKEN="$HISTORY_GH_TOKEN"', self._report()["run"])
+
+    def test_the_decision_is_the_scripts_never_the_shells(self):
+        run = self._report()["run"]
+        exit_ = run[run.index(self.NOTE):run.index(self.ERROR_LINE)]
+        self.assertIn("red_main_repair.py superseded", exit_)
+        self.assertIn("--history-file /tmp/repair-history-report.json", exit_)
+        # No second copy of "later and green" in shell.
+        for rule in ("success", "conclusion", "created_at", "jq "):
+            self.assertNotIn(rule, exit_)
+        self.assertNotIn("${{", run)
+
+    def test_the_verified_exit_prints_and_summarizes_the_green_run(self):
+        run = self._report()["run"]
+        exit_ = run[run.index(self.NOTE):run.index(self.ERROR_LINE)]
+        self.assertIn('echo "superseded:', exit_)
+        self.assertIn("$GITHUB_STEP_SUMMARY", exit_)
+        self.assertNotIn("linear_ops.py", exit_)
+        self.assertNotIn("gh pr", exit_)
+
+    def test_the_unverified_exit_fails(self):
+        run = self._report()["run"]
+        exit_ = run[run.index(self.NOTE):run.index(self.ERROR_LINE)]
+        self.assertIn("::error::the repair agent claimed the fault was "
+                      "superseded", exit_)
+        self.assertIn("exit 1", exit_)
+
+    def test_the_header_comment_names_the_third_ending(self):
+        body = src(REUSABLE)
+        comment = body[:body.index("      - name: Report\n")]
+        comment = comment[comment.rindex("\n\n"):]
+        self.assertIn("DRE-5700", comment)
+        self.assertIn("repair-superseded.txt", comment)
+
+
 class RegistryTest(unittest.TestCase):
     def test_repair_agent_is_on_the_console_roster(self):
         with open(os.path.join(REPO, "agents.yaml")) as f:
