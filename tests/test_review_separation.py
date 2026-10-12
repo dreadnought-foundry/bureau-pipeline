@@ -31,7 +31,9 @@ WHAT THESE TESTS HOLD
 --------------------
   1. The committed ladders are selectable as written: every rung is in
      neither `retired` nor `excluded`, and every overlap they carry is
-     declared. Which model sits where is the console's choice (DRE-6863).
+     reviewed on another model, with or without a declared rule — the
+     console writes none (DRE-6789). Which model sits where is the
+     console's choice (DRE-6863).
   2. The schema permits one model on both the advisory and the workhorse
      ladder, with or without a declared selection rule (DRE-6785), and still
      refuses a declared rule that is malformed or stale.
@@ -60,9 +62,9 @@ model id and role it names is read off that copy's ladders, `agents:` map and
 `review_separation` block. Each name below says what its rung IS on the frozen
 ladders, and `TheFixtureHoldsTheOverlapTest` pins that it still is. What must
 hold for any saved state — the committed file passes `policy_errors`, its
-overlaps are declared, its reviewer roles are advisory, its mirror carries the
-rules it declares — keeps reading the committed file and derives what it
-expects from it.
+overlaps are reviewed off their build model, its reviewer roles are advisory,
+its mirror carries the rules it declares — keeps reading the committed file
+and derives what it expects from it.
 
 The 2026-08-09 guard is untouched by all of it, and the tests that pin it live
 in tests/test_model_policy.py: a probe reporting a model up still decides only
@@ -272,16 +274,18 @@ class LaddersAsDataTest(unittest.TestCase):
     def test_todays_config_passes_policy_validation(self):
         self.assertEqual(mf.policy_errors(_committed()), [])
 
-    def test_every_overlap_is_real_and_declared(self):
+    def test_every_overlap_is_reviewed_off_its_build_model(self):
         # Every advisory rung above the ladder's last that is also a build
-        # rung carries a rule, and no rule reviews on the build model.
+        # rung is reviewed on another model, and no rule reviews on the build
+        # model. A rule is optional since DRE-6785, and a console save that
+        # puts a build model on the Reviewers' walk writes none (DRE-6789).
         cfg = _committed()
         advice = _ladder(cfg, ADVISORY)
         for model in advice[:-1]:
             if model in _ladder(cfg, WORKHORSE):
                 with self.subTest(model=model):
-                    self.assertIn(model, _rules(cfg))
-                    self.assertNotEqual(_rules(cfg)[model], model)
+                    self.assertNotEqual(mf.reviewers_for(cfg, model)[0], model)
+                    self.assertNotEqual(_rules(cfg).get(model), model)
 
     def test_the_committed_reviewer_roles_are_advisory_as_written(self):
         cfg = _committed()
