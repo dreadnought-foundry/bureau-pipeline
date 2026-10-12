@@ -182,6 +182,26 @@ the bot's GitHub quota burned twice). Repair must not rebuild it:
   and two repair runs (36197298146 at 15:33 PT, 36202241737 at 16:45 PT)
   were spent on it — `already-repaired` only knew a merged `repair/*` PR as
   the fix.
+
+  The rule is asked twice (DRE-5700): once by the decide step, before the
+  agent, and again at the Report step when the agent says the fault is gone.
+  A fix that merges while the agent works is invisible to the first asking,
+  so the agent has a third ending beside the PR and the escalation — one line
+  naming the fix in `/tmp/repair-superseded.txt`, no PR, nothing pushed. The
+  Report step does not believe that line: it re-gathers the run listing with
+  `repair_history.py gather` and asks the same `superseding_run` through
+  `red_main_repair.py superseded`. A later green run on another commit ends
+  the job green with no card and no comment (the repair card is `settle`'s to
+  close, DRE-4411); no such run, or a listing that could not be read, fails
+  the run for the medic exactly as a dead agent does. The claim is verified
+  rather than believed because the file is the only thing telling a finished
+  agent from a dead one, and an agent that is wrong about main — or a run
+  whose agent wrote the file and then misjudged — must not turn a red main
+  green in the record. On 2026-10-03 repair run 37092915226 decided before
+  any later run was green; its agent rightly found the red already fixed by
+  DRE-5680 and opened nothing, and the Report step failed the run 41 seconds
+  after main went green on 44eb259 — a medic retry, a failure card and a
+  death receipt for a run that had done its job.
 - **Bounded attempts, keyed by the failing SHA.** At most **2** repair
   attempts per distinct failing head SHA on `main`, tracked mechanically
   (the repair branch and its PR are the attempt record — no external state;
