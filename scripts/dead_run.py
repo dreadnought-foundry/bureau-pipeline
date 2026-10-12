@@ -182,6 +182,10 @@ import model_fallback  # noqa: E402 — after the path insert, by design
 # prints into the log, and the one reader of it. Import-safe: no I/O at import.
 import credential_rotation  # noqa: E402 — after the path insert, by design
 
+# A run the stream watchdog stopped for going silent (DRE-6974): the one reader
+# of the line it writes. Stdlib-only at module level, so no import cycle.
+import stream_watchdog  # noqa: E402 — after the path insert, by design
+
 DEAD_TAG = "dead-run-requeue"
 HOLD_LABEL = "needs-human"
 # The clock on every limit-death marker (DRE-4208): a marker nothing has
@@ -289,8 +293,9 @@ _CLAUDE_LIMIT_SIGNATURES = tuple(
     if sig not in _CAPACITY_NOT_A_LIMIT_DEATH
 )
 # The turn-cap VETO (DRE-3499). The Claude signatures above are ordinary
-# English, and the classifier scans the WHOLE failed log — `gh run view
-# --log-failed`, prose and all. On 2026-09-07 at 16:50Z the medic posted
+# English, and the classifier scanned the WHOLE failed log — `gh run view
+# --log-failed`, prose and all (since DRE-6985 it reads only what the run
+# printed, `run_printed`, and the veto still comes first). On 2026-09-07 at 16:50Z the medic posted
 # `🪦 limit-death: kind=claude stage=plan reset=unknown` on epic DRE-3257 for
 # agent-bureau run 34144302622: nothing in that run met an account wall — the
 # post-approval review (the second critic, which ran after approval until
@@ -322,6 +327,31 @@ _TURNS_SPENT = re.compile(r"\"?num_turns\"?\s*[:=]\s*(\d+)")
 # Linear's client or its host. A quoted payload in prose is not a wall.
 _LINEAR_LINE_ANCHORS = ("api.linear.app", "LinearRateLimited", "rate limited:",
                         "linear_ops")
+# WHAT THE RUN SAID, as against what GitHub printed about it (DRE-6985). The
+# Claude signatures are read only off lines the run itself printed. A
+# `gh run view --log-failed` line is `job\tstep\t<ISO timestamp> <content>`;
+# the prefix is optional, so a bare line reads the same. Three things in that
+# content are not the run speaking: GitHub's echo of a step's script, which
+# opens with the cyan color code — the raw escape byte, or the two characters
+# `^[` the fetched logs carry; a step's inputs, between `##[group]` and
+# `##[endgroup]`; and the card's own text, between its untrusted-card-text
+# fences. A fence counts only as a whole line, so a sanitized `[defanged]`
+# copy inside the card text neither opens nor closes one.
+_LOG_PREFIX = re.compile(r"^(?:[^\t\n]*\t){0,2}(?:\d{4}-\d{2}-\d{2}T[\d:.]+Z )?")
+_ECHO_LINE = re.compile(r"^(?:\x1b|\^\[)\[36;1m")
+_GROUP_OPEN = "##[group]"
+_GROUP_CLOSE = "##[endgroup]"
+_CARD_FENCE = re.compile(r"^\s*=+\s*(BEGIN|END)\s+UNTRUSTED\s+CARD\s+TEXT\b", re.I)
+# The run's death receipt (`death_receipt.summary_line`) names the wall the
+# run hit, read off its own execution record by `death_cause.cause`. `capped`
+# and `throttled` are the Claude account's usage wall; `revoked` is a dead
+# credential, not a wall. Anchored at the start of the printed content, so an
+# echo or a sentence that quotes the line is not the line. death_receipt
+# cannot be imported here (it imports death_cause, which imports this module),
+# so the names are restated and tests/test_limit_death_reads_what_the_run_said
+# holds them to summary_line's own output.
+_RECEIPT_WALL = re.compile(r"^Run death: \S+ · wall (\S+)")
+_CLAUDE_WALLS = ("capped", "throttled")
 LIMIT_STAGES = ("classify", "plan", "build", "fix", "review", "sync")
 # The workflow the medic was woken for names the stage the death has to
 # re-enter. Prefix-matched, case-insensitively: the reusable is "Agent Plan
@@ -387,6 +417,46 @@ def turn_cap_in_text(text: str) -> bool:
     return any(turns >= ceiling for turns in spent for ceiling in ceilings)
 
 
+def run_printed(text: str) -> str:
+    """The content of the lines a failed run's log carries from the run
+    itself: prefix stripped, with GitHub's script echoes, step-input groups
+    and the card's fenced text dropped (DRE-6985). Pure text, no I/O."""
+    kept = []
+    inside = None  # None, "group" or "fence"
+    for raw in (text or "").splitlines():
+        line = _LOG_PREFIX.sub("", raw, count=1)
+        if inside == "group":
+            if line.startswith(_GROUP_CLOSE):
+                inside = None
+            continue
+        if _ECHO_LINE.match(line):
+            continue
+        fence = _CARD_FENCE.match(line)
+        if inside == "fence":
+            if fence and fence.group(1).upper() == "END":
+                inside = None
+            continue
+        if line.startswith(_GROUP_OPEN):
+            inside = "group"
+        elif fence and fence.group(1).upper() == "BEGIN":
+            inside = "fence"
+        else:
+            kept.append(line)
+    return "\n".join(kept)
+
+
+def receipt_wall(text: str) -> str | None:
+    """The wall the run's own death receipt names — `capped`, `throttled`,
+    `revoked` — or None when the log prints no receipt with a wall. Read only
+    off what the run printed (`run_printed`); the last receipt wins."""
+    wall = None
+    for line in run_printed(text).splitlines():
+        found = _RECEIPT_WALL.match(line)
+        if found:
+            wall = found.group(1)
+    return wall
+
+
 def limit_kind(text: str) -> str | None:
     """`"claude"` or `"linear"` when `text` — a failed run's log or result —
     carries one of `_CLAUDE_LIMIT_SIGNATURES` (the Claude wall, read off
@@ -418,10 +488,39 @@ def limit_kind(text: str) -> str | None:
     GitHub echoes into every planner run's log. The evidence is the receipt
     step's printed line (`credential_rotation.in_log`), because the 401 itself
     never reaches the log. Linear is untouched, as it is by the turn cap.
+
+    THE STALL VETO (DRE-6974) is the third, on the same side. A run the stream
+    watchdog stopped for going silent hit no wall, and it is owed the medic's
+    one retry. Planner run 38170959772 went quiet 13 minutes in and was marked
+    `kind=claude … assumed=yes` off that same echoed plan.yml comment, so the
+    marker skipped the retry the card's stall record promised. The evidence is
+    the watchdog's own line (`stream_watchdog.stall_from_log`), which reads
+    only a real, unquoted stall — prose that mentions one changes nothing. A
+    real wall behind a stall dies at the retry's first model call, with no
+    stall line, and is marked then. Linear is untouched, as above.
+
+    THE CLAUDE ANSWER READS ONLY WHAT THE RUN SAID (DRE-6985). Each veto
+    above was one more exception to the same fault: the echoed plan.yml
+    comment is in every planner log, so every planner failure read as a wall.
+    Of the 14 newest plan-stage markers read on 2026-10-11, none was a usage
+    limit — six were Linear's request limit, read as `claude` because this
+    test runs first. So the signatures are searched in `run_printed` alone —
+    no script echo, no step-input group, no fenced card text — and the run's
+    own death receipt is read: `wall capped` or `wall throttled` is the
+    account's wall (`receipt_wall`). That receipt is the only thing a real
+    planner limit prints, because the action keeps the model's closing
+    message out of the log. The vetoes still stand it down. The Linear tests
+    below read the whole text, as before.
     """
     text = text or ""
-    if not turn_cap_in_text(text) and not credential_rotation.in_log(text) and any(
-        sig in text.lower() for sig in _CLAUDE_LIMIT_SIGNATURES
+    if (
+        not turn_cap_in_text(text)
+        and not credential_rotation.in_log(text)
+        and stream_watchdog.stall_from_log(text) is None
+        and (
+            receipt_wall(text) in _CLAUDE_WALLS
+            or any(sig in run_printed(text).lower() for sig in _CLAUDE_LIMIT_SIGNATURES)
+        )
     ):
         return "claude"
     for sig in LIMIT_SIGNATURES:
@@ -449,6 +548,10 @@ def limit_reset(text: str, kind: str, now: datetime) -> datetime | None:
     reset is the `x-ratelimit-requests-reset` epoch (milliseconds or seconds)
     when the text carries the header; the client's error line usually does
     not, and then the honest answer is unknown.
+
+    The Claude reset is read off `run_printed` alone (DRE-6985): a reset
+    quoted in an echoed script line or in the card's own text is not the
+    run's, and must not set the clock the recovery sweep waits on.
     """
     text = text or ""
     if kind == "linear":
@@ -459,7 +562,7 @@ def limit_reset(text: str, kind: str, now: datetime) -> datetime | None:
         if raw > 10**11:  # milliseconds
             raw //= 1000
         return datetime.fromtimestamp(raw, UTC)
-    found = _CLAUDE_RESET.search(text)
+    found = _CLAUDE_RESET.search(run_printed(text))
     if not found:
         return None
     hour = int(found.group("h")) % 12 + (12 if found.group("ap").lower() == "pm" else 0)

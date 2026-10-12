@@ -135,8 +135,6 @@ ALLOWED: dict[str, str] = {
     "tests/test_model_adoption.py::test_load_prices_rejects_an_entry_missing_a_side": _OWN_INPUT,
     "tests/test_model_adoption.py::test_the_newer_opus_with_no_declared_price_is_ask":
         _FROZEN_LADDERS,
-    "tests/test_model_adoption.py::test_the_newer_same_priced_sonnet_is_adopted_on_every_ladder":
-        _FROZEN_LADDERS,
     "tests/test_model_caution.py::test_a_dearer_model_names_both_prices": _FROZEN_CAUTIONS,
     "tests/test_model_caution.py::test_a_standing_exception_is_current_when_given":
         _FROZEN_CAUTIONS,

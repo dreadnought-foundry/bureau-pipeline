@@ -233,18 +233,23 @@ def test_the_newer_same_priced_sonnet_is_adopted_on_every_ladder(tmp_path):
     assert sonnet6["family"] == "sonnet"
     assert sonnet6["display_name"] == "Claude Sonnet 6"
     assert sonnet6["price"] == {"input": 2.0, "output": 10.0}
-    # Every ladder carrying a Sonnet rung, and on each the family's NEWEST one.
-    # Since 2026-09-16 (DRE-3880) Sonnet 5 is the newest on TWO of them — it
-    # tops the advisory ladder and backs the workhorse one — so a same-family
-    # successor takes two rungs at once, which is exactly why the selection
-    # rule that covers that overlap has to travel with it
-    # (tests/test_review_separation.py, CarriedForwardToDre3892Test). The
-    # judgement ladder still ends on Sonnet 4.6.
-    assert {(r["ladder"], r["model"]) for r in sonnet6["replaces"]} == {
-        ("workhorse", SONNET5),
-        ("advisory", SONNET5),
-        ("judgement", SONNET46),
-    }
+    # Every ladder carrying a Sonnet rung the catalog dates, and on each the
+    # family's NEWEST one — read off the frozen ladders and the catalog, never
+    # typed (DRE-6935). A rung can be the newest on two ladders at once, which
+    # is exactly why the selection rule that covers that overlap has to travel
+    # with it (tests/test_review_separation.py, CarriedForwardToDre3892Test).
+    dated = {entry["id"]: entry["created_at"] for entry in FIXTURE_CATALOG}
+    cfg = model_fixture.fixture_config()
+    want = set()
+    for name, rungs in cfg["ladders"].items():
+        sonnets = [r["model"] for r in rungs
+                   if ma.family(r["model"]) == "sonnet" and r["model"] in dated]
+        if sonnets:
+            want.add((name, max(sonnets, key=dated.__getitem__)))
+    assert len(want) >= 2, "the fixture puts a dated Sonnet rung on two ladders"
+    assert len({model for _, model in want}) < len(want), (
+        "one Sonnet rung is the newest on two ladders at once")
+    assert {(r["ladder"], r["model"]) for r in sonnet6["replaces"]} == want
     for rung in sonnet6["replaces"]:
         assert rung["created_at"], "a replaced rung carries the date it was ranked on"
         assert set(rung["price"]) == {"input", "output"}
@@ -610,10 +615,15 @@ def test_load_prices_reads_the_committed_file():
     assert declared[FABLE51]["input"] == 10.0
 
 
-def test_haiku_5_5_is_priced_excluded_and_on_nothing(live_config):
+def test_haiku_5_5_is_priced_excluded_and_on_nothing():
     # DRE-6288, the CEO's signed answer of 2026-10-08: "go ahead and add it but
     # we are not using it currently". Recorded with its base-tier price, held
     # off every ladder by `excluded:`, and so never asked about again.
+    #
+    # The price is read off config/model-prices.yaml, which the console never
+    # writes. Haiku's standing is read off the frozen fixture: a save that
+    # makes Haiku a group's default lifts its exclusion and puts it on a
+    # ladder (DRE-6789), so the committed models.yaml cannot hold it (DRE-6935).
     haiku = "claude-haiku-5-5"
     declared = ma.load_prices(PRICES_PATH)
     assert haiku in declared
@@ -621,26 +631,27 @@ def test_haiku_5_5_is_priced_excluded_and_on_nothing(live_config):
     assert declared[haiku]["output"] == 0.50
     assert str(declared[haiku].get("source", "")).strip()
 
+    cfg = model_fixture.fixture_config()
     excluded = {
         entry["model"] if isinstance(entry, dict) else entry
-        for entry in live_config["excluded"]
+        for entry in cfg["excluded"]
     }
     assert haiku in excluded
 
     ladder_ids = {
         rung["model"] if isinstance(rung, dict) else rung
-        for rungs in live_config["ladders"].values()
+        for rungs in cfg["ladders"].values()
         for rung in rungs
     }
     assert haiku not in ladder_ids
-    assert haiku not in live_config["effort"]
-    for rule in live_config["review_separation"]["rules"]:
+    assert haiku not in cfg["effort"]
+    for rule in cfg["review_separation"]["rules"]:
         assert haiku not in (rule["built_on"], rule["reviewers_use"])
 
     decisions = ma.classify_catalog(
         [model(haiku, "2026-10-07T00:00:00Z", "Claude Haiku 5.5")],
-        live_config,
-        declared,
+        cfg,
+        ma.load_prices(model_fixture.FIXTURE_DIR / "model-prices.yaml"),
     )
     assert decisions == [], "the adoption rule must not ask about it again"
 

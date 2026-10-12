@@ -459,6 +459,9 @@ jobs:
   # `!= 'false'` rather than `== 'true'` on purpose — the gate answers every
   # decision, so an ABSENT output means the step never ran at all, and that must
   # leave the long-standing behaviour of every watched workflow untouched.
+  #
+  # `stall_record` carries a copy of this `if:` as its RETRYING value
+  # (DRE-6995), and a test holds the two equal: change one, change both.
   retry:
     needs: classify
     if: >
@@ -551,9 +554,14 @@ jobs:
   # job is what the card gets.
   #
   # It posts the FIRST stall's record only — the step that went quiet, when it
-  # last spoke, for how long, and that the pipeline is trying once more. The
-  # `retry` job above is meanwhile issuing that retry, because a stall keeps
-  # `infra_crash=false` and the retry gate says nothing about a first one.
+  # last spoke, for how long, and how long it had worked before that. The
+  # `retry` job above usually issues the one retry, because a stall keeps
+  # `infra_crash=false` and the retry gate says nothing about a first one —
+  # but not always: a second attempt, a Linear limit or a gate that declined
+  # for another reason stops the retry and not this record (DRE-6995). So the
+  # step is handed the `retry` job's own condition as RETRYING, and the note
+  # says the pipeline is trying once more only when that reads true. A test
+  # holds the two expressions equal.
   #
   # ONE VOICE PER STALL: on a REPEAT the gate has already declined the retry
   # (`rule == stalled-no-stream-repeat`), `retry_declined` posts that refusal
@@ -593,6 +601,18 @@ jobs:
           RUN_URL: ${{ github.event.workflow_run.html_url }}
           STALL_STEP: ${{ needs.classify.outputs.stall_step }}
           STALL_SILENCE: ${{ needs.classify.outputs.stall_silence }}
+          # The `retry` job's `if:`, verbatim (DRE-6995) — the note promises a
+          # retry only when that job is the one running.
+          RETRYING: >-
+            ${{ (github.event.workflow_run.conclusion == 'failure' || github.event.workflow_run.conclusion == 'timed_out') &&
+            github.event.workflow_run.run_attempt == 1 &&
+            needs.classify.outputs.infra_crash != 'true' &&
+            needs.classify.outputs.class != 'upstream_5xx' &&
+            needs.classify.outputs.class != 'linear_ratelimited' &&
+            needs.classify.outputs.class != 'standing_defect' &&
+            needs.classify.outputs.limit != 'true' &&
+            needs.classify.outputs.retry != 'false' }}
+          LIMIT: ${{ needs.classify.outputs.limit }}
         run: |
           echo "stall on ${RUN_URL}: ${STALL_STEP} silent for ${STALL_SILENCE}s"
           # EXACTLY ONE record per run-attempt. The classify job runs on every
@@ -614,7 +634,7 @@ jobs:
           python3 .bureau-pipeline/scripts/stream_watchdog.py record \
             --card "$CARD" --log /tmp/stall-log.txt \
             --run-id "$RUN_ID" --run-attempt "$RUN_ATTEMPT" \
-            --run-url "$RUN_URL" \
+            --run-url "$RUN_URL" --retrying "$RETRYING" --limit "$LIMIT" \
             || echo "::warning title=Stall record not written::$CARD went silent on run $RUN_ID and the record could not be posted. The run's own log carries the stall line; nothing was rejected and the retry is unaffected."
 
   # Critic infra-crash back-off (DRE-1921). No rerun, no diagnosis agent —
@@ -1286,7 +1306,7 @@ jobs:
           JOB_STATUS: ${{ job.status }}
           CLAUDE_AUTH_MODE: ${{ vars.CLAUDE_AUTH_MODE }}
         run: |
-          EXEC_FILE="${CLAUDE_EXECUTION_FILE:-/home/runner/work/_temp/claude-execution-output.json}"
+          EXEC_FILE="${CLAUDE_EXECUTION_FILE:-${RUNNER_TEMP:-/tmp}/claude-execution-output.json}"
           python3 .bureau-pipeline/scripts/death_receipt.py emit \
             --execution-file "$EXEC_FILE" \
             --out "${RUNNER_TEMP:-/tmp}/death-receipt.json" \

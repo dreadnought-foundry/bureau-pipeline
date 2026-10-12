@@ -192,14 +192,26 @@ def test_model_prices_are_the_declared_numbers():
     assert _choices()["models"][0]["input"] == 4.0
 
 
-def test_only_haiku_carries_an_excluded_reason():
+def test_only_an_excluded_model_carries_an_excluded_reason():
+    # Read off the committed file's own `excluded` list, never a named model:
+    # a save that makes Haiku a group's default lifts its exclusion (DRE-6789,
+    # DRE-6935), and its choice then carries no reason at all.
     reasons = {e["model"]: e["reason"] for e in _raw()["excluded"]}
     for model in _choices()["models"]:
-        if model["id"] == "claude-haiku-5-5":
-            assert model["excluded"] == reasons["claude-haiku-5-5"]
-            assert "DRE-6288" in model["excluded"]
-        else:
-            assert model["excluded"] is None, model["id"]
+        assert model["excluded"] == reasons.get(model["id"]), model["id"]
+
+
+def test_haiku_carries_its_dre_6288_reason_on_the_frozen_files(tmp_path):
+    # The frozen fixture still sets Haiku aside, so the reason the CEO's answer
+    # put on it is proved there, where no console save reaches.
+    raw, doc = _fixture_choices(tmp_path)
+    reasons = {e["model"]: e["reason"] for e in raw["excluded"]}
+    haiku = "claude-haiku-5-5"
+    carried = {m["id"]: m["excluded"] for m in doc["models"]}
+    assert carried[haiku] == reasons[haiku]
+    assert "DRE-6288" in carried[haiku]
+    for model, reason in carried.items():
+        assert reason == reasons.get(model), model
 
 
 # --------------------------------------------------------------------------- #
