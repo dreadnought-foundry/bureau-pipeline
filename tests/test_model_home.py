@@ -135,6 +135,13 @@ def defaults_top(kind: str) -> str:
     return d["ladders"][d["kinds"][kind]][0]
 
 
+def defaults_top_for(role: str) -> str:
+    """The top of `role`'s group in the defaults in the code — read off the
+    defaults, never assumed, since a console save can move `role` to another
+    group."""
+    return defaults_top(mf.code_defaults()["agents"][role])
+
+
 def chosen(role: str, **kwargs) -> tuple[dict, str]:
     """`(decision, note)` for `role` in this process, every model up."""
     decision = mf.select_with_reasons(role, probe=up, **kwargs)
@@ -227,7 +234,7 @@ class TestEveryTestStartsNotSet:
         for name in NAMES:
             assert name not in os.environ
         decision, note = chosen("engineer")
-        assert decision["model"] == defaults_top("workhorse")
+        assert decision["model"] == defaults_top_for("engineer")
         assert "model-home" not in note
         assert mf.HOME_STATUS == "not set"
 
@@ -238,7 +245,7 @@ class TestEveryTestStartsNotSet:
 
 def test_not_set_is_main_s_note_with_the_tagged_line_before_it(tmp_path):
     model, note, err = select_cli("engineer", tmp=tmp_path)
-    assert model == defaults_top("workhorse")
+    assert model == defaults_top_for("engineer")
     role = "engineer"
     kind = mf.kind_for(role)
     assert note == (f"model-policy: {model} chosen for {role} ({kind} kind) — top of "
@@ -392,7 +399,7 @@ def test_the_defaults_break_no_rule():
 
 def test_the_selector_cli_still_prints_a_model_on_an_unreadable_home(tmp_path):
     model, note, err = select_cli("engineer", tmp=tmp_path, BUREAU_MODEL_HOME_TOKEN="")
-    assert model == defaults_top("workhorse")
+    assert model == defaults_top_for("engineer")
     assert note.startswith("DEGRADED model-policy:")
     assert UNREADABLE_CLAUSE.search(note), note
     tag = next(line for line in err if line.startswith("model-home: unreadable — "))
