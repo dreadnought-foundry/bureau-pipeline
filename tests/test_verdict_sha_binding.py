@@ -48,9 +48,11 @@ QA_REVIEW = ROOT / ".github" / "workflows" / "qa-review.yml"
 VERIFY = ROOT / ".github" / "workflows" / "verify.yml"
 
 sys.path.insert(0, str(ROOT / "scripts"))
+sys.path.insert(0, str(ROOT / "tests"))
 os.environ.setdefault("REPO", "test/test")
 os.environ.setdefault("REPO_SLUG", "test")
 
+import fixed_tmp  # noqa: E402
 import merge_gate  # noqa: E402
 import reconcile  # noqa: E402
 import step_shell  # noqa: E402
@@ -255,6 +257,11 @@ class ProducerFormatTest(unittest.TestCase):
     def setUpClass(cls):
         if shutil.which("bash") is None:
             raise AssertionError("bash is required to run these tests")
+
+    def setUp(self):
+        # Another copy of the suite on this machine uses the same paths
+        # (DRE-7025): take turns with it.
+        fixed_tmp.hold(self)
 
     def tearDown(self):
         for path in self.QA_FILES + self.VERIFY_FILES:
