@@ -307,9 +307,15 @@ def one_line(text: str, limit: int = 300) -> str:
     return collapsed[:limit]
 
 
-def output_lines(outcome: Outcome) -> list[str]:
-    """The `key=value` lines the workflow appends to `$GITHUB_OUTPUT`."""
-    return [
+def output_lines(outcome: Outcome, *, uncommitted: bool = False) -> list[str]:
+    """The `key=value` lines the workflow appends to `$GITHUB_OUTPUT`.
+
+    `uncommitted` is whether `--uncommitted` was given (DRE-6959): only then
+    is its line printed, so a call without the flag prints exactly the twelve
+    lines it always did. An output that was never written reads as '' in
+    `steps.<id>.outputs`, the same as the empty line.
+    """
+    lines = [
         f"branch={outcome.branch}",
         f"local_work={_flag(outcome.local_work)}",
         f"pushed={_flag(outcome.pushed)}",
@@ -329,10 +335,12 @@ def output_lines(outcome: Outcome) -> list[str]:
         # (DRE-6348). Both empty on the build path.
         f"target_branch={outcome.target_branch}",
         f"sidecar={outcome.sidecar}",
-        # After all twelve (DRE-6959). Empty unless `--uncommitted` was given
-        # and the working tree held edits that were saved.
-        f"uncommitted={outcome.uncommitted}",
     ]
+    if uncommitted:
+        # After all twelve (DRE-6959). Empty when the tree was clean or the
+        # capture failed.
+        lines.append(f"uncommitted={outcome.uncommitted}")
+    return lines
 
 
 def http_status(text: str) -> str:
@@ -1127,7 +1135,7 @@ def main(argv: list[str]) -> int:
         )
     except Exception as exc:  # never fail the job over a rescue
         _log(f"push rescue: skipped — {exc}")
-    for line in output_lines(outcome):
+    for line in output_lines(outcome, uncommitted=bool(args.uncommitted)):
         print(line)
     # ALWAYS 0. A red step here calls the medic to re-run a run that already
     # did the work; the Report step reads `local_work` and says so instead.

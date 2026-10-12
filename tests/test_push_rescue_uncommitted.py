@@ -223,7 +223,9 @@ class Workspace:
 
 
 def lines(outcome) -> dict:
-    return dict(line.split("=", 1) for line in push_rescue.output_lines(outcome))
+    """The outputs as the CLI prints them when `--uncommitted` was given."""
+    return dict(line.split("=", 1)
+                for line in push_rescue.output_lines(outcome, uncommitted=True))
 
 
 # --------------------------------------------------------------------------- #
@@ -451,7 +453,6 @@ class WhenThereIsNothingToSay(unittest.TestCase):
         out = ws.rescue(github, [], flag=False)
         self.assertEqual(set(github.git_verbs()) & CAPTURE_VERBS, set())
         self.assertEqual(out.uncommitted, "")
-        self.assertEqual(lines(out)["uncommitted"], "")
         self.assertFalse(os.path.exists(ws.uncommitted))
         argv = github.gh("create")[0][0]
         self.assertNotIn(HEADING, argv[argv.index("--body") + 1])
@@ -501,14 +502,22 @@ class WhenThereIsNothingToSay(unittest.TestCase):
 
 class TheOutputLine(unittest.TestCase):
 
+    EXISTING = [
+        "branch", "local_work", "pushed", "pr_opened", "rescued", "pr_url",
+        "push_status", "attempts", "patch", "error", "target_branch", "sidecar",
+    ]
+
     def test_uncommitted_comes_after_every_existing_line(self):
         keys = [line.split("=", 1)[0] for line in
+                push_rescue.output_lines(push_rescue.Outcome(), uncommitted=True)]
+        self.assertEqual(keys, self.EXISTING + ["uncommitted"])
+
+    def test_without_the_flag_the_lines_are_exactly_the_existing_twelve(self):
+        # The proof-task.yml and agent-fix.yml calls pass no flag, and their
+        # outputs keep their names, order and count.
+        keys = [line.split("=", 1)[0] for line in
                 push_rescue.output_lines(push_rescue.Outcome())]
-        self.assertEqual(keys, [
-            "branch", "local_work", "pushed", "pr_opened", "rescued", "pr_url",
-            "push_status", "attempts", "patch", "error", "target_branch",
-            "sidecar", "uncommitted",
-        ])
+        self.assertEqual(keys, self.EXISTING)
 
     def test_the_cli_passes_the_flag_through(self):
         seen = {}
@@ -545,11 +554,14 @@ class TheOutputLine(unittest.TestCase):
         try:
             from contextlib import redirect_stdout
             import io
-            with redirect_stdout(io.StringIO()):
+            buf = io.StringIO()
+            with redirect_stdout(buf):
                 push_rescue.main(["rescue", "--card", CARD, "--repo", REPO])
         finally:
             push_rescue.rescue = original
         self.assertEqual(seen.get("uncommitted_path", ""), "")
+        printed = [line.split("=", 1)[0] for line in buf.getvalue().splitlines()]
+        self.assertEqual(printed, self.EXISTING)
 
 
 # --------------------------------------------------------------------------- #
