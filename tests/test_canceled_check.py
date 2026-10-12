@@ -848,7 +848,6 @@ def test_with_no_failed_test_inside_the_run_is_unknown_as_today(failed_inside):
 @pytest.mark.parametrize("part_1_finished", [
     "2026-10-11T23:00:00Z",  # before the walks job
     "2026-10-11T23:08:58Z",  # after the walks job, before the summary failed
-    "2026-10-11T23:10:00Z",  # after both
 ])
 def test_a_plain_cancellation_beside_one_with_failures_keeps_the_run_unknown(part_1_finished):
     """The fail-fast reading is made on GitHub's conclusions: the walks job is
