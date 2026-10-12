@@ -368,9 +368,10 @@ jobs:
             --limit-log /tmp/medic-log.txt --workflow "$WORKFLOW_NAME" \
             --run-id "$RUN_ID" --now "$RUN_UPDATED_AT" --failed-step "$FAILED_STEP" \
             "${ACCOUNT_FLAGS[@]}") || DECISION=""
-          # First lines by expansion, never `| head -1`: under pipefail a
-          # head that exits early kills the writer with SIGPIPE (141) and
-          # takes the step down with it (DRE-7024).
+          # First lines by expansion, never `| head -1`: safe with or without
+          # pipefail. This step runs under GitHub's default `bash -e`, but the
+          # test harness runs it with pipefail, where a head that exits early
+          # kills the writer with SIGPIPE and the pipeline reads 141 (DRE-7024).
           ACTION=${DECISION%%$'\n'*}
           if [ "$ACTION" != "limit" ]; then
             echo "limit=false" >> "$GITHUB_OUTPUT"

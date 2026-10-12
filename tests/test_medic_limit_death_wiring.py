@@ -6,9 +6,10 @@ marker; until the medic calls it, no marker is written and the reconcile sweep
 (`limit_recovery.py`) has nothing to bring back. This file pins the call and
 the gate, by RUNNING the classify job's new step under a shim rather than
 reading its text: the step's `run:` block is rendered from a fake
-`workflow_run` payload exactly the way GitHub renders it, executed under the
-workflow's own shell flags (`bash -e -o pipefail`), and every `python3` it
-makes is recorded.
+`workflow_run` payload exactly the way GitHub renders it, executed under
+`bash -e -o pipefail`, and every `python3` it makes is recorded. That is
+deliberately stricter than the workflow: medic.yml sets no `shell:`, so GitHub
+runs the step as `bash -e` without pipefail, and the step must hold under both.
 
 What must hold:
 
@@ -317,13 +318,15 @@ class MarkerTest(unittest.TestCase):
 
 # ── 2b. no pipe a reader closes early (DRE-7024) ─────────────────────────────
 class EarlyClosedPipeTest(unittest.TestCase):
-    """The step took its first line with `… | head -1` under `pipefail`. Bash
+    """The step took its first line with `… | head -1`, and this harness runs
+    it under `pipefail` — stricter than the workflow's default `bash -e`. Bash
     writes a multi-line string one line per write, so a `head` that exits after
-    the first line kills the writer with SIGPIPE: the pipeline is 141, `-e`
-    ends the step, and the whole medic goes down with it (every job `needs:
-    classify`). Red main a3042237 died that way on a 722-byte decision, a race
-    the step lost once in six runs. A decision longer than a pipe's buffer
-    loses the race every time, so this one cannot pass by luck."""
+    the first line kills the writer with SIGPIPE: under `pipefail` the pipeline
+    is 141 and `-e` ends the step. The live step, without `pipefail`, sees
+    `head`'s 0 and was never at risk — the harness was. Red main a3042237 died
+    that way on a 722-byte decision, a race the step lost once in six runs. The
+    step must stay correct under both flag sets. A decision longer than a
+    pipe's buffer loses the race every time, so this one cannot pass by luck."""
 
     LONG_DECISION = "limit\n\n" + MARKER + "\n" + ("x" * 99 + "\n") * 1000
 
