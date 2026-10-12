@@ -584,8 +584,9 @@ catalog offers that no ladder names into exactly one of three:
   ladders it read the candidate against — under its own name,
   `daily-adoption`, and files a record card saying what moved where (DRE-6943).
   It reads the home again right before the write and writes nothing when a
-  console save moved it during the trial. No human decision — the rule was the
-  decision.
+  console save moved it during the trial. The record card lands in Done when
+  the home was written and in Canceled when nothing was. No human decision —
+  the rule was the decision.
 - **`ignore`** — a model older than, or superseded by, what we run gets nothing:
   a line in the run summary, no card, no pull request.
 - **`ask`** — a new family, a model whose declared price is above the rung it

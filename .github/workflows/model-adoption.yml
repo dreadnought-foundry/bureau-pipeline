@@ -83,8 +83,9 @@
 #      trial-failure card on their exact titles (`find-open` ignores terminal
 #      cards), the home write on its `written_at` (a rerun finds its own write
 #      and writes nothing), the pin raise on its title prefix, and each branch
-#      by name. The record card lands in Done, so a rerun that finds nothing
-#      to write files one more record saying so.
+#      by name. The record card lands in Done when the home was written and in
+#      Canceled when nothing was, and `find-open` skips both, so a rerun that
+#      finds nothing to write files one more Canceled record saying so.
 #   Q4 command limits — `gh pr create` needs the branch pushed and a token that
 #      may push it, which is why the App token is minted before checkout. A
 #      pull request listing GitHub will not answer fails the run rather than

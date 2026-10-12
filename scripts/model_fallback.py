@@ -1058,7 +1058,7 @@ def _unpriced(model: str) -> str:
 def _retired_errors(cfg: dict) -> list[str]:
     """Rule 11 (DRE-6785): an id under `retired` that a ladder rung or a
     `projects.<slug>.<kind>` exception still names, in a sentence written for
-    the operator who reads the adoption's failure report."""
+    the operator who reads the refusal."""
     retired = set(cfg["retired"])
     errors: list[str] = []
     for name, models in cfg["ladders"].items():
@@ -1082,8 +1082,8 @@ def _retired_errors(cfg: dict) -> list[str]:
                     f"retired: {model} is retired and is still named by "
                     f"projects.{slug}.{kind} — a retired model is never "
                     "selectable, so nothing was written. The operator changes "
-                    "or clears that choice on Settings › Agents & models, and "
-                    f"the next daily run retires {model}."
+                    "or clears that choice on Settings › Agents & models, or "
+                    "does not retire it."
                 )
     return errors
 

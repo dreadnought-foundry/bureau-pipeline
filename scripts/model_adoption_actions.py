@@ -57,7 +57,9 @@ Linear is imported lazily behind an ops object a test replaces, a Linear
 failure is never raised (the record card is owed and the run carries on), and
 the result is `$GITHUB_OUTPUT` lines. The record card lands in `Done` with a
 `WORKBENCH` verdict, never `Todo`: a card entering Todo is dispatched, and the
-write it records is already made by the run that files it.
+write it records is already made by the run that files it. A run that wrote
+nothing files its record in `Canceled` instead: Done would claim a change
+nobody made, and the next daily run sorts the candidate again.
 """
 
 from __future__ import annotations
@@ -109,6 +111,11 @@ REPO_SLUG = "bureau-pipeline"
 #: (`dependabot_card.LABEL`): automation filed it, never `hand-built`, which is
 #: the CEO's alone (DRE-6228).
 RECORD_LANE = "Done"
+#: A run that wrote nothing made no change for Done to claim, and there is no
+#: work left on it — the next daily run sorts the candidate again — so its
+#: record is filed Canceled. `config/lane-contract.json` admits this workflow
+#: to both lanes, for the record card alone.
+UNWRITTEN_LANE = "Canceled"
 RECORD_VERDICT = "WORKBENCH"
 RECORD_LABELS = (f"repo:{REPO_SLUG}", "agent:devops", "initiative:bureau",
                  dependabot_card.LABEL)
@@ -825,7 +832,8 @@ def record_verdict_why(decision, run_url: str) -> str:
 def open_record_card(decision, *, run_url: str, ops=None, trial=None,
                      applied=None) -> dict:
     """File (or find) the adoption's record card, its body saying what
-    `apply` did (`applied`, the file its `--result` wrote).
+    `apply` did (`applied`, the file its `--result` wrote): in Done when it
+    wrote the home, in Canceled when it wrote nothing.
 
     Raises `Refused` — before any Linear call — on a Decision that is not
     `adopt`. Otherwise NEVER raises: a Linear failure returns `card_owed`
@@ -840,9 +848,11 @@ def open_record_card(decision, *, run_url: str, ops=None, trial=None,
         return {"card": existing, "card_url": "", "card_owed": False, "note": ""}
 
     body = record_body(decision, run_url=run_url, trial=trial, applied=applied)
+    written = (applied or {}).get("outcome") == "written"
     try:
         issue = ops.create_card(title, body, repo_slug=REPO_SLUG,
-                                labels=list(RECORD_LABELS), lane=RECORD_LANE)
+                                labels=list(RECORD_LABELS),
+                                lane=RECORD_LANE if written else UNWRITTEN_LANE)
     except Exception as exc:  # noqa: BLE001 — the ONE thing that must not fail
         print(f"record card: NOT filed ({exc}) — the card is owed",
               file=sys.stderr)
