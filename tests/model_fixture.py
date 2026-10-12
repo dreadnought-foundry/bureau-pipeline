@@ -11,11 +11,20 @@ This is a plain module, not a pytest fixture: the policy and selector tests are
 `unittest.TestCase` classes. Every test reaches the fixture through it, and
 derives every model id it expects from `fixture_config()` through `ladder()`,
 never from a literal.
+
+Since the selector selects on the home or the defaults in the code (DRE-6939),
+a scenario is a home document rather than an edit of a tree's `models.yaml`:
+`fixture_home()` is the frozen choices as one, `lead_with`, `move_agent` and
+`with_project` edit a copy, and `home_env` or `fixture_module(..., doc=...)`
+hands it to a tree (DRE-6972).
 """
 from __future__ import annotations
 
+import copy
 import hashlib
 import importlib.util
+import json
+import os
 import shutil
 import subprocess
 import sys
@@ -69,13 +78,67 @@ def fixture_text() -> str:
     return (FIXTURE_DIR / "models.yaml").read_text()
 
 
+def fixture_home() -> dict:
+    """The frozen home document, parsed — a fresh copy on every call."""
+    return json.loads((FIXTURE_DIR / "home.json").read_text())
+
+
 def _rung_ids(rungs) -> list[str]:
     return [r["model"] if isinstance(r, dict) else r for r in rungs or []]
 
 
-def ladder(cfg: dict, kind: str) -> list[str]:
-    """The rung ids of the ladder `kind` walks in the raw config `cfg`."""
-    return _rung_ids(cfg["ladders"][cfg["kinds"][kind]["ladder"]])
+def ladder(cfg_or_doc: dict, kind: str) -> list[str]:
+    """The rung ids `kind` walks: `groups.<kind>.models` of a home document,
+    or the ladder `kind` names in a raw config of the old shape."""
+    if "ladders" not in cfg_or_doc:
+        return _rung_ids(cfg_or_doc["groups"][kind]["models"])
+    return _rung_ids(cfg_or_doc["ladders"][cfg_or_doc["kinds"][kind]["ladder"]])
+
+
+# --------------------------------------------------------------------------- #
+# Editing a home document — each returns a new one                             #
+# --------------------------------------------------------------------------- #
+
+def lead_with(doc: dict, group: str, model: str) -> dict:
+    """`doc` with `model` first in `group`, the group's other models after it
+    in their order."""
+    new = copy.deepcopy(doc)
+    models = new["groups"][group]["models"]
+    new["groups"][group]["models"] = [model, *(m for m in models if m != model)]
+    return new
+
+
+def move_agent(doc: dict, agent: str, group: str) -> dict:
+    """`doc` with `agent` in `group`."""
+    new = copy.deepcopy(doc)
+    new["agents"][agent] = group
+    return new
+
+
+def with_project(doc: dict, slug: str, group: str, model: str) -> dict:
+    """`doc` with project `slug` trying `model` first in `group`, beside any
+    choice the project already has."""
+    new = copy.deepcopy(doc)
+    new.setdefault("projects", {}).setdefault(slug, {})[group] = model
+    return new
+
+
+HOME_FILE_ENV = "BUREAU_MODEL_HOME_FILE"
+
+
+def home_env(tree: Path, doc: dict, **extra) -> dict:
+    """`doc` written to `tree/config/model-home.json`, and a copy of this
+    process's environment with `BUREAU_MODEL_HOME_FILE` naming it, plus
+    `extra` (such as `BUREAU_FAKE_AVAILABLE`). A value that is not text is
+    written as JSON. This process's own environment is left alone."""
+    path = Path(tree) / "config" / "model-home.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(doc, indent=2) + "\n")
+    env = dict(os.environ)
+    env[HOME_FILE_ENV] = str(path)
+    env.update({key: value if isinstance(value, str) else json.dumps(value)
+                for key, value in extra.items()})
+    return env
 
 
 def _copy_into(dest: Path) -> None:
@@ -107,7 +170,7 @@ def fixture_tree(dest: Path) -> Path:
     return dest
 
 
-def fixture_module(tree: Path, name: str = "model_fallback"):
+def fixture_module(tree: Path, name: str = "model_fallback", doc: dict | None = None):
     """`tree/scripts/<name>.py`, imported under a name of its own, so its
     module-level config is the tree's and the repo's imported module of the
     same name is left alone.
@@ -115,6 +178,14 @@ def fixture_module(tree: Path, name: str = "model_fallback"):
     The tree's own siblings answer its imports while it loads: whatever the
     session already imported under those names is set aside for the import and
     put back after it.
+
+    With `doc`, the module has already read it: the selector reads the home at
+    its first choice call, not at import (DRE-6939), so `doc` is written with
+    `home_env`, `BUREAU_MODEL_HOME_FILE` names it, and the module's
+    `use_home()` runs while the siblings are still in place — its reader is
+    the tree's `model_home`. The environment is put back before this returns.
+    With no `doc` nothing is read here: the module's first choice call reads
+    whatever home the environment names, which in the suite is none.
     """
     scripts = (Path(tree) / "scripts").resolve()
     tag = hashlib.sha1(str(scripts).encode()).hexdigest()[:12]
@@ -131,12 +202,28 @@ def fixture_module(tree: Path, name: str = "model_fallback"):
         module = importlib.util.module_from_spec(spec)
         sys.modules[unique] = module
         spec.loader.exec_module(module)
+        if doc is not None:
+            _read_home(module, tree, doc)
     finally:
         sys.path.remove(str(scripts))
         for m in [m for m in sys.modules if is_sibling(m)]:
             del sys.modules[m]
         sys.modules.update(saved)
     return module
+
+
+def _read_home(module, tree: Path, doc: dict) -> None:
+    """`module.use_home()` with `BUREAU_MODEL_HOME_FILE` naming `doc`, the
+    name put back as it was afterwards."""
+    before = os.environ.get(HOME_FILE_ENV)
+    os.environ[HOME_FILE_ENV] = home_env(tree, doc)[HOME_FILE_ENV]
+    try:
+        module.use_home()
+    finally:
+        if before is None:
+            os.environ.pop(HOME_FILE_ENV, None)
+        else:
+            os.environ[HOME_FILE_ENV] = before
 
 
 def model_reading_tests(tree: Path) -> list[Path]:

@@ -1,26 +1,28 @@
 """No test pins a choice the console can change (DRE-6866).
 
-The console rewrites `config/models.yaml` on every save: which model leads a
-group, which group an agent is in, which agents exist, which projects have a
-model of their own. A test that asserts one of those choices as a literal goes
-red on a legitimate save. The rewrite cards (DRE-6860 to DRE-6864, DRE-6884,
+The console changes a choice on every save: which model leads a group, which
+group an agent is in, which agents exist, which projects have a model of their
+own. Since DRE-6939 those choices live in the home, not in
+`config/models.yaml`. A test that asserts one of them as a literal goes red on
+a legitimate save. The rewrite cards (DRE-6860 to DRE-6864, DRE-6884,
 DRE-6885) removed the pins that existed; this guard keeps new ones out.
 
-It reads what the console can change today off the committed file — the rung
-ids of every ladder, the `agents:` map, the `ungrouped` list and the kind
-keys — and scans exactly the files `model_fixture.model_reading_tests(ROOT)`
-names, the set the harness (DRE-6865) runs inside each changed copy. In each
-file, every `assert` statement and every `self.assert*` call is a candidate,
-with a module-level constant bound to a string literal read as that string.
-Four shapes are findings:
+It reads what the console can change off the frozen home document
+(`model_fixture.fixture_home()`) — the models of every group, the agents in
+`agents` and `added_agents` with the session agents the console may put in a
+group, and the group keys — and scans exactly the files
+`model_fixture.model_reading_tests(ROOT)` names, the set the harness
+(DRE-6865) runs inside each changed copy. In each file, every `assert`
+statement and every `self.assert*` call is a candidate, with a module-level
+constant bound to a string literal read as that string. Four shapes are
+findings:
 
-* a ladder model id of the committed file;
-* an agent name of `agents:` or `ungrouped` beside a kind key — an
-  agent-to-group pair;
+* a model id of one of the document's groups;
+* an agent name beside a group key — an agent-to-group pair;
 * a list or tuple literal of two or more agent names;
 * the word `projects` beside `{}`.
 
-An id on no ladder (`retired`, `excluded`) is not a finding. The only way past
+An id in no group (`retired`, `excluded`) is not a finding. The only way past
 the guard is `ALLOWED`, one entry per test with the reason its literal is not
 a pin; an entry whose test is gone or produces no finding fails as stale, so
 the list cannot grow silently.
@@ -33,8 +35,6 @@ import shutil
 import sys
 from dataclasses import dataclass
 from pathlib import Path
-
-import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "tests"))
@@ -89,6 +89,13 @@ _ABSENT_KEY = (
 _OWN_MOVE = (
     "The agent and group are the move the test's own change set makes, read "
     "back from the file that change set wrote.")
+_RULES_BLOCK = (
+    "The names are the contracted values of config/models.yaml's `rules:` "
+    "block (DRE-6992), which the console reads and never writes.")
+_OWN_RULES = (
+    "The names are the `rules:` block the test writes into a frozen-fixture "
+    "tree itself and reads back from that tree's module; no console save "
+    "touches it.")
 
 # `"tests/<file>.py::<Class.test_name or test_name>"` -> why the literal in
 # that test is not a pin. One entry per test; every entry is checked to still
@@ -167,6 +174,12 @@ ALLOWED: dict[str, str] = {
         _PRICE,
     "tests/test_model_projects_schema.py::TestNormalizedShape.test_a_kind_with_no_label_or_purpose_gets_the_defaults":
         _ABSENT_KEY,
+    "tests/test_model_rules_and_markers.py::test_a_planner_the_block_admits_may_hold_the_judgement_kind":
+        _OWN_RULES,
+    "tests/test_model_rules_and_markers.py::test_a_reviewer_the_block_adds_is_held_to_rule_3":
+        _OWN_RULES,
+    "tests/test_model_rules_and_markers.py::test_the_committed_config_carries_the_rules_block":
+        _RULES_BLOCK,
     "tests/test_model_trial.py::test_the_degraded_summary_names_both_numbers_on_both_sides":
         _OWN_INPUT,
     "tests/test_model_trial.py::test_the_same_run_at_full_limits_passes": _OWN_INPUT,
@@ -247,19 +260,28 @@ ALLOWED: dict[str, str] = {
 
 @dataclass(frozen=True)
 class Choices:
-    """What the console can change, read off a tree's `config/models.yaml`."""
+    """What the console can change, read off a home document."""
 
     ids: frozenset[str]
     agents: frozenset[str]
     kinds: frozenset[str]
 
     @classmethod
-    def of(cls, tree: Path) -> "Choices":
-        cfg = yaml.safe_load((tree / "config" / "models.yaml").read_text()) or {}
-        ids = {r["model"] if isinstance(r, dict) else r
-               for rungs in (cfg.get("ladders") or {}).values() for r in rungs or []}
-        agents = set(cfg.get("agents") or {}) | set(cfg.get("ungrouped") or [])
-        return cls(frozenset(ids), frozenset(agents), frozenset(cfg.get("kinds") or {}))
+    def of(cls, doc: dict, session=()) -> "Choices":
+        """The choices `doc` holds. `session` names the session agents, which
+        are in no group until the console puts one there."""
+        groups = doc.get("groups") or {}
+        ids = {m for key in groups for m in model_fixture.ladder(doc, key)}
+        agents = (set(doc.get("agents") or {}) | set(doc.get("added_agents") or {})
+                  | set(session))
+        return cls(frozenset(ids), frozenset(agents), frozenset(groups))
+
+    @classmethod
+    def frozen(cls) -> "Choices":
+        """The choices of the frozen home document, with the frozen files'
+        session agents."""
+        return cls.of(model_fixture.fixture_home(),
+                      model_fixture.fixture_config().get("session_agents") or ())
 
     def id_pattern(self) -> re.Pattern:
         # Longest first, and bounded, so `claude-opus-5` is not read inside
@@ -383,9 +405,9 @@ def scan_file(path: Path, rel: str, choices: Choices) -> list[Finding]:
 
 def scan(tree: Path) -> list[Finding]:
     """Every finding in the files `model_fixture.model_reading_tests(tree)`
-    names, read against `tree`'s own `config/models.yaml`."""
+    names, read against the choices of the frozen home document."""
     tree = Path(tree)
-    choices = Choices.of(tree)
+    choices = Choices.frozen()
     found = []
     for path in model_fixture.model_reading_tests(tree):
         found += scan_file(path, path.relative_to(tree).as_posix(), choices)
@@ -434,15 +456,16 @@ def test_every_allowed_entry_carries_a_reason():
 # The guard's own correctness, on a planted tree                               #
 # --------------------------------------------------------------------------- #
 
-def _cfg() -> dict:
-    return yaml.safe_load((ROOT / "config" / "models.yaml").read_text())
+def _doc() -> dict:
+    return model_fixture.fixture_home()
 
 
 def _plant(tmp_path: Path, files: dict[str, str]) -> Path:
-    """A tree holding the committed `config/models.yaml` and `files` under
-    `tests/`."""
+    """A tree holding the frozen `config/models.yaml` — whose rung ids say
+    which files are scanned — and `files` under `tests/`."""
     (tmp_path / "config").mkdir()
-    shutil.copy2(ROOT / "config" / "models.yaml", tmp_path / "config" / "models.yaml")
+    shutil.copy2(model_fixture.FIXTURE_DIR / "models.yaml",
+                 tmp_path / "config" / "models.yaml")
     (tmp_path / "tests").mkdir()
     for name, text in files.items():
         (tmp_path / "tests" / name).write_text(text)
@@ -454,10 +477,10 @@ def _line(text: str, marker: str) -> int:
 
 
 def test_each_shape_is_reported_by_file_and_line(tmp_path):
-    cfg = _cfg()
-    model = model_fixture.ladder(cfg, next(iter(cfg["kinds"])))[0]
-    agent, kind = next(iter(cfg["agents"].items()))
-    first, second = list(cfg["agents"])[:2]
+    doc = _doc()
+    model = model_fixture.ladder(doc, next(iter(doc["groups"])))[0]
+    agent, kind = next(iter(doc["agents"].items()))
+    first, second = list(doc["agents"])[:2]
     text = (
         '"""Reads config/models.yaml."""\n'
         "class PlantedTest:\n"
@@ -490,8 +513,8 @@ def test_each_shape_is_reported_by_file_and_line(tmp_path):
 
 
 def test_an_id_reached_through_a_module_constant_is_caught(tmp_path):
-    cfg = _cfg()
-    model = model_fixture.ladder(cfg, next(iter(cfg["kinds"])))[-1]
+    doc = _doc()
+    model = model_fixture.ladder(doc, next(iter(doc["groups"])))[-1]
     text = (
         '"""Reads config/models.yaml."""\n'
         f'PINNED = "{model}"\n'
@@ -506,8 +529,8 @@ def test_an_id_reached_through_a_module_constant_is_caught(tmp_path):
 
 
 def test_a_file_naming_only_a_ladder_id_is_scanned(tmp_path):
-    cfg = _cfg()
-    model = model_fixture.ladder(cfg, list(cfg["kinds"])[-1])[0]
+    doc = _doc()
+    model = model_fixture.ladder(doc, list(doc["groups"])[-1])[0]
     text = f'def test_pick():\n    assert pick() == "{model}"\n'
     assert not any(name in text for name in model_fixture.MODEL_FILE_NAMES)
     tree = _plant(tmp_path, {"test_step.py": text})
@@ -529,8 +552,10 @@ def test_an_assertion_reading_both_sides_from_the_config_is_not_reported(tmp_pat
 
 
 def test_an_id_on_no_ladder_is_not_reported(tmp_path):
-    cfg = _cfg()
-    off = [e["model"] for e in (cfg.get("retired") or []) + (cfg.get("excluded") or [])]
+    # Retired and excluded are code-side facts of the frozen models.yaml.
+    cfg = model_fixture.fixture_config()
+    off = [e["model"] if isinstance(e, dict) else e
+           for e in (cfg.get("retired") or []) + (cfg.get("excluded") or [])]
     assert off
     text = '"""Reads config/models.yaml."""\ndef test_off():\n' + "".join(
         f'    assert retired() == "{model}"\n' for model in off)
@@ -540,8 +565,8 @@ def test_an_id_on_no_ladder_is_not_reported(tmp_path):
 
 
 def test_an_allowed_test_passes_and_a_stale_entry_fails(tmp_path):
-    cfg = _cfg()
-    model = model_fixture.ladder(cfg, next(iter(cfg["kinds"])))[0]
+    doc = _doc()
+    model = model_fixture.ladder(doc, next(iter(doc["groups"])))[0]
     text = (
         '"""Reads config/models.yaml."""\n'
         "class PlantedTest:\n"

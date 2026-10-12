@@ -410,10 +410,27 @@ note, and the note ends with the home's clause:
 defaults in the code as a home document — what the operator seeds it with.
 
 What this file still carries is read for the **code-side facts** — `effort`,
-`review_separation`, `discovery`, `retired`, `excluded`, `session_agents` and
-`about` — and, until DRE-6982, its old save route regenerates the literal from
-it on every merged save, so a save by that route stays in force through the
-defaults.
+`review_separation`, `discovery`, `retired`, `excluded`, `session_agents`,
+`about` and `rules` — and, until DRE-6982, its old save route regenerates the
+literal from it on every merged save, so a save by that route stays in force
+through the defaults.
+
+**The `rules` block (DRE-6992).** `reviewers_only` (today `[critic,
+verifier]`) and `planners_may_hold` (today `[planner]`): the agents that must stay Reviewers
+(rule 3) and the ones that may sit with the Planners (rule 10).
+`model_fallback` reads them into `BACKSTOP_ROLES` and `JUDGEMENT_ROLES` when
+it loads, and the console reads them to know what its page may offer. A
+file with no block, or a key that is not a non-empty list of names, reads
+today's values. It is a different key from the `rules` under
+`review_separation`. A reviewer added here must be bound by
+`review_separation.roles` too (rule 8).
+
+A marker naming a model the defaults do not — one the home names, say — still
+attributes when the model has a declared price: `model_fallback.attributable`
+answers for `last_attempt_model` and `last_error_model`, and reads
+`config/model-prices.yaml` only for an id outside `KNOWN_MODELS`. That set does
+not grow to every priced id, because the adoption reads it as the models
+already adopted (DRE-6992).
 
 ## The file
 
@@ -734,7 +751,8 @@ block shape shown in `models.yaml`'s comment; anything it could not move is
 caught by the edit's own closing comparison, and nothing is written.
 
 **Rule 10 — `judgement` is the planner's kind.** `JUDGEMENT_ROLES` in
-`scripts/model_fallback.py` is `("planner",)`, and any other role assigned `judgement` is refused:
+`scripts/model_fallback.py` is `("planner",)`, read from `rules.planners_may_hold`
+(DRE-6992), and any other role assigned `judgement` is refused:
 `agents.engineer: judgement` would put Fable 5.1 on every build card, which is
 volume on the strongest model — the 2026-08-09 incident. The `kinds.judgement`
 comment said "ONE role, deliberately" from DRE-3015 on and nothing enforced it.
@@ -785,9 +803,11 @@ The wider design is recorded in `architecture/decisions/adr-model-policy.md` in
 - **The console roster**, indirectly: `agents.yaml`'s per-agent `model:` line is
   a **generated** mirror of this file.
 - **`model-prices.yaml`**, the other way round: schema validation reads the
-  declared price of any rung sitting below the one its ladder degrades onto
-  (DRE-3880), so that file is on the dispatch path too — an entry deleted there
-  makes this config stop validating, and the fleet falls to the mirror.
+  declared price of every rung (DRE-3880, DRE-6785), so an entry deleted there
+  makes this config fail `sync_model_config.py --check`, and the home's reader
+  sets aside a home model with no price. Importing `model_fallback` does not
+  read it (DRE-6992): the load-time check keeps only this file's code-side
+  facts, and the price rule is about the choices it does not keep.
 
 ## Generated mirrors and the drift gate
 
