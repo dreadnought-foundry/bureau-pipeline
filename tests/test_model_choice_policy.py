@@ -375,11 +375,18 @@ def test_a_malformed_declared_rule_is_still_refused(edit, needle):
     assert any(needle in e for e in found), found
 
 
-def test_a_fourth_kind_is_still_refused_in_rule_1s_words():
+def test_an_added_kind_on_the_builders_ladder_is_refused_in_rule_1s_words():
+    """DRE-6834, in the place of the pin that any fourth kind is refused: an
+    added group is admitted on a ladder of its own name, and one that would
+    walk the Builders' ladder is refused, as sharing a ladder always was."""
     cfg = frozen()
     cfg["kinds"]["designers"] = {"ladder": ladder_name(cfg, "workhorse")}
     found = errors(cfg)
-    assert len(found) == 1 and found[0].startswith("kinds: must declare exactly ")
+    assert found and all(e.startswith("kinds") for e in found), found
+    assert any(e.startswith("kinds.designers: ") for e in found), found
+    cfg["kinds"]["designers"] = {"ladder": "designers"}
+    cfg["ladders"]["designers"] = [{"model": ladder(cfg, "workhorse")[0], "reason": "own"}]
+    assert errors(cfg) == []
 
 
 def test_todays_config_still_passes_with_no_rung_moved():

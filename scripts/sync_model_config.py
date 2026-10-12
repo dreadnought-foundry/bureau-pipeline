@@ -55,7 +55,7 @@ from pathlib import Path
 # drift the day one side gains a rule, and the whole point of DRE-2317 is that
 # the rule cannot be edited away by accident.
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from model_fallback import _normalize_config  # noqa: E402
+from model_fallback import WORKHORSE_KIND, _normalize_config  # noqa: E402
 from model_fallback import _normalize_separation  # noqa: E402
 from model_fallback import declared_prices  # noqa: E402
 from model_fallback import declared_repo_slugs  # noqa: E402
@@ -311,6 +311,14 @@ def render_choices(raw: dict, cfg: dict, prices: dict,
     refused move's ``reason`` is the plain line the change script prints for
     it. ``registry`` is the agents.yaml names with a generated region, read
     off ``REGISTRY_TARGET`` when not given.
+
+    ``add_group`` (DRE-6834) says whether the pipeline takes a new group, as
+    ``{allowed, reason}``: the change script's answer for an ``add_group``
+    under a free name on the Builders' default model, judged exactly as a
+    move is, and a refused one's ``reason`` says why in plain words without
+    the probe's own words. A group added from the console is then one more
+    entry under ``groups``, and every agent's ``moves`` names it like any
+    other.
     """
     # The change script imports this module, so this one imports it late.
     import model_config_change as mcc
@@ -399,6 +407,8 @@ def render_choices(raw: dict, cfg: dict, prices: dict,
         "generated_from": "config/models.yaml",
         "models": models,
         "groups": groups,
+        "add_group": _add_group(raw, cfg, prices, registry, baseline, repo_slugs,
+                                floors, installed),
         "agents": agents,
         "projects": [
             {"slug": slug, "exceptions": dict(entry)}
@@ -406,6 +416,53 @@ def render_choices(raw: dict, cfg: dict, prices: dict,
         ],
     }
     return json.dumps(document, indent=2, ensure_ascii=False) + "\n"
+
+
+#: The group `_add_group` asks the change script about. Its words select
+#: nothing; the name is the first free one of `ADD_GROUP_PROBE`, `-2`, `-3`, ….
+ADD_GROUP_PROBE = "new-group"
+
+
+def _add_group(raw: dict, cfg: dict, prices: dict, registry: set[str],
+               baseline: set[str], repo_slugs, floors, installed) -> dict:
+    """``{allowed, reason}`` for a new group (DRE-6834): the change script's
+    pre-flight checks, the pinned Claude Code, then the errors its own edit
+    adds to ``baseline`` — the same three a Save meets."""
+    import model_config_change as mcc
+
+    taken = set(raw.get("kinds") or {}) | set(raw.get("ladders") or {})
+    name, n = ADD_GROUP_PROBE, 1
+    while name in taken:
+        n += 1
+        name = f"{ADD_GROUP_PROBE}-{n}"
+    model = cfg["ladders"][cfg["kinds"][WORKHORSE_KIND]][0]
+    change = {"op": "add_group", "group": name, "label": "New group",
+              "purpose": "A group added from the console.", "model": model}
+    refused = (mcc._problems(change, raw, prices, registry)
+               or _cannot_run(model, floors, installed)
+               or [error for error in _policy_errors(
+                   mcc.edit_data(raw, change, ""), prices, repo_slugs=repo_slugs)
+                   if error not in baseline])
+    return {
+        "allowed": not refused,
+        "reason": _add_group_reason(change, refused, raw) if refused else None,
+    }
+
+
+def _add_group_reason(change: dict, refused: list[str], raw: dict) -> str:
+    """Why no group can be added, for the console: the change script's why for
+    each finding, after one opening sentence. The probe's name, label and
+    purpose are this generator's own words, never the CEO's, so the change it
+    describes is never read back to him."""
+    import model_config_change as mcc
+
+    sentences = ["A new group cannot be added right now."]
+    for reason in refused:
+        why = mcc._why(reason, change, raw).rstrip(".")
+        sentence = f"{why[:1].upper()}{why[1:]}."
+        if sentence not in sentences:
+            sentences.append(sentence)
+    return " ".join(sentences)
 
 
 def _entry_id(entry) -> str | None:

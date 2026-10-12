@@ -233,14 +233,17 @@ class RoleKindsTest(unittest.TestCase):
     def setUp(self):
         fmf.clear_availability_cache()
 
-    def test_config_declares_exactly_the_three_kinds(self):
+    def test_config_declares_the_three_kinds_and_any_added_group_on_its_own_ladder(self):
         # The committed file, in any saved state: the kinds the code knows,
-        # each on a ladder of its own.
+        # each on a ladder of its own. Since DRE-6834 a save may add a group
+        # beside them, and an added group walks the ladder of its own name.
         cfg = _committed()
-        self.assertEqual(
-            sorted(cfg["kinds"]), sorted(mf.ROLE_KINDS),
-            "config/models.yaml declares exactly the role kinds the selector knows",
+        self.assertTrue(
+            set(mf.ROLE_KINDS) <= set(cfg["kinds"]),
+            "config/models.yaml declares every role kind the selector knows",
         )
+        for kind in set(cfg["kinds"]) - set(mf.ROLE_KINDS):
+            self.assertEqual(cfg["kinds"][kind]["ladder"], kind, kind)
         ladders = {kind: spec["ladder"] for kind, spec in cfg["kinds"].items()}
         for kind, ladder in ladders.items():
             self.assertIn(ladder, cfg["ladders"], f"kind {kind}: unknown ladder")

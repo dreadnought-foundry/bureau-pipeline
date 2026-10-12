@@ -107,6 +107,14 @@
 #                  title-cased) and `purpose` (one line under it; default
 #                  empty). Both are words for a person and select nothing
 #                  (DRE-6633).
+#                  A kind beside these three is a group added from the
+#                  console's "+ Add a group" (DRE-6834): its name is lowercase
+#                  letters, digits and dashes, starting with a letter, and it
+#                  walks the ladder of its own name. It is a BUILD group:
+#                  every rule that holds for the workhorse ladder holds for
+#                  its ladder, a reviewer skips the model a build in it ran
+#                  on, and the critic and the verifier still may not leave
+#                  advisory, nor any role but the planner join judgement.
 #   ladders        named, ordered preference ladders, best → worst. Selection
 #                  (scripts/model_fallback.py `select`) walks a ladder top→bottom
 #                  and returns the first AVAILABLE model. A model that is not on
