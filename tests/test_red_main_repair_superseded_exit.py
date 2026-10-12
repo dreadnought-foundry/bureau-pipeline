@@ -90,6 +90,8 @@ def _cli(text):
 # --------------------------------------------------------------------------- #
 
 class SupersededSubcommandTest(unittest.TestCase):
+    """Exit 1 exactly, never just non-zero: argparse refuses an unknown
+    subcommand with 2, so "non-zero" alone would pass with no subcommand."""
 
     def test_a_later_green_run_on_another_commit_prints_its_id(self):
         done = _cli(json.dumps(_history(_branch_run())))
@@ -100,42 +102,42 @@ class SupersededSubcommandTest(unittest.TestCase):
         done = _cli(json.dumps(_history(
             _branch_run(conclusion="failure"),
             _branch_run(run_id=GREEN_RUN + 1, conclusion="cancelled"))))
-        self.assertNotEqual(done.returncode, 0)
+        self.assertEqual(done.returncode, 1, done.stderr)
         self.assertEqual(done.stdout.strip(), "")
 
     def test_no_runs_at_all_exits_non_zero(self):
         done = _cli(json.dumps(_history()))
-        self.assertNotEqual(done.returncode, 0)
+        self.assertEqual(done.returncode, 1, done.stderr)
         self.assertEqual(done.stdout.strip(), "")
 
     def test_a_green_run_on_the_failed_commit_exits_non_zero(self):
         # A re-run of the failed commit going green proves a flake, not that
         # main has moved past the fault on a later commit.
         done = _cli(json.dumps(_history(_branch_run(head_sha=FAILED_SHA))))
-        self.assertNotEqual(done.returncode, 0)
+        self.assertEqual(done.returncode, 1, done.stderr)
         self.assertEqual(done.stdout.strip(), "")
 
     def test_a_green_run_created_before_the_failed_run_exits_non_zero(self):
         # Green before the failure is the commit the fault landed on top of.
         done = _cli(json.dumps(_history(
             _branch_run(created_at="2026-10-03T02:10:00Z"))))
-        self.assertNotEqual(done.returncode, 0)
+        self.assertEqual(done.returncode, 1, done.stderr)
         self.assertEqual(done.stdout.strip(), "")
 
     def test_the_gathers_failed_marker_exits_non_zero(self):
         # Unreadable is never green.
         done = _cli(repair_history.FETCH_FAILED + "\n")
-        self.assertNotEqual(done.returncode, 0)
+        self.assertEqual(done.returncode, 1, done.stderr)
         self.assertEqual(done.stdout.strip(), "")
 
     def test_malformed_json_exits_non_zero(self):
         done = _cli("{not json")
-        self.assertNotEqual(done.returncode, 0)
+        self.assertEqual(done.returncode, 1, done.stderr)
         self.assertEqual(done.stdout.strip(), "")
 
     def test_a_missing_history_file_exits_non_zero(self):
         done = _cli(None)
-        self.assertNotEqual(done.returncode, 0)
+        self.assertEqual(done.returncode, 1, done.stderr)
         self.assertEqual(done.stdout.strip(), "")
 
     def test_the_reason_is_said_on_stderr(self):
