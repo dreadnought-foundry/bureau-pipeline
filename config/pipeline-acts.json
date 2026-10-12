@@ -2116,6 +2116,21 @@
       "why": "The same receipt family as `dead_run.py decide` above and undeclared for the same reason: giving it a row is a REGISTRY change, not an emission change. Its body is written by scripts/dead_run.py, which owns the `turn-exhaustion-requeue` tag the turn-cap count and the split ledger read — that tag, on the first line, is the whole point of the receipt — so composing it through pipeline_act would move a seam this card does not own."
     },
     {
+      "file": ".github/workflows/agent-task.yml",
+      "anchor": "🧾 uncommitted-work:",
+      "step": "Name uncommitted work on the card",
+      "kind": "not-an-act",
+      "means": "The build ended with edits in its working tree that are in no commit and on no branch; the push rescue saved them as the run artifact `rescue-<CARD>.uncommitted.diff`, kept for 30 days (DRE-6959).",
+      "why": "A REPORT about where work was left, not something the pipeline did on its own. It requeues nothing, parks nothing, moves no lane and dispatches nobody — the saved diff is for a person to apply, and nothing reads this line back. The three questions a trailer answers all read 'not applicable'. Its `uncommitted-work:` opening is a label for the reader, not a tag any sweep counts."
+    },
+    {
+      "file": "scripts/push_rescue.py",
+      "anchor": "\"--body\", uncommitted_paragraph(path)",
+      "kind": "not-an-act",
+      "means": "The PR-side half of the uncommitted-work note: one comment on a pull request that already exists, saying the build left edits in no commit and naming the run artifact that holds them (DRE-6959).",
+      "why": "A REPORT about the pull request's own diff — that it is not the whole change — not something the pipeline did on its own. It creates no obligation, hands the work to nobody and has nothing to discharge, so the three questions a trailer answers all read 'not applicable'. The same paragraph goes into the body of a pull request the rescue opens itself, which is not a comment and so is not a site."
+    },
+    {
       "file": ".github/workflows/proof-task.yml",
       "anchor": "🧠 model-attempt: ${{ steps.model.outputs.model }} — proof agent starting (turns=400).",
       "step": "Record the model attempt",
