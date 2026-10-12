@@ -331,13 +331,14 @@ class TestTheLaneContract:
         assert "only when he asks for it" in said
         assert "nothing automatic applies it" in said
 
-    def test_the_migration_is_a_writer_of_exactly_three_lanes(self):
-        # Live lanes only: an arriving lane (Queued, DRE-6710) copies its
-        # writers from the lane it replaces, and no card can land there yet.
+    def test_the_migration_is_a_writer_of_exactly_four_lanes(self):
+        # Live lanes only. Queued (live since DRE-6740) copies its writers from
+        # Backlog, the lane it replaces, word for word — so the migration may
+        # write it, though nothing routes a card there until the cutover.
         writing = [entry["name"] for entry in lane_contract.load()["lanes"]
                    if entry["status"] == "live"
                    and MIGRATION in ((entry.get("clauses") or {}).get("writers") or {}).get("who", [])]
-        assert sorted(writing) == ["Backlog", "Hand-work", "Planning"]
+        assert sorted(writing) == ["Backlog", "Hand-work", "Planning", "Queued"]
 
     @pytest.mark.parametrize("lane,phrase", [
         ("Planning", "no critic pass"),
