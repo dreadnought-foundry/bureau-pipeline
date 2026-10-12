@@ -785,9 +785,11 @@ The wider design is recorded in `architecture/decisions/adr-model-policy.md` in
 - **The console roster**, indirectly: `agents.yaml`'s per-agent `model:` line is
   a **generated** mirror of this file.
 - **`model-prices.yaml`**, the other way round: schema validation reads the
-  declared price of any rung sitting below the one its ladder degrades onto
-  (DRE-3880), so that file is on the dispatch path too — an entry deleted there
-  makes this config stop validating, and the fleet falls to the mirror.
+  declared price of every rung (DRE-3880, DRE-6785), so an entry deleted there
+  makes this config fail `sync_model_config.py --check`, and the home's reader
+  sets aside a home model with no price. Importing `model_fallback` does not
+  read it (DRE-6992): the load-time check keeps only this file's code-side
+  facts, and the price rule is about the choices it does not keep.
 
 ## Generated mirrors and the drift gate
 

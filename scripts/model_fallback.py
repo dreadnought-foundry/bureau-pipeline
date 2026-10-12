@@ -1248,6 +1248,14 @@ def _load_config() -> dict:
     return {**_load_code_side(), **{key: defaults[key] for key in _CHOICE_KEYS}}
 
 
+class _EveryIdPriced(dict):
+    """The prices `_load_code_side` judges with: every id counts as priced, so
+    rule 4b refuses nothing there and `declared_prices` is never called."""
+
+    def __contains__(self, model) -> bool:
+        return True
+
+
 def _load_code_side() -> dict:
     """The bundled YAML when readable AND admissible, else the generated
     literal above. Degrades, never raises — this sits on the dispatch path of
@@ -1257,6 +1265,12 @@ def _load_code_side() -> dict:
     A config that PARSES but violates policy is refused the same way: the fleet
     keeps running the last-known-good facts and says so on stderr, rather than
     adopting the thing the policy exists to prevent.
+
+    The price rule (4b) is the one rule not judged here, so the import reads no
+    price (DRE-6992): it is about the ladders and the projects, which are
+    choices this loader does not keep. Where a choice is made it is still
+    held to it — `sync_model_config.py --check` on this file, and the home's
+    reader on the home.
     """
     try:
         import yaml  # PyYAML ships in the runner image; absence is degradable
@@ -1264,7 +1278,7 @@ def _load_code_side() -> dict:
         raw = yaml.safe_load(_CONFIG_PATH.read_text())
         parsed = _normalize_config(raw)
         if parsed:
-            violations = policy_errors(raw)
+            violations = policy_errors(raw, prices=_EveryIdPriced())
             if not violations:
                 return parsed
             print(
