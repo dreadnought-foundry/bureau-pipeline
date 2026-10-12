@@ -60,11 +60,13 @@ sys.path.insert(0, str(ROOT / "tests"))
 
 import model_config_change as mcc  # noqa: E402
 import model_fallback as mf  # noqa: E402
+import model_fixture  # noqa: E402
 import proof_and_demo  # noqa: E402
 import sync_model_config  # noqa: E402
 from model_config_text import (  # noqa: E402
     config_with_session_agents_ungrouped,
     fresh_agent_name,
+    with_session_agents_ungrouped,
 )
 
 TODAY = "2026-10-11"
@@ -83,6 +85,16 @@ SESSION = list(_START["session_agents"])
 GROUPS = list(_START["kinds"])
 #: A name `add_agent` takes — one the file does not hold yet.
 NEW = fresh_agent_name(_START)
+
+#: The frozen file (tests/model_fixture.py), every session-run agent in no
+#: group: where the selector cases start (DRE-6935). They compare what a moved
+#: agent selects with the Planners' ladder, and on the committed file that
+#: ladder is led by whatever the CEO last saved — on 2026-10-11 by the model
+#: leading the Builders too.
+_FROZEN_START = with_session_agents_ungrouped(model_fixture.fixture_text())
+_FROZEN = yaml.safe_load(_FROZEN_START)
+FROZEN_SESSION = list(_FROZEN["session_agents"])
+FROZEN_GROUPS = list(_FROZEN["kinds"])
 
 
 # --------------------------------------------------------------------------- #
@@ -241,6 +253,14 @@ def _tree(base: Path, models_text: str) -> Path:
     return base
 
 
+def _frozen_tree(base: Path, models_text: str) -> Path:
+    """Today's scripts on the frozen model files (`model_fixture.fixture_tree`),
+    with `models_text` as its models.yaml."""
+    model_fixture.fixture_tree(base)
+    (base / "config" / "models.yaml").write_text(models_text)
+    return base
+
+
 def _select(tree: Path, role: str) -> tuple[str, str]:
     """`(model, note)` from the real `model_fallback.py select` in `tree`."""
     proc = subprocess.run(
@@ -294,18 +314,20 @@ def _assert_answered_as_unknown(tree: Path, agent: str, group: str, read: str):
     assert model not in fables, read
 
 
-@pytest.mark.parametrize("agent", SESSION)
-@pytest.mark.parametrize("group", GROUPS)
+@pytest.mark.parametrize("agent", FROZEN_SESSION)
+@pytest.mark.parametrize("group", FROZEN_GROUPS)
 def test_a_session_agent_joins_any_group_and_selects_like_an_unknown_name(
         tmp_path, agent, group):
-    text, refusals = _apply(_move(agent, group))
+    # On the frozen file, where the Planners' leading model is on no Builders
+    # rung, so selecting by the group would show (DRE-6935).
+    text, refusals = _apply(_move(agent, group), text=_FROZEN_START)
     assert refusals == [], _reasons(refusals)
     doc = yaml.safe_load(text)
     assert doc["agents"][agent] == group
     assert agent not in doc["ungrouped"]
     assert agent in doc["session_agents"]
 
-    tree = _tree(tmp_path / "tree", text)
+    tree = _frozen_tree(tmp_path / "tree", text)
     _assert_answered_as_unknown(tree, agent, group, "from the YAML")
 
     # The degrade mirror: regenerate the literal in the copy, then take the

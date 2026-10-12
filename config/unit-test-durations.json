@@ -1,5 +1,5 @@
 {
-  "measured": "CI run 38082387546 (PR #956, 2026-10-10, head e5629d2), jobs 114304866472, 114304867288, 114304867599 and 114304867574: the suite in four parts, every test green but the durations-coverage check this record fixes; seconds per file from the runner's timestamps on each pytest -v result line; plus tests/test_console_project_model_keeps_the_suite_green.py alone, measured locally for DRE-6883 (2026-10-11, 4 cores, 442.62 s for its 46 tests once it walks every project and every group), because no CI run had timed that file yet; and tests/test_console_agent_move_keeps_the_suite_green.py alone, measured locally for DRE-6889 (2026-10-11, 4 cores, 633.36 s for its 46 tests: 20 agent-move cases, each the whole model, session and console suite in a copy of the tree)",
+  "measured": "CI run 38082387546 (PR #956, 2026-10-10, head e5629d2), jobs 114304866472, 114304867288, 114304867599 and 114304867574: the suite in four parts, every test green but the durations-coverage check this record fixes; seconds per file from the runner's timestamps on each pytest -v result line; plus tests/test_console_project_model_keeps_the_suite_green.py alone, measured locally for DRE-6883 (2026-10-11, 4 cores, 442.62 s for its 46 tests once it walks every project and every group), because no CI run had timed that file yet; and tests/test_console_agent_move_keeps_the_suite_green.py alone, measured locally for DRE-6889 (2026-10-11, 4 cores, 633.36 s for its 46 tests: 20 agent-move cases, each the whole model, session and console suite in a copy of the tree); and then the four walks (tests/*_keeps_the_suite_green.py) replaced by their slowest CI time for DRE-6935, each as `run-walks` printed it in the walks job: the agent-move walk 17m45s, the change walk 0m12s and the every-default walk 20m42s (24 cases) in run 38178110152, job 114591044631, where the project walk was cut off; the project walk 14m48s in main run 38182132601, the slowest of the eight green main runs 38177885940 to 38184357767, which put the change walk at 0m12s to 0m18s",
   "seconds": {
     "tests/fixtures/mirror-check/agent-bureau/console/backend/tests/test_unrelated.py": 0.01,
     "tests/test_absent_workflow_is_not_unreadable.py": 0.12,
@@ -78,11 +78,13 @@
     "tests/test_conflict_sweep_per_pr_busy.py": 0.17,
     "tests/test_conflict_unknown_poll.py": 0.02,
     "tests/test_conflicts_only.py": 3.89,
-    "tests/test_console_agent_move_keeps_the_suite_green.py": 633.36,
+    "tests/test_console_agent_move_keeps_the_suite_green.py": 1065.0,
     "tests/test_console_answer_receipt.py": 0.15,
+    "tests/test_console_change_keeps_the_suite_green.py": 18.0,
     "tests/test_console_escalation.py": 0.56,
+    "tests/test_console_every_default_keeps_the_suite_green.py": 1242.0,
     "tests/test_console_honesty_wiring.py": 0.02,
-    "tests/test_console_project_model_keeps_the_suite_green.py": 442.62,
+    "tests/test_console_project_model_keeps_the_suite_green.py": 888.0,
     "tests/test_console_receipt.py": 0.11,
     "tests/test_crashed_critic_holds_merge.py": 5.88,
     "tests/test_crashed_review_recovery.py": 3.26,

@@ -395,12 +395,16 @@ class TestOwnKindMembership:
         assert errors(with_projects({"atlas": {"judgement": PLAN_LAST}})) == []
 
     def test_a_priced_model_on_no_ladder_is_admitted(self):
-        cfg = committed()
-        cfg["excluded"] = [e for e in cfg["excluded"]
-                           if e["model"] != "claude-haiku-5-5"]
-        cfg["projects"] = {"atlas": {"advisory": "claude-haiku-5-5"}}
+        # The frozen copy's set-aside priced model, derived — the committed
+        # file loses it the moment a save makes it a default (DRE-6935).
+        cfg = fixture()
+        aside = [e["model"] for e in cfg["excluded"] if e["model"] in FIXTURE_PRICES]
+        assert aside, "the frozen copy sets aside no priced model"
+        model = aside[0]
+        cfg["excluded"] = [e for e in cfg["excluded"] if e["model"] != model]
+        cfg["projects"] = {"atlas": {"advisory": model}}
         for ids in mf._normalize_config(cfg)["ladders"].values():
-            assert "claude-haiku-5-5" not in ids
+            assert model not in ids
         assert errors(cfg) == []
 
     def test_a_model_with_no_declared_price_says_so_and_only_that(self):
