@@ -97,12 +97,15 @@ def test_every_named_step_reads_the_home_and_holds_the_token():
     for (name, step_name), (doc, job_id, i, step) in sorted(found.items()):
         if (name, step_name) not in NAMED_STEPS:
             continue
-        assert step.get("env", {}).get("BUREAU_MODEL_HOME_TOKEN") == TOKEN, (name, step_name)
+        value = step.get("env", {}).get("BUREAU_MODEL_HOME_TOKEN")
+        mint_id = scope.mint_id_of(value)
+        assert mint_id, (name, step_name, value)
         steps = doc["jobs"][job_id]["steps"]
-        mints = [s for s in steps[:i] if s.get("id") == "model_home"]
-        assert mints, f"{name}: job {job_id} mints no model-home token before {step_name!r}"
+        mints = [s for s in steps[:i] if s.get("id") == mint_id]
+        assert mints, f"{name}: job {job_id} mints no {mint_id} before {step_name!r}"
         mint = mints[-1]
-        assert mint["name"] == "Mint the model-home read token"
+        assert mint["name"].startswith("Mint the model-home read token") \
+            or mint["name"].startswith("Re-mint the model-home read token")
         assert mint["uses"].startswith(PINNED)
         assert mint["continue-on-error"] is True
         assert mint["with"] == {
@@ -380,7 +383,7 @@ def test_a_mint_without_continue_on_error_fails(tmp_path):
     root = _write(tmp_path, workflows={"w.yml": doc})
     violations = _violations(root)
     assert len(violations) == 1, violations
-    assert "w.yml: job j: mint step lacks `continue-on-error: true`" in violations[0]
+    assert "w.yml: job j: mint step model_home lacks `continue-on-error: true`" in violations[0]
 
 
 @pytest.mark.parametrize("key, value", [
@@ -395,6 +398,76 @@ def test_a_mint_for_the_wrong_scope_fails(tmp_path, key, value):
     violations = _violations(root)
     assert len(violations) == 1, violations
     assert key in violations[0]
+
+
+MODEL_STEP = {"name": "Plan", "id": "plan",
+              "uses": "anthropics/claude-code-action@0000000000000000000000000000000000000000"}
+
+
+def _re_mint(step_id="model_home_2"):
+    return {**copy.deepcopy(MINT), "id": step_id,
+            "name": "Re-mint the model-home read token"}
+
+
+def _reads(key, step_id):
+    return {**STEPS[key],
+            "env": {"BUREAU_MODEL_HOME_TOKEN": f"${{{{ steps.{step_id}.outputs.token }}}}"}}
+
+
+def test_a_step_reading_the_mint_across_a_model_step_fails(tmp_path):
+    # DRE-6940: an App token lives an hour and a model step may pass it, so a
+    # step after one that reads the mint before it reads with a dead token —
+    # and the reader, which never raises, selects on the defaults in the code.
+    root = _write(tmp_path, workflows={"w.yml": _workflow(MODEL_STEP, _held("decide"))})
+    violations = _violations(root)
+    assert len(violations) == 1, violations
+    assert repr(STEPS["decide"]["name"]) in violations[0]
+    assert "minted before model step(s)" in violations[0]
+    assert "'Plan'" in violations[0]
+
+
+def test_a_re_mint_after_the_model_step_passes(tmp_path):
+    doc = _workflow(_held("select"), MODEL_STEP, _re_mint(),
+                    _reads("decide", "model_home_2"))
+    root = _write(tmp_path, workflows={"w.yml": doc})
+    violations, stats = scope.check_tree(root)
+    assert violations == []
+    assert stats["steps"] == 2
+
+
+def test_a_re_mint_before_the_model_step_fails(tmp_path):
+    doc = _workflow(_held("select"), _re_mint(), MODEL_STEP,
+                    _reads("decide", "model_home_2"))
+    root = _write(tmp_path, workflows={"w.yml": doc})
+    violations = _violations(root)
+    assert len(violations) == 1, violations
+    assert "reads `model_home_2`, minted before model step(s)" in violations[0]
+
+
+def test_a_step_naming_a_re_mint_the_job_lacks_fails(tmp_path):
+    doc = _workflow(MODEL_STEP, _reads("decide", "model_home_2"))
+    root = _write(tmp_path, workflows={"w.yml": doc})
+    violations = _violations(root)
+    assert len(violations) == 1, violations
+    assert "job j has no mint step (id: model_home_2) before it" in violations[0]
+
+
+def test_a_re_mint_for_the_wrong_scope_fails(tmp_path):
+    re_mint = _re_mint()
+    re_mint["with"]["repositories"] = "atlas"
+    doc = _workflow(MODEL_STEP, re_mint, _reads("decide", "model_home_2"))
+    root = _write(tmp_path, workflows={"w.yml": doc})
+    violations = _violations(root)
+    assert len(violations) == 1, violations
+    assert "w.yml: job j: mint step model_home_2 has repositories" in violations[0]
+
+
+def test_a_token_from_another_mint_family_still_fails(tmp_path):
+    other = _reads("select", "model_homes")
+    root = _write(tmp_path, workflows={"w.yml": _workflow(other)})
+    violations = _violations(root)
+    assert len(violations) == 1, violations
+    assert "must be" in violations[0]
 
 
 def _undeclared(tmp_path, rel, text):
