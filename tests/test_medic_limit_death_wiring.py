@@ -315,6 +315,26 @@ class MarkerTest(unittest.TestCase):
         self.assertNotIn("by hand", result["text"])
 
 
+# ── 2b. no pipe a reader closes early (DRE-7024) ─────────────────────────────
+class EarlyClosedPipeTest(unittest.TestCase):
+    """The step took its first line with `… | head -1` under `pipefail`. Bash
+    writes a multi-line string one line per write, so a `head` that exits after
+    the first line kills the writer with SIGPIPE: the pipeline is 141, `-e`
+    ends the step, and the whole medic goes down with it (every job `needs:
+    classify`). Red main a3042237 died that way on a 722-byte decision, a race
+    the step lost once in six runs. A decision longer than a pipe's buffer
+    loses the race every time, so this one cannot pass by luck."""
+
+    LONG_DECISION = "limit\n\n" + MARKER + "\n" + ("x" * 99 + "\n") * 1000
+
+    def test_a_decision_longer_than_a_pipe_buffer_does_not_kill_the_step(self):
+        result = run_step(decision=self.LONG_DECISION)
+        self.assertEqual(0, result["rc"], result["text"][:500])
+        self.assertIn("limit=true", result["outputs"])
+        self.assertIn(MARKER.splitlines()[0], result["text"], "the body's first line is still said")
+        self.assertEqual(1, len(_comment_calls(result)), result["calls"][:3])
+
+
 # ── 3. anything else ─────────────────────────────────────────────────────────
 class NotALimitTest(unittest.TestCase):
     def test_an_ordinary_death_publishes_false_and_posts_nothing(self):
