@@ -721,6 +721,29 @@ jobs:
           # drive the dashboard's per-card progress bar).
           LINEAR_API_KEY: ${{ vars.LINEAR_AGENT_BUCKET == 'planner' && secrets.LINEAR_PLANNER_KEY || secrets.LINEAR_API_KEY }}
           LINEAR_API_KEY_FALLBACK: ${{ secrets.LINEAR_API_KEY }}
+          # BACKGROUND TASKS OFF (DRE-6959). On 2026-10-11 (run 38164304144,
+          # card DRE-6950) the build committed its failing test, made the
+          # change in its working tree, started the web suite in the
+          # background and ended its turn to wait for the notification. In a
+          # headless run, ending the turn ends the session: the run closed as
+          # `success` at 102 of 400 turns and the change died with the runner.
+          # The fourth model step to do it — DRE-5271 fixed agent-fix.yml's
+          # Fix step, DRE-5564 the planner, DRE-6523 the repair agent.
+          #
+          # CHECKED, NOT GUESSED, by the Fix step's comment in agent-fix.yml:
+          # https://code.claude.com/docs/en/env-vars documents
+          # CLAUDE_CODE_DISABLE_BACKGROUND_TASKS — "Set to `1` to disable all
+          # background task functionality, including the `run_in_background`
+          # parameter on Bash and subagent tools, auto-backgrounding, and the
+          # Ctrl+B shortcut" — so a command that reaches its timeout is
+          # stopped and handed back in the foreground, and the agent keeps
+          # its turn to commit and push. The per-command limit is not raised,
+          # for the reason given there; the prompt's step 3 removes the need
+          # instead: no whole suite locally, push before any long check.
+          # In `env:`, never `with:` — the three `with:` blocks are held
+          # identical by tests/test_agent_task_rate_limit_retry.py. Pinned by
+          # tests/test_build_run_no_background_wait.py.
+          CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: "1"
         with:
           # DRE-3414: the launcher the shared install step above PROVED
           # runs. Without it the vendor action installs a second copy of
@@ -781,8 +804,23 @@ jobs:
             Process (mandatory):
             1. ${{ steps.resume.outputs.resume == 'true' && format('Branch {0} exists from a previous run of this card that ran out of turns. Check it out; if it is behind the default branch, merge origin/{1} into it. Do not create a new branch. Read the note at $RUNNER_TEMP/resume-note.md first: it lists what is already committed. Continue from there.', steps.resume.outputs.branch, github.event.repository.default_branch || 'main') || format('Create branch agent/{0}-<short-slug> off the default branch ({1}).', github.event.client_payload.identifier, steps.resume.outputs.reason || 'no resume decision') }}
             2. TDD: write failing tests first, commit, then implement until green.
-            3. Run the local checks listed in .github/bureau/overrides.md —
-               all must pass locally before you push.
+            3. Run the local checks listed in .github/bureau/overrides.md,
+               narrowed to what your change can reach (DRE-6959). Do not run
+               the whole test suite locally, because CI runs it on the push.
+               Run only the test files your change touches, each under a
+               timeout (for example `timeout 300 <test command> <file>`).
+               Commit and push before any check that runs longer than a few
+               minutes: run step 4b's commit-order check first (it takes
+               seconds), push the branch, run that check after the push, and
+               fix a red result with another commit on the same branch — open
+               the pull request in step 5 once it is green. Background tasks
+               are off in this run, so a command that outlasts its timeout is
+               stopped rather than moved to the background. Never end your
+               turn while a background task is still running — in this
+               headless run, ending the turn ends the session, no notification
+               ever arrives, and every uncommitted edit dies with the runner.
+               A finished edit with no push is the one outcome that loses the
+               work.
             4. PRE-SUBMIT GATE — do this BEFORE you open the PR, never after.
                Re-read the card's acceptance criteria above and walk them ONE
                BY ONE against your actual diff. For each item, prove it by
@@ -966,6 +1004,11 @@ jobs:
           # of them — scripts/pipeline_act.py check fails on the ambiguity.
           LINEAR_API_KEY: ${{ vars.LINEAR_AGENT_BUCKET == 'planner' && secrets.LINEAR_PLANNER_KEY || secrets.LINEAR_API_KEY }}
           LINEAR_API_KEY_FALLBACK: ${{ secrets.LINEAR_API_KEY }}
+          # Background tasks off, as in attempt 1 (DRE-6959):
+          # CLAUDE_CODE_DISABLE_BACKGROUND_TASKS, documented at
+          # https://code.claude.com/docs/en/env-vars — attempt 1's comment
+          # gives the incident and the reasoning.
+          CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: "1"
         with:
           # DRE-3414: the launcher the shared install step above PROVED
           # runs. Without it the vendor action installs a second copy of
@@ -1026,8 +1069,23 @@ jobs:
             Process (mandatory):
             1. ${{ steps.resume.outputs.resume == 'true' && format('Branch {0} exists from a previous run of this card that ran out of turns. Check it out; if it is behind the default branch, merge origin/{1} into it. Do not create a new branch. Read the note at $RUNNER_TEMP/resume-note.md first: it lists what is already committed. Continue from there.', steps.resume.outputs.branch, github.event.repository.default_branch || 'main') || format('Create branch agent/{0}-<short-slug> off the default branch ({1}).', github.event.client_payload.identifier, steps.resume.outputs.reason || 'no resume decision') }}
             2. TDD: write failing tests first, commit, then implement until green.
-            3. Run the local checks listed in .github/bureau/overrides.md —
-               all must pass locally before you push.
+            3. Run the local checks listed in .github/bureau/overrides.md,
+               narrowed to what your change can reach (DRE-6959). Do not run
+               the whole test suite locally, because CI runs it on the push.
+               Run only the test files your change touches, each under a
+               timeout (for example `timeout 300 <test command> <file>`).
+               Commit and push before any check that runs longer than a few
+               minutes: run step 4b's commit-order check first (it takes
+               seconds), push the branch, run that check after the push, and
+               fix a red result with another commit on the same branch — open
+               the pull request in step 5 once it is green. Background tasks
+               are off in this run, so a command that outlasts its timeout is
+               stopped rather than moved to the background. Never end your
+               turn while a background task is still running — in this
+               headless run, ending the turn ends the session, no notification
+               ever arrives, and every uncommitted edit dies with the runner.
+               A finished edit with no push is the one outcome that loses the
+               work.
             4. PRE-SUBMIT GATE — do this BEFORE you open the PR, never after.
                Re-read the card's acceptance criteria above and walk them ONE
                BY ONE against your actual diff. For each item, prove it by
@@ -1208,6 +1266,11 @@ jobs:
           # of them — scripts/pipeline_act.py check fails on the ambiguity.
           LINEAR_API_KEY: ${{ vars.LINEAR_AGENT_BUCKET == 'planner' && secrets.LINEAR_PLANNER_KEY || secrets.LINEAR_API_KEY }}
           LINEAR_API_KEY_FALLBACK: ${{ secrets.LINEAR_API_KEY }}
+          # Background tasks off, as in attempt 1 (DRE-6959):
+          # CLAUDE_CODE_DISABLE_BACKGROUND_TASKS, documented at
+          # https://code.claude.com/docs/en/env-vars — attempt 1's comment
+          # gives the incident and the reasoning.
+          CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: "1"
         with:
           # DRE-3414: the launcher the shared install step above PROVED
           # runs. Without it the vendor action installs a second copy of
@@ -1268,8 +1331,23 @@ jobs:
             Process (mandatory):
             1. ${{ steps.resume.outputs.resume == 'true' && format('Branch {0} exists from a previous run of this card that ran out of turns. Check it out; if it is behind the default branch, merge origin/{1} into it. Do not create a new branch. Read the note at $RUNNER_TEMP/resume-note.md first: it lists what is already committed. Continue from there.', steps.resume.outputs.branch, github.event.repository.default_branch || 'main') || format('Create branch agent/{0}-<short-slug> off the default branch ({1}).', github.event.client_payload.identifier, steps.resume.outputs.reason || 'no resume decision') }}
             2. TDD: write failing tests first, commit, then implement until green.
-            3. Run the local checks listed in .github/bureau/overrides.md —
-               all must pass locally before you push.
+            3. Run the local checks listed in .github/bureau/overrides.md,
+               narrowed to what your change can reach (DRE-6959). Do not run
+               the whole test suite locally, because CI runs it on the push.
+               Run only the test files your change touches, each under a
+               timeout (for example `timeout 300 <test command> <file>`).
+               Commit and push before any check that runs longer than a few
+               minutes: run step 4b's commit-order check first (it takes
+               seconds), push the branch, run that check after the push, and
+               fix a red result with another commit on the same branch — open
+               the pull request in step 5 once it is green. Background tasks
+               are off in this run, so a command that outlasts its timeout is
+               stopped rather than moved to the background. Never end your
+               turn while a background task is still running — in this
+               headless run, ending the turn ends the session, no notification
+               ever arrives, and every uncommitted edit dies with the runner.
+               A finished edit with no push is the one outcome that loses the
+               work.
             4. PRE-SUBMIT GATE — do this BEFORE you open the PR, never after.
                Re-read the card's acceptance criteria above and walk them ONE
                BY ONE against your actual diff. For each item, prove it by
@@ -1700,10 +1778,16 @@ jobs:
           # --patch: where the branch's commits go when BOTH credentials are
           # refused. The next step uploads it as `rescue-<card>.patch`, so the
           # work outlives the runner instead of being destroyed with it.
+          #
+          # --uncommitted (DRE-6959): where the working tree's edits that are
+          # in NO commit go, as one diff against HEAD — a separate file, never
+          # the patch above, which deliver_rescue.py replays with `git am`.
+          # Its `uncommitted` output gates the two steps after the upload.
           python3 .bureau-pipeline/scripts/push_rescue.py rescue \
             --card "$CARD" --repo "$REPO" --base "$BASE" \
             --card-url "$CARD_URL" --card-title "$CARD_TITLE" \
             --patch "${RUNNER_TEMP:-/tmp}/rescue-$CARD.patch" \
+            --uncommitted "${RUNNER_TEMP:-/tmp}/rescue-$CARD.uncommitted.diff" \
             >> "$GITHUB_OUTPUT"
 
       # THE RUNNER IS NEVER THE LAST COPY (DRE-3098). `patch` is set only when
@@ -1720,6 +1804,37 @@ jobs:
           path: ${{ steps.rescue.outputs.patch }}
           if-no-files-found: warn
           retention-days: 30
+
+      # AN EDIT IN NO COMMIT IS NOT LEFT ON THE RUNNER EITHER (DRE-6959). On
+      # 2026-10-11 (run 38164304144, card DRE-6950) the build ended its turn
+      # with its finished change in the working tree and one commit on the
+      # branch; the rescue delivered the commit and the change died with the
+      # runner. `uncommitted` is set only when the rescue found edits that are
+      # in no commit and saved them, so every other run skips both steps.
+      # The pull request — the one the rescue opened, or the one that
+      # existed — was already told by push_rescue.py; the card is told here,
+      # because with no pull request it is the only place that hears of it.
+      - name: Upload uncommitted work
+        if: always() && steps.gate.outputs.bounced != 'true' && steps.dedupe.outputs.skip != 'true' && steps.rescue.outputs.uncommitted != ''
+        continue-on-error: true
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: rescue-${{ github.event.client_payload.identifier }}.uncommitted.diff
+          path: ${{ steps.rescue.outputs.uncommitted }}
+          if-no-files-found: warn
+          retention-days: 30
+
+      - name: Name uncommitted work on the card
+        if: always() && steps.gate.outputs.bounced != 'true' && steps.dedupe.outputs.skip != 'true' && steps.rescue.outputs.uncommitted != ''
+        continue-on-error: true
+        env:
+          LINEAR_API_KEY: ${{ vars.LINEAR_AGENT_BUCKET == 'planner' && secrets.LINEAR_PLANNER_KEY || secrets.LINEAR_API_KEY }}
+          LINEAR_API_KEY_FALLBACK: ${{ secrets.LINEAR_API_KEY }}
+          CARD: ${{ github.event.client_payload.identifier }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          python3 .bureau-pipeline/scripts/linear_ops.py comment "$CARD" \
+            "🧾 uncommitted-work: this build ended with changes in its working tree that are in no commit and on no branch — saved as artifact rescue-$CARD.uncommitted.diff on run $RUN_URL for 30 days."
 
       # DRE-1346 Fix 1: the execution result can end {"subtype":"success",
       # "is_error":true} (usage-limit/API death mid-run) — previously the
