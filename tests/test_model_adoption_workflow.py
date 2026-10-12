@@ -860,3 +860,10 @@ def test_python_tooling_is_installed_through_the_shared_cached_action(job):
     names = [s.get("name") for s in _steps(_job(job))
              if s.get("uses") == "./.github/actions/setup-python-cached"]
     assert names and all(names), f"{job}: a named setup-python-cached step"
+
+
+def test_a_written_at_that_is_not_one_plain_line_never_reaches_the_output(tmp_path):
+    proc, out, _ = _pick(tmp_path, [], dict(HOME_READ, written_at="x\nroute=pin"))
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert out["written_at"] == "unusable"
+    assert "route" not in out

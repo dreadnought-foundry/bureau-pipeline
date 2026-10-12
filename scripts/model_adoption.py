@@ -2,9 +2,11 @@
 """The adoption RULE — and only the rule (DRE-3895).
 
 Takes the live Anthropic catalog (the `/v1/models` shape `model_catalog.py`
-already parses), the ladders in `config/models.yaml`, and the declared prices
-in `config/model-prices.yaml`, and sorts every model id the pipeline has never
-configured into exactly one of three rules the CEO stated on 2026-09-14:
+already parses), the ladders in the model home (DRE-6943 — the groups and the
+project choices of `BUREAU_MODEL_CHOICES`, read through `model_home.read`),
+and the declared prices in `config/model-prices.yaml`, and sorts every model
+id the pipeline has never configured into exactly one of three rules the CEO
+stated on 2026-09-14:
 
   * **adopt**  — a newer version of a family already on a ladder, at the same
                  or a lower declared price;
@@ -27,14 +29,25 @@ the adoption workflow (DRE-3898) consume:
 
 WHAT THIS MODULE DOES NOT DO (do not "improve" it into doing them)
 ------------------------------------------------------------------
-It edits no config, renders no card or PR text, and never touches Linear. Its
-CLI is `classify` and nothing else — `apply`, `render`, `open-record-card` and
+It edits no config, renders no card text, and never touches Linear. Its CLI
+is `classify` and nothing else — `apply`, `render`, `open-record-card` and
 `open-question-card` live in DRE-3903's own module, which imports
-`classify_catalog` and `load_prices` from here. Adoption itself is an edit of
-`config/models.yaml` in a reviewed PR — proposed by the adoption workflow
-(`.github/workflows/model-adoption.yml`, DRE-3898) after a trial for `adopt`,
-and left to a person for everything else. This module says which of the three
-buckets a candidate falls in, and why.
+`classify_catalog` and `load_prices` from here. Adoption itself is a write of
+the home under the adoption's own name, `daily-adoption` — made by the
+adoption workflow (`.github/workflows/model-adoption.yml`, DRE-3898) after a
+trial for `adopt`, and left to a person, on Settings › Agents & models, for
+everything else. This module says which of the three buckets a candidate falls
+in, and why.
+
+THE LADDERS ARE THE HOME'S (DRE-6943)
+-------------------------------------
+`classify` reads the home once and records the `written_at` of the document it
+read (`--home-out`), which the workflow hands to `apply` so the write can tell
+whether the home changed while the trial ran. A home that is not set or cannot
+be read classifies NOTHING: `[]`, exit 0, and the home's `model-home:` line on
+stderr and in the record. An adoption is never decided against the defaults in
+the code. The library form, `classify_catalog`, still takes a models.yaml-shaped
+mapping; `home_config` is the home document in that shape.
 
 PRICE IS NEVER GUESSED
 ----------------------
@@ -72,12 +85,17 @@ from datetime import datetime
 from pathlib import Path
 
 import model_catalog
+import model_fallback
+import model_home
 from model_catalog import created_at, family
 from model_fallback import KNOWN_MODELS
 
 _ROOT = Path(__file__).resolve().parent.parent
-CONFIG_PATH = _ROOT / "config" / "models.yaml"
 PRICES_PATH = _ROOT / "config" / "model-prices.yaml"
+
+# Every command of this CLI reads the home (DRE-6939's contract, checked by
+# DRE-6940's `check_model_home_scope.py`).
+READS_MODEL_HOME = ("*",)
 
 # The three rules, and nothing else may appear in a record's `rule`.
 RULE_ADOPT = "adopt"
@@ -158,13 +176,34 @@ def _price_of(model_id: str, prices) -> dict | None:
     return {"input": float(side_in), "output": float(side_out)}
 
 
-def load_config(path=CONFIG_PATH) -> dict:
-    """`config/models.yaml` as a mapping. The ladders are read from it live —
-    a rung added tomorrow is compared tomorrow, with nothing here enumerating
-    ladder names by hand."""
-    import yaml
+def home_config(doc) -> dict:
+    """A home document in the shape `classify_catalog` reads: each group's
+    `models` as the ladder of its key, the project choices, and `discovery` —
+    a code-side fact of this checkout, never the home's. The ladders are read
+    from the document live — a rung added tomorrow is compared tomorrow, with
+    nothing here enumerating group names by hand."""
+    groups = doc.get("groups") if isinstance(doc, Mapping) else None
+    projects = doc.get("projects") if isinstance(doc, Mapping) else None
+    return {
+        "ladders": {
+            str(key): list(group.get("models") or [])
+            for key, group in (groups or {}).items() if isinstance(group, Mapping)
+        },
+        "projects": {str(slug): dict(entry) for slug, entry in (projects or {}).items()
+                     if isinstance(entry, Mapping)},
+        "discovery": dict(model_fallback.CONFIG.get("discovery") or {}),
+    }
 
-    return yaml.safe_load(Path(path).read_text()) or {}
+
+def home_record(outcome) -> dict:
+    """What `classify --home-out` writes: the read's state, the `written_at`
+    of the document it read (None unless read) and the tagged line."""
+    doc = outcome.get("document") if outcome.get("state") == model_home.READ else None
+    return {
+        "state": outcome.get("state"),
+        "written_at": doc.get("written_at") if isinstance(doc, Mapping) else None,
+        "line": model_home.status_line(outcome),
+    }
 
 
 # --------------------------------------------------------------------------- #
@@ -418,24 +457,28 @@ def load_catalog_file(path) -> list[dict]:
 
 def _parse_classify_args(argv: list[str]):
     snapshot = None
-    config_path = CONFIG_PATH
     prices_path = PRICES_PATH
+    home_out = None
     rest = list(argv)
     while rest:
         arg = rest.pop(0)
         if arg == "--snapshot":
             snapshot = rest.pop(0) if rest else None
-        elif arg == "--config":
-            config_path = rest.pop(0) if rest else config_path
         elif arg == "--prices":
             prices_path = rest.pop(0) if rest else prices_path
+        elif arg == "--home-out" and rest:
+            home_out = rest.pop(0)
         else:
             raise ValueError(f"unknown option {arg!r}")
-    return snapshot, config_path, prices_path
+    return snapshot, prices_path, home_out
 
 
 def _cmd_classify(argv: list[str]) -> int:
     """Print the Decision records as a JSON list, exit 0.
+
+    The home is read first, once (`model_home.read`, which prints its tagged
+    line to stderr); with `--home-out <file>` what it read is written there
+    (`home_record`). A home that is not read classifies nothing: `[]`.
 
     Without `--snapshot` the live catalog is fetched ONCE, through
     `model_catalog.fetch_catalog` — the same seam, the same degrade, the same
@@ -444,10 +487,17 @@ def _cmd_classify(argv: list[str]) -> int:
     outage is not a finding.
     """
     try:
-        snapshot, config_path, prices_path = _parse_classify_args(argv)
+        snapshot, prices_path, home_out = _parse_classify_args(argv)
     except ValueError as exc:
         print(f"::error::{exc}")
         return 2
+
+    outcome = model_home.read()
+    if home_out:
+        Path(home_out).write_text(json.dumps(home_record(outcome)) + "\n")
+    if outcome.get("state") != model_home.READ:
+        print("[]")
+        return 0
 
     if snapshot:
         catalog = load_catalog_file(snapshot)
@@ -456,12 +506,12 @@ def _cmd_classify(argv: list[str]) -> int:
         catalog = model_catalog.fetch_catalog(fetch=_fake_catalog_from_env())
 
     try:
-        config = load_config(config_path)
         prices = load_prices(prices_path)
     except (OSError, ValueError) as exc:
         print(f"::error::{exc}")
         return 2
 
+    config = home_config(outcome["document"])
     print(json.dumps(classify_catalog(catalog, config, prices), indent=2))
     return 0
 
@@ -482,9 +532,11 @@ def _fake_catalog_from_env():
 def main(argv: list[str]) -> int:
     """CLI for the adoption rule.
 
-      classify [--snapshot <catalog.json>] [--config config/models.yaml]
-               [--prices config/model-prices.yaml]
-                    print one Decision record per candidate, as JSON, exit 0
+      classify [--snapshot <catalog.json>] [--prices config/model-prices.yaml]
+               [--home-out <file>]
+                    print one Decision record per candidate against the
+                    home's ladders, as JSON, exit 0 — `[]` when the home is
+                    not read
 
     There is no other command, deliberately: this module decides, it never
     acts. Applying a decision, rendering it, and opening a card for it are
@@ -493,7 +545,7 @@ def main(argv: list[str]) -> int:
     if not argv:
         print(
             "usage: model_adoption.py classify [--snapshot <catalog.json>] "
-            "[--config <models.yaml>] [--prices <model-prices.yaml>]"
+            "[--prices <model-prices.yaml>] [--home-out <file>]"
         )
         return 2
     cmd, *rest = argv

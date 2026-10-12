@@ -25,8 +25,7 @@ facts, and handed to a `model_fixture.fixture_tree` through `home_env` or
 read off today's choices would go red on a legitimate save (DRE-6866); every
 model id below is read off the frozen document's groups or the frozen
 `models.yaml`, never typed. What is a fact of the code — `review_separation`,
-`retired`, `excluded`, the old file's schema and the adoption that edits it —
-is still proved on the frozen `models.yaml` through `policy_errors`. Only the
+`retired`, `excluded` and the old file's schema — is still proved on the frozen `models.yaml` through `policy_errors`. Only the
 `todays_` tests read the committed file, and they check what holds for any
 saved state. The probe is stubbed (`BUREAU_FAKE_AVAILABLE`, or a lambda
 in-process): no network.
@@ -52,7 +51,6 @@ sys.path.insert(0, str(ROOT / "scripts"))
 sys.path.insert(0, str(ROOT / "tests"))
 
 import model_adoption as ma  # noqa: E402
-import model_adoption_actions as maa  # noqa: E402
 import model_fallback as mf  # noqa: E402
 import model_fixture  # noqa: E402
 import model_home  # noqa: E402
@@ -90,12 +88,6 @@ def unseen(family: str, version: int) -> str:
     """A model id no frozen file names, in the vendor's spelling of the ids it
     does name."""
     return f"{OPUS55.split('-')[0]}-{family}-{version}"
-
-
-def successor(model: str) -> str:
-    """The same-family id one minor version above `model`."""
-    head, _, minor = model.rpartition("-")
-    return f"{head}-{int(minor) + 1}"
 
 
 # Priced nowhere, and of no family the fixture runs.
@@ -477,71 +469,6 @@ def test_a_retired_id_on_a_ladder_is_refused_in_the_ladder_form():
 def test_todays_config_names_no_retired_id():
     assert not [e for e in errors(committed(), mf.declared_prices())
                 if e.startswith("retired:")]
-
-
-# --------------------------------------------------------------------------- #
-# The adoption's write gate, on a non-rung exception (DRE-6633 unchanged)      #
-# --------------------------------------------------------------------------- #
-
-def _adopt(candidate: str, replaces: str, *ladders: str) -> dict:
-    """A Decision of rule `adopt` replacing `replaces` on each of `ladders`, in
-    the record shape `model_adoption._decision` builds."""
-    entry = {"id": candidate, "display_name": None}
-    price = {"input": 1.0, "output": 5.0}
-    return json.loads(json.dumps(ma._decision(
-        entry, ma.family(candidate), None, ma.RULE_ADOPT,
-        [{"ladder": name, "model": replaces, "created_at": None, "price": price}
-         for name in ladders],
-        price, "a same-family successor at no higher price")))
-
-
-def _config_text(projects: dict) -> str:
-    """The frozen models.yaml TEXT with its `projects:` block replaced —
-    `apply_text` edits text, never a re-dump."""
-    lines = model_fixture.fixture_text().splitlines(keepends=True)
-    start = next(i for i, l in enumerate(lines) if l.startswith("projects:"))
-    end = next(i for i in range(start + 1, len(lines))
-               if lines[i].strip() and not lines[i][0].isspace())
-    block = ["projects:\n"] + [
-        line for slug, entry in projects.items()
-        for line in [f"  {slug}:\n"] + [f"    {k}: {m}\n" for k, m in entry.items()]
-    ]
-    return "".join(lines[:start] + block + ["\n"] + lines[end:])
-
-
-def test_an_adoption_never_strands_a_non_rung_exception():
-    candidate = successor(SONNET46)
-    text = _config_text({"atlas": {"workhorse": SONNET46}})
-    assert errors(yaml.safe_load(text)) == []
-    result = maa.apply_text(text, _adopt(candidate, SONNET46, "judgement"),
-                            "2026-10-11")
-    after = yaml.safe_load(result)
-    assert after["projects"]["atlas"]["workhorse"] == SONNET46
-    assert ladder(after, "judgement")[-1] == candidate
-    assert SONNET46 in [r["model"] for r in after["retired"]]
-    with_candidate = {**prices(), candidate: {"input": 1.0, "output": 5.0}}
-    assert errors(after, with_candidate) == [
-        f"retired: {SONNET46} is retired and is still named by "
-        "projects.atlas.workhorse — a retired model is never selectable, so "
-        "nothing was written. The operator changes or clears that choice on "
-        f"Settings › Agents & models, and the next daily run retires {SONNET46}."
-    ]
-
-
-def test_an_adoption_still_moves_an_exception_on_its_own_kinds_rung():
-    candidate = successor(SONNET55)
-    text = _config_text({"atlas": {"workhorse": SONNET55}})
-    # Sonnet 5.5 is a rung of both the Builders' and the Reviewers' ladder,
-    # so a same-family successor replaces it on both, as the classifier says.
-    result = maa.apply_text(
-        text, _adopt(candidate, SONNET55, "workhorse", "advisory"), "2026-10-11")
-    after = yaml.safe_load(result)
-    assert after["projects"]["atlas"]["workhorse"] == candidate
-    # The exception moved with its rung, so nothing refuses it and nothing is
-    # left naming a retired id. (The `effort` entry an adoption leaves behind
-    # is the adoption's own concern, and untouched by this card.)
-    found = errors(after, {**prices(), candidate: {"input": 2.0, "output": 10.0}})
-    assert not [e for e in found if "projects." in e or e.startswith("retired:")], found
 
 
 # --------------------------------------------------------------------------- #

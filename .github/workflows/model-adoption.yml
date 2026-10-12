@@ -5,8 +5,9 @@
 # sorts every such model into one of them:
 #
 #   * `adopt`  — a newer version of a family already on a ladder, at the same
-#                or a lower declared price: one real trial run, a record card,
-#                and an ordinary pull request to config/models.yaml;
+#                or a lower declared price: one real trial run, then ONE write
+#                of the model home under the adoption's own name and a record
+#                card (DRE-6943);
 #   * `ask`    — a new family, a pricier tier, or no declared price: ONE
 #                plain-English question card for the CEO;
 #   * `ignore` — older than, or superseded by, what we run: a summary line and
@@ -24,9 +25,20 @@
 # month-old list. The catalog is fetched ONCE into $RUNNER_TEMP, and `apply`
 # reads that same file, so the rule and the edit see one catalog.
 #
+# THE LADDERS ARE THE HOME'S (DRE-6943). `classify` reads the model home — the
+# variable BUREAU_MODEL_CHOICES the console writes — and records the
+# `written_at` of the document it read. A home it cannot read classifies
+# nothing: the run stays green with the `model-home:` line in its summary, and
+# no adoption is ever decided against the defaults in the code. `apply` reads
+# the home AGAIN right before it writes, and writes nothing when that
+# `written_at` moved during the trial (a console save, most likely — the
+# console's lock does not cover this writer); tomorrow's run sorts again. It
+# edits no file and opens no pull request: the old id stays priced and
+# unretired, and the record card says so when it has left the home.
+#
 # ONE ADOPTION IN FLIGHT AT A TIME. Only the FIRST `adopt` decision is acted
-# on, and not at all while an adoption pull request is open. The next one
-# waits for the next run.
+# on, and not at all while an adoption pull request opened before DRE-6943 is
+# still open. The next one waits for the next run.
 #
 # FULL STRENGTH FIRST (DRE-5121). A trial that comes back `degraded` — the
 # model ran below the context window or output cap the Models API lists,
@@ -37,14 +49,15 @@
 # after that merges. That is the path Sonnet 5.5 needed on 2026-09-28
 # (DRE-5116).
 #
-# NOTHING HERE PUSHES TO `main`. The adoption and the pin raise each ride an
-# `agent/*` branch and an ordinary pull request authored by the bureau App, so
-# the critic reviews it on `pull_request` and the merge gate merges it on CI
-# green plus a bound APPROVE — the same gates as any agent's work.
+# NOTHING HERE PUSHES TO `main`. The pin raise rides an `agent/*` branch and
+# an ordinary pull request authored by the bureau App, so the critic reviews it
+# on `pull_request` and the merge gate merges it on CI green plus a bound
+# APPROVE — the same gates as any agent's work.
 #
 # `dry_run: true` (workflow_dispatch) produces the summary table, the trial and
-# every rendered text, and writes no card, no branch and no pull request. It is
-# what the PROOF card dispatches.
+# every rendered text, previews the home write with `apply --check`, and writes
+# no card, no home, no branch and no pull request. It is what the PROOF card
+# dispatches.
 #
 # NO ${{ }} INSIDE A `run:` BLOCK (DRE-3484): every value arrives through
 # `env:`, which also lets tests/test_model_adoption_workflow.py execute the
@@ -55,29 +68,35 @@
 #      request is made with the bureau App token minted first, so the branch
 #      and the pull request are `agent-bureau-bot`'s, an identity qa-review.yml's
 #      `allowed_bots` already admits: the critic runs on `pull_request` and the
-#      merge gate merges an `agent/*` head. The trial is model-trial.yml, whose
-#      own `allowed_bots` admits `github-actions`.
+#      merge gate merges an `agent/*` head. The home is written with a second
+#      App token, minted in the `adopt` job with `variables: write` on
+#      bureau-pipeline alone, and the document says `written_by:
+#      daily-adoption`. The trial is model-trial.yml, whose own
+#      `allowed_bots` admits `github-actions`.
 #   Q2 secrets — a scheduled or dispatched run in this repo reads the repo's
 #      normal secrets store, never the Dependabot one, so the App key, the
 #      Linear key and the Anthropic credential all resolve; `secrets: inherit`
 #      hands the trial the same store. The Anthropic credential is only ever
 #      used for the catalog and the Models API read and inside claude-code-action,
 #      never for a raw Messages API call (DRE-3074).
-#   Q3 re-run — every write is deduped: the question card, the record card and
-#      the trial-failure card on their exact titles (`find-open` ignores
-#      terminal cards), the adoption on its PR title and any open
-#      `agent/*-adopt-*` head, the pin raise on its title prefix, and each
-#      branch by name. A rerun finds what the first run made and mints nothing.
+#   Q3 re-run — every write is deduped: the question card and the
+#      trial-failure card on their exact titles (`find-open` ignores terminal
+#      cards), the home write on its `written_at` (a rerun finds its own write
+#      and writes nothing), the pin raise on its title prefix, and each branch
+#      by name. The record card lands in Done, so a rerun that finds nothing
+#      to write files one more record saying so.
 #   Q4 command limits — `gh pr create` needs the branch pushed and a token that
 #      may push it, which is why the App token is minted before checkout. A
 #      pull request listing GitHub will not answer fails the run rather than
 #      opening a duplicate. The pin raise edits `.github/workflows/`, which a
 #      token may push only with the App's `workflows` permission.
-#   Q5 our crash — a crash between the push and `gh pr create` leaves a branch
-#      with no pull request. The next run finds the branch, reuses it as it
-#      stands and opens the pull request; nothing else was recorded to unstick.
-#      A red run goes to the medic (self-medic.yml), and its one retry repeats
-#      the same deduped writes.
+#   Q5 our crash — a crash between the pin raise's push and `gh pr create`
+#      leaves a branch with no pull request. The next run finds the branch,
+#      reuses it as it stands and opens the pull request. A crash after the
+#      home write and before the record card leaves the home written and the
+#      record owed; the step summary already says what was written. A red run
+#      goes to the medic (self-medic.yml), and its one retry repeats the same
+#      deduped writes.
 name: Model adoption
 
 on:
@@ -119,6 +138,7 @@ jobs:
     outputs:
       candidate: ${{ steps.pick.outputs.candidate }}
       route: ${{ steps.route.outputs.route }}
+      written_at: ${{ steps.pick.outputs.written_at }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -137,8 +157,27 @@ jobs:
           CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
         run: python3 scripts/model_catalog.py snapshot "$RUNNER_TEMP/catalog.json"
 
+      # The home the adoption reads (DRE-6943): every step here that runs
+      # model_adoption.py, model_adoption_actions.py or claude_code_pin.py
+      # holds this token — one rule for the file. A refused mint leaves it
+      # empty, the home unreadable, and the adoption deciding nothing.
+      - name: Mint the model-home read token
+        id: model_home
+        continue-on-error: true
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: ${{ secrets.BUREAU_APP_ID }}
+          private-key: ${{ secrets.BUREAU_APP_PRIVATE_KEY }}
+          owner: dreadnought-foundry
+          repositories: bureau-pipeline
+          permission-variables: read
+
+      # Against the home's ladders, recording the `written_at` it read; a home
+      # it cannot read classifies nothing (`[]`) and says why.
       - name: Classify every candidate
-        run: python3 scripts/model_adoption.py classify --snapshot "$RUNNER_TEMP/catalog.json" > "$RUNNER_TEMP/decisions.json"
+        env:
+          BUREAU_MODEL_HOME_TOKEN: ${{ steps.model_home.outputs.token }}
+        run: python3 scripts/model_adoption.py classify --snapshot "$RUNNER_TEMP/catalog.json" --home-out "$RUNNER_TEMP/home-read.json" > "$RUNNER_TEMP/decisions.json"
 
       # Every candidate's id, rule and reason, as a table — an `ignore` gets
       # its line here and nothing anywhere else. Each `ask` is written to its
@@ -150,20 +189,29 @@ jobs:
           import json
           import os
           import pathlib
+          import re
 
           tmp = pathlib.Path(os.environ["RUNNER_TEMP"])
           try:
               decisions = json.loads((tmp / "decisions.json").read_text())
+              home = json.loads((tmp / "home-read.json").read_text())
           except (OSError, ValueError) as exc:
               raise SystemExit(f"::error::the classification is unreadable: {exc}")
-          if not isinstance(decisions, list):
+          if not isinstance(decisions, list) or not isinstance(home, dict):
               raise SystemExit("::error::the classification is not a list of Decision records")
 
           def cell(value):
               return " ".join(str(value or "").split()).replace("|", "\\|")
 
+          read = home.get("state") == "read"
+          written_at = str(home.get("written_at") or "") if read else ""
           lines = ["### Model adoption", ""]
-          if decisions:
+          if not read:
+              # Never decided against the defaults in the code (DRE-6943).
+              lines += [f"`{cell(home.get('line'))}`", "",
+                        "Nothing was classified: an adoption is decided against "
+                        "the home or not at all. Tomorrow's run reads it again."]
+          elif decisions:
               lines += ["| Candidate | Rule | Reason |", "|---|---|---|"]
               lines += [f"| `{cell(d.get('candidate'))}` | {cell(d.get('rule'))} "
                         f"| {cell(d.get('reason'))} |" for d in decisions]
@@ -187,6 +235,12 @@ jobs:
           with open(os.environ["GITHUB_OUTPUT"], "a") as fh:
               fh.write(f"candidate={candidate}\n")
               fh.write(f"asks={len(asks)}\n")
+              # Handed to `apply --expect-written-at`. A value that is not one
+              # plain line is handed on as one that matches no home, so the
+              # write is never made against it.
+              if not re.fullmatch(r"[0-9A-Za-z:.+_-]*", written_at):
+                  written_at = "unusable"
+              fh.write(f"written_at={written_at}\n")
           text = "\n".join(lines) + "\n"
           print(text)
           summary = os.environ.get("GITHUB_STEP_SUMMARY")
@@ -202,6 +256,7 @@ jobs:
         if: steps.pick.outputs.candidate != ''
         env:
           GH_TOKEN: ${{ github.token }}
+          BUREAU_MODEL_HOME_TOKEN: ${{ steps.model_home.outputs.token }}
         run: |
           TITLE=$(python3 scripts/model_adoption_actions.py render pr-title --decision "$RUNNER_TEMP/decision.json")
           gh pr list --repo "$GITHUB_REPOSITORY" --state open --limit 200 \
@@ -250,6 +305,7 @@ jobs:
           ANTHROPIC_API_KEY: ${{ vars.CLAUDE_AUTH_MODE != 'subscription' && secrets.ANTHROPIC_API_KEY || '' }}
           CLAUDE_CODE_OAUTH_TOKEN: ${{ vars.CLAUDE_AUTH_MODE == 'subscription' && secrets.CLAUDE_CODE_OAUTH_TOKEN || '' }}
           GH_TOKEN: ${{ github.token }}
+          BUREAU_MODEL_HOME_TOKEN: ${{ steps.model_home.outputs.token }}
         run: python3 scripts/claude_code_pin.py supports "$CANDIDATE" >> "$GITHUB_OUTPUT"
 
       - name: Route the adoption candidate
@@ -276,11 +332,13 @@ jobs:
 
       # `ask`: ONE decision card per candidate, deduped on its title. It lands
       # in Planning with needs-human + no-code + agent:devops, and the planning
-      # run parks it in Green Light, the CEO's queue.
+      # run parks it in Green Light, the CEO's queue. Its body reads the
+      # ladder the model would join from the home.
       - name: Ask the CEO — one question card per candidate
         if: steps.pick.outputs.asks != '0' && env.DRY_RUN != 'true'
         env:
           LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+          BUREAU_MODEL_HOME_TOKEN: ${{ steps.model_home.outputs.token }}
         run: |
           for DECISION in "$RUNNER_TEMP"/ask-*.json; do
             python3 scripts/model_adoption_actions.py open-question-card --decision "$DECISION" \
@@ -290,14 +348,16 @@ jobs:
 
       - name: Dry run — print the questions
         if: steps.pick.outputs.asks != '0' && env.DRY_RUN == 'true'
+        env:
+          BUREAU_MODEL_HOME_TOKEN: ${{ steps.model_home.outputs.token }}
         run: |
           for DECISION in "$RUNNER_TEMP"/ask-*.json; do
             python3 scripts/model_adoption_actions.py render question-title --decision "$DECISION"
             python3 scripts/model_adoption_actions.py render question-body --decision "$DECISION"
           done
 
-      # The catalog travels with the decision, so `apply` edits against the
-      # exact list the rule classified — never a second fetch.
+      # The catalog travels with the decision, so `apply` classifies against
+      # the exact list the rule classified — never a second fetch.
       - name: Hand the catalog and the decision on
         if: steps.pick.outputs.candidate != ''
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -392,17 +452,17 @@ jobs:
             python3 scripts/linear_ops.py create "$TITLE" "$RUNNER_TEMP/trial-failed.md" --repo "$REPO_SLUG" --label agent:devops
           fi
 
-  # A PASSED trial: the record card, the edit, and an ordinary pull request.
-  # `passed` guards every step of this job.
+  # A PASSED trial: one write of the home, then the record card saying what
+  # it did (DRE-6943). No branch and no pull request. `passed` guards every
+  # step of this job.
   adopt:
     needs: [classify, trial]
     if: ${{ !cancelled() && needs.trial.outputs.outcome == 'passed' }}
     runs-on: ${{ fromJSON(vars.BUREAU_SHORT_RUNS_ON || vars.BUREAU_RUNS_ON || '["ubuntu-latest"]') }}
     timeout-minutes: 30
     steps:
-      # Minted FIRST: the checkout's push credential and `gh pr create` both
-      # need it, and a pull request authored by the App is one the critic runs
-      # on (Q1, Q4).
+      # Minted FIRST, the way every job here that may write starts: the
+      # checkout is the App's.
       - name: Mint bot token
         id: app
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
@@ -413,7 +473,6 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           token: ${{ steps.app.outputs.token }}
-          fetch-depth: 0
 
       - name: Install the pipeline's Python tooling (cached)
         uses: ./.github/actions/setup-python-cached
@@ -450,136 +509,71 @@ jobs:
           print(json.dumps(trial, indent=2))
           PY
 
-      # Rendered, never written inline: the title is what the in-flight check
-      # dedupes on, and the body is the critic's evidence.
-      - name: Render the adoption pull request
-        run: |
-          python3 scripts/model_adoption_actions.py render pr-title --decision "$RUNNER_TEMP/decision.json"
-          python3 scripts/model_adoption_actions.py render pr-body --decision "$RUNNER_TEMP/decision.json" \
-            --trial "$RUNNER_TEMP/trial.json" > "$RUNNER_TEMP/pr-body.md"
-          cat "$RUNNER_TEMP/pr-body.md"
+      # The home the adoption reads (DRE-6943): every step here that runs
+      # model_adoption.py, model_adoption_actions.py or claude_code_pin.py
+      # holds this token — one rule for the file. A refused mint leaves it
+      # empty, the home unreadable, and the adoption deciding nothing.
+      - name: Mint the model-home read token
+        id: model_home
+        continue-on-error: true
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: ${{ secrets.BUREAU_APP_ID }}
+          private-key: ${{ secrets.BUREAU_APP_PRIVATE_KEY }}
+          owner: dreadnought-foundry
+          repositories: bureau-pipeline
+          permission-variables: read
 
-      # The board's record of the adoption, and the name of its branch. A
-      # Linear failure owes the card and the adoption proceeds on the fallback
-      # branch, which the pull request says.
+      # The ONE writer of the home besides the console: `variables: write` on
+      # bureau-pipeline alone, handed to the apply step and no other.
+      - name: Mint the model-home write token
+        id: model_home_write
+        if: env.DRY_RUN != 'true'
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: ${{ secrets.BUREAU_APP_ID }}
+          private-key: ${{ secrets.BUREAU_APP_PRIVATE_KEY }}
+          owner: dreadnought-foundry
+          repositories: bureau-pipeline
+          permission-variables: write
+
+      # Reads the home again; a `written_at` other than the one classify
+      # recorded writes nothing and ends green with one sentence. Otherwise
+      # ONE PATCH, `written_by: daily-adoption`. No file is edited.
+      - name: Apply the adoption to the home
+        id: apply
+        if: env.DRY_RUN != 'true'
+        env:
+          CANDIDATE: ${{ needs.classify.outputs.candidate }}
+          EXPECT_WRITTEN_AT: ${{ needs.classify.outputs.written_at }}
+          BUREAU_MODEL_HOME_TOKEN: ${{ steps.model_home.outputs.token }}
+          BUREAU_MODEL_HOME_WRITE_TOKEN: ${{ steps.model_home_write.outputs.token }}
+        run: |
+          python3 scripts/model_adoption_actions.py apply "$CANDIDATE" --snapshot "$RUNNER_TEMP/catalog.json" \
+            --expect-written-at "$EXPECT_WRITTEN_AT" --result "$RUNNER_TEMP/applied.json"
+
+      # The board's record of the adoption: what moved where, the home as the
+      # place it changed, and every sentence the write said. A Linear failure
+      # owes the card; the step summary already says what was written.
       - name: Open the record card
         id: record
         if: env.DRY_RUN != 'true'
         env:
           LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          BUREAU_MODEL_HOME_TOKEN: ${{ steps.model_home.outputs.token }}
         run: |
           python3 scripts/model_adoption_actions.py open-record-card \
-            --decision "$RUNNER_TEMP/decision.json" --run-url "$RUN_URL" >> "$GITHUB_OUTPUT"
+            --decision "$RUNNER_TEMP/decision.json" --run-url "$RUN_URL" \
+            --trial "$RUNNER_TEMP/trial.json" --applied "$RUNNER_TEMP/applied.json" >> "$GITHUB_OUTPUT"
 
-      # Q5: a branch that already exists with no pull request is a run that
-      # crashed after its push. It is reused as it stands, and the pull
-      # request is opened below.
-      - name: Create the adoption branch off origin/main, or reuse it
-        id: branch
-        if: env.DRY_RUN != 'true'
-        env:
-          BRANCH: ${{ steps.record.outputs.branch }}
-        run: |
-          [ -n "$BRANCH" ] || { echo "::error::the record card step named no branch"; exit 1; }
-          git fetch --quiet origin main
-          if git ls-remote --exit-code --heads origin "$BRANCH" > /dev/null; then
-            git fetch --quiet origin "$BRANCH"
-            git checkout -B "$BRANCH" "origin/$BRANCH"
-            echo "reuse=true" >> "$GITHUB_OUTPUT"
-            echo "$BRANCH already exists — reusing it as it stands"
-          else
-            git checkout -B "$BRANCH" origin/main
-            echo "reuse=false" >> "$GITHUB_OUTPUT"
-          fi
-
-      - name: Apply the adoption to config/models.yaml
-        if: env.DRY_RUN != 'true' && steps.branch.outputs.reuse != 'true'
-        env:
-          CANDIDATE: ${{ needs.classify.outputs.candidate }}
-        run: python3 scripts/model_adoption_actions.py apply "$CANDIDATE" --snapshot "$RUNNER_TEMP/catalog.json"
-
-      - name: Regenerate the derived model regions
-        if: env.DRY_RUN != 'true' && steps.branch.outputs.reuse != 'true'
-        run: |
-          python3 scripts/sync_model_config.py
-          python3 scripts/sync_model_config.py --check
-
-      # INFORMATIONAL. A red result is stated in the pull request, not a reason
-      # to withhold it: the critic and the fix agent own the repair, and both
-      # act on an `agent/*` branch.
-      - name: Run the model tests (informational)
-        id: tests
-        if: env.DRY_RUN != 'true'
-        run: |
-          set +e
-          python3 -m pytest tests/test_model_policy.py tests/test_model_config.py tests/test_model_choices.py -q \
-            > "$RUNNER_TEMP/model-tests.txt" 2>&1
-          rc=$?
-          set -e
-          tail -n 40 "$RUNNER_TEMP/model-tests.txt"
-          if [ "$rc" -eq 0 ]; then result=passed; else result=failed; fi
-          echo "result=$result" >> "$GITHUB_OUTPUT"
-          echo "model tests: $result"
-
-      # The staged set is PROVED before the commit: config/models.yaml,
-      # agents.yaml, the generated region of scripts/model_fallback.py and the
-      # generated config/model-choices.json (DRE-6635), and nothing else — the
-      # four paths the TDD gate reads as data and a generated region (DRE-3896).
-      - name: Commit and push the adoption branch
-        if: env.DRY_RUN != 'true' && steps.branch.outputs.reuse != 'true'
-        env:
-          BRANCH: ${{ steps.record.outputs.branch }}
-          CARD: ${{ steps.record.outputs.card }}
-          CANDIDATE: ${{ needs.classify.outputs.candidate }}
-        run: |
-          git add -- config/models.yaml agents.yaml scripts/model_fallback.py config/model-choices.json
-          STAGED=$(git diff --cached --name-only)
-          for path in $STAGED; do
-            case "$path" in
-              config/models.yaml|agents.yaml|scripts/model_fallback.py|config/model-choices.json) ;;
-              *) echo "::error::refusing to commit $path — an adoption touches only the model config"; exit 1 ;;
-            esac
-          done
-          [ -n "$STAGED" ] || { echo "::error::the adoption changed nothing"; exit 1; }
-          git -c user.name="agent-bureau-bot[bot]" \
-            -c user.email="agent-bureau-bot[bot]@users.noreply.github.com" \
-            commit --quiet -m "chore(${CARD:-models}): adopt $CANDIDATE through the model adoption workflow"
-          git push origin "HEAD:refs/heads/$BRANCH"
-
-      - name: Open the adoption pull request
-        if: env.DRY_RUN != 'true'
-        env:
-          GH_TOKEN: ${{ steps.app.outputs.token }}
-          BRANCH: ${{ steps.record.outputs.branch }}
-          TESTS: ${{ steps.tests.outputs.result }}
-          CARD_OWED: ${{ steps.record.outputs.card_owed }}
-        run: |
-          EXISTING=$(gh pr list --repo "$GITHUB_REPOSITORY" --head "$BRANCH" --state open \
-            --json url --jq '.[0].url // ""')
-          if [ -n "$EXISTING" ]; then
-            echo "already open as $EXISTING — not duplicating"
-            exit 0
-          fi
-          {
-            echo
-            echo "## Model tests"
-            echo
-            echo "\`tests/test_model_policy.py\` and \`tests/test_model_config.py\` on this branch: **${TESTS:-not run}**."
-            if [ "$CARD_OWED" = "true" ]; then
-              echo
-              echo "The record card could not be filed, so it is owed: this branch carries no card id."
-            fi
-          } >> "$RUNNER_TEMP/pr-body.md"
-          gh pr create --repo "$GITHUB_REPOSITORY" --base main --head "$BRANCH" \
-            --title "$(python3 scripts/model_adoption_actions.py render pr-title --decision "$RUNNER_TEMP/decision.json")" \
-            --body-file "$RUNNER_TEMP/pr-body.md"
-
-      - name: Dry run — preview the config edit
+      - name: Dry run — preview the home write
         if: env.DRY_RUN == 'true'
         env:
           CANDIDATE: ${{ needs.classify.outputs.candidate }}
-        run: python3 scripts/model_adoption_actions.py apply "$CANDIDATE" --snapshot "$RUNNER_TEMP/catalog.json" --check
+          EXPECT_WRITTEN_AT: ${{ needs.classify.outputs.written_at }}
+          BUREAU_MODEL_HOME_TOKEN: ${{ steps.model_home.outputs.token }}
+        run: python3 scripts/model_adoption_actions.py apply "$CANDIDATE" --snapshot "$RUNNER_TEMP/catalog.json" --expect-written-at "$EXPECT_WRITTEN_AT" --check
 
   # DEGRADED, or a pin the candidate is known not to run on: raise the Claude
   # Code pin first (DRE-5121), one raise in flight at a time.
@@ -612,12 +606,28 @@ jobs:
           requirements: |
             requirements-dev.txt
 
+      # The home the adoption reads (DRE-6943): every step here that runs
+      # model_adoption.py, model_adoption_actions.py or claude_code_pin.py
+      # holds this token — one rule for the file. A refused mint leaves it
+      # empty, the home unreadable, and the adoption deciding nothing.
+      - name: Mint the model-home read token
+        id: model_home
+        continue-on-error: true
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: ${{ secrets.BUREAU_APP_ID }}
+          private-key: ${{ secrets.BUREAU_APP_PRIVATE_KEY }}
+          owner: dreadnought-foundry
+          repositories: bureau-pipeline
+          permission-variables: read
+
       # Every pin-raise title opens with the module's own prefix, read from it
       # rather than restated here.
       - name: Is a pin raise already in flight
         id: inflight
         env:
           GH_TOKEN: ${{ steps.app.outputs.token }}
+          BUREAU_MODEL_HOME_TOKEN: ${{ steps.model_home.outputs.token }}
         run: |
           gh pr list --repo "$GITHUB_REPOSITORY" --state open --limit 200 \
             --json title,headRefName > "$RUNNER_TEMP/open-prs.json"
@@ -651,6 +661,7 @@ jobs:
           ANTHROPIC_API_KEY: ${{ vars.CLAUDE_AUTH_MODE != 'subscription' && secrets.ANTHROPIC_API_KEY || '' }}
           CLAUDE_CODE_OAUTH_TOKEN: ${{ vars.CLAUDE_AUTH_MODE == 'subscription' && secrets.CLAUDE_CODE_OAUTH_TOKEN || '' }}
           GH_TOKEN: ${{ github.token }}
+          BUREAU_MODEL_HOME_TOKEN: ${{ steps.model_home.outputs.token }}
         run: |
           python3 scripts/claude_code_pin.py latest-supporting "$CANDIDATE" > "$RUNNER_TEMP/pin.json"
           python3 <<'PY'
@@ -678,6 +689,8 @@ jobs:
 
       - name: Render the pin-raise pull request
         if: steps.find.outputs.answer == 'found'
+        env:
+          BUREAU_MODEL_HOME_TOKEN: ${{ steps.model_home.outputs.token }}
         run: |
           python3 scripts/claude_code_pin.py render pr-title --pin "$RUNNER_TEMP/pin.json"
           python3 scripts/claude_code_pin.py render pr-body --pin "$RUNNER_TEMP/pin.json"
@@ -689,6 +702,7 @@ jobs:
         if: steps.find.outputs.answer == 'found' && env.DRY_RUN != 'true'
         env:
           BRANCH: ${{ steps.find.outputs.branch }}
+          BUREAU_MODEL_HOME_TOKEN: ${{ steps.model_home.outputs.token }}
         run: |
           git fetch --quiet origin main
           if git ls-remote --exit-code --heads origin "$BRANCH" > /dev/null; then
@@ -782,11 +796,27 @@ jobs:
           print(json.dumps(trial, indent=2))
           PY
 
+      # The home the adoption reads (DRE-6943): every step here that runs
+      # model_adoption.py, model_adoption_actions.py or claude_code_pin.py
+      # holds this token — one rule for the file. A refused mint leaves it
+      # empty, the home unreadable, and the adoption deciding nothing.
+      - name: Mint the model-home read token
+        id: model_home
+        continue-on-error: true
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: ${{ secrets.BUREAU_APP_ID }}
+          private-key: ${{ secrets.BUREAU_APP_PRIVATE_KEY }}
+          owner: dreadnought-foundry
+          repositories: bureau-pipeline
+          permission-variables: read
+
       - name: Open the pin-raise pull request
         if: env.DRY_RUN != 'true'
         env:
           GH_TOKEN: ${{ steps.app.outputs.token }}
           BRANCH: ${{ needs.pin-raise.outputs.branch }}
+          BUREAU_MODEL_HOME_TOKEN: ${{ steps.model_home.outputs.token }}
         run: |
           EXISTING=$(gh pr list --repo "$GITHUB_REPOSITORY" --head "$BRANCH" --state open \
             --json url --jq '.[0].url // ""')
