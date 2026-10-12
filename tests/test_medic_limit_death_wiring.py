@@ -6,9 +6,10 @@ marker; until the medic calls it, no marker is written and the reconcile sweep
 (`limit_recovery.py`) has nothing to bring back. This file pins the call and
 the gate, by RUNNING the classify job's new step under a shim rather than
 reading its text: the step's `run:` block is rendered from a fake
-`workflow_run` payload exactly the way GitHub renders it, executed under the
-workflow's own shell flags (`bash -e -o pipefail`), and every `python3` it
-makes is recorded.
+`workflow_run` payload exactly the way GitHub renders it, executed under
+`bash -e -o pipefail`, and every `python3` it makes is recorded. That is
+deliberately stricter than the workflow: medic.yml sets no `shell:`, so GitHub
+runs the step as `bash -e` without pipefail, and the step must hold under both.
 
 What must hold:
 
@@ -313,6 +314,30 @@ class MarkerTest(unittest.TestCase):
         self.assertIn("limit=true", result["outputs"])
         self.assertIn("marker=refused", result["outputs"])
         self.assertNotIn("by hand", result["text"])
+
+
+# ── 2b. no pipe a reader closes early (DRE-7025) ─────────────────────────────
+class EarlyClosedPipeTest(unittest.TestCase):
+    """The step took its first line with `… | head -1`, and this harness runs
+    it under `pipefail` — stricter than the workflow's default `bash -e`. Bash
+    writes a multi-line string one line per write, so a `head` that exits after
+    the first line kills the writer with SIGPIPE: under `pipefail` the pipeline
+    is 141 and `-e` ends the step. The live step, without `pipefail`, sees
+    `head`'s 0 and was never at risk — the harness was. On main a3042237 the
+    suite-green job, six copies of the suite on one machine, lost that race
+    twice: once as exit 141 on a classifier death, once as a marker test that
+    saw no post because the step had already ended. The step must stay correct
+    under both flag sets. A decision longer than a pipe's buffer loses the race
+    every time, so this one cannot pass by luck."""
+
+    LONG_DECISION = "limit\n\n" + MARKER + "\n" + ("x" * 99 + "\n") * 1000
+
+    def test_a_decision_longer_than_a_pipe_buffer_does_not_kill_the_step(self):
+        result = run_step(decision=self.LONG_DECISION)
+        self.assertEqual(0, result["rc"], result["text"][:500])
+        self.assertIn("limit=true", result["outputs"])
+        self.assertIn(MARKER.splitlines()[0], result["text"], "the body's first line is still said")
+        self.assertEqual(1, len(_comment_calls(result)), result["calls"][:3])
 
 
 # ── 3. anything else ─────────────────────────────────────────────────────────
