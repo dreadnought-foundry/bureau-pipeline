@@ -253,6 +253,11 @@ STANDARD_PATH = os.path.join(ROOT, "standards", "card-quality.md")
 # every other run uses, so a ladder change (DRE-3015) moves this with it.
 ROLE = "planner"
 
+# The commands of this CLI whose process reads the model home (DRE-6940): every
+# one — `_pick_model` and `call_with_capacity_fallback` call the selector's
+# choice functions, so the read is wherever a model is asked for.
+READS_MODEL_HOME = ("*",)
+
 # The heading the prompt lives under in the planner brief.
 PROMPT_HEADING = "## Classifying the card itself"
 

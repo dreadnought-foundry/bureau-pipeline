@@ -375,6 +375,19 @@ A name counts as set when it is in the environment, even empty — an empty toke
 is a mint that failed. With neither, nobody asked for a home: the run is on the
 defaults in the code, exactly as before the home.
 
+A run gets the token from its own job (DRE-6940). A run's boot token is
+minted for the calling repository only, so each job holding a step whose
+process reads the home carries a `Mint the model-home read token` step (id
+`model_home`, owner `dreadnought-foundry`, repository `bureau-pipeline`,
+`permission-variables: read`, `continue-on-error: true`), and hands
+`${{ steps.model_home.outputs.token }}` to those steps alone — never a job
+output or `$GITHUB_ENV`, so the agent steps beside them never hold it. Which
+steps read the home is declared in the scripts: a module-level
+`READS_MODEL_HOME` names the CLI commands whose process reads it, or `("*",)`
+for every one. `scripts/check_model_home_scope.py`, a step of Pipeline Tests,
+fails a reading step without the token and a script that reaches the home
+without the declaration.
+
 Every read prints one line tagged `model-home:` to stderr, above the selection
 note, and the note ends with the home's clause:
 

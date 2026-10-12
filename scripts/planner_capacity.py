@@ -50,6 +50,11 @@ from execution_result import load_execution  # noqa: E402
 ROLE = "planner"
 _DONE = ("success", "failure")
 
+# The commands of this CLI whose process reads the model home (DRE-6940):
+# `decide` picks the rung below a model refused for capacity
+# (`model_fallback.fallback_for`); `finish` reads nothing.
+READS_MODEL_HOME = ("decide",)
+
 
 def _text(record: dict) -> str:
     parts = []

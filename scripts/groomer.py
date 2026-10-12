@@ -293,6 +293,10 @@ import planning_escalation  # noqa: E402 — the plain-English write guard
 import planner_queue  # noqa: E402 — the ONE planner slot ledger (DRE-5176)
 import sanitize_untrusted  # noqa: E402 — ONE defang prefix for untrusted text
 
+# Every command of this CLI may read the model home (DRE-6940): `_build` runs
+# `groom_judgement`, which picks its model off the planner's ladder.
+READS_MODEL_HOME = ("*",)
+
 # --------------------------------------------------------------------------- #
 # vocabulary                                                                   #
 # --------------------------------------------------------------------------- #

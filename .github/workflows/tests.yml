@@ -338,6 +338,13 @@ jobs:
       # the WIP band the fast path exists for.
       - name: WIP cap single-source check
         run: python3 scripts/check_wip_cap.py
+      # The model home's token (DRE-6940): every step whose process reads the
+      # home holds `BUREAU_MODEL_HOME_TOKEN` from a mint in its own job, and
+      # every script that reaches the home declares `READS_MODEL_HOME`. A
+      # selecting step without it runs on the defaults in the code in every
+      # organization but this one, whatever the console says.
+      - name: Every step that reads the model home holds its token
+        run: python3 scripts/check_model_home_scope.py
       # reconcile.py call sites (DRE-3042): a workflow step that runs the
       # sweep is a call site, and the sweep takes its arguments from the
       # environment. linear-sync's conflict sweep never set REPO_SLUG —

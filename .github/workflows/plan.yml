@@ -636,10 +636,29 @@ jobs:
             "${{ github.event.client_payload.identifier }}" \
             --github-output "$GITHUB_OUTPUT"
 
+      # The model home (DRE-6939) is a variable on
+      # dreadnought-foundry/bureau-pipeline, which a run's boot token in another
+      # organization cannot read. A narrow token for the bureau App's installation
+      # there, handed only to the steps below whose process reads the home
+      # (DRE-6940, held by scripts/check_model_home_scope.py). A refused mint
+      # leaves it empty and the selector on the defaults in the code — never a
+      # failed job.
+      - name: Mint the model-home read token
+        id: model_home
+        if: steps.gate.outputs.bounced != 'true' && steps.dedupe.outputs.skip != 'true' && steps.slot.outputs.admitted == 'true'
+        continue-on-error: true
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: ${{ secrets.BUREAU_APP_ID }}
+          private-key: ${{ secrets.BUREAU_APP_PRIVATE_KEY }}
+          owner: dreadnought-foundry
+          repositories: bureau-pipeline
+          permission-variables: read
       - name: Classify the card — one-off, epic or wave
         id: classify
         if: steps.gate.outputs.bounced != 'true' && steps.dedupe.outputs.skip != 'true' && steps.slot.outputs.admitted == 'true' && steps.ask.outputs.review != 'true'
         env:
+          BUREAU_MODEL_HOME_TOKEN: ${{ steps.model_home.outputs.token }}
           LINEAR_API_KEY: ${{ secrets.LINEAR_PLANNER_KEY || secrets.LINEAR_API_KEY }}
           LINEAR_API_KEY_FALLBACK: ${{ secrets.LINEAR_API_KEY }}
           # The same credential the model-selection step below reads, through
@@ -839,6 +858,7 @@ jobs:
         id: model
         if: steps.gate.outputs.bounced != 'true' && steps.dedupe.outputs.skip != 'true' && steps.slot.outputs.admitted == 'true'
         env:
+          BUREAU_MODEL_HOME_TOKEN: ${{ steps.model_home.outputs.token }}
           # The probe authenticates with the same CLAUDE token the agent uses.
           ANTHROPIC_API_KEY: ${{ vars.CLAUDE_AUTH_MODE != 'subscription' && secrets.ANTHROPIC_API_KEY || '' }}
           CLAUDE_CODE_OAUTH_TOKEN: ${{ vars.CLAUDE_AUTH_MODE == 'subscription' && secrets.CLAUDE_CODE_OAUTH_TOKEN || '' }}
@@ -1290,6 +1310,7 @@ jobs:
         # the job: a dead run leaves the card in Planning with nobody told.
         continue-on-error: true
         env:
+          BUREAU_MODEL_HOME_TOKEN: ${{ steps.model_home.outputs.token }}
           ANTHROPIC_API_KEY: ${{ vars.CLAUDE_AUTH_MODE != 'subscription' && secrets.ANTHROPIC_API_KEY || '' }}
           CLAUDE_CODE_OAUTH_TOKEN: ${{ vars.CLAUDE_AUTH_MODE == 'subscription' && secrets.CLAUDE_CODE_OAUTH_TOKEN || '' }}
         run: |
@@ -2235,6 +2256,7 @@ jobs:
         id: plan_cap
         if: "!cancelled() && (steps.route.outputs.mode == 'plan') && steps.claude.outcome == 'failure'"
         env:
+          BUREAU_MODEL_HOME_TOKEN: ${{ steps.model_home.outputs.token }}
           EXEC_FILE: ${{ steps.claude.outputs.execution_file }}
           MODEL: ${{ steps.model.outputs.model }}
         run: |
@@ -2753,6 +2775,7 @@ jobs:
         id: premodel
         if: steps.route.outputs.mode == 'plan' && steps.kids.outputs.count != '0'
         env:
+          BUREAU_MODEL_HOME_TOKEN: ${{ steps.model_home.outputs.token }}
           ANTHROPIC_API_KEY: ${{ vars.CLAUDE_AUTH_MODE != 'subscription' && secrets.ANTHROPIC_API_KEY || '' }}
           CLAUDE_CODE_OAUTH_TOKEN: ${{ vars.CLAUDE_AUTH_MODE == 'subscription' && secrets.CLAUDE_CODE_OAUTH_TOKEN || '' }}
         run: |
@@ -3093,6 +3116,7 @@ jobs:
         id: replan_cap
         if: "!cancelled() && (steps.pre1.outputs.action == 'hold' && steps.pre1.outputs.bound != 'true') && steps.replan.outcome == 'failure'"
         env:
+          BUREAU_MODEL_HOME_TOKEN: ${{ steps.model_home.outputs.token }}
           EXEC_FILE: ${{ steps.replan.outputs.execution_file }}
           MODEL: ${{ steps.model.outputs.model }}
         run: |
@@ -3699,6 +3723,7 @@ jobs:
         id: postmodel
         if: steps.route.outputs.mode == 'review'
         env:
+          BUREAU_MODEL_HOME_TOKEN: ${{ steps.model_home.outputs.token }}
           ANTHROPIC_API_KEY: ${{ vars.CLAUDE_AUTH_MODE != 'subscription' && secrets.ANTHROPIC_API_KEY || '' }}
           CLAUDE_CODE_OAUTH_TOKEN: ${{ vars.CLAUDE_AUTH_MODE == 'subscription' && secrets.CLAUDE_CODE_OAUTH_TOKEN || '' }}
         run: |
@@ -4626,6 +4651,7 @@ jobs:
         id: postreplan_cap
         if: "!cancelled() && (steps.route.outputs.mode == 'review' && steps.post1.outputs.action == 'hold' && steps.slot.outputs.admitted == 'true') && steps.postreplan.outcome == 'failure'"
         env:
+          BUREAU_MODEL_HOME_TOKEN: ${{ steps.model_home.outputs.token }}
           EXEC_FILE: ${{ steps.postreplan.outputs.execution_file }}
           MODEL: ${{ steps.model.outputs.model }}
         run: |
@@ -5387,6 +5413,7 @@ jobs:
         id: rollup_cap
         if: "!cancelled() && (steps.shape.outputs.route == 'roll-up') && steps.rollup.outcome == 'failure'"
         env:
+          BUREAU_MODEL_HOME_TOKEN: ${{ steps.model_home.outputs.token }}
           EXEC_FILE: ${{ steps.rollup.outputs.execution_file }}
           MODEL: ${{ steps.model.outputs.model }}
         run: |
