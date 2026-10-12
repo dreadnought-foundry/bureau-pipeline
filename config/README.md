@@ -428,6 +428,23 @@ What this file still carries is read for the **code-side facts** — `effort`,
 literal from it on every merged save, so a save by that route stays in force
 through the defaults.
 
+**Carried into the home until part 2's switch (DRE-6986).** Once the home is
+seeded a run reads it and not this file, so a save by the old route would be
+in force nowhere. Until the console writes the home itself (part 2,
+DRE-6976), `.github/workflows/model-home-carry.yml` runs on every push to
+`main` that touches this file and carries a merged change to its choices into
+the home within minutes (`scripts/model_home_carry.py`): a group's new first
+model moves to the front of the home's ladder, the home's other rungs as they
+are; an agent's new group; an added group with its ladder; a project's model
+set or cleared. Nothing else is carried — a ladder changed below its first
+rung, a group removed, a whole choice key removed — and the run says so in one
+line and ends green. The write is held to `model_home.home_errors`, re-read
+just before it, and stamped `written_by: console` for a merge from the old
+route's `agent/model-config-` branch, `operator` otherwise. Before the seeding
+nothing is carried: the change is in the defaults in the code, which the
+seeding renders. Each run prints one line tagged `model-home-carry:`. It goes
+with the route it serves (DRE-6981).
+
 **The `rules` block (DRE-6992).** `reviewers_only` (today `[critic,
 verifier]`) and `planners_may_hold` (today `[planner]`): the agents that must stay Reviewers
 (rule 3) and the ones that may sit with the Planners (rule 10).
