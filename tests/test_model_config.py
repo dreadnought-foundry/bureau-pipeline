@@ -643,7 +643,10 @@ def _swap_workhorse(tree: Path) -> None:
 
 
 class ConfigDrivesTheFleetTest(unittest.TestCase):
-    """Editing ONLY config/models.yaml changes what the fleet runs on.
+    """Editing config/models.yaml and running the generator changes what the
+    fleet runs on when no home is set; the edit ALONE no longer does (DRE-6939:
+    the selector runs on the home or on the defaults in the code, never on the
+    choices written in that file).
 
     Rules of the selector and the generator, so they run on the frozen fixture
     and every id they expect is read off its ladders — never a literal, and
@@ -664,17 +667,18 @@ class ConfigDrivesTheFleetTest(unittest.TestCase):
         """The first rung of `agent`'s ladder in the fixture, as written."""
         return model_fixture.ladder(self.cfg, self.cfg["agents"][agent])[0]
 
-    def test_config_edit_alone_changes_what_the_ci_path_selects(self):
-        # No regeneration: the CI path READS the config, so the edit is live on
-        # the next dispatch. (The generated mirror is only the degrade path.)
+    def test_config_edit_alone_no_longer_changes_what_the_ci_path_selects(self):
+        # No regeneration: since DRE-6939 the CI path reads its choices from
+        # the home or the defaults in the code, never from the config, so the
+        # edit alone changes nothing until the generator carries it there.
         with tempfile.TemporaryDirectory() as td:
             tree = _fixture_tree(td)
             self.assertEqual(_cli_select(tree, "engineer"), self.build[0])
             _swap_workhorse(tree)
             self.assertNotEqual(self.build[-1], self.build[0])
             self.assertEqual(
-                _cli_select(tree, "engineer"), self.build[-1],
-                "editing config/models.yaml did not change the selected model",
+                _cli_select(tree, "engineer"), self.build[0],
+                "editing config/models.yaml alone changed the selected model",
             )
 
     def test_config_edit_plus_generator_updates_every_mirror(self):
@@ -720,6 +724,8 @@ class ConfigDrivesTheFleetTest(unittest.TestCase):
                              if cfg["kinds"][k]["ladder"] == advisory and m != lone]:
                     del entry[kind]
             path.write_text(yaml.safe_dump(cfg, sort_keys=False))
+            # …and the generator carries it into the code (DRE-6939).
+            self.assertEqual(_run_sync(tree).returncode, 0)
             self.assertEqual(_cli_select(tree, "critic"), lone)
             # …and the build fleet is untouched by that edit.
             self.assertEqual(_cli_select(tree, "engineer"), self.build[0])

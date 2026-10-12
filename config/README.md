@@ -4,9 +4,12 @@ Everything here exists for the same reason: the workflows that read these files
 run in a product repo's GitHub Actions with **no AWS credentials** and **no
 token for a private repo**, so anything they need must be a file in the public
 `bureau-pipeline` checkout they already do (`.bureau-pipeline` @ `main`). None
-of it is ever a runtime lookup.
+of it is ever a runtime lookup. The one exception is the model CHOICES, which
+since DRE-6939 live in a repository variable every run reads with a token it
+mints (see `models.yaml` below).
 
-- **`models.yaml`** — which model each agent runs on (see below).
+- **`models.yaml`** — the code-side facts of model selection; the choices live
+  in the home (see below).
 - **`model-prices.yaml`** — the declared price of each model id, in USD per
   million tokens (DRE-3895). An id absent from it has no price and cannot
   adopt itself.
@@ -351,8 +354,53 @@ of it is ever a runtime lookup.
 
 # `models.yaml` — the ONE model config (DRE-2316 / DRE-2317 / DRE-3015)
 
-`models.yaml` is **the only file a human edits to change which model an agent
-uses**. It declares named, ordered fallback **ladders** (best → worst), classes
+## The choices live in the home (DRE-6939)
+
+The CHOICES — which models a group runs on and in what order, which group an
+agent is in, a project's own model — live in **the home**, not in this file:
+the GitHub Actions repository variable **`BUREAU_MODEL_CHOICES`** on
+**`dreadnought-foundry/bureau-pipeline`**, one JSON document for the whole
+fleet, written by the console through the bureau App. Every selecting run reads
+it when it first asks which model to use (`scripts/model_home.py`, through
+`model_fallback.use_home`): the home first, **the defaults in the code**
+(`model_fallback.code_defaults()`, the generated literal) otherwise, and
+**never the choices written in this file**. A change in the console is in
+force on the next run in each organization, with no pull request.
+
+Two environment names point a process at the home:
+**`BUREAU_MODEL_HOME_TOKEN`** (a bureau App installation token for this
+repository with `variables: read`; the reader makes one GET with it) and
+**`BUREAU_MODEL_HOME_FILE`** (a path to a local copy, read instead of the API).
+A name counts as set when it is in the environment, even empty — an empty token
+is a mint that failed. With neither, nobody asked for a home: the run is on the
+defaults in the code, exactly as before the home.
+
+Every read prints one line tagged `model-home:` to stderr, above the selection
+note, and the note ends with the home's clause:
+
+- ` · model-home: read` — the home's choices are in force. Entries this
+  release cannot judge (a model it holds no price for or holds `excluded` or
+  `retired`, an agent it does not know, a project slug not in `repo-map.json`)
+  are set aside and named on the tagged line; the rest is in force.
+- ` · model-home: unreadable (<reason>), running on the defaults in the code` —
+  and the note opens `DEGRADED`, so every selecting workflow raises its
+  `::warning::`. The reason is one safe line (`model_home.one_line`).
+- nothing, when neither name is set.
+
+`python3 scripts/model_home.py check <file>` holds a document to every rule
+(what each writer runs before it writes), and `render-defaults` prints the
+defaults in the code as a home document — what the operator seeds it with.
+
+What this file still carries is read for the **code-side facts** — `effort`,
+`review_separation`, `discovery`, `retired`, `excluded`, `session_agents` and
+`about` — and, until DRE-6982, its old save route regenerates the literal from
+it on every merged save, so a save by that route stays in force through the
+defaults.
+
+## The file
+
+`models.yaml` was **the only file a human edited to change which model an agent
+uses**, until the home above. It declares named, ordered fallback **ladders** (best → worst), classes
 every agent as one of three **role kinds**, and lists the ids that stay *readable
 but not selectable* (retired ids, and ids excluded by cost policy or because
 the CEO has said we do not use them).
@@ -710,9 +758,10 @@ The wider design is recorded in `architecture/decisions/adr-model-policy.md` in
 
 ## Who reads it
 
-- **The CI path.** `scripts/model_fallback.py` loads this file and `select()`
-  walks the ladder it names for that agent, returning the first model a runtime
-  availability probe says is up. Every agent workflow — build agents *and* the
+- **The CI path.** `scripts/model_fallback.py` loads this file's code-side
+  facts and `select()` walks the ladder the home (or, with no home, the
+  defaults in the code) names for that agent, returning the first model a
+  runtime availability probe says is up. Every agent workflow — build agents *and* the
   critic, verifier and medic — takes its `--model` from that step. No workflow
   pins a model id; a test reads the workflow files and fails if one does.
 - **The console roster**, indirectly: `agents.yaml`'s per-agent `model:` line is
@@ -869,8 +918,11 @@ first daily run after that PR merges.
 
 ## Changing a model
 
-Edit `models.yaml`, run the sync script, commit both. Merging to `main` is
-**instantly live fleet-wide** — treat it as a production change. Remember that
+Change it in the console, which writes the home: it is in force on the next
+run (DRE-6939). The old route — edit `models.yaml`, run the sync script, commit
+both — still changes the defaults in the code, which every run without a
+readable home runs on; merging it to `main` is **instantly live fleet-wide**
+— treat it as a production change. Remember that
 availability decides how far *down* a ladder we walk, never how far up: a model
 that is not on a ladder is never selected, however available it becomes. Ladder
 membership is the spend decision, and it is made here — in this file, in a

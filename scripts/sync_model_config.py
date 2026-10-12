@@ -1,13 +1,18 @@
 #!/usr/bin/env python3
 """Regenerate every mirror of config/models.yaml (DRE-2316).
 
-``config/models.yaml`` is the ONE file a human edits to change which model an
-agent runs on. Two places mirror it, and both are GENERATED regions delimited by
-marker comments — never a hand edit:
+``config/models.yaml`` is the file a human edits to change the defaults in the
+code — which model an agent runs on when no home is readable. Since DRE-6939
+the choices in force live in the home (the ``BUREAU_MODEL_CHOICES`` repository
+variable, ``scripts/model_home.py``), and the selector never reads the choices
+written in this file; the home first, the defaults in the code otherwise. Two
+places mirror it, and both are GENERATED regions delimited by marker comments —
+never a hand edit:
 
-  * ``scripts/model_fallback.py`` — ``_FALLBACK_MODEL_CONFIG``, the last-known-
-    good literal the selector degrades to when the YAML is missing/unreadable
-    (the same shape ``validate_card.py`` carries for ``config/repo-map.json``).
+  * ``scripts/model_fallback.py`` — ``_FALLBACK_MODEL_CONFIG``, the defaults in
+    the code (``code_defaults()``): what the selector runs on with no readable
+    home (the same shape ``validate_card.py`` carries for
+    ``config/repo-map.json``).
   * ``agents.yaml`` — each agent's ``model:`` line, which is the console
     roster's contract (the console reads the registry via the GitHub contents
     API; it does not read this config).

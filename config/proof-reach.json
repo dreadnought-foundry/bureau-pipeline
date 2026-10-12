@@ -101,6 +101,12 @@
       "printed_by": "scripts/github_calls_reading.py",
       "constant": "TAG",
       "when": "every job a wiring card places the emit step in, one line per login, since DRE-6914"
+    },
+    {
+      "tag": "model-home:",
+      "printed_by": "scripts/model_home.py",
+      "constant": "TAG",
+      "when": "every selecting run since DRE-6939: the selector reads the home when it first answers a choice, before it prints the model id, and the reader prints the line to stderr, so it is in the `Select model` step's log above the note"
     }
   ],
   "causes": [

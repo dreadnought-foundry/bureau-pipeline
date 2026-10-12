@@ -377,7 +377,10 @@ def _step(name: str) -> dict:
 def _run_select_step(tmp: Path, *, fell_from: str):
     scripts = tmp / ".bureau-pipeline" / "scripts"
     scripts.mkdir(parents=True)
-    shutil.copy(ROOT / "scripts" / "model_fallback.py", scripts)
+    # The selector of a frozen fixture tree: its defaults in the code are the
+    # frozen files' choices, which it runs on with no home (DRE-6939).
+    frozen = model_fixture.fixture_tree(tmp / "frozen")
+    shutil.copy(frozen / "scripts" / "model_fallback.py", scripts)
     config = tmp / ".bureau-pipeline" / "config"
     config.mkdir()
     for name in ("models.yaml", "model-prices.yaml"):

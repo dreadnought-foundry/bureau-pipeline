@@ -12,6 +12,7 @@ tree without `.git`.
 from __future__ import annotations
 
 import re
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -176,6 +177,10 @@ def test_the_tree_selects_what_its_own_config_says(tmp_path):
     proc = subprocess.run([sys.executable, "scripts/sync_model_config.py"],
                           cwd=dest, capture_output=True, text=True)
     assert proc.returncode == 0, proc.stdout + proc.stderr
+    # The selector runs on the regenerated literal, never on the YAML's
+    # choices (DRE-6939). Its old bytecode goes with it: swapping two rungs
+    # keeps the file's size, so a same-second rewrite would load the old one.
+    shutil.rmtree(dest / "scripts" / "__pycache__", ignore_errors=True)
 
     mf = fixture_module(dest)
     assert mf.select("engineer", probe=lambda m: True, clock=lambda: 0.0) == second
