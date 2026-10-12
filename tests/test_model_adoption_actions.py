@@ -5,10 +5,12 @@ pipeline has never configured into adopt / ignore / ask and prints one Decision
 record per candidate. `scripts/model_adoption_actions.py` ACTS on that record,
 four ways and no others — the four the adoption workflow (DRE-3898) calls:
 
-  * `apply <candidate-id>` — re-runs the classifier for that id, refuses
-    anything that is not `adopt`, and rewrites `config/models.yaml` as a TEXT
-    edit, so every comment and every `reason:` block survives byte for byte;
-  * `render <target>` — the PR, record-card and question texts;
+  * `apply <candidate-id>` — reads the model home again, writes nothing when
+    it changed while the trial ran, re-runs the classifier for that id against
+    it, refuses anything that is not `adopt`, and writes the home with ONE
+    `PATCH` under its own name, `daily-adoption` (DRE-6943). It edits no file;
+  * `render <target>` — the record-card and question texts, and the title the
+    in-flight check reads;
   * `open-record-card` / `open-question-card` — the two Linear cards, in
     `scripts/repair_card.py`'s shape: a fake-able ops object, never a raise on
     a Linear failure, `$GITHUB_OUTPUT` lines as the result.
@@ -18,14 +20,16 @@ THE TRAPS THESE TESTS PIN.
   * **The Decision fixtures come from the real classifier**, run over the
     committed catalog snapshot plus the successor models a test adds — never
     hand-written records that could drift from what DRE-3895 prints.
-  * **The config is edited as text, never re-dumped.** A YAML round-trip drops
-    every comment in `config/models.yaml`, and the comments ARE the file's
-    record of every spend decision ever made in it.
+  * **The home is read again right before the write**, and a `written_at`
+    other than the one `classify` recorded writes nothing: the console's lock
+    does not cover this writer, so that comparison is what keeps a save made
+    during the trial from being overwritten.
   * **Nothing is written on a refusal** — not on `ignore`, not on `ask`, not on
-    a result `model_fallback.policy_errors` rejects.
+    a document `model_home.home_errors` rejects — and no file is ever edited.
   * **The question is for a non-technical reader**: no file path, no command,
     no verdict marker, and both prices plus the ladder in its first paragraph.
-  * Zero network: every Linear call goes to a recorded fake.
+  * Zero network: every Linear call goes to a recorded fake, and the one
+    HTTP write to the home to a recorded stub.
 
 Run: cd bureau-pipeline && python3 -m pytest tests/test_model_adoption_actions.py -q
 """
@@ -33,7 +37,6 @@ Run: cd bureau-pipeline && python3 -m pytest tests/test_model_adoption_actions.p
 from __future__ import annotations
 
 import copy
-import difflib
 import json
 import re
 import subprocess
@@ -52,11 +55,10 @@ import dependabot_card  # noqa: E402
 import model_adoption as ma  # noqa: E402
 import model_catalog as mc  # noqa: E402
 import model_fallback as mf  # noqa: E402
+import model_home as mh  # noqa: E402
 import routing_verdict  # noqa: E402
-import sync_model_config  # noqa: E402
 import validate_card  # noqa: E402
 import model_fixture  # noqa: E402
-from model_config_text import without_projects  # noqa: E402
 
 import model_adoption_actions as maa  # noqa: E402
 
@@ -65,10 +67,11 @@ CONFIG_PATH = ROOT / "config" / "models.yaml"
 PRICES_PATH = ROOT / "config" / "model-prices.yaml"
 SNAPSHOT_PATH = ROOT / "models.json"
 
-#: The frozen model config (DRE-6864). The Decisions below are classified
-#: against it and `apply` edits it, never the committed file: a console save
-#: that put Sonnet 4.6 at the Planners' top turned every adoption here into a
-#: refusal. The ids it holds are read off its ladders, never spelled.
+#: The frozen model config (DRE-6864) and its home document (DRE-6943). The
+#: Decisions below are classified against the home's groups, never the
+#: committed file: a console save that put Sonnet 4.6 at the Planners' top
+#: turned every adoption here into a refusal. The ids it holds are read off
+#: its ladders, never spelled.
 FROZEN = model_fixture.fixture_config()
 SONNET5 = model_fixture.ladder(FROZEN, "workhorse")[-1]   # the Builders' last rung
 SONNET46 = model_fixture.ladder(FROZEN, "judgement")[-1]  # the Planners' last rung
@@ -128,13 +131,15 @@ def prices_text(**extra) -> str:
 
 def decisions(**extra_prices) -> dict:
     """`{candidate: Decision}` from the real classifier over the snapshot plus
-    the successors, against the frozen config and the given extra prices."""
+    the successors, against the frozen home's groups and the given extra
+    prices."""
     catalog = mc.snapshot_catalog(snapshot_with(*SUCCESSORS))
     prices = ma.load_prices()
     for key, (side_in, side_out) in extra_prices.items():
         prices[key.replace("_", "-")] = {"input": float(side_in),
                                          "output": float(side_out)}
-    found = ma.classify_catalog(catalog, model_fixture.fixture_config(), prices)
+    found = ma.classify_catalog(catalog, ma.home_config(model_fixture.fixture_home()),
+                                prices)
     return {d["candidate"]: json.loads(json.dumps(d)) for d in found}
 
 
@@ -226,288 +231,352 @@ class FakeOps:
 
 
 # --------------------------------------------------------------------------- #
-# apply — the config edit                                                      #
+# apply — the home, read again and written under the adoption's own name       #
 # --------------------------------------------------------------------------- #
 
+OPUS56 = "claude-opus-5-6"
+DEMO = "agent-bureau-demo"
+WRITTEN_AT = model_fixture.fixture_home()["written_at"]
+WRITE_TOKEN = "write-token-from-the-mint"
+
+
+class PatchStub:
+    """The one HTTP write `apply` makes, recorded: `(url, headers, body)` per
+    call, answered 204 as GitHub answers a variable update."""
+
+    def __init__(self, status=204):
+        self.status = status
+        self.calls: list[tuple] = []
+
+    def __call__(self, url, headers, body, timeout):
+        self.calls.append((url, dict(headers), json.loads(body)))
+        return self.status, ""
+
+    def document(self) -> dict:
+        (call,) = self.calls
+        return json.loads(call[2]["value"])
+
+
+def opus_home(*, demo_names_opus=True) -> dict:
+    """The frozen home, with project agent-bureau-demo trying Opus 5.5 first
+    on the Builders when asked."""
+    doc = model_fixture.fixture_home()
+    if demo_names_opus:
+        doc = model_fixture.with_project(doc, DEMO, "workhorse", OPUS55)
+    return doc
+
+
 class TestApply:
-    """`apply` on the frozen config, with a Sonnet 6 the rule says to adopt."""
+    """`apply` against a home whose every group runs Opus 5.5, with an Opus
+    5.6 the rule says to adopt — cheaper than Opus 5.5 on both sides."""
 
-    def _setup(self, tmp_path, *, sonnet6_price=(2, 10), config_text=None):
-        # The frozen text, never the committed file (DRE-6864): the console
-        # rewrites that one, and a Planners top or exception on Sonnet 4.6
-        # turns this adoption into a refusal. An exception moving with its
-        # rung is pinned on configs built for it, below.
-        config = tmp_path / "models.yaml"
-        config.write_text(config_text or model_fixture.fixture_text())
+    @pytest.fixture
+    def stub(self, monkeypatch):
+        stub = PatchStub()
+        monkeypatch.setattr(maa, "_http_patch", stub)
+        monkeypatch.setenv(maa.WRITE_TOKEN_ENV, WRITE_TOKEN)
+        return stub
+
+    def _setup(self, tmp_path, monkeypatch, doc=None, *, opus56_price=(3, 15)):
+        home = tmp_path / "home.json"
+        home.write_text(json.dumps(doc if doc is not None else opus_home()))
+        monkeypatch.setenv(mh.FILE_ENV, str(home))
         prices = tmp_path / "model-prices.yaml"
-        prices.write_text(prices_text(claude_sonnet_6=sonnet6_price))
-        snap = write_json(tmp_path, "catalog.json", snapshot_with(*SUCCESSORS))
-        return config, prices, snap
+        prices.write_text(prices_text(claude_opus_5_6=opus56_price))
+        snap = write_json(tmp_path, "catalog.json", snapshot_with(
+            {"id": OPUS56, "display_name": "Claude Opus 5.6",
+             "created_at": "2026-10-10T00:00:00Z", "in_catalog": True}))
+        return home, prices, snap
 
-    def _apply(self, capsys, config, prices, snap, candidate=SONNET6, *extra):
-        rc = maa.main(["apply", candidate, "--snapshot", snap,
-                       "--config", str(config), "--prices", str(prices), *extra])
+    def _apply(self, capsys, tmp_path, prices, snap, *extra,
+               expect=WRITTEN_AT, candidate=OPUS56):
+        args = ["apply", candidate, "--snapshot", snap, "--prices", str(prices),
+                "--result", str(tmp_path / "applied.json")]
+        if expect is not None:
+            args += ["--expect-written-at", expect]
+        rc = maa.main([*args, *extra])
         return rc, capsys.readouterr()
 
-    def test_every_former_sonnet_rung_reads_the_new_id(self, tmp_path, capsys,
-                                                       adopt_sonnet6):
-        config, prices, snap = self._setup(tmp_path)
-        rc, _ = self._apply(capsys, config, prices, snap)
+    def test_the_module_declares_that_every_command_reads_the_home(self):
+        assert maa.READS_MODEL_HOME == ("*",)
+
+    def test_one_patch_puts_the_successor_where_the_old_id_stood(
+            self, tmp_path, monkeypatch, capsys, stub):
+        _, prices, snap = self._setup(tmp_path, monkeypatch)
+        before = opus_home()
+        rc, out = self._apply(capsys, tmp_path, prices, snap)
+        assert rc == 0, out.out + out.err
+        assert len(stub.calls) == 1, "one PATCH, no retry"
+        url, headers, body = stub.calls[0]
+        assert url == mh.API_URL
+        assert headers["Authorization"] == f"Bearer {WRITE_TOKEN}"
+        assert set(body) == {"value"}
+        after = stub.document()
+        # Every group that ran Opus 5.5 runs Opus 5.6 in its place, in order.
+        moved = [key for key in before["groups"]
+                 if OPUS55 in before["groups"][key]["models"]]
+        assert {"workhorse", "advisory", "judgement"} == set(moved)
+        for key, group in before["groups"].items():
+            assert after["groups"][key]["models"] == [
+                OPUS56 if m == OPUS55 else m for m in group["models"]]
+            assert after["groups"][key]["label"] == group["label"]
+        # The project that named it names the successor.
+        assert after["projects"][DEMO] == {"workhorse": OPUS56}
+        # Under the adoption's own name, at a fresh time; nothing else moves.
+        assert after["written_by"] == "daily-adoption"
+        assert after["written_at"] != WRITTEN_AT
+        assert datetime.strptime(after["written_at"], "%Y-%m-%dT%H:%M:%SZ")
+        for key in ("version", "agents", "added_agents"):
+            assert after[key] == before[key]
+        assert mh.home_errors(after, mf.declared_prices(prices), mh.code_side(),
+                              mf.declared_repo_slugs()) == []
+        result = json.loads((tmp_path / "applied.json").read_text())
+        assert result["outcome"] == "written"
+        assert result["written_at"] == after["written_at"]
+
+    def test_a_project_choice_on_another_model_is_left_alone(
+            self, tmp_path, monkeypatch, capsys, stub):
+        doc = opus_home(demo_names_opus=False)
+        assert doc["projects"][DEMO] != {"workhorse": OPUS55}
+        _, prices, snap = self._setup(tmp_path, monkeypatch, doc)
+        rc, out = self._apply(capsys, tmp_path, prices, snap)
+        assert rc == 0, out.out + out.err
+        assert stub.document()["projects"] == doc["projects"]
+
+    def test_the_old_id_left_on_nothing_is_said_not_retired(
+            self, tmp_path, monkeypatch, capsys, stub):
+        _, prices, snap = self._setup(tmp_path, monkeypatch)
+        rc, out = self._apply(capsys, tmp_path, prices, snap)
         assert rc == 0
-        after = yaml.safe_load(config.read_text())
-        before = model_fixture.fixture_config()
-        for rung in adopt_sonnet6["replaces"]:
-            ids = [r["model"] for r in after["ladders"][rung["ladder"]]]
-            was = [r["model"] for r in before["ladders"][rung["ladder"]]]
-            assert rung["model"] not in ids
-            assert ids == [SONNET6 if m == rung["model"] else m for m in was]
-        on_a_ladder = {r["model"] for rungs in after["ladders"].values() for r in rungs}
-        assert SONNET5 not in on_a_ladder and SONNET46 not in on_a_ladder
+        sentence = maa.not_retired_sentence(OPUS55)
+        assert sentence == (
+            f"{OPUS55} is on no group and no project of the home and is not "
+            "retired; retiring it is a code change a person makes once part 3 "
+            "has taken the choices out of config/models.yaml")
+        assert sentence in out.out
+        result = json.loads((tmp_path / "applied.json").read_text())
+        assert sentence in result["sentences"]
 
-    def test_every_comment_and_reason_line_survives_byte_for_byte(self, tmp_path,
-                                                                  capsys, adopt_sonnet6):
-        config, prices, snap = self._setup(tmp_path)
-        before = config.read_text().splitlines()
-        assert self._apply(capsys, config, prices, snap)[0] == 0
-        after = config.read_text().splitlines()
-        removed = [l[1:] for l in difflib.unified_diff(before, after, lineterm="", n=0)
-                   if l.startswith("-") and not l.startswith("---")]
-        added = [l[1:] for l in difflib.unified_diff(before, after, lineterm="", n=0)
-                 if l.startswith("+") and not l.startswith("+++")]
-        # The ONLY lines that change are the rung ids and the separation rule
-        # that names the moved rung; everything else is added, never rewritten.
-        # The frozen config's project exceptions name no replaced rung
-        # (asserted here), so none moves.
-        replaced = {r["model"] for r in adopt_sonnet6["replaces"]}
-        assert not replaced & {m for kinds in FROZEN["projects"].values()
-                               for m in kinds.values()}
-        olds = "|".join(re.escape(m) for m in sorted(replaced))
-        for line in removed:
-            assert re.fullmatch(rf"\s*-?\s*(model|built_on): ({olds})", line), line
-        assert all(not l.lstrip().startswith("#") for l in removed)
-        assert all("reason:" not in l for l in removed)
-        assert sum(1 for l in added
-                   if re.fullmatch(rf"\s*- model: {re.escape(SONNET6)}", l)) == len(
-            adopt_sonnet6["replaces"])
-        # Every original comment line is still there, in order.
-        comments = [l for l in before if l.lstrip().startswith("#")]
-        assert comments == [l for l in after if l.lstrip().startswith("#")]
+    def test_every_project_choice_naming_a_replaced_id_moves(
+            self, tmp_path, monkeypatch, capsys, stub):
+        # "In every project choice that names it": the Builders' choice and
+        # the Reviewers' both name Opus 5.5 and both move; a choice of a
+        # model the adoption replaces nowhere stays.
+        doc = model_fixture.with_project(opus_home(), DEMO, "advisory", OPUS55)
+        doc = model_fixture.with_project(doc, "portico", "workhorse", "claude-opus-5")
+        _, prices, snap = self._setup(tmp_path, monkeypatch, doc)
+        rc, out = self._apply(capsys, tmp_path, prices, snap)
+        assert rc == 0, out.out + out.err
+        after = stub.document()
+        assert after["projects"][DEMO] == {"workhorse": OPUS56, "advisory": OPUS56}
+        assert after["projects"]["portico"] == {"workhorse": "claude-opus-5"}
 
-    def test_retired_gains_each_old_id_with_the_dated_reason(self, tmp_path, capsys):
-        config, prices, snap = self._setup(tmp_path)
-        assert self._apply(capsys, config, prices, snap)[0] == 0
-        retired = yaml.safe_load(config.read_text())["retired"]
-        by_id = {r["model"]: r["reason"] for r in retired}
-        assert "claude-opus-4-8" in by_id, "the existing retired entry survives"
-        for old in (SONNET5, SONNET46):
-            assert by_id[old] == (
-                f"replaced by {SONNET6} on {today()} — automated same-family "
-                "adoption (DRE-3892)"
-            )
+    def test_only_an_old_id_left_on_nothing_is_said(
+            self, tmp_path, monkeypatch, capsys, stub):
+        # The Reviewers run Opus 5 as their newest Opus, so the adoption takes
+        # Opus 5 there — and Opus 5 stays on the Builders, below Opus 5.6.
+        doc = opus_home()
+        doc["groups"]["advisory"]["models"] = ["claude-sonnet-5-5", "claude-sonnet-5",
+                                               "claude-opus-5"]
+        _, prices, snap = self._setup(tmp_path, monkeypatch, doc)
+        rc, out = self._apply(capsys, tmp_path, prices, snap)
+        assert rc == 0, out.out + out.err
+        after = stub.document()
+        assert after["groups"]["advisory"]["models"] == [
+            "claude-sonnet-5-5", "claude-sonnet-5", OPUS56]
+        assert "claude-opus-5" in after["groups"]["workhorse"]["models"]
+        result = json.loads((tmp_path / "applied.json").read_text())
+        assert result["sentences"] == [maa.not_retired_sentence(OPUS55)]
 
-    def test_the_result_passes_policy_and_the_separation_rule_moved(self, tmp_path,
-                                                                    capsys,
-                                                                    adopt_sonnet6):
-        config, prices, snap = self._setup(tmp_path)
-        assert self._apply(capsys, config, prices, snap)[0] == 0
-        after = yaml.safe_load(config.read_text())
-        assert mf.policy_errors(after, ma.load_prices(prices)) == []
-        # Read off the frozen config, never a literal (DRE-5138): a rule
-        # naming a rung that left every ladder moves to the candidate, and a
-        # rule naming a rung still on both ladders — Sonnet 5.5 since DRE-5116 —
-        # still describes a real overlap and stays, or policy refuses the bare
-        # overlap it leaves behind.
-        on_a_ladder = {r["model"] for rungs in after["ladders"].values() for r in rungs}
-        gone = {r["model"] for r in adopt_sonnet6["replaces"]} - on_a_ladder
-        was = FROZEN["review_separation"]["rules"]
-        assert any(r["built_on"] in gone for r in was), "a rule has to move"
-        rules = after["review_separation"]["rules"]
-        assert [r["built_on"] for r in rules] == [
-            SONNET6 if r["built_on"] in gone else r["built_on"] for r in was]
+    def test_a_home_changed_during_the_trial_is_not_written(
+            self, tmp_path, monkeypatch, capsys, stub):
+        doc = opus_home()
+        doc["written_at"] = "2026-10-12T09:30:00Z"   # a console save mid-trial
+        doc["written_by"] = "console"
+        _, prices, snap = self._setup(tmp_path, monkeypatch, doc)
+        summary = tmp_path / "summary.md"
+        monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(summary))
+        rc, out = self._apply(capsys, tmp_path, prices, snap)
+        assert rc == 0, "nothing written is a green run"
+        assert stub.calls == [], "no PATCH"
+        sentence = ("the home changed at 2026-10-12T09:30:00Z while the trial ran; "
+                    "nothing written; tomorrow's run sorts again")
+        assert maa.home_changed_sentence("2026-10-12T09:30:00Z") == sentence
+        assert sentence in out.out
+        assert sentence in summary.read_text()
+        result = json.loads((tmp_path / "applied.json").read_text())
+        assert result["outcome"] == "home-changed"
+        assert result["sentences"] == [sentence]
 
-    def test_sync_model_config_regenerates_both_mirrors(self, tmp_path, capsys):
-        # A throwaway tree on the frozen files the generator writes into, so
-        # the committed mirrors are never touched.
-        tree = model_fixture.fixture_tree(tmp_path / "tree")
-        before = self._agent_tops(tree / "config" / "models.yaml")
-        (tree / "config" / "model-prices.yaml").write_text(
-            prices_text(claude_sonnet_6=(2, 10)))
-        snap = write_json(tmp_path, "catalog.json", snapshot_with(*SUCCESSORS))
-        rc, _ = self._apply(capsys, tree / "config" / "models.yaml",
-                            tree / "config" / "model-prices.yaml", snap)
+    def test_a_home_that_cannot_be_read_again_is_not_written(
+            self, tmp_path, monkeypatch, capsys, stub):
+        _, prices, snap = self._setup(tmp_path, monkeypatch)
+        monkeypatch.delenv(mh.FILE_ENV)
+        rc, out = self._apply(capsys, tmp_path, prices, snap)
         assert rc == 0
+        assert stub.calls == []
+        result = json.loads((tmp_path / "applied.json").read_text())
+        assert result["outcome"] == "unread"
+        assert "nothing written; tomorrow's run sorts again" in result["sentences"][0]
+        assert "model-home: not set" in out.err
 
-        sync = [sys.executable, str(tree / "scripts" / "sync_model_config.py")]
-        wrote = subprocess.run(sync, capture_output=True, text=True, cwd=tree)
-        assert wrote.returncode == 0, wrote.stderr
-        assert "wrote: scripts/model_fallback.py" in wrote.stdout
-        # agents.yaml mirrors each agent's ladder TOP, so it is rewritten only
-        # when the adoption moved a top — read off the two configs, never a
-        # literal (DRE-5138: since DRE-5116 Sonnet 5 is no ladder's top).
-        after = self._agent_tops(tree / "config" / "models.yaml")
-        registry = {a["name"]: a["model"] for a in
-                    yaml.safe_load((tree / "agents.yaml").read_text())["agents"]}
-        mirrored = sorted(set(after) & set(registry))
-        assert mirrored
-        assert [registry[a] for a in mirrored] == [after[a] for a in mirrored]
-        if before != after:
-            assert "wrote: agents.yaml" in wrote.stdout
+    def test_no_write_token_writes_nothing_and_fails(
+            self, tmp_path, monkeypatch, capsys, stub):
+        _, prices, snap = self._setup(tmp_path, monkeypatch)
+        monkeypatch.setenv(maa.WRITE_TOKEN_ENV, "")
+        rc, out = self._apply(capsys, tmp_path, prices, snap)
+        assert rc == 2
+        assert stub.calls == []
+        assert maa.WRITE_TOKEN_ENV in out.out
+
+    def test_a_refused_patch_fails_the_run(self, tmp_path, monkeypatch, capsys):
+        stub = PatchStub(status=403)
+        monkeypatch.setattr(maa, "_http_patch", stub)
+        monkeypatch.setenv(maa.WRITE_TOKEN_ENV, WRITE_TOKEN)
+        _, prices, snap = self._setup(tmp_path, monkeypatch)
+        rc, out = self._apply(capsys, tmp_path, prices, snap)
+        assert rc == 2
+        assert len(stub.calls) == 1
+        assert "403" in out.out
+
+    def test_without_the_expected_written_at_nothing_is_written(
+            self, tmp_path, monkeypatch, capsys, stub):
+        _, prices, snap = self._setup(tmp_path, monkeypatch)
+        rc, _ = self._apply(capsys, tmp_path, prices, snap, expect=None)
+        assert rc == 2
+        assert stub.calls == []
+
+    def test_check_judges_the_document_and_writes_nothing(
+            self, tmp_path, monkeypatch, capsys, stub):
+        _, prices, snap = self._setup(tmp_path, monkeypatch)
+        rc, out = self._apply(capsys, tmp_path, prices, snap, "--check")
+        assert rc == 0, out.out + out.err
+        assert stub.calls == []
+        assert f'-        "{OPUS55}"' in out.out
+        assert f'+        "{OPUS56}"' in out.out
+        assert '+  "written_by": "daily-adoption"' in out.out
+
+    @pytest.mark.parametrize("rule", ["no declared price", "excluded"])
+    def test_check_refuses_what_the_home_rules_refuse(
+            self, tmp_path, monkeypatch, capsys, stub, rule):
+        # The rule classified Opus 5.6 `adopt`; the home's own rules, judged
+        # on the document `apply` would write, still say no — and `apply`
+        # repeats their plain sentence and writes nothing.
+        _, prices, snap = self._setup(tmp_path, monkeypatch)
+        if rule == "excluded":
+            side = dict(mh.code_side(), excluded=[*mh.code_side()["excluded"], OPUS56])
+            monkeypatch.setattr(mh, "code_side", lambda: side)
+            want = f"{OPUS56} is excluded, so it cannot be chosen."
         else:
-            assert "ok:    agents.yaml" in wrote.stdout
-        check = subprocess.run(sync + ["--check"], capture_output=True, text=True,
-                               cwd=tree)
-        assert check.returncode == 0, check.stderr
-        assert SONNET6 in (tree / "scripts" / "model_fallback.py").read_text()
+            declared = dict(mf.declared_prices(prices))
+            declared.pop(OPUS56)
+            monkeypatch.setattr(mf, "declared_prices", lambda path=None: declared)
+            want = mf._unpriced(OPUS56)
+        for extra in (("--check",), ()):
+            rc, out = self._apply(capsys, tmp_path, prices, snap, *extra)
+            assert rc == 2, extra
+            assert want in out.out
+            assert stub.calls == []
 
-    @staticmethod
-    def _agent_tops(path) -> dict[str, str]:
-        """`{agent: the top of its kind's ladder}` in a models.yaml, read
-        through the generator's own normalizing loader."""
-        cfg = sync_model_config.load_config(Path(path))
-        return {agent: cfg["ladders"][cfg["kinds"].get(kind) or cfg["default_ladder"]][0]
-                for agent, kind in cfg["agents"].items()}
-
-    def test_check_prints_a_diff_and_writes_nothing(self, tmp_path, capsys):
-        config, prices, snap = self._setup(tmp_path)
-        before = config.read_text()
-        rc, out = self._apply(capsys, config, prices, snap, SONNET6, "--check")
-        assert rc == 0
-        assert config.read_text() == before
-        assert f"-    - model: {SONNET5}" in out.out
-        assert f"+    - model: {SONNET6}" in out.out
-
-    @pytest.mark.parametrize("candidate, sonnet6_price, rule", [
-        ("claude-opus-4-7", (2, 10), "ignore"),
-        (SONNET6, (3, 15), "ask"),
+    @pytest.mark.parametrize("candidate, opus56_price, rule", [
+        ("claude-opus-4-7", (3, 15), "ignore"),
+        (OPUS56, (6, 30), "ask"),
     ])
-    def test_a_candidate_that_is_not_adopt_is_refused(self, tmp_path, capsys,
-                                                      candidate, sonnet6_price, rule):
-        config, prices, snap = self._setup(tmp_path, sonnet6_price=sonnet6_price)
-        before = config.read_text()
-        rc, out = self._apply(capsys, config, prices, snap, candidate)
+    def test_a_candidate_that_is_not_adopt_is_refused(
+            self, tmp_path, monkeypatch, capsys, stub, candidate, opus56_price, rule):
+        _, prices, snap = self._setup(tmp_path, monkeypatch, opus56_price=opus56_price)
+        rc, out = self._apply(capsys, tmp_path, prices, snap, candidate=candidate)
         assert rc == 2
-        assert config.read_text() == before
         assert rule in out.out
+        assert stub.calls == []
 
-    def test_a_candidate_the_catalog_does_not_list_is_refused(self, tmp_path, capsys):
-        config, prices, snap = self._setup(tmp_path)
-        before = config.read_text()
-        rc, _ = self._apply(capsys, config, prices, snap, "claude-sonnet-9")
+    def test_a_candidate_the_catalog_does_not_list_is_refused(
+            self, tmp_path, monkeypatch, capsys, stub):
+        _, prices, snap = self._setup(tmp_path, monkeypatch)
+        rc, _ = self._apply(capsys, tmp_path, prices, snap, candidate="claude-opus-9")
         assert rc == 2
-        assert config.read_text() == before
+        assert stub.calls == []
 
-    def test_a_result_that_violates_policy_is_refused_and_nothing_written(
-            self, tmp_path, capsys):
-        # An effort level declared for the rung being replaced: after the edit
-        # it names a model on no ladder, which `policy_errors` refuses.
-        text = model_fixture.fixture_text().replace(
-            f"effort:\n  {OPUS55}: high\n",
-            f"effort:\n  {OPUS55}: high\n  {SONNET5}: high\n",
-        )
-        assert text != model_fixture.fixture_text()
-        assert mf.policy_errors(yaml.safe_load(text)) == []
-        config, prices, snap = self._setup(tmp_path, config_text=text)
-        rc, out = self._apply(capsys, config, prices, snap)
+    def test_the_config_option_is_gone(self, tmp_path, monkeypatch, capsys, stub):
+        _, prices, snap = self._setup(tmp_path, monkeypatch)
+        rc, _ = self._apply(capsys, tmp_path, prices, snap,
+                            "--config", str(CONFIG_PATH))
         assert rc == 2
+        assert stub.calls == []
+
+
+class TestApplyEditsNoFile:
+    """In a tree whose `config/models.yaml` still names Opus 5.5 on its
+    ladders, as the committed file will until part 3, an adoption that takes
+    Opus 5.5 off every group and project of the home leaves that file — and
+    every other file of the tree — byte for byte as it was."""
+
+    def test_the_tree_is_untouched_and_still_validates(self, tmp_path, monkeypatch,
+                                                       capsys):
+        tree = model_fixture.fixture_tree(tmp_path / "tree")
+        actions = model_fixture.fixture_module(tree, "model_adoption_actions")
+        config = tree / "config" / "models.yaml"
+        text = config.read_text()
+        cfg = yaml.safe_load(text)
+        assert OPUS55 in {m for kind in ("workhorse", "advisory", "judgement")
+                          for m in model_fixture.ladder(cfg, kind)}
+        retired_before = model_catalog_ids(cfg.get("retired"))
+        assert OPUS55 not in retired_before
+
+        doc = model_fixture.fixture_home()
+        home = tmp_path / "home.json"
+        home.write_text(json.dumps(doc))
+        monkeypatch.setenv(mh.FILE_ENV, str(home))
+        monkeypatch.setenv(actions.WRITE_TOKEN_ENV, WRITE_TOKEN)
+        stub = PatchStub()
+        monkeypatch.setattr(actions, "_http_patch", stub)
+        prices = tmp_path / "model-prices.yaml"
+        frozen = (model_fixture.FIXTURE_DIR / "model-prices.yaml").read_text()
+        prices.write_text(frozen.rstrip("\n") + (
+            f"\n  {OPUS56}:\n    input: 3.00\n    output: 15.00\n"
+            '    source: "https://www.anthropic.com/pricing"\n'
+            "    declared: 2026-10-10\n"))
+        snap = write_json(tmp_path, "catalog.json", snapshot_with(
+            {"id": OPUS56, "display_name": "Claude Opus 5.6",
+             "created_at": "2026-10-10T00:00:00Z", "in_catalog": True}))
+
+        before = _tree_bytes(tree)
+        rc = actions.main(["apply", OPUS56, "--snapshot", snap, "--prices",
+                           str(prices), "--expect-written-at", doc["written_at"],
+                           "--result", str(tmp_path / "applied.json")])
+        out = capsys.readouterr()
+        assert rc == 0, out.out + out.err
+
+        # The home moved: Opus 5.5 is on no group and no project of it.
+        after = stub.document()
+        assert all(OPUS55 not in g["models"] for g in after["groups"].values())
+        assert all(OPUS55 not in p.values() for p in after["projects"].values())
+        # The tree did not: not a byte, no `retired:` entry, still valid.
+        assert _tree_bytes(tree) == before
         assert config.read_text() == text
-        assert f"effort.{SONNET5}" in out.out
+        cfg_after = yaml.safe_load(config.read_text())
+        assert model_catalog_ids(cfg_after.get("retired")) == retired_before
+        tree_mf = actions.mf
+        assert tree_mf.policy_errors(cfg_after, tree_mf.declared_prices(),
+                                     repo_slugs=tree_mf.declared_repo_slugs()) == []
+        # And the record card says the retirement is a person's, later.
+        sentence = actions.not_retired_sentence(OPUS55)
+        applied = json.loads((tmp_path / "applied.json").read_text())
+        decision = next(d for d in actions.classify_catalog(
+            mc.snapshot_catalog(json.loads(Path(snap).read_text())),
+            ma.home_config(doc), ma.load_prices(prices)) if d["candidate"] == OPUS56)
+        body = actions.record_body(decision, run_url=RUN_URL, applied=applied)
+        assert sentence in body
 
-    def test_apply_text_is_a_text_edit_of_exactly_the_named_ladder(self,
-                                                                  adopt_sonnet6):
-        # Only the ladders the Decision names — never a `- model:` line under
-        # `retired:` or `excluded:` that happens to share the id.
-        decision = copy.deepcopy(adopt_sonnet6)
-        decision["replaces"] = [r for r in decision["replaces"]
-                                if r["ladder"] == "workhorse"]
-        (old,) = [r["model"] for r in decision["replaces"]]
-        advisory = [r["model"] for r in FROZEN["ladders"]["advisory"]]
-        assert old in advisory, "the workhorse rung is on the advisory ladder too"
-        text = maa.apply_text(model_fixture.fixture_text(), decision, "2026-11-02")
-        after = yaml.safe_load(text)
-        # The advisory ladder is read off the frozen config, never a literal
-        # top (DRE-5138), and comes through untouched, rung for rung.
-        assert [r["model"] for r in after["ladders"]["advisory"]] == advisory
-        assert SONNET6 in [r["model"] for r in after["ladders"]["workhorse"]]
-        assert old not in [r["model"] for r in after["ladders"]["workhorse"]]
-        # The old id is still on the advisory ladder, so it is NOT retired.
-        assert old not in [r["model"] for r in after["retired"]]
 
-    # ----------------------------------------------------------------------- #
-    # A project exception follows the rung it names (DRE-6633)                #
-    # ----------------------------------------------------------------------- #
+def model_catalog_ids(entries) -> list[str]:
+    return [e["model"] if isinstance(e, dict) else e for e in entries or []]
 
-    @staticmethod
-    def _with_projects(block: str) -> str:
-        text = without_projects(model_fixture.fixture_text())
-        assert "\nprojects: {}\n" in text
-        return text.replace("\nprojects: {}\n", f"\nprojects:\n{block}")
 
-    @staticmethod
-    def _narrowed(decision, *ladders):
-        narrowed = copy.deepcopy(decision)
-        narrowed["replaces"] = [r for r in narrowed["replaces"]
-                                if r["ladder"] in ladders]
-        return narrowed
-
-    def test_an_exception_moves_with_its_rung_and_the_result_validates(
-            self, adopt_sonnet6):
-        # The Sonnet 5 rungs only: the judgement ladder is one this Decision
-        # does not touch, so an exception naming its rung is left alone.
-        decision = self._narrowed(adopt_sonnet6, "workhorse", "advisory")
-        (old,) = {r["model"] for r in decision["replaces"]}
-        judgement = f"    judgement: {SONNET46}\n"
-        text = self._with_projects(f"  atlas:\n    workhorse: {old}\n{judgement}")
-        assert mf.policy_errors(yaml.safe_load(text)) == []
-        result = maa.apply_text(text, decision, "2026-11-02")
-        assert yaml.safe_load(result)["projects"] == {
-            "atlas": {"workhorse": SONNET6, "judgement": SONNET46}}
-        assert judgement in result
-        # The only line that differs from the same edit with `projects: {}`
-        # is the exception that moved.
-        plain = maa.apply_text(without_projects(model_fixture.fixture_text()),
-                               decision, "2026-11-02")
-        removed = [l for l in difflib.unified_diff(
-            plain.splitlines(), result.splitlines(), lineterm="", n=0)
-            if l[:1] in "+-" and l[:3] not in ("+++", "---")]
-        assert removed == ["-projects: {}", "+projects:", "+  atlas:",
-                           f"+    workhorse: {SONNET6}", f"+{judgement.rstrip()}"]
-        prices = ma.load_prices()
-        prices[SONNET6] = {"input": 2.0, "output": 10.0}
-        assert mf.policy_errors(yaml.safe_load(result), prices,
-                                repo_slugs=mf.declared_repo_slugs()) == []
-
-    def test_every_exception_on_a_replaced_rung_moves(self, adopt_sonnet6):
-        olds = {r["ladder"]: r["model"] for r in adopt_sonnet6["replaces"]}
-        assert olds["judgement"] == SONNET46
-        text = self._with_projects(
-            f"  atlas:\n    workhorse: {olds['workhorse']}\n"
-            f"    judgement: {olds['judgement']}\n"
-            f"  portico:\n    advisory: {olds['advisory']}\n")
-        result = maa.apply_text(text, adopt_sonnet6, "2026-11-02")
-        assert yaml.safe_load(result)["projects"] == {
-            "atlas": {"workhorse": SONNET6, "judgement": SONNET6},
-            "portico": {"advisory": SONNET6}}
-
-    def test_the_same_id_on_a_ladder_the_decision_leaves_alone_stays(
-            self, adopt_sonnet6):
-        decision = self._narrowed(adopt_sonnet6, "workhorse")
-        (old,) = {r["model"] for r in decision["replaces"]}
-        text = self._with_projects(
-            f"  atlas:\n    workhorse: {old}  # the CEO's pick\n"
-            f"    advisory: {old}\n")
-        result = maa.apply_text(text, decision, "2026-11-02")
-        assert f"    workhorse: {SONNET6}  # the CEO's pick\n" in result
-        assert f"    advisory: {old}\n" in result
-        assert old in [r["model"] for r in yaml.safe_load(result)["ladders"]["advisory"]]
-
-    def test_a_projects_edit_the_text_pass_missed_is_refused(self, adopt_sonnet6,
-                                                            monkeypatch):
-        decision = self._narrowed(adopt_sonnet6, "workhorse", "advisory")
-        (old,) = {r["model"] for r in decision["replaces"]}
-        text = self._with_projects(f"  atlas:\n    workhorse: {old}\n")
-        monkeypatch.setattr(maa, "_move_projects", lambda lines, *a: lines)
-        with pytest.raises(maa.Refused):
-            maa.apply_text(text, decision, "2026-11-02")
+def _tree_bytes(tree: Path) -> dict[str, bytes]:
+    return {path.relative_to(tree).as_posix(): path.read_bytes()
+            for path in sorted(tree.rglob("*"))
+            if path.is_file() and "__pycache__" not in path.parts}
 
 
 # --------------------------------------------------------------------------- #
@@ -590,22 +659,38 @@ class TestQuestionBody:
         assert first.rstrip().endswith("?") or "?" in first
 
     def test_a_new_family_names_the_ladder_it_may_join(self, tmp_path, capsys,
-                                                       ask_new_family):
+                                                       monkeypatch, ask_new_family):
+        # The ladder discovery lets a new model join is a code-side fact; the
+        # model that leads it is the HOME's (DRE-6943) — here a home whose
+        # Reviewers lead with Opus 5.5, which no file or default says.
+        ladder = mf.CONFIG["discovery"]["on_new_model"]
+        doc = model_fixture.lead_with(model_fixture.fixture_home(), ladder, OPUS55)
+        home = tmp_path / "home.json"
+        home.write_text(json.dumps(doc))
+        monkeypatch.setenv(mh.FILE_ENV, str(home))
         body = render(capsys, "question-body",
                       write_json(tmp_path, "d.json", ask_new_family))
         first = body.strip().split("\n\n")[0]
         assert "$3.00" in first and "$15.00" in first
-        # The ladder discovery lets a new model join, and its top rung is the
-        # nearest thing we run there — both read off the committed config, never
-        # a literal (DRE-5138): `claude-sonnet-5` stopped being the advisory top
-        # at DRE-5116 and this line only passed by being a prefix of the new one.
-        config = yaml.safe_load(CONFIG_PATH.read_text())
-        ladder = config["discovery"]["on_new_model"]
-        top = config["ladders"][ladder][0]["model"]
-        price = ma.load_prices()[top]
+        price = ma.load_prices()[OPUS55]
         assert ladder in first
-        assert f"The nearest model we run is {top}," in first
+        assert f"The nearest model we run is {OPUS55}," in first
         assert f"${price['input']:.2f}" in first and f"${price['output']:.2f}" in first
+
+    def test_a_new_family_with_no_home_says_it_could_not_read_the_ladder(
+            self, ask_new_family):
+        # The suite's default: no home named, so no ladder top is claimed.
+        first = maa.question_body(ask_new_family).split("\n\n")[0]
+        assert "The nearest model we run" not in first
+        assert "We run nothing close to it today." not in first
+        assert "could not read" in first
+
+    def test_every_question_says_where_the_ceo_can_set_the_model(
+            self, tmp_path, capsys, ask):
+        body = render(capsys, "question-body", write_json(tmp_path, "d.json", ask))
+        assert ("You can set it yourself on the Settings › Agents & models page, "
+                "where it is already offered the day it is priced.") in body
+        assert "reviewed change" not in body, "no pull request carries the answer now"
 
     def test_no_declared_price_is_said_plainly(self, tmp_path, capsys, ask_no_price):
         body = render(capsys, "question-body",
@@ -615,58 +700,61 @@ class TestQuestionBody:
         assert "$4.00" in first and "$20.00" in first
 
 
-class TestPrAndRecordBodies:
+class TestRecordBody:
 
-    def test_pr_body_carries_the_trial_verbatim(self, tmp_path, capsys,
-                                                adopt_sonnet6):
-        body = render(capsys, "pr-body", write_json(tmp_path, "d.json", adopt_sonnet6),
-                      "--trial", write_json(tmp_path, "t.json", TRIAL))
-        assert TRIAL["run_url"] in body
-        assert TRIAL["outcome"] in body
-        assert TRIAL["summary"] in body
+    WRITTEN = {"outcome": "written", "written_at": "2026-11-02T07:40:00Z",
+               "sentences": []}
 
-    def test_pr_body_carries_the_classification_evidence(self, tmp_path, capsys,
-                                                         adopt_sonnet6):
-        body = render(capsys, "pr-body", write_json(tmp_path, "d.json", adopt_sonnet6),
-                      "--trial", write_json(tmp_path, "t.json", TRIAL))
+    def test_the_record_names_the_home_as_where_the_ladder_changed(
+            self, adopt_sonnet6):
+        body = maa.record_body(adopt_sonnet6, run_url=RUN_URL, trial=TRIAL,
+                               applied=self.WRITTEN)
+        first = body.split("\n\n")[1]
+        # What moved where, in the words it uses today ...
+        assert maa._summary(adopt_sonnet6) in first
+        # ... and the home as the place the ladder changed, under its own name.
+        assert "in the home" in first
+        assert "daily-adoption" in first
+        assert "2026-11-02T07:40:00Z" in first
+        assert "Settings › Agents & models" in first
+        assert "pull request" not in body
+        assert RUN_URL in body
         assert adopt_sonnet6["created_at"] in body
-        for rung in adopt_sonnet6["replaces"]:
-            assert rung["created_at"] in body
-            assert rung["ladder"] in body
-        assert "$2.00" in body and "$10.00" in body
-        assert "$3.00" in body and "$15.00" in body
-        assert "DRE-3892 rule 1" in body
-        assert "critic and the merge gate are its review" in body
+        assert TRIAL["summary"] in body
+        for marker in VERDICT_MARKERS:
+            assert marker not in body
 
-    def test_pr_body_never_carries_a_verdict_marker(self, tmp_path, capsys,
-                                                    adopt_sonnet6):
+    def test_the_record_carries_every_sentence_apply_said(self, adopt_sonnet6):
+        said = maa.not_retired_sentence(SONNET5)
+        body = maa.record_body(adopt_sonnet6, run_url=RUN_URL,
+                               applied=dict(self.WRITTEN, sentences=[said]))
+        assert said in body
+
+    def test_a_home_changed_mid_trial_is_recorded_as_nothing_written(
+            self, adopt_sonnet6):
+        said = maa.home_changed_sentence("2026-11-02T07:00:00Z")
+        body = maa.record_body(adopt_sonnet6, run_url=RUN_URL, applied={
+            "outcome": "home-changed", "written_at": "2026-11-02T07:00:00Z",
+            "sentences": [said]})
+        assert said in body
+        assert "daily-adoption" not in body.split("\n\n")[1]
+
+    def test_a_trial_summary_never_carries_a_verdict_marker(self, adopt_sonnet6):
         trial = dict(TRIAL, summary="VERDICT: APPROVE — QA Critic and QA Verifier")
-        body = render(capsys, "pr-body", write_json(tmp_path, "d.json", adopt_sonnet6),
-                      "--trial", write_json(tmp_path, "t.json", trial))
+        body = maa.record_body(adopt_sonnet6, run_url=RUN_URL, trial=trial,
+                               applied=self.WRITTEN)
         for marker in VERDICT_MARKERS:
             assert marker not in body
         assert "APPROVE" in body, "the rest of the summary still arrives"
 
-    def test_pr_body_without_a_trial_says_so(self, tmp_path, capsys, adopt_sonnet6):
-        body = render(capsys, "pr-body", write_json(tmp_path, "d.json", adopt_sonnet6))
-        assert "no trial result" in body.lower()
-
-    def test_record_body_adds_the_branch_and_the_run_url(self, adopt_sonnet6):
-        branch = maa.record_branch(CARD, SONNET6)
-        body = maa.record_body(adopt_sonnet6, run_url=RUN_URL, branch=branch,
-                               trial=TRIAL)
-        assert branch in body and RUN_URL in body
-        assert adopt_sonnet6["created_at"] in body
-        assert TRIAL["summary"] in body
-        for marker in VERDICT_MARKERS:
-            assert marker not in body
-
     def test_record_body_renders_from_the_cli(self, tmp_path, capsys, adopt_sonnet6):
         body = render(capsys, "record-body",
                       write_json(tmp_path, "d.json", adopt_sonnet6),
-                      "--trial", write_json(tmp_path, "t.json", TRIAL))
+                      "--trial", write_json(tmp_path, "t.json", TRIAL),
+                      "--applied", write_json(tmp_path, "a.json", self.WRITTEN))
         assert adopt_sonnet6["created_at"] in body
         assert TRIAL["run_url"] in body
+        assert "in the home" in body
 
 
 # --------------------------------------------------------------------------- #
@@ -675,13 +763,19 @@ class TestPrAndRecordBodies:
 
 class TestOpenRecordCard:
 
-    def test_files_the_record_in_progress_with_its_labels_and_verdict(
+    APPLIED = {"outcome": "written", "written_at": "2026-11-02T07:40:00Z",
+               "sentences": [maa.not_retired_sentence(SONNET5)]}
+
+    def test_files_the_record_in_done_with_its_labels_and_verdict(
             self, adopt_sonnet6):
+        # Done, not In Progress: no pull request will ever close it — the
+        # write it records is already made (DRE-6943).
         ops = FakeOps()
-        result = maa.open_record_card(adopt_sonnet6, run_url=RUN_URL, ops=ops)
+        result = maa.open_record_card(adopt_sonnet6, run_url=RUN_URL, ops=ops,
+                                      trial=TRIAL, applied=self.APPLIED)
         assert len(ops.created) == 1
         made = ops.created[0]
-        assert made["lane"] == "In Progress"
+        assert made["lane"] == "Done"
         assert made["repo_slug"] == "bureau-pipeline"
         assert made["title"] == maa.record_title(adopt_sonnet6)
         for want in ("repo:bureau-pipeline", "agent:devops", "initiative:bureau",
@@ -695,8 +789,12 @@ class TestOpenRecordCard:
         assert "WORKBENCH" in routing_verdict.verdicts()
         assert RUN_URL in ops.stamped[0][2]
         assert result["card"] == CARD
-        assert result["branch"] == f"agent/{CARD}-adopt-{SONNET6}"
+        assert "branch" not in result, "an adoption opens no branch"
         assert result["card_owed"] is False
+        assert made["description"] == maa.record_body(
+            adopt_sonnet6, run_url=RUN_URL, trial=TRIAL, applied=self.APPLIED)
+        assert maa.not_retired_sentence(SONNET5) in made["description"]
+        assert ops.described == [], "the body is whole at creation"
 
     def test_the_record_passes_the_live_card_gate(self, adopt_sonnet6):
         ops = FakeOps()
@@ -705,19 +803,11 @@ class TestOpenRecordCard:
         assert validate_card.missing(made["description"], made["labels"]) == []
         assert validate_card.repo_title_mismatch(made["title"], made["labels"]) is None
 
-    def test_the_record_ends_up_naming_its_branch_and_run(self, adopt_sonnet6):
-        ops = FakeOps()
-        maa.open_record_card(adopt_sonnet6, run_url=RUN_URL, ops=ops)
-        final = ops.described[-1][1] if ops.described else ops.created[0]["description"]
-        assert f"agent/{CARD}-adopt-{SONNET6}" in final
-        assert RUN_URL in final
-
-    def test_a_linear_failure_owes_the_card_and_falls_back(self, adopt_sonnet6):
+    def test_a_linear_failure_owes_the_card(self, adopt_sonnet6):
         result = maa.open_record_card(adopt_sonnet6, run_url=RUN_URL,
                                       ops=FakeOps(fail_create=True))
         assert result["card"] == ""
         assert result["card_owed"] is True
-        assert result["branch"] == f"agent/model-adoption-{SONNET6}"
 
     def test_a_failed_search_still_files_the_card(self, adopt_sonnet6):
         ops = FakeOps(fail_find=True)
@@ -728,7 +818,6 @@ class TestOpenRecordCard:
         result = maa.open_record_card(adopt_sonnet6, run_url=RUN_URL,
                                       ops=FakeOps(fail_stamp=True))
         assert result["card"] == CARD
-        assert result["branch"] == f"agent/{CARD}-adopt-{SONNET6}"
 
     def test_an_open_card_of_the_same_title_creates_nothing(self, adopt_sonnet6):
         ops = FakeOps(open_card="DRE-77")
@@ -736,18 +825,24 @@ class TestOpenRecordCard:
         assert ops.created == [] and ops.stamped == []
         assert ("find_open", maa.record_title(adopt_sonnet6)) in ops.calls
         assert result["card"] == "DRE-77"
-        assert result["branch"] == f"agent/DRE-77-adopt-{SONNET6}"
 
     def test_cli_prints_github_output_lines(self, tmp_path, capsys, adopt_sonnet6):
+        ops = FakeOps()
         rc = maa.main(["open-record-card", "--decision",
                        write_json(tmp_path, "d.json", adopt_sonnet6),
-                       "--run-url", RUN_URL], ops=FakeOps())
+                       "--run-url", RUN_URL,
+                       "--trial", write_json(tmp_path, "t.json", TRIAL),
+                       "--applied", write_json(tmp_path, "a.json", self.APPLIED)],
+                      ops=ops)
         lines = capsys.readouterr().out.splitlines()
         assert rc == 0
         assert f"card={CARD}" in lines
         assert f"card_url=https://linear.app/x/issue/{CARD}" in lines
-        assert f"branch=agent/{CARD}-adopt-{SONNET6}" in lines
+        assert not [line for line in lines if line.startswith("branch=")]
         assert "card_owed=false" in lines
+        made = ops.created[0]["description"]
+        assert TRIAL["summary"] in made
+        assert maa.not_retired_sentence(SONNET5) in made
 
     def test_cli_on_a_linear_failure_exits_zero_and_owes_the_card(
             self, tmp_path, capsys, adopt_sonnet6):
@@ -757,7 +852,6 @@ class TestOpenRecordCard:
         lines = capsys.readouterr().out.splitlines()
         assert rc == 0
         assert "card_owed=true" in lines
-        assert f"branch=agent/model-adoption-{SONNET6}" in lines
 
     @pytest.mark.parametrize("which", ["ask_priced_above", "ignore_old"])
     def test_a_non_adopt_decision_exits_2_without_touching_ops(
@@ -839,7 +933,9 @@ class TestCliContract:
     def test_the_four_commands_and_six_render_targets(self):
         assert maa.COMMANDS == ("apply", "render", "open-record-card",
                                 "open-question-card")
-        assert maa.RENDER_TARGETS == ("pr-title", "pr-body", "question-title",
+        # `pr-body` went with the adoption's pull request (DRE-6943); the
+        # title stays, because the in-flight check still reads it.
+        assert maa.RENDER_TARGETS == ("pr-title", "question-title",
                                       "question-body", "record-title",
                                       "record-body")
 
