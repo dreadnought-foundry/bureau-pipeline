@@ -442,7 +442,10 @@ line and ends green. The write is held to `model_home.home_errors`, re-read
 just before it, and stamped `written_by: console` for a merge from the old
 route's `agent/model-config-` branch, `operator` otherwise. Before the seeding
 nothing is carried: the change is in the defaults in the code, which the
-seeding renders. Each run prints one line tagged `model-home-carry:`. It goes
+seeding renders. A push whose queued run GitHub cancelled, or whose run was
+red, is carried by the next run: it compares from the last green run's head
+when that is older than the push's own `before`. Each run prints one line
+tagged `model-home-carry:`. It goes
 with the route it serves (DRE-6981).
 
 **The `rules` block (DRE-6992).** `reviewers_only` (today `[critic,

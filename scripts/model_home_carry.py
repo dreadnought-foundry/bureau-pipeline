@@ -11,7 +11,10 @@ nowhere. `.github/workflows/model-home-carry.yml` runs this on every push to
 minutes. It is a bridge, removed with the route it serves (DRE-6981).
 
 WHAT IS CARRIED, AND ONLY THAT. The choices at the push's `before` commit are
-compared with those at its `after` commit, and the difference is turned into
+compared with those at its `after` commit — or from the head of this
+workflow's last green run, when that is older (`since`): GitHub cancels a
+queued run when a newer push takes its place, and that push is carried with
+the newer one rather than never — and the difference is turned into
 the six changes the page makes (`model_config_change.OPS`), applied to a fresh
 read of the home:
 
@@ -87,6 +90,7 @@ READS_MODEL_HOME = ("*",)
 READ_TOKEN_ENV = mh.TOKEN_ENV
 WRITE_TOKEN_ENV = "BUREAU_MODEL_HOME_WRITE_TOKEN"
 CONFIG = "config/models.yaml"
+WORKFLOW = "model-home-carry.yml"
 # The old route's branch: a merge from it is the console's save.
 CONSOLE_BRANCH = BRANCH_PREFIX
 PULLS_PATH = f"repos/{mh.REPOSITORY}/commits/{{sha}}/pulls"
@@ -364,6 +368,45 @@ def _pulls(sha: str) -> list:
     return found if isinstance(found, list) else []
 
 
+def _last_carried() -> str | None:
+    """The head of this workflow's last green run on main, or None when it
+    has none yet, through `gh run list`."""
+    done = subprocess.run(["gh", "run", "list", "--repo", mh.REPOSITORY,
+                           "--workflow", WORKFLOW, "--branch", "main",
+                           "--status", "success", "--limit", "1", "--json", "headSha"],
+                          capture_output=True, text=True, timeout=60)
+    if done.returncode != 0:
+        raise RuntimeError(done.stderr.strip() or f"gh exited {done.returncode}")
+    found = json.loads(done.stdout or "[]")
+    head = found[0].get("headSha") if isinstance(found, list) and found and \
+        isinstance(found[0], Mapping) else None
+    return head if isinstance(head, str) and head else None
+
+
+def _is_ancestor(old: str, new: str) -> bool:
+    return subprocess.run(["git", "merge-base", "--is-ancestor", old, new], cwd=ROOT,
+                          capture_output=True, text=True).returncode == 0
+
+
+def since(before: str) -> str:
+    """The commit to compare from: the head of this workflow's last green run
+    when it is older than the push's `before`, else `before`. A queued run is
+    cancelled when a newer push takes its place, so the push it belonged to
+    is carried here, with this one; a red run's push is carried again. The
+    window only ever widens, and a setting the home already holds is not
+    written again."""
+    try:
+        last = _last_carried()
+    except Exception as exc:
+        raise Failed(f"the runs of {WORKFLOW} could not be read ({mh.one_line(exc)}), so "
+                     "a push whose run was cancelled could go uncarried; re-run this run")
+    if last and last != before and _is_ancestor(last, before):
+        print(f"compared from {last[:7]}, the last commit a green run carried, not the "
+              f"push's before {before[:7]} — a run between them was cancelled or red")
+        return last
+    return before
+
+
 def written_by(sha: str) -> str:
     """`console` when the commit came in from the old route's branch, else
     `operator` — a role word, never a person."""
@@ -512,6 +555,7 @@ def main(argv: list[str]) -> int:
         print(f"{TAG} nothing carried — the push has no before commit to compare with")
         return 0
     try:
+        before = since(before)
         before_text, after_text = _show(before), _show(after)
     except Failed as exc:
         print(f"{TAG} not written — {exc}")
