@@ -3,20 +3,38 @@
 detection (DRE-1490). Plus the preserved is_error heartbeat + hold-cap markers
 from DRE-1354.
 
-WHERE THE LADDERS COME FROM (DRE-2316)
---------------------------------------
-`config/models.yaml` in this repo is the ONE file a human edits to change which
-model an agent runs on, and this module READS it — no Python constant is
-maintained separately. The config is a FILE in the public bureau-pipeline
-checkout the product-repo workflows already do (`.bureau-pipeline` @main),
-because those workflows have NO AWS credentials and NO private-repo token; it
-can never be a runtime lookup. Same constraint, same shape as
-`config/repo-map.json` (see config/README.md).
+WHERE THE CHOICES COME FROM (DRE-2316, DRE-6939)
+------------------------------------------------
+The CHOICES — which models a group runs on and in what order, which group an
+agent is in, a project's own model — live in ONE home outside every
+repository: the GitHub Actions variable `BUREAU_MODEL_CHOICES` on
+dreadnought-foundry/bureau-pipeline, which the console writes. The CEO,
+2026-10-11: "These should all be externalized and all we're doing is changing
+the values of the configuration." `scripts/model_home.py` is its reader and
+its rules.
 
-`_FALLBACK_MODEL_CONFIG` below is a GENERATED mirror of that file, used ONLY
-when the YAML is missing/unreadable — a truncated checkout must not strand a
-dispatch. Do not hand-edit it: run `python3 scripts/sync_model_config.py`
-(`--check` fails CI on drift).
+This module reads the home ONCE per process, when a choice is first asked for
+— the first call of one of the five CHOICE FUNCTIONS, `kind_for`,
+`ladder_for`, `fallback_for`, `select_with_reasons` and `select` (`use_home`)
+— and puts its choices in place in `CONFIG`, `LADDERS`, `KINDS`,
+`AGENT_KINDS` and `LADDER`. Importing the module reads nothing: most of its
+importers want a code-side fact, and do no I/O for it. With no home named
+(`not set`) the choices are the DEFAULTS IN THE CODE — `_FALLBACK_MODEL_CONFIG`
+below, `code_defaults()` — exactly as before the home; with a home that cannot
+be read they are the defaults too, LOUDLY: the note opens `DEGRADED` and ends
+with the home's clause (`selection_note`).
+
+The choices still written in `config/models.yaml` are never read by the
+selector: the home or the defaults, nothing between. That file is read for the
+CODE-SIDE FACTS (`effort`, `review_separation`, `discovery`, `retired`,
+`excluded`, `session_agents`, `about`), a FILE in the public bureau-pipeline
+checkout the product-repo workflows already do (`.bureau-pipeline`), the same
+shape as `config/repo-map.json` (see config/README.md). Until DRE-6982 its
+old save route regenerates the literal below from it on every merged save, so
+a save by that route stays in force through the defaults.
+
+`_FALLBACK_MODEL_CONFIG` is GENERATED from that file. Do not hand-edit it: run
+`python3 scripts/sync_model_config.py` (`--check` fails CI on drift).
 
 THE ROLE KINDS (DRE-2317, DRE-3015)
 -----------------------------------
@@ -212,11 +230,11 @@ _PRICES_PATH = Path(__file__).resolve().parent.parent / "config" / "model-prices
 # for a repo the pipeline does not route to is a typo nobody would see.
 _REPO_MAP_PATH = Path(__file__).resolve().parent.parent / "config" / "repo-map.json"
 
-# Last-known-good fallback: the config as of this commit. `_load_config` reads
-# the on-disk YAML FIRST (so changing a model is a data edit to one file); this
-# literal is used ONLY when that file is missing/unreadable/malformed, so a
-# truncated checkout degrades to the last-known ladders instead of stranding a
-# dispatch.
+# The defaults in the code (DRE-6939): the choices every run makes when the
+# home is not set or cannot be read, read through `code_defaults()` and by
+# nobody else by name. The code-side facts in it are the last-known-good ones,
+# used only when config/models.yaml is missing/unreadable/malformed, so a
+# truncated checkout degrades instead of stranding a dispatch.
 #
 # GENERATED REGION: do not hand-edit. Edit config/models.yaml, then run
 # `python3 scripts/sync_model_config.py` to regenerate it (`--check` in CI fails
@@ -300,6 +318,21 @@ _FALLBACK_MODEL_CONFIG = {
     "excluded": ["claude-haiku-5-5", "claude-fable-5"],
 }
 # --- END generated model config ---
+
+
+def code_defaults() -> dict:
+    """The defaults in the code, normalized — the choices a run makes when no
+    home answers (DRE-6939), and the document the operator seeds the home
+    with (`model_home.render_defaults`). A fresh copy on every call, so no
+    caller can edit what the next one reads. The one accessor of the
+    generated literal: its name is nobody else's business."""
+    return _normalize_config(_FALLBACK_MODEL_CONFIG) or {}
+
+
+# The keys of the normalized config that are CHOICES (DRE-6939): the home's
+# to say, else the defaults in the code's — never config/models.yaml's.
+_CHOICE_KEYS = ("default_ladder", "kinds", "ladders", "agents", "groups",
+                "ungrouped", "projects")
 
 
 def _normalize_config(raw) -> dict | None:
@@ -635,6 +668,34 @@ def _project_ids(cfg: Mapping) -> set[str]:
 # Policy validation — the schema half of "availability is not permission"      #
 # --------------------------------------------------------------------------- #
 
+def misplaced_backstops(agents: Mapping, *, required: bool = False) -> list[tuple[str, object]]:
+    """Rule 3 — `(role, group)` for each of `BACKSTOP_ROLES` that is not in the
+    advisory kind (None: in no group). They gate unattended merges; a
+    demotion is the inversion this policy removes. `required` refuses a
+    backstop in no group too: the home must place both (DRE-6939), where the
+    old file may leave one out and keep the default it then gets.
+
+    The one statement of the rule, read by `policy_errors` and by
+    `model_home.structure_errors`."""
+    return [
+        (role, agents.get(role)) for role in BACKSTOP_ROLES
+        if agents.get(role) != ADVISORY_KIND
+        and (required or agents.get(role) is not None)
+    ]
+
+
+def misplaced_planners(agents: Mapping, session) -> list[str]:
+    """Rule 10 — every role in the judgement kind that is neither in
+    `JUDGEMENT_ROLES` nor a session agent (DRE-6633, DRE-6833). The one
+    statement of the rule, read by `policy_errors` and by
+    `model_home.structure_errors`."""
+    return [
+        role for role, kind in agents.items()
+        if kind == JUDGEMENT_KIND and role not in JUDGEMENT_ROLES
+        and role not in session
+    ]
+
+
 def policy_errors(config, prices=None, repo_slugs=None) -> list[str]:
     """Every way this config would put the strongest model on the build path,
     as plain-English strings. Empty list = the config is admissible.
@@ -781,27 +842,22 @@ def policy_errors(config, prices=None, repo_slugs=None) -> list[str]:
                 f"agents.{role}: {kind!r} is not a role kind — roles are assigned "
                 f"{list(kinds)}, never a ladder name"
             )
-    for role in BACKSTOP_ROLES:
-        assigned = cfg["agents"].get(role)
-        if assigned is not None and assigned != ADVISORY_KIND:
-            errors.append(
-                f"agents.{role}: must be {ADVISORY_KIND!r} (it gates unattended "
-                f"merges), got {assigned!r}"
-            )
+    for role, assigned in misplaced_backstops(cfg["agents"]):
+        errors.append(
+            f"agents.{role}: must be {ADVISORY_KIND!r} (it gates unattended "
+            f"merges), got {assigned!r}"
+        )
     # Rule 10 (DRE-6633): the judgement kind is the planner's. A session agent
     # is exempt (DRE-6833): its group selects nothing, see `AGENT_KINDS`.
     owners = " and ".join(JUDGEMENT_ROLES)
-    session = _session_names(cfg)
-    for role, kind in cfg["agents"].items():
-        if (kind == JUDGEMENT_KIND and role not in JUDGEMENT_ROLES
-                and role not in session):
-            errors.append(
-                f"agents.{role}: {JUDGEMENT_KIND!r} is the {owners}'s kind — it "
-                f"admits a role that runs once per epic, and {role} runs per "
-                "card; volume on the strongest model is the 2026-08-09 "
-                f"incident. A build or fix role is {WORKHORSE_KIND!r}, a "
-                f"reviewer is {ADVISORY_KIND!r}"
-            )
+    for role in misplaced_planners(cfg["agents"], _session_names(cfg)):
+        errors.append(
+            f"agents.{role}: {JUDGEMENT_KIND!r} is the {owners}'s kind — it "
+            f"admits a role that runs once per epic, and {role} runs per "
+            "card; volume on the strongest model is the 2026-08-09 "
+            f"incident. A build or fix role is {WORKHORSE_KIND!r}, a "
+            f"reviewer is {ADVISORY_KIND!r}"
+        )
 
     if prices is None:
         prices = declared_prices()
@@ -1129,12 +1185,24 @@ def _project_errors(cfg: dict, prices: Mapping, repo_slugs, fleet: set[str]) -> 
 
 
 def _load_config() -> dict:
-    """The model config: the bundled YAML when readable AND admissible, else the
-    generated literal above. Degrades, never raises — this sits on the dispatch
-    path of every card, and a config we cannot parse must not block a build.
+    """The model config this process starts on: the CHOICES from the defaults
+    in the code (`code_defaults()`), and the CODE-SIDE FACTS from
+    config/models.yaml (DRE-6939). No network, and neither of the home's
+    environment names is read: the home is read later, by `use_home`, when a
+    choice is first asked for. Degrades, never raises.
+    """
+    defaults = code_defaults()
+    return {**_load_code_side(), **{key: defaults[key] for key in _CHOICE_KEYS}}
+
+
+def _load_code_side() -> dict:
+    """The bundled YAML when readable AND admissible, else the generated
+    literal above. Degrades, never raises — this sits on the dispatch path of
+    every card, and a config we cannot parse must not block a build. Only its
+    code-side facts are kept (`_load_config`).
 
     A config that PARSES but violates policy is refused the same way: the fleet
-    keeps running the last-known-good ladders and says so on stderr, rather than
+    keeps running the last-known-good facts and says so on stderr, rather than
     adopting the thing the policy exists to prevent.
     """
     try:
@@ -1216,6 +1284,148 @@ SEPARATION: dict = CONFIG["review_separation"]
 # realistically wants Sonnet-or-better.)
 LADDER: list[str] = LADDERS[CONFIG["default_ladder"]]
 
+# The home's read in this process (DRE-6939): empty until `use_home` has run,
+# then `read`, `not set`, or `unreadable (<reason>)` with the reason already
+# one safe line (`model_home.one_line`). `_HOME_OUTCOME` is the reader's whole
+# answer, which `selection_note` hands back to it for the note's clause.
+HOME_STATUS: str = ""
+_HOME_OUTCOME: dict | None = None
+
+# The commands of this module's CLI whose process reads the home (DRE-6939,
+# checked by DRE-6940): `select` calls the choice functions; `effort`,
+# `build-model` and `role-of` read nothing.
+READS_MODEL_HOME = ("select",)
+
+# The two environment names the reader honors. A process with neither is one
+# nobody asked to read a home — its read is `not set`.
+_HOME_NAMES = ("BUREAU_MODEL_HOME_TOKEN", "BUREAU_MODEL_HOME_FILE")
+
+
+def _home_reader():
+    """`scripts/model_home.py`, or None in a checkout that does not carry it
+    (a vendored copy of this file alone)."""
+    try:
+        import model_home
+    except ImportError:
+        return None
+    return model_home
+
+
+def _replace(target, value):
+    """`value`, put in `target` in place when both are a dict or both a list,
+    so a name imported before the change sees it."""
+    if isinstance(target, dict) and isinstance(value, Mapping):
+        target.clear()
+        target.update(value)
+        return target
+    if isinstance(target, list) and isinstance(value, list):
+        target[:] = value
+        return target
+    return value
+
+
+def _put_choices(choices: Mapping) -> None:
+    """The choices in `choices`, put in place in `CONFIG`, `LADDERS`, `KINDS`,
+    `AGENT_KINDS` and `LADDER`."""
+    for key in _CHOICE_KEYS:
+        CONFIG[key] = _replace(CONFIG.get(key), choices[key])
+    _replace(AGENT_KINDS, {
+        role: kind for role, kind in CONFIG["agents"].items()
+        if role not in SESSION_AGENTS
+    })
+    _replace(LADDER, list(LADDERS.get(CONFIG["default_ladder"], [])))
+
+
+def _home_choices(doc: Mapping) -> dict:
+    """The choices a home document says, in the normalized shape: one ladder
+    and one kind per group key, the group's label and purpose, the agents,
+    the projects, and every roster name absent from `agents` ungrouped."""
+    groups = doc["groups"]
+    agents = {str(name): str(group) for name, group in doc["agents"].items()}
+    defaults = code_defaults()
+    roster = [*defaults["agents"], *defaults["ungrouped"],
+              *(CONFIG.get("session_agents") or []), *(doc.get("added_agents") or {})]
+    return {
+        "default_ladder": WORKHORSE_KIND,
+        "kinds": {str(key): str(key) for key in groups},
+        "ladders": {str(key): list(group["models"]) for key, group in groups.items()},
+        "groups": {
+            str(key): {"label": group.get("label", str(key).title()),
+                       "purpose": group.get("purpose", "")}
+            for key, group in groups.items()
+        },
+        "agents": agents,
+        "ungrouped": [name for name in dict.fromkeys(roster) if name not in agents],
+        "projects": {str(slug): dict(entry)
+                     for slug, entry in (doc.get("projects") or {}).items()},
+    }
+
+
+def use_home() -> str:
+    """Read the home once in this process and put its choices in place
+    (DRE-6939); every later call answers from that read. Returns
+    `HOME_STATUS`.
+
+    The reader judges the document and prints the home's tagged line to
+    stderr; a home it accepts replaces the choices, and anything else leaves
+    them the defaults in the code. Never raises: this sits on the dispatch
+    path of every card."""
+    global HOME_STATUS, _HOME_OUTCOME
+    if HOME_STATUS:
+        return HOME_STATUS
+    reader = _home_reader()
+    try:
+        if reader is not None:
+            outcome = reader.read()
+        elif any(name in os.environ for name in _HOME_NAMES):
+            outcome = {"state": "unreadable", "document": None, "set_aside": [],
+                       "reason": "scripts/model_home.py is not in this checkout"}
+            print("model-home: unreadable — scripts/model_home.py is not in this "
+                  "checkout; running on the defaults in the code", file=sys.stderr)
+        else:
+            outcome = {"state": "not set", "document": None, "set_aside": [],
+                       "reason": None}
+        if outcome.get("state") == "read":
+            _put_choices(_home_choices(outcome["document"]))
+    except Exception as exc:  # a bug here must never strand a dispatch
+        _put_choices(code_defaults())
+        outcome = {"state": "unreadable", "document": None, "set_aside": [],
+                   "reason": f"the home could not be put in place ({type(exc).__name__})"}
+        print(f"model-home: unreadable — {outcome['reason']}; running on the "
+              "defaults in the code", file=sys.stderr)
+    _HOME_OUTCOME = outcome
+    state = outcome.get("state")
+    HOME_STATUS = (f"unreadable ({outcome.get('reason')})" if state == "unreadable"
+                   else str(state or "not set"))
+    return HOME_STATUS
+
+
+def reset_home() -> None:
+    """The choices back to the defaults in the code, in place, and the read
+    forgotten, so the next choice call reads the home again (DRE-6939). The
+    test suite's per-test reset is its caller."""
+    global HOME_STATUS, _HOME_OUTCOME
+    _put_choices(code_defaults())
+    HOME_STATUS = ""
+    _HOME_OUTCOME = None
+
+
+def _home_unreadable() -> bool:
+    return HOME_STATUS.startswith("unreadable")
+
+
+def _home_clause() -> str:
+    """The note's trailing clause for this process's read: nothing when no
+    choice function has run or the home is not set (the note printed before
+    the home), else the reader's words."""
+    if HOME_STATUS in ("", "not set"):
+        return ""
+    reader = _home_reader()
+    if reader is None:
+        return f" · model-home: {HOME_STATUS}, running on the defaults in the code"
+    return reader.status_clause(_HOME_OUTCOME)
+
+
 # Models that have rotated OUT of every ladder. NOT selectable — kept only so a
 # marker stamped before the rotation stays attributable. `last_error_model`
 # validates a marker's payload against KNOWN_MODELS, so dropping a retired id
@@ -1246,6 +1456,7 @@ def kind_for(role: str) -> str:
     """The role KIND — `workhorse`, `advisory` or `judgement` — an agent/role is
     classified as. An unknown name is WORKHORSE: an unrecognized role must land
     on the cheap side of the fence, never on a stronger model."""
+    use_home()
     kind = AGENT_KINDS.get(role or "", "")
     return kind if kind in KINDS else WORKHORSE_KIND
 
@@ -1307,6 +1518,7 @@ def ladder_for(role: str, repo: str | None = None) -> list[str]:
     is `effective_ladders(CONFIG, slug)` for that kind — the exception first,
     then the kind's ladder with it removed. No repo, an unknown one or no
     exception is the fleet ladder, exactly as before."""
+    use_home()
     name = KINDS.get(kind_for(role), "")
     slug = resolve_repo_slug(repo)
     if _project_exception(role, slug) is None:
@@ -1626,6 +1838,7 @@ def fallback_for(role: str, model: str, repo: str | None = None) -> str | None:
 
     `repo` reads it off that project's walk (DRE-6634), the same walk `select`
     chose from, so the fallback and the capacity retry agree with it."""
+    use_home()
     walk = ladder_for(role, repo)
     if model not in walk:
         return None
@@ -1759,7 +1972,12 @@ def select_with_reasons(
     at; running the reviewer on a different model than the build did is the
     DESIGNED path, and a ::warning:: on every Sonnet-5 build would teach the
     fleet to ignore the warning that means a reviewer lost its model.
+
+    The home is read first (`use_home`, DRE-6939), and a home that could not
+    be read makes the decision `degraded` too: the run is on the defaults in
+    the code when somebody asked for the home's choices.
     """
+    use_home()
     if probe is None:
         probe = _probe_real
     if clock is None:
@@ -1794,7 +2012,7 @@ def select_with_reasons(
                 "skipped": skipped,
                 "separated": separated,
                 "built_on_unknown": bool(built_on_unknown),
-                "degraded": bool(skipped),
+                "degraded": bool(skipped) or _home_unreadable(),
                 "exhausted": False,
                 **where,
             }
@@ -1833,11 +2051,17 @@ def selection_note(decision: Mapping) -> str:
     policy: if an advisory role ever falls off the strongest model — because it
     is unavailable, or because an advisory budget was introduced and exhausted —
     the run says so out loud instead of shipping a quietly cheaper critic.
+
+    The note ENDS with the home's clause (DRE-6939, `model_home.status_clause`)
+    — ` · model-home: read`, or the unreadable one, which also opens the note
+    `DEGRADED`. A home that is not set, or a process in which no choice
+    function has run, adds nothing: the note is the one printed before the
+    home.
     """
     model = decision.get("model")
     role = decision.get("role") or "agent"
     kind = decision.get("kind") or WORKHORSE_KIND
-    head = "DEGRADED " if decision.get("degraded") else ""
+    head = "DEGRADED " if decision.get("degraded") or _home_unreadable() else ""
     note = f"{head}model-policy: {model} chosen for {role} ({kind} kind)"
     # The separation is recorded but is NOT a degradation (DRE-3880): it is
     # named here so a verdict can be traced to the model that wrote it, and it
@@ -1869,6 +2093,7 @@ def selection_note(decision: Mapping) -> str:
     if decision.get("exhausted"):
         note += " — no rung probed available; fell through to the lowest rung"
     note += _project_fragment(decision, kind)
+    note += _home_clause()
     return " ".join(note.split())
 
 
@@ -1941,6 +2166,7 @@ def select(
     when it has one for this role's kind, leads the walk. Nothing, or anything
     that names no project, is the fleet ladder.
     """
+    use_home()
     return select_with_reasons(
         role, repo=repo, probe=probe, clock=clock, ladder=ladder, avoid=avoid,
         out_of_capacity=out_of_capacity, built_on=built_on,
@@ -2066,8 +2292,9 @@ def main(argv: list[str]) -> int:
              [--effort-file <path>] [--built-on <model>] [--built-on-unknown]
              [--repo <slug-or-owner/name>]
                                    print the model the next attempt should use
-                                   (walks that agent's ladder from
-                                   config/models.yaml, probes availability) and,
+                                   (reads the home once, DRE-6939, then walks
+                                   that agent's ladder from the home or the
+                                   defaults in the code, probes availability) and,
                                    with --explain-file, write the one-line
                                    selection note beside it. --avoid walks past
                                    a model this card's last attempt died on
@@ -2111,7 +2338,8 @@ def main(argv: list[str]) -> int:
     STDOUT IS ONLY THE MODEL ID — every workflow does `MODEL=$(… select …)`.
     The note (which model ran, and why anything above it was skipped) goes to
     the `--explain-file` path and to stderr, so adding it can never corrupt the
-    captured id. A degraded selection's note starts with `DEGRADED`, which is
+    captured id. The home's tagged line (`model-home: …`) goes to stderr
+    before it, printed by the reader when the first choice is asked for. A degraded selection's note starts with `DEGRADED`, which is
     what the workflows turn into a `::warning::`."""
     if not argv:
         print(
