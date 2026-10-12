@@ -91,6 +91,10 @@ RESCUE_MINT_IDS = ("pushtoken", "pushtoken2")
 # The GitHub calls reading's boot-App re-mint (DRE-6916): the bot's meter,
 # read after the model step on a token minted after it.
 CALLS_MINT_ID = "callsbot"
+# The model home's read token (DRE-6940): a mint, but not a re-mint — it is
+# minted once, before `Select model`, for the dreadnought-foundry installation
+# and not for this repo, and tests/test_model_home_scope.py owns it.
+MODEL_HOME_MINT_ID = "model_home"
 
 
 def _steps() -> list[dict]:
@@ -279,6 +283,7 @@ class TheReMintIsTheBootMintAgain(unittest.TestCase):
             if _action(s) == MINT_ACTION
             and s.get("id") != START_MINT_ID
             and s.get("id") not in POOL_STEP_IDS
+            and s.get("id") != MODEL_HOME_MINT_ID
         ]
 
     def test_the_re_mints_are_the_reports_and_the_rescues(self):
