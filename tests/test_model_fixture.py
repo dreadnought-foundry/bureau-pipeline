@@ -213,11 +213,12 @@ def test_lead_with_puts_a_model_first_and_leaves_the_rest_in_order():
 
 def test_move_agent_puts_an_agent_in_another_group():
     doc = fixture_home()
-    assert doc["agents"]["medic"] == "advisory"
-    moved = move_agent(doc, "medic", "workhorse")
-    assert moved["agents"]["medic"] == "workhorse"
-    assert {k: v for k, v in moved["agents"].items() if k != "medic"} == {
-        k: v for k, v in doc["agents"].items() if k != "medic"}
+    agent, now = next(iter(doc["agents"].items()))
+    other = next(group for group in doc["groups"] if group != now)
+    moved = move_agent(doc, agent, other)
+    assert moved["agents"][agent] == other
+    assert {k: v for k, v in moved["agents"].items() if k != agent} == {
+        k: v for k, v in doc["agents"].items() if k != agent}
     assert doc == fixture_home()
 
 
