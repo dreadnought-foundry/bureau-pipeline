@@ -89,6 +89,13 @@ _ABSENT_KEY = (
 _OWN_MOVE = (
     "The agent and group are the move the test's own change set makes, read "
     "back from the file that change set wrote.")
+_RULES_BLOCK = (
+    "The names are the contracted values of config/models.yaml's `rules:` "
+    "block (DRE-6992), which the console reads and never writes.")
+_OWN_RULES = (
+    "The names are the `rules:` block the test writes into a frozen-fixture "
+    "tree itself and reads back from that tree's module; no console save "
+    "touches it.")
 
 # `"tests/<file>.py::<Class.test_name or test_name>"` -> why the literal in
 # that test is not a pin. One entry per test; every entry is checked to still
@@ -167,6 +174,12 @@ ALLOWED: dict[str, str] = {
         _PRICE,
     "tests/test_model_projects_schema.py::TestNormalizedShape.test_a_kind_with_no_label_or_purpose_gets_the_defaults":
         _ABSENT_KEY,
+    "tests/test_model_rules_and_markers.py::test_a_planner_the_block_admits_may_hold_the_judgement_kind":
+        _OWN_RULES,
+    "tests/test_model_rules_and_markers.py::test_a_reviewer_the_block_adds_is_held_to_rule_3":
+        _OWN_RULES,
+    "tests/test_model_rules_and_markers.py::test_the_committed_config_carries_the_rules_block":
+        _RULES_BLOCK,
     "tests/test_model_trial.py::test_the_degraded_summary_names_both_numbers_on_both_sides":
         _OWN_INPUT,
     "tests/test_model_trial.py::test_the_same_run_at_full_limits_passes": _OWN_INPUT,
