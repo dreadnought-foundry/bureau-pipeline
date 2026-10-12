@@ -368,7 +368,10 @@ jobs:
             --limit-log /tmp/medic-log.txt --workflow "$WORKFLOW_NAME" \
             --run-id "$RUN_ID" --now "$RUN_UPDATED_AT" --failed-step "$FAILED_STEP" \
             "${ACCOUNT_FLAGS[@]}") || DECISION=""
-          ACTION=$(printf '%s\n' "$DECISION" | head -1)
+          # First lines by expansion, never `| head -1`: under pipefail a
+          # head that exits early kills the writer with SIGPIPE (141) and
+          # takes the step down with it (DRE-7024).
+          ACTION=${DECISION%%$'\n'*}
           if [ "$ACTION" != "limit" ]; then
             echo "limit=false" >> "$GITHUB_OUTPUT"
             echo "not a limit death (decision: ${ACTION:-none}) — ordinary medic handling"
@@ -376,7 +379,7 @@ jobs:
           fi
           echo "limit=true" >> "$GITHUB_OUTPUT"
           BODY=$(printf '%s\n' "$DECISION" | tail -n +3)
-          echo "$BODY" | head -1
+          printf '%s\n' "${BODY%%$'\n'*}"
           if [ -z "${CARD:-}" ]; then
             echo "::notice::Limit death on run $RUN_ID with no card in the head branch or the log — the retry and the diagnosis are blocked, and no marker can be written. Recovery needs a person: nothing names the card to bring back."
             exit 0
