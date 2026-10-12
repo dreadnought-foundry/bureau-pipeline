@@ -55,6 +55,13 @@ AGENT_TASK_WORKFLOW = os.path.join(".github", "workflows", "agent-task.yml")
 # which parse the prompt without a sandbox to ask.
 DEFAULT_BRANCH = "main"
 
+# Every run of the harness that reaches an agent scenario reads the model home
+# (DRE-6940): `_select_model` runs `model_fallback.py select engineer` as a
+# child process that inherits this process's environment, token and all.
+READS_MODEL_HOME = ("*",)
+# What reads it — model_home.py's TOKEN_ENV and FILE_ENV — kept from the agent.
+MODEL_HOME_ENV = ("BUREAU_MODEL_HOME_TOKEN", "BUREAU_MODEL_HOME_FILE")
+
 # The agent CLI the action wraps. Overridable so a runner with the CLI already
 # installed skips the npx fetch (and so a pin can be forced in an incident).
 DEFAULT_AGENT_CLI = "npx --yes @anthropic-ai/claude-code@latest"
@@ -374,6 +381,10 @@ def run_agent(
     argv += ["--allowedTools", ALLOWED_TOOLS]
 
     child_env = dict(env or os.environ)
+    # The model home's read token is for `_select_model`'s child alone
+    # (DRE-6940): the agent runs Bash over a seeded card and reads no home.
+    for name in MODEL_HOME_ENV:
+        child_env.pop(name, None)
     child_env["GH_TOKEN"] = token
     child_env["GITHUB_TOKEN"] = token
 

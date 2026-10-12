@@ -253,6 +253,23 @@ jobs:
           permission-contents: read
           permission-pull-requests: read
 
+      # The model home (DRE-6939) is a variable on
+      # dreadnought-foundry/bureau-pipeline, which a run's boot token in another
+      # organization cannot read. A narrow token for the bureau App's installation
+      # there, handed only to the steps below whose process reads the home
+      # (DRE-6940, held by scripts/check_model_home_scope.py). A refused mint
+      # leaves it empty and the selector on the defaults in the code — never a
+      # failed job.
+      - name: Mint the model-home read token
+        id: model_home
+        continue-on-error: true
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: ${{ secrets.BUREAU_APP_ID }}
+          private-key: ${{ secrets.BUREAU_APP_PRIVATE_KEY }}
+          owner: dreadnought-foundry
+          repositories: bureau-pipeline
+          permission-variables: read
       - name: Groom
         # Identified for the death-cause receipt at the foot of this job
         # (DRE-4340): GitHub's own outcome for this step is what says whether
@@ -261,6 +278,7 @@ jobs:
         # to load.
         id: groom
         env:
+          BUREAU_MODEL_HOME_TOKEN: ${{ steps.model_home.outputs.token }}
           LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
           # The judged read's credential (DRE-3153), gated on `CLAUDE_AUTH_MODE`
           # exactly the way plan.yml's classify step gates it — one reading of
@@ -621,6 +639,24 @@ jobs:
         id: install_claude
         if: ${{ matrix.repository != '' && steps.target.outcome == 'success' }}
 
+      # The model home (DRE-6939) is a variable on
+      # dreadnought-foundry/bureau-pipeline, which a run's boot token in another
+      # organization cannot read. A narrow token for the bureau App's installation
+      # there, handed only to the steps below whose process reads the home
+      # (DRE-6940, held by scripts/check_model_home_scope.py). A refused mint
+      # leaves it empty and the selector on the defaults in the code — never a
+      # failed job.
+      - name: Mint the model-home read token
+        id: model_home
+        if: ${{ matrix.repository != '' && steps.target.outcome == 'success' && steps.install_claude.outcome == 'success' }}
+        continue-on-error: true
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: ${{ secrets.BUREAU_APP_ID }}
+          private-key: ${{ secrets.BUREAU_APP_PRIVATE_KEY }}
+          owner: dreadnought-foundry
+          repositories: bureau-pipeline
+          permission-variables: read
       # Model selection for the verify agent, medic.yml's shape: the id and the
       # level it runs at come from config/models.yaml (agent `verifier`, the
       # ADVISORY ladder — a bounded read-only check, not build work), never a
@@ -630,6 +666,7 @@ jobs:
         id: model
         if: ${{ matrix.repository != '' && steps.target.outcome == 'success' && steps.install_claude.outcome == 'success' }}
         env:
+          BUREAU_MODEL_HOME_TOKEN: ${{ steps.model_home.outputs.token }}
           ANTHROPIC_API_KEY: ${{ vars.CLAUDE_AUTH_MODE != 'subscription' && secrets.ANTHROPIC_API_KEY || '' }}
           CLAUDE_CODE_OAUTH_TOKEN: ${{ vars.CLAUDE_AUTH_MODE == 'subscription' && secrets.CLAUDE_CODE_OAUTH_TOKEN || '' }}
           REPOSITORY: ${{ matrix.repository }}
@@ -806,6 +843,23 @@ jobs:
             --proposal proposal.json --verdicts verdicts \
             --out proposal-verified.json
 
+      # The model home (DRE-6939) is a variable on
+      # dreadnought-foundry/bureau-pipeline, which a run's boot token in another
+      # organization cannot read. A narrow token for the bureau App's installation
+      # there, handed only to the steps below whose process reads the home
+      # (DRE-6940, held by scripts/check_model_home_scope.py). A refused mint
+      # leaves it empty and the selector on the defaults in the code — never a
+      # failed job.
+      - name: Mint the model-home read token
+        id: model_home
+        continue-on-error: true
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: ${{ secrets.BUREAU_APP_ID }}
+          private-key: ${{ secrets.BUREAU_APP_PRIVATE_KEY }}
+          owner: dreadnought-foundry
+          repositories: bureau-pipeline
+          permission-variables: read
       # With a card, `post` posts the verified record at most once per id —
       # a re-run of the whole workflow recomputes, and `already_proposed`
       # keeps the second post silent. The dry-run switch (DRE-3712) reads the
@@ -813,6 +867,7 @@ jobs:
       # the page is printed for the step summary.
       - name: Post the verified proposal
         env:
+          BUREAU_MODEL_HOME_TOKEN: ${{ steps.model_home.outputs.token }}
           LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
           CARD: ${{ inputs.card }}
           DRY_RUN: ${{ inputs.dry_run }}

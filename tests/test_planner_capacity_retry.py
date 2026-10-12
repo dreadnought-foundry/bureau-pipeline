@@ -312,9 +312,14 @@ def _by_id(step_id: str) -> dict:
 
 @pytest.mark.parametrize("site", SITES, ids=SITE_IDS)
 def test_the_five_steps_sit_in_order_right_after_the_planner_step(site):
+    # The capacity read selects a model, so the model-home token is minted
+    # again between it and the planner step that may have aged the first one
+    # past its hour (DRE-6940), and only when the capacity read runs.
     name, orig, cap, mint, retry, done, _mint0, _coe = site
     at = _index(orig)
-    assert [_steps()[at + k].get("id") for k in range(5)] == [orig, cap, mint, retry, done]
+    home = f"model_home_{cap}"
+    assert [_steps()[at + k].get("id") for k in range(6)] == [orig, home, cap, mint, retry, done]
+    assert _by_id(home).get("if") == _by_id(cap).get("if")
 
 
 @pytest.mark.parametrize("site", SITES, ids=SITE_IDS)

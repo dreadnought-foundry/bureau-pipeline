@@ -328,6 +328,7 @@ REVIEW_DIED = "Review — the review died"
 # they leave these out exactly as they did while the steps carried the
 # activate clause.
 SECOND_CRITIC_STEPS = (
+    "Re-mint the model-home read token — postmodel",
     "Select model — second critic",
     "Second critic — cross-epic sight",
     "Second critic — context",
@@ -341,6 +342,7 @@ SECOND_CRITIC_STEPS = (
     "Second critic — decision",
     "Turn ceiling — second critic's re-plan",
     "Re-plan after the second critic sent it back",
+    "Re-mint the model-home read token — postreplan_cap",
     "Re-plan after the second critic sent it back — out of capacity?",
     "Re-mint bot token — Re-plan after the second critic sent it back on the next rung",
     "Re-plan after the second critic sent it back — on the next rung",
