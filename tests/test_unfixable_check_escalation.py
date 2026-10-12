@@ -10,8 +10,10 @@ were in the wrong ORDER:
     b3f2eb14  scripts/validate_card.py     <- first code change
     080ae84e  README.md + tests/...py      <- the test, LAST
 
-`check_tdd_commits.py` (DRE-2022) requires a commit touching `tests/` strictly
-before the first commit changing non-test code. The fix agent can ADD commits.
+`check_tdd_commits.py` (DRE-2022) then required a commit touching `tests/`
+strictly before the first commit changing non-test code; since DRE-3009 every
+code commit needs a test commit since the previous code commit, which is the
+same kind of finding — the ORDER of commits. The fix agent can ADD commits.
 It cannot REORDER them: order changes only by rewriting history, which needs a
 force-push it does not have and should not have. It diagnosed that correctly
 and refused — on attempt TWO, after a full CI round and a full critic round —
