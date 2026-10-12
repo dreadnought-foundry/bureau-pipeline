@@ -252,7 +252,10 @@ def test_the_walks_job_starts_from_the_parts_environment():
                     if s.get("name") == "Unit tests")["env"]
     step = next(s for s in job["steps"]
                 if "run-walks" in str(s.get("run", "")))
-    assert step.get("env") == unit_env
+    # Plus exactly one name, the walk the matrix entry was handed (DRE-7016),
+    # and it reaches the shell through the environment, never the `run:`.
+    assert step.get("env") == dict(unit_env, WALK="${{ matrix.walk }}"), step.get("env")
+    assert "${{" not in step["run"], step["run"]
 
 
 # ---------------------------------------------------------------------------
@@ -372,9 +375,30 @@ def test_each_walk_runs_in_a_job_of_its_own():
 
 def test_each_walk_job_runs_only_the_walk_it_was_handed():
     _, job = _walks_job()
-    assert (job.get("env") or {}).get("WALK") == "${{ matrix.walk }}", job.get("env")
     step = next(s for s in job["steps"] if "run-walks" in str(s.get("run", "")))
-    assert '--walk "$WALK"' in step["run"], step["run"]
+    assert (step.get("env") or {}).get("WALK") == "${{ matrix.walk }}", step.get("env")
+    assert '--only "$WALK"' in step["run"], step["run"]
+
+
+def test_the_walk_list_reads_the_runner_chain_on_a_short_clock_of_its_own():
+    """Like every other job here it runs where `BUREAU_CI_RUNS_ON` says, and
+    listing files takes seconds, so its limit is minutes, not the walks'."""
+    _, list_job = _walk_list_job()
+    assert list_job.get("runs-on") == _jobs()[PARTS_JOB]["runs-on"], list_job.get("runs-on")
+    assert 0 < int(list_job.get("timeout-minutes", 0)) <= 10, list_job.get("timeout-minutes")
+    assert "if" not in list_job
+
+
+def test_a_list_job_that_failed_leaves_the_walks_skipped_and_that_is_red():
+    """When the list job fails, GitHub skips every walk, and `needs.walks.
+    result` reads `skipped` — which must fail the required check, never pass
+    it as a skipped job would pass the merge gate."""
+    final = next(s for s in _aggregate()["steps"] if s.get("name") == "Every part passed")
+    for walks, code in (("skipped", 1), ("failure", 1), ("cancelled", 1), ("success", 0)):
+        proc = subprocess.run(
+            ["bash", "-e", "-c", final["run"]], capture_output=True, text=True,
+            env=dict(os.environ, PARTS="success", WALKS=walks))
+        assert proc.returncode == code, (walks, proc.stdout, proc.stderr)
 
 
 def test_the_walk_clock_is_over_twice_the_slowest_measured_walk():
@@ -409,30 +433,56 @@ def test_walks_json_lists_every_walk_and_is_red_with_none(tmp_path):
         [sys.executable, str(SCRIPT), "walks", "--json", "--root", str(none)],
         capture_output=True, text=True)
     assert proc.returncode == 1, proc.stdout
+    assert proc.stdout == "", "no list at all, so the matrix is never empty"
+    assert parts.WALK in proc.stderr, "the message names the pattern it looked for"
 
 
-def test_run_walks_with_walk_runs_that_walk_alone(tmp_path):
+def test_walks_json_on_the_tree_is_the_walks():
+    proc = subprocess.run(
+        [sys.executable, str(SCRIPT), "walks", "--json"],
+        capture_output=True, text=True, check=True)
+    assert json.loads(proc.stdout) == parts.walks(ROOT)
+
+
+#: A test body that leaves a mark when pytest collects it, so a test can see
+#: whether a file was run at all.
+MARKS = ("import pathlib\n"
+         "pathlib.Path(__file__).with_suffix('.ran').write_text('ran')\n")
+
+
+def test_run_walks_only_runs_that_walk_alone(tmp_path):
     root = _tree(tmp_path, ["tests/test_a.py",
                             "tests/test_green_keeps_the_suite_green.py"])
     _tree(root, ["tests/test_red_keeps_the_suite_green.py"],
-          "def test_x():\n    assert False\n")
+          MARKS + "def test_x():\n    assert False\n")
     proc = subprocess.run(
         [sys.executable, str(SCRIPT), "run-walks", "--root", str(root),
-         "--walk", "tests/test_green_keeps_the_suite_green.py"],
+         "--only", "tests/test_green_keeps_the_suite_green.py"],
         capture_output=True, text=True, cwd=root, env=_env())
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert "1 walk(s): 1 passed" in proc.stdout
     assert "test_red_keeps_the_suite_green.py" not in proc.stdout
+    assert not (root / "tests" / "test_red_keeps_the_suite_green.ran").exists(), (
+        "the failing walk ran")
+    proc = subprocess.run(
+        [sys.executable, str(SCRIPT), "run-walks", "--root", str(root),
+         "--only", "tests/test_red_keeps_the_suite_green.py"],
+        capture_output=True, text=True, cwd=root, env=_env())
+    assert proc.returncode == 1, proc.stdout + proc.stderr
+    assert "1 walk(s): 0 passed, 1 failed" in proc.stdout
 
 
 def test_run_walks_refuses_a_walk_it_cannot_find(tmp_path):
-    """A typo, or a file that is not a walk, would run nothing and pass."""
-    root = _tree(tmp_path, ["tests/test_a.py",
-                            "tests/test_one_keeps_the_suite_green.py"])
-    for named in ("tests/test_a.py", "tests/test_gone_keeps_the_suite_green.py"):
+    """A typo, or a file that is not a walk, would run nothing and pass — or
+    run a file that is not a walk on the walks' clock. Neither starts pytest."""
+    root = _tree(tmp_path, ["tests/test_one_keeps_the_suite_green.py"])
+    _tree(root, ["tests/test_x.py"], MARKS + "def test_x():\n    pass\n")
+    for named in ("tests/test_x.py", "tests/test_gone_keeps_the_suite_green.py"):
         proc = subprocess.run(
             [sys.executable, str(SCRIPT), "run-walks", "--root", str(root),
-             "--walk", named],
+             "--only", named],
             capture_output=True, text=True, cwd=root, env=_env())
         assert proc.returncode != 0, named
         assert named in proc.stderr, proc.stderr
+        assert "running walk" not in proc.stdout, proc.stdout
+        assert not (root / "tests" / "test_x.ran").exists(), named

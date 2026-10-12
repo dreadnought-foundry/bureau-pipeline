@@ -224,11 +224,19 @@ jobs:
           echo "walks=$walks" >> "$GITHUB_OUTPUT"
           echo "walks: $walks"
 
-  # 45 minutes is a single walk's clock now: over 2x the slowest walk measured
-  # on CI, the every-default walk's 1242 seconds
-  # (`config/unit-test-durations.json`, which
-  # `tests/test_tests_workflow_parts.py` holds the clock to). Read the times
-  # these jobs print before a walk spends the margin.
+  # EACH WALK ON ITS OWN CLOCK, AND THE CLOCK FROM WHAT THE JOB MEASURED
+  # (DRE-7016). The ten finished main runs read at 16:15 PT on 2026-10-11 ran
+  # the three walks of the day in one job in 16m28s (run 38174492643) to 32m26s
+  # (run 38178153419), on nothing but the machine GitHub handed them: the
+  # agent-move walk took 8m40s on the first and 17m31s on the second, the
+  # project-model walk 7m11s and 14m34s. The slowest walk seen anywhere, the
+  # every-default walk's 20m42s in job 114591044631, is 2.13 times the 583
+  # seconds it took at a desk on four cores. So the limit is a walk's desk
+  # seconds (`config/unit-test-durations.json`), times 2.13, doubled: 2 x 2.13
+  # x 633.36 for the agent-move walk is 2,698 seconds, and 50 minutes rounds
+  # that up to the next ten. `tests/test_walks_time_budget.py` holds every
+  # walk on the tree to it and names the walk that no longer fits: split it,
+  # or raise this from a new measurement.
   walks:
     name: scripts unit tests (walk ${{ matrix.walk }})
     needs: walk-list
@@ -238,10 +246,7 @@ jobs:
       fail-fast: false
       matrix:
         walk: ${{ fromJSON(needs.walk-list.outputs.walks) }}
-    timeout-minutes: 45
-    # The job's, not the step's, so the step's environment stays the parts'.
-    env:
-      WALK: ${{ matrix.walk }}
+    timeout-minutes: 50
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -256,6 +261,8 @@ jobs:
             requirements-dev.txt
       # The parts' `Unit tests` environment, exactly: a walk imports the same
       # modules a part does, and must not pass or fail on which job ran it.
+      # Plus the walk this entry runs, through the environment, never written
+      # into the shell line.
       - name: Console-change walk
         env:
           LINEAR_API_KEY: test-key
@@ -263,7 +270,8 @@ jobs:
           GH_TOKEN: test
           REPO_SLUG: agent-bureau
           BUREAU_REQUIRE_GIT_HISTORY: "1"
-        run: python3 scripts/unit_test_parts.py run-walks --walk "$WALK"
+          WALK: ${{ matrix.walk }}
+        run: python3 scripts/unit_test_parts.py run-walks --only "$WALK"
 
   # The ONE result the merge gate and branch protection read (DRE-5838). Branch
   # protection on `main` requires a check named exactly `scripts unit tests`;
