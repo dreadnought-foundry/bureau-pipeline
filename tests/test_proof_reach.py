@@ -142,6 +142,10 @@ class DeclarationTest(unittest.TestCase):
                          (tags["proof-dispatch:"]["printed_by"], tags["proof-dispatch:"]["constant"]))
         self.assertEqual(WORKFLOW, tags["proof identity:"]["printed_by"])
         self.assertIn("proof local run:", tags)
+        # DRE-6939: the model home's line, in every selecting step's log.
+        self.assertEqual(("scripts/model_home.py", "TAG"),
+                         (tags["model-home:"]["printed_by"], tags["model-home:"]["constant"]))
+        self.assertIn("DRE-6939", tags["model-home:"]["when"])
         for entry in tags.values():
             self.assertEqual(["tag", "printed_by", "constant", "when"], list(entry))
 

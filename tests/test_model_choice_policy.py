@@ -120,7 +120,20 @@ def make_tree(base: Path, cfg: dict) -> Path:
     """The frozen fixture tree at `base`, its models.yaml replaced by `cfg`."""
     model_fixture.fixture_tree(base)
     (base / "config" / "models.yaml").write_text(yaml.safe_dump(cfg, sort_keys=False))
+    regenerate(base)
     return base
+
+
+def regenerate(tree: Path) -> None:
+    """The tree's generated literal, regenerated from the config just written
+    into it — as tests/test_model_policy.py's `_run_sync` does. Since DRE-6939
+    the selector runs on the home or on the defaults in the code, never on the
+    choices in `config/models.yaml`, so the tree's code must say them."""
+    proc = subprocess.run(
+        [sys.executable, str(tree / "scripts" / "sync_model_config.py")],
+        cwd=tree, capture_output=True, text=True,
+    )
+    assert proc.returncode == 0, proc.stdout + proc.stderr
 
 
 def env(available: dict | None = None) -> dict:
