@@ -625,6 +625,12 @@ jobs:
           role-to-assume: ${{ secrets.PROOF_ROLE_ARN }}
           role-session-name: proof-${{ github.event.client_payload.identifier }}
           aws-region: ${{ inputs.aws_region }}
+          # The session's length, the caller's own variable (DRE-7020). No
+          # default on purpose: unset, the input is empty and the pinned
+          # action uses its own 3,600 seconds, today's one hour exactly. A
+          # value above the role's maximum session is refused by AWS, and
+          # the run goes on with no session and costs its AWS rows.
+          role-duration-seconds: ${{ vars.PROOF_ROLE_DURATION_SECONDS }}
 
       - name: Record the caller's proof identity
         env:
@@ -782,6 +788,12 @@ jobs:
           PROOF_LOCAL_TAG: ${{ steps.local.outputs.tag }}
           PROOF_PYTHON: ${{ steps.local.outputs.python || '' }}
           PROOF_LOGIN_FILE: ${{ runner.temp }}/proof-login.json
+          # How long the AWS session above lives, in seconds (DRE-7020): the
+          # caller's variable, or the action's own one hour when it is unset.
+          # A number, not a credential — the read token cannot read
+          # repository variables on every installation, and a run cannot
+          # read its own step summary (briefs/proof.md, Identities).
+          PROOF_SESSION_SECONDS: ${{ vars.PROOF_ROLE_DURATION_SECONDS || '3600' }}
         with:
           path_to_claude_code_executable: ${{ steps.install_claude.outputs.executable }}
           anthropic_api_key: ${{ vars.CLAUDE_AUTH_MODE != 'subscription' && secrets.ANTHROPIC_API_KEY || '' }}
@@ -1000,6 +1012,12 @@ jobs:
           PROOF_LOCAL_TAG: ${{ steps.local.outputs.tag }}
           PROOF_PYTHON: ${{ steps.local.outputs.python || '' }}
           PROOF_LOGIN_FILE: ${{ runner.temp }}/proof-login.json
+          # How long the AWS session above lives, in seconds (DRE-7020): the
+          # caller's variable, or the action's own one hour when it is unset.
+          # A number, not a credential — the read token cannot read
+          # repository variables on every installation, and a run cannot
+          # read its own step summary (briefs/proof.md, Identities).
+          PROOF_SESSION_SECONDS: ${{ vars.PROOF_ROLE_DURATION_SECONDS || '3600' }}
         with:
           path_to_claude_code_executable: ${{ steps.install_claude.outputs.executable }}
           anthropic_api_key: ${{ vars.CLAUDE_AUTH_MODE != 'subscription' && secrets.ANTHROPIC_API_KEY || '' }}
@@ -1216,6 +1234,12 @@ jobs:
           PROOF_LOCAL_TAG: ${{ steps.local.outputs.tag }}
           PROOF_PYTHON: ${{ steps.local.outputs.python || '' }}
           PROOF_LOGIN_FILE: ${{ runner.temp }}/proof-login.json
+          # How long the AWS session above lives, in seconds (DRE-7020): the
+          # caller's variable, or the action's own one hour when it is unset.
+          # A number, not a credential — the read token cannot read
+          # repository variables on every installation, and a run cannot
+          # read its own step summary (briefs/proof.md, Identities).
+          PROOF_SESSION_SECONDS: ${{ vars.PROOF_ROLE_DURATION_SECONDS || '3600' }}
         with:
           path_to_claude_code_executable: ${{ steps.install_claude.outputs.executable }}
           anthropic_api_key: ${{ vars.CLAUDE_AUTH_MODE != 'subscription' && secrets.ANTHROPIC_API_KEY || '' }}
