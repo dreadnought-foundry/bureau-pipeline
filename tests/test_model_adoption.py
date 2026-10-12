@@ -751,6 +751,9 @@ def test_classify_catalog_is_importable_for_one_id(live_config):
 OPUS56 = "claude-opus-5-6"
 SONNET55 = "claude-sonnet-5-5"
 CORVID = "claude-corvid-1"
+#: The Builders' top in the frozen home — the Opus a cheaper Opus 5.6
+#: succeeds. Read off its ladder, never spelled.
+HOME_TOP = model_fixture.ladder(model_fixture.fixture_home(), "workhorse")[0]
 
 # Every rung of the fixture home, dated, so each one ranks.
 HOME_CATALOG = [
@@ -769,7 +772,7 @@ def _home_scenario(tmp_path, *extra):
     catalog_file = tmp_path / "catalog.json"
     catalog_file.write_text(json.dumps(payload(*HOME_CATALOG, *extra)))
     declared = dict(model_fixture.fixture_prices())
-    rung = declared[OPUS55]
+    rung = declared[HOME_TOP]
     assert (3.0, 15.0) < (rung["input"], rung["output"])
     declared[OPUS56] = {"input": 3.0, "output": 15.0,
                         "source": "https://example.invalid/pricing"}
@@ -795,7 +798,8 @@ def test_the_module_declares_that_every_command_reads_the_home():
 
 def test_a_cheaper_successor_on_the_home_ladders_is_adopt(tmp_path):
     doc = model_fixture.fixture_home()
-    assert model_fixture.ladder(doc, "workhorse") == [OPUS55, OPUS, SONNET55, SONNET5]
+    # Every rung the home's Builders walk is offered, dated, so each one ranks.
+    assert set(model_fixture.ladder(doc, "workhorse")) <= {m["id"] for m in HOME_CATALOG}
     proc, record = _classify_home(
         tmp_path, home_env(tmp_path, doc), model(OPUS56, "2026-10-10T00:00:00Z"))
     decided = by_candidate(json.loads(proc.stdout))
@@ -803,9 +807,9 @@ def test_a_cheaper_successor_on_the_home_ladders_is_adopt(tmp_path):
     replaced = {(r["ladder"], r["model"]) for r in decided[OPUS56]["replaces"]}
     # Every group of the home that runs Opus 5.5, its newest Opus — the
     # Builders and the Reviewers among them.
-    groups = {key for key in doc["groups"] if OPUS55 in model_fixture.ladder(doc, key)}
+    groups = {key for key in doc["groups"] if HOME_TOP in model_fixture.ladder(doc, key)}
     assert {"workhorse", "advisory"} <= groups
-    assert replaced == {(key, OPUS55) for key in groups}
+    assert replaced == {(key, HOME_TOP) for key in groups}
     # The document it read is recorded, for `apply --expect-written-at`.
     assert record["state"] == "read"
     assert record["written_at"] == doc["written_at"]

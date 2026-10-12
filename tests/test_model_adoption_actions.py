@@ -77,6 +77,8 @@ FROZEN = model_fixture.fixture_config()
 SONNET5 = model_fixture.ladder(FROZEN, "workhorse")[-1]   # the Builders' last rung
 SONNET46 = model_fixture.ladder(FROZEN, "judgement")[-1]  # the Planners' last rung
 OPUS55 = model_fixture.ladder(FROZEN, "workhorse")[0]     # the Builders' top
+OPUS5 = model_fixture.ladder(FROZEN, "workhorse")[1]      # the Builders' second rung
+SONNET55 = model_fixture.ladder(FROZEN, "workhorse")[2]   # the Builders' first Sonnet
 
 SONNET6 = "claude-sonnet-6"
 OPUS6 = "claude-opus-6"
@@ -364,13 +366,13 @@ class TestApply:
         # the Reviewers' both name Opus 5.5 and both move; a choice of a
         # model the adoption replaces nowhere stays.
         doc = model_fixture.with_project(opus_home(), DEMO, "advisory", OPUS55)
-        doc = model_fixture.with_project(doc, "portico", "workhorse", "claude-opus-5")
+        doc = model_fixture.with_project(doc, "portico", "workhorse", OPUS5)
         _, prices, snap = self._setup(tmp_path, monkeypatch, doc)
         rc, out = self._apply(capsys, tmp_path, prices, snap)
         assert rc == 0, out.out + out.err
         after = stub.document()
         assert after["projects"][DEMO] == {"workhorse": OPUS56, "advisory": OPUS56}
-        assert after["projects"]["portico"] == {"workhorse": "claude-opus-5"}
+        assert after["projects"]["portico"] == {"workhorse": OPUS5}
 
     def test_a_project_choice_moves_whichever_group_it_is_for(self):
         # On purpose, and not the kind-scoped move the retired YAML edit made
@@ -389,15 +391,13 @@ class TestApply:
         # The Reviewers run Opus 5 as their newest Opus, so the adoption takes
         # Opus 5 there — and Opus 5 stays on the Builders, below Opus 5.6.
         doc = opus_home()
-        doc["groups"]["advisory"]["models"] = ["claude-sonnet-5-5", "claude-sonnet-5",
-                                               "claude-opus-5"]
+        doc["groups"]["advisory"]["models"] = [SONNET55, SONNET5, OPUS5]
         _, prices, snap = self._setup(tmp_path, monkeypatch, doc)
         rc, out = self._apply(capsys, tmp_path, prices, snap)
         assert rc == 0, out.out + out.err
         after = stub.document()
-        assert after["groups"]["advisory"]["models"] == [
-            "claude-sonnet-5-5", "claude-sonnet-5", OPUS56]
-        assert "claude-opus-5" in after["groups"]["workhorse"]["models"]
+        assert after["groups"]["advisory"]["models"] == [SONNET55, SONNET5, OPUS56]
+        assert OPUS5 in after["groups"]["workhorse"]["models"]
         result = json.loads((tmp_path / "applied.json").read_text())
         assert result["sentences"] == [maa.not_retired_sentence(OPUS55)]
 
