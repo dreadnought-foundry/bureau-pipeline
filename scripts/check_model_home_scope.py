@@ -31,8 +31,14 @@ step, when:
 
   * `BUREAU_MODEL_HOME_TOKEN` is not in the step's scope (step, job or
     workflow `env:`), or its value is anything but
-    `${{ steps.model_home.outputs.token }}`;
-  * the job has no mint step (`id: model_home`) before it;
+    `${{ steps.model_home.outputs.token }}` or a re-mint's
+    `${{ steps.model_home_<suffix>.outputs.token }}`;
+  * the job has no mint step with the id it names before it;
+  * a model step (`anthropics/claude-code-action`) sits between that mint
+    and the step: an App token lives an hour, a model step can pass it, and
+    the reader never raises — a dead token selects on the defaults in the
+    code. A step after a model step reads a re-mint placed after it, as
+    plan.yml's `*_cap` steps do (DRE-3940's rule, for this token);
   * the mint step is not `actions/create-github-app-token`, lacks
     `continue-on-error: true` (a refused permission must cost the defaults,
     never the run), or does not ask for owner `dreadnought-foundry`,
@@ -89,6 +95,7 @@ TOKEN_ENV = "BUREAU_MODEL_HOME_TOKEN"
 MINT_ID = "model_home"
 REQUIRED_TOKEN_EXPR = "${{ steps.model_home.outputs.token }}"
 MINT_ACTION = "actions/create-github-app-token"
+MODEL_ACTION = "anthropics/claude-code-action"
 MINT_WITH = {
     "owner": "dreadnought-foundry",
     "repositories": "bureau-pipeline",
@@ -103,7 +110,8 @@ SEEDS = {"model_fallback": CHOICE_FUNCTIONS, "model_home": ("read",)}
 
 MODULE_SCOPE = "<module>"
 
-_TOKEN_EXPR = re.compile(r"^\$\{\{\s*steps\.model_home\.outputs\.token\s*\}\}$")
+_TOKEN_EXPR = re.compile(
+    r"^\$\{\{\s*steps\.(model_home(?:_\w+)?)\.outputs\.token\s*\}\}$")
 _PYTHON = r"\bpython3?\b"
 _MODULE_RUN = re.compile(_PYTHON + r"[^|;&\n]*?\s-m\s+([A-Za-z_][\w.]*)")
 _INLINE_PYTHON = re.compile(_PYTHON + r"(?:\s+-\S+)*?\s+(?:-c\b|-\s*<<)")
@@ -420,16 +428,27 @@ def token_in_scope(doc, job_id, step):
     return None
 
 
+def mint_id_of(value):
+    """The mint id a token expression reads — `model_home` or a re-mint's
+    `model_home_<suffix>` — or None when it reads no model-home mint."""
+    match = _TOKEN_EXPR.match(str(value).strip())
+    return match.group(1) if match else None
+
+
 def is_token_expression(value):
-    return bool(_TOKEN_EXPR.match(str(value).strip()))
+    return mint_id_of(value) is not None
+
+
+def _uses(step, action):
+    uses = step.get("uses")
+    return isinstance(uses, str) and uses.split("@", 1)[0] == action
 
 
 def _mint_errors(mint):
     """What is wrong with a mint step, as [reason]."""
     errors = []
-    uses = mint.get("uses")
-    if not (isinstance(uses, str) and uses.split("@", 1)[0] == MINT_ACTION):
-        errors.append(f"is not {MINT_ACTION} (uses {uses!r})")
+    if not _uses(mint, MINT_ACTION):
+        errors.append(f"is not {MINT_ACTION} (uses {mint.get('uses')!r})")
     if mint.get("continue-on-error") is not True:
         errors.append(
             "lacks `continue-on-error: true` — a refused permission must "
@@ -472,18 +491,30 @@ def check_workflow(doc, name, scripts, packages):
         elif not is_token_expression(value):
             violations.append(
                 f"{where} ({why}): {TOKEN_ENV} is {value!r} — it must be "
-                f"exactly {REQUIRED_TOKEN_EXPR!r}"
+                f"exactly {REQUIRED_TOKEN_EXPR!r}, or a re-mint's "
+                f"'${{{{ steps.{MINT_ID}_<suffix>.outputs.token }}}}'"
             )
+        mint_id = mint_id_of(value) or MINT_ID
         earlier = ((jobs.get(job_id) or {}).get("steps") or [])[:i]
-        mints = [s for s in earlier if isinstance(s, dict) and s.get("id") == MINT_ID]
-        if not mints:
+        at = [j for j, s in enumerate(earlier)
+              if isinstance(s, dict) and s.get("id") == mint_id]
+        if not at:
             violations.append(
                 f"{where} ({why}): job {job_id} has no mint step "
-                f"(id: {MINT_ID}) before it — the token it names is empty"
+                f"(id: {mint_id}) before it — the token it names is empty"
             )
             continue
-        for error in _mint_errors(mints[-1]):
-            violations.append(f"{name}: job {job_id}: mint step {error}")
+        for error in _mint_errors(earlier[at[-1]]):
+            violations.append(f"{name}: job {job_id}: mint step {mint_id} {error}")
+        aged = [repr(s.get("name") or j) for j, s in enumerate(earlier)
+                if j > at[-1] and isinstance(s, dict) and _uses(s, MODEL_ACTION)]
+        if aged:
+            violations.append(
+                f"{where} ({why}) reads `{mint_id}`, minted before model "
+                f"step(s) {', '.join(aged)} — a model step can outlast the "
+                f"token's hour, and a dead token selects on the defaults in "
+                f"the code; re-mint it after the last of them"
+            )
     return sorted(set(violations), key=violations.index)
 
 

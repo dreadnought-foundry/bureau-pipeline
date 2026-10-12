@@ -381,7 +381,12 @@ process reads the home carries a `Mint the model-home read token` step (id
 `model_home`, owner `dreadnought-foundry`, repository `bureau-pipeline`,
 `permission-variables: read`, `continue-on-error: true`), and hands
 `${{ steps.model_home.outputs.token }}` to those steps alone — never a job
-output or `$GITHUB_ENV`, so the agent steps beside them never hold it. Which
+output or `$GITHUB_ENV`, so the agent steps beside them never hold it (and the
+harness hands it to its selector child, never to the agent it launches). A
+token lives an hour and a model step can pass it, so a reading step after a
+model step reads a re-mint placed after that step instead, id
+`model_home_<suffix>`, gated as the step is — plan.yml's capacity checks and
+critic selections do. Which
 steps read the home is declared in the scripts: a module-level
 `READS_MODEL_HOME` names the CLI commands whose process reads it, or `("*",)`
 for every one. `scripts/check_model_home_scope.py`, a step of Pipeline Tests,

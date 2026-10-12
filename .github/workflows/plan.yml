@@ -2245,6 +2245,21 @@ jobs:
                message is posted on the epic as the reason when no reason
                file was written, so make it say why in plain English.
 
+      # The model-home token again, after the model step(s) above (DRE-6940):
+      # an App token lives an hour and a model run can pass it, so the step
+      # below reads a mint of its own — the first mint's inputs, its gate.
+      - name: Re-mint the model-home read token — plan_cap
+        id: model_home_plan_cap
+        if: "!cancelled() && (steps.route.outputs.mode == 'plan') && steps.claude.outcome == 'failure'"
+        continue-on-error: true
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: ${{ secrets.BUREAU_APP_ID }}
+          private-key: ${{ secrets.BUREAU_APP_PRIVATE_KEY }}
+          owner: dreadnought-foundry
+          repositories: bureau-pipeline
+          permission-variables: read
+
       # DRE-3970 — Plan epic: refused for capacity? The step above is
       # continue-on-error so a refusal is READ rather than ending the job: its
       # own execution record goes through the one detector
@@ -2255,7 +2270,7 @@ jobs:
         id: plan_cap
         if: "!cancelled() && (steps.route.outputs.mode == 'plan') && steps.claude.outcome == 'failure'"
         env:
-          BUREAU_MODEL_HOME_TOKEN: ${{ steps.model_home.outputs.token }}
+          BUREAU_MODEL_HOME_TOKEN: ${{ steps.model_home_plan_cap.outputs.token }}
           EXEC_FILE: ${{ steps.claude.outputs.execution_file }}
           MODEL: ${{ steps.model.outputs.model }}
         run: |
@@ -2745,6 +2760,21 @@ jobs:
             "${{ runner.temp }}/plan-artifact.md" \
             ${{ steps.uiepic.outputs.ui == 'true' && '--ui' || '' }}
 
+      # The model-home token again, after the model step(s) above (DRE-6940):
+      # an App token lives an hour and a model run can pass it, so the step
+      # below reads a mint of its own — the first mint's inputs, its gate.
+      - name: Re-mint the model-home read token — premodel
+        id: model_home_premodel
+        if: steps.route.outputs.mode == 'plan' && steps.kids.outputs.count != '0'
+        continue-on-error: true
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: ${{ secrets.BUREAU_APP_ID }}
+          private-key: ${{ secrets.BUREAU_APP_PRIVATE_KEY }}
+          owner: dreadnought-foundry
+          repositories: bureau-pipeline
+          permission-variables: read
+
       # --- The FIRST critic (DRE-2721) --------------------------------------
       #
       # It reviews a MOVING document, before the CEO has spent any attention on
@@ -2774,7 +2804,7 @@ jobs:
         id: premodel
         if: steps.route.outputs.mode == 'plan' && steps.kids.outputs.count != '0'
         env:
-          BUREAU_MODEL_HOME_TOKEN: ${{ steps.model_home.outputs.token }}
+          BUREAU_MODEL_HOME_TOKEN: ${{ steps.model_home_premodel.outputs.token }}
           ANTHROPIC_API_KEY: ${{ vars.CLAUDE_AUTH_MODE != 'subscription' && secrets.ANTHROPIC_API_KEY || '' }}
           CLAUDE_CODE_OAUTH_TOKEN: ${{ vars.CLAUDE_AUTH_MODE == 'subscription' && secrets.CLAUDE_CODE_OAUTH_TOKEN || '' }}
         run: |
@@ -3105,6 +3135,21 @@ jobs:
               python3 .bureau-pipeline/scripts/plan_artifact.py check \
                 "${{ runner.temp }}/plan-artifact.md"
 
+      # The model-home token again, after the model step(s) above (DRE-6940):
+      # an App token lives an hour and a model run can pass it, so the step
+      # below reads a mint of its own — the first mint's inputs, its gate.
+      - name: Re-mint the model-home read token — replan_cap
+        id: model_home_replan_cap
+        if: "!cancelled() && (steps.pre1.outputs.action == 'hold' && steps.pre1.outputs.bound != 'true') && steps.replan.outcome == 'failure'"
+        continue-on-error: true
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: ${{ secrets.BUREAU_APP_ID }}
+          private-key: ${{ secrets.BUREAU_APP_PRIVATE_KEY }}
+          owner: dreadnought-foundry
+          repositories: bureau-pipeline
+          permission-variables: read
+
       # DRE-3970 — Re-plan after send-back: refused for capacity? The step above is
       # continue-on-error so a refusal is READ rather than ending the job: its
       # own execution record goes through the one detector
@@ -3115,7 +3160,7 @@ jobs:
         id: replan_cap
         if: "!cancelled() && (steps.pre1.outputs.action == 'hold' && steps.pre1.outputs.bound != 'true') && steps.replan.outcome == 'failure'"
         env:
-          BUREAU_MODEL_HOME_TOKEN: ${{ steps.model_home.outputs.token }}
+          BUREAU_MODEL_HOME_TOKEN: ${{ steps.model_home_replan_cap.outputs.token }}
           EXEC_FILE: ${{ steps.replan.outputs.execution_file }}
           MODEL: ${{ steps.model.outputs.model }}
         run: |
@@ -3678,6 +3723,21 @@ jobs:
           python3 .bureau-pipeline/scripts/linear_ops.py comment "$EPIC" \
             "🛑 Parked in Triage with needs-human for an operator — the plan goes on to neither the second critic nor Green Light until a person settles it. ${NOTE} When it is settled, ${HOW}."
 
+      # The model-home token again, after the model step(s) above (DRE-6940):
+      # an App token lives an hour and a model run can pass it, so the step
+      # below reads a mint of its own — the first mint's inputs, its gate.
+      - name: Re-mint the model-home read token — postmodel
+        id: model_home_postmodel
+        if: steps.route.outputs.mode == 'review'
+        continue-on-error: true
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: ${{ secrets.BUREAU_APP_ID }}
+          private-key: ${{ secrets.BUREAU_APP_PRIVATE_KEY }}
+          owner: dreadnought-foundry
+          repositories: bureau-pipeline
+          permission-variables: read
+
       # --- The SECOND critic (DRE-2721) -------------------------------------
       #
       # The first critic is done with the plan, and it is now read as the
@@ -3722,7 +3782,7 @@ jobs:
         id: postmodel
         if: steps.route.outputs.mode == 'review'
         env:
-          BUREAU_MODEL_HOME_TOKEN: ${{ steps.model_home.outputs.token }}
+          BUREAU_MODEL_HOME_TOKEN: ${{ steps.model_home_postmodel.outputs.token }}
           ANTHROPIC_API_KEY: ${{ vars.CLAUDE_AUTH_MODE != 'subscription' && secrets.ANTHROPIC_API_KEY || '' }}
           CLAUDE_CODE_OAUTH_TOKEN: ${{ vars.CLAUDE_AUTH_MODE == 'subscription' && secrets.CLAUDE_CODE_OAUTH_TOKEN || '' }}
         run: |
@@ -4640,6 +4700,21 @@ jobs:
             LEFT and why. A finding that is neither is one nobody knows the
             state of — and the round after this one is checking exactly these.
 
+      # The model-home token again, after the model step(s) above (DRE-6940):
+      # an App token lives an hour and a model run can pass it, so the step
+      # below reads a mint of its own — the first mint's inputs, its gate.
+      - name: Re-mint the model-home read token — postreplan_cap
+        id: model_home_postreplan_cap
+        if: "!cancelled() && (steps.route.outputs.mode == 'review' && steps.post1.outputs.action == 'hold' && steps.slot.outputs.admitted == 'true') && steps.postreplan.outcome == 'failure'"
+        continue-on-error: true
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: ${{ secrets.BUREAU_APP_ID }}
+          private-key: ${{ secrets.BUREAU_APP_PRIVATE_KEY }}
+          owner: dreadnought-foundry
+          repositories: bureau-pipeline
+          permission-variables: read
+
       # DRE-3970 — Re-plan after the second critic sent it back: refused for capacity? The step above is
       # continue-on-error so a refusal is READ rather than ending the job: its
       # own execution record goes through the one detector
@@ -4650,7 +4725,7 @@ jobs:
         id: postreplan_cap
         if: "!cancelled() && (steps.route.outputs.mode == 'review' && steps.post1.outputs.action == 'hold' && steps.slot.outputs.admitted == 'true') && steps.postreplan.outcome == 'failure'"
         env:
-          BUREAU_MODEL_HOME_TOKEN: ${{ steps.model_home.outputs.token }}
+          BUREAU_MODEL_HOME_TOKEN: ${{ steps.model_home_postreplan_cap.outputs.token }}
           EXEC_FILE: ${{ steps.postreplan.outputs.execution_file }}
           MODEL: ${{ steps.model.outputs.model }}
         run: |
@@ -5401,6 +5476,21 @@ jobs:
                these rules is dropped and the reason is posted
                alone.
 
+      # The model-home token again, after the model step(s) above (DRE-6940):
+      # an App token lives an hour and a model run can pass it, so the step
+      # below reads a mint of its own — the first mint's inputs, its gate.
+      - name: Re-mint the model-home read token — rollup_cap
+        id: model_home_rollup_cap
+        if: "!cancelled() && (steps.shape.outputs.route == 'roll-up') && steps.rollup.outcome == 'failure'"
+        continue-on-error: true
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: ${{ secrets.BUREAU_APP_ID }}
+          private-key: ${{ secrets.BUREAU_APP_PRIVATE_KEY }}
+          owner: dreadnought-foundry
+          repositories: bureau-pipeline
+          permission-variables: read
+
       # DRE-3970 — Roll-up route — split into child epics: refused for
       # capacity? The step above is continue-on-error so a refusal is READ
       # rather than ending the job: its own execution record goes through the
@@ -5412,7 +5502,7 @@ jobs:
         id: rollup_cap
         if: "!cancelled() && (steps.shape.outputs.route == 'roll-up') && steps.rollup.outcome == 'failure'"
         env:
-          BUREAU_MODEL_HOME_TOKEN: ${{ steps.model_home.outputs.token }}
+          BUREAU_MODEL_HOME_TOKEN: ${{ steps.model_home_rollup_cap.outputs.token }}
           EXEC_FILE: ${{ steps.rollup.outputs.execution_file }}
           MODEL: ${{ steps.model.outputs.model }}
         run: |
