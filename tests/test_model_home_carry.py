@@ -93,10 +93,11 @@ def _side() -> dict:
 
 @pytest.fixture
 def stubs(monkeypatch):
-    """The stub home and pulls read, the tokens set, the fixture's facts."""
+    """The stub home, pulls and runs reads, the tokens set, the fixture's facts."""
     state = {"home": StubHome(fixture_home()), "pulls": []}
     monkeypatch.setattr(carry_mod, "_http", lambda *a, **k: state["home"](*a, **k))
     monkeypatch.setattr(carry_mod, "_pulls", lambda sha: state["pulls"])
+    monkeypatch.setattr(carry_mod, "_last_carried", lambda: None, raising=False)
     monkeypatch.setattr(carry_mod, "_facts", lambda: (
         fixture_prices(), _side(), mf.declared_repo_slugs()))
     monkeypatch.setenv(carry_mod.READ_TOKEN_ENV, "read-token")
@@ -466,6 +467,100 @@ def test_a_push_with_no_before_commit_carries_nothing(stubs, capsys, monkeypatch
     assert _tagged(out)[0].startswith(f"{carry_mod.TAG} nothing carried — ")
 
 
+def _three_pushes(monkeypatch, last):
+    """Commits A → B → C on main, each push's file: A the fixture, B one save,
+    C B's save and one more. The last green run carried from `last`."""
+    agent = fixture_config()["ungrouped"][0]
+    slug = "atlas"
+    model = ladder(fixture_config(), "workhorse")[2]
+    first = {"op": "move_agent", "agent": agent, "group": "advisory"}
+    second = {"op": "set_project_model", "project": slug, "group": "workhorse", "model": model}
+    files = {"a" * 40: fixture_text(), "b" * 40: _edited(first), "c" * 40: _edited(first, second)}
+    order = ["a" * 40, "b" * 40, "c" * 40]
+    monkeypatch.setattr(carry_mod, "_show", lambda sha: files[sha])
+    monkeypatch.setattr(carry_mod, "_last_carried", lambda: last)
+    monkeypatch.setattr(carry_mod, "_is_ancestor", lambda old, new: (
+        old in order and new in order and order.index(old) <= order.index(new)))
+    return agent, slug, model
+
+
+def test_a_push_whose_queued_run_was_cancelled_is_carried_by_the_next(stubs, capsys, monkeypatch):
+    # Run B waited behind run A and was cancelled when run C took its place,
+    # so run C compares from A — the last commit a green run carried — and
+    # B's save is carried with C's in the one PATCH.
+    agent, slug, model = _three_pushes(monkeypatch, "a" * 40)
+    rc = carry_mod.main(["carry", "--before", "b" * 40, "--after", "c" * 40])
+    out = capsys.readouterr().out
+    assert rc == 0, out
+    doc = stubs["home"].written()
+    assert doc["agents"][agent] == "advisory"
+    assert doc["projects"][slug]["workhorse"] == model
+    assert f"{carry_mod.TAG} carried 2 setting(s) from {'c' * 7}" in out
+    assert f"compared from {'a' * 7}" in out
+
+
+def test_with_no_earlier_green_run_it_compares_from_the_push_before(stubs, capsys, monkeypatch):
+    agent, slug, model = _three_pushes(monkeypatch, None)
+    rc = carry_mod.main(["carry", "--before", "b" * 40, "--after", "c" * 40])
+    out = capsys.readouterr().out
+    assert rc == 0, out
+    doc = stubs["home"].written()
+    assert doc["projects"][slug]["workhorse"] == model
+    assert doc["agents"].get(agent) == fixture_home()["agents"].get(agent)
+    assert f"{carry_mod.TAG} carried 1 setting(s) from {'c' * 7}" in out
+    assert "compared from" not in out
+
+
+@pytest.mark.parametrize("last", ["b" * 40, "c" * 40, "f" * 40])
+def test_a_last_green_run_not_before_the_push_never_narrows_it(stubs, capsys, monkeypatch, last):
+    # The push's own `before`, the push itself, or a commit off its history:
+    # the comparison is the push's own, never narrower.
+    agent, slug, model = _three_pushes(monkeypatch, last)
+    rc = carry_mod.main(["carry", "--before", "b" * 40, "--after", "c" * 40])
+    out = capsys.readouterr().out
+    assert rc == 0, out
+    assert stubs["home"].written()["projects"][slug]["workhorse"] == model
+    assert f"{carry_mod.TAG} carried 1 setting(s) from {'c' * 7}" in out
+
+
+def test_runs_that_cannot_be_read_are_red_and_write_nothing(stubs, capsys, monkeypatch):
+    _three_pushes(monkeypatch, None)
+
+    def refused():
+        raise RuntimeError("HTTP 403")
+
+    monkeypatch.setattr(carry_mod, "_last_carried", refused)
+    rc = carry_mod.main(["carry", "--before", "b" * 40, "--after", "c" * 40])
+    out = capsys.readouterr().out
+    assert rc == 1, out
+    assert stubs["home"].patches == []
+    assert _tagged(out)[0].startswith(f"{carry_mod.TAG} not written — ")
+    assert "HTTP 403" in out
+
+
+def test_the_last_carried_commit_is_the_head_of_this_workflows_last_green_run(monkeypatch):
+    calls = []
+
+    def run(cmd, **kwargs):
+        calls.append(cmd)
+        return carry_mod.subprocess.CompletedProcess(cmd, 0, json.dumps([{"headSha": "a" * 40}]), "")
+
+    monkeypatch.setattr(carry_mod.subprocess, "run", run)
+    assert carry_mod._last_carried() == "a" * 40
+    cmd = calls[0]
+    assert cmd[:3] == ["gh", "run", "list"]
+    flags = dict(zip(cmd[3::2], cmd[4::2]))
+    assert flags["--repo"] == model_home.REPOSITORY
+    assert flags["--workflow"] == WORKFLOW.name
+    assert flags["--branch"] == "main"
+    assert flags["--status"] == "success"
+    assert flags["--json"] == "headSha"
+
+    monkeypatch.setattr(carry_mod.subprocess, "run", lambda cmd, **k: (
+        carry_mod.subprocess.CompletedProcess(cmd, 0, "[]", "")))
+    assert carry_mod._last_carried() is None
+
+
 def test_the_cli_refuses_a_missing_argument():
     assert carry_mod.main(["carry", "--before", "b" * 40]) == 2
 
@@ -501,6 +596,14 @@ def test_it_runs_on_a_push_to_main_touching_the_file():
 def test_it_runs_one_at_a_time_without_cancelling():
     assert _workflow()["concurrency"] == {"group": "model-home-carry",
                                           "cancel-in-progress": False}
+
+
+def test_it_may_read_its_own_runs():
+    # The last green run's head is read with this run's own token.
+    assert _workflow()["permissions"]["actions"] == "read"
+    text = WORKFLOW.read_text()
+    assert "a queued one waits" not in text
+    assert "cancel" in text[text.index("Q3"):text.index("name: Model home carry")]
 
 
 def test_it_uses_the_old_routes_runner_and_python_setup():
