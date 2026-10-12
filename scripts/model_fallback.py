@@ -1444,6 +1444,13 @@ RETIRED_MODELS = set(CONFIG["retired"])
 # on no ladder, and a build on it must still be read off its marker — else
 # every review of that project's builds runs `--built-on-unknown` — and the
 # daily adoption must never ask about a model a person just chose.
+#
+# Built at import from the defaults in the code, and NOT rebuilt by `use_home`
+# (DRE-6939): its readers (`last_attempt_model`, `last_error_model`, and the
+# no-read `build-model` command) must not read the home. That is safe while
+# every priced model is on a default ladder, excluded, retired or a project's
+# — true today. A home naming a priced model outside all four would read its
+# builds as unknown; keeping such a model attributable is DRE-6992's.
 KNOWN_MODELS = (
     {m for models in LADDERS.values() for m in models}
     | RETIRED_MODELS
