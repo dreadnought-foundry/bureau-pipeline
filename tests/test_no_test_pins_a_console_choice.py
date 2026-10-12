@@ -154,6 +154,8 @@ ALLOWED: dict[str, str] = {
         _FROZEN_AGENTS,
     "tests/test_model_config_change.py::test_a_project_builder_on_a_reviewer_model_says_where_it_is_reviewed":
         _FROZEN_CHANGES,
+    "tests/test_model_config_change.py::test_an_added_group_on_fable_5_1_is_cautioned_against_the_builders_default":
+        _FROZEN_CAUTIONS,
     "tests/test_model_config_change.py::test_clearing_the_only_exception_leaves_projects_empty_and_sets_aside":
         _FROZEN_CHANGES,
     "tests/test_model_config_change.py::test_replacing_a_project_choice_sets_the_replaced_model_aside_again":
