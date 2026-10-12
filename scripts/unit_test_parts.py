@@ -38,7 +38,9 @@ alone — a walk added later needs no edit here or in `tests.yml`. `run-walks`
 runs each walk on its own and prints how long each took (and writes it to the
 job summary), so the walks' clock is watched rather than discovered at its
 limit. In `tests.yml` each walk has a job of its own (DRE-6935): `walks --json`
-hands the job list to the matrix, and `run-walks --walk FILE` runs that one.
+hands the job list to the matrix, and `run-walks --only FILE` runs that one,
+on a clock `tests/test_walks_time_budget.py` holds to each walk's recorded
+seconds (DRE-7016).
 
 `measure` rebuilds the durations record from pytest `--junit-xml` reports, or
 from the GitHub Actions logs of the parts' `pytest -v` (each result line is
@@ -377,7 +379,7 @@ def main(argv: list[str] | None = None) -> int:
 
     p_run = sub.add_parser("run-walks", help="run every walk, timed")
     p_run.add_argument("--root", type=Path, default=ROOT)
-    p_run.add_argument("--walk", help="run only this walk, repo-relative")
+    p_run.add_argument("--only", help="run only this walk, repo-relative")
 
     p_measure = sub.add_parser("measure", help="rebuild the durations record")
     p_measure.add_argument("reports", type=Path, nargs="+")
@@ -425,7 +427,7 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if args.cmd == "run-walks":
-        return run_walks(args.root, args.walk)
+        return run_walks(args.root, args.only)
 
     seconds = measure(args.reports)
     DURATIONS.write_text(json.dumps(
