@@ -841,13 +841,23 @@ jobs:
 
                    python3 .bureau-pipeline/scripts/check_tdd_commits.py origin/${{ github.event.repository.default_branch }} HEAD
 
-               Exit 0 and the order holds. Exit 1 means no commit touching
-               tests/ comes before your first code commit, and NO commit you
-               add later can clear it — the finding is the ORDER of the commits
-               that already exist. Reorder them NOW, before you push: an
-               interactive rebase, or re-commit the same content onto a fresh
-               branch test-first. Once the PR exists this same check has no
-               automated path to green at all and costs a human a rebase
+               Exit 0 and the order holds. The rule is the one it prints:
+               every code commit needs a test commit since the previous code
+               commit — for the first code commit, since the branch began.
+               Exit 1 names the code commit that has none, and NO commit you
+               add later can clear it — the finding is the ORDER of the
+               commits that already exist. Reorder them NOW, before you push:
+               an interactive rebase, or re-commit the same content onto a
+               fresh branch test-first. A code commit after the first that is
+               a pure refactor, configuration outside the ops paths, or a
+               whole generated file may instead claim that exemption: reword
+               its message (rebase, `reword`) so its last line is the trailer
+               the failure lists — `TDD-Exempt: refactor`, `TDD-Exempt: config`
+               or `TDD-Exempt: generated` — and only when it is true, because
+               the critic reads that commit's diff against the claim. A pure
+               deletion is detected and needs no trailer. Once the PR exists
+               this same check has no automated path to green at all and
+               costs a human a rebase
                (DRE-2694: three hours and two review rounds on work whose
                content was never wrong). Exit 2 means it could not evaluate —
                say so in the PR body rather than ignoring it.
@@ -1106,13 +1116,23 @@ jobs:
 
                    python3 .bureau-pipeline/scripts/check_tdd_commits.py origin/${{ github.event.repository.default_branch }} HEAD
 
-               Exit 0 and the order holds. Exit 1 means no commit touching
-               tests/ comes before your first code commit, and NO commit you
-               add later can clear it — the finding is the ORDER of the commits
-               that already exist. Reorder them NOW, before you push: an
-               interactive rebase, or re-commit the same content onto a fresh
-               branch test-first. Once the PR exists this same check has no
-               automated path to green at all and costs a human a rebase
+               Exit 0 and the order holds. The rule is the one it prints:
+               every code commit needs a test commit since the previous code
+               commit — for the first code commit, since the branch began.
+               Exit 1 names the code commit that has none, and NO commit you
+               add later can clear it — the finding is the ORDER of the
+               commits that already exist. Reorder them NOW, before you push:
+               an interactive rebase, or re-commit the same content onto a
+               fresh branch test-first. A code commit after the first that is
+               a pure refactor, configuration outside the ops paths, or a
+               whole generated file may instead claim that exemption: reword
+               its message (rebase, `reword`) so its last line is the trailer
+               the failure lists — `TDD-Exempt: refactor`, `TDD-Exempt: config`
+               or `TDD-Exempt: generated` — and only when it is true, because
+               the critic reads that commit's diff against the claim. A pure
+               deletion is detected and needs no trailer. Once the PR exists
+               this same check has no automated path to green at all and
+               costs a human a rebase
                (DRE-2694: three hours and two review rounds on work whose
                content was never wrong). Exit 2 means it could not evaluate —
                say so in the PR body rather than ignoring it.
@@ -1368,13 +1388,23 @@ jobs:
 
                    python3 .bureau-pipeline/scripts/check_tdd_commits.py origin/${{ github.event.repository.default_branch }} HEAD
 
-               Exit 0 and the order holds. Exit 1 means no commit touching
-               tests/ comes before your first code commit, and NO commit you
-               add later can clear it — the finding is the ORDER of the commits
-               that already exist. Reorder them NOW, before you push: an
-               interactive rebase, or re-commit the same content onto a fresh
-               branch test-first. Once the PR exists this same check has no
-               automated path to green at all and costs a human a rebase
+               Exit 0 and the order holds. The rule is the one it prints:
+               every code commit needs a test commit since the previous code
+               commit — for the first code commit, since the branch began.
+               Exit 1 names the code commit that has none, and NO commit you
+               add later can clear it — the finding is the ORDER of the
+               commits that already exist. Reorder them NOW, before you push:
+               an interactive rebase, or re-commit the same content onto a
+               fresh branch test-first. A code commit after the first that is
+               a pure refactor, configuration outside the ops paths, or a
+               whole generated file may instead claim that exemption: reword
+               its message (rebase, `reword`) so its last line is the trailer
+               the failure lists — `TDD-Exempt: refactor`, `TDD-Exempt: config`
+               or `TDD-Exempt: generated` — and only when it is true, because
+               the critic reads that commit's diff against the claim. A pure
+               deletion is detected and needs no trailer. Once the PR exists
+               this same check has no automated path to green at all and
+               costs a human a rebase
                (DRE-2694: three hours and two review rounds on work whose
                content was never wrong). Exit 2 means it could not evaluate —
                say so in the PR body rather than ignoring it.

@@ -37,6 +37,19 @@ mints (see `models.yaml` below).
 - **`repo-map.json`** — the relay's routing snapshot (see further below).
 - **`lane-contract.json`** — the board's lanes, their clauses and their
   permitted writers (DRE-2726). `docs/lane-contract.md` is rendered from it.
+- **`tdd-exemptions.json`** — the exemptions to the TDD commit rule
+  (DRE-3009): every code commit needs a test commit since the previous code
+  commit, and any code commit after the first may instead carry one of these.
+  Four entries, each exactly `id`, `match`, `reason` and `critic_checks`:
+  `deletion` (`match: deletion-only`, detected from the diff) and `refactor`,
+  `config`, `generated` (`match: trailer`, claimed with a `TDD-Exempt: <id>`
+  git trailer). Adding an entry is a data edit with no code change, and it is
+  its own reviewed pull request: bureau-pipeline's own `tdd` job reads the list
+  at the merge base, and every other caller reads the copy beside the script,
+  so a branch is never judged by a list it edited. Read only by
+  `scripts/check_tdd_commits.py`, which exits 2 on a file it cannot read or an
+  unknown `match`; `tests/test_tdd_commit_check.py` loads this copy on every
+  pull request so a break is caught where it is made.
 - **`epic-cap.json`** — the cap on epics in motion and the roll-up switch
   (DRE-5129, DRE-5134): `cap`, how many epics may be In Progress at once, and
   `count_rollup_parents`, whether a roll-up parent takes a slot. Set by the
