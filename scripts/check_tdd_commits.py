@@ -10,9 +10,47 @@ no LLM call.
 
 The rule (engineering standard: "commit the failing test FIRST"):
 
-  • At least one commit touching files under `tests/` must appear STRICTLY
-    BEFORE the first commit that changes non-test code. Same-commit doesn't
-    count — history must SHOW the test existed before the fix.
+  • One sentence, `RULE` below, printed by every run and carried word for
+    word by standards/engineering.md (DRE-3009, the operator's "we should
+    always be doing TDD" of 2026-09-03): every code commit needs a test
+    commit since the previous code commit — for the first code commit,
+    since the branch began. Any code commit after the first may instead
+    carry an exemption from `config/tdd-exemptions.json`. Until DRE-3009 the
+    floor was once per BRANCH — one test commit strictly before the first
+    code commit — and a critic holding the stricter, unenforced reading
+    cost agent-bureau #2247 22 hours (DRE-3005). Read mechanically off the
+    commit list (oldest first, merges skipped):
+      – a CODE commit touches at least one path `classify_path` calls code;
+      – a TEST commit touches a test path and no code path, so a commit
+        carrying both is a code commit and is not its own test — history
+        must SHOW the test existed before the fix;
+      – "since the previous code commit" means strictly between the two.
+    The pairing is positional. Whether a test is real is the critic's call.
+  • The exemptions are DATA (`config/tdd-exemptions.json`, `parse_exemptions`).
+    An entry's `match` is `deletion-only` — detected: every code path in the
+    commit adds zero lines in `git diff-tree --numstat`, and a binary path is
+    never one — or `trailer`, honored only when the commit claims it with a
+    `TDD-Exempt: <id>` git trailer. An unknown id fails the commit. Neither
+    ever covers the FIRST code commit, so every branch with code still
+    carries a real RED commit before it, and a branch the per-change rule
+    passes also passes the old floor. Who wrote the trailer is not checked:
+    commit authorship is not attested (see the standards-sync note below).
+    What keeps a claim honest is that it is printed on its commit's line
+    (`claimed: refactor`), stays in the history, and is read by the critic
+    against that entry's `critic_checks`.
+  • A branch cannot exempt itself. When this script sits in the repository
+    under check (bureau-pipeline's own `tdd` job: the two
+    `rev-parse --show-toplevel` roots are equal) the list is read at the
+    merge base; anywhere else — a product repo's `.bureau-pipeline/`, the
+    shared action's fetched copy, the critic's `$PIPELINE_DIR` — it is the
+    copy beside this script, which the pull request under review cannot
+    edit. No flag decides it, so no workflow edit can switch it. A merge
+    base with no list at all is judged by the once-per-branch floor it
+    started under (`check_floor`), which is how this card's own pull request
+    and every one already open when it merged are judged; merging the
+    default branch in or rebasing moves a branch onto the per-change rule.
+    A list that is present but unreadable, or holds a shape
+    `parse_exemptions` refuses, exits 2.
   • Docs-only and ops-only PRs are exempt, classified by changed paths:
     docs = `docs/` + any `*.md` (README, standards/, briefs/) + a static
            design record (`.html`/`.md`/`.png`/`.jpg`/`.jpeg`/`.svg`/`.pen`/
@@ -137,14 +175,45 @@ from __future__ import annotations
 import ast
 import json
 import os
+import re
 import subprocess
 import sys
 
 import unfixable_checks
 
+# The data file the exemptions live in, as a path from a repository root.
+EXEMPTIONS_FILE = "config/tdd-exemptions.json"
+
+# The rule, once. standards/engineering.md carries this sentence word for word
+# and tests/test_verdict_evidence.py fails if the two differ.
+RULE = (
+    "Every code commit needs a test commit since the previous code commit — "
+    "for the first code commit, since the branch began. Any code commit after "
+    "the first may instead carry an exemption from "
+    f"`{EXEMPTIONS_FILE}`."
+)
+
 FAILURE_MESSAGE = (
     "no test commit precedes the implementation — commit the RED test first"
 )
+LATER_FAILURE_MESSAGE = (
+    "no test commit since the previous code commit — commit a RED test "
+    "before it, or claim an exemption it qualifies for"
+)
+UNKNOWN_CLAIM_MESSAGE = (
+    "a commit claims an exemption the list does not offer as a claim"
+)
+
+# The git trailer a commit claims an exemption with.
+TRAILER_KEY = "TDD-Exempt"
+
+# The two ways an entry can match, and the four keys every entry carries.
+MATCH_DELETION = "deletion-only"
+MATCH_TRAILER = "trailer"
+MATCH_KINDS = (MATCH_DELETION, MATCH_TRAILER)
+_ENTRY_KEYS = frozenset({"id", "match", "reason", "critic_checks"})
+_TOP_KEYS = frozenset({"_readme", "exemptions"})
+_ID_RE = re.compile(r"[a-z0-9][a-z0-9-]*\Z")
 
 # Path prefixes/names per category. Checked in order; first match wins, and
 # anything unmatched is code (fail-closed).
@@ -559,9 +628,157 @@ def commit_categories(commit) -> set[str]:
     }
 
 
-def check_commits(commits) -> tuple[bool, str]:
-    """Apply the ordering rule to an OLDEST-FIRST list of commit records
-    (dicts with `sha`, `subject`, `paths`). Returns (ok, reason)."""
+class ExemptionsError(ValueError):
+    """The exemption list cannot be read, or holds a shape this check refuses.
+    Cannot evaluate — exit 2, never a pass."""
+
+
+def parse_exemptions(text: str) -> list[dict]:
+    """The exemption list's text → its entries, or ExemptionsError.
+
+    The file is an object holding `exemptions` (a list) and optionally
+    `_readme`, and nothing else. Every entry has exactly `id`, `match`,
+    `reason` and `critic_checks`, each a non-empty string; `id` is a
+    lower-case token and unique; `match` is one of `MATCH_KINDS`. Anything
+    else is refused rather than read around, because a list this check half
+    understands is one a branch could hide an exemption in."""
+    try:
+        raw = json.loads(text)
+    except ValueError as e:
+        raise ExemptionsError(f"not JSON: {e}") from None
+    if not isinstance(raw, dict):
+        raise ExemptionsError("the top level must be an object")
+    extra = set(raw) - _TOP_KEYS
+    if extra:
+        raise ExemptionsError(f"unknown top-level keys: {sorted(extra)}")
+    entries = raw.get("exemptions")
+    if not isinstance(entries, list):
+        raise ExemptionsError("`exemptions` must be a list")
+    seen = set()
+    for entry in entries:
+        if not isinstance(entry, dict) or set(entry) != _ENTRY_KEYS:
+            raise ExemptionsError(
+                f"every entry has exactly the keys {sorted(_ENTRY_KEYS)}: "
+                f"{entry!r}"
+            )
+        for key in sorted(_ENTRY_KEYS):
+            value = entry[key]
+            if not isinstance(value, str) or not value.strip():
+                raise ExemptionsError(f"`{key}` must be a non-empty string: "
+                                      f"{entry!r}")
+        if not _ID_RE.match(entry["id"]):
+            raise ExemptionsError(f"`id` must be a lower-case token: "
+                                  f"{entry['id']!r}")
+        if entry["match"] not in MATCH_KINDS:
+            raise ExemptionsError(
+                f"unknown `match` {entry['match']!r} on {entry['id']!r} — "
+                f"one of {', '.join(MATCH_KINDS)}"
+            )
+        if entry["id"] in seen:
+            raise ExemptionsError(f"duplicate id {entry['id']!r}")
+        seen.add(entry["id"])
+    return entries
+
+
+def _code_paths(commit) -> list[str]:
+    sources = commit.get("sources") or {}
+    return [
+        p for p in commit["paths"]
+        if classify_path(p, *sources.get(p, (None, None))) == "code"
+    ]
+
+
+def is_deletion_only(commit) -> bool:
+    """True iff every code path in the commit adds zero lines.
+
+    `added` is `git diff-tree --numstat`'s first column per path, None for a
+    binary path (numstat prints `-`), and a binary path is never a deletion.
+    A commit record with no `added` map is never one either — fail-closed.
+    Lines added to a docs, ops or test path beside the deletion do not count:
+    the rule is about the code paths."""
+    added = commit.get("added") or {}
+    paths = _code_paths(commit)
+    return bool(paths) and all(
+        type(added.get(p)) is int and added[p] == 0 for p in paths
+    )
+
+
+def judge_commits(commits, exemptions) -> list[dict]:
+    """The per-change rule over an OLDEST-FIRST list of commit records.
+
+    One judgement per commit: `commit`, `code` (is it a code commit), `ok`,
+    `note` (which reason applied, for a code commit — what its classification
+    line prints), `previous` (the code commit before it, None for the first)
+    and `failure` (the headline it fails under, None when it passes).
+
+    A record may carry `claims` (its `TDD-Exempt:` trailer values) and
+    `added` (see `is_deletion_only`); one without either claims nothing and is
+    never a deletion."""
+    claimable = [e["id"] for e in exemptions if e["match"] == MATCH_TRAILER]
+    detector = next(
+        (e["id"] for e in exemptions if e["match"] == MATCH_DELETION), None
+    )
+    judged = []
+    previous = None
+    tested = False
+    for c in commits:
+        cats = commit_categories(c)
+        if "code" not in cats:
+            if "test" in cats:
+                tested = True
+            judged.append({"commit": c, "code": False, "ok": True,
+                           "note": None, "previous": None, "failure": None})
+            continue
+        claims = list(c.get("claims") or [])
+        unknown = [x for x in claims if x not in claimable]
+        failure = None
+        if unknown:
+            failure = UNKNOWN_CLAIM_MESSAGE
+            note = (f"FAILS: claims {', '.join(unknown)}, which the list "
+                    f"does not offer — the ids a commit may claim are: "
+                    f"{', '.join(claimable) or 'none'}")
+        elif tested:
+            note = ("test commit since the branch began" if previous is None
+                    else "test commit since the previous code commit")
+        elif previous is None:
+            failure = FAILURE_MESSAGE
+            note = "FAILS: no test commit since the branch began"
+        elif detector and is_deletion_only(c):
+            note = f"detected: {detector}"
+        elif claims:
+            note = f"claimed: {', '.join(claims)}"
+        else:
+            failure = LATER_FAILURE_MESSAGE
+            note = ("FAILS: no test commit since the previous code commit "
+                    f"{previous['sha'][:7]}")
+        judged.append({"commit": c, "code": True, "ok": failure is None,
+                       "note": note, "previous": previous,
+                       "failure": failure})
+        previous = c
+        tested = False
+    return judged
+
+
+def check_commits(commits, exemptions=()) -> tuple[bool, str]:
+    """The per-change rule (`RULE`) over an OLDEST-FIRST list of commit
+    records (dicts with `sha`, `subject`, `paths`). Returns (ok, reason); a
+    failure's reason is the headline of the FIRST failing commit — the
+    per-commit detail is `failure_report`'s."""
+    judged = judge_commits(commits, exemptions)
+    if not any(j["code"] for j in judged):
+        return True, "exempt: no non-test code changed (docs/ops/tests only)"
+    failed = [j for j in judged if not j["ok"]]
+    if failed:
+        return False, failed[0]["failure"]
+    return True, ("every code commit has a test commit since the previous "
+                  "code commit, or an exemption")
+
+
+def check_floor(commits) -> tuple[bool, str]:
+    """The once-per-branch floor every branch was judged by before DRE-3009,
+    and the one a branch whose merge base has no exemption list is still
+    judged by: a test commit strictly before the first code commit. No claim
+    is honored and no deletion detected."""
     first_code = next(
         (i for i, c in enumerate(commits) if "code" in commit_categories(c)),
         None,
@@ -571,6 +788,54 @@ def check_commits(commits) -> tuple[bool, str]:
     if any("test" in commit_categories(c) for c in commits[:first_code]):
         return True, "a test commit precedes the first implementation commit"
     return False, FAILURE_MESSAGE
+
+
+def _named(commit) -> str:
+    return f"{commit['sha'][:7]} \"{commit['subject']}\""
+
+
+def failure_report(judged, exemptions) -> str:
+    """What a red run prints: each failing commit, the code commit it needed a
+    test after, and every exemption it could have claimed as the exact
+    trailer line to add. A gate that says "no" without "or one of these" is
+    what produces disputes."""
+    lines = []
+    for j in judged:
+        if j["ok"]:
+            continue
+        c = j["commit"]
+        if j["failure"] == UNKNOWN_CLAIM_MESSAGE:
+            lines.append(f"{_named(c)}: {j['note'][len('FAILS: '):]}")
+        elif j["previous"] is None:
+            lines.append(
+                f"{_named(c)}: {FAILURE_MESSAGE}. It is the first code "
+                "commit, so it needs a test commit since the branch began, "
+                "and no exemption covers it."
+            )
+        else:
+            lines.append(
+                f"{_named(c)}: no test commit since the previous code commit "
+                f"{_named(j['previous'])}."
+            )
+    lines.append("")
+    lines.append(
+        "A code commit after the first may instead claim one of these, as a "
+        "trailer — the exact line, last in its commit message:"
+    )
+    for e in exemptions:
+        if e["match"] == MATCH_TRAILER:
+            lines.append(f"  {TRAILER_KEY}: {e['id']}    — {e['reason']}")
+    for e in exemptions:
+        if e["match"] == MATCH_DELETION:
+            lines.append(f"  {e['id']} is detected, not claimed — {e['reason']}")
+    lines.append(
+        "A missing claim is cleared the way a wrong order is: by rewriting "
+        "the branch — here, rewording that one commit's message (an "
+        "interactive rebase, `reword`) and force-pushing. Adding a commit "
+        "cannot clear it. The critic reads every claimed commit's diff "
+        f"against that entry's `critic_checks` in {EXEMPTIONS_FILE}."
+    )
+    return "\n".join(lines)
 
 
 def _git(*args: str) -> str:
@@ -623,14 +888,95 @@ def pr_commits(base: str, head: str):
             for p in paths
             if p.endswith(".py") and classify_path(p) == "code"
         }
+        claims = _git(
+            "log", "-1",
+            f"--format=%(trailers:key={TRAILER_KEY},valueonly)", sha,
+        ).splitlines()
+        added = {}
+        for line in _git(
+            "diff-tree", "--no-commit-id", "--numstat", "-r", sha
+        ).splitlines():
+            count, _deleted, path = line.split("\t", 2)
+            # `-` is a binary path: no line count, so never a deletion.
+            added[path] = int(count) if count.isdigit() else None
         commits.append({
             "sha": sha,
             "subject": subject,
             "author": author,
             "paths": paths,
             "sources": sources,
+            "claims": [v.strip() for v in claims if v.strip()],
+            "added": added,
         })
     return commits
+
+
+def _toplevel(directory: str | None = None) -> str | None:
+    """The root of the git repository holding `directory` (the working
+    directory when None), or None when it is not inside one."""
+    p = subprocess.run(
+        ["git", "-C", directory or ".", "rev-parse", "--show-toplevel"],
+        capture_output=True, text=True,
+    )
+    if p.returncode != 0 or not p.stdout.strip():
+        return None
+    return os.path.realpath(p.stdout.strip())
+
+
+def runs_from_repo_under_check() -> bool:
+    """True iff this script sits in the repository it is checking — the root
+    of the repository its own file is in equals the root of the one the
+    working directory is in. That is bureau-pipeline's own `tdd` job (and a
+    local run in a bureau-pipeline checkout). Every other caller runs it from
+    somewhere the pull request cannot edit: a product repo's
+    `.bureau-pipeline/` checkout (its own repository), the shared action's
+    fetched copy (no `.git` at all) and the critic's `$PIPELINE_DIR`."""
+    here = _toplevel(os.path.dirname(os.path.abspath(__file__)))
+    return here is not None and here == _toplevel()
+
+
+def load_exemptions(base: str, head: str) -> tuple[list[dict] | None, str]:
+    """(entries, the line saying where they came from), or (None, the line
+    saying why the once-per-branch floor applies).
+
+    Raises ExemptionsError for a list that is present but cannot be used, and
+    CalledProcessError when git cannot compute the merge base — both exit 2."""
+    if runs_from_repo_under_check():
+        merge_base = _git("merge-base", base, head).strip()
+        listed = _git("ls-tree", "--name-only", merge_base, "--",
+                      EXEMPTIONS_FILE).strip()
+        if not listed:
+            return None, (
+                f"{EXEMPTIONS_FILE} did not exist at the merge base "
+                f"{merge_base[:7]}, so this branch is judged by the "
+                "once-per-branch floor it started under: a test commit "
+                "strictly before the first code commit, no claim honored and "
+                "no deletion detected. Merging the default branch in, or "
+                "rebasing onto it, moves the branch onto the per-change rule."
+            )
+        try:
+            text = _git("show", f"{merge_base}:{EXEMPTIONS_FILE}")
+        except UnicodeDecodeError as e:
+            raise ExemptionsError(f"not UTF-8: {e}") from None
+        return parse_exemptions(text), (
+            f"exemptions: {EXEMPTIONS_FILE} as it stood at the merge base "
+            f"{merge_base[:7]} — a branch is judged by the list it started "
+            "from"
+        )
+    path = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+        EXEMPTIONS_FILE,
+    )
+    # The copy beside the script ships in the same commit as the script, so
+    # a missing one is a broken checkout — never the floor.
+    try:
+        with open(path, encoding="utf-8") as fh:
+            text = fh.read()
+    except (OSError, UnicodeDecodeError) as e:
+        raise ExemptionsError(f"cannot read {path}: {e}") from None
+    return parse_exemptions(text), (
+        f"exemptions: {path}, the copy beside this script"
+    )
 
 
 def main(argv: list[str]) -> int:
@@ -648,9 +994,10 @@ def main(argv: list[str]) -> int:
         # Cannot evaluate ≠ pass: a broken checkout must be a red job.
         print(f"git failed: {e.stderr.strip()}", file=sys.stderr)
         return 2
-    for c in commits:
+    def line(c):
         cats = sorted(commit_categories(c)) or ["empty"]
-        print(f"{c['sha'][:7]} [{','.join(cats)}] {c['subject']}")
+        return f"{c['sha'][:7]} [{','.join(cats)}] {c['subject']}"
+
     # The branch: explicit when the caller threads it, else GitHub's own
     # pull_request variable, so a fleet repo running this from
     # `.bureau-pipeline/scripts/` gets the exemption without a workflow edit.
@@ -658,15 +1005,41 @@ def main(argv: list[str]) -> int:
     head_ref = os.environ.get("HEAD_REF") or os.environ.get("GITHUB_HEAD_REF")
     if is_standards_sync_pr(head_ref, attested_pr_author(),
                             [c.get("author") for c in commits]):
+        for c in commits:
+            print(line(c))
         print(f"exempt: the nightly standards-sync PR — opened by "
               f"{STANDARDS_SYNC_BOT}[bot] (GitHub-attested), on branch "
               f"{STANDARDS_SYNC_BRANCH}, every commit authored by that bot; "
               f"generated manifests with no behaviour of their own to "
               f"RED-test")
         return 0
-    ok, reason = check_commits(commits)
-    print(reason)
+    try:
+        exemptions, source = load_exemptions(base, head)
+    except subprocess.CalledProcessError as e:
+        print(f"git failed: {e.stderr.strip()}", file=sys.stderr)
+        return 2
+    except ExemptionsError as e:
+        # A list that is present but unusable is never read as "no list".
+        print(f"cannot evaluate: {EXEMPTIONS_FILE}: {e}", file=sys.stderr)
+        return 2
+    print(source)
+    if exemptions is None:
+        for c in commits:
+            print(line(c))
+        ok, reason = check_floor(commits)
+        print(reason)
+        report = None
+    else:
+        print(f"rule: {RULE}")
+        judged = judge_commits(commits, exemptions)
+        for j in judged:
+            print(line(j["commit"]) + (f" — {j['note']}" if j["code"] else ""))
+        ok, reason = check_commits(commits, exemptions)
+        print(reason)
+        report = None if ok else failure_report(judged, exemptions)
     if not ok:
+        if report:
+            print(report)
         # DRE-2694: tell the writer, here at CI time, that adding a commit
         # cannot clear this — the cheapest place the discipline is knowable.
         entry = unfixable_checks.match(unfixable_checks.TDD_CHECK_NAME)
