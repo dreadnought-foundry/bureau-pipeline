@@ -1574,7 +1574,20 @@ jobs:
                ordinary commit carries the push.
             5. Commit with message "fix(${{ steps.pr.outputs.card }}): address review
                findings (attempt ${{ steps.pr.outputs.attempt }})" and push to the
-               SAME branch. Do NOT open a new PR. Do NOT force-push. The PR
+               SAME branch. When that fix changes code, it is TWO commits,
+               test first (DRE-3009): every code commit needs a test commit
+               since the previous code commit, so first commit the test
+               files alone as "test(${{ steps.pr.outputs.card }}): RED for
+               review findings (attempt ${{ steps.pr.outputs.attempt }})",
+               then the code in the fix commit. A commit carrying both is not
+               its own test, and the TDD commit-order check has no
+               add-a-commit path to green, so get the order right before the
+               push. A fix whose code change is purely a refactor (or
+               configuration, or a whole generated file) may instead end the
+               fix commit's message with the trailer line
+               `TDD-Exempt: refactor` (or `config`, `generated`) — only when
+               it is true, because the critic reads the claim against the
+               diff. Do NOT open a new PR. Do NOT force-push. The PR
                description is already final at this point (step 4b) — this
                push is what the next reviewer reads it off.
                For the What's new exception in step 4b the commit is empty,
