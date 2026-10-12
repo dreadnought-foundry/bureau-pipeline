@@ -3,21 +3,21 @@ build/review separation is kept by SELECTION rather than by disjoint lists.
 
 WHAT THE CEO DECIDED (signed console answer, 2026-09-16 07:28 PT)
 ----------------------------------------------------------------
-`claude-sonnet-5` replaces `claude-sonnet-4-6` as the workhorse ladder's
-backup rung. `claude-sonnet-4-6` is NOT retired: it keeps its existing place
-as the judgement (planner) ladder's last resort — the "never block a plan on
-availability" rung. Only its WORKHORSE entry is replaced.
+Sonnet 5 replaces Sonnet 4.6 as the workhorse ladder's backup rung. Sonnet 4.6
+is NOT retired: it keeps its existing place as the judgement (planner)
+ladder's last resort — the "never block a plan on availability" rung. Only its
+WORKHORSE entry is replaced.
 
 That puts one model on two ladders at once: Sonnet 5 now tops the advisory
 ladder AND backs the workhorse one. The separation the old schema rule bought
 by keeping the lists disjoint is bought at selection time instead: when a
-build ran on `claude-sonnet-5`, the critic and the verifier for that pull
-request skip it and use `claude-opus-5`.
+build ran on Sonnet 5, the critic and the verifier for that pull request skip
+it and use Opus 5.
 
 The overlap is not new in principle — the advisory ladder's own fallback is
-already `claude-opus-5`, the workhorse PRIMARY, so reviewer and worker have
-coincided whenever the critic falls back. This card makes the guarantee
-explicit per-run instead of incidental.
+already Opus 5, the workhorse PRIMARY, so reviewer and worker have coincided
+whenever the critic falls back. This card makes the guarantee explicit per-run
+instead of incidental.
 
 DRE-6785 (the CEO's decision of 2026-10-10) stopped refusing a BARE overlap.
 The separation no longer needs a written rule: the reviewer's walk loses the
@@ -42,25 +42,30 @@ WHAT THESE TESTS HOLD
      workflows actually call.
   4. DRE-3892 (newer versions adopt themselves) cannot silently drop the
      rule: an adoption that moves the overlapping rung without moving the
-     selection rule with it fails `sync_model_config.py --check` twice over —
-     the new rung is a bare overlap, and the old rule is stale.
+     selection rule with it is refused by `policy_errors` twice over — the
+     new rung is unpriced, and the old rule is stale.
 
-DRE-5116 (2026-09-28) put `claude-sonnet-5-5` above `claude-sonnet-5` on BOTH
-ladders and kept Sonnet 5, so two models now sit on both. Each gets a rule, and
-validation was widened to match: every advisory rung ABOVE the ladder's last
-that also sits on a build ladder needs one (it used to be the advisory top
-only, which refused Sonnet 5's rule as stale). `TwoSonnetsOnBothLaddersTest`
-pins that, including the case it exists for — a Sonnet-5 build still never
-reviewed by Sonnet 5 when Sonnet 5.5 is unavailable too.
+DRE-5116 (2026-09-28) put Sonnet 5.5 above Sonnet 5 on BOTH ladders and kept
+Sonnet 5, so two models now sit on both. Each gets a rule, and validation was
+widened to match: every advisory rung ABOVE the ladder's last that also sits
+on a build ladder needs one (it used to be the advisory top only, which
+refused Sonnet 5's rule as stale). `TwoSonnetsOnBothLaddersTest` pins that,
+including the case it exists for — a Sonnet-5 build still never reviewed by
+Sonnet 5 when Sonnet 5.5 is unavailable too.
 
-WHAT IS READ FROM WHERE (DRE-6863)
-----------------------------------
-The console rewrites config/models.yaml on every save — which model leads a
-group, which group a role is in — so a RULE here is proved on the frozen copy
-(`model_fixture.fixture_tree` / `fixture_module` / `fixture_config`), and every
-model id and role it names is read off that copy's ladders, `agents:` map and
-`review_separation` block. Each name below says what its rung IS on the frozen
-ladders, and `TheFixtureHoldsTheOverlapTest` pins that it still is. What must
+WHAT IS READ FROM WHERE (DRE-6863, DRE-6989)
+-------------------------------------------
+Since DRE-6939 the selector runs on the home or on the defaults in the code,
+never on the choices in a tree's `config/models.yaml`. So the reviewer walks
+are asserted on a home document: the frozen one
+(`model_fixture.fixture_home()`, DRE-6972), handed to the module's fixture
+tree with `fixture_module(..., doc=...)` and to its CLI with `home_env`. Every
+model id and role a walk names is read off that document's groups and
+`agents:` map. The `review_separation` block is a fact of the CODE, not a
+choice, so it is read off the frozen `models.yaml` (`fixture_config`), and a
+scenario without a rule changes that block alone (`_on_home`,
+`_write_code_side`). Each name below says what its model IS in the frozen
+document, and `TheFixtureHoldsTheOverlapTest` pins that it still is. What must
 hold for any saved state — the committed file passes `policy_errors`, its
 overlaps are reviewed off their build model, its reviewer roles are advisory,
 its mirror carries the rules it declares — keeps reading the committed file
@@ -74,7 +79,6 @@ how far DOWN a ladder we walk, and nothing here puts a model on a ladder.
 from __future__ import annotations
 
 import json
-import os
 import subprocess
 import sys
 import tempfile
@@ -94,6 +98,7 @@ sys.path.insert(0, str(ROOT / "tests"))
 
 import model_fallback as mf  # noqa: E402
 import model_fixture  # noqa: E402
+from model_fixture import fixture_home, home_env, ladder  # noqa: E402
 
 WORKHORSE = "workhorse"
 ADVISORY = "advisory"
@@ -105,6 +110,8 @@ def _committed(path: Path = CONFIG) -> dict:
 
 
 def _fixture() -> dict:
+    """The frozen `models.yaml`: the code-side facts, `review_separation`
+    among them."""
     return model_fixture.fixture_config()
 
 
@@ -116,43 +123,54 @@ def _ladder(cfg, kind) -> list:
     return _rung_ids(cfg["ladders"][cfg["kinds"][kind]["ladder"]])
 
 
-# The rungs every rule below is about, read off the FROZEN ladders by their
+def _successor(model: str) -> str:
+    """The same-family id one version above `model`."""
+    head, _, version = model.rpartition("-")
+    return f"{head}-{int(version) + 1}"
+
+
+# The document every walk below is asserted on.
+HOME = fixture_home()
+
+# The models every rule below is about, read off the FROZEN document by their
 # place — never typed. `TheFixtureHoldsTheOverlapTest` pins what each one is.
-_WORK = _ladder(_fixture(), WORKHORSE)
-_ADVICE = _ladder(_fixture(), ADVISORY)
-_PLAN = _ladder(_fixture(), JUDGEMENT)
-# The advisory top, which is also a build rung: the upper overlap (DRE-5116).
+_WORK = ladder(HOME, WORKHORSE)
+_ADVICE = ladder(HOME, ADVISORY)
+_PLAN = ladder(HOME, JUDGEMENT)
+# The advisory top, which is also a build model: the upper overlap (DRE-5116).
 UPPER = _ADVICE[0]
-# The rung below it on both ladders: the lower overlap, the build model a
+# The model below it in both groups: the lower overlap, the build model a
 # "Sonnet-5 build" ran on when this file was written (DRE-3880).
 LOWER = _ADVICE[1]
-# The build ladder's top, and the advisory ladder's last rung: the designed
+# The build group's top, and the advisory group's last model: the designed
 # loud fall, and where the frozen rules send a reviewer instead.
 BUILD_TOP = _WORK[0]
-# A build rung on no other ladder — the "Opus build" that is no overlap.
+# A build model in no other group — the "Opus build" that is no overlap.
 BUILD_ONLY = next(m for m in _WORK if m not in _ADVICE and m not in _PLAN)
-# The planner's model, and its cheaper last resort, both on no other ladder.
+# The planner's model, and its cheaper last resort, both in no other group.
 PLAN_TOP = _PLAN[0]
 PLAN_LAST = _PLAN[-1]
 # The successor that does not exist yet — the DRE-3892 adoption this config
 # has to survive. Deliberately unpriced: an unpriced candidate is `ask` to the
 # adoption rule, and here it is simply a rung nobody declared a price for.
-SONNET6 = "claude-sonnet-6"
+SONNET6 = _successor(LOWER)
 
-# The roles the separation binds, read off the frozen file rather than imported
-# from the code, so a code change that quietly drops one is a failure here.
+# The roles the separation binds, read off the frozen file's code-side block
+# rather than imported from the code, so a code change that quietly drops one
+# is a failure here.
 REVIEWER_ROLES = tuple(_fixture()["review_separation"]["roles"])
-# The roles the separation does NOT bind, read off the frozen `agents:` map: an
-# advisory role that reviews nothing, a build role, and a role that is not
-# advisory at all.
-_KINDS = _fixture()["agents"]
+# The roles the separation does NOT bind, read off the frozen document's
+# `agents:` map: an advisory role that reviews nothing, a build role, and a
+# role that is not advisory at all.
+_KINDS = HOME["agents"]
 UNBOUND_ADVISORY = next(r for r, k in _KINDS.items()
                         if k == ADVISORY and r not in REVIEWER_ROLES)
 BUILDER = next(r for r, k in _KINDS.items() if k == WORKHORSE)
 NOT_ADVISORY = next(r for r, k in _KINDS.items() if k != ADVISORY)
 
-# One fixture tree for the whole module, and `model_fallback` imported from it:
-# its config, ladders and mirror are the frozen ones.
+# One fixture tree for the whole module, and `model_fallback` imported from it
+# with the frozen document already read: its choices are the document's, its
+# code-side facts and mirror the frozen file's.
 _TREE_DIR: tempfile.TemporaryDirectory | None = None
 TREE: Path | None = None
 fmf = None
@@ -162,7 +180,7 @@ def setUpModule():
     global _TREE_DIR, TREE, fmf
     _TREE_DIR = tempfile.TemporaryDirectory()
     TREE = model_fixture.fixture_tree(Path(_TREE_DIR.name) / "tree")
-    fmf = model_fixture.fixture_module(TREE)
+    fmf = model_fixture.fixture_module(TREE, doc=HOME)
 
 
 def tearDownModule():
@@ -170,26 +188,35 @@ def tearDownModule():
 
 
 def _copy_tree(tmp: Path) -> Path:
-    """A fresh fixture tree, for a test that rewrites its config."""
+    """A fresh fixture tree, for a test that rewrites its code-side facts."""
     return model_fixture.fixture_tree(tmp / "tree")
 
 
-def _write_config(tree: Path, cfg: dict) -> None:
+def _choices(cfg: dict) -> dict:
+    norm = mf._normalize_config(cfg)
+    return {key: norm[key] for key in mf._CHOICE_KEYS}
+
+
+def _write_code_side(tree: Path, cfg: dict) -> None:
+    """`cfg` as `tree`'s `config/models.yaml` — refused unless its choices are
+    the frozen file's, so only a code-side fact can change this way. A choice
+    is changed on a document."""
+    assert _choices(cfg) == _choices(_fixture()), "a choice is changed on a document"
     (tree / "config" / "models.yaml").write_text(yaml.safe_dump(cfg, sort_keys=False))
 
 
-def _run_sync(tree: Path, *args: str) -> subprocess.CompletedProcess:
-    return subprocess.run(
-        [sys.executable, str(tree / "scripts" / "sync_model_config.py"), *args],
-        capture_output=True,
-        text=True,
-    )
+def _on_home(cfg: dict) -> dict:
+    """The config the module's selector runs on — the frozen document's
+    choices — with the code-side `review_separation` of `cfg`, a copy of the
+    frozen `models.yaml`."""
+    return {**fmf.CONFIG,
+            "review_separation": fmf._normalize_config(cfg)["review_separation"]}
 
 
 def _cli_select(tree: Path, agent: str, *extra: str, available=None):
-    """The selector CLI with a STUBBED probe — what the workflows run."""
-    env = dict(os.environ)
-    env["BUREAU_FAKE_AVAILABLE"] = json.dumps(available or {})
+    """The selector CLI on the frozen document, with a STUBBED probe — what
+    the workflows run."""
+    env = home_env(tree, HOME, BUREAU_FAKE_AVAILABLE=available or {})
     why = tree / "why.txt"
     proc = subprocess.run(
         [
@@ -206,6 +233,7 @@ def _cli_select(tree: Path, agent: str, *extra: str, available=None):
         env=env,
     )
     assert proc.returncode == 0, f"select {agent} failed: {proc.stdout}\n{proc.stderr}"
+    assert "model-home: read" in proc.stderr, proc.stderr
     return proc.stdout.strip(), why.read_text().strip()
 
 
@@ -218,8 +246,9 @@ def _rules(cfg: dict) -> dict:
 
 
 class TheFixtureHoldsTheOverlapTest(unittest.TestCase):
-    """What each name above relies on, true of the frozen ladders — so a rule
-    test below that passes is about the case it says it is."""
+    """What each name above relies on, true of the frozen document and the
+    frozen rules — so a rule test below that passes is about the case it says
+    it is."""
 
     def test_both_overlaps_sit_on_both_ladders_above_the_advisory_last_rung(self):
         self.assertEqual(len(_ADVICE), 3)
@@ -242,6 +271,27 @@ class TheFixtureHoldsTheOverlapTest(unittest.TestCase):
                 self.assertNotIn(model, _WORK)
                 self.assertNotIn(model, _ADVICE)
         self.assertNotIn(SONNET6, fmf.KNOWN_MODELS)
+
+    def test_the_module_runs_on_the_document(self):
+        # A home the reader refused leaves the module on the defaults in the
+        # code, and every walk below would be about them instead.
+        self.assertEqual(fmf.HOME_STATUS, "read")
+        self.assertEqual(fmf.ladder_for(REVIEWER_ROLES[0]), _ADVICE)
+        self.assertEqual(fmf.ladder_for(BUILDER), _WORK)
+
+    def test_the_code_side_writer_refuses_a_changed_choice(self):
+        cfg = _fixture()
+        cfg["ladders"][cfg["kinds"][ADVISORY]["ladder"]].reverse()
+        with tempfile.TemporaryDirectory() as td:
+            tree = Path(td)
+            (tree / "config").mkdir()
+            with self.assertRaises(AssertionError):
+                _write_code_side(tree, cfg)
+            self.assertFalse((tree / "config" / "models.yaml").exists())
+            cfg = _fixture()
+            cfg.pop("review_separation")
+            _write_code_side(tree, cfg)
+            self.assertNotIn("review_separation", _committed(tree / "config" / "models.yaml"))
 
     def test_the_roles_are_where_the_scenarios_need_them(self):
         self.assertTrue(REVIEWER_ROLES)
@@ -315,7 +365,7 @@ class SchemaPermitsTheOverlapOnlyWithTheRuleTest(unittest.TestCase):
         self.assertEqual(fmf.policy_errors(cfg), [])
         for model in (LOWER, UPPER):
             with self.subTest(built_on=model):
-                walk = fmf.reviewers_for(cfg, model)
+                walk = fmf.reviewers_for(_on_home(cfg), model)
                 self.assertNotIn(model, walk)
                 self.assertTrue(walk)
 
@@ -323,7 +373,7 @@ class SchemaPermitsTheOverlapOnlyWithTheRuleTest(unittest.TestCase):
         cfg = _fixture()
         cfg["review_separation"]["rules"] = []
         self.assertEqual(fmf.policy_errors(cfg), [])
-        self.assertNotIn(LOWER, fmf.reviewers_for(cfg, LOWER))
+        self.assertNotIn(LOWER, fmf.reviewers_for(_on_home(cfg), LOWER))
 
     def test_a_rule_that_reviews_on_the_build_model_is_refused(self):
         # A "rule" that sends the reviewer back to the model the build ran on
@@ -380,15 +430,6 @@ class SchemaPermitsTheOverlapOnlyWithTheRuleTest(unittest.TestCase):
         cfg["review_separation"]["rules"].pop()
         self.assertEqual(fmf.policy_errors(cfg), [])
 
-    def test_ci_accepts_a_bare_overlap(self):
-        with tempfile.TemporaryDirectory() as td:
-            tree = _copy_tree(Path(td))
-            cfg = _fixture()
-            cfg.pop("review_separation", None)
-            _write_config(tree, cfg)
-            proc = _run_sync(tree, "--check")
-            self.assertNotIn("rejected by model policy", proc.stdout + proc.stderr)
-
     def test_the_selector_separates_a_bare_overlap_with_no_rule(self):
         # The config loads (it validates), and the reviewer of a build on the
         # lower overlap still never runs on it: the separation is derived.
@@ -396,7 +437,7 @@ class SchemaPermitsTheOverlapOnlyWithTheRuleTest(unittest.TestCase):
             tree = _copy_tree(Path(td))
             cfg = _fixture()
             cfg.pop("review_separation", None)
-            _write_config(tree, cfg)
+            _write_code_side(tree, cfg)
             model, note = _cli_select(
                 tree, REVIEWER_ROLES[0], "--built-on", LOWER,
                 available={BUILD_ONLY: True, LOWER: True},
@@ -742,11 +783,11 @@ class TheDegradePathKeepsTheRuleTest(unittest.TestCase):
 class CarriedForwardToDre3892Test(unittest.TestCase):
     """A future same-family adoption cannot silently drop the rule.
 
-    DRE-3892's adoption path edits `config/models.yaml` and regenerates the
-    mirrors — which runs exactly the schema check below. Moving the
-    overlapping rung without moving its selection rule fails twice: the new
-    rung is a bare overlap, and the rule left behind names a model that is no
-    longer on both ladders.
+    DRE-3892's adoption path edits `config/models.yaml`, and the schema check
+    below is what refuses that file — the selector runs on the last-known-good
+    facts rather than honor it. Moving the overlapping rung without moving its
+    selection rule fails twice: the new rung has no declared price, and the
+    rule left behind names a model that is no longer on both ladders.
     """
 
     def _adopt(self, cfg, new_id):
@@ -778,14 +819,6 @@ class CarriedForwardToDre3892Test(unittest.TestCase):
                 rule["reason"] = "carried forward"
         prices = {**fmf.declared_prices(), SONNET6: {"input": 2.0, "output": 10.0}}
         self.assertEqual(fmf.policy_errors(cfg, prices), [])
-
-    def test_ci_goes_red_on_an_adoption_that_drops_the_rule(self):
-        with tempfile.TemporaryDirectory() as td:
-            tree = _copy_tree(Path(td))
-            _write_config(tree, self._adopt(_fixture(), SONNET6))
-            proc = _run_sync(tree, "--check")
-            self.assertNotEqual(proc.returncode, 0)
-            self.assertIn(SONNET6, proc.stdout + proc.stderr)
 
     def test_an_adoption_of_this_family_moves_the_rung_on_BOTH_ladders(self):
         # Why the rule has to travel with it: the lower overlap is one id on
@@ -848,7 +881,7 @@ class TwoSonnetsOnBothLaddersTest(unittest.TestCase):
             r for r in cfg["review_separation"]["rules"] if r["built_on"] != LOWER
         ]
         self.assertEqual(fmf.policy_errors(cfg), [])
-        self.assertNotIn(LOWER, fmf.reviewers_for(cfg, LOWER))
+        self.assertNotIn(LOWER, fmf.reviewers_for(_on_home(cfg), LOWER))
 
     def test_dropping_the_top_rule_is_admitted_and_still_separates(self):
         cfg = _fixture()
@@ -856,7 +889,7 @@ class TwoSonnetsOnBothLaddersTest(unittest.TestCase):
             r for r in cfg["review_separation"]["rules"] if r["built_on"] != UPPER
         ]
         self.assertEqual(fmf.policy_errors(cfg), [])
-        self.assertNotIn(UPPER, fmf.reviewers_for(cfg, UPPER))
+        self.assertNotIn(UPPER, fmf.reviewers_for(_on_home(cfg), UPPER))
 
     def test_the_last_rung_needs_no_rule_but_may_carry_one(self):
         # The advisory ladder's last rung is also the build ladder's top: the
