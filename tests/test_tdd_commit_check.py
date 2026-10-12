@@ -2707,6 +2707,26 @@ class TheRuleIsStatedOnceEverywhereTest(unittest.TestCase):
     def test_the_config_readme_lists_the_file(self):
         self.assertIn("tdd-exemptions.json", self.read("config/README.md"))
 
+    def test_the_fix_prompt_commits_its_test_before_its_code(self):
+        # Measured before shipping: bureau-pipeline #1064 and #1041 both
+        # newly fail the per-change rule on the fix loop's one
+        # "address review findings" commit carrying test and code together.
+        # The fix agent cannot reorder a pushed commit, so the prompt has to
+        # split them before the push or every such round strands its PR.
+        wf = yaml.safe_load(self.read(".github/workflows/agent-fix.yml"))
+        prompts = [
+            (step.get("with") or {}).get("prompt", "")
+            for job in wf["jobs"].values() for step in job.get("steps") or []
+            if "anthropics/claude-code-action" in (step.get("uses") or "")
+        ]
+        prompts = [p for p in prompts if "address review" in p]
+        self.assertTrue(prompts)
+        for prompt in prompts:
+            text = _norm(prompt)
+            self.assertIn("since the previous code commit", text)
+            self.assertRegex(text, r"test\(\$\{\{ steps\.pr\.outputs\.card \}\}\): RED")
+            self.assertIn("TDD-Exempt:", text)
+
 
 if __name__ == "__main__":
     unittest.main()
