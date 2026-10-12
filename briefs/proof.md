@@ -133,6 +133,22 @@ asks for a reading the declaration does not hold is a cause row, below.
   sign-in ration counter (DRE-5928, DRE-6035). When no caller provides one, the
   Identities section records `aws: none` and every criterion that needs the
   product's own identities is `Not observed.` with that reason.
+
+  Every sign-in you hold was made when the job started: `GH_READ_TOKEN` and
+  `GH_TOKEN` live one hour and nothing in the run can renew them, and the AWS
+  session lives `PROOF_SESSION_SECONDS` seconds. Make every GitHub read, and
+  the one refused write, before anything that waits; a push made after the
+  first hour is refused, so commit the record on the branch and leave the push
+  and the pull request to the workflow's push-rescue step. Before a hold or any
+  other wait, add up the wait, the window the card reads after it and the
+  reads themselves; if that ends after the AWS session does, make the hold
+  anyway, write each window's start and end in PT into the record, and write
+  every row you could not read as `Not observed.` with that reason, so the
+  next run on the branch reads those windows. Never run a hold a second time:
+  the job ends at 120 minutes; when a release or a backend start lands inside
+  a hold, quote it, read each row as the card words it, and write a count the
+  card's window can no longer reach as `Not met.` with the lines you saw.
+  (DRE-7020)
 - **Never:** never a person's account, never the CEO's account, never a
   sign-in typed into a web page by the run itself. Hosted sign-ins are rationed
   by the product's own script — three a Pacific day (DRE-5671) — and a hosted
