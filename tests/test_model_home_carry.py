@@ -201,14 +201,15 @@ def test_move_agent_sets_the_agents_group(stubs, capsys):
 
 
 def test_move_agent_removes_an_agent_that_left_every_group(stubs, capsys):
-    assert fixture_home()["agents"]["proof"] == "workhorse"
-    after = _dumped(lambda raw: raw["agents"].pop("proof"))
+    agent, group = next(iter(fixture_config()["agents"].items()))
+    assert fixture_home()["agents"][agent] == group
+    after = _dumped(lambda raw: raw["agents"].pop(agent))
     rc, out = _run(fixture_text(), after, capsys)
     assert rc == 0, out
     doc = stubs["home"].written()
-    assert "proof" not in doc["agents"]
+    assert agent not in doc["agents"]
     _assert_fresh(doc)
-    assert "agents.proof: workhorse → (none)" in out
+    assert f"agents.{agent}: {group} → (none)" in out
 
 
 def test_add_group_adds_the_group_with_its_label_purpose_and_ladder(stubs, capsys):
