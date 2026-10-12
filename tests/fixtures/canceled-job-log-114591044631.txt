@@ -1,0 +1,16 @@
+2026-10-11T22:41:41.6839361Z running walk tests/test_console_every_default_keeps_the_suite_green.py
+2026-10-11T23:02:21.8066412Z tests/test_console_every_default_keeps_the_suite_green.py::test_every_test_passes_after_the_save[default-workhorse-claude-haiku-5-5] FAILED [ 61%]
+2026-10-11T23:02:21.8226266Z tests/test_console_every_default_keeps_the_suite_green.py::test_every_test_passes_after_the_save[default-advisory-claude-haiku-5-5] FAILED [ 73%]
+2026-10-11T23:02:21.8386294Z tests/test_console_every_default_keeps_the_suite_green.py::test_every_test_passes_after_the_save[default-judgement-claude-haiku-5-5] FAILED [ 84%]
+2026-10-11T23:02:23.1988883Z E         =========================== short test summary info ============================
+2026-10-11T23:02:23.1990062Z E         FAILED tests/test_model_adoption.py::test_haiku_5_5_is_priced_excluded_and_on_nothing - AssertionError: assert 'claude-haiku-5-5' in {'claude-fable-5'}
+2026-10-11T23:02:23.2128924Z =========================== short test summary info ============================
+2026-10-11T23:02:23.2130064Z FAILED tests/test_console_every_default_keeps_the_suite_green.py::test_every_test_passes_after_the_save[default-workhorse-claude-haiku-5-5] - AssertionError: tests/test_model_adoption.py::test_haiku_5_5_is_priced_excluded_and_on_nothing
+2026-10-11T23:02:23.2156157Z   =========================== short test summary info ============================
+2026-10-11T23:02:23.2157120Z   FAILED tests/test_model_adoption.py::test_haiku_5_5_is_priced_excluded_and_on_nothing - AssertionError: assert 'claude-haiku-5-5' in {'claude-fable-5'}
+2026-10-11T23:02:23.2165764Z FAILED tests/test_console_every_default_keeps_the_suite_green.py::test_every_test_passes_after_the_save[default-advisory-claude-haiku-5-5] - AssertionError: tests/test_model_adoption.py::test_haiku_5_5_is_priced_excluded_and_on_nothing
+2026-10-11T23:02:23.2201088Z FAILED tests/test_console_every_default_keeps_the_suite_green.py::test_every_test_passes_after_the_save[default-judgement-claude-haiku-5-5] - AssertionError: tests/test_model_adoption.py::test_haiku_5_5_is_priced_excluded_and_on_nothing
+2026-10-11T23:02:23.2235299Z ================== 3 failed, 49 passed in 1241.31s (0:20:41) ===================
+2026-10-11T23:02:23.2444726Z walk tests/test_console_every_default_keeps_the_suite_green.py ... failed ... took 20m42s
+2026-10-11T23:02:23.2445487Z running walk tests/test_console_project_model_keeps_the_suite_green.py
+2026-10-11T23:08:48.2826633Z ##[error]The operation was canceled.

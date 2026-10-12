@@ -10708,6 +10708,49 @@ def _collateral_limits(runs) -> dict:
     return limits
 
 
+def _read_job_log(check: dict) -> tuple[str | None, str | None]:
+    """One canceled job's log, as (text, why it could not be read). A job's
+    id IS its check run's id; read through `_actions_read`, on the token the
+    run read in `_tend_canceled_runs` uses. `gh api` refuses a body holding
+    terminal escape sequences unless told to allow them, and every Actions
+    log holds them in its step headers — the flag is what makes it readable.
+    An empty answer is a failed read: a finished job's log is never empty."""
+    out, detail = _actions_read((
+        "api", "--allow-escape-sequences",
+        f"repos/{REPO}/actions/jobs/{check.get('id')}/logs"))
+    if detail is not None or not out:
+        return None, detail or "the Actions read answered nothing"
+    return out, None
+
+
+def _failed_inside(pr: dict, runs, limits: dict) -> dict:
+    """The tests each canceled job's log shows failing (DRE-7018): check id →
+    `canceled_check.failed_tests` of its log. Read for every `cancelled` check
+    on the head with a workflow run behind it that is not fail-fast
+    collateral; one whose log could not be read is left out, and its run
+    stays UNKNOWN as before."""
+    dropped = {id(c) for c in canceled_check.collateral(runs, limits)}
+    found: dict = {}
+    for check in runs or ():
+        if (not isinstance(check, dict) or canceled_check.is_review(check)
+                or check.get("conclusion") != canceled_check.CANCELLED
+                or canceled_check.run_of(check) is None or id(check) in dropped):
+            continue
+        name = check.get("name") or f"job {check.get('id')}"
+        text, why = _read_job_log(check)
+        if text is None:
+            print(f"canceled-check: PR #{pr['number']} the log of {name!r} "
+                  f"could not be read ({why}) — its run stays unknown this sweep")
+            continue
+        tests = canceled_check.failed_tests(text)
+        found[check.get("id")] = tests
+        if tests:
+            print(f"canceled-check: PR #{pr['number']} {name!r} was canceled "
+                  f"after {len(tests)} test(s) had already failed — counted as "
+                  f"a failure, not a cancellation: {', '.join(tests)}")
+    return found
+
+
 def _tend_canceled_runs(pr: dict, sha: str, unknown: dict) -> bool:
     """Re-run, or tell once, each workflow run on `pr`'s head that holds a
     canceled check (DRE-3072). The rule is `canceled_check`'s; the reads and
@@ -10788,7 +10831,9 @@ def fix_approved_but_red() -> None:
     re-run once, or told once on a later attempt, and never counted toward a
     fix dispatch — the rule is `canceled_check`'s. Except a check canceled by
     its run's fail-fast after a sibling failed (DRE-6780): it is dropped, and
-    the run is red on the failures beside it."""
+    the run is red on the failures beside it. And a canceled check whose log
+    already shows a failed test (DRE-7018) is a failure, sent the fix agent
+    through the same gates as any red check."""
     import proof_dispatch  # noqa: PLC0415 — proof_dispatch imports this module
 
     # Unreadable answers BUSY (gh_actions_read): the App token 403s on this
@@ -10822,7 +10867,11 @@ def fix_approved_but_red() -> None:
         # matrix's fail-fast collateral (agent-bureau #3563, 2026-10-10). It is
         # dropped, the run is red on its failures, and it is neither re-run
         # nor told — the gates below decide the fix dispatch as for any red.
-        split = canceled_check.split(runs, _collateral_limits(runs))
+        # DRE-7018: a canceled check whose log already shows a failed test is
+        # a failure (bureau-pipeline #1042, 2026-10-11) — red as any other,
+        # neither re-run nor told; a log that cannot be read changes nothing.
+        limits = _collateral_limits(runs)
+        split = canceled_check.split(runs, limits, _failed_inside(pr, runs, limits))
         if not _tend_canceled_runs(pr, sha, split.unknown):
             continue  # a refused re-run never falls through to a fix dispatch
         failed = list(dict.fromkeys(
