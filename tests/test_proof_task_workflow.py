@@ -68,6 +68,15 @@ APP_TOKEN_VERSION = "v3.2.0"
 
 AWS_NONE = "proof identity: aws — none, PROOF_ROLE_ARN not provided"
 AWS_ASSUMED = "proof identity: aws — role assumed as proof-"
+AWS_REFUSED = ("proof identity: aws — none, PROOF_ROLE_ARN provided but the "
+               "role could not be assumed")
+
+#: The caller's repository variable that sets the AWS session's length
+#: (DRE-7020). Unset, the input is empty and the pinned action uses its own
+#: 3,600 seconds; the agent steps read the same variable with that fallback.
+SESSION_VAR = "${{ vars.PROOF_ROLE_DURATION_SECONDS }}"
+SESSION_ENV = "PROOF_SESSION_SECONDS"
+SESSION_VALUE = "${{ vars.PROOF_ROLE_DURATION_SECONDS || '3600' }}"
 
 RESULT_STEP = "Report proof result to Linear"
 RETURN_STEP = "Return from Green Light on the CEO's answer"
@@ -476,6 +485,38 @@ class CallerAwsIdentityTest(unittest.TestCase):
                          with_["role-session-name"])
         self.assertEqual("${{ inputs.aws_region }}", with_["aws-region"])
 
+    def test_the_session_length_is_the_callers_variable_and_nothing_else_moved(self):
+        """DRE-7020: the step gains `role-duration-seconds` read from the
+        caller's variable with no fallback — unset, the input is empty and the
+        pinned action's own 3,600 applies, today's behavior exactly — and
+        every other field of the step is what it was."""
+        step = _step(self.ASSUME)
+        self.assertEqual(
+            f"{AWS_CREDS}@e1253824e5c10ff9df46874f81ed3ec929e19cfd", step["uses"])
+        self.assertEqual("steps.proof_role.outputs.provided == 'true'", step["if"])
+        self.assertIs(True, step["continue-on-error"])
+        self.assertEqual("aws", step["id"])
+        self.assertEqual({
+            "role-to-assume": "${{ secrets.PROOF_ROLE_ARN }}",
+            "role-session-name": "proof-${{ github.event.client_payload.identifier }}",
+            "aws-region": "${{ inputs.aws_region }}",
+            "role-duration-seconds": SESSION_VAR,
+        }, step["with"])
+        self.assertEqual(
+            {"name", "id", "if", "continue-on-error", "uses", "with"}, set(step))
+
+    def test_the_session_length_input_says_what_unset_and_too_long_cost(self):
+        src = PROOF_TASK.read_text().splitlines()
+        at = [i for i, l in enumerate(src)
+              if l.strip() == f"role-duration-seconds: {SESSION_VAR}"]
+        self.assertEqual(1, len(at), "one role-duration-seconds input, as written")
+        start = max(i for i, l in enumerate(src[:at[0]])
+                    if l.strip() == f"- name: {self.ASSUME}")
+        comment = " ".join(l.strip().lstrip("#").strip()
+                           for l in src[start:at[0]] if l.strip().startswith("#"))
+        for phrase in ("3,600", "unset", "maximum", "AWS rows"):
+            self.assertIn(phrase, comment)
+
     def test_it_runs_only_when_the_role_is_provided(self):
         """The secrets context cannot be read in an `if:`, and a job-level
         mirror would put the role in the agent step's env chain. So one step
@@ -500,6 +541,38 @@ class CallerAwsIdentityTest(unittest.TestCase):
         runs = _runs()
         self.assertIn(AWS_NONE, runs)
         self.assertIn(AWS_ASSUMED + "$CARD", runs)
+
+    def test_the_record_step_writes_its_three_lines_character_for_character(self):
+        """DRE-7020 changes the session's length, never the line the record
+        copies: the step writes exactly these three, and no fourth."""
+        run = _step("Record the caller's proof identity")["run"]
+        lines = re.findall(r'^\s*LINE="([^"\n]*)"\s*$', run, re.M)
+        self.assertEqual([AWS_NONE, AWS_ASSUMED + "$CARD", AWS_REFUSED], lines)
+
+
+class ProofSessionLengthTest(unittest.TestCase):
+    """The run learns its AWS session's length from its env (DRE-7020): a
+    number, not a credential — the read token cannot read repository
+    variables on every installation, and a run cannot read its own step
+    summary."""
+
+    def test_every_agent_step_carries_the_length_with_the_one_hour_fallback(self):
+        agents = _agent_steps()
+        self.assertEqual(3, len(agents))
+        for _i, step in agents:
+            self.assertEqual(SESSION_VALUE, (step.get("env") or {}).get(SESSION_ENV),
+                             f"{step['name']} does not carry {SESSION_ENV}")
+
+    def test_no_other_step_carries_it(self):
+        agent_ids = {i for i, _s in _agent_steps()}
+        for i, step in enumerate(_steps()):
+            if i in agent_ids:
+                continue
+            self.assertNotIn(SESSION_ENV, step.get("env") or {}, step.get("name"))
+        self.assertNotIn(SESSION_ENV, _job().get("env") or {})
+        self.assertNotIn(SESSION_ENV, _doc().get("env") or {})
+        self.assertEqual(3, PROOF_TASK.read_text().count(SESSION_ENV),
+                         "the name appears once per agent step and nowhere else")
 
 
 #: `linear_ops.py advance <card> "<to>" "<from>"`, as a run step writes it.
