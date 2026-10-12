@@ -455,10 +455,35 @@ class ResumedHistoryPassesTddCheckTest(unittest.TestCase):
             # The resume run: check out, merge the default in, finish.
             git(work, "checkout", "-q", name)
             git(work, "merge", "-q", "--no-edit", "origin/main", when=1_700_000_300)
+            # Since DRE-3009 every code commit needs a test commit since the
+            # previous one, so the resume run's own change opens with its RED.
+            s.write(work, "tests/test_app.py",
+                    "def test_x(): assert False\ndef test_y(): assert False\n")
+            s.commit(work, "test: RED for the rest", when=1_700_000_350)
             s.write(work, "scripts/app.py", "VALUE = 3\n")
             s.commit(work, "feat: the rest", when=1_700_000_400)
             proc = self._check(work)
             self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+
+    def test_a_resumed_change_with_no_test_of_its_own_is_red(self):
+        # DRE-3009: the dead run's RED commit covers the dead run's code
+        # commit, not the resume run's.
+        with tempfile.TemporaryDirectory() as td:
+            s = Scratch(td)
+            name = f"agent/{CARD}-resume-no-red"
+            s.branch(name, {"tests/test_app.py": "def test_x(): assert False\n"},
+                     subject="test: RED", when=1_700_000_100)
+            git(s.seed, "checkout", "-q", "-B", name, f"origin/{name}")
+            s.write(s.seed, "scripts/app.py", "VALUE = 2\n")
+            s.commit(s.seed, "feat: half of it", when=1_700_000_150)
+            git(s.seed, "push", "-q", "origin", name)
+            work = s.clone()
+            git(work, "checkout", "-q", name)
+            s.write(work, "scripts/app.py", "VALUE = 3\n")
+            s.commit(work, "feat: the rest", when=1_700_000_400)
+            proc = self._check(work)
+            self.assertEqual(proc.returncode, 1, proc.stdout + proc.stderr)
+            self.assertIn("feat: the rest", proc.stdout)
 
     def test_the_check_still_catches_code_first_on_the_same_shape(self):
         # The control: the same merged shape with the order reversed is red,
