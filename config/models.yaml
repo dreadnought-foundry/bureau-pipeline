@@ -525,9 +525,7 @@ about:
 # (`model_fallback.policy_errors`); the daily adoption moves an exception with
 # the rung it names when a same-family successor replaces it on that kind's
 # ladder, and never retires a model an exception still names.
-projects:
-  agent-bureau-demo:
-    workhorse: claude-sonnet-5-5
+projects: {}
 
 # THE BUILD/REVIEW FENCE, DECLARED (DRE-3880, CEO decision 2026-09-16)
 # --------------------------------------------------------------------
