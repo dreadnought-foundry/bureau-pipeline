@@ -714,3 +714,260 @@ def test_attempt_two_with_only_a_canceled_check_is_still_told_nothing_is_coming(
     assert trailer and trailer["act"] == canceled_check.AGAIN_ACT
     assert VITEST_2 in body and fx["head_sha"] in body
     assert "nothing automatic is coming" in body
+
+
+# --------------------------------------------------------------------------
+# 4. A cancellation with a failed test already inside it (DRE-7018)
+# --------------------------------------------------------------------------
+#
+# bureau-pipeline #1042, head c4be402a, workflow run 38178110152 on attempt 2,
+# 2026-10-11: `scripts unit tests (walks)` printed `3 failed, 49 passed` at
+# 16:02 PT and was stopped at its 45-minute limit at 16:08 PT. Its conclusion
+# read `cancelled`, so the sweep told a person nothing automatic was coming and
+# three real failures waited 20 minutes for one. A canceled check whose log
+# already shows a failed test is a failure: the fix agent is sent as for any
+# red check. The two log fixtures are cut from the real job logs: job
+# 114591044631's lines the card quotes, and job 114479165587's last twenty
+# result lines through its cancel line — a plain time-limit cancellation.
+
+FIXTURE_C4BE = ROOT / "tests" / "fixtures" / "canceled-check-c4be402a.json"
+LOG_FAILED = ROOT / "tests" / "fixtures" / "canceled-job-log-114591044631.txt"
+LOG_PLAIN = ROOT / "tests" / "fixtures" / "canceled-job-log-114479165587.txt"
+RUN_C4BE = 38178110152
+WALKS = "scripts unit tests (walks)"
+WALKS_JOB = 114591044631
+UNIT = "scripts unit tests"
+PART_1 = "scripts unit tests (part 1)"
+PART_1_JOB = 114591045454
+_SAVE = ("tests/test_console_every_default_keeps_the_suite_green.py::"
+         "test_every_test_passes_after_the_save")
+WALKS_FAILED = [f"{_SAVE}[default-workhorse-claude-haiku-5-5]",
+                f"{_SAVE}[default-advisory-claude-haiku-5-5]",
+                f"{_SAVE}[default-judgement-claude-haiku-5-5]"]
+INNER = "tests/test_model_adoption.py::test_haiku_5_5_is_priced_excluded_and_on_nothing"
+CANCEL = "2026-10-11T23:08:48.2826633Z ##[error]The operation was canceled."
+
+
+def fixture_c4be() -> dict:
+    return json.loads(FIXTURE_C4BE.read_text(encoding="utf-8"))
+
+
+def test_the_c4be_fixture_is_the_cards_table():
+    fx = fixture_c4be()
+    assert fx["pr"] == 1042 and fx["run"]["id"] == RUN_C4BE
+    assert fx["run"]["run_attempt"] == 2 and fx["run"]["conclusion"] == "cancelled"
+    by_name = {c["name"]: c for c in fx["check_runs"]}
+    assert (by_name[WALKS]["id"], by_name[WALKS]["conclusion"]) == (WALKS_JOB, "cancelled")
+    assert by_name[UNIT]["conclusion"] == "failure"
+    assert canceled_check.limit(fx["annotations"][str(WALKS_JOB)]) == "45-minute"
+    # The walks job finished before the failure beside it: no collateral.
+    assert canceled_check.collateral_candidates(fx["check_runs"]) == ()
+
+
+def test_the_failed_tests_are_read_off_the_walks_log_in_order_once_each():
+    tests = canceled_check.failed_tests(LOG_FAILED.read_text(encoding="utf-8"))
+    assert tests == WALKS_FAILED
+
+
+def test_the_quoted_inner_run_is_not_read():
+    tests = canceled_check.failed_tests(LOG_FAILED.read_text(encoding="utf-8"))
+    assert INNER not in tests
+    assert not [t for t in tests if "test_model_adoption" in t]
+
+
+def test_a_plain_time_limit_cancel_shows_no_failed_test():
+    text = LOG_PLAIN.read_text(encoding="utf-8")
+    assert "##[error]The operation was canceled." in text and " PASSED [" in text
+    assert canceled_check.failed_tests(text) == []
+
+
+def test_a_failed_line_after_the_cancel_line_is_not_read():
+    text = LOG_PLAIN.read_text(encoding="utf-8") + (
+        "2026-10-11T13:47:01.0000000Z FAILED tests/test_x.py::test_late - boom\n"
+        "2026-10-11T13:47:01.1000000Z tests/test_x.py::test_late FAILED [ 11%]\n")
+    assert canceled_check.failed_tests(text) == []
+
+
+@pytest.mark.parametrize("text", [None, "", "\n\n"])
+def test_nothing_is_read_from_no_log(text):
+    assert canceled_check.failed_tests(text) == []
+
+
+@pytest.mark.parametrize("line, test", [
+    ("2026-10-11T23:02:23.2130064Z FAILED tests/test_a.py::test_b - AssertionError: x",
+     "tests/test_a.py::test_b"),
+    ("2026-10-11T23:02:23.2130064Z ERROR tests/test_a.py::test_b - fixture 'db' not found",
+     "tests/test_a.py::test_b"),
+    ("2026-10-11T23:02:23.2130064Z FAILED tests/test_a.py::TestC::test_b",
+     "tests/test_a.py::TestC::test_b"),
+    ("2026-10-11T23:02:21.8066412Z tests/test_a.py::test_b[x-y] FAILED [ 61%]",
+     "tests/test_a.py::test_b[x-y]"),
+    ("2026-10-11T23:02:21.8066412Z tests/test_a.py::test_b ERROR [100%]",
+     "tests/test_a.py::test_b"),
+    ("2026-10-11T23:02:21.8066412Z tests/test_a.py::test_b FAILED                 [  4%]",
+     "tests/test_a.py::test_b"),
+])
+def test_both_of_pytests_wordings_are_read(line, test):
+    assert canceled_check.failed_tests(line + "\n" + CANCEL) == [test]
+
+
+@pytest.mark.parametrize("line", [
+    "2026-10-11T23:02:23.1990062Z E         FAILED tests/test_a.py::test_b - x",
+    "2026-10-11T23:02:23.2157120Z   FAILED tests/test_a.py::test_b - x",
+    "2026-10-11T23:02:23.2157120Z   tests/test_a.py::test_b FAILED [ 61%]",
+    "2026-10-11T23:02:23.2235299Z ================== 3 failed, 49 passed in 1241.31s ==",
+    "2026-10-11T23:02:23.2444726Z walk tests/test_a.py ... failed ... took 20m42s",
+    "2026-10-11T23:02:21.8066412Z tests/test_a.py::test_b PASSED [ 61%]",
+    "2026-10-11T23:02:21.8066412Z tests/test_a.py::test_FAILED_b PASSED [ 61%]",
+])
+def test_quoted_and_other_lines_are_not_read(line):
+    assert canceled_check.failed_tests(line + "\n" + CANCEL) == []
+
+
+def test_the_patterns_are_one_named_tuple():
+    assert isinstance(canceled_check.FAILED_TEST_PATTERNS, tuple)
+    assert len(canceled_check.FAILED_TEST_PATTERNS) >= 2
+
+
+def test_a_canceled_check_with_failed_tests_inside_is_a_failure():
+    fx = fixture_c4be()
+    split = canceled_check.split(fx["check_runs"], failed_inside={WALKS_JOB: WALKS_FAILED})
+    assert sorted(c["name"] for c in split.red) == sorted([WALKS, UNIT])
+    assert split.unknown == {}
+
+
+@pytest.mark.parametrize("failed_inside", [None, {}, {WALKS_JOB: []}])
+def test_with_no_failed_test_inside_the_run_is_unknown_as_today(failed_inside):
+    fx = fixture_c4be()
+    split = canceled_check.split(fx["check_runs"], failed_inside=failed_inside)
+    assert split.red == ()
+    assert list(split.unknown) == [RUN_C4BE]
+    assert sorted(c["name"] for c in split.unknown[RUN_C4BE]) == sorted([WALKS, UNIT])
+
+
+@pytest.mark.parametrize("part_1_finished", [
+    "2026-10-11T23:00:00Z",  # before the walks job
+    "2026-10-11T23:08:58Z",  # after the walks job, before the summary failed
+    "2026-10-11T23:10:00Z",  # after both
+])
+def test_a_plain_cancellation_beside_one_with_failures_keeps_the_run_unknown(part_1_finished):
+    """The fail-fast reading is made on GitHub's conclusions: the walks job is
+    never the earlier failure that makes a sibling collateral."""
+    fx = fixture_c4be()
+    runs = _at(_with(fx, **{PART_1: "cancelled"}), PART_1, part_1_finished)
+    split = canceled_check.split(runs, {PART_1_JOB: None},
+                                 failed_inside={WALKS_JOB: WALKS_FAILED})
+    assert split.red == ()
+    assert list(split.unknown) == [RUN_C4BE]
+    assert sorted(c["name"] for c in split.unknown[RUN_C4BE]) == sorted(
+        [WALKS, UNIT, PART_1])
+
+
+class FakeGhC4be(FakeGh):
+    """`FakeGh` for run 38178110152, serving each canceled job's log off
+    `logs` (job id → text; a missing or None entry answers nothing)."""
+
+    def __init__(self, *args, logs=None):
+        super().__init__(*args)
+        self.logs = {str(k): v for k, v in (logs or {}).items()}
+
+    def __call__(self, *args):
+        joined = " ".join(args)
+        if f"actions/runs/{RUN_C4BE}" in joined:
+            self.calls.append(args)
+            return json.dumps(self.run) if self.run is not None else ""
+        if "/logs" in joined:
+            self.calls.append(args)
+            for job, text in self.logs.items():
+                if f"actions/jobs/{job}/logs" in joined:
+                    return text or ""
+            return ""
+        return super().__call__(*args)
+
+
+def log_reads(fake) -> list:
+    return [a for a in fake.calls if "/logs" in " ".join(a)]
+
+
+class SweepC4be(Sweep):
+    """One pass of `fix_approved_but_red` over bureau-pipeline #1042."""
+
+    def __init__(self, logs=None, check_runs=None, notes=()):
+        fx = fixture_c4be()
+        self.fake = FakeGhC4be(
+            fx["check_runs"] if check_runs is None else check_runs,
+            fx["run"], fx["annotations"], [approved_pr(fx, notes)], logs=logs)
+        self.refuse = False
+        self.reruns: list = []
+        self.fixes: list = []
+        self.posted: list = []
+
+
+def test_replay_c4be_dispatches_one_fix_and_names_the_failed_tests(capsys):
+    fx = fixture_c4be()
+    sweep = SweepC4be(logs={WALKS_JOB: LOG_FAILED.read_text(encoding="utf-8")}).run()
+    assert sweep.reruns == [] and sweep.posted == []
+    assert len(sweep.fixes) == 1
+    assert sweep.fixes[0][:2] == ("workflow", "run")
+    assert f"pr_number={fx['pr']}" in sweep.fixes[0]
+    assert _no_canceled_check_receipt(sweep.posted)
+    out = capsys.readouterr().out
+    assert "#1042" in out and WALKS in out
+    for test in WALKS_FAILED:
+        assert test in out
+
+
+def test_the_log_is_read_once_on_the_jobs_endpoint_allowing_escapes():
+    """`gh api` refuses a job log holding terminal escape sequences unless
+    told to allow them, and every Actions log holds them (step headers)."""
+    sweep = SweepC4be(logs={WALKS_JOB: LOG_FAILED.read_text(encoding="utf-8")}).run()
+    reads = log_reads(sweep.fake)
+    assert len(reads) == 1
+    assert f"repos/{reconcile.REPO}/actions/jobs/{WALKS_JOB}/logs" in reads[0]
+    assert "--allow-escape-sequences" in reads[0]
+
+
+def test_replay_c4be_with_a_plain_cancel_log_is_told_once_as_today():
+    fx = fixture_c4be()
+    sweep = SweepC4be(logs={WALKS_JOB: LOG_PLAIN.read_text(encoding="utf-8")}).run()
+    assert sweep.fixes == [] and sweep.reruns == []
+    assert len(sweep.posted) == 1
+    body = sweep.posted[0][1]
+    trailer = pipeline_act.read_trailer(body)
+    assert trailer and trailer["act"] == canceled_check.AGAIN_ACT
+    assert WALKS in body and fx["head_sha"] in body
+
+
+def test_replay_c4be_with_an_unreadable_log_is_told_once_and_says_so(capsys):
+    sweep = SweepC4be(logs={}).run()
+    assert sweep.fixes == [] and sweep.reruns == []
+    assert len(sweep.posted) == 1
+    trailer = pipeline_act.read_trailer(sweep.posted[0][1])
+    assert trailer and trailer["act"] == canceled_check.AGAIN_ACT
+    out = capsys.readouterr().out
+    assert "log" in out and "could not be read" in out and WALKS in out
+
+
+def test_replay_c4be_after_the_fix_ran_with_no_commit_is_passed_over():
+    """The canceled check with failures inside goes through the same gates
+    as any red one: here the no-commit pass-over (DRE-6583)."""
+    log = LOG_FAILED.read_text(encoding="utf-8")
+    with mock.patch.object(reconcile, "_no_commit_fix_runs", return_value=True):
+        sweep = SweepC4be(logs={WALKS_JOB: log}).run()
+    assert sweep.fixes == [] and sweep.reruns == [] and sweep.posted == []
+
+
+def test_replay_1d7a_reads_no_job_log_for_its_collateral_check():
+    sweep = Sweep1d7a().run()
+    assert len(sweep.fixes) == 1
+    assert not [a for a in sweep.fake.calls if "/logs" in " ".join(a)]
+
+
+def test_replay_a3fa0c44_reads_the_shards_log_and_stays_unknown():
+    """The shard's log is read (a cancellation with a run behind it); the
+    harness answers nothing, so the run is re-run once as before."""
+    fx = fixture()
+    sweep = Sweep(fx["check_runs"], _attempt(fx, 1)).run()
+    reads = [" ".join(a) for a in sweep.fake.calls if "/logs" in " ".join(a)]
+    assert len(reads) == 1 and f"actions/jobs/{SHARD_JOB}/logs" in reads[0]
+    assert sweep.fixes == [] and len(sweep.reruns) == 1
