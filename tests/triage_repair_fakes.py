@@ -112,6 +112,11 @@ class TriageRepairBoard:
         card.lane = lane
         card.history.append((lane, self._now()))
 
+    def unlabel(self, identifier: str, label_name: str) -> None:
+        """A person removes a label, outside any code under test."""
+        card = self.cards[identifier]
+        card.labels = [n for n in card.labels if n != label_name]
+
     def fail(self, kind: str, match: str = "") -> None:
         """The next write of `kind` whose detail contains `match` raises."""
         self._failures.setdefault(kind, []).append(match)
@@ -251,9 +256,14 @@ class TriageRepairBoard:
         self.events.append(("comment", identifier, body))
         return None
 
-    def cmd_state(self, identifier, state_name, *flags, **kw):
+    def cmd_state(self, identifier, state_name, *flags, expect=None, **kw):
+        """The conditional write `linear_ops.cmd_state` makes with `expect`:
+        refused, False, when the card's lane is not one the caller read."""
         self._check("state", state_name)
         card = self._card(identifier)
+        if expect is not None and card.lane not in tuple(expect):
+            self.events.append(("state-refused", identifier, state_name))
+            return False
         card.lane = state_name
         card.history.append((state_name, self._now()))
         self.events.append(("state", identifier, state_name))

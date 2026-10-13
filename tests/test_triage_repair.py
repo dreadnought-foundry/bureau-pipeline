@@ -375,9 +375,11 @@ class TestApplyRewritten:
     def test_a_repair_with_no_answers_is_unfinished(self, tmp_path):
         board = TriageRepairBoard()
         _parked(board, "DRE-1", NOTE_7066)
+        _claim(board, "DRE-1")
+        before = len(board.events)
         out = _write(tmp_path / "out", revised=REVISED)
         assert _apply(board, "DRE-1", "repair", out) != 0
-        assert [k for k, _ in board.writes("DRE-1")] == ["comment"]
+        assert [k for k, _ in board.writes("DRE-1")[before:]] == ["comment"]
         newest = board.newest("DRE-1")
         assert newest.startswith("🩹 triage-repair: unfinished")
         assert "repair-answers.md" in newest
@@ -385,6 +387,7 @@ class TestApplyRewritten:
     def test_a_failed_move_after_the_lift_is_unfinished_naming_it(self, tmp_path, capsys):
         board = TriageRepairBoard()
         _parked(board, "DRE-1", NOTE_7066)
+        _claim(board, "DRE-1")
         board.fail("state", "Planning")
         out = _write(tmp_path / "out", revised=REVISED, answers=_answers(8))
         assert _apply(board, "DRE-1", "repair", out) != 0
@@ -400,14 +403,128 @@ class TestApplyRewritten:
     def test_a_failed_set_description_lifts_and_moves_nothing(self, tmp_path):
         board = TriageRepairBoard()
         _parked(board, "DRE-1", NOTE_7066)
+        _claim(board, "DRE-1")
+        before = len(board.events)
         board.fail("description")
         out = _write(tmp_path / "out", revised=REVISED, answers=_answers(8))
         assert _apply(board, "DRE-1", "repair", out) != 0
-        kinds = [k for k, _ in board.writes("DRE-1")]
+        kinds = [k for k, _ in board.writes("DRE-1")[before:]]
         assert kinds == ["comment"]
         assert "set the description" in board.newest("DRE-1")
         assert "needs-human" in board.labels("DRE-1")
         assert board.lane("DRE-1") == "Triage"
+
+    @pytest.mark.parametrize("lane", ["In Progress", "Backlog", "Planning"])
+    def test_a_card_moved_out_of_triage_after_the_claim_is_not_rewritten(
+            self, tmp_path, lane):
+        """The planner runs for up to 120 turns between the claim and the
+        apply. A card a person or the hygiene agent moved on in that window is
+        no longer the repair's: its description is not overwritten and it is
+        not dragged to Planning."""
+        board = TriageRepairBoard()
+        _parked(board, "DRE-7066", NOTE_7066)
+        assert _claim(board, "DRE-7066") == 0
+        board.move("DRE-7066", lane)
+        before = len(board.events)
+        out = _write(tmp_path / "out", revised=REVISED, answers=_answers(8))
+        assert _apply(board, "DRE-7066", "repair", out) != 0
+        assert [k for k, _ in board.writes("DRE-7066")[before:]] == ["comment"]
+        assert board.description("DRE-7066") == DESCRIPTION
+        assert board.lane("DRE-7066") == lane
+        assert "needs-human" in board.labels("DRE-7066")
+        newest = board.newest("DRE-7066")
+        assert newest.startswith("🩹 triage-repair: unfinished")
+        assert "no longer in Triage" in newest
+        assert "Writes already made: none" in newest
+
+    def test_a_card_whose_hold_a_person_lifted_is_not_rewritten(self, tmp_path):
+        board = TriageRepairBoard()
+        _parked(board, "DRE-7066", NOTE_7066)
+        assert _claim(board, "DRE-7066") == 0
+        board.unlabel("DRE-7066", "needs-human")
+        before = len(board.events)
+        out = _write(tmp_path / "out", revised=REVISED, answers=_answers(8))
+        assert _apply(board, "DRE-7066", "repair", out) != 0
+        assert [k for k, _ in board.writes("DRE-7066")[before:]] == ["comment"]
+        assert board.description("DRE-7066") == DESCRIPTION
+        assert board.lane("DRE-7066") == "Triage"
+        newest = board.newest("DRE-7066")
+        assert newest.startswith("🩹 triage-repair: unfinished")
+        assert "needs-human" in newest
+
+    def test_the_move_to_planning_is_conditional_on_triage(self, tmp_path, monkeypatch):
+        """A card moved on after the live read, while the rewrite's own writes
+        run, is still not dragged to Planning: the move expects Triage."""
+        board = TriageRepairBoard()
+        _parked(board, "DRE-7066", NOTE_7066)
+        assert _claim(board, "DRE-7066") == 0
+        real = triage_repair._decisions_block
+
+        def then_moved(card):
+            real(card)
+            board.move(card, "In Progress")
+
+        monkeypatch.setattr(triage_repair, "_decisions_block", then_moved)
+        out = _write(tmp_path / "out", revised=REVISED, answers=_answers(8))
+        assert _apply(board, "DRE-7066", "repair", out) != 0
+        assert board.lane("DRE-7066") == "In Progress"
+        assert ("state-refused", "Planning") in board.writes("DRE-7066")
+        newest = board.newest("DRE-7066")
+        assert newest.startswith("🩹 triage-repair: unfinished")
+        assert "move the card to Planning" in newest
+
+
+# --------------------------------------------------------------------------- #
+# apply — only under a standing claim                                          #
+# --------------------------------------------------------------------------- #
+
+
+class TestApplyNeedsTheClaim:
+    def test_a_second_apply_after_rewritten_posts_nothing(self, tmp_path, capsys):
+        board = TriageRepairBoard()
+        _parked(board, "DRE-7066", NOTE_7066)
+        assert _claim(board, "DRE-7066") == 0
+        out = _write(tmp_path / "out", revised=REVISED, answers=_answers(8))
+        assert _apply(board, "DRE-7066", "repair", out) == 0
+        # Somebody puts the card back in Triage; a stale rerun applies again.
+        board.move("DRE-7066", "Triage")
+        board.say("DRE-7066", STAMP)
+        board.cards["DRE-7066"].labels.append("needs-human")
+        before = len(board.events)
+        assert _apply(board, "DRE-7066", "repair", out) != 0
+        assert board.events[before:] == []
+        assert len([b for b in _receipts(board, "DRE-7066")
+                    if b.splitlines()[0].startswith("🩹 triage-repair: rewritten")]) == 1
+        assert board.lane("DRE-7066") == "Triage"
+        assert "no claim stands" in capsys.readouterr().err
+
+    def test_a_second_apply_after_asked_posts_nothing(self, tmp_path):
+        board = TriageRepairBoard()
+        _parked(board, "DRE-2", DECISION_NOTE)
+        assert _claim(board, "DRE-2") == 0
+        out = _write(tmp_path / "out", question=QUESTION, choices=CHOICES)
+        assert _apply(board, "DRE-2", "escalate", out) == 0
+        before = len(board.events)
+        assert _apply(board, "DRE-2", "escalate", out) != 0
+        assert board.events[before:] == []
+
+    def test_an_apply_with_no_claim_posts_nothing(self, tmp_path):
+        board = TriageRepairBoard()
+        _parked(board, "DRE-7066", NOTE_7066)
+        out = _write(tmp_path / "out", revised=REVISED, answers=_answers(8))
+        assert _apply(board, "DRE-7066", "repair", out) != 0
+        assert board.events == []
+        assert board.description("DRE-7066") == DESCRIPTION
+        assert board.lane("DRE-7066") == "Triage"
+
+    def test_a_person_typed_started_is_not_a_claim(self, tmp_path):
+        board = TriageRepairBoard()
+        _parked(board, "DRE-7066", NOTE_7066)
+        board.say("DRE-7066", "🩹 triage-repair: started — typed by a person.",
+                  user=PERSON_USER)
+        out = _write(tmp_path / "out", revised=REVISED, answers=_answers(8))
+        assert _apply(board, "DRE-7066", "repair", out) != 0
+        assert board.events == []
 
 
 # --------------------------------------------------------------------------- #
@@ -481,16 +598,23 @@ class TestApplyAsked:
         set_aside = "set aside" in board.newest("DRE-7066")
         assert set_aside is with_rewrite
 
-    def test_a_card_moved_on_before_apply_stands_down_unfinished(self, tmp_path):
+    def test_a_card_moved_on_before_apply_is_unfinished_before_any_write(self, tmp_path):
+        """The live lane is read before the lift, so a card already moved on
+        keeps its hold and is never handed to the escalation at all."""
         board = self._decision_card(tmp_path)
         board.move("DRE-2", "In Progress")
+        before = len(board.events)
         out = _write(tmp_path / "out", question=QUESTION, choices=CHOICES)
         assert _apply(board, "DRE-2", "escalate", out) != 0
+        assert [k for k, _ in board.writes("DRE-2")[before:]] == ["comment"]
         assert board.lane("DRE-2") == "In Progress"
-        assert len(_stand_downs(board, "DRE-2")) == 1
+        assert "needs-human" in board.labels("DRE-2")
+        assert not _stand_downs(board, "DRE-2")
+        assert not _escalation_notes(board, "DRE-2")
         newest = board.newest("DRE-2")
         assert newest.startswith("🩹 triage-repair: unfinished")
-        assert "it is in In Progress" in newest and "lift the hold" in newest
+        assert "no longer in Triage" in newest
+        assert "Writes already made: none" in newest
         assert not [b for b in _receipts(board, "DRE-2") if "asked" in b.splitlines()[0]]
 
     def test_a_refused_question_is_unfinished_before_any_write(self, tmp_path):
