@@ -657,3 +657,33 @@ def test_the_standard_and_the_document_say_the_train_files_the_card():
         assert "RELEASE ROLLED BACK:" in text and "RELEASE BROKEN:" in text
         assert "Released as <tag>" in text
         assert "`## Deferred`" in text
+
+
+def test_the_document_names_no_roster_file():
+    # The train's document describes no roster sweep (DRE-6025's guard in
+    # tests/test_fleet_default_window.py), so it never names the map's file.
+    assert "repo-map.json" not in release_train.render_markdown()
+
+
+def test_the_card_filed_held_has_its_row_in_the_hold_registry():
+    import hold
+    doc = json.loads((ROOT / "config" / "holds.json").read_text())
+    sites = [s for s in hold.discover() if s.file == "scripts/release_deferral.py"]
+    assert [s.scope for s in sites] == ["<module>"]
+    rows = [r for r in doc["sites"] if hold.row_matches(r, sites[0])]
+    assert len(rows) == 1
+    assert [e["reason"] for e in rows[0]["reasons"]] == ["manual"]
+    assert [p for p in hold.problems() if "release_deferral" in p] == []
+
+
+def test_both_card_comments_are_declared_not_composed():
+    import check_act_receipts
+    sites = [s for s in check_act_receipts.sites()
+             if s.path == "scripts/release_deferral.py"]
+    assert len(sites) == 2
+    declared = check_act_receipts.declarations()
+    for site in sites:
+        rows = [d for d in declared if check_act_receipts._matches(d, site)]
+        assert [d["kind"] for d in rows] == ["not-an-act"], site.line
+    assert [p for p in check_act_receipts.problems()
+            if "release_deferral" in p] == []
