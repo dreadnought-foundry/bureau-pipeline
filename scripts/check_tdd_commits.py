@@ -137,17 +137,22 @@ The rule (engineering standard: "commit the failing test FIRST"):
     path exemption for `plugins/**` would let real plugin code skip the
     discipline forever, and the bot's identity alone would exempt most of the
     fleet's PRs — it authors nearly all of them.
-  • The onboarding routing PR's routing paths are not code (DRE-7209). The
+  • The onboarding routing PR's mirror regions are not code (DRE-7209). The
     onboarding process opens one routing PR here and one in agent-bureau,
     both on the literal branch `bot/onboard`, adding a repo to the map and to
-    every file regenerated from it. Those paths, `ONBOARD_ROUTING_PATHS`, are
-    rendered rather than authored, and each repo's CI already proves them
-    (`scripts/sync_fallback_map.py --check` here, `make sync-mirrors CHECK=1`
-    in agent-bureau). The same attested opener decides it as for
-    standards-sync — `agent-bureau-bot`, from `attested_pr_author` — plus the
-    exact branch. It is NOT a PR exemption: only the routing set moves out of
-    `code`, so a commit that also touches any other code path on that branch
-    is a code commit and is held to the rule like any other.
+    every file regenerated from it. What is regenerated is not those whole
+    files: it is the lines between `BEGIN generated repo mirror` and
+    `END generated repo mirror` in each of agent-bureau's five slug mirrors,
+    and that region is all `make sync-mirrors CHECK=1` proves. So a path in
+    `ONBOARD_ROUTING_PATHS` leaves `code` only for a change confined to that
+    region, under the same fail-closed edges as the generated-region rule
+    above; a logic edit beside the region is code. This repo's
+    `scripts/validate_card.py` is not in the set, because the generated-
+    region rule already proves and exempts its mirror region. The same
+    attested opener decides it as for standards-sync — `agent-bureau-bot`,
+    from `attested_pr_author` — plus the exact branch. It is NOT a PR
+    exemption: any other path on that branch, or any other line of a routing
+    path, is held to the rule like any other.
   • Merge commits are skipped: merging an advanced main into the branch
     brings mainline commits that are not the PR's own work.
 
@@ -339,18 +344,19 @@ STANDARDS_SYNC_BOT = "agent-bureau-bot"
 ONBOARD_BRANCH = "bot/onboard"
 ONBOARD_BOT = "agent-bureau-bot"
 
-# Every path a routing PR changes, in either repo — and nothing else. None is
-# authored: each is regenerated from the repo map, and the regeneration check
-# each repo's CI already runs proves it (`scripts/sync_fallback_map.py --check`
-# here, for the repo map's fallback region in `scripts/validate_card.py`;
-# `make sync-mirrors CHECK=1` in agent-bureau, for the five paths its
-# `scripts/sync_repo_mirrors.py` lists in `SLUG_MIRRORS`). The `config/` paths
-# are ops already and are listed because the card names the whole set. Exact
-# paths, never a prefix: a neighboring file is held to the rule.
+# The paths a routing PR changes, in either repo. The `config/` paths are ops
+# already and are listed because the card names the whole set. The five code
+# paths are the slug mirrors agent-bureau's `scripts/sync_repo_mirrors.py`
+# lists in `SLUG_MIRRORS`, and only their repo-mirror region is regenerated —
+# `make sync-mirrors CHECK=1` in agent-bureau's CI proves that region and
+# nothing else in the file, so `is_routing_mirror_change` relieves only a
+# change confined to it. `scripts/validate_card.py`, the card's other path
+# here, is left to the generated-region rule (`_GENERATED_REGION_PROOFS`),
+# which already exempts its mirror region. Exact paths, never a prefix: a
+# neighboring file is held to the rule.
 ONBOARD_ROUTING_PATHS = frozenset({
     # bureau-pipeline
     "config/repo-map.json",
-    "scripts/validate_card.py",
     # agent-bureau
     "config/pipeline-channel.json",
     "config/linear-workspace.json",
@@ -360,6 +366,11 @@ ONBOARD_ROUTING_PATHS = frozenset({
     "console/web/src/components/flyout/cardMeta.ts",
     "demo/demo_library.py",
 })
+
+# The markers agent-bureau's mirror generator splices between — the region its
+# `--check` proves (`scripts/sync_fallback_map.py` writes the same phrases).
+_BEGIN_REPO_MIRROR = "BEGIN generated repo mirror"
+_END_REPO_MIRROR = "END generated repo mirror"
 
 
 def _normalized_bot_login(login: str) -> str:
@@ -470,8 +481,9 @@ def is_onboard_routing_pr(head_ref: str | None,
 
 def mark_routing_paths(commits) -> list[dict]:
     """Each commit record with a `routing` list: its paths in
-    `ONBOARD_ROUTING_PATHS`, which `commit_categories` reads as not code.
-    Call it only for a PR `is_onboard_routing_pr` admits."""
+    `ONBOARD_ROUTING_PATHS`, which `commit_categories` reads as not code when
+    `is_routing_mirror_change` holds for them. Call it only for a PR
+    `is_onboard_routing_pr` admits."""
     return [
         {**c, "routing": [p for p in c["paths"] if p in ONBOARD_ROUTING_PATHS]}
         for c in commits
@@ -545,7 +557,9 @@ def is_docs_only_python_change(before: str | None, after: str | None) -> bool:
     return shape_before == shape_after
 
 
-def _outside_generated_regions(source: str) -> list[str] | None:
+def _outside_generated_regions(
+    source: str, begin: str = _BEGIN_GENERATED, end: str = _END_GENERATED
+) -> list[str] | None:
     """Every line of `source` that is NOT inside a generated region, with the
     marker lines kept, or None if there is no usable region.
 
@@ -563,12 +577,12 @@ def _outside_generated_regions(source: str) -> list[str] | None:
     saw_region = False
     for line in lines:
         if inside:
-            if _END_GENERATED in line:
+            if end in line:
                 inside = False
                 outside.append(line)
             continue
         outside.append(line)
-        if _BEGIN_GENERATED in line:
+        if begin in line:
             inside = True
             saw_region = True
     if inside or not saw_region:
@@ -616,6 +630,39 @@ def is_generated_region_change(
     if outside_before is None:
         return False
     outside_after = _outside_generated_regions(after)
+    if outside_after is None:
+        return False
+    return outside_before == outside_after
+
+
+def is_routing_mirror_change(
+    path: str, before: str | None, after: str | None
+) -> bool:
+    """True iff `path` is a routing path (DRE-7209) whose two versions differ
+    ONLY inside its `BEGIN generated repo mirror` regions — the lines
+    agent-bureau's `make sync-mirrors CHECK=1` proves.
+
+    `is_generated_region_change` with the onboarding set in place of
+    `_GENERATED_REGION_PROOFS` and the repo-mirror markers in place of the
+    generic ones, and the same fail-closed edges: a path outside the set, a
+    missing counterpart, Python that will not parse on either side, a missing
+    or unterminated region, and a line changed outside a region or on a
+    marker are all False. Non-`.py` mirrors (the `.ts` ones) are compared by
+    lines alone; nothing here parses them."""
+    if path not in ONBOARD_ROUTING_PATHS:
+        return False
+    if before is None or after is None:
+        return False
+    if path.endswith(".py") and (
+        _executable_shape(before) is None or _executable_shape(after) is None
+    ):
+        return False
+    outside_before = _outside_generated_regions(
+        before, _BEGIN_REPO_MIRROR, _END_REPO_MIRROR)
+    if outside_before is None:
+        return False
+    outside_after = _outside_generated_regions(
+        after, _BEGIN_REPO_MIRROR, _END_REPO_MIRROR)
     if outside_after is None:
         return False
     return outside_before == outside_after
@@ -684,11 +731,17 @@ def classify_path(
 def _classify_in_commit(commit, path: str) -> str:
     """`classify_path` for one of the commit's paths, reading its `sources`
     and — on an onboarding routing PR — its `routing` list: a routing path
-    the rules call `code` is regenerated and proved elsewhere, so it is docs,
-    the way a generated region is (DRE-3896, DRE-7209)."""
+    the rules call `code`, changed only inside its repo-mirror region, is
+    regenerated and proved elsewhere, so it is docs, the way a generated
+    region is (DRE-3896, DRE-7209)."""
     sources = commit.get("sources") or {}
-    category = classify_path(path, *sources.get(path, (None, None)))
-    if category == "code" and path in (commit.get("routing") or ()):
+    before, after = sources.get(path, (None, None))
+    category = classify_path(path, before, after)
+    if (
+        category == "code"
+        and path in (commit.get("routing") or ())
+        and is_routing_mirror_change(path, before, after)
+    ):
         return "docs"
     return category
 
@@ -936,7 +989,9 @@ def pr_commits(base: str, head: str):
     AUTHOR (the git author name, which is what the standards-sync exemption
     reads — per commit, so one foreign commit on that branch ends it) and —
     for the `.py` paths a path-only read would call code — both versions of
-    the file across the commit, so the AST-equivalence rule can see them.
+    the file across the commit, so the AST-equivalence rule can see them,
+    and likewise for any routing path (DRE-7209), `.ts` included, so its
+    mirror region can be compared.
     `base..head` excludes everything already on the base branch, and
     --no-merges drops merge-from-main commits (not the PR's own work).
     Merges being excluded, `<sha>^` is the one unambiguous parent."""
@@ -955,7 +1010,8 @@ def pr_commits(base: str, head: str):
         sources = {
             p: (_blob(f"{sha}^", p), _blob(sha, p))
             for p in paths
-            if p.endswith(".py") and classify_path(p) == "code"
+            if (p.endswith(".py") or p in ONBOARD_ROUTING_PATHS)
+            and classify_path(p) == "code"
         }
         claims = _git(
             "log", "-1",
@@ -1084,14 +1140,14 @@ def main(argv: list[str]) -> int:
               f"RED-test")
         return 0
     if is_onboard_routing_pr(head_ref, opener):
-        # Not an exemption of the PR: only the routing set leaves `code`, and
-        # every other path on the branch is judged below as usual.
+        # Not an exemption of the PR: only a routing path's mirror region
+        # leaves `code`, and everything else is judged below as usual.
         commits = mark_routing_paths(commits)
         print(f"routing: the onboarding routing PR — opened by "
               f"{ONBOARD_BOT}[bot] (GitHub-attested), on branch "
-              f"{ONBOARD_BRANCH}; its routing paths are regenerated and "
-              f"proved by the repo's regeneration check, so they are not "
-              f"code here, and any other path is held to the rule")
+              f"{ONBOARD_BRANCH}; a routing path changed only inside its "
+              f"generated repo-mirror region is not code here, and any "
+              f"other line or path is held to the rule")
     try:
         exemptions, source = load_exemptions(base, head)
     except subprocess.CalledProcessError as e:
