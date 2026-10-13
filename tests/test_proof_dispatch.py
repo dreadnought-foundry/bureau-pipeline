@@ -898,6 +898,228 @@ def test_a_ceo_press_hold_the_window_shows_answered_is_left_to_the_thread_read(
     assert [f[0] for f in h.fired] == ["DRE-5930"]
 
 
+# --------------------------------------------------------------------------- #
+# a hold that waits only for a time lifts by itself (DRE-7228)                 #
+# --------------------------------------------------------------------------- #
+
+#: NOW is 2026-10-06 10:30 PT: one stamped time before it, one after.
+PASSED = "2026-10-06T08:00-07:00"
+TO_COME = "2026-10-06T14:33-07:00"
+TIME_OBSERVED = "the day of jobs on the pinned machine family"
+#: DRE-6549's own hold, prose, with its time long past at NOW's date + 6.
+DRE_6549_OBSERVED = ("the day of jobs on the pinned machine family, counted "
+                     "from DRE-6548's live-at time")
+DRE_6549_NEEDS = ("the 24 hours after 2026-10-11 14:33 PT to pass, so not "
+                  "before 2026-10-12 14:33 PT")
+AFTER_6549 = NOW.replace(month=10, day=13, hour=7)  # 2026-10-13 00:30 PT
+
+
+def time_hold(when: str, minutes_ago: float, observed: str = TIME_OBSERVED,
+              user=VIEWER) -> dict:
+    """The hold `linear_ops.py proof-waiting-until` writes, pinned as text."""
+    return comment(f"🔬 proof-waiting: {observed} — needs not-before={when}",
+                   minutes_ago, user)
+
+
+def _lifts(h) -> list:
+    return [body for _, body in h.posted
+            if body.startswith(proof_record.OBSERVED_MARK)]
+
+
+@pytest.mark.parametrize("shown", [True, False], ids=["window-shows-it", "beyond-the-window"])
+def test_a_time_only_hold_past_its_time_is_lifted_and_dispatched_on_the_same_pass(
+        monkeypatch, capsys, shown):
+    """One card, its only hold a stamped time that has passed: the early
+    check off the lane read leaves it to the thread, the thread check posts
+    one `🔬 proof-observed` quoting the time, and the same pass dispatches."""
+    thread = [promoted(600), time_hold(PASSED, 300, user=PERSON)]
+    card = lane_card("DRE-6549", window=thread if shown else [promoted(600)])
+    board = Board(hand=[card], threads={"DRE-6549": thread})
+    h = Harness(monkeypatch, board)
+    tally = h.sweep()
+    lines = _about(_lines(capsys), "DRE-6549")
+    assert [f[0] for f in h.fired] == ["DRE-6549"], lines
+    assert tally.dispatched == 1 and tally.held == 0
+    lifts = _lifts(h)
+    assert len(lifts) == 1, h.posted
+    note = lifts[0]
+    assert f"not-before={PASSED} has passed" in note
+    assert "read at 2026-10-06 10:30 PT" in note
+    assert "lifted by the proof dispatcher" in note
+    # The note is the first write, then the dispatch, then its receipt.
+    assert h.order == [("comment", "DRE-6549"), ("fire", "DRE-6549"),
+                       ("comment", "DRE-6549")]
+    # …and it is a note the one hold reader reads as the discharge.
+    after = thread + [comment(note, 0)]
+    assert proof_record.open_holds(fake_voices(after, VIEWER, card="DRE-6549")) == []
+
+
+def test_the_lift_is_one_note_the_next_pass_does_not_repeat(monkeypatch, capsys):
+    thread = [promoted(600), time_hold(PASSED, 300)]
+    board = Board(hand=[lane_card("DRE-6549", window=thread)],
+                  threads={"DRE-6549": thread})
+    h = Harness(monkeypatch, board, states={"DRE-6549": state("running")})
+    h.sweep()
+    assert len(_lifts(h)) == 1
+    thread.append(comment(_lifts(h)[0], 1))
+    h.sweep(now=NOW + PASS)
+    assert len(_lifts(h)) == 1, h.posted
+
+
+def test_two_time_only_holds_both_past_lift_together_quoting_each(monkeypatch, capsys):
+    earlier = "2026-10-05T09:00-07:00"
+    thread = [promoted(600), time_hold(earlier, 900), time_hold(PASSED, 300)]
+    board = Board(hand=[lane_card("DRE-6549", window=thread)],
+                  threads={"DRE-6549": thread})
+    h = Harness(monkeypatch, board)
+    h.sweep()
+    assert [f[0] for f in h.fired] == ["DRE-6549"]
+    (note,) = _lifts(h)
+    assert f"not-before={earlier}" in note and f"not-before={PASSED}" in note
+
+
+@pytest.mark.parametrize("shown", [True, False], ids=["early-check", "full-check"])
+def test_a_time_only_hold_before_its_time_stays_held_and_says_when_it_lifts(
+        monkeypatch, capsys, shown):
+    thread = [promoted(600), time_hold(TO_COME, 300)]
+    card = lane_card("DRE-6549", window=thread if shown else [promoted(600)])
+    board = Board(hand=[card], threads={"DRE-6549": thread})
+    h = Harness(monkeypatch, board)
+    tally = h.sweep()
+    lines = _about(_lines(capsys), "DRE-6549")
+    assert h.fired == [] and h.posted == []
+    assert tally.held == 1
+    assert any("condition 4 (hold): held by 🔬 proof-waiting: " in line
+               and line.endswith(f"not-before={TO_COME} — lifts at 2026-10-06 14:33 PT")
+               for line in lines), lines
+    # The early check names it at no read; the full check reads the thread.
+    assert (("thread", "DRE-6549") in board.reads) is not shown
+
+
+#: Holds no time lifts — each with a time that passed long ago where it has one.
+NEVER_BY_TIME = {
+    "event": ("the nightly on main", "the nightly to fire"),
+    "clause-beside-words": ("the nightly on main",
+                            f"not-before={PASSED} and the nightly to fire"),
+    "words-beside-clause": ("the nightly on main",
+                            f"the nightly to fire and not-before={PASSED}"),
+    "operators-press": ("the console shows the new order",
+                        "the operator's press on Approve"),
+    "operators-press-and-time": ("the console shows the new order",
+                                 f"not-before={PASSED}, the operator's press"),
+    "ceo-press": ("the CEO signs in to the console",
+                  "the CEO's press: sign in once"),
+    "ceo-press-observed-half": (f"{proof_record.CEO_PRESS} on Approve",
+                                f"not-before={PASSED}"),
+    "no-offset": ("the nightly on main", "not-before=2026-10-06T08:00"),
+}
+
+
+@pytest.mark.parametrize("case", sorted(NEVER_BY_TIME))
+@pytest.mark.parametrize("shown", [True, False], ids=["window-shows-it", "beyond-the-window"])
+def test_a_hold_that_names_more_than_a_time_is_never_lifted_by_time(
+        monkeypatch, capsys, case, shown):
+    observed, needs = NEVER_BY_TIME[case]
+    thread = [promoted(600), hold(observed, needs, 300)]
+    card = lane_card("DRE-6549", window=thread if shown else [promoted(600)])
+    board = Board(hand=[card], threads={"DRE-6549": thread})
+    h = Harness(monkeypatch, board)
+    tally = h.sweep()
+    lines = _about(_lines(capsys), "DRE-6549")
+    assert h.fired == [] and h.posted == [], lines
+    assert tally.held == 1
+    assert any(f"condition 4 (hold): held by 🔬 proof-waiting: {observed} — needs {needs}"
+               in line and "lifts at" not in line for line in lines), lines
+
+
+#: The hold that still holds beside a time-only hold whose time has passed.
+BESIDE = {
+    "event": hold("the nightly on main", "the nightly to fire", 0),
+    "operators-press": hold("the console shows the new order",
+                            "the operator's press on Approve", 0),
+    "cause": hold("“the nightly names v3” reads “Not observed. cause: …”",
+                  "the operator's decision on DRE-6549's rows: accept, reword or drop", 0),
+    "ceo-press": ceo_press_hold(0),
+    "time-to-come": time_hold(TO_COME, 0),
+}
+
+
+@pytest.mark.parametrize("newer", [True, False], ids=["other-newer", "other-older"])
+@pytest.mark.parametrize("case", sorted(BESIDE))
+def test_a_passed_time_hold_beside_any_other_open_hold_posts_nothing(
+        monkeypatch, capsys, case, newer):
+    """One `🔬 proof-observed` lifts every open hold but the CEO's press, so
+    a time hold that has passed lifts nothing while any other hold stands —
+    and the line names the hold that still holds."""
+    other = dict(BESIDE[case])
+    passed = time_hold(PASSED, 200 if newer else 100)
+    other["createdAt"] = _at(100 if newer else 200)
+    thread = [promoted(600), *sorted([passed, other], key=lambda c: c["createdAt"])]
+    board = Board(hand=[lane_card("DRE-6549", window=thread)],
+                  threads={"DRE-6549": thread})
+    h = Harness(monkeypatch, board)
+    tally = h.sweep()
+    lines = _about(_lines(capsys), "DRE-6549")
+    assert h.fired == [] and h.posted == [], lines
+    assert tally.held == 1
+    still = _first(other["body"])
+    named = [line for line in lines if "condition 4 (hold): held by " in line]
+    assert named and all(still in line for line in named), lines
+    assert all(f"not-before={PASSED}" not in line for line in named), lines
+
+
+def _first(body: str) -> str:
+    return body.split("\n", 1)[0]
+
+
+@pytest.mark.parametrize("shown", [True, False], ids=["window-shows-it", "beyond-the-window"])
+def test_dre_6549s_prose_hold_past_its_date_is_never_lifted(monkeypatch, capsys, shown):
+    """The fixture is DRE-6549's own hold, read the morning after the time
+    its prose names: nothing reads a date out of prose."""
+    thread = [promoted(600), hold(DRE_6549_OBSERVED, DRE_6549_NEEDS, 300, user=PERSON)]
+    card = lane_card("DRE-6549", window=thread if shown else [promoted(600)])
+    board = Board(hand=[card], threads={"DRE-6549": thread})
+    h = Harness(monkeypatch, board)
+    tally = h.sweep(now=AFTER_6549)
+    lines = _about(_lines(capsys), "DRE-6549")
+    assert h.fired == [] and h.posted == [], lines
+    assert tally.held == 1
+    assert any(line.endswith(f"condition 4 (hold): held by 🔬 proof-waiting: "
+                             f"{DRE_6549_OBSERVED} — needs {DRE_6549_NEEDS}")
+               for line in lines), lines
+
+
+def test_a_lift_that_cannot_be_posted_holds_the_card_and_fails_the_pass(monkeypatch, capsys):
+    thread = [promoted(600), time_hold(PASSED, 300)]
+    board = Board(hand=[lane_card("DRE-6549", window=thread)],
+                  threads={"DRE-6549": thread})
+    h = Harness(monkeypatch, board)
+
+    def refused(ident, text):
+        raise linear_ops.LinearError("HTTP 500 from Linear")
+
+    monkeypatch.setattr(linear_ops, "cmd_proof_observed", refused)
+    tally = h.sweep()
+    lines = _about(_lines(capsys), "DRE-6549")
+    assert h.fired == [] and h.posted == []
+    assert tally.held == 1 and tally.dispatched == 0
+    assert any("HTTP 500" in f for f in tally.failures), tally.failures
+    assert any("condition 4 (hold):" in line and "HTTP 500" in line for line in lines), lines
+
+
+def test_the_dry_run_says_it_would_lift_and_writes_nothing(monkeypatch, capsys):
+    thread = [promoted(600), time_hold(PASSED, 300)]
+    board = Board(hand=[lane_card("DRE-6549", window=thread)],
+                  threads={"DRE-6549": thread})
+    h = Harness(monkeypatch, board)
+    h.sweep(live=False)
+    lines = _lines(capsys)
+    assert h.posted == [] and h.fired == []
+    assert any(line.startswith("would: lift DRE-6549 — ")
+               and f"not-before={PASSED} has passed" in line for line in lines), lines
+    assert "would: dispatch DRE-6549 — first proof run" in lines
+
+
 @pytest.mark.parametrize("turn", range(6))
 def test_the_read_bound_is_unchanged_whatever_the_turn(monkeypatch, capsys, turn):
     """The real readers over a counting transport, a board with held and

@@ -297,7 +297,9 @@ jobs:
             body RAW_FINDINGS findings \
             body RAW_DECISIONS decisions
 
-      # The model home (DRE-6939) read token, for the selector below only
+      # The model home (DRE-6939) read token, for bureau-pipeline alone and
+      # with no permission subset — the pinned action declares no variables
+      # input (DRE-7230) — and for the selector below only
       # (scripts/check_model_home_scope.py). A refused mint leaves the
       # selector on the defaults in the code, never a failed leg.
       - name: Mint the model-home read token
@@ -310,7 +312,6 @@ jobs:
           private-key: ${{ secrets.BUREAU_APP_PRIVATE_KEY }}
           owner: dreadnought-foundry
           repositories: bureau-pipeline
-          permission-variables: read
 
       # The planner's own ladder and effort, from config/models.yaml — no new
       # roster entry and no model pinned here.
