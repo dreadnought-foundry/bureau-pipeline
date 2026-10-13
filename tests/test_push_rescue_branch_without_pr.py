@@ -351,7 +351,7 @@ class BothTokensRefusedLeavesTheBlocker(unittest.TestCase):
         self.assertEqual(1, len(posted), posted)
         self.assertTrue(posted[0].startswith(
             "🛑 Agent blocked: class=branch-without-pr · "), posted[0])
-        self.assertEqual([[report_file.CARD, "Backlog", "--park"]], moved)
+        self.assertEqual([[report_file.CARD, "Queued", "--park"]], moved)
 
 
 # --------------------------------------------------------------------------- #
@@ -414,7 +414,7 @@ class ADeliveredNoteIsAnOrdinaryBuildResult(unittest.TestCase):
                          moved)
         for comment in posted:
             self.assertNotIn("Agent blocked", comment)
-        self.assertNotIn("Backlog", [m[1] for m in moved])
+        self.assertNotIn("Queued", [m[1] for m in moved])
 
     def test_the_lookups_expired_token_does_not_hide_the_rescues_pr(self):
         posted, moved = _report(self, self._delivered(), NOTE_401,
@@ -435,7 +435,7 @@ class ADeliveredNoteIsAnOrdinaryBuildResult(unittest.TestCase):
                                 card_pr=report_file.CARD_PR_NO_PR_STUB)
         self.assertTrue(posted[0].startswith(
             "🛑 Agent blocked: class=branch-without-pr · "), posted)
-        self.assertEqual([[report_file.CARD, "Backlog", "--park"]], moved)
+        self.assertEqual([[report_file.CARD, "Queued", "--park"]], moved)
 
     def test_a_url_that_is_not_a_github_pull_request_is_not_reported(self):
         out = push_rescue.Outcome()

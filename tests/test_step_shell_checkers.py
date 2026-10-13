@@ -246,16 +246,17 @@ def test_ready_lane_writers_read_the_seam_variable_as_the_queue_lane(trees):
     inline, moved = trees
     for root in (inline, moved):
         seam = _seam_writes(root)
-        assert [w.lane for w in seam] == [lane_contract.QUEUE_LANE] == ["Backlog"], seam
+        assert [w.lane for w in seam] == [lane_contract.QUEUE_LANE] == ["Queued"], seam
 
 
 def test_ready_lane_writers_read_the_seam_variable_with_the_exit_moved(trees, monkeypatch):
-    """Moving the planning exit (DRE-6742) moves what the seam prints, and the
-    census reads the moved value — never a name of its own."""
-    monkeypatch.setattr(lane_contract, "queue_lane", lambda contract=None: "Queued")
+    """Moving the planning exit (DRE-6742 moved it to Queued) moves what the
+    seam prints, and the census reads the moved value — never a name of its
+    own. Put back, it prints the old name."""
+    monkeypatch.setattr(lane_contract, "queue_lane", lambda contract=None: "Backlog")
     inline, moved = trees
     for root in (inline, moved):
-        assert [w.lane for w in _seam_writes(root)] == ["Queued"]
+        assert [w.lane for w in _seam_writes(root)] == ["Backlog"]
 
 
 def test_a_variable_no_seam_assigns_stays_unread(tmp_path):

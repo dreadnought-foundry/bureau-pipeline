@@ -12,7 +12,7 @@ person at it.
 That makes "the lane the sweep promotes into" more than one lane, so the
 `PROMOTION_LANE = "Todo"` constant goes. `sweep_promotes()` is read off the
 lane contract instead: the destination is a work-segment lane other than the
-lane the planning exit lands in (Backlog). `config_problems()` binds the
+lane the planning exit lands in (Queued, since DRE-6742). `config_problems()` binds the
 promoter, `reconcile.py`, to every lane the sweep carries a card to.
 """
 
@@ -107,8 +107,10 @@ class TestWhatTheSweepCarries:
 
     def test_the_planning_exit_landing_lane_is_never_a_sweep_lane(self):
         landing = lane_contract.planning_exit()[1]
-        assert landing == "Backlog"
+        assert landing == "Queued"
         assert landing not in routing_verdict.sweep_lanes()
+        # Nor is the name it replaced (DRE-6742): Backlog sits before it.
+        assert "Backlog" not in routing_verdict.sweep_lanes()
 
     def test_a_verdict_pointed_at_a_planning_lane_is_not_swept(self):
         doc = copy.deepcopy(routing_verdict.load())
@@ -161,11 +163,11 @@ class TestThePromotionRefusal:
 
 class TestTheHandBuiltReceipt:
     """The receipt a person reads is the note wrapped in the promoter's header,
-    `🧹 Auto-promoted Backlog → <lane>:`. It must name ONE lane — the lane the
+    `🧹 Auto-promoted Queued → <lane>:`. It must name ONE lane — the lane the
     card was really moved to (the critic on #703: a note saying "your turn in
     Hand-work" under a `→ Todo` header sends the reader to an empty lane)."""
 
-    LANES = ("Backlog", "Todo", HAND_WORK, "In Progress", "In Review", "Done")
+    LANES = ("Queued", "Backlog", "Todo", HAND_WORK, "In Progress", "In Review", "Done")
 
     @pytest.mark.parametrize("name", ("WORKBENCH", "OPERATOR"))
     def test_the_note_names_the_destination_and_no_other_lane(self, name):
@@ -194,7 +196,8 @@ class TestTheHandBuiltReceipt:
         assert board.promote() == 1
         landed = board.lane_of("DRE-3385")
         receipt = board.receipt_for("DRE-3385")
-        named = [lane for lane in self.LANES if lane != "Backlog" and lane in receipt]
+        named = [lane for lane in self.LANES
+                 if lane not in lane_contract.QUEUE_LANES and lane in receipt]
         assert named == [landed], receipt
 
 

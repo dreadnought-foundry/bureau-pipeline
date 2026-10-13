@@ -190,7 +190,7 @@ class TestTheMergedLaneDoesBothJobs:
         ) as cmd_state, patch.object(reconcile.linear_ops, "cmd_comment"):
             reconcile.main()
         add_label.assert_called_once_with("DRE-2726", reconcile.HOLD_LABEL)
-        cmd_state.assert_called_once_with("DRE-2726", "Backlog", "--park")
+        cmd_state.assert_called_once_with("DRE-2726", "Queued", "--park")
 
 
 class TestTheProgressLaneAimsAtTheMergedLane:

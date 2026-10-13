@@ -8,10 +8,18 @@ flip changes the status and deletes the three arriving keys — `arriving_by`,
 `reason` and `board_action` — and nothing else: the clauses are still Backlog's
 word for word, apart from the places where the text names the lane itself.
 
-Nothing else moves here either: Backlog stays live, every writer still writes
-Backlog, and the planning exit still lands in Backlog. DRE-6741 adds the alias
-`Backlog → Queued` and opens each of Backlog's clauses with the sentence that
-says the lane is being replaced; DRE-6742 moves the planning exit.
+Nothing else moved there either: Backlog stayed live, every writer still wrote
+Backlog, and the planning exit still landed in Backlog. DRE-6741 added the alias
+`Backlog → Queued` and opened each of Backlog's clauses with the sentence that
+says the lane is being replaced.
+
+DRE-6742 moves the planning exit. `planning_exit.to` reads `Queued`, so
+`lane_contract.QUEUE_LANE` does, and every writer the earlier cards converted
+writes `Queued` at once; the routing and planning vocabularies' destinations
+move with it. Its precondition is pinned here: no string constant in any
+script still names `Backlog`, so no script reader is left reading only the old
+name when the writes move. Backlog stays live and stays an alias, so a card
+still under the old name is read as queued.
 """
 
 import copy
@@ -54,13 +62,19 @@ ARRIVING_KEYS = {
 }
 
 
-# The sentence DRE-6741 opens every one of Backlog's clauses with. Everything
-# after it is still Queued's clause with the lane's own name swapped back.
+# The sentence DRE-6741 opens every one of Backlog's clauses with, as
+# DRE-6742 re-words it once the planning exit has moved. Everything after it is
+# still Queued's clause with the lane's own name swapped back.
 REPLACED = (
     "Being replaced by Queued (DRE-4125): the contract's alias reads this name "
-    "as Queued (DRE-6741), and the planning exit still lands here until "
-    "DRE-6742 moves it, so every writer still writes this lane. "
+    "as Queued (DRE-6741), and since DRE-6742 the planning exit lands in "
+    "Queued, so the pipeline's writers write Queued and a card still here is "
+    "read as one there. "
 )
+
+# DRE-6741's wording, which said the exit had not moved yet. Nothing may still
+# say it once the exit has moved.
+NOT_YET = "the planning exit still lands here until DRE-6742 moves it"
 
 
 def shipped():
@@ -187,9 +201,6 @@ class TestNothingElseMoves:
         assert BACKLOG in lane_contract.lane_names()
         assert lane_contract.lane(BACKLOG)["status"] == "live"
 
-    def test_the_planning_exit_still_lands_in_backlog(self):
-        assert lane_contract.planning_exit() == ("Green Light", BACKLOG)
-
     def test_backlog_keeps_its_writers(self):
         assert raw_lane(shipped(), BACKLOG)["clauses"]["writers"]["who"] == (
             raw_lane(shipped(), QUEUED)["clauses"]["writers"]["who"]
@@ -263,3 +274,146 @@ class TestTheDocument:
 
     def test_the_document_is_the_render_of_the_contract(self):
         assert self.doc_text() == lane_contract.render_markdown()
+
+
+# --------------------------------------------------------------------------- #
+# the flip (DRE-6742)                                                         #
+# --------------------------------------------------------------------------- #
+
+
+class TestThePlanningExitMoves:
+    def test_the_planning_exit_lands_in_queued(self):
+        assert lane_contract.planning_exit() == ("Green Light", QUEUED)
+
+    def test_writers_write_queued(self):
+        assert lane_contract.QUEUE_LANE == QUEUED
+        assert lane_contract.queue_lane() == QUEUED
+
+    def test_readers_still_read_both_names(self):
+        assert lane_contract.QUEUE_LANES == (QUEUED, BACKLOG)
+
+    def test_no_backlog_clause_still_says_the_exit_has_not_moved(self):
+        text = json.dumps(raw_lane(shipped(), BACKLOG)["clauses"])
+        assert NOT_YET not in text
+        assert "every writer still writes this lane" not in text
+
+    def test_the_document_says_it_too(self):
+        with open(os.path.join(ROOT, "docs", "lane-contract.md"), encoding="utf-8") as fh:
+            text = fh.read()
+        assert f"**Green Light → {QUEUED}**" in text
+        assert NOT_YET not in text
+
+
+class TestTheVocabulariesMoveWithIt:
+    """The routing and planning vocabularies name the lane the exit lands in,
+    so they move in the same pull request — a PARKED card or a one-off sent to
+    a lane the writers no longer write is the split this card exists to stop."""
+
+    def test_a_parked_verdict_lands_in_queued(self):
+        import routing_verdict
+
+        assert routing_verdict.destination("PARKED") == QUEUED
+
+    def test_a_one_off_lands_in_queued(self):
+        import planning_shape
+
+        assert planning_shape.destination("one-off") == QUEUED
+
+
+# --------------------------------------------------------------------------- #
+# the precondition: no script reads the old name alone                         #
+# --------------------------------------------------------------------------- #
+
+
+def _scripts():
+    base = os.path.join(ROOT, "scripts")
+    for dirpath, dirnames, filenames in os.walk(base):
+        dirnames[:] = [d for d in dirnames if d != "__pycache__"]
+        for filename in sorted(filenames):
+            if filename.endswith(".py"):
+                yield os.path.join(dirpath, filename)
+
+
+class TestNoScriptNamesTheOldLane:
+    """The flip's precondition (DRE-6742). Every reader tests membership in
+    `QUEUE_LANES`, read off the alias, and every writer writes `QUEUE_LANE`,
+    read off the planning exit — so no string constant in any script names
+    `Backlog` at all. Read with `lane_contract._scan_python`, the contract's
+    own vocabulary reader, so a docstring counts and a `#` comment recording an
+    incident does not. A literal `Backlog` left in a script is a reader that
+    stops seeing the queue, or a writer that does not move, the day the exit
+    lands in `Queued`."""
+
+    def test_the_scan_sees_every_script(self):
+        names = {os.path.basename(path) for path in _scripts()}
+        assert {"reconcile.py", "lane_contract.py", "routing_verdict.py",
+                "groom_readiness.py"} <= names
+
+    def test_the_scan_finds_a_literal_when_there_is_one(self, tmp_path):
+        # The guard on the guard: a scan that finds nothing anywhere would
+        # pass the next test over a tree full of literals.
+        probe = tmp_path / "probe.py"
+        probe.write_text('LANES = ("Planning", "Backlog")\n', encoding="utf-8")
+        assert lane_contract._scan_python(str(probe), [BACKLOG]) == {BACKLOG}
+
+    def test_no_string_constant_in_any_script_names_backlog(self):
+        named = sorted(
+            os.path.relpath(path, ROOT) for path in _scripts()
+            if lane_contract._scan_python(path, [BACKLOG])
+        )
+        assert named == [], named
+
+
+class TestTheGroomerReadsTheQueueUnderEitherName:
+    """`groom_readiness.py` is the script the earlier cards missed: its lanes
+    named `Backlog` and never `Queued`, so a card the moved writers file in
+    `Queued` would read as finished to a `depends on` line, and an epic there
+    as already started. Converted here the way the rest were."""
+
+    def test_a_dependency_in_the_queue_is_open_under_either_name(self):
+        import groom_readiness
+
+        for lane in lane_contract.QUEUE_LANES:
+            assert lane in groom_readiness.OPEN_STATES, lane
+
+    def test_a_parent_in_the_queue_has_not_started_under_either_name(self):
+        import groom_readiness
+
+        for lane in lane_contract.QUEUE_LANES:
+            assert lane in groom_readiness.PARENT_NOT_STARTED, lane
+
+
+class TestTheRegistriesNameTheLaneTheWritersWrite:
+    """The holds and acts that describe a converted writer's lane say Queued
+    once it writes Queued (DRE-6742). An incident recorded as it happened —
+    a card parked in Backlog on a date — is history and stays as it was."""
+
+    @staticmethod
+    def _config(name):
+        with open(os.path.join(ROOT, "config", name), encoding="utf-8") as fh:
+            return json.load(fh)
+
+    def test_the_operator_step_lift_sends_queued_to_hand_work(self):
+        entry = self._config("holds.json")["reasons"]["operator-step"]
+        assert entry["lift_sends"] == "Queued to Hand-work"
+        assert "Backlog" not in entry["why"]
+
+    def test_the_acts_whose_writer_moved_name_queued(self):
+        doc = self._config("pipeline-acts.json")
+        acts = {act["tag"]: act for act in doc["acts"]}
+        for tag, field in (("roll-up-split", "means"),
+                           ("hyg-triage-returned", "means"),
+                           ("hyg-triage-returned", "why"),
+                           ("promotion-stalled", "means")):
+            assert "Queued" in acts[tag][field], (tag, field)
+            assert "Backlog" not in acts[tag][field], (tag, field)
+
+    def test_the_sweeps_two_queue_receipts_say_queued(self):
+        # DRE-6743 anchored both on `{QUEUE_LANE}`; what they mean moves here.
+        doc = self._config("pipeline-acts.json")
+        for anchor in ("🧹 Auto-advanced {QUEUE_LANE} → Planning",
+                       "🧹 Auto-promoted {QUEUE_LANE} → {destination}"):
+            rows = [u for u in doc["unconverted"] if u["anchor"] == anchor]
+            assert len(rows) == 1, anchor
+            assert "Queued" in rows[0]["means"], anchor
+            assert "Backlog" not in rows[0]["means"], anchor

@@ -864,7 +864,7 @@ class TestOperatorStep:
         entry = doc["reasons"]["operator-step"]
         assert entry["lifts"] == "blockers-terminal"
         assert entry["why"].strip()
-        assert entry["lift_sends"] == "Backlog to Hand-work"
+        assert entry["lift_sends"] == "Queued to Hand-work"
         kind = doc["lift_kinds"]["blockers-terminal"]
         for phrase in ("blockedBy", "Done", "Canceled", "Duplicate", "promotion gate"):
             assert phrase in kind, phrase
@@ -880,7 +880,7 @@ class TestOperatorStep:
         assert "`blockers-terminal`" in kinds_item
         rows = [line for line in text.splitlines()
                 if line.startswith("| `operator-step` | `blockers-terminal` |")]
-        assert len(rows) == 1 and rows[0].rstrip(" |").endswith("Backlog → Hand-work"), rows
+        assert len(rows) == 1 and rows[0].rstrip(" |").endswith("Queued → Hand-work"), rows
         assert "the sweep lifts `operator-step`" in " ".join(text.split())
 
     def test_the_page_counts_the_vocabulary_off_the_file(self):

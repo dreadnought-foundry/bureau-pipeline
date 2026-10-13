@@ -47,10 +47,10 @@ moves itself (below).
 | `dead-run-cap` | `unpark-marker` | Only an operator's `unpark` resets the death budget, and its `dead-run-budget-reset` marker is the fact. | Nothing moves |
 | `turn-cap-park` | `unpark-marker` | The same budget reset. Two turn-cap deaths past green are the most a card ever gets. | Nothing moves |
 | `epic-rereview-twice` | `manual` | The park ends in Triage for an operator. The way back, `plan_critic.REAPPROVE_HOW`, is a person's act that leaves no fact a sweep can read. | Nothing moves |
-| `plan-critic-bound` | `manual` | Every bound park ends in Triage. It gets one automatic repair first, once per card (`scripts/triage_repair.py`, DRE-7178), which lifts it with `because=triage-repair`. After that, the way back is the same person's act. | Triage → Planning (rewritten) or Green Light (a question), when the repair lifts it; otherwise nothing moves |
+| `plan-critic-bound` | `manual` | Every bound park ends in Triage. It gets one automatic repair first, once per card (`scripts/triage_repair.py`, DRE-7178), which lifts it with `because=triage-repair`. After that, the way back is the same person's act. | Triage → Planning (rewritten, or an epic re-planned) or Green Light (a question), when the repair lifts it; otherwise nothing moves |
 | `fix-dispute` | `new-head` | The fix loop's budget was spent on one head. A new head runs the review, the gate and the fix loop again. | Triage → In Review |
 | `unfixable-check` | `new-head` | The red check was read on one head (its receipt is keyed `unfixable-check-hold @<sha8>`). A new head is read again. | Triage → In Review |
-| `operator-step` | `blockers-terminal` | A planner-filed operator step is a person's to do once the work before it is finished. The card's `blockedBy` relations say when, and the sweep's promotion gate reads them. | Backlog → Hand-work |
+| `operator-step` | `blockers-terminal` | A planner-filed operator step is a person's to do once the work before it is finished. The card's `blockedBy` relations say when, and the sweep's promotion gate reads them. | Queued → Hand-work |
 | `manual` | `manual` | A person chose it, or a writer created the card already held. Nothing a sweep can read says it is over. | Nothing moves |
 
 A `manual` hold — `epic-rereview-twice`, `plan-critic-bound`, `manual`, and any
@@ -58,7 +58,8 @@ label with no stamp — is lifted only by `card-closed` or by a person. Outside
 Done or Canceled, nothing in this epic lifts it. The one exception is the
 Triage repair (DRE-7178): a `plan-critic-bound` hold is lifted once per card by
 `scripts/triage_repair.py`, with `because=triage-repair`, as it moves the
-repaired card to Planning or Green Light.
+repaired card to Planning or Green Light — an epic, to Planning for a fresh
+planning attempt with every finding in front of the planner (DRE-7181).
 
 A `new-head` hold that is still stuck on the new head is re-parked with a fresh
 stamp by the review, the gate or the fix loop. For a fix dispute there is a
@@ -96,7 +97,7 @@ rows, recording the event with `🔬 proof-observed`, or dropping the record.
 A planner files an operator step — something a person does once the cards
 before it are finished — held from birth. Without a stamp its label reads
 `manual`, and nothing a sweep can read says a `manual` hold is over, so the
-card sat in Backlog forever (DRE-6408). The stamp names the reason instead:
+card sat in the queue forever (DRE-6408). The stamp names the reason instead:
 
     🔒 hold: reason=operator-step at=none lifts=blockers-terminal by=<writer-file>
 
@@ -104,7 +105,7 @@ The lift is met when every `blockedBy` relation of the card is Done, Canceled
 or Duplicate. Those relations are read only by the sweep's promotion gate
 (DRE-6427), so the sweep lifts `operator-step` rather than standing down for
 it: it calls `hold.lift` with `blockers-terminal` and carries the card from
-Backlog to Hand-work. The one-time pass over the cards already parked (DRE-6429)
+Queued to Hand-work. The one-time pass over the cards already parked (DRE-6429)
 lifts the same way.
 
 `hold.lift_due` is not taught the lift kind and answers None for it outside
@@ -165,7 +166,7 @@ for the other seven. `hold.stamp_line` refuses any other pairing, so a wrong
 qualifier fails at the writer and never at the lift. `hold.py apply` exits 2 on
 the same input before it writes anything. A writer that lands the label itself
 posts only the stamp, through `hold.post_stamp`: `dead_run.py park --reason
-<code>` writes the label and Backlog, both or neither, and stamps
+<code>` writes the label and Queued, both or neither, and stamps
 `dead-run-cap` or `turn-cap-park` only once both have landed (DRE-6178).
 
 A writer other than the hygiene agent that lifts a hold posts the lift line
@@ -255,8 +256,8 @@ nothing resumes, so each also moves it (DRE-6273):
   Triage (DRE-6177)
   goes from Triage to Planning. The Triage lane leaves such a card alone
   while the hold stands (DRE-6190), so it is still there to be found. Planning
-  and not Backlog: a card that has been through Triage since its newest
-  routing verdict is refused `stale-verdict` in Backlog (DRE-4962), and
+  and not Queued: a card that has been through Triage since its newest
+  routing verdict is refused `stale-verdict` in Queued (DRE-4962), and
   Planning's exit routes it afresh.
 
 The move is made only from the lane the hold parked the card in. A card a

@@ -258,12 +258,16 @@ class TestSelect:
         assert rows[0]["findings"] == [REVISION_FINDING, DECISION_FINDING]
         assert rows[0]["decisions"] == [DECISION_FINDING]
 
-    def test_a_card_with_children_is_skipped_and_not_written(self, tmp_path, capsys):
+    def test_a_card_with_children_is_replanned_not_rewritten(self, tmp_path, capsys):
+        """An epic's plan is its children: it goes back to Planning (DRE-7181,
+        `tests/test_triage_repair_epic.py`), never a description rewrite."""
         board = TriageRepairBoard()
         _parked(board, "DRE-3", NOTE_7066, children=["DRE-31", "DRE-32"])
         _, rows = _select(board, tmp_path)
-        assert rows == []
-        assert "triage-repair: DRE-3 → skip — " in capsys.readouterr().out
+        assert [r["action"] for r in rows] == ["replan"]
+        assert rows[0]["findings"] == FINDINGS_7066
+        assert "triage-repair: DRE-3 → replan — " in capsys.readouterr().out
+        assert board.events == []
 
     def test_a_park_note_with_no_numbered_list_is_skipped(self, tmp_path, capsys):
         board = TriageRepairBoard()

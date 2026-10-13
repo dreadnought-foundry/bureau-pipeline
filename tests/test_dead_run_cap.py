@@ -360,8 +360,8 @@ class TheCliReadsTheThreadTest(unittest.TestCase):
 
 class TheHoldNamesTheQueueLaneTest(unittest.TestCase):
     """DRE-6745: every hold receipt names `QUEUE_LANE`, the lane the park
-    writes — `Backlog` under the shipped contract, and `Queued` once DRE-6742
-    moves the planning exit, with no edit to `dead_run`."""
+    writes — `Queued` under the shipped contract since DRE-6742 moved the
+    planning exit, with no edit to `dead_run`, and the old `Backlog` before it."""
 
     HOLDS = {
         "silent": lambda: dead_run.decide(2),
@@ -381,14 +381,14 @@ class TheHoldNamesTheQueueLaneTest(unittest.TestCase):
                     self.assertNotIn("Backlog", d.comments[0])
 
     def test_under_the_shipped_contract(self):
-        self.assertEqual(dead_run.QUEUE_LANE, "Backlog")
+        self.assertEqual(dead_run.QUEUE_LANE, "Queued")
         self._assert_named(dead_run.QUEUE_LANE)
 
-    def test_under_the_flipped_exit(self):
+    def test_under_the_exit_before_it_moved(self):
         from unittest import mock
 
-        with mock.patch.object(dead_run, "QUEUE_LANE", "Queued"):
-            self._assert_named("Queued")
+        with mock.patch.object(dead_run, "QUEUE_LANE", "Backlog"):
+            self._assert_named("Backlog")
 
     def test_the_turn_requeue_promises_the_same_lane(self):
         from unittest import mock

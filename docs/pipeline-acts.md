@@ -260,11 +260,11 @@ epics under itself, and each child is planned and green-lit on its own
 (`standards/card-quality.md`). `python3 scripts/epic_split.py check` refuses a
 split that is not one. `activate` then posts this receipt ONCE on the parent,
 naming every child in `blockedBy` order with its slice's first sentence, what
-blocks it, and whether it is sent to Planning or waits in Backlog. After that
-it sends to Planning each child still in Backlog that no open sibling blocks,
+blocks it, and whether it is sent to Planning or waits in Queued. After that
+it sends to Planning each child still in the queue that no open sibling blocks,
 where the relay starts that child's planner run, and moves the parent to
 In Progress, where the sweep's ordinary epic close finds it. Meanwhile, a
-child blocked by an open sibling waits in Backlog for the sweep's auto-advance
+child blocked by an open sibling waits in Queued for the sweep's auto-advance
 (DRE-6591): the seam rule plans it only on what that sibling observed, so it
 is carried on to its planner run once every sibling it waits on is Done. A
 sibling already Done, Canceled or Duplicate holds nothing.
@@ -315,6 +315,14 @@ row hands the work to a person, the planner or the sweep. The kinds are copied
 from the console's `ACTS` (agent-bureau PR #3023, DRE-5367) — three holds and
 eleven recoveries — so they agree tag by tag. The idempotency key is the pair (tag,
 cause), applied by the core's write seam and never restated by a lane.
+
+`hygiene-triage-alarm` has two bounds. A card a planning exit parked in Triage
+alarms once its wait reaches `HYGIENE_TRIAGE_ALARM_HOURS` (default 8). A card
+whose one automatic repair (`scripts/triage_repair.py`) is spent alarms once it
+reaches `HYGIENE_TRIAGE_REPAIRED_ALARM_HOURS` (default 0, the first hourly pass
+that sees it), held or not: it parked again after the repair, or the repair did
+not finish, or it started two hours ago and recorded no outcome (DRE-7183). A
+repair still running never alarms.
 
 The hourly **summary** the pass posts to its standing card is not one of these:
 it is a report about the pass, declared `not-an-act` in the `unconverted`
@@ -439,7 +447,7 @@ writes nothing.
 DRE-4198 found five Backlog cards refused promotion for the same reason across
 thirty hours, and found them only by reading a sweep log: the refusal was
 posted once and never read again, so each looked exactly like a card waiting
-its turn. `promote_ready` now records every card it leaves in Backlog for a
+its turn. `promote_ready` now records every card it leaves in the queue for a
 reason that is not a declared wait, dated by the oldest comment carrying that
 refusal's receipt — never by a count of sweeps kept somewhere
 (`scripts/promotion_stall.py`, DRE-4207).
@@ -524,10 +532,19 @@ last, after every other write of its outcome:
     🩹 triage-repair: started — … The description as it stood before the repair, so a person can put it back:
     🩹 triage-repair: rewritten — … The findings, each with its answer:
     🩹 triage-repair: asked — … the card's description is unchanged.
+    🩹 triage-repair: replanned — … The findings in front of the planner:
     🩹 triage-repair: unfinished — <what failed or was missing>. Writes already made: <list>.
 
-`replanned` and `split` are the epic re-plan's and the split's (DRE-7181,
-DRE-7182). **The receipt key is live**: a pipeline-authored comment whose
+`replanned` is an epic's (DRE-7181): a card with children that has had no
+bound rewrite, and whose findings are there and name no decision, gets the
+`🔁 bound-rewrite:` receipt — posted through
+`plan_bound.post_receipt`, so that row's text and act are still emitted from
+`plan_bound.py` — with every finding the bound left open, the lift, and the
+move to Planning, where a fresh planning attempt starts. An epic carrying a
+bound-rewrite receipt anywhere on its thread is `spent`; one whose findings
+name a decision is `escalate`, as the bound itself asks it, and one whose park
+left no findings is `skip`. `split` is the
+split's (DRE-7182). **The receipt key is live**: a pipeline-authored comment whose
 first line opens `🩹 triage-repair:` anywhere on the card is the card's one
 repair, so `select` answers `spent` and `claim` exits 3. A comment of that
 shape from any other author counts for nothing.

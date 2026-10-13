@@ -212,6 +212,18 @@ def ready_lanes(contract: dict | None = None, doc: dict | None = None) -> tuple:
     return planning_escalation.work_lanes_reachable_from_planning(contract, doc)
 
 
+def is_ready(lane: str | None, ready: tuple, contract: dict | None = None) -> bool:
+    """Is a card in `lane` in ready work — under the lane's own name, or
+    under a retired name the contract aliases to one?
+
+    The vocabularies name the lane a card is sent to, never the name it
+    replaced: since DRE-6742 they say `Queued`, and the queue's old name is an
+    alias for it. A card written under the old name is still in the queue, so
+    a writer or a team default that lands one there is the same hole.
+    """
+    return lane in ready or lane_contract.aliases(contract).get(lane) in ready
+
+
 def unseen_writers(contract: dict | None = None) -> tuple:
     """The permitted writers of a ready-work lane that this cannot check.
 
@@ -928,7 +940,7 @@ def default_problems(default: str | None, *, contract: dict | None = None,
             "which is not a live lane — a card created without a state lands "
             "somewhere the contract does not name"
         ]
-    if default in ready:
+    if is_ready(default, ready, contract):
         return [
             f"{LINEAR_DEFAULT_WRITER}: Linear's team default is {default!r}, a "
             "lane the pipeline treats as ready work. Anything that creates a "
@@ -1151,7 +1163,7 @@ def writer_problems(root: str = ROOT, contract: dict | None = None,
                 f"`{DESTINATIONS_HOOK}()` in the module"
             )
             continue
-        if write.lane not in ready:
+        if not is_ready(write.lane, ready, contract):
             continue
         permitted = lane_contract.lane_writers(write.lane, contract=contract)
         if write.writer not in permitted:

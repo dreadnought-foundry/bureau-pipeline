@@ -335,15 +335,16 @@ class TestParkStampsTheReason:
 
     @pytest.mark.parametrize("reason", dead_run.PARK_REASONS)
     def test_the_park_writes_the_queue_lane_under_either_exit(self, monkeypatch, reason):
-        """DRE-6745: the park's state is `QUEUE_LANE` — `Backlog` under the
-        shipped contract, `Queued` once DRE-6742 moves the planning exit."""
+        """DRE-6745: the park's state is `QUEUE_LANE` — `Queued` under the
+        shipped contract since DRE-6742 moved the planning exit, `Backlog`
+        before it."""
         rc, calls = self._park(monkeypatch, ["park", "DRE-1", "--reason", reason])
         assert rc == 0
-        assert ("state", "DRE-1", "Backlog", "--park") in calls
-        monkeypatch.setattr(dead_run, "QUEUE_LANE", "Queued")
+        assert ("state", "DRE-1", "Queued", "--park") in calls
+        monkeypatch.setattr(dead_run, "QUEUE_LANE", "Backlog")
         rc, calls = self._park(monkeypatch, ["park", "DRE-1", "--reason", reason])
         assert rc == 0
-        assert [c for c in calls if c[0] == "state"] == [("state", "DRE-1", "Queued", "--park")]
+        assert [c for c in calls if c[0] == "state"] == [("state", "DRE-1", "Backlog", "--park")]
         assert ("add_label", "DRE-1", dead_run.HOLD_LABEL) in calls
 
     def test_the_dead_run_cap_is_stamped_the_same_way(self, monkeypatch):

@@ -134,7 +134,7 @@ class TestThePromoterReadsTheDestination:
         board = promo._Board(promo._card(comments=[promo.WORKBENCH]))
         board.promote()
         receipt = board.receipt_for("DRE-3385")
-        assert receipt.startswith(f"🧹 Auto-promoted Backlog → {HAND_WORK}: ")
+        assert receipt.startswith(f"🧹 Auto-promoted Queued → {HAND_WORK}: ")
         assert "→ Todo" not in receipt
 
     def test_a_persons_card_spends_no_wip_slot(self, capsys):
@@ -154,7 +154,7 @@ class TestThePromoterReadsTheDestination:
             assert board.promote(active_count=0) == 1
         assert board.lane_of("DRE-1") == "Todo"
         assert board.lane_of("DRE-2") == "Backlog"
-        assert board.receipt_for("DRE-1").startswith("🧹 Auto-promoted Backlog → Todo: ")
+        assert board.receipt_for("DRE-1").startswith("🧹 Auto-promoted Queued → Todo: ")
 
     def test_the_lane_is_never_spelled_in_the_promoter(self):
         import inspect
@@ -168,7 +168,7 @@ class TestThePromoterReadsTheDestination:
     def test_the_age_clock_reads_the_entry_receipt_under_either_queue_name(self, queue):
         """The Hand-work age reads the card's entry off the newest promotion
         receipt in its window (DRE-6409). That receipt names `QUEUE_LANE`, so
-        it reads `Backlog` until DRE-6742 and `Queued` after — and a card
+        it read `Backlog` until DRE-6742 and `Queued` after — and a card
         promoted on either side of the flip is dated, never left unknown."""
         entered = "2026-10-12T01:00:00.000Z"
         card = {

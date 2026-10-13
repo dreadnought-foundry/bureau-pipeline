@@ -304,7 +304,7 @@ def test_a_card_no_longer_in_backlog_is_skipped_without_a_call(capsys):
     run.advance.assert_not_called()
     assert _gate_lines(capsys.readouterr().out) == [
         "promotion: DRE-1572 agent-blocker class=nothing-to-change — no longer in "
-        "Backlog since the board was read — skipping"
+        "Queued since the board was read — skipping"
     ]
 
 

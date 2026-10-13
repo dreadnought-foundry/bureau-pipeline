@@ -67,11 +67,17 @@ REQUIRED_ENV_EXPR = "${{ secrets.LINEAR_API_KEY }}"
 _PLANNER_FIRST = "${{ secrets.LINEAR_PLANNER_KEY || secrets.LINEAR_API_KEY }}"
 _OPTED_IN_PLANNER = ("${{ vars.LINEAR_AGENT_BUCKET == 'planner' && "
                      "secrets.LINEAR_PLANNER_KEY || secrets.LINEAR_API_KEY }}")
+# DRE-7194: the verifier's agent holds that key in a LIVE verification only. A
+# shadow replay posts nothing and its agent holds no Linear key at all
+# (tests/test_verify_shadow.py), so the same expression sits inside a gate on
+# `inputs.shadow` — a live run still gets exactly the key above.
+_LIVE_ONLY_OPTED_IN_PLANNER = (
+    "${{ !inputs.shadow && (" + _OPTED_IN_PLANNER[len("${{ "):-len(" }}")] + ") || '' }}")
 REQUIRED_ENV_EXPR_BY_WORKFLOW = {
     "plan.yml": _PLANNER_FIRST,
     "agent-task.yml": _OPTED_IN_PLANNER,
     "agent-fix.yml": _OPTED_IN_PLANNER,
-    "verify.yml": _OPTED_IN_PLANNER,
+    "verify.yml": _LIVE_ONLY_OPTED_IN_PLANNER,
     # DRE-5924: the proof run, copied from agent-task.yml.
     "proof-task.yml": _OPTED_IN_PLANNER,
 }

@@ -692,7 +692,7 @@ class TestADeadReviewHoldsAndSaysSo:
 # queued card may sit under, `QUEUE_LANE` the one a writer writes. The sweep is
 # the queue's heaviest reader, so it is converted on its own: a card in
 # `Queued` is promoted exactly as one in `Backlog` is, and every lane and
-# receipt it writes follows `QUEUE_LANE` — `Backlog` until DRE-6742 flips the
+# receipt it writes follows `QUEUE_LANE` — `Backlog` until DRE-6742 flipped the
 # planning exit, `Queued` after, with no edit here.
 # --------------------------------------------------------------------------
 import ast  # noqa: E402
@@ -862,8 +862,9 @@ class TestTheSweepReadsBothQueueNames:
 
 class TestTheSweepWritesThroughQueueLane:
     """Every lane the sweep writes the queue under is `QUEUE_LANE`: on the
-    shipped contract that is `Backlog`, byte for byte today's, and the day the
-    planning exit moves it is `Queued` with no edit to the sweep."""
+    shipped contract that is `Queued` since DRE-6742 moved the planning exit,
+    with no edit to the sweep, and with the exit put back it is `Backlog`,
+    byte for byte the receipts before it."""
 
     @staticmethod
     def _park() -> tuple[list, list]:
@@ -902,19 +903,8 @@ class TestTheSweepWritesThroughQueueLane:
         return posted[0]
 
     def test_the_park_and_the_receipts_follow_queue_lane(self, monkeypatch):
-        # The shipped contract: today's lane and today's receipts, byte for byte.
-        assert lane_contract.QUEUE_LANE == "Backlog"
-        states, posted = self._park()
-        assert states == [("Backlog", "--park")]
-        assert "parked in Backlog with the 'needs-human' label" in posted[0]
-        assert self._promote() == [
-            "🧹 Auto-promoted Backlog → Todo: no parent epic, a FLEET verdict, "
-            "and all blockers Done."]
-        assert self._advance_epic().startswith(
-            "🧹 Auto-advanced Backlog → Planning: blocker DRE-6813 is Done")
-
-        # The flipped exit: the same sweep writes `Queued` everywhere.
-        monkeypatch.setattr(reconcile, "QUEUE_LANE", QUEUED)
+        # The shipped contract: the sweep writes `Queued` everywhere.
+        assert lane_contract.QUEUE_LANE == QUEUED
         states, posted = self._park()
         assert states == [(QUEUED, "--park")]
         assert f"parked in {QUEUED} with the 'needs-human' label" in posted[0]
@@ -924,6 +914,17 @@ class TestTheSweepWritesThroughQueueLane:
             "and all blockers Done."]
         assert self._advance_epic().startswith(
             f"🧹 Auto-advanced {QUEUED} → Planning: blocker DRE-6813 is Done")
+
+        # The exit put back: the receipts before DRE-6742, byte for byte.
+        monkeypatch.setattr(reconcile, "QUEUE_LANE", "Backlog")
+        states, posted = self._park()
+        assert states == [("Backlog", "--park")]
+        assert "parked in Backlog with the 'needs-human' label" in posted[0]
+        assert self._promote() == [
+            "🧹 Auto-promoted Backlog → Todo: no parent epic, a FLEET verdict, "
+            "and all blockers Done."]
+        assert self._advance_epic().startswith(
+            "🧹 Auto-advanced Backlog → Planning: blocker DRE-6813 is Done")
 
     def test_the_two_receipts_are_anchored_on_the_source_not_the_lane(self):
         """`config/pipeline-acts.json` pins the two receipts by the line that
