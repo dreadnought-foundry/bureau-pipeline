@@ -76,9 +76,21 @@ fast path shipped, which the sweep moves straight to Planning (DRE-4150, point
      asks whether the card's problem can still be seen in that code — not
      whether the card's own fix merged — and answers `still-needed`,
      `partly-solved`, `done-elsewhere`, `obsolete`, `not-worth-it` or
-     `unverified` (DRE-5304). Every answer but `unverified` needs a
-     `file:line` proof from the code, or it is recorded `unverified` with
-     the reason `no proof`. `done-elsewhere`, `obsolete` and `not-worth-it`
+     `unverified` (DRE-5304). Every answer but `unverified` needs one
+     anchored proof item, or it is recorded `unverified` with the reason
+     `no proof` (DRE-7240): a `file:line` from the code, a Done card with
+     its merged pull request from the row's `matched_work`, or a fact from
+     the row's `routing` — the last two counted only when the runner itself
+     handed them to the agent, and each shown on the page by the runner's
+     own `fact` line, and one the runner did not confirm left out of the
+     proof. A Cancel of a card with children, in any state,
+     counts only a Done card not under it or a routing fact, never a
+     `file:line` quote, else it is `unverified` with `proof belongs to a
+     child`; a Cancel counting a pull request that did part of the card,
+     even beside other proof, is recorded `partly-solved` with `adjusted:
+     partial pull request`; and
+     each verdict carries `rested_on`, what it rested on.
+     `done-elsewhere`, `obsolete` and `not-worth-it`
      put the card on the Cancel list; `partly-solved` puts a Planning card on
      the Rewrite first list, with the agent's drafted body, and `unverified`
      takes a Planning card out of the batch and leaves it in Intake (DRE-6666).
@@ -629,14 +641,17 @@ in `## Why each card is in the batch`.
 **The proof line (DRE-5746).** That verdict is one plain line —
 `Verified against main: **<verdict>** — <summary>; <proof>; <proof>` — and
 every proof the agent gave is on it, in the form the Cancel reason already
-uses: `path:line — quote` for a `file:line` item, `source — quote` for any
-other (`groomer.proof_line`, the one formatter both read). Not a new
+uses: `path:line — quote` for a `file:line` item, `<fact> — quote` for a
+done-work or routing item, ending `(whole card: the agent's reading)` when
+the files could not check the agent's `whole` (DRE-7240), and
+`source — quote` for any other (`groomer.proof_line`, the one formatter
+both read). Not a new
 `- **Label:**` line and not a column of the batch table: the console and the
 drain parse both, and they render byte for byte as before. A Planning card
 with no proof is one whose verdict is `unverified`, and its line carries the
 reason instead, one of exactly `agent step failed`, `agent step skipped`,
-`no verdict file`, `no proof`, `unreadable answer`, `no verdict artifact` or
-`lookup failed: <why>` (`groom_verify_agent.UNVERIFIED_REASONS`); a verdict
+`no verdict file`, `no proof`, `unreadable answer`, `no verdict artifact`,
+`proof belongs to a child` or `lookup failed: <why>` (`groom_verify_agent.UNVERIFIED_REASONS`); a verdict
 document naming any other reason is read as `unreadable answer`. An
 `excluded` card is never on the Planning list. A cost or clock the step could not read
 says `unknown`, never zero. A record with no `verify` block renders byte for
