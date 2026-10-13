@@ -7140,7 +7140,7 @@ def return_waiting_epics(epics: set[str]) -> None:
     every one of those blockers alike.
 
     `epics` is this repo's Queued epics off the promotion phase's read, the
-    set `closable_epics(cards, BACKLOG_LANE)` hands `close_finished_epics`.
+    set `closable_epics(cards, QUEUE_LANE)` hands `close_finished_epics`.
     Their relations come off the pass's epic record — one read for them all,
     and none at all when the close already made it. An epic moves when:
       * the record still reads it in Queued;
