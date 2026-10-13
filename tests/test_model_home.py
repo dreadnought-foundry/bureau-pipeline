@@ -421,7 +421,8 @@ def test_the_selector_cli_still_prints_a_model_on_an_unreadable_home(tmp_path):
     assert note.startswith("DEGRADED model-policy:")
     assert UNREADABLE_CLAUSE.search(note), note
     tag = next(line for line in err if line.startswith("model-home: unreadable — "))
-    assert tag.endswith("; running on the defaults in the code")
+    assert tag == ("model-home: unreadable — the token mint was refused: "
+                   "BUREAU_MODEL_HOME_TOKEN is set and empty; the built-in defaults are in use")
     assert err.index(tag) < err.index(note)
 
 
