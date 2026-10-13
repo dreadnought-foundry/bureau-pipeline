@@ -51,10 +51,15 @@ Every cut is named in the document's `why`, never silent:
     reaching `REQUEST_TIMEOUT`) — named, asked nothing more, and the next repo
     is asked. What it answered before refusing is kept.
   * **A rate limit, the request budget (`MAX_REQUESTS`) or the clock
-    (`MAX_SECONDS`)** — the leg stops, and keeps what it read.
+    (`MAX_SECONDS`)** — the leg stops, makes no further request, keeps the
+    facts of every run whose jobs it read, and counts the kept runs it left
+    unread — those of every runs page already answered, the repo being
+    listed included.
 
 The document is written on every path. `read` is true when at least one repo
-answered its runs query.
+answered its runs query, unless a stop came before any run's jobs were read:
+then there is no fact to keep, and `read: false` says so rather than an empty
+list that reads as "ran nowhere".
 
 ## In the verify leg
 
@@ -276,6 +281,9 @@ def _read_runs(leg: _Leg, repo: _Repo) -> None:
             kept = by_path.setdefault(str(path), [])
             if len(kept) < ROUTING_RUNS_PER_WORKFLOW:
                 kept.append(run)
+        # After every page, so a stop on the next one still counts these.
+        repo.ranks = [[kept[rank] for kept in by_path.values() if len(kept) > rank]
+                      for rank in range(ROUTING_RUNS_PER_WORKFLOW)]
         endpoint = _next_endpoint(headers)
         if endpoint is None:
             break
@@ -283,9 +291,6 @@ def _read_runs(leg: _Leg, repo: _Repo) -> None:
             repo.notes.append(PAGE_LIMIT.format(
                 repo=repo.full, pages=ROUTING_RUN_PAGES,
                 runs=ROUTING_RUN_PAGES * PER_PAGE))
-    for kept in by_path.values():
-        for rank, run in enumerate(kept):
-            repo.ranks[rank].append(run)
 
 
 def _read_jobs(leg: _Leg, repo: _Repo, run: dict) -> None:
@@ -347,7 +352,8 @@ def owner(*, owner, gh_run, repo_map, now, clock=time.monotonic) -> dict:
          "repos": {"owner/repo": {"read": bool, "why": str | null}},
          "facts": [fact, ...]}
 
-    `read` is true when at least one repo answered its runs query; `why`
+    `read` is true when at least one repo answered its runs query and no
+    stop came before any run's jobs were read; `why`
     names every refusal and cut, and what stopped the leg, joined by `; `,
     or is null when nothing was left out. A repo's `read` says its runs were
     answered, and its `why` that it refused."""
@@ -397,7 +403,10 @@ def owner(*, owner, gh_run, repo_map, now, clock=time.monotonic) -> dict:
                      for repo in repos if repo.refused is None)
         if unread:
             notes.append(RUNS_NOT_READ.format(n=unread))
-    doc["read"] = any(repo.answered for repo in repos)
+    # A stop ends every request, so one that came before any run's jobs were
+    # read leaves no fact to keep: that is not read, never "ran nowhere".
+    doc["read"] = any(repo.answered for repo in repos) and not (
+        stopped and not any(repo.runs_read for repo in repos))
     doc["why"] = "; ".join(notes) or None
     doc["requests"] = leg.requests
     doc["seconds"] = round(float(leg.elapsed()), 1)
