@@ -19,9 +19,14 @@
 # THE PLANNER HOLDS NO LINEAR KEY (DRE-2696's rule, waived on purpose). It runs
 # a model over untrusted card text, and every Linear read and write of this run
 # is made by `select`, `claim`, `apply` and the context steps, each holding the
-# key on its own step's env. Its tools are Read/Glob/Grep/Write with no Bash,
-# so it could not run linear_ops.py if it held one — groomer.yml's `Verify the
-# card against main` shape. The waiver is in tests/test_agent_linear_key.py.
+# key on its own step's env. Its tools are Read/Glob/Grep/Write with no Bash.
+# Its Write still reaches the workspace — the card repo and the
+# `.bureau-pipeline` checkout — and its `--add-dir`, so no step holding the
+# key runs a script from there: each runs from `$TRUSTED_PIPELINE`, a
+# read-only copy of the checkout taken before any model runs, outside both.
+# groomer.yml keeps its card writes in a separate job for the same reason; one
+# job here keeps each card's claim and apply under hygiene's 2-hour bound. The
+# waiver is in tests/test_agent_linear_key.py.
 #
 # Vendor boundary (standards/vendor-boundaries.md):
 #   Q1 actor — the schedule initiates as `github-actions` (a schedule's actor
@@ -203,17 +208,31 @@ jobs:
         with:
           path: .bureau-pipeline
 
+      # The copy every step holding the Linear key runs its scripts from (see
+      # the header). Taken before any model runs, outside the workspace and the
+      # agent's `--add-dir`, and read-only. A reused runner can hold the last
+      # run's copy, so it is made writable before it is replaced.
+      - name: Keep a trusted copy of bureau-pipeline
+        env:
+          TRUSTED_PIPELINE: ${{ runner.temp }}/pipeline-trusted
+        run: |
+          if [ -e "$TRUSTED_PIPELINE" ]; then chmod -R u+w "$TRUSTED_PIPELINE"; fi
+          rm -rf "$TRUSTED_PIPELINE"
+          cp -a .bureau-pipeline "$TRUSTED_PIPELINE"
+          chmod -R a-w "$TRUSTED_PIPELINE"
+
       # The claim IS the card's one repair. Exit 3: a receipt already stands,
       # nothing was posted, and the leg ends here, green, with no model run.
       - name: Claim the card
         id: claim
         env:
           CARD: ${{ matrix.card }}
+          TRUSTED_PIPELINE: ${{ runner.temp }}/pipeline-trusted
           LINEAR_API_KEY: ${{ secrets.LINEAR_PLANNER_KEY || secrets.LINEAR_API_KEY }}
           LINEAR_API_KEY_FALLBACK: ${{ secrets.LINEAR_API_KEY }}
         run: |
           set +e
-          python3 .bureau-pipeline/scripts/triage_repair.py claim "$CARD"
+          python3 "$TRUSTED_PIPELINE"/scripts/triage_repair.py claim "$CARD"
           rc=$?
           set -e
           if [ "$rc" -eq 0 ]; then
@@ -232,12 +251,14 @@ jobs:
         env:
           CARD: ${{ matrix.card }}
           OUT_DIR: ${{ runner.temp }}/triage-repair/${{ matrix.card }}
+          TRUSTED_PIPELINE: ${{ runner.temp }}/pipeline-trusted
           LINEAR_API_KEY: ${{ secrets.LINEAR_PLANNER_KEY || secrets.LINEAR_API_KEY }}
           LINEAR_API_KEY_FALLBACK: ${{ secrets.LINEAR_API_KEY }}
         run: |
-          python3 .bureau-pipeline/scripts/assemble_context.py assemble planner \
+          # Read from the copy, written to the checkout, where the planner reads it.
+          python3 "$TRUSTED_PIPELINE"/scripts/assemble_context.py assemble planner --root "$TRUSTED_PIPELINE" \
             > .bureau-pipeline/agent-context.md
-          python3 .bureau-pipeline/scripts/spoken_thread.py people "$CARD" >> .bureau-pipeline/agent-context.md
+          python3 "$TRUSTED_PIPELINE"/scripts/spoken_thread.py people "$CARD" >> .bureau-pipeline/agent-context.md
           echo "assembled $(wc -l < .bureau-pipeline/agent-context.md) lines of planner context"
           # `apply` reads this directory and nothing else, so nothing may be
           # left in it from anything that ran before the planner.
@@ -254,13 +275,14 @@ jobs:
         if: steps.claim.outputs.claimed == 'true' && (matrix.action == 'repair' || matrix.action == 'escalate')
         env:
           CARD: ${{ matrix.card }}
+          TRUSTED_PIPELINE: ${{ runner.temp }}/pipeline-trusted
           LINEAR_API_KEY: ${{ secrets.LINEAR_PLANNER_KEY || secrets.LINEAR_API_KEY }}
           LINEAR_API_KEY_FALLBACK: ${{ secrets.LINEAR_API_KEY }}
           RAW_TITLE: ${{ matrix.title }}
           FINDINGS: ${{ toJSON(matrix.findings) }}
           DECISIONS: ${{ toJSON(matrix.decisions) }}
         run: |
-          RAW_DESCRIPTION="$(python3 .bureau-pipeline/scripts/linear_ops.py description "$CARD")"
+          RAW_DESCRIPTION="$(python3 "$TRUSTED_PIPELINE"/scripts/linear_ops.py description "$CARD")"
           RAW_FINDINGS="$(python3 -c 'import json, os
           found = json.loads(os.environ["FINDINGS"] or "[]") or []
           print("\n".join(f"{n}. {f}" for n, f in enumerate(found, 1)))')"
@@ -269,7 +291,7 @@ jobs:
           picked = json.loads(os.environ["DECISIONS"] or "[]") or []
           print("\n".join(f"{found.index(d) + 1}. {d}" for d in picked if d in found))')"
           export RAW_DESCRIPTION RAW_FINDINGS RAW_DECISIONS
-          python3 .bureau-pipeline/scripts/sanitize_untrusted.py \
+          python3 "$TRUSTED_PIPELINE"/scripts/sanitize_untrusted.py \
             line RAW_TITLE title \
             body RAW_DESCRIPTION description \
             body RAW_FINDINGS findings \
@@ -426,7 +448,8 @@ jobs:
 
       # ALWAYS once the card is claimed, whatever the planner did: a dead or
       # half-done planner reaches the `unfinished` receipt here. `replan` runs
-      # no planner, so it has no directory to read.
+      # no planner, so it has no directory to read. The planner's files are
+      # data `apply` validates; the code that reads them is the trusted copy.
       - name: Apply the planner's files
         id: apply
         if: ${{ !cancelled() && steps.claim.outputs.claimed == 'true' }}
@@ -434,11 +457,21 @@ jobs:
           CARD: ${{ matrix.card }}
           ACTION: ${{ matrix.action }}
           OUT_DIR: ${{ runner.temp }}/triage-repair/${{ matrix.card }}
+          TRUSTED_PIPELINE: ${{ runner.temp }}/pipeline-trusted
           LINEAR_API_KEY: ${{ secrets.LINEAR_PLANNER_KEY || secrets.LINEAR_API_KEY }}
           LINEAR_API_KEY_FALLBACK: ${{ secrets.LINEAR_API_KEY }}
         run: |
           if [ "$ACTION" = "replan" ]; then
-            python3 .bureau-pipeline/scripts/triage_repair.py apply "$CARD" --action "$ACTION"
+            python3 "$TRUSTED_PIPELINE"/scripts/triage_repair.py apply "$CARD" --action "$ACTION"
           else
-            python3 .bureau-pipeline/scripts/triage_repair.py apply "$CARD" --action "$ACTION" --dir "$OUT_DIR"
+            python3 "$TRUSTED_PIPELINE"/scripts/triage_repair.py apply "$CARD" --action "$ACTION" --dir "$OUT_DIR"
           fi
+
+      # Read-only files would stop a reused runner clearing its temp directory.
+      - name: Remove the trusted copy
+        if: ${{ always() }}
+        env:
+          TRUSTED_PIPELINE: ${{ runner.temp }}/pipeline-trusted
+        run: |
+          if [ -e "$TRUSTED_PIPELINE" ]; then chmod -R u+w "$TRUSTED_PIPELINE"; fi
+          rm -rf "$TRUSTED_PIPELINE"
