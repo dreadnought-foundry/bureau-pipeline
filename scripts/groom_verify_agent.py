@@ -1209,7 +1209,9 @@ def _weigh(verdict: str, proof: list[dict], row: dict, declared,
 
     Each done-work or routing item is checked against what the row supplied,
     and the runner writes `fact` (and on done work `covers_check`) onto each
-    one that matched. With `recorded`, a part the row does not carry — the
+    one that matched; one that did not is left out of `proof`. A Cancel
+    counting any partial done-work item is `partly-solved`, whatever else it
+    counts. With `recorded`, a part the row does not carry — the
     workflow's `apply` holds no folded targets — is read off the document
     `verdict` wrote: an item carrying the runner's `fact` is one `judge`
     matched, and the context words are the ones `judge` kept. A row with no
@@ -1251,7 +1253,10 @@ def _weigh(verdict: str, proof: list[dict], row: dict, declared,
             whole = kind == ROUTING or item.get("covers") == "whole"
         else:
             anchored = False
-        weighed.append(item)
+        # A done-work or routing item the runner did not confirm is dropped,
+        # never shown: on the page it would read like the runner's own line.
+        if anchored or kind not in (DONE_WORK, ROUTING):
+            weighed.append(item)
         if anchored:
             counted.append((kind, under, whole))
     if not counted:

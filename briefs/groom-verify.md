@@ -246,7 +246,8 @@ or routing. The runner checks each one against what it handed you. A
 done-work item counts only when the matched Done work holds that card,
 Done, and that pull request, merged. A routing item counts only when where
 jobs ran holds that `id`. An item naming work or a fact you were not given
-does not count, and an answer with no anchored item left is recorded as
+does not count and is left out of your proof, so the page never shows it,
+and an answer with no anchored item left is recorded as
 `unverified` with the reason `no proof`, whichever answer it is. On each
 item it counts, the runner writes its own line from that data as `fact`,
 and the CEO reads that line beside your quote.
@@ -263,8 +264,9 @@ code exists, not who landed it. Code still counts toward `still-needed` and
 `unverified` with the reason `proof belongs to a child`.
 
 **A pull request that did part of the card is `partly-solved`, not a
-Cancel.** A Cancel resting on a done-work item whose `covers` is `"part"`,
-or missing, is recorded as `partly-solved`, with `adjusted` reading
+Cancel.** A Cancel counting a done-work item whose `covers` is `"part"`,
+or missing, is recorded as `partly-solved` even when other proof beside it
+would carry the Cancel alone, with `adjusted` reading
 `partial pull request`, and goes on the Rewrite first list with your summary and your
 `rewrite` draft when you wrote one — so write the draft when you give a
 done-work Cancel that may be partial. When the card names files and the

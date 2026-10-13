@@ -82,11 +82,13 @@ fast path shipped, which the sweep moves straight to Planning (DRE-4150, point
      its merged pull request from the row's `matched_work`, or a fact from
      the row's `routing` — the last two counted only when the runner itself
      handed them to the agent, and each shown on the page by the runner's
-     own `fact` line. A Cancel of a card with children, in any state,
+     own `fact` line, and one the runner did not confirm left out of the
+     proof. A Cancel of a card with children, in any state,
      counts only a Done card not under it or a routing fact, never a
      `file:line` quote, else it is `unverified` with `proof belongs to a
-     child`; a Cancel resting on a pull request that did part of the card
-     is recorded `partly-solved` with `adjusted: partial pull request`; and
+     child`; a Cancel counting a pull request that did part of the card,
+     even beside other proof, is recorded `partly-solved` with `adjusted:
+     partial pull request`; and
      each verdict carries `rested_on`, what it rested on.
      `done-elsewhere`, `obsolete` and `not-worth-it`
      put the card on the Cancel list; `partly-solved` puts a Planning card on
