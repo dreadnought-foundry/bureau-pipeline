@@ -411,7 +411,9 @@ def lane_says(target: str, lane: str | None) -> tuple[bool, str]:
     lane = lane or "an unknown lane"
     if lane in DONE:
         return True, f"{target} is Done"
-    if lane in IN_FLIGHT:
+    # A retiring name the contract aliases (the queue's old one, DRE-6753) is
+    # read as the lane it means until the sweep's drain moves the card.
+    if lane_contract.aliases().get(lane, lane) in IN_FLIGHT:
         return True, f"{target} is approved and in {lane}"
     if lane in ("Canceled", "Duplicate"):
         return False, f"{target} was closed as {lane}, so nothing replaced it"

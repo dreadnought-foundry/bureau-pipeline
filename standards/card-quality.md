@@ -836,7 +836,7 @@ could not finish reading fifteen cards at the old ceiling — the plan was too
 long to be reviewed in one pass, which means nobody read all of it.
 
 **The split as it landed on the board.** DRE-3164 kept seven cards. DRE-3245
-took eight, blocked on it, sitting in Backlog until part 1 is Done.
+took eight, blocked on it, sitting in the queue until part 1 is Done.
 
 ### What the planner files instead
 

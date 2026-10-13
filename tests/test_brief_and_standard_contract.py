@@ -408,8 +408,11 @@ class TestTheQueueIsCalledQueued:
             "260 Backlog cards",  # DRE-3236's measured merge-sync
             "Backlog held **226** cards",  # the 2026-08-26 census
         ),
-        "standards/architecture.md": ("It replaced `Backlog` (DRE-4125)",),
-        "standards/card-quality.md": ("sitting in Backlog until part 1 is Done",),
+        # Once Backlog retired (DRE-6753) it is a retired alias, which no
+        # brief or standard may name at all (test_agent_docs_lane_vocabulary),
+        # so neither standard keeps a history line naming it.
+        "standards/architecture.md": (),
+        "standards/card-quality.md": (),
         "docs/groomer.md": ("of a 226-card Backlog",),
         "docs/hand-built-migration.md": ("were parked in Backlog",),
         "docs/hand-work-migration.md": (

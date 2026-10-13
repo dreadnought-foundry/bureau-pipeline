@@ -69,8 +69,10 @@ def test_it_holds_every_lane_a_computed_write_reaches():
 
 
 def test_it_holds_every_retiring_lanes_replacement():
-    """Nothing is retiring today, so a retiring lane is injected — the drain's
-    destination is read off the contract, and so is this."""
+    """A retiring lane is injected whose replacement nothing else publishes —
+    the shipped one, Backlog, is replaced by Queued, which the park already
+    publishes (DRE-6753) — so the drain's destination is proved to be read off
+    the contract, and so is this."""
     real = lane_contract.lanes
 
     def with_one_retiring(status="live", contract=None):

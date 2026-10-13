@@ -314,12 +314,26 @@ class TestAgainstTheShippedContract:
                 "which has shipped, and nothing implements it"
             )
 
-    def test_the_shipped_contract_carries_no_retiring_entry(self):
+    def test_the_shipped_contract_carries_only_the_retiring_queue_name(self):
         # DRE-2818. `board.retired_entry_is_deleted` failed on `main` all day
         # naming both entries; this is that failure, pinned as a unit test so
-        # the next one is caught before it reaches the trunk.
+        # the next one is caught before it reaches the trunk. The one retiring
+        # entry today is Backlog (DRE-6753), whose state Linear keeps — a
+        # team's only backlog-type status cannot be archived — so the entry
+        # stays, and the rule passes while the state is on the board.
         contract = lane_contract.load()
-        assert lane_contract.lanes(status="retiring", contract=contract) == ()
+        assert lane_contract.lane_names(status="retiring", contract=contract) == (
+            "Backlog",
+        )
+        board = {
+            name: 0
+            for status in ("live", "retiring")
+            for name in lane_contract.lane_names(status=status, contract=contract)
+        }
+        report = lane_contract.check(contract=contract, board=board, vocabulary=())
+        assert "board.retired_entry_is_deleted" not in {
+            f.clause_id for f in report.failures()
+        }
 
     def test_the_shipped_contract_fails_when_linear_has_dropped_a_declared_lane(self):
         # The direction nobody was checking (the card's "related" section): a
