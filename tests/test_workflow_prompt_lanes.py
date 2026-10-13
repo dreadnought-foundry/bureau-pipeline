@@ -103,6 +103,10 @@ class TestNoPromptNamesALaneThatDoesNotExist:
         # the script — the standalone CI step catches it on its own.
         with open(ROOT / "config" / "lane-contract.json", encoding="utf-8") as fh:
             aliases = [e["from"] for e in json.load(fh)["aliases"]["entries"]]
+        # An alias still live while its lane is replaced (Backlog → Queued,
+        # DRE-6741) is on the board, and test_an_alias_readopted_as_a_live_lane_
+        # is_not_a_finding already says a prompt may name it.
+        aliases = [a for a in aliases if a not in cwp.live_lanes()]
         denied = cwp.not_lanes()
         missing = [a for a in aliases if a not in denied]
         assert not missing, f"aliases absent from the denylist: {missing}"
