@@ -644,9 +644,19 @@ byte as before. The drain still reads the posted comment, never the artifact,
 and reads a verify-agent Cancel row exactly like any other.
 
 **What verify excludes without judging (DRE-5306).** `groom_verify_agent.py
-targets` reads each card with its board context — age, labels, parent,
-children, the last move and every comment with who said it — in one Linear
-request per card, and excludes five kinds before any agent runs, never by the
+targets` reads each card with its board context — age, labels, parent and
+its title, children, relations both ways, the last move and the thread with
+who said each comment — in one Linear request per card, plus one per older
+page of fifty comments up to 200 (DRE-7238). `prepare` holds what that adds
+to the agent's input to known limits: each comment cut at 2,000 characters,
+the thread shown held to 30,000 characters with the newest kept, and the
+board context saying `comments_read`, `comments_shown` and `thread_whole`.
+Two fenced sections follow the Layer A evidence: the Done cards and merged
+pull requests matched to the card's problem (`matched_work`, at most 20,000
+characters, a pull request past that shown by its line alone) and where jobs
+ran recently (`routing`, at most 60 facts, the card's own repo first). A row
+at every limit adds under 65,000 characters, roughly 16,000 tokens. It also
+excludes five kinds before any agent runs, never by the
 model: `parent epic with <n> open child(ren)` (a child not Done, Canceled or
 Duplicate — an epic with no open child is judged like any card),
 `hand-built` or `operator-step` (whichever hand mark the card carries, read
