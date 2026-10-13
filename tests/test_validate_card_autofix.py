@@ -19,7 +19,7 @@ Inference rules (mirrors the relay's REPO_MAP convention — see validate_card):
                candidate must be a real repo (VALID_SLUGS) or the card is
                bounced (never a wrong-repo guess). An initiative that names no
                single repo (`initiative:foundry`, DRE-7075) yields no candidate
-               at all, even though `foundry` is now a repo slug.
+               at all, even once `foundry` is a repo slug (DRE-7076 onboards it).
 """
 
 import inspect
@@ -97,11 +97,10 @@ class InferRepoTest(unittest.TestCase):
 
     def test_initiative_foundry_resolves_to_unmapped_slug(self):
         # Rule 5 reachability: the Dreadnought Foundry initiative spans several
-        # products, so its label names no single repo. Since DRE-7075 `foundry`
-        # is ALSO a repo slug, and identity would route every card carrying the
-        # initiative label to that one repo. infer_repo must not resolve it to
-        # anything the gate accepts.
-        self.assertIn("foundry", validate_card.VALID_SLUGS)  # the collision
+        # products, so its label names no single repo. `foundry` is also the
+        # studio's build repo, which joins the map when DRE-7076 onboards it, and
+        # identity would then route every card carrying the initiative label to
+        # that one repo. infer_repo must not resolve it to anything at all.
         slug, source = validate_card.infer_repo(["initiative:foundry"])
         self.assertNotIn(slug, validate_card.VALID_SLUGS)
         self.assertEqual((slug, source), (None, None))
@@ -119,8 +118,7 @@ class InferRepoTest(unittest.TestCase):
             validate_card.VALID_SLUGS,
             {"atlas", "deltasolv", "agent-bureau",
              "agent-bureau-demo", "bureau-pipeline",  # DRE-1929 self-host
-             "portico",  # DRE-2086 docs-platform → portico rename
-             "foundry", "charter"},  # DRE-7075
+             "portico"},  # DRE-2086 docs-platform → portico rename
             # DRE-2672: vericorr retired — the fleet no longer routes to it.
         )
 
@@ -261,8 +259,8 @@ class GateFixFirstTest(unittest.TestCase):
         self.assertTrue(self._run(fake))
         self.assertEqual(fake.states, [("DRE-999", "Planning")])
         self.assertEqual(fake.descriptions, [])
-        # DRE-7075: `foundry` is a repo slug now — the bounce must not have
-        # written the repo label it would have guessed.
+        # DRE-7075: once `foundry` is a repo slug the bounce must still not
+        # write the repo label identity would have guessed.
         self.assertFalse(any(l[1].startswith("repo:") for l in fake.added_labels))
 
     def test_retired_vericorr_project_bounces(self):

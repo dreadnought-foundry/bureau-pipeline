@@ -94,21 +94,10 @@ class RepoMapSnapshotTest(unittest.TestCase):
         self.assertEqual(slug, "portico")
         self.assertIn(slug, validate_card.VALID_SLUGS)
 
-    def test_foundry_and_charter_are_routable_slugs(self):
-        # DRE-7075: both repos joined the routing map. A `repo:foundry` or
-        # `repo:charter` card passes the Todo gate's validation, and both of
-        # the gate's copies (snapshot + fallback literal) know the slug.
-        for slug in ("foundry", "charter"):
-            self.assertEqual(_snapshot()[slug], f"dreadnought-foundry/{slug}")
-            self.assertIn(slug, validate_card.VALID_SLUGS)
-            self.assertEqual(
-                validate_card._FALLBACK_REPO_MAP[slug], f"dreadnought-foundry/{slug}")
-            self.assertEqual(
-                validate_card.missing("", [f"repo:{slug}", "agent:engineer"]), [])
-
     def test_initiative_foundry_alone_still_bounces(self):
         # DRE-7075: `initiative:foundry` is the whole Dreadnought Foundry
-        # initiative, not the new repo. A card carrying it and no `repo:` label
+        # initiative, not the studio's build repo of the same name. A card
+        # carrying it and no `repo:` label
         # must still owe its repo, never infer the `foundry` slug.
         self.assertEqual(
             validate_card.missing("", ["initiative:foundry", "agent:engineer"]),
