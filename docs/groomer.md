@@ -285,7 +285,7 @@ rule — `id`, a plain-English `reason` and `condition` with placeholders, and
 evaluators disagree on the ids. The six rules:
 
 1. `read-waits-on-open-card` — the ranked read's `depends on` line names a
-   card that is open: Planning, Green Light, Backlog, Todo, In Progress or In
+   card that is open: Planning, Green Light, Queued, Todo, In Progress or In
    Review. A named card with no child and no `[EPIC]` title holds the card
    until it is Done. A named epic holds it until the epic is **built out or
    Done**, read exactly as the sweep's epic gate reads a blocker
@@ -301,7 +301,7 @@ evaluators disagree on the ids. The six rules:
    reference, not ownership — `collision_report`'s rule. Ready when that card
    is Done.
 3. `child-of-epic-not-in-progress` — the card's parent epic is in Intake,
-   Planning, Green Light, Backlog, Todo or Triage. Ready when the epic is In
+   Planning, Green Light, Queued, Todo or Triage. Ready when the epic is In
    Progress. The epic card itself trips nothing and keeps its slot as a unit
    of one, and the verify step's own exclusion keeps it in Intake with its
    reason on the page — nothing of the unit moves until a person moves the
@@ -541,7 +541,7 @@ to ten cards behind it, in proposal order:
 — the description's own line, or a card or PR the ranked read's evidence names
 — stands only if X is **Done**, is a **merged PR**, or is **approved and in
 flight** — in a live lane of the lane contract's `work` segment other than
-Done, read off `config/lane-contract.json`: Backlog, Todo, Hand-work (live
+Done, read off `config/lane-contract.json`: Queued, Todo, Hand-work (live
 since DRE-5320), In Progress or In Review (DRE-5348).
 Otherwise the Cancel is
 rejected, and the card stays on the Planning list with the reason as its Why.

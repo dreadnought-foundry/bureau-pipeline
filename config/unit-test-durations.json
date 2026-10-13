@@ -627,6 +627,7 @@
     "tests/test_terminal_guard_race.py": 0.08,
     "tests/test_test_names_are_not_infra.py": 1.71,
     "tests/test_tests_workflow_nightly.py": 1.82,
+    "tests/test_triage_repair_workflow.py": 3.49,
     "tests/test_turn_budget.py": 1.85,
     "tests/test_turn_budget_scenario.py": 10.0,
     "tests/test_turn_exhaustion_not_outage.py": 0.67,

@@ -21,7 +21,7 @@
 # proof; `Hand-work` carries no stall window by contract. So there is no
 # `Card → In Progress` step, and agent-task.yml's report script is not used
 # here: its lane moves read the card out of `In Progress,Todo` only, and its
-# dead-run exits requeue to `Todo`, park in `Backlog` or replan to
+# dead-run exits requeue to `Todo`, park in `Queued` or replan to
 # `Planning` — three lanes a proof card must never enter. `qa-review.yml`
 # carries the card to `In Review` when the record's pull request opens
 # (DRE-4179), and the sweep's `move_hand_built_to_review` is the backstop.
@@ -1705,7 +1705,7 @@ jobs:
       # Written fresh for the proof run: agent-task.yml's report script reads
       # the card out of `In Progress,Todo` only, so every move it makes would
       # refuse a card in `Hand-work`, and its dead-run exits requeue to
-      # `Todo`, park in `Backlog` or replan to `Planning`. This step has four
+      # `Todo`, park in `Queued` or replan to `Planning`. This step has four
       # exits:
       #
       #   1. a record pull request is OPEN (card_pr.py find, the predicate the

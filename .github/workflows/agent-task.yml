@@ -923,7 +923,7 @@ jobs:
                  asked in Green Light with the plain-English Finding / Question /
                  Recommendation lines, and is never parked silently. A decision
                  between ways to build the card is still item 6's escalation.
-               A mechanical class (the first three) parks the card in Backlog,
+               A mechanical class (the first three) parks the card in Queued,
                and the sweep acts on it within one pass.
                Two things are NOT blockers. A card that is really several cards
                is a hand-back (/tmp/agent-handback.txt). A card whose work is
@@ -1198,7 +1198,7 @@ jobs:
                  asked in Green Light with the plain-English Finding / Question /
                  Recommendation lines, and is never parked silently. A decision
                  between ways to build the card is still item 6's escalation.
-               A mechanical class (the first three) parks the card in Backlog,
+               A mechanical class (the first three) parks the card in Queued,
                and the sweep acts on it within one pass.
                Two things are NOT blockers. A card that is really several cards
                is a hand-back (/tmp/agent-handback.txt). A card whose work is
@@ -1470,7 +1470,7 @@ jobs:
                  asked in Green Light with the plain-English Finding / Question /
                  Recommendation lines, and is never parked silently. A decision
                  between ways to build the card is still item 6's escalation.
-               A mechanical class (the first three) parks the card in Backlog,
+               A mechanical class (the first three) parks the card in Queued,
                and the sweep acts on it within one pass.
                Two things are NOT blockers. A card that is really several cards
                is a hand-back (/tmp/agent-handback.txt). A card whose work is

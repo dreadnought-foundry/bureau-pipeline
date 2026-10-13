@@ -361,7 +361,10 @@ class TestTwoDeathsMeansSplit:
             f"the turn-exhaustion budget tag ({dead_run.TURN_TAG!r}) is what the "
             "requeue is counted by; name it so the count can be checked"
         )
-        assert "Backlog" in section, "the park lands the card in Backlog; say so"
+        assert dead_run.PARK_STATE in section, (
+            f"the park lands the card in {dead_run.PARK_STATE!r} "
+            "(dead_run.PARK_STATE); say so"
+        )
 
     def test_the_sweep_skips_a_parked_card(self):
         section = _flat(_section())

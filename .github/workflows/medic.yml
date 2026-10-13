@@ -238,7 +238,7 @@ jobs:
 
       # Is a retry the right answer for THIS failure? (DRE-2954.) Two rules,
       # asked of two different sources of truth: the CARD says whether a human
-      # already owns this work (the `needs-human` label, or Backlog plus the
+      # already owns this work (the `needs-human` label, or Queued plus the
       # hold receipt that put it there after this run started), and the failed
       # RUN'S OWN LOG says whether it died of turn exhaustion — a death that is
       # deterministic on the card's size, so a rerun walks into the same wall.

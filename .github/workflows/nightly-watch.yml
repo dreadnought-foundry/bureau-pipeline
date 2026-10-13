@@ -58,7 +58,7 @@
 #   Q3 re-run — idempotent by construction: the card lookup is by exact title
 #      and the titles are constants per owner, so a re-run comments on the open
 #      card instead of minting a second. A card CANCELED while the condition
-#      still holds invites a fresh one next hour — park it in Backlog instead,
+#      still holds invites a fresh one next hour — park it in Queued instead,
 #      the model-drift rule.
 #   Q4 command limits — reading a workflow's TRIGGERS needs the file, which the
 #      Actions API does not carry, so this reads each workflow's contents at

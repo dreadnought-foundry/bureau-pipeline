@@ -77,7 +77,10 @@ AGENT_WORKFLOWS = {
 }
 
 # Every workflow that may read the planner's token. plan.yml is the original.
-PLANNER_KEY_READERS = {"plan.yml", *AGENT_WORKFLOWS}
+# DRE-7179: the Triage Repair run is the planner's work — its `claim`, context
+# and `apply` steps read and write the cards the planner rewrites — so it holds
+# plan.yml's expression, the planner's token first, with no opt-in.
+PLANNER_KEY_READERS = {"plan.yml", "triage-repair.yml", *AGENT_WORKFLOWS}
 
 
 def _doc(name: str) -> dict:
@@ -323,6 +326,7 @@ EXPIRES_EXPR = "${{ vars.LINEAR_PLANNER_KEY_EXPIRES_AT }}"
 TOKEN_JOBS = {
     **{name: (job,) for name, (job, _floor) in AGENT_WORKFLOWS.items()},
     "plan.yml": ("plan", "publish"),
+    "triage-repair.yml": ("select", "repair"),
 }
 
 

@@ -327,10 +327,10 @@ jobs:
           # <<< DRE-4650 stacked landing
           # Event-driven sweeps, but only the ones THIS merge can have changed
           # (DRE-2930). Two board-wide passes used to run here unconditionally:
-          #   --promote-only  a Done may have unblocked dependent Backlog
+          #   --promote-only  a Done may have unblocked dependent Queued
           #                   children — promote them NOW rather than waiting
           #                   on the drifting cron ("*/15" delivers 78-100 min
-          #                   apart in practice). Pure Linear; the Backlog→Todo
+          #                   apart in practice). Pure Linear; the Queued→Todo
           #                   transition rides the relay webhook for the actual
           #                   agent dispatch.
           #   --close-epics   a Done may have been an epic's LAST child — close
