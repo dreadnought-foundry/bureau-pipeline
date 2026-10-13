@@ -333,18 +333,39 @@ jobs:
           # No id (truncated 300-file record, or an API blip → `{}`) means
           # the verdict binds the SHA alone, exactly as before.
           BASE=$(gh pr view "$PR" --json baseRefName --jq .baseRefName)
+          # A shadow replay (DRE-7194) compares the replayed head with the
+          # base it was built on, not the base branch today: once a pull
+          # request has merged, its head is an ancestor of the base branch
+          # and `$BASE...$SHA` is empty. The merge commit's first parent is
+          # the base branch as it stood at the merge; a pull request that
+          # never merged keeps the base branch.
+          if [ "$SHADOW" = "true" ]; then
+            MERGED=$(gh pr view "$PR" --json mergeCommit --jq '.mergeCommit.oid // empty')
+            if [ -n "$MERGED" ]; then
+              BASE=$(gh api "repos/${{ github.repository }}/commits/$MERGED" --jq '.parents[0].sha')
+              [ -n "$BASE" ] || { echo "::error::shadow replay: merge commit $MERGED has no first parent"; exit 1; }
+            fi
+          fi
           gh api "repos/${{ github.repository }}/compare/$BASE...$SHA" > /tmp/verify-compare.json 2>/dev/null \
             || echo '{}' > /tmp/verify-compare.json
           CONTENT=$(python3 .bureau-pipeline/scripts/verdict_content.py --compare-file /tmp/verify-compare.json 2>/dev/null || true)
           echo "content=$CONTENT" >> "$GITHUB_OUTPUT"
           # The diff a shadow replay is handed (DRE-7194): that same
-          # three-dot compare of the base branch and the replayed head, as a
-          # patch in the file the prompt names. `gh pr diff` would show the
-          # branch as it is today. A compare that cannot be read fails the
-          # step — a replay with no diff has nothing to verify.
+          # three-dot compare, as a patch in the file the prompt names.
+          # `gh pr diff` would show the branch as it is today. A compare that
+          # cannot be read, or reads empty, fails the step and leaves no
+          # file — a replay with no diff has nothing to verify.
           if [ "$SHADOW" = "true" ]; then
+            rm -f /tmp/shadow-replay.diff /tmp/shadow-replay.diff.part
             gh api -H "Accept: application/vnd.github.diff" \
-              "repos/${{ github.repository }}/compare/$BASE...$SHA" > /tmp/shadow-replay.diff
+              "repos/${{ github.repository }}/compare/$BASE...$SHA" > /tmp/shadow-replay.diff.part \
+              || { rm -f /tmp/shadow-replay.diff.part; echo "::error::shadow replay: the compare of $BASE and $SHA could not be read"; exit 1; }
+            if [ ! -s /tmp/shadow-replay.diff.part ]; then
+              rm -f /tmp/shadow-replay.diff.part
+              echo "::error::shadow replay: the compare of $BASE and $SHA is empty — nothing to verify"
+              exit 1
+            fi
+            mv /tmp/shadow-replay.diff.part /tmp/shadow-replay.diff
             echo "shadow replay: PR #$PR at $SHA, $(wc -l < /tmp/shadow-replay.diff) diff lines against $BASE"
           fi
 
@@ -702,6 +723,19 @@ jobs:
           echo "effort_arg=${EFFORT:+--effort $EFFORT}" >> "$GITHUB_OUTPUT"
           echo "shadow replay model: $MODEL${EFFORT:+ (effort $EFFORT)}"
 
+      # The card's thread, off the runner before a shadow replay's agent
+      # starts (DRE-7194). The job's snapshot and the thread Select model
+      # read out of it carry the critic's and the verifier's earlier
+      # verdicts, and the agent holds Bash and Read. The scope gate's
+      # compare is done with too. Every reader of these files runs above.
+      - name: Take the card's thread off the runner (shadow)
+        id: shadow_scrub
+        if: inputs.shadow
+        run: |
+          rm -f "${RUNNER_TEMP:-/tmp}/card-snapshot.json" "${RUNNER_TEMP:-/tmp}/card-thread.json" \
+            /tmp/verify-compare.json
+          echo "shadow replay: the card's snapshot and thread are off the runner"
+
       # Claude Code, installed ONCE and proved, before the model step below
       # (DRE-3414). DRE-3416: the vendor's own installer exited clean, left no
       # launcher, and every Claude-running job in the fleet died minutes later
@@ -805,7 +839,7 @@ jobs:
             You are the behavioral Verifier for PR #${{ steps.pr.outputs.number }}
             in this repo, implementing Linear card ${{ steps.pr.outputs.card }}.
             Use `gh pr view ${{ steps.pr.outputs.number }}` and
-            `gh pr diff ${{ steps.pr.outputs.number }}` (GH_TOKEN is in your env).${{ inputs.shadow && format(' SHADOW REPLAY — where this paragraph and the steps below differ, this paragraph wins. You are replaying this pull request at commit {0}, the head an earlier verification ran on, and the workspace is already checked out there: do not check out the pull request branch or any other commit. Do not run `gh pr diff` — it shows the branch as it is today; the diff you verify is the three-dot compare of the base branch and {0}, in {1}. Do not read the pull request''s comments, by any route. You have no Linear access in this run: the card''s description is in {2} and stands in for the live card (when it is empty, judge from the pull request body).', steps.pr.outputs.sha, '/tmp/shadow-replay.diff', '/tmp/shadow-card.md') || '' }}
+            `gh pr diff ${{ steps.pr.outputs.number }}` (GH_TOKEN is in your env).${{ inputs.shadow && format(' SHADOW REPLAY — where this paragraph and the steps below differ, this paragraph wins. You are replaying this pull request at commit {0}, the head an earlier verification ran on, and the workspace is already checked out there: do not check out the pull request branch or any other commit. Do not run `gh pr diff` — it shows the branch as it is today; the diff you verify is the three-dot compare of {0} with the base it was built on, in {1}. Do not read the pull request''s comments, by any route — not `gh pr view --comments`, not `gh api` on its issue or review comments, and not the pull request''s page. You have no Linear access in this run: the card''s description is in {2} and stands in for the live card (when it is empty, judge from the pull request body).', steps.pr.outputs.sha, '/tmp/shadow-replay.diff', '/tmp/shadow-card.md') || '' }}
 
             You do NOT review the code — you RUN THE FEATURE and prove it works:
             1. Read the card's acceptance criteria (read the LIVE card as the
@@ -974,7 +1008,7 @@ jobs:
             You are the behavioral Verifier for PR #${{ steps.pr.outputs.number }}
             in this repo, implementing Linear card ${{ steps.pr.outputs.card }}.
             Use `gh pr view ${{ steps.pr.outputs.number }}` and
-            `gh pr diff ${{ steps.pr.outputs.number }}` (GH_TOKEN is in your env).${{ inputs.shadow && format(' SHADOW REPLAY — where this paragraph and the steps below differ, this paragraph wins. You are replaying this pull request at commit {0}, the head an earlier verification ran on, and the workspace is already checked out there: do not check out the pull request branch or any other commit. Do not run `gh pr diff` — it shows the branch as it is today; the diff you verify is the three-dot compare of the base branch and {0}, in {1}. Do not read the pull request''s comments, by any route. You have no Linear access in this run: the card''s description is in {2} and stands in for the live card (when it is empty, judge from the pull request body).', steps.pr.outputs.sha, '/tmp/shadow-replay.diff', '/tmp/shadow-card.md') || '' }}
+            `gh pr diff ${{ steps.pr.outputs.number }}` (GH_TOKEN is in your env).${{ inputs.shadow && format(' SHADOW REPLAY — where this paragraph and the steps below differ, this paragraph wins. You are replaying this pull request at commit {0}, the head an earlier verification ran on, and the workspace is already checked out there: do not check out the pull request branch or any other commit. Do not run `gh pr diff` — it shows the branch as it is today; the diff you verify is the three-dot compare of {0} with the base it was built on, in {1}. Do not read the pull request''s comments, by any route — not `gh pr view --comments`, not `gh api` on its issue or review comments, and not the pull request''s page. You have no Linear access in this run: the card''s description is in {2} and stands in for the live card (when it is empty, judge from the pull request body).', steps.pr.outputs.sha, '/tmp/shadow-replay.diff', '/tmp/shadow-card.md') || '' }}
 
             You do NOT review the code — you RUN THE FEATURE and prove it works:
             1. Read the card's acceptance criteria (read the LIVE card as the
