@@ -265,6 +265,30 @@ class ANewWriterWithAWrongDestinationIsCaught(unittest.TestCase):
             problems = rlw.writer_problems()
         self.assertTrue(_named(problems, rogue), problems)
 
+    def test_a_new_writer_naming_the_queue_lane_by_its_contract_name_is_read(self):
+        # Writers name the queue lane `QUEUE_LANE`, never a literal (DRE-6744).
+        # A name computed in `lane_contract` is still a destination the check
+        # reads — imported bare or reached through the module — so a rogue
+        # writer is named for the lane it reaches, not as merely unread.
+        lane = lane_contract.QUEUE_LANE
+        for rogue, source in (
+            ("zz_rogue_queue_import.py",
+             "from lane_contract import QUEUE_LANE\nimport linear_ops\n\n"
+             "def park(card):\n"
+             "    linear_ops.cmd_state(card, QUEUE_LANE)\n"),
+            ("zz_rogue_queue_attribute.py",
+             "import lane_contract\nimport linear_ops\n\n"
+             "def park(card):\n"
+             "    linear_ops.cmd_state(card, lane_contract.QUEUE_LANE)\n"),
+        ):
+            with self.subTest(rogue=rogue), _Staged(f"scripts/{rogue}", source):
+                problems = rlw.writer_problems()
+                self.assertTrue(
+                    _named([p for p in problems if rogue in p],
+                           f"puts a card in {lane!r}"),
+                    problems,
+                )
+
     def test_a_new_writer_pointed_at_a_lane_it_is_declared_for_is_not_named(self):
         # The check must not simply hate every new file: reconcile.py is a
         # declared Todo writer, so a second promotion inside it is fine. Without
