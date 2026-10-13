@@ -397,12 +397,15 @@ class TheBoundIsWired(unittest.TestCase):
         #     death.
         #   * the two re-plans — after the first critic and after the second —
         #     sized per plan since DRE-5288, whose worst case is the cap.
-        #   * the planner's revision of a one-off card (DRE-5376), which runs at
-        #     the one-off read's own ceiling and so shares its worst case.
+        #   * the planner's revision of a one-off card (DRE-5376), sized from
+        #     the one-off read's ceiling since DRE-7177
+        #     (`plan_critic.one_off_revision_turns`), which stops at the same
+        #     retry cap and so shares its worst case.
         #
         # A SIXTH expression would drop out of this arithmetic, which is what
         # the count below refuses.
-        revision = pc.ONE_OFF_TURNS_RETRY_CAP
+        revision = max(pc.one_off_revision_turns(c)
+                       for c in range(1, pc.ONE_OFF_TURNS_RETRY_CAP + 1))
         expressions = (rr.POST_REVIEW_RETRY_CAP, pc.ONE_OFF_TURNS_RETRY_CAP,
                        pc.REPLAN_TURNS_CAP, pc.REPLAN_TURNS_CAP, revision)
         self.assertEqual(
