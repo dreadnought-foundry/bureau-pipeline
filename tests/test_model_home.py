@@ -305,6 +305,24 @@ def test_an_empty_token_is_unreadable(monkeypatch):
     assert fake.calls == []
 
 
+def test_a_refused_mint_says_so_plainly(monkeypatch, capsys):
+    """DRE-7230: the mint step is continue-on-error and shows as passing, so
+    the selector's line is the one sign a mint was refused. It says the mint
+    was refused and that the built-in defaults are in use."""
+    fake = FakeTransport(200, "{}")
+    monkeypatch.setattr(mh, "_http_get", fake)
+    monkeypatch.setenv("BUREAU_MODEL_HOME_TOKEN", "")
+    outcome = mh.read()
+    assert outcome["state"] == "unreadable"
+    assert capsys.readouterr().err.splitlines() == [
+        "model-home: unreadable — the token mint was refused: "
+        "BUREAU_MODEL_HOME_TOKEN is set and empty; the built-in defaults are in use"]
+    assert fake.calls == []
+    assert mh.status_clause(outcome) == (
+        " · model-home: unreadable (the token mint was refused: BUREAU_MODEL_HOME_TOKEN "
+        "is set and empty), running on the defaults in the code")
+
+
 @pytest.mark.parametrize("status", [404, 401])
 def test_a_refused_token_is_unreadable(monkeypatch, status):
     fake = FakeTransport(status, '{"message": "Bad credentials"}')
