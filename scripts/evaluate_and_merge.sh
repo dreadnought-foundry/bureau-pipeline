@@ -43,8 +43,9 @@ set -e
 #     error earns one more read first (DRE-7026).
 #  1. Stops at a pull request that is not open, or whose branch is not one of
 #     the pipeline's own: agent/* (card work), repair/* (red-main repair),
-#     dependabot/* (dependency bumps), and the scheduled branch
-#     bot/standards-sync, matched as a literal. The dependabot and bot branches carry no card. The set is
+#     dependabot/* (dependency bumps), the scheduled branch
+#     bot/standards-sync and the onboarding branch bot/onboard, each matched
+#     as a literal. The dependabot and bot branches carry no card. The set is
 #     the one reconcile.PIPELINE_BRANCH_PREFIXES holds. It echoes the
 #     `bureau-card` line when the branch names a card.
 #  2. Gathers the records the decision reads, each from GitHub's own answer.
@@ -400,6 +401,9 @@ set -e
 #   earns ONE more read, the same read, after READ_RETRY_SECONDS (15 by
 #   default). GitHub's error still goes to the log. Any other failure, and a
 #   second failure of any kind, kills the step as before.
+# DRE-7209 (2026-10-13). bot/onboard, the onboarding process's routing pull
+#   requests here and in agent-bureau, merges here card-less on the same
+#   terms, as a second literal — never `bot/*`.
 
 set -euo pipefail
 
@@ -423,7 +427,7 @@ BRANCH=$(pr_field headRefName)
 STATE=$(pr_field state)
 [ "$STATE" != "OPEN" ] && { echo "PR #$PR is $STATE — nothing to do"; exit 0; }
 # The pipeline's own branches, as literals (DRE-2426 keeps this set and reconcile's one).
-case "$BRANCH" in agent/*|repair/*|dependabot/*|bot/standards-sync) ;; *) echo "not an agent branch — skip"; exit 0;; esac
+case "$BRANCH" in agent/*|repair/*|dependabot/*|bot/standards-sync|bot/onboard) ;; *) echo "not an agent branch — skip"; exit 0;; esac
 CARD=$(printf '%s' "$BRANCH" | grep -oiE 'DRE-[0-9]+' | head -1 | tr '[:lower:]' '[:upper:]' || true)
 # The ECHOED line only: this job's name is a check-run name (DRE-4407).
 if [ -n "$CARD" ]; then echo "bureau-card: $CARD"; fi

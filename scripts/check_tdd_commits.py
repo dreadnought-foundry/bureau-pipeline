@@ -137,6 +137,17 @@ The rule (engineering standard: "commit the failing test FIRST"):
     path exemption for `plugins/**` would let real plugin code skip the
     discipline forever, and the bot's identity alone would exempt most of the
     fleet's PRs — it authors nearly all of them.
+  • The onboarding routing PR's routing paths are not code (DRE-7209). The
+    onboarding process opens one routing PR here and one in agent-bureau,
+    both on the literal branch `bot/onboard`, adding a repo to the map and to
+    every file regenerated from it. Those paths, `ONBOARD_ROUTING_PATHS`, are
+    rendered rather than authored, and each repo's CI already proves them
+    (`scripts/sync_fallback_map.py --check` here, `make sync-mirrors CHECK=1`
+    in agent-bureau). The same attested opener decides it as for
+    standards-sync — `agent-bureau-bot`, from `attested_pr_author` — plus the
+    exact branch. It is NOT a PR exemption: only the routing set moves out of
+    `code`, so a commit that also touches any other code path on that branch
+    is a code commit and is held to the rule like any other.
   • Merge commits are skipped: merging an advanced main into the branch
     brings mainline commits that are not the PR's own work.
 
@@ -322,6 +333,34 @@ _GENERATED_REGION_PROOFS = {
 STANDARDS_SYNC_BRANCH = "bot/standards-sync"
 STANDARDS_SYNC_BOT = "agent-bureau-bot"
 
+# The onboarding routing PR (DRE-7209) — the literal branch the onboarding
+# process opens its routing pull requests on, here and in agent-bureau, and the
+# bot that must have OPENED one (GitHub-attested, the standards-sync signal).
+ONBOARD_BRANCH = "bot/onboard"
+ONBOARD_BOT = "agent-bureau-bot"
+
+# Every path a routing PR changes, in either repo — and nothing else. None is
+# authored: each is regenerated from the repo map, and the regeneration check
+# each repo's CI already runs proves it (`scripts/sync_fallback_map.py --check`
+# here, for the repo map's fallback region in `scripts/validate_card.py`;
+# `make sync-mirrors CHECK=1` in agent-bureau, for the five paths its
+# `scripts/sync_repo_mirrors.py` lists in `SLUG_MIRRORS`). The `config/` paths
+# are ops already and are listed because the card names the whole set. Exact
+# paths, never a prefix: a neighboring file is held to the rule.
+ONBOARD_ROUTING_PATHS = frozenset({
+    # bureau-pipeline
+    "config/repo-map.json",
+    "scripts/validate_card.py",
+    # agent-bureau
+    "config/pipeline-channel.json",
+    "config/linear-workspace.json",
+    "console/backend/sources.py",
+    "cloud/relay-gh/normalize.py",
+    "console/web/src/components/wizard/new-agent/repos.ts",
+    "console/web/src/components/flyout/cardMeta.ts",
+    "demo/demo_library.py",
+})
+
 
 def _normalized_bot_login(login: str) -> str:
     """One actor's three spellings collapsed to one: GitHub surfaces a Bot
@@ -414,6 +453,29 @@ def is_standards_sync_pr(head_ref: str | None, pr_author: str | None,
     if not commit_authors:
         return False
     return all(names_standards_sync_bot(a) for a in commit_authors)
+
+
+def is_onboard_routing_pr(head_ref: str | None,
+                          pr_author: str | None) -> bool:
+    """True iff this is an onboarding routing PR (DRE-7209): opened by the
+    bot — `pr_author` from `attested_pr_author`, the one signal here the PR's
+    contents cannot write — on exactly `bot/onboard`. No commit-author
+    condition: what narrows this one is `mark_routing_paths`, which moves
+    only the routing set out of `code` and leaves every other path on the
+    branch under the rule. Fail-closed on a missing opener or branch."""
+    if not pr_author or _normalized_bot_login(pr_author) != ONBOARD_BOT:
+        return False
+    return (head_ref or "").strip() == ONBOARD_BRANCH
+
+
+def mark_routing_paths(commits) -> list[dict]:
+    """Each commit record with a `routing` list: its paths in
+    `ONBOARD_ROUTING_PATHS`, which `commit_categories` reads as not code.
+    Call it only for a PR `is_onboard_routing_pr` admits."""
+    return [
+        {**c, "routing": [p for p in c["paths"] if p in ONBOARD_ROUTING_PATHS]}
+        for c in commits
+    ]
 
 
 class _DocstringStripper(ast.NodeTransformer):
@@ -619,14 +681,22 @@ def classify_path(
     return "code"
 
 
+def _classify_in_commit(commit, path: str) -> str:
+    """`classify_path` for one of the commit's paths, reading its `sources`
+    and — on an onboarding routing PR — its `routing` list: a routing path
+    the rules call `code` is regenerated and proved elsewhere, so it is docs,
+    the way a generated region is (DRE-3896, DRE-7209)."""
+    sources = commit.get("sources") or {}
+    category = classify_path(path, *sources.get(path, (None, None)))
+    if category == "code" and path in (commit.get("routing") or ()):
+        return "docs"
+    return category
+
+
 def commit_categories(commit) -> set[str]:
     """Every category one commit touches. A commit may carry a `sources` map
     {path: (before, after)}; a commit without one classifies by path alone."""
-    sources = commit.get("sources") or {}
-    return {
-        classify_path(p, *sources.get(p, (None, None)))
-        for p in commit["paths"]
-    }
+    return {_classify_in_commit(commit, p) for p in commit["paths"]}
 
 
 class ExemptionsError(ValueError):
@@ -682,10 +752,8 @@ def parse_exemptions(text: str) -> list[dict]:
 
 
 def _code_paths(commit) -> list[str]:
-    sources = commit.get("sources") or {}
     return [
-        p for p in commit["paths"]
-        if classify_path(p, *sources.get(p, (None, None))) == "code"
+        p for p in commit["paths"] if _classify_in_commit(commit, p) == "code"
     ]
 
 
@@ -1004,7 +1072,8 @@ def main(argv: list[str]) -> int:
     # `.bureau-pipeline/scripts/` gets the exemption without a workflow edit.
     # The opener is read the same way — threaded, else from the event payload.
     head_ref = os.environ.get("HEAD_REF") or os.environ.get("GITHUB_HEAD_REF")
-    if is_standards_sync_pr(head_ref, attested_pr_author(),
+    opener = attested_pr_author()
+    if is_standards_sync_pr(head_ref, opener,
                             [c.get("author") for c in commits]):
         for c in commits:
             print(line(c))
@@ -1014,6 +1083,15 @@ def main(argv: list[str]) -> int:
               f"generated manifests with no behaviour of their own to "
               f"RED-test")
         return 0
+    if is_onboard_routing_pr(head_ref, opener):
+        # Not an exemption of the PR: only the routing set leaves `code`, and
+        # every other path on the branch is judged below as usual.
+        commits = mark_routing_paths(commits)
+        print(f"routing: the onboarding routing PR — opened by "
+              f"{ONBOARD_BOT}[bot] (GitHub-attested), on branch "
+              f"{ONBOARD_BRANCH}; its routing paths are regenerated and "
+              f"proved by the repo's regeneration check, so they are not "
+              f"code here, and any other path is held to the rule")
     try:
         exemptions, source = load_exemptions(base, head)
     except subprocess.CalledProcessError as e:
