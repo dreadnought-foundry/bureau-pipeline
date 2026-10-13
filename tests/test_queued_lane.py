@@ -9,8 +9,9 @@ flip changes the status and deletes the three arriving keys — `arriving_by`,
 word for word, apart from the places where the text names the lane itself.
 
 Nothing else moves here either: Backlog stays live, every writer still writes
-Backlog, the planning exit still lands in Backlog, and no alias is declared
-yet. DRE-6741 adds the alias and DRE-6742 moves the planning exit.
+Backlog, and the planning exit still lands in Backlog. DRE-6741 adds the alias
+`Backlog → Queued` and opens each of Backlog's clauses with the sentence that
+says the lane is being replaced; DRE-6742 moves the planning exit.
 """
 
 import copy
@@ -53,6 +54,15 @@ ARRIVING_KEYS = {
 }
 
 
+# The sentence DRE-6741 opens every one of Backlog's clauses with. Everything
+# after it is still Queued's clause with the lane's own name swapped back.
+REPLACED = (
+    "Being replaced by Queued (DRE-4125): the contract's alias reads this name "
+    "as Queued (DRE-6741), and the planning exit still lands here until "
+    "DRE-6742 moves it, so every writer still writes this lane. "
+)
+
+
 def shipped():
     return lane_contract.load()
 
@@ -65,6 +75,12 @@ def renamed(value):
     """Backlog's text with the lane's own name swapped for Queued's — the only
     difference the two entries are permitted."""
     return json.loads(json.dumps(value).replace(BACKLOG, QUEUED))
+
+
+def unreplaced(clause):
+    """A Backlog clause with DRE-6741's opening sentence taken off."""
+    assert clause["text"].startswith(REPLACED), clause["text"][:120]
+    return {**clause, "text": clause["text"][len(REPLACED):]}
 
 
 def arriving_doc():
@@ -121,11 +137,13 @@ class TestTheQueuedEntry:
         # pending and the writers list. DRE-6710 pinned the arriving entry to
         # this; holding the live one to it is what proves the flip moved no
         # clause.
+        # Backlog's clauses open with DRE-6741's sentence, and the comparison
+        # is made on what follows it.
         queued = raw_lane(shipped(), QUEUED)["clauses"]
         backlog = raw_lane(shipped(), BACKLOG)["clauses"]
         assert set(queued) == set(lane_contract.CLAUSE_KINDS)
         for kind in lane_contract.CLAUSE_KINDS:
-            assert queued[kind] == renamed(backlog[kind]), kind
+            assert queued[kind] == renamed(unreplaced(backlog[kind])), kind
 
     def test_the_one_place_backlog_names_itself_now_names_queued(self):
         backlog = raw_lane(shipped(), BACKLOG)["clauses"]["evidence"]["pending"]
@@ -172,9 +190,30 @@ class TestNothingElseMoves:
     def test_the_planning_exit_still_lands_in_backlog(self):
         assert lane_contract.planning_exit() == ("Green Light", BACKLOG)
 
-    def test_no_alias_names_queued_yet(self):
-        assert BACKLOG not in lane_contract.aliases()
-        assert QUEUED not in lane_contract.aliases().values()
+    def test_backlog_keeps_its_writers(self):
+        assert raw_lane(shipped(), BACKLOG)["clauses"]["writers"]["who"] == (
+            raw_lane(shipped(), QUEUED)["clauses"]["writers"]["who"]
+        )
+
+
+# --------------------------------------------------------------------------- #
+# the alias, and the lane it is replacing (DRE-6741)                           #
+# --------------------------------------------------------------------------- #
+
+
+class TestBacklogIsBeingReplaced:
+    def test_backlog_is_an_alias_for_queued(self):
+        assert lane_contract.aliases()[BACKLOG] == QUEUED
+
+    def test_every_backlog_clause_says_the_lane_is_being_replaced(self):
+        clauses = raw_lane(shipped(), BACKLOG)["clauses"]
+        for kind in lane_contract.CLAUSE_KINDS:
+            assert clauses[kind]["text"].startswith(REPLACED), kind
+
+    def test_no_queued_clause_says_it(self):
+        clauses = raw_lane(shipped(), QUEUED)["clauses"]
+        for kind in lane_contract.CLAUSE_KINDS:
+            assert "Being replaced" not in clauses[kind]["text"], kind
 
 
 # --------------------------------------------------------------------------- #

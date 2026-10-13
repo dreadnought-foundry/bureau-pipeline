@@ -261,3 +261,83 @@ class TestLoaderRefusesToGuess:
         broken.write_text(json.dumps(doc), encoding="utf-8")
         with pytest.raises(lane_contract.ContractError):
             lane_contract.load(str(broken))
+
+
+class TestTheQueueLanes:
+    """DRE-6741: the switch the Backlog → Queued cutover turns on. A READER
+    tests membership in `QUEUE_LANES`; a WRITER writes `QUEUE_LANE`. The first
+    is read off the alias, the second off the planning exit, so the readers
+    read both names from the day the alias lands and no writer moves until
+    DRE-6742 moves the planning exit."""
+
+    def fixture(self, **planning_exit):
+        doc = json.loads(open(CONTRACT, encoding="utf-8").read())
+        doc["planning_exit"].update(planning_exit)
+        return doc
+
+    def test_backlog_is_an_alias_for_queued(self):
+        assert lane_contract.aliases()["Backlog"] == "Queued"
+
+    def test_the_alias_line_carries_its_shim_marker(self):
+        lines = [
+            line for line in open(CONTRACT, encoding="utf-8").read().splitlines()
+            if '"from": "Backlog"' in line
+        ]
+        assert len(lines) == 1
+        assert '"to": "Queued"' in lines[0]
+        assert "lane-rename-shim DRE-4125" in lines[0]
+
+    def test_the_planning_exit_has_not_moved(self):
+        assert lane_contract.planning_exit() == ("Green Light", "Backlog")
+
+    def test_both_names_are_live_lanes(self):
+        assert lane_contract.lane("Backlog")["status"] == "live"
+        assert lane_contract.lane("Queued")["status"] == "live"
+
+    def test_queue_lanes_reads_queued_then_every_name_aliased_to_it(self):
+        assert lane_contract.queue_lanes() == ("Queued", "Backlog")
+        assert lane_contract.QUEUE_LANES == ("Queued", "Backlog")
+
+    def test_queue_lanes_is_derived_from_the_alias(self):
+        doc = self.fixture()
+        doc["aliases"]["entries"] = [
+            entry for entry in doc["aliases"]["entries"] if entry["to"] != "Queued"
+        ]
+        assert lane_contract.queue_lanes(doc) == ("Queued",)
+
+    def test_queue_lanes_ignores_an_alias_for_another_lane(self):
+        assert "Plan " + "Review" not in lane_contract.QUEUE_LANES
+
+    def test_queue_lane_is_the_planning_exit(self):
+        assert lane_contract.queue_lane() == lane_contract.planning_exit()[1]
+        assert lane_contract.QUEUE_LANE == "Backlog"
+
+    def test_queue_lane_follows_the_planning_exit_when_it_moves(self):
+        assert lane_contract.queue_lane(self.fixture(to="Queued")) == "Queued"
+
+    def test_the_queue_lane_is_always_one_of_the_queue_lanes(self):
+        assert lane_contract.QUEUE_LANE in lane_contract.QUEUE_LANES
+        doc = self.fixture(to="Queued")
+        assert lane_contract.queue_lane(doc) in lane_contract.queue_lanes(doc)
+
+    def test_the_offline_check_passes(self):
+        report = lane_contract.check(vocabulary=lane_contract.pipeline_vocabulary())
+        board_rules = {
+            f.clause_id for f in report.failures() if f.clause_id.startswith("board.")
+        }
+        assert {f.clause_id for f in report.failures()} == board_rules
+
+
+class TestTheContractScriptsNameNoRetiringLane:
+    """DRE-6741: `_scan_python` reads every string constant, docstrings
+    included, so the two scripts that carry the contract say Queued."""
+
+    @pytest.mark.parametrize("script", ["lane_contract.py", "lane_scope.py"])
+    def test_no_string_constant_names_backlog(self, script):
+        path = os.path.join(os.path.dirname(__file__), "..", "scripts", script)
+        assert lane_contract._scan_python(path, ["Backlog"]) == set()
+
+    def test_the_scan_would_see_a_docstring(self, tmp_path):
+        probe = tmp_path / "probe.py"
+        probe.write_text('"""Cards wait in Backlog."""\n', encoding="utf-8")
+        assert lane_contract._scan_python(str(probe), ["Backlog"]) == {"Backlog"}
