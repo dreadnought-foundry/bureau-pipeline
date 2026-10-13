@@ -819,18 +819,24 @@ def test_the_checks_evidence_on_an_epic_with_an_open_child_is_refused():
     assert f"Moved to Cancel: {EPIC}" not in text
 
 
-def test_an_epic_whose_children_are_all_closed_is_cancelable_as_before():
+def test_an_epic_whose_children_are_all_closed_is_refused_off_its_own_line():
+    """No open child, so `cancel_refusal` lets it through — and since
+    DRE-7241 an epic is canceled only on the verify agent's check: a
+    `Superseded by:` line cannot say whose work it points at."""
     cards = _epic_lane(children=(("DRE-4634", "Done"),
                                  ("DRE-4635", "Canceled"),
                                  ("DRE-4636", "Duplicate")),
                        description="Superseded by: DRE-4700")
     assert groomer.open_children(cards[0]) == 0
     proposal = groomer.propose(cards, cycles=CYCLES, capacity=3, now=NOW)
-    dead = [r for r in proposal["outcomes"]["dead"] if r["identifier"] == EPIC]
-    assert dead and dead[0]["source"] == groomer.DEAD_FROM_LINE
-    assert dead[0]["open_children"] == 0
-    assert proposal["cancels_refused"] == []
-    assert "## Cancels refused" not in groomer.render_proposal(proposal)
+    assert EPIC not in [r["identifier"] for r in proposal["outcomes"]["dead"]]
+    assert EPIC in positions(proposal)
+    assert _refused(proposal)[EPIC] == {
+        "identifier": EPIC, "refusal": groomer.EPIC_CANCEL_REFUSED,
+        "source": groomer.DEAD_FROM_LINE}
+    row = next(r for r in proposal["outcomes"]["now"]
+               if r["identifier"] == EPIC)
+    assert row["open_children"] == 0 and row["children"] == 3
 
 
 def test_a_refused_card_outside_the_batch_stays_not_now_and_is_not_listed():
