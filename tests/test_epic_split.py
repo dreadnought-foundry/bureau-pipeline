@@ -358,7 +358,8 @@ class TestActivate:
         _activate(board)
         children = [m for m in board.moves if m[0] != PARENT]
         assert children == [("DRE-9101", "Planning"), ("DRE-9102", "Planning")]
-        assert all(frm == "Backlog" for card, _, frm in board.advances if card != PARENT)
+        assert all(frm.split(",") == list(lane_contract.QUEUE_LANES)
+                   for card, _, frm in board.advances if card != PARENT)
 
     def test_a_child_already_past_backlog_is_left_alone(self):
         children = [_child("DRE-9101"), _child("DRE-9102"), _child("DRE-9103")]
@@ -527,6 +528,69 @@ class TestABlockedChildWaitsInBacklog:
         with contextlib.redirect_stdout(out):
             epic_split.activate(board, PARENT)
         assert "waiting in Backlog: DRE-9103" in out.getvalue(), out.getvalue()
+
+
+class TestTheQueueLane:
+    """A blocked child epic waits in `lane_contract.QUEUE_LANE`, and `activate`
+    sends an unblocked one out of the queue under either of its names
+    (DRE-6746). The queue is read through `QUEUE_LANES` and written as
+    `QUEUE_LANE`, which follows the planning exit — `Backlog` until DRE-6742
+    moves it, `Queued` after, with no edit to the script."""
+
+    @pytest.fixture(params=[False, True], ids=["shipped", "flipped"])
+    def queue(self, request, monkeypatch):
+        if request.param:
+            monkeypatch.setattr(epic_split, "QUEUE_LANE", "Queued")
+        return epic_split.QUEUE_LANE
+
+    def test_the_shipped_queue_lane_is_the_contract_s(self):
+        assert epic_split.QUEUE_LANE is lane_contract.QUEUE_LANE
+        assert epic_split.QUEUE_LANES is lane_contract.QUEUE_LANES
+
+    def test_a_blocked_child_is_left_in_the_queue_lane(self, queue):
+        lanes = {c["identifier"]: queue for c in _dre6585()}
+        board = _Board(_dre6585(), lanes=lanes)
+        assert _activate(board) == 0
+        assert board.lanes["DRE-9103"] == queue
+        assert "DRE-9103" not in [a[0] for a in board.advances]
+        line = _receipt_line(board, "DRE-9103")
+        assert f"waits in `{queue}` on DRE-9101" in line, line
+
+    def test_a_flipped_exit_names_queued_in_the_receipt_and_the_report(self, monkeypatch):
+        monkeypatch.setattr(epic_split, "QUEUE_LANE", "Queued")
+        board = _Board(_dre6585(), lanes={c["identifier"]: "Queued" for c in _dre6585()})
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            epic_split.activate(board, PARENT)
+        assert "waiting in Queued: DRE-9103" in out.getvalue(), out.getvalue()
+        body = _receipts(board)[0]
+        assert "Each child waiting in `Queued` stays there" in body
+        assert "Backlog" not in body
+
+    @pytest.mark.parametrize("lane", lane_contract.QUEUE_LANES)
+    def test_an_unblocked_child_is_sent_from_either_name(self, queue, lane):
+        board = _Board(_dre6585(), lanes={c["identifier"]: lane for c in _dre6585()})
+        _activate(board)
+        assert board.lanes["DRE-9101"] == "Planning"
+        assert board.lanes["DRE-9102"] == "Planning"
+        assert "sent to `Planning`" in _receipt_line(board, "DRE-9101")
+
+    @pytest.mark.parametrize("lane", lane_contract.QUEUE_LANES)
+    def test_a_blocked_child_under_either_name_waits_where_it_is(self, queue, lane):
+        """A child the planner created under the old name before the exit
+        moved is still in the queue: it waits, and the receipt names the lane
+        it is actually in."""
+        board = _Board(_dre6585(), lanes={c["identifier"]: lane for c in _dre6585()})
+        _activate(board)
+        assert board.lanes["DRE-9103"] == lane
+        assert f"waits in `{lane}` on DRE-9101" in _receipt_line(board, "DRE-9103")
+
+    def test_the_move_out_of_the_queue_is_guarded_on_every_name(self, queue):
+        board = _Board(_dre6585(), lanes={c["identifier"]: queue for c in _dre6585()})
+        _activate(board)
+        froms = [frm for card, _, frm in board.advances if card != PARENT]
+        assert froms and all(frm.split(",") == list(lane_contract.QUEUE_LANES)
+                             for frm in froms)
 
 
 # =========================================================================== #

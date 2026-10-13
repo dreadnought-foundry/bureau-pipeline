@@ -48,20 +48,21 @@ a finding), reads each child's lane, and then, in this order:
      `pipeline_act.receipt()` and keyed on its tag, so a retried run posts
      nothing twice. It names every child in order with its slice's first
      sentence, what blocks it and where it goes — sent to Planning, waiting
-     in Backlog on the siblings named, or left where it already is — and
+     in the queue on the siblings named, or left where it already is — and
      ends with what the parent is;
-  2. moves to Planning, in that order, every child still in Backlog that no
-     OPEN sibling blocks (DRE-6591). Arriving in Planning is what starts a
+  2. moves to Planning, in that order, every child still in the queue that
+     no OPEN sibling blocks (DRE-6591) — `Queued`, read under either of its
+     names (`lane_contract.QUEUE_LANES`, DRE-6746). Arriving in Planning is what starts a
      child's planner run — the relay dispatches one per lane entry (DRE-1913,
      DRE-3030); nothing here dispatches. A child an open sibling blocks stays
-     in Backlog: the seam rule plans it only on what that sibling observed
+     in the queue: the seam rule plans it only on what that sibling observed
      (`standards/card-quality.md`), and the sweep returns it to Planning,
      where the planner is dispatched, once every blocker is Done — the
      auto-advance (`reconcile.advance_unblocked_epics`, DRE-6407) when the
      sweep closes the blocker, and the full sweep's return pass
      (`reconcile.return_waiting_epics`, DRE-6653) however it closed. A sibling that is Done, Canceled or Duplicate
      (`prose_blockers.TERMINAL`) holds nothing; one whose lane could not be
-     read holds its dependent. A child already past Backlog is left alone;
+     read holds its dependent. A child already past the queue is left alone;
   3. moves the parent from Planning to In Progress — the lane the sweep reads
      active epics from (`reconcile.repo_epics` → `close_finished_epics`), so
      the parent closes by itself when its last child is Done
@@ -69,10 +70,10 @@ a finding), reads each child's lane, and then, in this order:
      skips it as an epic. The CEO never approves a roll-up parent, so nothing
      else would move it there.
 
-The parent moves LAST on purpose. An active epic's Backlog children are what
+The parent moves LAST on purpose. An active epic's Queued children are what
 the sweep promotes, so the parent reaching In Progress while its children still
-sat in Backlog would put them in front of the promotion gate instead of the
-planner. A child left waiting in Backlog is still an `[EPIC]`, which the
+sat in the queue would put them in front of the promotion gate instead of the
+planner. A child left waiting in the queue is still an `[EPIC]`, which the
 promotion gate never promotes as work (`reconcile.card_is_epic`), so it waits
 there for the auto-advance and nothing else moves it. A crash anywhere leaves
 a state the retry finishes: the receipt is counted before it is posted, and
@@ -81,7 +82,10 @@ a state the retry finishes: the receipt is counted before it is posted, and
 The lane names are read off the contract (`lane_contract.lane_names`) at the
 moment they are used, and `contract_problems()` holds the contract to the
 writes this makes: `plan.yml` — the run that splits a roll-up — must be a
-permitted writer of both destinations.
+permitted writer of both destinations. The queue is `lane_contract`'s own
+(DRE-6746): a child is read as in it under any name in `QUEUE_LANES`, moved out
+of it guarded on every one of them, and said to wait in `QUEUE_LANE` — the
+planning exit's destination, the lane the planner created it in.
 
 Every Linear-touching function takes the `linear_ops` MODULE as its first
 argument — the convention `mid_epic` uses — so the pure
@@ -107,6 +111,7 @@ from dataclasses import dataclass
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import lane_contract  # noqa: E402
+from lane_contract import QUEUE_LANE, QUEUE_LANES  # noqa: E402 — the queue, written and read (DRE-6746)
 import pipeline_act  # noqa: E402
 import planning_shape  # noqa: E402
 import proof_and_demo  # noqa: E402
@@ -134,7 +139,7 @@ PARENT_SENTENCE = (
 )
 
 # Where `activate` puts one child (DRE-6591): sent to Planning, waiting in
-# Backlog on an open sibling, or left in the lane it already reached.
+# the queue on an open sibling, or left in the lane it already reached.
 SEND = "send"
 WAIT = "wait"
 LEFT = "left"
@@ -195,13 +200,38 @@ def _lane(name: str, contract: dict | None = None) -> str:
 
 def lanes(contract: dict | None = None) -> dict:
     """Every lane this module reads or writes, each confirmed live in the
-    contract at the moment it is used."""
+    contract at the moment it is used.
+
+    `child_from` is the queue as it is written, `QUEUE_LANE`: where a waiting
+    child is said to wait, and where a child no read has placed is taken to
+    be. A child is READ as in the queue under any name in `QUEUE_LANES`, and
+    moved out of it guarded on all of them (`_queue_from`)."""
     return {
-        "child_from": _lane("Backlog", contract),
+        "child_from": _lane(QUEUE_LANE, contract),
         "child_to": _lane("Planning", contract),
         "parent_from": _lane("Planning", contract),
         "parent_to": _lane("In Progress", contract),
     }
+
+
+def _queue_from() -> str:
+    """The from-lanes a child leaves the queue by: every name it may sit
+    under, so a child the planner filed under either one is sent."""
+    return ",".join(QUEUE_LANES)
+
+
+def _waits_in(lane: str | None, named: dict) -> str:
+    """The queue lane a waiting child is in — the name its read gave, or
+    `QUEUE_LANE` for a child no read placed."""
+    return lane if lane in QUEUE_LANES else named["child_from"]
+
+
+def _waiting_lanes(placed: dict, where: dict | None, named: dict) -> list:
+    """The queue lanes the waiting children are in, each named once."""
+    return list(dict.fromkeys(
+        _waits_in((where or {}).get(ident), named)
+        for ident, (verdict, _) in placed.items() if verdict == WAIT
+    ))
 
 
 def destinations(contract: dict | None = None) -> tuple:
@@ -333,8 +363,9 @@ def placements(children: list, where: dict | None = None) -> dict:
     `(SEND | WAIT | LEFT, the open siblings it waits on)` (DRE-6591).
 
     `where` maps an identifier to the lane it is in now; a child it does not
-    name is read as still in Backlog, which is a split nothing has moved yet.
-    A child in Backlog is SENT when every sibling blocking it is Done,
+    name is read as still in the queue, which is a split nothing has moved
+    yet. A child in the queue — under any name in `QUEUE_LANES` — is SENT when
+    every sibling blocking it is Done,
     Canceled or Duplicate, and WAITS otherwise. A sibling whose lane is
     unknown holds its dependent — sending a child to be planned early costs a
     planner run nobody needed, and waiting costs nothing the auto-advance
@@ -346,7 +377,7 @@ def placements(children: list, where: dict | None = None) -> dict:
     siblings = _sibling_blockers(children)
     out = {}
     for ident in order(children):
-        if where.get(ident, named["child_from"]) != named["child_from"]:
+        if where.get(ident, named["child_from"]) not in QUEUE_LANES:
             out[ident] = (LEFT, [])
             continue
         waits_on = [
@@ -500,7 +531,7 @@ def _placed(verdict: str, waits_on: list, lane: str | None, named: dict) -> str:
     if verdict == SEND:
         return f"sent to `{named['child_to']}` now"
     if verdict == WAIT:
-        return f"waits in `{named['child_from']}` on " + ", ".join(waits_on)
+        return f"waits in `{_waits_in(lane, named)}` on " + ", ".join(waits_on)
     if lane is None:
         return "its lane could not be read, left where it is"
     return f"already in `{lane}`, left where it is"
@@ -542,10 +573,13 @@ def receipt_detail(parent: str, children: list, where: dict | None = None) -> st
         "dispatches one for every card that enters the lane, and nothing here "
         "claims that run started.",
     ]
-    if any(verdict == WAIT for verdict, _ in placed.values()):
+    waiting_in = _waiting_lanes(placed, where, named)
+    if waiting_in:
         lines += [
             "",
-            f"Each child waiting in `{named['child_from']}` stays there until "
+            "Each child waiting in "
+            + " or ".join(f"`{lane}`" for lane in waiting_in)
+            + " stays there until "
             "every sibling it waits on is Done, Canceled or Duplicate, so it "
             "is planned on what they observed and never ahead of it. The "
             "sweep's auto-advance carries it on then, and nothing here starts "
@@ -624,13 +658,13 @@ def activate(linear_ops, parent: str) -> int:
     sent = [child for child in sequence if placed[child][0] == SEND]
     waiting = [child for child in sequence if placed[child][0] == WAIT]
     for child in sent:
-        linear_ops.cmd_advance(child, named["child_to"], named["child_from"])
+        linear_ops.cmd_advance(child, named["child_to"], _queue_from())
     linear_ops.cmd_advance(parent, named["parent_to"], named["parent_from"])
     print(
         f"epic split: {parent} active — {len(sequence)} child epic(s) in order: "
         + ", ".join(sequence)
         + f"; sent to {named['child_to']}: {', '.join(sent) or 'none'}"
-        + f"; waiting in {named['child_from']}: "
+        + f"; waiting in {' or '.join(_waiting_lanes(placed, where, named)) or named['child_from']}: "
         + (", ".join(f"{c} (on {', '.join(placed[c][1])})" for c in waiting) or "none")
     )
     return 0
