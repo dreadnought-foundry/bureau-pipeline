@@ -47,22 +47,35 @@ does not know it, so its minimum cannot sit in `MINIMUM_CLAUDE_CODE`, whose rows
 must name a model the config knows. It goes in `AHEAD_OF_ADOPTION` instead, and
 the ladder check reads both — so the row guards the ladder from the moment the
 adoption puts the model on one.
+
+THE LADDERS IT HOLDS ARE THE ONES THE READER ANSWERS (DRE-6971). The choices
+leave `config/models.yaml` (DRE-6983): a run selects on the home, else on the
+defaults in the code (DRE-6939). So the ladders and project choices checked
+here are read through `model_fallback.CONFIG`, twice — on the defaults in the
+code, with no home set, and with `BUREAU_MODEL_HOME_FILE` naming a document
+rendered by `model_home.render_defaults()` — and never out of the file. A
+model only the home names stays in `AHEAD_OF_ADOPTION` until the defaults in
+the code name it: `model_fallback.KNOWN_MODELS`, which the first table's rows
+are held to, is code-side and reads no home.
 """
 
+import json
+import os
 import re
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
 import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
-CONFIG = ROOT / "config" / "models.yaml"
 INSTALLER = ROOT / ".github" / "actions" / "install-claude-code" / "action.yml"
 
 sys.path.insert(0, str(ROOT / "scripts"))
 
 import model_fallback as mf  # noqa: E402
+import model_home  # noqa: E402
 
 # model id → the oldest Claude Code the API accepts it from, as the refusal
 # itself names it. Opus 5.5's is from bureau-pipeline QA Review runs
@@ -107,24 +120,57 @@ def _pinned_version() -> str:
     return str(action["inputs"]["version"]["default"]).strip()
 
 
-def _canonical_ladders() -> dict[str, list[str]]:
-    cfg = yaml.safe_load(CONFIG.read_text())
-    return {
-        name: [rung["model"] if isinstance(rung, dict) else rung for rung in rungs]
-        for name, rungs in cfg["ladders"].items()
-    }
+def _choices_read(document: dict | None = None) -> list[dict]:
+    """The choices the reader answers, read through `model_fallback.CONFIG`
+    twice (DRE-6971): with no home set, which is the defaults in the code, and
+    with `BUREAU_MODEL_HOME_FILE` naming `document` — by default the one
+    `render_defaults()` renders. The name and the read are put back as they
+    were found."""
+    reads = []
+    saved = os.environ.get(model_home.FILE_ENV)
+    with tempfile.TemporaryDirectory() as tmp:
+        home = Path(tmp) / "model-home.json"
+        home.write_text(json.dumps(document or model_home.render_defaults()))
+        try:
+            for path in (None, home):
+                os.environ.pop(model_home.FILE_ENV, None)
+                if path is not None:
+                    os.environ[model_home.FILE_ENV] = str(path)
+                mf.reset_home()
+                status = mf.use_home()
+                assert status == ("not set" if path is None else "read"), status
+                reads.append({"ladders": {name: list(models) for name, models
+                                          in mf.CONFIG["ladders"].items()},
+                              "projects": {slug: dict(entry) for slug, entry
+                                           in mf.CONFIG["projects"].items()}})
+        finally:
+            os.environ.pop(model_home.FILE_ENV, None)
+            if saved is not None:
+                os.environ[model_home.FILE_ENV] = saved
+            mf.reset_home()
+    return reads
+
+
+def _canonical_ladders(document: dict | None = None) -> dict[str, list[str]]:
+    """Every ladder either read answers, each one's models in order."""
+    ladders: dict[str, list[str]] = {}
+    for read in _choices_read(document):
+        for name, models in read["ladders"].items():
+            ladders[name] = list(dict.fromkeys([*ladders.get(name, []), *models]))
+    return ladders
 
 
 def _canonical_exceptions() -> dict[str, list[str]]:
-    """Every `projects.<slug>.<kind>` model of the committed config, keyed by
-    that path (DRE-6785): since 2026-10-10 an exception may name a model on no
+    """Every `projects.<slug>.<kind>` model either read answers, keyed by that
+    path (DRE-6785): since 2026-10-10 an exception may name a model on no
     ladder, so the ladder check alone no longer covers what a run selects."""
-    cfg = yaml.safe_load(CONFIG.read_text())
-    return {
-        f"projects.{slug}.{kind}": [model]
-        for slug, entry in (cfg.get("projects") or {}).items()
-        for kind, model in (entry or {}).items()
-    }
+    exceptions: dict[str, list[str]] = {}
+    for read in _choices_read():
+        for slug, entry in read["projects"].items():
+            for kind, model in (entry or {}).items():
+                path = f"projects.{slug}.{kind}"
+                exceptions[path] = list(dict.fromkeys([*exceptions.get(path, []), model]))
+    return exceptions
 
 
 def _unsupported(ladders: dict[str, list[str]], pinned: str,
@@ -172,8 +218,9 @@ class MinimumTableTest(unittest.TestCase):
         for model in MINIMUM_CLAUDE_CODE:
             self.assertIn(
                 model, mf.KNOWN_MODELS,
-                f"{model} is in MINIMUM_CLAUDE_CODE but config/models.yaml "
-                "does not know it — check the id",
+                f"{model} is in MINIMUM_CLAUDE_CODE but the defaults in the "
+                "code do not know it — check the id, or move the row to "
+                "AHEAD_OF_ADOPTION",
             )
 
     def test_every_minimum_is_an_exact_version(self):
@@ -201,14 +248,34 @@ class MinimumTableTest(unittest.TestCase):
 class LadderSupportTest(unittest.TestCase):
     """The check the card asks for: nothing on a ladder the binary cannot run."""
 
+    def test_the_ladders_held_are_the_ones_the_reader_answers(self):
+        # Read through the reader, never out of config/models.yaml (DRE-6971):
+        # every ladder of the defaults in the code is here, model for model.
+        ladders = _canonical_ladders()
+        for name, models in mf.code_defaults()["ladders"].items():
+            self.assertEqual(ladders.get(name), models, name)
+
+    def test_a_model_the_home_puts_on_a_ladder_is_held_too(self):
+        # The read with the document named is one of the two the check walks,
+        # so a model only the home puts on the Builders ladder is in it.
+        # The model is one of another group's, derived so no console save
+        # pins it: priced, and on no Builders rung of the defaults.
+        ladders = mf.code_defaults()["ladders"]
+        model = next(m for name, models in ladders.items() if name != "workhorse"
+                     for m in models if m not in ladders["workhorse"])
+        doc = model_home.render_defaults()
+        doc["groups"]["workhorse"]["models"].append(model)
+        self.assertIn(model, _canonical_ladders(doc)["workhorse"])
+
     def test_every_model_on_every_ladder_runs_on_the_pinned_claude_code(self):
         errors = _unsupported(_canonical_ladders(), _pinned_version())
         self.assertEqual(errors, [], "\n".join(errors))
 
     def test_the_generated_fallback_ladders_run_on_it_too(self):
-        # The literal `_load_config` falls back to when the YAML is unreadable
-        # is a ladder the fleet can run on as well.
-        ladders = mf._FALLBACK_MODEL_CONFIG["ladders"]
+        # The defaults in the code, which a run selects on when no home
+        # answers, are ladders the fleet can run on as well — read through
+        # their accessor, whatever the literal behind it is called.
+        ladders = mf.code_defaults()["ladders"]
         errors = _unsupported(ladders, _pinned_version())
         self.assertEqual(errors, [], "\n".join(errors))
 

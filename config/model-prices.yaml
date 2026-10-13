@@ -12,6 +12,11 @@
 #     last-known-good ladders, so an entry deleted here is a fleet-wide
 #     degrade, not a documentation change.
 #
+# The model trial (`.github/workflows/model-trial.yml`, DRE-6971) also COUNTS
+# the entries of the top-level prices mapping as its fixed task, and reads no
+# price: the file stays in the repository and is never empty, where the
+# choices it counted before leave `config/models.yaml`.
+#
 # PRICE IS NEVER GUESSED, AND ABSENCE IS A VALID ANSWER.
 # ------------------------------------------------------
 # This file is the ONLY source of price the adoption rule reads. An id that is
