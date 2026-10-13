@@ -4,8 +4,9 @@
 Green Light is the CEO's "needs you" queue, and the epic this belongs to fixes
 what may sit in it: a plan BOTH critics passed, the planner's business question
 with a recommendation, a build's escalation to a person, (while the CEO's
-acceptance of kind (c) stands) an approved epic queued under the cap, or the
-sweep's question about an epic grown past the size he approved (DRE-6414). A row
+acceptance of kind (c) stands) an approved epic queued under the cap, the
+sweep's question about an epic grown past the size he approved (DRE-6414), or
+the release train's notice of a release it deferred (DRE-5234). A row
 asking him to look again, re-run something, settle a critic loop or move a
 card nobody has read is the failure. Until DRE-5281 three `plan.yml` sites
 wrote Green Light for a critic outcome, and until DRE-5286 the sweep wrote it
@@ -74,6 +75,11 @@ DRE-5275 wrote on Green Light's `entrance` in `config/lane-contract.json`.
      no other (DRE-6414) — the sweep's question about an epic grown past the
      size the CEO approved, created in the lane on a card of its own. Its
      caller, `reconcile.py#report_epic_growth`, is reconciled by rule 6.
+   * `deferred-release`: the unit is `release_deferral.py#file_deferral` and
+     no other (DRE-5234) — the release train's notice of a surface it
+     deferred with no re-arm minute, created in the lane on a card of its own.
+     The kind is declared before its site exists; DRE-5235 lands the site and
+     its record together.
 6. **A borrowed write is attributed to its caller.** The DRE-4124 stall exit
    reached Green Light through `planning_escalation.escalate`, whose own write
    is the planner's declared question site; a discovery reading write sites
@@ -187,6 +193,12 @@ BLOCKER_ASK_SITE = "blocker_ask.py#resolve"
 #: (DRE-6414) — the only unit an `epic-growth` row comes from. A literal, for
 #: the reason REVIEW_CAP_SITE is one.
 EPIC_GROWTH_SITE = "reconcile.py#ask_epic_growth_question"
+
+#: The release train's notice of a surface it deferred with no re-arm minute
+#: (DRE-5234) — the only unit a `deferred-release` row comes from. A literal,
+#: for the reason REVIEW_CAP_SITE is one, and because DRE-5235 lands the
+#: module after the kind.
+DEFERRED_RELEASE_SITE = "release_deferral.py#file_deferral"
 
 
 # --------------------------------------------------------------------------- #
@@ -566,6 +578,14 @@ def _gate_problems(record: dict, writes_here: list, root: str, lane: str) -> lis
             f"epic-growth site is {EPIC_GROWTH_SITE} — the question about an "
             f"epic grown past its green light reaches {lane} through the sweep's "
             "one asking function and nowhere else; a caller of it belongs on "
+            "that record's `callers`"
+        )
+    elif kind == "deferred-release" and where != DEFERRED_RELEASE_SITE:
+        out.append(
+            f"{where} is declared a 'deferred-release' arrival, and the only "
+            f"deferred-release site is {DEFERRED_RELEASE_SITE} — the release "
+            f"train's notice of a deferred surface reaches {lane} through its "
+            "one filing function and nowhere else; a caller of it belongs on "
             "that record's `callers`"
         )
     elif kind == "agent-escalation":
