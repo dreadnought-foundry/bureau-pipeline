@@ -3,7 +3,7 @@
 
 `config/routing-verdicts.json` declares the five routes, each with the lane it
 sends a card to and the actor who picks it up there. This module is the only
-reader: the sweep (`reconcile.py`) carries a Backlog card to the lane its
+reader: the sweep (`reconcile.py`) carries a Queued card to the lane its
 verdict names and refuses one whose verdict names a lane the sweep does not go
 to, it never reports a PARKED card as stalled,
 `docs/routing-verdicts.md` is RENDERED from the same file, and the write path
@@ -11,15 +11,14 @@ below is the one way a verdict gets onto a card.
 
 ## Promoted is not the same as dispatched (DRE-3385)
 
-Three verdicts leave Backlog by the sweep — FLEET to `Todo`, WORKBENCH and
+Three verdicts leave Queued by the sweep — FLEET to `Todo`, WORKBENCH and
 OPERATOR to `Hand-work`, the person-work lane (DRE-5321) — and the sweep
 performs the move for all three. Only FLEET is handed to an agent. That
 distinction lives in two readers here: `sweep_promotes` (is this card's
 destination a lane the sweep carries cards into) and `is_promotable` (may a run
 be dispatched at it). Collapsing them into one is what left OPERATOR and WORKBENCH with a
-destination written on them and no turn ever coming — "enters Backlog and goes
-to the queue when its turn comes, with no turn ever coming" (DRE-2735), and on
-2026-09-08, 33 of the board's 40 Backlog cards.
+destination written on them and no turn ever coming (DRE-2735) — on
+2026-09-08, 33 of the 40 cards waiting in the queue.
 
 ## Why routing and not a score
 
@@ -206,7 +205,7 @@ OPERATOR_STEP_LABEL = "operator-step"
 # because a person may mean it on its own.
 RETIREMENT_LIFTS = (HAND_BUILT_LABEL,)
 
-# The lanes the sweep promotes a Backlog card INTO are READ, not declared
+# The lanes the sweep promotes a Queued card INTO are READ, not declared
 # (DRE-5321). Until then one constant said `Todo`, because THREE of the five
 # verdicts named it — FLEET, WORKBENCH and OPERATOR — and what separated them
 # was who picks the card up, not where it goes. Hand-work changed that: a
@@ -293,7 +292,7 @@ _CACHE: dict = {}
 
 def load(path: str | None = None) -> dict:
     """Parse the vocabulary. Cached per path — `reconcile.promote_ready` reads
-    it once per Backlog card and a file read per card is a file read per card."""
+    it once per Queued card and a file read per card is a file read per card."""
     path = path or CONFIG_PATH
     if path not in _CACHE:
         try:
@@ -357,14 +356,14 @@ def is_promotable(name: str, doc: dict | None = None) -> bool:
     """May an unattended RUN be dispatched at this card? FLEET alone.
 
     Not the same question as `sweep_promotes` below, and the difference is the
-    whole of DRE-3385: three verdicts are carried out of Backlog, and only one
+    whole of DRE-3385: three verdicts are carried out of Queued, and only one
     of them is handed to an agent when it gets there.
     """
     return bool(record(name, doc)["promotable"])
 
 
 #: The lane a build run reports into — the first lane past the waiting lanes.
-#: The sweep never promotes a Backlog card to it or past it: a card reaches In
+#: The sweep never promotes a Queued card to it or past it: a card reaches In
 #: Progress because work started, In Review because a pull request opened, and
 #: Done because it merged. Bounding the carried lanes here is what stops a
 #: one-word vocabulary edit (WORKBENCH → `Done`) from having the sweep close a
@@ -373,9 +372,9 @@ BUILD_LANE = "In Progress"
 
 
 def _carried_lanes() -> tuple:
-    """The lanes the sweep may carry a Backlog card INTO, off the lane contract:
+    """The lanes the sweep may carry a Queued card INTO, off the lane contract:
     the live work-segment lanes strictly between the one the planning exit lands
-    in (Backlog — where a card waits for its turn, the lane the sweep promotes
+    in (Queued — where a card waits for its turn, the lane the sweep promotes
     OUT of) and `BUILD_LANE`. In the contract's flow order that is Todo and
     Hand-work: the two lanes a card waits in for whoever builds it."""
     landing = lane_contract.planning_exit()[1]
@@ -386,11 +385,11 @@ def _carried_lanes() -> tuple:
 
 
 def sweep_promotes(name: str, doc: dict | None = None) -> bool:
-    """Does the sweep MOVE a Backlog card carrying this verdict?
+    """Does the sweep MOVE a Queued card carrying this verdict?
 
     True when the verdict's destination is a work-segment lane other than the
     planning exit's landing lane (DRE-5321): FLEET (to Todo), WORKBENCH and
-    OPERATOR (to Hand-work). PARKED stays in Backlog on purpose, and NEEDS WORK
+    OPERATOR (to Hand-work). PARKED stays in Queued on purpose, and NEEDS WORK
     goes back to Planning, which is the planner's move and never the sweep's.
 
     Read off the destination and the lane contract rather than listed, so a
@@ -870,7 +869,7 @@ def _destination_refusal(
 
     The half that is about a WRONG DESTINATION and nothing else. Since DRE-3385
     that is read off `sweep_promotes`, not off `promotable`: WORKBENCH and
-    OPERATOR are carried out of Backlog like FLEET, into `Hand-work` since
+    OPERATOR are carried out of Queued like FLEET, into `Hand-work` since
     DRE-5321; what they are not is DISPATCHED, and the promoter says so in the
     receipt rather than by leaving the card behind.
     """
@@ -1062,8 +1061,8 @@ def lanes_entered_since(moves, verdict_at: str, approved_at: str | None = None) 
     """The listed lanes the card ENTERED after its last approval, in order.
 
     Entered, not "moved at all": the planning exit writes the verdict and then
-    moves the card to Backlog, and a build run parks a card it could not build
-    In Progress → Backlog on a stated blocker — neither enters a listed lane,
+    moves the card to Queued, and a build run parks a card it could not build
+    In Progress → Queued on a stated blocker — neither enters a listed lane,
     so both promote as they always have.
 
     The last approval is the newest of three moments. The verdict itself. A
@@ -1119,7 +1118,7 @@ def stale_verdict_refusal(
         f"{name} routing verdict was written on {verdict_at[:10]} (UTC), and "
         f"since then the card has been in {passed}.\n\n"
         "A routing verdict approves one trip through Planning. Moving a card "
-        "back to Backlog — sending it back from Green Light, or by hand — is "
+        "back to the queue — sending it back from Green Light, or by hand — is "
         "not an approval to build it, so it stays here and nothing is built.\n\n"
         f"**To build it:** it needs {PLANNING_LANE} again — move it to "
         f"{PLANNING_LANE}, and the planning exit routes it afresh. "
@@ -1295,7 +1294,7 @@ def hand_built_promotion(name: str, doc: dict | None = None, *,
     So is the lane it lands in, read off the vocabulary — `Hand-work` today,
     never a lane restated here. Since DRE-5322 the promoter writes that same
     destination into the move and into the receipt's header
-    (`🧹 Auto-promoted Backlog → <destination>:`), so the two always agree; a
+    (`🧹 Auto-promoted Queued → <destination>:`), so the two always agree; a
     note naming a lane the card was not moved to is what the critic on #703
     refused.
     """
@@ -1653,7 +1652,7 @@ def render_markdown(doc: dict | None = None) -> str:
         "The actor is who is **accountable for the card at the destination** — "
         "usually whoever picks it up, and where nobody does, the writer that "
         "performs the move. Being a writer somewhere is not enough: `operator` "
-        "is a real writer and is not permitted on `Backlog`, which is why "
+        "is a real writer and is not permitted on `Queued`, which is why "
         "PARKED naming it sent cards to a lane that actor may not write "
         "(DRE-2824)."
     )

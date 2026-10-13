@@ -260,11 +260,11 @@ epics under itself, and each child is planned and green-lit on its own
 (`standards/card-quality.md`). `python3 scripts/epic_split.py check` refuses a
 split that is not one. `activate` then posts this receipt ONCE on the parent,
 naming every child in `blockedBy` order with its slice's first sentence, what
-blocks it, and whether it is sent to Planning or waits in Backlog. After that
-it sends to Planning each child still in Backlog that no open sibling blocks,
+blocks it, and whether it is sent to Planning or waits in Queued. After that
+it sends to Planning each child still in the queue that no open sibling blocks,
 where the relay starts that child's planner run, and moves the parent to
 In Progress, where the sweep's ordinary epic close finds it. Meanwhile, a
-child blocked by an open sibling waits in Backlog for the sweep's auto-advance
+child blocked by an open sibling waits in Queued for the sweep's auto-advance
 (DRE-6591): the seam rule plans it only on what that sibling observed, so it
 is carried on to its planner run once every sibling it waits on is Done. A
 sibling already Done, Canceled or Duplicate holds nothing.
@@ -439,7 +439,7 @@ writes nothing.
 DRE-4198 found five Backlog cards refused promotion for the same reason across
 thirty hours, and found them only by reading a sweep log: the refusal was
 posted once and never read again, so each looked exactly like a card waiting
-its turn. `promote_ready` now records every card it leaves in Backlog for a
+its turn. `promote_ready` now records every card it leaves in the queue for a
 reason that is not a declared wait, dated by the oldest comment carrying that
 refusal's receipt — never by a count of sweeps kept somewhere
 (`scripts/promotion_stall.py`, DRE-4207).

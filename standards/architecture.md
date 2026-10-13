@@ -55,9 +55,10 @@ Intake → Planning → Green Light → Backlog → Queued → Todo → Hand-wor
   trip through Planning (`stale-verdict`, DRE-4962).
 - **`Queued`** — the queue that replaces `Backlog` (DRE-4125), a lane of type
   `unstarted` because Linear draws a `backlog`-type column first whatever its
-  position. Live on the board since DRE-6740, with `Backlog`'s clauses; nothing
-  routes to it yet — every writer still writes `Backlog` until the cutover
-  moves them.
+  position. Live on the board since DRE-6740, with `Backlog`'s clauses. Since
+  DRE-6742 the planning exit lands here, so the pipeline's writers write
+  `Queued`, and a card still in `Backlog` is read as one here through the
+  contract's alias.
 - **`Hand-work`** — the person-work lane (DRE-5240): a card a person builds,
   never dispatched, never reported stalled, carried to `In Review` when its pull
   request opens. WORKBENCH and OPERATOR land here (DRE-5321), which leaves

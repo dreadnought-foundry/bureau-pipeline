@@ -330,8 +330,8 @@ def _canonical_lane(lane: str) -> str:
     the contract's own rename aliases. The relay lower-cases the lane it
     sends; Linear answers in the board's own casing; and a board mid-rename
     must not read as a card that moved. The aliases are read first: a lane
-    being replaced stays live on the board until its writers have moved
-    (Backlog → Queued, DRE-4125), and it is still the lane it aliases."""
+    being replaced stays live on the board until no card is left under its
+    old name (the queue, DRE-4125), and it is still the lane it aliases."""
     if not lane:
         return ""
     for old, new in lane_scope.LANE_ALIASES.items():

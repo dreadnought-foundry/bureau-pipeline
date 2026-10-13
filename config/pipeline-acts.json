@@ -741,7 +741,7 @@
       "tag": "roll-up-split",
       "adopted": true,
       "kind": "progress",
-      "means": "A roll-up's child epics passed the split check, so its split is recorded once on the parent: every child in order, named as sent to Planning or waiting in Backlog on the open sibling that blocks it (DRE-6591), and the parent placed where the sweep closes it.",
+      "means": "A roll-up's child epics passed the split check, so its split is recorded once on the parent: every child in order, named as sent to Planning or waiting in Queued on the open sibling that blocks it (DRE-6591), and the parent placed where the sweep closes it.",
       "state": "unchanged",
       "next_actor": "plan.yml",
       "discharges": null,
@@ -903,14 +903,14 @@
       "tag": "hyg-triage-returned",
       "adopted": true,
       "kind": "recovery",
-      "means": "A Triage card whose mechanical defect the agent fixed — a prose blocker made true by the relation it added, a dependency loop a Done card already broke, a retired-repo card marked operator-step and parked — is returned to Backlog, never Todo.",
+      "means": "A Triage card whose mechanical defect the agent fixed — a prose blocker made true by the relation it added, a dependency loop a Done card already broke, a retired-repo card marked operator-step and parked — is returned to Queued, never Todo.",
       "state": "unchanged",
       "next_actor": "reconcile.py",
       "discharges": null,
       "subscriber": "hygiene.yml",
       "cadence_s": null,
       "cadence_why": "Null: the card is the sweep's again, and scripts/reconcile.py re-reads it at its own gate on the next ~15-minute pass; nothing speaks on this receipt's behalf.",
-      "why": "DRE-5368, the hygiene agent's core; the lane that decides it is a sibling card under DRE-5365, and the core holds the one table of tags so every lane's receipt reads the same. Its idempotency key is (tag, cause): scripts/hygiene.py's write seam suppresses the act when the target already carries a receipt with this tag and the same cause line, so a repeat is never sent and a new cause always is. Its state is `unchanged` because the registry's states name an obligation an act leaves open — a run expected back, a person's hold, a human queue — and this act leaves none of its own: the move it makes is one the lane contract admits `hygiene.py` to make, and the receipt is the record of it. It discharges nothing. Backlog and never Todo, because the promotion gate is what decides a card is ready, and the agent fixed a defect rather than deciding that.",
+      "why": "DRE-5368, the hygiene agent's core; the lane that decides it is a sibling card under DRE-5365, and the core holds the one table of tags so every lane's receipt reads the same. Its idempotency key is (tag, cause): scripts/hygiene.py's write seam suppresses the act when the target already carries a receipt with this tag and the same cause line, so a repeat is never sent and a new cause always is. Its state is `unchanged` because the registry's states name an obligation an act leaves open — a run expected back, a person's hold, a human queue — and this act leaves none of its own: the move it makes is one the lane contract admits `hygiene.py` to make, and the receipt is the record of it. It discharges nothing. Queued and never Todo, because the promotion gate is what decides a card is ready, and the agent fixed a defect rather than deciding that.",
       "emits": {
         "file": "scripts/hygiene.py",
         "anchor": "\"hyg-triage-returned\""
@@ -1197,7 +1197,7 @@
       "tag": "promotion-stalled",
       "adopted": true,
       "kind": "hold",
-      "means": "A Backlog card the sweep has refused promotion for the same reason on sweep after sweep for two hours or more — a refusal nothing can clear on its own, which until now was indistinguishable from a card waiting its turn.",
+      "means": "A Queued card the sweep has refused promotion for the same reason on sweep after sweep for two hours or more — a refusal nothing can clear on its own, which until now was indistinguishable from a card waiting its turn.",
       "state": "unchanged",
       "next_actor": "operator",
       "discharges": null,
@@ -1415,7 +1415,7 @@
       "file": "scripts/hand_work_migration.py",
       "anchor": "ops.cmd_comment(ident, migration_note(row, done))",
       "kind": "not-an-act",
-      "means": "The one-time hand-built migration tells each card it changed what it did — label removed, label added, verdict restamped, moved to Backlog or moved to Planning — and the rule it followed, quoting the CEO's rule of 2026-10-07 (DRE-6230). The comment opens `🧳 hand-built-migration:`.",
+      "means": "The one-time hand-built migration tells each card it changed what it did — label removed, label added, verdict restamped, moved to Queued or moved to Planning — and the rule it followed, quoting the CEO's rule of 2026-10-07 (DRE-6230). The comment opens `🧳 hand-built-migration:`.",
       "why": "A record written for the human who asked for it, not a receipt for a downstream actor. Nothing was refused, recovered or held, so a trailer would declare an autonomous act that never happened and hand the work to an actor that does not exist. The migration is a one-shot pass an operator runs by hand (`hand_work_migration.py run --apply`), the same shape as the backlog cutover's move note and the Hand-work migration's note this row replaces; its only reader is a person looking at the card."
     },
     {
@@ -1716,21 +1716,21 @@
       "file": "scripts/reconcile.py",
       "anchor": "🧹 Auto-advanced {QUEUE_LANE} → Planning",
       "kind": "undeclared-act",
-      "means": "Every blocker of a waiting epic is closed, so the dependent epic advances on its own from Backlog to Planning, where the planner is dispatched.",
+      "means": "Every blocker of a waiting epic is closed, so the dependent epic advances on its own from Queued to Planning, where the planner is dispatched.",
       "why": "Act-shaped, and the registry has no row for it. DRE-2825 declared thirteen acts by reading reconcile.py's ten tag constants, the fix loop's three notices and the medic; this receipt was not among them. Giving it a row is a REGISTRY change — a tag, a kind, a state, a next actor, a subscriber, and the reasoning that fixes each — not an emission change, and this card converts what the registry declares. Named here so the debt is countable rather than invisible."
     },
     {
       "file": "scripts/reconcile.py",
       "anchor": "linear_ops.cmd_comment(identifier, notice)",
       "kind": "seam",
-      "means": "A promotion refusal — why a Backlog card was not promoted — surfaced once across sweeps.",
+      "means": "A promotion refusal — why a Queued card was not promoted — surfaced once across sweeps.",
       "why": "A SEAM, not a site with a body of its own: it takes a body its callers own and decides only whether to post it, exactly as `_post_pr_note` does. `_post_pr_note` is excluded in code because the card named it; excluding this one is a change to the guard's model of what a seam is, and the card that makes that call also has to convert the callers. Named here so the shape is countable rather than invisible. Its notices are keyed on tags the refusing gates own, and `_surface_once` reads a tag it is handed rather than one it knows."
     },
     {
       "file": "scripts/reconcile.py",
       "anchor": "🧹 Auto-promoted {QUEUE_LANE} → {destination}",
       "kind": "undeclared-act",
-      "means": "A Backlog card whose blockers are all Done is promoted on its own, to the lane its routing verdict names: Todo for FLEET, Hand-work for WORKBENCH and OPERATOR (DRE-5322).",
+      "means": "A Queued card whose blockers are all Done is promoted on its own, to the lane its routing verdict names: Todo for FLEET, Hand-work for WORKBENCH and OPERATOR (DRE-5322).",
       "why": "Act-shaped, and the registry has no row for it. DRE-2825 declared thirteen acts by reading reconcile.py's ten tag constants, the fix loop's three notices and the medic; this receipt was not among them. Giving it a row is a REGISTRY change — a tag, a kind, a state, a next actor, a subscriber, and the reasoning that fixes each — not an emission change, and this card converts what the registry declares. Named here so the debt is countable rather than invisible."
     },
     {
@@ -2088,7 +2088,7 @@
       "anchor": "🛑 Agent blocked:",
       "step": "Report result to Linear",
       "kind": "undeclared-act",
-      "means": "The card cannot be built as written, so the pipeline parks it in Backlog rather than redispatching agents into the same wall.",
+      "means": "The card cannot be built as written, so the pipeline parks it in Queued rather than redispatching agents into the same wall.",
       "why": "Act-shaped, and the registry has no row for it. DRE-2825 declared thirteen acts by reading reconcile.py's ten tag constants, the fix loop's three notices and the medic; this receipt was not among them. Giving it a row is a REGISTRY change — a tag, a kind, a state, a next actor, a subscriber, and the reasoning that fixes each — not an emission change, and this card converts what the registry declares. Named here so the debt is countable rather than invisible. The blocker prose is the agent's; the park is the pipeline's, and it is the park a trailer would describe."
     },
     {
@@ -2365,7 +2365,7 @@
       "anchor": "\"$(cat \"$HELD\")\"",
       "step": "Routing verdicts — the epic's children",
       "kind": "not-an-act",
-      "means": "The epic is told which of its children no writer will stamp, so the cards that will freeze in Backlog are named on the card a person is about to read (DRE-4593).",
+      "means": "The epic is told which of its children no writer will stamp, so the cards that will freeze in Queued are named on the card a person is about to read (DRE-4593).",
       "why": "A VERDICT, not an act. It is a judgement about the WORK — these cards state no exit condition, so nothing can say who builds them — where an act is something the pipeline did about the work on its own. It has its own writer, its own vocabulary and its own readers, and a second grammar on the same comment would give them two keys to disagree over. Its body belongs to scripts/plan_child_verdicts.py, which owns the note, exactly as the proof-card bounce above belongs to scripts/proof_and_demo.py."
     },
     {
@@ -2968,7 +2968,7 @@
       "file": "scripts/blocker_ask.py",
       "anchor": "cmd_comment(card[\"identifier\"], ask)",
       "kind": "not-an-act",
-      "means": "A build agent's blocker the sweep cannot act on — the `question` class, or a mechanical class whose action module handed it back as a person's call — is asked on the card once, `blocker_ask.compose`: the 🙋 first line, the agent's reason with the Finding, Question and Recommendation lines `console_escalation.complete` renders, and the agent's run, before the card is moved Backlog → Green Light (DRE-6459).",
+      "means": "A build agent's blocker the sweep cannot act on — the `question` class, or a mechanical class whose action module handed it back as a person's call — is asked on the card once, `blocker_ask.compose`: the 🙋 first line, the agent's reason with the Finding, Question and Recommendation lines `console_escalation.complete` renders, and the agent's run, before the card is moved Queued → Green Light (DRE-6459).",
       "why": "A question is not an act: it asks a person to decide rather than announcing something the pipeline did, the same reason the planner's escalation note and the sweep's review-cap question ask rather than announce. The act this ask is part of is said by the resolver's receipt, posted after the ask and the move have both landed. That receipt's tag is the once-per-marker key, read by `blocker_class.open_blocker`; a standing ask whose move did not land is found again by its 🙋 first line, newer than the open marker, and never posted twice."
     },
     {

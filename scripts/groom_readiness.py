@@ -63,6 +63,7 @@ import answer_into_card  # noqa: E402 — the CEO's decisions block, one heading
 import epic_cap  # noqa: E402 — buildable(), counts_against_cap(), IN_MOTION_NODE
 import groomer  # noqa: E402 — file references, repo labels, the boilerplate rule
 import mid_epic  # noqa: E402 — the one reading of "is this card an epic"
+from lane_contract import QUEUE_LANES  # noqa: E402 — the queue, read under either name (DRE-6742)
 
 ROOT = Path(__file__).resolve().parents[1]
 RULES_PATH = ROOT / "config" / "groom-readiness.json"
@@ -72,8 +73,10 @@ APPLIED_HERE = "groom_readiness"
 
 #: The open lanes a card named on a `depends on` line holds the card from.
 #: Done, Canceled and Duplicate clear it (`standards/card-quality.md`:
-#: "Canceled clears the blocker without claiming delivery").
-OPEN_STATES = ("Planning", "Green Light", "Backlog", "Todo", "In Progress",
+#: "Canceled clears the blocker without claiming delivery"). The queue is read
+#: under every name it carries, so a card the moved writers file in Queued
+#: holds its dependents as one in the old lane did (DRE-6742).
+OPEN_STATES = ("Planning", "Green Light", *QUEUE_LANES, "Todo", "In Progress",
                "In Review")
 
 #: The lanes whose cards own the files they name, for rule 2. Each is read
@@ -83,7 +86,7 @@ IN_FLIGHT_LANES = ("Planning", "Todo", "In Progress", "In Review")
 #: A parent epic in one of these has not started, so its child waits (rule 3).
 #: Intake is the lane itself: an epic in the same population is a member of
 #: the same unit, and the epic card is what the rule leaves in the walk.
-PARENT_NOT_STARTED = ("Intake", "Planning", "Green Light", "Backlog", "Todo",
+PARENT_NOT_STARTED = ("Intake", "Planning", "Green Light", *QUEUE_LANES, "Todo",
                       "Triage")
 
 #: Rule 4 reads a `##` or `###` heading whose text contains this, any case.
