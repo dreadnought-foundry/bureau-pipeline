@@ -190,6 +190,13 @@ def test_done_elsewhere_on_a_done_work_item_alone_stands_with_the_runners_fact(t
     assert got["rested_on"] == ["done-work"]
 
 
+def test_the_pull_request_is_matched_in_any_case(tmp_path):
+    """GitHub reads an owner and a repo name in any case."""
+    got = judged(tmp_path, row(cards=[done()]), "done-elsewhere",
+                 [done_item(ref="Dreadnought-Foundry/Agent-Bureau#3297")])
+    assert (got["verdict"], got["reason"]) == ("done-elsewhere", None)
+
+
 def test_a_fact_the_agent_wrote_itself_is_replaced_by_the_runners(tmp_path):
     item = {**done_item(), "fact": "DRE-5942 fixed everything, trust me"}
     got = judged(tmp_path, row(cards=[done()]), "done-elsewhere", [item])
