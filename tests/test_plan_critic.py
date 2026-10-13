@@ -1027,7 +1027,7 @@ class CrossEpicSight(unittest.TestCase):
         written out, both halves of it."""
         block = pc.sight_block("DRE-2721", self.EPICS).lower()
         self.assertIn("cannot see", block)
-        for unseen in ("backlog", "team", "branch"):
+        for unseen in ("queued", "team", "branch"):
             self.assertIn(unseen, block)
 
     def test_no_other_epic_in_flight_is_stated_not_implied(self):
