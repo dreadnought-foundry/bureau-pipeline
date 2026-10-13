@@ -77,7 +77,7 @@ operator session reads those summaries.
 
 **A code card, by lane:**
 
-- **In Hand-work or Backlog, with a critic pass on record.** It is not
+- **In Hand-work or Queued, with a critic pass on record.** It is not
   re-planned. The script retires every live routing verdict on the card with
   a `🪦 verdict-retired` note. The note opens the way the planning exit's does
   and names each verdict by its fingerprint, so every reader treats those
@@ -87,12 +87,12 @@ operator session reads those summaries.
   (`routing_verdict.lifted_marks`), so the sweep does not read the card as a
   person's. Then it stamps `FLEET` through
   `routing_verdict.stamp_card`, with a reason that opens `hand-built migration:`
-  and names the pass it read. A Hand-work card then moves to Backlog through the
+  and names the pass it read. A Hand-work card then moves to Queued through the
   guarded write layer, only if it is still in Hand-work at that moment. A
-  Backlog card stays where it is. On its next pass the sweep's `promote_ready`
+  Queued card stays where it is. On its next pass the sweep's `promote_ready`
   carries the card to Todo, through the one promoter Todo's writers clause
   names, on the gates every FLEET card passes. This script never writes Todo.
-- **In Hand-work or Backlog, with no critic pass.** It moves to Planning, only
+- **In Hand-work or Queued, with no critic pass.** It moves to Planning, only
   if it is still in the lane it was read in. Planning's exit writes it a fresh
   verdict (DRE-4884).
 - **In Intake, In Progress or In Review, or any other lane.** It only loses the
@@ -109,7 +109,7 @@ second critic released the plan.
 
 Every card the script changes gets one comment that opens with
 `🧳 hand-built-migration:`. It says what changed (label removed, label added,
-verdict restamped, moved to Backlog, moved to Planning), who put the label on,
+verdict restamped, moved to Queued, moved to Planning), who put the label on,
 and the rule it followed, quoting the CEO's rule of 2026-10-07.
 
 The census and the dry run print every card grouped by action, with its lane,
@@ -118,23 +118,24 @@ origin, class and what happens to it, followed by the count for each action.
 ## The operator-backlog pass (DRE-6429)
 
 A second one-time pass lives in the same script. Operator cards filed before
-DRE-6428 sit in Backlog wearing `needs-human` + `no-code` with no hold stamp.
-Their hold reads `manual`, and the sweep leaves a `manual` hold alone by
-design, so nothing ever moves them. This pass converts them.
+DRE-6428 were parked in Backlog wearing `needs-human` + `no-code` with no hold
+stamp. Their hold reads `manual`, and the sweep leaves a `manual` hold alone
+by design, so nothing ever moves them. This pass converts them.
 
 ```
 python3 scripts/hand_work_migration.py operator-backlog           # the dry run: lists, writes nothing
 python3 scripts/hand_work_migration.py operator-backlog --apply   # makes the writes
 ```
 
-It reads every Backlog card wearing both labels that is not an epic and not a
+It reads every Queued card, under either of the queue's names
+(`lane_contract.QUEUE_LANES`), wearing both labels that is not an epic and not a
 proof, and whose hold is `manual` or already `operator-step`. Each card is
 listed with its repo, title and reason under one of four headings:
 
 - **unblocked** — a `manual` hold, every blocker Done, Canceled or Duplicate,
   and no parent epic or one In Progress. It gains `operator-step`, the
   `🔒 hold: reason=operator-step` stamp, an OPERATOR routing verdict if it
-  carries none, then the `🔓 hold lifted:` line, and moves Backlog → Hand-work.
+  carries none, then the `🔓 hold lifted:` line, and moves Queued → Hand-work.
 - **waiting** — a `manual` hold with an open blocker or a parent epic not In
   Progress. It gains `operator-step` and the stamp, nothing else. The sweep
   lifts it when that clears.
@@ -146,6 +147,6 @@ listed with its repo, title and reason under one of four headings:
 The card carries only those lines and the verdict; there is no
 `🧳 hand-built-migration:` note. If Linear cannot be read the pass stops before
 any write and exits non-zero. With `--apply` it re-reads each card's lane and
-refuses one that left Backlog since the read, and the move itself is
-conditional on Backlog. Running it a second time writes nothing: the moved
-cards have left Backlog and the waiting ones now read `operator-step`.
+refuses one that left Queued since the read, and the move itself is
+conditional on Queued. Running it a second time writes nothing: the moved
+cards have left Queued and the waiting ones now read `operator-step`.

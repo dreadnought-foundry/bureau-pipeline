@@ -33,9 +33,9 @@ Linear card → relay Lambda → repository_dispatch on the product repo
 
 ## The board (the lane contract)
 ```
-Intake → Planning → Green Light → Backlog → Queued → Todo → Hand-work → In Progress → In Review → Done
-                                                            off to the side: Triage
-                                                            terminal:  Canceled · Duplicate
+Intake → Planning → Green Light → Queued → Todo → Hand-work → In Progress → In Review → Done
+                                                  off to the side: Triage
+                                                  terminal:  Canceled · Duplicate
 ```
 - **`Intake`** — every writer that creates work writes here first.
 - **`Planning`** — the card owes a decomposition; a build run that finds an epic
@@ -43,7 +43,7 @@ Intake → Planning → Green Light → Backlog → Queued → Todo → Hand-wor
 - **`Green Light`** — the CEO's "needs you" queue: a plan awaiting approval, and
   an agent escalation awaiting a decision, in one lane. An epic activates when
   the CEO moves ONLY the epic to `In Progress`.
-- **`Backlog`** — process-controlled: a card here carries a routing verdict, and
+- **`Queued`** — process-controlled: a card here carries a routing verdict, and
   the sweep promotes every card whose verdict it carries — FLEET to `Todo` for a
   dispatched run, WORKBENCH and OPERATOR to `Hand-work` for a person, stamping
   each verdict's own marks: `operator-step` + `no-code` for OPERATOR, none for
@@ -52,13 +52,11 @@ Intake → Planning → Green Light → Backlog → Queued → Todo → Hand-wor
   and a card carrying no verdict at all is refused.
   So is a card sent back since its verdict — one that has been in Intake,
   Green Light, Triage or a closed lane since — because a verdict approves one
-  trip through Planning (`stale-verdict`, DRE-4962).
-- **`Queued`** — the queue that replaces `Backlog` (DRE-4125), a lane of type
+  trip through Planning (`stale-verdict`, DRE-4962). It is of type
   `unstarted` because Linear draws a `backlog`-type column first whatever its
-  position. Live on the board since DRE-6740, with `Backlog`'s clauses. Since
-  DRE-6742 the planning exit lands here, so the pipeline's writers write
-  `Queued`, and a card still in `Backlog` is read as one here through the
-  contract's alias.
+  position. It replaced `Backlog` (DRE-4125): live on the board since DRE-6740,
+  the planning exit's lane since DRE-6742, and the old column stays until every
+  writer has moved, a card in it read as `Queued` through the contract's alias.
 - **`Hand-work`** — the person-work lane (DRE-5240): a card a person builds,
   never dispatched, never reported stalled, carried to `In Review` when its pull
   request opens. WORKBENCH and OPERATOR land here (DRE-5321), which leaves
