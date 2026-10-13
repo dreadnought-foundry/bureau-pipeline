@@ -68,6 +68,8 @@ class Card:
     comments: list[Comment] = field(default_factory=list)
     children: list[str] = field(default_factory=list)
     history: list[tuple[str, str]] = field(default_factory=list)
+    #: The parent's identifier: a card on this board, whose lane is read live.
+    parent: str | None = None
 
 
 class TriageRepairBoard:
@@ -90,12 +92,14 @@ class TriageRepairBoard:
     def add(self, identifier: str, *, lane: str = "Triage",
             labels=("needs-human", "repo:agent-bureau", "agent:engineer"),
             description: str = "The card as it stood.\n",
-            comments=(), children=(), title: str | None = None) -> Card:
+            comments=(), children=(), title: str | None = None,
+            parent: str | None = None) -> Card:
         """A card, with its comments oldest first. A comment is a body (the
-        pipeline's) or `(body, user)`."""
+        pipeline's) or `(body, user)`. `parent` names another card on the
+        board."""
         card = Card(identifier, title or f"{identifier} — a card", lane,
                     list(labels), description, children=list(children),
-                    history=[(lane, self._now())])
+                    history=[(lane, self._now())], parent=parent)
         self.cards[identifier] = card
         for entry in comments:
             body, user = entry if isinstance(entry, tuple) else (entry, FLEET_USER)
@@ -175,8 +179,8 @@ class TriageRepairBoard:
         return [{"body": c.body, "createdAt": c.created_at}
                 for c in self._thread(identifier, whole_thread, "comment_timeline")]
 
-    def comment_bodies(self, identifier):
-        return [c.body for c in self._thread(identifier, False, "comment_bodies")]
+    def comment_bodies(self, identifier, *, whole_thread=False):
+        return [c.body for c in self._thread(identifier, whole_thread, "comment_bodies")]
 
     def count_comments(self, identifier, needle, *, since=None):
         return sum(1 for c in self._thread(identifier, True, "count_comments")
@@ -235,7 +239,8 @@ class TriageRepairBoard:
                 if c.lane in states]
 
     def gql(self, query, variables=None, **kw):
-        """The single-issue reads `answer_into_card` and `hold` make."""
+        """The single-issue reads `answer_into_card`, `hold` and
+        `triage_repair` make."""
         identifier = (variables or {}).get("id")
         card = self._card(identifier)
         if query.lstrip().startswith("mutation"):
@@ -245,6 +250,11 @@ class TriageRepairBoard:
             node = self._board_node(card)
             issue["labels"] = node["labels"]
             issue["comments"] = node["comments"]
+        if "parent" in query:
+            parent = self.cards.get(card.parent) if card.parent else None
+            issue["parent"] = ({"identifier": parent.identifier,
+                                "state": {"name": parent.lane}}
+                               if parent is not None else None)
         return {"issue": issue}
 
     # --- the writes -------------------------------------------------------
