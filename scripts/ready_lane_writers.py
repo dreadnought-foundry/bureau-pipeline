@@ -33,7 +33,9 @@ workflow (DRE-5220). The destination of each is resolved statically — a
 literal, a module constant (imported by name or computed by a pure reader, as
 `lane_contract.QUEUE_LANE` is — DRE-6744), a parameter default, a pure vocabulary
 reader called with literal arguments, or, when the call site computes it, the module's own
-published `destinations()`. A destination no rule can read is reported as
+published `destinations()`. `QUEUE_LANE` is the planning exit's destination, so
+the planner's writers reach `Queued` only once DRE-6742 flips that exit, and
+that card is the one that asserts it (DRE-6749). A destination no rule can read is reported as
 UNREAD rather than assumed innocent: unknown is never a pass.
 
 A writer is named the way the lane contract names it — a module that a workflow
@@ -80,8 +82,8 @@ otherwise is worse than none:
   * **Linear's team-level default.** `defaultIssueState` is a setting on the
     Linear team, mirrored in agent-bureau's `config/linear-workspace.json`
     (nested, as `team.defaultIssueState`, since DRE-2751). It is a writer no
-    code path touches and the highest-leverage one — it carried `Backlog` when
-    this was written. `observed_default()` reads it from a workspace
+    code path touches and the highest-leverage one — it carried the lane
+    `Queued` replaces when this was written. `observed_default()` reads it from a workspace
     declaration in reach, at `team.defaultIssueState` or a top-level
     `defaultIssueState`, or from Linear itself; with neither, it returns None
     and `default_problems(None)` REPORTS it as UNKNOWN, naming both paths,
