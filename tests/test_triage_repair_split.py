@@ -189,8 +189,9 @@ class TestSiblings:
                      siblings=[_sibling(SIBLING_TITLE, SIBLING_BODY)])
         assert _apply(board, "DRE-7164", out) == 0
 
-        # Its own writes, then the lift, the move and the receipt, in that order.
-        assert _kinds(board, before) == ["description", "decisions-block", "file",
+        # The sibling first, then the narrowed card, then the lift, the move
+        # and the receipt, in that order.
+        assert _kinds(board, before) == ["file", "description", "decisions-block",
                                          "remove-label", "comment", "state", "comment"]
         assert board.description("DRE-7164") == NARROWED
         assert seams.seams() == ["oneoff"]
@@ -283,6 +284,25 @@ class TestSiblings:
         assert not [b for b in base._receipts(board, "DRE-7164")
                     if b.splitlines()[0].startswith("🩹 triage-repair: split")]
         assert "triage-repair: DRE-7164 → unfinished" in capsys.readouterr().out
+        # The card is not narrowed, so the piece not filed is still on it.
+        assert board.description("DRE-7164") == base.DESCRIPTION
+
+    def test_a_first_sibling_that_fails_to_file_leaves_the_card_whole(
+            self, board, seams, tmp_path):
+        """The narrowed card is written only once every piece is filed: a
+        refused filing never strands a piece that is in neither place."""
+        before = _parked_7164(board)
+        seams.fail_on(1)
+        out = _write(tmp_path / "out", revised=NARROWED, answers=base._answers(7),
+                     siblings=[_sibling(SIBLING_TITLE, SIBLING_BODY)])
+        assert _apply(board, "DRE-7164", out) != 0
+        assert seams.filed == []
+        assert _kinds(board, before) == ["comment"]
+        assert board.description("DRE-7164") == base.DESCRIPTION
+        assert board.lane("DRE-7164") == "Triage"
+        newest = board.newest("DRE-7164")
+        assert newest.startswith("🩹 triage-repair: unfinished")
+        assert "sibling-1.md" in newest
 
     def test_a_question_beside_a_sibling_files_nothing_and_ends_in_green_light(
             self, board, seams, tmp_path):
