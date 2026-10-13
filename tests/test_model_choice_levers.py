@@ -81,7 +81,8 @@ def build_tree(dest: Path, edit: Callable[[dict], None] | None = None) -> Path:
     """Today's scripts and a copy of the real config at `dest`, the copy's
     `models.yaml` edited by `edit` (left byte for byte as committed without
     one — what a revert restores), and the generated mirrors regenerated
-    from it by the real generator."""
+    from it by the real generator. An agent the edit adds that the registry
+    lacks gets a registry entry, as the generator requires of every agent."""
     dest = Path(dest)
     (dest / "scripts").mkdir(parents=True, exist_ok=True)
     (dest / "config").mkdir(parents=True, exist_ok=True)
@@ -94,11 +95,29 @@ def build_tree(dest: Path, edit: Callable[[dict], None] | None = None) -> Path:
         raw = yaml.safe_load((dest / "config" / "models.yaml").read_text())
         edit(raw)
         (dest / "config" / "models.yaml").write_text(yaml.safe_dump(raw, sort_keys=False))
+        register(dest / "agents.yaml", raw)
     proc = subprocess.run(
         [sys.executable, str(dest / "scripts" / "sync_model_config.py")],
         cwd=dest, capture_output=True, text=True, timeout=120)
     assert proc.returncode == 0, proc.stdout + proc.stderr
     return dest
+
+
+def register(registry: Path, raw: dict) -> None:
+    """An entry in `registry` for each pipeline agent of `raw` it does not
+    name, with the generated model region the generator fills. A session
+    agent has none, and needs none."""
+    text = registry.read_text()
+    names = set(re.findall(r"^\s*- name:\s*(\S+)", text, re.M))
+    names |= set(raw.get("session_agents") or ())
+    for name in raw["agents"]:
+        if name not in names:
+            text = text.rstrip("\n") + (
+                f"\n\n  - name: {name}\n    role: {name}\n"
+                "    # BEGIN generated model — canonical: config/models.yaml "
+                "(regenerate: scripts/sync_model_config.py)\n"
+                "    # END generated model\n")
+    registry.write_text(text)
 
 
 def tree_raw(tree: Path) -> dict:
