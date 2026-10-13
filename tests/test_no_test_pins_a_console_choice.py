@@ -169,9 +169,6 @@ ALLOWED: dict[str, str] = {
         _FROZEN_CHANGES,
     "tests/test_model_config_change.py::test_the_dre_6789_ids_are_where_the_frozen_file_puts_them":
         _FROZEN_CHANGES,
-    "tests/test_model_effort.py::PriceTest.test_opus_5_5_is_declared_at_4_and_20": _PRICE,
-    "tests/test_model_effort.py::PriceTest.test_sonnet_5_5_is_declared_at_the_price_of_sonnet_5":
-        _PRICE,
     "tests/test_model_projects_schema.py::TestNormalizedShape.test_a_kind_with_no_label_or_purpose_gets_the_defaults":
         _ABSENT_KEY,
     "tests/test_model_rules_and_markers.py::test_a_planner_the_block_admits_may_hold_the_judgement_kind":
