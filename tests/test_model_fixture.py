@@ -13,12 +13,15 @@ history: the harness copies the tree without `.git`.
 """
 from __future__ import annotations
 
+import ast
+import io
 import json
 import os
 import re
 import shutil
 import subprocess
 import sys
+import tokenize
 from pathlib import Path
 
 import pytest
@@ -107,6 +110,21 @@ def test_the_readme_carries_the_rule_for_documents():
     # The refresh rule for the document: re-rendered inside a fixture tree.
     assert "when `render-defaults` changes shape" in text
     assert "inside a tree `fixture_tree` builds" in text
+
+
+def test_the_readme_says_how_a_tree_is_built_and_whom_the_default_serves():
+    text = " ".join(README.read_text().split())
+    # The rule for documents, and the rule for the committed files.
+    assert "proved on a document, in a tree built with `regenerate=False`" in text
+    assert "checks only what must hold for any saved state" in text
+    # What the default still does, for which tests, and until when.
+    assert "`fixture_tree`'s default still regenerates the literal" in text
+    for name in ("tests/test_model_config_change.py", "tests/console_change_walk.py",
+                 "tests/test_console_*_keeps_the_suite_green.py",
+                 "tests/test_model_config.py", "tests/test_model_choices.py",
+                 "tests/test_model_caution.py"):
+        assert name in text, name
+    assert "until part 3 removes both" in text
 
 
 def test_the_frozen_config_is_after_session_agents_landed():
@@ -372,6 +390,94 @@ def test_fixture_module_without_a_document_reads_nothing_and_runs_on_the_tree(tr
     assert not note.startswith("DEGRADED")
 
 
+def test_fixture_module_with_a_document_hands_it_to_the_selector_the_module_imported(
+        tmp_path):
+    """A module that imports the selector — the classifier, the groomer — is
+    loaded with the tree's selector already on `doc`."""
+    dest = fixture_tree(tmp_path / "tree", regenerate=False)
+    # The classifier reads the rest of config/ (the lane contract) as it loads.
+    for path in sorted((ROOT / "config").iterdir()):
+        if path.is_file() and not (dest / "config" / path.name).exists():
+            shutil.copy2(path, dest / "config" / path.name)
+    home = fixture_home()
+    last = ladder(home, "judgement")[-1]
+    classify = fixture_module(dest, "planning_classify",
+                              doc=lead_with(home, "judgement", last))
+    selector = classify.model_fallback
+    assert Path(selector.__file__).resolve().parent == (dest / "scripts").resolve()
+    assert selector.HOME_STATUS == "read"
+    assert selector.ladder_for("planner")[0] == last
+    assert "BUREAU_MODEL_HOME_FILE" not in os.environ
+
+
+# --------------------------------------------------------------------------- #
+# 3c. A tree built without the generator (DRE-6990)                            #
+# --------------------------------------------------------------------------- #
+
+def _record_subprocesses(monkeypatch) -> list:
+    """Every `subprocess.run` from here on, as `(argv, cwd)`, still run."""
+    calls: list = []
+    real = subprocess.run
+
+    def run(*args, **kwargs):
+        calls.append(([str(a) for a in args[0]], kwargs.get("cwd")))
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(model_fixture.subprocess, "run", run)
+    return calls
+
+
+def _stub_a_refusing_generator(monkeypatch) -> None:
+    copy = model_fixture._copy_into
+
+    def copy_then_stub(dest: Path) -> None:
+        copy(dest)
+        (dest / "scripts" / "sync_model_config.py").write_text(
+            "import sys\n"
+            "print('stub generator: refusing the frozen config', file=sys.stderr)\n"
+            "sys.exit(1)\n")
+
+    monkeypatch.setattr(model_fixture, "_copy_into", copy_then_stub)
+
+
+def test_regenerate_false_copies_the_tree_and_runs_no_subprocess(tmp_path, monkeypatch):
+    calls = _record_subprocesses(monkeypatch)
+    dest = fixture_tree(tmp_path / "tree", regenerate=False)
+    assert calls == []
+    assert dest == tmp_path / "tree"
+    # Today's scripts as committed: no generated region was rewritten.
+    for path in sorted((ROOT / "scripts").glob("*.py")):
+        assert (dest / "scripts" / path.name).read_bytes() == path.read_bytes(), path.name
+    for name in ("models.yaml", "model-prices.yaml"):
+        assert (dest / "config" / name).read_bytes() == (FIXTURE_DIR / name).read_bytes()
+    assert (dest / "agents.yaml").read_bytes() == (FIXTURE_DIR / "agents.yaml").read_bytes()
+    assert (dest / "config" / "repo-map.json").read_bytes() == (
+        ROOT / "config" / "repo-map.json").read_bytes()
+    # The generator writes the console's choices file; nothing wrote it here.
+    assert not (dest / "config" / "model-choices.json").exists()
+
+
+def test_regenerate_false_never_meets_a_refusing_generator(tmp_path, monkeypatch):
+    _stub_a_refusing_generator(monkeypatch)
+    calls = _record_subprocesses(monkeypatch)
+    dest = fixture_tree(tmp_path / "tree", regenerate=False)
+    assert calls == []
+    assert (dest / "scripts" / "sync_model_config.py").is_file()
+
+
+def test_the_default_runs_the_generator_in_the_tree_exactly_once(tmp_path, monkeypatch):
+    calls = _record_subprocesses(monkeypatch)
+    dest = fixture_tree(tmp_path / "tree")
+    assert calls == [([sys.executable, str(dest / "scripts" / "sync_model_config.py")], dest)]
+    assert (dest / "config" / "model-choices.json").is_file()
+
+
+def test_regenerate_true_is_the_default(tmp_path, monkeypatch):
+    calls = _record_subprocesses(monkeypatch)
+    dest = fixture_tree(tmp_path / "tree", regenerate=True)
+    assert calls == [([sys.executable, str(dest / "scripts" / "sync_model_config.py")], dest)]
+
+
 # --------------------------------------------------------------------------- #
 # 4. Independent of today's choices                                            #
 # --------------------------------------------------------------------------- #
@@ -402,18 +508,12 @@ def test_the_tree_selects_what_its_own_config_says(tmp_path):
 # --------------------------------------------------------------------------- #
 
 def test_a_generator_that_fails_raises_fixture_stale(tmp_path, monkeypatch):
-    copy = model_fixture._copy_into
-
-    def copy_then_stub(dest: Path) -> None:
-        copy(dest)
-        (dest / "scripts" / "sync_model_config.py").write_text(
-            "import sys\n"
-            "print('stub generator: refusing the frozen config', file=sys.stderr)\n"
-            "sys.exit(1)\n")
-
-    monkeypatch.setattr(model_fixture, "_copy_into", copy_then_stub)
+    _stub_a_refusing_generator(monkeypatch)
+    calls = _record_subprocesses(monkeypatch)
+    dest = tmp_path / "tree"
     with pytest.raises(FixtureStale) as caught:
-        fixture_tree(tmp_path / "tree")
+        fixture_tree(dest)
+    assert calls == [([sys.executable, str(dest / "scripts" / "sync_model_config.py")], dest)]
     message = str(caught.value)
     assert STALE_SENTENCE in message
     assert "tests/fixtures/model-config-frozen/README.md" in message
@@ -461,3 +561,101 @@ def test_model_reading_tests_on_the_repo_finds_the_selector_through_a_workflow()
     assert ROOT / "tests" / "test_plan_model_death_swing.py" in found
     assert ROOT / "tests" / "test_model_fixture.py" in found
     assert found == sorted(found)
+
+
+# --------------------------------------------------------------------------- #
+# 7. The planner's path proves its scenarios on documents (DRE-6990)           #
+# --------------------------------------------------------------------------- #
+
+# The seven tests of the planner's path that copy a tree and select in it.
+PLANNER_PATH = (
+    "tests/test_project_reaches_planner_pickers.py",
+    "tests/test_model_effort.py",
+    "tests/test_plan_model_death_swing.py",
+    "tests/test_planner_capacity_retry.py",
+    "tests/test_planning_capacity_fallback.py",
+    "tests/test_planning_classify_turn_limit.py",
+    "tests/test_planning_unread_park.py",
+)
+OLD_ROUTE = ("sync_model_config", "FixtureStale")
+BARE_ID = re.compile(r"claude-[a-z]+-[0-9]")
+
+
+def _source(rel: str) -> str:
+    return (ROOT / rel).read_text(encoding="utf-8")
+
+
+def fixture_tree_calls(text: str) -> list[tuple[int, bool]]:
+    """`(line, passes regenerate=False)` for every `fixture_tree(...)` call."""
+    found = []
+    for node in ast.walk(ast.parse(text)):
+        if not isinstance(node, ast.Call):
+            continue
+        func = node.func
+        name = func.attr if isinstance(func, ast.Attribute) else getattr(func, "id", None)
+        if name != "fixture_tree":
+            continue
+        off = any(k.arg == "regenerate" and isinstance(k.value, ast.Constant)
+                  and k.value.value is False for k in node.keywords)
+        found.append((node.lineno, off))
+    return found
+
+
+def old_route_mentions(text: str) -> list[tuple[int, str]]:
+    """`(line, name)` for every line of `text` naming the generator or its
+    refusal."""
+    return [(n, name) for n, line in enumerate(text.splitlines(), 1)
+            for name in OLD_ROUTE if name in line]
+
+
+def bare_ids(text: str) -> list[tuple[int, str]]:
+    """`(line, id)` for every model id spelled in `text` outside a comment —
+    docstrings and strings included."""
+    found = []
+    for tok in tokenize.generate_tokens(io.StringIO(text).readline):
+        if tok.type == tokenize.COMMENT:
+            continue
+        for match in BARE_ID.finditer(tok.string):
+            line = tok.start[0] + tok.string.count("\n", 0, match.start())
+            found.append((line, match.group(0)))
+    return found
+
+
+def test_every_one_of_the_seven_builds_its_trees_without_the_generator():
+    calls = {rel: fixture_tree_calls(_source(rel)) for rel in PLANNER_PATH}
+    # Each of the seven builds a tree: a file with no call proves nothing here.
+    assert all(calls.values()), {rel: c for rel, c in calls.items() if not c}
+    regenerating = {rel: [line for line, off in c if not off] for rel, c in calls.items()}
+    assert not any(regenerating.values()), regenerating
+
+
+def test_none_of_the_seven_names_the_generator_or_its_refusal():
+    found = {rel: old_route_mentions(_source(rel)) for rel in PLANNER_PATH}
+    assert not any(found.values()), found
+
+
+def test_none_of_the_seven_spells_a_model_id_outside_a_comment():
+    found = {rel: bare_ids(_source(rel)) for rel in PLANNER_PATH}
+    assert not any(found.values()), found
+
+
+def test_the_tree_scan_finds_a_call_that_regenerates():
+    text = ("tree = model_fixture.fixture_tree(dest)\n"
+            "other = fixture_tree(dest, regenerate=True)\n"
+            "third = fixture_tree(dest, regenerate=False)\n")
+    assert fixture_tree_calls(text) == [(1, False), (2, False), (3, True)]
+
+
+def test_the_old_route_scan_finds_the_generator_and_its_refusal():
+    text = ("import os\n"
+            f"subprocess.run(['scripts/{OLD_ROUTE[0]}.py'])\n"
+            f"except model_fixture.{OLD_ROUTE[1]}:\n")
+    assert old_route_mentions(text) == [(2, OLD_ROUTE[0]), (3, OLD_ROUTE[1])]
+
+
+def test_the_id_scan_reads_strings_and_docstrings_and_skips_comments():
+    model = "-".join(("claude", "opus", "9"))
+    text = (f'"""The scenario.\n\nBuilt on {model}."""\n'
+            f"# {model} in a comment is history\n"
+            f"MODEL = '{model}'\n")
+    assert bare_ids(text) == [(3, model), (5, model)]
