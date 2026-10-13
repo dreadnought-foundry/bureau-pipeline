@@ -12,7 +12,10 @@ The failures this file holds shut:
     and Linear Sync, so the runs are kept PER WORKFLOW, the newest run of
     every workflow asked before any workflow's second run;
   * a cut is never silent: a page limit, a repo's facts past 40, the request
-    budget, the clock and a refusing repo are each named in `why`;
+    budget, the clock and a refusing repo are each named in `why`, and a stop
+    counts the kept runs it left unread;
+  * a stop before any run's jobs were read keeps no fact, so the document is
+    `read: false` — never `read: true` with an empty list;
   * a row with no routing, or `read: false`, has no facts — `fold` writes
     `read: false` with every owner named rather than an empty list that reads
     as "ran nowhere";
@@ -263,6 +266,8 @@ def test_the_budget_cuts_second_runs_before_any_newest_run(monkeypatch):
     assert {f["workflow"] for f in doc["facts"]} == {SWEEP, REVIEW}
     assert doc["read"] is True
     assert "request budget of 3 spent" in doc["why"]
+    # Four runs kept, two read: the second run of each workflow.
+    assert "2 kept run(s) were not read" in doc["why"]
 
 
 def test_newest_runs_of_every_repo_before_any_second_run(monkeypatch):
@@ -375,6 +380,30 @@ def test_a_rate_limit_stops_the_leg_and_says_so():
     doc = leg(gh, repo_map=TWO_REPOS)
     assert len(gh.calls) == 2
     assert "rate limited" in doc["why"]
+    # The stop came while portico's runs were listed, before any run's jobs
+    # were read: agent-bureau's one kept run went unread, so there is no fact
+    # to keep and the document must not read as "ran nowhere".
+    assert "1 kept run(s) were not read" in doc["why"]
+    assert doc["facts"] == []
+    assert doc["read"] is False
+    assert doc["repos"][AB] == {"read": True, "why": None}
+
+
+def test_a_stop_on_a_later_runs_page_counts_the_pages_already_read(monkeypatch):
+    # agent-bureau answers two pages, and the budget stops the third.
+    monkeypatch.setattr(gr, "MAX_REQUESTS", 2)
+    w1, w2, w3 = (f".github/workflows/w{i}.yml" for i in (1, 2, 3))
+    pages = [[run_(60, w1), run_(59, w2)],
+             [run_(58, w3), run_(57, w1)],
+             [run_(56, w2)]]
+    gh = FakeGh(pages={AB: pages}, jobs={})
+    doc = leg(gh)
+    assert len(gh.run_requests()) == 2 and gh.job_requests() == []
+    assert "request budget of 2 spent" in doc["why"]
+    # Kept from the two pages read: w1 twice, w2 once and w3 once.
+    assert "4 kept run(s) were not read" in doc["why"]
+    assert doc["facts"] == []
+    assert doc["read"] is False
 
 
 def test_the_clock_stops_the_leg_and_says_so():
@@ -387,6 +416,8 @@ def test_the_clock_stops_the_leg_and_says_so():
     assert doc["read"] is True
     assert f"time budget of {gr.MAX_SECONDS} s spent" in doc["why"]
     assert doc["facts"]
+    # Fifty workflows kept, one runs page and eleven jobs requests made.
+    assert "39 kept run(s) were not read" in doc["why"]
 
 
 def test_every_request_runs_under_the_request_timeout(monkeypatch):
