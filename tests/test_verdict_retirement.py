@@ -375,7 +375,7 @@ class _Linear:
     def sweep(self):
         """The next reconcile, over the card as the exit left it. Comments go
         in as Linear returns them — newest first."""
-        assert self.lane == "Backlog"
+        assert self.lane == "Queued"
         backlog = _card(identifier=CARD, parent_state=None, labels=self.labels,
                         blocked_by=BLOCKER)
         backlog["title"] = DRE_4724["title"]
@@ -418,7 +418,7 @@ class TestDre4724LeavesPlanningWithAFreshVerdict:
         assert len(notes) == 1
         assert "**WORKBENCH**" in notes[0] and "re-entered Planning" in notes[0]
         assert "2026-09-23 13:41 PT" in notes[0]
-        assert card.lane == "Backlog"
+        assert card.lane == "Queued"
 
     def test_the_retirement_is_written_before_the_new_verdict(self):
         card = _dre_4724_sent_back()

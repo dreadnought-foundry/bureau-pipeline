@@ -116,8 +116,8 @@ pull request could not be opened — which is the very case this step exists
 for, and any note used to make it stand aside. On 2026-10-10 five runs did
 exactly that: each pushed its branch, met HTTP 401 on `gh pr create` because
 the run's credential had expired, wrote the note, and this step printed "the
-agent chose a different exit" while holding two fresh tokens. Each card went to
-Backlog and waited for the sweep to open its pull request.
+agent chose a different exit" while holding two fresh tokens. Each card was
+parked in the queue and waited for the sweep to open its pull request.
 
 So a note whose FIRST line stamps that class, written alone, is delivered: the
 branch is pushed if GitHub does not have it and the pull request opened if the

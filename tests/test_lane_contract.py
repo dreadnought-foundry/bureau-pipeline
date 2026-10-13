@@ -271,8 +271,8 @@ class TestTheQueueLanes:
     """DRE-6741: the switch the Backlog → Queued cutover turns on. A READER
     tests membership in `QUEUE_LANES`; a WRITER writes `QUEUE_LANE`. The first
     is read off the alias, the second off the planning exit, so the readers
-    read both names from the day the alias lands and no writer moves until
-    DRE-6742 moves the planning exit."""
+    read both names from the day the alias lands and no writer moved until
+    DRE-6742 moved the planning exit."""
 
     def fixture(self, **planning_exit):
         doc = json.loads(open(CONTRACT, encoding="utf-8").read())
@@ -291,8 +291,8 @@ class TestTheQueueLanes:
         assert '"to": "Queued"' in lines[0]
         assert "lane-rename-shim DRE-4125" in lines[0]
 
-    def test_the_planning_exit_has_not_moved(self):
-        assert lane_contract.planning_exit() == ("Green Light", "Backlog")
+    def test_the_planning_exit_lands_in_queued(self):
+        assert lane_contract.planning_exit() == ("Green Light", "Queued")
 
     def test_both_names_are_live_lanes(self):
         assert lane_contract.lane("Backlog")["status"] == "live"
@@ -314,10 +314,10 @@ class TestTheQueueLanes:
 
     def test_queue_lane_is_the_planning_exit(self):
         assert lane_contract.queue_lane() == lane_contract.planning_exit()[1]
-        assert lane_contract.QUEUE_LANE == "Backlog"
+        assert lane_contract.QUEUE_LANE == "Queued"
 
     def test_queue_lane_follows_the_planning_exit_when_it_moves(self):
-        assert lane_contract.queue_lane(self.fixture(to="Queued")) == "Queued"
+        assert lane_contract.queue_lane(self.fixture(to="Backlog")) == "Backlog"
 
     def test_the_queue_lane_is_always_one_of_the_queue_lanes(self):
         assert lane_contract.QUEUE_LANE in lane_contract.QUEUE_LANES

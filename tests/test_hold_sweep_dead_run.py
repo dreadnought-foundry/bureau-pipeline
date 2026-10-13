@@ -187,15 +187,15 @@ class TestTheSecondStrikeHolds:
 
     @pytest.mark.parametrize("lane", ["In Progress", reconcile.REVIEW_LANE])
     def test_the_park_follows_the_planning_exit(self, monkeypatch, lane):
-        """DRE-6745: the hold's state is `QUEUE_LANE` — `Backlog` under the
-        shipped contract, `Queued` with the exit moved (DRE-6742)."""
-        assert reconcile.QUEUE_LANE == "Backlog"
-        monkeypatch.setattr(reconcile, "QUEUE_LANE", "Queued")
+        """DRE-6745: the hold's state is `QUEUE_LANE` — `Queued` under the
+        shipped contract since DRE-6742 moved the exit, `Backlog` before it."""
+        assert reconcile.QUEUE_LANE == "Queued"
+        monkeypatch.setattr(reconcile, "QUEUE_LANE", "Backlog")
         linear = _Linear(_at_cap())
         linear.run(_card(lane), reconcile.REQUEUE_CAP,
                    extra=[patch.object(reconcile.dead_run, "split_tried", return_value=True)])
         assert [w for w in linear.writes if w[0] == "state"] == [
-            ("state", "DRE-7100", "Queued", "--park")]
+            ("state", "DRE-7100", "Backlog", "--park")]
         assert ("label", "DRE-7100", reconcile.HOLD_LABEL) in linear.writes
 
     @pytest.mark.parametrize("lane", ["In Progress", reconcile.REVIEW_LANE])

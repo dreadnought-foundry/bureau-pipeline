@@ -299,7 +299,10 @@ class FakeLinear:
             nodes = [c for c in self.cards.values() if c["state"]["name"] in wanted]
             return self._page(nodes, v.get("after"))
         if _BACKLOG_READ in q:
-            nodes = [c for c in self.cards.values() if c["state"]["name"] == "Backlog"]
+            # Either of the queue's names, as Linear's `in` filter answers it
+            # (DRE-6742).
+            nodes = [c for c in self.cards.values()
+                     if c["state"]["name"] in reconcile.QUEUE_LANES]
             if v.get("numbers"):
                 keep = {int(n) for n in v["numbers"]}
                 nodes = [c for c in nodes if int(c["identifier"].split("-")[1]) in keep]
@@ -319,7 +322,8 @@ class FakeLinear:
         if "workflowStates" in q:
             return {"workflowStates": {"nodes": [
                 {"id": f"state-{n.lower().replace(' ', '-')}", "name": n, "type": t}
-                for n, t in (("Backlog", "backlog"), ("Todo", "unstarted"),
+                for n, t in (("Backlog", "backlog"), ("Queued", "unstarted"),
+                             ("Todo", "unstarted"),
                              ("In Progress", "started"), ("In Review", "started"),
                              ("Done", "completed"), ("Planning", "unstarted"))
             ]}}

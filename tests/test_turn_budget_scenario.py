@@ -622,17 +622,18 @@ class TurnDeathIsReadScenario(unittest.TestCase):
         self.assertIn(("state", lane_contract.QUEUE_LANE, "--park"), moves(journal))
         self.assertIn(f"Parked in {lane_contract.QUEUE_LANE} with", posted[1])
 
-    def test_a_second_death_past_green_parks_in_queued_once_the_exit_moves(self):
-        """DRE-6745: the park and its receipt follow `QUEUE_LANE` — moving the
-        planning exit to `Queued` (DRE-6742) moves both, with no edit here."""
-        self.assertEqual("Backlog", lane_contract.QUEUE_LANE)
-        _, journal = run_report(self, _this_run(3), prior="1", queue_lane="Queued")
+    def test_a_second_death_past_green_parks_in_backlog_with_the_exit_put_back(self):
+        """DRE-6745: the park and its receipt follow `QUEUE_LANE` — `Queued`
+        since DRE-6742 moved the planning exit, and the exit put back moves
+        both back to `Backlog`, with no edit here."""
+        self.assertEqual("Queued", lane_contract.QUEUE_LANE)
+        _, journal = run_report(self, _this_run(3), prior="1", queue_lane="Backlog")
         posted = comments(journal)
         self.assertIn(("add_label", "needs-human"), moves(journal))
-        self.assertEqual([("state", "Queued", "--park")],
+        self.assertEqual([("state", "Backlog", "--park")],
                          [m for m in moves(journal) if m[0] == "state"])
-        self.assertIn("Parked in Queued with", posted[-1])
-        self.assertNotIn("Backlog", posted[-1])
+        self.assertIn("Parked in Backlog with", posted[-1])
+        self.assertNotIn("Queued", posted[-1])
 
     def test_an_unreadable_thread_does_not_fail_the_step(self):
         """The dump is read on a path that is already handling a death. If

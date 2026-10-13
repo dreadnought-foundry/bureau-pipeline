@@ -504,8 +504,11 @@ def _drive_roll_up_split(mp):
     earlier wording to read it off. Re-frozen by DRE-6591, which names each
     child as sent to Planning or waiting in Backlog: the parent reads as
     Planning and both children as Backlog, so the first is sent and the
-    second waits on it."""
+    second waits on it. Re-frozen by DRE-6742, which moved the planning exit:
+    the children read as `QUEUE_LANE`, the lane the planner now files them
+    in, so the second waits in Queued."""
     import epic_split  # noqa: PLC0415 — only this driver needs it
+    import lane_contract  # noqa: PLC0415 — the lane the planner files children in
 
     body = ("The engine ships first and ends at a watched release. More "
             "follows.\n\n## Acceptance criteria\n\n- [ ] planned on its own\n")
@@ -522,7 +525,7 @@ def _drive_roll_up_split(mp):
 
     epic_split.activate(SimpleNamespace(
         get_issue=lambda i, **_k: {
-            "state": {"name": "Planning" if i == "DRE-1" else "Backlog"}},
+            "state": {"name": "Planning" if i == "DRE-1" else lane_contract.QUEUE_LANE}},
         cmd_children_detail=lambda _i: print(json.dumps(children)),
         count_comments=lambda *_a, **_k: 0,
         cmd_comment=posted,

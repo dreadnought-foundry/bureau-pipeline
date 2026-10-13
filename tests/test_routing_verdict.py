@@ -170,18 +170,39 @@ class TestParkedNamesTheProcessWriter:
     that nobody does. Revival is a separate, later, human act.
     """
 
-    def test_operator_is_not_a_backlog_writer(self):
+    def test_operator_is_not_a_queue_writer(self):
         """The decided change, pinned so a future fix cannot take the easy road
-        of widening the lane instead of correcting the verdict."""
-        assert "operator" not in lane_contract.lane_writers("Backlog"), (
-            "Backlog is process-controlled — re-opening by-hand writes would "
-            "make the lane contract describe the old model"
-        )
+        of widening the lane instead of correcting the verdict. Queued carries
+        Backlog's writers word for word (DRE-6740), so neither name admits one."""
+        for lane in lane_contract.QUEUE_LANES:
+            assert "operator" not in lane_contract.lane_writers(lane), (
+                f"{lane} is process-controlled — re-opening by-hand writes would "
+                "make the lane contract describe the old model"
+            )
+
+    def test_parked_lands_in_queued(self):
+        """DRE-6742 moved the planning exit to Queued, and PARKED's
+        destination with it: a parked card waits where the exit lands."""
+        assert routing_verdict.destination("PARKED") == "Queued"
+        assert routing_verdict.destination("PARKED") == lane_contract.QUEUE_LANE
+
+    def test_the_vocabulary_names_queued_as_the_lane_the_sweep_reads(self):
+        """The prose moves with the destination (DRE-6742): FLEET is promoted
+        out of Queued, PARKED waits there and nothing takes it back out, and
+        the file's own account of the sweep says it promotes past Queued."""
+        doc = json.loads(CONFIG.read_text(encoding="utf-8"))
+        records = {entry["name"]: entry for entry in doc["verdicts"]}
+        assert "out of Queued" in records["FLEET"]["why"]
+        for field in ("why", "revival"):
+            assert "Queued" in records["PARKED"][field], field
+            assert "Backlog" not in records["PARKED"][field], field
+        readme = " ".join(doc["_readme"])
+        assert "a work lane past Queued" in readme
 
     def test_parked_is_landed_by_a_process_writer(self):
         actor = routing_verdict.actor("PARKED")
         assert actor != "operator"
-        assert actor in lane_contract.lane_writers("Backlog")
+        assert actor in lane_contract.lane_writers(routing_verdict.destination("PARKED"))
 
     def test_parked_names_the_planning_exit_writer_that_really_lands_it(self):
         """Not any permitted writer — the one that actually performs the move.
@@ -229,7 +250,7 @@ class TestParkedNamesTheProcessWriter:
                 entry["actor"] = "operator"
         problems = routing_verdict.config_problems(doc)
         assert any(
-            "PARKED" in p and "operator" in p and "Backlog" in p for p in problems
+            "PARKED" in p and "operator" in p and "Queued" in p for p in problems
         ), f"a forbidden actor passed the check: {problems}"
 
     def test_a_glossary_writer_is_not_enough_on_any_lane(self):

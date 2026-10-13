@@ -321,13 +321,13 @@ def test_sweep_still_requeues_dead_card_below_cap():
     add_label.assert_not_called()
 
 
-@pytest.mark.parametrize("lane", ["shipped", "Queued"])
+@pytest.mark.parametrize("lane", ["shipped", "Backlog"])
 def test_sweep_still_holds_dead_card_at_cap(monkeypatch, lane):
     """The DRE-1403 hold cap is unchanged for genuinely dead runs, and the
-    park lands in `QUEUE_LANE` (DRE-6745): `Backlog` under the shipped
-    contract, `Queued` once DRE-6742 moves the planning exit."""
+    park lands in `QUEUE_LANE` (DRE-6745): `Queued` under the shipped
+    contract since DRE-6742 moved the planning exit, `Backlog` before it."""
     if lane == "shipped":
-        assert reconcile.QUEUE_LANE == "Backlog"
+        assert reconcile.QUEUE_LANE == "Queued"
     else:
         monkeypatch.setattr(reconcile, "QUEUE_LANE", lane)
     reconcile._write_failures.clear()

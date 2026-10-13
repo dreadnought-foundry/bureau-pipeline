@@ -140,14 +140,26 @@ class TestBoundToTheLaneContract:
 
     def test_an_actor_the_destination_forbids_is_a_config_problem(self):
         """The mutation that matters: `operator` is a real writer and is not a
-        `Backlog` writer, so a one-off landed in Backlog "for the operator"
+        `Queued` writer, so a one-off landed in Queued "for the operator"
         names somebody who may not legally write the lane."""
         doc = _mutated()
         _entry(doc, "one-off")["actor"] = "operator"
         problems = planning_shape.config_problems(doc)
         assert any(
-            "one-off" in p and "operator" in p and "Backlog" in p for p in problems
+            "one-off" in p and "operator" in p and "Queued" in p for p in problems
         ), f"a forbidden actor passed the check: {problems}"
+
+    def test_a_one_off_lands_where_the_planning_exit_lands(self):
+        """DRE-6742 moved the planning exit to Queued, and the one-off's
+        destination with it, so the shape that leaves carrying its verdict
+        waits in the lane every converted writer writes."""
+        assert planning_shape.destination("one-off") == "Queued"
+        assert planning_shape.destination("one-off") == lane_contract.QUEUE_LANE
+
+    def test_the_one_off_says_where_it_lands(self):
+        why = _entry(planning_shape.load(), "one-off")["why"]
+        assert "It lands in Queued" in why
+        assert "Backlog" not in why
 
     def test_an_actor_outside_the_glossary_is_a_config_problem(self):
         doc = _mutated()

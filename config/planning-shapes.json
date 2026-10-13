@@ -51,11 +51,11 @@
     {
       "name": "one-off",
       "means": "One card, one pull request. It owes no plan artifact and stops for no green light.",
-      "destination": "Backlog",
+      "destination": "Queued",
       "actor": "reconcile.py",
       "promotable": true,
       "marks": [],
-      "why": "The most common thing anyone files, and the whole reason the vocabulary exists: a one-liner that is made to owe an epic's paperwork is a planner run and a CEO decision spent on nothing. It lands in Backlog carrying its routing verdict, and the sweep promotes it from there — which is why this is the one shape that is promotable, and why the actor is the sweep that performs the move. Nothing escalates it BY DESIGN, so its verdict is its approval (DRE-2735)."
+      "why": "The most common thing anyone files, and the whole reason the vocabulary exists: a one-liner that is made to owe an epic's paperwork is a planner run and a CEO decision spent on nothing. It lands in Queued carrying its routing verdict, and the sweep promotes it from there — which is why this is the one shape that is promotable, and why the actor is the sweep that performs the move. Nothing escalates it BY DESIGN, so its verdict is its approval (DRE-2735)."
     },
     {
       "name": "epic",

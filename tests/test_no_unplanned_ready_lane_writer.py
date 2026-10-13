@@ -94,9 +94,10 @@ class TheReadyWorkLanesAreDerived(unittest.TestCase):
     """A ready-work lane is one the planning segment can send a card to and the
     pipeline then treats as work. Read out of the vocabularies, never typed."""
 
-    def test_the_ready_work_lanes_are_backlog_todo_and_hand_work_today(self):
-        # Hand-work joined when DRE-5321 pointed WORKBENCH and OPERATOR at it.
-        self.assertEqual(rlw.ready_lanes(), ("Backlog", "Todo", "Hand-work"))
+    def test_the_ready_work_lanes_are_queued_todo_and_hand_work_today(self):
+        # Hand-work joined when DRE-5321 pointed WORKBENCH and OPERATOR at it,
+        # and Queued replaced Backlog when DRE-6742 moved the planning exit.
+        self.assertEqual(rlw.ready_lanes(), ("Queued", "Todo", "Hand-work"))
 
     def test_a_lane_becomes_ready_work_because_the_vocabulary_says_so(self):
         # Re-point a shape's exit and the set moves with it. A hardcoded pair
@@ -135,8 +136,8 @@ class TheDiscoveryActuallyFindsSomething(unittest.TestCase):
         pairs = {(w.writer, w.lane) for w in rlw.writes()}
         for expected in (
             ("reconcile.py", "Todo"),      # the sweep promoting a FLEET card
-            ("reconcile.py", "Backlog"),   # the dead-run park
-            ("linear_ops.py", "Backlog"),  # an epic's children
+            ("reconcile.py", "Queued"),    # the dead-run park
+            ("linear_ops.py", "Queued"),   # an epic's children
             ("agent-task.yml", "Todo"),    # the build run requeueing itself
         ):
             self.assertIn(expected, pairs)
@@ -252,6 +253,9 @@ class ANewWriterWithAWrongDestinationIsCaught(unittest.TestCase):
             "        run: |\n"
             '          python3 .bureau-pipeline/scripts/linear_ops.py state "$CARD" "Backlog"\n'
         )
+        # `Backlog` is not in the vocabularies since DRE-6742, but the
+        # contract aliases it to Queued: a write under the old name is still
+        # a write into the queue, and is named.
         with _Staged(f".github/workflows/{rogue}", source):
             problems = rlw.writer_problems()
         self.assertTrue(_named(problems, rogue), problems)
@@ -323,6 +327,14 @@ class LinearsOwnTeamDefaultIsCovered(unittest.TestCase):
         problems = rlw.default_problems("Backlog")
         self.assertTrue(_named(problems, "Backlog"), problems)
         self.assertTrue(_named(problems, rlw.LINEAR_DEFAULT_WRITER), problems)
+
+    def test_a_team_default_of_either_queue_name_is_reported(self):
+        # DRE-6742: the vocabularies name Queued, and Backlog is the name the
+        # contract aliases to it — a card landing under either is in the
+        # queue, so a default of either is the same hole.
+        for lane in lane_contract.QUEUE_LANES:
+            problems = rlw.default_problems(lane)
+            self.assertTrue(_named(problems, lane), (lane, problems))
 
     def test_a_team_default_outside_the_work_segment_is_clean(self):
         self.assertEqual(rlw.default_problems("Intake"), [])

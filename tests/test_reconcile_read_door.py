@@ -442,7 +442,7 @@ def test_a_park_on_door_data_that_still_holds_parks_conditionally(monkeypatch):
         monkeypatch.setattr(reconcile.dead_run, "split_tried", lambda bodies: True)
         reconcile.main()
     assert linear.labels == [("DRE-301", reconcile.HOLD_LABEL)]
-    assert linear.writes == [("state", "DRE-301", "Backlog", ("--park",),
+    assert linear.writes == [("state", "DRE-301", "Queued", ("--park",),
                               ("In Progress",), ())]
 
 
