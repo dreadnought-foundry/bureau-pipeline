@@ -1,22 +1,35 @@
-# models.yaml — the ONE model config for the whole fleet (DRE-2316/DRE-2317).
+# models.yaml — the model config the defaults in the code are rendered from
+# (DRE-2316/DRE-2317).
 #
-# THIS IS THE ONLY FILE A HUMAN EDITS to change which model an agent runs on.
+# WHERE A CHOICE TAKES EFFECT is written down once, with the run lines that
+# show it, in docs/model-choice-levers.md (DRE-7195). In short: the selector
+# never reads the choices below. It reads the model home (`BUREAU_MODEL_CHOICES`)
+# when that reads, else the defaults in the code — `_FALLBACK_MODEL_CONFIG`,
+# GENERATED from this file. Every run's `model-home:` line says which. The
+# choices below reach a run only through that literal, and not at all while
+# the home is in force.
+#
 # Everything else that names a model is GENERATED from this file, between
 # explicit `BEGIN generated …` / `END generated …` markers:
 #
-#   * scripts/model_fallback.py  — `_FALLBACK_MODEL_CONFIG` (the degrade path
-#                                  used only when this file is unreadable)
+#   * scripts/model_fallback.py  — `_FALLBACK_MODEL_CONFIG` (the defaults in
+#                                  the code; its code-side facts are also the
+#                                  degrade path when this file is unreadable)
 #   * agents.yaml                — each agent's `model:` / `kind:` lines (the
 #                                  console roster's contract)
+#   * config/model-choices.json  — what the console's Settings page reads;
+#                                  never read on the dispatch path
 #
 # Regenerate with:  python3 scripts/sync_model_config.py
 # CI fails red on drift (`--check`, pinned by tests/test_model_config.py).
 #
 # Why a FILE, not a lookup: product-repo workflows run with NO AWS credentials
 # and NO token for a private repo — the same constraint documented for
-# config/repo-map.json in config/README.md. Selection must resolve out of the
-# public `.bureau-pipeline` checkout the workflow already does, so this file
-# travels with the code and is live fleet-wide the moment it merges to @main.
+# config/repo-map.json in config/README.md. The code-side facts resolve out of
+# the public `.bureau-pipeline` checkout the workflow already does. A change
+# here is in force for a run whose pipeline ref carries the merge: on the merge
+# for an `@main` caller, and when `stable` or the next `vN` moves past it for a
+# tag-pinned one.
 #
 # THE RULE: AVAILABILITY IS NOT PERMISSION (DRE-2317)
 # ---------------------------------------------------
