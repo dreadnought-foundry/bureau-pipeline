@@ -316,6 +316,14 @@ from the console's `ACTS` (agent-bureau PR #3023, DRE-5367) — three holds and
 eleven recoveries — so they agree tag by tag. The idempotency key is the pair (tag,
 cause), applied by the core's write seam and never restated by a lane.
 
+`hygiene-triage-alarm` has two bounds. A card a planning exit parked in Triage
+alarms once its wait reaches `HYGIENE_TRIAGE_ALARM_HOURS` (default 8). A card
+whose one automatic repair (`scripts/triage_repair.py`) is spent alarms once it
+reaches `HYGIENE_TRIAGE_REPAIRED_ALARM_HOURS` (default 0, the first hourly pass
+that sees it), held or not: it parked again after the repair, or the repair did
+not finish, or it started two hours ago and recorded no outcome (DRE-7183). A
+repair still running never alarms.
+
 The hourly **summary** the pass posts to its standing card is not one of these:
 it is a report about the pass, declared `not-an-act` in the `unconverted`
 block, the way Nightly Watch's report is.
