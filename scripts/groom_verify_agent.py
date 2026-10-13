@@ -16,9 +16,11 @@ and answers `still-needed`, `partly-solved`, `done-elsewhere`, `obsolete` or
 and the four subcommands here are everything around it.
 
   * `targets` — in the groom job, which holds the Linear key: every card to
-    verify, its title, body and board context — age, labels, parent,
-    children, last move, and every comment with who said it — read through
-    `linear_ops` in one request and passed through `sanitize_untrusted`, its
+    verify, its title, body and board context — age, labels, parent and its
+    title, children, relations both ways, last move, and the thread with who
+    said each comment, read in pages of fifty up to `MAX_COMMENTS` and held
+    to the limits below (DRE-7238) — read through `linear_ops` in one
+    request, and one more per older page, and passed through `sanitize_untrusted`, its
     repo mapped through `config/repo-map.json`; and the matrix the workflow
     fans out over. It also decides which cards are EXCLUDED without
     judgement (DRE-5306): a parent epic with an open child, a `hand-built`
@@ -33,7 +35,11 @@ and the four subcommands here are everything around it.
     verdict and every mark, and a mapped card whose own repo did not answer
     is `unverified` with `lookup failed: <why>` whatever the agent said.
   * `prepare` — in the verify job, with no Linear key: the agent's whole
-    input, and the moment it started.
+    input, and the moment it started. After the card and the Layer A
+    evidence come two more fenced sections (DRE-7238): the Done cards and
+    merged pull requests matched to the card's problem (`row["matched_work"]`,
+    each line `matched_line`) and where jobs ran recently (`row["routing"]`,
+    each line `routing_line`), each held to its own limit.
   * `verdict` — always, even when the agent step died or never ran: the raw
     answer, checked, in the fixed shape the proposal reads.
   * `apply` — back in the groom job: a Planning card proved `done-elsewhere`,
@@ -154,17 +160,66 @@ FENCE_BEGIN = "===== BEGIN UNTRUSTED CARD TEXT ====="
 FENCE_END = "===== END UNTRUSTED CARD TEXT ====="
 #: The section `agent_input` writes after the card's body (DRE-5306).
 CONTEXT_HEADING = "## The card's board context"
+#: The two fenced sections after the Layer A evidence (DRE-7238).
+MATCHED_HEADING = ("## Done cards and merged pull requests matched to the "
+                   "card's problem")
+ROUTING_HEADING = "## Where jobs ran recently"
+#: Every heading the input writes inside or between its fences: a line of
+#: card, comment or pull request text that starts one is defanged.
+_HEADINGS = (CONTEXT_HEADING, MATCHED_HEADING, ROUTING_HEADING)
 
-#: The card and its board context, in ONE request per card (DRE-5306): each
-#: list bounded at fifty, so a request asks for at most 150 nested nodes.
+#: The limits on what DRE-7238 adds to one card's input. Together they keep
+#: it under about 65,000 characters however long the thread is.
+#: The comments read, in pages of `COMMENT_PAGE`: Linear serves the newest
+#: first, so a longer thread loses its oldest.
+COMMENT_PAGE = 50
+MAX_COMMENTS = 200
+#: One comment's body is cut here, and says how much was cut.
+MAX_COMMENT_CHARS = 2000
+CUT = "… [cut: {n} more characters]"
+#: The comment bodies shown, newest kept first.
+MAX_THREAD_CHARS = 30000
+THREAD_CUT = ("{n} older comment(s) not shown: the thread passed "
+              f"{MAX_THREAD_CHARS:,} characters")
+#: The matched Done work section, and the line once pull requests past it
+#: are shown by their `matched_line` alone.
+MAX_MATCHED_CHARS = 20000
+MATCHED_CUT = ("{n} matched pull request(s) shown by title only: the section "
+               f"passed {MAX_MATCHED_CHARS:,} characters")
+#: The routing facts shown, the card's own repo first.
+MAX_ROUTING_LINES = 60
+ROUTING_CUT = "{n} more fact(s) not shown"
+#: What a row written before the lookups card reads as (the `matched_work`
+#: contract).
+NOT_SEARCHED = {"searched": False, "why": "not searched", "cards": []}
+
+#: The card and its board context, in ONE request per card (DRE-5306). The
+#: first page of comments is the fifty newest; `commentPages` is the same
+#: connection asking only for its `pageInfo`, and `COMMENT_PAGE_QUERY` reads
+#: the older pages behind it until Linear says there are no more or
+#: `MAX_COMMENTS` were read (DRE-7238). `parentTitle` is the parent's title
+#: beside the identifier and state the board context always carried.
 CARD_QUERY = """query($id: String!) {
   issue(id: $id) {
     identifier title description createdAt
     labels { nodes { name } }
     parent { identifier state { name } }
+    parentTitle: parent { title }
     children(first: 50) { nodes { identifier state { name } } }
     comments(first: 50) { nodes { body createdAt user { id } botActor { id } } }
+    commentPages: comments(first: 50) { pageInfo { hasNextPage endCursor } }
     history(first: 50) { nodes { createdAt fromState { name } toState { name } actor { id } botActor { id } } }
+    relations(first: 50) { nodes { type relatedIssue { identifier title state { name } } } }
+    inverseRelations(first: 50) { nodes { type issue { identifier title state { name } } } }
+  }
+}"""
+#: The older comments, one page of fifty after the cursor Linear gave.
+COMMENT_PAGE_QUERY = """query($id: String!, $after: String!) {
+  issue(id: $id) {
+    comments(first: 50, after: $after) {
+      pageInfo { hasNextPage endCursor }
+      nodes { body createdAt user { id } botActor { id } }
+    }
   }
 }"""
 
@@ -272,6 +327,17 @@ def _fenced(text: str) -> str:
             line = sanitize_untrusted.DEFANG_PREFIX + line
         out.append(line)
     return "\n".join(out)
+
+
+def _defanged(text: str) -> str:
+    """`_fenced`, and a line that starts one of the input's own headings
+    defanged too: the real sections follow inside and between the fences,
+    and no card, comment or pull request text may write a second one."""
+    return "\n".join(
+        sanitize_untrusted.DEFANG_PREFIX + line
+        if any(line.strip().lower().startswith(h.lower()) for h in _HEADINGS)
+        else line
+        for line in _fenced(text).split("\n"))
 
 
 def is_exclusion(reason) -> bool:
@@ -418,11 +484,70 @@ def _moves(issue: dict) -> list[tuple[datetime, dict]]:
     return sorted(found, key=lambda pair: pair[0], reverse=True)
 
 
+def _cut(body: str) -> tuple[str, bool]:
+    """A comment body held to `MAX_COMMENT_CHARS`, saying how much was cut,
+    and whether it was."""
+    if len(body) <= MAX_COMMENT_CHARS:
+        return body, False
+    return (body[:MAX_COMMENT_CHARS] + "\n"
+            + CUT.format(n=len(body) - MAX_COMMENT_CHARS)), True
+
+
+def _shown(said: list[dict]) -> list[dict]:
+    """The newest comments whose bodies fit in `MAX_THREAD_CHARS`, oldest
+    first. A send-back or a diagnosis is usually late in a thread, so the
+    oldest are the ones left out — never one from the middle."""
+    kept, used = [], 0
+    for comment in reversed(said):
+        used += len(comment["body"])
+        if used > MAX_THREAD_CHARS:
+            break
+        kept.append(comment)
+    return kept[::-1]
+
+
+def _relations(issue: dict) -> list[dict]:
+    """The card's relations both ways: `out` is this card's own (it blocks,
+    duplicates or relates to the other), `in` is the other card's."""
+    out = []
+    for field, other, direction in (("relations", "relatedIssue", "out"),
+                                    ("inverseRelations", "issue", "in")):
+        for node in _nodes(issue, field):
+            card = node.get(other) if isinstance(node.get(other), dict) else {}
+            out.append({"type": _clean(node.get("type")),
+                        "direction": direction,
+                        "identifier": _clean(card.get("identifier")),
+                        "title": _clean(card.get("title")),
+                        "state": _clean(_state(card))})
+    return out
+
+
+def _parent(issue: dict) -> dict | None:
+    """The parent's identifier and state, and its title when the read
+    carried one — `parentTitle` in `CARD_QUERY`."""
+    parent = issue.get("parent")
+    if not isinstance(parent, dict):
+        return None
+    found = {"identifier": _clean(parent.get("identifier")),
+             "state": _clean(_state(parent))}
+    title = parent.get("title") or (issue.get("parentTitle") or {}).get("title")
+    if title:
+        found["title"] = _clean(title)
+    return found
+
+
 def board_context(issue: dict, viewer: str, *, card: str, now: datetime,
                   verifier=None) -> dict:
     """The card's board context, every string through `sanitize_untrusted`.
     Who said each comment is `spoken_thread.voices`'s answer, and a comment
-    it withholds is shown by its label alone."""
+    it withholds is shown by its label alone.
+
+    The thread is the `MAX_COMMENTS` newest Linear gave, each body cut at
+    `MAX_COMMENT_CHARS` and the bodies shown held to `MAX_THREAD_CHARS`
+    (DRE-7238). `comments_read` is how many were read, `comments_shown` how
+    many the agent sees, and `thread_whole` is true only when every comment
+    on the card was read and shown in full — `comments.pageInfo.hasNextPage`
+    from `_read_card` says whether Linear held more."""
     created = _moment(issue.get("createdAt"))
     if created is None:
         raise ValueError("Linear gave no readable createdAt for the card")
@@ -436,27 +561,36 @@ def board_context(issue: dict, viewer: str, *, card: str, now: datetime,
     comments = sorted(_nodes(issue, "comments"),
                       key=lambda n: _moment(n.get("createdAt"))
                       or datetime.min.replace(tzinfo=timezone.utc))
+    all_read = len(comments) <= MAX_COMMENTS and not (
+        (issue.get("comments") or {}).get("pageInfo") or {}).get("hasNextPage")
+    comments = comments[-MAX_COMMENTS:]
     said = []
     for voice in spoken_thread.voices(comments, viewer, card=card,
                                       verifier=verifier):
         by = BY_VOICE.get(voice.kind, spoken_thread.UNKNOWN)
-        said.append({"at": _clean(voice.created_at), "by": by,
-                     "body": (_clean(voice.label) if by == WITHHELD
-                              else sanitize_untrusted.sanitize_body(
-                                  voice.body or ""))})
-    parent = issue.get("parent")
+        body, was_cut = ((_clean(voice.label), False) if by == WITHHELD
+                         else _cut(sanitize_untrusted.sanitize_body(
+                             voice.body or "")))
+        said.append({"at": _clean(voice.created_at), "by": by, "body": body,
+                     "cut": was_cut})
+    shown = _shown(said)
+    cut = sum(1 for c in shown if c.pop("cut"))
     return {
         "created_at": _clean(issue.get("createdAt")),
         "age_days": max(0, (now - created).days),
         "labels": [_clean(n.get("name")) for n in _nodes(issue, "labels")],
-        "parent": ({"identifier": _clean(parent.get("identifier")),
-                    "state": _clean(_state(parent))}
-                   if isinstance(parent, dict) else None),
+        "parent": _parent(issue),
         "children": [{"identifier": _clean(n.get("identifier")),
                       "state": _clean(_state(n))}
                      for n in _nodes(issue, "children")],
+        "relations": _relations(issue),
         "last_moved": last,
-        "comments": said,
+        "comments": shown,
+        "comments_read": len(said),
+        "comments_shown": len(shown),
+        "comments_cut": cut,
+        "comments_all_read": all_read,
+        "thread_whole": all_read and len(shown) == len(said) and not cut,
     }
 
 
@@ -487,6 +621,39 @@ def _viewer(lops) -> str | None:
         return None
 
 
+def _read_card(lops, identifier: str) -> dict:
+    """The card through `CARD_QUERY`, and its older comments through
+    `COMMENT_PAGE_QUERY`, page after page until Linear says there are no
+    more or `MAX_COMMENTS` were read. `comments` comes back holding every
+    comment read and `pageInfo.hasNextPage` saying whether Linear held more.
+
+    A page that fails, or a cursor that is missing or repeats, ends the walk
+    with what was read: the thread is then not whole, and the board context
+    says so, rather than the card going unread."""
+    issue = (lops.gql(CARD_QUERY, {"id": identifier}) or {}).get("issue")
+    if not isinstance(issue, dict):
+        raise ValueError("Linear returned no card")
+    nodes = _nodes(issue, "comments")
+    info = (issue.get("commentPages") or {}).get("pageInfo") or {}
+    more, seen = bool(info.get("hasNextPage")), set()
+    while more and len(nodes) < MAX_COMMENTS:
+        after = info.get("endCursor")
+        if not after or after in seen:
+            break
+        seen.add(after)
+        try:
+            page = (((lops.gql(COMMENT_PAGE_QUERY,
+                               {"id": identifier, "after": after}) or {})
+                     .get("issue") or {}).get("comments") or {})
+        except Exception:  # noqa: BLE001 — a page unread leaves the thread part-read
+            break
+        nodes += [n for n in page.get("nodes") or [] if isinstance(n, dict)]
+        info = page.get("pageInfo") or {}
+        more = bool(info.get("hasNextPage"))
+    return {**issue, "comments": {"nodes": nodes,
+                                  "pageInfo": {"hasNextPage": more}}}
+
+
 def targets(proposal: dict, *, lops, repo_map: dict,
             verifier=None) -> list[dict]:
     """Every card to verify, read with its board context in one request
@@ -513,9 +680,7 @@ def targets(proposal: dict, *, lops, repo_map: dict,
             target["excluded"] = EXCLUDE_UNREAD.format(why=VIEWER_UNREAD)
             continue
         try:
-            issue = (lops.gql(CARD_QUERY, {"id": identifier}) or {}).get("issue")
-            if not isinstance(issue, dict):
-                raise ValueError("Linear returned no card")
+            issue = _read_card(lops, identifier)
             context = board_context(issue, viewer, card=identifier, now=now,
                                     verifier=verifier)
         except Exception as e:  # noqa: BLE001 — an unread card is excluded, not fatal
@@ -595,31 +760,209 @@ def _context_lines(context) -> list[str]:
                                      in context.get("labels") or []) or "none"),
              "Parent: " + (f"{line(parent.get('identifier'))} "
                            f"({line(parent.get('state'))})"
+                           + (f" — {line(parent['title'])}"
+                              if parent.get("title") else "")
                            if isinstance(parent, dict) else "none")]
     children = context.get("children") or []
     lines.append("Children:" + ("" if children else " none"))
     lines += [f"- {line(c.get('identifier'))} ({line(c.get('state'))})"
               for c in children]
+    # A row written before DRE-7238 carries no relations, and says nothing
+    # about them rather than claiming none.
+    if "relations" in context:
+        relations = context.get("relations") or []
+        lines.append("Relations:" + ("" if relations else " none"))
+        lines += [f"- {line(r.get('type'))}, {line(r.get('direction'))}: "
+                  f"{line(r.get('identifier'))} ({line(r.get('state'))}) — "
+                  f"{line(r.get('title'))}" for r in relations]
     lines.append("Last state move: " + (
         f"to {line(moved.get('to'))} on {line(moved.get('at'))}, "
         f"by: {line(moved.get('by'))}" if isinstance(moved, dict) else "none"))
+    if "thread_whole" in context:
+        lines.append(_thread_line(context))
     comments = context.get("comments") or []
     lines.append("Comments, oldest first:" + ("" if comments else " none"))
+    left_out = (context.get("comments_read") or 0) - len(comments)
+    if left_out > 0:
+        lines.append(THREAD_CUT.format(n=left_out))
     for comment in comments:
         lines.append(f"- {line(comment.get('at'))}, by: {line(comment.get('by'))}")
-        body = _fenced(str(comment.get("body") or "")).strip("\n")
+        body = _defanged(str(comment.get("body") or "")).strip("\n")
         lines += [f"  {text}" if text else "" for text in body.split("\n")]
     return lines
 
 
+def _thread_line(context: dict) -> str:
+    """How much of the thread the agent sees, in one line: the counts, and
+    `thread_whole` with what kept it from being whole."""
+    read, shown = context.get("comments_read"), context.get("comments_shown")
+    head = (f"Thread: {read} comment(s) read, {shown} shown, thread_whole: "
+            f"{'true' if context.get('thread_whole') else 'false'}")
+    if context.get("thread_whole"):
+        return head + " — every comment on the card, each in full"
+    why = []
+    if not context.get("comments_all_read"):
+        why.append(f"Linear holds more than the {read} comment(s) read")
+    if (read or 0) > (shown or 0):
+        why.append(f"the {read - shown} oldest read are not shown")
+    if context.get("comments_cut"):
+        why.append(f"{context['comments_cut']} shown comment(s) cut at "
+                   f"{MAX_COMMENT_CHARS:,} characters")
+    return head + " — " + "; ".join(why or ["part of the thread"])
+
+
 def _body(text: str) -> str:
-    """The card's body, fenced — and a line mimicking the board-context
-    heading defanged, since the real section follows it inside the same
-    fence and a body must not be able to write a second one."""
-    return "\n".join(
-        sanitize_untrusted.DEFANG_PREFIX + line
-        if line.strip().lower().startswith(CONTEXT_HEADING.lower()) else line
-        for line in _fenced(text).split("\n"))
+    """The card's body, fenced — and a line mimicking one of the input's
+    headings defanged, since the real board-context section follows it
+    inside the same fence and a body must not be able to write a second
+    one."""
+    return _defanged(text)
+
+
+def _day(iso) -> str:
+    moment = _moment(iso)
+    return moment.strftime("%Y-%m-%d") if moment else ""
+
+
+def matched_line(card: dict, pr: dict | None) -> str:
+    """One matched Done card, or one of its pull requests, in one line —
+    the line the agent reads and the line the runner writes as a counted
+    item's `fact`:
+
+        DRE-5942 (Done 2026-10-07, under DRE-5910) — <title>
+        DRE-5942 → dreadnought-foundry/agent-bureau#3297, merged 2026-10-07 — <PR title>
+
+    A pull request `fold` could not read says `not read: <why>`, and one
+    read but never merged says `not merged`."""
+    ident = _one_line(card.get("identifier"))
+    if pr is None:
+        inside = " ".join(p for p in (_one_line(card.get("state")) or
+                                      "state unknown",
+                                      _day(card.get("completed_at"))) if p)
+        if card.get("parent"):
+            inside += f", under {_one_line(card['parent'])}"
+        text = f"{ident} ({inside}) — {_one_line(card.get('title'))}"
+    else:
+        ref = f"{_one_line(pr.get('repo'))}#{_one_line(pr.get('number'))}"
+        if pr.get("read") is not True:
+            text = (f"{ident} → {ref}, not read: "
+                    f"{_one_line(pr.get('why')) or 'no reason recorded'}")
+        elif _day(pr.get("merged_at")):
+            text = (f"{ident} → {ref}, merged {_day(pr['merged_at'])} — "
+                    f"{_one_line(pr.get('title'))}")
+        else:
+            text = f"{ident} → {ref}, not merged — {_one_line(pr.get('title'))}"
+    return _defanged(_one_line(text))
+
+
+def routing_line(fact: dict) -> str:
+    """One routing fact in one line — the line the agent reads and the line
+    the runner writes as a counted item's `fact`:
+
+        <id>: <jobs> job(s), <first date> to <last date>, runner labels <labels>
+    """
+    labels = ", ".join(_one_line(label) for label in fact.get("labels") or [])
+    return _defanged(_one_line(
+        f"{fact.get('id')}: {fact.get('jobs')} job(s), "
+        f"{_day(fact.get('first_completed_at')) or 'unknown'} to "
+        f"{_day(fact.get('last_completed_at')) or 'unknown'}, "
+        f"runner labels {labels or 'none'}"))
+
+
+def _pr_detail(pr: dict) -> list[str]:
+    """A read pull request's changed files and body, indented under its
+    line. An unread one has neither."""
+    if pr.get("read") is not True:
+        return []
+    files = [_one_line(f) for f in pr.get("files") or []]
+    lines = ["    files: " + (", ".join(files) or "none")
+             + (" (and more not listed)" if pr.get("files_cut") else "")]
+    body = _defanged(str(pr.get("body") or "")).strip("\n")
+    if body:
+        lines.append("    body:")
+        lines += [f"      {text}" if text else "" for text in body.split("\n")]
+    return [_defanged(lines[0])] + lines[1:]
+
+
+def _matched_lines(row: dict) -> list[str]:
+    """The matched Done work section's fenced lines, held to
+    `MAX_MATCHED_CHARS`. Every card and every pull request is named by its
+    `matched_line`, in rank order; a pull request's files and body follow
+    it while they fit, and from the first that would pass the limit every
+    one after it is named alone, under one line saying how many."""
+    work = row.get("matched_work")
+    if not isinstance(work, dict):
+        work = NOT_SEARCHED
+    if work.get("searched") is not True:
+        return [_defanged(_one_line(
+            "Not searched: " + (_one_line(work.get("why")) or "not searched")))]
+    cards = [c for c in work.get("cards") or [] if isinstance(c, dict)]
+    terms = [_one_line(t) for t in work.get("terms") or []]
+    lines = [_defanged(_one_line(
+        f"Searched ({_one_line(work.get('source')) or 'unknown'}) for: "
+        + ("; ".join(terms) or "nothing")))]
+    if not cards:
+        return lines + ["No Done card matched."]
+    # Every card and pull request line is shown whatever happens, so the
+    # room for files and bodies is what is left after them and the cut line.
+    entries = []
+    for card in cards:
+        matched = "; ".join(_one_line(t) for t in card.get("terms") or [])
+        head = [f"- {matched_line(card, None)}"]
+        if matched:
+            head.append(_defanged(f"  matched: {matched}"))
+        entries.append((head, [(f"  - {matched_line(card, pr)}", _pr_detail(pr))
+                               for pr in card.get("prs") or []
+                               if isinstance(pr, dict)]))
+    always = lines + [MATCHED_CUT.format(n=sum(len(p) for _, p in entries))]
+    always += [h for head, _ in entries for h in head]
+    always += [line for _, prs in entries for line, _ in prs]
+    room = MAX_MATCHED_CHARS - sum(len(line) + 1 for line in always)
+    out, note_at, n = [], None, 0
+    for head, prs in entries:
+        out += head
+        for line, detail in prs:
+            size = sum(len(d) + 1 for d in detail)
+            if detail and (note_at is not None or size > room):
+                if note_at is None:
+                    note_at = len(out)
+                n += 1
+                out.append(line)
+                continue
+            room -= size
+            out += [line] + detail
+    if note_at is not None:
+        out.insert(note_at, MATCHED_CUT.format(n=n))
+    return lines + out
+
+
+def _routing_lines(row: dict) -> list[str]:
+    """The routing section's fenced lines: at most `MAX_ROUTING_LINES`
+    facts, the card's own repo first and the rest by newest
+    `last_completed_at`, and one line naming how many more there were. A row
+    with no routing, or one not read, has no facts and says so."""
+    routing = row.get("routing")
+    if not isinstance(routing, dict) or routing.get("read") is not True:
+        why = routing.get("why") if isinstance(routing, dict) else None
+        return [_defanged(_one_line(
+            "Not read: " + (_one_line(why) or "no routing was recorded for "
+                                               "this card")))]
+    lines = [_defanged(_one_line(
+        f"Read {_one_line(routing.get('read_at')) or 'at an unknown time'}"
+        + (f"; cut: {_one_line(routing['why'])}" if routing.get("why")
+           else "")))]
+    facts = [f for f in routing.get("facts") or [] if isinstance(f, dict)]
+    if not facts:
+        return lines + ["No job ran in the window read."]
+    oldest = datetime.min.replace(tzinfo=timezone.utc)
+    facts.sort(key=lambda f: _moment(f.get("last_completed_at")) or oldest,
+               reverse=True)
+    own = row.get("repository")
+    facts.sort(key=lambda f: f.get("repo") != own)
+    lines += [f"- {routing_line(f)}" for f in facts[:MAX_ROUTING_LINES]]
+    if len(facts) > MAX_ROUTING_LINES:
+        lines.append(ROUTING_CUT.format(n=len(facts) - MAX_ROUTING_LINES))
+    return lines
 
 
 def agent_input(row: dict, brief: str) -> str:
@@ -635,6 +978,13 @@ def agent_input(row: dict, brief: str) -> str:
     lines += [FENCE_END, "", "## The Layer A evidence", "", FENCE_BEGIN]
     lines += ([f"- {_fenced(_one_line(e))}" for e in evidence]
               or ["None recorded."])
+    # The Done work matched to the card's problem, and where jobs ran
+    # (DRE-7238): titles, bodies and paths other people wrote, so each sits
+    # in a fence of its own.
+    lines += [FENCE_END, "", MATCHED_HEADING, "", FENCE_BEGIN]
+    lines += _matched_lines(row)
+    lines += [FENCE_END, "", ROUTING_HEADING, "", FENCE_BEGIN]
+    lines += _routing_lines(row)
     lines += [FENCE_END, "", "## The verdict file", "",
               SHAPE.replace("{card}", card), ""]
     return "\n".join(lines)

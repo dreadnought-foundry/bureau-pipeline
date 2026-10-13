@@ -330,8 +330,11 @@ def test_the_matched_section_shows_the_card_its_pull_requests_and_the_unread_one
     assert "It checks every minute." in section
     assert "not read: not looked up" in section
     # The section sits after the Layer A evidence and before the verdict file.
-    assert (text.index("## The Layer A evidence") < text.index(MATCHED)
-            < text.index("## The verdict file"))
+    start = _after_brief(text)
+    assert (text.index("\n## The Layer A evidence\n", start)
+            < text.index("\n" + MATCHED + "\n", start)
+            < text.index("\n" + ROUTING + "\n", start)
+            < text.index("\n## The verdict file\n", start))
 
 
 def test_a_row_without_matched_work_says_not_searched():
