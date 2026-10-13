@@ -13,7 +13,8 @@ as a home document (DRE-6972, the home contract on DRE-6939), with
 `written_by: operator` and the `written_at` of that date (Rule 3). Every test
 reaches these files through `tests/model_fixture.py` — never by spelling this
 directory's name — and that module's `fixture_tree` builds a throwaway tree
-from them with today's `scripts/` and regenerates its mirrors.
+from them with today's `scripts/`, regenerating its mirrors unless it is told
+not to (Rule 4).
 
 ## Rule 1: what a test may read the model files for
 
@@ -59,3 +60,23 @@ files: a test compares its groups, agents and projects with the frozen
 `models.yaml` alone, and `model_home.py check` accepts it inside a fixture
 tree. Re-render it the same way, inside a fixture tree, when `render-defaults`
 changes shape or the three files are re-frozen.
+
+## Rule 4: how a tree is built, and whom the default serves
+
+A rule of the policy or of selection is proved on a document, in a tree built
+with `regenerate=False`: `fixture_tree(dest, regenerate=False)` copies today's
+`scripts/` and the frozen files and runs nothing, because a tree whose selector
+answers from a home document has no use for a regenerated literal. A test that
+reads the committed files checks only what must hold for any saved state, and
+derives every expected value from those files.
+
+`fixture_tree`'s default still regenerates the literal: it runs
+`scripts/sync_model_config.py` inside the tree and raises `FixtureStale` when
+the generator refuses the frozen files. Two sets of tests still build on it —
+the old route's tests (`tests/test_model_config_change.py` and its siblings,
+`tests/console_change_walk.py` and the
+`tests/test_console_*_keeps_the_suite_green.py` walks), and the generator's own
+(`tests/test_model_config.py`, `tests/test_model_choices.py` and
+`tests/test_model_caution.py`). It stays the default until part 3 removes both:
+the generator, and the route that saves a choice by rewriting
+`config/models.yaml` (DRE-6990).

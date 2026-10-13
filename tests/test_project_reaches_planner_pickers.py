@@ -14,11 +14,15 @@ ranking call serves every repo in its census. tests/test_groom_judgement.py
 passes unchanged, and `test_the_groomer_still_picks_with_no_repo` pins the
 omission.
 
-The temp tree is today's scripts on the frozen model files
-(tests/model_fixture.py, DRE-6884) with `projects: {atlas: {judgement: <the
-fixture judgement ladder's last rung>}}` — the last rung, so with no project it
-has nowhere to fall and on atlas's walk it falls to the fleet's top. Expected
-ids are read off the tree's judgement ladder rather than typed.
+The scenario is a home document (DRE-6990): the frozen one
+(`model_fixture.fixture_home()`, DRE-6972) with
+`with_project(doc, "atlas", "judgement", <its judgement group's last model>)` —
+the last, so with no project it has nowhere to fall and on atlas's walk it falls
+to the fleet's top. It is handed through `home_env` to a tree of today's scripts
+on the frozen model files (tests/model_fixture.py), built with
+`regenerate=False`: the selector answers from the document, never from the
+tree's `config/models.yaml`. Expected ids are read off the document's judgement
+group rather than typed.
 
 Run: cd bureau-pipeline && python3 -m pytest tests/test_project_reaches_planner_pickers.py -q
 """
@@ -27,24 +31,24 @@ from __future__ import annotations
 
 import ast
 import json
-import os
 import shutil
 import subprocess
 import sys
 from pathlib import Path
 
 import pytest
-import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "tests"))
 
 import model_fixture  # noqa: E402
-from model_fixture import ladder  # noqa: E402
+from model_fixture import fixture_home, home_env, ladder, with_project  # noqa: E402
 
+HOME = fixture_home()
 # atlas's planner leads with the fleet's last rung, its exception.
-EXCEPTION = ladder(model_fixture.fixture_config(), "judgement")[-1]
-PROJECTS = {"atlas": {"judgement": EXCEPTION}}
+EXCEPTION = ladder(HOME, "judgement")[-1]
+# The document every scenario runs on.
+DOC = with_project(HOME, "atlas", "judgement", EXCEPTION)
 SPEND_LIMIT = ("You've hit your monthly spend limit. Switch to another model to "
                "continue.")
 
@@ -56,32 +60,10 @@ def _refusal(model):
              "result": SPEND_LIMIT}]
 
 
-def make_tree(base: Path, projects: dict) -> Path:
-    """Today's scripts on the frozen model files whose models.yaml carries
-    `projects`, regenerated, with the rest of the repo's config beside them."""
-    tree = model_fixture.fixture_tree(base)
-    cfg = tree_config(tree)
-    cfg["projects"] = projects
-    (tree / "config" / "models.yaml").write_text(yaml.safe_dump(cfg, sort_keys=False))
-    proc = subprocess.run(
-        [sys.executable, str(tree / "scripts" / "sync_model_config.py")],
-        cwd=tree, capture_output=True, text=True)
-    assert proc.returncode == 0, proc.stdout + proc.stderr
-    for path in sorted((ROOT / "config").iterdir()):
-        if path.is_file() and not (tree / "config" / path.name).exists():
-            shutil.copy2(path, tree / "config" / path.name)
-    return tree
-
-
-def tree_config(tree: Path) -> dict:
-    return yaml.safe_load((tree / "config" / "models.yaml").read_text())
-
-
-def env() -> dict:
-    out = dict(os.environ)
-    out["BUREAU_FAKE_AVAILABLE"] = "{}"
-    out["ANTHROPIC_API_KEY"] = ""  # subscription mode: the top rung, read directly
-    return out
+def env(tree: Path) -> dict:
+    """`DOC` as the tree's home, every model available, no network."""
+    # ANTHROPIC_API_KEY empty: subscription mode, the top rung read directly.
+    return home_env(tree, DOC, BUREAU_FAKE_AVAILABLE="{}", ANTHROPIC_API_KEY="")
 
 
 def py(tree: Path, code: str):
@@ -90,7 +72,7 @@ def py(tree: Path, code: str):
          "import json, sys\n"
          f"sys.path.insert(0, {str(tree / 'scripts')!r})\n"
          "import model_fallback, planning_classify, planner_capacity\n" + code],
-        capture_output=True, text=True, env=env(), cwd=tree,
+        capture_output=True, text=True, env=env(tree), cwd=tree,
     )
     assert proc.returncode == 0, proc.stderr
     assert "REFUSING" not in proc.stderr, proc.stderr
@@ -99,7 +81,8 @@ def py(tree: Path, code: str):
 
 @pytest.fixture(scope="module")
 def tree(tmp_path_factory) -> Path:
-    tree = make_tree(tmp_path_factory.mktemp("dre6634-planner"), PROJECTS)
+    tree = model_fixture.fixture_tree(tmp_path_factory.mktemp("dre6634-planner"),
+                                      regenerate=False)
     # The frozen tree carries the model files only; the planner scripts read
     # the rest of config/ (the lane contract, the planning shapes) as they run,
     # so today's copies fill in what the tree does not hold (DRE-6863).
@@ -111,7 +94,7 @@ def tree(tmp_path_factory) -> Path:
 
 @pytest.fixture(scope="module")
 def fleet(tree) -> list[str]:
-    return ladder(tree_config(tree), "judgement")
+    return ladder(DOC, "judgement")
 
 
 @pytest.fixture(scope="module")
@@ -120,8 +103,15 @@ def walk(fleet) -> list[str]:
     return [EXCEPTION] + [m for m in fleet if m != EXCEPTION]
 
 
-def test_the_tree_s_config_loads_with_its_project_entry(tree, fleet, walk):
-    assert py(tree, "print(json.dumps(model_fallback.CONFIG['projects']))") == PROJECTS
+def test_the_tree_reads_the_document_with_its_project_entry(tree, fleet, walk):
+    """A refused document leaves the selector on the defaults in the code,
+    with no atlas entry, and every scenario below would pass for the wrong
+    reason."""
+    got = py(tree, "model_fallback.use_home()\n"
+                   "print(json.dumps([model_fallback.HOME_STATUS, "
+                   "model_fallback.CONFIG['projects']]))")
+    assert got == ["read", DOC["projects"]]
+    assert DOC["projects"]["atlas"] == {"judgement": EXCEPTION}
     assert fleet[-1] == EXCEPTION, "the exception must be the fleet ladder's last rung"
     assert walk[0] != fleet[0], "the project's walk must lead with another rung"
 
@@ -209,7 +199,7 @@ def test_the_classify_command_takes_repo(tree):
     proc = subprocess.run(
         [sys.executable, str(ROOT / "scripts" / "planning_classify.py"),
          "classify", "--help"],
-        capture_output=True, text=True, env=env(),
+        capture_output=True, text=True, env=env(tree),
     )
     assert proc.returncode == 0, proc.stderr
     assert "--repo" in proc.stdout
@@ -258,7 +248,7 @@ def test_the_decide_command_writes_the_same_answer(tree, tmp_path, walk):
             [sys.executable, str(tree / "scripts" / "planner_capacity.py"),
              "decide", str(record), "--model", EXCEPTION, *extra,
              "--github-output", str(out)],
-            capture_output=True, text=True, env=env(), cwd=tree,
+            capture_output=True, text=True, env=env(tree), cwd=tree,
         )
         assert proc.returncode == 0, proc.stderr
         outputs[name] = dict(line.split("=", 1)
