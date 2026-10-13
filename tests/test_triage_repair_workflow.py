@@ -51,6 +51,12 @@ END = "===== END UNTRUSTED CARD TEXT ====="
 #: The one directory the prompt tells the planner to write to, and `apply`
 #: reads from.
 OUT_DIR = "${{ runner.temp }}/triage-repair/${{ matrix.card }}"
+#: The copy of bureau-pipeline every step holding the Linear key runs its
+#: scripts from: outside the workspace and outside `--add-dir`, so outside
+#: everything the planner's Write reaches.
+TRUSTED = "${{ runner.temp }}/pipeline-trusted"
+COPY_STEP = "Keep a trusted copy of bureau-pipeline"
+DROP_STEP = "Remove the trusted copy"
 #: The four files the planner may write (`triage_repair`'s names).
 OUTPUT_FILES = ("revised-card.md", "repair-answers.md", "question.md",
                 "question-choices.json")
@@ -350,12 +356,14 @@ class TestTheRepairJob:
                 "actions/create-github-app-token") and s.get("id") == "app"),
             _index("repair", lambda s: s.get("name") == "Check out the card's repo"),
             _index("repair", lambda s: s.get("name") == "Check out bureau-pipeline"),
+            _index("repair", lambda s: s.get("name") == COPY_STEP),
             _index("repair", lambda s: _runs(s, "triage_repair.py claim")),
             _index("repair", lambda s: _runs(s, "assemble_context.py assemble planner")),
             _index("repair", lambda s: _runs(s, "model_fallback.py select planner")),
             _index("repair", lambda s: s.get("uses") == INSTALL_ACTION),
             _index("repair", lambda s: s.get("name") == AGENT_STEP),
             _index("repair", lambda s: _runs(s, "triage_repair.py apply")),
+            _index("repair", lambda s: s.get("name") == DROP_STEP),
         ]
         assert order == sorted(order), order
 
@@ -396,21 +404,26 @@ class TestClaim:
         assert steps[0]["id"] == "claim"
         return steps[0]
 
+    @staticmethod
+    def _env(step, tmp_path):
+        return _step_env(step, {"card": "DRE-1"}, tmp_path / "temp")
+
     def test_a_claim_runs_on_the_matrix_card(self, step, tmp_path):
         assert step["env"]["CARD"] == "${{ matrix.card }}"
-        result, outputs, argvs = _bash(step["run"], {"CARD": "DRE-1"}, tmp_path)
+        result, outputs, argvs = _bash(step["run"], self._env(step, tmp_path), tmp_path)
         assert result.returncode == 0, result.stderr
-        assert argvs == [[".bureau-pipeline/scripts/triage_repair.py", "claim", "DRE-1"]]
+        trusted = _fill(TRUSTED, {}, tmp_path / "temp")
+        assert argvs == [[f"{trusted}/scripts/triage_repair.py", "claim", "DRE-1"]]
         assert outputs["claimed"] == "true"
 
     def test_exit_3_ends_the_leg_green_with_nothing_claimed(self, step, tmp_path):
-        result, outputs, _ = _bash(step["run"], {"CARD": "DRE-1"}, tmp_path,
+        result, outputs, _ = _bash(step["run"], self._env(step, tmp_path), tmp_path,
                                    rc=triage_repair.EXIT_SPENT)
         assert result.returncode == 0, result.stderr
         assert outputs["claimed"] == "false"
 
     def test_any_other_failure_is_red(self, step, tmp_path):
-        result, outputs, _ = _bash(step["run"], {"CARD": "DRE-1"}, tmp_path, rc=1)
+        result, outputs, _ = _bash(step["run"], self._env(step, tmp_path), tmp_path, rc=1)
         assert result.returncode != 0
         assert outputs.get("claimed") != "true"
 
@@ -528,6 +541,104 @@ class TestTheAgentStep:
         assert "agent-bureau-qa-bot" in bots and "github-actions" in bots
 
 
+class TestTheTrustedCopy:
+    """Withholding the key from the agent step is not enough on its own: the
+    planner's Write reaches the workspace — the card repo and the
+    `.bureau-pipeline` checkout — and its `--add-dir`, and a later step of the
+    same job that held the key and ran `.bureau-pipeline/scripts/` would run
+    whatever the planner wrote there. So every step holding the key runs its
+    scripts from a copy taken before any model runs, outside both, and
+    read-only."""
+
+    @staticmethod
+    def _holders() -> list[dict]:
+        return [s for s in _job("repair")["steps"]
+                if "LINEAR_API_KEY" in (s.get("env") or {})]
+
+    @staticmethod
+    def _env(step: dict, temp: Path) -> dict:
+        """The step's env, `runner.temp` and the matrix filled; every other
+        expression is a placeholder, since `python3` is a stub here."""
+        row = {"card": "DRE-1", "action": "repair", "title": "t"}
+        env = {}
+        for key, value in (step.get("env") or {}).items():
+            value = str(value).replace("${{ runner.temp }}", str(temp))
+            value = re.sub(r"\$\{\{\s*matrix\.(\w+)\s*\}\}",
+                           lambda m: str(row[m.group(1)]), value)
+            env[key] = re.sub(r"\$\{\{.*?\}\}", "[]", value)
+        return env
+
+    def test_the_copy_lies_outside_everything_the_planner_can_write(self):
+        add_dirs = re.findall(r"--add-dir\s+(\$\{\{ runner\.temp \}\}\S*|\S+)",
+                              _agent()["with"]["claude_args"])
+        assert add_dirs == ["${{ runner.temp }}/triage-repair"]
+        # Not under the workspace, which is the agent's working directory.
+        assert TRUSTED.startswith("${{ runner.temp }}/")
+        for granted in add_dirs:
+            assert not (TRUSTED + "/").startswith(granted + "/"), granted
+            assert not (granted + "/").startswith(TRUSTED + "/"), granted
+
+    def test_no_step_holding_the_key_runs_a_script_the_planner_can_write(self, tmp_path):
+        holders = self._holders()
+        assert {s["name"] for s in holders} == {
+            "Claim the card", "Planner context", "Read the card for the planner",
+            "Apply the planner's files"}
+        temp = tmp_path / "temp"
+        trusted = _fill(TRUSTED, {}, temp)
+        for step in holders:
+            assert step["env"]["TRUSTED_PIPELINE"] == TRUSTED, step["name"]
+            assert ".bureau-pipeline/scripts" not in step["run"], step["name"]
+            work = tmp_path / re.sub(r"\W", "_", step["name"])
+            (work / ".bureau-pipeline").mkdir(parents=True)
+            result, _, argvs = _bash(step["run"], self._env(step, temp), work)
+            assert result.returncode == 0, (step["name"], result.stderr)
+            scripts = [argv[0] for argv in argvs if argv and argv[0] != "-c"]
+            assert scripts, step["name"]
+            for script in scripts:
+                assert script.startswith(f"{trusted}/scripts/"), (step["name"], script)
+
+    def test_the_planner_context_is_read_from_the_copy_and_written_for_the_planner(self):
+        run = _step("repair", "Planner context")["run"]
+        assert 'assemble planner --root "$TRUSTED_PIPELINE"' in run
+        # The planner reads its context where its prompt says: the checkout.
+        assert "> .bureau-pipeline/agent-context.md" in run
+        assert ".bureau-pipeline/agent-context.md" in _agent()["with"]["prompt"]
+
+    def test_the_copy_is_taken_before_any_model_runs_and_holds_no_key(self):
+        copy = _step("repair", COPY_STEP)
+        assert "if" not in copy
+        assert "LINEAR" not in json.dumps(copy)
+        assert copy["env"]["TRUSTED_PIPELINE"] == TRUSTED
+        at = _index("repair", lambda s: s.get("name") == COPY_STEP)
+        assert at == _index("repair", lambda s: s.get("name") == "Check out bureau-pipeline") + 1
+        for later in ("Claim the card", "Select model", AGENT_STEP):
+            assert at < _index("repair", lambda s, n=later: s.get("name") == n), later
+
+    def test_the_copy_is_whole_read_only_and_removed_at_the_end(self, tmp_path):
+        temp = tmp_path / "temp"
+        temp.mkdir()
+        scripts = tmp_path / ".bureau-pipeline" / "scripts"
+        scripts.mkdir(parents=True)
+        (scripts / "triage_repair.py").write_text("print('the reviewed code')\n")
+        copy, drop = _step("repair", COPY_STEP), _step("repair", DROP_STEP)
+        trusted = Path(_fill(TRUSTED, {}, temp))
+        # Twice: a reused runner can hold the last run's read-only copy.
+        for _ in range(2):
+            result, _, _ = _bash(copy["run"], self._env(copy, temp), tmp_path)
+            assert result.returncode == 0, result.stderr
+        landed = trusted / "scripts" / "triage_repair.py"
+        assert landed.read_text() == "print('the reviewed code')\n"
+        if os.geteuid() != 0:  # root writes through any mode bit
+            with pytest.raises(PermissionError):
+                landed.write_text("print('the planner was here')\n")
+            with pytest.raises(PermissionError):
+                (trusted / "scripts" / "json.py").write_text("")
+        assert drop["if"] == "${{ always() }}"
+        result, _, _ = _bash(drop["run"], self._env(drop, temp), tmp_path)
+        assert result.returncode == 0, result.stderr
+        assert not trusted.exists()
+
+
 class TestThePrompt:
     def _prompt(self) -> str:
         return _agent()["with"]["prompt"]
@@ -591,7 +702,7 @@ def _apply_argv(row: dict, temp: Path, work: Path) -> list[str]:
     result, _, argvs = _bash(step["run"], _step_env(step, row, temp), work)
     assert result.returncode == 0, result.stderr
     assert len(argvs) == 1
-    assert argvs[0][0] == ".bureau-pipeline/scripts/triage_repair.py"
+    assert argvs[0][0] == f"{_fill(TRUSTED, row, temp)}/scripts/triage_repair.py"
     return argvs[0][1:]
 
 
