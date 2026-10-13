@@ -46,6 +46,7 @@ os.environ.setdefault("REPO", "dreadnought-foundry/bureau-pipeline")
 os.environ.setdefault("GH_TOKEN", "x")
 
 import dedupe_dispatch  # noqa: E402
+import lane_contract  # noqa: E402
 import turn_budget  # noqa: E402
 
 CARD = "DRE-3088"
@@ -216,13 +217,22 @@ print("claude-opus-5")
 '''
 
 
-def _checkout(td: str) -> str:
+def _checkout(td: str, queue_lane: str | None = None) -> str:
     base = os.path.join(td, ".bureau-pipeline")
     if os.path.exists(base):
         return base
     shutil.copytree(os.path.join(ROOT, "scripts"), os.path.join(base, "scripts"),
                     ignore=shutil.ignore_patterns("__pycache__"))
     shutil.copytree(os.path.join(ROOT, "config"), os.path.join(base, "config"))
+    if queue_lane is not None:
+        # DRE-6745: the checkout's planning exit moved, as DRE-6742 moves it —
+        # `lane_contract.QUEUE_LANE`, and every park that reads it, follows.
+        contract = os.path.join(base, "config", "lane-contract.json")
+        with open(contract, encoding="utf-8") as fh:
+            doc = json.load(fh)
+        doc["planning_exit"]["to"] = queue_lane
+        with open(contract, "w", encoding="utf-8") as fh:
+            json.dump(doc, fh)
     _executable(os.path.join(base, "scripts", "linear_ops.py"), LINEAR_STUB)
     _executable(os.path.join(base, "scripts", "card_pr.py"), CARD_PR_STUB)
     return base
@@ -485,16 +495,17 @@ sys.exit(code)
 
 
 def run_report(tc, thread, *, prior="0", claude_outcome="failure",
-               fail="", exit_files=None, card_pr_exit="0"):
+               fail="", exit_files=None, card_pr_exit="0", queue_lane=None):
     """Drive the real `Report result to Linear` block on a turn-cap death.
 
     `exit_files` maps one of EXIT_FILES to the text the agent wrote there
     before it died. They are written to this run's own notes directory, which
-    the step reads through `AGENT_NOTES_DIR`.
+    the step reads through `AGENT_NOTES_DIR`. `queue_lane` moves the
+    checkout's planning exit there (DRE-6745).
     """
     td = tempfile.mkdtemp()
     tc.addCleanup(shutil.rmtree, td, ignore_errors=True)
-    base = _checkout(td)
+    base = _checkout(td, queue_lane)
     _executable(os.path.join(base, "scripts", "card_pr.py"), CARD_PR_EXIT_STUB)
     log = os.path.join(td, "linear.jsonl")
     exec_file = os.path.join(td, "claude-execution-output.json")
@@ -590,13 +601,14 @@ class TurnDeathIsReadScenario(unittest.TestCase):
     def test_a_replan_writes_no_hold_label_and_no_backlog(self):
         _, journal = run_report(self, _this_run(1), prior="1")
         self.assertNotIn(("add_label", "needs-human"), moves(journal))
-        self.assertFalse([m for m in moves(journal) if "Backlog" in m])
+        self.assertFalse([m for m in moves(journal)
+                          if set(lane_contract.QUEUE_LANES) & set(m)])
         self.assertFalse([m for m in moves(journal) if "Todo" == m[-1]])
 
     def test_a_second_death_past_green_parks(self):
-        """Backlog plus the hold label, atomically (DRE-2931), the stamp
-        naming the turn cap (DRE-6178), and a receipt that reads budget rather
-        than size."""
+        """The queue lane plus the hold label, atomically (DRE-2931), the
+        stamp naming the turn cap (DRE-6178), and a receipt that reads budget
+        rather than size."""
         _, journal = run_report(self, _this_run(3), prior="1")
         posted = comments(journal)
         self.assertEqual(2, len(posted), posted)
@@ -607,7 +619,20 @@ class TurnDeathIsReadScenario(unittest.TestCase):
         self.assertIn("budget, not size", posted[1])
         self.assertNotIn("split", posted[1].lower())
         self.assertIn(("add_label", "needs-human"), moves(journal))
-        self.assertIn(("state", "Backlog", "--park"), moves(journal))
+        self.assertIn(("state", lane_contract.QUEUE_LANE, "--park"), moves(journal))
+        self.assertIn(f"Parked in {lane_contract.QUEUE_LANE} with", posted[1])
+
+    def test_a_second_death_past_green_parks_in_queued_once_the_exit_moves(self):
+        """DRE-6745: the park and its receipt follow `QUEUE_LANE` — moving the
+        planning exit to `Queued` (DRE-6742) moves both, with no edit here."""
+        self.assertEqual("Backlog", lane_contract.QUEUE_LANE)
+        _, journal = run_report(self, _this_run(3), prior="1", queue_lane="Queued")
+        posted = comments(journal)
+        self.assertIn(("add_label", "needs-human"), moves(journal))
+        self.assertEqual([("state", "Queued", "--park")],
+                         [m for m in moves(journal) if m[0] == "state"])
+        self.assertIn("Parked in Queued with", posted[-1])
+        self.assertNotIn("Backlog", posted[-1])
 
     def test_an_unreadable_thread_does_not_fail_the_step(self):
         """The dump is read on a path that is already handling a death. If
@@ -679,7 +704,19 @@ class EveryTurnDeathLeavesTheTagScenario(unittest.TestCase):
                         "the work is pushed and no pull request was opened\n"})
         posted = comments(journal)
         self.assertEqual(1, len(self._tagged(posted)), posted)
-        self.assertIn(("state", "Backlog", "--park"), moves(journal))
+        self.assertIn(("state", lane_contract.QUEUE_LANE, "--park"), moves(journal))
+
+    def test_a_blocker_written_before_dying_parks_in_queued_once_the_exit_moves(self):
+        _, journal = run_report(
+            self, _this_run(2), queue_lane="Queued",
+            exit_files={"agent-blocker.txt":
+                        "blocker-class: branch-without-pr\n"
+                        "the work is pushed and no pull request was opened\n"})
+        posted = comments(journal)
+        self.assertEqual(1, len(self._tagged(posted)), posted)
+        self.assertEqual([("state", "Queued", "--park")],
+                         [m for m in moves(journal) if m[0] == "state"])
+        self.assertIn(" — parked in Queued until ", posted[0])
 
     def test_a_question_written_as_a_blocker_before_dying_is_asked_with_the_tag(self):
         """An unstamped note is a person's question (DRE-6444): the escalation
@@ -691,7 +728,8 @@ class EveryTurnDeathLeavesTheTagScenario(unittest.TestCase):
         self.assertEqual(1, len(self._tagged(posted)), posted)
         self.assertIn(("advance", "Green Light", "In Progress,Todo"),
                       moves(journal))
-        self.assertFalse([m for m in moves(journal) if "Backlog" in m])
+        self.assertFalse([m for m in moves(journal)
+                          if set(lane_contract.QUEUE_LANES) & set(m)])
 
     def test_an_unreadable_pr_state_keeps_the_tag(self):
         _, journal = run_report(self, _this_run(3), card_pr_exit="3")

@@ -1,4 +1,4 @@
-"""Regression pin: a blocked card parks in Backlog, never returns to Todo.
+"""Regression pin: a blocked card parks in the queue lane, never returns to Todo.
 
 Origin (2026-06-12): DRE-1286's agent wrote a blocker note and the workflow
 moved the card to Todo — but the relay dispatches a fresh agent on EVERY
@@ -10,6 +10,11 @@ a human or the dependency gate releases the card.
 The blocker branch lives in shell inside agent-task.yml, so this pins the
 script text of that branch specifically (not the dead-run branch, which
 legitimately requeues to Todo for its first 2 attempts).
+
+The lane is `lane_contract.QUEUE_LANE` (DRE-6745), read by the shell through
+the seam the step shells read every pipeline constant from: `Backlog` until
+DRE-6742 moves the planning exit, `Queued` after. No script that parks a card
+names the lane itself.
 """
 
 import os
@@ -19,7 +24,16 @@ import unittest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "scripts"))
 
+import lane_contract  # noqa: E402
 import step_shell  # noqa: E402
+
+SCRIPTS = os.path.join(os.path.dirname(__file__), "..", "scripts")
+
+#: The seam: `lane_contract.QUEUE_LANE`, printed by the pipeline's own module.
+QUEUE_SEAM = (
+    "QUEUE_LANE=$(python3 -c 'import sys; sys.path.insert(0, \".bureau-pipeline/scripts\"); "
+    "import lane_contract; print(lane_contract.QUEUE_LANE)')"
+)
 
 WORKFLOW = os.path.join(
     os.path.dirname(__file__), "..", ".github", "workflows", "agent-task.yml"
@@ -114,8 +128,14 @@ class EscalateByExceptionTest(unittest.TestCase):
 
 
 class BlockerParksInBacklogTest(unittest.TestCase):
-    def test_blocker_branch_parks_in_backlog(self):
-        self.assertIn('state "$CARD" "Backlog"', blocker_branch())
+    def test_blocker_branch_parks_in_the_queue_lane(self):
+        self.assertIn('state "$CARD" "$QUEUE_LANE" --park', blocker_branch())
+        self.assertNotIn('"Backlog"', blocker_branch())
+
+    def test_the_queue_lane_is_read_through_the_seam(self):
+        self.assertIn(QUEUE_SEAM, report_step())
+        src = report_step()
+        self.assertLess(src.index(QUEUE_SEAM), src.index('"$QUEUE_LANE"'))
 
     def test_blocker_branch_never_returns_to_todo(self):
         self.assertNotIn('"Todo"', blocker_branch())
@@ -141,6 +161,38 @@ class BlockerParksInBacklogTest(unittest.TestCase):
         tail = src.split("agent-blocker.txt ]; then", 1)[1]
         dead_branch = tail.split("\n          else\n", 1)[1]
         self.assertIn('state "$CARD" "Todo"', dead_branch)
+
+
+class NoParkWriterNamesTheQueueLaneTest(unittest.TestCase):
+    """DRE-6745: the five scripts that park a card name no lane the queue
+    replaces — every write and every receipt reads `QUEUE_LANE`, and every
+    read tests membership in `QUEUE_LANES`. A `#` comment recording an
+    incident keeps its words; `_scan_yaml` skips those lines."""
+
+    PYTHON = ("dead_run.py", "medic_retry.py", "limit_recovery.py")
+    SHELL = ("report_agent_result.sh", "report_fix_result.sh")
+
+    def test_no_string_constant_in_the_python_names_backlog(self):
+        for name in self.PYTHON:
+            with self.subTest(script=name):
+                self.assertEqual(
+                    set(), lane_contract._scan_python(os.path.join(SCRIPTS, name), ["Backlog"]))
+
+    def test_no_code_line_in_the_shells_names_backlog(self):
+        for name in self.SHELL:
+            with self.subTest(script=name):
+                self.assertEqual(
+                    set(), lane_contract._scan_yaml(os.path.join(SCRIPTS, name), ["Backlog"]))
+
+    def test_each_shell_reads_the_lane_through_the_seam(self):
+        for name in self.SHELL:
+            with self.subTest(script=name):
+                with open(os.path.join(SCRIPTS, name), encoding="utf-8") as fh:
+                    self.assertIn(QUEUE_SEAM, fh.read())
+
+    def test_the_scan_is_not_vacuous(self):
+        # The python scan parses: on this file's own source it finds the word.
+        self.assertEqual({"Backlog"}, lane_contract._scan_python(__file__, ["Backlog"]))
 
 
 if __name__ == "__main__":

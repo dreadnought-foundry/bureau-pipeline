@@ -295,6 +295,13 @@ jobs:
     # the gate waits on the Verifier's run as CI; its verdict comment posts
     # before that run ends, and an out-of-scope Verify posts none. Its
     # completion is the wake that merges.
+    #
+    # The workflow_run leg's two bot branches are LITERALS (CEO's signed
+    # answer, 2026-09-15: literal bot branch names only, never `bot/*`):
+    # `bot/standards-sync`, the nightly standards regeneration (DRE-2777), and
+    # `bot/onboard`, the onboarding process's routing pull requests (DRE-7209).
+    # scripts/evaluate_and_merge.sh's branch case and
+    # reconcile.PIPELINE_BRANCH_PREFIXES hold the same set.
     if: >
       !cancelled() &&
       ((github.event_name == 'workflow_dispatch' &&
@@ -314,7 +321,8 @@ jobs:
         (startsWith(github.event.workflow_run.head_branch, 'agent/') ||
          startsWith(github.event.workflow_run.head_branch, 'repair/') ||
          startsWith(github.event.workflow_run.head_branch, 'dependabot/') ||
-         github.event.workflow_run.head_branch == 'bot/standards-sync') &&
+         github.event.workflow_run.head_branch == 'bot/standards-sync' ||
+         github.event.workflow_run.head_branch == 'bot/onboard') &&
         ((needs.resolve.result == 'skipped' &&
           github.event.workflow_run.pull_requests[0].number) ||
          (needs.resolve.result == 'success' &&

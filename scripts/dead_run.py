@@ -2,7 +2,7 @@
 """Dead-run requeue + hold-cap decision, unified across death classes (stdlib).
 
 A card whose agent dies with NO PR is requeued at most REQUEUE_CAP times, then
-HELD for a human (Backlog + needs-human label) so the pipeline stops looping
+HELD for a human (Queued + needs-human label) so the pipeline stops looping
 (DRE-1403) — except that a SILENT death at the cap hands the card to the
 planner once per budget first (DRE-6178, `hold.DEAD_SPLIT_MARK`): runs that
 end with no PR and no blocker note are the one death a smaller card can
@@ -152,7 +152,7 @@ DRE-2308/2309/2310) gets a genuinely fresh set of attempts instead of re-holding
 on its first death forever.
 
 This module is the no-I/O core that decides — given the prior dead count and the
-death class — whether to REQUEUE (→ Todo) or HOLD (→ Backlog + needs-human), and
+death class — whether to REQUEUE (→ Todo) or HOLD (→ Queued + needs-human), and
 what comment(s) to post. The workflow does the Linear writes; the decision is
 unit-tested here so the "is_error counts toward the cap" regression is pinned.
 """
@@ -185,6 +185,12 @@ import credential_rotation  # noqa: E402 — after the path insert, by design
 # A run the stream watchdog stopped for going silent (DRE-6974): the one reader
 # of the line it writes. Stdlib-only at module level, so no import cycle.
 import stream_watchdog  # noqa: E402 — after the path insert, by design
+
+# The queue lane (DRE-6745): the park writes `QUEUE_LANE`, the planning exit's
+# destination — the lane `Queued` replaces until DRE-6742 moves the exit, then
+# `Queued` — and never a name of its own. Read where it is written, so a test
+# that moves the exit moves the park and every receipt that names it.
+from lane_contract import QUEUE_LANE  # noqa: E402 — after the path insert, by design
 
 DEAD_TAG = "dead-run-requeue"
 HOLD_LABEL = "needs-human"
@@ -235,7 +241,11 @@ ERROR_MARKER_PREFIX = "model-error:"
 # blip, which a second attempt clears, and an exhausted quota, which no number
 # of attempts inside one run will clear; three separates them cheaply without
 # pretending the second case is winnable here.
-PARK_STATE = "Backlog"
+#
+# The lane is `QUEUE_LANE` (DRE-6745). PARK_STATE is that value as this module
+# was imported, kept for the readers outside it that ask for the name; the
+# park itself, and every receipt, reads `QUEUE_LANE` when it runs.
+PARK_STATE = QUEUE_LANE
 PARK_ATTEMPTS = 3
 
 # A limit death's own marker (DRE-3171). Same substring discipline as
@@ -748,7 +758,7 @@ class LimitDeath:
 class Decision:
     """What to do about a dead run.
 
-    action   — "requeue" (→ Todo), "hold" (→ Backlog + needs-human label),
+    action   — "requeue" (→ Todo), "hold" (→ Queued + needs-human label),
                "replan" (DRE-4366: a turn-cap death before implementation
                green — → Planning, no label, no retry; DRE-6178: a silent
                death at the dead-run cap whose budget has not tried the
@@ -1046,7 +1056,7 @@ def decide(
                     f"That is budget, "
                     f"not size: the work finishes but the run does not, and the "
                     f"one retry at the same budget did not land it either. "
-                    f"Parked in Backlog with the '{HOLD_LABEL}' label for a "
+                    f"Parked in {QUEUE_LANE} with the '{HOLD_LABEL}' label for a "
                     f"person to read what the runs left behind and decide how "
                     f"the card gets finished.{run_suffix}"
                 ],
@@ -1060,7 +1070,7 @@ def decide(
                 f"was finished and the run was not. Requeued to Todo for one "
                 f"more attempt at the same budget (turn exhaustion "
                 f"{prior_dead + 1}/{turn_cap + 1}). If that run also dies past "
-                f"implementation green, the card parks in Backlog with the "
+                f"implementation green, the card parks in {QUEUE_LANE} with the "
                 f"'{HOLD_LABEL}' label; if it dies short of it, the card goes "
                 f"to Planning.{run_suffix}"
             ],
@@ -1107,7 +1117,7 @@ def decide(
                 [
                     f"🚨 held-for-human ({DEAD_TAG} cap reached): {note}, and "
                     f"it has now happened {prior_dead + 1} times. Parked in "
-                    f"Backlog with the '{HOLD_LABEL}' label — the re-mint at "
+                    f"{QUEUE_LANE} with the '{HOLD_LABEL}' label — the re-mint at "
                     f"the push is not recovering this card, so a human needs "
                     f"to look at the App credentials before it is retried."
                     f"{kept}{run_suffix}"
@@ -1148,7 +1158,7 @@ def decide(
             [
                 f"🚨 held-for-human ({DEAD_TAG} cap reached): agent died with "
                 f"{cause} for the {prior_dead + 1}th time{names} — parked in "
-                f"Backlog with the '{HOLD_LABEL}' label so the relay and the "
+                f"{QUEUE_LANE} with the '{HOLD_LABEL}' label so the relay and the "
                 f"reconcile sweep stop looping. A human must split/fix the card "
                 f"and clear the label to retry.{run_suffix}{error_marker_line}"
             ],
@@ -1271,10 +1281,10 @@ def park(
     """Park a card for a human — BOTH writes, or neither. True iff both landed.
 
     DRE-2911's park half-applied: the `needs-human` label write landed, the
-    state write to Backlog did not, and the card sat In Progress for seven and
-    a half hours while its own comment said it was in Backlog. Nothing retried,
-    because from the pipeline's side the park was done — the label is what
-    every sweep reads to leave a held card alone.
+    state write to the park lane did not, and the card sat In Progress for
+    seven and a half hours while its own comment said it was parked. Nothing
+    retried, because from the pipeline's side the park was done — the label is
+    what every sweep reads to leave a held card alone.
 
     The order and the undo are the whole mechanism:
 
@@ -1321,9 +1331,9 @@ def park(
             f"was NOT written either, so nothing is half-applied and the sweep "
             f"can re-attempt the whole park.")
         return False
-    if _attempt(f"state → {PARK_STATE}", lambda: write_state()):
+    if _attempt(f"state → {QUEUE_LANE}", lambda: write_state()):
         return True
-    log(f"park {identifier}: the state write to {PARK_STATE} never landed. "
+    log(f"park {identifier}: the state write to {QUEUE_LANE} never landed. "
         f"Undoing this call's own label write so the card is not left claiming "
         f"a hold it is not in — the DRE-2911 shape, refused.")
     if not already_labelled:
@@ -1353,7 +1363,7 @@ def park_unlanded_comment(run_url: str = "", tag: str = DEAD_TAG) -> str:
     run_suffix = f" Run: {run_url}" if run_url else ""
     return (
         f"🚨 {tag} cap reached — but the park did NOT land: Linear refused "
-        f"the write, so this card is NOT in Backlog and does NOT carry the "
+        f"the write, so this card is NOT in {QUEUE_LANE} and does NOT carry the "
         f"'{HOLD_LABEL}' label. Neither was written rather than half of each, "
         f"so nothing here is claiming a hold that does not exist. This run is "
         f"still counted against the '{tag}' budget, and the reconcile sweep "
@@ -1468,7 +1478,7 @@ def _cmd_park(identifier: str, reason: str = "") -> int:
 
     Exit 0 iff BOTH landed. Exit 1 means the park did not happen and NOTHING
     was left half-applied: the caller posts park_unlanded_comment() instead of
-    a hold receipt that would claim a Backlog the card is not in.
+    a hold receipt that would claim a lane the card is not in.
 
     `--reason` names the budget the hold spent (DRE-6178), one of
     PARK_REASONS. The stamp is composed before anything is written, so a bad
@@ -1500,11 +1510,12 @@ def _cmd_park(identifier: str, reason: str = "") -> int:
 
     def write_state() -> None:
         # --park: a deliberate HOLD-cap park (DRE-1403). Without it the
-        # DRE-1885 building-card guard re-routes this In Progress → Backlog
-        # move back to Todo and the loop returns. The destination is the
-        # module constant, readable statically, so this stays the ONE lane
-        # this module can write (ready_lane_writers.py, DRE-2859).
-        linear_ops.cmd_state(identifier, PARK_STATE, "--park")
+        # DRE-1885 building-card guard re-routes this In Progress → queue-lane
+        # move back to Todo and the loop returns. The destination is
+        # `lane_contract.QUEUE_LANE`, imported by name and readable statically,
+        # so this stays the ONE lane this module can write
+        # (ready_lane_writers.py, DRE-2859; DRE-6745).
+        linear_ops.cmd_state(identifier, QUEUE_LANE, "--park")
 
     ok = park(
         identifier,
