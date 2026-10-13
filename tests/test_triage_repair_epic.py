@@ -404,6 +404,99 @@ class TestApplyReplanned:
 
 
 # --------------------------------------------------------------------------- #
+# what the bound itself would not rewrite is never re-planned                  #
+# --------------------------------------------------------------------------- #
+
+#: A finding `send_back_class.classify` places as DECISION.
+DECISION = ("The card offers two lanes without picking one, so nothing says "
+            "which the build should use.")
+PARKED = "🛑 Parked in Triage with needs-human for an operator."
+
+
+def _bound_epic(board: TriageRepairBoard, *findings: str, card: str = "DRE-9"):
+    """An epic parked at the second critic's bound in round 3. With one
+    finding, the round's record carries it (`findings_section` prints no list
+    for one); with none, the epic has no send-back round on this attempt."""
+    comments = [plan_critic.cycle_marker(card)]
+    if findings:
+        comments += [
+            f"🛑 **Second critic** — round 3: the bound.\n\nReason: {findings[0]}",
+            "plan-critic: stage=post round=3 result=SEND_BACK collisions=0 "
+            f"open=0 — {findings[0]}",
+        ]
+    comments += [STAMP, PARKED]
+    return board.add(card, comments=comments, children=CHILDREN)
+
+
+def _passed_then_parked(board: TriageRepairBoard, card: str = "DRE-9"):
+    """An epic parked after a round that PASSED, its park note listing a
+    decision-class finding beside a revision."""
+    note = ("🛑 The planner was asked to revise this card to answer the critic, "
+            "and the revision did not finish.\n\nWhat the critic found:\n\n"
+            f"1. A step nothing runs.\n2. {DECISION}\n")
+    return board.add(card, children=CHILDREN, comments=[
+        plan_critic.cycle_marker(card),
+        "plan-critic: stage=post round=1 result=SEND_BACK collisions=0 — A gap.",
+        "plan-critic: stage=post round=2 result=PASS collisions=0",
+        STAMP, note,
+    ])
+
+
+class TestNotReplanned:
+    def test_the_decision_finding_is_one_the_bound_asks(self):
+        """The premise: the bound's own exit asks this finding of the CEO."""
+        action, _ = plan_bound.decide([DECISION], False, "post")
+        assert action == "question"
+
+    def test_an_epic_with_a_decision_finding_is_escalated(self, tmp_path, capsys):
+        board = TriageRepairBoard()
+        _bound_epic(board, DECISION)
+        _, rows = _select(board, tmp_path)
+        assert [(r["card"], r["action"]) for r in rows] == [("DRE-9", "escalate")]
+        assert rows[0]["findings"] == [DECISION]
+        assert rows[0]["decisions"] == [DECISION]
+        assert "triage-repair: DRE-9 → escalate — " in capsys.readouterr().out
+        assert board.events == []
+
+    def test_an_epic_parked_after_a_passed_round_with_a_decision_is_escalated(
+            self, tmp_path):
+        board = TriageRepairBoard()
+        _passed_then_parked(board)
+        _, rows = _select(board, tmp_path)
+        assert [r["action"] for r in rows] == ["escalate"]
+        assert rows[0]["findings"] == ["A step nothing runs.", DECISION]
+        assert rows[0]["decisions"] == [DECISION]
+
+    def test_an_epic_with_no_findings_is_skipped(self, tmp_path, capsys):
+        board = TriageRepairBoard()
+        _bound_epic(board)
+        _, rows = _select(board, tmp_path)
+        assert rows == []
+        assert "triage-repair: DRE-9 → skip — " in capsys.readouterr().out
+        assert board.events == []
+
+    @pytest.mark.parametrize("findings,said", [
+        ((DECISION,), "only the CEO can make"),
+        ((), "no findings"),
+    ])
+    def test_apply_replan_refuses_and_spends_no_grant(self, findings, said):
+        board = TriageRepairBoard()
+        _bound_epic(board, *findings)
+        _claim(board, "DRE-9")
+        before = len(board.events)
+        assert _apply(board, "DRE-9") != 0
+        assert [k for k, _ in board.writes("DRE-9")[before:]] == ["comment"]
+        newest = board.newest("DRE-9")
+        assert triage_repair.outcome_of(newest) == "unfinished"
+        assert said in newest
+        assert "Writes already made: none" in newest
+        assert not _bound_receipts(board, "DRE-9")
+        assert not plan_bound.granted(_records(board, "DRE-9"))
+        assert board.lane("DRE-9") == "Triage"
+        assert "needs-human" in board.labels("DRE-9")
+
+
+# --------------------------------------------------------------------------- #
 # plan_bound.post_receipt — the receipt half of `_rewrite`                     #
 # --------------------------------------------------------------------------- #
 
