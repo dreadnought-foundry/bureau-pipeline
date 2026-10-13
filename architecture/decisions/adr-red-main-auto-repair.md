@@ -54,8 +54,11 @@ merely RUN on the default branch is watched by something — the repair rail for
 a red commit, the medic for a crashed run. `scripts/check_workflow_watchers.py`
 derives both populations from the workflow files and fails Pipeline Tests when
 one is unwatched, so adding a workflow with no watcher cannot pass quietly. The
-single exemption is declared with its reason: nothing watches the medic,
-because a medic that watched itself is the crash-loop guardrail 2 forbids.
+exemptions are declared with their reasons: nothing watches the medic,
+because a medic that watched itself is the crash-loop guardrail 2 forbids; and
+Shadow Replay (DRE-7197) is in `NOT_WATCHED`, because its red run is read by
+the operator from its report and a retry would spend another batch of reviewer
+runs.
 
 ## Decision — fix flow
 

@@ -38,9 +38,11 @@ Pipeline Tests step. Two rules, from two different failure meanings:
   that crashed rather than a commit that is broken, which is the medic's job —
   but "nobody is watching" must never be the answer.
 
-The ONE exemption is declared, in data, with its reason: the medic is the
-terminal watcher. A medic that watched itself would rebuild the 2026-06-28
-medic-crash-loop the ADR forbids, so nothing watches it by design.
+The exemptions are declared, in data, with their reasons. The medic is the
+terminal watcher: a medic that watched itself would rebuild the 2026-06-28
+medic-crash-loop the ADR forbids, so nothing watches it by design. And
+`NOT_WATCHED` names, by workflow name, the few whose red run a person reads
+and an automatic retry would only make dearer — Shadow Replay (DRE-7197).
 
 Deterministic, PyYAML-only. Run from anywhere:
 
@@ -86,6 +88,17 @@ TERMINAL_WATCHER_REASON = (
     "rebuild the 2026-06-28 medic crash-loop (retrying a run that cannot "
     "succeed deepens the failure), so nothing watches it, deliberately"
 )
+
+#: Workflows nothing watches on purpose, by name, each with its reason. Only
+#: RULE 2 reads it: a workflow that validates a push to the default branch is
+#: never exempt from the repair rail.
+NOT_WATCHED = {
+    "Shadow Replay": (
+        "a red replay is read by the operator from its report "
+        "(shadow-replay-report), and an automatic retry would spend another "
+        "batch of reviewer runs (DRE-7197)"
+    ),
+}
 
 
 class Workflow(NamedTuple):
@@ -240,7 +253,7 @@ def check_dir(workflows_dir=WORKFLOWS_DIR, default_branch: str = DEFAULT_BRANCH)
         if not runs_on_default_branch(wf.on, default_branch):
             continue
         stats["main_capable"] += 1
-        if wf.name in exempt or wf.name in all_watches:
+        if wf.name in exempt or wf.name in all_watches or wf.name in NOT_WATCHED:
             continue
         violations.append(
             f"{wf.filename}: {wf.name!r} can run on {default_branch} and no "

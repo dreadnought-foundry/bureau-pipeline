@@ -432,9 +432,13 @@ The list is now **derived, never remembered**. `scripts/check_workflow_watchers.
 | a `push` trigger that reaches the default branch | must be watched by the **Red-Main Repair** caller | its failure means the branch itself is red |
 | can RUN on the default branch at all (`schedule`, `repository_dispatch`, `workflow_dispatch`, `workflow_run`, `issue_comment`) | must be watched by **some** `workflow_run` watcher | usually a crashed run — the medic's job — but "nobody" is never the answer |
 
-One declared exemption, with its reason in the code: nothing watches the medic,
-because a medic that watched itself rebuilds the 2026-06-28 crash-loop. Adding
-a workflow with no watcher fails CI instead of adding a silent failure surface.
+The exemptions are declared, each with its reason in the code. Nothing watches
+the medic, because a medic that watched itself rebuilds the 2026-06-28
+crash-loop. And `NOT_WATCHED` names the workflows left unwatched on purpose:
+today only Shadow Replay (DRE-7197), whose red run the operator reads from its
+report, where an automatic retry would spend another batch of reviewer runs.
+Adding any other workflow with no watcher fails CI instead of adding a silent
+failure surface.
 
 **And a PR now says when a red check is not its fault.** The other half of that
 day was that two fix agents and a human could not tell an inherited failure
