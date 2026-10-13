@@ -710,7 +710,16 @@ budget: an empty `lookup_budget` sizes the leg off the token's bucket
 (`BUDGET_SHARE` of what remains, at most `MAX_REQUESTS`), `0` spends nothing,
 and a whole number is the cap. Every verdict carries its lookup state — `ok`,
 `failed`, `none` (no file named, or excluded) or `not-run` (no lookup was
-folded).
+folded). A morning posts no proposal in exactly two shapes (DRE-5317) — the
+lookup failed for every card that names a file, or the pre-post check could
+search no owner for merged pull requests — and a standing blind owner is
+neither, because it is named on the cards whose files live elsewhere and fails
+only the cards whose files live under it. The run stays green and the medic is
+not woken: the reason is the last line of the run's "Post the verified
+proposal" step and a warning on the run's summary page, it is
+`verify.not_posted_why` in the kept `proposal-verified.json`, and on a real
+morning the judgement receipt still lands on the standing card carrying the
+not-posted clause, while a dry run posts nothing at all.
 
 **The work matched to a card's problem (DRE-7236).** On 2026-10-10 two cards
 were removed although their problems had been fixed elsewhere: DRE-4049's by
@@ -734,17 +743,6 @@ characters) and up to `MAX_PR_FILES` = 30 files. `fold` writes them onto
 every row that carries them. A search that fails, or that cannot run (no
 Linear key, an excluded card), writes `searched: false` and the reason. It
 never changes the card's `lookups` block or its lookup state.
-
-A morning posts no proposal in exactly two shapes (DRE-5317) — the
-lookup failed for every card that names a file, or the pre-post check could
-search no owner for merged pull requests — and a standing blind owner is
-neither, because it is named on the cards whose files live elsewhere and fails
-only the cards whose files live under it. The run stays green and the medic is
-not woken: the reason is the last line of the run's "Post the verified
-proposal" step and a warning on the run's summary page, it is
-`verify.not_posted_why` in the kept `proposal-verified.json`, and on a real
-morning the judgement receipt still lands on the standing card carrying the
-not-posted clause, while a dry run posts nothing at all.
 
 ### Rewrite first (DRE-6666)
 
