@@ -491,8 +491,10 @@ class TestTheAgentStep:
         agent = _agent()
         assert not [k for k in (agent.get("env") or {}) if "LINEAR" in k]
         assert "LINEAR" not in json.dumps(agent)
-        assert "LINEAR" not in json.dumps(_job("repair").get("env") or {})
-        assert "LINEAR" not in json.dumps(_doc().get("env") or {})
+        # The job's env names the Linear bucket and the token's expiry for the
+        # steps that hold a key; it carries no secret the agent would inherit.
+        assert "secrets." not in json.dumps(_job("repair").get("env") or {})
+        assert "secrets." not in json.dumps(_doc().get("env") or {})
 
     def test_the_linear_key_rides_only_the_steps_that_read_or_write(self):
         holders = {s.get("name") for s in _job("repair")["steps"]
@@ -539,9 +541,14 @@ class TestThePrompt:
             assert spots, f"{expr} is not in the prompt"
             assert all(start < at < stop for at in spots), expr
         # And nowhere else in the file — not in a run, not in another prompt.
-        outside = _text().replace(prompt.split(BEGIN, 1)[1].split(END, 1)[0], "")
-        for expr in UNTRUSTED:
-            assert expr not in outside, f"{expr} stands outside the fence"
+        lines = _text().splitlines()
+        begins = [i for i, line in enumerate(lines) if line.strip() == BEGIN]
+        ends = [i for i, line in enumerate(lines) if line.strip() == END]
+        assert len(begins) == 1 and len(ends) == 1
+        for i, line in enumerate(lines):
+            for expr in UNTRUSTED:
+                if expr in line:
+                    assert begins[0] < i < ends[0], f"{expr} stands outside the fence: {line!r}"
 
     def test_the_fence_is_announced_as_data(self):
         before = self._prompt().split(BEGIN, 1)[0]
