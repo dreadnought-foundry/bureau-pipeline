@@ -113,6 +113,24 @@
       "printed_by": "scripts/model_home_carry.py",
       "constant": "TAG",
       "when": "every run of `model-home-carry.yml` since DRE-6986, in its `Carry the merged choices into the home` step's log"
+    },
+    {
+      "tag": "shadow-verdict:",
+      "printed_by": ".github/workflows/qa-review.yml",
+      "constant": null,
+      "when": "every shadow replay since DRE-7193 and DRE-7194, one line in the `Write the shadow verdict` step's log: `qa-review.yml` prints it for the critic and `verify.yml` for the verifier"
+    },
+    {
+      "tag": "shadow-replay:",
+      "printed_by": "scripts/shadow_replay.py",
+      "constant": "TAG",
+      "when": "every run of `shadow-replay.yml` since DRE-7197, in its compare job's log: one line per replayed pull request, then one summary line"
+    },
+    {
+      "tag": "classifier-cost:",
+      "printed_by": "scripts/classifier_cost.py",
+      "constant": "TAG",
+      "when": "once per run of the planning classifier's cost tally since DRE-7196, when its Linear read succeeds"
     }
   ],
   "causes": [
