@@ -1498,7 +1498,7 @@ class TestTheActRegistry:
 #: The twelve clauses this card amends, and the sentence each gains.
 AMENDED = (
     ("Done", "entrance"), ("Done", "writers"), ("Canceled", "entrance"),
-    ("Canceled", "writers"), ("Planning", "writers"), ("Backlog", "writers"),
+    ("Canceled", "writers"), ("Planning", "writers"), ("Queued", "writers"),
     ("In Review", "writers"), ("Green Light", "exit"), ("Triage", "exit"),
     ("Todo", "exit"), ("In Progress", "exit"), ("In Review", "exit"),
     # The card's one contract point with DRE-5240: whichever of the two lands
@@ -1530,15 +1530,14 @@ class TestTheLaneContract:
             "the hygiene agent — the hourly pass that clears mechanical rows, each "
             "move under a 🧹 receipt naming the evidence it read")
 
-    def test_exactly_six_lanes_permit_it(self):
-        # Live lanes only. Queued (live since DRE-6740) copies its writers from
-        # Backlog, the lane it replaces, word for word; the guard below does not
-        # write it until the cutover routes cards there.
+    def test_exactly_five_lanes_permit_it(self):
+        # Live lanes only. Queued (live since DRE-6740) took its writers from
+        # the lane it replaced, which is retiring and carries no clauses
+        # (DRE-6753) — so six became five.
         permitting = {entry["name"] for entry in contract_doc()["lanes"]
                       if entry["status"] == "live"
                       and "hygiene.py" in entry["clauses"]["writers"].get("who", [])}
-        assert permitting == {"Planning", "Backlog", "Queued", "In Review", "Done",
-                              "Canceled"}
+        assert permitting == {"Planning", "Queued", "In Review", "Done", "Canceled"}
 
     def test_the_guard_admits_exactly_the_lanes_the_contract_permits(self):
         # The queue under the one name it is written as, `QUEUE_LANE` (DRE-6748):
@@ -1555,7 +1554,7 @@ class TestTheLaneContract:
         path = str(ROOT / "scripts" / "hygiene.py")
         assert lane_contract._scan_python(path, ["Backlog"]) == set()
 
-    @pytest.mark.parametrize("lane", ["Planning", "Backlog", "In Review", "Done", "Canceled"])
+    @pytest.mark.parametrize("lane", ["Planning", "Queued", "In Review", "Done", "Canceled"])
     def test_the_writers_clause_still_holds_with_the_agent_in_it(self, lane):
         report = lane_contract.check(vocabulary=lane_contract.pipeline_vocabulary())
         found = [f for f in report.findings if f.clause_id == f"{lane}.writers"]

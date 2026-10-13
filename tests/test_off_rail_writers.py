@@ -69,7 +69,7 @@ from test_intake_no_age_out import _card as intake_card  # noqa: E402
 from test_intake_urgent_fast_path import STANDING, _ship  # noqa: E402
 from test_intake_urgent_fast_path import Board as UrgentBoard  # noqa: E402
 from test_intake_urgent_fast_path import card as urgent_card  # noqa: E402
-from test_lane_fold_in_review import FAKE_RETIRING, _retiring, _stranded  # noqa: E402
+from test_lane_fold_in_review import OLD_QUEUE, _stranded  # noqa: E402
 from test_limit_recovery import card as limit_card  # noqa: E402
 from test_limit_recovery import marker  # noqa: E402
 from test_planner_queue_sweep import TTL, _claimed  # noqa: E402
@@ -116,9 +116,9 @@ WRITE_SEAMS = (
 # the ten trigger cards — one per phase, each from its own suite's fixture
 # --------------------------------------------------------------------------
 def _drain_card():
-    """A card stranded in the injected retiring lane (the `_retiring`
-    pattern): the drain moves it whoever owns it."""
-    return _stranded(FAKE_RETIRING["name"])
+    """A card stranded in the shipped retiring lane, Backlog (DRE-6753): the
+    drain moves it whoever owns it."""
+    return _stranded(OLD_QUEUE)
 
 
 def _limit_card():
@@ -325,7 +325,6 @@ def _world(cards, slug, closed=None):
             enter(mock.patch.object(reconcile, "close_finished_epics",
                                     return_value=set(closed)))
             enter(mock.patch.object(reconcile, "merged_card_scope", return_value=None))
-        enter(_retiring(FAKE_RETIRING))
         enter(mock.patch.object(reconcile, "active_cards", side_effect=_board(rows)))
         # GitHub: every helper answered, so nothing leaves the process.
         enter(mock.patch.object(reconcile, "gh", side_effect=_gh))
