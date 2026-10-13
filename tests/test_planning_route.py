@@ -1246,6 +1246,14 @@ class TestABlockedEpicWaits:
             "decide reads; plan.yml's wait step is the writer"
         )
 
+    def test_the_wait_line_names_the_queue_the_wait_step_parks_in(
+            self, tmp_path, capsys, monkeypatch):
+        """DRE-6747: the epic waits in `QUEUE_LANE`, read when the line is
+        printed — so flipping the planning exit moves the words with it."""
+        monkeypatch.setattr(lane_contract, "QUEUE_LANE", "Queued")
+        _, said, _ = _replayed(tmp_path, capsys)
+        assert "DRE-6589 waits in Queued — " in said
+
     def test_the_same_epic_is_planned_once_its_blocker_is_done(self, tmp_path, capsys):
         written, _, _ = _replayed(
             tmp_path, capsys,

@@ -79,6 +79,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import blocker_prose  # noqa: E402
+from lane_contract import QUEUE_LANE  # noqa: E402 — the lane a fixed card returns to (DRE-6747)
 
 # A blocker is met when it is terminal, and only then. Read inline off the
 # relation, so the gate never fetches a state it was already handed.
@@ -103,11 +104,13 @@ UNKNOWN_TAG = "relations-unknown"
 # grammar; these are how a human recognises it).
 DECLARING_PHRASES = ("Blocked by", "Depends on", "Serialize after")
 
-# Where a defective CARD goes, and where its author sends it back from. Backlog,
-# not Todo: Todo dispatches an agent run, and the card's real blockers may still
-# be unmet — Backlog is the lane the dependency gate re-evaluates it in.
+# Where a defective CARD goes, and where its author sends it back from. The
+# queue, not Todo: Todo dispatches an agent run, and the card's real blockers may
+# still be unmet — the queue is the lane the dependency gate re-evaluates it in.
+# The return is a write, so it is `QUEUE_LANE`, the lane the planning exit writes
+# (DRE-6747); the sweep reads the queue under either of its names.
 DEFECT_LANE = "Triage"
-RETURN_LANE = "Backlog"
+RETURN_LANE = QUEUE_LANE
 
 
 def _blocks_relations(card: dict) -> list:

@@ -1025,7 +1025,7 @@ class GreenLight(_Base):
 
     def test_docstring_states_the_residual_window(self):
         doc = " ".join(pq.__doc__.split())
-        self.assertIn("the one-off route moves its card to `Backlog`", doc)
+        self.assertIn("the one-off route moves its card to `Queued`", doc)
         self.assertIn("the classification bounce moves a card to `Triage`", doc)
         self.assertIn("the run holds a slot the ledger cannot see", doc)
         self.assertIn("no model step runs in it", doc)
@@ -2273,6 +2273,23 @@ class ArrivalWaitsBehindTheLine(_Base):
     def test_the_docstring_says_a_claim_never_passes_a_waiting_card(self):
         self.assertIn("a claim never passes a card that is waiting",
                       " ".join(pq.__doc__.split()).lower())
+
+
+
+class TestThePlanningScriptsNameNoRetiringLane(unittest.TestCase):
+    """DRE-6747: the critic, the bound, the route, the classifier and this
+    queue name the queue through `lane_contract`, never as a spelled lane.
+    Read as `lane_contract` reads the pipeline's vocabulary — every string
+    constant, docstrings included."""
+
+    SCRIPTS = ("plan_critic", "plan_bound", "planning_route",
+               "planning_classify", "planner_queue")
+
+    def test_no_string_constant_names_backlog(self):
+        for script in self.SCRIPTS:
+            with self.subTest(script=script):
+                path = os.path.join(SCRIPTS, f"{script}.py")
+                self.assertEqual(lane_contract._scan_python(path, ["Backlog"]), set())
 
 
 if __name__ == "__main__":
