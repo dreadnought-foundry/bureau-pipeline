@@ -90,7 +90,7 @@ import github_output  # noqa: E402
 from model_adoption_actions import WHATS_NEW_NONE, _quiet, load_trial  # noqa: E402
 from model_adoption_actions import _trial as _trial_section  # noqa: E402
 from model_catalog import CATALOG_URL  # noqa: E402
-from model_fallback import auth_headers  # noqa: E402
+from model_fallback import auth_headers, code_defaults  # noqa: E402
 from planning_classify import answered_model  # noqa: E402
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -787,28 +787,41 @@ def _pins_test_text(text: str, pin: dict) -> str:
 
 
 def _known_models(root: Path) -> set[str]:
-    """Every id the root's `config/models.yaml` knows — the ladders, `retired`,
-    `excluded` and every `projects.<slug>.<kind>`, the same four keys
-    `model_fallback.KNOWN_MODELS` and `model_adoption._known_ids` derive from
-    (DRE-6785, DRE-6786). A `{model, reason}` entry under the first three
-    gives its `model`, a bare string entry the string. Empty when the file
-    cannot be read, which files the row ahead of adoption."""
+    """Every id the config knows, as `model_fallback.KNOWN_MODELS` answers it
+    (DRE-6785, DRE-6786, DRE-6971): the ladders and every
+    `projects.<slug>.<kind>` of the defaults in the code
+    (`model_fallback.code_defaults()`), plus `retired` and `excluded` out of
+    the root's `config/models.yaml`. A `{model, reason}` entry under the last
+    two gives its `model`, a bare string entry the string.
+
+    It reads NO home, and no `ladders` key of the file. `apply` files a row
+    for a model this set knows in `MINIMUM_CLAUDE_CODE`, whose test holds
+    every row to `KNOWN_MODELS` — code-side, and read with no home in CI. A
+    model only the home names counts as not known, and its floor goes in
+    `AHEAD_OF_ADOPTION` until the defaults in the code name it; the ladder
+    check and `model_floors()` read both tables, so it is guarded either way.
+    Whatever cannot be read adds nothing: empty when neither can."""
     import yaml
 
+    known: set[str] = set()
+    try:
+        defaults = code_defaults() or {}
+    except Exception:  # an unreadable default files the row ahead of adoption
+        defaults = {}
+    for rungs in (defaults.get("ladders") or {}).values():
+        known |= {str(model) for model in rungs or []}
+    for exceptions in (defaults.get("projects") or {}).values():
+        if isinstance(exceptions, Mapping):
+            known |= {str(model) for model in exceptions.values()}
     try:
         config = yaml.safe_load((root / "config" / "models.yaml").read_text()) or {}
     except (OSError, yaml.YAMLError):
-        return set()
-    entries = [rung for rungs in (config.get("ladders") or {}).values()
-               for rung in rungs or []]
+        config = {}
+    if not isinstance(config, Mapping):
+        config = {}
     for key in ("retired", "excluded"):
-        entries += list(config.get(key) or [])
-    known: set[str] = set()
-    for entry in entries:
-        known.add(str(entry.get("model") if isinstance(entry, Mapping) else entry))
-    for exceptions in (config.get("projects") or {}).values():
-        if isinstance(exceptions, Mapping):
-            known |= {str(model) for model in exceptions.values()}
+        for entry in config.get(key) or []:
+            known.add(str(entry.get("model") if isinstance(entry, Mapping) else entry))
     return known
 
 
