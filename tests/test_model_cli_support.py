@@ -258,10 +258,14 @@ class LadderSupportTest(unittest.TestCase):
     def test_a_model_the_home_puts_on_a_ladder_is_held_too(self):
         # The read with the document named is one of the two the check walks,
         # so a model only the home puts on the Builders ladder is in it.
+        # The model is one of another group's, derived so no console save
+        # pins it: priced, and on no Builders rung of the defaults.
+        ladders = mf.code_defaults()["ladders"]
+        model = next(m for name, models in ladders.items() if name != "workhorse"
+                     for m in models if m not in ladders["workhorse"])
         doc = model_home.render_defaults()
-        doc["groups"]["workhorse"]["models"].append("claude-fable-5-1")
-        self.assertNotIn("claude-fable-5-1", mf.code_defaults()["ladders"]["workhorse"])
-        self.assertIn("claude-fable-5-1", _canonical_ladders(doc)["workhorse"])
+        doc["groups"]["workhorse"]["models"].append(model)
+        self.assertIn(model, _canonical_ladders(doc)["workhorse"])
 
     def test_every_model_on_every_ladder_runs_on_the_pinned_claude_code(self):
         errors = _unsupported(_canonical_ladders(), _pinned_version())
