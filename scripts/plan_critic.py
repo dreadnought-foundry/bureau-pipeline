@@ -175,6 +175,11 @@ CLI:
                                      and raised ONCE after a turn-ceiling death
                                      recorded on the card's own thread (JSON
                                      array on stdin). Never exits non-zero.
+  one-off-revision-turns [--ceiling N] [--github-output F]
+                                     `max_turns=<int>` for the planner's
+                                     revision of a one-off card, sized from the
+                                     critic's ceiling (DRE-7177). Never exits
+                                     non-zero.
   replan-turns [--children N] [--github-output F]
                                      `max_turns=<int>` for a re-plan, sized
                                      from the plan's child count (DRE-5288).
@@ -552,6 +557,12 @@ ONE_OFF_TURNS_DEFAULT = 60
 ONE_OFF_RETRY_MULTIPLIER = 1.5
 ONE_OFF_TURNS_RETRY_CAP = 135
 
+#: The smallest ceiling the planner's revision of a one-off card gets
+#: (DRE-7177). Rewriting a card is more work than reading it: on 2026-10-12
+#: (run 38329761597) DRE-7066's revision ran at the critic's 36, ended
+#: `error_max_turns` at 37 turns, and parked the card for the operator.
+ONE_OFF_REVISION_TURNS_FLOOR = 72
+
 #: The card's `**Files:**` line — the standard's own spelling, and the plainer
 #: ones a card actually gets written with (`Files:`, a list item, `__Files:__`).
 _FILES_LINE = re.compile(
@@ -611,6 +622,24 @@ def one_off_retry_ceiling(ceiling) -> int:
         base = ONE_OFF_TURNS_DEFAULT
     return min(ONE_OFF_TURNS_RETRY_CAP,
                math.ceil(base * ONE_OFF_RETRY_MULTIPLIER))
+
+
+def one_off_revision_turns(ceiling) -> int:
+    """`--max-turns` for the planner's revision of a one-off card, from the
+    critic's own `ceiling` (DRE-7177): twice it, never under
+    `ONE_OFF_REVISION_TURNS_FLOOR` and never over `ONE_OFF_TURNS_RETRY_CAP`.
+
+    Never raises, for `one_off_turns`' reason, and an UNKNOWN ceiling is
+    sized from `ONE_OFF_TURNS_DEFAULT`, as `one_off_retry_ceiling` sizes one.
+    """
+    try:
+        base = int(ceiling)
+    except (TypeError, ValueError):
+        base = ONE_OFF_TURNS_DEFAULT
+    if base <= 0:
+        base = ONE_OFF_TURNS_DEFAULT
+    return min(ONE_OFF_TURNS_RETRY_CAP,
+               max(ONE_OFF_REVISION_TURNS_FLOOR, 2 * base))
 
 
 def one_off_turn_cap_deaths(bodies: list) -> list[dict]:
@@ -4405,6 +4434,16 @@ def _cmd_one_off_turns(args) -> int:
     return 0
 
 
+def _cmd_one_off_revision_turns(args) -> int:
+    """The one-off revision's ceiling as a step output, sized from the
+    critic's (DRE-7177). Always 0, for `post-turns`' reason — and the workflow
+    carries a static fallback on top of this."""
+    turns = one_off_revision_turns(args.ceiling)
+    _write_outputs(args.github_output, [("max_turns", str(turns))])
+    print(f"one-off revision ceiling: {turns} turns (critic's ceiling={args.ceiling!r})")
+    return 0
+
+
 def _cmd_review_turns(args) -> int:
     """The receipt for one review by the second critic — what it SPENT
     against what it was given (DRE-3498). Reads the run's execution file
@@ -4612,6 +4651,15 @@ def main(argv: list[str]) -> int:
     o.add_argument("--description-file", default=None)
     o.add_argument("--github-output", default=None)
     o.set_defaults(fn=_cmd_one_off_turns)
+
+    v = sub.add_parser(
+        "one-off-revision-turns",
+        help="the one-off revision's turn ceiling, sized from the critic's")
+    # A string, for `post-turns --children`' reason: an empty or unreadable
+    # ceiling sizes to the default rather than failing the argument parse.
+    v.add_argument("--ceiling", default="")
+    v.add_argument("--github-output", default=None)
+    v.set_defaults(fn=_cmd_one_off_revision_turns)
 
     w = sub.add_parser("review-turns",
                        help="what one review by the second critic spent, as one line")
