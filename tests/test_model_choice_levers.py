@@ -200,6 +200,18 @@ def free_slug(tree: Path) -> str:
     return next(slug for slug in repo_map if slug not in projects)
 
 
+def builder(raw: dict) -> str:
+    """The copy's first pipeline agent in the Builders — the role a Builders
+    exception moves. Read off the copy, so a save that moves an agent out
+    of the Builders moves this choice with it."""
+    session = set(raw.get("session_agents") or ())
+    return next(name for name, group in raw["agents"].items()
+                if group == "workhorse" and name not in session)
+
+
+BUILDER = builder(real_raw())
+
+
 def exception_model(raw: dict) -> str:
     """A model the copy prices and runs that is not its Builders' first rung —
     what a project exception for the Builders puts first."""
@@ -239,8 +251,8 @@ def test_an_exception_written_in_models_yaml_takes_effect_through_the_literal(ba
     tree, slug, model = excepted
     top = ladder_ids(tree_raw(base), "workhorse")[0]
 
-    before, before_note = select(base, "engineer", "--repo", slug)
-    after, after_note = select(tree, "engineer", "--repo", slug)
+    before, before_note = select(base, BUILDER, "--repo", slug)
+    after, after_note = select(tree, BUILDER, "--repo", slug)
 
     assert before == top
     assert f"project {slug}: no exception, fleet ladder" in before_note
@@ -252,7 +264,7 @@ def test_an_exception_written_in_models_yaml_takes_effect_through_the_literal(ba
 def test_reverting_models_yaml_and_its_literal_rolls_the_exception_back(tmp_path, excepted):
     _, slug, model = excepted
     reverted = build_tree(tmp_path / "reverted")
-    chosen, note = select(reverted, "engineer", "--repo", slug)
+    chosen, note = select(reverted, BUILDER, "--repo", slug)
     assert chosen != model
     assert f"project {slug}: no exception, fleet ladder" in note
 
@@ -266,7 +278,7 @@ def test_the_literal_alone_carries_the_choice_and_models_yaml_choices_are_not_re
     stale = tmp_path / "stale"
     shutil.copytree(tree, stale)
     shutil.copy2(ROOT / "config" / "models.yaml", stale / "config" / "models.yaml")
-    chosen, note = select(stale, "engineer", "--repo", slug)
+    chosen, note = select(stale, BUILDER, "--repo", slug)
     assert chosen == model
     assert f"exception {model} leads the" in note
 
@@ -276,26 +288,26 @@ def test_today_s_regime_an_unreadable_home_runs_on_the_literal(base, excepted):
     DEGRADED, ends with the unreadable clause, and the literal's exception is
     in force."""
     tree, slug, model = excepted
-    chosen, note = select(tree, "engineer", "--repo", slug, **LIVE)
+    chosen, note = select(tree, BUILDER, "--repo", slug, **LIVE)
     assert chosen == model
     assert note.startswith("DEGRADED ")
     assert note.endswith("· model-home: unreadable (BUREAU_MODEL_HOME_TOKEN is set and "
                          "empty, so the token mint failed), running on the defaults in "
                          "the code")
-    plain, plain_note = select(base, "engineer", "--repo", slug, **LIVE)
+    plain, plain_note = select(base, BUILDER, "--repo", slug, **LIVE)
     assert plain != model
     assert "no exception, fleet ladder · model-home: unreadable" in plain_note
 
 
 def test_model_choices_json_is_not_read_on_the_dispatch_path(tmp_path, excepted):
     tree, slug, _ = excepted
-    _, note = select(tree, "engineer", "--repo", slug)
+    _, note = select(tree, BUILDER, "--repo", slug)
     garbled = tmp_path / "garbled"
     shutil.copytree(tree, garbled)
     (garbled / "config" / "model-choices.json").write_text("not json {")
-    _, garbled_note = select(garbled, "engineer", "--repo", slug)
+    _, garbled_note = select(garbled, BUILDER, "--repo", slug)
     (garbled / "config" / "model-choices.json").unlink()
-    _, missing_note = select(garbled, "engineer", "--repo", slug)
+    _, missing_note = select(garbled, BUILDER, "--repo", slug)
     assert garbled_note == note
     assert missing_note == note
 
@@ -310,7 +322,7 @@ def test_an_exception_in_the_home_wins_over_a_literal_that_lacks_it(base):
     doc["projects"].setdefault(slug, {})["workhorse"] = model
     home = write_home(base, doc)
 
-    chosen, note = select(base, "engineer", "--repo", slug, BUREAU_MODEL_HOME_FILE=home)
+    chosen, note = select(base, BUILDER, "--repo", slug, BUREAU_MODEL_HOME_FILE=home)
     assert chosen == model
     assert f"project {slug}: exception {model} leads the" in note
     assert note.endswith(" · model-home: read")
@@ -321,10 +333,10 @@ def test_render_defaults_rolls_the_home_back_to_the_literal(base):
     doc = render_defaults(base)
     doc["projects"].setdefault(slug, {})["workhorse"] = model
     home = write_home(base, doc)
-    assert select(base, "engineer", "--repo", slug, BUREAU_MODEL_HOME_FILE=home)[0] == model
+    assert select(base, BUILDER, "--repo", slug, BUREAU_MODEL_HOME_FILE=home)[0] == model
 
     home = write_home(base, render_defaults(base))
-    chosen, note = select(base, "engineer", "--repo", slug, BUREAU_MODEL_HOME_FILE=home)
+    chosen, note = select(base, BUILDER, "--repo", slug, BUREAU_MODEL_HOME_FILE=home)
     assert chosen != model
     assert f"project {slug}: no exception, fleet ladder · model-home: read" in note
 
@@ -336,7 +348,7 @@ def test_the_home_wins_over_a_literal_that_carries_another_choice(excepted):
     doc = render_defaults(tree)
     doc["projects"].pop(slug, None)
     home = write_home(tree, doc)
-    chosen, note = select(tree, "engineer", "--repo", slug, BUREAU_MODEL_HOME_FILE=home)
+    chosen, note = select(tree, BUILDER, "--repo", slug, BUREAU_MODEL_HOME_FILE=home)
     assert chosen != model
     assert f"project {slug}: no exception, fleet ladder · model-home: read" in note
 
