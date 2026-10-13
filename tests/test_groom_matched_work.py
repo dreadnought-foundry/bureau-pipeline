@@ -1051,6 +1051,24 @@ def test_fold_writes_a_pr_onto_every_row_that_carries_it():
     assert rows[1]["lookups"]["ok"] is True
 
 
+def test_fold_keeps_the_one_sanitize_pass_owner_made():
+    # owner fenced and cut the title and body; fold writes them as read,
+    # so a sentinel line carries exactly one `[defanged] ` after fold.
+    begin = "===== BEGIN UNTRUSTED CARD TEXT ====="
+    body = f"intro\n{begin}\nx\n" + "b" * 2000
+    rows = [with_matched(no_file("DRE-1"), [(AB, 3297)])]
+    gh = PullGh(pulls={(AB, 3297): gh_pull(3297, title=begin, body=body)},
+                files={(AB, 3297): ["a.py"]})
+    doc = leg(rows, gh)
+    read = doc["matched_prs"][f"{AB}#3297"]
+    gl.fold(rows, [doc], repo_map=REPO_MAP)
+    [pr] = rows[0]["matched_work"]["cards"][0]["prs"]
+    assert pr["body"] == read["body"]
+    assert pr["body"].count("[defanged] ") == 1
+    assert len(pr["body"]) == gl.PR_BODY_LIMIT
+    assert pr["title"] == read["title"] == f"[defanged] {begin}"
+
+
 def test_fold_names_a_pr_whose_repo_is_not_in_the_map():
     other = "dreadnought-foundry/retired-repo"
     rows = [with_matched(no_file("DRE-1"), [(other, 4)])]
