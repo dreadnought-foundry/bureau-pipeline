@@ -128,6 +128,8 @@ REPLAN = "re-plan after send-back"
 # critic, never to Green Light, and the first critic's bound parks in Triage.
 HANDOFF = "Plan → second critic"
 PRE_PARK = "First critic — the bound parks in Triage"
+# Its fresh token for the bound exit (DRE-7177), gated exactly as it is.
+PRE_PARK_MINT = "Re-mint bot token — the first critic's bound"
 ACTIVATE = "Activate the approved epic"
 SIGHT = "second critic — cross-epic sight"
 ROUTE = "Route — plan or activate"
@@ -1282,6 +1284,8 @@ SLOT_CLAUSE = "steps.slot.outputs.admitted == 'true'"
 
 GREEN_LIGHT_BOTH = "Epic → Green Light — both critics passed"
 REVIEW_HELD_PASS = "Review — the second critic passed a plan the first critic held"
+# Its fresh token for the bound exit (DRE-7177), gated exactly as it is.
+REVIEW_HELD_PASS_MINT = "Re-mint bot token — the held plan's bound"
 REVIEW_NO_RESULT = "Review — the second critic produced no result"
 REVIEW_DIED = "Review — the review died"
 REVIEW_RE_REVIEW = "Review — the revised plan is reviewed again"
@@ -1459,7 +1463,7 @@ class TheReviewRouteRunsTheSecondCriticBeforeGreenLight(unittest.TestCase):
                    if runs_in_review(s)
                    and "steps.post1.outputs.result == 'PASS'" in gate_of(s)
                    and "steps.post1.outputs.pre_passed != 'true'" in gate_of(s)]
-        self.assertEqual(reached, [REVIEW_HELD_PASS])
+        self.assertEqual(reached, [REVIEW_HELD_PASS_MINT, REVIEW_HELD_PASS])
         run = run_of(exact_step(REVIEW_HELD_PASS))
         self.assertIn(HOLD_WRITE, run)
         self.assertRegex(run, TRIAGE_WRITE)
@@ -1491,7 +1495,8 @@ class TheReviewRouteRunsTheSecondCriticBeforeGreenLight(unittest.TestCase):
                    and "steps.post1.outputs.action == 'hold'" in gate_of(s)
                    and "steps.post1.outputs.bound != 'true'" in gate_of(s)]
         self.assertEqual(reached, [PORTAL_MINT, PORTAL_CHECKOUT, PUBLISHED_SOURCE,
-                                   REVIEW_RECHECK, REVIEW_UPLOAD, REVIEW_RE_REVIEW])
+                                   REVIEW_RECHECK_MINT, REVIEW_RECHECK,
+                                   REVIEW_UPLOAD, REVIEW_RE_REVIEW])
         self.assertIn(RECHECK_OK, gate_of(exact_step(REVIEW_RE_REVIEW)))
         run = run_of(exact_step(REVIEW_RE_REVIEW))
         self.assertIn(f"--reason {rr.REASON_RE_REVIEW} --trigger-state "
@@ -1825,6 +1830,8 @@ PORTAL_MINT = "Mint bot token — portal checkout (review)"
 PORTAL_CHECKOUT = "Plan artifact — portal checkout (review)"
 PUBLISHED_SOURCE = "Plan artifact — published source"
 REVIEW_RECHECK = "Re-check the revised plan — review mode"
+# Its fresh token for the bound exit (DRE-7177), gated exactly as it is.
+REVIEW_RECHECK_MINT = "Re-mint bot token — re-check (review mode)"
 REVIEW_UPLOAD = "Plan artifact — upload source (review)"
 RECHECK_OK = "steps.recheck_review.outputs.ok == 'true'"
 POST_REPLAN = "Re-plan after the second critic sent it back"
@@ -2167,11 +2174,11 @@ class ThePlanRouteHandsAPassedPlanToTheSecondCritic(unittest.TestCase):
 
     def test_the_bound_reaches_exactly_one_step(self):
         reached = [s.get("name") for s in steps() if PRE_BOUND in gate_of(s)]
-        self.assertEqual(reached, [PRE_PARK])
+        self.assertEqual(reached, [PRE_PARK_MINT, PRE_PARK])
         bound_readers = [s.get("name") for s in steps()
                          if re.search(r"steps\.pre[12]\.outputs\.bound == 'true'",
                                       gate_of(s))]
-        self.assertEqual(bound_readers, [PRE_PARK])
+        self.assertEqual(bound_readers, [PRE_PARK_MINT, PRE_PARK])
         for known in ({"steps.pre1.outputs.action": "hold",
                        "steps.pre1.outputs.bound": "true",
                        "steps.pre2.outputs.action": "",
