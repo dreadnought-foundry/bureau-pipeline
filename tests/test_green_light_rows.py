@@ -269,7 +269,9 @@ class TestTheRepositoryPasses:
         assert set(declared) == {ESCALATE, CMD_EXIT, PARK, REVIEW_CAP, EPIC_GROWTH,
                                  BLOCKER_ASK, RELEASED_EPIC}
         # The cause park writes no lane since DRE-6837, so it has no record.
-        counts = {ESCALATE: 7, CMD_EXIT: 2, PARK: 2, REVIEW_CAP: 1, EPIC_GROWTH: 1,
+        # The Triage repair's question is the eighth caller of the escalation
+        # (DRE-7178).
+        counts = {ESCALATE: 8, CMD_EXIT: 2, PARK: 2, REVIEW_CAP: 1, EPIC_GROWTH: 1,
                   BLOCKER_ASK: 1, RELEASED_EPIC: 1}
         for (module, function), callers in declared.items():
             report = lane_callers.callers_of(module, function, str(ROOT))

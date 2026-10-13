@@ -35,8 +35,8 @@
     },
     "plan-critic-bound": {
       "lifts": "manual",
-      "why": "Every bound park ends in Triage for an operator and the way back is plan_critic.REAPPROVE_HOW, a person's act that leaves no fact a sweep can read.",
-      "lift_sends": "nothing moves"
+      "why": "Every bound park ends in Triage, and no sweep reads a fact that lifts it. It gets one automatic repair first, once per card (scripts/triage_repair.py, DRE-7178): the planner answers every finding of the park note, and the repair lifts the hold with because=triage-repair as it moves the card out. After that repair, or one that did not finish, the way back is plan_critic.REAPPROVE_HOW, a person's act.",
+      "lift_sends": "Triage to Planning (rewritten) or Green Light (a question), when the Triage repair lifts it; nothing moves otherwise"
     },
     "fix-dispute": {
       "lifts": "new-head",
@@ -77,7 +77,7 @@
     "limit-recovery": "limit_recovery: a held card's stages are not re-entered, save its sync bookkeeping."
   },
   "stamp": "🔒 hold: reason=<code> at=<qualifier or none> lifts=<lift-kind> by=<writer-file>",
-  "lift_line": "🔓 hold lifted: reason=<code> because=<lift-kind or card-closed or operator> by=<writer-file>",
+  "lift_line": "🔓 hold lifted: reason=<code> because=<lift-kind or card-closed or operator or triage-repair> by=<writer-file>",
   "sites": [
     {
       "file": "scripts/reconcile.py",

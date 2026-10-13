@@ -504,6 +504,44 @@ skipping` instead.
 The console learned the act first (DRE-6440): the `act registry consumers`
 job refuses a row the console does not carry.
 
+## The row that records a Triage repair — `🩹 triage-repair` (DRE-7178)
+
+| Field | Value |
+| -- | -- |
+| tag | `triage-repair-receipt` |
+| act name | `triage-repair` |
+| kind · state · next actor | `recovery` · `dispatched` · `plan.yml` |
+| discharges | nothing |
+| cadence | `6900` — plan.yml's plan job, `timeout-minutes: 115`, the run a rewritten card's entry to Planning fires |
+| emitted by | `scripts/triage_repair.py`, at the `pipeline_act.receipt("triage-repair", …)` call in `_post` |
+
+A card the plan critic's bound parks in Triage, held `plan-critic-bound`, gets
+one automatic repair, once per card (epic DRE-7174). `triage_repair.py select`
+reads every finding of the newest park note off the card's whole thread;
+`claim` posts the first receipt before the planner runs; `apply` posts the
+last, after every other write of its outcome:
+
+    🩹 triage-repair: started — … The description as it stood before the repair, so a person can put it back:
+    🩹 triage-repair: rewritten — … The findings, each with its answer:
+    🩹 triage-repair: asked — … the card's description is unchanged.
+    🩹 triage-repair: unfinished — <what failed or was missing>. Writes already made: <list>.
+
+`replanned` and `split` are the epic re-plan's and the split's (DRE-7181,
+DRE-7182). **The receipt key is live**: a pipeline-authored comment whose
+first line opens `🩹 triage-repair:` anywhere on the card is the card's one
+repair, so `select` answers `spent` and `claim` exits 3. A comment of that
+shape from any other author counts for nothing.
+
+The tag is `triage-repair-receipt`, never the bare act name. The repair lifts
+the hold with the contract's line, `🔓 hold lifted: reason=plan-critic-bound
+because=triage-repair by=triage_repair.py`, and no hold line may carry a
+registry tag (`docs/holds.md`), so a `tag in body` count of this act never
+reads a lift line as one of its receipts.
+
+The console must learn this act before this row merges. The `act registry
+consumers` job refuses a row the console does not carry, and it knows an act
+by its tag or its name.
+
 ## Why this exists
 
 The console has always checked this. Its

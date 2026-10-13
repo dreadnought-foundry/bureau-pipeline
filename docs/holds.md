@@ -47,7 +47,7 @@ moves itself (below).
 | `dead-run-cap` | `unpark-marker` | Only an operator's `unpark` resets the death budget, and its `dead-run-budget-reset` marker is the fact. | Nothing moves |
 | `turn-cap-park` | `unpark-marker` | The same budget reset. Two turn-cap deaths past green are the most a card ever gets. | Nothing moves |
 | `epic-rereview-twice` | `manual` | The park ends in Triage for an operator. The way back, `plan_critic.REAPPROVE_HOW`, is a person's act that leaves no fact a sweep can read. | Nothing moves |
-| `plan-critic-bound` | `manual` | Every bound park ends in Triage for an operator, and the way back is the same person's act. | Nothing moves |
+| `plan-critic-bound` | `manual` | Every bound park ends in Triage. It gets one automatic repair first, once per card (`scripts/triage_repair.py`, DRE-7178), which lifts it with `because=triage-repair`. After that, the way back is the same person's act. | Triage → Planning (rewritten) or Green Light (a question), when the repair lifts it; otherwise nothing moves |
 | `fix-dispute` | `new-head` | The fix loop's budget was spent on one head. A new head runs the review, the gate and the fix loop again. | Triage → In Review |
 | `unfixable-check` | `new-head` | The red check was read on one head (its receipt is keyed `unfixable-check-hold @<sha8>`). A new head is read again. | Triage → In Review |
 | `operator-step` | `blockers-terminal` | A planner-filed operator step is a person's to do once the work before it is finished. The card's `blockedBy` relations say when, and the sweep's promotion gate reads them. | Backlog → Hand-work |
@@ -55,7 +55,10 @@ moves itself (below).
 
 A `manual` hold — `epic-rereview-twice`, `plan-critic-bound`, `manual`, and any
 label with no stamp — is lifted only by `card-closed` or by a person. Outside
-Done or Canceled, nothing in this epic lifts it.
+Done or Canceled, nothing in this epic lifts it. The one exception is the
+Triage repair (DRE-7178): a `plan-critic-bound` hold is lifted once per card by
+`scripts/triage_repair.py`, with `because=triage-repair`, as it moves the
+repaired card to Planning or Green Light.
 
 A `new-head` hold that is still stuck on the new head is re-parked with a fresh
 stamp by the review, the gate or the fix loop. For a fix dispute there is a
@@ -168,7 +171,15 @@ posts only the stamp, through `hold.post_stamp`: `dead_run.py park --reason
 A writer other than the hygiene agent that lifts a hold posts the lift line
 through `hold.lift`, after the label comes off:
 
-    🔓 hold lifted: reason=<code> because=<lift-kind or card-closed or operator> by=<writer-file>
+    🔓 hold lifted: reason=<code> because=<lift-kind or card-closed or operator or triage-repair> by=<writer-file>
+
+`triage-repair` is the Triage repair's own lift (DRE-7178), and no lift kind:
+no sweep reads a fact and lifts on it. `scripts/triage_repair.py apply` lifts
+a `plan-critic-bound` hold once per card, after the outcome's own writes and
+before it moves the card out of Triage, so the plan run the move fires is not
+refused for the hold:
+
+    🔓 hold lifted: reason=plan-critic-bound because=triage-repair by=triage_repair.py
 
 The hygiene agent's own lift is its receipt instead: act `hygiene-hold-clear`,
 tag `hyg-hold-cleared`, cause `reason=<code> because=<lift-kind>`.
