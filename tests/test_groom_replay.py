@@ -196,7 +196,14 @@ def test_report_keeps_dre_4417_on_planning_as_that_morning_did():
     line = _card_lines(groom_replay.report(proposal))["DRE-4417"]
     summary = _fixture()["verdicts"]["DRE-4417"]["summary"]
     assert line == (f"groom-replay: DRE-4417 planning unverified — {summary} "
-                    f"— proof: — — rested on: —")
+                    f"(no proof) — proof: — — rested on: —")
+
+
+def test_report_names_why_a_card_was_excluded():
+    proposal = _fixture()["proposal"]
+    line = _card_lines(groom_replay.report(proposal))["DRE-4666"]
+    assert line.startswith("groom-replay: DRE-4666 excluded excluded — Not judged")
+    assert "(parent epic with 3 open children) — proof: —" in line
 
 
 def test_report_count_line_adds_up_to_the_window():
@@ -220,16 +227,17 @@ def test_report_after_todays_apply_names_rewrite_and_not_verified(tmp_path):
     recorded verdicts, then `report`."""
     fx = _fixture()
     base = groom_replay.base(copy.deepcopy(fx["proposal"]))
+    windowed = [card for card, _ in gva.window(base)]
     after = gva.apply(base, {c: dict(v) for c, v in fx["verdicts"].items()})
     lines = groom_replay.report(after)
     ended = {k: line.split()[2] for k, line in _card_lines(lines).items()}
     assert [k for k in ended if ended[k] == "rewrite"] == REWRITE
     assert [k for k in ended if ended[k] == "not-verified"] == ["DRE-4417"]
     assert [k for k in ended if ended[k] == "not-now"] == SPARES
-    assert ended.keys() == {c for c, _ in gva.window(base)}
+    assert set(ended) == set(windowed)
     m = COUNT_RE.fullmatch(lines[-1])
     n, *counts = (int(g) for g in m.groups())
-    assert n == sum(counts) == len(gva.window(base))
+    assert n == sum(counts) == len(windowed) == 20
     assert counts[2:4] == [len(REWRITE), 1]
 
 
