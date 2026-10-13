@@ -248,6 +248,12 @@ set -e
 #   one copy of the suite truncated the draft another was about to post, and
 #   the suite-green job, which runs its cases side by side, posted an empty
 #   question.
+# 2026-10-13, DRE-7163. `decide`'s action is read off its first line by
+#   parameter expansion, never through a pipe into `head`. `head` exits once
+#   it has that line, and the scenario harnesses run this file under
+#   pipefail. A `printf` write that landed after `head` exited died of
+#   SIGPIPE, `set -e` ended the script and no receipt was posted. It struck
+#   at random in the suite-green job and held the stable channel.
 # The agent's three notes sit where the prompt tells it to write them, /tmp.
 # AGENT_NOTES_DIR moves them, and only a test sets it (DRE-6961).
 NOTES_DIR="${AGENT_NOTES_DIR:-/tmp}"
@@ -445,7 +451,7 @@ else
   # shellcheck disable=SC2086  # ERR_FLAGS is deliberately word-split
   DECISION=$(python3 .bureau-pipeline/scripts/dead_run.py decide \
     "${PRIOR:-0}" $ERR_FLAGS --failed-step "$FAILED_STEP" --run-url "$RUN_URL" --handback-file "$NOTES_DIR"/agent-handback.txt)
-  ACTION=$(printf '%s\n' "$DECISION" | head -1)
+  ACTION="${DECISION%%$'\n'*}"  # line 1 with no pipe for `head` to close early (DRE-7163)
   BODY=$(printf '%s\n' "$DECISION" | tail -n +3)
   if [ "$ACTION" = "hold" ] && ! python3 .bureau-pipeline/scripts/dead_run.py park "$CARD" --reason "$PARK_REASON"; then ACTION="hold-unlanded"; fi
   if [ "$ACTION" = "hold-unlanded" ]; then BODY=$(python3 .bureau-pipeline/scripts/dead_run.py park-unlanded --run-url "$RUN_URL" "$PARK_TAG_FLAGS"); fi
