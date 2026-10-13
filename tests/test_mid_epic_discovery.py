@@ -165,7 +165,7 @@ class TestVerdictBeforePromotion:
         once, and sent to Planning for a verdict (DRE-5900)."""
         board = _PromotionBoard(created_at=AFTER, comments=[], routing=())
         assert board.promote() == 0
-        assert board.advanced == [("DRE-2740", "Planning", "Backlog")]
+        assert board.advanced == [("DRE-2740", "Planning", reconcile.QUEUE_FROM)]
         assert board.surfaced_once(mid_epic.NO_VERDICT_TAG)
 
     def test_the_sweep_promotes_it_once_the_verdict_is_there(self):
@@ -174,7 +174,7 @@ class TestVerdictBeforePromotion:
         )
         board = _PromotionBoard(created_at=AFTER, comments=[verdict])
         assert board.promote() == 1
-        assert board.advanced == [("DRE-2740", "Todo", "Backlog")]
+        assert board.advanced == [("DRE-2740", "Todo", reconcile.QUEUE_FROM)]
 
     def test_the_sweep_still_promotes_the_planned_roster(self):
         """Guard the guard: the same board with a card the plan anticipated
@@ -238,7 +238,7 @@ class TestPlanningsVerdictIsTheSignOff:
     def test_the_dre_5806_shape_promotes_after_one_planning_pass(self):
         board = _PromotionBoard(created_at=AFTER, comments=[])
         assert board.promote() == 1
-        assert board.advanced == [("DRE-2740", "Todo", "Backlog")]
+        assert board.advanced == [("DRE-2740", "Todo", reconcile.QUEUE_FROM)]
         assert not any(mid_epic.NO_VERDICT_TAG in b for _, b in board.posted)
 
 
@@ -246,7 +246,7 @@ class TestNeitherVerdictGoesToPlanningOnce:
     def test_it_is_refused_said_once_and_sent_to_planning(self):
         board = _PromotionBoard(created_at=AFTER, comments=[], routing=())
         assert board.promote() == 0
-        assert board.advanced == [("DRE-2740", "Planning", "Backlog")]
+        assert board.advanced == [("DRE-2740", "Planning", reconcile.QUEUE_FROM)]
         notices = [b for _, b in board.posted if mid_epic.NO_VERDICT_TAG in b]
         assert len(notices) == 1
         notice = notices[0]

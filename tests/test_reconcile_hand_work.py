@@ -112,7 +112,7 @@ class TestThePromoterReadsTheDestination:
                 mock.patch.object(reconcile.linear_ops, "cmd_comment"), \
                 mock.patch.object(reconcile.linear_ops, "count_comments", return_value=0):
             assert reconcile.promote_ready(active_count=0) == 1
-        assert calls == [("DRE-3385", HAND_WORK, "Backlog")]
+        assert calls == [("DRE-3385", HAND_WORK, reconcile.QUEUE_FROM)]
 
     def test_a_workbench_card_is_stamped_nothing_and_moved(self):
         """WORKBENCH declares no marks since DRE-6227: `hand-built` is the

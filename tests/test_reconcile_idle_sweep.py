@@ -330,7 +330,8 @@ def test_the_idle_check_is_one_small_page_that_fails_open():
     assert 1 < reconcile.IDLE_PAGE <= 100
     # Hand-work counts as in motion (DRE-5322): a person's card there is owed
     # the move to review and the idle alarm, which an idle pass skips.
-    assert reconcile.IDLE_LANES == ("Todo", "In Progress", "In Review", "Hand-work", "Backlog")
+    assert reconcile.IDLE_LANES == ("Todo", "In Progress", "In Review", "Hand-work",
+                                   *reconcile.QUEUE_LANES)
 
 
 # ── The label match is routing's, not an exact string (PR #687 critic, item 1) ──
