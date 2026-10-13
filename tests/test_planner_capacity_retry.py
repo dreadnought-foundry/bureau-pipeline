@@ -30,16 +30,17 @@ classifier's guarantee, as steps:
 A long genuine failure — turn cap, many turns, real spend — is not out of
 capacity, gets no second run, and fails the job as before.
 
-The decisions run on the frozen model files (tests/model_fixture.py,
-DRE-6884), so a console save that moves the planner or reorders its ladder
-leaves these rules standing: every model id below is a rung read off the
-fixture's judgement ladder, named for its place on it.
+The decisions run in a fixture tree (tests/model_fixture.py) built with
+`regenerate=False`, its selector on the frozen home document
+(`model_fixture.fixture_home()`, handed over through `home_env`, DRE-6990), so
+a console save that moves the planner or reorders its group leaves these rules
+standing: every model id below is a model of the document's judgement group,
+named for its place on it.
 """
 
 from __future__ import annotations
 
 import json
-import os
 import shutil
 import subprocess
 import sys
@@ -56,10 +57,14 @@ sys.path.insert(0, str(ROOT / "tests"))
 
 import model_fixture  # noqa: E402
 
-# The planner's walk in the frozen files: its top rung, the one below it, and
-# the last, which has nowhere to fall.
-JUDGEMENT = model_fixture.ladder(model_fixture.fixture_config(), "judgement")
+# The planner's walk in the frozen document: its top rung, the one below it,
+# and the last, which has nowhere to fall.
+HOME = model_fixture.fixture_home()
+JUDGEMENT = model_fixture.ladder(HOME, HOME["agents"]["planner"])
 TOP, SECOND, LAST = JUDGEMENT[0], JUDGEMENT[1], JUDGEMENT[-1]
+# A model the run also used a little of, on no rung of the planner's walk.
+HELPER = next(m for group in HOME["groups"] for m in model_fixture.ladder(HOME, group)
+              if m not in JUDGEMENT)
 SPEND_LIMIT = ("You've hit your monthly spend limit. Switch to another model to "
                "continue.")
 MODEL_ACTION = "anthropics/claude-code-action"
@@ -105,7 +110,7 @@ def _success(answered):
     return [{"type": "result", "subtype": "success", "is_error": False,
              "num_turns": 40, "total_cost_usd": 4.1, "result": "planned",
              "modelUsage": {answered: {"outputTokens": 30000},
-                            "claude-haiku-4-5-20251001": {"outputTokens": 90}}}]
+                            HELPER: {"outputTokens": 90}}}]
 
 
 def _write(tmp: Path, name: str, payload) -> str:
@@ -117,7 +122,7 @@ def _write(tmp: Path, name: str, payload) -> str:
 def _pipeline_tree(dest: Path) -> Path:
     """Today's scripts on the frozen model files, with the rest of the repo's
     config beside them — the lane contract and the others the steps read."""
-    tree = model_fixture.fixture_tree(dest)
+    tree = model_fixture.fixture_tree(dest, regenerate=False)
     for path in sorted((ROOT / "config").iterdir()):
         if path.is_file() and not (tree / "config" / path.name).exists():
             shutil.copy2(path, tree / "config" / path.name)
@@ -141,7 +146,7 @@ def teardown_module():
 
 
 def _cli(*args, env_extra=None):
-    env = dict(os.environ)
+    env = model_fixture.home_env(SCRIPT.parent.parent, HOME)
     env.update(env_extra or {})
     return subprocess.run([sys.executable, str(SCRIPT), *map(str, args)],
                           capture_output=True, text=True, env=env)
@@ -167,6 +172,8 @@ def test_a_spend_limit_refusal_retries_on_the_next_rung(tmp_path):
     assert got["retry"] == "true"
     assert got["model"] == SECOND
     assert got["because"] == "monthly spend limit"
+    # The rung below was read off the document, not the defaults in the code.
+    assert "model-home: read" in proc.stderr, proc.stderr
 
 
 @pytest.mark.parametrize("payload", [_long_failure(), _turn_cap()],
@@ -416,14 +423,15 @@ def test_the_second_critic_decision_reads_the_re_plan_that_counted():
 # --------------------------------------------------------------------------- #
 
 def _bash(step: dict, tmp: Path, env_extra: dict):
-    root = tmp / ".bureau-pipeline" / "scripts"
+    tree = tmp / ".bureau-pipeline"
+    root = tree / "scripts"
     if not root.exists():
-        _pipeline_tree(tmp / ".bureau-pipeline")
+        _pipeline_tree(tree)
         (root / "linear_ops.py").write_text(
             "import json,os,sys\n"
             "open(os.environ['STUB_LINEAR_LOG'],'a').write(json.dumps(sys.argv[1:])+'\\n')\n")
     out = tmp / "gh_output"
-    env = dict(os.environ)
+    env = model_fixture.home_env(tree, HOME)
     env.update({"GITHUB_OUTPUT": str(out), "RUNNER_TEMP": str(tmp),
                 "GITHUB_SERVER_URL": "https://github.com",
                 "GITHUB_REPOSITORY": "dreadnought-foundry/portico",
