@@ -720,6 +720,72 @@ class TestTheEpicGrowthQuestion:
 
 
 @pytest.mark.usefixtures("declared_callers")
+class TestTheDeferredRelease:
+    """A release the train deferred (DRE-5234): the train files one `no-code`
+    card of its own in Green Light, from one function and no other. The kind
+    is declared before its site exists — DRE-5235 lands the site and its
+    record together — so these tests hand the check the record themselves."""
+
+    UNIT = "release_deferral.py#file_deferral"
+
+    def _record(self, where: str) -> dict:
+        return {"kind": "deferred-release", "writer": "release-train.yml",
+                "where": where, "evidence": "x", "card": "DRE-0"}
+
+    def test_the_kind_is_declared_with_no_record_yet(self):
+        assert grl.DEFERRED_RELEASE_SITE == self.UNIT
+        assert "deferred-release" in grl.kinds()
+        assert [r for r in grl.arrivals() if r["kind"] == "deferred-release"] == []
+
+    def test_a_deferred_release_row_anywhere_else_fails_naming_the_site(self):
+        contract = _contract()
+        _entrance(contract)["arrivals"].append(
+            self._record("release_train.py#run_surface"))
+        found = grl.problems(contract=contract)
+        site = _named(found, grl.DEFERRED_RELEASE_SITE)
+        assert len(site) == 1, found
+        assert _named(site, "release_train.py#run_surface", "deferred-release"), site
+
+    def test_a_deferred_release_row_at_the_site_raises_no_site_problem(self):
+        contract = _contract()
+        _entrance(contract)["arrivals"].append(self._record(self.UNIT))
+        found = grl.problems(contract=contract)
+        assert _named(found, "is declared a 'deferred-release' arrival") == [], found
+        assert grl._gate_problems(self._record(self.UNIT), [], str(ROOT),
+                                  grl.lane_name()) == []
+
+    def test_the_contract_names_the_kind_and_the_train_as_its_writer(self):
+        green = lane_contract.lane(grl.lane_name())["clauses"]
+        text = green["entrance"]["text"]
+        assert text.startswith("Seven kinds of row, and no other")
+        for needle in ("(g) The release train deferred a surface",
+                       "RELEASE ROLLED BACK:", "RELEASE BROKEN:",
+                       "release deferred — <first 80 characters of the reason>",
+                       "`Released as <tag>`", "approval of DRE-5234"):
+            assert needle in text, needle
+        assert "release-train.yml" in green["writers"]["who"]
+        assert "DRE-5234" in green["writers"]["text"]
+        done = lane_contract.lane("Done")["clauses"]
+        assert "release-train.yml" in done["writers"]["who"]
+        assert "`Released as <tag>` comment (DRE-5234)" in done["entrance"]["text"]
+        assert "the verified tag its `Released as <tag>` comment names" in (
+            done["evidence"]["text"])
+
+    def test_the_glossary_no_longer_says_the_train_moves_no_card(self):
+        writers = lane_contract.load()["writers"]
+        what = writers["release-train.yml"]["what"]
+        assert "it moves no card" not in what
+        assert "straight into Green Light" in what and "closes that card Done" in what
+        readme = " ".join(writers["_readme"])
+        assert "`release-train.yml` is one" not in readme
+        assert "until DRE-5234 made it a writer of Green Light and Done" in readme
+        # The glossary renders; its `_readme` prose does not.
+        rendered = (ROOT / "docs" / "lane-contract.md").read_text(encoding="utf-8")
+        assert "closes that card Done when the surface next cuts a verified tag" in rendered
+        assert "it moves no card, and is here as the actor" not in rendered
+
+
+@pytest.mark.usefixtures("declared_callers")
 class TestTheProofRunPark:
     """The proof run's park (DRE-5925): a press only the CEO can make parks the
     card in Green Light, from the result step of `proof-task.yml`. It is an
