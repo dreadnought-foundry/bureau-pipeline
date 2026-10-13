@@ -708,18 +708,21 @@ jobs:
           # model is the silently-weakened critic DRE-2317 exists to prevent.
           case "$WHY" in DEGRADED*) echo "::warning::$WHY" ;; esac
 
-      # The effort level of the model a shadow replay names (DRE-7194). The
-      # Select model step above still runs, unchanged, and its level is the
-      # selected model's; a replay on another model runs at that model's own
-      # declared level, read from the same config. Empty when it declares
-      # none — no `--effort` at all.
+      # The model a shadow replay names and its effort level (DRE-7194), from
+      # one step, as the critic's replay has them (DRE-7193): the level is
+      # the one computed for the model the agent runs. The Select model step
+      # above still runs, unchanged, and its level is the selected model's; a
+      # replay on another model runs at that model's own declared level, read
+      # from the same config. Empty when it declares none — no `--effort` at
+      # all. Pinned by tests/test_model_effort.py.
       - name: Effort for the named model (shadow)
-        id: shadow_effort
+        id: shadow_model
         if: inputs.shadow && steps.scope.outputs.in_scope == 'true'
         env:
           MODEL: ${{ inputs.model }}
         run: |
           EFFORT=$(python3 .bureau-pipeline/scripts/model_fallback.py effort "$MODEL" 2>/dev/null || true)
+          echo "model=$MODEL" >> "$GITHUB_OUTPUT"
           echo "effort_arg=${EFFORT:+--effort $EFFORT}" >> "$GITHUB_OUTPUT"
           echo "shadow replay model: $MODEL${EFFORT:+ (effort $EFFORT)}"
 
@@ -825,8 +828,8 @@ jobs:
           # clock (caught by the pipeline itself overnight), and this one.
           claude_args: |
             --max-turns 120
-            --model ${{ inputs.shadow && inputs.model || steps.model.outputs.model }}
-            ${{ steps.shadow_effort.outputs.effort_arg }}${{ !inputs.shadow && steps.model.outputs.effort_arg || '' }}
+            --model ${{ inputs.shadow && steps.shadow_model.outputs.model || steps.model.outputs.model }}
+            ${{ inputs.shadow && steps.shadow_model.outputs.effort_arg || !inputs.shadow && steps.model.outputs.effort_arg || '' }}
             --allowedTools "Bash,Edit,Write,Read,Glob,Grep,WebSearch,WebFetch"
           prompt: |
             Read .bureau-pipeline/agent-context.md FIRST — your assembled
@@ -994,8 +997,8 @@ jobs:
           # rest of the block is still kept in sync with attempt 1.
           claude_args: |
             --max-turns 160
-            --model ${{ inputs.shadow && inputs.model || steps.model.outputs.model }}
-            ${{ steps.shadow_effort.outputs.effort_arg }}${{ !inputs.shadow && steps.model.outputs.effort_arg || '' }}
+            --model ${{ inputs.shadow && steps.shadow_model.outputs.model || steps.model.outputs.model }}
+            ${{ inputs.shadow && steps.shadow_model.outputs.effort_arg || !inputs.shadow && steps.model.outputs.effort_arg || '' }}
             --allowedTools "Bash,Edit,Write,Read,Glob,Grep,WebSearch,WebFetch"
           prompt: |
             Read .bureau-pipeline/agent-context.md FIRST — your assembled
