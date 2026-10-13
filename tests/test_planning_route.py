@@ -1424,6 +1424,14 @@ class TestTheWaitActIsDeclared:
         assert row["emits"]["file"] == ".github/workflows/plan.yml"
         assert f"--act={WAIT_ACT}" in row["emits"]["anchor"]
 
+    def test_the_act_means_names_the_queue_the_receipt_names(self):
+        # DRE-6750: `means` is what the console says for this act, so it
+        # names the lane the receipt and the write name.
+        acts = json.loads((ROOT / "config" / "pipeline-acts.json").read_text(encoding="utf-8"))
+        row = next(a for a in acts["acts"] if a["name"] == WAIT_ACT)
+        assert "waits in Queued" in row["means"]
+        assert "Backlog" not in row["means"]
+
     def test_the_registry_checks_clean(self):
         import pipeline_act
         assert pipeline_act.problems() == []
