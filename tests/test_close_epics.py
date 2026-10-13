@@ -28,6 +28,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
 os.environ.setdefault("REPO", "dreadnought-foundry/agent-bureau")
 os.environ.setdefault("REPO_SLUG", "agent-bureau")
 
+import lane_contract  # noqa: E402
 import reconcile  # noqa: E402
 
 
@@ -352,7 +353,7 @@ def _board(lane: str | None, kids=FINISHED) -> budget.EpicBoard:
     if lane is None:
         return budget.EpicBoard(active=active, backlog=backlog)
     epic = budget._epic(EPIC, state=lane)
-    if lane == reconcile.BACKLOG_LANE:
+    if lane in reconcile.QUEUE_LANES:
         backlog = backlog + [epic]
     else:
         active = active + [epic]
@@ -377,7 +378,7 @@ def test_a_finished_epic_in_backlog_is_closed_by_one_full_sweep(board_pins):
     """The epic is in Backlog and in no swept lane — the shape that stayed
     open — and one full sweep closes it with the same receipt and advances
     the chain behind it."""
-    fake = _board(reconcile.BACKLOG_LANE)
+    fake = _board(reconcile.QUEUE_LANE)
     assert all(c["identifier"] != EPIC for c in fake.active)
     state, comment, advance = _sweep(fake)
     assert _closed(state), state.call_args_list
@@ -390,7 +391,7 @@ def test_a_finished_epic_in_backlog_is_closed_by_one_full_sweep(board_pins):
 
 
 def test_a_backlog_epic_with_an_open_child_stays_open(board_pins):
-    state, comment, advance = _sweep(_board(reconcile.BACKLOG_LANE,
+    state, comment, advance = _sweep(_board(reconcile.QUEUE_LANE,
                                             kids=("Done", "In Progress")))
     assert not _closed(state)
     advance.assert_not_called()
@@ -399,7 +400,7 @@ def test_a_backlog_epic_with_an_open_child_stays_open(board_pins):
 def test_a_backlog_epic_whose_children_are_all_canceled_stays_open(board_pins):
     """Every child Canceled and none Done is not a completion — in Backlog as
     in every other lane."""
-    state, _, advance = _sweep(_board(reconcile.BACKLOG_LANE,
+    state, _, advance = _sweep(_board(reconcile.QUEUE_LANE,
                                       kids=("Canceled", "Canceled")))
     assert not _closed(state)
     advance.assert_not_called()
@@ -481,7 +482,7 @@ def _merge_close(monkeypatch, parent_state):
 def test_the_merge_path_closes_a_finished_parent_in_backlog(board_pins, monkeypatch):
     """DRE-4819's last child closed on a merge: this is the site that would
     have closed it."""
-    state, advance = _merge_close(monkeypatch, reconcile.BACKLOG_LANE)
+    state, advance = _merge_close(monkeypatch, reconcile.QUEUE_LANE)
     assert _closed(state), state.call_args_list
     advance.assert_called_once_with(EPIC)
 
@@ -495,17 +496,18 @@ def test_the_merge_path_closes_nothing_whose_parent_is_in_planning(board_pins, m
 
 
 def test_epic_close_lanes_are_the_sweep_lanes_and_backlog():
-    assert reconcile.EPIC_CLOSE_LANES == reconcile.SWEEP_STATES + (reconcile.BACKLOG_LANE,)
-    assert set(reconcile.EPIC_CLOSE_LANES) == {"Todo", "In Progress", "In Review", "Backlog"}
+    assert reconcile.EPIC_CLOSE_LANES == reconcile.SWEEP_STATES + reconcile.QUEUE_LANES
+    assert set(reconcile.EPIC_CLOSE_LANES) == {
+        "Todo", "In Progress", "In Review", *lane_contract.QUEUE_LANES}
 
 
 def test_both_sites_read_epic_close_lanes(board_pins, monkeypatch):
     """Take Backlog out of the one constant and NEITHER site closes from it —
     so both read it, and neither keeps a lane list of its own."""
     monkeypatch.setattr(reconcile, "EPIC_CLOSE_LANES", reconcile.SWEEP_STATES)
-    state, _, _ = _sweep(_board(reconcile.BACKLOG_LANE))
+    state, _, _ = _sweep(_board(reconcile.QUEUE_LANE))
     assert not _closed(state), "the full sweep closed from a lane the constant left out"
-    state, _ = _merge_close(monkeypatch, reconcile.BACKLOG_LANE)
+    state, _ = _merge_close(monkeypatch, reconcile.QUEUE_LANE)
     assert not _closed(state), "the merge path closed from a lane the constant left out"
 
 
@@ -528,7 +530,7 @@ def test_the_docstrings_name_the_lanes_an_epic_closes_from():
     for fn in (reconcile.close_finished_epics, reconcile._close_epic_if_finished):
         doc = fn.__doc__ or ""
         assert "EPIC_CLOSE_LANES" in doc, fn.__name__
-        for lane in ("Todo", "In Progress", "In Review", "Backlog"):
+        for lane in ("Todo", "In Progress", "In Review", "Queued"):
             assert lane in doc, (fn.__name__, lane)
 
 

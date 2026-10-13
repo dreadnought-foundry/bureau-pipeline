@@ -53,6 +53,7 @@ os.environ.setdefault("REPO_SLUG", "agent-bureau")
 os.environ.setdefault("GH_TOKEN", "x")
 
 import dead_run  # noqa: E402
+import lane_contract  # noqa: E402
 import limit_recovery  # noqa: E402
 import reconcile  # noqa: E402
 
@@ -249,9 +250,10 @@ def test_build_from_todo_is_a_redispatch_not_a_same_lane_write():
     assert "re-dispatched" in s.comments[0][1].lower()
 
 
-def test_build_from_backlog_moves_to_todo():
+@pytest.mark.parametrize("lane", lane_contract.QUEUE_LANES)
+def test_build_from_the_queue_moves_to_todo(lane):
     s = Seams()
-    s.recover([card(lane="Backlog", bodies=[marker()])])
+    s.recover([card(lane=lane, bodies=[marker()])])
     assert s.moves == [("DRE-3062", "Todo")]
 
 
@@ -264,11 +266,21 @@ def test_planning_stage_from_planning_bounces_out_through_intake_and_back(stage)
     assert "Planning" in s.comments[0][1]
 
 
-@pytest.mark.parametrize("lane", ["Backlog", "Intake", "Triage"])
+@pytest.mark.parametrize("lane", ["Intake", "Triage", *lane_contract.QUEUE_LANES])
 def test_planning_stage_from_before_planning_exit_enters_planning_once(lane):
     s = Seams()
     s.recover([card(ident="DRE-3162", lane=lane, bodies=[marker(stage="plan")])])
     assert s.moves == [("DRE-3162", "Planning")]
+    assert s.reruns == []
+
+
+def test_the_replan_lanes_read_the_queue_under_either_name():
+    """DRE-6745: a card parked in the queue sits under `Queued` or the lane it
+    replaces, so `REPLAN_FROM` is read off `QUEUE_LANES` — never a name of
+    its own."""
+    assert {"Queued", "Backlog"} <= set(limit_recovery.REPLAN_FROM)
+    assert set(lane_contract.QUEUE_LANES) <= set(limit_recovery.REPLAN_FROM)
+    assert {"Intake", "Triage"} <= set(limit_recovery.REPLAN_FROM)
 
 
 @pytest.mark.parametrize("stage", ["fix", "review", "sync"])
@@ -1152,6 +1164,18 @@ def test_under_the_window_every_row_is_today_s_behavior_line_for_line(row):
         unknown.moves, unknown.reruns, unknown.dispatched)
     assert not any(limit_recovery.STOOD_PHRASE in line for line in young_lines)
     assert not any(limit_recovery.STOOD_PHRASE in body for _, body in young.comments)
+
+
+@pytest.mark.parametrize("lane", ["Backlog", "Queued"])
+def test_the_handoff_names_the_queue_lane_to_park_in(monkeypatch, lane):
+    """DRE-6745: the hand-off tells a person to park the card in `QUEUE_LANE`
+    — `Backlog` under the shipped contract, `Queued` once DRE-6742 moves the
+    planning exit."""
+    assert limit_recovery.QUEUE_LANE == "Backlog"
+    monkeypatch.setattr(limit_recovery, "QUEUE_LANE", lane)
+    s, _ = _run("handoff", FRESH)
+    body = s.comments[0][1]
+    assert f"park it in {lane} until the account is released" in body
 
 
 def test_row_handoff_reason_is_the_clock_answered_early_at_any_age():

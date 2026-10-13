@@ -30,8 +30,12 @@ and the pass's stdout. The legacy markers are the `body` of the real entries
 in `tests/fixtures/blocker-reasons.json` (DRE-6438), `Run:` URL and all. After
 each pass, two assertions that the receipt really resolved the marker:
 `reconcile.open_agent_blocker` over the thread the fake left answers None, and
-a SECOND pass over what the fake now holds in Backlog calls no action module
+a SECOND pass over what the fake now holds in the queue calls no action module
 and records no write.
+
+Every case runs twice, the card parked under each name the queue has
+(`lane_contract.QUEUE_LANES`, DRE-6747): the classes resolve, ask and return
+a card in `Queued` exactly as in the lane it replaces.
 
 Which action module ran is observed, never stubbed: `_watching` sets a
 profile hook that records each call of a real module's `resolve` code object.
@@ -65,6 +69,7 @@ import blocker_nothing_to_change  # noqa: E402
 import blocker_resolve  # noqa: E402
 import blocker_wrong_repo  # noqa: E402
 import console_escalation  # noqa: E402
+import lane_contract  # noqa: E402
 import linear_ops  # noqa: E402
 import pipeline_act  # noqa: E402
 import push_rescue  # noqa: E402
@@ -74,6 +79,9 @@ import routing_verdict  # noqa: E402
 #: The sweep under test.
 REPO = "dreadnought-foundry/agent-bureau"
 SLUG = "agent-bureau"
+
+#: The from-lanes every module's move out of the queue names (DRE-6747).
+QUEUE_FROM = ",".join(lane_contract.QUEUE_LANES)
 
 #: The receipt's tag, read off the registry the gate reads it from.
 TAG = pipeline_act.tag("agent-blocker-resolved")
@@ -104,9 +112,10 @@ def _legacy(card, run=None) -> str:
     return row["body"]
 
 
-def _stamped(cls: str, reason: str, until: str, run: int) -> str:
-    """A marker in the poster's grammar (`report_agent_result.sh`, DRE-6444)."""
-    return (f"🛑 Agent blocked: class={cls} · {reason} — parked in Backlog until "
+def _stamped(cls: str, reason: str, until: str, run: int, lane: str) -> str:
+    """A marker in the poster's grammar (`report_agent_result.sh`, DRE-6444),
+    its clause naming the lane the card parked in."""
+    return (f"🛑 Agent blocked: class={cls} · {reason} — parked in {lane} until "
             f"{until}. Run: https://github.com/{REPO}/actions/runs/{run}")
 
 
@@ -119,7 +128,9 @@ class Board:
     """Linear and GitHub as one sweep sees them. Every write lands in `writes`
     in the order it was made, and changes what the next read answers."""
 
-    def __init__(self):
+    def __init__(self, queue="Backlog"):
+        #: The name of the queue every card is parked under.
+        self.queue = queue
         self.cards: dict[str, dict] = {}
         self.writes: list[tuple] = []
         self.reads: list[str] = []
@@ -130,7 +141,7 @@ class Board:
     def add(self, identifier, marker, *, title, labels=(f"repo:{SLUG}",),
             description=CRITERIA, branch=None):
         self.cards[identifier] = {
-            "lane": "Backlog", "title": title, "description": description,
+            "lane": self.queue, "title": title, "description": description,
             "labels": list(labels), "thread": [ROUTING_FLEET, marker],
             "branch": branch,
         }
@@ -161,7 +172,8 @@ class Board:
 
     def backlog_children(self, only=None, **_kw):
         return [self.node(i) for i, card in self.cards.items()
-                if card["lane"] == "Backlog" and (only is None or i in only)]
+                if card["lane"] in lane_contract.QUEUE_LANES
+                and (only is None or i in only)]
 
     def fetch_backlog_linear(self, only, *, stamped=False):
         self.fetched.append(list(only))
@@ -251,9 +263,9 @@ def _card_of(branch: str) -> str:
     return "-".join(branch.split("/", 1)[1].split("-")[:2])
 
 
-@pytest.fixture
-def board(monkeypatch):
-    fake = Board()
+@pytest.fixture(params=lane_contract.QUEUE_LANES)
+def board(request, monkeypatch):
+    fake = Board(queue=request.param)
     monkeypatch.setattr(reconcile, "REPO_SLUG", SLUG)
     monkeypatch.setattr(reconcile, "REPO", REPO)
     monkeypatch.setattr(reconcile, "backlog_children", fake.backlog_children)
@@ -365,7 +377,7 @@ def _resolved_once(board, run, identifier, cls, action, writes, modules) -> str:
 def _closed_for_good(board, capsys, identifier):
     """The receipt really resolved the marker: the gate's own reader finds no
     open blocker on the thread the fake left, and a second pass over what the
-    fake holds in Backlog calls no module and writes nothing."""
+    fake holds in the queue calls no module and writes nothing."""
     assert reconcile.open_agent_blocker(board.node(identifier)) is None
     before = (list(board.writes), list(board.fetched), list(board.github), list(board.reads))
     again = _sweep(capsys)
@@ -401,13 +413,13 @@ def test_1_a_stamped_nothing_to_change_attesting_every_criterion_cancels_the_car
     board.add(ident, _stamped(
         "nothing-to-change", reason,
         "the sweep acts on it (it cancels the card once every criterion is attested "
-        "met, and sends the rest to the planner)", 37900000001),
+        "met, and sends the rest to the planner)", 37900000001, board.queue),
         title="bureau-pipeline: retry an unreadable run log")
 
     run = _sweep(capsys)
 
     _resolved_once(board, run, ident, "nothing-to-change", "canceled", [
-        ("state", ident, "Canceled", ("Backlog",), ("needs-human",)),
+        ("state", ident, "Canceled", lane_contract.QUEUE_LANES, ("needs-human",)),
         ("receipt", ident),
     ], ["blocker_nothing_to_change"])
     assert board.lane(ident) == "Canceled"
@@ -421,7 +433,7 @@ def test_2_the_dre_5195_legacy_marker_sends_the_card_to_planning(board, capsys):
     run = _sweep(capsys)
 
     receipt = _resolved_once(board, run, ident, "nothing-to-change", "replanned", [
-        ("advance", ident, "Planning", "Backlog", True),
+        ("advance", ident, "Planning", QUEUE_FROM, True),
         ("receipt", ident),
     ], ["blocker_nothing_to_change"])
     assert "0 of 3 criteria attested" in receipt
@@ -443,9 +455,9 @@ def test_3_the_dre_3242_legacy_marker_relabels_the_card_and_moves_no_lane(board,
         ("receipt", ident),
     ], ["blocker_wrong_repo"])
     assert "repo:agent-bureau → repo:bureau-pipeline" in receipt
-    assert board.lane(ident) == "Backlog"
+    assert board.lane(ident) == board.queue
     assert board.cards[ident]["labels"] == ["agent:engineer", "repo:bureau-pipeline"]
-    # Still in Backlog, now another repo's card: this sweep skips it silently.
+    # Still in the queue, now another repo's card: this sweep skips it silently.
     assert [c["identifier"] for c in board.backlog_children()] == [ident]
     _closed_for_good(board, capsys, ident)
 
@@ -461,7 +473,7 @@ def test_4_the_dre_6056_legacy_marker_opens_a_draft_and_asks_in_green_light(boar
     _resolved_once(board, run, ident, "branch-without-pr", "asked", [
         ("create", ident),
         ("ask", ident),
-        ("advance", ident, "Green Light", "Backlog", True),
+        ("advance", ident, "Green Light", QUEUE_FROM, True),
         ("receipt", ident),
     ], ["blocker_branch_pr", "blocker_ask"])
     (create,) = [w[2] for w in board.writes if w[0] == "create"]
@@ -493,14 +505,14 @@ def test_5_a_stamped_branch_without_pr_opens_a_ready_pull_request_and_moves_to_r
     board.add(ident, _stamped(
         "branch-without-pr", reason,
         "the sweep acts on it (it opens or finds the pull request for the work on "
-        "the branch)", 37900000005),
+        "the branch)", 37900000005, board.queue),
         title="retry the widget fetch", branch=branch)
 
     run = _sweep(capsys)
 
     receipt = _resolved_once(board, run, ident, "branch-without-pr", "pr-opened", [
         ("create", ident),
-        ("advance", ident, "In Review", "Backlog", True),
+        ("advance", ident, "In Review", QUEUE_FROM, True),
         ("receipt", ident),
     ], ["blocker_branch_pr"])
     (create,) = [w[2] for w in board.writes if w[0] == "create"]
@@ -523,7 +535,7 @@ def test_6_the_synthetic_legacy_question_is_asked_in_green_light(board, capsys):
 
     receipt = _resolved_once(board, run, ident, "question", "asked", [
         ("ask", ident),
-        ("advance", ident, "Green Light", "Backlog", True),
+        ("advance", ident, "Green Light", QUEUE_FROM, True),
         ("receipt", ident),
     ], ["blocker_ask"])
     (ask,) = _comments(board, "ask")
@@ -545,7 +557,7 @@ def test_7_a_wrong_repo_naming_two_repositories_is_asked_with_nothing_stubbed(
     marker = (
         "🛑 Agent blocked: This card is pointed at the wrong repo. The sweep's "
         "script it changes lives in bureau-pipeline and the screen it feeds lives "
-        "in portico, so no one repository holds the work. — parked in Backlog "
+        f"in portico, so no one repository holds the work. — parked in {board.queue} "
         "until the blocker is resolved (a Todo return here would redispatch agents "
         f"into the same wall). Run: https://github.com/{REPO}/actions/runs/37900000007"
     )
@@ -557,7 +569,7 @@ def test_7_a_wrong_repo_naming_two_repositories_is_asked_with_nothing_stubbed(
 
     _resolved_once(board, run, ident, "wrong-repo", "asked", [
         ("ask", ident),
-        ("advance", ident, "Green Light", "Backlog", True),
+        ("advance", ident, "Green Light", QUEUE_FROM, True),
         ("receipt", ident),
     ], ["blocker_wrong_repo", "blocker_ask"])
     (ask,) = _comments(board, "ask")

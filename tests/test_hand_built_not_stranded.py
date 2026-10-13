@@ -561,8 +561,9 @@ def test_hand_built_card_in_progress_with_no_pr_is_not_requeued():
 
 
 def test_hand_built_card_in_progress_is_not_parked_after_the_requeue_cap():
-    """Past the cap the same branch parks the card in Backlog with the hold
-    label — the sweep overriding a human's own placement on their own work."""
+    """Past the cap the same branch parks the card in the queue
+    (`reconcile.QUEUE_LANE`) with the hold label — the sweep overriding a
+    human's own placement on their own work."""
     s = _run_sweep([_card(state="In Progress")], extra={"REQUEUE_CAP": 0})
     s.cmd_state.assert_not_called()
     s.add_label.assert_not_called()

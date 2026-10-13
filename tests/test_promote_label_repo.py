@@ -122,7 +122,7 @@ def test_label_only_dependent_is_promoted_on_merge():
     ) as advance, patch.object(reconcile.linear_ops, "cmd_comment"):
         promoted = reconcile.promote_ready(active_count=0)
     assert promoted == 1
-    advance.assert_called_once_with("DRE-1811", "Todo", "Backlog")
+    advance.assert_called_once_with("DRE-1811", "Todo", reconcile.QUEUE_FROM)
 
 
 def test_other_repos_dependent_is_not_promoted_here():

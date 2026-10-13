@@ -11,7 +11,8 @@ asks those two and acts on the answer:
   * `replan` — the decision's body (it opens `hold.DEAD_SPLIT_MARK`) is posted
     and the card advances to Planning from the lane it is in. No label.
   * `hold` — `hold.apply(…, "dead-run-cap", "none", "reconcile.py")`, the
-    `--park` move to Backlog, and the lane's `🚨 held-for-human` receipt with
+    `--park` move to the queue lane (`QUEUE_LANE`, DRE-6745), and the lane's
+    `🚨 held-for-human` receipt with
     its anchor phrase unchanged.
 
 The death the sweep sees is always the silent class, so `decide` is asked with
@@ -178,11 +179,24 @@ class TestTheSecondStrikeHolds:
         assert linear.kinds() == ["label", "comment", "state", "comment"]
         assert linear.writes[0] == ("label", "DRE-7100", reconcile.HOLD_LABEL)
         assert linear.writes[1][2] == CAP_STAMP
-        assert linear.writes[2] == ("state", "DRE-7100", "Backlog", "--park")
+        assert linear.writes[2] == ("state", "DRE-7100", reconcile.QUEUE_LANE, "--park")
         receipt = linear.writes[3][2]
         assert receipt.startswith("🚨 held-for-human:")
         assert ANCHORS[lane] in receipt
         assert not any(c.startswith(hold.DEAD_SPLIT_MARK) for c in linear.comments())
+
+    @pytest.mark.parametrize("lane", ["In Progress", reconcile.REVIEW_LANE])
+    def test_the_park_follows_the_planning_exit(self, monkeypatch, lane):
+        """DRE-6745: the hold's state is `QUEUE_LANE` — `Backlog` under the
+        shipped contract, `Queued` with the exit moved (DRE-6742)."""
+        assert reconcile.QUEUE_LANE == "Backlog"
+        monkeypatch.setattr(reconcile, "QUEUE_LANE", "Queued")
+        linear = _Linear(_at_cap())
+        linear.run(_card(lane), reconcile.REQUEUE_CAP,
+                   extra=[patch.object(reconcile.dead_run, "split_tried", return_value=True)])
+        assert [w for w in linear.writes if w[0] == "state"] == [
+            ("state", "DRE-7100", "Queued", "--park")]
+        assert ("label", "DRE-7100", reconcile.HOLD_LABEL) in linear.writes
 
     @pytest.mark.parametrize("lane", ["In Progress", reconcile.REVIEW_LANE])
     @pytest.mark.parametrize("recorded", [False, True], ids=["hung", "recorded"])
@@ -237,7 +251,7 @@ class TestTheReadDoorRunsFirst:
         linear = _Linear(_at_cap())
         linear.run(card, reconcile.REQUEUE_CAP,
                    extra=[patch.object(reconcile.dead_run, "split_tried", return_value=True)])
-        assert ("state", "DRE-7100", "Backlog", "--park") in linear.writes
+        assert ("state", "DRE-7100", reconcile.QUEUE_LANE, "--park") in linear.writes
         assert linear.state_guards == [{"expect": ("In Progress",), "labels_absent": ()}]
 
 
@@ -301,7 +315,7 @@ class TestTheDecisionIsDeadRuns:
         held = dead_run.Decision("hold", ["🚨 held-for-human (decided elsewhere)"])
         linear.run(_card(), reconcile.REQUEUE_CAP,
                    extra=[patch.object(reconcile.dead_run, "decide", return_value=held)])
-        assert ("state", "DRE-7100", "Backlog", "--park") in linear.writes
+        assert ("state", "DRE-7100", reconcile.QUEUE_LANE, "--park") in linear.writes
         assert "advance" not in linear.kinds()
 
     def test_a_replan_answer_advances(self):

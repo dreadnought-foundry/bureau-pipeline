@@ -490,7 +490,13 @@ class GitHub:
                     last_error = GitHubError(e.code, detail)
                 else:
                     raise GitHubError(e.code, detail) from e
-            except urllib.error.URLError as e:
+            except (urllib.error.URLError, ConnectionResetError, TimeoutError) as e:
+                # urlopen wraps only a fault raised while SENDING. One raised
+                # while reading the answer — http.client.RemoteDisconnected,
+                # a bare reset, a read timeout — arrives unwrapped, the same
+                # shapes linear_ops.is_transient retries (DRE-3087). Run
+                # 38365040174 died on one before this clause named them
+                # (DRE-7232).
                 if attempt >= _RETRIES:
                     raise GitHubError(0, str(e)) from e
                 last_error = e

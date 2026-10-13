@@ -683,3 +683,257 @@ class TestADeadReviewHoldsAndSaysSo:
         assert plan_critic.REAPPROVE_HOW not in posted[0]
         assert "yours to decide" in posted[0]
         assert self.ROUND_ONE not in posted[0]
+
+
+# --------------------------------------------------------------------------
+# DRE-6743: the sweep reads both queue names and writes through QUEUE_LANE.
+#
+# DRE-6741 put the switch in `lane_contract`: `QUEUE_LANES` is every name a
+# queued card may sit under, `QUEUE_LANE` the one a writer writes. The sweep is
+# the queue's heaviest reader, so it is converted on its own: a card in
+# `Queued` is promoted exactly as one in `Backlog` is, and every lane and
+# receipt it writes follows `QUEUE_LANE` — `Backlog` until DRE-6742 flips the
+# planning exit, `Queued` after, with no edit here.
+# --------------------------------------------------------------------------
+import ast  # noqa: E402
+import json  # noqa: E402
+import re  # noqa: E402
+
+ROOT = Path(__file__).resolve().parent.parent
+RECONCILE_SOURCE = ROOT / "scripts" / "reconcile.py"
+ACTS = ROOT / "config" / "pipeline-acts.json"
+
+#: The lane a test writes the queue under when it needs the cutover's side.
+QUEUED = "Queued"
+
+#: Any state filter a board read can carry: one name, or a list of them.
+_STATE_FILTER = re.compile(r'state: \{name: \{(eq|in): (\[[^\]]*\]|"[^"]*")\}\}')
+
+
+def _one_off(identifier: str, lane: str) -> dict:
+    """A parentless FLEET card, sitting in `lane`, with nothing blocking it."""
+    return {
+        "id": f"uuid-{identifier}",
+        "identifier": identifier,
+        "title": f"a one-off in {lane}",
+        "description": "Trim the trailing slash from the health endpoint.",
+        "createdAt": CREATED,
+        "priority": 3,
+        "parent": None,
+        "children": {"nodes": []},
+        "state": {"name": lane},
+        "labels": {"nodes": [{"name": "repo:bureau-pipeline"},
+                             {"name": "agent:engineer"}]},
+        "comments": {"nodes": [{"body": routing_verdict.verdict_comment(
+            "FLEET", "the acceptance criteria are unit-testable")}]},
+        "inverseRelations": {"nodes": [], "pageInfo": {"hasNextPage": False}},
+    }
+
+
+class _QueueBoard:
+    """Linear as the promotion read and the promotion write see it.
+
+    The read serves only the cards whose lane the query's state filter names,
+    so a read that asks for one name sees half the queue. The write is
+    `cmd_advance`'s guard: a card moves only out of a lane it was handed."""
+
+    def __init__(self, *cards):
+        self.lanes = {c["identifier"]: c["state"]["name"] for c in cards}
+        self.cards = {c["identifier"]: c for c in cards}
+        self.queries: list[str] = []
+        self.posted: list[tuple[str, str]] = []
+
+    def gql(self, query, variables=None):
+        self.queries.append(query)
+        found = _STATE_FILTER.search(query)
+        if "issues(" not in query or found is None:
+            raise reconcile.linear_ops.LinearError(
+                f"unexpected query {' '.join(query.split())[:80]}")
+        kind, names = found.groups()
+        wanted = set(json.loads(names)) if kind == "in" else {json.loads(names)}
+        return {"issues": {
+            "nodes": [c for i, c in self.cards.items() if self.lanes[i] in wanted],
+            "pageInfo": {"hasNextPage": False, "endCursor": None},
+        }}
+
+    def advance(self, ident, to_state, from_states, *flags, **kw):
+        if self.lanes[ident] not in from_states.split(","):
+            return False
+        self.lanes[ident] = to_state
+        return True
+
+    def promote(self) -> int:
+        with patch.object(reconcile, "REPO_SLUG", "bureau-pipeline"), \
+                patch.object(reconcile.bureau_read, "mode", return_value="off"), \
+                patch.object(reconcile.linear_ops, "gql", side_effect=self.gql), \
+                patch.object(reconcile.linear_ops, "cmd_advance",
+                             side_effect=self.advance), \
+                patch.object(reconcile.linear_ops, "cmd_comment",
+                             side_effect=lambda i, b: self.posted.append((i, b))), \
+                patch.object(reconcile.linear_ops, "count_comments", return_value=0):
+            return reconcile.promote_ready(active_count=0)
+
+
+class TestTheSweepReadsBothQueueNames:
+    def test_a_fleet_card_in_either_queue_name_is_promoted_to_todo(self):
+        """One FLEET card in `Queued`, one in `Backlog`: both reach Todo. The
+        read that asks for `Backlog` alone never sees the first, and a move
+        guarded on `Backlog` alone refuses it."""
+        board = _QueueBoard(_one_off("DRE-6801", QUEUED), _one_off("DRE-6802", "Backlog"))
+        reconcile._write_failures.clear()
+        try:
+            assert board.promote() == 2
+        finally:
+            reconcile._write_failures.clear()
+        assert board.lanes == {"DRE-6801": "Todo", "DRE-6802": "Todo"}
+
+    def test_the_queue_names_come_from_the_contract(self):
+        """`reconcile.QUEUE_LANE` and `QUEUE_LANES` are `lane_contract`'s own
+        objects, re-exported — never a second definition in the sweep."""
+        assert reconcile.QUEUE_LANE is lane_contract.QUEUE_LANE
+        assert reconcile.QUEUE_LANES is lane_contract.QUEUE_LANES
+        assert not hasattr(reconcile, "BACKLOG_LANE")
+        tree = ast.parse(RECONCILE_SOURCE.read_text(encoding="utf-8"))
+        assigned = {
+            target.id
+            for node in ast.walk(tree) if isinstance(node, (ast.Assign, ast.AnnAssign))
+            for target in (node.targets if isinstance(node, ast.Assign) else [node.target])
+            if isinstance(target, ast.Name)
+        }
+        assert not assigned & {"QUEUE_LANE", "QUEUE_LANES"}
+
+    def test_no_string_constant_in_the_sweep_names_the_old_lane(self):
+        """A lane name in a string is a read or a write that does not follow
+        the switch. Comments recording an incident are history and stay."""
+        assert lane_contract._scan_python(str(RECONCILE_SOURCE), ["Backlog"]) == set()
+
+    def test_every_board_read_of_the_queue_filters_on_every_queue_name(self):
+        """The Linear reads, the door reads and the lane sets the sweep reads
+        the queue through all carry every name in `QUEUE_LANES`."""
+        listed = json.dumps(list(lane_contract.QUEUE_LANES))
+        assert reconcile.QUEUE_STATE_FILTER == f"state: {{name: {{in: {listed}}}}}"
+        assert reconcile.QUEUE_STATE_FILTER in reconcile._INTAKE_BLOCKED_QUERY
+        for lanes in (reconcile.EPIC_CLOSE_LANES, reconcile.IDLE_LANES):
+            assert set(lane_contract.QUEUE_LANES) <= set(lanes)
+        asked = []
+        with patch.object(reconcile.bureau_read, "board",
+                          side_effect=lambda lanes, **kw: asked.append(list(lanes))):
+            reconcile._door_backlog_read(None)
+        assert asked == [list(lane_contract.QUEUE_LANES)]
+
+    def test_the_door_keeps_a_card_under_either_queue_name(self):
+        read = type("Read", (), {"nodes": [_one_off("DRE-6801", QUEUED),
+                                           _one_off("DRE-6802", "Backlog"),
+                                           _one_off("DRE-6803", "Todo")]})()
+        with patch.object(reconcile, "_door_backlog_read", return_value=read), \
+                patch.object(reconcile, "complete_inverse_relations"):
+            cards = reconcile._door_backlog_children(None)
+        assert [c["identifier"] for c in cards] == ["DRE-6801", "DRE-6802"]
+
+    @pytest.mark.parametrize("lane", lane_contract.QUEUE_LANES)
+    def test_a_child_waiting_under_either_name_is_in_flow(self, lane):
+        """The Intake-blocker phase reads a waiting child of a running epic as
+        in flow under either name, and its notice names the lane it is in."""
+        child = {**_one_off("DRE-6804", lane),
+                 "parent": {"identifier": EPIC, "state": {"name": "In Progress"}}}
+        assert reconcile._in_flow(child) is True
+        notice = reconcile.intake_blocker_notice(
+            {"identifier": "DRE-6805", "title": "a blocker"}, child, titles=False)
+        assert f"waiting in {lane} under {EPIC}" in notice
+
+    @pytest.mark.parametrize("lane", lane_contract.QUEUE_LANES)
+    def test_the_idle_check_sees_a_card_waiting_under_either_name(self, lane):
+        """From the door: one card of this repo in the queue keeps the pass awake."""
+        read = type("Read", (), {"nodes": [_one_off("DRE-6806", lane)]})()
+        asked = []
+
+        def board(lanes, **kw):
+            asked.append(tuple(lanes))
+            return read
+
+        with patch.object(reconcile, "REPO_SLUG", "bureau-pipeline"), \
+                patch.object(reconcile, "MAX_WIP", 3), \
+                patch.object(reconcile.bureau_read, "mode", return_value="on"), \
+                patch.object(reconcile.bureau_read, "enabled", return_value=True), \
+                patch.object(reconcile.bureau_read, "board", side_effect=board):
+            assert reconcile.sweep_idle() is None
+        assert set(lane_contract.QUEUE_LANES) <= set(asked[0])
+
+
+class TestTheSweepWritesThroughQueueLane:
+    """Every lane the sweep writes the queue under is `QUEUE_LANE`: on the
+    shipped contract that is `Backlog`, byte for byte today's, and the day the
+    planning exit moves it is `Queued` with no edit to the sweep."""
+
+    @staticmethod
+    def _park() -> tuple[list, list]:
+        card = {"identifier": "DRE-6810", "state": {"name": "In Progress"},
+                "labels": {"nodes": []}, "description": ""}
+        states, posted = [], []
+        with patch.object(reconcile.dead_run, "split_tried", return_value=True), \
+                patch.object(reconcile.hold, "apply"), \
+                patch.object(reconcile.linear_ops, "cmd_state",
+                             side_effect=lambda i, lane, *f, **k: states.append((lane, *f))), \
+                patch.object(reconcile.linear_ops, "cmd_comment",
+                             side_effect=lambda i, b: posted.append(b)), \
+                patch.object(reconcile.linear_ops, "cmd_advance"):
+            reconcile.hand_dead_run_to_planner(card, reconcile.REQUEUE_CAP, [])
+        return states, posted
+
+    @staticmethod
+    def _promote() -> list[str]:
+        board = _QueueBoard(_one_off("DRE-6811", lane_contract.QUEUE_LANE))
+        reconcile._write_failures.clear()
+        try:
+            board.promote()
+        finally:
+            reconcile._write_failures.clear()
+        return [b for i, b in board.posted if i == "DRE-6811"]
+
+    @staticmethod
+    def _advance_epic() -> str:
+        posted = []
+        reconcile.reset_sweep_cards()
+        with patch.object(reconcile.linear_ops, "cmd_advance", return_value=True), \
+                patch.object(reconcile.linear_ops, "cmd_comment",
+                             side_effect=lambda i, b: posted.append(b)):
+            reconcile._return_epic_to_planning("DRE-6812", "blocker DRE-6813 is Done")
+        reconcile.reset_sweep_cards()
+        return posted[0]
+
+    def test_the_park_and_the_receipts_follow_queue_lane(self, monkeypatch):
+        # The shipped contract: today's lane and today's receipts, byte for byte.
+        assert lane_contract.QUEUE_LANE == "Backlog"
+        states, posted = self._park()
+        assert states == [("Backlog", "--park")]
+        assert "parked in Backlog with the 'needs-human' label" in posted[0]
+        assert self._promote() == [
+            "🧹 Auto-promoted Backlog → Todo: no parent epic, a FLEET verdict, "
+            "and all blockers Done."]
+        assert self._advance_epic().startswith(
+            "🧹 Auto-advanced Backlog → Planning: blocker DRE-6813 is Done")
+
+        # The flipped exit: the same sweep writes `Queued` everywhere.
+        monkeypatch.setattr(reconcile, "QUEUE_LANE", QUEUED)
+        states, posted = self._park()
+        assert states == [(QUEUED, "--park")]
+        assert f"parked in {QUEUED} with the 'needs-human' label" in posted[0]
+        assert "Backlog" not in posted[0]
+        assert self._promote() == [
+            f"🧹 Auto-promoted {QUEUED} → Todo: no parent epic, a FLEET verdict, "
+            "and all blockers Done."]
+        assert self._advance_epic().startswith(
+            f"🧹 Auto-advanced {QUEUED} → Planning: blocker DRE-6813 is Done")
+
+    def test_the_two_receipts_are_anchored_on_the_source_not_the_lane(self):
+        """`config/pipeline-acts.json` pins the two receipts by the line that
+        emits them, and that line names `QUEUE_LANE`, never a lane — so the
+        anchor does not move again at the flip."""
+        doc = json.loads(ACTS.read_text(encoding="utf-8"))
+        anchors = {d["anchor"] for d in doc["unconverted"]
+                   if d["file"] == "scripts/reconcile.py"}
+        assert "🧹 Auto-promoted {QUEUE_LANE} → {destination}" in anchors
+        assert "🧹 Auto-advanced {QUEUE_LANE} → Planning" in anchors
+        source = RECONCILE_SOURCE.read_text(encoding="utf-8")
+        assert 'f"🧹 Auto-promoted {QUEUE_LANE} → {destination}: {reason}"' in source
+        assert 'f"🧹 Auto-advanced {QUEUE_LANE} → Planning: {because}' in source

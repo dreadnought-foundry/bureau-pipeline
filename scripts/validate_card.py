@@ -54,8 +54,9 @@ CLI:
   check-children <EPIC>
                  read-only post-plan sweep (DRE-1715): runs `missing()` — the
                  SAME validation core the gate uses — over EVERY child of an
-                 epic, in WHATEVER state (children are created in Backlog, which
-                 the gate path deliberately leaves alone). Exit 0 iff every child
+                 epic, in WHATEVER state (children are created in the queue,
+                 `Queued` under either of its names, which the gate path
+                 deliberately leaves alone). Exit 0 iff every child
                  carries a resolvable repo + an agent:* role and a non-placeholder
                  body; exit 1 listing the offenders otherwise, so plan.yml fails
                  the plan before it completes rather than shipping a broken child
@@ -553,7 +554,7 @@ def cmd_gate(identifier: str) -> None:
         return
 
     # --- Fix-first: decide the FULL repair before mutating anything, so a card
-    # we can't fully fix is bounced clean (never left half-repaired in Backlog).
+    # we can't fully fix is bounced clean (never left half-repaired in the queue).
     new_labels: list[str] = []
     fixed: list[str] = []          # human-readable bits for the auto-fix comment
     sources: set[str] = set()
@@ -717,17 +718,17 @@ def _bounce(linear_ops, identifier: str, gaps: list[str], why: str,
             detail: str | None = None) -> None:
     """Refuse a card the gate cannot repair, and return it to Planning.
 
-    Planning, not Backlog (DRE-2858). This is the one writer that knows for
+    Planning, not the queue (DRE-2858). This is the one writer that knows for
     CERTAIN a card is invalid, and it was putting it in the lane the rest of the
     system reads as ready work — where `reconcile.promote_ready` would pick it
     up again and walk it back into this same refusal. What the card owes is the
     classification it is missing, and Planning is the lane that owes one.
 
-    The comment body moves with the lane. It used to say "Returned to Backlog;
-    fix and move to Todo again", which after this change was wrong twice: the
-    card is not in Backlog, and moving it straight to Todo skips the very
-    classification the bounce is asking for — the shortcut this card closes. A
-    refused card still carries its plain-English reason, and
+    The comment body moves with the lane. It used to send the card back to the
+    queue to be fixed and moved to Todo again, which after this change was
+    wrong twice: the card is not in the queue, and moving it straight to Todo
+    skips the very classification the bounce is asking for — the shortcut this
+    card closes. A refused card still carries its plain-English reason, and
     `tests/test_writers_point_at_planning.py` asserts the text byte for byte
     rather than assuming it."""
     body = (
@@ -773,7 +774,7 @@ def _card_from(issue: dict) -> dict:
 
 # --- Post-plan child sweep (DRE-1715) ----------------------------------------
 #
-# After the planner creates children (in Backlog), confirm EVERY child is
+# After the planner creates children (in the queue), confirm EVERY child is
 # complete and valid before the plan is allowed to finish — reusing this gate's
 # `missing()` (single source of truth, no parallel checker) plus the shared
 # body-placeholder guard. The gate's own cmd_gate intentionally only acts on

@@ -797,15 +797,13 @@ class WorkflowModelPinTest(unittest.TestCase):
         body = (ROOT / ".github" / "workflows" / "agent-task.yml").read_text()
         self.assertIn('model_fallback.py select "$ROLE"', body)
 
-    # The two ways an agent step may read the selected model. The second is a
-    # review workflow's shadow mode (DRE-7194, and the critic's DRE-7193): a
-    # SHADOW replay runs on the model its caller names, and a live run on the
-    # same step output as the first — never a literal id either way
-    # (tests/test_verify_shadow.py pins the live reading).
-    SELECTED_MODEL_ARGS = (
-        "--model ${{ steps.model.outputs.model }}",
-        "--model ${{ inputs.shadow && inputs.model || steps.model.outputs.model }}",
-    )
+    # The selected model, or — in a shadow replay only — the model the replay's
+    # caller named: qa-review hands it on from the step that checked it
+    # (DRE-7193, tests/test_qa_review_shadow.py), verify reads the input itself
+    # (DRE-7194, tests/test_verify_shadow.py). Never a literal id either way.
+    SELECTED_MODEL = re.compile(
+        r"--model \$\{\{ (?:inputs\.shadow && (?:steps\.shadow_model\.outputs|inputs)\.model \|\| )?"
+        r"steps\.model\.outputs\.model \}\}")
 
     def test_agent_steps_consume_the_selected_model(self):
         # A Select-model step that nothing reads is theatre: the claude_args
@@ -813,8 +811,7 @@ class WorkflowModelPinTest(unittest.TestCase):
         for wf in ("qa-review.yml", "verify.yml", "medic.yml"):
             with self.subTest(workflow=wf):
                 body = (ROOT / ".github" / "workflows" / wf).read_text()
-                self.assertTrue(any(arg in body for arg in self.SELECTED_MODEL_ARGS),
-                                f"{wf}: no agent step reads the selected model")
+                self.assertRegex(body, self.SELECTED_MODEL)
 
     def test_selected_model_is_used_by_every_claude_invocation(self):
         # qa-review and verify each run TWO agent attempts (attempt 1 + retry);
@@ -823,7 +820,7 @@ class WorkflowModelPinTest(unittest.TestCase):
             with self.subTest(workflow=wf):
                 body = (ROOT / ".github" / "workflows" / wf).read_text()
                 self.assertEqual(
-                    sum(body.count(arg) for arg in self.SELECTED_MODEL_ARGS), expected,
+                    len(self.SELECTED_MODEL.findall(body)), expected,
                     f"{wf}: both agent attempts must use the selected model",
                 )
 

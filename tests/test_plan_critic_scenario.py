@@ -322,6 +322,13 @@ PRE_PARK = "First critic — the bound parks in Triage"
 REVIEW_RE_REVIEW = "Review — the revised plan is reviewed again"
 REVIEW_BOUND = "Review — the bound parks the plan in Triage"
 REVIEW_DIED = "Review — the review died"
+# The fresh token each bound exit dispatches the planner's rewrite with
+# (DRE-7177), minted directly before its step and gated exactly as it is, so
+# a walk that reaches the step reaches its mint first.
+PRE_PARK_MINT = "Re-mint bot token — the first critic's bound"
+REVIEW_BOUND_MINT = "Re-mint bot token — the second critic's bound"
+REVIEW_HELD_PASS_MINT = "Re-mint bot token — the held plan's bound"
+REVIEW_RECHECK_MINT = "Re-mint bot token — re-check (review mode)"
 # The second critic's own steps — the reading, the decision, the re-plan and
 # the mints between them. They ran in both modes until DRE-5281 narrowed them
 # to review; the outcome walks below ask which OUTCOMES a decision reaches, so
@@ -597,7 +604,7 @@ class CriticWalk(unittest.TestCase):
                    **{f"steps.pre2.outputs.{k}": v for k, v in out.items()}}
         self.assertEqual(
             self._reached_on_the_plan_route(decided, after="First critic — round 2 decision"),
-            [PRE_PARK])
+            [PRE_PARK_MINT, PRE_PARK])
         self._shell(PRE_PARK, NOTE=out["note"], FINDING=out["reason"])
         self.assertEqual(self._lane_writes(), ["add-label needs-human", "state Triage"])
         self.assertNotIn("state Green Light", self._log())
@@ -623,7 +630,7 @@ class CriticWalk(unittest.TestCase):
         self.assertEqual((out["action"], out["bound"]), ("hold", "true"))
         decided = {f"steps.pre1.outputs.{k}": v for k, v in out.items()}
         decided.update(NOT_RUN_PRE2)
-        self.assertEqual(self._reached_on_the_plan_route(decided), [PRE_PARK])
+        self.assertEqual(self._reached_on_the_plan_route(decided), [PRE_PARK_MINT, PRE_PARK])
         self._shell(PRE_PARK, NOTE=out["note"], FINDING=out["reason"])
         self.assertEqual(self._lane_writes(), ["add-label needs-human", "state Triage"])
         self.assertEqual(self._dispatches(), [])
@@ -1852,7 +1859,8 @@ class CriticWalk(unittest.TestCase):
         decided = self._decided()
         self.assertEqual(decided["steps.post1.outputs.pre_passed"], "false")
         self.assertEqual(self._reached(decided),
-                         ["Review — the second critic passed a plan the first critic held"])
+                         [REVIEW_HELD_PASS_MINT,
+                          "Review — the second critic passed a plan the first critic held"])
         self._shell("Review — the second critic passed a plan the first critic held")
         self.assertEqual(self._lane_writes(), ["add-label needs-human", "state Triage"])
         note = self._thread()[-1]
@@ -1901,15 +1909,15 @@ class CriticWalk(unittest.TestCase):
         # DRE-5299: the revision is read, re-checked and uploaded on this path,
         # and the re-review is reached only once the re-check passed it.
         self.assertEqual(self._reached(decided),
-                         ["Plan artifact — published source",
+                         ["Plan artifact — published source", REVIEW_RECHECK_MINT,
                           "Re-check the revised plan — review mode"])
         self.assertEqual(
             self._reached(dict(decided, **{"steps.recheck_review.outputs.ok": "false"})),
-            ["Plan artifact — published source",
+            ["Plan artifact — published source", REVIEW_RECHECK_MINT,
              "Re-check the revised plan — review mode"])
         self.assertEqual(
             self._reached(dict(decided, **{"steps.recheck_review.outputs.ok": "true"})),
-            ["Plan artifact — published source",
+            ["Plan artifact — published source", REVIEW_RECHECK_MINT,
              "Re-check the revised plan — review mode",
              "Plan artifact — upload source (review)", name])
         # Nothing here is the CEO's to decide, so no card-set question is
@@ -1940,7 +1948,7 @@ class CriticWalk(unittest.TestCase):
         self._shell("second critic — decision")
         decided = self._decided()
         self.assertEqual(decided["steps.post1.outputs.bound"], "true")
-        self.assertEqual(self._reached(decided), [name])
+        self.assertEqual(self._reached(decided), [REVIEW_BOUND_MINT, name])
         self._shell(name, NOTE=decided["steps.post1.outputs.note"],
                     FINDING=decided["steps.post1.outputs.reason"],
                     REPLAN_OUTCOME="success")

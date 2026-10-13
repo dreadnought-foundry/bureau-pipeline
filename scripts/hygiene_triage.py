@@ -4,8 +4,10 @@ its mechanical defects fixed.
 
 Discovered by the core's glob (`scripts/hygiene.py`), registered nowhere. It
 reads the cards in `Triage` and fixes the defects the standard already names,
-returning a card to `Backlog` — never `Todo`, which dispatches — with the
-cause named. One action per card, the first of these that applies:
+returning a card to the queue — never `Todo`, which dispatches — with the
+cause named. The queue is `lane_contract.QUEUE_LANE` (DRE-6748), read at each
+write, so it follows the planning exit to Queued when DRE-6742 flips it. One
+action per card, the first of these that applies:
 
 1. **A moot card.** Its parent epic is `Canceled` or `Duplicate` on the board
    read: the person decided on the parent, and the card is canceled with that
@@ -41,7 +43,7 @@ cause named. One action per card, the first of these that applies:
    answers `archived: true` to `gh api repos/<owner>/<repo>` (cause `archived
    repo <owner/repo>`). It is marked `routing_verdict.OPERATOR_STEP_LABEL` —
    a repo that is gone is the operator's to re-point, which is an operator step,
-   and `hand-built` is the CEO's mark alone (DRE-6228) — and parked in Backlog.
+   and `hand-built` is the CEO's mark alone (DRE-6228) — and parked in Queued.
 5. **A proof with an open pull request.** The title opens `PROOF:` and
    `card_pr.find` — the one "did this card produce a pull request" seam —
    answers an OPEN pull request in the card's repo. It moves to In Review, the
@@ -51,10 +53,10 @@ cause named. One action per card, the first of these that applies:
    id that resolves — on the board read, or by one `ctx.linear` read per pass —
    gets the relation, which makes the sentence true (a relation to a Done card
    is met and harmless). Cause: `relation added, blocked by <DRE-N[, DRE-M]>`.
-   The card returns to Backlog only when every claim resolved AND it carries a
+   The card returns to Queued only when every claim resolved AND it carries a
    routing verdict (`routing_verdict.verdict_on`): an id that resolves nowhere
    is a sentence only its author can reword, and a card with no verdict has
-   nothing for Backlog to route on. Then the relation is still added, under a
+   nothing for Queued to route on. Then the relation is still added, under a
    `hyg-cause-named` receipt, and a `Left` row says what is missing. Nothing
    rewrites a description.
 7. **A dependency loop.** The card's `blockedBy` chain returns to itself
@@ -62,7 +64,7 @@ cause named. One action per card, the first of these that applies:
    relations, and its own `blocks` relations read the other way round, so a
    Done card off the board still closes a loop. When a card in the loop is met
    (`prose_blockers.TERMINAL` — the gate's own reading of a blocker that holds
-   nothing) the card returns to Backlog, under the same verdict rule as (6).
+   nothing) the card returns to Queued, under the same verdict rule as (6).
    Cause: `loop <A → B → A> broken, <DRE-N> is <state>`. When every card in it
    is open, which edge to cut is a person's call.
 
@@ -93,15 +95,21 @@ from datetime import UTC, datetime, timedelta
 import card_pr
 import hold
 import hygiene
+import lane_contract
 import linear_ops
 import prose_blockers
 import routing_verdict
 
 LANE = "Triage"
 
-#: Where every write here returns a card to: the lane the dependency gate and
-#: the routing verdict re-evaluate it in. Never Todo.
-RETURN_LANE = prose_blockers.RETURN_LANE
+
+def return_lane() -> str:
+    """Where every write here returns a card to: the queue, the lane the
+    dependency gate and the routing verdict re-evaluate it in. Never Todo.
+    `lane_contract.QUEUE_LANE`, read at the write so it follows the planning
+    exit (DRE-6748)."""
+    return lane_contract.QUEUE_LANE
+
 
 #: The parent states that make a child moot.
 MOOT_PARENT = ("Canceled", "Duplicate")
@@ -363,7 +371,7 @@ def retired(card: dict, ctx: hygiene.Context, seen: _Pass) -> list | None:
         return None
     return [_action(card, "hygiene-triage-return", cause, evidence, ctx,
                     [hygiene.linear_label(card, routing_verdict.OPERATOR_STEP_LABEL, True)],
-                    [hygiene.linear_state(card, RETURN_LANE, park=True)])]
+                    [hygiene.linear_state(card, return_lane(), park=True)])]
 
 
 # --------------------------------------------------------------------------- #
@@ -392,8 +400,8 @@ def proof_in_review(card: dict, ctx: hygiene.Context) -> list | None:
 
 
 def _no_verdict(card: dict, what: str) -> hygiene.Left:
-    return _left(card, f"{what}, but it carries no routing verdict — Backlog has "
-                       "nothing to route it on",
+    return _left(card, f"{what}, but it carries no routing verdict — "
+                       f"{return_lane()} has nothing to route it on",
                  "a person moves it to Planning, where the planning exit routes it afresh")
 
 
@@ -422,7 +430,7 @@ def prose_blocker(card: dict, ctx: hygiene.Context, seen: _Pass) -> list | None:
                                               f"{', '.join(found)}"))
         else:
             out.append(_action(card, "hygiene-triage-return", cause, evidence, ctx, relations,
-                               [hygiene.linear_state(card, RETURN_LANE)]))
+                               [hygiene.linear_state(card, return_lane())]))
     return out + rows
 
 
@@ -491,7 +499,7 @@ def loop(card: dict, ctx: hygiene.Context, seen: _Pass) -> list | None:
     cause = f"loop {named} broken, {met} is {seen.states[met]}"
     evidence = [f"relation {a} blocked by {b}" for a, b in zip(cycle, cycle[1:] + cycle[:1])]
     return [_action(card, "hygiene-triage-return", cause, evidence + [f"{met} {seen.states[met]}"],
-                    ctx, [], [hygiene.linear_state(card, RETURN_LANE)])]
+                    ctx, [], [hygiene.linear_state(card, return_lane())])]
 
 
 # --------------------------------------------------------------------------- #

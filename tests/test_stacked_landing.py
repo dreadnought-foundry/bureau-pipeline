@@ -172,6 +172,9 @@ class LandingScenario:
         self.scripts = self.dir / "scripts"
         shutil.copytree(SCRIPTS, self.scripts,
                         ignore=shutil.ignore_patterns("__pycache__"))
+        # `prose_blockers` reads the queue lane off
+        # `config/lane-contract.json` at import (DRE-6747), so it rides along.
+        shutil.copytree(ROOT / "config", self.dir / "config")
         # The one script the closer both imports and runs, stubbed in place —
         # exactly where it sits in the live checkout, so the shipped
         # `sys.path` insert and the shipped subprocess path both find it.

@@ -715,9 +715,20 @@ class TestGuard:
         with pytest.raises(hygiene.Forbidden):
             hygiene.guard(hygiene.linear_state(card("DRE-1", "Triage", "portico"), lane), context())
 
-    @pytest.mark.parametrize("lane", ["Planning", "Backlog", "In Review", "Done", "Canceled"])
+    @pytest.mark.parametrize("lane", ["Planning", lane_contract.QUEUE_LANE, "In Review", "Done",
+                                      "Canceled"])
     def test_the_five_lanes_the_contract_admits_it_to_pass(self, lane):
         hygiene.guard(hygiene.linear_state(card("DRE-1", "Triage", "portico"), lane), context())
+
+    def test_the_queue_it_admits_follows_the_planning_exit(self, monkeypatch):
+        # DRE-6748: the queue is `QUEUE_LANE`, read when the guard runs — Backlog
+        # under the shipped contract, Queued once DRE-6742 flips the exit.
+        monkeypatch.setattr(lane_contract, "QUEUE_LANE", "Queued")
+        hygiene.guard(hygiene.linear_state(card("DRE-1", "Triage", "portico"), "Queued"),
+                      context())
+        with pytest.raises(hygiene.Forbidden):
+            hygiene.guard(hygiene.linear_state(card("DRE-1", "Triage", "portico"), "Backlog"),
+                          context())
 
     @pytest.mark.parametrize("lane", ["Done", "Canceled"])
     def test_closing_a_card_with_children_is_refused(self, lane):
@@ -1530,9 +1541,19 @@ class TestTheLaneContract:
                               "Canceled"}
 
     def test_the_guard_admits_exactly_the_lanes_the_contract_permits(self):
-        # All but Queued, which nothing writes until the cutover (DRE-6740).
-        assert set(hygiene.destinations()) == {"Planning", "Backlog", "In Review",
+        # The queue under the one name it is written as, `QUEUE_LANE` (DRE-6748):
+        # Backlog until DRE-6742 flips the planning exit to Queued.
+        assert set(hygiene.destinations()) == {"Planning", lane_contract.QUEUE_LANE,
+                                               "In Review", "Done", "Canceled"}
+
+    def test_the_published_destinations_follow_the_planning_exit(self, monkeypatch):
+        monkeypatch.setattr(lane_contract, "QUEUE_LANE", "Queued")
+        assert set(hygiene.destinations()) == {"Planning", "Queued", "In Review",
                                                "Done", "Canceled"}
+
+    def test_no_string_in_the_core_names_the_retired_queue(self):
+        path = str(ROOT / "scripts" / "hygiene.py")
+        assert lane_contract._scan_python(path, ["Backlog"]) == set()
 
     @pytest.mark.parametrize("lane", ["Planning", "Backlog", "In Review", "Done", "Canceled"])
     def test_the_writers_clause_still_holds_with_the_agent_in_it(self, lane):

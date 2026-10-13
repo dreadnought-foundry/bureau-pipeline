@@ -1714,7 +1714,7 @@
     },
     {
       "file": "scripts/reconcile.py",
-      "anchor": "🧹 Auto-advanced Backlog → Planning",
+      "anchor": "🧹 Auto-advanced {QUEUE_LANE} → Planning",
       "kind": "undeclared-act",
       "means": "Every blocker of a waiting epic is closed, so the dependent epic advances on its own from Backlog to Planning, where the planner is dispatched.",
       "why": "Act-shaped, and the registry has no row for it. DRE-2825 declared thirteen acts by reading reconcile.py's ten tag constants, the fix loop's three notices and the medic; this receipt was not among them. Giving it a row is a REGISTRY change — a tag, a kind, a state, a next actor, a subscriber, and the reasoning that fixes each — not an emission change, and this card converts what the registry declares. Named here so the debt is countable rather than invisible."
@@ -1728,7 +1728,7 @@
     },
     {
       "file": "scripts/reconcile.py",
-      "anchor": "🧹 Auto-promoted Backlog → {destination}",
+      "anchor": "🧹 Auto-promoted {QUEUE_LANE} → {destination}",
       "kind": "undeclared-act",
       "means": "A Backlog card whose blockers are all Done is promoted on its own, to the lane its routing verdict names: Todo for FLEET, Hand-work for WORKBENCH and OPERATOR (DRE-5322).",
       "why": "Act-shaped, and the registry has no row for it. DRE-2825 declared thirteen acts by reading reconcile.py's ten tag constants, the fix loop's three notices and the medic; this receipt was not among them. Giving it a row is a REGISTRY change — a tag, a kind, a state, a next actor, a subscriber, and the reasoning that fixes each — not an emission change, and this card converts what the registry declares. Named here so the debt is countable rather than invisible."
@@ -2298,7 +2298,7 @@
     },
     {
       "file": ".github/workflows/plan.yml",
-      "anchor": "🧠 model-attempt: ${{ steps.classify.outputs.receipt }} — planning classifier read the card.",
+      "anchor": "🧠 model-attempt: $RECEIPT — planning classifier read the card.",
       "step": "Classifier heartbeat — the model that answered",
       "kind": "not-an-act",
       "means": "Which model was asked for and which one actually answered the classification, so DRE-3015's judgement ladder can be read off the card and a fall off the top rung is visible (DRE-3083).",

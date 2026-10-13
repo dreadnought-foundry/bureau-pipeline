@@ -72,6 +72,10 @@ MODULE = SCRIPTS / "plan_child_verdicts.py"
 
 EPIC = "DRE-4668"
 
+# Where adoption puts a child: the queue lane, the planning exit's destination
+# (DRE-6746) — `Backlog` until DRE-6742 moves the exit, `Queued` after.
+QUEUE = lane_contract.QUEUE_LANE
+
 LABELS = ("repo:bureau-pipeline", "agent:engineer", "initiative:pipeline")
 OPS_LABELS = ("repo:bureau-pipeline", "agent:ops", "initiative:pipeline")
 
@@ -217,7 +221,7 @@ class TheHandFiledChildrenAreAdoptedTest(unittest.TestCase):
         self.assertEqual(
             {i: self.board.lanes[i] for i in
              ("DRE-901", "DRE-902", "DRE-9099")},
-            {"DRE-901": "Backlog", "DRE-902": "Backlog", "DRE-9099": "Backlog"},
+            {"DRE-901": QUEUE, "DRE-902": QUEUE, "DRE-9099": QUEUE},
         )
 
     def test_the_build_children_carry_fleet(self):
@@ -244,7 +248,7 @@ class TheHandFiledChildrenAreAdoptedTest(unittest.TestCase):
         self.assertTrue(self.board.comments.get("DRE-901"),
                         "the verdict is posted before the move")
         self.assertGreaterEqual(first_move, 0)
-        self.assertEqual(self.board.advances[first_move][1], "Backlog")
+        self.assertEqual(self.board.advances[first_move][1], QUEUE)
 
     def test_it_is_only_ever_taken_out_of_intake(self):
         """The move names its from-lane, so a child the sweep or a person has
@@ -269,7 +273,7 @@ class TheHandFiledChildrenAreAdoptedTest(unittest.TestCase):
         self.assertEqual(
             {i: self.board.lanes[i] for i in
              ("DRE-901", "DRE-902", "DRE-9099")},
-            {"DRE-901": "Backlog", "DRE-902": "Backlog", "DRE-9099": "Backlog"},
+            {"DRE-901": QUEUE, "DRE-902": QUEUE, "DRE-9099": QUEUE},
         )
         self.assertEqual(self.board.comments, before)
 
@@ -296,8 +300,8 @@ class ANeedsWorkChildIsNotAdoptedTest(unittest.TestCase):
         self.assertNotIn("DRE-901", [i for i, _, _ in self.board.advances])
 
     def test_its_siblings_are_still_adopted(self):
-        self.assertEqual(self.board.lanes["DRE-902"], "Backlog")
-        self.assertEqual(self.board.lanes["DRE-9099"], "Backlog")
+        self.assertEqual(self.board.lanes["DRE-902"], QUEUE)
+        self.assertEqual(self.board.lanes["DRE-9099"], QUEUE)
 
     def test_it_is_named_on_the_epic(self):
         """`withheld_comment` already does this — the note lands on the card
@@ -318,7 +322,9 @@ class ANeedsWorkChildIsNotAdoptedTest(unittest.TestCase):
 # ===========================================================================
 class AChildPastIntakeIsUntouchedTest(unittest.TestCase):
 
-    LANES = ("Backlog", "Todo", "In Progress")
+    # The queue under either of its names (DRE-6746): a child already waiting
+    # there reads the same whichever name the board files it under.
+    LANES = lane_contract.QUEUE_LANES + ("Todo", "In Progress")
 
     def test_it_is_neither_moved_nor_re_stamped(self):
         already = routing_verdict.verdict_comment(
@@ -342,8 +348,8 @@ class AChildPastIntakeIsUntouchedTest(unittest.TestCase):
         board.lanes["DRE-901"] = "In Progress"
         board.comments["DRE-901"] = [already]
         _planning_exit(board, children)
-        self.assertEqual(board.lanes["DRE-902"], "Backlog")
-        self.assertEqual(board.lanes["DRE-9099"], "Backlog")
+        self.assertEqual(board.lanes["DRE-902"], QUEUE)
+        self.assertEqual(board.lanes["DRE-9099"], QUEUE)
 
 
 # ===========================================================================
@@ -367,7 +373,7 @@ class NothingElseLeavesIntakeTest(unittest.TestCase):
         module's own constants so a later edit that pointed it at a build lane
         fails here rather than in a live plan run."""
         self.assertEqual(plan_child_verdicts.ADOPTED_FROM, "Intake")
-        self.assertEqual(plan_child_verdicts.ADOPTION_LANE, "Backlog")
+        self.assertIs(plan_child_verdicts.ADOPTION_LANE, lane_contract.QUEUE_LANE)
         self.assertNotIn(plan_child_verdicts.ADOPTION_LANE,
                          routing_verdict.sweep_lanes())
 

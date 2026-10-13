@@ -38,11 +38,14 @@ sys.path.insert(0, str(ROOT / "scripts"))
 
 import blocker_class  # noqa: E402
 import blocker_nothing_to_change as module  # noqa: E402
+import lane_contract  # noqa: E402
 import linear_ops  # noqa: E402
 
 SCRIPT = ROOT / "scripts" / "blocker_nothing_to_change.py"
 FIXTURE = ROOT / "tests" / "fixtures" / "blocker-reasons.json"
 REPO = "dreadnought-foundry/bureau-pipeline"
+#: The move out of the queue reads it under every name it has (DRE-6747).
+QUEUE_FROM = ",".join(lane_contract.QUEUE_LANES)
 
 CRITERIA = (
     "The cap file says 15.",
@@ -104,11 +107,15 @@ class StubLinear:
 
     def cmd_state(self, identifier, state_name, *flags, **kwargs):
         self.calls.append(("cmd_state", identifier, state_name, flags, kwargs))
-        return self.state_ok
+        expect = kwargs.get("expect")
+        if not self.state_ok or (expect is not None and self.lane not in expect):
+            return False
+        self.lane = state_name
+        return True
 
     def cmd_advance(self, identifier, to_state, from_states_csv, *flags, **kwargs):
         self.calls.append(("cmd_advance", identifier, to_state, from_states_csv, flags, kwargs))
-        if self.lands:
+        if self.lands and self.lane in [s.strip() for s in from_states_csv.split(",")]:
             self.lane = to_state
         else:
             print(f"{identifier} is not in {from_states_csv} — not advancing")
@@ -145,7 +152,7 @@ class TestEveryCriterionAttestedCancels:
         result = module.resolve(_card(), reason, repo=REPO)
         assert stub.calls == [(
             "cmd_state", "DRE-9001", "Canceled", (),
-            {"expect": ("Backlog",), "labels_absent": ("needs-human",)},
+            {"expect": lane_contract.QUEUE_LANES, "labels_absent": ("needs-human",)},
         )]
         action, note = result
         assert action == "canceled"
@@ -173,11 +180,30 @@ class TestEveryCriterionAttestedCancels:
         assert [call[0] for call in fake.calls] == ["cmd_state"]
 
 
+class TestEitherQueueName:
+    """DRE-6747: the cancel and the replan read the queue under every name it
+    has, so a card parked in `Queued` resolves as one in the lane it replaces."""
+
+    @pytest.mark.parametrize("lane", lane_contract.QUEUE_LANES)
+    def test_every_criterion_attested_cancels_from_either_name(self, monkeypatch, lane):
+        fake = _use(monkeypatch, StubLinear(lane=lane))
+        action, _ = module.resolve(_card(), _reason(_lines(3)), repo=REPO)
+        assert action == "canceled"
+        assert fake.lane == "Canceled"
+
+    @pytest.mark.parametrize("lane", lane_contract.QUEUE_LANES)
+    def test_fewer_attested_replans_from_either_name(self, monkeypatch, lane):
+        fake = _use(monkeypatch, StubLinear(lane=lane))
+        action, _ = module.resolve(_card(), _reason(_lines(2)), repo=REPO)
+        assert action == "replanned"
+        assert fake.lane == "Planning"
+
+
 class TestFewerAttestedReplans:
     def test_two_of_three_advances_to_planning_and_reads_the_lane_back(self, stub):
         result = module.resolve(_card(), _reason(_lines(2)), repo=REPO)
         assert stub.calls == [
-            ("cmd_advance", "DRE-9001", "Planning", "Backlog", (), {"held": True}),
+            ("cmd_advance", "DRE-9001", "Planning", QUEUE_FROM, (), {"held": True}),
             ("get_issue", "DRE-9001", {"fresh": True}),
         ]
         action, note = result
@@ -220,6 +246,7 @@ class TestFewerAttestedReplans:
         assert action == "canceled"
         description = DESCRIPTION + "- [ ] A fourth criterion, outside any fence\n"
         stub.calls.clear()
+        stub.lane = "Backlog"  # the first resolve canceled it
         action, note = module.resolve(_card(description), _reason(_lines(3)), repo=REPO)
         assert (action, note.split(" criteria")[0]) == ("replanned", "3 of 4")
 

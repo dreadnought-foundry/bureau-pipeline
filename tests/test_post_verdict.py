@@ -81,7 +81,8 @@ class TheStepDelegatesTest(unittest.TestCase):
     def test_it_keeps_its_id_and_condition(self):
         step = _step()
         self.assertEqual(step.get("id"), "post")
-        self.assertEqual(step.get("if"), "always() && !cancelled() && steps.decide.outputs.review == 'true'")
+        # A shadow replay posts nothing (DRE-7193): its verdict is a file.
+        self.assertEqual(step.get("if"), "always() && !cancelled() && steps.decide.outputs.review == 'true' && !inputs.shadow")
 
 
 class TheScriptFileTest(unittest.TestCase):

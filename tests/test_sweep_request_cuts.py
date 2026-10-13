@@ -205,7 +205,7 @@ def _parent_ref(epic: dict) -> dict:
 # a 260-card Backlog costs three requests here as it does live.
 # --------------------------------------------------------------------------
 _BOARD_READ = "state: {name: {in: $states}}"
-_BACKLOG_READ = 'state: {name: {eq: "Backlog"}}'
+_BACKLOG_READ = reconcile.QUEUE_STATE_FILTER
 #: The pass's epic records (DRE-3642): the same identifier-scoped filter the
 #: Backlog read uses, with no lane of its own — an active epic is not in
 #: Backlog — so the two are told apart by the lane filter the other one has.

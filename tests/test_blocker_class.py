@@ -45,6 +45,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "scripts"))
 
 import blocker_class  # noqa: E402
+import lane_contract  # noqa: E402
 
 CONFIG = ROOT / "config" / "blocker-classes.json"
 FIXTURE = ROOT / "tests" / "fixtures" / "blocker-reasons.json"
@@ -71,9 +72,10 @@ TRAILER = (" — parked in Backlog until the blocker is resolved (a Todo return 
            "https://github.com/dreadnought-foundry/bureau-pipeline/actions/runs/42")
 
 
-def _marker(reason: str, cls: str | None = None) -> str:
+def _marker(reason: str, cls: str | None = None, lane: str = "Backlog") -> str:
     head = f"class={cls} · " if cls else ""
-    return f"🛑 Agent blocked: {head}{reason}{TRAILER}"
+    trailer = TRAILER.replace(" — parked in Backlog", f" — parked in {lane}", 1)
+    return f"🛑 Agent blocked: {head}{reason}{trailer}"
 
 
 def _fixture() -> list:
@@ -272,6 +274,20 @@ class TestMarker:
     def test_marker_reason_cuts_at_the_last_parked_clause(self):
         reason = "It says — parked in Backlog once before, and again."
         assert blocker_class.marker_reason(_marker(reason)) == reason
+
+    @pytest.mark.parametrize("lane", lane_contract.QUEUE_LANES)
+    def test_marker_reason_cuts_at_the_parked_clause_under_either_queue_name(self, lane):
+        """DRE-6747: the poster's clause names the lane the card parks in, and
+        the reader cuts the reason at it under every name the queue has."""
+        reason = "repo: bureau-pipeline\nThe file lives there."
+        body = _marker(reason, "wrong-repo", lane=lane)
+        assert blocker_class.marker_reason(body) == reason
+
+    @pytest.mark.parametrize("lane", lane_contract.QUEUE_LANES)
+    def test_marker_reason_cuts_at_the_last_clause_whichever_name_came_first(self, lane):
+        other = next(name for name in lane_contract.QUEUE_LANES if name != lane)
+        reason = f"It says — parked in {other} once before, and again."
+        assert blocker_class.marker_reason(_marker(reason, lane=lane)) == reason
 
     def test_a_marker_class_is_read_without_the_phrases(self):
         body = _marker("There is nothing for this card to change.", "wrong-repo")
@@ -537,3 +553,22 @@ class TestDocs:
     def test_the_config_readme_carries_the_bullet(self):
         text = (ROOT / "config" / "README.md").read_text(encoding="utf-8")
         assert "- **`blocker-classes.json`**" in text
+
+
+# --------------------------------------------------------------------------- #
+# the queue's two names (DRE-6747)                                             #
+# --------------------------------------------------------------------------- #
+
+#: The blocker scripts DRE-6747 moved onto `lane_contract`'s queue names.
+QUEUE_SCRIPTS = ("blocker_class", "blocker_ask", "blocker_resolve",
+                 "blocker_wrong_repo", "blocker_branch_pr",
+                 "blocker_nothing_to_change", "prose_blockers")
+
+
+@pytest.mark.parametrize("script", QUEUE_SCRIPTS)
+def test_no_string_constant_in_a_blocker_script_names_the_retiring_lane(script):
+    """Read as `lane_contract` reads the pipeline's vocabulary — every string
+    constant, docstrings included — so a lane is named through `QUEUE_LANE` /
+    `QUEUE_LANES` and never spelled."""
+    path = ROOT / "scripts" / f"{script}.py"
+    assert lane_contract._scan_python(str(path), ["Backlog"]) == set()

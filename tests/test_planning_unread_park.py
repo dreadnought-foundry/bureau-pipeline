@@ -21,8 +21,9 @@ DRE-5979 (bureau-pipeline #759) made most of those calls answer, by asking the n
      `park-unread` for it. And the first failure's note stops promising the CEO a question.
 
 The one test here that falls down a ladder is a rule of the classifier, so it runs against the frozen model files
-(DRE-6885): its classifier is imported from `model_fixture.fixture_tree`, and the rung it refuses on is the top of
-the planner's ladder in `model_fixture.fixture_config()`, never a literal.
+(DRE-6885): its classifier is imported from a `model_fixture.fixture_tree` built with `regenerate=False`, its selector
+on the frozen home document (`model_fixture.fixture_home()`, through `fixture_module(..., doc=...)`, DRE-6990), and the
+rung it refuses on is the top of the planner's group in that document, never a literal.
 """
 
 from __future__ import annotations
@@ -66,20 +67,21 @@ _MODEL_FILES = ("models.yaml", "model-prices.yaml", "model-choices.json")
 
 @pytest.fixture(scope="module")
 def fixture_classify(tmp_path_factory):
-    """The classifier of a tree running today's scripts on the frozen model files, so its walk is the fixture's. What
-    else it reads — `config/`'s lane contract and shape vocabulary, the brief and standard — rides along as
+    """The classifier of a tree running today's scripts on the frozen model files, its selector on the frozen
+    document, so its walk is the fixture's. What else it reads — `config/`'s lane contract and shape vocabulary, the brief and standard — rides along as
     committed."""
     dest = tmp_path_factory.mktemp("dre6885-unread") / "tree"
     shutil.copytree(ROOT / "config", dest / "config", ignore=shutil.ignore_patterns(*_MODEL_FILES))
     for name in ("briefs", "standards"):
         shutil.copytree(ROOT / name, dest / name)
-    return model_fixture.fixture_module(model_fixture.fixture_tree(dest), "planning_classify")
+    return model_fixture.fixture_module(model_fixture.fixture_tree(dest, regenerate=False), "planning_classify",
+                                        doc=model_fixture.fixture_home())
 
 
 def _top_rung() -> str:
-    """The planner's first rung on the frozen files, named for its place."""
-    cfg = model_fixture.fixture_config()
-    return model_fixture.ladder(cfg, cfg["agents"]["planner"])[0]
+    """The planner's first rung on the frozen document, named for its place."""
+    home = model_fixture.fixture_home()
+    return model_fixture.ladder(home, home["agents"]["planner"])[0]
 
 
 def _no_answer_error() -> planning_classify.TransportError:
@@ -113,6 +115,7 @@ def test_a_fall_after_no_answer_logs_what_the_cli_streamed(capsys, fixture_class
     """Since #759 the next rung answers, so the run never reaches `_transport` and the `stream:` summary DRE-5979
     put in the error never reached a log: six falls on agent-bureau on 10-06 and not one cause recorded. The fall's
     own line carries it."""
+    assert fixture_classify.model_fallback.HOME_STATUS == "read", "the selector is not on the document"
     top = _top_rung()
 
     def call(model, prompt, **kwargs):
