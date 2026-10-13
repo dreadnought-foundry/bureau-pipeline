@@ -196,7 +196,7 @@ class TestTheHeldOperatorCardIsCarried:
         lifted = writes.index(("comment", LIFT_LINE))
         advance = writes.index(("advance", "Hand-work"))
         receipts = [i for i, (k, w) in enumerate(writes)
-                    if k == "comment" and w.startswith("🧹 Auto-promoted Backlog → Hand-work")]
+                    if k == "comment" and w.startswith("🧹 Auto-promoted Queued → Hand-work")]
         assert len(receipts) == 1
         assert unlabel < lifted < advance < receipts[0]
         assert routing_verdict.destination("OPERATOR") == "Hand-work"

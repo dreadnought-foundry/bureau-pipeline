@@ -1169,9 +1169,9 @@ def test_under_the_window_every_row_is_today_s_behavior_line_for_line(row):
 @pytest.mark.parametrize("lane", ["Backlog", "Queued"])
 def test_the_handoff_names_the_queue_lane_to_park_in(monkeypatch, lane):
     """DRE-6745: the hand-off tells a person to park the card in `QUEUE_LANE`
-    — `Backlog` under the shipped contract, `Queued` once DRE-6742 moves the
-    planning exit."""
-    assert limit_recovery.QUEUE_LANE == "Backlog"
+    — `Queued` under the shipped contract since DRE-6742 moved the planning
+    exit, `Backlog` before it."""
+    assert limit_recovery.QUEUE_LANE == "Queued"
     monkeypatch.setattr(limit_recovery, "QUEUE_LANE", lane)
     s, _ = _run("handoff", FRESH)
     body = s.comments[0][1]

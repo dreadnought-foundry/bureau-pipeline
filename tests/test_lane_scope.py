@@ -46,14 +46,20 @@ class TestFlowOrder:
         assert pos["Green Light"] < pos["Backlog"] < pos["Todo"]
         assert pos["Todo"] < pos["In Progress"] < pos["In Review"] < pos["Done"]
 
-    def test_planning_exit_is_named_and_sits_between_green_light_and_backlog(self):
+    def test_planning_exit_is_named_and_sits_between_green_light_and_the_queue(self):
         # The hazard on the card: the boundary is only as good as the
         # definition of "where verdicts are produced". It is pinned to a
         # transition with a name, not to a description that drifts.
         assert lane_scope.PLANNING_EXIT_FROM == "Green Light"
-        assert lane_scope.PLANNING_EXIT_TO == "Backlog"
+        assert lane_scope.PLANNING_EXIT_TO == "Queued"
+        # Since DRE-6742 the exit lands in Queued, and the one lane between
+        # it and Green Light is Backlog, the name the alias reads as Queued.
         pos = lane_scope.LANE_FLOW.index
-        assert pos(lane_scope.PLANNING_EXIT_TO) == pos(lane_scope.PLANNING_EXIT_FROM) + 1
+        between = lane_scope.LANE_FLOW[
+            pos(lane_scope.PLANNING_EXIT_FROM) + 1:pos(lane_scope.PLANNING_EXIT_TO)]
+        assert between == ("Backlog",)
+        assert all(lane_scope.canonical_lane(name) == lane_scope.PLANNING_EXIT_TO
+                   for name in between)
 
     def test_the_retired_name_is_todays_board_name_for_green_light(self):
         # Wave 1.5 §5's rename has landed in code (DRE-2722) but not on the

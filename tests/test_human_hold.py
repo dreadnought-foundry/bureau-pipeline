@@ -200,7 +200,7 @@ def _inprogress_card(labels=None):
 
 
 def test_in_progress_holds_after_cap():
-    """≥ cap dead-run-requeue tags → label + Backlog, NOT another Todo requeue."""
+    """≥ cap dead-run-requeue tags → label + Queued, NOT another Todo requeue."""
     reconcile._write_failures.clear()
     mocks = _full_sweep_mocks({"active_cards": MagicMock(return_value=[_inprogress_card()])})
     with patch.multiple(reconcile, **mocks), patch.object(
@@ -212,9 +212,9 @@ def test_in_progress_holds_after_cap():
         reconcile.main()
     add_label.assert_called_once_with("DRE-1331", reconcile.HOLD_LABEL)
     # --park: the HOLD-cap park is DELIBERATE, so it opts out of the DRE-1885
-    # building-card reroute (otherwise an In Progress → Backlog hold would be
+    # building-card reroute (otherwise an In Progress → Queued hold would be
     # re-routed to Todo and loop forever past the cap).
-    cmd_state.assert_called_once_with("DRE-1331", "Backlog", "--park")
+    cmd_state.assert_called_once_with("DRE-1331", "Queued", "--park")
     assert ("DRE-1331", "Todo") not in [c.args for c in cmd_state.call_args_list]
 
 

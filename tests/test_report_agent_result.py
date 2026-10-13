@@ -281,7 +281,7 @@ HANDBACK = "agent-handback.txt"
 
 FIXTURES = os.path.join(ROOT, "tests", "fixtures", "blocker-reasons.json")
 #: The lane a blocker parks in: `lane_contract.QUEUE_LANE`, read by the script
-#: through the seam (DRE-6745) — `Backlog` until DRE-6742 moves the exit.
+#: through the seam (DRE-6745) — `Queued` since DRE-6742 moved the exit.
 QUEUE_LANE = lane_contract.QUEUE_LANE
 PARKED = f" — parked in {QUEUE_LANE}"
 ATTESTED = (
@@ -452,12 +452,12 @@ class TheBlockerParksInTheQueueLane(unittest.TestCase):
         self.assertEqual(1, len(posted), posted)
         self.assertIn(f" — parked in {lane} until the sweep acts on it (", posted[0])
 
-    def test_under_the_shipped_contract_it_parks_in_backlog(self):
-        self.assertEqual("Backlog", QUEUE_LANE)
-        self._assert_parked_in("Backlog", None)
+    def test_under_the_shipped_contract_it_parks_in_queued(self):
+        self.assertEqual("Queued", QUEUE_LANE)
+        self._assert_parked_in("Queued", None)
 
-    def test_with_the_exit_moved_it_parks_in_queued(self):
-        self._assert_parked_in("Queued", "Queued")
+    def test_with_the_exit_put_back_it_parks_in_backlog(self):
+        self._assert_parked_in("Backlog", "Backlog")
 
     def test_with_the_exit_moved_the_question_names_queued(self):
         posted, moved = self._run({ESCALATION: "Which of A or B first?"}, "Queued")

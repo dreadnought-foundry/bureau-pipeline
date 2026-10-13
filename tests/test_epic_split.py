@@ -626,12 +626,14 @@ class TestTheLaneContract:
         in_progress = lane_contract.lane("In Progress")["clauses"]["writers"]["text"]
         assert "are sent to Planning" not in in_progress
 
-    def test_the_acts_page_says_a_blocked_child_waits_in_backlog(self):
+    def test_the_acts_page_says_a_blocked_child_waits_in_queued(self):
+        # Queued since DRE-6742 moved the planning exit the children are filed by.
         page = (ROOT / "docs" / "pipeline-acts.md").read_text(encoding="utf-8")
         section = page.split("`🧩 roll-up-split`", 1)[1].split("\n## ", 1)[0]
         flat = " ".join(section.split())
         assert "sends each child still in Backlog to Planning" not in flat
-        assert ("a child blocked by an open sibling waits in Backlog for the "
+        assert "sends each child still in Queued to Planning" not in flat
+        assert ("a child blocked by an open sibling waits in Queued for the "
                 "sweep's auto-advance") in flat
         row = pipeline_act.record(epic_split.ACT)
         assert "each sent to Planning" not in row["means"]
