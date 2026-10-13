@@ -649,13 +649,19 @@ its title, children, relations both ways, the last move and the thread with
 who said each comment — in one Linear request per card, plus one per older
 page of fifty comments up to 200 (DRE-7238). `prepare` holds what that adds
 to the agent's input to known limits: each comment cut at 2,000 characters,
-the thread shown held to 30,000 characters with the newest kept, and the
-board context saying `comments_read`, `comments_shown` and `thread_whole`.
+the thread shown held to 30,000 characters with the newest kept, the board
+context saying `comments_read`, `comments_shown` and `thread_whole`, and at
+most 20 relations shown (`<n> more relation(s) not shown` names the rest),
+each title and the parent's cut at 200 characters. Children and labels are
+not cut: Linear returns at most fifty of each.
 Two fenced sections follow the Layer A evidence: the Done cards and merged
 pull requests matched to the card's problem (`matched_work`, at most 20,000
 characters, a pull request past that shown by its line alone) and where jobs
 ran recently (`routing`, at most 60 facts, the card's own repo first). A row
-at every limit adds under 65,000 characters, roughly 16,000 tokens. It also
+at every limit — 200 long comments, 50 relations each way, 50 children and
+50 labels of 40 characters — adds 64,013 characters, under the 65,000 target
+and roughly 16,000 tokens. A label name is the one field not held to a
+length, so that figure assumes labels of that size. It also
 excludes five kinds before any agent runs, never by the
 model: `parent epic with <n> open child(ren)` (a child not Done, Canceled or
 Duplicate — an epic with no open child is judged like any card),

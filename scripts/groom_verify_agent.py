@@ -186,6 +186,12 @@ THREAD_CUT = ("{n} older comment(s) not shown: the thread passed "
 MAX_MATCHED_CHARS = 20000
 MATCHED_CUT = ("{n} matched pull request(s) shown by title only: the section "
                f"passed {MAX_MATCHED_CHARS:,} characters")
+#: The relations shown, in the order Linear gave them, this card's own
+#: first, and the line naming the rest.
+MAX_RELATIONS = 20
+RELATIONS_CUT = "{n} more relation(s) not shown"
+#: A relation's title, and the parent's, is cut here and ends `…`.
+MAX_TITLE_CHARS = 200
 #: The routing facts shown, the card's own repo first.
 MAX_ROUTING_LINES = 60
 ROUTING_CUT = "{n} more fact(s) not shown"
@@ -752,6 +758,12 @@ def _context_lines(context) -> list[str]:
     def line(text) -> str:
         return _fenced(_one_line(text))
 
+    def title(text) -> str:
+        text = _one_line(text)
+        if len(text) > MAX_TITLE_CHARS:
+            text = text[:MAX_TITLE_CHARS] + "…"
+        return _fenced(text)
+
     parent = context.get("parent")
     moved = context.get("last_moved")
     lines = [f"Age: {context.get('age_days')} days "
@@ -760,7 +772,7 @@ def _context_lines(context) -> list[str]:
                                      in context.get("labels") or []) or "none"),
              "Parent: " + (f"{line(parent.get('identifier'))} "
                            f"({line(parent.get('state'))})"
-                           + (f" — {line(parent['title'])}"
+                           + (f" — {title(parent['title'])}"
                               if parent.get("title") else "")
                            if isinstance(parent, dict) else "none")]
     children = context.get("children") or []
@@ -774,7 +786,9 @@ def _context_lines(context) -> list[str]:
         lines.append("Relations:" + ("" if relations else " none"))
         lines += [f"- {line(r.get('type'))}, {line(r.get('direction'))}: "
                   f"{line(r.get('identifier'))} ({line(r.get('state'))}) — "
-                  f"{line(r.get('title'))}" for r in relations]
+                  f"{title(r.get('title'))}" for r in relations[:MAX_RELATIONS]]
+        if len(relations) > MAX_RELATIONS:
+            lines.append(RELATIONS_CUT.format(n=len(relations) - MAX_RELATIONS))
     lines.append("Last state move: " + (
         f"to {line(moved.get('to'))} on {line(moved.get('at'))}, "
         f"by: {line(moved.get('by'))}" if isinstance(moved, dict) else "none"))

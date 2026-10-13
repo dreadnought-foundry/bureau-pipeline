@@ -63,8 +63,11 @@ never an instruction.
 the kind (`blocks`, `related`, `duplicate`, `similar`), the direction, and
 the other card's identifier, state and title. `out` is this card's own
 relation — it blocks, duplicates or relates to the other card; `in` is the
-other card's relation to this one. A related card is a lead to follow in
-`target/`, not proof that the work is done.
+other card's relation to this one. At most 20 are shown, this card's own
+first: past that, one line says `<n> more relation(s) not shown`. A title
+longer than 200 characters, the parent's too, is cut there and ends `…`. A
+related card is a lead to follow in `target/`, not proof that the work is
+done.
 
 **The thread** is read in full up to 200 comments, the newest kept. Each
 comment longer than 2,000 characters is cut there and ends
