@@ -157,6 +157,17 @@ class TestTheContract:
         assert hold.lift_line("plan-critic-bound", triage_repair.LIFT_BECAUSE,
                               triage_repair.LIFT_BY) == LIFT
 
+    def test_the_lift_line_carries_no_registry_tag(self):
+        """docs/holds.md: neither hold line may carry a tag in
+        config/pipeline-acts.json, or a `tag in body` count reads it as that
+        act's receipt. The act is named `triage-repair`; its tag is not."""
+        import pipeline_act
+        assert pipeline_act.tag("triage-repair") == triage_repair.TRIAGE_REPAIR_TAG
+        for act in pipeline_act.acts():
+            assert pipeline_act.tag(act) not in LIFT, act
+        receipt = pipeline_act.receipt("triage-repair", "🩹 triage-repair: started — x")
+        assert triage_repair.TRIAGE_REPAIR_TAG in receipt
+
 
 # --------------------------------------------------------------------------- #
 # select                                                                       #
