@@ -54,8 +54,10 @@ import proof_reach  # noqa: E402
 
 REPO = "dreadnought-foundry/bureau-pipeline"
 QA = "agent-bureau-qa-bot[bot]"
-MODEL = "claude-opus-5-5"
-OTHER_MODEL = "claude-sonnet-5-5"
+# Opaque to the code under test, and on no ladder, so no console save is
+# pinned here (DRE-6866).
+MODEL = "replay-model"
+OTHER_MODEL = "recorded-model"
 
 
 def _sr():
