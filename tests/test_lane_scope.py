@@ -188,3 +188,68 @@ class TestTheRuleNamesPlanningExit:
         with open(src) as f:
             text = f.read()
         assert "pre-verdict lanes" not in text.lower()
+
+
+# --- the queue lane under both names (DRE-6741) -------------------------------
+
+
+def _fixture_contract(**planning_exit):
+    import copy
+
+    import lane_contract
+
+    doc = copy.deepcopy(lane_contract.load())
+    doc["planning_exit"].update(planning_exit)
+    return doc
+
+
+def _scope_from(monkeypatch, doc):
+    """Point the guard's derived constants at `doc`, exactly as importing it
+    against that contract would — and undone after the test."""
+    import lane_contract
+
+    monkeypatch.setattr(lane_scope, "LANE_FLOW", lane_contract.flow_lanes(doc))
+    monkeypatch.setattr(lane_scope, "OFF_FLOW", lane_contract.off_flow(doc))
+    monkeypatch.setattr(lane_scope, "LANE_ALIASES", lane_contract.aliases(doc))
+    exit_from, exit_to = lane_contract.planning_exit(doc)
+    monkeypatch.setattr(lane_scope, "PLANNING_EXIT_FROM", exit_from)
+    monkeypatch.setattr(lane_scope, "PLANNING_EXIT_TO", exit_to)
+
+
+class TestTheQueueLaneUnderBothNames:
+    """Backlog is being replaced by Queued (DRE-4125). The contract's alias
+    resolves the old name to the new one, so the guard gives a card the same
+    answer under either name — before the planning exit moves (DRE-6742) and
+    after it."""
+
+    def test_backlog_resolves_to_queued_through_the_alias(self):
+        assert lane_scope.canonical_lane("Backlog") == "Queued"
+        assert lane_scope.LANE_ALIASES["Backlog"] == "Queued"
+
+    @pytest.mark.parametrize("epic_lane", [None, "Green Light", "In Progress"])
+    def test_both_names_are_policed_alike_under_the_shipped_contract(self, epic_lane):
+        assert lane_scope.is_policed("Backlog", parent_epic_lane=epic_lane) == (
+            lane_scope.is_policed("Queued", parent_epic_lane=epic_lane)
+        )
+
+    @pytest.mark.parametrize("epic_lane", [None, "Green Light", "In Progress"])
+    def test_both_names_are_policed_alike_once_the_exit_lands_in_queued(
+        self, monkeypatch, epic_lane
+    ):
+        _scope_from(monkeypatch, _fixture_contract(to="Queued"))
+        assert lane_scope.PLANNING_EXIT_TO == "Queued"
+        assert lane_scope.is_policed("Backlog", parent_epic_lane=epic_lane) == (
+            lane_scope.is_policed("Queued", parent_epic_lane=epic_lane)
+        )
+
+    def test_without_the_alias_a_moved_exit_would_unpolice_backlog(self, monkeypatch):
+        # The control that makes the test above mean something: Backlog sits
+        # before Queued in the flow, so once the exit lands in Queued only the
+        # alias keeps a card still in Backlog on the policed side.
+        doc = _fixture_contract(to="Queued")
+        doc["aliases"]["entries"] = [
+            entry for entry in doc["aliases"]["entries"] if entry["to"] != "Queued"
+        ]
+        _scope_from(monkeypatch, doc)
+        assert lane_scope.is_policed("Backlog") is False
+        assert lane_scope.is_policed("Queued") is True
