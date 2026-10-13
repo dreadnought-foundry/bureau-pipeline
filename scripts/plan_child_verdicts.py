@@ -6,7 +6,7 @@ exactly one routing verdict, written by the planning-exit writer. For a
 planner-created epic's children, nothing wrote one. The planner creates them
 with `linear_ops.py subissue`; the only verdict-writer that ran on its own was
 `proof_and_demo.py check --stamp`, which stamps the PROOF card and nothing else.
-So every BUILD child reached Backlog verdictless and the sweep refused it:
+So every BUILD child reached the queue verdictless and the sweep refused it:
 
     🚨 routing-no-verdict: <CARD> carries no routing verdict, so nothing has
     said who builds it
@@ -65,7 +65,7 @@ label, the title/repo match and `linear_ops.body_problem` — it never looks for
 `- [ ]` criterion, so a child with a heading, some prose and no criteria passes
 `check-children` and arrives here unstampable. Silence then costs exactly what
 this card exists to stop: a line in a run log nobody reads, a green step, an
-approved epic, and a card frozen in Backlog on `routing-no-verdict`. So every
+approved epic, and a card frozen in the queue on `routing-no-verdict`. So every
 child this step will not stamp — and that nobody else writes either — is named
 in `withheld_comment()`, which the plan run posts ON THE EPIC, in the same run,
 before the CEO is asked to approve it. The card still stops; what changes is
@@ -94,33 +94,33 @@ lane; this module stamped verdicts and moved nothing; and nothing else takes a
 card out of Intake by design (`reconcile.INTAKE_LANE` — no card leaves Intake
 for being old; since DRE-4150 an Urgent card raised after that rule shipped
 does, and only to Planning). So the epic was approved and nothing built:
-`reconcile.backlog_children` asks Linear for `state: {name: {eq: "Backlog"}}`
-and every hand-filed child was still in Intake. Read on 2026-09-23 before
-approving DRE-4666 (12 such children); DRE-4626 and DRE-4633 have the same
-shape, 7 each.
+`reconcile.backlog_children` reads the queue, and every hand-filed child was
+still in Intake. Read on 2026-09-23 before approving DRE-4666 (12 such
+children); DRE-4626 and DRE-4633 have the same shape, 7 each.
 
 So every child this planning exit accounts for is ADOPTED: taken out of
-`Intake` and put in `Backlog`, after its verdict is written.
+`Intake` and put in the queue, `Queued` — `lane_contract.QUEUE_LANE`, the
+planning exit's destination (DRE-6746) — after its verdict is written.
 
 **The approval model, and it is the CEO's own** (signed through the console on
 DRE-4668, 2026-09-23 09:57 PT). An epic's green light is the approval for the
 cards filed under it. This adds exactly ONE more exit from Intake, and only for
-a card whose parent epic is being planned. `Backlog` is not a build lane:
+a card whose parent epic is being planned. `Queued` is not a build lane:
 `reconcile.promote_ready` still releases the card only once the parent epic is
 `In Progress` — the CEO's approval act — and every blocker is Done. An epic
-nobody approves leaves its children sitting in Backlog, unbuilt. A card in
+nobody approves leaves its children sitting in the queue, unbuilt. A card in
 Intake with NO parent epic is never in this set at all and still leaves only
 through a groomer batch the CEO approves.
 
 Three rules fall out of that, and each is the same rule as the stamp:
 
-  * The verdict is written FIRST, then the move. Backlog's entrance condition
+  * The verdict is written FIRST, then the move. The queue's entrance condition
     is that the card carries a routing verdict (`config/lane-contract.json`),
     and the sweep runs every fifteen minutes — a card moved first sits, however
     briefly, in a lane it does not qualify for.
   * A child this step will not stamp and nobody else will either — NEEDS WORK,
     or a child that reads as an epic — is NOT adopted. It carries no verdict,
-    so Backlog would freeze it on `routing-no-verdict`; it stays where it is
+    so the queue would freeze it on `routing-no-verdict`; it stays where it is
     and `withheld_comment()` names it on the epic instead.
   * The closing cards ARE adopted. `proof_and_demo.py` has already written the
     PROOF card's verdict by the time this runs (it is a verdict a HUMAN acts
@@ -147,7 +147,7 @@ The lane write goes through `linear_ops` for the same reason, one door over:
 that module's own seam, so a module that assembled its own issue mutation over
 Linear's state field would be a writer no check here can see. The writer this
 one is attributed to is `plan.yml` — the workflow that runs it — which the lane
-contract permits on `Backlog`.
+contract permits on `Queued` under either of its names.
 
 CLI:
 
@@ -173,6 +173,7 @@ from dataclasses import dataclass
 _HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _HERE)
 import lane_contract  # noqa: E402
+from lane_contract import QUEUE_LANE  # noqa: E402 — the queue lane, written (DRE-6746)
 import planning_route  # noqa: E402
 import proof_and_demo  # noqa: E402
 import routing_verdict  # noqa: E402
@@ -183,10 +184,12 @@ import routing_verdict  # noqa: E402
 #: module's own names — and because "the only new exit from Intake" is a claim
 #: a test can read here rather than infer from a call.
 #:
-#: `Backlog` is deliberately not the promotion lane: adoption puts the card
+#: The queue is deliberately not the promotion lane: adoption puts the card
 #: where the sweep will CONSIDER it, and `reconcile.promote_ready` still holds
-#: it until the parent epic is In Progress and every blocker is Done.
-ADOPTION_LANE = "Backlog"
+#: it until the parent epic is In Progress and every blocker is Done. It is
+#: `QUEUE_LANE`, never a literal (DRE-6746): the planning exit's destination,
+#: which follows the exit when DRE-6742 moves it to `Queued`.
+ADOPTION_LANE = QUEUE_LANE
 ADOPTED_FROM = "Intake"
 
 
@@ -204,13 +207,13 @@ class ChildVerdict:
     `held` splits those three by who is owed the news. A closing card is
     another writer's and nothing is wrong with it. The other two leave a card
     with NO verdict and nobody scheduled to write one, which freezes it in
-    Backlog — so they go in the note posted on the epic (`withheld_comment`).
+    the queue — so they go in the note posted on the epic (`withheld_comment`).
 
     `adopt` is whether this planning exit takes the card out of `Intake`
     (DRE-4668). It follows the same split, from the other side: a card that
     will carry a verdict is adopted — the ones this step stamps, and the
     closing cards `proof_and_demo.py` has already stamped — and a `held` card
-    is not, because Backlog's entrance condition is a verdict and a card put
+    is not, because the queue's entrance condition is a verdict and a card put
     there without one freezes on `routing-no-verdict`.
     """
 
@@ -409,8 +412,8 @@ def withheld_comment(epic: str, held) -> str:
         "",
         "Every card leaving planning carries one line saying who builds it — "
         "the fleet, or a person. The sweep refuses a card that has none, and "
-        "nothing here can write one, so this work will sit in Backlog until "
-        "somebody looks at it:",
+        f"nothing here can write one, so this work will sit in {QUEUE_LANE} "
+        "until somebody looks at it:",
         "",
     ]
     lines += [f"- **{record.identifier}** — {record.why}" for record in held]
