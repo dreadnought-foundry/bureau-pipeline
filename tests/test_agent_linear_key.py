@@ -155,6 +155,21 @@ DOCUMENTED_EXCEPTIONS = {
         "brief (briefPath: null) and its prompt names no tracker command, "
         "pinned by tests/test_medic_diagnosis_snapshot.py."
     ),
+    (
+        "triage-repair.yml",
+        "Repair the card",
+    ): (
+        "The Triage Repair planner is denied Linear ON PURPOSE (DRE-7179 + "
+        "DRE-2696). It runs a model over untrusted card text, and every "
+        "Linear read and write of the run is made by the `select`, `claim` "
+        "and `apply` steps of scripts/triage_repair.py and the planner "
+        "context step, each holding the key on its own step's env. Its tool "
+        "set is \"Read,Glob,Grep,Write\" with no Bash, so it could not run "
+        "linear_ops.py if it held the key, and it posts no heartbeat: it "
+        "writes four files to one directory, which `apply` reads. That is "
+        "groomer.yml's 'Verify the card against main' shape, pinned by "
+        "tests/test_triage_repair_workflow.py."
+    ),
 }
 
 # The eight agent steps counted in the DRE-2696 sweep. More is fine (new
