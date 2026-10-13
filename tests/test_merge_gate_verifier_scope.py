@@ -441,8 +441,11 @@ class TheWrapperReadsTheCardOnceTest(unittest.TestCase):
         self.assertEqual(run.proc.returncode, 0, run.explain())
         self.assertEqual(len(run.card_reads), 1, run.explain())
         self.assertEqual(run.decision(), "hold", run.explain())
-        self.assertIn(f"no snapshot of {CARD}", run.proc.stdout)
+        reason = [ln for ln in run.proc.stdout.splitlines() if ln.startswith("reason=")][-1]
+        self.assertIn("could not ask whether the verifier gates head", reason)
+        self.assertIn(f"no snapshot of {CARD}", reason)
         self.assertEqual(run.merges, [], run.explain())
+        self.assertIn("gate-note: posted", run.proc.stdout)
 
     def test_no_verifier_verdict_reads_no_card(self):
         run = run_wrapper(seed=(CRITIC_APPROVE,))
