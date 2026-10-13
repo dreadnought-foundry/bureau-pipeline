@@ -103,16 +103,18 @@ The planner's files are read first, and exactly one outcome is reached:
     shapes, never both, and `repair-answers.md` beside it:
       - siblings: `revised-card.md` narrowed to the first piece, and each
         other piece as `sibling-<n>.md` — `# <title>`, then a full card body.
-        Writes: the description and the Decisions block, then each sibling in
-        its number order, through the seam the card's parent decides — under
+        Writes: each sibling in its number order, then the description and
+        the Decisions block, so a refused filing leaves the card whole. Each
+        sibling is filed through the seam the card's parent decides — under
         an epic being built (`mid_epic.EPIC_ACTIVE_LANES`),
         `mid_epic.discovery` as an addition, so the epic's green light is not
         re-asked; under any other parent, `linear_ops.cmd_subissue`; with no
         parent, `linear_ops.cmd_oneoff` with the card's own `repo:`, `agent:`
         and `initiative:` labels. The seam decides the lane a sibling lands
         in, and nothing here names it. A sibling that fails to file stops the
-        sequence: the card stays in Triage, held, and `unfinished` names the
-        cards already filed, which stay, and the files not filed.
+        sequence: the card stays in Triage, held, with its description
+        untouched, and `unfinished` names the cards already filed, which
+        stay, and the files not filed.
       - an epic: `reshape.txt` reading exactly `epic`. Writes: the description
         and the Decisions block when a `revised-card.md` stands beside it,
         then the shape, through `planning_shape.stamp` as `by: planner` with
@@ -929,9 +931,8 @@ def _split(card: str, writes: _Writes, records, reason: str, *, revised: str,
     found = park_findings(_body(park_note(records)))
     because = split_finding(found)
 
-    if revised.strip():
-        writes.do(W_DESCRIPTION, lambda: linear_ops.set_description(card, revised))
-        writes.do(W_DECISIONS, lambda: _decisions_block(card))
+    # Every sibling is filed before the card is narrowed: a refused filing
+    # then leaves the card whole, never a piece that is in neither place.
     filed: list[tuple[str, str]] = []
     for i, (name, title, body) in enumerate(pieces):
         try:
@@ -942,6 +943,9 @@ def _split(card: str, writes: _Writes, records, reason: str, *, revised: str,
             raise _Stopped(f"{stop.what} — not filed: "
                            + ", ".join(left for left, *_ in pieces[i:])) from stop
         filed.append((ident, title))
+    if revised.strip():
+        writes.do(W_DESCRIPTION, lambda: linear_ops.set_description(card, revised))
+        writes.do(W_DECISIONS, lambda: _decisions_block(card))
     if shape:
         writes.do(W_STAMP, lambda: _stamp_epic(card, because, model))
     writes.do(W_LIFT, lambda: hold.lift(card, LIFT_BECAUSE, LIFT_BY, reason=reason))
