@@ -98,6 +98,12 @@ WRITERS = ("console", "daily-adoption", "operator")
 
 READ, UNREADABLE, NOT_SET = "read", "unreadable", "not set"
 _ON_DEFAULTS = "running on the defaults in the code"
+# An empty token is a mint that failed. The mint step is continue-on-error and
+# shows as passing, so the reader's line is the one sign of it, and it says
+# plainly that the mint was refused and the built-in defaults are in use
+# (DRE-7230).
+MINT_REFUSED = f"the token mint was refused: {TOKEN_ENV} is set and empty"
+_ON_BUILT_IN = "the built-in defaults are in use"
 
 # `one_line`: what a printed reason or document value may hold.
 _SAFE = frozenset(string.ascii_letters + string.digits + " .,:;_/()=+@-")
@@ -436,7 +442,7 @@ def _source(token, path) -> str | None:
         except (OSError, UnicodeDecodeError) as exc:
             raise _Unreadable(f"{FILE_ENV} names {path}, which could not be read ({exc})")
     if not token:
-        raise _Unreadable(f"{TOKEN_ENV} is set and empty, so the token mint failed")
+        raise _Unreadable(MINT_REFUSED)
     return _fetch(token)
 
 
@@ -501,7 +507,9 @@ def status_line(outcome: Mapping) -> str:
                 dict.fromkeys(aside))
         return line
     if state == UNREADABLE:
-        return f"{TAG} unreadable — {one_line(outcome.get('reason'))}; {_ON_DEFAULTS}"
+        reason = one_line(outcome.get("reason"))
+        tail = _ON_BUILT_IN if reason == MINT_REFUSED else _ON_DEFAULTS
+        return f"{TAG} unreadable — {reason}; {tail}"
     return f"{TAG} not set — {_ON_DEFAULTS}"
 
 

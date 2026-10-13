@@ -638,8 +638,10 @@ jobs:
 
       # The model home (DRE-6939) is a variable on
       # dreadnought-foundry/bureau-pipeline, which a run's boot token in another
-      # organization cannot read. A narrow token for the bureau App's installation
-      # there, handed only to the steps below whose process reads the home
+      # organization cannot read. A token for the bureau App's installation
+      # there, for bureau-pipeline alone and with no permission subset — the
+      # pinned action declares no variables input (DRE-7230) — handed only to
+      # the steps below whose process reads the home
       # (DRE-6940, held by scripts/check_model_home_scope.py). A refused mint
       # leaves it empty and the selector on the defaults in the code — never a
       # failed job.
@@ -653,7 +655,6 @@ jobs:
           private-key: ${{ secrets.BUREAU_APP_PRIVATE_KEY }}
           owner: dreadnought-foundry
           repositories: bureau-pipeline
-          permission-variables: read
       - name: Classify the card — one-off, epic or wave
         id: classify
         if: steps.gate.outputs.bounced != 'true' && steps.dedupe.outputs.skip != 'true' && steps.slot.outputs.admitted == 'true' && steps.ask.outputs.review != 'true'
@@ -2304,7 +2305,6 @@ jobs:
           private-key: ${{ secrets.BUREAU_APP_PRIVATE_KEY }}
           owner: dreadnought-foundry
           repositories: bureau-pipeline
-          permission-variables: read
 
       # DRE-3970 — Plan epic: refused for capacity? The step above is
       # continue-on-error so a refusal is READ rather than ending the job: its
@@ -2819,7 +2819,6 @@ jobs:
           private-key: ${{ secrets.BUREAU_APP_PRIVATE_KEY }}
           owner: dreadnought-foundry
           repositories: bureau-pipeline
-          permission-variables: read
 
       # --- The FIRST critic (DRE-2721) --------------------------------------
       #
@@ -3194,7 +3193,6 @@ jobs:
           private-key: ${{ secrets.BUREAU_APP_PRIVATE_KEY }}
           owner: dreadnought-foundry
           repositories: bureau-pipeline
-          permission-variables: read
 
       # DRE-3970 — Re-plan after send-back: refused for capacity? The step above is
       # continue-on-error so a refusal is READ rather than ending the job: its
@@ -3802,7 +3800,6 @@ jobs:
           private-key: ${{ secrets.BUREAU_APP_PRIVATE_KEY }}
           owner: dreadnought-foundry
           repositories: bureau-pipeline
-          permission-variables: read
 
       # --- The SECOND critic (DRE-2721) -------------------------------------
       #
@@ -4799,7 +4796,6 @@ jobs:
           private-key: ${{ secrets.BUREAU_APP_PRIVATE_KEY }}
           owner: dreadnought-foundry
           repositories: bureau-pipeline
-          permission-variables: read
 
       # DRE-3970 — Re-plan after the second critic sent it back: refused for capacity? The step above is
       # continue-on-error so a refusal is READ rather than ending the job: its
@@ -5615,7 +5611,6 @@ jobs:
           private-key: ${{ secrets.BUREAU_APP_PRIVATE_KEY }}
           owner: dreadnought-foundry
           repositories: bureau-pipeline
-          permission-variables: read
 
       # DRE-3970 — Roll-up route — split into child epics: refused for
       # capacity? The step above is continue-on-error so a refusal is READ

@@ -6,9 +6,8 @@ The selector reads the one home for model choices (DRE-6939: the variable
 in `BUREAU_MODEL_HOME_TOKEN`. Every reusable workflow here mints its boot token
 for the CALLING repository only, so a run in another organization holds
 nothing that can read that variable: each job that holds a home-reading step
-mints a second, narrow token — the bureau App's installation on
-dreadnought-foundry, repository `bureau-pipeline`, `variables: read` — and
-hands it to exactly those steps. A step that misses it selects on the defaults
+mints a second token — the bureau App's installation on dreadnought-foundry,
+repository `bureau-pipeline` alone — and hands it to exactly those steps. A step that misses it selects on the defaults
 in the code whatever the home says, and says so only in its own note; this
 check is what keeps a new selecting step from being added without it.
 
@@ -39,10 +38,23 @@ step, when:
     the reader never raises — a dead token selects on the defaults in the
     code. A step after a model step reads a re-mint placed after it, as
     plan.yml's `*_cap` steps do (DRE-3940's rule, for this token);
-  * the mint step is not `actions/create-github-app-token`, lacks
-    `continue-on-error: true` (a refused permission must cost the defaults,
-    never the run), or does not ask for owner `dreadnought-foundry`,
-    repository `bureau-pipeline` and `permission-variables: read`.
+  * the mint step lacks `continue-on-error: true` (a refused permission
+    must cost the defaults, never the run).
+
+EVERY MODEL-HOME MINT — a step with id `model_home`, `model_home_<suffix>`
+or `model_home_write`, whether a reading step names it or not — FAILS when
+it is not `actions/create-github-app-token`, does not ask for owner
+`dreadnought-foundry` and repository `bureau-pipeline`, or asks for a
+`permission-*` subset without variables (DRE-7230). The pinned action
+(v3.2.0, and v3.3.0 after it) declares no input for repository variables:
+handed the undeclared `permission-variables`, it warned, forwarded it anyway,
+and GitHub refused every mint, so every run read the home as unreadable. A
+mint therefore asks for no subset, and its token carries the installation's
+own permissions on the one repository, variables included. Should a pinned
+release declare a variables input, it goes in `VARIABLES_INPUTS` and a mint
+may ask for that one input. The write mints keep no `continue-on-error`, so
+a refused write is red; tests/test_model_home_carry.py and
+tests/test_model_adoption_workflow.py hold that.
 
 THE DECLARATIONS ARE DERIVED, never listed. Walking the source of `scripts/`
 by AST, the check finds every script with a function that reaches the home in
@@ -99,8 +111,12 @@ MODEL_ACTION = "anthropics/claude-code-action"
 MINT_WITH = {
     "owner": "dreadnought-foundry",
     "repositories": "bureau-pipeline",
-    "permission-variables": "read",
 }
+# The pinned action's declared inputs that ask for repository variables: none
+# in v3.2.0 or v3.3.0 (DRE-7230). A model-home mint asks for no `permission-*`
+# subset unless it is one of these.
+VARIABLES_INPUTS: tuple[str, ...] = ()
+PERMISSION_PREFIX = "permission-"
 
 # The functions whose first call in a process reads the home (DRE-6939).
 CHOICE_FUNCTIONS = ("kind_for", "ladder_for", "fallback_for",
@@ -112,6 +128,7 @@ MODULE_SCOPE = "<module>"
 
 _TOKEN_EXPR = re.compile(
     r"^\$\{\{\s*steps\.(model_home(?:_\w+)?)\.outputs\.token\s*\}\}$")
+_MINT_ID = re.compile(r"^model_home(?:_\w+)?$")
 _PYTHON = r"\bpython3?\b"
 _MODULE_RUN = re.compile(_PYTHON + r"[^|;&\n]*?\s-m\s+([A-Za-z_][\w.]*)")
 _INLINE_PYTHON = re.compile(_PYTHON + r"(?:\s+-\S+)*?\s+(?:-c\b|-\s*<<)")
@@ -444,21 +461,43 @@ def _uses(step, action):
     return isinstance(uses, str) and uses.split("@", 1)[0] == action
 
 
-def _mint_errors(mint):
-    """What is wrong with a mint step, as [reason]."""
+def is_model_home_mint(step):
+    """True for a step whose id names a model-home mint: `model_home`, a
+    re-mint's `model_home_<suffix>`, or `model_home_write`."""
+    return isinstance(step, dict) and bool(_MINT_ID.match(str(step.get("id") or "")))
+
+
+def _scope_errors(mint):
+    """What is wrong with any model-home mint's action and inputs, as [reason]."""
     errors = []
     if not _uses(mint, MINT_ACTION):
         errors.append(f"is not {MINT_ACTION} (uses {mint.get('uses')!r})")
+    with_ = mint.get("with") if isinstance(mint.get("with"), dict) else {}
+    for key, want in MINT_WITH.items():
+        if str(with_.get(key, "")).strip() != want:
+            errors.append(f"has {key}: {with_.get(key)!r}, not {want!r}")
+    subset = [key for key in with_
+              if key.startswith(PERMISSION_PREFIX) and key not in VARIABLES_INPUTS]
+    if subset:
+        errors.append(
+            f"asks for a permission subset ({', '.join(subset)}) without "
+            f"variables — {MINT_ACTION} declares no variables input, and one "
+            f"it does not declare is forwarded and refused; ask for no "
+            f"subset, so the token carries the installation's own "
+            f"permissions on {MINT_WITH['repositories']}, variables included"
+        )
+    return errors
+
+
+def _mint_errors(mint):
+    """What is wrong with a mint step a reading step names, as [reason]."""
+    errors = _scope_errors(mint)
     if mint.get("continue-on-error") is not True:
         errors.append(
             "lacks `continue-on-error: true` — a refused permission must "
             "leave the token empty and the run on the defaults in the code, "
             "never fail the job"
         )
-    with_ = mint.get("with") if isinstance(mint.get("with"), dict) else {}
-    for key, want in MINT_WITH.items():
-        if str(with_.get(key, "")).strip() != want:
-            errors.append(f"has {key}: {with_.get(key)!r}, not {want!r}")
     return errors
 
 
@@ -475,7 +514,8 @@ def reading_steps(doc, scripts, packages):
 
 
 def check_workflow(doc, name, scripts, packages):
-    """All DRE-6940 violations in one parsed workflow. Empty list == clean."""
+    """All DRE-6940 and DRE-7230 violations in one parsed workflow. Empty
+    list == clean."""
     violations = []
     jobs = doc.get("jobs") or {}
     for job_id, i, step, reasons in reading_steps(doc, scripts, packages):
@@ -515,6 +555,12 @@ def check_workflow(doc, name, scripts, packages):
                 f"token's hour, and a dead token selects on the defaults in "
                 f"the code; re-mint it after the last of them"
             )
+    # Every model-home mint, the write mints no reading step names included
+    # (DRE-7230).
+    for job_id, _i, step in _steps(doc):
+        if is_model_home_mint(step):
+            for error in _scope_errors(step):
+                violations.append(f"{name}: job {job_id}: mint step {step['id']} {error}")
     return sorted(set(violations), key=violations.index)
 
 
