@@ -183,7 +183,8 @@ def _agent_steps() -> list[dict]:
 
 def _ctx(*, shadow=False, model="", replay_pr="", replay_sha="", in_scope="true",
          real1="", real2="", install="success", cancelled=False, app2="",
-         death_path="", guard="success", verdict_dir="", upload="success") -> dict:
+         death_path="", guard="success", verdict_dir="", upload="success",
+         shadow_effort="--effort max") -> dict:
     return {
         "inputs": {"pipeline_ref": "main", "shadow": shadow, "model": model,
                    "replay_pr": replay_pr, "replay_sha": replay_sha},
@@ -195,7 +196,8 @@ def _ctx(*, shadow=False, model="", replay_pr="", replay_sha="", in_scope="true"
             "death": {"outputs": {"path": death_path}},
             "shadow_guard": {"outcome": guard},
             "model": {"outputs": {"model": SELECTED, "effort_arg": "--effort high"}},
-            "shadow_effort": {"outputs": {"effort_arg": "--effort max"} if shadow else {}},
+            "shadow_model": {"outputs": {"model": model, "effort_arg": shadow_effort}
+                             if shadow else {}},
             "pr": {"outputs": {"number": replay_pr or "77", "card": "DRE-1",
                                "sha": replay_sha or TODAY_SHA}},
             "worker": {"outputs": {"token": "worker-token"}},
@@ -642,15 +644,23 @@ class TheReplayedHeadTest(_Shell):
 
     def test_the_agent_runs_the_named_model(self):
         for step in _agent_steps():
-            self.assertIn("--model ${{ inputs.shadow && inputs.model || steps.model.outputs.model }}",
-                          step["with"]["claude_args"])
+            self.assertIn("--model ${{ inputs.shadow && steps.shadow_model.outputs.model "
+                          "|| steps.model.outputs.model }}", step["with"]["claude_args"])
             args = _value(step["with"]["claude_args"], _shadow()).split()
             self.assertEqual(args[args.index("--model") + 1], NAMED)
             self.assertEqual(args.count("--effort"), 1)
             self.assertEqual(args[args.index("--effort") + 1], "max")
 
+    def test_a_named_model_with_no_level_runs_with_no_effort(self):
+        # Never the selected model's level: that is a level computed for a
+        # model the replay does not run.
+        for step in _agent_steps():
+            args = _value(step["with"]["claude_args"], _shadow(shadow_effort="")).split()
+            self.assertEqual(args[args.index("--model") + 1], NAMED)
+            self.assertNotIn("--effort", args, step["name"])
+
     def test_the_named_models_effort_comes_from_the_config(self):
-        step = _step("shadow_effort")
+        step = _step("shadow_model")
         self.assertTrue(_cond(step["if"], _shadow()))
         self.assertFalse(_cond(step["if"], _shadow(in_scope="false")))
         proc = self.run_step(step, _shadow())
@@ -658,6 +668,7 @@ class TheReplayedHeadTest(_Shell):
         want = subprocess.run([sys.executable, str(ROOT / "scripts" / "model_fallback.py"),
                                "effort", NAMED], capture_output=True, text=True).stdout.strip()
         self.assertEqual(self.outputs()["effort_arg"], f"--effort {want}" if want else "")
+        self.assertEqual(self.outputs()["model"], NAMED)
 
     def test_resolve_pr_takes_the_number_and_the_commit_from_the_inputs(self):
         proc = self.run_step(_step("pr"), _shadow())

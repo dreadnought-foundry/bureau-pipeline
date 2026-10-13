@@ -798,11 +798,11 @@ class WorkflowModelPinTest(unittest.TestCase):
         self.assertIn('model_fallback.py select "$ROLE"', body)
 
     # The selected model, or — in a shadow replay only — the model the replay's
-    # caller named: qa-review hands it on from the step that checked it
-    # (DRE-7193, tests/test_qa_review_shadow.py), verify reads the input itself
-    # (DRE-7194, tests/test_verify_shadow.py). Never a literal id either way.
+    # caller named, handed on by the step that read its effort level
+    # (DRE-7193, tests/test_qa_review_shadow.py; DRE-7194,
+    # tests/test_verify_shadow.py). Never a literal id either way.
     SELECTED_MODEL = re.compile(
-        r"--model \$\{\{ (?:inputs\.shadow && (?:steps\.shadow_model\.outputs|inputs)\.model \|\| )?"
+        r"--model \$\{\{ (?:inputs\.shadow && steps\.shadow_model\.outputs\.model \|\| )?"
         r"steps\.model\.outputs\.model \}\}")
 
     def test_agent_steps_consume_the_selected_model(self):
