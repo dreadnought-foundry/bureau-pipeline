@@ -398,7 +398,7 @@ class TestTheOneOffIsActuallyPromoted:
 
         assert board.promote() == 1
         assert board.lane_of(CARD) == "Todo"
-        assert board.advanced == [(CARD, "Todo", "Backlog")]
+        assert board.advanced == [(CARD, "Todo", ",".join(lane_contract.QUEUE_LANES))]
 
     def test_the_same_card_without_that_verdict_does_not(self):
         """The pairing that makes the test above mean something: the verdict

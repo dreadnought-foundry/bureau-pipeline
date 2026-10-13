@@ -130,7 +130,7 @@ def _card(
 # once per card, is exactly what exhausted the quota.
 _PER_CARD_COMMENTS = "query($id: String!) { issue(id: $id) {"
 _BOARD_READ = "state: {name: {in: $states}}"
-_BACKLOG_READ = 'state: {name: {eq: "Backlog"}}'
+_BACKLOG_READ = reconcile.QUEUE_STATE_FILTER
 
 
 class FakeLinear:

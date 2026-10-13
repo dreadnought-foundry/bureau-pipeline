@@ -326,7 +326,7 @@ def test_an_unreadable_live_card_is_left_for_the_next_pass_and_the_pass_goes_on(
     run.run(resolve_blockers=True)
     assert run.calls == []
     assert run.promoted == 1
-    run.advance.assert_called_once_with("DRE-1580", "Todo", "Backlog")
+    run.advance.assert_called_once_with("DRE-1580", "Todo", reconcile.QUEUE_FROM)
     assert _gate_lines(capsys.readouterr().out) == [
         "promotion: DRE-1572 agent-blocker class=nothing-to-change — not resolved "
         "this pass: it could not be read live (HTTP 502)"
@@ -363,7 +363,7 @@ def test_a_resolver_failure_is_one_cards_and_the_next_card_still_promotes(error,
         "DRE-1572 agent-blocker class=nothing-to-change: boom"]
     assert not [b for i, b in run.comments if b.startswith("🚨")]
     assert run.promoted == 1
-    run.advance.assert_called_once_with("DRE-1580", "Todo", "Backlog")
+    run.advance.assert_called_once_with("DRE-1580", "Todo", reconcile.QUEUE_FROM)
     err = capsys.readouterr().err
     assert "ERROR: DRE-1572 agent-blocker class=nothing-to-change — not resolved: boom" in err
 
@@ -429,7 +429,7 @@ def test_promote_ready_promotes_card_with_resolved_blocker():
     run.run(resolve_blockers=True)
     assert run.promoted == 1
     assert run.calls == []
-    run.advance.assert_called_once_with("DRE-1572", "Todo", "Backlog")
+    run.advance.assert_called_once_with("DRE-1572", "Todo", reconcile.QUEUE_FROM)
 
 
 def test_promote_ready_promotes_card_without_blocker():
@@ -438,4 +438,4 @@ def test_promote_ready_promotes_card_without_blocker():
     assert run.promoted == 1
     assert run.calls == []
     assert run.fetched == []
-    run.advance.assert_called_once_with("DRE-1572", "Todo", "Backlog")
+    run.advance.assert_called_once_with("DRE-1572", "Todo", reconcile.QUEUE_FROM)

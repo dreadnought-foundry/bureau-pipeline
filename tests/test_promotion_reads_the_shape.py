@@ -183,7 +183,7 @@ class TestTheOneOffIsPromoted:
         board = _Board(_card(comments=[ONE_OFF_STAMP, FLEET]))
         assert board.promote() == 1
         assert board.lane_of("DRE-3018") == "Todo"
-        assert board.advanced == [("DRE-3018", "Todo", "Backlog")]
+        assert board.advanced == [("DRE-3018", "Todo", reconcile.QUEUE_FROM)]
 
     def test_the_receipt_says_a_one_off_was_promoted(self):
         board = _Board(_card(comments=[ONE_OFF_STAMP, FLEET]))

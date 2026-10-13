@@ -288,4 +288,4 @@ def test_promote_ready_promotes_unheld_card():
     ) as advance, patch.object(reconcile.linear_ops, "cmd_comment"):
         promoted = reconcile.promote_ready(active_count=0)
     assert promoted == 1
-    advance.assert_called_once_with("DRE-1331", "Todo", "Backlog")
+    advance.assert_called_once_with("DRE-1331", "Todo", reconcile.QUEUE_FROM)

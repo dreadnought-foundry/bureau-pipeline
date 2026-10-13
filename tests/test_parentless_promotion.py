@@ -189,7 +189,7 @@ class TestTheFourCells:
         board = _Board(_card(parent_state=None, comments=[FLEET]))
         assert board.promote() == 1
         assert board.lane_of("DRE-2735") == "Todo"
-        assert board.advanced == [("DRE-2735", "Todo", "Backlog")]
+        assert board.advanced == [("DRE-2735", "Todo", reconcile.QUEUE_FROM)]
 
     def test_parentless_without_a_verdict_stays_in_backlog(self):
         """Nothing has approved it: no epic a human moved, and no verdict."""

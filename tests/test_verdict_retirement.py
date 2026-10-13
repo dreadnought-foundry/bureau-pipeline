@@ -438,7 +438,7 @@ class TestDre4724LeavesPlanningWithAFreshVerdict:
 
         card.now = SWEEP_AT
         board = card.sweep()
-        assert board.advanced == [(CARD, "Todo", "Backlog")]
+        assert board.advanced == [(CARD, "Todo", reconcile.QUEUE_FROM)]
         assert card.lane == "Todo"
         assert board.labelled == [], "the sweep put a mark back on"
         assert HAND_BUILT not in card.labels
@@ -457,7 +457,7 @@ class TestDre4724LeavesPlanningWithAFreshVerdict:
         with patch.object(reconcile.routing_verdict, "lane_moves",
                           side_effect=lambda i: list(moves)):
             board.promote()
-        assert board.advanced == [(CARD, "Hand-work", "Backlog")]
+        assert board.advanced == [(CARD, "Hand-work", reconcile.QUEUE_FROM)]
         assert (CARD, HAND_BUILT) in board.labelled
 
     def test_re_running_the_exit_writes_nothing_twice(self):
@@ -487,7 +487,7 @@ class TestAReplanThatRoutesWorkbenchAgain:
 
         card.now = SWEEP_AT
         board = card.sweep()
-        assert board.advanced == [(CARD, "Hand-work", "Backlog")]
+        assert board.advanced == [(CARD, "Hand-work", reconcile.QUEUE_FROM)]
 
 
 class TestAPersonsHandBuiltIsLeftAlone:
