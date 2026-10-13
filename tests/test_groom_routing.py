@@ -103,6 +103,10 @@ class FakeGh:
         url = urlsplit(endpoint)
         parts = url.path.split("/")
         repo = "/".join(parts[1:3])
+        if parts[0] == "repositories":
+            # GitHub's `next` link names the repo by its numeric id.
+            repo = list(self.pages)[int(parts[1])]
+            parts = ["repos", *repo.split("/"), *parts[2:]]
         query = {k: v[0] for k, v in parse_qs(url.query).items()}
         lines = ["HTTP/2.0 200 OK", "Content-Type: application/json"]
         if parts[-1] == "jobs":
@@ -117,7 +121,8 @@ class FakeGh:
             page = int(query.get("page", "1"))
             if page < len(pages):
                 lines.append(
-                    f'Link: <https://api.github.com/repositories/9/actions/runs'
+                    f'Link: <https://api.github.com/repositories/'
+                    f'{list(self.pages).index(repo)}/actions/runs'
                     f'?status=completed&per_page=100&page={page + 1}>; rel="next",'
                     f' <https://api.github.com/x?page={len(pages)}>; rel="last"')
             body = {"total_count": sum(len(p) for p in pages),
@@ -285,7 +290,7 @@ def test_follows_next_for_at_most_three_pages_and_names_the_limit():
     # The second and third requests are the `next` links GitHub gave.
     assert [parse_qs(urlsplit(e).query).get("page") for e in runs] == [
         None, ["2"], ["3"]]
-    assert urlsplit(runs[1]).path == "repositories/9/actions/runs"
+    assert urlsplit(runs[1]).path == "repositories/0/actions/runs"
     assert doc["why"] and "3 pages" in doc["why"] and AB in doc["why"]
 
 
