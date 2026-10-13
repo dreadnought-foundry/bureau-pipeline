@@ -186,6 +186,10 @@
       "what": "the hygiene agent — the hourly pass that clears mechanical rows, each move under a 🧹 receipt naming the evidence it read",
       "path": "scripts/hygiene.py"
     },
+    "triage_repair.py": {
+      "what": "the Triage repair — the one automatic repair a card the plan critic's bound parked in Triage gets, once per card: the card rewritten and moved to Planning, or one question that moves it to Green Light (DRE-7178)",
+      "path": "scripts/triage_repair.py"
+    },
     "guard": {
       "what": "the lane guard — returns a card whose occupancy is unjustified",
       "path": null,
@@ -301,7 +305,7 @@
       "stale_why": "what a Planning card owes is a classification, and producing one is a planner run — plan.yml's job alone is capped at 45 minutes, two planner passes and two critic rounds (DRE-2736, DRE-2721)",
       "clauses": {
         "entrance": {
-          "text": "The card has been classified as needing a plan.",
+          "text": "The card has been classified as needing a plan. Or the Triage repair (`triage_repair.py`, DRE-7178) rewrote a card the plan critic's bound had parked in Triage, lifted its hold and moved it here, once per card, so the plan run the entry fires has the critics read the rewritten card.",
           "enforced_from": "5",
           "assertion": null,
           "pending": null
@@ -314,7 +318,7 @@
         },
         "writers": {
           "text": "The planner, the sweep that re-triggers it, a build run handing back a card that turned out to be an epic, a build run whose turn-cap death stopped before implementation green and is sent back to be cut smaller (the `replan` write, DRE-4366), a build run whose dead-run cap is reached on a silent death — no pull request and no blocker note — and the planner has not yet had the card on that budget, sent once to be split before anyone parks it (the same `replan` write, under the `✂️ dead-run-cap → Planning:` receipt, DRE-6178), the sweep's two no-PR dead-run caps — a card In Progress with no live run, or In Review with its pull request gone — making the same hand-off once on the same budget under the same receipt (DRE-6186), the groomer draining a batch the CEO approved, the sweep's Urgent fast path moving a card raised to Urgent after that rule shipped (DRE-4150), the critic's audit moving a card it could not classify, the guarded write layer every automated card-minting seam goes through — the Todo gate returning a card it cannot repair, the one-off producer, and the medic/watch seams that file a fresh card (DRE-2858) — and a human. And the hygiene agent, returning from Green Light a row that was never a decision — a planner that died, a classifier transport failure, a child without acceptance criteria, an escalation that asks for a split or an access, a stall park — with the cause named (DRE-5365). And the Hand-work migration, sending a code card from Hand-work that has had no critic pass back here to be read before anything builds it (DRE-6230). And the sweep, handing off a build agent's `nothing-to-change` blocker that attested fewer than every acceptance criterion — or a card with no criteria to attest against — to be re-read, once per card, under the resolver's receipt (DRE-6458): a second such note is a person's call, asked in Green Light.",
-          "who": ["plan.yml", "reconcile.py", "agent-task.yml", "groomer.py", "critic_score.py", "linear_ops.py", "operator", "hygiene.py", "hand_work_migration.py"],
+          "who": ["plan.yml", "reconcile.py", "agent-task.yml", "groomer.py", "critic_score.py", "linear_ops.py", "operator", "hygiene.py", "hand_work_migration.py", "triage_repair.py"],
           "enforced_from": "2",
           "assertion": "lane.writers_exist"
         },
@@ -352,6 +356,7 @@
                 "planning_escalation.py#_cmd_escalate",
                 "planning_route.py#_cmd_exit",
                 "plan_bound.py#_question",
+            "triage_repair.py#apply",
                 "plan.yml#Classification refused — park the card for the CEO",
                 "plan.yml#One-off critic — escalate",
                 "plan.yml#Planner escalation — hand-planning parks for the CEO",
@@ -454,7 +459,7 @@
         },
         "writers": {
           "text": "The planner, the two agent runs that escalate, the proof run parking a card on a press only the CEO can make (DRE-5925), the merge gate parking a card whose pull request waits on a required code-owner review (DRE-4341), a human, the console filing the week's agent-failure report (DRE-4271), the sweep asking about an epic that grew past the size the CEO approved (DRE-6414), and the sweep returning to the line an approved epic a blocker released when the epic cap answers queue (DRE-6618).",
-          "who": ["plan.yml", "agent-task.yml", "agent-fix.yml", "merge-gate.yml", "proof-task.yml", "reconcile.py", "operator", "console"],
+          "who": ["plan.yml", "agent-task.yml", "agent-fix.yml", "merge-gate.yml", "proof-task.yml", "reconcile.py", "operator", "console", "triage_repair.py"],
           "enforced_from": "2",
           "assertion": "lane.writers_exist"
         },
@@ -703,7 +708,7 @@
           "pending": "DRE-2723 defines what may be parked here"
         },
         "exit": {
-          "text": "Somebody fixes the card, and it re-enters at Intake. Triage is not a decision queue — a card waiting on the CEO belongs in Green Light. An operator re-enters a parked epic by clearing `needs-human` and moving it to Planning: a plan run fires for any card entering Planning, the route opens a fresh planning attempt, and the planner and both critics read the plan again (DRE-5268). The plan run that fires when an `agent:planner` card ENTERS Triage is refused by the plan-gate when the card carries `needs-human` or its newest comment is a `planning-stall-park` note, so a park stays parked until a person moves it (DRE-5277). Or the hygiene agent fixes the mechanical defect and returns the card to Backlog, never Todo (DRE-5365). The hygiene agent's holds lane lifts a hold whose condition has cleared and returns the card to the lane the pipeline resumes it in: a `no-route` hold to Planning when the card's `repo:` label now names a repo on the rail, so that Planning's exit routes it afresh, and a `fix-dispute` or `unfixable-check` hold to In Review when its open pull request has a new head (DRE-6172). Not live yet: the lifts land with DRE-6180 and the returns with DRE-6273; until then a person lifts such a hold by clearing `needs-human` and moving the card.",
+          "text": "Somebody fixes the card, and it re-enters at Intake. Triage is not a decision queue — a card waiting on the CEO belongs in Green Light. An operator re-enters a parked epic by clearing `needs-human` and moving it to Planning: a plan run fires for any card entering Planning, the route opens a fresh planning attempt, and the planner and both critics read the plan again (DRE-5268). The plan run that fires when an `agent:planner` card ENTERS Triage is refused by the plan-gate when the card carries `needs-human` or its newest comment is a `planning-stall-park` note, so a park stays parked until a person moves it (DRE-5277). Or the hygiene agent fixes the mechanical defect and returns the card to Backlog, never Todo (DRE-5365). The hygiene agent's holds lane lifts a hold whose condition has cleared and returns the card to the lane the pipeline resumes it in: a `no-route` hold to Planning when the card's `repo:` label now names a repo on the rail, so that Planning's exit routes it afresh, and a `fix-dispute` or `unfixable-check` hold to In Review when its open pull request has a new head (DRE-6172). Not live yet: the lifts land with DRE-6180 and the returns with DRE-6273; until then a person lifts such a hold by clearing `needs-human` and moving the card. A card held `plan-critic-bound` gets one automatic repair first, once per card (`triage_repair.py`, DRE-7178): the planner answers every finding of its park note, and the repair lifts the hold (`because=triage-repair`) and takes one of two ways out — to Planning with the card rewritten, where the plan run that entry fires has the critics read it again, or to Green Light with one question for the CEO, through `planning_escalation.escalate` called with `from_lane=\"Triage\"`, the one caller that names a lane outside the Planning segment as still the escalation's to move. A repair that reaches neither leaves the card in Triage with an `unfinished` receipt for the hygiene agent's alarm.",
           "enforced_from": "5",
           "assertion": null,
           "pending": "DRE-2723"

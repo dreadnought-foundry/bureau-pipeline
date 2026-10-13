@@ -1306,7 +1306,8 @@ def _stale(record, attempt_since: str | None) -> bool:
 
 
 def moved_on(issue: dict, comment_bodies, contract: dict | None = None,
-             *, attempt_since: str | None = None) -> str | None:
+             *, attempt_since: str | None = None,
+             from_lane: str | None = None) -> str | None:
     """Why this card is past the escalation, or None when it is still ours.
 
     Two facts, and both are said when both hold: the lane the board shows the
@@ -1330,10 +1331,23 @@ def moved_on(issue: dict, comment_bodies, contract: dict | None = None,
     five-second window DRE-3654 was written for. `attempt_since=None` states no
     attempt, and then nothing is stale and the reading is exactly the one the
     two pre-DRE-4124 callers have always had.
+
+    `from_lane` is the one lane outside the segment the caller is moving the
+    card FROM (DRE-7178): a card standing there is still the escalation's to
+    move, as a card in the segment is. The Triage repair is the only caller
+    that names one, always Triage — a repaired card parked there by the
+    plan critic's bound, whose planner found a decision only the CEO can make.
+    Without it Triage, in `off-flow`, reads as moved on, and the question is
+    stood down with nothing asked. It excuses that one lane and nothing else:
+    a card in any other lane outside the segment is still moved on, and the
+    routing-verdict fact below is unchanged.
     """
     lane = ((issue or {}).get("state") or {}).get("name") or ""
+    aliases = lane_contract.aliases(contract)
+    leaving = aliases.get(from_lane, from_lane) if from_lane else None
     facts: list[str] = []
-    if not in_escalation_segment(lane, contract):
+    if not in_escalation_segment(lane, contract) and (
+            leaving is None or aliases.get(lane, lane) != leaving):
         facts.append(f"it is in {lane or 'no lane the board reports'}")
     current = [_body(c) for c in (comment_bodies or ())
                if not _stale(c, attempt_since)]
@@ -1348,7 +1362,8 @@ def moved_on(issue: dict, comment_bodies, contract: dict | None = None,
 def stood_down_comment(identifier: str, where: str, reason: str | None,
                        withdrawn: bool = False, transport: bool = False,
                        rewrite: bool = False,
-                       last_words: str | None = None) -> str:
+                       last_words: str | None = None,
+                       from_lane: str | None = None) -> str:
     """The record a card gets when the escalation reached it too late.
 
     `where` is `moved_on()`'s sentence. `withdrawn` is the crash-between-the-
@@ -1356,13 +1371,16 @@ def stood_down_comment(identifier: str, where: str, reason: str | None,
     the card, so this one withdraws the ask instead of leaving a question
     standing over a card someone is building. Same plain-English rule as the
     escalation note — the reason is shown only if `refusal()` lets it through.
+    `from_lane` is `escalate`'s: the lane named where `ORIGIN` is, so a
+    stand-down from the Triage repair says the card moved on from Triage.
     """
     lane = destination()
+    origin = from_lane or ORIGIN
     if withdrawn:
         lines = [
             f"{STOOD_DOWN_MARK} {STOOD_DOWN_TAG}: {identifier} — the ask above "
             f"is withdrawn. Since that note was posted the card has moved on "
-            f"from {ORIGIN}: {where}. It has been left there and was not moved "
+            f"from {origin}: {where}. It has been left there and was not moved "
             f"back to **{lane}**.",
             "",
         ]
@@ -1370,7 +1388,7 @@ def stood_down_comment(identifier: str, where: str, reason: str | None,
         lines = [
             f"{STOOD_DOWN_MARK} {STOOD_DOWN_TAG}: {identifier} was not parked — "
             f"by the time this run went to escalate it, the card had already "
-            f"moved on from {ORIGIN}: {where}. It has been left there.",
+            f"moved on from {origin}: {where}. It has been left there.",
             "",
         ]
     # `rewrite` sits with `transport` rather than with the question: neither one
@@ -1392,7 +1410,8 @@ def escalate(linear_ops, identifier: str, reason: str | None,
              issue: dict | None = None, comments=None,
              attempt_since: str | None = None,
              last_words: str | None = None,
-             choices: dict | None = None) -> Outcome:
+             choices: dict | None = None,
+             from_lane: str | None = None) -> Outcome:
     """Post the escalation and park the card — if the card is still ours.
 
     `issue` and `comments` let a caller that has ALREADY read the card hand
@@ -1461,6 +1480,11 @@ def escalate(linear_ops, identifier: str, reason: str | None,
     `moved_on` ask about, and never the handed `comments`. The read is made
     only here, on the path that posts a note, so a stand-down and a retry
     whose note is already on the card cost nothing.
+
+    `from_lane` (DRE-7178) is handed to `moved_on` and to the stand-down
+    note: a card standing in that lane is still this escalation's to move to
+    the destination. `triage_repair.py` is the one caller that passes it,
+    always Triage; every other caller passes nothing and reads as before.
     """
     choices = lifted_choices(reason) or choices
     lane = destination()
@@ -1469,7 +1493,8 @@ def escalate(linear_ops, identifier: str, reason: str | None,
         issue = linear_ops.get_issue(identifier, fresh=True)
     bodies = list(comments) if handed else linear_ops.comment_timeline(identifier)
     elsewhere = moved_on(
-        issue, bodies, attempt_since=attempt_since or attempt_started_at())
+        issue, bodies, attempt_since=attempt_since or attempt_started_at(),
+        from_lane=from_lane)
 
     def _count(tag: str, what: str) -> int:
         """How many of `tag` the card already carries. Counted off the handed
@@ -1500,7 +1525,8 @@ def escalate(linear_ops, identifier: str, reason: str | None,
         else:
             linear_ops.cmd_comment(identifier, stood_down_comment(
                 identifier, elsewhere, reason, withdrawn=bool(already),
-                transport=transport, rewrite=rewrite, last_words=last_words))
+                transport=transport, rewrite=rewrite, last_words=last_words,
+                from_lane=from_lane))
             posted = True
         return Outcome(parked=False, posted=posted, stood_down=elsewhere)
     if already:

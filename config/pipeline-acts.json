@@ -1097,6 +1097,24 @@
       }
     },
     {
+      "name": "triage-repair",
+      "tag": "triage-repair-receipt",
+      "adopted": true,
+      "kind": "recovery",
+      "means": "A card the plan critic's bound parked in Triage (held plan-critic-bound) got its one automatic repair, once per card. `started` is the claim, posted before the planner runs, with the description as it stood fenced so a person can put it back; `rewritten` (the card is rewritten and back in Planning, where a plan run fires), `asked` (one question moved the card to Green Light) and later `replanned` and `split` are finished outcomes, each posted last; `unfinished` names the write that failed, or what the planner did not write, and every write already made.",
+      "state": "dispatched",
+      "next_actor": "plan.yml",
+      "discharges": null,
+      "subscriber": "plan.yml",
+      "cadence_s": 6900,
+      "cadence_why": "Copied from the plan-bound-rewrite row, which is the measurement: a rewritten card enters Planning and the plan.yml run that entry fires has its plan job timeout-minutes: 115, so 6900 seconds after the receipt that run is over, whatever it did. It also bounds a `started` claim: the Triage Repair workflow's repair job runs inside timeout-minutes: 100.",
+      "why": "DRE-7178 (epic DRE-7174). On 2026-10-12 DRE-7066 and DRE-7164 sat in Triage about three hours each, held plan-critic-bound, and every finding on both was a defect in the card: the hygiene agent's Triage rule 3 only reported them. `scripts/triage_repair.py select` reads every finding of the newest park note off the card's whole thread and answers repair (every finding a revision or uncertain) or escalate (a finding `send_back_class` places as a decision); `claim` posts `🩹 triage-repair: started`; `apply` reads the planner's files and reaches exactly one outcome, writing in the contract's order — its own writes, the lift (`because=triage-repair`), the move out of Triage, then the receipt. The receipt key IS live, which is why the tag is adopted: a pipeline-authored comment whose first line opens `🩹 triage-repair:` anywhere on the card is the card's one repair, so `select` answers spent and `claim` exits 3. The tag is `triage-repair-receipt`, never the bare act name, because the contract's lift line reads `because=triage-repair` and docs/holds.md lets no hold line carry a registry tag: a `tag in body` count of this act never reads a lift line as one of its receipts. Nothing is discharged.",
+      "emits": {
+        "file": "scripts/triage_repair.py",
+        "anchor": "pipeline_act.receipt(\"triage-repair\""
+      }
+    },
+    {
       "name": "proof-run-dispatched",
       "tag": "proof-run",
       "adopted": true,
