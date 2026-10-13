@@ -71,6 +71,7 @@ _HERE = os.path.dirname(os.path.abspath(__file__))
 if _HERE not in sys.path:
     sys.path.insert(0, _HERE)
 
+import lane_contract  # noqa: E402 — the queue's names (DRE-6749)
 import linear_ops  # noqa: E402
 import mid_epic  # noqa: E402 — ONE rule for "a child is an epic"
 import proof_and_demo  # noqa: E402 — ONE rule for "a child is a proof"
@@ -100,7 +101,7 @@ ACTIVATED_NOTE = "▶️ Epic activated"
 START_OWNER_SLUG = "bureau-pipeline"
 
 #: A child in one of these lanes is the record that the epic has already run:
-#: only the activate route promotes a child out of Backlog. Read off the
+#: only the activate route promotes a child out of Queued. Read off the
 #: epic's own children, never off its comment thread — `count_comments`
 #: reads the fifty newest comments, and a running epic's `▶️ Epic activated`
 #: comment falls out of that window within a day.
@@ -529,16 +530,16 @@ def start_on_record(thread: list, green_lit_at: str | None) -> bool:
 
 def promotion_refusal(identifier: str, epic: str, record: dict | None,
                       thread: list | None, green_lit_at: str | None) -> str | None:
-    """Why the sweep holds `identifier` in Backlog, or None.
+    """Why the sweep holds `identifier` in Queued, or None.
 
     On an approval the relay sends the sweep and `plan.yml` at once, and
     nothing ordered the two. A child the sweep promotes first makes rule 1 of
-    `decision` true — "a child out of Backlog, so this epic has run" — and the
+    `decision` true — "a child out of Queued, so this epic has run" — and the
     epic starts past the cap (2026-10-05, Portico sweep 37392493131). So the
     children of an In Progress epic that has never run wait until a start
     follows the current approval (`start_on_record`).
 
-    An epic with a child out of Backlog has run, and is never held here. An
+    An epic with a child out of Queued has run, and is never held here. An
     unread record abstains: the epic gate already holds a child whose epic
     Linear did not answer. An unread thread (None) abstains too, for the
     reason `reconcile.epic_thread` gives: holding every child of every
@@ -554,15 +555,18 @@ def promotion_refusal(identifier: str, epic: str, record: dict | None,
     `thread` must be the WHOLE thread (`reconcile.whole_epic_thread`): the
     start is written once, and an epic that has not moved a child piles
     critic and plan markers on top of it until it leaves the fifty-comment
-    window — a hold read off the window would never lift (DRE-5639)."""
+    window — a hold read off the window would never lift (DRE-5639).
+
+    The receipt names `QUEUE_LANE`, the lane the child was parked in, so it
+    reads right on either side of DRE-6742's flip (DRE-6749)."""
     if record is None or _state(record) != IN_PROGRESS or activated_before(record):
         return None
     if thread is None or start_on_record(thread, green_lit_at):
         return None
     why = f"no start is on record since it was approved ({green_lit_at or 'time unknown'})"
     return (
-        f"⏸️ {UNDECIDED_TAG}: {identifier} waits in Backlog — its epic {epic} "
-        f"is In Progress, but the epic cap has not decided whether it starts or "
+        f"⏸️ {UNDECIDED_TAG}: {identifier} waits in {lane_contract.QUEUE_LANE} — "
+        f"its epic {epic} is In Progress, but the epic cap has not decided whether it starts or "
         f"waits in line ({why}). The children move when the epic is activated "
         f"or started from the line; if it is queued they stay here. To ask the "
         f"cap again, comment `{review_rerun.RERUN_REVIEW_ACT}` on {epic}."

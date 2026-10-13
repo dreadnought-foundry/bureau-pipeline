@@ -3313,3 +3313,11 @@ def test_press_a_row_waiting_on_anything_else_keeps_its_line_byte_for_byte(
     h, _, _ = _press_pass(monkeypatch, thread=_sent_back(), text=record_md(MET_ROW, row))
     assert h.holds == [("DRE-5930", proof_record._cut(row[0], 70), WEEKLY)]
     assert proof_record.CEO_PRESS in h.holds[0][1]
+
+
+def test_no_string_constant_in_the_proof_dispatcher_names_the_old_lane():
+    """A lane name in a string does not follow the switch (DRE-6749)."""
+    import lane_contract
+
+    path = str(Path(__file__).resolve().parent.parent / "scripts" / "proof_dispatch.py")
+    assert lane_contract._scan_python(path, ["Backlog"]) == set()

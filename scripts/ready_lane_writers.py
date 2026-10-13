@@ -36,7 +36,9 @@ reader called with literal arguments, or, when the call site computes it, the mo
 published `destinations()`. A step shell's lane variable is read when the
 shell assigned it a module's constant through the seam the step shells read
 every pipeline constant by, `$(python3 -c '…; import M; print(M.NAME)')`, as
-the module's own value (DRE-6745). A destination no rule can read is reported as
+the module's own value (DRE-6745). `QUEUE_LANE` is the planning exit's destination, so
+the planner's writers reach `Queued` only once DRE-6742 flips that exit, and
+that card is the one that asserts it (DRE-6749). A destination no rule can read is reported as
 UNREAD rather than assumed innocent: unknown is never a pass.
 
 A writer is named the way the lane contract names it — a module that a workflow
@@ -83,8 +85,8 @@ otherwise is worse than none:
   * **Linear's team-level default.** `defaultIssueState` is a setting on the
     Linear team, mirrored in agent-bureau's `config/linear-workspace.json`
     (nested, as `team.defaultIssueState`, since DRE-2751). It is a writer no
-    code path touches and the highest-leverage one — it carried `Backlog` when
-    this was written. `observed_default()` reads it from a workspace
+    code path touches and the highest-leverage one — it carried the lane
+    `Queued` replaces when this was written. `observed_default()` reads it from a workspace
     declaration in reach, at `team.defaultIssueState` or a top-level
     `defaultIssueState`, or from Linear itself; with neither, it returns None
     and `default_problems(None)` REPORTS it as UNKNOWN, naming both paths,

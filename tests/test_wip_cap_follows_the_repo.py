@@ -539,3 +539,11 @@ class TestTheReusablesLetTheRepoSpeak:
                     )
                     assert env.get("MAX_WIP") == "${{ inputs.max_wip }}", name
         assert found >= 1, f"{name}: no promotion step found — the check went vacuous"
+
+
+def test_no_string_constant_in_the_wip_cap_check_names_the_old_lane():
+    """A lane name in a string does not follow the switch (DRE-6749)."""
+    import lane_contract
+
+    path = str(Path(__file__).resolve().parent.parent / "scripts" / "check_wip_cap.py")
+    assert lane_contract._scan_python(path, ["Backlog"]) == set()

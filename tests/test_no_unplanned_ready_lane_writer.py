@@ -193,6 +193,11 @@ class TheRepositoryIsClean(unittest.TestCase):
         # so a failure here is actionable without opening this test.
         self.assertEqual(problems, [], "\n".join(problems))
 
+    def test_no_string_constant_in_the_check_names_the_old_lane(self):
+        # A lane name in a string does not follow the switch (DRE-6749).
+        path = str(ROOT / "scripts" / "ready_lane_writers.py")
+        self.assertEqual(lane_contract._scan_python(path, ["Backlog"]), set())
+
 
 class ADeclaredWriterIsOneThatPassedThroughPlanning(unittest.TestCase):
     """Why "declared" is the same claim as "passed through Planning".

@@ -19,7 +19,7 @@ that. This module is the reader that sees the set.
 
   1. **Reads the whole lane.** Paginated (`linear_ops.gql_paged`). The sweep's
      `issues(first: 100)` with no cursor made its world the first 100 rows of a
-     226-card Backlog, and WHICH rows it never saw was decided by Linear's
+     226-card queue, and WHICH rows it never saw was decided by Linear's
      default ordering (DRE-2681). A groomer that sequences page one has
      sequenced nothing, so completeness is asserted: every card in the
      population comes out carrying exactly one outcome.

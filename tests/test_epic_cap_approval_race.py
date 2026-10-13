@@ -40,6 +40,7 @@ os.environ.setdefault("REPO", "dreadnought-foundry/bureau-pipeline")
 os.environ.setdefault("REPO_SLUG", "bureau-pipeline")
 
 import epic_cap  # noqa: E402
+import lane_contract  # noqa: E402
 import plan_critic  # noqa: E402
 import reconcile  # noqa: E402
 from test_reconcile_promotion import (  # noqa: E402
@@ -338,6 +339,17 @@ class TestWhatRecordsTheStart:
         assert epic_cap.promotion_refusal(WORK[0], EPIC, record, None, APPROVED_AT) is None
         assert epic_cap.promotion_refusal(
             WORK[0], EPIC, record, _passed_thread(), APPROVED_AT) is not None
+
+    def test_the_hold_names_the_lane_the_queue_is_written_to(self):
+        """`QUEUE_LANE` (DRE-6749): `Backlog` until DRE-6742 flips the
+        planning exit and `Queued` after — the hold names where its child
+        was parked, on either side of the flip."""
+        record = _Approval().record()
+        for queue in lane_contract.QUEUE_LANES:
+            with patch.object(lane_contract, "QUEUE_LANE", queue):
+                hold = epic_cap.promotion_refusal(
+                    WORK[0], EPIC, record, _passed_thread(), APPROVED_AT)
+            assert f"{WORK[0]} waits in {queue} — its epic {EPIC}" in hold, hold
 
     def test_an_unread_epic_record_abstains_the_epic_gate_holds_it(self):
         assert epic_cap.promotion_refusal(
