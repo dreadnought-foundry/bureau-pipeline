@@ -1138,7 +1138,9 @@ def _fold_row(row: dict, look: dict, owners: list[str], by_owner: dict,
 def _fold_matched(row: dict, by_owner: dict) -> None:
     """Each matched pull request on the row, as its owner's leg read it.
     One no leg read says why: that owner's reason, no document from it, or
-    a repo outside the map, which no leg is ever asked about."""
+    a repo outside the map, which no leg is ever asked about. The leg
+    already fenced the title and body, so they are written as read — a
+    second fence would prefix each defanged line twice."""
     for pr in _prs_of_row(row):
         repo = str(pr.get("repo") or "")
         owner = repo.split("/")[0]
@@ -1154,9 +1156,9 @@ def _fold_matched(row: dict, by_owner: dict) -> None:
             pr.update(read=entry.get("read") is True,
                       why=_one_line(entry["why"]) if entry.get("why") else None,
                       merged_at=entry.get("merged_at") or None,
-                      title=(_clean(entry["title"])
+                      title=(str(entry["title"])
                              if entry.get("title") is not None else None),
-                      body=(_pr_body(entry["body"])
+                      body=(str(entry["body"])[:PR_BODY_LIMIT]
                             if entry.get("body") is not None else None),
                       files=files, files_cut=bool(entry.get("files_cut")))
             continue

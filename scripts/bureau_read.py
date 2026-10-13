@@ -31,12 +31,12 @@ an empty In Progress lane promote twelve cards at once, Stage 2 review H2).
   seconds per read.
 
   The one exception is a `scope=fleet` board or search read answered 401,
-  403 or 404 (DRE-5848, DRE-7236). The door serves the fleet to steward repos only, and only once
-  the console's `PIPELINE_READ_UNROUTED` is open, so a refusal there is the
-  door declining that SCOPE to this repo, not the door failing: that one read
-  is UNKNOWN (`refused` or `not-found`) and the door stays in use. A token the
-  door really refuses is refused again on the next `scope=repo` read, which
-  stops the door for the run as before.
+  403 or 404 (DRE-5848, DRE-7236). The door serves the fleet to steward
+  repos only, and only once the console's `PIPELINE_READ_UNROUTED` is open,
+  so a refusal there is the door declining that SCOPE to this repo, not the
+  door failing: that one read is UNKNOWN (`refused` or `not-found`) and the
+  door stays in use. A token the door really refuses is refused again on the
+  next `scope=repo` read, which stops the door for the run as before.
 * No OIDC token: the stub did not grant `id-token: write`. That is a fallback,
   never a red run.
 * A `pull_request` or `pull_request_target` run (`GITHUB_EVENT_NAME`): the door
