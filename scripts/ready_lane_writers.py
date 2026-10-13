@@ -30,8 +30,9 @@ a writer this sweep would never see, and it is reported as such.
 layer a lane — a step moved to `scripts/<name>.sh` (DRE-3488) read through
 to its script by `step_shell.workflow_source`, so it still writes as its
 workflow (DRE-5220). The destination of each is resolved statically — a
-literal, a module constant, a parameter default, a pure vocabulary reader called with
-literal arguments, or, when the call site computes it, the module's own
+literal, a module constant (imported by name or computed by a pure reader, as
+`lane_contract.QUEUE_LANE` is — DRE-6744), a parameter default, a pure vocabulary
+reader called with literal arguments, or, when the call site computes it, the module's own
 published `destinations()`. A destination no rule can read is reported as
 UNREAD rather than assumed innocent: unknown is never a pass.
 
@@ -335,6 +336,8 @@ class _Repo:
                     "tree": tree,
                     "source": source,
                     "consts": _module_constants(tree),
+                    "values": _module_values(tree),
+                    "imports": _module_imports(tree),
                     "funcs": _functions(tree),
                 }
             )
@@ -352,6 +355,45 @@ def _module_constants(tree) -> dict:
             if isinstance(target, ast.Name):
                 out[target.id] = node.value.value
     return out
+
+
+def _module_values(tree) -> dict:
+    """Module-level names bound to an expression that is not a literal —
+    `QUEUE_LANE = queue_lane()` — resolved where they are read (DRE-6744)."""
+    out: dict = {}
+    for node in getattr(tree, "body", []):
+        if not isinstance(node, ast.Assign) or isinstance(node.value, ast.Constant):
+            continue
+        for target in node.targets:
+            if isinstance(target, ast.Name):
+                out[target.id] = node.value
+    return out
+
+
+def _module_imports(tree) -> dict:
+    """`from <module> import <name>` at module level: local name → (module, name)."""
+    out: dict = {}
+    for node in getattr(tree, "body", []):
+        if isinstance(node, ast.ImportFrom) and node.module and not node.level:
+            for alias in node.names:
+                out[alias.asname or alias.name] = (node.module, alias.name)
+    return out
+
+
+def _module_value(repo: _Repo, module_name: str, name: str, depth: int) -> set:
+    """What module `module_name`'s top-level `name` can be: a literal, or the
+    expression it is bound to, read in that module's own scope."""
+    mod = repo.module(module_name)
+    if not mod:
+        return set()
+    if name in mod["consts"]:
+        return {mod["consts"][name]}
+    if name in mod["values"]:
+        return _resolve(mod["values"][name], repo, module_name, None, depth + 1)
+    if name in mod["imports"]:
+        other, attr = mod["imports"][name]
+        return _module_value(repo, other, attr, depth + 1)
+    return set()
 
 
 def _local_assignments(fn, name: str) -> list:
@@ -486,15 +528,10 @@ def _resolve(node, repo: _Repo, module_name: str, fn, depth: int = 0) -> set:
         default = _param_default(fn, node.id)
         if default is not None:
             return _resolve(default, repo, module_name, fn, depth + 1)
-        mod = repo.module(module_name)
-        if mod and node.id in mod["consts"]:
-            return {mod["consts"][node.id]}
-        return set()
+        return _module_value(repo, module_name, node.id, depth)
     if isinstance(node, ast.Attribute):
         if isinstance(node.value, ast.Name):
-            other = repo.module(node.value.id)
-            if other and node.attr in other["consts"]:
-                return {other["consts"][node.attr]}
+            return _module_value(repo, node.value.id, node.attr, depth)
         return set()
     if isinstance(node, ast.Call):
         args = [a.value for a in node.args if isinstance(a, ast.Constant)]

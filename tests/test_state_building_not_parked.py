@@ -170,6 +170,85 @@ def test_terminal_guard_still_wins_over_building_reroute():
     assert "refusing" in out.lower()
 
 
+# --- the queue lane under either name (DRE-6744) ---------------------------
+
+
+class _QueuedBoard(_FakeLinear):
+    """The board with `Queued` beside `Backlog`, typed `unstarted` — the worst
+    case: a reroute that read only Linear's type would let a building card
+    into the queue under its new name."""
+
+    STATES = {**_FakeLinear.STATES, "Queued": ("st-queued", "unstarted")}
+
+
+def test_building_card_aimed_at_queued_is_rerouted_to_todo():
+    """The reroute reads the queue lane by NAME, through `QUEUE_LANES`: a
+    building card parked in `Queued` strands exactly as one parked in the lane
+    it replaces."""
+    fake = _QueuedBoard("In Progress")
+    out = _run_state(fake, "Queued")
+    assert fake.updates == [_QueuedBoard.STATES["Todo"][0]], fake.updates
+    assert "instead of 'Queued'" in out
+
+
+def test_held_building_card_aimed_at_queued_is_rerouted_to_todo():
+    """The held move (one read) decides the same reroute on the live card."""
+    fake = _QueuedBoard("In Progress")
+    _run_state(fake, "Queued", "--held")
+    assert fake.updates == [_QueuedBoard.STATES["Todo"][0]], fake.updates
+
+
+def test_explicit_park_flag_keeps_a_building_card_in_queued():
+    fake = _QueuedBoard("In Progress")
+    _run_state(fake, "Queued", "--park")
+    assert fake.updates == [_QueuedBoard.STATES["Queued"][0]]
+
+
+def test_not_started_card_park_to_queued_still_works():
+    fake = _QueuedBoard("Todo")
+    _run_state(fake, "Queued")
+    assert fake.updates == [_QueuedBoard.STATES["Queued"][0]]
+
+
+def test_state_queued_on_a_board_without_it_falls_back_to_backlog_and_says_so():
+    """`state Queued` against a board that does not carry the lane yet lands in
+    the lane it replaces, and the receipt says so: `_LANE_RENAME_FALLBACKS` is
+    the contract's alias, inverted."""
+    fake = _FakeLinear("Todo")
+    out = _run_state(fake, "Queued")
+    assert fake.updates == [_FakeLinear.STATES["Backlog"][0]]
+    assert "'Queued' is not on the board yet" in out
+    assert "pre-rename lane 'Backlog'" in out
+
+
+def test_building_card_aimed_at_queued_on_a_board_without_it_is_rerouted():
+    fake = _FakeLinear("In Progress")
+    _run_state(fake, "Queued")
+    assert fake.updates == [_FakeLinear.STATES["Todo"][0]]
+
+
+def test_rename_fallbacks_are_the_contract_aliases_inverted():
+    import lane_contract
+
+    inverted: dict = {}
+    for old, new in lane_contract.aliases().items():
+        inverted[new.lower()] = inverted.get(new.lower(), ()) + (old,)
+    assert linear_ops._LANE_RENAME_FALLBACKS == inverted
+    # Every name a reader accepts for the queue is a name a write falls back to.
+    assert linear_ops._LANE_RENAME_FALLBACKS[lane_contract.QUEUE_LANES[0].lower()] \
+        == lane_contract.QUEUE_LANES[1:]
+
+
+def test_the_write_layer_names_no_retired_queue_lane_of_its_own():
+    """No string constant in `linear_ops.py` — docstring, receipt, query —
+    carries the lane `Queued` replaces: every write and every read of the queue
+    lane goes through `lane_contract`. A `#` comment recording an incident is
+    history and keeps its wording; the scan reads string constants only."""
+    import lane_contract
+
+    assert lane_contract._scan_python(linear_ops.__file__, ["Backlog"]) == set()
+
+
 if __name__ == "__main__":
     import pytest
 

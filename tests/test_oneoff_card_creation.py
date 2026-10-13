@@ -43,7 +43,10 @@ class FakeLinear:
     """A scriptable stand-in for the Linear endpoint — no parent lookup, since
     a one-off has none."""
 
-    def __init__(self):
+    LANES = (("Planning", "backlog"), ("Backlog", "backlog"), ("Triage", "unstarted"))
+
+    def __init__(self, lanes=LANES):
+        self.lanes = lanes
         self.created = None
         self.relations = []
         self.label_create_names = []
@@ -62,9 +65,8 @@ class FakeLinear:
             return {
                 "workflowStates": {
                     "nodes": [
-                        {"id": "state-planning", "name": "Planning", "type": "backlog"},
-                        {"id": "state-backlog", "name": "Backlog", "type": "backlog"},
-                        {"id": "state-triage", "name": "Triage", "type": "unstarted"},
+                        {"id": f"state-{name.lower()}", "name": name, "type": kind}
+                        for name, kind in self.lanes
                     ]
                 }
             }
@@ -184,3 +186,46 @@ class TestOneOffIsReachable:
         plan = (ROOT / ".github" / "workflows" / "plan.yml").read_text()
         assert "linear_ops.py oneoff" in plan
         assert "one-off" in plan.lower()
+
+
+def _run_create(fake, tmp_path, *flags):
+    f = tmp_path / "create.md"
+    f.write_text(GOOD_BODY)
+    buf = io.StringIO()
+    with patch.object(linear_ops, "gql", side_effect=fake.gql):
+        with redirect_stdout(buf):
+            linear_ops.cmd_create("A failure report", str(f),
+                                  "--repo", "bureau-pipeline", *flags)
+    return buf.getvalue()
+
+
+class TestCreateTakesTheQueueLane:
+    """`create --lane` takes the queue lane under its new name (DRE-6744), and a
+    board that does not carry `Queued` yet takes the card in the lane it
+    replaces, saying so — the alias `_LANE_RENAME_FALLBACKS` is derived from."""
+
+    QUEUED = FakeLinear.LANES + (("Queued", "backlog"),)
+
+    def test_lane_queued_lands_in_queued(self, tmp_path):
+        fake = FakeLinear(lanes=self.QUEUED)
+        out = _run_create(fake, tmp_path, "--lane", "Queued")
+        assert fake.created["stateId"] == "state-queued"
+        assert "lane=Queued" in out
+        assert "not on the board yet" not in out
+
+    def test_lane_queued_on_a_board_without_it_falls_back_and_says_so(self, tmp_path):
+        fake = FakeLinear()
+        out = _run_create(fake, tmp_path, "--lane", "Queued")
+        assert fake.created["stateId"] == "state-backlog"
+        assert "'Queued' is not on the board yet" in out
+        assert "pre-rename lane 'Backlog'" in out
+
+    def test_the_default_is_still_planning(self, tmp_path):
+        fake = FakeLinear(lanes=self.QUEUED)
+        _run_create(fake, tmp_path)
+        assert fake.created["stateId"] == "state-planning"
+
+    def test_a_one_off_is_still_planning_on_a_board_with_queued(self, tmp_path):
+        fake = FakeLinear(lanes=self.QUEUED)
+        _run_oneoff(fake, tmp_path, GOOD_BODY, *PLAN_LABELS)
+        assert fake.created["stateId"] == "state-planning"
