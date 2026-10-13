@@ -1796,18 +1796,18 @@ def drain_retiring_lanes() -> None:
     third, and the contract entry is deleted fourth. Archiving before the drain
     would fail every in-flight write instead.
 
-    NOTHING IS RETIRING TODAY, and that is deliberate rather than neglect
-    (DRE-2818): the operator confirmed DRE-2726's drain was finished, Linear
-    archived both states, and the two entries were deleted — a retiring entry
-    whose state Linear already dropped is itself drift, and
-    `board.retired_entry_is_deleted` fails on it. This function stays because
-    it is step two of a protocol the contract still defines: `retiring` remains
-    a validated lane status with a mandatory board step, and the Phase-3 rule
-    `board.retiring_lane_is_empty` names this drain as its prerequisite. With
-    an empty retiring set it returns before it reads anything from Linear, and
-    tests/test_lane_fold_in_review.py pins both that inertness and — against an
-    injected retiring lane, since the real file no longer has one — the
-    behaviour it will have on the next retirement.
+    DRE-2818 finished DRE-2726's retirement: the operator confirmed the drain
+    was done, Linear archived both states, and the two entries were deleted —
+    a retiring entry whose state Linear already dropped is itself drift, and
+    `board.retired_entry_is_deleted` fails on it. This function stayed as step
+    two of the protocol, and DRE-6753 is its next use: the queue's old name
+    retires into Queued. Linear keeps a team's only backlog-type status, so
+    that state stays on the board and its entry stays with it — the drain
+    moves any card that lands there, on every sweep, for as long as it does.
+    With an empty retiring set it returns before it reads anything from
+    Linear, and
+    tests/test_lane_fold_in_review.py pins both that inertness and the drain
+    against the real retiring entry.
 
     Idempotent by construction — `cmd_advance` moves a card only while it is
     still in the lane named, so a second sweep finds nothing and a race between
