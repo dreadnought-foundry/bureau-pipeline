@@ -424,9 +424,10 @@ jobs:
       # pipeline's config can be read: the named model must be one the fleet
       # prices (config/model-prices.yaml) and not one it has put out of use
       # (`excluded` or `retired` in config/models.yaml). Still before any
-      # read of the pull request and long before an agent step. Also writes
-      # the model's own declared effort, so the replay runs it the way the
-      # fleet runs it — never at the effort of the model Select model chose.
+      # read of the pull request and long before an agent step. Writes the
+      # model it checked and that model's own declared effort, one step for
+      # both, so the replay runs it the way the fleet runs it — never at the
+      # effort of the model Select model chose.
       - name: Refuse a shadow model the fleet does not run
         id: shadow_model
         if: inputs.shadow
@@ -452,6 +453,7 @@ jobs:
                       sys.exit(1)
           PY
           EFFORT=$(python3 "$PIPELINE_DIR"/scripts/model_fallback.py effort "$MODEL")
+          echo "model=$MODEL" >> "$GITHUB_OUTPUT"
           echo "effort_arg=${EFFORT:+--effort $EFFORT}" >> "$GITHUB_OUTPUT"
           echo "shadow model: $MODEL${EFFORT:+ (effort $EFFORT)}"
 
@@ -779,8 +781,10 @@ jobs:
           # bureau-pipeline #1081: `main...42d305b2` 0 files, `b2a6e726...
           # 42d305b2` (its baseRefOid) 8, its own changedFiles. While a pull
           # request is open the two have the same merge base, so they agree.
+          # Read through the same seam as the record, but on its own: a field
+          # added to PR_RECORD_FIELDS would ride every live review's read.
           if [ "$SHADOW" = "true" ]; then
-            BASE=$(gh pr view "$PR" --json baseRefOid --jq .baseRefOid)
+            BASE=$(python3 "$PIPELINE_DIR"/scripts/read_once.py pr "$PR" --fields baseRefOid --field baseRefOid)
           fi
           python3 "$PIPELINE_DIR"/scripts/read_once.py once "compare-$BASE...$SHA" -- \
             gh api "repos/${{ github.repository }}/compare/$BASE...$SHA" > /tmp/qa-compare.json 2>/dev/null \
@@ -1643,12 +1647,13 @@ jobs:
           # actor (DRE-2053 — dependabot review dispatches, DRE-2047).
           allowed_bots: agent-bureau-bot,agent-bureau-bot-2,agent-bureau-bot-3,agent-bureau-bot-4,agent-bureau-qa-bot,dependabot,github-actions
           # DRE-7193: a shadow replay runs on the model its caller named —
-          # never a literal id — at that model's own declared effort. A live
+          # never a literal id — at that model's own declared effort, both
+          # handed on by the step that checked the model (shadow_model). A live
           # review rides Select model's choice and effort, as it always has;
           # the Refuse steps above stop a live review from naming a model.
           claude_args: |
             --max-turns ${{ steps.size.outputs.max_turns }}
-            --model ${{ inputs.shadow && inputs.model || steps.model.outputs.model }}
+            --model ${{ inputs.shadow && steps.shadow_model.outputs.model || steps.model.outputs.model }}
             ${{ inputs.shadow && steps.shadow_model.outputs.effort_arg || !inputs.shadow && steps.model.outputs.effort_arg || '' }}
             --allowedTools "Bash,Read,Glob,Grep,Write,WebSearch,WebFetch"
           prompt: |
@@ -2017,12 +2022,13 @@ jobs:
           # actor (DRE-2053 — dependabot review dispatches, DRE-2047).
           allowed_bots: agent-bureau-bot,agent-bureau-bot-2,agent-bureau-bot-3,agent-bureau-bot-4,agent-bureau-qa-bot,dependabot,github-actions
           # DRE-7193: a shadow replay runs on the model its caller named —
-          # never a literal id — at that model's own declared effort. A live
+          # never a literal id — at that model's own declared effort, both
+          # handed on by the step that checked the model (shadow_model). A live
           # review rides Select model's choice and effort, as it always has;
           # the Refuse steps above stop a live review from naming a model.
           claude_args: |
             --max-turns ${{ steps.size.outputs.retry_max_turns }}
-            --model ${{ inputs.shadow && inputs.model || steps.model.outputs.model }}
+            --model ${{ inputs.shadow && steps.shadow_model.outputs.model || steps.model.outputs.model }}
             ${{ inputs.shadow && steps.shadow_model.outputs.effort_arg || !inputs.shadow && steps.model.outputs.effort_arg || '' }}
             --allowedTools "Bash,Read,Glob,Grep,Write,WebSearch,WebFetch"
           prompt: |
