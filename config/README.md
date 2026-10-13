@@ -391,17 +391,18 @@ no pull request.
 
 Two environment names point a process at the home:
 **`BUREAU_MODEL_HOME_TOKEN`** (a bureau App installation token for this
-repository with `variables: read`; the reader makes one GET with it) and
+repository that can read its variables; the reader makes one GET with it) and
 **`BUREAU_MODEL_HOME_FILE`** (a path to a local copy, read instead of the API).
 A name counts as set when it is in the environment, even empty — an empty token
-is a mint that failed. With neither, nobody asked for a home: the run is on the
+is a mint that failed, and the reader's line says `the token mint was refused`
+and `the built-in defaults are in use`. With neither, nobody asked for a home: the run is on the
 defaults in the code, exactly as before the home.
 
 A run gets the token from its own job (DRE-6940). A run's boot token is
 minted for the calling repository only, so each job holding a step whose
 process reads the home carries a `Mint the model-home read token` step (id
 `model_home`, owner `dreadnought-foundry`, repository `bureau-pipeline`,
-`permission-variables: read`, `continue-on-error: true`), and hands
+`continue-on-error: true`, and no `permission-*` input), and hands
 `${{ steps.model_home.outputs.token }}` to those steps alone — never a job
 output or `$GITHUB_ENV`, so the agent steps beside them never hold it (and the
 harness hands it to its selector child, never to the agent it launches). A
@@ -414,6 +415,24 @@ steps read the home is declared in the scripts: a module-level
 for every one. `scripts/check_model_home_scope.py`, a step of Pipeline Tests,
 fails a reading step without the token and a script that reaches the home
 without the declaration.
+
+**Why the mint asks for no permission subset (DRE-7230).** The pinned
+`actions/create-github-app-token` (v3.2.0, and v3.3.0 after it) declares no
+input for repository variables. Handed the undeclared `permission-variables`,
+it warned, forwarded it anyway, and GitHub refused every mint, so every run
+read the home as unreadable. Each model-home mint — the reads, their
+re-mints, and the two write mints (`model_home_write`, in Model Home Carry
+and Model Adoption) — therefore asks for no subset, and its token carries
+every permission the bureau App's installation grants on `bureau-pipeline`,
+variables included. Two limits hold it: the token is scoped to that one
+repository, and it reaches only the steps that read (or, for a write token,
+write) the home, by the rule above. `scripts/check_model_home_scope.py` fails
+any model-home mint that asks for a subset without variables, or for another
+owner or repository, and `tests/test_app_token_inputs.py` fails any step that
+hands the action an input its pinned release does not declare, read from a
+copy of that release's inputs in
+`tests/fixtures/create-github-app-token-inputs.json`. The write mints keep no
+`continue-on-error`, so a refused write is red.
 
 Every read prints one line tagged `model-home:` to stderr, above the selection
 note, and the note ends with the home's clause:

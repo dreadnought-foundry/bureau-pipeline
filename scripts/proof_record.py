@@ -30,7 +30,10 @@ or read the hold. Both now do, through this module:
    unmet, and `shortfall` still holds the record on it.
 3. **The hold-discharge reader** — `open_holds`, moved from `proof_dispatch`;
    `open_holds_at` is the same reading with each hold's time, for the PROOF
-   close (DRE-6489).
+   close (DRE-6489). `time_only` (DRE-7228) reads one of those holds as
+   waiting only for a time — the `not-before=<T>` clause
+   `linear_ops.py proof-waiting-until` writes, and nothing else — which the
+   proof dispatcher lifts once the time passes.
 4. **The record finder**, new: the ONE `.md` file the pull request ADDS under
    `docs/` or `architecture/` (`find_record`, over `gh pr view --json files`),
    read at a given sha through the contents API (`fetch`). No match, or two, is
@@ -58,6 +61,7 @@ import re
 import subprocess  # nosec B404 — one fixed argv, `gh`, no shell
 import sys
 from collections import namedtuple
+from datetime import datetime
 from pathlib import Path
 from urllib.parse import quote
 
@@ -345,6 +349,47 @@ def open_holds_at(voices: list) -> list:
               and voice.kind in (spoken_thread.PIPELINE, spoken_thread.PERSON)):
             held = [h for h in held if CEO_PRESS in h[0]]
     return held
+
+
+#: What opens a hold's `needs` half; the half is the text after the last one.
+_NEEDS = "— needs"
+
+
+def time_only_clause(line: str | None) -> str | None:
+    """The `not-before=<T>` clause of a hold that waits only for a time, as
+    written — or None (DRE-7228).
+
+    A hold is time-only when, and only when, its first line is what
+    `linear_ops.py proof-waiting-until` writes: `🔬 proof-waiting: <anything>
+    — needs not-before=<T>`, the whole `needs` half — the text after the
+    line's last `— needs` — being that one clause and nothing else, `<T>`
+    parsing as an ISO 8601 time with a UTC offset, and the line not naming
+    `CEO_PRESS`. A clause beside other words, a time with no offset, and
+    prose naming a date are all not time-only: nothing reads a date out of
+    prose. Read it over what `open_holds` returns, so a hold a later note
+    discharged is never read again."""
+    line = _first_line(line)
+    if not line.startswith(HOLD_MARK) or CEO_PRESS in line or _NEEDS not in line:
+        return None
+    needs = line.rpartition(_NEEDS)[2]
+    if not needs[:1].isspace():
+        return None
+    clause = needs.strip()
+    if not clause.startswith(linear_ops.NOT_BEFORE):
+        return None
+    try:
+        moment = datetime.fromisoformat(clause[len(linear_ops.NOT_BEFORE):])
+    except ValueError:
+        return None
+    return clause if moment.tzinfo is not None else None
+
+
+def time_only(line: str | None) -> datetime | None:
+    """The time a time-only hold waits for (`time_only_clause`), or None."""
+    clause = time_only_clause(line)
+    if clause is None:
+        return None
+    return datetime.fromisoformat(clause[len(linear_ops.NOT_BEFORE):])
 
 
 # --------------------------------------------------------------------------- #
