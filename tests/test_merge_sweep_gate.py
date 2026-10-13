@@ -61,6 +61,7 @@ RECONCILE_YML = WORKFLOWS / "reconcile.yml"
 sys.path.insert(0, str(SCRIPTS))
 
 import check_wip_cap as cwc  # noqa: E402
+import lane_contract  # noqa: E402
 import merge_sweep_gate as gate  # noqa: E402
 
 
@@ -213,6 +214,18 @@ class GateDecisionTest(unittest.TestCase):
     def test_a_full_children_page_is_unknown_not_empty(self):
         card = _card(parent=_parent(children=("Done",), truncated=True))
         self.assertEqual([gate.CLOSE_EPICS], gate.sweeps(card))
+
+
+class QueueNameTest(unittest.TestCase):
+    """The queue the promotion moves cards out of is `lane_contract`'s, read
+    under every name it carries (DRE-6748) — never a lane literal here."""
+
+    def test_the_gate_reads_the_queue_off_the_contract(self):
+        self.assertEqual(lane_contract.QUEUE_LANES, gate.QUEUE_LANES)
+
+    def test_no_string_in_the_gate_names_the_retired_queue(self):
+        path = str(SCRIPTS / "merge_sweep_gate.py")
+        self.assertEqual(set(), lane_contract._scan_python(path, ["Backlog"]))
 
 
 class ReadFailureTest(unittest.TestCase):

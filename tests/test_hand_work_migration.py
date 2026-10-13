@@ -42,6 +42,7 @@ os.environ.setdefault("GH_TOKEN", "x")
 
 import backlog_cutover  # noqa: E402 — `card_ids_in_code`, the "no allowlist" check
 import hand_work_migration as hwm  # noqa: E402
+import lane_contract  # noqa: E402
 import linear_ops  # noqa: E402
 import pipeline_act  # noqa: E402
 import plan_critic  # noqa: E402
@@ -299,7 +300,7 @@ class TestTheCensus:
             "DRE-2": (hwm.PROOF, hwm.REMOVE, None),
             "DRE-3": (hwm.OPERATOR, hwm.SWAP, None),
             "DRE-4": (hwm.OPERATOR, hwm.SWAP, None),
-            "DRE-5": (hwm.CODE, hwm.RESTAMP, "Backlog"),
+            "DRE-5": (hwm.CODE, hwm.RESTAMP, lane_contract.QUEUE_LANE),
             "DRE-6": (hwm.CODE, hwm.RESTAMP, None),
             "DRE-7": (hwm.CODE, hwm.REPLAN, "Planning"),
             "DRE-8": (hwm.CODE, hwm.REMOVE, None),
@@ -498,10 +499,40 @@ class TestTheRun:
         assert "one-off" in whys["DRE-5"]
         assert "DRE-900" in whys["DRE-6"]
 
-    def test_only_the_hand_work_passed_card_moves_to_backlog(self):
+    def test_only_the_hand_work_passed_card_moves_to_the_queue(self):
         ops, _, _ = _apply()
-        assert ("DRE-5", "Backlog", {"expect": ("Hand-work",)}) in ops.states
+        assert ("DRE-5", lane_contract.QUEUE_LANE, {"expect": ("Hand-work",)}) in ops.states
         assert not [s for s in ops.states if s[0] == "DRE-6"]
+
+    def test_the_return_follows_the_planning_exit_to_queued(self, monkeypatch):
+        # DRE-6748: the return writes `QUEUE_LANE`, which reads Backlog until
+        # DRE-6742 flips the planning exit; flipped, it lands in Queued.
+        monkeypatch.setattr(lane_contract, "QUEUE_LANE", "Queued")
+        rows, _ = _rows([ONE_OFF_PASSED])
+        assert rows[0]["move_to"] == "Queued"
+        assert "Hand-work → Queued" in rows[0]["summary"]
+        ops, _, _ = _apply([ONE_OFF_PASSED])
+        assert ops.states == [("DRE-5", "Queued", {"expect": ("Hand-work",)})]
+        assert "moved to Queued" in ops.comments[-1][1]
+        assert "from Queued to the fleet" in ops.comments[-1][1]
+
+    @pytest.mark.parametrize("queue", lane_contract.QUEUE_LANES)
+    def test_a_passed_card_waiting_in_either_queue_name_stays_put(self, queue):
+        card = _card("DRE-34", lane=queue,
+                     comments=[_marker(plan_critic.STAGE_ONE_OFF, plan_critic.PASS),
+                               _verdict("WORKBENCH")])
+        row = _rows([card])[0][0]
+        assert (row["action"], row["move_to"]) == (hwm.RESTAMP, None)
+        ops, _, _ = _apply([card])
+        assert ops.states == []
+
+    @pytest.mark.parametrize("queue", lane_contract.QUEUE_LANES)
+    def test_an_unpassed_card_in_either_queue_name_goes_to_planning(self, queue):
+        card = _card("DRE-35", lane=queue)
+        row = _rows([card])[0][0]
+        assert (row["action"], row["move_to"]) == (hwm.REPLAN, "Planning")
+        ops, _, _ = _apply([card])
+        assert ops.states == [("DRE-35", "Planning", {"expect": (queue,)})]
 
     def test_the_unpassed_hand_work_card_moves_to_planning(self):
         ops, stamps, _ = _apply()
@@ -510,8 +541,8 @@ class TestTheRun:
 
     def test_the_only_moves_are_those_two(self):
         ops, _, _ = _apply()
-        assert sorted((i, s) for i, s, _ in ops.states) == [("DRE-5", "Backlog"),
-                                                             ("DRE-7", "Planning")]
+        assert sorted((i, s) for i, s, _ in ops.states) == [
+            ("DRE-5", lane_contract.QUEUE_LANE), ("DRE-7", "Planning")]
 
     def test_no_write_names_todo(self):
         ops, _, _ = _apply()
@@ -533,8 +564,9 @@ class TestTheRun:
             assert "label removed" in body
         by_id = dict(notes)
         assert "label added" in by_id["DRE-1"] and "label added" in by_id["DRE-3"]
-        assert "verdict restamped" in by_id["DRE-5"] and "moved to Backlog" in by_id["DRE-5"]
-        assert "verdict restamped" in by_id["DRE-6"] and "moved to Backlog" not in by_id["DRE-6"]
+        moved = f"moved to {lane_contract.QUEUE_LANE}"
+        assert "verdict restamped" in by_id["DRE-5"] and moved in by_id["DRE-5"]
+        assert "verdict restamped" in by_id["DRE-6"] and moved not in by_id["DRE-6"]
         assert "moved to Planning" in by_id["DRE-7"]
         assert sorted(result["changed"]) == sorted(i for i, _ in notes)
 
@@ -648,12 +680,19 @@ class TestDeclared:
         assert '"hand-built"' not in SOURCE and '"operator-step"' not in SOURCE
         assert hwm.HAND_BUILT == HAND_BUILT and hwm.OPERATOR_STEP == OPERATOR_STEP
 
-    def test_its_writes_are_backlog_planning_and_hand_work_and_never_todo(self):
-        # Hand-work is the operator-backlog pass's move (DRE-6429).
+    def test_its_writes_are_the_queue_planning_and_hand_work_and_never_todo(self):
+        # Hand-work is the operator-backlog pass's move (DRE-6429); the queue
+        # is `QUEUE_LANE`, which follows the planning exit (DRE-6748).
         mine = [w for w in ready_lane_writers.writes()
                 if w.writer == "hand_work_migration.py"]
-        assert {w.lane for w in mine} == {"Backlog", "Planning", "Hand-work"}
+        assert {w.lane for w in mine} == {lane_contract.QUEUE_LANE, "Planning", "Hand-work"}
         assert ready_lane_writers.writer_problems() == []
+
+    def test_no_string_in_it_names_the_retired_queue(self):
+        # DRE-6748: the queue is `lane_contract.QUEUE_LANE` / `QUEUE_LANES`,
+        # so the retirement card (DRE-6753) finds no lane literal left here.
+        path = str(ROOT / "scripts" / "hand_work_migration.py")
+        assert lane_contract._scan_python(path, ["Backlog"]) == set()
 
     def test_its_comment_sites_are_in_the_act_registry(self):
         assert pipeline_act.main(["check"]) == 0

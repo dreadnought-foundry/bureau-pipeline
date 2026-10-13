@@ -43,6 +43,7 @@ sys.path.insert(0, str(ROOT / "scripts"))
 os.environ.setdefault("REPO", "dreadnought-foundry/bureau-pipeline")
 
 import hygiene  # noqa: E402
+import lane_contract  # noqa: E402
 
 MODULE_PATH = ROOT / "scripts" / "hygiene_done.py"
 FIXTURE = ROOT / "tests" / "fixtures" / "hygiene-done-2026-09-30.json"
@@ -842,7 +843,8 @@ class TestOverTheWholeFixture:
         items, _ctx, _gh = plan()
         written = {w.lane for a in actions(items) for w in a.writes if w.kind == "linear_state"}
         assert written == {"Done", "Canceled"}
-        assert not written & {"In Progress", "Todo", "Planning", "Backlog"}
+        # The queue under every name it carries (DRE-6748).
+        assert not written & {"In Progress", "Todo", "Planning", *lane_contract.QUEUE_LANES}
 
     def test_a_card_with_children_is_never_closed_or_canceled(self):
         doc = fixture()
