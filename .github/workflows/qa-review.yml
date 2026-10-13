@@ -31,6 +31,48 @@ on:
         type: string
         required: false
         default: "fleet"
+      # ── Shadow replay (DRE-7193) ─────────────────────────────────────────
+      # The critic half of the replay tool the model-switch epics measure
+      # with (DRE-7185, DRE-7187, DRE-7188, DRE-7189). With `shadow` true the
+      # job replays ONE past pull request at the head its recorded verdict
+      # was bound to, on the model the caller names, and writes the verdict
+      # to the `shadow-verdict-critic-<replay_pr>` artifact — and posts
+      # NOTHING: no comment, no check run, no label, no review, no Linear
+      # write. Every writing step's `if:` ends `&& !inputs.shadow`, and the
+      # critic's token is minted read-only, so a missed guard still cannot
+      # write. With none of the four set, the job is the review it was
+      # before, step for step (tests/test_qa_review_shadow.py compares it to
+      # a snapshot of main). The contract the verifier card (DRE-7194) and
+      # the batch replay card (DRE-7197) read is pinned by the same test.
+      model:
+        description: >-
+          Shadow mode only: the model id the replay runs on. Empty means
+          select as today. Set on a live review it is REFUSED — a live
+          review on a named model would step around the build/review
+          separation the Select model step buys (DRE-3880).
+        type: string
+        required: false
+        default: ''
+      shadow:
+        description: >-
+          Replay `replay_pr` at `replay_sha` on `model` and write the
+          verdict to a file, posting nothing.
+        type: boolean
+        required: false
+        default: false
+      replay_pr:
+        description: Shadow mode only — the pull request number to replay.
+        type: string
+        required: false
+        default: ''
+      replay_sha:
+        description: >-
+          Shadow mode only — the 40-hex head the recorded verdict was bound
+          to. The workspace is checked out here and the critic is handed
+          this commit's diff, never the pull request's current head.
+        type: string
+        required: false
+        default: ''
     secrets:
       ANTHROPIC_API_KEY:
         required: false
@@ -251,6 +293,53 @@ jobs:
       # `isDraft` (DRE-5801): Decide review skips a draft off this same read.
       PR_RECORD_FIELDS: headRefName,headRefOid,baseRefName,changedFiles,additions,deletions,isDraft
     steps:
+      # SHADOW REFUSES A BAD REQUEST FIRST (DRE-7193), before a token is
+      # minted or anything is checked out. The shape of the four inputs only:
+      # whether the named model is one the fleet prices and runs needs the
+      # pipeline's config, so that half is the step after the checkout move.
+      #
+      # A LIVE review on a named model is refused here too. Select model
+      # takes the model that built this pull request off the critic's walk
+      # (DRE-3880); a caller naming the model would step around that.
+      # Skipped when no new input is set, so a live review runs exactly the
+      # steps it ran before. Every `${{ }}` in env:, none in the script.
+      - name: Refuse a malformed shadow request
+        id: shadow_shape
+        if: inputs.shadow || inputs.model != ''
+        env:
+          SHADOW: ${{ inputs.shadow }}
+          MODEL: ${{ inputs.model }}
+          REPLAY_PR: ${{ inputs.replay_pr }}
+          REPLAY_SHA: ${{ inputs.replay_sha }}
+        run: |
+          if [ "$SHADOW" != "true" ]; then
+            echo "::error::a live review never runs on a named model (model=$MODEL) — the critic's model is selected, so the build/review separation holds. Set shadow: true to replay a past pull request on a named model."
+            exit 1
+          fi
+          MISSING=""
+          [ -n "$MODEL" ] || MISSING="$MISSING model"
+          [ -n "$REPLAY_PR" ] || MISSING="$MISSING replay_pr"
+          [ -n "$REPLAY_SHA" ] || MISSING="$MISSING replay_sha"
+          if [ -n "$MISSING" ]; then
+            echo "::error::a shadow replay needs model, replay_pr and replay_sha — missing:$MISSING"
+            exit 1
+          fi
+          if ! [[ "$REPLAY_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::replay_sha must be a whole commit id, 40 lowercase hex characters — got '$REPLAY_SHA'"
+            exit 1
+          fi
+          if ! [[ "$REPLAY_PR" =~ ^[1-9][0-9]*$ ]]; then
+            echo "::error::replay_pr must be a pull request number — got '$REPLAY_PR'"
+            exit 1
+          fi
+          # The id reaches the critic's command line, so it is held to the
+          # shape of a model id before the config is ever asked about it.
+          if ! [[ "$MODEL" =~ ^[a-z0-9][a-z0-9.-]*$ ]]; then
+            echo "::error::model must be a model id — got '$MODEL'"
+            exit 1
+          fi
+          echo "shadow request: pr=$REPLAY_PR sha=$REPLAY_SHA model=$MODEL"
+
       # Mint from the qa-bot App so the critic's GitHub calls draw from the
       # qa-bot installation's SEPARATE 5,000/hr quota — not the dispatch bot's
       # bucket the relay's repository_dispatch already consumes (DRE-1921).
@@ -265,7 +354,12 @@ jobs:
           app-id: ${{ secrets.BUREAU_QA_APP_ID }}
           private-key: ${{ secrets.BUREAU_QA_APP_PRIVATE_KEY }}
 
+      # A shadow replay (DRE-7193) reviews the head its recorded verdict was
+      # bound to, so the working tree is that commit. Empty on a live review,
+      # which is the checkout's own default — the event's ref, as before.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.shadow && inputs.replay_sha || '' }}
 
       # `path:` must stay under $GITHUB_WORKSPACE — actions/checkout refuses
       # anything else outright ("is not under") — so the checkout lands in the
@@ -326,6 +420,43 @@ jobs:
           echo "PIPELINE_DIR=$DEST" >> "$GITHUB_ENV"
           echo "pipeline scripts: $DEST (outside $GITHUB_WORKSPACE)"
 
+      # The other half of the shadow refusal (DRE-7193), the first point the
+      # pipeline's config can be read: the named model must be one the fleet
+      # prices (config/model-prices.yaml) and not one it has put out of use
+      # (`excluded` or `retired` in config/models.yaml). Still before any
+      # read of the pull request and long before an agent step. Writes the
+      # model it checked and that model's own declared effort, one step for
+      # both, so the replay runs it the way the fleet runs it — never at the
+      # effort of the model Select model chose.
+      - name: Refuse a shadow model the fleet does not run
+        id: shadow_model
+        if: inputs.shadow
+        env:
+          MODEL: ${{ inputs.model }}
+        run: |
+          python3 - "$PIPELINE_DIR" "$MODEL" <<'PY'
+          import sys
+          from pathlib import Path
+
+          import yaml
+
+          root, model = Path(sys.argv[1]), sys.argv[2]
+          prices = yaml.safe_load((root / "config" / "model-prices.yaml").read_text())
+          models = yaml.safe_load((root / "config" / "models.yaml").read_text())
+          if model not in ((prices or {}).get("prices") or {}):
+              print(f"::error::{model} has no declared price in config/model-prices.yaml — a shadow replay runs only a model the fleet prices")
+              sys.exit(1)
+          for block in ("excluded", "retired"):
+              for entry in (models or {}).get(block) or []:
+                  if isinstance(entry, dict) and entry.get("model") == model:
+                      print(f"::error::{model} is {block} in config/models.yaml — a shadow replay never runs a model the fleet has put out of use")
+                      sys.exit(1)
+          PY
+          EFFORT=$(python3 "$PIPELINE_DIR"/scripts/model_fallback.py effort "$MODEL")
+          echo "model=$MODEL" >> "$GITHUB_OUTPUT"
+          echo "effort_arg=${EFFORT:+--effort $EFFORT}" >> "$GITHUB_OUTPUT"
+          echo "shadow model: $MODEL${EFFORT:+ (effort $EFFORT)}"
+
       # Authoritative review gate (DRE-1888). A workflow_dispatch always
       # reviews (operator asked for it explicitly). For a PR event, the critic
       # runs iff the branch is an agent branch OR carries a linked card; a
@@ -370,7 +501,18 @@ jobs:
           BODY_CHANGED: ${{ github.event.changes.body && 'true' || 'false' }}
           SENDER_IS_BOT: ${{ github.event.sender.type && (github.event.sender.type == 'Bot' && 'true' || 'false') || '' }}
           PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          # DRE-7193: a shadow replay is reviewed unconditionally — a merged,
+          # closed or draft pull request is still replayed, and a standing
+          # verdict is never carried (it is the thing being re-measured).
+          SHADOW: ${{ inputs.shadow }}
+          REPLAY_SHA: ${{ inputs.replay_sha }}
         run: |
+          if [ "$SHADOW" = "true" ]; then
+            echo "shadow replay of $REPLAY_SHA — reviewed unconditionally"
+            echo "review=true" >> "$GITHUB_OUTPUT"
+            echo "head_sha=$REPLAY_SHA" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
           # A draft is skipped whatever started the run (DRE-5801). An
           # unreadable flag reads as not a draft — the review runs.
           DRAFT=$(python3 "$PIPELINE_DIR"/scripts/read_once.py pr "$PR" --fields "$PR_RECORD_FIELDS" --field isDraft 2>/dev/null || true)
@@ -521,6 +663,13 @@ jobs:
              || steps.pool.outputs.n == '3' && secrets.BUREAU_APP_PRIVATE_KEY_3
              || steps.pool.outputs.n == '4' && secrets.BUREAU_APP_PRIVATE_KEY_4
              || secrets.BUREAU_QA_APP_PRIVATE_KEY }}
+          # DRE-7193: in a shadow replay this token — the one the critic agent
+          # holds as GH_TOKEN — can read and nothing else, so a writing step
+          # whose shadow guard was missed still cannot post. Empty on a live
+          # review, which asks for the installation's own permissions as
+          # before.
+          permission-contents: ${{ inputs.shadow && 'read' || '' }}
+          permission-pull-requests: ${{ inputs.shadow && 'read' || '' }}
 
       # THE GITHUB CALLS THIS RUN MAKES, PER POOL LOGIN (DRE-6917, epic
       # DRE-6911). The first of two points on each login's hourly meter, taken
@@ -558,8 +707,15 @@ jobs:
           # Reads (the PR record, the compare record) — the pool-selected
           # token (DRE-4282).
           GH_TOKEN: ${{ steps.reader.outputs.token }}
+          # DRE-7193: a shadow replay takes the pull request and the commit
+          # from its caller — the head the recorded verdict was bound to,
+          # never the pull request's head today.
+          SHADOW: ${{ inputs.shadow }}
+          REPLAY_PR: ${{ inputs.replay_pr }}
+          REPLAY_SHA: ${{ inputs.replay_sha }}
         run: |
           PR=${{ github.event.pull_request.number || github.event.inputs.pr_number }}
+          if [ "$SHADOW" = "true" ]; then PR="$REPLAY_PR"; fi
           echo "number=$PR" >> "$GITHUB_OUTPUT"
           # The record is the job's ONE read (Stage 2 fix #21, PR_RECORD_FIELDS
           # above): taken by Decide review on a pull_request run, here on a
@@ -592,6 +748,7 @@ jobs:
           # the gate holds for a fresh review instead of merging code the
           # critic never saw.
           SHA=$(python3 "$PIPELINE_DIR"/scripts/read_once.py pr "$PR" --fields "$PR_RECORD_FIELDS" --field headRefOid)
+          if [ "$SHADOW" = "true" ]; then SHA="$REPLAY_SHA"; fi
           echo "sha=$SHA" >> "$GITHUB_OUTPUT"
           # DRE-3005 rule 3: the moment this review's read of the pull
           # request BODY begins. The critic reads the description through
@@ -617,11 +774,54 @@ jobs:
           # truncated 300-file record, or an API blip → `{}`) means the
           # verdict binds the SHA alone, exactly as before this card.
           BASE=$(python3 "$PIPELINE_DIR"/scripts/read_once.py pr "$PR" --fields "$PR_RECORD_FIELDS" --field baseRefName)
+          # DRE-7193: a replay compares against the base COMMIT the pull
+          # request recorded, not the base branch's tip today. Once a pull
+          # request has merged with a merge commit, its head is an ancestor of
+          # the base branch, and `<branch>...<head>` is empty — measured on
+          # bureau-pipeline #1081: `main...42d305b2` 0 files, `b2a6e726...
+          # 42d305b2` (its baseRefOid) 8, its own changedFiles. While a pull
+          # request is open the two have the same merge base, so they agree.
+          # Read through the same seam as the record, but on its own: a field
+          # added to PR_RECORD_FIELDS would ride every live review's read.
+          if [ "$SHADOW" = "true" ]; then
+            BASE=$(python3 "$PIPELINE_DIR"/scripts/read_once.py pr "$PR" --fields baseRefOid --field baseRefOid)
+          fi
           python3 "$PIPELINE_DIR"/scripts/read_once.py once "compare-$BASE...$SHA" -- \
             gh api "repos/${{ github.repository }}/compare/$BASE...$SHA" > /tmp/qa-compare.json 2>/dev/null \
             || echo '{}' > /tmp/qa-compare.json
           CONTENT=$(python3 "$PIPELINE_DIR"/scripts/verdict_content.py --compare-file /tmp/qa-compare.json 2>/dev/null || true)
           echo "content=$CONTENT" >> "$GITHUB_OUTPUT"
+          if [ "$SHADOW" = "true" ]; then
+            # The diff the replay is handed: the same compare, as a diff, on
+            # disk. `gh pr diff` would show today's head. The prompt names
+            # this file, and the block below tells the critic to read it in
+            # place of every `gh pr diff` its strategy names.
+            DIFF=/tmp/qa-shadow.diff
+            gh api -H "Accept: application/vnd.github.diff" \
+              "repos/${{ github.repository }}/compare/$BASE...$SHA" > "$DIFF" 2>/dev/null \
+              || : > "$DIFF"
+            echo "diff_file=$DIFF" >> "$GITHUB_OUTPUT"
+            echo "shadow diff: $(wc -l < "$DIFF") lines of $BASE...$SHA"
+            {
+              echo "shadow_context<<SHADOW_EOF"
+              echo
+              echo
+              echo "SHADOW REPLAY (DRE-7193). This review replays PR #$PR as it stood at"
+              echo "commit $SHA — the working tree is checked out there. The diff to review"
+              echo "is the file $DIFF — the compare of the pull request's base ($BASE)"
+              echo "and that commit. Read it wherever the REVIEW STRATEGY block below says"
+              echo "\`gh pr diff\`, which shows today's head and not this one. If the file"
+              echo "is empty, fetch both commits and run \`git diff $BASE...$SHA\` yourself."
+              echo "The TDD check runs against that base commit too, not origin/<base branch> —"
+              echo "a merged head is already in the branch, so the range would be empty:"
+              echo "\`git fetch --unshallow origin $BASE\`, then"
+              echo "\`python3 \"\$PIPELINE_DIR\"/scripts/check_tdd_commits.py $BASE HEAD\`."
+              echo "Its exit code is the TDD verdict, as your brief says."
+              echo "Do not read the pull request's comments — judge the change, not an earlier verdict on it."
+              echo "Write your verdict file exactly as below — nothing is posted."
+              echo "SHADOW_EOF"
+            } >> "$GITHUB_OUTPUT"
+          fi
           # DRE-2466: the PR's own size totals, for the review-strategy step
           # below. The compare record above already carries per-file counts
           # but caps at 300 files and does not paginate (verdict_content.py
@@ -633,6 +833,9 @@ jobs:
           python3 "$PIPELINE_DIR"/scripts/read_once.py pr "$PR" --fields "$PR_RECORD_FIELDS" \
             --pick changedFiles,additions,deletions > /tmp/qa-size.json 2>/dev/null \
             || echo '{}' > /tmp/qa-size.json
+          # A replay is sized by the commit it replays: the record's totals
+          # are today's head, so they give way to the compare record alone.
+          if [ "$SHADOW" = "true" ]; then echo '{}' > /tmp/qa-size.json; fi
 
       # ── The card, read ONCE for the whole job (Stage 2 fix #14) ───────────
       # Two steps below read the card: Plan visual QA (its **Design:** line)
@@ -1137,6 +1340,9 @@ jobs:
           # carries it, so the REVIEW ROUND counts only this reviewer's
           # verdicts — never a typed login (DRE-1988).
           QA_LOGIN: ${{ steps.app.outputs.app-slug }}[bot]
+          # DRE-7193: a replay judges the change, never the verdict it
+          # already got — see the filter below.
+          SHADOW: ${{ inputs.shadow }}
         run: |
           # The branch and the thread: the job's one read of each (fix #21).
           # The body stays a live read: it is what the critic is handed.
@@ -1166,6 +1372,35 @@ jobs:
             "repos/$GITHUB_REPOSITORY/issues/$PR/comments?per_page=100" \
             > /tmp/cardctx-comments.json 2>/dev/null \
             || : > /tmp/cardctx-comments.json
+          # NO HINDSIGHT IN A REPLAY (DRE-7193). A shadow replay re-measures
+          # the verdict this pull request already got, so no word of an
+          # earlier critic or verifier verdict may reach its context: every
+          # comment whose first line opens with merge_gate's CRITIC_MARKER or
+          # VERIFIER_MARKER (`opens_with_marker`, the gate's own predicate) is
+          # dropped from the thread before anything reads it — the REVIEW
+          # ROUND then reads a first review — and the refutation below, the
+          # fixing agent's answer quoting a finding, is not read at all. The
+          # card's own comments never reach this prompt on any run: the card
+          # snapshot feeds only the Design line and the build model. A thread
+          # that cannot be filtered is emptied, which reads as an unknown
+          # round — never as the unfiltered thread.
+          if [ "$SHADOW" = "true" ]; then
+            python3 - /tmp/cardctx-comments.json <<'PY' || : > /tmp/cardctx-comments.json
+          import json, os, sys
+          sys.path.insert(0, os.path.join(os.environ["PIPELINE_DIR"], "scripts"))
+          import merge_gate
+
+          path = sys.argv[1]
+          with open(path, encoding="utf-8") as fh:
+              comments = merge_gate.flatten_pages(json.load(fh))
+          kept = [c for c in comments if isinstance(c, dict) and not any(
+              merge_gate.opens_with_marker(c.get("body"), marker)
+              for marker in (merge_gate.CRITIC_MARKER, merge_gate.VERIFIER_MARKER))]
+          print(f"shadow replay: {len(comments) - len(kept)} earlier verdict(s) kept out of the context")
+          with open(path, "w", encoding="utf-8") as fh:
+              json.dump([kept], fh)
+          PY
+          fi
           # A failed read leaves the file EMPTY, never `[]` (DRE-6533): an
           # empty thread reads as a first review, and that is the claim the
           # REVIEW ROUND exists to stop the critic making by mistake. Empty
@@ -1177,6 +1412,7 @@ jobs:
           jq -r --arg sha8 "$SHA8" '[add[] | select(.user.login == "agent-bureau-bot[bot]") | select(.body | contains("refuted-finding @" + $sha8))] | last | .body // empty' \
             < /tmp/cardctx-comments.json > /tmp/cardctx-refutation.txt 2>/dev/null \
             || : > /tmp/cardctx-refutation.txt
+          if [ "$SHADOW" = "true" ]; then : > /tmp/cardctx-refutation.txt; fi
           if [ -s /tmp/cardctx-refutation.txt ]; then
             echo "refuted=true" >> "$GITHUB_OUTPUT"
             echo "re-review after refutation: found a contested finding on $SHA8"
@@ -1415,10 +1651,15 @@ jobs:
           # reconcile's workflow_dispatch runs initiate as the workflow token's
           # actor (DRE-2053 — dependabot review dispatches, DRE-2047).
           allowed_bots: agent-bureau-bot,agent-bureau-bot-2,agent-bureau-bot-3,agent-bureau-bot-4,agent-bureau-qa-bot,dependabot,github-actions
+          # DRE-7193: a shadow replay runs on the model its caller named —
+          # never a literal id — at that model's own declared effort, both
+          # handed on by the step that checked the model (shadow_model). A live
+          # review rides Select model's choice and effort, as it always has;
+          # the Refuse steps above stop a live review from naming a model.
           claude_args: |
             --max-turns ${{ steps.size.outputs.max_turns }}
-            --model ${{ steps.model.outputs.model }}
-            ${{ steps.model.outputs.effort_arg }}
+            --model ${{ inputs.shadow && steps.shadow_model.outputs.model || steps.model.outputs.model }}
+            ${{ inputs.shadow && steps.shadow_model.outputs.effort_arg || !inputs.shadow && steps.model.outputs.effort_arg || '' }}
             --allowedTools "Bash,Read,Glob,Grep,Write,WebSearch,WebFetch"
           prompt: |
             Read .bureau-pipeline/agent-context.md FIRST — the bureau
@@ -1429,7 +1670,7 @@ jobs:
             You are an adversarial code reviewer. Review PR #${{ steps.pr.outputs.number }}
             in this repo (use `gh pr view ${{ steps.pr.outputs.number }}`;
             for the diff itself follow the REVIEW STRATEGY block below —
-            GH_TOKEN is in your env).
+            GH_TOKEN is in your env).${{ steps.pr.outputs.shadow_context }}
 
             REVIEW STRATEGY (DRE-2466 — chosen from this PR's measured diff
             size; follow it exactly). Fallback if the block below is empty:
@@ -1785,10 +2026,15 @@ jobs:
           # reconcile's workflow_dispatch runs initiate as the workflow token's
           # actor (DRE-2053 — dependabot review dispatches, DRE-2047).
           allowed_bots: agent-bureau-bot,agent-bureau-bot-2,agent-bureau-bot-3,agent-bureau-bot-4,agent-bureau-qa-bot,dependabot,github-actions
+          # DRE-7193: a shadow replay runs on the model its caller named —
+          # never a literal id — at that model's own declared effort, both
+          # handed on by the step that checked the model (shadow_model). A live
+          # review rides Select model's choice and effort, as it always has;
+          # the Refuse steps above stop a live review from naming a model.
           claude_args: |
             --max-turns ${{ steps.size.outputs.retry_max_turns }}
-            --model ${{ steps.model.outputs.model }}
-            ${{ steps.model.outputs.effort_arg }}
+            --model ${{ inputs.shadow && steps.shadow_model.outputs.model || steps.model.outputs.model }}
+            ${{ inputs.shadow && steps.shadow_model.outputs.effort_arg || !inputs.shadow && steps.model.outputs.effort_arg || '' }}
             --allowedTools "Bash,Read,Glob,Grep,Write,WebSearch,WebFetch"
           prompt: |
             THIS IS THE RETRY (DRE-3304). A first attempt already reviewed
@@ -1828,7 +2074,7 @@ jobs:
             You are an adversarial code reviewer. Review PR #${{ steps.pr.outputs.number }}
             in this repo (use `gh pr view ${{ steps.pr.outputs.number }}`;
             for the diff itself follow the REVIEW STRATEGY block below —
-            GH_TOKEN is in your env).
+            GH_TOKEN is in your env).${{ steps.pr.outputs.shadow_context }}
 
             REVIEW STRATEGY (DRE-2466 — chosen from this PR's measured diff
             size; follow it exactly). Fallback if the block below is empty:
@@ -2059,6 +2305,78 @@ jobs:
             echo "critic retry also did not produce a real verdict — neutral + fail"
           fi
 
+      # THE SHADOW VERDICT GOES TO A FILE (DRE-7193) — the whole outcome of a
+      # replay, since it posts nothing. The contract the verifier card
+      # (DRE-7194) and the batch replay card (DRE-7197) read, pinned by
+      # tests/test_qa_review_shadow.py:
+      #
+      #   artifact  shadow-verdict-critic-<replay_pr>
+      #   .json     role, repo, pr (integer), sha, model, verdict
+      #             ("APPROVE" | "REQUEST_CHANGES" | null), real (the gates'
+      #             own `real`), run_url — all eight, always
+      #   .md       /tmp/qa-verdict.md verbatim, empty when there is none
+      #   log       ONE line: shadow-verdict: role=critic pr=<n> sha=<40hex>
+      #             model=<id> verdict=<APPROVE|REQUEST_CHANGES|none>
+      #
+      # The verdict is read only off a REAL verdict, by the same expression
+      # the post step uses: an unfinished stub's `VERDICT: REQUEST_CHANGES`
+      # is a receipt, not a verdict, and is written as null. A refused
+      # request (the two Refuse steps) is no replay and writes nothing.
+      - name: Write the shadow verdict
+        id: shadow_verdict
+        if: always() && !cancelled() && inputs.shadow && steps.shadow_model.outcome == 'success'
+        env:
+          REAL: ${{ (steps.gate1.outputs.real == 'true' || steps.gate2.outputs.real == 'true') && 'true' || 'false' }}
+          REPLAY_PR: ${{ inputs.replay_pr }}
+          REPLAY_SHA: ${{ inputs.replay_sha }}
+          MODEL: ${{ inputs.model }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          VERDICT_FILE: /tmp/qa-verdict.md
+        run: |
+          OUT_DIR="${RUNNER_TEMP:-/tmp}/shadow-verdict"
+          rm -rf "$OUT_DIR"
+          mkdir -p "$OUT_DIR"
+          python3 - "$OUT_DIR" <<'PY'
+          import json, os, re, sys
+          from pathlib import Path
+
+          out = Path(sys.argv[1])
+          env = os.environ
+          try:
+              body = Path(env["VERDICT_FILE"]).read_text(encoding="utf-8", errors="replace")
+          except OSError:
+              body = ""
+          real = env.get("REAL") == "true"
+          verdict = None
+          if real:
+              m = re.match(r"\s*VERDICT:\s*(APPROVE|REQUEST_CHANGES)\b", body)
+              verdict = m.group(1) if m else None
+          record = {
+              "role": "critic",
+              "repo": env.get("GITHUB_REPOSITORY", ""),
+              "pr": int(env["REPLAY_PR"]),
+              "sha": env["REPLAY_SHA"],
+              "model": env["MODEL"],
+              "verdict": verdict,
+              "real": real,
+              "run_url": env["RUN_URL"],
+          }
+          (out / "shadow-verdict.json").write_text(json.dumps(record, indent=2) + "\n")
+          (out / "shadow-verdict.md").write_text(body)
+          print(f"shadow-verdict: role=critic pr={record['pr']} sha={record['sha']} "
+                f"model={record['model']} verdict={verdict or 'none'}")
+          PY
+          echo "dir=$OUT_DIR" >> "$GITHUB_OUTPUT"
+
+      - name: Upload the shadow verdict
+        if: always() && !cancelled() && inputs.shadow && steps.shadow_verdict.outputs.dir != ''
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: shadow-verdict-critic-${{ inputs.replay_pr }}
+          path: ${{ steps.shadow_verdict.outputs.dir }}
+          if-no-files-found: error
+          retention-days: 90
+
       # THE CRITIC'S OWN USAGE READING (DRE-4338) — the same two steps
       # agent-task.yml carries after its agent step, for the same reason:
       # the `rate_limit_event` the critic's run emitted is in the execution
@@ -2245,7 +2563,9 @@ jobs:
         # not on cancellation: a superseded run must not post a fail-closed
         # verdict that masks the live run's real one. Skipped entirely when
         # the decide gate said this PR is chrome-only (no verdict to post).
-        if: always() && !cancelled() && steps.decide.outputs.review == 'true'
+        # Never in a shadow replay (DRE-7193): the replay's verdict is the
+        # file "Write the shadow verdict" keeps, and nothing else.
+        if: always() && !cancelled() && steps.decide.outputs.review == 'true' && !inputs.shadow
         env:
           GH_TOKEN: ${{ steps.app.outputs.token }}
           LINEAR_API_KEY: ${{ vars.LINEAR_AGENT_BUCKET == 'planner' && secrets.LINEAR_PLANNER_KEY || secrets.LINEAR_API_KEY }}
@@ -2409,7 +2729,9 @@ jobs:
         # evidence is not there yet; the hand-built sweep draws the same line
         # (reconcile.move_hand_built_to_review). Marking it ready is the
         # moment it is, so that event moves the card.
-        if: always() && !cancelled() && (github.event.action == 'opened' || github.event.action == 'reopened' || github.event.action == 'ready_for_review') && !github.event.pull_request.draft
+        #
+        # Never in a shadow replay (DRE-7193), which posts nothing.
+        if: always() && !cancelled() && (github.event.action == 'opened' || github.event.action == 'reopened' || github.event.action == 'ready_for_review') && !github.event.pull_request.draft && !inputs.shadow
         env:
           LINEAR_API_KEY: ${{ vars.LINEAR_AGENT_BUCKET == 'planner' && secrets.LINEAR_PLANNER_KEY || secrets.LINEAR_API_KEY }}
           LINEAR_API_KEY_FALLBACK: ${{ secrets.LINEAR_API_KEY }}
@@ -2506,14 +2828,16 @@ jobs:
       # look-up per review. The reads above ride the pool; this does not.
       - name: Mint dispatch-bot token (checks:write — qa-bot has checks:read)
         id: checks_app
-        if: always() && !cancelled() && (steps.decide.outputs.review == 'true' || steps.decide.outputs.carried_sha != '')
+        # A shadow replay (DRE-7193) publishes no check, so it mints no
+        # token that could.
+        if: always() && !cancelled() && (steps.decide.outputs.review == 'true' || steps.decide.outputs.carried_sha != '') && !inputs.shadow
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
         with:
           app-id: ${{ secrets.BUREAU_APP_ID }}
           private-key: ${{ secrets.BUREAU_APP_PRIVATE_KEY }}
 
       - name: Publish review check on the reviewed head
-        if: always() && !cancelled() && steps.decide.outputs.review == 'true'
+        if: always() && !cancelled() && steps.decide.outputs.review == 'true' && !inputs.shadow
         env:
           GH_TOKEN: ${{ steps.checks_app.outputs.token }}
           # Same expression the verdict step uses — one source for "did a
@@ -2539,7 +2863,7 @@ jobs:
         # Ordered AFTER the ordinary publish step on purpose: that one is
         # the head-bound record's primary writer (DRE-2291) and stays the
         # first `publish_review_check.py` step in this file.
-        if: always() && !cancelled() && steps.decide.outputs.review != 'true' && steps.decide.outputs.carried_sha != ''
+        if: always() && !cancelled() && steps.decide.outputs.review != 'true' && steps.decide.outputs.carried_sha != '' && !inputs.shadow
         env:
           GH_TOKEN: ${{ steps.checks_app.outputs.token }}
           CARRIED_SHA: ${{ steps.decide.outputs.carried_sha }}
@@ -2566,8 +2890,10 @@ jobs:
       - name: Fail if critic never really ran
         id: critic_fail
         # Only when we actually tried to review — a chrome-only PR (decide
-        # said skip) never runs the gates, so it must NOT fail here.
-        if: always() && !cancelled() && steps.decide.outputs.review == 'true' && steps.size.outputs.strategy != 'oversized' && steps.gate1.outputs.real != 'true' && steps.gate2.outputs.real != 'true'
+        # said skip) never runs the gates, so it must NOT fail here. Nor does
+        # a shadow replay (DRE-7193): its outcome is the verdict file, which
+        # says `"real": false` for a replay that produced no verdict.
+        if: always() && !cancelled() && steps.decide.outputs.review == 'true' && steps.size.outputs.strategy != 'oversized' && steps.gate1.outputs.real != 'true' && steps.gate2.outputs.real != 'true' && !inputs.shadow
         env:
           # DRE-2924: the annotation is the first line the medic and the
           # operator read, and it must not assert a crash over a run that

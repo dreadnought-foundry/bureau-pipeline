@@ -273,11 +273,33 @@ class WorkflowWiringTest(unittest.TestCase):
     hand-written list of today's steps would not see it.
     """
 
-    # `--model <something>` inside a claude_args block, and the step id that
-    # `something` comes from when it is an interpolated step output.
-    _MODEL_ARG = re.compile(r"--model\s+\$\{\{\s*steps\.([A-Za-z0-9_]+)\.outputs")
+    # `--model <something>` inside a claude_args block, and every step id that
+    # `something` comes from when it is an interpolated step output — one, or
+    # one per branch of an expression that chooses between two (the critic's
+    # shadow replay, DRE-7193). The effort argument is read the same way, so
+    # each branch's model must have its level from the same step.
+    _MODEL_EXPR = re.compile(r"--model\s+\$\{\{(.*?)\}\}")
+    _MODEL_STEP = re.compile(r"\bsteps\.([A-Za-z0-9_]+)\.outputs\.model\b")
     _MODEL_ARG_WHOLE = re.compile(r"\$\{\{\s*steps\.([A-Za-z0-9_]+)\.outputs\.model_arg")
-    _EFFORT_ARG = re.compile(r"\$\{\{\s*steps\.([A-Za-z0-9_]+)\.outputs\.effort_arg")
+    _EFFORT_ARG = re.compile(r"\bsteps\.([A-Za-z0-9_]+)\.outputs\.effort_arg\b")
+
+    def _model_steps(self, block: str) -> set[str]:
+        steps = set(self._MODEL_ARG_WHOLE.findall(block))
+        for expr in self._MODEL_EXPR.findall(block):
+            steps |= set(self._MODEL_STEP.findall(expr))
+        return steps
+
+    def test_a_two_branch_model_needs_both_branches_levels(self):
+        # The reading the critic's shadow replay is held to: a model chosen
+        # between two steps, and an effort that names only one of them, is a
+        # level computed for a model the other branch does not run.
+        both = ("--model ${{ inputs.shadow && steps.a.outputs.model || steps.b.outputs.model }}\n"
+                "${{ inputs.shadow && steps.a.outputs.effort_arg || steps.b.outputs.effort_arg }}")
+        self.assertEqual(self._model_steps(both), {"a", "b"})
+        self.assertEqual(set(self._EFFORT_ARG.findall(both)), {"a", "b"})
+        one = ("--model ${{ inputs.shadow && inputs.model || steps.b.outputs.model }}\n"
+               "${{ inputs.shadow && steps.a.outputs.effort_arg || steps.b.outputs.effort_arg }}")
+        self.assertNotEqual(self._model_steps(one), set(self._EFFORT_ARG.findall(one)))
 
     def _claude_args_blocks(self):
         """`(path, line_no, block_text)` for every `claude_args:` block."""
@@ -301,9 +323,7 @@ class WorkflowWiringTest(unittest.TestCase):
     def test_every_claude_args_block_passes_the_effort_of_its_own_model(self):
         for path, line, block in self._claude_args_blocks():
             where = f"{Path(path).name}:{line}"
-            model_steps = set(self._MODEL_ARG.findall(block)) | set(
-                self._MODEL_ARG_WHOLE.findall(block)
-            )
+            model_steps = self._model_steps(block)
             effort_steps = set(self._EFFORT_ARG.findall(block))
             if model_steps:
                 self.assertEqual(
