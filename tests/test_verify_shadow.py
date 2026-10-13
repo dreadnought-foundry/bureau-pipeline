@@ -21,9 +21,12 @@ by running that shell:
 * shadow posts nothing: the writing steps are DISCOVERED by what their shell
   calls, never listed by name, and each is skipped in shadow;
 * the agent replays the verified head with no Linear key, a read-only token,
-  the checkout at `replay_sha` and the compare of the base branch and
-  `replay_sha` as its diff;
-* no earlier critic or verifier verdict reaches the shadow prompt;
+  the checkout at `replay_sha` and the compare of `replay_sha` with the base
+  it was built on as its diff — the merge commit's first parent once the pull
+  request has merged, the base branch while it has not — and an empty diff
+  fails the run rather than verifying nothing;
+* no earlier critic or verifier verdict reaches the shadow prompt, and the
+  card's snapshot and thread are off the runner before the agent starts;
 * the shadow verdict file, its artifact and its one log line.
 
 Run: python3 -m pytest tests/test_verify_shadow.py -v
@@ -262,9 +265,17 @@ FAKE_GH = textwrap.dedent(r'''
     with open(os.environ["GH_LOG"], "a") as fh:
         fh.write(json.dumps(argv) + "\n")
     joined = " ".join(argv)
+    # A merged pull request (MERGE_COMMIT set) behaves as GitHub does: its
+    # head is an ancestor of the base branch today, so the compare of `main`
+    # and that head is empty, and only the base it merged into
+    # (BASE_AT_MERGE, the merge commit's first parent) shows its change.
+    merged = os.environ.get("MERGE_COMMIT", "")
     if argv[:2] == ["pr", "view"]:
         if "--comments" in argv or "comments" in joined:
             print(os.environ["EARLIER_VERDICT"])
+        elif "mergeCommit" in joined:
+            if merged:
+                print(merged)
         elif "headRefName" in joined:
             print("agent/DRE-1-replayed")
         elif "headRefOid" in joined:
@@ -278,12 +289,26 @@ FAKE_GH = textwrap.dedent(r'''
     if argv[:1] == ["api"]:
         if "/comments" in joined:
             print(json.dumps([{"body": os.environ["EARLIER_VERDICT"]}]))
-        elif "application/vnd.github.diff" in joined:
-            print("diff --git a/replayed b/replayed")
-            print("+the change at the verified head")
-        elif "/compare/" in joined:
-            print(json.dumps({"files": [{"filename": "console/src/board.tsx", "patch": "+x"},
-                                        {"filename": "backend/app/api.py", "patch": "+y"}]}))
+            sys.exit(0)
+        if merged and f"/commits/{merged}" in joined:
+            print(os.environ["BASE_AT_MERGE"])
+            sys.exit(0)
+        if "/compare/" in joined:
+            if os.environ.get("COMPARE_FAILS"):
+                print("gh: HTTP 502", file=sys.stderr)
+                sys.exit(1)
+            base = joined.split("/compare/", 1)[1].split("...", 1)[0]
+            behind = bool(merged) and base != os.environ.get("BASE_AT_MERGE")
+            empty = behind or bool(os.environ.get("EMPTY_COMPARE"))
+            if "application/vnd.github.diff" in joined:
+                if not empty:
+                    print("diff --git a/replayed b/replayed")
+                    print("+the change at the verified head")
+            elif empty:
+                print(json.dumps({"status": "behind", "ahead_by": 0, "files": []}))
+            else:
+                print(json.dumps({"files": [{"filename": "console/src/board.tsx", "patch": "+x"},
+                                            {"filename": "backend/app/api.py", "patch": "+y"}]}))
         sys.exit(0)
     sys.exit(0)
 ''').lstrip()
@@ -662,6 +687,42 @@ class TheReplayedHeadTest(_Shell):
             self.assertIn("/tmp/shadow-replay.diff", prompt)
             self.assertIn("Do not run `gh pr diff`", prompt)
 
+    MERGED = {"MERGE_COMMIT": "a" * 40, "BASE_AT_MERGE": "b" * 40}
+
+    def test_a_merged_pull_request_is_compared_with_the_base_it_merged_into(self):
+        # A replay is of a past, judged pull request, so most have merged. Its
+        # head is then an ancestor of `main` today and `main...<sha>` is empty:
+        # the diff and the scope gate's files come from the merge commit's
+        # first parent, the base branch as it stood at the merge.
+        proc = self.run_step(_step("pr"), _shadow(), self.MERGED)
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        compares = [" ".join(c) for c in self.gh_calls() if c[:1] == ["api"] and "/compare/" in " ".join(c)]
+        self.assertEqual(len(compares), 2, compares)
+        for call in compares:
+            self.assertIn(f"repos/{REPO}/compare/{'b' * 40}...{REPLAY_SHA}", call)
+            self.assertNotIn(f"compare/main...", call)
+        self.assertIn("the change at the verified head", (self.tmp / "shadow-replay.diff").read_text())
+        proc = self.run_step(_step("scope"), _shadow())
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        changed = (self.tmp / "verify" / "changed.txt").read_text().split()
+        self.assertEqual(changed, ["console/src/board.tsx", "backend/app/api.py"])
+
+    def test_an_empty_replay_diff_fails_the_step_and_leaves_no_diff_file(self):
+        for env in ({"EMPTY_COMPARE": "1"}, {"COMPARE_FAILS": "1"}):
+            with self.subTest(env=env):
+                (self.tmp / "shadow-replay.diff").unlink(missing_ok=True)
+                proc = self.run_step(_step("pr"), _shadow(), env)
+                self.assertNotEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+                self.assertFalse((self.tmp / "shadow-replay.diff").exists())
+
+    def test_a_live_resolve_never_asks_for_the_merge_commit(self):
+        proc = self.run_step(_step("pr"), _ctx(), self.MERGED)
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        self.assertFalse([c for c in self.gh_calls() if "mergeCommit" in " ".join(c)])
+        compares = [" ".join(c) for c in self.gh_calls() if "/compare/" in " ".join(c)]
+        self.assertEqual(len(compares), 1, compares)
+        self.assertIn(f"repos/{REPO}/compare/main...{TODAY_SHA}", compares[0])
+
     def test_a_live_resolve_reads_todays_head_and_writes_no_diff_file(self):
         proc = self.run_step(_step("pr"), _ctx())
         self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
@@ -733,6 +794,36 @@ class NoHindsightTest(_Shell):
             self.assertNotIn(marker, card)
         for step in _agent_steps():
             self.assertIn("/tmp/shadow-card.md", _value(step["with"]["prompt"], _shadow()))
+
+    def test_the_cards_thread_is_off_the_runner_before_the_agent_runs(self):
+        # The snapshot and the thread Select model wrote carry the earlier
+        # verdicts, and the agent holds Bash and Read: a shadow-only step
+        # removes both, and the compare the scope gate read, before it starts.
+        keys = [k for k, _ in _keyed(_steps())]
+        step = _step("shadow_scrub")
+        at = keys.index(step["name"])
+        for before in ("Select model", "Effort for the named model (shadow)",
+                       "Decide scope (multi-system / UI?)", "Hand the replay the card's description (shadow)"):
+            self.assertLess(keys.index(before), at, before)
+        for agent in _agent_steps():
+            self.assertLess(at, keys.index(agent["name"]), agent["name"])
+        self.assertTrue(_cond(step["if"], _shadow()))
+        self.assertTrue(_cond(step["if"], _shadow(in_scope="false")))
+        self.assertFalse(_cond(step["if"], _ctx()))
+        files = [self.runner_temp / "card-snapshot.json", self.runner_temp / "card-thread.json",
+                 self.tmp / "verify-compare.json"]
+        for f in files:
+            f.write_text(f"🔎 {merge_gate.CRITIC_MARKER} — VERDICT: APPROVE @{REPLAY_SHA}")
+        proc = self.run_step(step, _shadow())
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        for f in files:
+            self.assertFalse(f.exists(), f.name)
+
+    def test_the_prompt_names_the_routes_to_the_comments(self):
+        for step in _agent_steps():
+            shadow = _value(step["with"]["prompt"], _shadow())
+            self.assertIn("`gh pr view --comments`", shadow)
+            self.assertIn("`gh api`", shadow)
 
 
 # ── 7. the shadow verdict ───────────────────────────────────────────────────
