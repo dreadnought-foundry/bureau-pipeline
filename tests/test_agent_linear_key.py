@@ -116,7 +116,7 @@ DOCUMENTED_EXCEPTIONS = {
         "\"Read,Glob,Grep,Write\" with no Bash, so there is no way for it to "
         "run linear_ops.py at all — the premise of the rule above. It posts "
         "no heartbeat and reads no card: the task is a FIXED string (read "
-        "config/models.yaml, count the ladders, write one line), identical "
+        "config/model-prices.yaml, count the prices, write one line), identical "
         "for every candidate, which is what makes two trials comparable and "
         "what leaves no untrusted text for an injection to ride in on. The "
         "workflow declares exactly two workflow_call secrets, both Anthropic "
