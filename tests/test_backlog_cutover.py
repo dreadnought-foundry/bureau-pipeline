@@ -612,7 +612,7 @@ def test_the_from_lane_follows_the_alias_rather_than_a_literal(monkeypatch):
     """Load the file afresh against a contract whose alias names another lane:
     the cutover's from-lane follows it, so nothing in the file spells it."""
     monkeypatch.setattr(lane_contract, "aliases",
-                        lambda contract=None: {"Plan Review": "Green Light",
+                        lambda contract=None: {"Old Approval": "Green Light",
                                                "Old Queue": "Queued"})
     monkeypatch.setattr(lane_contract, "QUEUE_LANES", ("Queued", "Old Queue"))
     spec = importlib.util.spec_from_file_location("backlog_cutover_probe", SOURCE_PATH)
