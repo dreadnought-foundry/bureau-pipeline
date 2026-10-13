@@ -1127,7 +1127,9 @@ def _done_match(item: dict, row: dict) -> tuple[dict, dict] | None:
                 or card.get("state") != "Done"):
             continue
         for pr in card.get("prs") or []:
-            if (isinstance(pr, dict) and _pr_ref(pr) == item.get("pr")
+            # GitHub reads an owner and a repo name in any case.
+            if (isinstance(pr, dict)
+                    and _pr_ref(pr).lower() == str(item.get("pr")).lower()
                     and pr.get("merged_at")):
                 return card, pr
     return None
@@ -1210,7 +1212,11 @@ def _weigh(verdict: str, proof: list[dict], row: dict, declared,
     one that matched. With `recorded`, a part the row does not carry — the
     workflow's `apply` holds no folded targets — is read off the document
     `verdict` wrote: an item carrying the runner's `fact` is one `judge`
-    matched, and the context words are the ones `judge` kept.
+    matched, and the context words are the ones `judge` kept. A row with no
+    board context names no children, so the child rule stands as `judge`
+    applied it; a row that names children and no matched work counts no
+    recorded Done card toward a Cancel, since nothing shows it is not under
+    the card.
     """
     know_work = not recorded or "matched_work" in row
     know_routing = not recorded or "routing" in row
