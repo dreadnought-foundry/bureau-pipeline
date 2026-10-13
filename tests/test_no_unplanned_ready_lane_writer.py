@@ -253,6 +253,9 @@ class ANewWriterWithAWrongDestinationIsCaught(unittest.TestCase):
             "        run: |\n"
             '          python3 .bureau-pipeline/scripts/linear_ops.py state "$CARD" "Backlog"\n'
         )
+        # `Backlog` is not in the vocabularies since DRE-6742, but the
+        # contract aliases it to Queued: a write under the old name is still
+        # a write into the queue, and is named.
         with _Staged(f".github/workflows/{rogue}", source):
             problems = rlw.writer_problems()
         self.assertTrue(_named(problems, rogue), problems)
@@ -324,6 +327,14 @@ class LinearsOwnTeamDefaultIsCovered(unittest.TestCase):
         problems = rlw.default_problems("Backlog")
         self.assertTrue(_named(problems, "Backlog"), problems)
         self.assertTrue(_named(problems, rlw.LINEAR_DEFAULT_WRITER), problems)
+
+    def test_a_team_default_of_either_queue_name_is_reported(self):
+        # DRE-6742: the vocabularies name Queued, and Backlog is the name the
+        # contract aliases to it — a card landing under either is in the
+        # queue, so a default of either is the same hole.
+        for lane in lane_contract.QUEUE_LANES:
+            problems = rlw.default_problems(lane)
+            self.assertTrue(_named(problems, lane), (lane, problems))
 
     def test_a_team_default_outside_the_work_segment_is_clean(self):
         self.assertEqual(rlw.default_problems("Intake"), [])

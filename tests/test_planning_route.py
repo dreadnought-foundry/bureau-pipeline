@@ -582,7 +582,7 @@ class TestTheExitCommand:
         card.run(lambda: planning_route.main(["exit", CARD]))
 
         assert card.posted == first, "the second pass posted a comment again"
-        assert card.states == [(CARD, "Backlog"), (CARD, "Backlog")]
+        assert card.states == [(CARD, "Queued"), (CARD, "Queued")]
 
     def test_a_roll_up_is_moved_and_given_no_verdict(self):
         card = _Card([_stamp("roll-up")])
