@@ -328,8 +328,6 @@ _FALLBACK_REPO_MAP = {
     "agent-bureau-demo": "dreadnought-foundry/agent-bureau-demo",
     "bureau-pipeline": "dreadnought-foundry/bureau-pipeline",
     "portico": "dreadnought-foundry/portico",
-    "foundry": "dreadnought-foundry/foundry",
-    "charter": "dreadnought-foundry/charter",
 }
 # --- END generated repo mirror ---
 
@@ -378,9 +376,10 @@ _INITIATIVE_ALIAS = {"bureau": "agent-bureau"}
 
 # Initiatives that name no single repo, so identity must not apply (DRE-7075).
 # `initiative:foundry` tags the whole Dreadnought Foundry initiative, which
-# spans several products — and `foundry` is ALSO a repo slug since DRE-7075.
-# Without this set every card carrying the initiative label alone would be
-# auto-fixed to `repo:foundry` and built there. Such a label is skipped, so a
+# spans several products — and `foundry` is also the studio's build repo,
+# which joins the routing map when DRE-7076 onboards it. From then on, without
+# this set every card carrying the initiative label alone would be auto-fixed
+# to `repo:foundry` and built there. Such a label is skipped, so a
 # card that names nothing else is bounced for its repo, never guessed at.
 _NON_REPO_INITIATIVES = frozenset({"foundry"})
 
@@ -455,8 +454,8 @@ def infer_repo(labels: list[str]) -> tuple[str | None, str | None]:
     ONE route (rule 2 of DRE-1405, narrowed by DRE-2874): an `initiative:<x>`
     label, aliased bureau→agent-bureau and identity otherwise. An initiative in
     `_NON_REPO_INITIATIVES` names no single repo and is skipped (DRE-7075):
-    `initiative:foundry` must not resolve to the `foundry` repo it shares a
-    slug with. The card's Linear
+    `initiative:foundry` must not resolve to the `foundry` repo that will share
+    its slug once DRE-7076 onboards it. The card's Linear
     project name used to be a second route and is not read here any more — see
     the note above `_INITIATIVE_PREFIX`. Labels, and only labels, decide.
 
