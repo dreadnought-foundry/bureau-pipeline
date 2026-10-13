@@ -1029,14 +1029,14 @@
       "tag": "epic-waits",
       "adopted": true,
       "kind": "hold",
-      "means": "An epic still to be planned reached Planning while a formal blocker of it was open, so instead of asking the CEO whether to wait it waits in Backlog, with each open blocker and its state named, and no planner runs.",
+      "means": "An epic still to be planned reached Planning while a formal blocker of it was open, so instead of asking the CEO whether to wait it waits in Queued, with each open blocker and its state named, and no planner runs.",
       "state": "held",
       "next_actor": "reconcile.py",
       "discharges": null,
       "subscriber": "plan.yml",
       "cadence_s": null,
       "cadence_why": "Null: the wait ends when every formal blocker of the epic is terminal, and scripts/reconcile.py declares no bound on when that happens — a blocker is built and proved at its own pace — so there is no bound on the wait to read as stuck.",
-      "why": "DRE-6651. DRE-6589 reached Planning blocked by DRE-6587, In Progress, and the planner could only ask the CEO \"wait, or plan now?\" — a question the board already answered. `planning_route.py decide` reads an epic's formal `blocks` relations, its children and its lane history, and writes `wait=true` when a blocker is not in `prose_blockers.TERMINAL`, it has no children and its history never moves it to In Progress (its green light); any read that fails writes `wait=false`. `plan.yml`'s `Epic waits on its blocker — Backlog, no planner` step posts this receipt, `⏸️ epic-waits: …`, then moves the epic to Backlog, and `Route — plan or activate` is skipped on `wait`, so no planner, no attempt boundary, no heartbeat and no critic follow. A HOLD: the auto-advance in `reconcile.py` returns the epic to Planning once every blocker is terminal (DRE-6653). The console learned the tag first (DRE-6672). It discharges nothing.",
+      "why": "DRE-6651. DRE-6589 reached Planning blocked by DRE-6587, In Progress, and the planner could only ask the CEO \"wait, or plan now?\" — a question the board already answered. `planning_route.py decide` reads an epic's formal `blocks` relations, its children and its lane history, and writes `wait=true` when a blocker is not in `prose_blockers.TERMINAL`, it has no children and its history never moves it to In Progress (its green light); any read that fails writes `wait=false`. `plan.yml`'s `Epic waits on its blocker — Queued, no planner` step posts this receipt, `⏸️ epic-waits: …`, then moves the epic to Queued (Backlog until DRE-6750), and `Route — plan or activate` is skipped on `wait`, so no planner, no attempt boundary, no heartbeat and no critic follow. A HOLD: the auto-advance in `reconcile.py` returns the epic to Planning once every blocker is terminal (DRE-6653). The console learned the tag first (DRE-6672). It discharges nothing.",
       "emits": {
         "file": ".github/workflows/plan.yml",
         "anchor": "\"$EPIC\" \"$WAITS\" --act=epic-waits-on-blocker"

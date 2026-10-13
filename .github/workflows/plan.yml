@@ -1,7 +1,7 @@
 # Plans an epic: triggered (via the product-repo stub) by the relay when a
 # card labeled agent:planner enters Todo. The planner decomposes the epic
-# into sub-issues (created in Backlog) and posts the plan to the epic as a
-# comment. The human approves by moving children Backlog → Todo, which
+# into sub-issues (created in Queued) and posts the plan to the epic as a
+# comment. The human approves by moving children Queued → Todo, which
 # dispatches each through agent-task.yml.
 #
 # Reusable workflow: concurrency + permissions live in the calling stub.
@@ -804,12 +804,12 @@ jobs:
             --github-output "$GITHUB_OUTPUT"
 
       # An epic still to be planned whose formal blocker is open waits in
-      # Backlog (DRE-6651): `decide` read the relation, the children and the
+      # Queued (DRE-6651): `decide` read the relation, the children and the
       # lane history and wrote `wait=true`. One receipt, then the move — and
       # `Route` carries `wait != 'true'`, so no planner, no attempt boundary,
       # no heartbeat and no critic follow. The slot is still released by the
       # `always()` step at the end. The auto-advance brings it back (DRE-6653).
-      - name: Epic waits on its blocker — Backlog, no planner
+      - name: Epic waits on its blocker — Queued, no planner
         if: steps.shape.outputs.route == 'epic' && steps.shape.outputs.wait == 'true'
         env:
           LINEAR_API_KEY: ${{ secrets.LINEAR_PLANNER_KEY || secrets.LINEAR_API_KEY }}
@@ -818,9 +818,9 @@ jobs:
           # Through env, never interpolated into the shell line.
           WAITS_ON: ${{ steps.shape.outputs.waits_on }}
         run: |
-          WAITS="⏸️ epic-waits: $EPIC waits in Backlog on its formal blocker(s) $WAITS_ON. It is planned when every one is Done — nothing is asked of anyone until then."
+          WAITS="⏸️ epic-waits: $EPIC waits in Queued on its formal blocker(s) $WAITS_ON. It is planned when every one is Done — nothing is asked of anyone until then."
           python3 .bureau-pipeline/scripts/linear_ops.py comment "$EPIC" "$WAITS" --act=epic-waits-on-blocker
-          python3 .bureau-pipeline/scripts/linear_ops.py state "$EPIC" "Backlog"
+          python3 .bureau-pipeline/scripts/linear_ops.py state "$EPIC" "Queued"
           echo "$WAITS"
           echo "$WAITS" >> "$GITHUB_STEP_SUMMARY"
 
@@ -1611,7 +1611,7 @@ jobs:
       # first and the record cannot be the only thing on the card if the run
       # dies between them. `--record-only`: the note `died` writes is the
       # second critic's review's — it names that review, the children waiting in
-      # Backlog and the round bound, and on this route every one of those
+      # Queued and the round bound, and on this route every one of those
       # sentences is false. The decision already said in words what this says
       # in numbers, and a second telling of one death is how two comments come
       # to describe it differently.
@@ -2631,7 +2631,7 @@ jobs:
       # over EVERY child the planner just created — before the plan is allowed to
       # finish — so a child with a placeholder/path body, missing repo, or no
       # role label is caught here (the plan fails loudly) rather than stranding
-      # in Backlog for the operator to hand-repair. The create seam
+      # in Queued for the operator to hand-repair. The create seam
       # (linear_ops.py subissue) already rejects these at creation; this is the
       # belt-and-braces sweep that closes any path that skipped the seam.
       # Skipped when the planner created zero children — that run escalated
@@ -3359,7 +3359,7 @@ jobs:
             exit 1
           fi
           # A revision is the planner's output too (DRE-4593): a card round 2
-          # added would otherwise reach Backlog with no routing verdict on it,
+          # added would otherwise reach Queued with no routing verdict on it,
           # and the sweep refuses exactly that. A card round 1 already stamped
           # is refused by the write path and costs one read.
           python3 .bureau-pipeline/scripts/plan_child_verdicts.py stamp \
@@ -3637,9 +3637,9 @@ jobs:
       # DRE-4626 and DRE-4633 are 7 each.
       #
       # So every child that carries a verdict out of here is moved Intake →
-      # Backlog, after the verdict is written, and out of no other lane. The
+      # Queued, after the verdict is written, and out of no other lane. The
       # CEO's signed answer on DRE-4668 is the approval model: an epic's green
-      # light is the approval for the cards filed under it. Backlog is not a
+      # light is the approval for the cards filed under it. Queued is not a
       # build lane — the sweep still holds the card until the epic reaches In
       # Progress and every blocker is Done — and a card in Intake with no
       # parent epic is not in this set at all.
@@ -3661,7 +3661,7 @@ jobs:
           python3 .bureau-pipeline/scripts/linear_ops.py children-detail "$EPIC" > "$CHILDREN"
           python3 .bureau-pipeline/scripts/plan_child_verdicts.py stamp \
             --epic "$EPIC" --comment-file "$HELD" < "$CHILDREN"
-          # A child nothing will ever stamp freezes in Backlog on
+          # A child nothing will ever stamp freezes in Queued on
           # `routing-no-verdict`. `validate_card.py check-children` does NOT
           # catch it — it never looks for acceptance criteria — so this note is
           # the only thing that says so, and it lands on the epic the CEO is
@@ -3811,7 +3811,7 @@ jobs:
       # the first one could not: given this is the specification, what is
       # missing? An adversarial pass is only worth much against a fixed target,
       # and this is the last point at which a gap is free to fix. After it the
-      # plan goes to the CEO and, once he approves it, the cards enter Backlog
+      # plan goes to the CEO and, once he approves it, the cards enter Queued
       # and agents build them, which is why every step below sits BEFORE Green
       # Light, and why Approve then means go (DRE-5281): the activate route at
       # the foot of this block runs no review at all.
@@ -5386,7 +5386,7 @@ jobs:
             fi
             python3 .bureau-pipeline/scripts/plan_child_verdicts.py stamp \
               --epic "$EPIC" --comment-file "$HELD" < "$CHILDREN"
-            # A child nothing will ever stamp freezes in Backlog. Say so on the
+            # A child nothing will ever stamp freezes in Queued. Say so on the
             # epic rather than in a run log nobody reads.
             if [ -s "$HELD" ]; then
               python3 .bureau-pipeline/scripts/linear_ops.py comment "$EPIC" \
@@ -5408,7 +5408,7 @@ jobs:
                  --repo "$GITHUB_REPOSITORY" \
                  --reason review --trigger-state "in progress"; then
               python3 .bureau-pipeline/scripts/linear_ops.py comment "$EPIC" \
-                "↩️ This plan was approved before both critics read it, so it is getting the review it missed: the second critic reads it with the epic back in Planning, and it comes back to Green Light passed, for one Approve. Nothing has started building, and the children stay in Backlog until then; nothing here is yours to do."
+                "↩️ This plan was approved before both critics read it, so it is getting the review it missed: the second critic reads it with the epic back in Planning, and it comes back to Green Light passed, for one Approve. Nothing has started building, and the children stay in Queued until then; nothing here is yours to do."
             else
               python3 .bureau-pipeline/scripts/linear_ops.py comment "$EPIC" \
                 "🚨 This plan was approved before both critics read it, and the review it missed could NOT be asked for — the dispatch did not go through, so nothing is reading the plan and nothing is building. This run is red, so the medic picks it up; nothing here is yours to do."
@@ -5455,7 +5455,7 @@ jobs:
       #      so the create seam admits it; `--epic` refuses a title that does
       #      not open with `[EPIC]`, which the prompt spells out.
       #   Q5 our own crash — a crash after some children are created leaves
-      #      them in Backlog under a parent still in Planning, owing a split.
+      #      them in Queued under a parent still in Planning, owing a split.
       #      The next run's `check` reads the children that exist, so nothing
       #      is created twice as long as the planner reads `children-detail`
       #      first, which the prompt tells it to. A crash inside `activate`
