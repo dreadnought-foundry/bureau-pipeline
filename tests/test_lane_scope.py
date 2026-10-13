@@ -43,7 +43,7 @@ class TestFlowOrder:
     def test_planning_segment_precedes_the_work_segment(self):
         pos = {lane: i for i, lane in enumerate(lane_scope.LANE_FLOW)}
         assert pos["Intake"] < pos["Planning"] < pos["Green Light"]
-        assert pos["Green Light"] < pos["Backlog"] < pos["Todo"]
+        assert pos["Green Light"] < pos["Queued"] < pos["Todo"]
         assert pos["Todo"] < pos["In Progress"] < pos["In Review"] < pos["Done"]
 
     def test_planning_exit_is_named_and_sits_between_green_light_and_the_queue(self):
@@ -52,14 +52,15 @@ class TestFlowOrder:
         # transition with a name, not to a description that drifts.
         assert lane_scope.PLANNING_EXIT_FROM == "Green Light"
         assert lane_scope.PLANNING_EXIT_TO == "Queued"
-        # Since DRE-6742 the exit lands in Queued, and the one lane between
-        # it and Green Light is Backlog, the name the alias reads as Queued.
+        # Since DRE-6742 the exit lands in Queued, and since DRE-6753 the
+        # lane between them, Backlog, is retiring and out of the flow: the
+        # exit is the very next lane, and the old name resolves to it through
+        # the alias.
         pos = lane_scope.LANE_FLOW.index
         between = lane_scope.LANE_FLOW[
             pos(lane_scope.PLANNING_EXIT_FROM) + 1:pos(lane_scope.PLANNING_EXIT_TO)]
-        assert between == ("Backlog",)
-        assert all(lane_scope.canonical_lane(name) == lane_scope.PLANNING_EXIT_TO
-                   for name in between)
+        assert between == ()
+        assert lane_scope.canonical_lane("Backlog") == lane_scope.PLANNING_EXIT_TO
 
     def test_the_retired_name_is_todays_board_name_for_green_light(self):
         # Wave 1.5 §5's rename has landed in code (DRE-2722) but not on the
@@ -248,14 +249,16 @@ class TestTheQueueLaneUnderBothNames:
             lane_scope.is_policed("Queued", parent_epic_lane=epic_lane)
         )
 
-    def test_without_the_alias_a_moved_exit_would_unpolice_backlog(self, monkeypatch):
-        # The control that makes the test above mean something: Backlog sits
-        # before Queued in the flow, so once the exit lands in Queued only the
-        # alias keeps a card still in Backlog on the policed side.
+    def test_without_the_alias_the_retiring_name_is_no_lane_at_all(self, monkeypatch):
+        # The control that makes the test above mean something: Backlog is
+        # retiring and out of the flow (DRE-6753), so only the alias gives a
+        # card still under it an answer — without it the guard refuses the
+        # name loudly rather than guessing a side of the boundary.
         doc = _fixture_contract(to="Queued")
         doc["aliases"]["entries"] = [
             entry for entry in doc["aliases"]["entries"] if entry["to"] != "Queued"
         ]
         _scope_from(monkeypatch, doc)
-        assert lane_scope.is_policed("Backlog") is False
+        with pytest.raises(lane_scope.UnknownLane):
+            lane_scope.is_policed("Backlog")
         assert lane_scope.is_policed("Queued") is True
