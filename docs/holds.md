@@ -47,7 +47,7 @@ moves itself (below).
 | `dead-run-cap` | `unpark-marker` | Only an operator's `unpark` resets the death budget, and its `dead-run-budget-reset` marker is the fact. | Nothing moves |
 | `turn-cap-park` | `unpark-marker` | The same budget reset. Two turn-cap deaths past green are the most a card ever gets. | Nothing moves |
 | `epic-rereview-twice` | `manual` | The park ends in Triage for an operator. The way back, `plan_critic.REAPPROVE_HOW`, is a person's act that leaves no fact a sweep can read. | Nothing moves |
-| `plan-critic-bound` | `manual` | Every bound park ends in Triage. It gets one automatic repair first, once per card (`scripts/triage_repair.py`, DRE-7178), which lifts it with `because=triage-repair`. After that, the way back is the same person's act. | Triage → Planning (rewritten) or Green Light (a question), when the repair lifts it; otherwise nothing moves |
+| `plan-critic-bound` | `manual` | Every bound park ends in Triage. It gets one automatic repair first, once per card (`scripts/triage_repair.py`, DRE-7178), which lifts it with `because=triage-repair`. After that, the way back is the same person's act. | Triage → Planning (rewritten, or an epic re-planned) or Green Light (a question), when the repair lifts it; otherwise nothing moves |
 | `fix-dispute` | `new-head` | The fix loop's budget was spent on one head. A new head runs the review, the gate and the fix loop again. | Triage → In Review |
 | `unfixable-check` | `new-head` | The red check was read on one head (its receipt is keyed `unfixable-check-hold @<sha8>`). A new head is read again. | Triage → In Review |
 | `operator-step` | `blockers-terminal` | A planner-filed operator step is a person's to do once the work before it is finished. The card's `blockedBy` relations say when, and the sweep's promotion gate reads them. | Queued → Hand-work |
@@ -58,7 +58,8 @@ label with no stamp — is lifted only by `card-closed` or by a person. Outside
 Done or Canceled, nothing in this epic lifts it. The one exception is the
 Triage repair (DRE-7178): a `plan-critic-bound` hold is lifted once per card by
 `scripts/triage_repair.py`, with `because=triage-repair`, as it moves the
-repaired card to Planning or Green Light.
+repaired card to Planning or Green Light — an epic, to Planning for a fresh
+planning attempt with every finding in front of the planner (DRE-7181).
 
 A `new-head` hold that is still stuck on the new head is re-parked with a fresh
 stamp by the review, the gate or the fix loop. For a fix dispute there is a

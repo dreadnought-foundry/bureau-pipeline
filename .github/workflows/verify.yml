@@ -40,6 +40,40 @@ on:
           and not actually pinned (DRE-2026).
         type: string
         required: true
+      # SHADOW MODE (DRE-7194). A replay of one past pull request at the head
+      # its recorded verdict was bound to, on a model the caller names, whose
+      # verdict goes to a file and nowhere else: no pull request comment, no
+      # Linear comment. The batch runner that dispatches replays (DRE-7197)
+      # and the critic's half in qa-review.yml (DRE-7193) read the same
+      # contract. All four are optional with defaults, so every product
+      # repo's stub is unchanged, and with none of them set this is today's
+      # verification step for step (tests/test_verify_shadow.py).
+      model:
+        description: >-
+          The model a SHADOW replay runs on. Empty means select as today; a
+          live verification never runs on a named model, so a non-empty
+          model without `shadow` is refused by the first step.
+        type: string
+        required: false
+        default: ''
+      shadow:
+        description: >-
+          Replay `replay_pr` at `replay_sha` on `model` and write the verdict
+          to the `shadow-verdict-verifier-<replay_pr>` artifact only.
+        type: boolean
+        required: false
+        default: false
+      replay_pr:
+        description: The pull request number to replay (shadow only).
+        type: string
+        required: false
+        default: ''
+      replay_sha:
+        description: >-
+          The 40-hex head the recorded verdict was bound to (shadow only).
+        type: string
+        required: false
+        default: ''
     secrets:
       ANTHROPIC_API_KEY:
         required: false
@@ -174,6 +208,61 @@ jobs:
       BUREAU_APP_ID_3: ${{ secrets.BUREAU_APP_ID_3 }}
       BUREAU_APP_ID_4: ${{ secrets.BUREAU_APP_ID_4 }}
     steps:
+      # The shadow guard (DRE-7194), FIRST so a bad input fails the job before
+      # anything else runs. Skipped when no new input is set. A live run with
+      # a named model is refused outright: the ladder, the build/review
+      # separation and the availability walk choose a live verifier's model,
+      # never a caller. A shadow run needs all three of model, replay_pr and
+      # replay_sha, a 40-lowercase-hex sha, and a model that is priced in
+      # config/model-prices.yaml and not listed under `excluded` or `retired`
+      # in config/models.yaml. Those two files are read at the caller's
+      # pipeline_ref straight from the public repository — the checkout of
+      # it is two steps away, and this step comes first. Anything it cannot
+      # read refuses. Every input reaches the shell through env:, never
+      # interpolated, and no refusal echoes a value back.
+      - name: Refuse a bad shadow or model input
+        id: shadow_guard
+        if: inputs.shadow || inputs.model != ''
+        env:
+          SHADOW: ${{ inputs.shadow }}
+          MODEL: ${{ inputs.model }}
+          REPLAY_PR: ${{ inputs.replay_pr }}
+          REPLAY_SHA: ${{ inputs.replay_sha }}
+          PIPELINE_REF: ${{ inputs.pipeline_ref || 'main' }}
+        run: |
+          refuse() { echo "::error::shadow guard: $1"; exit 1; }
+          if [ "$SHADOW" != "true" ]; then
+            refuse "a live verification never runs on a named model — the model input is set without shadow"
+          fi
+          [ -n "$MODEL" ] || refuse "shadow needs a model"
+          [ -n "$REPLAY_PR" ] || refuse "shadow needs replay_pr"
+          [ -n "$REPLAY_SHA" ] || refuse "shadow needs replay_sha"
+          [[ "$REPLAY_PR" =~ ^[1-9][0-9]*$ ]] || refuse "replay_pr is not a pull request number"
+          [[ "$REPLAY_SHA" =~ ^[0-9a-f]{40}$ ]] || refuse "replay_sha is not 40 lowercase hex"
+          DIR="${RUNNER_TEMP:-/tmp}/shadow-guard"
+          mkdir -p "$DIR"
+          for f in model-prices.yaml models.yaml; do
+            curl -fsSL --retry 3 -o "$DIR/$f" \
+              "https://raw.githubusercontent.com/dreadnought-foundry/bureau-pipeline/$PIPELINE_REF/config/$f" \
+              || refuse "could not read config/$f at the pipeline ref"
+          done
+          python3 - "$MODEL" "$DIR/model-prices.yaml" "$DIR/models.yaml" <<'PY' || refuse "the model is not one a shadow replay may run on"
+          import sys
+          import yaml
+          model, prices_file, models_file = sys.argv[1:4]
+          with open(prices_file) as fh:
+              prices = (yaml.safe_load(fh) or {}).get("prices") or {}
+          with open(models_file) as fh:
+              cfg = yaml.safe_load(fh) or {}
+          if model not in prices:
+              sys.exit("not priced in config/model-prices.yaml")
+          for section in ("excluded", "retired"):
+              for entry in cfg.get(section) or []:
+                  if (entry.get("model") if isinstance(entry, dict) else entry) == model:
+                      sys.exit(f"listed under {section} in config/models.yaml")
+          PY
+          echo "shadow guard: replaying PR #$REPLAY_PR at $REPLAY_SHA on a priced, selectable model"
+
       # Boot token: the ORIGINAL app (pool slot 1). Used for the checkouts,
       # the PR resolve and the scope gate (a handful of requests) and as
       # slot 1's pool probe; the VERIFIER itself — the quota-heavy
@@ -185,7 +274,12 @@ jobs:
           app-id: ${{ secrets.BUREAU_APP_ID }}
           private-key: ${{ secrets.BUREAU_APP_PRIVATE_KEY }}
 
+      # A shadow replay (DRE-7194) checks out the head the recorded verdict
+      # was bound to, never the branch as it is today. Empty is the action's
+      # own default — the event's ref — so a live run is unchanged.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.shadow && inputs.replay_sha || '' }}
 
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -197,8 +291,15 @@ jobs:
         id: pr
         env:
           GH_TOKEN: ${{ steps.app.outputs.token }}
+          # Shadow (DRE-7194): the number and the commit come from the
+          # caller, the head the recorded verdict was bound to — the guard
+          # has already proved both well formed.
+          SHADOW: ${{ inputs.shadow }}
+          REPLAY_PR: ${{ inputs.replay_pr }}
+          REPLAY_SHA: ${{ inputs.replay_sha }}
         run: |
           PR=${{ github.event.pull_request.number || github.event.inputs.pr_number }}
+          if [ "$SHADOW" = "true" ]; then PR="$REPLAY_PR"; fi
           echo "number=$PR" >> "$GITHUB_OUTPUT"
           BRANCH=$(gh pr view "$PR" --json headRefName --jq .headRefName)
           CARD=$(printf '%s' "$BRANCH" | grep -oiE 'DRE-[0-9]+' | head -1 | tr '[:lower:]' '[:upper:]' || true)
@@ -216,7 +317,11 @@ jobs:
           # The verdict embeds it (`VERDICT: <X> @<sha>`) so merge-gate can
           # refuse to apply a PASS to any commit pushed after the verify.
           # Captured BEFORE the run starts — fail-closed on mid-run pushes.
-          SHA=$(gh pr view "$PR" --json headRefOid --jq .headRefOid)
+          if [ "$SHADOW" = "true" ]; then
+            SHA="$REPLAY_SHA"
+          else
+            SHA=$(gh pr view "$PR" --json headRefOid --jq .headRefOid)
+          fi
           echo "sha=$SHA" >> "$GITHUB_OUTPUT"
           # DRE-2340: the CONTENT this verify is about to exercise — the
           # three-dot diff of that same sha, hashed by
@@ -228,10 +333,41 @@ jobs:
           # No id (truncated 300-file record, or an API blip → `{}`) means
           # the verdict binds the SHA alone, exactly as before.
           BASE=$(gh pr view "$PR" --json baseRefName --jq .baseRefName)
+          # A shadow replay (DRE-7194) compares the replayed head with the
+          # base it was built on, not the base branch today: once a pull
+          # request has merged, its head is an ancestor of the base branch
+          # and `$BASE...$SHA` is empty. The merge commit's first parent is
+          # the base branch as it stood at the merge; a pull request that
+          # never merged keeps the base branch.
+          if [ "$SHADOW" = "true" ]; then
+            MERGED=$(gh pr view "$PR" --json mergeCommit --jq '.mergeCommit.oid // empty')
+            if [ -n "$MERGED" ]; then
+              BASE=$(gh api "repos/${{ github.repository }}/commits/$MERGED" --jq '.parents[0].sha')
+              [ -n "$BASE" ] || { echo "::error::shadow replay: merge commit $MERGED has no first parent"; exit 1; }
+            fi
+          fi
           gh api "repos/${{ github.repository }}/compare/$BASE...$SHA" > /tmp/verify-compare.json 2>/dev/null \
             || echo '{}' > /tmp/verify-compare.json
           CONTENT=$(python3 .bureau-pipeline/scripts/verdict_content.py --compare-file /tmp/verify-compare.json 2>/dev/null || true)
           echo "content=$CONTENT" >> "$GITHUB_OUTPUT"
+          # The diff a shadow replay is handed (DRE-7194): that same
+          # three-dot compare, as a patch in the file the prompt names.
+          # `gh pr diff` would show the branch as it is today. A compare that
+          # cannot be read, or reads empty, fails the step and leaves no
+          # file — a replay with no diff has nothing to verify.
+          if [ "$SHADOW" = "true" ]; then
+            rm -f /tmp/shadow-replay.diff /tmp/shadow-replay.diff.part
+            gh api -H "Accept: application/vnd.github.diff" \
+              "repos/${{ github.repository }}/compare/$BASE...$SHA" > /tmp/shadow-replay.diff.part \
+              || { rm -f /tmp/shadow-replay.diff.part; echo "::error::shadow replay: the compare of $BASE and $SHA could not be read"; exit 1; }
+            if [ ! -s /tmp/shadow-replay.diff.part ]; then
+              rm -f /tmp/shadow-replay.diff.part
+              echo "::error::shadow replay: the compare of $BASE and $SHA is empty — nothing to verify"
+              exit 1
+            fi
+            mv /tmp/shadow-replay.diff.part /tmp/shadow-replay.diff
+            echo "shadow replay: PR #$PR at $SHA, $(wc -l < /tmp/shadow-replay.diff) diff lines against $BASE"
+          fi
 
       # ── The card, read ONCE for the whole job (Stage 2 fix #14) ───────────
       # The scope gate below reads the card's description and labels, and the
@@ -270,6 +406,21 @@ jobs:
           python3 .bureau-pipeline/scripts/card_snapshot.py take "$CARD" "$SNAP" \
             || echo "no snapshot of $CARD — the steps that read it degrade as on an unreadable card"
 
+      # The card a shadow replay's agent reads (DRE-7194). It holds no Linear
+      # key, so it cannot read the live card; it gets the card's DESCRIPTION
+      # from the job's one snapshot instead, and never the snapshot itself —
+      # the thread carries the critic's and the verifier's earlier verdicts,
+      # and a replay that can read the answer is no replay. No snapshot is
+      # an empty file, and the agent judges from the pull request body.
+      - name: Hand the replay the card's description (shadow)
+        id: shadow_card
+        if: inputs.shadow
+        run: |
+          python3 .bureau-pipeline/scripts/card_snapshot.py description \
+            "${RUNNER_TEMP:-/tmp}/card-snapshot.json" > /tmp/shadow-card.md \
+            || : > /tmp/shadow-card.md
+          echo "shadow replay: the card's description, $(wc -l < /tmp/shadow-card.md) lines"
+
       # ── Scope gate: run ONLY on multi-system or UI cards ──────────────────
       # The Verifier is expensive (it boots the app and drives a real E2E/
       # scenario path), and on single-system non-UI cards there is no
@@ -299,10 +450,18 @@ jobs:
           GH_TOKEN: ${{ steps.app.outputs.token }}
           PR: ${{ steps.pr.outputs.number }}
           CARD: ${{ steps.pr.outputs.card }}
+          SHADOW: ${{ inputs.shadow }}
         run: |
           set +e
           mkdir -p /tmp/verify
-          gh pr diff "$PR" --name-only > /tmp/verify/changed.txt 2>/dev/null || : > /tmp/verify/changed.txt
+          if [ "$SHADOW" = "true" ]; then
+            # A shadow replay (DRE-7194) scopes the files of the replayed
+            # head — Resolve PR's compare of it — not the branch today.
+            python3 -c 'import json, sys; [print(f["filename"]) for f in json.load(open(sys.argv[1])).get("files") or []]' \
+              /tmp/verify-compare.json > /tmp/verify/changed.txt 2>/dev/null || : > /tmp/verify/changed.txt
+          else
+            gh pr diff "$PR" --name-only > /tmp/verify/changed.txt 2>/dev/null || : > /tmp/verify/changed.txt
+          fi
           # The card comes from the job's one snapshot (fix #14), never from
           # Linear here: no snapshot is no card signal, as a failed read was.
           if python3 .bureau-pipeline/scripts/verify_scope.py --card "$CARD" --changed /tmp/verify/changed.txt \
@@ -404,6 +563,13 @@ jobs:
              || steps.pool.outputs.n == '3' && secrets.BUREAU_APP_PRIVATE_KEY_3
              || steps.pool.outputs.n == '4' && secrets.BUREAU_APP_PRIVATE_KEY_4
              || secrets.BUREAU_APP_PRIVATE_KEY }}
+          # A shadow replay's agent (DRE-7194) reads the repository and the
+          # pull request and writes neither. create-github-app-token skips a
+          # permission input whose value is empty, and with none set the
+          # token inherits the App's installation — so a live run's token is
+          # exactly today's.
+          permission-contents: ${{ inputs.shadow && 'read' || '' }}
+          permission-pull-requests: ${{ inputs.shadow && 'read' || '' }}
 
       # THE GITHUB CALLS THIS RUN MAKES, PER POOL LOGIN (DRE-6917, epic
       # DRE-6911). The first of two points on each login's hourly meter, taken
@@ -542,6 +708,37 @@ jobs:
           # model is the silently-weakened critic DRE-2317 exists to prevent.
           case "$WHY" in DEGRADED*) echo "::warning::$WHY" ;; esac
 
+      # The model a shadow replay names and its effort level (DRE-7194), from
+      # one step, as the critic's replay has them (DRE-7193): the level is
+      # the one computed for the model the agent runs. The Select model step
+      # above still runs, unchanged, and its level is the selected model's; a
+      # replay on another model runs at that model's own declared level, read
+      # from the same config. Empty when it declares none — no `--effort` at
+      # all. Pinned by tests/test_model_effort.py.
+      - name: Effort for the named model (shadow)
+        id: shadow_model
+        if: inputs.shadow && steps.scope.outputs.in_scope == 'true'
+        env:
+          MODEL: ${{ inputs.model }}
+        run: |
+          EFFORT=$(python3 .bureau-pipeline/scripts/model_fallback.py effort "$MODEL" 2>/dev/null || true)
+          echo "model=$MODEL" >> "$GITHUB_OUTPUT"
+          echo "effort_arg=${EFFORT:+--effort $EFFORT}" >> "$GITHUB_OUTPUT"
+          echo "shadow replay model: $MODEL${EFFORT:+ (effort $EFFORT)}"
+
+      # The card's thread, off the runner before a shadow replay's agent
+      # starts (DRE-7194). The job's snapshot and the thread Select model
+      # read out of it carry the critic's and the verifier's earlier
+      # verdicts, and the agent holds Bash and Read. The scope gate's
+      # compare is done with too. Every reader of these files runs above.
+      - name: Take the card's thread off the runner (shadow)
+        id: shadow_scrub
+        if: inputs.shadow
+        run: |
+          rm -f "${RUNNER_TEMP:-/tmp}/card-snapshot.json" "${RUNNER_TEMP:-/tmp}/card-thread.json" \
+            /tmp/verify-compare.json
+          echo "shadow replay: the card's snapshot and thread are off the runner"
+
       # Claude Code, installed ONCE and proved, before the model step below
       # (DRE-3414). DRE-3416: the vendor's own installer exited clean, left no
       # launcher, and every Claude-running job in the fleet died minutes later
@@ -571,9 +768,12 @@ jobs:
         # FAIL — that would churn good PRs into the fix loop. The gate below
         # detects it and we retry; on a double-crash we post a NEUTRAL status.
         continue-on-error: true
+        # A shadow replay's agent (DRE-7194) holds no Linear key: it posts
+        # nothing, and the card's thread holds the verdicts it is replaying.
+        # A live run's key is the same expression, inside the gate.
         env:
-          LINEAR_API_KEY: ${{ vars.LINEAR_AGENT_BUCKET == 'planner' && secrets.LINEAR_PLANNER_KEY || secrets.LINEAR_API_KEY }}
-          LINEAR_API_KEY_FALLBACK: ${{ secrets.LINEAR_API_KEY }}
+          LINEAR_API_KEY: ${{ !inputs.shadow && (vars.LINEAR_AGENT_BUCKET == 'planner' && secrets.LINEAR_PLANNER_KEY || secrets.LINEAR_API_KEY) || '' }}
+          LINEAR_API_KEY_FALLBACK: ${{ !inputs.shadow && (secrets.LINEAR_API_KEY) || '' }}
         with:
           # DRE-3414: the launcher the shared install step above PROVED
           # runs. Without it the vendor action installs a second copy of
@@ -628,8 +828,8 @@ jobs:
           # clock (caught by the pipeline itself overnight), and this one.
           claude_args: |
             --max-turns 120
-            --model ${{ steps.model.outputs.model }}
-            ${{ steps.model.outputs.effort_arg }}
+            --model ${{ inputs.shadow && steps.shadow_model.outputs.model || steps.model.outputs.model }}
+            ${{ inputs.shadow && steps.shadow_model.outputs.effort_arg || !inputs.shadow && steps.model.outputs.effort_arg || '' }}
             --allowedTools "Bash,Edit,Write,Read,Glob,Grep,WebSearch,WebFetch"
           prompt: |
             Read .bureau-pipeline/agent-context.md FIRST — your assembled
@@ -642,7 +842,7 @@ jobs:
             You are the behavioral Verifier for PR #${{ steps.pr.outputs.number }}
             in this repo, implementing Linear card ${{ steps.pr.outputs.card }}.
             Use `gh pr view ${{ steps.pr.outputs.number }}` and
-            `gh pr diff ${{ steps.pr.outputs.number }}` (GH_TOKEN is in your env).
+            `gh pr diff ${{ steps.pr.outputs.number }}` (GH_TOKEN is in your env).${{ inputs.shadow && format(' SHADOW REPLAY — where this paragraph and the steps below differ, this paragraph wins. You are replaying this pull request at commit {0}, the head an earlier verification ran on, and the workspace is already checked out there: do not check out the pull request branch or any other commit. Do not run `gh pr diff` — it shows the branch as it is today; the diff you verify is the three-dot compare of {0} with the base it was built on, in {1}. Do not read the pull request''s comments, by any route — not `gh pr view --comments`, not `gh api` on its issue or review comments, and not the pull request''s page. You have no Linear access in this run: the card''s description is in {2} and stands in for the live card (when it is empty, judge from the pull request body).', steps.pr.outputs.sha, '/tmp/shadow-replay.diff', '/tmp/shadow-card.md') || '' }}
 
             You do NOT review the code — you RUN THE FEATURE and prove it works:
             1. Read the card's acceptance criteria (read the LIVE card as the
@@ -759,9 +959,12 @@ jobs:
         if: always() && !cancelled() && steps.install_claude.outcome == 'success' && steps.scope.outputs.in_scope == 'true' && steps.gate1.outputs.real != 'true'
         uses: anthropics/claude-code-action@8ce9314fa9a404564fa7e954cd84f25bcba2b829 # v1.0.236
         continue-on-error: true
+        # A shadow replay's agent (DRE-7194) holds no Linear key: it posts
+        # nothing, and the card's thread holds the verdicts it is replaying.
+        # A live run's key is the same expression, inside the gate.
         env:
-          LINEAR_API_KEY: ${{ vars.LINEAR_AGENT_BUCKET == 'planner' && secrets.LINEAR_PLANNER_KEY || secrets.LINEAR_API_KEY }}
-          LINEAR_API_KEY_FALLBACK: ${{ secrets.LINEAR_API_KEY }}
+          LINEAR_API_KEY: ${{ !inputs.shadow && (vars.LINEAR_AGENT_BUCKET == 'planner' && secrets.LINEAR_PLANNER_KEY || secrets.LINEAR_API_KEY) || '' }}
+          LINEAR_API_KEY_FALLBACK: ${{ !inputs.shadow && (secrets.LINEAR_API_KEY) || '' }}
         with:
           # DRE-3414: the launcher the shared install step above PROVED
           # runs. Without it the vendor action installs a second copy of
@@ -794,8 +997,8 @@ jobs:
           # rest of the block is still kept in sync with attempt 1.
           claude_args: |
             --max-turns 160
-            --model ${{ steps.model.outputs.model }}
-            ${{ steps.model.outputs.effort_arg }}
+            --model ${{ inputs.shadow && steps.shadow_model.outputs.model || steps.model.outputs.model }}
+            ${{ inputs.shadow && steps.shadow_model.outputs.effort_arg || !inputs.shadow && steps.model.outputs.effort_arg || '' }}
             --allowedTools "Bash,Edit,Write,Read,Glob,Grep,WebSearch,WebFetch"
           prompt: |
             Read .bureau-pipeline/agent-context.md FIRST — your assembled
@@ -808,7 +1011,7 @@ jobs:
             You are the behavioral Verifier for PR #${{ steps.pr.outputs.number }}
             in this repo, implementing Linear card ${{ steps.pr.outputs.card }}.
             Use `gh pr view ${{ steps.pr.outputs.number }}` and
-            `gh pr diff ${{ steps.pr.outputs.number }}` (GH_TOKEN is in your env).
+            `gh pr diff ${{ steps.pr.outputs.number }}` (GH_TOKEN is in your env).${{ inputs.shadow && format(' SHADOW REPLAY — where this paragraph and the steps below differ, this paragraph wins. You are replaying this pull request at commit {0}, the head an earlier verification ran on, and the workspace is already checked out there: do not check out the pull request branch or any other commit. Do not run `gh pr diff` — it shows the branch as it is today; the diff you verify is the three-dot compare of {0} with the base it was built on, in {1}. Do not read the pull request''s comments, by any route — not `gh pr view --comments`, not `gh api` on its issue or review comments, and not the pull request''s page. You have no Linear access in this run: the card''s description is in {2} and stands in for the live card (when it is empty, judge from the pull request body).', steps.pr.outputs.sha, '/tmp/shadow-replay.diff', '/tmp/shadow-card.md') || '' }}
 
             You do NOT review the code — you RUN THE FEATURE and prove it works:
             1. Read the card's acceptance criteria (read the LIVE card as the
@@ -881,9 +1084,12 @@ jobs:
       # check), and the worker bot must never be able to author a verdict on
       # its own PR. Same pattern as qa-review.yml since #51; also keeps
       # verdict posts in the qa-bot's separate API-quota bucket.
+      #
+      # A shadow replay (DRE-7194) posts nothing, so neither this mint nor the
+      # post below runs in one: `!inputs.shadow` on both.
       - name: Mint qa-bot token (verdicts author as qa-bot)
         id: qa
-        if: always() && !cancelled() && steps.scope.outputs.in_scope == 'true'
+        if: always() && !cancelled() && steps.scope.outputs.in_scope == 'true' && !inputs.shadow
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
         with:
           app-id: ${{ secrets.BUREAU_QA_APP_ID }}
@@ -892,8 +1098,9 @@ jobs:
       - name: Post verdict or neutral status
         id: post
         # Only when in scope. Not on cancellation: a superseded run must not
-        # post a fail-closed verdict that masks the live run's real one.
-        if: always() && !cancelled() && steps.scope.outputs.in_scope == 'true'
+        # post a fail-closed verdict that masks the live run's real one. Never
+        # in a shadow replay (DRE-7194): its verdict goes to a file only.
+        if: always() && !cancelled() && steps.scope.outputs.in_scope == 'true' && !inputs.shadow
         env:
           GH_TOKEN: ${{ steps.qa.outputs.token }}
           LINEAR_API_KEY: ${{ vars.LINEAR_AGENT_BUCKET == 'planner' && secrets.LINEAR_PLANNER_KEY || secrets.LINEAR_API_KEY }}
@@ -943,12 +1150,104 @@ jobs:
 
       # Fail the job loudly AFTER the neutral comment is posted, so the infra
       # failure is visibly red and the medic picks it up. A genuine verdict
-      # (PASS or FAIL) ends green regardless. Out-of-scope runs end green.
+      # (PASS or FAIL) ends green regardless. Out-of-scope runs end green. A
+      # shadow replay (DRE-7194) posted no neutral status and is not failed
+      # here: its outcome is the file below, which says `"verdict": null`.
       - name: Fail if verifier never really ran
-        if: always() && !cancelled() && steps.scope.outputs.in_scope == 'true' && steps.gate1.outputs.real != 'true' && steps.gate2.outputs.real != 'true'
+        if: always() && !cancelled() && steps.scope.outputs.in_scope == 'true' && steps.gate1.outputs.real != 'true' && steps.gate2.outputs.real != 'true' && !inputs.shadow
         run: |
           echo "::error::QA verifier crashed on both attempts — no real verdict. Posted neutral status; failing job for medic visibility."
           exit 1
+
+      # THE SHADOW VERDICT (DRE-7194) — the whole outcome of a shadow replay,
+      # and the contract the batch runner (DRE-7197) reads:
+      #
+      #   shadow-verdict.json  role, repo, pr (integer), sha, model, verdict
+      #                        ("PASS" / "FAIL" / "SKIP" / null), real (the
+      #                        gates' own `real`), run_url, and a reason
+      #                        where there is one;
+      #   shadow-verdict.md    the verifier's /tmp/verify-verdict.md
+      #                        verbatim, empty when there is none;
+      #
+      # uploaded as `shadow-verdict-verifier-<replay_pr>`, and then ONE log
+      # line, `shadow-verdict: role=verifier pr=<n> sha=<40hex> model=<id>
+      # verdict=<PASS|FAIL|SKIP|none>`, said by the step after the upload so
+      # a line always has its artifact. An out-of-scope pull request is
+      # `"SKIP"` with `"reason": "out of scope"`; a verifier that crashed on
+      # both attempts, or a run that never reached the scope gate, is null.
+      # Not after a refused input: the guard's red is that run's outcome.
+      - name: Write the shadow verdict
+        id: shadow_verdict
+        if: always() && !cancelled() && inputs.shadow && steps.shadow_guard.outcome == 'success'
+        env:
+          PR: ${{ inputs.replay_pr }}
+          SHA: ${{ inputs.replay_sha }}
+          MODEL: ${{ inputs.model }}
+          IN_SCOPE: ${{ steps.scope.outputs.in_scope }}
+          REAL: ${{ (steps.gate1.outputs.real == 'true' || steps.gate2.outputs.real == 'true') && 'true' || 'false' }}
+        run: |
+          DIR="${RUNNER_TEMP:-/tmp}/shadow-verdict"
+          rm -rf "$DIR"
+          mkdir -p "$DIR"
+          python3 - "$DIR" /tmp/verify-verdict.md <<'PY'
+          import json
+          import os
+          import re
+          import sys
+          from pathlib import Path
+
+          out, verdict_file = Path(sys.argv[1]), Path(sys.argv[2])
+          env = os.environ
+          real = env.get("REAL") == "true"
+          verdict, reason, text = None, None, ""
+          if env.get("IN_SCOPE") == "true":
+              text = verdict_file.read_text() if verdict_file.is_file() else ""
+              m = re.match(r"\s*VERDICT:\s*(PASS|FAIL|SKIP)\b", text)
+              if real and m:
+                  verdict = m.group(1)
+              elif not real:
+                  reason = "the verifier produced no real verdict on either attempt"
+          elif env.get("IN_SCOPE") == "false":
+              verdict, reason = "SKIP", "out of scope"
+          else:
+              reason = "the replay stopped before the scope gate"
+          doc = {
+              "role": "verifier",
+              "repo": env["GITHUB_REPOSITORY"],
+              "pr": int(env["PR"]),
+              "sha": env["SHA"],
+              "model": env["MODEL"],
+              "verdict": verdict,
+              "real": real,
+              "run_url": f"{env['GITHUB_SERVER_URL']}/{env['GITHUB_REPOSITORY']}/actions/runs/{env['GITHUB_RUN_ID']}",
+          }
+          if reason:
+              doc["reason"] = reason
+          (out / "shadow-verdict.json").write_text(json.dumps(doc, indent=2) + "\n")
+          (out / "shadow-verdict.md").write_text(text)
+          line = (f"shadow-verdict: role=verifier pr={doc['pr']} sha={doc['sha']} "
+                  f"model={doc['model']} verdict={verdict or 'none'}")
+          with open(env["GITHUB_OUTPUT"], "a") as fh:
+              fh.write(f"dir={out}\nline={line}\n")
+          print(json.dumps(doc, indent=2))
+          PY
+
+      - name: Upload the shadow verdict
+        id: shadow_upload
+        if: always() && !cancelled() && steps.shadow_verdict.outputs.dir != ''
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: shadow-verdict-verifier-${{ inputs.replay_pr }}
+          path: ${{ steps.shadow_verdict.outputs.dir }}
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Say the shadow verdict
+        id: shadow_line
+        if: always() && !cancelled() && steps.shadow_verdict.outputs.line != '' && steps.shadow_upload.outcome == 'success'
+        env:
+          LINE: ${{ steps.shadow_verdict.outputs.line }}
+        run: printf '%s\n' "$LINE"
 
       # THE RUN'S OWN DEATH-CAUSE RECEIPT (DRE-4340). 69 of the fleet's 1,310
       # failures over 22 days — $97 of model work — could not be attributed to

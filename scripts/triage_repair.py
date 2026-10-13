@@ -33,10 +33,26 @@ worst of each round as `plan_bound.findings` reads them. One action per card:
     anywhere on the thread. Once per card, never once per park. A
     receipt-shaped comment from any other author grants nothing, by
     `plan_critic.trusted_bodies`' rule, as `plan_bound._is_receipt` reads its own.
-  * `skip` — the card has children (an epic's re-plan is DRE-7181's), or the
-    park note carries no numbered list.
+  * `spent`, too — the card has children and a pipeline-authored
+    `🔁 bound-rewrite:` receipt stands anywhere on the thread
+    (`plan_bound.granted`): the planner has had its one extra rewrite, so this
+    park is the second (DRE-7181).
+  * `skip` — the park note carries no numbered list, or, for a card with
+    children, its park left no findings at all: `plan_bound.decide([])` parks
+    for the same reason, and a bound rewrite with nothing in front of the
+    planner would spend the card's one grant on nothing.
   * `escalate` — at least one finding is one `send_back_class.classify`
-    places as DECISION.
+    places as DECISION, on a card with children too: the bound's own exit
+    (`plan_bound.decide`) asks such a finding of the CEO before it ever
+    grants a rewrite, and the planner cannot answer it.
+  * `replan` — the card has children, no such receipt, and findings none of
+    which is a decision. An epic's plan is its children, and the planner is
+    the agent that rewrites a plan, so the description is never rewritten.
+    Its findings are the bound round's (`epic_findings`): an epic's park note
+    carries the bound's sentence, and the list is on the critic's note beside
+    the round's record. DRE-7072 parked at 2026-10-12 16:25 PT with no
+    receipt, and an operator moved it back to Planning at 17:39 PT, where both
+    critics passed it.
   * `repair` — every finding is REVISION or uncertain. Uncertain is the
     planner's here, for the reason `plan_bound.UNCERTAIN_BY_STAGE` gives: every
     finding at a bound is the worst of a SEND_BACK round, the critic's own
@@ -82,6 +98,17 @@ The planner's files are read first, and exactly one outcome is reached:
     block survives the rewrite, DRE-6360), the lift, the move to Planning —
     which fires a plan run, so the critics read the rewritten card — then the
     receipt listing every finding by its number with its answer line.
+  * `replanned` — the action is `replan` (no `--dir`: the workflow claimed
+    it and runs no planner). Writes: the bound-rewrite receipt with every
+    finding (`plan_bound.post_receipt`, so `plan_bound.py context` puts them
+    under `## Findings the critics left open on this card` for the fresh
+    attempt, and `plan_bound.granted` reads the card as had), the lift, the
+    move to Planning — which fires a plan run, and the route opens a fresh
+    planning attempt, so both critics count from zero — then the receipt
+    naming the findings. A receipt that fails to post lifts and moves
+    nothing. A card whose bound rewrite was granted since `select` read it,
+    or whose findings, read again, are none or name a decision, is
+    `unfinished` with nothing written.
   * `unfinished` — anything else, a rewrite written for an `escalate` card
     among it. The card stays in Triage, still held, for the hygiene alarm.
 
@@ -102,7 +129,7 @@ the receipt key is an OPENING, which a lift line (`🔓`) never has.
 
     triage_repair.py select --out <file> [--limit N]
     triage_repair.py claim <CARD>                  exit 3: already repaired
-    triage_repair.py apply <CARD> --action repair|escalate [--dir <dir>]
+    triage_repair.py apply <CARD> --action repair|escalate|replan [--dir <dir>]
 """
 
 from __future__ import annotations
@@ -119,6 +146,7 @@ import board_snapshot  # noqa: E402
 import hold  # noqa: E402
 import linear_ops  # noqa: E402
 import pipeline_act  # noqa: E402
+import plan_bound  # noqa: E402
 import plan_critic  # noqa: E402
 import planning_escalation  # noqa: E402
 import send_back_class  # noqa: E402
@@ -162,8 +190,8 @@ SKIP = "skip"
 ACTIONS = (REPAIR, ESCALATE, REPLAN, SPENT, SKIP)
 #: The actions the workflow acts on, and so the ones `--out` carries.
 WORKED = (REPAIR, ESCALATE, REPLAN)
-#: The actions `apply` reaches an outcome for today.
-APPLIED = (REPAIR, ESCALATE)
+#: The actions `apply` reaches an outcome for.
+APPLIED = (REPAIR, ESCALATE, REPLAN)
 
 REPAIR_MAX_TURNS = 120
 DEFAULT_LIMIT = 3
@@ -196,6 +224,7 @@ _RECEIPT = re.compile(
 ONCE = "This happens once per card."
 
 # The write names an `unfinished` receipt lists, in the order they are made.
+W_BOUND_REWRITE = "post the bound-rewrite receipt"
 W_DESCRIPTION = "set the description"
 W_DECISIONS = "write the Decisions block"
 W_LIFT = "lift the hold"
@@ -265,6 +294,29 @@ def park_findings(body: str) -> list[str]:
     return found
 
 
+def epic_findings(records, card: str) -> list[str]:
+    """Every finding an epic's bound left open, in the bound round's order.
+
+    An epic's park note (`🛑 Parked in Triage …`) carries the bound's
+    sentence, not its list: the list is on the critic's own note for the round
+    that reached the bound, posted beside its record. DRE-7072's park note
+    named one of its five. So when the newest record of the CURRENT planning
+    attempt (`plan_critic.current_cycle_entries`) is a send-back, that round is
+    read with `plan_critic.prior_findings` — the record's reason, then the
+    note's list — the reader the next critic's charter uses. Otherwise (a park
+    after a round that passed, or a thread with no record on this attempt) the
+    park note's own list.
+    """
+    cycle = plan_critic.current_cycle_entries(list(records or []), card)
+    rows = plan_critic.parse_markers(cycle)
+    if rows and rows[-1]["result"] == plan_critic.SEND_BACK:
+        found = plan_critic.prior_findings(cycle, rows[-1]["stage"])
+        if found:
+            return found
+    note = park_note(records)
+    return park_findings(_body(note)) if note is not None else []
+
+
 def decisions(found: list[str]) -> list[str]:
     return [f for f in found if send_back_class.classify(f) == send_back_class.DECISION]
 
@@ -307,7 +359,10 @@ def decide(card: dict, records) -> dict:
     """The one action for one card in scope, off its whole thread. Pure."""
     found: list[str] = []
     note = park_note(records)
-    if note is not None:
+    epic = bool((card.get("children") or {}).get("nodes"))
+    if epic:
+        found = epic_findings(records, card.get("identifier") or "")
+    elif note is not None:
         found = park_findings(_body(note))
     picked = decisions(found)
     spent = receipts(records)
@@ -315,15 +370,22 @@ def decide(card: dict, records) -> dict:
         word = outcome_of(spent[-1]) or "unreadable"
         action, why = SPENT, (f"the card has had its one automatic repair — a "
                               f"`{word}` receipt stands on its thread")
-    elif (card.get("children") or {}).get("nodes"):
-        action, why = SKIP, ("the card has children — an epic is re-planned, "
-                             "not rewritten")
+    elif epic and plan_bound.granted(records):
+        action, why = SPENT, ("the planner has had its one bound rewrite on this "
+                              "epic — a `bound-rewrite` receipt stands on its "
+                              "thread, so this park is the second")
     elif not found:
-        action, why = SKIP, ("the park note carries no numbered list of findings"
+        action, why = SKIP, ("the epic's park left no findings to put in front "
+                             "of the planner" if epic else
+                             "the park note carries no numbered list of findings"
                              if note is not None else "the card carries no park note")
     elif picked:
         action, why = ESCALATE, (f"{len(picked)} of {len(found)} finding(s) name a "
                                  "choice only the CEO can make")
+    elif epic:
+        action, why = REPLAN, (f"an epic's plan is its children — it goes back "
+                               f"to {PLANNING_LANE} once, with all "
+                               f"{len(found)} finding(s) in front of the planner")
     else:
         action, why = REPAIR, (f"all {len(found)} finding(s) are the planner's to "
                                "answer in a rewrite")
@@ -412,6 +474,19 @@ def rewritten_body(found: list[str], answers_text: str) -> str:
         f"critics read the rewritten card. {ONCE} The findings, each with its "
         "answer:",
         listed or "(the park note carried no findings)",
+    ])
+
+
+def replanned_body(found: list[str]) -> str:
+    listed = "\n".join(f"{n}. {_flat(f)}" for n, f in enumerate(found, 1))
+    return "\n\n".join([
+        f"{RECEIPT_KEY} {REPLANNED} — this epic was parked at the plan "
+        "critic's bound before the planner had its one bound rewrite. The "
+        "rewrite's receipt above carries every finding the bound left open, "
+        f"the hold is lifted, and the card is back in {PLANNING_LANE}, where "
+        "a fresh planning attempt starts and both critics count from zero. "
+        f"{ONCE} The findings in front of the planner:",
+        listed or "(the park carried no findings)",
     ])
 
 
@@ -506,6 +581,14 @@ def _decisions_block(card: str) -> None:
         raise RuntimeError(did)
 
 
+def _bound_rewrite(card: str, found: list[str]) -> None:
+    """The bound-rewrite receipt, through `plan_bound.post_receipt`: its text
+    and its act stay emitted from `plan_bound.py`."""
+    problem = plan_bound.post_receipt(card, found)
+    if problem:
+        raise RuntimeError(problem)
+
+
 def _move_to_planning(card: str) -> None:
     """Conditional on Triage: a card moved on while the writes before this
     one ran is refused, never dragged back into planning."""
@@ -586,6 +669,29 @@ def apply(card: str, action: str, directory: str | None) -> int:
             writes.do(W_RECEIPT, lambda: _post(
                 card, asked_body(bool(revised.strip()))))
             print(f"triage-repair: {card} → {ASKED}")
+            return EXIT_OK
+
+        if action == REPLAN:
+            if plan_bound.granted(records):
+                return _finish(card, writes, "the planner has already had its "
+                               "one bound rewrite on this card, so it is not "
+                               "re-planned twice")
+            found = epic_findings(records, card)
+            if not found:
+                return _finish(card, writes, "the epic's park left no findings "
+                               "to put in front of the planner, so the bound "
+                               "rewrite is not spent on it")
+            picked = decisions(found)
+            if picked:
+                return _finish(card, writes, f"{len(picked)} of {len(found)} "
+                               "finding(s) name a choice only the CEO can make, "
+                               "so the epic is asked, not re-planned")
+            writes.do(W_BOUND_REWRITE, lambda: _bound_rewrite(card, found))
+            writes.do(W_LIFT, lambda: hold.lift(card, LIFT_BECAUSE, LIFT_BY,
+                                                reason=reason))
+            writes.do(W_MOVE, lambda: _move_to_planning(card))
+            writes.do(W_RECEIPT, lambda: _post(card, replanned_body(found)))
+            print(f"triage-repair: {card} → {REPLANNED}")
             return EXIT_OK
 
         missing = [name for name, text in ((REVISED_CARD, revised),
