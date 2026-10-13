@@ -1764,7 +1764,7 @@ def run(lops, identifier: str, *, call=None, model: str | None = None,
     Unless the card came BACK (DRE-4370). A planner stamp older than the newest
     return receipt — a build run's hand-back, or a turn death read as size — is
     void, because `planning_shape` reads the thread from that receipt on.
-    Before that, a one-off handed back kept its stamp, routed to Backlog and
+    Before that, a one-off handed back kept its stamp, routed to Queued and
     was dispatched again at the same budget. Now the card is read afresh with
     the receipt as evidence, and the new stamp quotes it as its why. A hand
     stamp survives the receipt, for the reason above: it is the override.

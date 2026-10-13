@@ -286,7 +286,7 @@ MARKER_PREFIX = "plan-critic:"
 # all — reading exactly like a normal pass.
 CYCLE_PREFIX = "plan-cycle:"
 
-# A collision found AFTER the cards reached Backlog — the D3 tripwire. Counted
+# A collision found AFTER the cards reached Queued — the D3 tripwire. Counted
 # in its own bucket, never mixed with the ones the post critic caught, because
 # the ratio between them is the signal that the check has to split back out
 # into its own pass.
@@ -676,7 +676,7 @@ card is to-build at all.
     merged.
   - **In Progress or In Review: a run or a pull request is in flight.** Judge
     it on what it will LAND, not on whether its files are in the tree yet.
-  - **Anything else — Backlog, Todo, Triage — is still to build**, and every
+  - **Anything else — Queued, Todo, Triage — is still to build**, and every
     finding you would normally make stands, this one included.
 
 A card's text and the repository cannot tell you which of those it is. Read the
@@ -1328,7 +1328,7 @@ def marker(stage: str, round_n: int, result: str, reason: str = "",
 
 
 def late_collision_marker(epic: str, other: str, detail: str) -> str:
-    """The record of a collision found AFTER the cards reached Backlog.
+    """The record of a collision found AFTER the cards reached Queued.
 
     Posted by whoever finds one (`plan_critic.py late-collision`), on the epic
     the collision belongs to. It is the tripwire half of the D3 measurement:
@@ -2354,7 +2354,7 @@ def promotion_refusal(identifier: str, epic: str, green_lit_at: str | None,
             f"{when} but {waiting}: its review died before it decided — "
             f"holding: {one_line(detail)}.\n\n"
             "Nothing has been found wrong with the plan and nothing has "
-            "started building; the children stay in Backlog until the review "
+            "started building; the children stay in Queued until the review "
             "runs again and passes.\n\n"
             f"**Nothing here is yours to decide.** {DEAD_REVIEW_NEXT} This is "
             f"waiting on the re-run of run {ran}."
@@ -2364,7 +2364,7 @@ def promotion_refusal(identifier: str, epic: str, green_lit_at: str | None,
         f"🚨 {POST_SENT_BACK_TAG}: {identifier}'s epic {epic} was approved at "
         f"{when} but {waiting}: it sent the plan back — holding. The "
         f"critic's reason: {quoted}\n\n"
-        "The children stay in Backlog until the gap is settled. The plan has "
+        "The children stay in Queued until the gap is settled. The plan has "
         "been revised with the critic's finding, and the review is run again "
         "by the pipeline itself — a revision that changed no card is not a "
         "decision anyone is waiting on.\n\n"
@@ -2401,7 +2401,7 @@ def death_note(epic: str, row: dict) -> str:
         f"{_death_sentence(row)}.\n\n"
         "This was not a rejection: the critic decided nothing, nothing has "
         "been found wrong with the plan, and nothing has started building — "
-        "the children stay in Backlog until the review runs again. This round "
+        "the children stay in Queued until the review runs again. This round "
         f"does not count toward the {_count_word(MAX_ROUNDS)}-round bound.\n\n"
         f"**Nothing here is yours to decide.** {DEAD_REVIEW_NEXT}"
     )
@@ -3275,7 +3275,7 @@ def sight_block(this_epic: str, epics: list[dict],
             "",
         ]
     lines += [
-        "YOU CANNOT SEE, and must not claim anything about: epics in Backlog, "
+        "YOU CANNOT SEE, and must not claim anything about: epics in Queued, "
         "Intake or Done; work in any other Linear team; unmerged branches and "
         "open pull requests; or anything an epic's own cards do not say. If a "
         "collision would need one of those to confirm, say what you suspect "
@@ -4431,7 +4431,7 @@ def _cmd_died(args) -> int:
 
     `--record-only` asks for the RECORD and nothing else (DRE-4381). The note
     is the second critic's — it names that review, the children waiting in
-    Backlog and the round bound — and on the one-off route every one of
+    Queued and the round bound — and on the one-off route every one of
     those sentences would be false. That route says what happened in the
     decision's own words, one comment earlier, so the death owes only its
     numbers here: a second telling of one death is how two comments come to

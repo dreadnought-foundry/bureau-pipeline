@@ -3,7 +3,7 @@
 
 DRE-6056's run pushed its finished work to `agent/DRE-6056-retire-split-ledger`,
 wrote a blocker instead of opening the pull request, and the card sat in
-Backlog as blocked until a person opened the pull request by hand. The push
+Queued as blocked until a person opened the pull request by hand. The push
 rescue (`push_rescue.py`) opens a pull request for a card's branch, but only
 inside the build run, and a blocker note is one of its `STOP_NOTES`: it reads
 the note as the agent choosing not to open one. This module overrules that for
@@ -61,6 +61,7 @@ import blocker_class  # noqa: E402
 import card_pr  # noqa: E402
 import linear_ops  # noqa: E402
 import push_rescue  # noqa: E402
+from lane_contract import QUEUE_LANES  # noqa: E402 — the queue, read under either name (DRE-6747)
 
 #: The two seams a test replaces: `gh` calls, and the pull-request lookup.
 _run = push_rescue._subprocess_run
@@ -172,7 +173,7 @@ def pr_body(card: dict, reason: str, branch: str, *, legacy: bool) -> str:
 
 
 def _to_in_review(identifier: str) -> None:
-    linear_ops.cmd_advance(identifier, "In Review", "Backlog", held=True)
+    linear_ops.cmd_advance(identifier, "In Review", ",".join(QUEUE_LANES), held=True)
     lane = (linear_ops.get_issue(identifier, fresh=True).get("state") or {}).get("name")
     if lane != "In Review":
         raise blocker_class.NotNow(f"In Review move did not land — the card is in {lane}")
