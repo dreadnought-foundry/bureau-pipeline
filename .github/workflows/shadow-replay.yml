@@ -1,0 +1,236 @@
+# Shadow Replay (DRE-7197) — a batch of side-by-side replays, and how often
+# each replay agreed with the verdict recorded at the time.
+#
+# The critic (DRE-7193, qa-review.yml) and the verifier (DRE-7194, verify.yml)
+# each replay ONE past pull request in shadow mode: at the head its recorded
+# verdict was bound to, on the model the caller names, writing the verdict to
+# the `shadow-verdict-<role>-<pr>` artifact and posting nothing. This runs a
+# batch of them and compares. The noise-floor reading is taken with it, and
+# the model-switch epics (DRE-7185, DRE-7187, DRE-7188, DRE-7189) read their
+# bars with it afterwards.
+#
+#   pick     scripts/shadow_replay.py pick — by default the newest `count`
+#            critic reviews recorded on `recorded_model` (read off the
+#            critic's copies on this repo's Linear cards), or the pull
+#            requests `prs` lists. Fewer than `count` fails the run, naming
+#            how many were found.
+#   replay   a matrix over the pick, four at a time so a batch does not drain
+#            the subscription in one burst. `uses:` cannot be an expression,
+#            so the replay is two jobs, one per reusable, and `reviewer`
+#            decides which one runs.
+#   compare  always: the artifacts against the pick, the report as the
+#            `shadow-replay-report` artifact, and the `shadow-replay:` lines.
+#
+# It posts nothing anywhere: everything it produces is an artifact and lines
+# in its own log. NOT watched by the medic or red-main repair
+# (scripts/check_workflow_watchers.py NOT_WATCHED): a red replay is read by
+# the operator from its report, and an automatic retry would spend another
+# batch of reviewer runs.
+#
+# Vendor boundary (standards/vendor-boundaries.md):
+#   Q1 actor — `workflow_dispatch` only, so the actor is the person who
+#      started it; nothing here reads the actor. The reusables run in shadow
+#      mode, which reviews unconditionally (DRE-7193) and mints the critic's
+#      token read-only.
+#   Q2 secrets — a dispatched run reads the repo's normal secrets store, and
+#      `secrets: inherit` hands the reusables the same keys a live review
+#      holds. `pick` uses LINEAR_API_KEY to read comments and this run's own
+#      token to read commits and pull requests.
+#   Q3 re-run — re-running failed jobs replays only the failed pull requests
+#      and compares again. Nothing is posted, so there is no receipt a re-run
+#      could trip over.
+#   Q4 limits — a matrix holds at most 256 jobs and a job output 1 MB; a
+#      batch of `count` records is far inside both.
+#   Q5 our crash — a replay that dies leaves no artifact, and compare counts
+#      it as a `no verdict` mismatch, named apart from a disagreement. A pick
+#      that fails starts no replay at all.
+name: Shadow Replay
+
+on:
+  workflow_dispatch:
+    inputs:
+      reviewer:
+        description: Which reviewer to replay — critic (qa-review.yml) or verifier (verify.yml).
+        type: choice
+        options: [critic, verifier]
+        default: critic
+      model:
+        description: The model id the replays run on.
+        type: string
+        required: true
+      recorded_model:
+        description: >-
+          Pick the critic reviews recorded on this model (the `🧠 model:` line
+          on the card's copy). Not needed when `prs` is given.
+        type: string
+        default: ''
+      count:
+        description: How many reviews to pick. Fewer eligible fails the run.
+        type: string
+        default: '20'
+      prs:
+        description: >-
+          Comma-separated pull request numbers that replace the pick. Each is
+          replayed at its newest real verdict's head, or at its final head
+          with `recorded` none when it has no verdict.
+        type: string
+        default: ''
+
+# Its own group, never a pull request's: a replay can never cancel, or be
+# cancelled by, a live review.
+concurrency:
+  group: shadow-replay-${{ github.run_id }}
+  cancel-in-progress: false
+
+# Exactly these four. A reusable can hold no more than its caller grants and
+# a grant left out is `none`, so each is here for the reusables:
+#   id-token        the agent's scrubbed log upload (DRE-4269)
+#   contents        every checkout — without it each replay fails at its first
+#   pull-requests   Resolve PR's read of the pull request record and compare
+#   actions         the run-log reads
+permissions:
+  id-token: write
+  contents: read
+  pull-requests: read
+  actions: read
+
+jobs:
+  pick:
+    runs-on: ${{ fromJSON(vars.BUREAU_SHORT_RUNS_ON || vars.BUREAU_RUNS_ON || '["ubuntu-latest"]') }}
+    timeout-minutes: 15
+    outputs:
+      matrix: ${{ steps.pick.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install the pipeline's Python tooling (cached)
+        uses: ./.github/actions/setup-python-cached
+        with:
+          python-version: "3.12"
+          requirements: |
+            requirements-dev.txt
+
+      - name: Pick the reviews to replay
+        id: pick
+        env:
+          GH_TOKEN: ${{ github.token }}
+          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+          REVIEWER: ${{ inputs.reviewer }}
+          RECORDED_MODEL: ${{ inputs.recorded_model }}
+          COUNT: ${{ inputs.count }}
+          PRS: ${{ inputs.prs }}
+        run: |
+          python3 scripts/shadow_replay.py pick \
+            --reviewer "$REVIEWER" --recorded-model "$RECORDED_MODEL" \
+            --count "$COUNT" --prs "$PRS" --repo "$GITHUB_REPOSITORY" \
+            --out "$RUNNER_TEMP/shadow-replay-pick/shadow-replay-pick.json" \
+            --github-output "$GITHUB_OUTPUT"
+
+      # The full records, with each recorded verdict's first line, for the
+      # compare job's report; the matrix carries only {pr, sha, recorded}.
+      - name: Upload the pick
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: shadow-replay-pick
+          path: ${{ runner.temp }}/shadow-replay-pick
+          if-no-files-found: error
+          retention-days: 90
+
+  replay-critic:
+    name: replay critic PR ${{ matrix.replay.pr }}
+    needs: pick
+    if: inputs.reviewer == 'critic'
+    strategy:
+      fail-fast: false
+      max-parallel: 4
+      matrix:
+        replay: ${{ fromJSON(needs.pick.outputs.matrix) }}
+    uses: dreadnought-foundry/bureau-pipeline/.github/workflows/qa-review.yml@main
+    with:
+      pipeline_ref: main
+      model: ${{ inputs.model }}
+      shadow: true
+      replay_pr: ${{ format('{0}', matrix.replay.pr) }}
+      replay_sha: ${{ matrix.replay.sha }}
+    secrets: inherit
+
+  replay-verifier:
+    name: replay verifier PR ${{ matrix.replay.pr }}
+    needs: pick
+    if: inputs.reviewer == 'verifier'
+    strategy:
+      fail-fast: false
+      max-parallel: 4
+      matrix:
+        replay: ${{ fromJSON(needs.pick.outputs.matrix) }}
+    uses: dreadnought-foundry/bureau-pipeline/.github/workflows/verify.yml@main
+    with:
+      pipeline_ref: main
+      model: ${{ inputs.model }}
+      shadow: true
+      replay_pr: ${{ format('{0}', matrix.replay.pr) }}
+      replay_sha: ${{ matrix.replay.sha }}
+    secrets: inherit
+
+  compare:
+    needs: [pick, replay-critic, replay-verifier]
+    if: always()
+    runs-on: ${{ fromJSON(vars.BUREAU_SHORT_RUNS_ON || vars.BUREAU_RUNS_ON || '["ubuntu-latest"]') }}
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install the pipeline's Python tooling (cached)
+        uses: ./.github/actions/setup-python-cached
+        with:
+          python-version: "3.12"
+          requirements: |
+            requirements-dev.txt
+
+      - name: Download the pick
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: shadow-replay-pick
+          path: ${{ runner.temp }}/shadow-replay-pick
+
+      # A replay that died wrote no artifact, and a batch where every replay
+      # died matches none: compare reads that as `no verdict` for each pull
+      # request, so an empty download is a finding in the report rather
+      # than a red step with no report.
+      - name: Download the shadow verdicts
+        continue-on-error: true
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: shadow-verdict-${{ inputs.reviewer }}-*
+          path: ${{ runner.temp }}/shadow-verdicts
+
+      # The tagged lines go to a file here and are printed once, by the last
+      # step, so the log carries exactly one summary line.
+      - name: Compare the replays with the recorded verdicts
+        env:
+          REVIEWER: ${{ inputs.reviewer }}
+          MODEL: ${{ inputs.model }}
+          RECORDED_MODEL: ${{ inputs.recorded_model }}
+        run: |
+          STATUS=0
+          python3 scripts/shadow_replay.py compare \
+            --reviewer "$REVIEWER" --model "$MODEL" --recorded-model "$RECORDED_MODEL" \
+            --pick "$RUNNER_TEMP/shadow-replay-pick/shadow-replay-pick.json" \
+            --artifacts "$RUNNER_TEMP/shadow-verdicts" \
+            --out-dir "$RUNNER_TEMP/shadow-replay-report" \
+            > "$RUNNER_TEMP/shadow-replay.log" || STATUS=$?
+          grep -v '^shadow-replay:' "$RUNNER_TEMP/shadow-replay.log" || true
+          exit "$STATUS"
+
+      - name: Upload the report
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: shadow-replay-report
+          path: |
+            ${{ runner.temp }}/shadow-replay-report/shadow-replay-report.md
+            ${{ runner.temp }}/shadow-replay-report/shadow-replay-report.json
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Print the shadow-replay lines
+        run: grep '^shadow-replay:' "$RUNNER_TEMP/shadow-replay.log"
