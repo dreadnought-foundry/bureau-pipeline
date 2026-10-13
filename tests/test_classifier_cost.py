@@ -23,6 +23,8 @@ from __future__ import annotations
 
 import json
 import os
+import re
+import subprocess
 import sys
 from pathlib import Path
 
@@ -205,11 +207,68 @@ def test_the_written_step_output_carries_the_clause(monkeypatch, tmp_path):
     assert written["receipt"] == f"{TOP} (asked) / {TOP} (answered) · cost $1.2346"
 
 
-def test_plan_yml_posts_the_receipt_unchanged():
-    """The clause rides the existing heartbeat — the workflow line is the one it always was."""
-    workflow = (ROOT / ".github" / "workflows" / "plan.yml").read_text(encoding="utf-8")
-    assert ('"🧠 model-attempt: ${{ steps.classify.outputs.receipt }} — planning classifier read the card."'
-            in workflow)
+LINEAR_OPS_STUB = """import json, os, sys
+with open(os.environ["CAPTURE"], "w", encoding="utf-8") as fh:
+    json.dump(sys.argv[1:], fh)
+"""
+
+
+def _heartbeat_step() -> tuple[dict, str]:
+    """plan.yml's classifier heartbeat, and the id of the step whose receipt it posts."""
+    steps = yaml.safe_load((ROOT / ".github" / "workflows" / "plan.yml").read_text(encoding="utf-8"))["jobs"]["plan"]["steps"]
+    heartbeat = next(step for step in steps if HEARTBEAT_TAIL.strip(" —.") in json.dumps(step, ensure_ascii=False))
+    classify_id = next(step["id"] for step in steps if "planning_classify.py" in (step.get("run") or ""))
+    return heartbeat, classify_id
+
+
+def _post_heartbeat(receipt: str, tmp_path) -> list[str]:
+    """Run the heartbeat step as the runner does — expressions substituted into the
+    script text first, then `bash -e <file>` — and return what linear_ops.py was handed."""
+    step, classify_id = _heartbeat_step()
+    known = {f"steps.{classify_id}.outputs.receipt": receipt,
+             "github.event.client_payload.identifier": "DRE-7196"}
+
+    def expand(text: str) -> str:
+        def one(match):
+            expr = match.group(1).strip()
+            if expr.startswith("secrets."):
+                return "test-key"
+            assert expr in known, f"an expression this test does not expand: {expr}"
+            return known[expr]
+        return re.sub(r"\$\{\{(.*?)\}\}", one, text)
+
+    scripts = tmp_path / ".bureau-pipeline" / "scripts"
+    scripts.mkdir(parents=True)
+    (scripts / "linear_ops.py").write_text(LINEAR_OPS_STUB, encoding="utf-8")
+    script = tmp_path / "step.sh"
+    script.write_text(expand(step["run"]), encoding="utf-8")
+    capture = tmp_path / "argv.json"
+    env = {"PATH": os.environ["PATH"], "HOME": str(tmp_path), "CAPTURE": str(capture)}
+    env.update({name: expand(str(value)) for name, value in (step.get("env") or {}).items()})
+    proc = subprocess.run(["bash", "-e", str(script)], cwd=tmp_path, env=env,
+                          capture_output=True, text=True, timeout=60)
+    assert proc.returncode == 0, proc.stderr
+    return json.loads(capture.read_text(encoding="utf-8"))
+
+
+@pytest.mark.parametrize("cost", ["0.0123", "1.2346"])
+def test_the_posted_heartbeat_keeps_the_cost_the_tally_reads(tmp_path, cost):
+    """The seam workflow → comment → tally: a `$0`/`$1` the shell expands would
+    post a mangled figure, and every receipt would count as uncosted."""
+    receipt = f"{TOP} (asked) / {TOP} (answered) · cost ${cost}"
+    argv = _post_heartbeat(receipt, tmp_path)
+    assert argv[:2] == ["comment", "DRE-7196"]
+    body = argv[2]
+    assert body == f"🧠 model-attempt: {receipt}{HEARTBEAT_TAIL}"
+    assert classifier_cost.is_receipt(body)
+    assert classifier_cost.receipt_cost(body) == pytest.approx(float(cost))
+
+
+def test_the_heartbeat_reads_the_receipt_from_its_env_not_its_script():
+    """An output spliced into `run:` is script text — the receipt reaches bash as data."""
+    step, classify_id = _heartbeat_step()
+    assert f"steps.{classify_id}.outputs.receipt" not in step["run"]
+    assert step["env"]["RECEIPT"] == f"${{{{ steps.{classify_id}.outputs.receipt }}}}"
 
 
 # --------------------------------------------------------------------------- #

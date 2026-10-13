@@ -787,7 +787,7 @@ class TestThePlanWorkflow:
         classify_id = self._step("planning_classify.py")["id"]
         step = next(
             s for s in self._steps()
-            if f"steps.{classify_id}.outputs.receipt" in json.dumps(s.get("run") or "")
+            if f"steps.{classify_id}.outputs.receipt" in json.dumps(s)
         )
         assert model_fallback.MARKER_PREFIX in step["run"], (
             "the classifier's heartbeat must be the same marker every other "
@@ -1324,8 +1324,10 @@ class TestTheReceiptSaysBoth:
     def test_the_heartbeat_posts_that_receipt(self):
         step = TestThePlanWorkflow._step("planning classifier read the card")
         classify_id = TestThePlanWorkflow._step("planning_classify.py")["id"]
-        assert f"steps.{classify_id}.outputs.receipt" in step["run"]
-        assert f"steps.{classify_id}.outputs.model }}}}" not in step["run"], (
+        # DRE-7196: through `env:`, since the receipt's cost clause carries a `$`.
+        assert step["env"]["RECEIPT"] == f"${{{{ steps.{classify_id}.outputs.receipt }}}}"
+        assert "$RECEIPT" in step["run"]
+        assert f"steps.{classify_id}.outputs.model }}}}" not in json.dumps(step), (
             "the heartbeat naming one model is what DRE-3083 found wrong"
         )
         assert model_fallback.MARKER_PREFIX in step["run"]
