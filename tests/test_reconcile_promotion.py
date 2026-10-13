@@ -830,7 +830,6 @@ class TestTheSweepReadsBothQueueNames:
             cards = reconcile._door_backlog_children(None)
         assert [c["identifier"] for c in cards] == ["DRE-6801", "DRE-6802"]
 
-
     @pytest.mark.parametrize("lane", lane_contract.QUEUE_LANES)
     def test_a_child_waiting_under_either_name_is_in_flow(self, lane):
         """The Intake-blocker phase reads a waiting child of a running epic as

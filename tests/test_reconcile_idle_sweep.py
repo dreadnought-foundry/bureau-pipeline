@@ -270,7 +270,7 @@ def test_with_the_door_on_the_idle_check_costs_no_linear_request(monkeypatch, ca
         door.decline_fleet("lane-not-held")
         _pass(board)
         lanes = door.asked("/board")[0]["query"]["lanes"]
-    assert lanes == "Todo,In Progress,In Review,Hand-work,Backlog"
+    assert lanes == ",".join(reconcile.DOOR_WORK_LANES + reconcile.QUEUE_LANES)
     # The check asked the door, not Linear. Linear answered only the fleet
     # phases' reads: the lanes this door declines at `scope=fleet` — it serves
     # the fleet to no repo while the console's PIPELINE_READ_UNROUTED is off
