@@ -130,8 +130,15 @@ LIFTERS = {OPERATOR_STEP_REASON: "sweep"}
 CARD_CLOSED = "card-closed"
 CLOSED_LANES = ("Done", "Canceled")
 
+#: The Triage repair's lift (DRE-7178): `scripts/triage_repair.py` lifts a
+#: `plan-critic-bound` hold once per card, right before it moves the card out
+#: of Triage — to Planning with the card rewritten, or to Green Light with a
+#: question for the CEO. Not a lift kind: no sweep reads a fact and lifts on
+#: it; the repair lifts its own card as it applies its outcome.
+TRIAGE_REPAIR = "triage-repair"
+
 #: What a lift line may say lifted the hold, besides a lift kind.
-LIFT_BECAUSE = LIFT_KINDS + (CARD_CLOSED, "operator")
+LIFT_BECAUSE = LIFT_KINDS + (CARD_CLOSED, "operator", TRIAGE_REPAIR)
 
 STAMP_PREFIX = "🔒 hold:"
 LIFT_PREFIX = "🔓 hold lifted:"
@@ -234,7 +241,8 @@ def stamp_line(reason: str, at: str | None, by: str) -> str:
 def lift_line(reason: str, because: str, by: str) -> str:
     """The line `lift` posts after the label comes off."""
     if because not in LIFT_BECAUSE:
-        raise ValueError(f"because={because!r} is not a lift kind, card-closed or operator")
+        raise ValueError(f"because={because!r} is not a lift kind, card-closed, "
+                         "operator or triage-repair")
     if not reason or re.search(r"\s", reason):
         raise ValueError(f"reason {reason!r} is not one word")
     line = f"{LIFT_PREFIX} reason={reason} because={because} by={_writer(by)}"
@@ -415,7 +423,8 @@ def lift(card: str, because: str, by: str, *, reason: str | None = None) -> None
     import linear_ops  # local: only the Linear commands need the seam
 
     if because not in LIFT_BECAUSE:
-        raise ValueError(f"because={because!r} is not a lift kind, card-closed or operator")
+        raise ValueError(f"because={because!r} is not a lift kind, card-closed, "
+                         "operator or triage-repair")
     if reason is None:
         _, bodies = _read_card(card)
         stamp = read_stamp(bodies)
@@ -817,7 +826,8 @@ def main(argv=None) -> int:
     if args.command == "lift":
         if args.because not in LIFT_BECAUSE:
             print(f"hold lift {args.card}: because={args.because!r} is not a lift "
-                  "kind, card-closed or operator — nothing written", file=sys.stderr)
+                  "kind, card-closed, operator or triage-repair — nothing written",
+                  file=sys.stderr)
             return 2
         try:
             lift(args.card, args.because, args.by)

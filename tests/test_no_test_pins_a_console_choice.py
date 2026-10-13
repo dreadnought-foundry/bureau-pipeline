@@ -216,6 +216,8 @@ ALLOWED: dict[str, str] = {
         _OWN_INPUT,
     "tests/test_qa_review_model_note.py::PrCopyIsUntouchedTest.test_the_model_line_never_reaches_the_pr_comment":
         _ABSENT,
+    "tests/test_qa_review_shadow.py::ShadowVerdictFileTest.test_a_real_approve_is_written_with_the_eight_keys_and_one_line":
+        _OWN_INPUT,
     "tests/test_session_agents.py::test_a_session_agent_can_be_moved_again_from_group_to_group":
         _OWN_MOVE,
     "tests/test_session_agents.py::test_the_change_set_of_run_38114763170_validates_and_applies":

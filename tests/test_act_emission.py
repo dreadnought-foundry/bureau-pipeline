@@ -676,6 +676,23 @@ def _drive_plan_bound_rewrite(mp):
     plan_bound.run_exit("DRE-1", "post", "dreadnought-foundry/bureau-pipeline")
 
 
+@site("triage-repair", "triage-repair")
+def _drive_triage_repair(mp):
+    """The Triage repair's claim (DRE-7178): a card held at the plan critic's
+    bound with no receipt on its thread, its description fenced into the
+    `started` receipt. Frozen from its first render: there was no earlier
+    wording to read it off."""
+    import answer_into_card  # noqa: PLC0415 — only this driver needs it
+    import triage_repair  # noqa: PLC0415
+
+    mp.setattr(triage_repair.linear_ops, "comment_records",
+               lambda *_a, **_k: [])
+    mp.setattr(answer_into_card, "_read_description",
+               lambda _card: "The card as it stood.")
+    _card_recorder(mp)
+    triage_repair.claim("DRE-1")
+
+
 @site("promotion-stalled", "promotion-stalled")
 def _drive_promotion_stalled(mp):
     """The promotion stall clock (DRE-4210): a parentless card refused for
