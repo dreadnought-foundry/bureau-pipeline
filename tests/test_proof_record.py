@@ -28,6 +28,7 @@ import os
 import subprocess  # nosec B404 — fixed argv, our own script
 import sys
 import tempfile
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
@@ -39,6 +40,7 @@ os.environ.setdefault("LINEAR_API_KEY", "test-key")
 os.environ.setdefault("REPO", "dreadnought-foundry/bureau-pipeline")
 
 import hygiene_done  # noqa: E402
+import linear_ops  # noqa: E402
 import proof_dispatch  # noqa: E402
 import proof_reach  # noqa: E402
 import proof_record  # noqa: E402
@@ -568,6 +570,79 @@ class TestOpenHolds:
             voice(spoken_thread.CEO_VIA_CONSOLE, "Approved"),
             voice(spoken_thread.PIPELINE, CEO_HOLD),
         ]) == [CEO_HOLD]
+
+
+# --------------------------------------------------------------------------
+# A hold that waits only for a time (DRE-7228)
+# --------------------------------------------------------------------------
+#: The stamped hold, as `linear_ops.py proof-waiting-until` writes it — pinned
+#: as a string, not composed by the code under test.
+TIME_HOLD = ("🔬 proof-waiting: the day of jobs on the pinned machine family, "
+             "counted from DRE-6548's live-at time — needs "
+             "not-before=2026-10-12T14:33-07:00")
+#: DRE-6549's own hold, typed through `proof-waiting` on 2026-10-11: its time
+#: has passed, and it is prose.
+DRE_6549_HOLD = ("🔬 proof-waiting: the day of jobs on the pinned machine family, "
+                 "counted from DRE-6548's live-at time — needs the 24 hours after "
+                 "2026-10-11 14:33 PT to pass, so not before 2026-10-12 14:33 PT")
+
+
+class TestTimeOnly:
+    def test_the_stamped_hold_is_time_only_at_its_time(self):
+        got = proof_record.time_only(TIME_HOLD)
+        assert got == datetime(2026, 10, 12, 21, 33, tzinfo=timezone.utc)
+        assert proof_record.time_only_clause(TIME_HOLD) == "not-before=2026-10-12T14:33-07:00"
+
+    def test_the_writers_line_is_time_only(self):
+        line = linear_ops.proof_waiting_line(
+            "the nightly ran", f"{linear_ops.NOT_BEFORE}2026-10-13T05:00+00:00")
+        assert proof_record.time_only(line) == datetime(2026, 10, 13, 5, tzinfo=timezone.utc)
+
+    def test_dre_6549s_prose_hold_is_not_read_for_a_date(self):
+        """Nothing reads a date out of prose, however plainly it states one."""
+        assert proof_record.time_only(DRE_6549_HOLD) is None
+        assert proof_record.time_only_clause(DRE_6549_HOLD) is None
+
+    @pytest.mark.parametrize("needs", [
+        "not-before=2026-10-12T14:33-07:00 and DRE-6548 live",
+        "DRE-6548 live and not-before=2026-10-12T14:33-07:00",
+        "not-before=2026-10-12T14:33-07:00; the operator's press",
+        "the operator's press",
+        "the operator's decision on not-before=2026-10-12T14:33-07:00",
+        "not-before=2026-10-12T14:33",           # no UTC offset
+        "not-before=tomorrow at 14:33 PT",       # does not parse
+        "not-before=2026-13-45T14:33-07:00",     # not a time
+        "not-before=",
+        "not-before 2026-10-12T14:33-07:00",
+    ], ids=["clause-then-event", "event-then-clause", "clause-then-press",
+            "operators-press", "cause-hold", "no-offset", "prose-time",
+            "bad-date", "empty", "no-equals"])
+    def test_any_needs_half_but_the_one_clause_is_not_time_only(self, needs):
+        line = f"{proof_record.HOLD_MARK} the nightly ran — needs {needs}"
+        assert proof_record.time_only(line) is None
+        assert proof_record.time_only_clause(line) is None
+
+    def test_a_hold_naming_the_ceos_press_is_never_time_only(self):
+        line = (f"{proof_record.HOLD_MARK} {proof_record.CEO_PRESS} on Approve — "
+                "needs not-before=2026-10-12T14:33-07:00")
+        assert proof_record.time_only(line) is None
+
+    def test_the_needs_half_is_the_text_after_the_last_needs(self):
+        line = (f"{proof_record.HOLD_MARK} a run — needs not-before=2026-10-12T14:33-07:00 "
+                "— needs the operator")
+        assert proof_record.time_only(line) is None
+        line = (f"{proof_record.HOLD_MARK} what a run — needs the operator — said — needs "
+                "not-before=2026-10-12T14:33-07:00")
+        assert proof_record.time_only(line) is not None
+
+    @pytest.mark.parametrize("line", [
+        "🔬 proof-observed: not-before=2026-10-12T14:33-07:00 has passed",
+        "a comment — needs not-before=2026-10-12T14:33-07:00",
+        "",
+        None,
+    ])
+    def test_a_line_that_is_not_a_hold_is_not_time_only(self, line):
+        assert proof_record.time_only(line) is None
 
 
 # --------------------------------------------------------------------------

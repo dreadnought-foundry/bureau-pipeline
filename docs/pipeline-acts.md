@@ -144,6 +144,28 @@ exhausted` or `holding for a human` — the console's `enrich.HOLD_MARKERS` read
 either phrase as a fix-budget hold, and the card would render as the wrong kind
 of stuck on a surface nobody would think to check.
 
+**A hold that waits only for a time** (DRE-7228) is written with
+`proof-waiting-until`, and that is the form to use for one — a day of jobs
+counted from a live-at time, a morning's scheduled run:
+
+    python3 scripts/linear_ops.py proof-waiting-until DRE-N \
+      "the day of jobs on the pinned machine family" "2026-10-12T14:33-07:00"
+
+It posts the same hold through `proof-waiting`, so the trailer and the
+console's `Waiting for proof — <reason>` are unchanged, with the `needs` half
+written by the command and never by the caller:
+`🔬 proof-waiting: <what is still to be observed> — needs not-before=<ISO time
+with offset>`. It refuses a time that does not parse with
+`datetime.fromisoformat`, a time with no UTC offset, and an observed half naming
+`the CEO's press`, and posts nothing. A hold whose `needs` half is that one
+clause and nothing else is **time-only** (`proof_record.time_only`): once every
+open hold on a `Hand-work` PROOF card is time-only and every time has passed, the
+proof dispatcher posts one `🔬 proof-observed` quoting each time and the card
+goes on to its first run on the same pass. A clause beside other words, a hold
+naming the CEO's press, and a date in prose are held exactly as before — nothing
+reads a date out of prose — and a time hold beside any other open hold is never
+lifted by time, because one `🔬 proof-observed` would lift that hold too.
+
 ## The row whose NUMBERS are data — `🚨 fleet-reviewer-outage` (DRE-3433)
 
 | Field | Value |

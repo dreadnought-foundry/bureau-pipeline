@@ -532,7 +532,9 @@ class TestTheAgentStep:
         assert mint["continue-on-error"] is True
         assert mint["with"]["owner"] == "dreadnought-foundry"
         assert mint["with"]["repositories"] == "bureau-pipeline"
-        assert mint["with"]["permission-variables"] == "read"
+        # No permission subset: the pinned action declares no variables
+        # input, and one it does not declare is refused (DRE-7230).
+        assert not [k for k in mint["with"] if k.startswith("permission-")]
         assert (_step("repair", "Select model")["env"]["BUREAU_MODEL_HOME_TOKEN"]
                 == "${{ steps.model_home.outputs.token }}")
 

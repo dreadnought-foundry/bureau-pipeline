@@ -113,7 +113,6 @@ def test_every_named_step_reads_the_home_and_holds_the_token():
             "private-key": "${{ secrets.BUREAU_APP_PRIVATE_KEY }}",
             "owner": "dreadnought-foundry",
             "repositories": "bureau-pipeline",
-            "permission-variables": "read",
         }
 
 
@@ -249,7 +248,6 @@ MINT = {
         "private-key": "${{ secrets.BUREAU_APP_PRIVATE_KEY }}",
         "owner": "dreadnought-foundry",
         "repositories": "bureau-pipeline",
-        "permission-variables": "read",
     },
 }
 
@@ -389,7 +387,6 @@ def test_a_mint_without_continue_on_error_fails(tmp_path):
 @pytest.mark.parametrize("key, value", [
     ("owner", "EveryBite"),
     ("repositories", "atlas"),
-    ("permission-variables", "write"),
 ])
 def test_a_mint_for_the_wrong_scope_fails(tmp_path, key, value):
     doc = _workflow(_held("select"))
@@ -398,6 +395,86 @@ def test_a_mint_for_the_wrong_scope_fails(tmp_path, key, value):
     violations = _violations(root)
     assert len(violations) == 1, violations
     assert key in violations[0]
+
+
+# DRE-7230: the pinned action declares no variables input, so a subset never
+# holds variables — `permission-variables` was forwarded undeclared and refused.
+@pytest.mark.parametrize("subset", [
+    {"permission-variables": "read"},
+    {"permission-contents": "read"},
+    {"permission-actions": "read", "permission-variables": "write"},
+])
+def test_a_mint_asking_for_a_subset_without_variables_fails(tmp_path, subset):
+    doc = _workflow(_held("select"))
+    doc["jobs"]["j"]["steps"][0]["with"].update(subset)
+    root = _write(tmp_path, workflows={"w.yml": doc})
+    violations = _violations(root)
+    assert len(violations) == 1, violations
+    assert "w.yml: job j: mint step model_home asks for a permission subset" in violations[0]
+    assert "without variables" in violations[0]
+    for key in subset:
+        assert key in violations[0]
+
+
+def test_a_declared_variables_input_may_be_the_subset(tmp_path, monkeypatch):
+    """Should a pinned release declare a variables input, a mint may ask for
+    that one input — and still nothing else."""
+    monkeypatch.setattr(scope, "VARIABLES_INPUTS", ("permission-repository-variables",))
+    doc = _workflow(_held("select"))
+    doc["jobs"]["j"]["steps"][0]["with"]["permission-repository-variables"] = "read"
+    root = _write(tmp_path, workflows={"w.yml": doc})
+    assert _violations(root) == []
+    doc["jobs"]["j"]["steps"][0]["with"]["permission-contents"] = "read"
+    root = _write(tmp_path, workflows={"w.yml": doc})
+    violations = _violations(root)
+    assert len(violations) == 1, violations
+    assert "permission-contents" in violations[0]
+    assert "permission-repository-variables" not in violations[0]
+
+
+def _write_mint():
+    """A write mint: read by no selecting step, and no continue-on-error, so
+    a refused write is red."""
+    mint = {**copy.deepcopy(MINT), "id": "model_home_write",
+            "name": "Mint the model-home write token"}
+    del mint["continue-on-error"]
+    return mint
+
+
+def test_a_write_mint_with_no_subset_passes(tmp_path):
+    doc = _workflow(_held("select"), _write_mint())
+    root = _write(tmp_path, workflows={"w.yml": doc})
+    assert _violations(root) == []
+
+
+@pytest.mark.parametrize("key, value, says", [
+    ("permission-variables", "write", "asks for a permission subset"),
+    ("permission-contents", "write", "asks for a permission subset"),
+    ("repositories", "atlas", "repositories"),
+])
+def test_a_write_mint_no_step_reads_is_still_held(tmp_path, key, value, says):
+    write = _write_mint()
+    write["with"][key] = value
+    root = _write(tmp_path, workflows={"w.yml": _workflow(_held("select"), write)})
+    violations = _violations(root)
+    assert len(violations) == 1, violations
+    assert "w.yml: job j: mint step model_home_write" in violations[0]
+    assert says in violations[0]
+
+
+def test_every_live_model_home_mint_asks_for_no_subset():
+    """All of them — the 24 read mints and both write mints."""
+    found = []
+    for path in sorted(WORKFLOWS.glob("*.yml")):
+        doc = yaml.safe_load(path.read_text())
+        for job_id, _i, step in scope._steps(doc):
+            if scope.is_model_home_mint(step):
+                found.append((path.name, job_id, step["id"]))
+                assert step["uses"].startswith(PINNED), (path.name, step["id"])
+                assert not [k for k in step["with"] if k.startswith("permission-")], \
+                    (path.name, job_id, step["id"], step["with"])
+    assert len(found) == 26, found
+    assert sum(mint_id == "model_home_write" for *_, mint_id in found) == 2
 
 
 MODEL_STEP = {"name": "Plan", "id": "plan",
