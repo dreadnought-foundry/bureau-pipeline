@@ -1316,8 +1316,10 @@ class TestTheReceiptSaysBoth:
         )
         assert written["model"] == self.FELL_TO
         assert written["asked"] == self.ASKED
+        # DRE-7196: the classifier's receipt ends with its cost clause, and a
+        # Decision that carries no cost says so.
         assert written["receipt"] == planning_classify.model_receipt(
-            self.ASKED, self.FELL_TO)
+            self.ASKED, self.FELL_TO, cost=None)
 
     def test_the_heartbeat_posts_that_receipt(self):
         step = TestThePlanWorkflow._step("planning classifier read the card")
