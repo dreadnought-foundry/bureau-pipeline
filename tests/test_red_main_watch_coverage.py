@@ -21,8 +21,10 @@ ASSERTED — `scripts/check_workflow_watchers.py`, a Pipeline Tests step:
     by SOME watcher — the repair rail for a red commit, the medic for a
     crashed run — so adding an unwatched workflow fails CI rather than
     passing quietly;
-  * the medic is the one declared exemption, because it is the terminal
-    watcher: a medic that watched itself is the crash-loop the ADR forbids.
+  * the medic is the declared terminal-watcher exemption: a medic that
+    watched itself is the crash-loop the ADR forbids. The only other
+    exemption is `NOT_WATCHED`, by name and with its reason (Shadow Replay,
+    DRE-7197, tests/test_shadow_replay.py).
 
 The live case is the fixture: `HarnessFailureOnMainTest` replays the 2026-08-29
 event — Integration Harness, conclusion=failure, head_branch=main — through the
@@ -176,7 +178,7 @@ class LiveCoverageTest(unittest.TestCase):
         self.assertNotIn("Red-Main Repair", watched_by_stub())
 
     def test_the_medic_is_the_declared_terminal_watcher(self):
-        # The single exemption, stated in data with its reason — nothing
+        # The terminal-watcher exemption, stated in data with its reason — nothing
         # watches the medic, deliberately, and the checker says why.
         exempt = cww.terminal_watchers(WF_DIR)
         self.assertEqual(["Pipeline Medic"], sorted(exempt))
