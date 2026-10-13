@@ -30,13 +30,13 @@ an empty In Progress lane promote twelve cards at once, Stage 2 review H2).
   straight to Linear (design §3). One slow door must not cost a sweep eight
   seconds per read.
 
-  The one exception is a `scope=fleet` board read answered 401, 403 or 404
-  (DRE-5848). The door serves the fleet to steward repos only, and only once
-  the console's `PIPELINE_READ_UNROUTED` is open, so a refusal there is the
-  door declining that SCOPE to this repo, not the door failing: that one read
-  is UNKNOWN (`refused` or `not-found`) and the door stays in use. A token the
-  door really refuses is refused again on the next `scope=repo` read, which
-  stops the door for the run as before.
+  The one exception is a `scope=fleet` board or search read answered 401,
+  403 or 404 (DRE-5848, DRE-7236). The door serves the fleet to steward
+  repos only, and only once the console's `PIPELINE_READ_UNROUTED` is open,
+  so a refusal there is the door declining that SCOPE to this repo, not the
+  door failing: that one read is UNKNOWN (`refused` or `not-found`) and the
+  door stays in use. A token the door really refuses is refused again on the
+  next `scope=repo` read, which stops the door for the run as before.
 * No OIDC token: the stub did not grant `id-token: write`. That is a fallback,
   never a red run.
 * A `pull_request` or `pull_request_target` run (`GITHUB_EVENT_NAME`): the door
@@ -74,6 +74,11 @@ because the door serves relations when it is left out):
   GET /cards/<id>/dependents?lanes=<L>&comments=50&relations=1
       — the cards <id> blocks, in the lanes asked, as board nodes
   GET /workflow-states
+  GET /search?term=<text>&first=<1-50>&scope=repo|fleet
+      — the cards Linear's search would find for `term` (DRE-6100), each
+        node exactly `{identifier, title, createdAt, state: {name}}`; a
+        `scope=fleet` refusal is UNKNOWN for that one read, as on /board
+        (`search()` says why)
   GET /planning-order
       — the planner line's order (DRE-5807), outside the envelope below:
         `{"order": ["DRE-…", …], "set_at", "set_by", "read_at"}`. Read
@@ -103,9 +108,10 @@ machine reason in `freshness.reason` (`stale`, `relations-stale`,
 `reread-pending`, `linear-hold`, `missing-field`, `lane-not-held`).
 
 Statuses: 200; 401/403 (refused — the client stops using the door this run,
-except on a `scope=fleet` /board read, where it is UNKNOWN for that one read);
-404 on /cards or /dependents (a card outside the tenant — UNKNOWN for that one
-read, the door stays in use), and on a `scope=fleet` /board read (the same); 429 (throttled — stops this run, on purpose: a
+except on a `scope=fleet` /board or /search read, where it is UNKNOWN for that
+one read); 404 on /cards or /dependents (a card outside the tenant — UNKNOWN
+for that one read, the door stays in use), and on a `scope=fleet` /board or
+/search read (the same); 429 (throttled — stops this run, on purpose: a
 sweep that waits out `Retry-After` holds its runner, and its reads fall back to
 Linear); 503 (closed or the database is down — stops this run). Any other
 status stops this run too.
@@ -806,6 +812,73 @@ def workflow_states(*, max_age: int) -> DoorRead:
                    relations=False, nodes_key="workflowStates")
     if not read.nodes:
         raise _malformed("/workflow-states answered no states")
+    _state["served"] += 1
+    return read
+
+
+# ── The search (DRE-6100's route, DRE-7236's client) ────────────────────────
+#: `GET /search?term=<text>&first=<1-50>&scope=repo|fleet` — what Linear's
+#: `searchIssues` would find for `term`, served from the console's record.
+SEARCH_PATH = "/search"
+#: An hour, the workflow-state map's bound: the groomer searches for cards
+#: that were finished days ago, and a card finished in the last hour is one
+#: the next morning's run finds.
+SEARCH_MAX_AGE = 3600
+#: DRE-6100's `first`: 25 when not given, never more than 50.
+SEARCH_FIRST = 25
+SEARCH_FIRST_MAX = 50
+#: Every node is exactly these fields — DRE-6100's `_search_answer`, the same
+#: four `groom_lookups` selects from Linear's `searchIssues`.
+SEARCH_FIELDS = {"identifier": None, "title": None, "createdAt": None,
+                 "state": {"name": None}}
+
+
+def _extra_paths(value, shape, path: str = "") -> list[str]:
+    """Every field path `value` carries that `shape` does not name."""
+    if not isinstance(value, dict) or not isinstance(shape, dict):
+        return []
+    out = []
+    for key, child in value.items():
+        here = f"{path}.{key}" if path else key
+        if key not in shape:
+            out.append(here)
+        else:
+            out.extend(_extra_paths(child, shape[key], here))
+    return out
+
+
+def search(term: str, *, first: int = SEARCH_FIRST, scope: str = "fleet") -> DoorRead:
+    """The cards the door's search finds for `term` — the whole answer, or
+    ReadUnknown. Never part of one.
+
+    The board reads' rules, unchanged: the mode is read once, every request
+    carries a fresh OIDC token, and after one failure the door is not asked
+    again this run. A `scope=fleet` read answered 401, 403 or 404 is UNKNOWN
+    for that one read and the door stays in use — the exception `board`
+    makes (DRE-5848), for the same reason: the door declining the fleet
+    SCOPE to this caller is not the door failing.
+
+    Every node carries exactly `SEARCH_FIELDS`. A missing field and an extra
+    one are both a door answering outside its contract: UNKNOWN `malformed`,
+    and the door is not asked again."""
+    text = term.strip() if isinstance(term, str) else ""
+    if not text:
+        raise ValueError(f"bureau_read.search: no term, got {term!r}")
+    if (not isinstance(first, int) or isinstance(first, bool)
+            or not 1 <= first <= SEARCH_FIRST_MAX):
+        raise ValueError(f"bureau_read.search: first must be 1 to {SEARCH_FIRST_MAX}, "
+                         f"got {first!r}")
+    if scope not in ("repo", "fleet"):
+        raise ValueError(f"bureau_read.search: scope {scope!r}")
+    envelope = _get(SEARCH_PATH, {"term": text, "first": str(first), "scope": scope},
+                    max_age=SEARCH_MAX_AGE, refusal_ok=scope == "fleet")
+    read = _accept(envelope, max_age=SEARCH_MAX_AGE, shape=SEARCH_FIELDS,
+                   relations=False)
+    for node in read.nodes:
+        extra = _extra_paths(node, SEARCH_FIELDS)
+        if extra:
+            raise _malformed(f"/search: {node.get('identifier') or 'a node'} carries "
+                             f"{', '.join(extra[:5])}, not one of the four fields")
     _state["served"] += 1
     return read
 

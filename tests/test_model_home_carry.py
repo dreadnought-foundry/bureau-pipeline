@@ -43,6 +43,7 @@ from model_fixture import (FIXTURE_DIR, fixture_config, fixture_home,  # noqa: E
 
 WORKFLOW = ROOT / ".github" / "workflows" / "model-home-carry.yml"
 OLD_ROUTE = ROOT / ".github" / "workflows" / "model-config-change.yml"
+APP_TOKEN_INPUTS = ROOT / "tests" / "fixtures" / "create-github-app-token-inputs.json"
 AFTER_SHA = "0123456789abcdef0123456789abcdef01234567"
 TODAY = "2026-10-12"
 
@@ -632,10 +633,22 @@ def test_the_two_mints():
         assert mint["with"]["repositories"] == "bureau-pipeline"
     assert read["id"] == "model_home"
     assert read["continue-on-error"] is True
-    assert read["with"]["permission-variables"] == "read"
     assert write["id"] == "model_home_write"
     assert "continue-on-error" not in write
-    assert write["with"]["permission-variables"] == "write"
+    # DRE-7230: v3.2.0 declares no variables input, and the one it was handed
+    # was forwarded anyway and refused. Each mint asks for no permission
+    # subset, so its token carries the installation's own permissions —
+    # variables: write among them — and passes only inputs the pin declares.
+    pins = json.loads(APP_TOKEN_INPUTS.read_text())["pins"]
+    for mint in (read, write):
+        assert mint["with"] == {
+            "app-id": "${{ secrets.BUREAU_APP_ID }}",
+            "private-key": "${{ secrets.BUREAU_APP_PRIVATE_KEY }}",
+            "owner": "dreadnought-foundry",
+            "repositories": "bureau-pipeline",
+        }
+        declared = pins[mint["uses"].split("@")[1].split()[0]]["inputs"]
+        assert set(mint["with"]) <= set(declared)
 
 
 def test_the_carry_step_passes_before_after_and_the_tokens():
