@@ -8,7 +8,7 @@ on nearly every card, with
 
 (DRE-5202's run 37491599406; DRE-5948, DRE-5949, DRE-5958 and DRE-5959 the same). Each card was parked in Green
 Light as plumbing, so one-off cards never reached the critic. The same card's real prompt classified correctly from
-the operator's machine on Claude Code 2.1.290 and 2.1.291, on `claude-fable-5-1`, and Fable planned fine in the
+the operator's machine on Claude Code 2.1.290 and 2.1.291, on Fable 5.1, and Fable planned fine in the
 same CI. The run kept nothing of what the CLI streamed, so the cause could not be read from it.
 
 So:
@@ -23,9 +23,10 @@ So:
      the next failure names its cause in the run log.
 
 These are rules of the classifier, so they run against the frozen model files (DRE-6885): `planning_classify` and the
-selector it falls through are imported from `model_fixture.fixture_tree`, and the rungs a test expects are the first
-and second of the planner's ladder in `model_fixture.fixture_config()`, never a literal. A console save that moves the
-planner or changes its ladder leaves them alone.
+selector it falls through are imported from a `model_fixture.fixture_tree` built with `regenerate=False`, the selector
+on the frozen home document (`model_fixture.fixture_home()`, through `fixture_module(..., doc=...)`, DRE-6990), and the
+rungs a test expects are the first and second of the planner's group in that document, never a literal. A console save
+that moves the planner or changes its group leaves them alone.
 """
 
 from __future__ import annotations
@@ -54,17 +55,19 @@ def _classifier_tree(dest: Path) -> Path:
     shutil.copytree(ROOT / "config", dest / "config", ignore=shutil.ignore_patterns(*_MODEL_FILES))
     for name in ("briefs", "standards"):
         shutil.copytree(ROOT / name, dest / name)
-    return model_fixture.fixture_tree(dest)
+    return model_fixture.fixture_tree(dest, regenerate=False)
 
 
-# The classifier, and the selector it imported, are the tree's.
+HOME = model_fixture.fixture_home()
+
+# The classifier, and the selector it imported, are the tree's; the selector is on the frozen document.
 _TREE = tempfile.TemporaryDirectory()
-planning_classify = model_fixture.fixture_module(_classifier_tree(Path(_TREE.name) / "tree"), "planning_classify")
+planning_classify = model_fixture.fixture_module(_classifier_tree(Path(_TREE.name) / "tree"), "planning_classify",
+                                                 doc=HOME)
 mf = planning_classify.model_fallback
 
-# The planner's walk on the frozen files, named for its place: the rung a call is asked on, and the one below it.
-_PLANNER = model_fixture.ladder(model_fixture.fixture_config(),
-                                model_fixture.fixture_config()["agents"]["planner"])
+# The planner's walk on the frozen document, named for its place: the rung a call is asked on, and the one below it.
+_PLANNER = model_fixture.ladder(HOME, HOME["agents"]["planner"])
 TOP, NEXT = _PLANNER[0], _PLANNER[1]
 
 # The envelope shape the failing CI runs reported: the turn cap, an error, and no result text.
@@ -113,6 +116,11 @@ def _no_answer_on(refused: str, *, record=None):
 # --------------------------------------------------------------------------- #
 # A. no answer within the turn limit falls once to the next rung               #
 # --------------------------------------------------------------------------- #
+
+def test_the_classifier_s_selector_walks_the_document():
+    assert mf.HOME_STATUS == "read", "the selector is not on the document"
+    assert mf.ladder_for("planner") == _PLANNER
+
 
 def test_a_turn_limit_end_with_no_answer_is_answered_by_the_next_rung():
     call = _no_answer_on(TOP)

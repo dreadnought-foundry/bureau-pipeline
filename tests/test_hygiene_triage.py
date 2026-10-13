@@ -1,14 +1,15 @@
 """RED-first: the hygiene agent's Triage lane (DRE-5410).
 
 `scripts/hygiene_triage.py` reads the broken-card lane once and fixes the
-mechanical defects the standard already names, returning the card to
-`Backlog` — never `Todo` — with the cause named:
+mechanical defects the standard already names, returning the card to the
+queue, `lane_contract.QUEUE_LANE` (DRE-6748) — never `Todo` — with the cause
+named:
 
   1. a prose blocker with no relation — the relation is added, which makes the
-     sentence true, and a card carrying a routing verdict returns to Backlog;
-  2. a dependency loop a Done card already broke — the card returns to
-     Backlog with the loop named;
-  3. a retired-repo card — marked `operator-step` and parked in Backlog;
+     sentence true, and a card carrying a routing verdict returns to the queue;
+  2. a dependency loop a Done card already broke — the card returns to the
+     queue with the loop named;
+  3. a retired-repo card — marked `operator-step` and parked in the queue;
   4. a proof with an open pull request — moved to In Review;
   5. a card whose parent epic is Canceled or Duplicate — canceled;
   6. a card held `no-route` (DRE-6190) — its newest `🔒 hold:` stamp says so,
@@ -48,6 +49,7 @@ sys.path.insert(0, str(ROOT / "scripts"))
 os.environ.setdefault("REPO", "dreadnought-foundry/bureau-pipeline")
 
 import hygiene  # noqa: E402
+import lane_contract  # noqa: E402
 import linear_ops  # noqa: E402
 import reconcile  # noqa: E402
 import routing_verdict  # noqa: E402
@@ -220,7 +222,7 @@ class TestAProseBlocker:
         assert action.cause == "relation added, blocked by DRE-4301"
         first = note.body.splitlines()[0]
         assert first.startswith("🧹 hygiene: hyg-triage-returned — relation added, blocked by DRE-4301")
-        assert state.lane == "Backlog" and state.park is False
+        assert state.lane == lane_contract.QUEUE_LANE and state.park is False
         assert lefts(items, "DRE-4401") == []
 
     def test_the_writes_carry_the_board_card_never_a_bare_id(self):
@@ -299,7 +301,7 @@ class TestADependencyLoop:
         assert action.act == "hygiene-triage-return"
         assert action.cause == "loop DRE-4411 → DRE-4310 → DRE-4411 broken, DRE-4310 is Done"
         assert kinds(action) == ["linear_comment", "linear_state"]
-        assert action.writes[1].lane == "Backlog" and action.writes[1].park is False
+        assert action.writes[1].lane == lane_contract.QUEUE_LANE and action.writes[1].park is False
         assert comment_of(action).splitlines()[0].startswith(
             "🧹 hygiene: hyg-triage-returned — loop DRE-4411 → DRE-4310 → DRE-4411 broken")
         assert lefts(items, "DRE-4411") == []
@@ -360,7 +362,7 @@ class TestARetiredRepo:
         assert all(getattr(w, "label", None) != routing_verdict.HAND_BUILT_LABEL
                    for w in action.writes)
         assert note.body.splitlines()[0].startswith(f"🧹 hygiene: hyg-triage-returned — {cause}")
-        assert (state.lane, state.park) == ("Backlog", True)
+        assert (state.lane, state.park) == (lane_contract.QUEUE_LANE, True)
         for write in action.writes:
             hygiene.guard(write, ctx)
 
@@ -479,7 +481,7 @@ class TestAHeldNoRouteCard:
         assert action.act == "hygiene-triage-return"
         assert kinds(action) == ["linear_label", "linear_comment", "linear_state"]
         assert action.writes[0].label == "operator-step"
-        assert (action.writes[2].lane, action.writes[2].park) == ("Backlog", True)
+        assert (action.writes[2].lane, action.writes[2].park) == (lane_contract.QUEUE_LANE, True)
 
     def test_a_newer_stamp_of_another_reason_decides_and_the_card_is_retired(self):
         doc = fixture()
@@ -638,6 +640,37 @@ class TestTheWholeFixture:
 
 
 # --------------------------------------------------------------------------- #
+# the queue it returns a card to (DRE-6748)                                    #
+# --------------------------------------------------------------------------- #
+
+#: The fixture's cards a pass returns to the queue: the prose blockers, the
+#: broken loop and the two retired repos.
+RETURNED = {"DRE-4401", "DRE-4404", "DRE-4411", "DRE-4421", "DRE-4422"}
+
+
+class TestTheQueue:
+    def test_every_return_lands_in_the_queue_lane(self):
+        items, _ctx, _gh, _linear = plan()
+        lanes = {w.card: w.lane for a in actions(items) if a.act == "hygiene-triage-return"
+                 for w in a.writes if w.kind == "linear_state"}
+        assert lanes == {ident: lane_contract.QUEUE_LANE for ident in RETURNED}
+
+    def test_with_the_planning_exit_flipped_every_return_lands_in_queued(self, monkeypatch):
+        # `QUEUE_LANE` reads Backlog until DRE-6742 flips the planning exit;
+        # flipped, the lane writes Queued and the core's guard admits it.
+        monkeypatch.setattr(lane_contract, "QUEUE_LANE", "Queued")
+        sent, ledger = run(fixture(), monkeypatch)
+        lanes = {w.card: w.lane for w in sent
+                 if w.kind == "linear_state" and w.card in RETURNED}
+        assert lanes == {ident: "Queued" for ident in RETURNED}
+        outcomes = {a["outcome"] for a in ledger["actions"] if a["target"] in RETURNED}
+        assert outcomes == {"executed"}
+
+    def test_no_string_in_the_lane_names_the_retired_queue(self):
+        assert lane_contract._scan_python(str(MODULE_PATH), ["Backlog"]) == set()
+
+
+# --------------------------------------------------------------------------- #
 # idempotency, through the core's key                                          #
 # --------------------------------------------------------------------------- #
 
@@ -689,7 +722,7 @@ class TestIdempotency:
                      if w.kind == "linear_relation" and w.card == "DRE-4401"]
         assert relations == ["DRE-4302"]
         assert [w.lane for w in sent2 if w.kind == "linear_state" and w.card == "DRE-4401"] == [
-            "Backlog"]
+            lane_contract.QUEUE_LANE]
 
     def test_a_card_back_under_a_parent_in_a_new_state_is_a_new_cause(self, monkeypatch):
         doc = fixture()

@@ -156,7 +156,7 @@
     {
       "file": "scripts/dead_run.py",
       "scope": "_cmd_park",
-      "anchor": "PARK_STATE",
+      "anchor": "QUEUE_LANE",
       "note": "`dead_run.py park`, reached from the build run's Report step (scripts/report_agent_result.sh): the dead-run-requeue budget's cap, or the turn-exhaustion-requeue budget's.",
       "reasons": [
         {

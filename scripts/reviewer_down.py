@@ -108,6 +108,7 @@ from datetime import datetime, timedelta, timezone
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+import lane_contract  # noqa: E402 — the queue's names (DRE-6749)
 import medic_classify  # noqa: E402
 import merge_gate  # noqa: E402
 import pipeline_act  # noqa: E402
@@ -698,8 +699,9 @@ def card_body(first_run, lines) -> str:
         "It reads this card on every sweep for as long as the card is open in "
         "Triage or in another lane the sweep reads, however long ago the "
         "crashes were. It cannot see a verdict on a pull request that has "
-        "since merged or closed, and it does not read Backlog or Green Light; "
-        "in those cases a person closes this card.",
+        "since merged or closed, and it does not read "
+        f"{', '.join(lane_contract.QUEUE_LANES)} or Green Light; in those cases a "
+        "person closes this card.",
     ])
     return "\n".join(body)
 

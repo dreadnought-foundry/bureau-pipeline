@@ -33,7 +33,12 @@ workflow (DRE-5220). The destination of each is resolved statically — a
 literal, a module constant (imported by name or computed by a pure reader, as
 `lane_contract.QUEUE_LANE` is — DRE-6744), a parameter default, a pure vocabulary
 reader called with literal arguments, or, when the call site computes it, the module's own
-published `destinations()`. A destination no rule can read is reported as
+published `destinations()`. A step shell's lane variable is read when the
+shell assigned it a module's constant through the seam the step shells read
+every pipeline constant by, `$(python3 -c '…; import M; print(M.NAME)')`, as
+the module's own value (DRE-6745). `QUEUE_LANE` is the planning exit's destination, so
+the planner's writers reach `Queued` only once DRE-6742 flips that exit, and
+that card is the one that asserts it (DRE-6749). A destination no rule can read is reported as
 UNREAD rather than assumed innocent: unknown is never a pass.
 
 A writer is named the way the lane contract names it — a module that a workflow
@@ -80,8 +85,8 @@ otherwise is worse than none:
   * **Linear's team-level default.** `defaultIssueState` is a setting on the
     Linear team, mirrored in agent-bureau's `config/linear-workspace.json`
     (nested, as `team.defaultIssueState`, since DRE-2751). It is a writer no
-    code path touches and the highest-leverage one — it carried `Backlog` when
-    this was written. `observed_default()` reads it from a workspace
+    code path touches and the highest-leverage one — it carried the lane
+    `Queued` replaces when this was written. `observed_default()` reads it from a workspace
     declaration in reach, at `team.defaultIssueState` or a top-level
     `defaultIssueState`, or from Linear itself; with neither, it returns None
     and `default_problems(None)` REPORTS it as UNKNOWN, naming both paths,
@@ -762,6 +767,32 @@ def cli_lane_arguments(root: str = ROOT, lane_params: dict | None = None) -> dic
 _CONTINUATION = re.compile(r"\\\s*\n\s*")
 _INVOCATION = re.compile(r"linear_ops\.py((?:\\\s*\n|[^\n])*)")
 
+#: A shell variable assigned one of the pipeline's own constants through the
+#: seam every step shell reads one by (DRE-6745):
+#: `QUEUE_LANE=$(python3 -c '…; import lane_contract; print(lane_contract.QUEUE_LANE)')`.
+#: Only that exact shape is read — the module's top-level name, printed — and
+#: anything else assigned to a variable stays unread.
+_SEAM_ASSIGNMENT = re.compile(
+    r"^[ \t]*(?P<var>[A-Za-z_]\w*)=\$\(python3 -c '(?P<code>[^']*)'\)[ \t]*$", re.M)
+_SEAM_PRINT = re.compile(
+    r"\bimport (?P<module>\w+); print\((?P=module)\.(?P<name>[A-Za-z_]\w*)\)$")
+_SHELL_VARIABLE = re.compile(r"^\$(?:\{(?P<braced>\w+)\}|(?P<bare>\w+))$")
+
+
+def _seam_values(text: str, root: str) -> dict:
+    """variable → every string the seam can print into it, read as the module's
+    own top-level value, exactly as a Python writer naming it is read."""
+    out: dict = {}
+    repo = None
+    for match in _SEAM_ASSIGNMENT.finditer(text):
+        printed = _SEAM_PRINT.search(match.group("code").strip())
+        if not printed:
+            continue
+        repo = repo or _Repo(root)
+        out[match.group("var")] = out.get(match.group("var"), set()) | _module_value(
+            repo, printed.group("module"), printed.group("name"), 0)
+    return out
+
 
 def _workflow_writes(root: str, live: set, lane_args: dict) -> list:
     found: list[LaneWrite] = []
@@ -771,6 +802,7 @@ def _workflow_writes(root: str, live: set, lane_args: dict) -> list:
         except OSError:
             continue
         writer = os.path.basename(path)
+        seam = None
         for match in _INVOCATION.finditer(text):
             args = _shell_args(_CONTINUATION.sub(" ", match.group(1)))
             if not args:
@@ -781,6 +813,14 @@ def _workflow_writes(root: str, live: set, lane_args: dict) -> list:
             line = text.count("\n", 0, match.start()) + 1
             where = f"{os.path.relpath(path, root)}:{line}"
             value = args[index + 1] if len(args) > index + 1 else None
+            variable = _SHELL_VARIABLE.match(value or "")
+            if variable:
+                seam = _seam_values(text, root) if seam is None else seam
+                lanes = seam.get(variable.group("braced") or variable.group("bare"), set())
+                if lanes and lanes <= live:
+                    found += [LaneWrite(writer, where, lane, "workflow", value)
+                              for lane in sorted(lanes)]
+                    continue
             found.append(
                 LaneWrite(writer, where, value if value in live else None, "workflow",
                           value if value is not None else "<no argument>")

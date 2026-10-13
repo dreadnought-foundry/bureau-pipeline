@@ -97,8 +97,11 @@ CEILINGS = {
 # the step output each one reads it from. `posta` is sized from the plan it has
 # to read (DRE-3241); `oocritic` is sized from the card it has to read
 # (DRE-4381 — a fixed 20 killed two reads of DRE-4378 and told the CEO nothing
-# had checked the card). `oorevise` reads the same output (DRE-5376): the
-# planner's revision of a sent-back one-off re-reads the files the critic read.
+# had checked the card). `oorevise` read the same output from DRE-5376 until
+# DRE-7177, when DRE-7066's revision died at 37 turns under the critic's 36: it
+# reads its own step's output now, sized from the critic's ceiling
+# (`plan_critic.one_off_revision_turns`), because a rewrite of a card is more
+# work than reading it.
 #
 # The four re-plan steps left the table with DRE-5288: a ten-card revision of
 # epic DRE-5268 FINISHED at 86 turns and was failed at the literal 60 every one
@@ -108,7 +111,7 @@ CEILINGS = {
 SIZED = {
     "posta": "steps.postturns.outputs.max_turns",
     "oocritic": "steps.ooturns.outputs.max_turns",
-    "oorevise": "steps.ooturns.outputs.max_turns",
+    "oorevise": "steps.oorevturns.outputs.max_turns",
     "replan": "steps.replanturns.outputs.max_turns",
     "replan_retry": "steps.replanturns.outputs.max_turns",
     "postreplan": "steps.postreplanturns.outputs.max_turns",

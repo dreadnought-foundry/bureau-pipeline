@@ -169,9 +169,6 @@ _RECEIPT_LINE = re.compile(
 )
 _SUMMARY_LINE = re.compile(rf"^{re.escape(SUMMARY_MARK)} (?P<digest>[0-9a-f]{{12}})\b")
 
-#: The lanes a state write may move a card to — exactly the lanes whose
-#: `writers` clause in `config/lane-contract.json` names `hygiene.py`.
-DESTINATIONS = ("Planning", "Backlog", "In Review", "Done", "Canceled")
 #: The lanes the guard names when it refuses one: never written by this agent.
 REFUSED_LANES = ("In Progress", "Todo", "Green Light", "Triage", "Intake")
 #: The lanes that close a card, and so refuse a card with children (an epic).
@@ -201,10 +198,16 @@ class Forbidden(RuntimeError):
 
 
 def destinations() -> tuple:
-    """The lanes this module can write — published for
-    `ready_lane_writers.py`, which cannot read a destination the executor
-    takes off a `Write` at run time."""
-    return DESTINATIONS
+    """The lanes a state write may move a card to — exactly the lanes whose
+    `writers` clause in `config/lane-contract.json` names `hygiene.py`, with
+    the queue under the one name it is written as. The guard admits these, and
+    they are published for `ready_lane_writers.py`, which cannot read a
+    destination the executor takes off a `Write` at run time.
+
+    The queue is `lane_contract.QUEUE_LANE` (DRE-6748), read at the call rather
+    than once at import, so the agent writes Queued the day DRE-6742 flips the
+    planning exit."""
+    return ("Planning", lane_contract.QUEUE_LANE, "In Review", "Done", "Canceled")
 
 
 def pt(now: datetime) -> str:
@@ -597,11 +600,11 @@ def _guard_linear(write: Write, ctx: Context) -> None:
     if not in_scope(ctx, scoped):
         raise Forbidden(f"{write.card} is not in the {ctx.owner} leg's scope")
     if write.kind == "linear_state":
-        if write.lane not in DESTINATIONS:
+        if write.lane not in destinations():
             raise Forbidden(
                 f"the hygiene agent never moves a card to {write.lane!r} — "
                 f"{', '.join(REFUSED_LANES)} are refused, and it writes only "
-                f"{', '.join(DESTINATIONS)}"
+                f"{', '.join(destinations())}"
             )
         if write.lane in CLOSING_LANES and write.children != ():
             raise Forbidden(

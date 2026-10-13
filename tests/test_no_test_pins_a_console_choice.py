@@ -169,9 +169,6 @@ ALLOWED: dict[str, str] = {
         _FROZEN_CHANGES,
     "tests/test_model_config_change.py::test_the_dre_6789_ids_are_where_the_frozen_file_puts_them":
         _FROZEN_CHANGES,
-    "tests/test_model_effort.py::PriceTest.test_opus_5_5_is_declared_at_4_and_20": _PRICE,
-    "tests/test_model_effort.py::PriceTest.test_sonnet_5_5_is_declared_at_the_price_of_sonnet_5":
-        _PRICE,
     "tests/test_model_projects_schema.py::TestNormalizedShape.test_a_kind_with_no_label_or_purpose_gets_the_defaults":
         _ABSENT_KEY,
     "tests/test_model_rules_and_markers.py::test_a_planner_the_block_admits_may_hold_the_judgement_kind":
@@ -219,6 +216,8 @@ ALLOWED: dict[str, str] = {
         _OWN_INPUT,
     "tests/test_qa_review_model_note.py::PrCopyIsUntouchedTest.test_the_model_line_never_reaches_the_pr_comment":
         _ABSENT,
+    "tests/test_qa_review_shadow.py::ShadowVerdictFileTest.test_a_real_approve_is_written_with_the_eight_keys_and_one_line":
+        _OWN_INPUT,
     "tests/test_session_agents.py::test_a_session_agent_can_be_moved_again_from_group_to_group":
         _OWN_MOVE,
     "tests/test_session_agents.py::test_the_change_set_of_run_38114763170_validates_and_applies":

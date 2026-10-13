@@ -3,7 +3,7 @@
 
 Production breaks at 02:00 and every route the intake design offers ends in a
 queue that waits on a person: the sanctioned path is Intake → Planning →
-one-off → Backlog → the promoter, and the escalation route is the CEO's own
+one-off → Queued → the promoter, and the escalation route is the CEO's own
 queue — at 2am, the person the wave exists to stop interrupting.
 
 So there is exactly ONE marker, `break-glass`, applied BY HAND by the

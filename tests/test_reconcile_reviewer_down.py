@@ -1224,7 +1224,7 @@ def test_the_board_read_lanes_are_swept_lanes_plus_the_alarm_lane():
     assert reconcile.BOARD_READ_LANES == (
         reconcile.SWEPT_LANES + (reconcile.FLEET_OUTAGE_LANE,))
     assert reconcile.FLEET_OUTAGE_LANE == "Triage"
-    for unread in ("Backlog", "Green Light"):
+    for unread in (*reconcile.QUEUE_LANES, "Green Light"):
         assert unread not in reconcile.BOARD_READ_LANES, (
             "the card body says a person closes a card moved there"
         )

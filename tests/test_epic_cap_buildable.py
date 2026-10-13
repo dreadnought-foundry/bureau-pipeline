@@ -34,6 +34,7 @@ os.environ.setdefault("REPO_SLUG", "bureau-pipeline")
 os.environ.setdefault("GH_TOKEN", "x")
 
 import epic_cap  # noqa: E402
+import lane_contract  # noqa: E402
 import linear_ops  # noqa: E402
 
 FIXTURE = ROOT / "tests" / "fixtures" / "dre-5918-in-progress-epics-2026-10-05.json"
@@ -162,6 +163,24 @@ def test_one_open_buildable_card_makes_it_count():
                                    "Triage", "Green Light", "Hand-work", "Planning"])
 def test_every_open_state_holds_the_slot(state):
     assert _counts(_epic("DRE-100", _child("DRE-3", state=state)))
+
+
+@pytest.mark.parametrize("queue", lane_contract.QUEUE_LANES)
+def test_a_child_under_either_queue_name_is_buildable_the_same_way(queue):
+    """The queue carries two names until the alias is deleted (DRE-6741): a
+    child waiting under either is a card left to build (DRE-6749)."""
+    child = _child("DRE-3", state=queue, labels=("agent:engineer",))
+    assert epic_cap.buildable(child)
+    assert _counts(_epic("DRE-100", child))
+    marked = _child("DRE-4", state=queue, labels=("no-code",))
+    assert not epic_cap.buildable(marked)
+    assert not _counts(_epic("DRE-100", marked))
+
+
+def test_no_string_constant_in_the_epic_cap_names_the_old_lane():
+    """A lane name in a string does not follow the switch (DRE-6749)."""
+    path = str(ROOT / "scripts" / "epic_cap.py")
+    assert lane_contract._scan_python(path, ["Backlog"]) == set()
 
 
 @pytest.mark.parametrize("state", ["Done", "Canceled", "Duplicate"])

@@ -280,7 +280,7 @@ from the lane the hold parked the card in adds a state write after the
 receipt: In Review, or Planning. The label is already off when that write
 fires a run, so the plan-gate does not refuse a plan run for it. Every other
 lift moves nothing. In Review and Planning are both lanes the hygiene agent
-may write (`hygiene.DESTINATIONS`); the lane proposes no other lane write and
+may write (`hygiene.destinations()`); the lane proposes no other lane write and
 no `gh` write.
 
 **An archived card is unarchived for the write and re-archived after it.** A

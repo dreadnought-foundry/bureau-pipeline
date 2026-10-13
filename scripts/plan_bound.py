@@ -5,7 +5,7 @@ Every bound site in `plan.yml` — the six epic park steps stamping
 `plan-critic-bound`, and `One-off critic — park in Triage` — did the same
 three things: hold, move to Triage, post the 🛑 note. The card then had no
 owner and no next step. DRE-4059 reached the second critic's bound at
-2026-10-08 20:22 PT and its seven planned children sat in Backlog until an
+2026-10-08 20:22 PT and its seven planned children sat in Queued until an
 operator moved it back by hand at 11:23 PT the next day; DRE-6234 reached the
 one-off critic's third send-back at 19:08 PT and waited for an operator to
 rewrite it by hand. This module decides what a bound does BEFORE anything

@@ -1027,7 +1027,7 @@ class CrossEpicSight(unittest.TestCase):
         written out, both halves of it."""
         block = pc.sight_block("DRE-2721", self.EPICS).lower()
         self.assertIn("cannot see", block)
-        for unseen in ("backlog", "team", "branch"):
+        for unseen in ("queued", "team", "branch"):
             self.assertIn(unseen, block)
 
     def test_no_other_epic_in_flight_is_stated_not_implied(self):
@@ -2209,6 +2209,8 @@ class ThePostMarkerReleasesTheChildren(unittest.TestCase):
             self._cycle(pc.marker(pc.STAGE_POST, 1, pc.SEND_BACK, "a gap")))
         self.assertEqual(pc.refusal_tag(missing), pc.POST_UNREAD_TAG)
         self.assertEqual(pc.refusal_tag(held), pc.POST_SENT_BACK_TAG)
+        # DRE-6747: the children wait in the queue, by its name.
+        self.assertIn("The children stay in Queued until the gap is settled", held)
         self.assertNotEqual(pc.POST_UNREAD_TAG, pc.POST_SENT_BACK_TAG)
         self.assertNotIn(pc.POST_UNREAD_TAG, pc.POST_SENT_BACK_TAG)
         self.assertNotIn(pc.POST_SENT_BACK_TAG, pc.POST_UNREAD_TAG)
@@ -2985,6 +2987,8 @@ class ADeadReviewLeavesATombstone(unittest.TestCase):
         self.assertNotIn(self.ROUND_ONE, refusal)
         self.assertNotIn(pc.POST_SENT_BACK_TAG, refusal)
         self.assertEqual(pc.refusal_tag(refusal), pc.POST_DIED_TAG)
+        self.assertIn("the children stay in Queued until the review runs again",
+                      " ".join(refusal.split()))
 
     def test_the_died_refusal_names_the_card_the_epic_and_the_run(self):
         refusal = pc.promotion_refusal(
@@ -3808,7 +3812,7 @@ class TheSecondCriticReadsBeforeGreenLight(unittest.TestCase):
         self.assertIn("a plan under review that the CEO has not approved", block)
         self.assertIn("name it all the same", block)
         # The cannot-see sentence is unchanged.
-        self.assertIn("epics in Backlog, Intake or Done", block)
+        self.assertIn("epics in Queued, Intake or Done", block)
 
     # --- the words -----------------------------------------------------------
 
@@ -3831,6 +3835,16 @@ class TheSecondCriticReadsBeforeGreenLight(unittest.TestCase):
         self.assertEqual(pc.question(pc.STAGE_PRE), "Is this fit to take the CEO's time?")
         self.assertEqual(pc.question(pc.STAGE_POST),
                          "Given this is now the specification, what is missing?")
+
+    def test_both_charters_say_a_child_still_to_build_waits_in_queued(self):
+        """DRE-6747: a child the critic must still judge sits in `Queued`, the
+        queue's name, in both charters' reading of a lane."""
+        for stage in ("pre", "post"):
+            out = self._run("charter", stage)
+            self.assertEqual(out.returncode, 0, out.stderr)
+            text = " ".join(out.stdout.split())
+            self.assertIn("Anything else — Queued, Todo, Triage — is still to build", text)
+            self.assertNotIn("Backlog", text)
 
     def test_the_post_charter_is_the_last_reader_before_green_light(self):
         out = self._run("charter", "post")
@@ -3857,6 +3871,8 @@ class TheSecondCriticReadsBeforeGreenLight(unittest.TestCase):
         note = pc.death_note(self.EPIC, row)
         self.assertIn(f"**The second critic's review of {self.EPIC} did not finish**",
                       note)
+        self.assertIn("the children stay in Queued until the review runs again",
+                      " ".join(note.split()))
 
     def test_a_second_death_parks_in_triage(self):
         self.assertIn(pc.BOUND_PARK_LANE, pc.DEAD_REVIEW_NEXT)

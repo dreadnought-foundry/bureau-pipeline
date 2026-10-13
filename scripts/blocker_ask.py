@@ -33,7 +33,7 @@ one declared site.
   2. Posts the ask. The comment-cap condition (the thread is full, nothing
      posted) is `NotNow`, and the card is not moved: a card is never carried to
      Green Light with no question on it (DRE-6490).
-  3. Moves the card Backlog → Green Light, `held=True`, and reads the lane back
+  3. Moves the card Queued → Green Light, `held=True`, and reads the lane back
      fresh; anywhere but Green Light is `NotNow`, the marker left open and the
      ask standing for the next pass to find.
 
@@ -59,6 +59,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import blocker_class  # noqa: E402
 import console_escalation  # noqa: E402
 import linear_ops  # noqa: E402
+from lane_contract import QUEUE_LANE, QUEUE_LANES  # noqa: E402 — the queue, written and read (DRE-6747)
 
 #: The ask's first line — a machine prefix, so the sweep reads a standing ask
 #: as its own comment.
@@ -72,7 +73,7 @@ WHO = "the build agent"
 
 #: The closing line, before the agent's run.
 CLOSING = ("Answer here, then move this card to **Todo** to proceed (a fresh run "
-           "picks up your guidance), or to **Backlog** to drop it. Asked by the "
+           f"picks up your guidance), or to **{QUEUE_LANE}** to drop it. Asked by the "
            "sweep; the agent's run: ")
 NOT_RECORDED = "not recorded"
 
@@ -113,7 +114,7 @@ def resolve(card: dict, reason: str, *, repo: str) -> tuple[str, str] | None:
     if not asked:
         if linear_ops.cmd_comment(card["identifier"], ask) == linear_ops.COMMENT_CAP_CONDITION:
             raise blocker_class.NotNow("the thread is full — the question could not be posted")
-    linear_ops.cmd_advance(card["identifier"], "Green Light", "Backlog", held=True)
+    linear_ops.cmd_advance(card["identifier"], "Green Light", ",".join(QUEUE_LANES), held=True)
     lane = (linear_ops.get_issue(card["identifier"], fresh=True).get("state") or {}).get("name")
     if lane != "Green Light":
         raise blocker_class.NotNow(f"Green Light move did not land — the card is in {lane}")

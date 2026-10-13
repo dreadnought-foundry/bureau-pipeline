@@ -699,7 +699,7 @@ class TestThePromoterRoutesOnTheVerdict:
     def test_a_fleet_card_promotes(self):
         board = _PromotionBoard([routing_verdict.verdict_comment("FLEET", "unit-testable")])
         assert board.promote() == 1
-        assert board.advanced == [("DRE-2799", "Todo", "Backlog")]
+        assert board.advanced == [("DRE-2799", "Todo", reconcile.QUEUE_FROM)]
         assert board.labelled == []
 
     @pytest.mark.parametrize("verdict", ["WORKBENCH", "OPERATOR"])
@@ -707,7 +707,7 @@ class TestThePromoterRoutesOnTheVerdict:
         board = _PromotionBoard([routing_verdict.verdict_comment(verdict, "because")])
         assert board.promote() == 1
         # To the verdict's own lane, Hand-work, since DRE-5322.
-        assert board.advanced == [("DRE-2799", routing_verdict.destination(verdict), "Backlog")]
+        assert board.advanced == [("DRE-2799", routing_verdict.destination(verdict), reconcile.QUEUE_FROM)]
         assert board.advanced[0][1] == "Hand-work"
         assert [l for _, l in board.labelled] == list(routing_verdict.marks(verdict))
         receipt = "\n".join(b for _, b in board.posted)
@@ -892,7 +892,7 @@ class TestAStaleVerdictIsNotAnApproval:
     def test_a_planning_exit_promotes_as_today(self):
         board = _StaleBoard("FLEET", [_move(EXIT_AT, "Planning", "Backlog")], parent=None)
         assert board.promote() == 1
-        assert board.advanced == [("DRE-2799", "Todo", "Backlog")]
+        assert board.advanced == [("DRE-2799", "Todo", reconcile.QUEUE_FROM)]
         assert board.reads == ["DRE-2799"]
 
     def test_a_build_run_s_park_promotes_once_its_blockers_clear(self):
@@ -907,7 +907,7 @@ class TestAStaleVerdictIsNotAnApproval:
         assert board.advanced == []
         board.card["inverseRelations"]["nodes"][0]["issue"]["state"]["name"] = "Done"
         assert board.promote() == 1
-        assert board.advanced == [("DRE-2799", "Todo", "Backlog")]
+        assert board.advanced == [("DRE-2799", "Todo", reconcile.QUEUE_FROM)]
         assert not any(routing_verdict.STALE_VERDICT_NEEDLE in b for _, b in board.posted)
 
     def test_the_history_is_read_only_for_a_card_that_passed_every_other_gate(self):

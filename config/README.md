@@ -377,8 +377,17 @@ fleet, written by the console through the bureau App. Every selecting run reads
 it when it first asks which model to use (`scripts/model_home.py`, through
 `model_fallback.use_home`): the home first, **the defaults in the code**
 (`model_fallback.code_defaults()`, the generated literal) otherwise, and
-**never the choices written in this file**. A change in the console is in
-force on the next run in each organization, with no pull request.
+**never the choices written in this file**.
+
+Which of the two is in force is read off a run's `model-home:` line, never
+assumed. **`docs/model-choice-levers.md`** (DRE-7195) records the reading with
+the run lines that show it, when a change to this file reaches the fleet, and
+the one-step rollback each sibling of DRE-7184 pulls, and says which runs it
+could read. While a run reads `unreadable` or `not set`, the defaults in the
+code are in force and this file reaches it only through the literal rendered
+from it. Once a run reads `read`, a change
+written to the home is in force on the next run in each organization, with
+no pull request.
 
 Two environment names point a process at the home:
 **`BUREAU_MODEL_HOME_TOKEN`** (a bureau App installation token for this
@@ -986,11 +995,15 @@ first daily run after that PR merges.
 
 ## Changing a model
 
-Change it in the console, which writes the home: it is in force on the next
-run (DRE-6939). The old route — edit `models.yaml`, run the sync script, commit
-both — still changes the defaults in the code, which every run without a
-readable home runs on; merging it to `main` is **instantly live fleet-wide**
-— treat it as a production change. Remember that
+Where a change takes effect depends on which regime a run's `model-home:` line
+shows, and `docs/model-choice-levers.md` says which one held when it was last
+read. Once the home reads, a change written to it is in force on the next run
+(DRE-6939). The old route — edit `models.yaml`, run the sync script, commit
+both, which is also what the console's save does until it writes the home
+itself (DRE-6976) — changes the defaults in the code, which every run without
+a readable home runs on. Merging it to `main` puts it in force for `@main`
+callers at once, and for tag-pinned callers when `stable` or the next `vN`
+moves past the merge — treat it as a production change. Remember that
 availability decides how far *down* a ladder we walk, never how far up: a model
 that is not on a ladder is never selected, however available it becomes. Ladder
 membership is the spend decision, and it is made here — in this file, in a
