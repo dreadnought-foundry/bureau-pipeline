@@ -5051,10 +5051,16 @@ def report_intake_blockers() -> list[tuple[str, str]]:
 # with DRE-6049, the daily split ledger's with DRE-6056, once the planner
 # derived the ledger from the console's record at plan time. Removing them
 # narrows the list that answer set and contradicts nothing in it.
+#
+# `bot/onboard` joined on the same terms (DRE-7209): the onboarding process's
+# routing pull requests, here and in agent-bureau, which the merge gate merges
+# card-less. Broad tuple only — no card to work, no fix agent — and a literal
+# name, as that answer allows. The onboarding routing step reads this file at
+# `stable` for the literal before it opens one.
 CARD_BRANCH_PREFIXES = ("agent/",)
 FIX_BRANCH_PREFIXES = ("agent/", "repair/")
 PIPELINE_BRANCH_PREFIXES = (
-    "agent/", "repair/", "dependabot/", "bot/standards-sync",
+    "agent/", "repair/", "dependabot/", "bot/standards-sync", "bot/onboard",
 )
 
 
