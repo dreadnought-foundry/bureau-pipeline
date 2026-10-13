@@ -5,11 +5,12 @@ Subcommands:
   state <DRE-N> <state-name> [--park]  move a card to a workflow state. Refuses
                                        to un-complete a terminal (Done/Canceled)
                                        card (DRE-1877), and re-routes a BUILDING
-                                       card (In Progress) aimed at Backlog to
-                                       Todo so it re-dispatches instead of
-                                       stranding (DRE-1885). `--park` opts a
-                                       deliberate hold (blocker / dead-run cap)
-                                       out of that reroute — Backlog is intended.
+                                       card (In Progress) aimed at the queue
+                                       lane (Queued, under either name) to Todo
+                                       so it re-dispatches instead of stranding
+                                       (DRE-1885). `--park` opts a deliberate
+                                       hold (blocker / dead-run cap) out of that
+                                       reroute — Queued is intended.
   advance <DRE-N> <to-state> <from-states-csv>
                                        move ONLY if current state is in the csv
                                        (guards against dragging Done cards back)
@@ -49,7 +50,7 @@ Subcommands:
                                        merged with the critic's APPROVE at the
                                        merged head (DRE-5919)
   subissue <DRE-N(parent)> <title> <description-file>
-                                       create a child issue (Backlog) under an epic.
+                                       create a child issue (Queued) under an epic.
                                        Inlines the file's CONTENTS (never a path),
                                        inherits repo:<slug>+role labels from the
                                        parent epic, encodes any **Blocked by:**
@@ -155,7 +156,8 @@ import blocker_prose  # noqa: E402 — ONE anchored blocker-prose grammar (DRE-2
 import bureau_read  # noqa: E402 — the read door: workflow states from our database (Stage 2 #9)
 import dead_run  # noqa: E402 — the dead-run tags/cap live in ONE module
 import epic_todo_gate  # noqa: E402 — ONE rule: an epic is never put in Todo (DRE-5316)
-import lane_scope  # noqa: E402 — the lane contract, incl. the pending rename
+import lane_contract  # noqa: E402 — the lane contract, incl. the pending rename
+from lane_contract import QUEUE_LANE, QUEUE_LANES  # noqa: E402 — the queue lane, written and read (DRE-6744)
 import mid_epic  # noqa: E402 — ONE source for "a card has no children" (DRE-2739)
 import pipeline_act  # noqa: E402 — ONE writer for an act's receipt (DRE-2825)
 
@@ -1202,7 +1204,7 @@ def gql_paged(
     Linear serves at most 100 nodes per page and says so ONLY in `pageInfo` — a
     query that never selects it gets the first page and no way to know another
     exists. That is silent by construction, and it is what made the reconcile
-    sweep's world the first 100 rows of a 226-card Backlog: 126 cards were not
+    sweep's world the first 100 rows of a 226-card queue: 126 cards were not
     promotion candidates, not by policy, not reported anywhere, and WHICH 126
     was decided by Linear's default ordering (DRE-2681).
 
@@ -1309,17 +1311,20 @@ def state_id(team_id: str, name: str) -> str:
 # day the workspace is renamed the exact match wins and this goes quiet on its
 # own — which is when the alias gets deleted, in one place, for both readers.
 #
-# That one place is `lane_scope.LANE_ALIASES`, which already records the same
-# pending rename for the guard's lane contract (DRE-2754). It maps board name →
-# contract name because it normalizes what it READS; this is the same fact in
-# the direction we WRITE, so it is inverted rather than restated — one literal,
-# one deletion when the board catches up.
+# That one place is the contract's alias list, `lane_contract.aliases()`, which
+# the guard reads too (`lane_scope.LANE_ALIASES`, DRE-2754). It maps board name →
+# contract name because a reader normalizes what it READS; this is the same fact
+# in the direction we WRITE, so it is inverted rather than restated — one entry,
+# one deletion when the board catches up. The queue's own rename is one of them
+# (DRE-4125): a write of `Queued` to a board that does not carry it yet lands in
+# the lane it replaces, and says so (DRE-6744).
 #
 # Narrow on purpose: only a lane the repo has actually renamed gets a fallback.
 # A lane that was never renamed (Triage) must keep failing loud, because there a
 # missing state is a real misconfiguration and a fallback would hide it.
 _LANE_RENAME_FALLBACKS = {
-    new.lower(): (old,) for old, new in lane_scope.LANE_ALIASES.items()
+    new.lower(): tuple(old for old, to in lane_contract.aliases().items() if to == new)
+    for new in lane_contract.aliases().values()
 }
 
 
@@ -1493,9 +1498,31 @@ def state_id_and_type(team_id: str | None, name: str, *,
 _TERMINAL_TYPES = ("completed", "canceled")
 
 # The hold label a DELIBERATE human-hold stamps on a card before parking it in
-# Backlog (DRE-1403). Its presence is the native "a human owns this now" signal
-# that exempts a Backlog park from the building-card reroute below.
+# the queue lane (DRE-1403). Its presence is the native "a human owns this now"
+# signal that exempts a queue-lane park from the building-card reroute below.
 _HOLD_LABEL = dead_run.HOLD_LABEL  # "needs-human"
+
+
+def _parks_in_the_queue(state_name: str, target_type: str) -> bool:
+    """Whether a move to `state_name` parks a card where nothing re-dispatches
+    it — the move the building-card reroute (DRE-1885) catches.
+
+    Linear's `backlog` bucket, as it always was, OR the queue lane under either
+    of its names (DRE-6744): the reroute reads the queue by membership in
+    `QUEUE_LANES`, so a building card asked for `Queued` is caught whatever
+    bucket the board files that lane in."""
+    queue = {name.lower() for name in QUEUE_LANES}
+    return target_type == "backlog" or state_name.strip().lower() in queue
+
+
+def _rerouted_receipt(identifier: str, current_name, state_name: str) -> str:
+    return (
+        f"{identifier} is {current_name!r} (building) — re-queued to 'Todo' "
+        f"instead of {state_name!r}; an actively-building card is never parked "
+        f"in {' or '.join(QUEUE_LANES)} (inert, nothing re-promotes it), only "
+        f"re-dispatched via Todo. Pass --park (or stamp 'needs-human') for a "
+        f"deliberate hold."
+    )
 
 
 def _label_names(issue: dict) -> list[str]:
@@ -1791,8 +1818,8 @@ def cmd_state(
     first read; see `_held_state_move`.
     """
     # `--park` (passed by the DELIBERATE park callers: the agent-task blocker
-    # branch + both dead-run/hung HOLD-cap paths) opts a Backlog move out of the
-    # building-card reroute below. Everything else is treated as an ordinary
+    # branch + both dead-run/hung HOLD-cap paths) opts a queue-lane move out of
+    # the building-card reroute below. Everything else is treated as an ordinary
     # transition that must NOT be allowed to strand a building card.
     deliberate_park = "--park" in flags
     expect = tuple(expect) if expect is not None else None
@@ -1845,17 +1872,19 @@ def cmd_state(
     # building card rather than the finished one.
     #
     # If a building card genuinely must be re-queued, send it to Todo (which
-    # re-dispatches via the cascade), NEVER Backlog (inert — nothing picks it up).
-    # Two exemptions keep the LEGITIMATE Backlog parks working:
+    # re-dispatches via the cascade), NEVER the queue lane (inert — nothing picks
+    # it up), under either of its names: `Queued`, or the lane it replaces
+    # (`QUEUE_LANES`, DRE-6744). Two exemptions keep the LEGITIMATE queue-lane
+    # parks working:
     #   * `--park` — a deliberate hold caller (the blocker branch, whose Todo
     #     would redispatch agents into the same wall — DRE-1286; and the HOLD-cap
     #     after REQUEUE_CAP dead runs — DRE-1403/1572), and
     #   * the card already carries the `needs-human` hold label (a human owns it).
-    # A not-started card (backlog/unstarted/triage) dropped to Backlog — an
-    # explicit operator/CEO park, or a card that never started — is untouched.
+    # A not-started card (backlog/unstarted/triage) dropped to the queue lane —
+    # an explicit operator/CEO park, or a card that never started — is untouched.
     if (
         current_type == "started"
-        and target_type == "backlog"
+        and _parks_in_the_queue(state_name, target_type)
         and not deliberate_park
         and _HOLD_LABEL not in [n.lower() for n in _label_names(issue)]
     ):
@@ -1866,12 +1895,7 @@ def cmd_state(
         if not guarded_state_write(identifier, issue, todo_id, todo_type, "Todo",
                                    expect=expect, labels_absent=labels_absent):
             return False
-        print(
-            f"{identifier} is {current_name!r} (building) — re-queued to 'Todo' "
-            f"instead of {state_name!r}; an actively-building card is never parked "
-            f"in Backlog (inert, nothing re-promotes it), only re-dispatched via "
-            f"Todo. Pass --park (or stamp 'needs-human') for a deliberate hold."
-        )
+        print(_rerouted_receipt(identifier, current_name, state_name))
         return True
     if guarded_state_write(identifier, issue, target_id, target_type, state_name,
                            expect=expect, labels_absent=labels_absent):
@@ -1910,7 +1934,7 @@ def _held_state_move(
     """
     target_id, target_type = target
     todo = None
-    if target_type == "backlog" and not deliberate_park:
+    if _parks_in_the_queue(state_name, target_type) and not deliberate_park:
         todo = state_id_and_type(None, "Todo", team_key=_team_key(identifier))
     # (1) THE pre-write re-read (DRE-2316): LIVE, never a memo, and the only
     # read of the card this move makes.
@@ -1922,17 +1946,12 @@ def _held_state_move(
         and _HOLD_LABEL not in [n.lower() for n in _label_names(fresh)]
     ):
         # DRE-1885, decided on the live card: a building card is re-queued to
-        # Todo, never parked in Backlog where nothing re-promotes it.
+        # Todo, never parked in the queue lane where nothing re-promotes it.
         if not guarded_state_write(identifier, fresh, todo[0], todo[1], "Todo",
                                    expect=expect, labels_absent=labels_absent,
                                    pre_read=fresh):
             return False
-        print(
-            f"{identifier} is {current.get('name')!r} (building) — re-queued to 'Todo' "
-            f"instead of {state_name!r}; an actively-building card is never parked "
-            f"in Backlog (inert, nothing re-promotes it), only re-dispatched via "
-            f"Todo. Pass --park (or stamp 'needs-human') for a deliberate hold."
-        )
+        print(_rerouted_receipt(identifier, current.get("name"), state_name))
         return True
     if guarded_state_write(identifier, fresh, target_id, target_type, state_name,
                            expect=expect, labels_absent=labels_absent, pre_read=fresh):
@@ -3198,7 +3217,7 @@ def _create_card(team_id: str, title: str, description: str, labels: list[str],
 
     `lane` defaults to Planning, the lane Planning owns (DRE-2858): a card this
     seam mints has not been classified, has no shape stamp and carries no
-    routing verdict, so landing it in Backlog puts unproven work in the lane the
+    routing verdict, so landing it in Queued puts unproven work in the lane the
     rest of the system reads as ready. The ONE caller that passes something else
     is `cmd_subissue` — see the note there.
 
@@ -3245,7 +3264,7 @@ def _file_operator_hold(issue: dict, labels) -> None:
 
     The planner files an operator step as `needs-human` + `no-code`
     (`briefs/planner.md`). The labels alone are a hold with no stamp, which
-    reads `manual`, and nothing lifts a `manual` hold — the card sat in Backlog
+    reads `manual`, and nothing lifts a `manual` hold — the card sat in the queue
     forever (DRE-6408). So a card carrying the pair is marked `operator-step`
     and its hold stamped `operator-step`: the sweep lifts it once every blocker
     is terminal and carries the card to Hand-work (DRE-6426, DRE-6427).
@@ -3343,26 +3362,32 @@ def cmd_subissue(parent_identifier: str, title: str, description_file: str, *fla
         blockers,
     )
 
-    # 5 — CREATE, under the epic, in Backlog. The children sit there while the
-    # epic is still pre-approval, and the guard leaves them alone until the epic
-    # passes Planning exit (DRE-2754 — see scripts/lane_scope.py).
+    # 5 — CREATE, under the epic, in the queue lane, `Queued`. The children sit
+    # there while the epic is still pre-approval, and the guard leaves them alone
+    # until the epic passes Planning exit (DRE-2754 — see scripts/lane_scope.py).
     #
-    # THE ONE ROUTE THROUGH `_create_card` THAT STAYS IN BACKLOG, and it is not
-    # an oversight (DRE-2858). A child's approval is its epic's — the CEO moved
-    # that epic, and that decision covers everything under it (DRE-1893) — so a
-    # child owes no classification of its own and never passes through Planning
-    # separately. It is also the lane the sweep looks in: `reconcile.
-    # promote_ready` reads `backlog_children()`, whose query is
-    # `state: {name: {eq: "Backlog"}}`, and a child carrying no routing verdict
-    # promotes exactly as before. Children created anywhere else are children
-    # nothing ever promotes.
+    # THE ONE ROUTE THROUGH `_create_card` THAT LANDS IN `Queued` AND NOT IN
+    # PLANNING, the deliberate exception to the Planning default (DRE-2858). A
+    # child's approval is its epic's — the CEO moved that epic, and that decision
+    # covers everything under it (DRE-1893) — so a child owes no classification
+    # of its own and never passes through Planning separately. It is also the
+    # lane the sweep looks in: `reconcile.promote_ready` reads an epic's children
+    # in the queue lane, and a child carrying no routing verdict promotes exactly
+    # as before. Children created anywhere else are children nothing ever
+    # promotes.
+    #
+    # The name is `lane_contract.QUEUE_LANE`, never a literal (DRE-6744): the
+    # planning exit's destination, which is the lane `Queued` replaces until
+    # DRE-6742 moves the exit, and the sweep reads children through
+    # `QUEUE_LANES` (DRE-6743) — so the lane written here and the lanes read
+    # there agree under either exit, by construction.
     #
     # RETURNED, not just printed: the mid-epic route needs the identifier it
     # just created so it can record the growth on the epic in the same motion
     # (DRE-2739, consumed at mid_epic.py:483). The CLI path ignores the value,
     # so behaviour there is unchanged.
     issue = _create_card(parent["team"]["id"], title, description, child_labels,
-                         blockers, parent_id=parent["id"], lane="Backlog")
+                         blockers, parent_id=parent["id"], lane=QUEUE_LANE)
     # 6 — AN OPERATOR STEP IS FILED HELD, under a reason the sweep lifts
     # (DRE-6428).
     _file_operator_hold(issue, child_labels)
@@ -3382,10 +3407,11 @@ def cmd_oneoff(title: str, description_file: str, *flags) -> dict:
 
     Same body path-guard, same validate_card gate and same **Blocked by:** →
     relation handling as a planned child (DRE-2754). It lands in Planning, not
-    Backlog (DRE-2858): a card minted here has been through nobody's Planning
+    Queued (DRE-2858): a card minted here has been through nobody's Planning
     run — it carries no shape stamp and no routing verdict, and the sweep
-    refuses a parentless card without one anyway, so Backlog was a lane it could
-    only sit in. Planning is where the classification it is missing is made.
+    refuses a parentless card without one anyway, so the queue was a lane it
+    could only sit in. Planning is where the classification it is missing is
+    made.
     """
     description = _card_body(description_file)
     labels, cli_blockers = _parse_flags(flags)
@@ -3553,7 +3579,7 @@ def cmd_create(title: str, description_file: str, *flags: str) -> None:
 
 
 #: The lane `create` lands a card in unless the caller names another one.
-#: Planning, not Backlog or Triage — see `cmd_create` for why (DRE-2858). A
+#: Planning, not Queued or Triage — see `cmd_create` for why (DRE-2858). A
 #: NAMED value because readers depend on it: the medic's duplicate search
 #: (`find_open`, by title and open-ness since Stage 2 fix #23) must see the
 #: lane this seam writes, and `tests/test_workflow_prompt_lanes.py` binds the
@@ -4447,7 +4473,7 @@ def cmd_unpark(identifier: str, note: str = "") -> None:
     exhausted history.
 
     Step 3 is a plain transition, never `--park` — `--park` exists only to opt a
-    deliberate Backlog HOLD out of the DRE-1885 building-card reroute, which is
+    deliberate Queued HOLD out of the DRE-1885 building-card reroute, which is
     the exact opposite of what this does.
 
     Idempotent enough to re-run: a card without the label just skips step 1, and
