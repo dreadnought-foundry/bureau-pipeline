@@ -600,7 +600,11 @@ def test_the_adopt_job_mints_the_write_token_for_the_home():
     assert mint["uses"].split("@")[0] == "actions/create-github-app-token"
     assert mint["with"]["owner"] == "dreadnought-foundry"
     assert mint["with"]["repositories"] == "bureau-pipeline"
-    assert mint["with"]["permission-variables"] == "write"
+    # DRE-7230: no permission subset — v3.2.0 declares no variables input, so
+    # the token carries the installation's own permissions, variables: write
+    # among them. No continue-on-error: a refused write is red.
+    assert not [k for k in mint["with"] if k.startswith("permission-")], mint["with"]
+    assert "continue-on-error" not in mint
     assert "env.DRY_RUN != 'true'" in mint["if"]
     assert steps.index(mint) < steps.index(_apply_step())
     # The write token reaches the one step that writes, and no other.
@@ -691,7 +695,7 @@ def test_each_job_that_runs_one_mints_the_read_token_before_it(job_name):
     assert mint["continue-on-error"] is True
     assert mint["with"]["owner"] == "dreadnought-foundry"
     assert mint["with"]["repositories"] == "bureau-pipeline"
-    assert mint["with"]["permission-variables"] == "read"
+    assert not [k for k in mint["with"] if k.startswith("permission-")], mint["with"]
     first = next(i for i, s in enumerate(steps) if HOME_SCRIPTS.search(s.get("run") or ""))
     assert steps.index(mint) < first
 
