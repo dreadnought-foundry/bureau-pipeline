@@ -25,6 +25,7 @@ import pytest
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "scripts"))
 
+import lane_contract  # noqa: E402
 import promotion_stall  # noqa: E402
 from promotion_stall import Refused  # noqa: E402
 
@@ -226,6 +227,25 @@ def test_idle_board_says_both_once_the_oldest_record_is_that_old():
     assert "3 cards" in entry
     assert "DRE-12" in entry  # the oldest receipt
     assert f"{(promotion_stall.IDLE_BOARD_MINUTES + 30) / 60:.1f}h" in entry
+
+
+@pytest.mark.parametrize("queue", lane_contract.QUEUE_LANES)
+def test_idle_board_names_the_lane_the_queue_is_written_to(monkeypatch, queue):
+    """The line and the entry name `QUEUE_LANE` (DRE-6749): `Backlog` until
+    DRE-6742 flips the planning exit and `Queued` after, so the alarm names
+    the lane the cards it counts were parked in on either side of the flip."""
+    monkeypatch.setattr(lane_contract, "QUEUE_LANE", queue)
+    records = [Refused("DRE-12", "routing-no-verdict",
+                       ago(promotion_stall.IDLE_BOARD_MINUTES + 30))]
+    line, entry = promotion_stall.idle_board(0, 0, CAP, records, NOW)
+    assert f" 1 card in {queue} stand refused or held" in line, line
+    assert f" 1 card in {queue} stand refused or held" in entry, entry
+
+
+def test_no_string_constant_in_the_stall_clock_names_the_old_lane():
+    """A lane name in a string does not follow the switch (DRE-6749)."""
+    path = str(ROOT / "scripts" / "promotion_stall.py")
+    assert lane_contract._scan_python(path, ["Backlog"]) == set()
 
 
 def test_idle_board_is_silenced_by_active_or_spent_on_its_own():

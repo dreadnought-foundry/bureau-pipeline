@@ -656,3 +656,11 @@ def test_report_diffs_counts_only_the_unexplained(capsys):
     out = capsys.readouterr().out
     assert "read-door-diff: door-older board DRE-1 lane" in out
     assert "read-door-diff: board compared 2 card(s): 1 explained (door-older), 1 unexplained" in out
+
+
+def test_no_string_constant_in_the_read_client_names_the_old_lane():
+    """A lane name in a string does not follow the switch (DRE-6749)."""
+    import lane_contract
+
+    path = str(Path(__file__).resolve().parent.parent / "scripts" / "bureau_read.py")
+    assert lane_contract._scan_python(path, ["Backlog"]) == set()

@@ -32,6 +32,7 @@ sys.path.insert(0, str(ROOT / "scripts"))
 os.environ.setdefault("LINEAR_API_KEY", "test-key")
 
 import epic_cap  # noqa: E402
+import lane_contract  # noqa: E402
 import linear_ops  # noqa: E402
 
 #: The two reads as the module defines them, kept at import — before
@@ -372,6 +373,14 @@ def test_all_backlog_children_mean_not_activated():
 
 def test_canceled_and_triage_children_do_not_mean_activated():
     assert not epic_cap.activated_before(_with_children("Backlog", "Canceled", "Triage"))
+
+
+@pytest.mark.parametrize("queue", lane_contract.QUEUE_LANES)
+def test_a_child_under_either_queue_name_has_not_run(queue):
+    """Only the activate route moves a child out of the queue, under either
+    of its names (DRE-6749)."""
+    assert not epic_cap.activated_before(_with_children(queue, queue))
+    assert epic_cap.activated_before(_with_children("Done", queue))
 
 
 def test_the_activated_states_are_the_contract():
