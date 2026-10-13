@@ -78,6 +78,9 @@ EXCLUDED_KINDS = {
                    "the row shows where his approved work is in the line",
     "weekly-report": "a report to read and close is not a question — and its "
                      "writer lives in agent-bureau, with no arrivals record here",
+    "deferred-release": "a notice the release train files and closes itself, "
+                        "which asks the CEO nothing — he reads it, and the train "
+                        "closes it when the surface next cuts a verified tag",
 }
 
 
