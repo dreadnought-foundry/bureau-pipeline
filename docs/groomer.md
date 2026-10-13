@@ -697,8 +697,9 @@ backticked file paths in its body, the first `MAX_PATHS` = 3 of them; a card
 naming more says how many were left out. In the groom job, which holds the
 Linear key, `groom_lookups.cards` asks Linear for newer cards naming those
 paths, which costs one Linear request per card that names a file and none for
-any other — a 30-card morning adds at most 30 requests to the fleet key's
-2,500 an hour. Then the GitHub half runs once per owner, on that owner's own
+any other. The problem search below adds at most two more per card that is
+not excluded, so a 30-card morning adds at most 90 requests to the fleet
+key's 2,500 an hour. Then the GitHub half runs once per owner, on that owner's own
 token, because an App installation token sees one installation: for each
 repo, the commits that touched each path since the card was filed, and the
 merged pull requests they belong to. In the verify leg `groom_lookups.py fold`
@@ -735,6 +736,29 @@ proposal" step and a warning on the run's summary page, it is
 `verify.not_posted_why` in the kept `proposal-verified.json`, and on a real
 morning the judgement receipt still lands on the standing card carrying the
 not-posted clause, while a dry run posts nothing at all.
+
+**The work matched to a card's problem (DRE-7236).** On 2026-10-10 two cards
+were removed although their problems had been fixed elsewhere: DRE-4049's by
+DRE-5942 in another file, and DRE-5657's by DRE-5658. The path lookups could
+not see either. So `groom_lookups.cards` also searches for each card that is
+not excluded, including one that names no file, and writes the result to the
+row's `matched_work`. The search terms come from `problem_terms`: the card's
+identifier, its paths, up to three backticked spans, and up to six two-word
+phrases from its title, at most `MAX_TERMS` = 12 in all. The read door's
+search (`bureau_read.search`) is asked first. When the door is off, has no
+token, or cannot answer every term, Linear's `searchIssues` is asked instead,
+and `source` records which one answered. From what the search finds, the
+groomer keeps the Done cards completed after the card was filed, never the
+card itself. They are ranked by how many terms each matched and then by
+newest completion, at most `MAX_MATCHED_CARDS` = 8. Each kept card carries its
+parent chain, read `MAX_ANCESTRY` = 4 levels up, and the GitHub pull requests
+on its attachments, at most `MAX_MATCHED_PRS` = 3. Each owner's leg reads
+those pull requests in its own repos after its path lookups and under the
+same budget and clock: the merge time, the title, the body (cut at 1,500
+characters) and up to `MAX_PR_FILES` = 30 files. `fold` writes them onto
+every row that carries them. A search that fails, or that cannot run (no
+Linear key, an excluded card), writes `searched: false` and the reason. It
+never changes the card's `lookups` block or its lookup state.
 
 ### Rewrite first (DRE-6666)
 
