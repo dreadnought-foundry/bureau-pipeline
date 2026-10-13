@@ -89,12 +89,24 @@ def _on(doc: dict) -> dict:
     return doc.get("on") or doc.get(True) or {}
 
 
+# DRE-7194: verify.yml's agent steps hold a key in a LIVE verification only —
+# a shadow replay's agent holds none (tests/test_verify_shadow.py). The gate
+# wraps the very expression this file pins, so unwrapped it is the key a live
+# run holds, and every check below reads it that way.
+_SHADOW_GATE = re.compile(r"^\$\{\{ !inputs\.shadow && \((.+)\) \|\| '' \}\}$")
+
+
+def _live(value):
+    m = _SHADOW_GATE.match(value) if isinstance(value, str) else None
+    return "${{ " + m.group(1) + " }}" if m else value
+
+
 def _key_steps(doc: dict) -> list[tuple[str, str, dict]]:
     """(job, step name, env) for every step that hands a process a Linear key."""
     out = []
     for job_id, job in (doc.get("jobs") or {}).items():
         for step in job.get("steps") or []:
-            env = step.get("env") or {}
+            env = {k: _live(v) for k, v in (step.get("env") or {}).items()}
             if "LINEAR_API_KEY" in env:
                 out.append((job_id, step.get("name") or step.get("uses", "?"), env))
     return out
@@ -194,7 +206,7 @@ def test_the_agents_own_step_holds_the_planners_key_and_the_fallback(name):
         for step in job.get("steps") or []:
             if not str(step.get("uses") or "").startswith("anthropics/claude-code-action"):
                 continue
-            env = step.get("env") or {}
+            env = {k: _live(v) for k, v in (step.get("env") or {}).items()}
             if name == "qa-review.yml":
                 assert "LINEAR_API_KEY" not in env, step.get("name")
                 assert "LINEAR_API_KEY_FALLBACK" not in env, step.get("name")
