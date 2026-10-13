@@ -797,13 +797,20 @@ class WorkflowModelPinTest(unittest.TestCase):
         body = (ROOT / ".github" / "workflows" / "agent-task.yml").read_text()
         self.assertIn('model_fallback.py select "$ROLE"', body)
 
+    # The selected model, or — in a shadow replay only (DRE-7193) — the model
+    # the replay's caller named. The replay is refused on a live review, and
+    # tests/test_qa_review_shadow.py evaluates the expression both ways.
+    SELECTED_MODEL = re.compile(
+        r"--model \$\{\{ (?:inputs\.shadow && inputs\.model \|\| )?"
+        r"steps\.model\.outputs\.model \}\}")
+
     def test_agent_steps_consume_the_selected_model(self):
         # A Select-model step that nothing reads is theatre: the claude_args
         # block must interpolate the step output.
         for wf in ("qa-review.yml", "verify.yml", "medic.yml"):
             with self.subTest(workflow=wf):
                 body = (ROOT / ".github" / "workflows" / wf).read_text()
-                self.assertIn("--model ${{ steps.model.outputs.model }}", body)
+                self.assertRegex(body, self.SELECTED_MODEL)
 
     def test_selected_model_is_used_by_every_claude_invocation(self):
         # qa-review and verify each run TWO agent attempts (attempt 1 + retry);
@@ -812,7 +819,7 @@ class WorkflowModelPinTest(unittest.TestCase):
             with self.subTest(workflow=wf):
                 body = (ROOT / ".github" / "workflows" / wf).read_text()
                 self.assertEqual(
-                    body.count("--model ${{ steps.model.outputs.model }}"), expected,
+                    len(self.SELECTED_MODEL.findall(body)), expected,
                     f"{wf}: both agent attempts must use the selected model",
                 )
 
