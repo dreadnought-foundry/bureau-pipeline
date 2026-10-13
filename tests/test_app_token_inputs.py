@@ -1,6 +1,6 @@
 """No step hands `actions/create-github-app-token` an input its pin lacks (DRE-7230).
 
-v3.2.0 declares no input for repository variables, yet 25 model-home mints
+v3.2.0 declares no input for repository variables, yet 26 model-home mints
 asked for `permission-variables`. The action logged that the input is not
 valid, still forwarded it as `variables: read` (or `write`), and GitHub
 refused the mint: every selecting run read the home as unreadable and ran on
