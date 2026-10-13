@@ -36,7 +36,7 @@
     "plan-critic-bound": {
       "lifts": "manual",
       "why": "Every bound park ends in Triage, and no sweep reads a fact that lifts it. It gets one automatic repair first, once per card (scripts/triage_repair.py, DRE-7178): the planner answers every finding of the park note, and the repair lifts the hold with because=triage-repair as it moves the card out. After that repair, or one that did not finish, the way back is plan_critic.REAPPROVE_HOW, a person's act.",
-      "lift_sends": "Triage to Planning (rewritten) or Green Light (a question), when the Triage repair lifts it; nothing moves otherwise"
+      "lift_sends": "Triage to Planning (rewritten, or an epic re-planned) or Green Light (a question), when the Triage repair lifts it; nothing moves otherwise"
     },
     "fix-dispute": {
       "lifts": "new-head",
