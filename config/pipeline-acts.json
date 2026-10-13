@@ -1029,7 +1029,7 @@
       "tag": "epic-waits",
       "adopted": true,
       "kind": "hold",
-      "means": "An epic still to be planned reached Planning while a formal blocker of it was open, so instead of asking the CEO whether to wait it waits in Backlog, with each open blocker and its state named, and no planner runs.",
+      "means": "An epic still to be planned reached Planning while a formal blocker of it was open, so instead of asking the CEO whether to wait it waits in Queued, with each open blocker and its state named, and no planner runs.",
       "state": "held",
       "next_actor": "reconcile.py",
       "discharges": null,
