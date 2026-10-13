@@ -259,6 +259,42 @@ def planning_exit(contract: dict | None = None) -> tuple:
     return (exit_["from"], exit_["to"])
 
 
+# The queue a card waits in between the planning exit and its verdict's
+# destination (DRE-4125). The lane it replaces is an alias entry in the
+# contract, never a name here.
+_QUEUE = "Queued"
+
+
+def queue_lanes(contract: dict | None = None) -> tuple:
+    """Every name a card in the queue may sit under: `Queued`, then each name
+    the contract aliases to it, in the file's order.
+
+    The READER's half of the cutover (DRE-6741). A reader tests membership in
+    this, never equality with `queue_lane()`, so it reads a card under either
+    name from the day the alias lands; deleting the alias narrows it to
+    `("Queued",)` with no edit here.
+    """
+    return (_QUEUE,) + tuple(
+        old for old, new in aliases(contract).items() if new == _QUEUE
+    )
+
+
+def queue_lane(contract: dict | None = None) -> str:
+    """The lane queued work is written into: the planning exit's destination.
+
+    The WRITER's half of the cutover (DRE-6741). It follows the planning exit,
+    so a writer converted to it moves no card until the exit itself moves to
+    `Queued` (DRE-6742), and then every converted writer moves at once.
+    """
+    return planning_exit(contract)[1]
+
+
+# Read once, off the shipped contract: what readers test against and what
+# writers write. A test that needs the flipped exit monkeypatches QUEUE_LANE.
+QUEUE_LANES = queue_lanes()
+QUEUE_LANE = queue_lane()
+
+
 def stale_minutes(contract: dict | None = None) -> dict:
     """lane → its stall window, for every lane that declares one."""
     return {
@@ -276,9 +312,9 @@ def lane_writers(name: str, status: str = "live", contract: dict | None = None) 
     """The writer keys THIS lane permits — not the glossary of every writer.
 
     The distinction is the whole of DRE-2824: `operator` is a defined writer,
-    and it is not a `Backlog` writer, so a routing verdict that sent a card to
-    Backlog "for the operator" named somebody who may not legally write the
-    lane. Anything binding an actor to a lane asks here; reaching into the
+    and it is not a writer of the queue lane, `Queued`, so a routing verdict
+    that sent a card to the queue "for the operator" named somebody who may not
+    legally write the lane. Anything binding an actor to a lane asks here; reaching into the
     clause dict at each call site is how a second copy of the answer starts.
     """
     return tuple(lane(name, status, contract)["clauses"]["writers"]["who"])

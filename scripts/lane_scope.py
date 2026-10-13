@@ -3,11 +3,11 @@
 
 Wave 1.5's guard (DRE-2725) undoes an unjustified lane occupancy: a card with no
 verdict, in any working lane, goes back to Intake. That rule collides head-on
-with the planner (DRE-2719), which creates an epic's children into `Backlog`
-while the epic is still pre-approval — `plan.yml:255` creates the sub-issues and
-`plan.yml:360` only afterwards moves the epic to Green Light. At that moment no
-verdict exists for either card, so an un-scoped guard bounces the planner's own
-output to Intake, and to Triage on the second strike.
+with the planner (DRE-2719), which creates an epic's children into the queue,
+`Queued`, while the epic is still pre-approval — `plan.yml:255` creates the
+sub-issues and `plan.yml:360` only afterwards moves the epic to Green Light. At
+that moment no verdict exists for either card, so an un-scoped guard bounces
+the planner's own output to Intake, and to Triage on the second strike.
 
 **The rule, decided by the operator on 2026-08-26 and recorded in
 `architecture/decisions/adr-layer-1-guard-scope.md`:**
@@ -15,7 +15,8 @@ output to Intake, and to Triage on the second strike.
     Layer 1 polices the lanes DOWNSTREAM OF PLANNING EXIT.
 
 Planning exit is the transition out of the planning segment — the point at which
-the second critic has written its verdict and the card enters `Backlog`. Every
+the second critic has written its verdict and the card enters the queue,
+`Queued`. Every
 lane before it sits before any verdict can exist, so there is nothing there to
 check.
 
@@ -55,7 +56,9 @@ PLANNING_EXIT_FROM, PLANNING_EXIT_TO = lane_contract.planning_exit()
 # the right lane. `classify()` normalizes a board name INTO the contract;
 # `linear_ops._LANE_RENAME_FALLBACKS` inverts it to write a contract name OUT to
 # a board that does not carry it yet. Both read the same entry, and an entry is
-# deleted from the contract once no board carries the old name.
+# deleted from the contract once no board carries the old name. The queue's own
+# rename (DRE-4125) is one of these entries, so a card the board still shows
+# under the old name classifies as Queued.
 LANE_ALIASES = lane_contract.aliases()
 
 # Lanes that are not on the flow at all, each with the reason Layer 1 leaves it
