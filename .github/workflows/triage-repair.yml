@@ -406,13 +406,16 @@ jobs:
             ===== END UNTRUSTED CARD TEXT =====
 
             You have no Linear access: file no new card, move no lane, post
-            no comment. Write ONLY these four files, to this one directory,
-            with the `Write` tool, and nothing anywhere else:
+            no comment. Write ONLY these files, to this one directory, with
+            the `Write` tool, and nothing anywhere else:
               ${{ runner.temp }}/triage-repair/${{ matrix.card }}/revised-card.md
               ${{ runner.temp }}/triage-repair/${{ matrix.card }}/repair-answers.md
               ${{ runner.temp }}/triage-repair/${{ matrix.card }}/question.md
               ${{ runner.temp }}/triage-repair/${{ matrix.card }}/question-choices.json
-            The workflow applies what you write, once.
+              ${{ runner.temp }}/triage-repair/${{ matrix.card }}/sibling-<n>.md
+              ${{ runner.temp }}/triage-repair/${{ matrix.card }}/reshape.txt
+            The last two only for a split, below. The workflow applies what
+            you write, once, and files any card for you.
 
             When the action is `repair`: rewrite the card ONCE, so that one
             rewrite answers every finding above. Write the WHOLE revised
@@ -422,6 +425,23 @@ jobs:
             repository before you write it. Then write repair-answers.md as
             one numbered line per finding, in the park note's order, saying
             what you changed for it, or that you left it and why.
+
+            When a finding says the card is more than one job, split it
+            instead, in exactly one of two shapes, and still answer every
+            finding in repair-answers.md:
+              (a) Siblings, when the pieces ship separately. Narrow
+                  revised-card.md to the first piece. Write each other piece
+                  as sibling-<n>.md, numbered from 1: its first line
+                  `# <title>`, then a full card body with its own
+                  `**Files:**` line and `## Acceptance criteria`, and a
+                  `**Blocked by:** ${{ matrix.card }}` line when it waits on
+                  the narrowed card.
+              (b) An epic, when the pieces are one feature whose plan the CEO
+                  should approve. Write reshape.txt containing exactly `epic`
+                  and no sibling file. revised-card.md is optional here; when
+                  you write it, it becomes the epic's description.
+            Never both shapes. A question in question.md still wins: with
+            one written, nothing you split is filed.
 
             A finding that is really the CEO's decision — a business choice
             between two defensible options, a spend, a price, a policy — is
@@ -450,6 +470,8 @@ jobs:
       # half-done planner reaches the `unfinished` receipt here. `replan` runs
       # no planner, so it has no directory to read. The planner's files are
       # data `apply` validates; the code that reads them is the trusted copy.
+      # MODEL is the model step's selection, for a split's `epic` stamp, which
+      # names the model the planner ran on (DRE-7182); `replan` selects none.
       - name: Apply the planner's files
         id: apply
         if: ${{ !cancelled() && steps.claim.outputs.claimed == 'true' }}
@@ -457,6 +479,7 @@ jobs:
           CARD: ${{ matrix.card }}
           ACTION: ${{ matrix.action }}
           OUT_DIR: ${{ runner.temp }}/triage-repair/${{ matrix.card }}
+          MODEL: ${{ steps.model.outputs.model }}
           TRUSTED_PIPELINE: ${{ runner.temp }}/pipeline-trusted
           LINEAR_API_KEY: ${{ secrets.LINEAR_PLANNER_KEY || secrets.LINEAR_API_KEY }}
           LINEAR_API_KEY_FALLBACK: ${{ secrets.LINEAR_API_KEY }}
@@ -464,7 +487,7 @@ jobs:
           if [ "$ACTION" = "replan" ]; then
             python3 "$TRUSTED_PIPELINE"/scripts/triage_repair.py apply "$CARD" --action "$ACTION"
           else
-            python3 "$TRUSTED_PIPELINE"/scripts/triage_repair.py apply "$CARD" --action "$ACTION" --dir "$OUT_DIR"
+            python3 "$TRUSTED_PIPELINE"/scripts/triage_repair.py apply "$CARD" --action "$ACTION" --dir "$OUT_DIR" ${MODEL:+--model "$MODEL"}
           fi
 
       # Read-only files would stop a reused runner clearing its temp directory.
