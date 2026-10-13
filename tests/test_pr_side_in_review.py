@@ -234,6 +234,10 @@ class TheVerdictIsNeverAtRiskTest(unittest.TestCase):
         self.assertIn("'reopened'", condition)
 
 
+#: Live lanes no card is routed to yet, so not yet from-lanes (DRE-6740).
+NOT_YET_ROUTED = ("Queued",)
+
+
 class TheFromLanesAreThePreReviewLanesTest(unittest.TestCase):
     def test_every_from_lane_is_a_lane_the_contract_carries(self):
         for lane in _from_lanes():
@@ -255,11 +259,19 @@ class TheFromLanesAreThePreReviewLanesTest(unittest.TestCase):
         same line `reconcile.HAND_BUILT_REVIEW_LANES` draws (DRE-4356)."""
         self.assertNotIn("Green Light", _from_lanes())
 
-    def test_every_pre_review_flow_lane_but_that_one_is_present(self):
+    def test_queued_is_not_a_from_lane_until_the_cutover(self):
+        """`Queued` went live with DRE-6740, a card that forbade workflow
+        changes, and nothing routes a card there yet. The cutover that routes
+        cards to it adds it to the step's csv — and deletes this test and
+        `NOT_YET_ROUTED` with it."""
+        self.assertIn("Queued", lane_contract.flow_lanes())
+        self.assertNotIn("Queued", _from_lanes())
+
+    def test_every_pre_review_flow_lane_but_those_is_present(self):
         flow = lane_contract.flow_lanes()
         upstream = [
             name for name in flow[: flow.index(REVIEW_LANE)]
-            if name != "Green Light"
+            if name != "Green Light" and name not in NOT_YET_ROUTED
         ]
         self.assertEqual(
             [lane for lane in _from_lanes() if lane in flow], upstream,

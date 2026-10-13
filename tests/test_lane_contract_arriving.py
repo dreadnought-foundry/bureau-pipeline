@@ -20,8 +20,9 @@ state on the board, then flipped the entry to live, deleting the three arriving
 keys and changing nothing else. The tests of the MECHANISM below run against
 `arriving_doc()`, the shipped contract with Hand-work put back the way DRE-5315
 declared it. The tests of the SHIPPED entry say it is live. The shipped file
-may carry other arriving lanes — `Queued` since DRE-6710, pinned in
-tests/test_queued_lane.py — so nothing here assumes Hand-work is the only one.
+may carry other arriving lanes — `Queued` was one from DRE-6710 until DRE-6740
+flipped it live, pinned in tests/test_queued_lane.py — so nothing here assumes
+Hand-work is the only one.
 """
 
 import copy

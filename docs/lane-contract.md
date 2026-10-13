@@ -15,11 +15,12 @@ Wave phase reached: **2** — the lane contract asserted by the harness. A claus
 | 2 | Planning | planning | 120 min |
 | 3 | Green Light | planning | — |
 | 4 | Backlog | work | — |
-| 5 | Todo | work | 15 min |
-| 6 | Hand-work | work | — |
-| 7 | In Progress | work | 60 min |
-| 8 | In Review | work | 120 min |
-| 9 | Done | work | — |
+| 5 | Queued | work | — |
+| 6 | Todo | work | 15 min |
+| 7 | Hand-work | work | — |
+| 8 | In Progress | work | 60 min |
+| 9 | In Review | work | 120 min |
+| 10 | Done | work | — |
 
 Planning exit is the transition **Green Light → Backlog** — where the second critic writes its verdict, and the boundary the guard's scope is derived from.
 
@@ -81,6 +82,19 @@ _Waiting on: the sweep carries every verdict it promotes out of this lane and re
 Permitted writers: `plan.yml`, `mid_epic.py`, `reconcile.py`, `dead_run.py`, `linear_ops.py`, `agent-task.yml`, `hygiene.py`, `hand_work_migration.py` | Phase 2 — live |
 | **evidence** | A routing verdict comment; and, for a child of an epic, an epic that has passed Planning exit.  
 _Waiting on: the marker exists and the sweep reads it (DRE-2724); asserting that every Backlog card carries one needs the writer at planning exit (DRE-2721)._ | Phase 5 — promised |
+
+### Queued
+
+| Clause | What it requires | Enforcement |
+| --- | --- | --- |
+| **entrance** | It carries a routing verdict — one of the five in config/routing-verdicts.json, machine-readable on the card.  
+_Waiting on: the vocabulary exists (DRE-2724); what is still missing is a writer that puts a verdict on EVERY card at planning exit — DRE-2721's second critic._ | Phase 5 — promised |
+| **exit** | The verdict's destination is reached, and the sweep is what reaches it (DRE-3385). Which verdict lands where is config/routing-verdicts.json's to say, and the sweep reads that file, never this sentence. It promotes a FLEET card to Todo once the dependency gate clears, the WIP cap has room and — for a child of an epic — both critics passed the plan on its current planning attempt before the green light (DRE-3059, DRE-5268). The sweep promotes a WORKBENCH or OPERATOR card to its verdict's destination on the same gates too, stamping the marks its verdict declares — `operator-step` and `no-code` for OPERATOR, none for WORKBENCH — before the move, so the card never sits there missing one; it never stamps `hand-built`, which is the CEO's mark, applied only when he asks for it, and nothing automatic applies it (2026-10-07, DRE-6227); nothing is dispatched for it, it takes no slot under the WIP cap, and the receipt says whose turn it is. Under DRE-5240 that destination is Hand-work, the lane where a person's work waits, and FLEET alone goes to Todo (DRE-5321, DRE-5322). An epic here whose children are all closed, with at least one Done, is closed by the sweep, with the same receipt and the same advance of the epics it blocks as one in Todo, In Progress or In Review (DRE-6410); every child Canceled and none Done is not a completion, and it stays. A PARKED card does not leave, and is never reported as stalled; a NEEDS WORK card goes back to Planning, which is the planner's move and not the sweep's. A card carrying no verdict at all is not promoted, whether or not it has a parent epic: the epic's approval says the PLAN was approved, never who builds this piece of it. A verdict approves ONE trip through Planning (DRE-4962): a card that has entered Intake, Green Light, Triage, Canceled, Duplicate or Done since its newest verdict is not promoted — the sweep refuses it `stale-verdict`, says once on the card when the verdict was written, which of those lanes it passed through since and that it needs Planning again to be built, and leaves it here. A later exit from Planning, or for a child its epic's green light, is a fresh approval. Since DRE-4884 that exit retires, on the record, every verdict written before the card re-entered Planning, and stamps the one it reads now — taking off an `operator-step` the old verdict put on when the new one does not — so a re-planned card leaves with exactly one live verdict, and a retired one is read by nothing. The check reads the card's lane history, so it is the last gate, asked only of a card every other gate has passed; a history Linear cannot return holds the card that sweep and says nothing on it.  
+_Waiting on: the sweep carries every verdict it promotes out of this lane and refuses the rest (DRE-2724, DRE-3385); asserting the transitions needs the history Phase 5 records; DRE-5240 pointed WORKBENCH and OPERATOR at Hand-work (DRE-5321) and the sweep carries them there (DRE-5322)._ | Phase 5 — promised |
+| **writers** | The planner and mid-epic discovery create here; the sweep and the dead-run cap park here; and the build run parks the card it could not build — a stated blocker, or a run that kept dying past the cap (DRE-2859) — on a silent death only after the planner has had the card once on that budget (DRE-6178). A person also lands a card here by sending it back from Green Light — the rejected answer that lane's exit names — or by moving it here by hand; that move approves nothing, and the `stale-verdict` refusal above is what keeps the sweep from building it (DRE-4962). And the hygiene agent, returning a Triage card whose mechanical defect it fixed — a prose blocker made true by the relation it added, a dependency loop a Done card already broke, a retired-repo card marked operator-step and parked — never to Todo (DRE-5365). And the Hand-work migration, returning a code card from Hand-work that has had a critic pass here carrying a fresh FLEET verdict, for the sweep to promote (DRE-6230).  
+Permitted writers: `plan.yml`, `mid_epic.py`, `reconcile.py`, `dead_run.py`, `linear_ops.py`, `agent-task.yml`, `hygiene.py`, `hand_work_migration.py` | Phase 2 — live |
+| **evidence** | A routing verdict comment; and, for a child of an epic, an epic that has passed Planning exit.  
+_Waiting on: the marker exists and the sweep reads it (DRE-2724); asserting that every Queued card carries one needs the writer at planning exit (DRE-2721)._ | Phase 5 — promised |
 
 ### Todo
 
@@ -187,27 +201,6 @@ _Waiting on: needs the transition history Phase 5 records._ | Phase 5 — promis
 Permitted writers: `operator` | Phase 2 — live |
 | **evidence** | The card it duplicates, named on it.  
 _Waiting on: needs the transition history Phase 5 records._ | Phase 5 — promised |
-
-## Arriving
-
-Lanes the contract names before the board has them. Nothing routes to one yet: no live reader sees it, the harness does not require the state in Linear or in the console, and it permits both. Its clauses are written complete, so the board step below and a one-word flip of its status to live are all that remain.
-
-### Queued — arriving by DRE-4125
-
-The queue a card waits in between the planning exit and its verdict's destination — the lane that replaces Backlog. Linear draws a `backlog`-type column first whatever its position, and cannot change a state's type after creation, so the queue moves to a lane of type `unstarted` rather than staying in Backlog. Declared here before Linear has the state, so the board can grow it without turning the harness red; nothing routes to it until a later card flips its status to live.
-
-**Board step:** create workflow state `Queued`, type `unstarted`, on the DRE team, positioned after `Hand-work` (position 5750 in agent-bureau's `config/linear-workspace.json`); then DRE-6740, in DRE-4125's sibling epic DRE-6739, flips this entry's status to live
-
-| Clause | What it will require | Enforcement once live |
-| --- | --- | --- |
-| **entrance** | It carries a routing verdict — one of the five in config/routing-verdicts.json, machine-readable on the card.  
-_Waiting on: the vocabulary exists (DRE-2724); what is still missing is a writer that puts a verdict on EVERY card at planning exit — DRE-2721's second critic._ | Phase 5 — promised |
-| **exit** | The verdict's destination is reached, and the sweep is what reaches it (DRE-3385). Which verdict lands where is config/routing-verdicts.json's to say, and the sweep reads that file, never this sentence. It promotes a FLEET card to Todo once the dependency gate clears, the WIP cap has room and — for a child of an epic — both critics passed the plan on its current planning attempt before the green light (DRE-3059, DRE-5268). The sweep promotes a WORKBENCH or OPERATOR card to its verdict's destination on the same gates too, stamping the marks its verdict declares — `operator-step` and `no-code` for OPERATOR, none for WORKBENCH — before the move, so the card never sits there missing one; it never stamps `hand-built`, which is the CEO's mark, applied only when he asks for it, and nothing automatic applies it (2026-10-07, DRE-6227); nothing is dispatched for it, it takes no slot under the WIP cap, and the receipt says whose turn it is. Under DRE-5240 that destination is Hand-work, the lane where a person's work waits, and FLEET alone goes to Todo (DRE-5321, DRE-5322). An epic here whose children are all closed, with at least one Done, is closed by the sweep, with the same receipt and the same advance of the epics it blocks as one in Todo, In Progress or In Review (DRE-6410); every child Canceled and none Done is not a completion, and it stays. A PARKED card does not leave, and is never reported as stalled; a NEEDS WORK card goes back to Planning, which is the planner's move and not the sweep's. A card carrying no verdict at all is not promoted, whether or not it has a parent epic: the epic's approval says the PLAN was approved, never who builds this piece of it. A verdict approves ONE trip through Planning (DRE-4962): a card that has entered Intake, Green Light, Triage, Canceled, Duplicate or Done since its newest verdict is not promoted — the sweep refuses it `stale-verdict`, says once on the card when the verdict was written, which of those lanes it passed through since and that it needs Planning again to be built, and leaves it here. A later exit from Planning, or for a child its epic's green light, is a fresh approval. Since DRE-4884 that exit retires, on the record, every verdict written before the card re-entered Planning, and stamps the one it reads now — taking off an `operator-step` the old verdict put on when the new one does not — so a re-planned card leaves with exactly one live verdict, and a retired one is read by nothing. The check reads the card's lane history, so it is the last gate, asked only of a card every other gate has passed; a history Linear cannot return holds the card that sweep and says nothing on it.  
-_Waiting on: the sweep carries every verdict it promotes out of this lane and refuses the rest (DRE-2724, DRE-3385); asserting the transitions needs the history Phase 5 records; DRE-5240 pointed WORKBENCH and OPERATOR at Hand-work (DRE-5321) and the sweep carries them there (DRE-5322)._ | Phase 5 — promised |
-| **writers** | The planner and mid-epic discovery create here; the sweep and the dead-run cap park here; and the build run parks the card it could not build — a stated blocker, or a run that kept dying past the cap (DRE-2859) — on a silent death only after the planner has had the card once on that budget (DRE-6178). A person also lands a card here by sending it back from Green Light — the rejected answer that lane's exit names — or by moving it here by hand; that move approves nothing, and the `stale-verdict` refusal above is what keeps the sweep from building it (DRE-4962). And the hygiene agent, returning a Triage card whose mechanical defect it fixed — a prose blocker made true by the relation it added, a dependency loop a Done card already broke, a retired-repo card marked operator-step and parked — never to Todo (DRE-5365). And the Hand-work migration, returning a code card from Hand-work that has had a critic pass here carrying a fresh FLEET verdict, for the sweep to promote (DRE-6230).  
-Permitted writers: `plan.yml`, `mid_epic.py`, `reconcile.py`, `dead_run.py`, `linear_ops.py`, `agent-task.yml`, `hygiene.py`, `hand_work_migration.py` | Phase 2 — live |
-| **evidence** | A routing verdict comment; and, for a child of an epic, an epic that has passed Planning exit.  
-_Waiting on: the marker exists and the sweep reads it (DRE-2724); asserting that every Queued card carries one needs the writer at planning exit (DRE-2721)._ | Phase 5 — promised |
 
 ## The rules the harness asserts
 

@@ -489,10 +489,7 @@
     },
     {
       "name": "Queued",
-      "status": "arriving",
-      "arriving_by": "DRE-4125",
-      "reason": "The queue a card waits in between the planning exit and its verdict's destination — the lane that replaces Backlog. Linear draws a `backlog`-type column first whatever its position, and cannot change a state's type after creation, so the queue moves to a lane of type `unstarted` rather than staying in Backlog. Declared here before Linear has the state, so the board can grow it without turning the harness red; nothing routes to it until a later card flips its status to live.",
-      "board_action": "create workflow state `Queued`, type `unstarted`, on the DRE team, positioned after `Hand-work` (position 5750 in agent-bureau's `config/linear-workspace.json`); then DRE-6740, in DRE-4125's sibling epic DRE-6739, flips this entry's status to live",
+      "status": "live",
       "segment": "work",
       "clauses": {
         "entrance": {

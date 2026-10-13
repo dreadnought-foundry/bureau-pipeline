@@ -1519,15 +1519,18 @@ class TestTheLaneContract:
             "the hygiene agent — the hourly pass that clears mechanical rows, each "
             "move under a 🧹 receipt naming the evidence it read")
 
-    def test_exactly_five_lanes_permit_it(self):
-        # Live lanes only: an arriving lane (Queued, DRE-6710) copies its
-        # writers from the lane it replaces, and no card can land there yet.
+    def test_exactly_six_lanes_permit_it(self):
+        # Live lanes only. Queued (live since DRE-6740) copies its writers from
+        # Backlog, the lane it replaces, word for word; the guard below does not
+        # write it until the cutover routes cards there.
         permitting = {entry["name"] for entry in contract_doc()["lanes"]
                       if entry["status"] == "live"
                       and "hygiene.py" in entry["clauses"]["writers"].get("who", [])}
-        assert permitting == {"Planning", "Backlog", "In Review", "Done", "Canceled"}
+        assert permitting == {"Planning", "Backlog", "Queued", "In Review", "Done",
+                              "Canceled"}
 
     def test_the_guard_admits_exactly_the_lanes_the_contract_permits(self):
+        # All but Queued, which nothing writes until the cutover (DRE-6740).
         assert set(hygiene.destinations()) == {"Planning", "Backlog", "In Review",
                                                "Done", "Canceled"}
 

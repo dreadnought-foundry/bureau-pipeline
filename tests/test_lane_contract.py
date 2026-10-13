@@ -46,11 +46,13 @@ CONTRACT = os.path.join(
 # lanes. Written out ONCE, here, as the thing the tests below compare against —
 # every other list in the pipeline is derived from the contract file.
 # DRE-5320 made it twelve: `Hand-work`, the person-work lane after Todo.
+# DRE-6740 made it thirteen: `Queued`, the queue that replaces Backlog.
 LIVE_LANES = (
     "Intake",
     "Planning",
     "Green Light",
     "Backlog",
+    "Queued",
     "Todo",
     "Hand-work",
     "In Progress",
@@ -177,7 +179,7 @@ class TestLaneCleanup:
                 "no longer has"
             )
 
-    def test_the_twelve_live_lanes_are_exactly_the_board(self):
+    def test_the_thirteen_live_lanes_are_exactly_the_board(self):
         assert set(lane_contract.lane_names(status="live")) == set(LIVE_LANES)
 
     def test_the_merged_lane_keeps_the_longer_stall_window(self):
