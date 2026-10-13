@@ -170,7 +170,7 @@ class TurnDeathIsReadFirstTest(unittest.TestCase):
         self.assertTrue(body.startswith(HOLD_PREFIX), body)
         self.assertIn("budget, not size", body)
         self.assertIn(dead_run.HOLD_LABEL, body)
-        self.assertIn("Backlog", body)
+        self.assertIn(f"Parked in {dead_run.QUEUE_LANE} with", body)
 
     def test_a_run_that_reached_green_is_never_diagnosed_as_split(self):
         for prior in (0, dead_run.TURN_REQUEUE_CAP):
@@ -356,6 +356,54 @@ class TheCliReadsTheThreadTest(unittest.TestCase):
             dead_run.main(["decide", "0", "--turn-exhaustion",
                            "--comments-file", "/nonexistent/comments.json"])
         self.assertEqual("replan", buf.getvalue().splitlines()[0])
+
+
+class TheHoldNamesTheQueueLaneTest(unittest.TestCase):
+    """DRE-6745: every hold receipt names `QUEUE_LANE`, the lane the park
+    writes — `Backlog` under the shipped contract, and `Queued` once DRE-6742
+    moves the planning exit, with no edit to `dead_run`."""
+
+    HOLDS = {
+        "silent": lambda: dead_run.decide(2),
+        "is_error": lambda: dead_run.decide(2, is_error=True, error_model=OPUS),
+        "credential": lambda: dead_run.decide(2, credential_expiry=True),
+        "turn cap": lambda: dead_run.decide(
+            dead_run.TURN_REQUEUE_CAP, turn_exhaustion=True, last_progress=3),
+    }
+
+    def _assert_named(self, lane):
+        for name, hold in self.HOLDS.items():
+            with self.subTest(hold=name):
+                d = hold()
+                self.assertEqual("hold", d.action)
+                self.assertRegex(d.comments[0], rf"[Pp]arked in\s+{lane} with")
+                if lane != "Backlog":
+                    self.assertNotIn("Backlog", d.comments[0])
+
+    def test_under_the_shipped_contract(self):
+        self.assertEqual(dead_run.QUEUE_LANE, "Backlog")
+        self._assert_named(dead_run.QUEUE_LANE)
+
+    def test_under_the_flipped_exit(self):
+        from unittest import mock
+
+        with mock.patch.object(dead_run, "QUEUE_LANE", "Queued"):
+            self._assert_named("Queued")
+
+    def test_the_turn_requeue_promises_the_same_lane(self):
+        from unittest import mock
+
+        with mock.patch.object(dead_run, "QUEUE_LANE", "Queued"):
+            d = dead_run.decide(0, turn_exhaustion=True, last_progress=3)
+        self.assertEqual("requeue", d.action)
+        self.assertIn("the card parks in Queued with", d.comments[0])
+
+    def test_the_unlanded_receipt_names_the_lane_it_is_not_in(self):
+        from unittest import mock
+
+        with mock.patch.object(dead_run, "QUEUE_LANE", "Queued"):
+            note = dead_run.park_unlanded_comment()
+        self.assertIn("this card is NOT in Queued", note)
 
 
 class TurnNotedTest(unittest.TestCase):

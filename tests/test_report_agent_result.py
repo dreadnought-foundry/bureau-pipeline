@@ -34,6 +34,7 @@ WORKFLOW = os.path.join(ROOT, ".github", "workflows", "agent-task.yml")
 SCRIPT = os.path.join(ROOT, "scripts", "report_agent_result.sh")
 sys.path.insert(0, os.path.join(ROOT, "scripts"))
 
+import lane_contract  # noqa: E402
 import step_shell  # noqa: E402
 
 STEP = "Report result to Linear"
@@ -168,24 +169,34 @@ def _executable(path: str, body: str) -> None:
     os.chmod(path, 0o755)
 
 
-def _checkout(td: str) -> None:
+def _checkout(td: str, queue_lane: str | None = None) -> None:
     base = os.path.join(td, ".bureau-pipeline")
     shutil.copytree(os.path.join(ROOT, "scripts"), os.path.join(base, "scripts"),
                     ignore=shutil.ignore_patterns("__pycache__"))
     shutil.copytree(os.path.join(ROOT, "config"), os.path.join(base, "config"))
+    if queue_lane is not None:
+        # The checkout's own contract with the planning exit moved, which is
+        # all DRE-6742 changes: `lane_contract.QUEUE_LANE` reads it (DRE-6745).
+        contract = os.path.join(base, "config", "lane-contract.json")
+        with open(contract, encoding="utf-8") as fh:
+            doc = json.load(fh)
+        doc["planning_exit"]["to"] = queue_lane
+        with open(contract, "w", encoding="utf-8") as fh:
+            json.dump(doc, fh)
     _executable(os.path.join(base, "scripts", "linear_ops.py"), LINEAR_STUB)
     _executable(os.path.join(base, "scripts", "card_pr.py"), CARD_PR_STUB)
 
 
 def run_pr_opened(tc, command: list[str], *, card_pr: str = CARD_PR_STUB,
-                  env_extra=None):
+                  env_extra=None, queue_lane: str | None = None):
     """Run `command` from a runner-shaped directory; return `(proc, journal)`.
 
     `env_extra` is the Push rescue step's outputs, as the step's `env:` hands
-    them over (tests/test_push_rescue_branch_without_pr.py, DRE-6719)."""
+    them over (tests/test_push_rescue_branch_without_pr.py, DRE-6719).
+    `queue_lane` moves the checkout's planning exit there (DRE-6745)."""
     td = tempfile.mkdtemp()
     tc.addCleanup(shutil.rmtree, td, ignore_errors=True)
-    _checkout(td)
+    _checkout(td, queue_lane)
     _executable(os.path.join(td, ".bureau-pipeline", "scripts", "card_pr.py"), card_pr)
     binary = os.path.join(td, "bin")
     os.makedirs(binary)
@@ -269,7 +280,10 @@ ESCALATION = "agent-escalation.txt"
 HANDBACK = "agent-handback.txt"
 
 FIXTURES = os.path.join(ROOT, "tests", "fixtures", "blocker-reasons.json")
-PARKED = " — parked in Backlog"
+#: The lane a blocker parks in: `lane_contract.QUEUE_LANE`, read by the script
+#: through the seam (DRE-6745) — `Backlog` until DRE-6742 moves the exit.
+QUEUE_LANE = lane_contract.QUEUE_LANE
+PARKED = f" — parked in {QUEUE_LANE}"
 ATTESTED = (
     "- [x] the cap is 15 — config/epic-cap.json reads 15 on main\n"
     "- [x] the proof names the count — architecture/proofs/epic-cap.md says 9 of 15\n"
@@ -315,7 +329,7 @@ class ABlockerIsClassifiedBeforeItParks(unittest.TestCase):
         self.assertIn(PARKED + " until the sweep acts on it (", posted[0])
         self.assertTrue(posted[0].endswith(
             f"Run: https://github.com/{REPO}/actions/runs/{RUN_ID}"), posted[0])
-        self.assertEqual([[CARD, "Backlog", "--park"]], moved)
+        self.assertEqual([[CARD, QUEUE_LANE, "--park"]], moved)
         return posted[0]
 
     def test_a_wrong_repo_note_keeps_its_repo_line_first(self):
@@ -367,7 +381,7 @@ class ABlockerIsClassifiedBeforeItParks(unittest.TestCase):
         self.assertNotIn("🛑 Agent blocked", posted[0])
         self.assertNotIn("blocker-class:", posted[0])
         self.assertIn([CARD, "Green Light", "In Progress,Todo"], moved)
-        self.assertNotIn("Backlog", [m[1] for m in moved])
+        self.assertFalse(set(lane_contract.QUEUE_LANES) & {m[1] for m in moved}, moved)
 
     def test_an_unclassed_note_is_asked_in_green_light(self):
         posted, moved = self._run({BLOCKER: "the API does not exist"})
@@ -401,7 +415,11 @@ class ABlockerIsClassifiedBeforeItParks(unittest.TestCase):
             posted[0].startswith("🛑 Agent blocked: class=question · "), posted[0])
         self.assertIn(PARKED + " until the sweep asks it in Green Light. Run: ",
                       posted[0])
-        self.assertEqual([[CARD, "Backlog", "--park"]], moved)
+        self.assertEqual([[CARD, QUEUE_LANE, "--park"]], moved)
+
+    def test_the_question_names_the_queue_lane_to_drop_it_in(self):
+        posted, _ = self._run({ESCALATION: "Which of A or B should ship first?"})
+        self.assertIn(f"or to **{QUEUE_LANE}** to drop it.", posted[0])
 
     def test_the_header_describes_the_classify_first_branch(self):
         lines = script_text().splitlines()
@@ -409,6 +427,43 @@ class ABlockerIsClassifiedBeforeItParks(unittest.TestCase):
                                   lines.index("# Incident history")])
         self.assertIn("blocker_class.py classify", section)
         self.assertIn("class=<class>", section)
+
+
+class TheBlockerParksInTheQueueLane(unittest.TestCase):
+    """DRE-6745: the blocker's park, its receipt and the escalation's "drop
+    it" lane all read `lane_contract.QUEUE_LANE` through the seam the step
+    shells read every pipeline constant from — driven under the shipped
+    contract and under a checkout whose planning exit is `Queued`."""
+
+    def _run(self, notes: dict, queue_lane: str | None):
+        proc, journal = run_pr_opened(
+            self, ["bash", SCRIPT], card_pr=CARD_PR_NO_PR_STUB,
+            env_extra={"AGENT_NOTES_DIR": notes_with(self, notes)},
+            queue_lane=queue_lane)
+        self.assertEqual(0, proc.returncode, proc.stderr + proc.stdout)
+        posted = [e["args"][1] for e in journal if e["op"] == "comment"]
+        moved = [e["args"] for e in journal if e["op"] in ("advance", "state")]
+        return posted, moved
+
+    def _assert_parked_in(self, lane: str, queue_lane: str | None):
+        posted, moved = self._run(
+            {BLOCKER: "blocker-class: branch-without-pr\nPushed, no PR.\n"}, queue_lane)
+        self.assertEqual([[CARD, lane, "--park"]], moved)
+        self.assertEqual(1, len(posted), posted)
+        self.assertIn(f" — parked in {lane} until the sweep acts on it (", posted[0])
+
+    def test_under_the_shipped_contract_it_parks_in_backlog(self):
+        self.assertEqual("Backlog", QUEUE_LANE)
+        self._assert_parked_in("Backlog", None)
+
+    def test_with_the_exit_moved_it_parks_in_queued(self):
+        self._assert_parked_in("Queued", "Queued")
+
+    def test_with_the_exit_moved_the_question_names_queued(self):
+        posted, moved = self._run({ESCALATION: "Which of A or B first?"}, "Queued")
+        self.assertIn("or to **Queued** to drop it.", posted[0])
+        self.assertNotIn("Backlog", posted[0])
+        self.assertIn([CARD, "Green Light", "In Progress,Todo"], moved)
 
 
 if __name__ == "__main__":

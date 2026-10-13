@@ -7,7 +7,7 @@ for a human. Both are right on their own, and until this module nothing joined
 them — so on 2026-09-01 they contradicted each other inside a minute:
 
     16:36  DRE-2937's second turn-cap death spends the `turn-exhaustion-requeue`
-           cap. The card is parked in Backlog with `needs-human`: "this card
+           cap. The card is parked in the queue with `needs-human`: "this card
            does not fit inside one run; split it".
     16:37  the medic re-runs the FIRST dead run as attempt 2. The card returns
            to In Progress and a third ~$16 build starts on a card the pipeline
@@ -18,7 +18,8 @@ The park says stop; the retry says go; the retry won. Two rules close it, and
 this module is where the medic asks them:
 
   1. **THE CARD IS PARKED.** A card carrying `needs-human`, or sitting in
-     Backlog with a `held-for-human` receipt NEWER than the run, is a card a
+     the queue lane — `Queued`, or the lane it replaces (`QUEUE_LANES`,
+     DRE-6745) — with a `held-for-human` receipt NEWER than the run, is a card a
      person now owns. Nothing may dispatch at it — that is already the rule the
      reconcile sweep and `agent-fix.yml` both obey, and the medic was the one
      door left open.
@@ -154,6 +155,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import check_agent_result  # noqa: E402
 import dead_run  # noqa: E402
+from lane_contract import QUEUE_LANES  # noqa: E402 — the park lane, under either name (DRE-6745)
 import execution_result  # noqa: E402
 import hold  # noqa: E402
 import out_of_memory  # noqa: E402
@@ -237,7 +239,7 @@ _CHANGE_REASON = re.compile(r"^(?:::error::|##\[error\])(?P<reason>change \d+ of
 # both caps reach ("🚨 held-for-human (dead-run-requeue cap reached)" and
 # "… (turn-exhaustion-requeue cap reached)"). Deliberately NOT the unlanded
 # receipt's wording: `park_unlanded_comment()` says the park did not land, and
-# a card that is not in Backlog and carries no label is not parked.
+# a card that is not in the queue lane and carries no label is not parked.
 # tests/test_medic_retry_honours_the_park.py pins this against a real
 # `dead_run.decide()` hold, so a reword there fails at the diff.
 HELD_RECEIPT_MARK = "held-for-human ("
@@ -688,9 +690,13 @@ def park_reason(
          live stamp decides, the label with no live stamp or a reason the
          registry does not know is held, and the sentence names the reason;
       2. the park LANE plus the hold receipt that put the card there, newer
-         than the run. The receipt is required because Backlog is not by itself
-         a hold — it is also where a blocked card and a PARKED routing verdict
-         sit, and neither of those is this run's business;
+         than the run. The lane is the queue under either of its names,
+         `QUEUE_LANES` (DRE-6745): the park writes `QUEUE_LANE`, which moves to
+         `Queued` with the planning exit, and a card parked before that move
+         still sits under the old name. The receipt is required because the
+         queue is not by itself a hold — it is also where a blocked card and a
+         PARKED routing verdict sit, and neither of those is this run's
+         business;
       3. Planning plus the replan receipt that sent the card there, newer
          than the run (DRE-4366) — or the dead-run cap's hand-off to the
          planner, `DEAD_SPLIT_RECEIPT_MARK` (DRE-6178). Required for the same
@@ -726,7 +732,8 @@ def park_reason(
             f"before implementation green, so the card owes a split, not a "
             f"rerun"
         )
-    if (state or "").strip().lower() != dead_run.PARK_STATE.lower():
+    lane = (state or "").strip()
+    if lane.lower() not in {name.lower() for name in QUEUE_LANES}:
         return ""
     held = _newest_after(receipts, HELD_RECEIPT_MARK, run_started_at)
     if not held:
@@ -734,7 +741,7 @@ def park_reason(
     when = (held.get("created_at") or "").strip()
     at = f" at {when}" if when else ""
     return (
-        f"it was moved to {dead_run.PARK_STATE}{at} by the pipeline's own "
+        f"it was moved to {lane}{at} by the pipeline's own "
         f"hold, after this run started"
     )
 

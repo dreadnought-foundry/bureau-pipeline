@@ -284,7 +284,7 @@ def test_unpark_passes_an_operator_note_through():
 
 def test_unpark_does_not_use_park_semantics():
     """unpark's state move is an ORDINARY Todo transition — `--park` is only
-    ever for a deliberate Backlog hold (DRE-1885)."""
+    ever for a deliberate hold in the queue lane (DRE-1885)."""
     with patch.object(linear_ops, "remove_label"), patch.object(
         linear_ops, "cmd_comment"
     ), patch.object(linear_ops, "cmd_state") as cmd_state:
