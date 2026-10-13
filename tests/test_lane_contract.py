@@ -134,8 +134,12 @@ class TestTheFileExists:
         # are filed (tests/test_returned_child_split.py). `hygiene.py` joined
         # it on DRE-5368, for one class only: a childless card under a
         # Canceled or Duplicate parent (tests/test_hygiene.py).
+        # `model-adoption.yml` joined it on DRE-6943, for one class only: the
+        # record card of a daily adoption run that wrote nothing into the home
+        # (tests/test_model_adoption_actions.py).
         assert lane_contract.lane_writers("Canceled") == (
             "operator", "reconcile.py", "groomer.py", "plan.yml", "hygiene.py",
+            "model-adoption.yml",
         )
 
     def test_every_lanes_permitted_writers_are_defined_in_the_glossary(self):

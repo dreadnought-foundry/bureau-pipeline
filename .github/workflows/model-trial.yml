@@ -1,5 +1,5 @@
 # Model trial (DRE-3897) — ONE real agent run on a candidate model, before any
-# adoption PR is written.
+# adoption is written into the home (DRE-6943).
 #
 # `model-adoption.yml` (DRE-3898) discovers a model in the live catalog and
 # sorts it by the CEO's rule. Before this trial, a newly found model went from
