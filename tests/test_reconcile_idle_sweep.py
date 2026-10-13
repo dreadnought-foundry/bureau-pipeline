@@ -97,7 +97,7 @@ class TeamBoard:
         if "state: {name: {in: $states}}" in q:
             nodes = [c for c in self.cards if c["state"]["name"] in v["states"]]
             return {"issues": {"nodes": nodes, "pageInfo": {"hasNextPage": False}}}
-        if 'state: {name: {eq: "Backlog"}}' in q:
+        if reconcile.QUEUE_STATE_FILTER in q:
             nodes = [c for c in self.cards if c["state"]["name"] == "Backlog"]
             return {"issues": {"nodes": nodes, "pageInfo": {"hasNextPage": False}}}
         if "title: {startsWith: $prefix}" in q:
@@ -170,7 +170,7 @@ def test_an_idle_demo_pass_spends_three_requests_and_says_so_once(capsys):
     _pass(board)
     assert board.queries[0] == reconcile.IDLE_QUERY
     assert board.requests == 3  # the check, the one board read, Green Light
-    assert not any('eq: "Backlog"' in q for q in board.queries)  # no promotion read
+    assert not any(reconcile.QUEUE_STATE_FILTER in q for q in board.queries)  # no promotion read
     out = capsys.readouterr().out
     idle = [ln for ln in out.splitlines() if ln.startswith("idle:")]
     assert len(idle) == 1 and DEMO in idle[0]

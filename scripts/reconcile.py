@@ -62,7 +62,7 @@ there owes a classification, not a repo label or a run receipt, and is flagged
 only after PLANNING_MINUTES with nothing happening to it (DRE-1978 sat in
 Planning 7 days unseen).
 
-Also runs the dependency gate: Backlog children whose parent epic is ACTIVATED
+Also runs the dependency gate: Queued children whose parent epic is ACTIVATED
 (= plan approved) are auto-promoted to Todo once every blocker is Done — blockers
 read from Linear's native "blocks" relations AND from "Blocked by: DRE-N" /
 "serialize after DRE-N" lines in the description. A WIP cap (MAX_WIP, default
@@ -75,7 +75,7 @@ builds nothing on any path (DRE-3994), and when the stub names no cap either,
 from the caller's BUREAU_MAX_WIP Actions variable (DRE-6631; see
 `cap_and_source`).
 
-Mid-epic discovery (DRE-2739): a Backlog child created AFTER its epic's most
+Mid-epic discovery (DRE-2739): a Queued child created AFTER its epic's most
 recent green light is a card the approved plan never described, and promoting it
 dispatches an agent within fifteen minutes whether or not anyone has read it. So
 it promotes only once it carries a verdict — the `mid-epic-verdict` the
@@ -113,7 +113,7 @@ card-level relations, which the card gate honors as before.
 The auto-advance is stricter: when a blocker epic reaches Done, every epic
 blocked-by it whose blockers are now ALL Done — built out is not enough, the
 seam rule (DRE-3244) plans against what the blocker's proof observed — is
-auto-advanced out of Backlog to Triage
+auto-advanced out of Queued to Triage
 (which re-triggers the planner). Never to In Progress, so the Green Light
 human-approval gate is preserved. Both the promotion hold and the advance fail
 SAFE on unreadable relation data (don't promote / don't advance on
@@ -179,6 +179,7 @@ import hold  # noqa: E402 — DRE-6173: ONE writer of the hold's label and its s
 # config/lane-contract.json, the file the harness asserts the live board against
 # and docs/lane-contract.md is rendered from.
 import lane_contract  # noqa: E402
+from lane_contract import QUEUE_LANE, QUEUE_LANES  # noqa: E402,F401 — re-exported (DRE-6743)
 import limit_death_record  # noqa: E402 — DRE-5837: a limit death Linear would not let the medic mark
 import limit_recovery  # noqa: E402 — DRE-3171: re-enter the stage a limit death left
 import linear_ops  # noqa: E402
@@ -1718,7 +1719,19 @@ BOARD_READ_LANES = tuple(dict.fromkeys(SWEPT_LANES + (FLEET_OUTAGE_LANE,)))
 # (`_fleet_or_linear`). Backlog is the promotion read's own lane.
 DOOR_LINEAR_LANES = tuple(lane for lane in SWEPT_LANES if lane in INTAKE_LANE + PLANNING_LANE)
 DOOR_WORK_LANES = tuple(lane for lane in SWEPT_LANES if lane not in DOOR_LINEAR_LANES)
-BACKLOG_LANE = "Backlog"
+
+# The queue, read under every name it carries and written under one (DRE-6743).
+# `QUEUE_LANES` and `QUEUE_LANE` are `lane_contract`'s own (DRE-6741),
+# re-exported and never defined here: every read of the queue tests membership
+# in `QUEUE_LANES`, and every lane and receipt the sweep writes is
+# `QUEUE_LANE`, which follows the planning exit — so the sweep moves to the new
+# lane the day DRE-6742 flips the exit, with no edit to this file. A move OUT
+# of the queue is guarded on every name (`QUEUE_FROM`), so a card waiting under
+# either one leaves it.
+QUEUE_FROM = ",".join(QUEUE_LANES)
+# The state filter every Linear read of the queue carries, built off the
+# contract so the query names each lane the queue may sit under.
+QUEUE_STATE_FILTER = "state: {name: {in: %s}}" % json.dumps(list(QUEUE_LANES))
 
 # The lanes a finished epic closes FROM, declared once and read by both close
 # sites — the full sweep and the merge path's `--close-only` (DRE-6410). The
@@ -1731,7 +1744,7 @@ BACKLOG_LANE = "Backlog"
 # Hand-work is a person's lane the sweep never puts an epic in. Green Light is
 # not read at all, and Triage only for the outage alarm (BOARD_READ_LANES,
 # DRE-6576): neither holds a finished epic by design, so neither is closed from.
-EPIC_CLOSE_LANES = SWEEP_STATES + (BACKLOG_LANE,)
+EPIC_CLOSE_LANES = SWEEP_STATES + QUEUE_LANES
 
 # The lanes `move_hand_built_to_review` reads a hand-built card OUT of
 # (DRE-4356): every flow lane strictly upstream of the review lane that the
@@ -2019,7 +2032,7 @@ def card_is_epic(card: dict, bodies: list[str] | None = None) -> bool:
     — `if "agent:planner" in labels` — and that label is the one the RELAY
     REQUIRES before it will dispatch the planner at all, so every card that
     comes out of Planning wears it. Every one-off among them was therefore
-    skipped as an epic and sat in Backlog forever: the label it needed to get
+    skipped as an epic and sat in Queued forever: the label it needed to get
     classified was the label that stopped it being built (DRE-3044, observed on
     DRE-3018 and DRE-3020 across every sweep from 2026-09-03 17:32 PT).
 
@@ -2528,7 +2541,7 @@ def _hand_work_age(card: dict, reason: str) -> str:
     called only for a card IN Hand-work and only by its own repo's sweep.
 
     The clock is the ENTRY, never `updatedAt`, which moves on every comment:
-    the newest `🧹 Auto-promoted Backlog → Hand-work:` receipt in the window
+    the newest `🧹 Auto-promoted <queue> → Hand-work:` receipt in the window
     (`promote_ready`'s, the mark `proof_dispatch._entered` reads), at no
     request; only without one, and only for a card that can alarm,
     `routing_verdict.lane_moves`' newest move into the lane, one request. An
@@ -2554,9 +2567,11 @@ def _hand_work_age(card: dict, reason: str) -> str:
     at = lambda iso: datetime.fromisoformat(iso.replace("Z", "+00:00"))  # noqa: E731
     marks = {(lbl.get("name") or "").lower()
              for lbl in (card.get("labels") or {}).get("nodes", [])}
+    # The receipt names `QUEUE_LANE` (DRE-6743), so a card promoted on either
+    # side of the planning exit's flip carries one or the other.
+    receipts = tuple(f"🧹 Auto-promoted {name} → {lane}:" for name in QUEUE_LANES)
     entered = next((n.get("createdAt") for n in reversed(nodes)
-                    if (n.get("body") or "").lstrip().startswith(
-                        f"🧹 Auto-promoted Backlog → {lane}:")), None)
+                    if (n.get("body") or "").lstrip().startswith(receipts)), None)
     exempt = ("a standing card" if ident in {s["card"] for s in rule["standing"]}
               else "the CEO's own hand-built card" if HAND_BUILT_LABEL.lower() in marks
               else "")
@@ -4830,7 +4845,7 @@ _INTAKE_BLOCKED_QUERY = """query($needle: String!, $states: [String!]!, $epicSta
     labels: {name: {containsIgnoreCase: $needle}},
     or: [
       {state: {name: {in: $states}}},
-      {state: {name: {eq: "Backlog"}}, parent: {state: {name: {in: $epicStates}}}}
+      {""" + QUEUE_STATE_FILTER + """, parent: {state: {name: {in: $epicStates}}}}
     ]
   }) { nodes {
     id identifier title description
@@ -4849,7 +4864,7 @@ def _in_flow(card: dict) -> bool:
     if lane in INTAKE_BLOCKED_LANES:
         return True
     parent = card.get("parent") or {}
-    return lane == BACKLOG_LANE and (
+    return lane in QUEUE_LANES and (
         (parent.get("state") or {}).get("name") in EPIC_ACTIVE_STATES
     )
 
@@ -4895,9 +4910,9 @@ def intake_blocker_notice(blocker: dict, blocked: dict, *, titles: bool = True) 
     stop = blocker["identifier"]
     work = blocked["identifier"]
     lane = (blocked.get("state") or {}).get("name")
-    if lane == BACKLOG_LANE:
+    if lane in QUEUE_LANES:
         epic = (blocked.get("parent") or {}).get("identifier")
-        where = f"waiting in Backlog under {epic}, an epic already In Progress"
+        where = f"waiting in {lane} under {epic}, an epic already In Progress"
     else:
         where = f"already {lane}"
     return (
@@ -6118,7 +6133,7 @@ def hand_dead_run_to_planner(card: dict, dead: int, bodies: list[str]) -> bool:
     planner tryable once more.
 
     `hold`: the label and its `🔒 hold:` stamp (`hold.apply`), the `--park`
-    move to Backlog, and the lane's `🚨 held-for-human` receipt, worded as it
+    move to `QUEUE_LANE`, and the lane's `🚨 held-for-human` receipt, worded as it
     always was.
 
     A card the read door's board put here is read live once before either
@@ -6147,7 +6162,7 @@ def hand_dead_run_to_planner(card: dict, dead: int, bodies: list[str]) -> bool:
         # DRE-1885 building-card guard would re-route this In Progress →
         # Backlog move to Todo and re-loop forever.
         if linear_ops.cmd_state(
-            ident, "Backlog", "--park", **_door_guard(card)
+            ident, QUEUE_LANE, "--park", **_door_guard(card)
         ) is False and _door_guard(card):
             return False
     # ONE post for the three bodies: config/pipeline-acts.json names this
@@ -6157,12 +6172,12 @@ def hand_dead_run_to_planner(card: dict, dead: int, bodies: list[str]) -> bool:
     # park, as it always did.
     linear_ops.cmd_comment(ident, decision.comments[0] if replan else (
         f"🚨 held-for-human: {REVIEW_LANE} with no PR after {dead} "
-        f"requeues — parked in Backlog with the '{HOLD_LABEL}' label "
+        f"requeues — parked in {QUEUE_LANE} with the '{HOLD_LABEL}' label "
         "so the sweep stops looping. A human must split/fix the card "
         "and clear the label to retry."
         if lane == REVIEW_LANE else
         f"🚨 held-for-human: agent keeps dying with no PR (hung or "
-        f"silent) after {dead} requeues — parked in Backlog with the "
+        f"silent) after {dead} requeues — parked in {QUEUE_LANE} with the "
         f"'{HOLD_LABEL}' label so the sweep stops looping. A human must "
         "split/fix the card and clear the label to retry."
     ))
@@ -6376,10 +6391,10 @@ def complete_inverse_relations(cards: list[dict]) -> None:
 def backlog_children(
     only: list[str] | None = None, *, from_linear: bool = False, stamped: bool = False,
 ) -> list[dict]:
-    """EVERY Backlog card, not the first page of them (DRE-2681).
+    """EVERY Queued card, not the first page of them (DRE-2681).
 
     promote_ready() picks its candidates from this list, so an unpaginated page
-    made "every Backlog card" mean "the first 100 Linear happened to return" —
+    made "every Queued card" mean "the first 100 Linear happened to return" —
     126 of the 226 cards on the 2026-08-26 census were not promotion
     candidates, and nothing said so.
 
@@ -6391,7 +6406,7 @@ def backlog_children(
     `priority` is selected for the promotion order (DRE-6567): `promote_ready`
     takes Urgent cards first, and this read is where it learns which those are.
 
-    `only` — identifiers — narrows the read to those cards, still in Backlog,
+    `only` — identifiers — narrows the read to those cards, still in Queued,
     in one request (DRE-3236): the merge path asks for the merged card's own
     dependents and nothing else. Same node shape, so the gate that reads them
     cannot tell the two apart. An empty scope reads nothing.
@@ -6400,9 +6415,10 @@ def backlog_children(
     is (DRE-3236).
 
     THE READ DOOR (Stage 2 #6a): in `on` the cards come from the door — the
-    whole Backlog as `/board?lanes=Backlog&relations=1`, a named set as
-    `/cards?ids=` kept to the ones still in Backlog — in the same node shape,
-    and a door that cannot answer whole falls back to the Linear read below.
+    whole queue as `/board?lanes=<every name in QUEUE_LANES>&relations=1`, a
+    named set as `/cards?ids=` kept to the ones still in Queued — in the same
+    node shape, and a door that cannot answer whole falls back to the Linear
+    read below.
     Every card served this way is door-decided: its promotion re-reads its
     predicate live before it writes (`live_promotion_refusal`). A relation page
     the door marks unknown (`hasNextPage`) is read to its end LIVE, as Linear's
@@ -6436,7 +6452,7 @@ def backlog_children(
            issues(first: 100, after: $after, filter: {
              team: {key: {eq: "DRE"}},
              %s
-             state: {name: {eq: "Backlog"}}
+             %s
            }) { nodes {
              id identifier title description createdAt priority%s
              parent { identifier state { name } }
@@ -6445,7 +6461,8 @@ def backlog_children(
              %s
              %s
            } pageInfo { hasNextPage endCursor } } }""" % (
-            declared, scope, " updatedAt state { name }" if stamped else "",
+            declared, scope, QUEUE_STATE_FILTER,
+            " updatedAt state { name }" if stamped else "",
             linear_ops.COMMENT_WINDOW_GQL, INVERSE_RELATIONS_GQL,
         ),
         {"numbers": numbers} if only is not None else None,
@@ -6473,7 +6490,7 @@ def _door_backlog_children(only: list[str] | None) -> list[dict]:
             raise BoardHeld(e.reason) from e
         print(f"read-door: backlog unknown ({e}) — read from Linear this pass")
         return _fetch_backlog_linear(only)
-    cards = [c for c in read.nodes if (c.get("state") or {}).get("name") == BACKLOG_LANE]
+    cards = [c for c in read.nodes if (c.get("state") or {}).get("name") in QUEUE_LANES]
     for card in cards:
         _door_sourced.add(card["identifier"])
         linear_ops.remember_comments(card.get("identifier"), card.get("comments"))
@@ -6484,7 +6501,7 @@ def _door_backlog_children(only: list[str] | None) -> list[dict]:
 def _door_backlog_read(only: list[str] | None):
     if only is not None:
         return bureau_read.cards(only, max_age=bureau_read.BOARD_MAX_AGE, relations=True)
-    return bureau_read.board([BACKLOG_LANE], scope="repo",
+    return bureau_read.board(list(QUEUE_LANES), scope="repo",
                              max_age=bureau_read.BOARD_MAX_AGE, relations=True)
 
 
@@ -6499,7 +6516,7 @@ def _shadow_backlog(only: list[str] | None):
 def _shadow_compare_backlog(read, linear_cards: list[dict]) -> None:
     mine = [c for c in linear_cards if card_repo(c) == REPO_SLUG]
     door = [c for c in read.nodes
-            if (c.get("state") or {}).get("name") == BACKLOG_LANE
+            if (c.get("state") or {}).get("name") in QUEUE_LANES
             and card_repo(c) == REPO_SLUG]
     bureau_read.report_diffs(
         "backlog", bureau_read.compare(door, mine, door_as_of=read.as_of),
@@ -6513,7 +6530,7 @@ def live_promotion_refusal(card: dict, bodies: list[str]) -> tuple[dict | None, 
     not. ONE request — `_fetch_backlog_linear`'s own query for this one card,
     so the shape is the gate's shape — plus a relation top-up only for a card
     past twenty relations. Everything the card-level gate decided on is asked
-    again of the live card: the lane (the query filters to Backlog), epic-ness,
+    again of the live card: the lane (the query filters to Queued), epic-ness,
     the hold label, the label set, the parent and its lane, the prose claims,
     the blockers with their CURRENT lanes, an agent-blocker, and the verdict.
 
@@ -6530,7 +6547,7 @@ def live_promotion_refusal(card: dict, bodies: list[str]) -> tuple[dict | None, 
     except linear_ops.LinearError as e:
         return None, f"it could not be read live ({e})"
     if not found:
-        return None, "it is no longer in Backlog"
+        return None, f"it is no longer in {QUEUE_LANE}"
     live = found[0]
     live_bodies = card_comment_bodies(live)
     if card_is_epic(live, live_bodies):
@@ -6763,7 +6780,7 @@ def _fetch_epic_relations(epic_identifier: str) -> dict | None:
     are the same fact to this gate, and it says which epic and why.
 
     Read off `epic_records()` since DRE-3642: this was one request per epic
-    with Backlog children, every sweep, for three fields of a card the board
+    with Queued children, every sweep, for three fields of a card the board
     read had already returned. A NEW dict, not the cached record, because
     `epic_blockers_unmet` fills in the fields prose_blockers expects and a
     consumer must not be able to edit the pass's record for everyone else.
@@ -6824,7 +6841,7 @@ def _not_built_out(blocker: str, state: str) -> str | None:
     choice, and a roll-up parent is never built out before it is Done.
 
     The state comes off the relation, so a blocker that has built nothing —
-    Backlog, Planning, Green Light — costs no read.
+    Queued, Planning, Green Light — costs no read.
     """
     if state != epic_cap.IN_PROGRESS:
         return f"its state is {state}, not {epic_cap.IN_PROGRESS}"
@@ -7019,17 +7036,17 @@ def advance_unblocked_epics(done_epic: str) -> None:
     the pipeline (DRE-1772, auto-advance).
 
     For each epic that `done_epic` `blocks` (its forward `relations`): if ALL of
-    that epic's own blockers are now Done AND it is still in Backlog, return it
+    that epic's own blockers are now Done AND it is still in Queued, return it
     to **Planning**, whose arrival dispatches the planner (DRE-6653). Triage
     was the planner's trigger once; it is the broken-card lane now, and the
     relay's dispatch on entering it is refused by the plan gate (DRE-5277).
     Every dependent takes that one path — the wave route that sent some
     elsewhere is retired (DRE-4700). NEVER to In Progress — the Green Light
     approval gate stays human-owned. Idempotent and safe:
-      * only acts on epics still in Backlog (never re-advances one already past
+      * only acts on epics still in Queued (never re-advances one already past
         it, never moves an epic parked in Green Light or Triage, or one already
         running). It reads the lane and the relations and nothing else, so an
-        epic a person sent to Backlog — a rejected plan, a hand park — whose
+        epic a person sent to Queued — a rejected plan, a hand park — whose
         blockers are all closed is returned to Planning too: the planner plans
         it again and a person still approves it. Dropping an epic is
         Canceled, which nothing here revives (DRE-6653);
@@ -7061,7 +7078,7 @@ def advance_unblocked_epics(done_epic: str) -> None:
         if rel["type"] == "blocks"
     }
     for dep in sorted(dependents):
-        if card_state(dep) != "Backlog":
+        if card_state(dep) not in QUEUE_LANES:
             continue  # idempotent: only ever advance a still-Backlog epic
         # The strict rule, asked for by name (DRE-6407): `dep` is still to be
         # planned, so an In Progress blocker holds it whatever is left to build.
@@ -7071,13 +7088,13 @@ def advance_unblocked_epics(done_epic: str) -> None:
 
 
 def _return_epic_to_planning(dep: str, because: str) -> None:
-    """Move waiting epic `dep` Backlog → Planning and post the one receipt
+    """Move waiting epic `dep` Queued → Planning and post the one receipt
     that says so (DRE-6653). `because` names the blocker(s) that released it.
 
     The ONE site for both writers — the hook and the full sweep's pass — on
     purpose: `config/pipeline-acts.json` carries an `unconverted` row anchored
     on this receipt's first line, and that row must match exactly one site.
-    The move is from Backlog alone, so an epic somebody moved meanwhile is
+    The move is from the queue alone, so an epic somebody moved meanwhile is
     left where it is; the pass remembers what it moved, so the hook and the
     pass never move one twice in a sweep. The receipt says the epic is back
     in Planning, so it is posted only when `cmd_advance` reports the move
@@ -7086,13 +7103,13 @@ def _return_epic_to_planning(dep: str, because: str) -> None:
     """
     if dep in _returned_epics:
         return
-    if not linear_ops.cmd_advance(dep, "Planning", "Backlog"):
+    if not linear_ops.cmd_advance(dep, "Planning", QUEUE_FROM):
         print(f"epic-return: {dep} was not moved to Planning — no receipt posted")
         return
     _returned_epics.add(dep)
     linear_ops.cmd_comment(
         dep,
-        f"🧹 Auto-advanced Backlog → Planning: {because}, and every blocker is "
+        f"🧹 Auto-advanced {QUEUE_LANE} → Planning: {because}, and every blocker is "
         "now closed.\n\nThe epic is back in Planning, and its arrival there "
         "dispatches the planner; a person still approves the plan (→ In Progress).",
     )
@@ -7108,22 +7125,22 @@ def _released_by(states: dict[str, str]) -> str:
 
 
 def return_waiting_epics(epics: set[str]) -> None:
-    """Return this repo's Backlog epics whose blockers are all terminal to
+    """Return this repo's Queued epics whose blockers are all terminal to
     Planning (DRE-6653) — the full sweep's backstop for the auto-advance.
 
     `advance_unblocked_epics` fires only when the sweep itself closes a
     blocker EPIC. A blocker that is an ordinary card, an epic a person closed
     by hand, or a blocker that was Canceled never fires it, and the dependent
-    waited in Backlog forever. This pass reads the lane and the formal
+    waited in Queued forever. This pass reads the lane and the formal
     `blockedBy` relations and nothing else — never whether an `⏸️ epic-waits:`
     receipt stands — so it covers DRE-6591's placement, DRE-6651's wait and
     every one of those blockers alike.
 
-    `epics` is this repo's Backlog epics off the promotion phase's read, the
+    `epics` is this repo's Queued epics off the promotion phase's read, the
     set `closable_epics(cards, BACKLOG_LANE)` hands `close_finished_epics`.
     Their relations come off the pass's epic record — one read for them all,
     and none at all when the close already made it. An epic moves when:
-      * the record still reads it in Backlog;
+      * the record still reads it in Queued;
       * it carries at least one formal `blockedBy` relation — an epic nothing
         blocks has nothing to wait for, and a roll-up child waiting for its
         parent's activation is the split's to send (DRE-6591);
@@ -7144,9 +7161,9 @@ def return_waiting_epics(epics: set[str]) -> None:
             record = epic_records([epic]).get(epic)
             relations = _fetch_epic_relations(epic)
             if record is None or relations is None:
-                print(f"epic-return: {epic} could not be read — left in Backlog this sweep")
+                print(f"epic-return: {epic} could not be read — left in {QUEUE_LANE} this sweep")
                 continue
-            if ((record.get("state") or {}).get("name")) != BACKLOG_LANE:
+            if ((record.get("state") or {}).get("name")) not in QUEUE_LANES:
                 continue  # moved since the promotion read: not waiting here
             states = prose_blockers.blocker_states(relations)
             if not states:
@@ -7173,7 +7190,7 @@ def open_agent_blocker(card: dict) -> blocker_class.Blocker | None:
 
 def has_unresolved_blocker(card: dict) -> bool:
     """True if the card's latest engineer-blocker marker has no human reply after
-    it — i.e. the card was parked in Backlog on a genuine blocker and nobody has
+    it — i.e. the card was parked in Queued on a genuine blocker and nobody has
     resolved it yet. Promoting such a card just re-dispatches the engineer into
     the identical wall (DRE-1585 / DRE-1572's five-run loop).
 
@@ -7256,16 +7273,16 @@ def _route_to_defect_lane(identifier: str) -> None:
     IDEMPOTENT BY CONSTRUCTION, which is why the move is not tag-guarded the
     way the notice is: `cmd_advance` is guarded on the from-lane, so a card
     already in Triage — or one a human moved mid-sweep — is left alone, and a
-    card that IS still in Backlog with the defect unfixed is one the sweep
+    card that IS still in Queued with the defect unfixed is one the sweep
     should route again rather than leave sitting (the failure mode where the
     first sweep's comment landed and its move did not). The next sweep does not
-    see the card at all: it is no longer a Backlog candidate.
+    see the card at all: it is no longer a Queued candidate.
 
     A WRITE, so its failure is a write failure: the ledger fails the run red for
     medic, and it never blocks the rest of the sweep.
     """
     try:
-        linear_ops.cmd_advance(identifier, prose_blockers.DEFECT_LANE, "Backlog")
+        linear_ops.cmd_advance(identifier, prose_blockers.DEFECT_LANE, QUEUE_FROM)
     except linear_ops.LinearError as e:
         _write_failures.append(f"{identifier} prose-blocker triage move: {e}")
         print(
@@ -7280,18 +7297,18 @@ def _send_to_planning(identifier: str) -> None:
 
     Planning is where a card missing its verdict gets one (DRE-2858): it reads
     the card and its exit stamps the routing verdict and lands it back in
-    Backlog, where `mid_epic.carries_verdict` now lets it through. Not Triage —
+    Queued, where `mid_epic.carries_verdict` now lets it through. Not Triage —
     the card is not malformed; not Green Light — no decision is owed, the epic
     was already approved. Refusing it on every pass instead left DRE-5806 in
-    Backlog for a day with nothing able to clear it.
+    Queued for a day with nothing able to clear it.
 
     The same from-lane-guarded move `_route_to_defect_lane` makes, for the same
     reasons: a card a person moved mid-sweep is left alone, a card still in
-    Backlog is moved again rather than left sitting, and a write failure lands
+    Queued is moved again rather than left sitting, and a write failure lands
     on the ledger and never blocks the rest of the sweep.
     """
     try:
-        linear_ops.cmd_advance(identifier, mid_epic.SIGN_OFF_STATE, "Backlog")
+        linear_ops.cmd_advance(identifier, mid_epic.SIGN_OFF_STATE, QUEUE_FROM)
     except linear_ops.LinearError as e:
         _write_failures.append(f"{identifier} mid-epic Planning move: {e}")
         print(
@@ -7639,22 +7656,22 @@ def promote_ready(
     active_count: int, candidates: list[dict] | None = None, *, close_epics: bool = False,
     resolve_blockers: bool = False, ask_cap: bool = False,
 ) -> int:
-    """Auto-promote Backlog cards whose blockers are all Done.
+    """Auto-promote Queued cards whose blockers are all Done.
 
     Two gates, because there are two ways a card can have been approved
     (DRE-2735). A CHILD is gated on its parent epic's state: a human moved that
     epic, and that decision covers everything under it (DRE-1893). A PARENTLESS
-    card — the one-off, which goes straight to Backlog and which nothing
+    card — the one-off, which goes straight to Queued and which nothing
     escalates by design — has no approval to inherit, so its VERDICT is the
     approval, written at Planning exit. Refusing it for want of a parent left
-    the most common thing anyone files sitting in Backlog forever.
+    the most common thing anyone files sitting in Queued forever.
 
-    `candidates` — Backlog cards in `backlog_children`'s shape — replaces the
-    whole-Backlog read when the caller already knows which cards a moment can
+    `candidates` — Queued cards in `backlog_children`'s shape — replaces the
+    whole-Queued read when the caller already knows which cards a moment can
     have changed (the merge path, DRE-3236). Every gate below is the same.
 
     `close_epics` — the full sweep's — closes this repo's finished epics among
-    the candidates first, off the same list (DRE-6410): Backlog is one of
+    the candidates first, off the same list (DRE-6410): Queued is one of
     `EPIC_CLOSE_LANES`, and this is the pass's one read of it, made after
     `carry_epics_out_of_todo` (DRE-5347). Their children come off the pass's
     epic record, one paged request for them all, and an epic it closes is no
@@ -7666,7 +7683,7 @@ def promote_ready(
     unmarked, and the receipt says whose turn it is. Only a verdict routed
     somewhere else (PARKED, NEEDS WORK) or no verdict at all is refused. The
     hand-built promotions do not spend the WIP budget either: nothing is
-    dispatched for them, so they take no slot, and a Backlog holding 33
+    dispatched for them, so they take no slot, and a Queued holding 33
     operator cards must not eat the fleet's promotion budget on its way out.
 
     And they do not WAIT on it. The cap is asked per card, never once for the
@@ -7678,7 +7695,7 @@ def promote_ready(
     spent, since a person's card can stand anywhere in the order.
 
     And a refusal is read back as a clock (DRE-4210). Every exit that leaves a
-    card of this repo in Backlog for a reason that is NOT a declared wait —
+    card of this repo in Queued for a reason that is NOT a declared wait —
     a refusal no sweep can clear, or a hold a person must lift — is recorded,
     dated by its receipt. After the loop a clocked refusal standing two hours
     is named on the card ONCE and on the red-run ledger every sweep, and a
@@ -7778,7 +7795,7 @@ def promote_ready(
                        int(c["identifier"].split("-")[1])),
     )
     if close_epics:
-        backlog_epics = closable_epics(candidates, BACKLOG_LANE)
+        backlog_epics = closable_epics(candidates, QUEUE_LANE)
         closed = set(close_finished_epics(backlog_epics) or ())
         candidates = [c for c in candidates if c["identifier"] not in closed]
         # The same set, less what just closed, for the full sweep's return
@@ -7958,7 +7975,7 @@ def promote_ready(
                     print(f"{head} — not resolved this pass: it could not be read live ({e})")
                 if found == []:
                     stands = False
-                    print(f"{head} — no longer in Backlog since the board was read — skipping")
+                    print(f"{head} — no longer in {QUEUE_LANE} since the board was read — skipping")
                 elif found and (blocker := open_agent_blocker(found[0])) is None:
                     stands = False
                     print(f"{head} — resolved since the board was read — skipping")
@@ -8297,7 +8314,7 @@ def promote_ready(
             if lift_hold:
                 hold.lift(card["identifier"], hold.BLOCKERS_TERMINAL, "reconcile.py",
                           reason=hold.OPERATOR_STEP_REASON)
-            linear_ops.cmd_advance(card["identifier"], destination, "Backlog")
+            linear_ops.cmd_advance(card["identifier"], destination, QUEUE_FROM)
             # The receipt names what actually approved this card, and — for the
             # two verdicts nothing is dispatched for — whose turn it now is.
             # "parent epic active" on a card with no parent would be a confident
@@ -8314,7 +8331,7 @@ def promote_ready(
                 )
             linear_ops.cmd_comment(
                 card["identifier"],
-                f"🧹 Auto-promoted Backlog → {destination}: {reason}",
+                f"🧹 Auto-promoted {QUEUE_LANE} → {destination}: {reason}",
             )
         except linear_ops.LinearError as e:
             _write_failures.append(f"{card['identifier']} advance/comment: {e}")
@@ -8381,10 +8398,10 @@ def promote_ready(
 
 def close_finished_epics(epic_identifiers: set[str]) -> set[str]:
     """An epic whose children are all terminal closes itself — from Todo,
-    In Progress, In Review or Backlog, the lanes `EPIC_CLOSE_LANES` declares,
+    In Progress, In Review or Queued, the lanes `EPIC_CLOSE_LANES` declares,
     and from no other (DRE-6410). The callers choose the epics by lane: the
     full sweep hands over the work lanes' epics off its board read and
-    Backlog's off the promotion phase's read, the merge path its parent when
+    Queued's off the promotion phase's read, the merge path its parent when
     it sits in one of them. Returns the epics it closed: on the merge path a
     close is the moment a slot in the epic cap opens, and the next waiting
     epic starts (DRE-5152).
@@ -8427,7 +8444,7 @@ def _close_epic_if_finished(epic: str) -> bool:
 
     The test is the same whichever lane the epic sits in, and the lanes it is
     asked about are `EPIC_CLOSE_LANES` — Todo, In Progress, In Review and
-    Backlog — chosen by the callers of `close_finished_epics` (DRE-6410)."""
+    Queued — chosen by the callers of `close_finished_epics` (DRE-6410)."""
     record = epic_records([epic]).get(epic)
     if record is None:
         # The same skip an unreadable children read has always taken: raised so
@@ -13622,7 +13639,7 @@ def closable_epics(cards: list[dict], lane: str) -> set[str]:
     one an epic closes from (`EPIC_CLOSE_LANES`, DRE-6410) — otherwise none.
 
     The lane is the read's, not the card's: `backlog_children`' Linear query
-    selects no lane, because every row it returns is in Backlog."""
+    selects no lane, because every row it returns is in Queued."""
     return repo_epics(cards) if lane in EPIC_CLOSE_LANES else set()
 
 
@@ -14461,7 +14478,7 @@ OFF_RAIL_SKIPPED: dict[str, str] = {
 # that card is owed. So the in-motion lanes are the nudge loop's plus the
 # watchdog's, every lane this repo's own work can sit in on the way to review.
 IN_MOTION_LANES = tuple(dict.fromkeys(SWEEP_STATES + WATCHDOG_LANES))
-IDLE_LANES = IN_MOTION_LANES + (BACKLOG_LANE,)
+IDLE_LANES = IN_MOTION_LANES + QUEUE_LANES
 
 #: The smallest Linear question that answers it: does a card of THIS repo sit
 #: in any of those lanes? One request, one bounded page, ids and label names.
@@ -14489,9 +14506,9 @@ def sweep_idle() -> str | None:
     """Why this pass is idle, or None when it has work (or cannot tell).
 
     From the read door when it is `on` (no Linear request): this repo's cards
-    in the work lanes, and its Backlog cards not held for a human — a held
+    in the work lanes, and its Queued cards not held for a human — a held
     card is never promoted. Otherwise from Linear with `IDLE_QUERY`, one
-    request, where any of this repo's Backlog cards counts as promotable (the
+    request, where any of this repo's Queued cards counts as promotable (the
     query cannot ask "not held" safely).
 
     An answer nobody could get is NOT idle: the pass runs in full, exactly as
@@ -14504,7 +14521,7 @@ def sweep_idle() -> str | None:
         return f"the WIP cap is {MAX_WIP}, so nothing here is built or promoted"
     if bureau_read.mode() == "on" and bureau_read.enabled():
         try:
-            read = bureau_read.board(DOOR_WORK_LANES + (BACKLOG_LANE,), scope="repo",
+            read = bureau_read.board(DOOR_WORK_LANES + QUEUE_LANES, scope="repo",
                                      max_age=bureau_read.BOARD_MAX_AGE)
         except bureau_read.ReadUnknown as e:
             if e.skip:
@@ -14514,7 +14531,7 @@ def sweep_idle() -> str | None:
         else:
             mine = [c for c in read.nodes if card_repo(c) == REPO_SLUG]
             moving = [c for c in mine if c["state"]["name"] in IN_MOTION_LANES]
-            waiting = [c for c in mine if c["state"]["name"] == BACKLOG_LANE
+            waiting = [c for c in mine if c["state"]["name"] in QUEUE_LANES
                        and not held(c)]
             if moving or waiting:
                 return None
@@ -14606,7 +14623,7 @@ def main(
       - plan.yml, the moment an epic activates (In Progress, the one lane the
         gate counts an epic as active in — DRE-5347)
       - linear-sync.yml, the moment a merge flips a card to Done
-    Promotion is pure Linear (the Backlog→Todo transition rides the Linear
+    Promotion is pure Linear (the Queued→Todo transition rides the Linear
     webhook → relay → repository_dispatch for the actual agent start), so
     the event hooks need only LINEAR_API_KEY. (Origin: DRE-1260 activated
     9s after a sweep checked and faced an ~80-minute wait, 2026-06-12.)
