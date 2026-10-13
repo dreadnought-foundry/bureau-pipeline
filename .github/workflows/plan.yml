@@ -775,15 +775,22 @@ jobs:
       # `modelUsage` lists every model the run billed. The line is composed in
       # planning_classify.py and posted here: a receipt assembled in YAML is a
       # second answer to "which model answered" that nothing tests.
+      #
+      # The receipt arrives through `env:`, never spliced into the script
+      # (DRE-7196): it ends ` · cost $0.0123`, and spliced into a quoted bash
+      # string the shell reads `$0` as the script's path and `$1` as empty, so
+      # every receipt would post a mangled figure the cost tally counts as
+      # uncosted.
       - name: Classifier heartbeat — the model that answered
         if: steps.classify.outputs.answered == 'true'
         env:
           LINEAR_API_KEY: ${{ secrets.LINEAR_PLANNER_KEY || secrets.LINEAR_API_KEY }}
           LINEAR_API_KEY_FALLBACK: ${{ secrets.LINEAR_API_KEY }}
+          RECEIPT: ${{ steps.classify.outputs.receipt }}
         run: |
           python3 .bureau-pipeline/scripts/linear_ops.py comment \
             "${{ github.event.client_payload.identifier }}" \
-            "🧠 model-attempt: ${{ steps.classify.outputs.receipt }} — planning classifier read the card."
+            "🧠 model-attempt: $RECEIPT — planning classifier read the card."
 
       - name: Planning shape — which route this card takes
         id: shape

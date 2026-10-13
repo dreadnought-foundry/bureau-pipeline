@@ -21,7 +21,8 @@ so consecutive days never count a receipt twice.
 
 A receipt with no readable cost — ` · cost unknown`, or one written before the
 clause existed — is counted in `receipts` and in `uncosted`, and never added
-as zero.
+as zero. A call that failed outright posts no receipt at all, so whatever it
+spent is outside the tally: the total is a floor, not the whole bill.
 
 One line out, always exactly one on a run that read Linear:
 
