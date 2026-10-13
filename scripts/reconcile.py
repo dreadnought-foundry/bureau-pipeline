@@ -4325,9 +4325,12 @@ def destinations() -> tuple[str, ...]:
     Pure: no Linear call and no environment read. The retiring lanes'
     replacements come off the lane contract, the same reading
     `drain_retiring_lanes` makes (none today); the two `_fleet_outage_state`
-    lanes are the literals its two callers pass.
+    lanes are the literals its two callers pass. The dead-run park writes
+    `QUEUE_LANE`, read here when asked so it follows the planning exit
+    (DRE-6743).
     """
     lanes = [
+        QUEUE_LANE,
         REVIEW_LANE,
         limit_recovery.PLANNING_LANE,
         limit_recovery.BOUNCE_LANE,
