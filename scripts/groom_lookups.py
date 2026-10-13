@@ -59,6 +59,19 @@ owner is not answered by this leg reading `[]` for it. That rule is DRE-5458's
     card is `ok` when any repo in the map answered. A card naming no file was
     never asked anything and is left as `cards` wrote it.
 
+## The work matched to a card's problem (DRE-7236)
+
+On 2026-10-10 two removed cards went unseen: DRE-4049's problem had been fixed
+in another file under DRE-5942, and DRE-5657's delivered by DRE-5658. A file
+lookup finds neither. So `cards` also searches each row's `problem_terms` —
+the read door's search first, Linear's when the door cannot answer — keeps
+the Done cards completed since the card was filed, and writes them, with the
+pull requests on their attachments, to `row["matched_work"]`. The `owner`
+legs read those pull requests in their own repos after the path lookups, and
+`fold` writes them onto every row that carries them. A card naming no file
+is searched, and its pull requests read, like any other; its `lookups` block,
+and every other row's, is exactly what it was. `cards` states the contract.
+
 CLI:
 
     python3 scripts/groom_lookups.py owner --owner <owner> --targets <file> \\
@@ -74,6 +87,7 @@ import json
 import math
 import os
 import re
+import string
 import subprocess  # nosec B404 — a fixed-arg `gh` read, argv list, never a shell
 import sys
 import time
@@ -82,6 +96,7 @@ from pathlib import Path
 from urllib.parse import urlencode
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import bureau_read  # noqa: E402 — the read door's search, before Linear's
 import dispatch_pool  # noqa: E402 — the one case-insensitive header reader
 import groomer  # noqa: E402 — `_FILE_REF`, the one reader of a card's paths
 import sanitize_untrusted  # noqa: E402 — Linear text is fenced data
@@ -147,6 +162,53 @@ LOOKUP_FAILED = "lookup failed: "
 
 #: How many cards one aliased `searchIssues` field asks Linear for.
 SEARCH_FIRST = 25
+
+# --- the matched work (DRE-7236): the contract the input card reads -------- #
+#: The most terms one card is searched by: its identifier, its paths, its
+#: backticked spans and its title's two-word phrases, in that order.
+MAX_TERMS = 12
+#: The most backticked spans, and the length a span must have.
+MAX_SPANS = 3
+SPAN_MIN, SPAN_MAX = 4, 80
+#: The most two-word phrases from the title, and the letters each word needs.
+MAX_PHRASES = 6
+PHRASE_WORD_MIN = 3
+#: Words a title phrase never holds: a phrase of them finds every card.
+STOPWORDS = (
+    "about", "above", "after", "again", "all", "also", "and", "any", "are",
+    "because", "been", "before", "being", "below", "both", "but", "can",
+    "could", "did", "does", "doing", "done", "each", "either", "every", "for",
+    "from", "had", "has", "have", "her", "here", "his", "how", "into", "its",
+    "just", "may", "might", "more", "most", "must", "neither", "nor", "not",
+    "now", "off", "once", "one", "only", "onto", "other", "our", "out",
+    "over", "own", "per", "same", "shall", "should", "some", "still", "such",
+    "than", "that", "the", "their", "them", "then", "there", "these", "they",
+    "this", "those", "too", "under", "very", "via", "was", "were", "what",
+    "when", "where", "which", "while", "who", "whom", "whose", "why", "will",
+    "with", "would", "yet", "you", "your",
+)
+#: The most search hits one match request reads: the Done ones, the most
+#: terms matched first. It bounds the request, never the contract's cap.
+MAX_CANDIDATES = 20
+#: The most matched cards a row carries, the most pull requests per card,
+#: and the parent levels one match request reads.
+MAX_MATCHED_CARDS = 8
+MAX_MATCHED_PRS = 3
+MAX_ANCESTRY = 4
+#: The most files read off one matched pull request (`per_page`), and the
+#: characters its body is cut at.
+MAX_PR_FILES = 30
+PR_BODY_LIMIT = 1500
+#: The one lane a matched card is in.
+DONE = "Done"
+# The `why` values of `matched_work`, exact.
+NOT_SEARCHED = "not searched"
+EXCLUDED_NOT_SEARCHED = "the card is excluded, so nothing was searched"
+NO_LINEAR_KEY = "no Linear key, so nothing was searched"
+DOOR_HELD = ("the read door says {reason}: Linear was not asked, so its held "
+             "bucket is not spent")
+NOT_LOOKED_UP = "not looked up"
+PR_NOT_IN_MAP = "{repo} is not in the repo map"
 #: The `fold` command's input files, found at any depth under --lookups-dir.
 LOOKUPS_GLOB = "lookups-*.json"
 
@@ -168,6 +230,10 @@ NO_REPO_ANSWERED = "no repo answered — {whys}"
 _LIST_ORDER = {"planning": 0, "spare": 1}
 _NEXT = re.compile(r'rel="?next"?')
 _DIGITS = re.compile(r"[0-9]+")
+_SPAN = re.compile(r"`([^`\n]+)`")
+_PR_URL = re.compile(r"https://github\.com/([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+)"
+                     r"/pull/([0-9]+)(?:[/?#].*)?")
+_WORD_EDGE = string.punctuation + "“”‘’—–…"
 
 
 class GhError(RuntimeError):
@@ -366,6 +432,114 @@ def _read_card(leg: _Leg, row: dict, repos: list[str], card: dict,
             card["unread_repos"][repo] = refused.why
 
 
+def matched_work_of(row) -> dict:
+    """The row's `matched_work`. A row written before DRE-7236 has none,
+    and every reader reads it as not searched."""
+    work = row.get("matched_work") if isinstance(row, dict) else None
+    if isinstance(work, dict):
+        return work
+    return {"searched": False, "why": NOT_SEARCHED, "cards": []}
+
+
+def _prs_of_row(row) -> list[dict]:
+    out = []
+    for card in matched_work_of(row).get("cards") or []:
+        if isinstance(card, dict):
+            out += [pr for pr in card.get("prs") or [] if isinstance(pr, dict)]
+    return out
+
+
+def _rows_with_matched_prs(rows) -> list[dict]:
+    """The rows whose `matched_work.cards` holds a pull request, Planning
+    before spares — whatever their `lookups.looked_up` says: a card that
+    names no file is searched like any other (DRE-7236)."""
+    out = [r for r in rows or []
+           if isinstance(r, dict) and r.get("card") and _prs_of_row(r)]
+    return sorted(out, key=lambda r: _LIST_ORDER.get(r.get("list"), 2))
+
+
+def _pr_key(repo: str, number) -> str:
+    return f"{repo}#{number}"
+
+
+def _matched_to_read(rows, repos: list[str]) -> list[tuple[str, str, int]]:
+    """`(key, repo, number)` for every matched pull request in this owner's
+    repos, each once, in row order. A repo's case is the map's."""
+    own = {r.lower(): r for r in repos}
+    out: list[tuple[str, str, int]] = []
+    for row in _rows_with_matched_prs(rows):
+        for pr in _prs_of_row(row):
+            repo = own.get(str(pr.get("repo") or "").lower())
+            number = pr.get("number")
+            if (repo is None or not isinstance(number, int)
+                    or isinstance(number, bool)):
+                continue
+            key = _pr_key(repo, number)
+            if key not in {k for k, _, _ in out}:
+                out.append((key, repo, number))
+    return out
+
+
+def _blank_pr() -> dict:
+    return {"read": False, "why": None, "merged_at": None, "title": None,
+            "body": None, "files": [], "files_cut": False}
+
+
+def _json_pull(body: str, what: str) -> dict:
+    try:
+        doc = json.loads(body or "null")
+    except ValueError as e:
+        raise _Refused(f"{what} answered unreadable JSON: {e}") from e
+    if not isinstance(doc, dict) or not isinstance(doc.get("number"), int):
+        message = doc.get("message") if isinstance(doc, dict) else None
+        raise _Refused(f"{what} answered {_one_line(message) or type(doc).__name__}"
+                       f", not a pull request")
+    return doc
+
+
+def _pr_body(text) -> str:
+    """Fenced data first, then cut, so the cut text is the sanitized text."""
+    return sanitize_untrusted.sanitize_body(str(text or ""))[:PR_BODY_LIMIT]
+
+
+def _read_pr(leg: _Leg, repo: str, number: int, entry: dict) -> None:
+    _, body = leg.request(f"repos/{repo}/pulls/{number}")
+    pull = _json_pull(body, f"{repo} pull request #{number}")
+    entry.update(merged_at=pull.get("merged_at") or None,
+                 title=_clean(pull.get("title")), body=_pr_body(pull.get("body")))
+    headers, body = leg.request(
+        f"repos/{repo}/pulls/{number}/files?per_page={MAX_PR_FILES}")
+    listed = [str(f["filename"])
+              for f in _json_list(body, f"{repo} files of #{number}")
+              if isinstance(f, dict) and f.get("filename")]
+    link = dispatch_pool._header(headers, "link") or ""
+    changed = pull.get("changed_files")
+    entry["files"] = listed[:MAX_PR_FILES]
+    entry["files_cut"] = bool(
+        len(listed) > MAX_PR_FILES
+        or any(_NEXT.search(part) for part in link.split(","))
+        or (isinstance(changed, int) and changed > len(entry["files"])))
+
+
+def _read_matched(leg: _Leg, doc: dict, matched) -> None:
+    """Each matched pull request, after the path lookups so they spend the
+    leg exactly as before: a repo that refuses is named on that pull request
+    and the next is read; a stop names every one not read."""
+    stopped = doc["why"]
+    for key, repo, number in matched:
+        entry = doc["matched_prs"][key]
+        if stopped:
+            entry["why"] = stopped
+            continue
+        try:
+            _read_pr(leg, repo, number, entry)
+            entry["read"] = True
+        except _Refused as refused:
+            entry["why"] = refused.why
+        except _Stop as stop:
+            stopped = doc["why"] = entry["why"] = stop.why
+
+
 def owner(rows, *, owner, gh_run, repo_map, now, budget=None,
           clock=time.monotonic) -> dict:
     """The `owner` command: one owner's repos, on that owner's token in
@@ -387,17 +561,44 @@ def owner(rows, *, owner, gh_run, repo_map, now, budget=None,
     it as unfinished all the same. The owner's `why` is what stopped the leg,
     or null when nothing did. `now` bounds every commits query (`until`), so
     the window asked is the card's creation to the moment the leg ran.
+
+    The matched pull requests (DRE-7236). Every row whose
+    `matched_work.cards` holds a pull request in one of this owner's repos —
+    `_rows_with_matched_prs`, a card naming no file included — has it read,
+    each once, AFTER the path lookups and under the same budget, clock and
+    refusal rules:
+
+        GET /repos/{owner}/{repo}/pulls/{n}
+        GET /repos/{owner}/{repo}/pulls/{n}/files?per_page=MAX_PR_FILES
+
+    into one more key, written only when there is one to read, so a morning
+    with none writes the document above byte for byte:
+
+        "matched_prs": {"owner/repo#n": {"read": bool, "why": str | null,
+                        "merged_at": str | null, "title": str | null,
+                        "body": str | null, "files": [str],
+                        "files_cut": bool}}
+
+    `body` is fenced (`sanitize_untrusted`) and cut at `PR_BODY_LIMIT`;
+    `files_cut` is true when GitHub holds more files than were listed. A
+    pull request not read says why: the repo's refusal, or what stopped the
+    leg. `fold` writes them onto every row that carries them.
     """
     started = clock()
     targets = _rows_to_read(rows)
     cards = {r["card"]: _blank() for r in targets}
     doc = {"owner": owner, "read": True, "why": None, "requests": 0,
            "budget": budget, "seconds": 0.0, "cards": cards}
+    matched = _matched_to_read(rows, _repos_of(owner, repo_map))
+    if matched:
+        doc["matched_prs"] = {key: _blank_pr() for key, _, _ in matched}
 
     def not_read(why: str) -> dict:
         doc.update(read=False, why=why)
         for card in cards.values():
             card["why"] = why
+        for entry in (doc.get("matched_prs") or {}).values():
+            entry["why"] = why
         doc["seconds"] = round(float(clock() - started), 1)
         return doc
 
@@ -421,6 +622,7 @@ def owner(rows, *, owner, gh_run, repo_map, now, budget=None,
         for card in cards.values():
             if not card["read"] and card["why"] is None:
                 card["why"] = stop.why
+    _read_matched(leg, doc, matched)
     doc["requests"] = leg.requests
     doc["budget"] = leg.cap
     doc["seconds"] = round(float(leg.elapsed()), 1)
@@ -483,15 +685,261 @@ def paths_of(row) -> tuple[list[str], int]:
     return found[:MAX_PATHS], max(0, len(found) - MAX_PATHS)
 
 
-def _search_query(n: int) -> str:
-    """One document, one aliased `searchIssues` field per path; each term a
-    variable, so a path is never spliced into the query text."""
-    params = ", ".join(f"$p{i}: String!" for i in range(n))
+def _search_query(n: int, prefix: str = "p") -> str:
+    """One document, one aliased `searchIssues` field per path (`p<i>`) or
+    per problem term (`t<i>`); each term a variable, so a path is never
+    spliced into the query text."""
+    params = ", ".join(f"${prefix}{i}: String!" for i in range(n))
     fields = "\n".join(
-        f"  p{i}: searchIssues(term: $p{i}, first: {SEARCH_FIRST}) "
+        f"  {prefix}{i}: searchIssues(term: ${prefix}{i}, first: {SEARCH_FIRST}) "
         "{ nodes { identifier title createdAt state { name } } }"
         for i in range(n))
     return f"query({params}) {{\n{fields}\n}}"
+
+
+# --------------------------------------------------------------------------- #
+# matched work — the problem search (DRE-7236)                                 #
+# --------------------------------------------------------------------------- #
+
+def _spans(text) -> list[str]:
+    """The backticked spans that hold no whitespace, run `SPAN_MIN` to
+    `SPAN_MAX` characters, and are not a path `_FILE_REF` already reads."""
+    return [span for span in _SPAN.findall(text or "")
+            if SPAN_MIN <= len(span) <= SPAN_MAX
+            and not any(c.isspace() for c in span)
+            and not groomer._FILE_REF.fullmatch(f"`{span}`")]
+
+
+def _is_word(word: str) -> bool:
+    return (len(word) >= PHRASE_WORD_MIN and word.isalpha()
+            and word.lower() not in STOPWORDS)
+
+
+def _phrases(title) -> list[str]:
+    """Every two words adjacent in the title, each a word of at least
+    `PHRASE_WORD_MIN` letters and neither a stopword, lowercased, in title
+    order. Punctuation at a word's edge is not part of it; a token with any
+    inside (`fail-back`, `DRE-5400's`) is not a word."""
+    words = [token.strip(_WORD_EDGE) for token in str(title or "").split()]
+    return [f"{a.lower()} {b.lower()}" for a, b in zip(words, words[1:])
+            if _is_word(a) and _is_word(b)]
+
+
+def problem_terms(row) -> list[str]:
+    """What a card's problem is searched by, at most `MAX_TERMS`, each once,
+    in this order: the card's identifier; its paths (`paths_of`); at most
+    `MAX_SPANS` backticked spans from the title, then the body; at most
+    `MAX_PHRASES` two-word phrases from the title."""
+    row = row if isinstance(row, dict) else {}
+    terms: list[str] = []
+
+    def add(found, cap=None) -> None:
+        added = 0
+        for term in found:
+            if cap is not None and added >= cap:
+                return
+            if term and term not in terms:
+                terms.append(term)
+                added += 1
+
+    add([str(row.get("card") or "").strip()])
+    add(paths_of(row)[0])
+    add(_spans(row.get("title")) + _spans(row.get("body")), MAX_SPANS)
+    add(_phrases(row.get("title")), MAX_PHRASES)
+    return terms[:MAX_TERMS]
+
+
+def _holds_key(lops) -> bool:
+    """Does this `linear_ops` hold a Linear key? Read through its own
+    `api_key`, which raises when there is none; a reader with no `api_key`
+    to ask holds none either. Never printed."""
+    reader = getattr(lops, "api_key", None)
+    if not callable(reader):
+        return False
+    try:
+        return bool(reader())
+    except Exception:  # noqa: BLE001 — no key is a reason, not a failure
+        return False
+
+
+class _Held(Exception):
+    """The door says Linear's bucket is held: skip, never fall back."""
+
+    def __init__(self, reason: str):
+        super().__init__(reason)
+        self.reason = reason
+
+
+def _door_search(terms: list[str]) -> dict | None:
+    """Every term's nodes from the read door, or None when the door is off
+    or could not answer them all — then Linear answers every term, so one
+    card's answer is never half the door's."""
+    if not bureau_read.enabled():
+        return None
+    found = {}
+    for term in terms:
+        try:
+            found[term] = bureau_read.search(term, first=SEARCH_FIRST,
+                                             scope="fleet").nodes
+        except bureau_read.ReadUnknown as unknown:
+            if unknown.skip:
+                bureau_read.note_skip("the groom's problem search", unknown.reason)
+                raise _Held(unknown.reason) from unknown
+            return None
+    return found
+
+
+def _linear_search(lops, terms: list[str]) -> dict:
+    found = lops.gql(_search_query(len(terms), prefix="t"),
+                     {f"t{i}": t for i, t in enumerate(terms)}) or {}
+    return {t: (found.get(f"t{i}") or {}).get("nodes") or []
+            for i, t in enumerate(terms)}
+
+
+def _candidates(row: dict, hits: dict) -> list[tuple[str, list[str], str]]:
+    """`(identifier, terms it matched, title)` for each Done card a search
+    found, never the card itself, the most terms first, at most
+    `MAX_CANDIDATES`. The match request re-reads every one."""
+    found: dict[str, tuple[list[str], str]] = {}
+    for term, nodes in hits.items():
+        for node in nodes if isinstance(nodes, list) else []:
+            if not isinstance(node, dict):
+                continue
+            ident = node.get("identifier")
+            state = node.get("state")
+            if (not isinstance(ident, str) or not ident
+                    or ident == row.get("card")
+                    or not isinstance(state, dict) or state.get("name") != DONE):
+                continue
+            matched, _ = found.setdefault(ident, ([], str(node.get("title") or "")))
+            if term not in matched:
+                matched.append(term)
+    ranked = sorted(found.items(), key=lambda kv: -len(kv[1][0]))
+    return [(ident, matched, title)
+            for ident, (matched, title) in ranked[:MAX_CANDIDATES]]
+
+
+def _ancestry(levels: int) -> str:
+    return ("parent { identifier " * levels).rstrip() + " }" * levels
+
+
+def _match_query(n: int) -> str:
+    """One document, one aliased `issue` per candidate: its lane, when it
+    was completed, its attachments' urls and `MAX_ANCESTRY` levels of
+    parents. Each identifier a variable."""
+    params = ", ".join(f"$c{i}: String!" for i in range(n))
+    fields = "\n".join(
+        f"  c{i}: issue(id: $c{i}) {{ identifier title state {{ name }} "
+        f"completedAt attachments {{ nodes {{ url }} }} "
+        f"{_ancestry(MAX_ANCESTRY)} }}"
+        for i in range(n))
+    return f"query({params}) {{\n{fields}\n}}"
+
+
+def _ancestors(node: dict) -> list[str]:
+    out: list[str] = []
+    parent = node.get("parent")
+    while isinstance(parent, dict) and len(out) < MAX_ANCESTRY:
+        ident = parent.get("identifier")
+        if not isinstance(ident, str) or not ident:
+            break
+        out.append(_clean(ident))
+        parent = parent.get("parent")
+    return out
+
+
+def _unread_pr(repo: str, number: int) -> dict:
+    return {"repo": repo, "number": number,
+            "url": f"https://github.com/{repo}/pull/{number}",
+            "read": False, "why": NOT_LOOKED_UP, "merged_at": None,
+            "title": None, "body": None, "files": [], "files_cut": False}
+
+
+def _prs_on(node: dict) -> list[dict]:
+    """The GitHub pull request links on the card's attachments, each once,
+    at most `MAX_MATCHED_PRS`."""
+    out: list[dict] = []
+    seen: set = set()
+    attachments = node.get("attachments")
+    for item in ((attachments or {}).get("nodes") or []
+                 if isinstance(attachments, dict) else []):
+        url = item.get("url") if isinstance(item, dict) else None
+        found = _PR_URL.fullmatch(url.strip()) if isinstance(url, str) else None
+        if not found:
+            continue
+        repo, number = f"{found[1]}/{found[2]}", int(found[3])
+        if (repo.lower(), number) in seen:
+            continue
+        seen.add((repo.lower(), number))
+        out.append(_unread_pr(repo, number))
+        if len(out) >= MAX_MATCHED_PRS:
+            break
+    return out
+
+
+def _matched(row: dict, ranked, found: dict, since: datetime) -> list[dict]:
+    """The Done cards completed after the card was created, ranked by terms
+    matched and then newest completion, at most `MAX_MATCHED_CARDS`."""
+    out = []
+    for i, (ident, terms, title) in enumerate(ranked):
+        node = found.get(f"c{i}")
+        if not isinstance(node, dict):
+            continue
+        ident = node.get("identifier") or ident
+        state = node.get("state")
+        done_at = _moment(node.get("completedAt"))
+        if (ident == row.get("card") or not isinstance(state, dict)
+                or state.get("name") != DONE or done_at is None
+                or done_at <= since):
+            continue
+        ancestors = _ancestors(node)
+        out.append((done_at, {
+            "identifier": _clean(ident),
+            "title": _clean(node.get("title") or title),
+            "state": DONE, "completed_at": _clean(node.get("completedAt")),
+            "parent": ancestors[0] if ancestors else None,
+            "ancestors": ancestors,
+            "ancestors_cut": len(ancestors) >= MAX_ANCESTRY,
+            "terms": list(terms), "prs": _prs_on(node)}))
+    out.sort(key=lambda pair: pair[0], reverse=True)
+    out.sort(key=lambda pair: -len(pair[1]["terms"]))
+    return [card for _, card in out[:MAX_MATCHED_CARDS]]
+
+
+def _unsearched(why: str, terms=()) -> dict:
+    return {"searched": False, "source": None, "why": why,
+            "terms": list(terms), "cards": []}
+
+
+def _matched_work(row: dict, lops, holds_key: bool) -> dict:
+    """The row's `matched_work` (the contract in `cards`). Whatever goes
+    wrong is `searched: false` with the reason, never a failed lookup."""
+    if row.get("excluded"):
+        return _unsearched(EXCLUDED_NOT_SEARCHED)
+    terms: list[str] = []
+    try:
+        terms = problem_terms(row)
+        if not holds_key:
+            return _unsearched(NO_LINEAR_KEY, terms)
+        since = _moment((row.get("context") or {}).get("created_at"))
+        if since is None:
+            return _unsearched(NO_CREATED_AT, terms)
+        try:
+            hits, source = _door_search(terms), "door"
+        except _Held as held:
+            return _unsearched(DOOR_HELD.format(reason=held.reason), terms)
+        if hits is None:
+            hits, source = _linear_search(lops, terms), "linear"
+        work = {"searched": True, "source": source, "why": None,
+                "terms": terms, "cards": []}
+        ranked = _candidates(row, hits)
+        if ranked:
+            found = lops.gql(_match_query(len(ranked)),
+                             {f"c{i}": c[0] for i, c in enumerate(ranked)}) or {}
+            work["cards"] = _matched(row, ranked, found, since)
+        return work
+    except Exception as e:  # noqa: BLE001 — a failed search is said, not fatal
+        return _unsearched(_clean(_one_line(e)) or type(e).__name__, terms)
 
 
 def cards(rows, *, lops, now) -> list[dict]:
@@ -503,11 +951,48 @@ def cards(rows, *, lops, now) -> list[dict]:
     looked up: ONE `lops.gql` request for the newer cards naming its paths,
     with `ok: null` until `fold` decides it. A request Linear refuses is named
     in `newer_cards_why` and the next card is asked; the card is not failed
-    for it. Linear's cost: one request per file-naming, non-excluded row."""
+    for it. Linear's cost: one request per file-naming, non-excluded row.
+
+    Every row also gets `matched_work` (DRE-7236) — written FIRST, so a row
+    that names no file is searched like any other, and never touching a
+    byte of `lookups`:
+
+        {"searched": bool, "source": "door" | "linear" | null,
+         "why": str | null, "terms": [str],
+         "cards": [{"identifier", "title", "state": "Done", "completed_at",
+                    "parent": str | null, "ancestors": [str],
+                    "ancestors_cut": bool, "terms": [str],
+                    "prs": [{"repo", "number", "url", "read": false,
+                             "why": "not looked up", "merged_at": null,
+                             "title": null, "body": null, "files": [],
+                             "files_cut": false}]}]}
+
+    The card's `problem_terms` are asked of the read door's search first
+    (`bureau_read.search`, `scope=fleet`); when the door is off, has no
+    token, or cannot answer every term, Linear's `searchIssues` answers them
+    all in ONE aliased document — `source` says which. The Done cards found
+    (`MAX_CANDIDATES` of them) are re-read in ONE more Linear request for
+    their lane, completion, attachments and `MAX_ANCESTRY` levels of
+    parents; those completed after the card was created, never the card
+    itself, are kept, ranked by terms matched and then newest completion, at
+    most `MAX_MATCHED_CARDS`, each with its parent chain (`ancestors_cut`
+    when the fourth level was reached) and the GitHub pull requests on its
+    attachments (`MAX_MATCHED_PRS`), for the `owner` legs to read.
+
+    `searched: false` says why nothing was asked, or why the search failed:
+    an excluded row, no Linear key (`lops.api_key` — none, nothing is asked,
+    the door included), no creation date, a door saying Linear's bucket is
+    held (`linear-hold`: the phase is skipped, never sent to Linear), or the
+    request's own error. Linear's cost: at most two more requests per
+    non-excluded row."""
     limit = _moment(now)
+    holds_key = None
     for row in rows or []:
         if not isinstance(row, dict):
             continue
+        if not row.get("excluded") and holds_key is None:
+            holds_key = _holds_key(lops)
+        row["matched_work"] = _matched_work(row, lops, bool(holds_key))
         if row.get("excluded"):
             row["lookups"] = None
             continue
@@ -650,6 +1135,40 @@ def _fold_row(row: dict, look: dict, owners: list[str], by_owner: dict,
     look["why"] = NO_REPO_ANSWERED.format(whys="; ".join(whys))
 
 
+def _fold_matched(row: dict, by_owner: dict) -> None:
+    """Each matched pull request on the row, as its owner's leg read it.
+    One no leg read says why: that owner's reason, no document from it, or
+    a repo outside the map, which no leg is ever asked about. The leg
+    already fenced the title and body, so they are written as read — a
+    second fence would prefix each defanged line twice."""
+    for pr in _prs_of_row(row):
+        repo = str(pr.get("repo") or "")
+        owner = repo.split("/")[0]
+        doc = by_owner.get(owner.lower())
+        read = ((doc or {}).get("matched_prs")
+                if isinstance(doc, dict) else None)
+        index = ({str(k).lower(): v for k, v in read.items()}
+                 if isinstance(read, dict) else {})
+        entry = index.get(_pr_key(repo, pr.get("number")).lower())
+        if isinstance(entry, dict):
+            files = [str(f) for f in entry.get("files") or []
+                     if isinstance(f, str)][:MAX_PR_FILES]
+            pr.update(read=entry.get("read") is True,
+                      why=_one_line(entry["why"]) if entry.get("why") else None,
+                      merged_at=entry.get("merged_at") or None,
+                      title=(str(entry["title"])
+                             if entry.get("title") is not None else None),
+                      body=(str(entry["body"])[:PR_BODY_LIMIT]
+                            if entry.get("body") is not None else None),
+                      files=files, files_cut=bool(entry.get("files_cut")))
+            continue
+        if doc is None or doc.get("read") is not True:
+            why = _why_of(owner, doc, None)
+        else:
+            why = PR_NOT_IN_MAP.format(repo=repo)
+        pr.update(read=False, why=why)
+
+
 def fold(rows, docs: list[dict], *, repo_map) -> list[dict]:
     """Fold every leg's document into the rows, in place, and return them.
 
@@ -658,7 +1177,11 @@ def fold(rows, docs: list[dict], *, repo_map) -> list[dict]:
     one `the lookup did not cover …` line per owner or repo not read, and its
     `ok` and `why` — decided by its own repo when it is mapped, by any repo
     when it is not. A row that names no file, or whose `lookups` is null, is
-    left as it was. The owner is the document's own `owner` key."""
+    left as it was. The owner is the document's own `owner` key.
+
+    Every row whose `matched_work` holds a pull request — a row naming no
+    file included — then has each one written as its owner's leg read it
+    (DRE-7236), and nothing else of the row changes for it."""
     by_owner: dict[str, dict] = {}
     for doc in docs or []:
         if isinstance(doc, dict) and isinstance(doc.get("owner"), str):
@@ -670,6 +1193,8 @@ def fold(rows, docs: list[dict], *, repo_map) -> list[dict]:
         look = row.get("lookups")
         if isinstance(look, dict) and look.get("looked_up") is True:
             _fold_row(row, look, owners, by_owner, repo_map)
+    for row in _rows_with_matched_prs(rows):
+        _fold_matched(row, by_owner)
     return rows
 
 
