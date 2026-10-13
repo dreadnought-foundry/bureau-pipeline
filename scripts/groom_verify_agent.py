@@ -12,8 +12,14 @@ Planning list and the spares behind it — gets one agent, holding
 `briefs/groom-verify.md`, the card, and its repo checked out read-only under
 `target/`. The agent asks whether the card's problem can still be seen there,
 and answers `still-needed`, `partly-solved`, `done-elsewhere`, `obsolete` or
-`not-worth-it`, each with a `file:line` proof. This file never calls a model: the vendor action in the workflow does,
-and the four subcommands here are everything around it.
+`not-worth-it`, each with one anchored proof (DRE-7240): a `file:line` in
+`target/`, a Done card with its merged pull request from the row's
+`matched_work`, or a fact from the row's `routing` — the last two checked
+against what the runner handed the agent. A Cancel of a card with children
+counts only a Done card not under it, or a routing fact, and a Cancel on a
+pull request that did part of the card is `partly-solved`. This file never
+calls a model: the vendor action in the workflow does, and the four
+subcommands here are everything around it.
 
   * `targets` — in the groom job, which holds the Linear key: every card to
     verify, its title, body and board context — age, labels, parent and its
@@ -133,11 +139,29 @@ NO_FILE = "no verdict file"
 NO_PROOF = "no proof"
 UNREADABLE = "unreadable answer"
 NO_ARTIFACT = "no verdict artifact"
+#: A Cancel of a card with children left with no anchored item once code
+#: items and items under the card are set aside (DRE-7240).
+CHILD_PROOF = "proof belongs to a child"
 #: Every reason an `unverified` mark may carry, beside `lookup failed: <why>`
 #: (`groom_lookups.LOOKUP_FAILED`). Nothing else reaches the page (DRE-5746):
 #: `_mark` reads any other as `unreadable answer`.
 UNVERIFIED_REASONS = (STEP_FAILED, STEP_SKIPPED, NO_FILE, NO_PROOF,
-                      UNREADABLE, NO_ARTIFACT)
+                      UNREADABLE, NO_ARTIFACT, CHILD_PROOF)
+
+#: The proof kinds (DRE-7240). Three are anchored — a `file:line` in
+#: `target/`, a Done card with its merged pull request from the row's
+#: `matched_work`, a fact from the row's `routing` — and `source` only ever
+#: supports one of them.
+CODE, DONE_WORK, ROUTING = "code", "done-work", "routing"
+#: What a verdict rested on: the kinds of the anchored items that counted,
+#: and the context the agent declared, kept only when it was supplied.
+RESTED_ON = (CODE, DONE_WORK, ROUTING, "thread", "relations", "parent")
+#: A Cancel answer resting on a pull request that did part of the card is
+#: recorded `partly-solved`, saying so.
+ADJUSTED = "partial pull request"
+#: A done-work item's `covers_check`: the files the card names decided
+#: whether the pull request did the whole card, or the agent's `covers` alone.
+COVERS_PATHS, COVERS_AGENT = "paths", "agent"
 #: The fifth exclusion reason (DRE-5746), exact.
 UNMAPPED = "repo not in config/repo-map.json: {slug}"
 #: `prepare`'s whole output for a card no agent may read code for.
@@ -737,16 +761,22 @@ SHAPE = f"""Write exactly one file, `{RAW_FILE}`, at the workspace root:
   "summary": "One or two sentences.",
   "proof": [
     {{"file": "<path under target/>", "line": 1, "quote": "<the line>"}},
+    {{"done_card": "DRE-N", "pr": "<owner>/<repo>#<n>", "covers": "whole | part", "quote": "<what it solved>"}},
+    {{"routing": "<fact id>", "quote": "<what the fact shows>"}},
     {{"source": "<where>", "quote": "<the words>"}}
   ],
+  "rested_on": ["code | done-work | routing | thread | relations | parent"],
   "rewrite": "<on partly-solved only: the card's updated body, markdown>"
 }}
 ```
 
-Every answer but `unverified` needs at least one `file:line` proof from
-`target/`. If `target/` is absent or empty, the only answer is `unverified`.
-Write `"rewrite"` on a `partly-solved` answer only, and leave it out of every
-other."""
+Every answer but `unverified` needs at least one anchored proof item: a
+`file:line` from `target/`, a Done card with its merged pull request from the
+matched Done work, or a routing fact from where jobs ran. A `source` item
+never counts on its own. For a card with children, a Cancel counts only a
+Done card that is not under it, or a routing fact. If `target/` is absent or
+empty, the only answer is `unverified`. Write `"rewrite"` on a
+`partly-solved` answer only, and leave it out of every other."""
 
 
 def _context_lines(context) -> list[str]:
@@ -1022,22 +1052,43 @@ class _Unreadable(Exception):
 
 
 def _proof_item(item) -> dict:
-    """One proof item in its exact shape, or `_Unreadable`."""
+    """One proof item in one of its four exact shapes (DRE-7240), or
+    `_Unreadable`. Nothing the agent writes beyond the shape is kept: `fact`
+    and `covers_check` are the runner's words, written in `_weigh`."""
     if not isinstance(item, dict):
         raise _Unreadable
+    quote = item.get("quote")
+    if not isinstance(quote, str):
+        raise _Unreadable
+    quote = sanitize_untrusted.sanitize_line(quote)
     if "file" in item:
-        path, line, quote = item.get("file"), item.get("line"), item.get("quote")
+        path, line = item.get("file"), item.get("line")
         if (not isinstance(path, str) or not path.strip()
                 or isinstance(line, bool) or not isinstance(line, int)
-                or line < 1 or not isinstance(quote, str)):
+                or line < 1):
             raise _Unreadable
-        return {"file": _one_line(path), "line": line,
-                "quote": sanitize_untrusted.sanitize_line(quote)}
-    source, quote = item.get("source"), item.get("quote")
-    if not isinstance(source, str) or not isinstance(quote, str):
+        return {"file": _one_line(path), "line": line, "quote": quote}
+    if "done_card" in item:
+        card, ref = item.get("done_card"), item.get("pr")
+        if (not isinstance(card, str) or not card.strip()
+                or not isinstance(ref, str) or not ref.strip()):
+            raise _Unreadable
+        found = {"done_card": _one_line(card), "pr": _one_line(ref),
+                 "quote": quote}
+        # Anything but `whole` or `part` is no `covers` at all: the pull
+        # request is then read as one that did part of the card.
+        if item.get("covers") in ("whole", "part"):
+            found["covers"] = item["covers"]
+        return found
+    if "routing" in item:
+        fid = item.get("routing")
+        if not isinstance(fid, str) or not fid.strip():
+            raise _Unreadable
+        return {"routing": _one_line(fid), "quote": quote}
+    source = item.get("source")
+    if not isinstance(source, str):
         raise _Unreadable
-    return {"source": sanitize_untrusted.sanitize_line(source),
-            "quote": sanitize_untrusted.sanitize_line(quote)}
+    return {"source": sanitize_untrusted.sanitize_line(source), "quote": quote}
 
 
 def is_file_line(item: dict) -> bool:
@@ -1048,12 +1099,178 @@ def is_file_line(item: dict) -> bool:
             and ".." not in parts and bool(_one_line(item.get("quote"))))
 
 
-def _counts(item: dict, card_text: str) -> bool:
-    """Is this item proof? Quoted card text is never proof on its own."""
-    if is_file_line(item):
+def _kind(item: dict) -> str | None:
+    """The proof kind an item's shape names, or None for a `source` item."""
+    if "file" in item:
+        return CODE
+    if "done_card" in item:
+        return DONE_WORK
+    if "routing" in item:
+        return ROUTING
+    return None
+
+
+def _pr_ref(pr: dict) -> str:
+    return f"{_one_line(pr.get('repo'))}#{_one_line(pr.get('number'))}"
+
+
+def _done_match(item: dict, row: dict) -> tuple[dict, dict] | None:
+    """The Done card and merged pull request a done-work item names, when
+    the row's `matched_work` holds both — else None. A row with no
+    `matched_work` was never searched, and supplies none."""
+    work = row.get("matched_work")
+    if not isinstance(work, dict) or work.get("searched") is not True:
+        return None
+    for card in work.get("cards") or []:
+        if (not isinstance(card, dict)
+                or _one_line(card.get("identifier")) != item.get("done_card")
+                or card.get("state") != "Done"):
+            continue
+        for pr in card.get("prs") or []:
+            if (isinstance(pr, dict) and _pr_ref(pr) == item.get("pr")
+                    and pr.get("merged_at")):
+                return card, pr
+    return None
+
+
+def _routing_match(item: dict, row: dict) -> dict | None:
+    """The routing fact a routing item names, when the row's `routing.facts`
+    holds that `id` — else None. A row with no routing, or one not read,
+    has no facts."""
+    routing = row.get("routing")
+    if not isinstance(routing, dict) or routing.get("read") is not True:
+        return None
+    for found in routing.get("facts") or []:
+        if isinstance(found, dict) and found.get("id") == item.get("routing"):
+            return found
+    return None
+
+
+def _covers(item: dict, pr: dict, row: dict) -> tuple[bool, str]:
+    """`(did the pull request do the whole card, covers_check)`.
+
+    The files decide it when they can: the card names files (`lookups.paths`,
+    none left out) and the pull request's files were read in full. Some but
+    not all of the named paths among them is part of the card, whatever the
+    agent said. Every other case — none of the paths, no path named, more
+    than `groom_lookups.MAX_PATHS`, files not read in full — rests on the
+    agent's own `covers`, and says so."""
+    whole = item.get("covers") == "whole"
+    look = row.get("lookups") if isinstance(row.get("lookups"), dict) else {}
+    paths = {str(p) for p in look.get("paths") or []}
+    files = {str(f) for f in pr.get("files") or []}
+    if (paths and look.get("paths_left_out") == 0 and pr.get("read") is True
+            and pr.get("files_cut") is False and paths & files):
+        return whole and paths <= files, COVERS_PATHS
+    return whole, COVERS_AGENT
+
+
+def _children(row: dict) -> set[str] | None:
+    """The identifiers of the card's children, in any state — or None when
+    the row carries no board context to say."""
+    context = row.get("context")
+    if not isinstance(context, dict):
+        return None
+    return {_one_line(c.get("identifier")) for c in context.get("children") or []
+            if isinstance(c, dict)}
+
+
+def _under(card: dict, row: dict, children: set[str]) -> bool:
+    """Is the matched card under the card being checked? A child, anything
+    whose chain of parents holds the card, and a chain cut before its end —
+    nothing can show that one is not under it."""
+    ancestors = card.get("ancestors")
+    if card.get("ancestors_cut") is not False or not isinstance(ancestors, list):
         return True
-    quote = _one_line(item.get("quote"))
-    return "source" in item and bool(quote) and quote not in card_text
+    me = row.get("card")
+    return (_one_line(card.get("identifier")) in children
+            or me in {_one_line(a) for a in ancestors}
+            or _one_line(card.get("parent")) == me)
+
+
+def _supplied(row: dict) -> set[str]:
+    """The context words whose context the row actually supplied."""
+    context = row.get("context")
+    if not isinstance(context, dict):
+        return set()
+    return {word for word, there in (
+        ("thread", bool(context.get("comments"))),
+        ("relations", bool(context.get("relations"))),
+        ("parent", isinstance(context.get("parent"), dict))) if there}
+
+
+def _weigh(verdict: str, proof: list[dict], row: dict, declared,
+           *, recorded: bool = False) -> dict:
+    """The proof rules (DRE-7240), in one walk `judge` and `_mark` share:
+    `{"verdict", "reason", "proof", "rested_on"}` and `adjusted` on a Cancel
+    turned `partly-solved`. `verdict` is never `unverified` here.
+
+    Each done-work or routing item is checked against what the row supplied,
+    and the runner writes `fact` (and on done work `covers_check`) onto each
+    one that matched. With `recorded`, a part the row does not carry — the
+    workflow's `apply` holds no folded targets — is read off the document
+    `verdict` wrote: an item carrying the runner's `fact` is one `judge`
+    matched, and the context words are the ones `judge` kept.
+    """
+    know_work = not recorded or "matched_work" in row
+    know_routing = not recorded or "routing" in row
+    children = _children(row) or set()
+    weighed, counted = [], []
+    for raw in proof:
+        item, kind = dict(raw), _kind(raw)
+        under, whole = False, True
+        if kind == CODE:
+            anchored = is_file_line(item)
+        elif kind == DONE_WORK and know_work:
+            match = _done_match(item, row)
+            item.pop("fact", None)
+            item.pop("covers_check", None)
+            anchored = match is not None
+            if anchored:
+                card, pr = match
+                whole, check = _covers(item, pr, row)
+                item.update(fact=matched_line(card, pr), covers_check=check)
+                under = _under(card, row, children)
+        elif kind == ROUTING and know_routing:
+            found = _routing_match(item, row)
+            item.pop("fact", None)
+            anchored = found is not None
+            if anchored:
+                item["fact"] = routing_line(found)
+        elif kind in (DONE_WORK, ROUTING):
+            anchored = bool(_one_line(item.get("fact")))
+            # Nothing on the row says where a recorded card sits, so it is
+            # under the card whenever the card has children.
+            under = kind == DONE_WORK
+            whole = kind == ROUTING or item.get("covers") == "whole"
+        else:
+            anchored = False
+        weighed.append(item)
+        if anchored:
+            counted.append((kind, under, whole))
+    if not counted:
+        return {"verdict": UNVERIFIED, "reason": NO_PROOF, "proof": [],
+                "rested_on": []}
+    # The child rule: a Cancel of a card with children counts only a Done
+    # card not under it, and a routing fact — never a `file:line` quote,
+    # which shows a line exists, not who landed it.
+    if verdict in CANCELS and children:
+        counted = [(k, u, w) for k, u, w in counted
+                   if k == ROUTING or k == DONE_WORK and not u]
+        if not counted:
+            return {"verdict": UNVERIFIED, "reason": CHILD_PROOF, "proof": [],
+                    "rested_on": []}
+    supplied = (_supplied(row) if not recorded or isinstance(
+        row.get("context"), dict) else set(RESTED_ON[3:]))
+    words = {k for k, _, _ in counted} | {
+        w for w in (declared if isinstance(declared, list) else [])
+        if isinstance(w, str) and w in RESTED_ON[3:] and w in supplied}
+    found = {"verdict": verdict, "reason": None, "proof": weighed,
+             "rested_on": [w for w in RESTED_ON if w in words]}
+    if verdict in CANCELS and any(k == DONE_WORK and not w
+                                  for k, _, w in counted):
+        found.update(verdict=PARTLY_SOLVED, adjusted=ADJUSTED)
+    return found
 
 
 def _lookup_state(row: dict) -> str:
@@ -1071,8 +1288,9 @@ def _lookup_state(row: dict) -> str:
 
 def judge(raw_path, *, card: str, row: dict, outcome: str) -> dict:
     """`{verdict, summary, proof, reason, lookup}` — the answer as the
-    proposal may read it. The target row first, then the step, then the
-    file."""
+    proposal may read it, and on one that stood `rested_on` (DRE-7240), and
+    `adjusted` on a Cancel a partial pull request made `partly-solved`. The
+    target row first, then the step, then the file, then `_weigh`."""
     # The lookup state FIRST, and on every answer — the unmapped one too, so
     # a morning of unmapped cards still counts in DRE-5317's stop.
     lookup = _lookup_state(row)
@@ -1122,17 +1340,17 @@ def judge(raw_path, *, card: str, row: dict, outcome: str) -> dict:
     except (OSError, ValueError, _Unreadable):
         return unverified(UNREADABLE, f"The agent's {RAW_FILE} could not be "
                                       f"read as an answer.")
-    verdict = doc["verdict"]
     summary = sanitize_untrusted.sanitize_line(doc["summary"])
-    card_text = _one_line(f"{row.get('title') or ''} {row.get('body') or ''}")
+    if doc["verdict"] == UNVERIFIED:
+        return unverified(NO_PROOF, summary)
+    # One anchored item at least, checked against what the runner itself
+    # handed the agent — and for a Cancel, the child rule and the partial
+    # pull request (DRE-7240).
+    weighed = _weigh(doc["verdict"], proof, row, doc.get("rested_on"))
+    verdict = weighed["verdict"]
     if verdict == UNVERIFIED:
-        return unverified(NO_PROOF, summary)
-    if not any(is_file_line(p) for p in proof):
-        return unverified(NO_PROOF, summary)
-    if not any(_counts(p, card_text) for p in proof):
-        return unverified(NO_PROOF, summary)
-    answer = {"verdict": verdict, "summary": summary, "proof": proof,
-              "reason": None, "lookup": lookup}
+        return unverified(weighed["reason"], summary)
+    answer = {**weighed, "summary": summary, "lookup": lookup}
     # The drafted body, read on `partly-solved` only (DRE-6666), with the
     # digest of the body it rewrites. Absent or not a string is no draft —
     # the verdict stands either way.
@@ -1209,7 +1427,7 @@ def _mark(row: dict, doc: dict | None) -> dict:
               else _LOOKUP_NONE if row.get("excluded") else _LOOKUP_NOT_RUN)
     blank = {"summary": None, "proof": [], "cost_usd": None,
              "duration_ms": None, "model": None, "started_at": None,
-             "finished_at": None, "lookup": lookup}
+             "finished_at": None, "lookup": lookup, "rested_on": []}
     if row.get("excluded"):
         return {**blank, **_spend_of(doc), "verdict": EXCLUDED,
                 "reason": _one_line(row["excluded"])}
@@ -1234,11 +1452,18 @@ def _mark(row: dict, doc: dict | None) -> dict:
             "reason": doc.get("reason")}
     if mark["verdict"] not in VERDICTS or mark["verdict"] == EXCLUDED:
         mark.update(verdict=UNVERIFIED, reason=UNREADABLE, proof=[])
-    elif mark["verdict"] not in _UNPROVED and not any(
-            is_file_line(p) for p in mark["proof"]):
-        # `verdict` never writes this; a file that says it anyway is not
-        # allowed to stand, or cancel a card, on no proof.
-        mark.update(verdict=UNVERIFIED, reason=NO_PROOF, proof=[])
+    elif mark["verdict"] not in _UNPROVED:
+        # The proof rules again, over the same row (DRE-7240): `verdict`
+        # never writes an answer that fails them, and a file that says one
+        # anyway is not allowed to stand, or cancel a card, on it — no
+        # anchored item, an epic's Cancel on a child's evidence, or a Cancel
+        # on a pull request that did part of the card.
+        weighed = _weigh(mark["verdict"], mark["proof"], row,
+                         doc.get("rested_on"), recorded=True)
+        if (weighed["verdict"] == PARTLY_SOLVED
+                and doc.get("adjusted") == ADJUSTED):
+            weighed["adjusted"] = ADJUSTED
+        mark.update(weighed)
     elif mark["verdict"] == UNVERIFIED and not mark["reason"]:
         mark["reason"] = NO_PROOF
     elif mark["verdict"] == UNVERIFIED and not is_unverified_reason(
@@ -1271,8 +1496,9 @@ def _spend_of(doc: dict | None) -> dict:
 
 
 def cancel_reason(mark: dict) -> str:
-    """`<verdict>: <summary>`, then each proof as `file:line — quote` or
-    `source — quote` — the line the CEO reads and the drain writes onto the
+    """`<verdict>: <summary>`, then each proof as `groomer.proof_line`
+    writes it — `file:line — quote`, `<fact> — quote` or `source — quote`
+    — the line the CEO reads and the drain writes onto the
     card. One line, defanged like every other reason on the page."""
     parts = [f"{mark['verdict']}: {_one_line(mark.get('summary'))}"]
     parts += [groomer.proof_line(item) for item in mark.get("proof") or []]
@@ -1304,10 +1530,15 @@ def _rewrite_row(slot: dict, mark: dict) -> dict:
 def _verify_field(mark: dict) -> dict:
     field = {k: mark.get(k) for k in ("verdict", "summary", "proof", "reason",
                                       "cost_usd", "duration_ms", "model")}
-    # Only on a Cancel the guard refused (DRE-5309), so every other row keeps
-    # the shape it had.
+    # What the verdict rested on (DRE-7240), on every row.
+    field["rested_on"] = list(mark.get("rested_on") or [])
+    # Only on a Cancel the guard refused (DRE-5309), and on a Cancel a
+    # partial pull request turned `partly-solved` (DRE-7240), so every other
+    # row keeps the shape it had.
     if mark.get("refused"):
         field["refused"] = mark["refused"]
+    if mark.get("adjusted"):
+        field["adjusted"] = mark["adjusted"]
     return field
 
 

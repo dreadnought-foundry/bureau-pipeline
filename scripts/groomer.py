@@ -2983,15 +2983,28 @@ def _render_batch_reasons(proposal: dict) -> list:
 
 def proof_line(item: dict) -> str:
     """One verify proof item as the page writes it: `path:line — quote` for a
-    `file:line` item, `source — quote` for any other. The ONE form, read by
-    the Cancel reason (`groom_verify_agent.cancel_reason`) and the verdict
-    line alike (DRE-5746). Not defanged here — the caller defangs the line it
-    is part of."""
+    `file:line` item, `<fact> — quote` for a done-work or routing item
+    (DRE-7240) — the runner's line from the data it supplied, never the
+    agent's paraphrase — and `source — quote` for any other. The ONE form,
+    read by the Cancel reason (`groom_verify_agent.cancel_reason`) and the
+    verdict line alike (DRE-5746). A done-work item whose `whole` rests on
+    the agent's reading alone says so. Not defanged here — the caller
+    defangs the line it is part of."""
     def one(text) -> str:
         return " ".join(str(text or "").split())
 
     if "file" in item:
         return f"{one(item.get('file'))}:{item.get('line')} — {one(item.get('quote'))}"
+    if "done_card" in item:
+        fact = one(item.get("fact")) or (f"{one(item.get('done_card'))} → "
+                                         f"{one(item.get('pr'))}")
+        line = f"{fact} — {one(item.get('quote'))}"
+        if item.get("covers") == "whole" and item.get("covers_check") == "agent":
+            line += " (whole card: the agent's reading)"
+        return line
+    if "routing" in item:
+        fact = one(item.get("fact")) or one(item.get("routing"))
+        return f"{fact} — {one(item.get('quote'))}"
     return f"{one(item.get('source'))} — {one(item.get('quote'))}"
 
 

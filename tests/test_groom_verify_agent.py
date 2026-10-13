@@ -763,8 +763,9 @@ def test_the_brief_asks_whether_the_problem_is_observable_today():
     assert ("the problem is no longer observable because other work solved "
             "it, whether or not any pull request names this card") in flat
     assert "a fix that never merged is not the question" in flat.lower()
-    assert ("Every answer but `unverified` needs a `file:line` proof from "
-            "`target/`") in flat
+    # Since DRE-7240 the proof may be a Done card or a routing fact as well
+    # as a `file:line`, and one anchored item of any of the three is needed.
+    assert "Every answer but `unverified` needs one anchored item" in flat
     # The model may not exclude a card: the word is the runner's.
     assert "never answer `excluded`" in flat
 
@@ -2180,7 +2181,7 @@ def test_apply_still_cancels_an_epic_whose_children_are_all_closed(tmp_path):
 # --------------------------------------------------------------------------
 EXACT_UNVERIFIED = ("agent step failed", "agent step skipped",
                     "no verdict file", "no proof", "unreadable answer",
-                    "no verdict artifact")
+                    "no verdict artifact", "proof belongs to a child")
 
 
 def test_the_unverified_reasons_are_the_exact_strings_the_card_names():
