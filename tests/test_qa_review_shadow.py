@@ -857,6 +857,21 @@ class ReviewedHeadTest(unittest.TestCase):
         self.assertIn(REPLAY_SHA, context)
         self.assertRegex(context, r"(?i)do not read the pull request's comments")
 
+    def test_the_replay_runs_the_tdd_check_against_the_recorded_base_commit(self):
+        # The brief's `origin/$BASE` is today's base branch: once the pull
+        # request has merged it contains the head, the range is empty, and
+        # the check passes whatever the commits were.
+        step = _step(id="pr")
+        with tempfile.TemporaryDirectory() as td:
+            bench = _Bench(Path(td), _pr_fixtures())
+            res = bench.run(step, {}, _shadow())
+            self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
+            context = bench.outputs().get("shadow_context", "")
+        self.assertIn(f"git fetch --unshallow origin {BASE_OID}", context)
+        self.assertIn(f'check_tdd_commits.py {BASE_OID} HEAD', context)
+        self.assertRegex(context, r"(?i)not\b.*origin/<base branch>")
+        self.assertRegex(context, r"(?i)exit code is the TDD verdict")
+
     def test_resolve_pr_on_a_live_review_names_no_diff_file(self):
         step = _step(id="pr")
         known = dict(LIVE, **{"github.event.pull_request.number": float(REPLAY_PR)})
