@@ -10,7 +10,8 @@ Held here:
   * the thread is read in pages of fifty up to `MAX_COMMENTS`, each comment
     cut at `MAX_COMMENT_CHARS`, the thread shown held to `MAX_THREAD_CHARS`
     newest first, and the board context says whether the agent sees it whole;
-  * the card's relations, both ways, and its parent's title;
+  * the card's relations, both ways, and its parent's title — at most
+    `MAX_RELATIONS` shown, each title cut at `MAX_TITLE_CHARS`;
   * two fenced sections, the matched Done work and the routing facts, each
     held to its own limit and saying what it left out;
   * a row at every limit adds under 65,000 characters to the input;
@@ -260,6 +261,52 @@ def test_a_card_with_no_relations_says_none():
     assert "Relations: none" in board_section(input_of(row))
 
 
+def relations_both_ways(n, *, title_chars=255):
+    """`n` relations each way, every title `title_chars` long."""
+    def title(i):
+        return f"{i:03d} " + "t" * (title_chars - 4)
+    return ({"nodes": [{"type": "blocks", "relatedIssue": {
+                "identifier": f"DRE-{3000 + i}", "title": title(i),
+                "state": {"name": "In Progress"}}} for i in range(n)]},
+            {"nodes": [{"type": "related", "issue": {
+                "identifier": f"DRE-{4000 + i}", "title": title(n + i),
+                "state": {"name": "In Progress"}}} for i in range(n)]})
+
+
+def test_100_relations_show_20_each_title_cut_at_200_and_say_how_many_more():
+    assert gva.MAX_RELATIONS == 20
+    assert gva.MAX_TITLE_CHARS == 200
+    lops = PagedCard("DRE-101", [], parent=("DRE-900", "In Progress"))
+    lops.node["parentTitle"] = {"title": "p" * 255}
+    lops.node["relations"], lops.node["inverseRelations"] = \
+        relations_both_ways(50)
+    row = context_of(lops)
+    # The row keeps every relation whole; the input shows the limit.
+    assert len(row["context"]["relations"]) == 100
+
+    lines = board_section(input_of(row)).split("\n")
+    shown = [line for line in lines if line.startswith("- blocks, out: ")
+             or line.startswith("- related, in: ")]
+    assert [line.split(": ")[1].split(" ")[0] for line in shown] == \
+        [f"DRE-{3000 + i}" for i in range(20)]
+    for line in shown:
+        title = line.split(" — ", 1)[1]
+        assert len(title) == gva.MAX_TITLE_CHARS + 1 and title.endswith("…")
+    assert "80 more relation(s) not shown" in lines
+    parent = next(line for line in lines if line.startswith("Parent: "))
+    assert parent.endswith(" — " + "p" * 200 + "…")
+
+
+def test_a_title_at_the_limit_is_shown_whole():
+    lops = PagedCard("DRE-101", [])
+    lops.node["relations"], lops.node["inverseRelations"] = \
+        relations_both_ways(1, title_chars=200)
+    section = board_section(input_of(context_of(lops)))
+    assert "- blocks, out: DRE-3000 (In Progress) — 000 " + "t" * 196 + "\n" \
+        in section
+    assert "relation(s) not shown" not in section
+
+
 # --------------------------------------------------------------------------
 # criterion 5 — the Done work matched to the card's problem
 # --------------------------------------------------------------------------
@@ -419,7 +466,15 @@ REPOS = [f"dreadnought-foundry/repo-{n}" for n in range(5)] + [PORTICO]
 
 
 def at_every_limit():
-    issue = issue_node("DRE-101", parent=("DRE-900", "In Progress"))
+    """Every field `CARD_QUERY` reads at its most: 200 comments of 5,000
+    characters, 50 relations each way and a parent with 255-character
+    titles, 50 children and 50 labels of 40 characters."""
+    issue = issue_node(
+        "DRE-101", parent=("DRE-900", "In Progress"),
+        labels=[f"label-{n:02d}-" + "l" * 31 for n in range(50)],
+        children=[(f"DRE-{6000 + n}", "In Progress") for n in range(50)])
+    issue["parentTitle"] = {"title": "p" * 255}
+    issue["relations"], issue["inverseRelations"] = relations_both_ways(50)
     issue["comments"] = {"nodes": thread(
         [f"{n:03d} " + "w" * 4996 for n in range(200)])}
     ctx = gva.board_context(issue, VIEWER, card="DRE-101", now=NOW,
@@ -463,6 +518,10 @@ def test_a_row_at_every_limit_adds_under_65000_characters():
     assert re.search(r"\d+ matched pull request\(s\) shown by title only: "
                      r"the section passed 20,000 characters", full)
     assert "180 more fact(s) not shown" in full
+    assert "80 more relation(s) not shown" in full
+    assert len(row["context"]["children"]) == 50
+    assert len(row["context"]["labels"]) == 50
+    assert all(len(label) == 40 for label in row["context"]["labels"])
     assert len(fenced(full, MATCHED)) <= gva.MAX_MATCHED_CHARS
     assert sum(len(c["body"]) for c in row["context"]["comments"]) \
         <= gva.MAX_THREAD_CHARS
