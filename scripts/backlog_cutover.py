@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
-"""The cutover — the whole legacy Backlog moves to Intake, and nobody is exempt
+"""The cutover — the whole legacy queue moves to Intake, and nobody is exempt
 (DRE-2687).
 
-Every Backlog card was created before the front door existed, and none of them
+The legacy queue is `CUTOVER_FROM`: the name the lane contract aliases to
+Queued (DRE-4125), read through that alias rather than spelled here (DRE-6748).
+Every card in it was created before the front door existed, and none of them
 carries a routing verdict. They are not work: they are a list of things somebody
 once wanted. **They move to Intake and are re-planned before they are work
 again.**
@@ -14,7 +16,7 @@ The 2026-08-23 decision (D4) exempted four classes from the move — cards insid
 the paused DeltaSolv set. The CEO withdrew it on 2026-08-26, and the reason is
 mechanical rather than a change of mind: DRE-2725's guard says a card with no
 verdict cannot rest in any lane, and an exempt card is precisely a card with no
-verdict sitting in Backlog. The guard would have bounced all of them to Intake
+verdict sitting in the queue. The guard would have bounced all of them to Intake
 on its first sweep whatever this script said. There were only ever two
 consistent positions — exempt the legacy cards from the guard PERMANENTLY,
 which is the two-population board DRE-2728 exists to prevent, or move
@@ -43,7 +45,7 @@ that stays true. If such a card comes back for rework it goes to Intake like
 anything else.
 
 The third evidence was added on 2026-09-07 (DRE-3297), off the dry run. It
-reported 280 in Backlog and 279 moving, and 36 of the 279 were children of 11
+reported 280 in the queue and 279 moving, and 36 of the 279 were children of 11
 epics that were In Progress at that moment — DRE-2840, the card this run records
 itself on, among them. Sweeping those would have stalled eleven epics the CEO
 had already approved, each child having to earn its way back through Intake and
@@ -56,7 +58,7 @@ BE approved — and neither is any other state.
 An unreadable pull-request lookup is NOT "no pull request" (DRE-2034): the run
 refuses rather than yanking a card out from under an open PR.
 
-## Backlog is empty on cutover day
+## The legacy queue is empty on cutover day
 
 Not nearly empty. Empty. It refills only with verdict-carrying cards at the rate
 Planning produces them, so **expect it to look alarming for about a week** — say
@@ -70,11 +72,11 @@ and `--limit` bounds a single run.
 ## Rehearsing it on one card
 
 `--limit N` bounds a run but cannot NAME one: it takes whichever real cards the
-plan puts first, so a throwaway probe dropped into Backlog could not be moved
+plan puts first, so a throwaway probe dropped into the queue could not be moved
 alone and the move-in path could not be watched before the real run.
 `--only DRE-N [DRE-M …]` restricts the population to the cards it names, through
 this same path — the same in-flight test, the same reason posted before the
-move, the same from-lane guard. A named card that is not in Backlog is reported
+move, the same from-lane guard. A named card that is not in `CUTOVER_FROM` is reported
 as such and skipped; the run never reaches into whatever lane it is actually in.
 The occupancy record for such a run says plainly that it was a rehearsal on
 named cards, so nothing can read it as the cutover's.
@@ -98,6 +100,7 @@ from datetime import UTC, datetime
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import card_pr  # noqa: E402 — ONE anchored "does this head ref belong to this card"
+import lane_contract  # noqa: E402 — the alias the legacy queue is read through
 import linear_ops  # noqa: E402
 import routing_verdict  # noqa: E402
 
@@ -105,8 +108,12 @@ _HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(_HERE)
 REPO_MAP_PATH = os.path.join(ROOT, "config", "repo-map.json")
 
-#: The one transition this script makes, and the only one it may make.
-CUTOVER_FROM = "Backlog"
+#: The one transition this script makes, and the only one it may make. The
+#: from-lane is the retired name the lane contract aliases to the queue, read
+#: through that alias (DRE-6748); agent-bureau's phase prover reads both names
+#: off this file by name (DRE-7053), so each stays one module-level assignment.
+CUTOVER_FROM = next(old for old, new in lane_contract.aliases().items()
+                    if new in lane_contract.QUEUE_LANES)
 CUTOVER_TO = "Intake"
 
 MARK = "🚚"
@@ -443,7 +450,7 @@ def only_ids(values) -> list:
 
     Case and stray whitespace are the operator's to get wrong at 2am, and a
     card named twice is one card. A value that is not a card identifier at all
-    is refused loudly rather than reported as "not in Backlog" — that phrasing
+    is refused loudly rather than reported as "not in the queue" — that phrasing
     is a claim about the board, and a typo must never make one.
     """
     out: list = []
@@ -526,7 +533,7 @@ def run(lops, plan_: dict, *, apply: bool = False, limit: int | None = None) -> 
 
     The reason is posted BEFORE the move, so a move that fails still leaves the
     reason on the card. `cmd_advance` is guarded on the from-lane, so a card
-    that left Backlog between the read and the write is not dragged back.
+    that left `CUTOVER_FROM` between the read and the write is not dragged back.
     """
     targets = plan_["move"][:limit] if limit else plan_["move"]
     batch_one = set(plan_["batch_one"])
