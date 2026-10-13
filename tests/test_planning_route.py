@@ -1158,14 +1158,14 @@ class TestAPersonsCardIsRoutedBeforeTheCritic:
 
 # ===========================================================================
 # DRE-6651: an epic still to be planned whose formal blocker is open waits in
-# Backlog instead of asking the CEO
+# Queued (Backlog until DRE-6750) instead of asking the CEO
 # ===========================================================================
 #
 # DRE-6589 reached Planning blocked by DRE-6587 (In Progress), the planner
 # could only ask "wait, or plan now?", and the CEO answered a question the
 # board already held the answer to. `decide` reads the relation, the children
 # and the lane history beside the shape and says `wait`; `plan.yml` posts the
-# receipt, moves the epic to Backlog and dispatches no planner.
+# receipt, moves the epic to Queued and dispatches no planner.
 REPLAY = ROOT / "tests" / "fixtures" / "green-light-2026-10-10" / "dre-6589.json"
 REPLAY_KEYS = {"card", "arrival", "for", "as_of", "lane", "labels", "comments"}
 #: The `Route — plan or activate` gate at `main` before this card.
@@ -1180,7 +1180,7 @@ DECIDE_GATE = (
     "&& steps.slot.outputs.admitted == 'true' && steps.classify.outputs.escalate != 'true' "
     "&& steps.classify.outputs.requeue != 'true'"
 )
-WAIT_STEP = "Epic waits on its blocker — Backlog, no planner"
+WAIT_STEP = "Epic waits on its blocker — Queued, no planner"
 WAIT_GATE = "steps.shape.outputs.route == 'epic' && steps.shape.outputs.wait == 'true'"
 WAIT_ACT = "epic-waits-on-blocker"
 
@@ -1338,13 +1338,16 @@ class TestPlanYmlParksAWaitingEpic:
         assert _index("Planning shape") < _index(WAIT_STEP) < _index("Route — plan or activate")
         assert _gate(_step(WAIT_STEP)) == WAIT_GATE
 
-    def test_the_wait_step_posts_the_receipt_then_moves_the_epic_to_backlog(self):
+    def test_the_wait_step_posts_the_receipt_then_moves_the_epic_to_queued(self):
+        # DRE-6750: the write and the receipt name the queue by its new name.
         run = _step(WAIT_STEP)["run"]
         assert f"--act={WAIT_ACT}" in run
         assert "⏸️ epic-waits:" in run
+        assert "waits in Queued on its formal blocker(s)" in run
         assert "steps.shape.outputs.waits_on" in json.dumps(_step(WAIT_STEP))
-        assert 'linear_ops.py state "$EPIC" "Backlog"' in run
-        assert run.index(f"--act={WAIT_ACT}") < run.index('state "$EPIC" "Backlog"')
+        assert 'linear_ops.py state "$EPIC" "Queued"' in run
+        assert run.index(f"--act={WAIT_ACT}") < run.index('state "$EPIC" "Queued"')
+        assert "Backlog" not in run
         for absent in ("plan-cycle", "cycle-start", "open_attempt", "Plan heartbeat"):
             assert absent not in run
 
