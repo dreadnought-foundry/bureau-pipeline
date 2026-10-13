@@ -70,7 +70,7 @@ a **plain-English question** as a Linear comment and parks the card in the
 `Green Light` lane — the CEO's "needs you" queue, the same lane epics wait in
 for plan approval (DRE-2776; an escalated card is waiting on a judgement, not
 broken, so it does not belong in the broken-card lane); the CEO answers and
-moves it back to `Todo` to proceed or to `Backlog` to drop it.
+moves it back to `Todo` to proceed or to `Queued` to drop it.
 The critic + tests remain the correctness backstop on every merge.
 
 There is **no propose-first hard stop**. An earlier design (a read-only
@@ -480,7 +480,7 @@ from every discovered workflow in turn, rather than by asserting that it would.
 
 ## One WIP cap per repo (DRE-2529)
 
-A repo has ONE work-in-progress cap, and **three** workflows promote Backlog
+A repo has ONE work-in-progress cap, and **three** workflows promote Queued
 children through the dependency gate at it:
 
 | workflow | when it promotes |
@@ -509,7 +509,7 @@ Each pass the gate does run is **scoped to the merge** (DRE-3236): the
 workflow hands `reconcile.py` the merged card as `MERGED_CARD`, and the
 promotion pass evaluates only that card's own dependents while the epic-close
 pass evaluates only its own parent — one read of the card, one read of the
-dependents, never the whole Backlog or every active epic. Measured on a busy
+dependents, never the whole Queued lane or every active epic. Measured on a busy
 repo (260 Backlog cards, 5 active epics) one merge-sync fell from 285 Linear
 read requests to 11. The same card gave the sweep a per-pass read cache in
 `linear_ops.py`: the board reads carry every card's comments inline and every

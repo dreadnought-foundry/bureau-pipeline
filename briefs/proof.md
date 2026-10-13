@@ -191,7 +191,7 @@ asks for a reading the declaration does not hold is a cause row, below.
   request or a comment.
 
 ## The lanes, which you never write
-The board is `Intake` → `Planning` → `Green Light` → `Backlog` → `Todo` →
+The board is `Intake` → `Planning` → `Green Light` → `Queued` → `Todo` →
 `In Progress` → `In Review` → `Done`, with `Triage` off to the side and
 `Hand-work` beside `Todo` as the lane where a person's work waits. A proof card
 is dispatched from `Hand-work` and you never move it. The workflow does, in
