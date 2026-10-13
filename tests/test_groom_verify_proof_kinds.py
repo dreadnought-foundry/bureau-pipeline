@@ -221,6 +221,35 @@ def test_done_elsewhere_on_work_the_runner_never_supplied_is_no_proof(tmp_path, 
     assert got["proof"] == []
 
 
+def test_unconfirmed_work_and_facts_beside_a_counted_item_never_reach_the_page(tmp_path):
+    """An answer standing on one anchored item keeps no done-work or routing
+    item the runner never supplied: the page shows only what it checked."""
+    invented = [done_item("DRE-9999", ref=f"{AGENT_BUREAU}#1",
+                          quote="fabricated"),
+                routing_item("made/up:wf:job", quote="fabricated routing")]
+    got, mark = both(tmp_path, row(cards=[done()], facts=[fact()]),
+                     "done-elsewhere", [PROOF_LINE, *invented])
+    assert (got["verdict"], got["rested_on"]) == ("done-elsewhere", ["code"])
+    assert got["proof"] == [PROOF_LINE]
+    assert mark["proof"] == [PROOF_LINE]
+    shown = " ".join(groomer.proof_line(p) for p in got["proof"])
+    assert "DRE-9999" not in shown and "made/up" not in shown
+    assert "fabricated" not in gva.cancel_reason(mark)
+
+
+def test_mark_keeps_no_recorded_work_or_fact_the_runner_never_wrote_a_fact_on():
+    """On a bare row, as `apply` has it in the workflow: a done-work or
+    routing item with no runner `fact` is neither counted nor shown."""
+    bare = {"card": CARD, "repository": PORTICO, "repo_slug": "portico",
+            "list": "planning"}
+    mark = gva._mark(bare, {"card": CARD, "verdict": "done-elsewhere",
+                            "summary": "s", "reason": None,
+                            "proof": [PROOF_LINE, done_item("DRE-9999"),
+                                      routing_item("made/up:wf:job")]})
+    assert (mark["verdict"], mark["reason"]) == ("done-elsewhere", None)
+    assert mark["proof"] == [PROOF_LINE]
+
+
 def test_an_unsearched_row_supplies_no_done_work(tmp_path):
     the_row = row(cards=[done()])
     del the_row["matched_work"]
@@ -368,6 +397,18 @@ def test_a_cancel_on_a_partial_pull_request_is_partly_solved(tmp_path, covers):
     assert got["body_digest"] == "0123456789ab"
     assert mark["adjusted"] == "partial pull request"
     assert mark["rewrite"] == got["rewrite"]
+
+
+def test_a_partial_pull_request_turns_a_cancel_partly_solved_beside_other_proof(tmp_path):
+    """The agent's own word that the pull request did part of the card is
+    not outweighed by a routing fact beside it: the card goes to Rewrite
+    first, never to the Cancel list."""
+    got, mark = both(tmp_path, row(cards=[done()], facts=[fact()]),
+                     "obsolete", [done_item(covers="part"), routing_item()])
+    assert (got["verdict"], got["adjusted"]) == ("partly-solved",
+                                                 "partial pull request")
+    assert got["rested_on"] == ["done-work", "routing"]
+    assert mark["verdict"] == "partly-solved"
 
 
 def test_apply_puts_a_partial_pull_request_on_rewrite_first_never_on_cancel(tmp_path):
