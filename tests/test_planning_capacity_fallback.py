@@ -1,6 +1,6 @@
 """RED-first: planning falls to Opus 5 the moment Fable is out of capacity (DRE-3970).
 
-What broke. `claude-fable-5-1` refused every planning call on 2026-09-12/13, and
+What broke. Fable 5.1 refused every planning call on 2026-09-12/13, and
 again on 2026-09-14, with one sentence under `is_error: true`:
 
     You've hit your monthly spend limit. Switch to another model to continue.
@@ -35,16 +35,17 @@ to Opus 5." So:
      from the top, and the top is no excluded id.
 
 The classifier, the groomer and the selector here are the copies in a tree of
-today's scripts on the frozen model files (tests/model_fixture.py, DRE-6884),
-so a console save that moves the planner or reorders its ladder leaves these
-rules standing: every model id below is a rung read off the fixture's
-judgement ladder, named for its place on it.
+today's scripts on the frozen model files (tests/model_fixture.py), built with
+`regenerate=False`, and the selector selects on the frozen home document
+(`model_fixture.fixture_home()`, handed over through `home_env` or
+`fixture_module(..., doc=...)`, DRE-6990), so a console save that moves the
+planner or reorders its group leaves these rules standing: every model id below
+is a model of the document's judgement group, named for its place on it.
 """
 
 from __future__ import annotations
 
 import json
-import os
 import shutil
 import subprocess
 import sys
@@ -61,9 +62,10 @@ sys.path.insert(0, str(ROOT / "tests"))
 import model_fixture  # noqa: E402
 
 WF = ROOT / ".github" / "workflows" / "plan.yml"
-# The planner's walk in the frozen files: its top rung, the one below it, and
-# the last, which has nowhere to fall.
-JUDGEMENT = model_fixture.ladder(model_fixture.fixture_config(), "judgement")
+# The planner's walk in the frozen document: its top rung, the one below it,
+# and the last, which has nowhere to fall.
+HOME = model_fixture.fixture_home()
+JUDGEMENT = model_fixture.ladder(HOME, HOME["agents"]["planner"])
 TOP, SECOND, LAST = JUDGEMENT[0], JUDGEMENT[1], JUDGEMENT[-1]
 # The rung below the second, where a planner started on the second falls.
 THIRD = JUDGEMENT[2]
@@ -82,7 +84,7 @@ def _pipeline_tree(dest: Path) -> Path:
     """Today's scripts on the frozen model files, with the rest of the repo's
     config beside them — the lane contract the groomer's imports read — and
     the brief and standards the classifier builds its prompt from."""
-    tree = model_fixture.fixture_tree(dest)
+    tree = model_fixture.fixture_tree(dest, regenerate=False)
     for path in sorted((ROOT / "config").iterdir()):
         if path.is_file() and not (tree / "config" / path.name).exists():
             shutil.copy2(path, tree / "config" / path.name)
@@ -92,8 +94,8 @@ def _pipeline_tree(dest: Path) -> Path:
 
 
 # The tree's groomer, and the classifier and selector it imported, so the call
-# seam's errors and the selector's ladder are the ones the groomer sees. Built
-# once for the module.
+# seam's errors and the selector's ladder are the ones the groomer sees — the
+# selector already on the frozen document. Built once for the module.
 _TREE = None
 TREE = None
 groom_context = groom_judgement = mf = planning_classify = None
@@ -103,7 +105,7 @@ def setup_module():
     global _TREE, TREE, groom_context, groom_judgement, mf, planning_classify
     _TREE = tempfile.TemporaryDirectory()
     TREE = _pipeline_tree(Path(_TREE.name) / "tree")
-    groom_judgement = model_fixture.fixture_module(TREE, "groom_judgement")
+    groom_judgement = model_fixture.fixture_module(TREE, "groom_judgement", doc=HOME)
     groom_context = groom_judgement.groom_context
     planning_classify = groom_judgement.planning_classify
     mf = planning_classify.model_fallback
@@ -346,8 +348,8 @@ def test_the_fallback_is_the_rung_below_the_chosen_one():
 
 
 def _run_cli(*args):
-    env = dict(os.environ)
-    env["BUREAU_FAKE_AVAILABLE"] = json.dumps({model: True for model in JUDGEMENT})
+    env = model_fixture.home_env(
+        TREE, HOME, BUREAU_FAKE_AVAILABLE={model: True for model in JUDGEMENT})
     return subprocess.run([sys.executable, str(TREE / "scripts" / "model_fallback.py"),
                            *args], capture_output=True, text=True, env=env)
 
@@ -375,22 +377,14 @@ def _step(name: str) -> dict:
 
 
 def _run_select_step(tmp: Path, *, fell_from: str):
-    scripts = tmp / ".bureau-pipeline" / "scripts"
-    scripts.mkdir(parents=True)
-    # The selector of a frozen fixture tree: its defaults in the code are the
-    # frozen files' choices, which it runs on with no home (DRE-6939).
-    frozen = model_fixture.fixture_tree(tmp / "frozen")
-    shutil.copy(frozen / "scripts" / "model_fallback.py", scripts)
-    config = tmp / ".bureau-pipeline" / "config"
-    config.mkdir()
-    for name in ("models.yaml", "model-prices.yaml"):
-        shutil.copy(model_fixture.FIXTURE_DIR / name, config)
-    shutil.copy(ROOT / "config" / "repo-map.json", config)
-    (scripts / "linear_ops.py").write_text("print(0)\n")
+    # The checkout the step runs in: a fixture tree, its selector reading the
+    # frozen document as its home (DRE-6939), and Linear stubbed.
+    tree = model_fixture.fixture_tree(tmp / ".bureau-pipeline", regenerate=False)
+    (tree / "scripts" / "linear_ops.py").write_text("print(0)\n")
     step = _step("Select model")
     run = step["run"].replace("${{ github.event.client_payload.identifier }}", "DRE-3949")
     out_file = tmp / "gh_output"
-    env = dict(os.environ)
+    env = model_fixture.home_env(tree, HOME)
     env.update({
         "GITHUB_OUTPUT": str(out_file), "GITHUB_STEP_SUMMARY": str(tmp / "summary"),
         "RUNNER_TEMP": str(tmp), "LINEAR_API_KEY": "stub",
@@ -400,6 +394,8 @@ def _run_select_step(tmp: Path, *, fell_from: str):
     proc = subprocess.run(["bash", "-e", "-c", run], cwd=tmp, env=env,
                           capture_output=True, text=True)
     assert proc.returncode == 0, proc.stdout + proc.stderr
+    # The selector answered from the document, not its defaults in the code.
+    assert "model-home: read" in proc.stderr, proc.stderr
     return dict(line.split("=", 1) for line in out_file.read_text().splitlines()
                 if "=" in line)
 
@@ -448,6 +444,7 @@ def test_every_planner_step_carries_the_selected_fallback(name):
 # --------------------------------------------------------------------------- #
 
 def test_the_planner_walks_its_ladder_from_the_top():
+    assert mf.HOME_STATUS == "read", "the selector is not on the document"
     assert mf.ladder_for("planner") == JUDGEMENT
     assert TOP not in mf.CONFIG["excluded"]
 

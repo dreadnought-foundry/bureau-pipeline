@@ -9,14 +9,17 @@ the two rules, and the refresh rule for when today's code stops accepting it).
 
 This is a plain module, not a pytest fixture: the policy and selector tests are
 `unittest.TestCase` classes. Every test reaches the fixture through it, and
-derives every model id it expects from `fixture_config()` through `ladder()`,
-never from a literal.
+derives every model id it expects from `fixture_home()` or `fixture_config()`
+through `ladder()`, never from a literal.
 
 Since the selector selects on the home or the defaults in the code (DRE-6939),
 a scenario is a home document rather than an edit of a tree's `models.yaml`:
 `fixture_home()` is the frozen choices as one, `lead_with`, `move_agent` and
 `with_project` edit a copy, and `home_env` or `fixture_module(..., doc=...)`
-hands it to a tree (DRE-6972).
+hands it to a tree (DRE-6972). Such a tree is built with
+`fixture_tree(dest, regenerate=False)`, which runs no generator; the default
+still regenerates the literal for the old route's tests and the generator's
+own (DRE-6990).
 """
 from __future__ import annotations
 
@@ -154,12 +157,20 @@ def _copy_into(dest: Path) -> None:
     shutil.copy2(ROOT / "config" / "repo-map.json", dest / "config" / "repo-map.json")
 
 
-def fixture_tree(dest: Path) -> Path:
-    """A throwaway tree at `dest` running today's code on the frozen files, its
-    generated regions regenerated from them. Raises `FixtureStale` when the
-    generator refuses them."""
+def fixture_tree(dest: Path, regenerate: bool = True) -> Path:
+    """A throwaway tree at `dest` running today's code on the frozen files.
+
+    With `regenerate` (the default) its generated regions are regenerated from
+    the frozen files, and `FixtureStale` is raised when the generator refuses
+    them: the old route's tests and the generator's own still build on that
+    literal. With `regenerate=False` the tree is copied and nothing runs — a
+    tree whose selector answers from a home document (`home_env`,
+    `fixture_module(..., doc=...)`) has no use for a regenerated literal
+    (DRE-6990)."""
     dest = Path(dest)
     _copy_into(dest)
+    if not regenerate:
+        return dest
     proc = subprocess.run(
         [sys.executable, str(dest / "scripts" / "sync_model_config.py")],
         cwd=dest, capture_output=True, text=True)
@@ -181,9 +192,11 @@ def fixture_module(tree: Path, name: str = "model_fallback", doc: dict | None = 
 
     With `doc`, the module has already read it: the selector reads the home at
     its first choice call, not at import (DRE-6939), so `doc` is written with
-    `home_env`, `BUREAU_MODEL_HOME_FILE` names it, and the module's
+    `home_env`, `BUREAU_MODEL_HOME_FILE` names it, and the selector's
     `use_home()` runs while the siblings are still in place — its reader is
-    the tree's `model_home`. The environment is put back before this returns.
+    the tree's `model_home`. The selector is the module itself, or, for a
+    module that imports it (the classifier, the groomer), the tree's
+    `model_fallback` it imported (DRE-6990). The environment is put back before this returns.
     With no `doc` nothing is read here: the module's first choice call reads
     whatever home the environment names, which in the suite is none.
     """
@@ -213,12 +226,14 @@ def fixture_module(tree: Path, name: str = "model_fallback", doc: dict | None = 
 
 
 def _read_home(module, tree: Path, doc: dict) -> None:
-    """`module.use_home()` with `BUREAU_MODEL_HOME_FILE` naming `doc`, the
-    name put back as it was afterwards."""
+    """`use_home()` of the tree's selector — `module` itself, or the
+    `model_fallback` it imported — with `BUREAU_MODEL_HOME_FILE` naming
+    `doc`, the name put back as it was afterwards."""
+    selector = module if hasattr(module, "use_home") else sys.modules["model_fallback"]
     before = os.environ.get(HOME_FILE_ENV)
     os.environ[HOME_FILE_ENV] = home_env(tree, doc)[HOME_FILE_ENV]
     try:
-        module.use_home()
+        selector.use_home()
     finally:
         if before is None:
             os.environ.pop(HOME_FILE_ENV, None)

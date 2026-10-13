@@ -83,6 +83,19 @@ def test_it_holds_every_retiring_lanes_replacement():
         assert "Backlog" in reconcile.destinations()
 
 
+def test_it_holds_the_queue_lane_the_park_writes(monkeypatch):
+    """The dead-run park writes `QUEUE_LANE` (DRE-6743), a name the write
+    discovery cannot read at the call site, so the hook publishes it — and
+    reads it when asked, so the flipped exit is published with no edit."""
+    assert reconcile.QUEUE_LANE in reconcile.destinations()
+    parks = [w for w in ready_lane_writers.writes()
+             if w.where.startswith("scripts/reconcile.py:")
+             and w.expression == "QUEUE_LANE"]
+    assert parks and reconcile.QUEUE_LANE in {w.lane for w in parks}
+    monkeypatch.setattr(reconcile, "QUEUE_LANE", "Queued")
+    assert "Queued" in reconcile.destinations()
+
+
 def test_green_light_is_not_in_it():
     """Nothing in this module writes the CEO's decision queue any more."""
     assert "Green Light" not in _destinations()

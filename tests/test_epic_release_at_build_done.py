@@ -423,7 +423,7 @@ def test_the_auto_advance_moves_w_once_every_blocker_is_done(capsys):
             patch.object(linear_ops, "cmd_advance") as advance, \
             patch.object(linear_ops, "cmd_comment") as comment:
         assert reconcile._close_epic_if_finished(B) is True
-    advance.assert_called_once_with(W, "Planning", "Backlog")
+    advance.assert_called_once_with(W, "Planning", reconcile.QUEUE_FROM)
     to_w = [c.args[1] for c in comment.call_args_list if c.args[0] == W]
     assert len(to_w) == 1 and to_w[0].startswith("🧹 Auto-advanced Backlog → Planning:"), to_w
 

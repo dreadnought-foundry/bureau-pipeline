@@ -97,7 +97,7 @@ class TeamBoard:
         if "state: {name: {in: $states}}" in q:
             nodes = [c for c in self.cards if c["state"]["name"] in v["states"]]
             return {"issues": {"nodes": nodes, "pageInfo": {"hasNextPage": False}}}
-        if 'state: {name: {eq: "Backlog"}}' in q:
+        if reconcile.QUEUE_STATE_FILTER in q:
             nodes = [c for c in self.cards if c["state"]["name"] == "Backlog"]
             return {"issues": {"nodes": nodes, "pageInfo": {"hasNextPage": False}}}
         if "title: {startsWith: $prefix}" in q:
@@ -170,7 +170,7 @@ def test_an_idle_demo_pass_spends_three_requests_and_says_so_once(capsys):
     _pass(board)
     assert board.queries[0] == reconcile.IDLE_QUERY
     assert board.requests == 3  # the check, the one board read, Green Light
-    assert not any('eq: "Backlog"' in q for q in board.queries)  # no promotion read
+    assert not any(reconcile.QUEUE_STATE_FILTER in q for q in board.queries)  # no promotion read
     out = capsys.readouterr().out
     idle = [ln for ln in out.splitlines() if ln.startswith("idle:")]
     assert len(idle) == 1 and DEMO in idle[0]
@@ -270,7 +270,7 @@ def test_with_the_door_on_the_idle_check_costs_no_linear_request(monkeypatch, ca
         door.decline_fleet("lane-not-held")
         _pass(board)
         lanes = door.asked("/board")[0]["query"]["lanes"]
-    assert lanes == "Todo,In Progress,In Review,Hand-work,Backlog"
+    assert lanes == ",".join(reconcile.DOOR_WORK_LANES + reconcile.QUEUE_LANES)
     # The check asked the door, not Linear. Linear answered only the fleet
     # phases' reads: the lanes this door declines at `scope=fleet` — it serves
     # the fleet to no repo while the console's PIPELINE_READ_UNROUTED is off
@@ -330,7 +330,8 @@ def test_the_idle_check_is_one_small_page_that_fails_open():
     assert 1 < reconcile.IDLE_PAGE <= 100
     # Hand-work counts as in motion (DRE-5322): a person's card there is owed
     # the move to review and the idle alarm, which an idle pass skips.
-    assert reconcile.IDLE_LANES == ("Todo", "In Progress", "In Review", "Hand-work", "Backlog")
+    assert reconcile.IDLE_LANES == ("Todo", "In Progress", "In Review", "Hand-work",
+                                   *reconcile.QUEUE_LANES)
 
 
 # ── The label match is routing's, not an exact string (PR #687 critic, item 1) ──

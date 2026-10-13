@@ -83,7 +83,7 @@ class Linear:
                      for c in self.cards.values() if c["state"]["name"] in v["states"]]
             return {"issues": {"nodes": nodes,
                                "pageInfo": {"hasNextPage": False, "endCursor": None}}}
-        if 'state: {name: {eq: "Backlog"}}' in q:
+        if reconcile.QUEUE_STATE_FILTER in q:
             numbers = v.get("numbers")
             nodes = [copy.deepcopy(c) for c in self.cards.values()
                      if c["state"]["name"] == "Backlog"
@@ -189,7 +189,7 @@ def _advanced(linear):
 
 
 def _backlog_reads(linear):
-    return [q for q in linear.queries if 'eq: "Backlog"' in q]
+    return [q for q in linear.queries if reconcile.QUEUE_STATE_FILTER in q]
 
 
 def _lane_reads(linear):
@@ -213,7 +213,7 @@ def test_a_door_candidate_that_still_passes_is_promoted_after_one_live_read(monk
         assert reconcile.promote_ready(active_count=0) == 1
     assert _advanced(linear) == ["DRE-101"]
     assert len(_backlog_reads(linear)) == 1  # the re-check, by number, and nothing else
-    assert door.asked("/board")[0]["query"]["lanes"] == "Backlog"
+    assert door.asked("/board")[0]["query"]["lanes"] == ",".join(reconcile.QUEUE_LANES)
 
 
 def test_R1_relation_added_after_the_poll_blocks_promotion_via_live_recheck(monkeypatch):

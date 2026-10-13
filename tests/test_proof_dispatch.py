@@ -48,6 +48,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "scripts"))
 os.environ.setdefault("REPO", "dreadnought-foundry/bureau-pipeline")
 
+import lane_contract  # noqa: E402
 import linear_ops  # noqa: E402
 import pipeline_act  # noqa: E402
 import plan_run  # noqa: E402
@@ -710,6 +711,28 @@ def test_at_most_one_dispatch_per_pass_oldest_first(monkeypatch, capsys):
     lines = _lines(capsys)
     assert any("deferred" in l for l in _about(lines, "DRE-5941"))
     assert any("deferred" in l for l in _about(lines, "DRE-5943"))
+
+
+@pytest.mark.parametrize("queue", lane_contract.QUEUE_LANES)
+def test_the_entry_is_read_off_the_receipt_under_either_queue_name(queue):
+    """The sweep's promotion receipt names `QUEUE_LANE` (DRE-6743): it reads
+    `Backlog` until DRE-6742 flips the planning exit and `Queued` after. A
+    card promoted on either side of the flip is dated by its receipt, never
+    by the last comment that moved `updatedAt`."""
+    card = lane_card("DRE-5944", window=[
+        comment(f"🧹 Auto-promoted {queue} → Hand-work: the proof is a "
+                "person's to confirm.", 3000)])
+    assert proof_dispatch._entered(card) == _at(3000)
+
+
+def test_oldest_first_reads_the_entry_under_either_queue_name(monkeypatch, capsys):
+    queued = lane_card("DRE-5945", window=[
+        comment("🧹 Auto-promoted Queued → Hand-work: the proof is a "
+                "person's to confirm.", 3000)])
+    board = Board(hand=[lane_card("DRE-5946", entered=900), queued])
+    h = Harness(monkeypatch, board)
+    h.sweep()
+    assert [f[0] for f in h.fired] == ["DRE-5945"]
 
 
 def test_the_candidate_cap_defers_the_rest(monkeypatch, capsys):

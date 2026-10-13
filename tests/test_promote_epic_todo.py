@@ -111,7 +111,7 @@ def test_a_fleet_child_of_an_epic_in_progress_is_still_released():
     the unblocked children."""
     promoted, advance = _promote(_child("In Progress"))
     assert promoted == 1
-    advance.assert_called_once_with("DRE-2", "Todo", "Backlog")
+    advance.assert_called_once_with("DRE-2", "Todo", reconcile.QUEUE_FROM)
 
 
 def test_in_progress_epic_with_unfinished_blocker_does_not_promote():

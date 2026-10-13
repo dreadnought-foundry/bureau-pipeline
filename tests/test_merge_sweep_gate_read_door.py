@@ -280,7 +280,7 @@ def test_a_dispatched_card_done_pass_decides_on_the_door_and_promotes_after_a_li
     assert _advanced(linear) == ["DRE-802"]
     assert _gate_reads(linear) == []  # neither the gate nor the scope read Linear
     # The one Linear read on the whole path is the dependent's live re-check.
-    assert [q for q in linear.queries if 'eq: "Backlog"' in q] == linear.queries
+    assert [q for q in linear.queries if reconcile.QUEUE_STATE_FILTER in q] == linear.queries
 
 
 def test_on_a_dependent_blocked_live_is_still_held(monkeypatch):

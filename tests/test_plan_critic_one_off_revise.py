@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -661,6 +662,105 @@ class TheRailCarriesEachAction(unittest.TestCase):
         self.assertIn(f"{pc.RESULT_PREFIX} {pc.QUESTION} —", prompt)
         self.assertIn(f"{pc.RESULT_PREFIX} {pc.SEND_BACK} —", prompt)
         self.assertIn("--prior-file", prompt)
+
+
+# --- The revision's own ceiling (DRE-7177) -------------------------------------
+
+# Run 38329761597, 2026-10-12: DRE-7066's revision ran at the one-off CRITIC's
+# ceiling, `--max-turns 36`, ended `error_max_turns` at 37 turns, and parked the
+# card as "the revision did not finish". Rewriting a card is more work than
+# reading it, so the revision is sized from the critic's ceiling, never at it.
+DRE_7066_CEILING = 36
+REVISION_TURNS_STEP_CMD = "plan_critic.py one-off-revision-turns"
+CRITIC_STEP = "Pre-approval critic — the one-off exit"
+
+
+class TheRevisionHasRoomToFinish(unittest.TestCase):
+
+    def test_dre_7066s_revision_gets_at_least_the_floor(self):
+        self.assertEqual(pc.ONE_OFF_REVISION_TURNS_FLOOR, 72)
+        self.assertGreaterEqual(pc.one_off_revision_turns(DRE_7066_CEILING), 72)
+        self.assertGreater(pc.one_off_revision_turns(DRE_7066_CEILING), 37)
+
+    def test_the_formula(self):
+        for ceiling in (36, 48, 60, 72, 90, 120):
+            with self.subTest(ceiling=ceiling):
+                self.assertEqual(
+                    pc.one_off_revision_turns(ceiling),
+                    min(pc.ONE_OFF_TURNS_RETRY_CAP,
+                        max(pc.ONE_OFF_REVISION_TURNS_FLOOR, 2 * ceiling)))
+
+    def test_never_below_the_ceiling_never_above_the_cap(self):
+        # Every ceiling the critic's step can hand over: its retry cap is the
+        # largest number `one_off_ceiling` returns.
+        for ceiling in range(1, pc.ONE_OFF_TURNS_RETRY_CAP + 1):
+            with self.subTest(ceiling=ceiling):
+                turns = pc.one_off_revision_turns(ceiling)
+                self.assertGreaterEqual(turns, ceiling)
+                self.assertLessEqual(turns, pc.ONE_OFF_TURNS_RETRY_CAP)
+        self.assertEqual(pc.one_off_revision_turns(10_000), pc.ONE_OFF_TURNS_RETRY_CAP)
+
+    def test_an_unreadable_ceiling_is_sized_from_the_default(self):
+        sized = pc.one_off_revision_turns(pc.ONE_OFF_TURNS_DEFAULT)
+        for junk in (None, "", "abc", "36 turns", [], {}, 0, -5, "0"):
+            with self.subTest(ceiling=junk):
+                self.assertEqual(pc.one_off_revision_turns(junk), sized)
+        self.assertEqual(pc.one_off_revision_turns("36"),
+                         pc.one_off_revision_turns(DRE_7066_CEILING))
+
+    def _cli(self, *args) -> tuple[subprocess.CompletedProcess, str]:
+        with tempfile.TemporaryDirectory() as tmp:
+            out = os.path.join(tmp, "github-output")
+            run = subprocess.run(
+                [sys.executable, os.path.join(SCRIPTS, "plan_critic.py"),
+                 "one-off-revision-turns", *args, "--github-output", out],
+                capture_output=True, text=True)
+            written = open(out, encoding="utf-8").read() if os.path.exists(out) else ""
+        return run, written
+
+    def test_the_cli_writes_the_ceiling_and_exits_zero(self):
+        run, written = self._cli("--ceiling", str(DRE_7066_CEILING))
+        self.assertEqual(run.returncode, 0, run.stderr)
+        self.assertEqual(written,
+                         f"max_turns={pc.one_off_revision_turns(DRE_7066_CEILING)}\n")
+
+    def test_the_cli_never_fails_on_a_bad_ceiling(self):
+        for args in (("--ceiling", ""), ("--ceiling", "abc"), ()):
+            with self.subTest(args=args):
+                run, written = self._cli(*args)
+                self.assertEqual(run.returncode, 0, run.stderr)
+                self.assertEqual(written,
+                                 f"max_turns={pc.one_off_revision_turns(None)}\n")
+
+
+def _turn_ref(args: str) -> str:
+    refs = re.findall(r"--max-turns\s+\$\{\{\s*steps\.([A-Za-z0-9_-]+)\.outputs\.max_turns\s*\}\}",
+                      args)
+    assert len(refs) == 1 and args.count("--max-turns") == 1, args
+    return refs[0]
+
+
+class TheRevisionReadsItsOwnCeiling(unittest.TestCase):
+
+    def test_the_revision_reads_the_new_steps_output(self):
+        args = str((_named(REVISE_STEP).get("with") or {}).get("claude_args"))
+        self.assertNotIn("steps.ooturns.outputs.max_turns", args)
+        sized = [s for s in _steps() if s.get("id") == _turn_ref(args)]
+        self.assertEqual(len(sized), 1)
+        run = str(sized[0].get("run"))
+        self.assertIn(REVISION_TURNS_STEP_CMD, run)
+        self.assertIn('--ceiling "${{ steps.ooturns.outputs.max_turns }}"', run)
+        self.assertIn('--github-output "$GITHUB_OUTPUT"', run)
+        # A static fallback on top of a script that never fails: an unwritten
+        # output interpolates as a bare `--max-turns`, a run that never starts.
+        self.assertIn(f"max_turns={pc.one_off_revision_turns(None)}", run)
+        self.assertEqual(sized[0].get("if"), _named(REVISE_STEP).get("if"))
+        self.assertLess(_index(sized[0]["name"]), _index(REVISE_STEP))
+        self.assertGreater(_index(sized[0]["name"]), _index(DECISION_STEP))
+
+    def test_the_critics_ceiling_is_unchanged(self):
+        args = str((_named(CRITIC_STEP).get("with") or {}).get("claude_args"))
+        self.assertEqual(_turn_ref(args), "ooturns")
 
 
 # --- The lane contract ----------------------------------------------------------

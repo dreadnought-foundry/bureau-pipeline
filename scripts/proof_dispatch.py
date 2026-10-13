@@ -245,6 +245,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import card_pr  # noqa: E402
 import hold  # noqa: E402 — the sweep's review-cap stamp, read as the holds lane reads it
+import lane_contract  # noqa: E402 — the queue's names, which the promotion receipt carries
 import linear_ops  # noqa: E402
 import merge_gate  # noqa: E402 — the critic's marker for `standing_verdict`
 import pipeline_act  # noqa: E402
@@ -362,8 +363,11 @@ GATE_UNANSWERED_NEEDS = ("an operator reading the gate's declined note and the "
                          "re-run's thread")
 
 #: What the sweep's promotion posts as a card lands in `Hand-work` — the one
-#: time on the lane read that says when the card entered the lane.
-PROMOTED_MARK = f"🧹 Auto-promoted Backlog → {FIRST_RUN_LANE}"
+#: time on the lane read that says when the card entered the lane. The receipt
+#: names `QUEUE_LANE` (DRE-6743), so one mark per name the queue carries: a
+#: card promoted on either side of the planning exit's flip is dated by it.
+PROMOTED_MARK = tuple(f"🧹 Auto-promoted {name} → {FIRST_RUN_LANE}"
+                      for name in lane_contract.QUEUE_LANES)
 
 #: The fields the condition-7 lookup needs; `mergeCommit` is the merge's sha.
 PR_FIELDS = "number,url,headRefName,state,mergeCommit"

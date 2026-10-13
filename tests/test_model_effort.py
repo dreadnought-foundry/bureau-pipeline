@@ -21,16 +21,17 @@ else.
 Which model leads which ladder, and which level each declares, is the
 console's to change (DRE-6862). So the rule — the effort written is the one
 `effort:` declares for the model chosen, and empty for a model with no entry —
-is proved on the frozen fixture (`tests/model_fixture.py`) and its CLI, with
-every expected id and level read off that fixture. What still reads the
-committed file is what must hold for any saved state. `tests/test_model_config.py`
-is the sibling that pins the canonical file and its generated mirrors.
+is proved on the frozen fixture (`tests/model_fixture.py`) and its CLI: the
+selector of a tree built with `regenerate=False` answers from the frozen home
+document (DRE-6990), every expected id is read off that document's groups, and
+every level off the frozen `effort:` block, a code-side fact. What still reads
+the committed file is what must hold for any saved state.
+`tests/test_model_config.py` is the sibling that pins the canonical file and
+its generated mirrors.
 """
 
 import copy
 import glob
-import json
-import os
 import re
 import subprocess
 import sys
@@ -51,29 +52,33 @@ sys.path.insert(0, str(ROOT / "tests"))
 import model_fallback as mf  # noqa: E402
 import model_fixture  # noqa: E402
 
-# Ids priced in config/model-prices.yaml, which the console never writes: a
-# declared vendor price names the model it is the price of (PriceTest).
-OPUS55 = "claude-opus-5-5"
-OPUS = "claude-opus-5"
-SONNET5 = "claude-sonnet-5"
-SONNET55 = "claude-sonnet-5-5"
-
-# The frozen config every rule test reads its expected rungs and levels off.
+# The frozen config every rule test reads its levels off, and the frozen
+# document every rule test reads its expected rungs off.
 FIXTURE = model_fixture.fixture_config()
+HOME = model_fixture.fixture_home()
 
-# The selector loaded from a throwaway tree of the frozen files, and that
-# tree's CLI — set by setUpModule.
+# The ids the declared prices of config/model-prices.yaml, which the console
+# never writes, are pinned for (PriceTest), read off the frozen document by
+# their place: the Builders' top and the Opus below it it took over from
+# (DRE-4836), and the Reviewers' top and the Sonnet below it (DRE-5116).
+# `test_the_document_holds_the_two_adoptions` pins that shape.
+OPUS55, OPUS = model_fixture.ladder(HOME, "workhorse")[:2]
+SONNET55, SONNET5 = model_fixture.ladder(HOME, "advisory")[:2]
+
+# The selector loaded from a throwaway tree of the frozen files, on the frozen
+# document, and that tree — set by setUpModule.
 fx = None
 FIXTURE_CLI = None
+TREE = None
 _TREE = None
 
 
 def setUpModule():
-    global fx, FIXTURE_CLI, _TREE
+    global fx, FIXTURE_CLI, TREE, _TREE
     _TREE = tempfile.TemporaryDirectory()
-    tree = model_fixture.fixture_tree(Path(_TREE.name) / "tree")
-    fx = model_fixture.fixture_module(tree)
-    FIXTURE_CLI = tree / "scripts" / "model_fallback.py"
+    TREE = model_fixture.fixture_tree(Path(_TREE.name) / "tree", regenerate=False)
+    fx = model_fixture.fixture_module(TREE, doc=HOME)
+    FIXTURE_CLI = TREE / "scripts" / "model_fallback.py"
 
 
 def tearDownModule():
@@ -85,12 +90,12 @@ def _canonical() -> dict:
 
 
 def _walk(role: str) -> list:
-    """The rungs `role` walks in the frozen config: its group's ladder."""
-    return model_fixture.ladder(FIXTURE, FIXTURE["agents"][role])
+    """The rungs `role` walks in the frozen document: its group's models."""
+    return model_fixture.ladder(HOME, HOME["agents"][role])
 
 
 def _fixture_rungs() -> set:
-    return {m for kind in FIXTURE["kinds"] for m in model_fixture.ladder(FIXTURE, kind)}
+    return {m for group in HOME["groups"] for m in model_fixture.ladder(HOME, group)}
 
 
 class LadderTest(unittest.TestCase):
@@ -98,6 +103,12 @@ class LadderTest(unittest.TestCase):
 
     def test_the_canonical_config_still_validates(self):
         self.assertEqual(mf.policy_errors(_canonical()), [])
+
+    def test_the_generated_mirror_carries_the_declared_levels(self):
+        # The degrade path is the whole point of the mirror: a checkout whose
+        # YAML will not parse still runs the ladders — and must still ask for
+        # the level, or the fall-back-to-literal path silently drops to medium.
+        self.assertEqual(mf._FALLBACK_MODEL_CONFIG["effort"], _canonical()["effort"])
 
     def test_every_rung_names_a_reason(self):
         # The file's own style: a rung is a decision, and the decision carries
@@ -113,6 +124,13 @@ class LadderTest(unittest.TestCase):
 
 class PriceTest(unittest.TestCase):
     """The declared price — what "no dearer" is read from (DRE-3895)."""
+
+    def test_the_document_holds_the_two_adoptions(self):
+        # Guard: each pair is a newer id of the same family over the one it
+        # replaced, and the newer Opus is the one the effort rule is about.
+        self.assertTrue(OPUS55.startswith(OPUS + "-"), (OPUS55, OPUS))
+        self.assertTrue(SONNET55.startswith(SONNET5 + "-"), (SONNET55, SONNET5))
+        self.assertIn(OPUS55, FIXTURE["effort"])
 
     def test_opus_5_5_is_declared_at_4_and_20(self):
         prices = yaml.safe_load(PRICES.read_text())["prices"]
@@ -167,12 +185,6 @@ class DeclaredEffortTest(unittest.TestCase):
             with self.subTest(model=model):
                 self.assertIsNone(fx.effort_for(model))
 
-    def test_the_generated_mirror_carries_the_declared_levels(self):
-        # The degrade path is the whole point of the mirror: a checkout whose
-        # YAML will not parse still runs the ladders — and must still ask for
-        # the level, or the fall-back-to-literal path silently drops to medium.
-        self.assertEqual(fx._FALLBACK_MODEL_CONFIG["effort"], FIXTURE["effort"])
-
     def test_an_unknown_level_is_refused(self):
         cfg = copy.deepcopy(FIXTURE)
         cfg["effort"] = {_walk("engineer")[0]: "maximum-effort"}
@@ -183,18 +195,19 @@ class DeclaredEffortTest(unittest.TestCase):
         # A level declared for an id no ladder names is a level nothing applies
         # — and the likeliest cause is a typo in the id the fleet is meant to
         # be running at `high`.
+        typo = OPUS55 + "5"  # one keystroke off the id the fleet runs at high
+        self.assertNotIn(typo, _fixture_rungs())
         cfg = copy.deepcopy(FIXTURE)
-        cfg["effort"] = dict(cfg.get("effort") or {}, **{"claude-opus-5-55": "high"})
+        cfg["effort"] = dict(cfg.get("effort") or {}, **{typo: "high"})
         errors = fx.policy_errors(cfg)
-        self.assertTrue(any("claude-opus-5-55" in e for e in errors), errors)
+        self.assertTrue(any(typo in e for e in errors), errors)
 
 
 class SelectorCliTest(unittest.TestCase):
     """The CLI the workflows actually call, run in the fixture tree."""
 
     def _run(self, *args, available=None):
-        env = dict(os.environ)
-        env["BUREAU_FAKE_AVAILABLE"] = json.dumps(available or {})
+        env = model_fixture.home_env(TREE, HOME, BUREAU_FAKE_AVAILABLE=available or {})
         proc = subprocess.run(
             [sys.executable, str(FIXTURE_CLI), *args],
             capture_output=True, text=True, env=env,
