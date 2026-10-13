@@ -51,6 +51,8 @@ EXPECTED_PROMPT_FILES = {
     "proof-task.yml": 3,
     "qa-review.yml": 2,
     "red-main-repair.yml": 1,
+    # DRE-7179: the planner's rewrite of a card the plan critic parked.
+    "triage-repair.yml": 1,
     "verify.yml": 2,
 }
 

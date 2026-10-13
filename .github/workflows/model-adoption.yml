@@ -69,9 +69,10 @@
 #      and the pull request are `agent-bureau-bot`'s, an identity qa-review.yml's
 #      `allowed_bots` already admits: the critic runs on `pull_request` and the
 #      merge gate merges an `agent/*` head. The home is written with a second
-#      App token, minted in the `adopt` job with `variables: write` on
-#      bureau-pipeline alone, and the document says `written_by:
-#      daily-adoption`. The trial is model-trial.yml, whose own
+#      App token, minted in the `adopt` job for bureau-pipeline alone with
+#      no permission subset, so it carries the installation's own permissions
+#      there, `variables: write` among them (DRE-7230), and the document
+#      says `written_by: daily-adoption`. The trial is model-trial.yml, whose own
 #      `allowed_bots` admits `github-actions`.
 #   Q2 secrets — a scheduled or dispatched run in this repo reads the repo's
 #      normal secrets store, never the Dependabot one, so the App key, the
@@ -171,7 +172,6 @@ jobs:
           private-key: ${{ secrets.BUREAU_APP_PRIVATE_KEY }}
           owner: dreadnought-foundry
           repositories: bureau-pipeline
-          permission-variables: read
 
       # Against the home's ladders, recording the `written_at` it read; a home
       # it cannot read classifies nothing (`[]`) and says why.
@@ -523,10 +523,13 @@ jobs:
           private-key: ${{ secrets.BUREAU_APP_PRIVATE_KEY }}
           owner: dreadnought-foundry
           repositories: bureau-pipeline
-          permission-variables: read
 
-      # The ONE writer of the home besides the console: `variables: write` on
-      # bureau-pipeline alone, handed to the apply step and no other.
+      # The ONE writer of the home besides the console: a token for
+      # bureau-pipeline alone, handed to the apply step and no other. It asks
+      # for no permission subset — the pinned action declares no variables
+      # input (DRE-7230) — so it carries the installation's own permissions
+      # there, `variables: write` among them. No continue-on-error: a refused
+      # write is red.
       - name: Mint the model-home write token
         id: model_home_write
         if: env.DRY_RUN != 'true'
@@ -536,7 +539,6 @@ jobs:
           private-key: ${{ secrets.BUREAU_APP_PRIVATE_KEY }}
           owner: dreadnought-foundry
           repositories: bureau-pipeline
-          permission-variables: write
 
       # Reads the home again; a `written_at` other than the one classify
       # recorded writes nothing and ends green with one sentence. Otherwise
@@ -620,7 +622,6 @@ jobs:
           private-key: ${{ secrets.BUREAU_APP_PRIVATE_KEY }}
           owner: dreadnought-foundry
           repositories: bureau-pipeline
-          permission-variables: read
 
       # Every pin-raise title opens with the module's own prefix, read from it
       # rather than restated here.
@@ -810,7 +811,6 @@ jobs:
           private-key: ${{ secrets.BUREAU_APP_PRIVATE_KEY }}
           owner: dreadnought-foundry
           repositories: bureau-pipeline
-          permission-variables: read
 
       - name: Open the pin-raise pull request
         if: env.DRY_RUN != 'true'
