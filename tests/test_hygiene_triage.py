@@ -17,7 +17,14 @@ named:
   7. a card held on a planning reason (DRE-6451) — `plan-critic-bound` or
      `epic-rereview-twice`: one `Left` row naming the reason, its age in
      Triage and the park note, and once past `HYGIENE_TRIAGE_ALARM_HOURS` an
-     alarm receipt the core's (tag, cause) key posts once.
+     alarm receipt the core's (tag, cause) key posts once;
+  8. the same card once its one automatic repair is spent (DRE-7183) — its
+     newest pipeline-authored `🩹 triage-repair:` receipt finished and it
+     parked again, or did not finish, or `started` 2 hours ago with no
+     outcome: the alarm on the first pass, under
+     `HYGIENE_TRIAGE_REPAIRED_ALARM_HOURS` (default 0), held or not for the
+     last two. A `started` younger than that is a repair in flight, never an
+     alarm.
 
 Everything else is a `Left` row naming what a person must do.
 
@@ -1103,6 +1110,7 @@ class TestARepairedCard:
     def test_a_repair_in_flight_is_a_row_and_never_an_alarm(self, minutes):
         doc = fixture()
         started = NOW - timedelta(minutes=minutes)
+        note = park_note(doc, "DRE-4424")
         card(doc, "DRE-4424")["comments"]["nodes"].append(receipt("started", iso(started)))
         items, _ctx, _gh, _linear = plan(doc)
         # 15 hours in Triage, past the 8-hour bound — the repair still holds it.
@@ -1111,8 +1119,7 @@ class TestARepairedCard:
         assert len(rows) == 1
         assert rows[0].why == (
             f"held plan-critic-bound in Triage — its one automatic repair started "
-            f"{started:%Y-%m-%dT%H:%M:%SZ} and is still running — "
-            + park_note(doc, "DRE-4424")[:160])
+            f"{started:%Y-%m-%dT%H:%M:%SZ} and is still running — " + note[:160])
         assert rows[0].recommendation == RUNNING
 
     def test_a_started_two_hours_old_recorded_no_outcome_and_alarms(self):
