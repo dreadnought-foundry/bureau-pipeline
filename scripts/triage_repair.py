@@ -56,6 +56,17 @@ Exit 3, posting nothing, when a receipt already stands.
 
 ## The outcome (`apply`)
 
+`apply` acts only under a standing claim: when the newest pipeline receipt on
+the thread is not `started` — no claim, or a finished outcome already stands —
+it posts nothing and exits non-zero, so a retried or stale run never repeats a
+write or posts a second outcome. The planner runs for up to `REPAIR_MAX_TURNS`
+between the claim and the apply, so the card is then read live, before any
+write: a card a person or the hygiene agent moved out of Triage, or whose
+`needs-human` was cleared, in that window is no longer the repair's, and the
+outcome is `unfinished` with nothing written. The move to Planning is
+conditional on Triage too (`cmd_state(..., expect=(LANE,))`), for a card
+moved on while the rewrite's own writes run.
+
 The planner's files are read first, and exactly one outcome is reached:
 
   * `asked` — `question.md` is non-empty, whichever the action. The
@@ -496,8 +507,29 @@ def _decisions_block(card: str) -> None:
 
 
 def _move_to_planning(card: str) -> None:
-    if not linear_ops.cmd_state(card, PLANNING_LANE):
+    """Conditional on Triage: a card moved on while the writes before this
+    one ran is refused, never dragged back into planning."""
+    if not linear_ops.cmd_state(card, PLANNING_LANE, expect=(LANE,)):
         raise RuntimeError(f"a guard refused the move to {PLANNING_LANE}")
+
+
+def _claim_stands(records) -> bool:
+    """The newest pipeline receipt on the thread is this card's `started`."""
+    spent = receipts(records)
+    return bool(spent) and outcome_of(spent[-1]) == STARTED
+
+
+def _moved_on(card: str) -> str | None:
+    """Why the card is no longer the repair's, off its live read, or None
+    while it still stands in Triage wearing the hold."""
+    issue = linear_ops.get_issue(card, fresh=True)
+    lane = ((issue.get("state") or {}).get("name") or "")
+    if lane != LANE:
+        return f"the card is no longer in {LANE} — it is in {lane or 'no lane'}"
+    if hold.HOLD_LABEL not in [n.lower() for n in _labels(issue)]:
+        return (f"the card no longer wears `{hold.HOLD_LABEL}` — its hold was "
+                "lifted by someone else")
+    return None
 
 
 def _finish(card: str, writes: _Writes, what: str) -> int:
@@ -522,6 +554,17 @@ def apply(card: str, action: str, directory: str | None) -> int:
         records = linear_ops.comment_records(card, whole_thread=True)
     except Exception as exc:  # noqa: BLE001
         return _finish(card, writes, f"the card's thread could not be read ({exc})")
+    if not _claim_stands(records):
+        print(f"ERROR: {card}: no claim stands — the newest receipt is not "
+              f"`{STARTED}`, so this card's one repair is not this run's to "
+              "apply. Nothing posted", file=sys.stderr)
+        return EXIT_UNFINISHED
+    try:
+        gone = _moved_on(card)
+    except Exception as exc:  # noqa: BLE001
+        return _finish(card, writes, f"the card could not be read ({exc})")
+    if gone is not None:
+        return _finish(card, writes, gone)
     stamp = hold.read_stamp([_body(r) for r in records])
     reason = stamp["reason"] if stamp else "manual"
 
