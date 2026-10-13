@@ -555,6 +555,7 @@ last, after every other write of its outcome:
     🩹 triage-repair: rewritten — … The findings, each with its answer:
     🩹 triage-repair: asked — … the card's description is unchanged.
     🩹 triage-repair: replanned — … The findings in front of the planner:
+    🩹 triage-repair: split — … The cards filed: … The findings, each with its answer:
     🩹 triage-repair: unfinished — <what failed or was missing>. Writes already made: <list>.
 
 `replanned` is an epic's (DRE-7181): a card with children that has had no
@@ -565,8 +566,12 @@ bound rewrite, and whose findings are there and name no decision, gets the
 move to Planning, where a fresh planning attempt starts. An epic carrying a
 bound-rewrite receipt anywhere on its thread is `spent`; one whose findings
 name a decision is `escalate`, as the bound itself asks it, and one whose park
-left no findings is `skip`. `split` is the
-split's (DRE-7182). **The receipt key is live**: a pipeline-authored comment whose
+left no findings is `skip`. `split` is a card that is more than one job
+(DRE-7182): narrowed to its first piece with each other piece filed beside it
+through the seam its parent decides (`mid_epic.discovery` under an epic being
+built, `linear_ops.cmd_subissue` under any other parent, `linear_ops.cmd_oneoff`
+with none), or stamped `epic` through `planning_shape.stamp` as the planner,
+then lifted and moved to Planning. **The receipt key is live**: a pipeline-authored comment whose
 first line opens `🩹 triage-repair:` anywhere on the card is the card's one
 repair, so `select` answers `spent` and `claim` exits 3. A comment of that
 shape from any other author counts for nothing.
