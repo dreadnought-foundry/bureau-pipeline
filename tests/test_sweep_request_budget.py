@@ -469,7 +469,8 @@ def test_the_board_is_read_once_per_sweep():
 def test_a_lane_outside_the_swept_union_still_gets_its_own_read():
     """The cache serves the union it read. A caller asking for a lane outside
     SWEPT_LANES must still get a real query rather than a silently empty
-    answer — `drain_retiring_lanes` is exactly that caller."""
+    answer. `drain_retiring_lanes` was that caller until DRE-6753 put the
+    retiring lanes in the read itself; a lane no phase reads stands in."""
     outside = _card("DRE-1005", state="Duplicate")
     fake = FakeLinear(active=[outside])
     with _linear(fake):
