@@ -44,7 +44,9 @@ import test_triage_repair_workflow as wiring  # noqa: E402
 import triage_repair  # noqa: E402
 from triage_repair_fakes import TriageRepairBoard  # noqa: E402
 
-MODEL = "claude-opus-5-5"
+#: The test's own input, handed to `apply` as `--model` and read back off the
+#: stamp. It is no rung of any ladder, so no console save can make it a pin.
+MODEL = "planner-model-under-test"
 LABELS = ("needs-human", "repo:agent-bureau", "agent:engineer", "initiative:pipeline")
 
 #: DRE-7164, narrowed to its first piece: the reader that works out whether a
