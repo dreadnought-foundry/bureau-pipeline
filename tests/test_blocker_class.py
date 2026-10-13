@@ -547,7 +547,7 @@ class TestDocs:
     def test_the_page_lists_the_transient_lines(self):
         text = self.DOC.read_text(encoding="utf-8").lower()
         for phrase in ("not on the checkout", "notnow", "could not be read live",
-                       "left backlog", "not the full sweep"):
+                       "left queued", "not the full sweep"):
             assert phrase in text, phrase
 
     def test_the_config_readme_carries_the_bullet(self):
