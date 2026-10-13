@@ -12,6 +12,12 @@
 #     last-known-good ladders, so an entry deleted here is a fleet-wide
 #     degrade, not a documentation change.
 #
+# The planning classifier (`scripts/planning_classify.py`, DRE-7196) prices
+# its own call through `model_fallback.declared_prices` — the second reader's
+# function, not a third parser — and only on the raw API path, where the
+# response reports tokens rather than a cost. An id with no entry is a call
+# whose receipt says `cost unknown`; nothing is guessed there either.
+#
 # The model trial (`.github/workflows/model-trial.yml`, DRE-6971) also COUNTS
 # the entries of the top-level prices mapping as its fixed task, and reads no
 # price: the file stays in the repository and is never empty, where the

@@ -56,6 +56,8 @@ TITLE = "Retire the split ledger"
 BRANCH = f"agent/{CARD}-retire-split-ledger"
 URL = f"https://github.com/{REPO}/pull/901"
 CARD_URL = f"https://linear.app/dreadnoughtfoundry/issue/{CARD}"
+#: The move out of the queue reads it under every name it has (DRE-6747).
+QUEUE_FROM = ",".join(lane_contract.QUEUE_LANES)
 PARKED = (" — parked in Backlog until the blocker is resolved (a Todo return here "
           "would redispatch agents into the same wall). Run: "
           "https://github.com/dreadnought-foundry/bureau-pipeline/actions/runs/1")
@@ -169,7 +171,7 @@ class StubLinear:
 
     def cmd_advance(self, identifier, to_state, from_states_csv, *flags, **kwargs):
         self.calls.append(("cmd_advance", identifier, to_state, from_states_csv, flags, kwargs))
-        if self.lands and self.lane == "Backlog":
+        if self.lands and self.lane in [s.strip() for s in from_states_csv.split(",")]:
             self.lane = to_state
         else:
             print(f"{identifier} is in {self.lane}, not {from_states_csv} — not advancing")
@@ -183,7 +185,7 @@ class StubLinear:
 
 
 ADVANCED = [
-    ("cmd_advance", CARD, "In Review", "Backlog", (), {"held": True}),
+    ("cmd_advance", CARD, "In Review", QUEUE_FROM, (), {"held": True}),
     ("get_issue", CARD, {"fresh": True}),
 ]
 
@@ -240,6 +242,15 @@ class TestTheStampedCreate:
         assert action == "pr-opened"
         assert note.startswith(f"{URL} opened from {BRANCH} — the agent's note: ")
         assert STAMPED_REASON[:40] in note
+
+    @pytest.mark.parametrize("lane", lane_contract.QUEUE_LANES)
+    def test_a_card_under_either_queue_name_moves_to_review_the_same_way(self, stubs, lane):
+        """DRE-6747: the In Review move reads the queue under every name."""
+        _, _, linear = stubs(linear=StubLinear(lane=lane))
+        action, _ = module.resolve(_card(STAMPED_MARKER), STAMPED_REASON, repo=REPO)
+        assert action == "pr-opened"
+        assert linear.calls == ADVANCED
+        assert linear.lane == "In Review"
 
     def test_the_reads_happen_in_the_cards_order(self, stubs):
         run, _, _ = stubs()

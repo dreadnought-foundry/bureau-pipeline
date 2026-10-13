@@ -396,6 +396,15 @@ LABEL_ROUTED_MODEL = "none — precedence 1 asks no model"
 # stays one readable line in the run log.
 STREAM_SUMMARY_CHARS = 900
 
+# DRE-7196. The classifier receipt's last clause: what the call cost, or that
+# no cost could be read. `scripts/classifier_cost.py` reads it back, so the two
+# spellings live here once. `_NO_COST_CLAUSE` is `model_receipt`'s default — a
+# receipt that says nothing about cost, which is every receipt but the
+# classifier's.
+COST_CLAUSE = " · cost $"
+COST_UNKNOWN = " · cost unknown"
+_NO_COST_CLAUSE = object()
+
 
 class ClassifyError(RuntimeError):
     """The prompt cannot be composed — the brief, the standard or the
@@ -448,6 +457,10 @@ class Answer:
     # first real groomer run lost 204 of 260 lines to exactly one of these and
     # every receipt said `success`.
     continuations: int = 0
+    # What the call cost in US dollars (DRE-7196): the CLI envelope's
+    # `total_cost_usd`, or the API usage priced off `config/model-prices.yaml`.
+    # None is a cost nobody could read — never a zero.
+    cost_usd: float | None = None
 
 
 @dataclass(frozen=True)
@@ -493,6 +506,9 @@ class Decision:
     # there). Both None on every call that did not fall.
     fell_from: str | None = None
     fell_because: str | None = None
+    # DRE-7196. What the classification cost, summed over every rung it asked;
+    # None when no cost could be read. The receipt's last clause.
+    cost_usd: float | None = None
 
     @property
     def escalates(self) -> bool:
@@ -1118,7 +1134,34 @@ def _call_api(model: str, prompt: str, *, max_tokens: int | None = None,
         # The field the response has always carried and this module has never
         # read (DRE-3258). A cut answer is an answer.
         truncated=body.get("stop_reason") == "max_tokens",
+        cost_usd=_priced_usage(body.get("model") or model, body.get("usage")),
     )
+
+
+def _priced_usage(model: str | None, usage) -> float | None:
+    """What one `/v1/messages` response cost, off its `usage` and the price
+    `config/model-prices.yaml` declares for `model` (DRE-7196).
+
+    None when it cannot be priced: no usage, a model with no declared price, or
+    tokens read from or written to the prompt cache — the file declares no
+    cache price, and a price is never guessed.
+    """
+    price = model_fallback.declared_prices().get(model or "")
+    if not isinstance(usage, dict) or not price:
+        return None
+    counts = {}
+    for key in ("input_tokens", "output_tokens",
+                "cache_creation_input_tokens", "cache_read_input_tokens"):
+        value = usage.get(key) or 0
+        if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+            return None
+        counts[key] = value
+    if counts["cache_creation_input_tokens"] or counts["cache_read_input_tokens"]:
+        return None
+    if "input_tokens" not in usage or "output_tokens" not in usage:
+        return None
+    return (counts["input_tokens"] * price["input"]
+            + counts["output_tokens"] * price["output"]) / 1_000_000
 
 
 def _cli_argv(model: str) -> list:
@@ -1267,6 +1310,15 @@ def _envelope(stdout: str) -> dict | None:
     return None
 
 
+def envelope_cost(envelope) -> float | None:
+    """The `total_cost_usd` a CLI result envelope reports, or None when it
+    reports none we can read (DRE-7196). Never a zero for a missing figure."""
+    cost = envelope.get("total_cost_usd") if isinstance(envelope, dict) else None
+    if isinstance(cost, bool) or not isinstance(cost, (int, float)) or cost < 0:
+        return None
+    return float(cost)
+
+
 def _output_tokens(entry) -> int:
     """One `modelUsage` entry's output-token count, or 0 for anything the CLI
     wrote in a shape we do not recognise. Never raises: an unreadable count is
@@ -1309,7 +1361,7 @@ def answered_model(envelope, requested: str | None = None) -> str | None:
 
 
 def model_receipt(asked: str | None, answered: str | None, *,
-                  because: str | None = None) -> str:
+                  because: str | None = None, cost=_NO_COST_CLAUSE) -> str:
     """The heartbeat's model half: what was asked for AND what answered.
 
     One line, because it rides a `$GITHUB_OUTPUT` assignment and a Linear
@@ -1319,6 +1371,11 @@ def model_receipt(asked: str | None, answered: str | None, *,
 
     A half we do not know is written `unknown`. Repeating the other half would
     make a fallback we never saw look like a clean run on the model we picked.
+
+    `cost` is opt-in (DRE-7196): only the classifier passes it, so the groomer's
+    and the groom judgement's receipts are the lines they always were. Passed,
+    it ends the line ` · cost $<d.dddd>`, or ` · cost unknown` for None —
+    `scripts/classifier_cost.py` adds those up.
     """
     asked = " ".join((asked or "").split()) or "unknown"
     answered = " ".join((answered or "").split()) or "unknown"
@@ -1331,6 +1388,8 @@ def model_receipt(asked: str | None, answered: str | None, *,
         # DRE-3970: a fall the run MADE says why, in words that are not a death
         # marker — this line rides a `model-attempt:` heartbeat.
         line += f" — {asked} out of capacity ({' '.join(str(because).split())})"
+    if cost is not _NO_COST_CLAUSE:
+        line += COST_UNKNOWN if cost is None else f"{COST_CLAUSE}{float(cost):.4f}"
     return line
 
 
@@ -1435,7 +1494,7 @@ def _call_claude_code(model: str, prompt: str, *, max_tokens: int | None = None,
     if cut_off(envelope):
         return Answer(text=text if chunks else str(envelope.get("result") or ""),
                       model=answered_model(envelope, model), truncated=True,
-                      continuations=continued)
+                      continuations=continued, cost_usd=envelope_cost(envelope))
     if envelope.get("is_error") or envelope.get("subtype") not in (None, "success"):
         # DRE-5979: the message also says what the CLI streamed, because the run
         # log is the only place a failure like `error_max_turns` can be read.
@@ -1454,7 +1513,7 @@ def _call_claude_code(model: str, prompt: str, *, max_tokens: int | None = None,
             f"exit {done.returncode}",
         )
     return Answer(text=text, model=answered_model(envelope, model),
-                  continuations=continued)
+                  continuations=continued, cost_usd=envelope_cost(envelope))
 
 
 def _call_real(model: str, prompt: str, *, max_tokens: int | None = None,
@@ -1581,7 +1640,24 @@ def call_with_capacity_fallback(call, model: str, prompt: str, *,
         except TransportError as again:
             again.fell_from, again.fell_because, again.calls = fell_from, because, 2
             raise
+        # DRE-7196: the answer's cost is both rungs' — the one that fell billed
+        # too, when it returned an envelope.
+        answer = dataclasses.replace(
+            answer, cost_usd=_summed_cost(e.record, answer.cost_usd))
         return answer, below, fell_from, because, 2
+
+
+def _summed_cost(fell_record, answered_cost: float | None) -> float | None:
+    """The cost of a call that stepped down the ladder (DRE-7196): the sum over
+    the attempts that returned an envelope. A rung that fell with none (a raw
+    429) billed nothing readable and adds nothing; one whose envelope carries
+    no readable cost makes the sum unknown, because half a sum is not a total."""
+    if answered_cost is None:
+        return None
+    if fell_record is None:
+        return answered_cost
+    fell_cost = envelope_cost(fell_record)
+    return None if fell_cost is None else fell_cost + answered_cost
 
 
 def _pick_model(repo: str | None = None) -> str:
@@ -1655,7 +1731,8 @@ def classify(card: dict, *, call=None, model: str | None = None,
     decision = seam_decision(decision, card.get("description") or "",
                              roll_up_parent=card.get("roll_up_parent"))
     return dataclasses.replace(decision, answered=True, asked=model,
-                               fell_from=fell_from, fell_because=because)
+                               fell_from=fell_from, fell_because=because,
+                               cost_usd=answer.cost_usd)
 
 
 def seam_decision(decision: Decision, body: str, *,
@@ -1764,7 +1841,7 @@ def run(lops, identifier: str, *, call=None, model: str | None = None,
     Unless the card came BACK (DRE-4370). A planner stamp older than the newest
     return receipt — a build run's hand-back, or a turn death read as size — is
     void, because `planning_shape` reads the thread from that receipt on.
-    Before that, a one-off handed back kept its stamp, routed to Backlog and
+    Before that, a one-off handed back kept its stamp, routed to Queued and
     was dispatched again at the same budget. Now the card is read afresh with
     the receipt as evidence, and the new stamp quotes it as its why. A hand
     stamp survives the receipt, for the reason above: it is the override.
@@ -1979,12 +2056,17 @@ def _model_pairs(decision: Decision) -> list:
     `receipt` is the heartbeat's line as this module composes it — the workflow
     posts it rather than assembling one, because a receipt assembled in YAML is
     a second answer to "which model answered" that nothing tests.
+
+    The classifier's receipt is the one that carries the cost clause (DRE-7196),
+    so the heartbeat plan.yml posts says what the call cost without that
+    workflow changing.
     """
     return [
         ("model", decision.model or ""),
         ("asked", decision.asked or ""),
         ("receipt", model_receipt(decision.asked, decision.model,
-                                  because=decision.fell_because)),
+                                  because=decision.fell_because,
+                                  cost=decision.cost_usd)),
         # DRE-3970: plan.yml's Select model skips this rung for the planner, so
         # the run that saw Fable refused does not ask it a second time.
         ("fell_from", decision.fell_from or ""),

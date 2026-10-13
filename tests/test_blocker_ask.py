@@ -42,11 +42,14 @@ sys.path.insert(0, str(ROOT / "scripts"))
 import blocker_ask as module  # noqa: E402
 import blocker_class  # noqa: E402
 import console_escalation  # noqa: E402
+import lane_contract  # noqa: E402
 import linear_ops  # noqa: E402
 
 SCRIPT = ROOT / "scripts" / "blocker_ask.py"
 CARD = "DRE-9002"
 RUN = "https://github.com/dreadnought-foundry/bureau-pipeline/actions/runs/4242"
+#: The move out of the queue reads it under every name it has (DRE-6747).
+QUEUE_FROM = ",".join(lane_contract.QUEUE_LANES)
 PARKED = (" — parked in Backlog until the blocker is resolved (a Todo return here "
           "would redispatch agents into the same wall).")
 
@@ -68,7 +71,8 @@ DECLARED = (
 FIRST_LINE = ("🙋 The build agent stopped on this card and the sweep could not act "
               "on its note — it needs your call.")
 CLOSING = ("Answer here, then move this card to **Todo** to proceed (a fresh run "
-           "picks up your guidance), or to **Backlog** to drop it. Asked by the "
+           f"picks up your guidance), or to **{lane_contract.QUEUE_LANE}** to drop it. "
+           "Asked by the "
            "sweep; the agent's run: ")
 
 
@@ -103,7 +107,7 @@ class StubLinear:
 
     def cmd_advance(self, identifier, to_state, from_states_csv, *flags, **kwargs):
         self.calls.append(("cmd_advance", identifier, to_state, from_states_csv, flags, kwargs))
-        if self.lands and self.lane == "Backlog":
+        if self.lands and self.lane in [s.strip() for s in from_states_csv.split(",")]:
             self.lane = to_state
         else:
             print(f"{identifier} is in {self.lane}, not {from_states_csv} — not advancing")
@@ -120,7 +124,7 @@ class StubLinear:
 
 
 ADVANCED = [
-    ("cmd_advance", CARD, "Green Light", "Backlog", (), {"held": True}),
+    ("cmd_advance", CARD, "Green Light", QUEUE_FROM, (), {"held": True}),
     ("get_issue", CARD, {"fresh": True}),
 ]
 
@@ -179,6 +183,17 @@ class TestTheAsk:
         question = console_escalation.parse(comment).question
         assert note == f"asked in Green Light: {question[:120]}"
         assert note.startswith("asked in Green Light: ")
+
+    @pytest.mark.parametrize("lane", lane_contract.QUEUE_LANES)
+    def test_a_card_under_either_queue_name_is_asked_the_same_way(self, stub, lane):
+        """DRE-6747: the move reads the queue under every name it has, so a
+        card parked in `Queued` is carried to Green Light like one in the lane
+        it replaces."""
+        linear = stub(lane=lane)
+        result = module.resolve(_card(MARKER), REASON, repo="o/r")
+        assert linear.calls[1:] == ADVANCED
+        assert linear.lane == "Green Light"
+        assert result[0] == "asked"
 
     def test_the_comment_is_compose_over_the_reason_and_the_run(self, stub):
         linear = stub()
@@ -320,7 +335,7 @@ class TestTheModuleShape:
     def test_the_green_light_move_names_its_lane_as_a_literal(self):
         source = SCRIPT.read_text(encoding="utf-8")
         assert ('linear_ops.cmd_advance(card["identifier"], "Green Light", '
-                '"Backlog", held=True)') in source
+                '",".join(QUEUE_LANES), held=True)') in source
 
     def test_the_module_does_not_borrow_the_planners_escalation(self):
         assert "planning_escalation" not in _code()

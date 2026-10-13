@@ -38,6 +38,7 @@ Run: cd bureau-pipeline && python3 -m pytest tests/test_mid_epic_discovery.py -v
 from __future__ import annotations
 
 import contextlib
+import io
 import os
 import sys
 from pathlib import Path
@@ -328,14 +329,14 @@ class TestAdditionNeedsNoGreenLight:
             body="## What\n- the same fix, one call site along",
         )
         assert ident == "DRE-2740"
-        assert ops.created_state("DRE-2740") == "Backlog"
+        assert ops.created_state("DRE-2740") == lane_contract.QUEUE_LANE
         assert mid_epic.carries_verdict(ops.comments_on("DRE-2740"))
 
         board = _PromotionBoard(
             created_at=AFTER, comments=ops.comments_on("DRE-2740")
         )
         assert board.promote() == 1
-        assert board.visited("DRE-2740") == ["Backlog", "Todo"]
+        assert board.visited("DRE-2740") == [lane_contract.QUEUE_LANE, "Todo"]
         for lane in mid_epic.GREEN_LIGHT_LANES:
             assert lane not in board.visited("DRE-2740")
 
@@ -767,7 +768,7 @@ class TestBornWithItsRoutingVerdict:
         with _stamping_into(ops):
             ident = self._file(ops, verdict="WORKBENCH")
         created = next(c for c in ops.created if c["identifier"] == ident)
-        assert created["state"] == "Backlog"
+        assert created["state"] == lane_contract.QUEUE_LANE
         assert [s for s in ops.states if s[0] == ident] == []
         assert ops.labels_on(ident) == list(routing_verdict.marks("WORKBENCH")) == []
 
@@ -943,6 +944,48 @@ class TestBornWithItsRoutingVerdict:
         assert "--verdict" in (mid_epic.__doc__ or "")
 
 
+class TestTheSiblingLandsInTheQueueLane:
+    """A discovery's sibling lands in `lane_contract.QUEUE_LANE` (DRE-6746):
+    the planning exit's destination — `Backlog` under the shipped contract,
+    `Queued` the day DRE-6742 moves the exit. The write is the create seam's
+    (`linear_ops.cmd_subissue`, DRE-6744); the words this route puts on a card
+    name the same lane."""
+
+    BODY = (
+        "The second call site needs the same fix as the first.\n\n"
+        "## Acceptance criteria\n- [ ] the second call site is fixed"
+    )
+
+    @pytest.mark.parametrize("flipped", [False, True], ids=["shipped", "flipped"])
+    def test_the_sibling_lands_in_the_queue_lane(self, tmp_path, monkeypatch, flipped):
+        if flipped:
+            monkeypatch.setattr(linear_ops, "QUEUE_LANE", "Queued")
+        ops = _CreatingOps(tmp_path, epic_description="The epic.")
+        ident = mid_epic.discovery(
+            ops, "DRE-2700", kind=mid_epic.ADDITION,
+            because="a second call site needs the same fix",
+            title="bureau-pipeline: fix the second call site", body=self.BODY,
+        )
+        expected = "Queued" if flipped else lane_contract.QUEUE_LANE
+        assert ops.created_state(ident) == expected
+        assert ops.states == [], "the create is the only lane write"
+
+    def test_the_route_imports_the_queue_lane_from_the_contract(self):
+        assert mid_epic.QUEUE_LANE is lane_contract.QUEUE_LANE
+
+    @pytest.mark.parametrize("lane", ["Queued", "Backlog"])
+    def test_a_refused_verdict_names_the_queue_lane(self, monkeypatch, lane):
+        monkeypatch.setattr(mid_epic, "QUEUE_LANE", lane)
+        text = mid_epic.verdict_problem(mid_epic.ADDITION, "PARKED")
+        assert f"the sweep carries out of {lane}," in text, text
+
+    @pytest.mark.parametrize("lane", ["Queued", "Backlog"])
+    def test_the_sign_off_refusal_names_the_queue_lane(self, monkeypatch, lane):
+        monkeypatch.setattr(mid_epic, "QUEUE_LANE", lane)
+        text = mid_epic.promotion_refusal("DRE-2740", AFTER, GREEN_LIGHT, [])
+        assert f"back in {lane} with that verdict" in text, text
+
+
 def _routing_stamps(ops, identifier) -> list:
     """Every 🧭 routing-verdict comment on `identifier`. The marker must OPEN
     the body — `routing_verdict.verdicts_on` reads it the same way, because a
@@ -1044,7 +1087,9 @@ class _FakeOps:
         ident = f"DRE-{self._next}"
         self._next += 1
         issue = {"id": f"uuid-{ident}", "identifier": ident,
-                 "url": f"https://linear.app/x/{ident}", "state": "Backlog",
+                 "url": f"https://linear.app/x/{ident}",
+                 # The lane the real create seam writes (DRE-6744).
+                 "state": linear_ops.QUEUE_LANE,
                  "parent": parent, "title": title}
         self.created.append(issue)
         self.children.append((ident, AFTER))
@@ -1122,6 +1167,33 @@ class _FakeOps:
         return next(c["state"] for c in self.created if c["identifier"] == identifier)
 
 
+class _CreatingOps(_FakeOps):
+    """`_FakeOps` with the REAL create seam: `cmd_subissue` is
+    `linear_ops.cmd_subissue` over a fake Linear carrying both queue names, so
+    the lane a discovery's sibling lands in is the one the seam wrote."""
+
+    def __init__(self, tmp_path, **kw):
+        super().__init__(**kw)
+        from test_subissue_epic_child import PIPELINE_PARENT, _QueueBoard
+
+        self.tmp_path = tmp_path
+        self.board = _QueueBoard(parent_labels=PIPELINE_PARENT)
+
+    def cmd_subissue(self, parent, title, body, *flags):
+        path = self.tmp_path / "sibling.md"
+        path.write_text(body)
+        with patch.object(linear_ops, "gql", side_effect=self.board.gql), \
+                contextlib.redirect_stdout(io.StringIO()):
+            issue = linear_ops.cmd_subissue("DRE-EPIC", title, str(path), *flags)
+        lane = next(name for name in self.board.lanes
+                    if f"state-{name.lower()}" == self.board.created["stateId"])
+        issue = {**issue, "state": lane, "parent": parent, "title": title}
+        self.created.append(issue)
+        self.children.append((issue["identifier"], AFTER))
+        self.log.append(("subissue", issue["identifier"], title))
+        return issue
+
+
 class _PromotionBoard:
     """`reconcile.promote_ready` over ONE Backlog child of an In Progress epic,
     with every other gate (WIP, epic blockers, card blockers) open — so the only
@@ -1147,7 +1219,7 @@ class _PromotionBoard:
         }
         self.advanced: list[tuple[str, str, str]] = []
         self.posted: list[tuple[str, str]] = []
-        self.lanes = {"DRE-2740": ["Backlog"]}
+        self.lanes = {"DRE-2740": [lane_contract.QUEUE_LANE]}
 
     def promote(self) -> int:
         def advance(ident, to_state, from_states):
