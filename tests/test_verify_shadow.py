@@ -56,7 +56,20 @@ import merge_gate  # noqa: E402
 
 AGENT_ACTION = "anthropics/claude-code-action"
 SELECTED = "claude-selected-by-the-ladder"
-NAMED = "claude-opus-5-5"
+
+
+def _a_selectable_priced_model() -> str:
+    """A model the guard lets a replay run on, read off the config the guard
+    reads: priced, and listed under neither `excluded` nor `retired`. Never a
+    literal — the console changes which models those are (DRE-6859)."""
+    cfg = yaml.safe_load((ROOT / "config" / "models.yaml").read_text()) or {}
+    prices = yaml.safe_load((ROOT / "config" / "model-prices.yaml").read_text())["prices"]
+    barred = {e.get("model") if isinstance(e, dict) else e
+              for sec in ("excluded", "retired") for e in cfg.get(sec) or []}
+    return next(m for m in prices if m not in barred)
+
+
+NAMED = _a_selectable_priced_model()
 REPLAY_PR = "4242"
 REPLAY_SHA = "0123456789abcdef0123456789abcdef01234567"
 TODAY_SHA = "fedcba9876543210fedcba9876543210fedcba98"
