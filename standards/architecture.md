@@ -54,9 +54,12 @@ Intake → Planning → Green Light → Queued → Todo → Hand-work → In Pro
   Green Light, Triage or a closed lane since — because a verdict approves one
   trip through Planning (`stale-verdict`, DRE-4962). It is of type
   `unstarted` because Linear draws a `backlog`-type column first whatever its
-  position. It replaced `Backlog` (DRE-4125): live on the board since DRE-6740,
-  the planning exit's lane since DRE-6742, and the old column stays until every
-  writer has moved, a card in it read as `Queued` through the contract's alias.
+  position. It replaced the board's old `backlog`-type queue (DRE-4125): live
+  on the board since DRE-6740, the planning exit's lane since DRE-6742, and the
+  old lane retiring since DRE-6753 — the sweep drains any card in it into
+  `Queued`, a card there is read as `Queued` through the contract's alias
+  meanwhile, and the column stays on the board, empty, because Linear keeps a
+  team's only backlog-type status.
 - **`Hand-work`** — the person-work lane (DRE-5240): a card a person builds,
   never dispatched, never reported stalled, carried to `In Review` when its pull
   request opens. WORKBENCH and OPERATOR land here (DRE-5321), which leaves

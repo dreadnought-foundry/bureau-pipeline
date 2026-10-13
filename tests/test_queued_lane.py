@@ -20,6 +20,12 @@ move with it. Its precondition is pinned here: no string constant in any
 script still names `Backlog`, so no script reader is left reading only the old
 name when the writes move. Backlog stays live and stays an alias, so a card
 still under the old name is read as queued.
+
+DRE-6753 retires Backlog. Its entry is now `retiring`, carrying `retired_by`,
+`replaced_by`, `reason` and `board_action` and no clauses — the clauses it had
+were Queued's, word for word, and live on there. The alias stays, so a card
+still under the old name is still read as queued, and the sweep's drain moves
+it into Queued. `tests/test_backlog_retired.py` pins the retirement itself.
 """
 
 import copy
@@ -62,16 +68,6 @@ ARRIVING_KEYS = {
 }
 
 
-# The sentence DRE-6741 opens every one of Backlog's clauses with, as
-# DRE-6742 re-words it once the planning exit has moved. Everything after it is
-# still Queued's clause with the lane's own name swapped back.
-REPLACED = (
-    "Being replaced by Queued (DRE-4125): the contract's alias reads this name "
-    "as Queued (DRE-6741), and since DRE-6742 the planning exit lands in "
-    "Queued, so the pipeline's writers write Queued and a card still here is "
-    "read as one there. "
-)
-
 # DRE-6741's wording, which said the exit had not moved yet. Nothing may still
 # say it once the exit has moved.
 NOT_YET = "the planning exit still lands here until DRE-6742 moves it"
@@ -83,18 +79,6 @@ def shipped():
 
 def raw_lane(doc, name):
     return next(entry for entry in doc["lanes"] if entry["name"] == name)
-
-
-def renamed(value):
-    """Backlog's text with the lane's own name swapped for Queued's — the only
-    difference the two entries are permitted."""
-    return json.loads(json.dumps(value).replace(BACKLOG, QUEUED))
-
-
-def unreplaced(clause):
-    """A Backlog clause with DRE-6741's opening sentence taken off."""
-    assert clause["text"].startswith(REPLACED), clause["text"][:120]
-    return {**clause, "text": clause["text"][len(REPLACED):]}
 
 
 def arriving_doc():
@@ -129,10 +113,10 @@ class TestTheQueuedEntry:
         for key in ARRIVING_KEYS:
             assert key not in entry, key
 
-    def test_it_carries_exactly_backlogs_keys(self):
+    def test_it_carries_a_live_lanes_keys(self):
         entry = raw_lane(shipped(), QUEUED)
-        backlog = raw_lane(shipped(), BACKLOG)
-        assert set(entry) == set(backlog)
+        assert set(entry) == {"name", "status", "segment", "clauses"}
+        assert set(entry["clauses"]) == set(lane_contract.CLAUSE_KINDS)
 
     def test_the_flip_changed_the_status_and_deleted_the_arriving_keys_only(self):
         # Every key the live entry carries is one the arriving entry carried,
@@ -146,27 +130,15 @@ class TestTheQueuedEntry:
             k: v for k, v in live.items() if k != "status"
         }
 
-    def test_its_clauses_are_backlogs_with_only_the_lanes_own_name_changed(self):
-        # Field for field, every clause: text, enforced_from, assertion,
-        # pending and the writers list. DRE-6710 pinned the arriving entry to
-        # this; holding the live one to it is what proves the flip moved no
-        # clause.
-        # Backlog's clauses open with DRE-6741's sentence, and the comparison
-        # is made on what follows it.
+    def test_its_clauses_name_queued_and_never_the_lane_it_replaced(self):
+        # The clauses were Backlog's word for word, with the lane's own name
+        # swapped (DRE-6740). Backlog now carries none (DRE-6753), so Queued's
+        # are the only copy, and they name the old lane nowhere.
         queued = raw_lane(shipped(), QUEUED)["clauses"]
-        backlog = raw_lane(shipped(), BACKLOG)["clauses"]
-        assert set(queued) == set(lane_contract.CLAUSE_KINDS)
-        for kind in lane_contract.CLAUSE_KINDS:
-            assert queued[kind] == renamed(unreplaced(backlog[kind])), kind
+        assert "every Queued card" in queued["evidence"]["pending"]
+        assert BACKLOG not in json.dumps(queued)
 
-    def test_the_one_place_backlog_names_itself_now_names_queued(self):
-        backlog = raw_lane(shipped(), BACKLOG)["clauses"]["evidence"]["pending"]
-        queued = raw_lane(shipped(), QUEUED)["clauses"]["evidence"]["pending"]
-        assert "every Backlog card" in backlog
-        assert "every Queued card" in queued
-        assert BACKLOG not in json.dumps(raw_lane(shipped(), QUEUED)["clauses"])
-
-    def test_it_sits_immediately_after_backlog(self):
+    def test_it_sits_immediately_after_the_retiring_entry(self):
         names = [entry["name"] for entry in shipped()["lanes"]]
         assert names[names.index(BACKLOG) + 1] == QUEUED
 
@@ -185,43 +157,31 @@ class TestTheReaders:
     def test_no_lane_is_arriving(self):
         assert lane_contract.lanes("arriving") == ()
 
-    def test_it_flows_between_backlog_and_todo(self):
+    def test_it_flows_between_green_light_and_todo(self):
+        # Backlog sat between them until it began retiring (DRE-6753).
         flow = lane_contract.flow_lanes()
-        assert flow[flow.index(BACKLOG) + 1] == QUEUED
+        assert BACKLOG not in flow
+        assert flow[flow.index("Green Light") + 1] == QUEUED
         assert flow[flow.index(QUEUED) + 1] == "Todo"
 
 
 # --------------------------------------------------------------------------- #
-# what does not change                                                        #
+# the alias, and the lane it replaced (DRE-6741, DRE-6753)                     #
 # --------------------------------------------------------------------------- #
 
 
-class TestNothingElseMoves:
-    def test_backlog_is_still_live(self):
-        assert BACKLOG in lane_contract.lane_names()
-        assert lane_contract.lane(BACKLOG)["status"] == "live"
-
-    def test_backlog_keeps_its_writers(self):
-        assert raw_lane(shipped(), BACKLOG)["clauses"]["writers"]["who"] == (
-            raw_lane(shipped(), QUEUED)["clauses"]["writers"]["who"]
-        )
-
-
-# --------------------------------------------------------------------------- #
-# the alias, and the lane it is replacing (DRE-6741)                           #
-# --------------------------------------------------------------------------- #
-
-
-class TestBacklogIsBeingReplaced:
-    def test_backlog_is_an_alias_for_queued(self):
+class TestBacklogIsReplaced:
+    def test_backlog_is_still_an_alias_for_queued(self):
         assert lane_contract.aliases()[BACKLOG] == QUEUED
 
-    def test_every_backlog_clause_says_the_lane_is_being_replaced(self):
-        clauses = raw_lane(shipped(), BACKLOG)["clauses"]
-        for kind in lane_contract.CLAUSE_KINDS:
-            assert clauses[kind]["text"].startswith(REPLACED), kind
+    def test_backlog_is_retiring_and_no_longer_live(self):
+        assert BACKLOG not in lane_contract.lane_names()
+        assert lane_contract.lane(BACKLOG, status="retiring")["replaced_by"] == QUEUED
 
-    def test_no_queued_clause_says_it(self):
+    def test_backlog_carries_no_clauses_and_names_no_writer(self):
+        assert "clauses" not in raw_lane(shipped(), BACKLOG)
+
+    def test_no_queued_clause_says_it_is_being_replaced(self):
         clauses = raw_lane(shipped(), QUEUED)["clauses"]
         for kind in lane_contract.CLAUSE_KINDS:
             assert "Being replaced" not in clauses[kind]["text"], kind
@@ -237,13 +197,13 @@ class TestTheHarness:
         return {name: 0 for name in names}
 
     def test_a_board_without_the_state_is_red(self):
-        names = [n for n in lane_contract.lane_names() if n != QUEUED]
+        names = [n for n in lane_contract.lane_names() if n != QUEUED] + [BACKLOG]
         report = lane_contract.check(board=self.board(*names), vocabulary=())
         assert "board.every_lane_exists" in failed_rules(report)
 
     def test_a_board_carrying_the_state_is_green(self):
         report = lane_contract.check(
-            board=self.board(*lane_contract.lane_names()), vocabulary=()
+            board=self.board(*lane_contract.lane_names(), BACKLOG), vocabulary=()
         )
         assert not failed_rules(report) & {
             "board.every_lane_exists",
@@ -292,8 +252,8 @@ class TestThePlanningExitMoves:
     def test_readers_still_read_both_names(self):
         assert lane_contract.QUEUE_LANES == (QUEUED, BACKLOG)
 
-    def test_no_backlog_clause_still_says_the_exit_has_not_moved(self):
-        text = json.dumps(raw_lane(shipped(), BACKLOG)["clauses"])
+    def test_no_lane_still_says_the_exit_has_not_moved(self):
+        text = json.dumps(shipped()["lanes"])
         assert NOT_YET not in text
         assert "every writer still writes this lane" not in text
 

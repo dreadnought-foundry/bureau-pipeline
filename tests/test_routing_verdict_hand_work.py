@@ -272,10 +272,11 @@ class TestTheDocuments:
     def test_the_lane_contract_no_longer_says_a_persons_card_goes_to_todo(self):
         """The contract is what the pipeline enforces (standards/architecture.md),
         so its clauses move with the vocabulary in the same PR (the critic on
-        #703): Backlog's exit and Todo's entrance stop saying Todo is where a
-        WORKBENCH or OPERATOR card goes today."""
+        #703): the queue's exit and Todo's entrance stop saying Todo is where a
+        WORKBENCH or OPERATOR card goes today. The queue's exit is Queued's
+        since Backlog began retiring (DRE-6753)."""
         clauses = {
-            ("Backlog", "exit"): lane_contract.lane("Backlog")["clauses"]["exit"],
+            ("Queued", "exit"): lane_contract.lane("Queued")["clauses"]["exit"],
             ("Todo", "entrance"): lane_contract.lane("Todo")["clauses"]["entrance"],
         }
         for where, clause in clauses.items():

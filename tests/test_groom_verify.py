@@ -602,6 +602,17 @@ def test_a_cancel_superseded_by_an_approved_card_in_flight_stands(lane):
     assert [r["identifier"] for r in cancel(got)] == ["DRE-102"]
 
 
+def test_a_card_under_the_queues_retiring_name_is_read_through_the_alias():
+    # Backlog is retiring (DRE-6753) and is no in-flight lane of its own, but
+    # the contract's alias reads a card still there as Queued until the
+    # sweep's drain moves it — so it is approved and in flight, named as the
+    # board names it.
+    assert "Backlog" not in groom_verify.IN_FLIGHT
+    assert lane_contract.aliases()["Backlog"] in groom_verify.IN_FLIGHT
+    assert groom_verify.lane_says("DRE-1", "Backlog") == (
+        True, "DRE-1 is approved and in Backlog")
+
+
 # --------------------------------------------------------------------------
 # the in-flight lanes are read off the lane contract (DRE-5348)
 # --------------------------------------------------------------------------
@@ -628,19 +639,20 @@ def reload_against(monkeypatch, tmp_path):
     importlib.reload(groom_verify)
 
 
-def test_in_flight_on_the_committed_contract_is_the_six_lanes_in_flow_order():
+def test_in_flight_on_the_committed_contract_is_the_five_lanes_in_flow_order():
     # Hand-work went live with DRE-5320, and joined with nothing here edited;
-    # Queued followed with DRE-6740, the same way.
+    # Queued followed with DRE-6740, the same way; Backlog left it when it
+    # began retiring (DRE-6753), again with nothing here edited.
     assert lane_contract.lane("Hand-work")
     assert lane_contract.lane("Queued")
     assert groom_verify.IN_FLIGHT == (
-        "Backlog", "Queued", "Todo", "Hand-work", "In Progress", "In Review")
+        "Queued", "Todo", "Hand-work", "In Progress", "In Review")
 
 
 def test_a_live_hand_work_lane_joins_in_flight_in_flow_order(reload_against):
     fresh = reload_against(_contract_with(**{"Hand-work": "live"}))
     assert fresh.IN_FLIGHT == (
-        "Backlog", "Queued", "Todo", "Hand-work", "In Progress", "In Review")
+        "Queued", "Todo", "Hand-work", "In Progress", "In Review")
     assert fresh.lane_says("DRE-1", "Hand-work") == (
         True, "DRE-1 is approved and in Hand-work")
 
@@ -652,7 +664,7 @@ def test_while_hand_work_is_arriving_a_card_there_is_not_approved(reload_against
                  board_action="create the state")
     fresh = reload_against(doc)
     assert fresh.IN_FLIGHT == (
-        "Backlog", "Queued", "Todo", "In Progress", "In Review")
+        "Queued", "Todo", "In Progress", "In Review")
     assert fresh.lane_says("DRE-1", "Hand-work") == (
         False, "DRE-1 is in Hand-work and has not been approved")
 
@@ -660,7 +672,7 @@ def test_while_hand_work_is_arriving_a_card_there_is_not_approved(reload_against
 def test_a_contract_whose_only_work_lane_is_done_has_nothing_in_flight():
     doc = copy.deepcopy(lane_contract.load())
     doc["lanes"] = [entry for entry in doc["lanes"]
-                    if entry["segment"] != "work" or entry["name"] == "Done"]
+                    if entry.get("segment") != "work" or entry["name"] == "Done"]
     assert groom_verify.in_flight(doc) == ()
 
 
