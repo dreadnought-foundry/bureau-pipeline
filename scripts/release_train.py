@@ -2304,7 +2304,7 @@ def render_markdown() -> str:
         f"{owners} card on the same repo speaks for is warned of and files no "
         "card and no comment — that card, filed by the surface's own train, "
         "holds every account's release until a person closes it. A card that "
-        "cannot be filed — a repository `config/repo-map.json` does not name, "
+        "cannot be filed — a repository the repo map does not name, "
         "no Linear key, an API error, the budget — is one more `::warning::` "
         f"and one `{release_deferral.TAG}: card not filed — <why>` line, and "
         "never a red run."

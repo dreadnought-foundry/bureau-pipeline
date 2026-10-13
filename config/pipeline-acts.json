@@ -2995,6 +2995,20 @@
       "kind": "not-an-act",
       "means": "A proof card whose record's unmet rows carry cause words (DRE-6607) is asked once, `proof_cause_park.question`: the 🙋 For the operator — the proof run cannot observe first line, the Finding, Question and Recommendation lines `console_escalation.render` writes, what the operator does next, one `cause:` line per row and the run, posted after the 🔬 proof-waiting hold (DRE-6612). The card is left In Review for the operator — no lane is written (DRE-6837).",
       "why": "A question is not an act: it asks the operator to decide rather than announcing something the pipeline did, the same reason the sweep's blocker ask and review-cap question ask rather than announce. The hold posted before it is the `proof-observation-pending` act's receipt and carries its trailer, and names the operator as the next actor; this question is found again by its 🙋 first line after the newest such hold, so a second park over the same thread never posts it twice. It is the operator's because the operator, never the CEO, writes an accepted row (DRE-6244)."
+    },
+    {
+      "file": "scripts/release_deferral.py",
+      "anchor": "The reason changed.",
+      "kind": "not-an-act",
+      "means": "A deferral whose reason's fingerprint changed adds one comment to the open deferred-release card in Green Light, carrying the new `Deferred line:` (DRE-5235).",
+      "why": "Part of the deferral card's own record, not an act: the act is the train's decision, whose receipt line and decision record this module never touches. The comment's `Deferred line:` is what `release_deferral.last_line` reads back on the next lap to decide whether the reason changed again, so it is the card's idempotency key, and its only other reader is the person the card is for."
+    },
+    {
+      "file": "scripts/release_deferral.py",
+      "anchor": "f\"Released as {tag}\"",
+      "kind": "not-an-act",
+      "means": "The surface cut a verified tag, so the open deferred-release card is closed Done under `Released as <tag>` (DRE-5235).",
+      "why": "Part of the deferral card's own record, not an act: the release it names already has its own receipt, the train's decision line and record. The comment says why the notice card left Green Light, for the person it was filed for; nothing downstream reads it, and its wording is the card's acceptance criterion, pinned by tests/test_release_deferral.py."
     }
   ]
 }
