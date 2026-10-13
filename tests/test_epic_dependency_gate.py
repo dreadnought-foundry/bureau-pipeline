@@ -636,3 +636,122 @@ def test_the_promotion_read_hands_its_backlog_epics_to_the_pass():
     assert reconcile._backlog_epics == {"DRE-800"}
     reconcile.reset_sweep_cards()
     assert reconcile._backlog_epics == set()
+
+
+# ---------------------------------------------------------------------------
+# DRE-6743: every gate gives the same answer under either queue name. A card
+# or an epic waiting in `Queued` is waiting exactly as one in `Backlog` is, so
+# each gate below is driven once per name in `lane_contract.QUEUE_LANES`.
+# ---------------------------------------------------------------------------
+import json  # noqa: E402
+import re  # noqa: E402
+
+import lane_contract  # noqa: E402
+
+_STATE_FILTER = re.compile(r'state: \{name: \{(eq|in): (\[[^\]]*\]|"[^"]*")\}\}')
+
+
+def _queued_child(lane, identifier="DRE-900"):
+    return {**_child(identifier=identifier), "state": {"name": lane},
+            "title": "a child", "createdAt": "2026-07-01T00:00:00.000Z",
+            "children": {"nodes": []}}
+
+
+def _queue_read(*cards):
+    """The promotion read's Linear: it serves the cards whose lane the query's
+    state filter names, so a read that asks for one name sees half the queue."""
+    def gql(query, variables=None):
+        found = _STATE_FILTER.search(query)
+        if "issues(" not in query or found is None:
+            raise reconcile.linear_ops.LinearError("unexpected query")
+        kind, names = found.groups()
+        wanted = set(json.loads(names)) if kind == "in" else {json.loads(names)}
+        return {"issues": {
+            "nodes": [c for c in cards if c["state"]["name"] in wanted],
+            "pageInfo": {"hasNextPage": False, "endCursor": None},
+        }}
+    return gql
+
+
+def _promote_from(lane, *, unmet, refusal=None):
+    """`promote_ready` over one child of an In Progress epic, read from `lane`
+    through the real promotion read. Returns (promoted, the from-lanes each
+    move was guarded on, the children the epic cap was asked about)."""
+    reconcile._write_failures.clear()
+    reconcile.reset_sweep_cards()
+    asked = []
+    with patch.object(reconcile.bureau_read, "mode", return_value="off"), \
+        patch.object(reconcile.linear_ops, "gql",
+                     side_effect=_queue_read(_queued_child(lane))), \
+        patch.object(reconcile, "epic_blockers_unmet", return_value=unmet), \
+        patch.object(reconcile, "card_state", return_value="Done"), \
+        patch.object(reconcile, "epic_records", return_value={}), \
+        patch.object(reconcile, "whole_epic_thread", return_value=[]), \
+        patch.object(reconcile.mid_epic, "last_green_light",
+                     return_value="2026-08-01T00:00:00.000Z"), \
+        patch.object(reconcile.epic_cap, "promotion_refusal",
+                     side_effect=lambda ident, *a: asked.append(ident) or refusal), \
+        patch.object(reconcile.linear_ops, "count_comments", return_value=0), \
+        patch.object(reconcile.linear_ops, "cmd_advance") as advance, \
+        patch.object(reconcile.linear_ops, "cmd_comment"):
+        promoted = reconcile.promote_ready(active_count=0)
+    reconcile._write_failures.clear()
+    reconcile.reset_sweep_cards()
+    return promoted, [c.args[2] for c in advance.call_args_list], asked
+
+
+@pytest.mark.parametrize("lane", lane_contract.QUEUE_LANES)
+def test_the_dependency_gate_answers_the_same_under_either_queue_name(lane):
+    """Blocked epic: the child holds. Unblocked: it promotes, out of a move
+    guarded on the lane it sits in."""
+    assert _promote_from(lane, unmet=True)[:2] == (0, [])
+    promoted, guards, _ = _promote_from(lane, unmet=False)
+    assert promoted == 1
+    assert len(guards) == 1 and lane in guards[0].split(",")
+
+
+@pytest.mark.parametrize("lane", lane_contract.QUEUE_LANES)
+def test_the_epic_caps_hold_reads_a_child_under_either_queue_name(lane):
+    """The cap's hold is asked about the child whichever name it waits under,
+    and holds it."""
+    promoted, guards, asked = _promote_from(
+        lane, unmet=False, refusal="⏸️ epic-cap-undecided: held")
+    assert asked == ["DRE-900"]
+    assert (promoted, guards) == (0, [])
+
+
+@pytest.mark.parametrize("lane", lane_contract.QUEUE_LANES)
+def test_advance_unblocked_epics_answers_the_same_under_either_queue_name(lane):
+    with patch.object(reconcile.linear_ops, "gql", return_value=_forward_blocks("DRE-700", "DRE-800")), \
+        patch.object(reconcile, "card_state", return_value=lane), \
+        patch.object(reconcile, "epic_blockers_unmet", return_value=False), \
+        patch.object(reconcile.linear_ops, "cmd_advance", return_value=True) as advance, \
+        patch.object(reconcile.linear_ops, "cmd_comment") as comment:
+        reconcile.reset_sweep_cards()
+        reconcile.advance_unblocked_epics("DRE-700")
+        reconcile.reset_sweep_cards()
+    advance.assert_called_once()
+    who, to, guard = advance.call_args.args
+    assert (who, to) == ("DRE-800", "Planning") and lane in guard.split(",")
+    assert comment.call_args.args[1].startswith(
+        f"🧹 Auto-advanced {reconcile.QUEUE_LANE} → Planning:")
+
+
+@pytest.mark.parametrize("lane", lane_contract.QUEUE_LANES)
+def test_the_return_pass_answers_the_same_under_either_queue_name(lane):
+    linear = _EpicRecords(_backlog_epic("DRE-800", ("DRE-700", "Done"), state=lane))
+    advance, comment = _return_pass(linear, {"DRE-800"},
+                                    advance_effect=lambda *a, **k: True)
+    advance.assert_called_once()
+    assert lane in advance.call_args.args[2].split(",")
+    comment.assert_called_once()
+
+
+@pytest.mark.parametrize("lane", lane_contract.QUEUE_LANES)
+def test_close_finished_epics_closes_from_either_queue_name(lane):
+    """An epic read in the queue is one `close_finished_epics` is handed,
+    under either name — `EPIC_CLOSE_LANES` carries both."""
+    assert lane in reconcile.EPIC_CLOSE_LANES
+    epic = {**_child(identifier="DRE-800", parent=None), "parent": None,
+            "children": {"nodes": [{"id": "kid"}]}}
+    assert reconcile.closable_epics([epic], lane) == {"DRE-800"}

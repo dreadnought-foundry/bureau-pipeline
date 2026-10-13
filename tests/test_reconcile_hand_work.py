@@ -164,6 +164,28 @@ class TestThePromoterReadsTheDestination:
         assert "routing_verdict.destination(verdict)" in source
 
 
+    @pytest.mark.parametrize("queue", lane_contract.QUEUE_LANES)
+    def test_the_age_clock_reads_the_entry_receipt_under_either_queue_name(self, queue):
+        """The Hand-work age reads the card's entry off the newest promotion
+        receipt in its window (DRE-6409). That receipt names `QUEUE_LANE`, so
+        it reads `Backlog` until DRE-6742 and `Queued` after — and a card
+        promoted on either side of the flip is dated, never left unknown."""
+        entered = "2026-10-12T01:00:00.000Z"
+        card = {
+            "identifier": "DRE-6820",
+            "state": {"name": HAND_WORK},
+            "labels": {"nodes": [{"name": HAND_BUILT}]},
+            "comments": {"nodes": [{
+                "body": f"🧹 Auto-promoted {queue} → {HAND_WORK}: routed **WORKBENCH**",
+                "createdAt": entered,
+            }]},
+        }
+        with mock.patch.object(reconcile, "age_minutes",
+                               side_effect=lambda at: 30 * 60 if at == entered else None):
+            tail = reconcile._hand_work_age(card, "")
+        assert tail.startswith("; in Hand-work 30h — never alarms"), tail
+
+
 # --------------------------------------------------------------------------
 # 2: watched, never nudged
 # --------------------------------------------------------------------------
