@@ -4,8 +4,9 @@
 `stable` pointed at `b2a6e726` at that time, 9 commits behind `main`.
 Every time in this record is Pacific.
 
-**The answer, in one line:** today every selecting run says `model-home: unreadable (BUREAU_MODEL_HOME_TOKEN is set and empty, so the token mint failed), running on the defaults in the code`.
-So the choice in force is the generated literal in `scripts/model_fallback.py`, rendered from `config/models.yaml`.
+**The answer, in one line:** today every selecting run read on bureau-pipeline says `model-home: unreadable (BUREAU_MODEL_HOME_TOKEN is set and empty, so the token mint failed), running on the defaults in the code`.
+So for those runs the choice in force is the generated literal in `scripts/model_fallback.py`, rendered from `config/models.yaml`.
+A product repository's runs, and agent-bureau's console, were not read: treat the same answer there as unverified until one of their `model-home:` lines is quoted.
 The home, `BUREAU_MODEL_CHOICES`, is consulted on every run and is never read.
 A change reaches a run when a pull request changes `config/models.yaml` and its generated mirrors, and the run's pipeline ref carries that merge.
 
@@ -84,7 +85,7 @@ Run 38352540226 (card DRE-7174) logged the same lines at 10:40:10 PM PT.
 
 The step is `continue-on-error`, so the Select model step gets an empty token.
 The reader stops before any request goes out (`scripts/model_home.py:438`).
-**No run reaches the variables API today.**
+**No bureau-pipeline run read here reaches the variables API today.**
 
 Only bureau-pipeline's runs could be read for this record, because this run's token reads no other repository.
 A product repository's runs mint the same token with the same App, so the same refusal is expected there.

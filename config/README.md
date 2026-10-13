@@ -382,10 +382,10 @@ it when it first asks which model to use (`scripts/model_home.py`, through
 Which of the two is in force is read off a run's `model-home:` line, never
 assumed. **`docs/model-choice-levers.md`** (DRE-7195) records the reading with
 the run lines that show it, when a change to this file reaches the fleet, and
-the one-step rollback each sibling of DRE-7184 pulls. On 2026-10-12 at 10:42
-PM PT every selecting run read `unreadable`, because the token mint was
-refused, so the defaults in the code were in force and this file reached runs
-only through the literal rendered from it. Once a run reads `read`, a change
+the one-step rollback each sibling of DRE-7184 pulls, and says which runs it
+could read. While a run reads `unreadable` or `not set`, the defaults in the
+code are in force and this file reaches it only through the literal rendered
+from it. Once a run reads `read`, a change
 written to the home is in force on the next run in each organization, with
 no pull request.
 
