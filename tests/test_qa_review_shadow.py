@@ -606,8 +606,14 @@ class LiveReviewUnchangedTest(unittest.TestCase):
                 args = step["with"]["claude_args"]
                 self.assertNotRegex(args, r"--model\s+claude-")
                 m = re.search(r"--model (\$\{\{.*?\}\})", args)
-                self.assertEqual(_Eval(_shadow("claude-opus-5"))(m.group(1)),
-                                 "claude-opus-5")
+                # The id the refusal step checked, handed on by that step —
+                # which writes the caller's `model` input back unchanged
+                # (test_a_good_request_passes_and_names_the_models_effort),
+                # and never the model Select model chose.
+                checked = dict(_shadow(), **{
+                    "steps.shadow_model.outputs.model": "the-checked-model",
+                    "steps.model.outputs.model": "the-selected-model"})
+                self.assertEqual(_Eval(checked)(m.group(1)), "the-checked-model")
                 effort = re.search(r"\n(\$\{\{[^\n]*effort_arg[^\n]*\}\})", args)
                 self.assertEqual(_Eval(_shadow())(effort.group(1)).name,
                                  "steps.shadow_model.outputs.effort_arg")
@@ -722,6 +728,8 @@ class RefusalTest(unittest.TestCase):
                 res = bench.run(step, {}, known)
                 self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
             self.assertEqual(bench.outputs().get("effort_arg"), f"--effort {level}")
+            # The model the critic runs on is the one checked here, as named.
+            self.assertEqual(bench.outputs().get("model"), model)
 
     def test_the_refusers_do_not_run_on_a_live_review(self):
         for step in _refusers():

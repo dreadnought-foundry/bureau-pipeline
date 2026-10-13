@@ -798,10 +798,11 @@ class WorkflowModelPinTest(unittest.TestCase):
         self.assertIn('model_fallback.py select "$ROLE"', body)
 
     # The selected model, or — in a shadow replay only (DRE-7193) — the model
-    # the replay's caller named. The replay is refused on a live review, and
-    # tests/test_qa_review_shadow.py evaluates the expression both ways.
+    # the replay's caller named, as the step that checked it hands it on. The
+    # replay is refused on a live review, and tests/test_qa_review_shadow.py
+    # evaluates the expression both ways.
     SELECTED_MODEL = re.compile(
-        r"--model \$\{\{ (?:inputs\.shadow && inputs\.model \|\| )?"
+        r"--model \$\{\{ (?:inputs\.shadow && steps\.shadow_model\.outputs\.model \|\| )?"
         r"steps\.model\.outputs\.model \}\}")
 
     def test_agent_steps_consume_the_selected_model(self):
