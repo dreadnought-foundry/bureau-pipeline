@@ -37,16 +37,22 @@ worst of each round as `plan_bound.findings` reads them. One action per card:
     `🔁 bound-rewrite:` receipt stands anywhere on the thread
     (`plan_bound.granted`): the planner has had its one extra rewrite, so this
     park is the second (DRE-7181).
-  * `replan` — the card has children, and no such receipt. An epic's plan is
-    its children, and the planner is the agent that rewrites a plan, so the
-    description is never rewritten. Its findings are the bound round's
-    (`epic_findings`): an epic's park note carries the bound's sentence, and
-    the list is on the critic's note beside the round's record. DRE-7072
-    parked at 2026-10-12 16:25 PT with no receipt, and an operator moved it
-    back to Planning at 17:39 PT, where both critics passed it.
-  * `skip` — the park note carries no numbered list.
+  * `skip` — the park note carries no numbered list, or, for a card with
+    children, its park left no findings at all: `plan_bound.decide([])` parks
+    for the same reason, and a bound rewrite with nothing in front of the
+    planner would spend the card's one grant on nothing.
   * `escalate` — at least one finding is one `send_back_class.classify`
-    places as DECISION.
+    places as DECISION, on a card with children too: the bound's own exit
+    (`plan_bound.decide`) asks such a finding of the CEO before it ever
+    grants a rewrite, and the planner cannot answer it.
+  * `replan` — the card has children, no such receipt, and findings none of
+    which is a decision. An epic's plan is its children, and the planner is
+    the agent that rewrites a plan, so the description is never rewritten.
+    Its findings are the bound round's (`epic_findings`): an epic's park note
+    carries the bound's sentence, and the list is on the critic's note beside
+    the round's record. DRE-7072 parked at 2026-10-12 16:25 PT with no
+    receipt, and an operator moved it back to Planning at 17:39 PT, where both
+    critics passed it.
   * `repair` — every finding is REVISION or uncertain. Uncertain is the
     planner's here, for the reason `plan_bound.UNCERTAIN_BY_STAGE` gives: every
     finding at a bound is the worst of a SEND_BACK round, the critic's own
@@ -100,7 +106,8 @@ The planner's files are read first, and exactly one outcome is reached:
     move to Planning — which fires a plan run, and the route opens a fresh
     planning attempt, so both critics count from zero — then the receipt
     naming the findings. A receipt that fails to post lifts and moves
-    nothing. A card whose bound rewrite was granted since `select` read it is
+    nothing. A card whose bound rewrite was granted since `select` read it,
+    or whose findings, read again, are none or name a decision, is
     `unfinished` with nothing written.
   * `unfinished` — anything else, a rewrite written for an `escalate` card
     among it. The card stays in Triage, still held, for the hygiene alarm.
@@ -367,16 +374,18 @@ def decide(card: dict, records) -> dict:
         action, why = SPENT, ("the planner has had its one bound rewrite on this "
                               "epic — a `bound-rewrite` receipt stands on its "
                               "thread, so this park is the second")
-    elif epic:
-        action, why = REPLAN, (f"an epic's plan is its children — it goes back "
-                               f"to {PLANNING_LANE} once, with all "
-                               f"{len(found)} finding(s) in front of the planner")
     elif not found:
-        action, why = SKIP, ("the park note carries no numbered list of findings"
+        action, why = SKIP, ("the epic's park left no findings to put in front "
+                             "of the planner" if epic else
+                             "the park note carries no numbered list of findings"
                              if note is not None else "the card carries no park note")
     elif picked:
         action, why = ESCALATE, (f"{len(picked)} of {len(found)} finding(s) name a "
                                  "choice only the CEO can make")
+    elif epic:
+        action, why = REPLAN, (f"an epic's plan is its children — it goes back "
+                               f"to {PLANNING_LANE} once, with all "
+                               f"{len(found)} finding(s) in front of the planner")
     else:
         action, why = REPAIR, (f"all {len(found)} finding(s) are the planner's to "
                                "answer in a rewrite")
@@ -668,6 +677,15 @@ def apply(card: str, action: str, directory: str | None) -> int:
                                "one bound rewrite on this card, so it is not "
                                "re-planned twice")
             found = epic_findings(records, card)
+            if not found:
+                return _finish(card, writes, "the epic's park left no findings "
+                               "to put in front of the planner, so the bound "
+                               "rewrite is not spent on it")
+            picked = decisions(found)
+            if picked:
+                return _finish(card, writes, f"{len(picked)} of {len(found)} "
+                               "finding(s) name a choice only the CEO can make, "
+                               "so the epic is asked, not re-planned")
             writes.do(W_BOUND_REWRITE, lambda: _bound_rewrite(card, found))
             writes.do(W_LIFT, lambda: hold.lift(card, LIFT_BECAUSE, LIFT_BY,
                                                 reason=reason))
