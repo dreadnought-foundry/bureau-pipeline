@@ -230,15 +230,14 @@ jobs:
   # (run 38178153419), on nothing but the machine GitHub handed them: the
   # agent-move walk took 8m40s on the first and 17m31s on the second, the
   # project-model walk 7m11s and 14m34s. The walks have grown slower since:
-  # on the 13 main runs from 38445404426 to 38596919485 (2026-10-13 18:16 to
-  # 2026-10-14 16:18 UTC) the slowest, the project-model walk's 1,841.82
-  # seconds in run 38472073985, is 4.17 times the 442.62 it took at a desk on
-  # four cores. The limit was first set from 2.13, the every-default walk's
-  # 20m42s in job 114591044631 over its 583, and is raised from 4.17
-  # (DRE-7278). So the limit is a walk's desk seconds
-  # (`config/unit-test-durations.json`), times 4.17, doubled: 2 x 4.17 x
-  # 633.36 for the agent-move walk is 5,282 seconds, 88.0 minutes, and 90
-  # minutes rounds that up to the next ten. `tests/test_walks_time_budget.py`
+  # on the 14 main runs from 38445404426 to 38603675625 (2026-10-13 18:16 to
+  # 2026-10-14 17:05 UTC) the slowest, the every-default walk's 2,489.79
+  # seconds in run 38603675625, is 4.28 times the 583 it took at a desk on
+  # four cores. The limit was first set from 2.13, the same walk's 20m42s in
+  # job 114591044631, and is raised from 4.28 (DRE-7278). So the limit is a
+  # walk's desk seconds (`config/unit-test-durations.json`), times 4.28,
+  # doubled: 2 x 4.28 x 633.36 for the agent-move walk is 5,422 seconds, 90.4
+  # minutes, and 100 minutes rounds that up to the next ten. `tests/test_walks_time_budget.py`
   # holds every walk on the tree to it and names the walk that no longer
   # fits: split it, or raise this from a new measurement.
   walks:
@@ -250,7 +249,7 @@ jobs:
       fail-fast: false
       matrix:
         walk: ${{ fromJSON(needs.walk-list.outputs.walks) }}
-    timeout-minutes: 90
+    timeout-minutes: 100
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
