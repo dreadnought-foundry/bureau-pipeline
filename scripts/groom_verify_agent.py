@@ -1600,8 +1600,13 @@ def apply(proposal: dict, found: dict[str, dict],
     def refuse(identifier: str) -> bool:
         if marks[identifier]["verdict"] not in CANCELS:
             return False
+        # …and the proof check every Cancel writer asks (DRE-7241), of the
+        # row this one would write: the verdict's own proof items.
         refusal = groomer.cancel_refusal(
-            {"identifier": identifier, **(by_seq.get(identifier) or {})})
+            {"identifier": identifier, **(by_seq.get(identifier) or {})}
+        ) or groomer.cancel_proof_refusal(
+            {**(by_seq.get(identifier) or {}), "identifier": identifier,
+             "source": CANCEL_SOURCE, "proof": marks[identifier]["proof"]})
         if refusal is None:
             return False
         marks[identifier]["refused"] = refusal
@@ -1713,7 +1718,11 @@ def apply(proposal: dict, found: dict[str, dict],
             "source": CANCEL_SOURCE, "position": len(outcomes["dead"]) + 1,
             "epic": base.get("epic"), "band": base.get("band"),
             "reason": reason, "trigger": None, "evidence": reason,
-            "judged": False, "reasons": {}})
+            "judged": False, "reasons": {},
+            # The verdict's own proof items, with the runner's `fact` lines,
+            # and what it rested on (DRE-7241) — the reason ends with them.
+            "proof": [dict(item) for item in marks[identifier]["proof"]],
+            "rested_on": list(marks[identifier].get("rested_on") or [])})
 
     by_now = {r["identifier"]: r for r in kept}
     by_dead = {r["identifier"]: r for r in outcomes["dead"]}
