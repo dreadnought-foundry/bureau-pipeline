@@ -423,6 +423,16 @@
               ]
             },
             {
+              "kind": "deferred-release",
+              "writer": "release-train.yml",
+              "where": "release_deferral.py#file_deferral",
+              "evidence": "a card created in this lane in the one write that mints it, titled `<repo>: <surface> release deferred — <first 80 characters of the reason>` and labeled exactly `repo:<repo>`, `no-code`, `needs-human` and `agent:ops`, with no parent and no routing verdict, its description carrying the deferred line verbatim, the commit and the run URL — never filed while an open `RELEASE ROLLED BACK:` or `RELEASE BROKEN:` card on the same repo speaks for the deferral",
+              "card": "DRE-5235",
+              "callers": [
+                "release_deferral.py#_deferred"
+              ]
+            },
+            {
               "kind": "queued-epic",
               "writer": "plan.yml",
               "where": "plan.yml#Route — plan or activate",

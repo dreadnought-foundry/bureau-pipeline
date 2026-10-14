@@ -224,6 +224,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import intake_controls  # noqa: E402
 import merge_gate  # noqa: E402
 import release_decision  # noqa: E402 — the decision, as a message GitHub delivers (DRE-4768)
+import release_deferral  # noqa: E402 — a deferral is loud and files its card (DRE-5235)
 import release_linear  # noqa: E402 — the Linear release every declared surface gets (DRE-3854)
 import whats_new_release  # noqa: E402 — the release's whats-new.json (DRE-5513, DRE-5516)
 
@@ -2276,6 +2277,39 @@ def render_markdown() -> str:
         "stands and promotes it, and it is not a train run."
     )
     w("")
+    w("## A deferral is loud, and owes one card")
+    w("")
+    owners = " or ".join(f"`{p}`" for p in release_deferral.SURFACE_CARD_PREFIXES)
+    w(
+        "**DRE-5235.** A `deferred:` line with no re-arm clause is still a "
+        "`no-op` — its decision, receipt and record are what they were, and "
+        "the job concludes as it did — but it is no longer silent. The "
+        f"surface job prints a `{release_deferral.WARNING_TITLE}` warning, "
+        f"writes a `## {release_deferral.SUMMARY_HEADING}` block on the run's "
+        "summary page naming the surface, the commit, the reason and the run, "
+        f"and prints the same facts as one `{release_deferral.TAG}:` line in "
+        "its log. It then files one card per repo and surface, created in "
+        f"`{release_deferral.DEFERRAL_LANE}`: `<repo>: <surface> release "
+        "deferred — <first 80 characters of the reason>`, labeled `repo:<repo>`, "
+        "`no-code`, `needs-human` and `agent:ops`. A later lap comments on that "
+        "card only when the reason changed, numbers, times and commit ids "
+        "aside, and the surface's next verified tag closes it "
+        f"`{release_deferral.CLOSED_LANE}` under a `Released as <tag>` comment, "
+        "whatever lane it sits in by then."
+    )
+    w("")
+    w(
+        "A deferral that names its re-arm minute does none of that: it is the "
+        "train's own to re-arm, owed to nobody. A deferral an open "
+        f"{owners} card on the same repo speaks for is warned of and files no "
+        "card and no comment — that card, filed by the surface's own train, "
+        "holds every account's release until a person closes it. A card that "
+        "cannot be filed — a repository the repo map does not name, "
+        "no Linear key, an API error, the budget — is one more `::warning::` "
+        f"and one `{release_deferral.TAG}: card not filed — <why>` line, and "
+        "never a red run."
+    )
+    w("")
     w("## The trigger, and what the stub must declare")
     w("")
     w(
@@ -2463,7 +2497,8 @@ _ORDER = (
     ("deferred", NO_OP, "the script exited 0 printing `deferred: …` — the "
                         "deployment is owed to a person, and that is not a "
                         "failure; a line that ends `— re-arm in <N> minutes` "
-                        "re-arms the train for that minute (DRE-6005)"),
+                        "re-arms the train for that minute (DRE-6005), and "
+                        "any other warns and files its card (DRE-5235)"),
     ("released", RELEASE, "the script ran and the train verified the annotated "
                           "tag it cut at the released commit"),
 )
@@ -2745,6 +2780,18 @@ def _cmd_release(args) -> int:
         _record_decision(decided, entry=entry, repo=args.repo, phase="release",
                          sha=args.sha, head=head, deployed=deployed, now=now)
 
+    def decided_hook(decided: Decision) -> None:
+        """The record, then — beside it, whatever the record did — the
+        deferral notice (DRE-5235): a deferral with no re-arm minute is loud
+        and files its card, a verified tag closes it. `report` never raises."""
+        try:
+            write_decision(decided)
+        finally:
+            release_deferral.report(decided, repo=args.repo,
+                                    surface=args.surface, sha=args.sha,
+                                    warning=_warning,
+                                    step_summary=_step_summary)
+
     def after_release(previous, decided: Decision) -> None:
         """The surface is live: publish its `whats-new.json`, then write the
         Linear release with the same items (DRE-5516). Whatever either
@@ -2765,7 +2812,7 @@ def _cmd_release(args) -> int:
             now=now, brake=brake(), dispatched=args.dispatched,
             checks=lambda: fetch_checks(args.repo, args.sha),
             on_released=after_release,
-            on_decided=write_decision,
+            on_decided=decided_hook,
             # A deferral that names its minute re-arms the train from here
             # (DRE-6005), through the plan's own `_re_arm`: the same bound,
             # collapse, dispatch and clauses, and never a red run.
