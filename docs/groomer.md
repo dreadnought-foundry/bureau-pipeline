@@ -306,12 +306,18 @@ evaluators disagree on the ids. The six rules:
    epic not yet In Progress is not built out. So rule 1 holds a card for
    another epic until that epic is built out, and never for the card's own
    parent: a child waiting on its own epic is DRE-6664's in-flight case.
-2. `file-named-by-in-flight-card` — a file the card names in backticks is
-   named by a card in Planning, Todo, In Progress or In Review, in the same
-   repo, each lane read once a morning. A file cited by more than
+2. `file-named-by-in-flight-card` — a path the card names in backticks is
+   named by a card in Planning, Todo, In Progress or In Review, each lane read
+   once a morning. Two cards match only on the **same path in the same repo**
+   (DRE-6908), never on the bare file name: on 2026-10-11 the basename tied
+   `scripts/runners/README.md` to `console/backend/monitors/README.md`, and
+   the Ready when cell waited on a card that had nothing to do with it. A path
+   with no directory is the repo's own file at that bare path, so `README.md`
+   matches only another card's bare `README.md` in the same repo. The Reason
+   cell prints each path as the card wrote it. A path cited by more than
    `BOILERPLATE_THRESHOLD` cards across Intake and the four lanes is
-   reference, not ownership — `collision_report`'s rule. Ready when that card
-   is Done.
+   reference, not ownership — `collision_report`'s rule, counted by path.
+   Ready when that card is Done.
 3. `child-of-epic-not-in-progress` — the card's parent epic is in Intake,
    Planning, Green Light, Queued, Todo or Triage. Ready when the epic is In
    Progress. The epic card itself trips nothing and keeps its slot as a unit

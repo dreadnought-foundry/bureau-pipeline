@@ -26,8 +26,9 @@ holds.
    the sweep's epic gate reads a blocker (`reconcile._not_built_out`,
    DRE-6407). The card's own parent never holds it — that is DRE-6664's
    in-flight case.
-2. `file-named-by-in-flight-card` — a file the card names in backticks is
-   named by a card in Planning, Todo, In Progress or In Review.
+2. `file-named-by-in-flight-card` — a path the card names in backticks is
+   named, the same path in the same repo, by a card in Planning, Todo, In
+   Progress or In Review (DRE-6908).
 3. `child-of-epic-not-in-progress` — the card's parent epic has not started.
 4. `undecided-question` — a `decide before building` section with a question
    still beneath it, and no `## Decisions from the CEO` block.
@@ -286,7 +287,7 @@ def read_epics(lops, named: dict) -> dict:
 
 def _lane_rows(cards: list[dict]) -> list[dict]:
     return [{"identifier": c.get("identifier"), "repo": groomer.repo_of(c),
-             "files": sorted(groomer.file_references(c.get("description")))}
+             "files": sorted(groomer.file_paths(c.get("description")))}
             for c in cards or []]
 
 
@@ -313,11 +314,12 @@ def board(readiness: dict, *, population=(), verdicts: dict | None = None,
           threshold: int | None = None) -> dict:
     """What `evaluate` reads: the facts, the verdicts, and the files cited so
     often across the five lanes that they are reference, not ownership —
-    `collision_report`'s boilerplate rule, over Intake and the four lanes."""
+    `collision_report`'s boilerplate rule, over Intake and the four lanes,
+    counted by path as rule 2 compares them (DRE-6908)."""
     threshold = groomer.BOILERPLATE_THRESHOLD if threshold is None else threshold
     counts: Counter = Counter()
     for c in population:
-        counts.update(groomer.file_references(c.get("description")))
+        counts.update(groomer.file_paths(c.get("description")))
     for rows in (readiness.get("lanes") or {}).values():
         for row in rows:
             counts.update(set(row.get("files") or ()))
@@ -376,7 +378,10 @@ def _waits_on_open_card(card: dict, board: dict, record: dict) -> dict | None:
 
 
 def _file_named_in_flight(card: dict, board: dict, record: dict) -> dict | None:
-    mine = groomer.file_references(card.get("description")) - \
+    # The same path, never the bare name (DRE-6908): `scripts/runners/README.md`
+    # and `console/backend/monitors/README.md` are two files, and a bare
+    # `README.md` is the repo's root file, matching only another bare one.
+    mine = groomer.file_paths(card.get("description")) - \
         set(board.get("boilerplate") or ())
     if not mine:
         return None
