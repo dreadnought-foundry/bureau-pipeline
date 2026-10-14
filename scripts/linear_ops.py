@@ -31,6 +31,14 @@ Subcommands:
                                        `🔬 proof-waiting: <a> — needs <b>` as the
                                        proof-observation-pending act's receipt,
                                        so the console renders `Waiting for proof`
+  proof-waiting-until <DRE-N> "<still to be observed>" "<ISO time with UTC offset>"
+                                       the same hold when it waits only for a
+                                       time (DRE-7228): its needs half is
+                                       written as exactly `not-before=<time>`,
+                                       and the proof dispatcher lifts it once
+                                       the time passes. Refuses a time with no
+                                       offset or that does not parse, and an
+                                       observed half naming the CEO's press
   proof-observed <DRE-N> "<what was observed, with PT time>"
                                        the discharge record for the hold above:
                                        `🔬 proof-observed: <text>`, a PLAIN
@@ -2183,6 +2191,12 @@ def cmd_actor(identifier: str, role: str) -> None:
 # (docs/pipeline-acts.md: console-first).
 PROOF_WAITING_TAG = "proof-waiting"
 
+# The one clause a hold's `needs` half carries when it waits for a time and
+# nothing else (DRE-7228): `proof-waiting-until` writes it, and
+# `proof_record.time_only` reads it — so the proof dispatcher lifts the hold
+# itself once the time passes. Spelled here only.
+NOT_BEFORE = "not-before="
+
 # Deliberately not a `*_TAG` constant: it is not an act and the registry does
 # not declare it, and `pipeline_act.problems()` reads every `*_TAG = "…"` in an
 # emitting file as a tag that must have a row.
@@ -2250,6 +2264,48 @@ def cmd_proof_waiting(identifier: str, observed: str, needs: str) -> None:
         "proof-observation-pending", proof_waiting_line(observed, needs)
     )
     cmd_comment(identifier, body)
+
+
+def cmd_proof_waiting_until(identifier: str, observed: str, when: str) -> None:
+    """Hold a card on an observation that waits only for a time (DRE-7228).
+
+    The ordinary hold, through `cmd_proof_waiting`, with its `needs` half
+    written here and never by the caller: exactly `not-before=<when>`. That
+    is the one shape `proof_record.time_only` reads, so the proof dispatcher
+    lifts the hold itself once `when` has passed. `when` is an ISO 8601 time
+    with a UTC offset; anything else, or an observed half naming the CEO's
+    press, is refused and nothing is posted."""
+    import proof_record  # the reader; it imports this module, so not at the top
+
+    when = (when or "").strip()
+    try:
+        moment = datetime.fromisoformat(when)
+    except ValueError:
+        raise LinearError(
+            f"proof-waiting-until: {when!r} does not parse as an ISO 8601 time "
+            "— write it as 2026-10-12T14:33-07:00."
+        ) from None
+    if moment.tzinfo is None:
+        raise LinearError(
+            f"proof-waiting-until: {when!r} carries no UTC offset, so nothing "
+            "can say when it passes — write it as 2026-10-12T14:33-07:00."
+        )
+    refusal = proof_text_refusal(observed, "what is still to be observed")
+    if refusal:
+        raise LinearError(refusal)
+    if proof_record.CEO_PRESS in observed:
+        raise LinearError(
+            f"proof-waiting-until: what is still to be observed names "
+            f"{proof_record.CEO_PRESS!r}, which only his signed answer "
+            "discharges — a time never lifts it. Use proof-waiting."
+        )
+    needs = f"{NOT_BEFORE}{when}"
+    if proof_record.time_only(proof_waiting_line(observed, needs)) is None:
+        raise LinearError(
+            "proof-waiting-until: the hold would not read back as one that "
+            "waits only for a time — say what is still to be observed on one line."
+        )
+    cmd_proof_waiting(identifier, observed, needs)
 
 
 def cmd_proof_observed(identifier: str, text: str) -> None:
@@ -4716,6 +4772,7 @@ if __name__ == "__main__":
             "comment": cmd_comment,
             "actor": cmd_actor,
             "proof-waiting": cmd_proof_waiting,
+            "proof-waiting-until": cmd_proof_waiting_until,
             "proof-observed": cmd_proof_observed,
             "card-done": cmd_card_done,
             "set-description": set_description,

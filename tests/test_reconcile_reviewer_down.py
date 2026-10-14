@@ -1221,10 +1221,13 @@ def test_swept_lanes_is_unchanged():
 
 
 def test_the_board_read_lanes_are_swept_lanes_plus_the_alarm_lane():
+    # And the retiring lanes (DRE-6753): the drain reads them off this read
+    # rather than buying a request of its own on every sweep.
     assert reconcile.BOARD_READ_LANES == (
-        reconcile.SWEPT_LANES + (reconcile.FLEET_OUTAGE_LANE,))
+        reconcile.SWEPT_LANES + (reconcile.FLEET_OUTAGE_LANE,)
+        + reconcile.RETIRING_LANES)
     assert reconcile.FLEET_OUTAGE_LANE == "Triage"
-    for unread in (*reconcile.QUEUE_LANES, "Green Light"):
+    for unread in (reconcile.QUEUE_LANE, "Green Light"):
         assert unread not in reconcile.BOARD_READ_LANES, (
             "the card body says a person closes a card moved there"
         )

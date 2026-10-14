@@ -432,6 +432,51 @@ def cancel_refusal(row: dict) -> str | None:
     return (f"{row['identifier']} is an epic with {n} open "
             f"{'child' if n == 1 else 'children'}")
 
+
+def child_count(card: dict) -> int:
+    """How many child nodes `card` has, in any state — 0 for a card with no
+    `children` key (DRE-7241). Beside `open_children`, because a finished
+    epic is still an epic: the three writers that cannot say whose work they
+    point at may not cancel one (`cancel_proof_refusal`)."""
+    return len(((card or {}).get("children") or {}).get("nodes") or [])
+
+
+# The proof a Cancel row carries (DRE-7241): where each groomer writer's one
+# item says it came from, and the two refusals `cancel_proof_refusal` gives.
+# The verify agent's items are its verdict's own, so it has no entry here.
+PROOF_FROM_LINE = "the card's Superseded by line"
+PROOF_FROM_CHECK = "the deterministic check"
+PROOF_FROM_JUDGEMENT = "the ranked read"
+NO_CANCEL_PROOF = "no proof on the row"
+EPIC_CANCEL_REFUSED = "an epic is canceled only on the verify agent's check"
+#: The writers whose evidence cannot say who did the work: a `Superseded
+#: by:` line may name a child, and neither the check's reason nor the ranked
+#: read's pointer says whose pull request it was.
+UNATTRIBUTED_SOURCES = (DEAD_FROM_LINE, DEAD_FROM_CHECK, DEAD_FROM_JUDGEMENT)
+
+
+def cancel_proof_refusal(row: dict) -> str | None:
+    """Why `row` may not go on the Cancel list for its proof, or None when it
+    may (DRE-7241). Beside `cancel_refusal`, and asked by every writer of a
+    Cancel row after it, so none of them can skip it.
+
+    No proof, no Cancel: a row whose `proof` holds no item with something in
+    it is refused with `NO_CANCEL_PROOF` — 3 of 10 Cancel rows over 13
+    mornings were wrong, and a reason that shows nothing cannot be checked.
+    And an epic is canceled only on the verify agent's check: a row from
+    `UNATTRIBUTED_SOURCES` whose card has any child, in any state, is refused
+    with `EPIC_CANCEL_REFUSED`."""
+    shown = [item for item in row.get("proof") or []
+             if isinstance(item, dict)
+             and " ".join(str(item.get("quote") or item.get("fact")
+                              or "").split())]
+    if not shown:
+        return NO_CANCEL_PROOF
+    if (row.get("source") in UNATTRIBUTED_SOURCES
+            and int(row.get("children") or 0) > 0):
+        return EPIC_CANCEL_REFUSED
+    return None
+
 MARK = "🧺"
 PROPOSAL_TAG = "groom-proposal"
 
@@ -890,6 +935,15 @@ def superseded_by(description: str | None) -> str | None:
     return None
 
 
+def superseded_line(description: str | None) -> str | None:
+    """The `Superseded by:` line `superseded_by` read its target off, whole
+    and on one line — the quote of a line Cancel's proof (DRE-7241)."""
+    for match in _SUPERSEDED_LINE.finditer(description or ""):
+        if _PR_URL.search(match.group(1)) or _CARD_REF.search(match.group(1)):
+            return " ".join(match.group(0).split())
+    return None
+
+
 def supersession_gap(description: str | None) -> bool:
     """The card talks about being superseded but names nothing checkable."""
     text = description or ""
@@ -917,7 +971,17 @@ def file_references(description: str | None) -> set[str]:
     `Thread.tsx`, the next `rails/CommentsRail/Thread.tsx`. Comparing full paths
     would miss the collision that costs a merge conflict.
     """
-    return {ref.split("/")[-1] for ref in _FILE_REF.findall(description or "")}
+    return {ref.split("/")[-1] for ref in file_paths(description)}
+
+
+def file_paths(description: str | None) -> set[str]:
+    """The files a card says it touches, each path as the card wrote it.
+
+    What the readiness rule `file-named-by-in-flight-card` compares (DRE-6908):
+    on 2026-10-11 the basename tied `scripts/runners/README.md` to
+    `console/backend/monitors/README.md`, two files that share only a name.
+    """
+    return set(_FILE_REF.findall(description or ""))
 
 
 def blockers_of(card: dict) -> set[str]:
@@ -1369,8 +1433,10 @@ def sequence(cards: list[dict], *, collisions: dict | None = None,
                 **({"serves": unit["serves"]} if unit["serves"] else {}),
                 "deferred": key not in batchable,
                 # On every row, so each writer of a Cancel can ask
-                # `cancel_refusal` without the card in hand (DRE-5309).
+                # `cancel_refusal` without the card in hand (DRE-5309), and
+                # `cancel_proof_refusal` (DRE-7241).
                 "open_children": open_children(by_id[cid]),
+                "children": child_count(by_id[cid]),
             })
     return rows
 
@@ -1594,11 +1660,22 @@ def propose(cards: list[dict], *, cycles: list[dict], capacity: int = DEFAULT_CA
     # sequenced, and the Cancel list is drawn from the same twenty as the
     # Planning list rather than from the whole lane.
     to_cancel: dict = {}
+    # …and what each would carry on its row as proof (DRE-7241), by card: one
+    # item per writer, `[]` where nothing can be shown.
+    proofs: dict = {}
+    check_proofs = {identifier: [{"source": PROOF_FROM_CHECK,
+                                  "quote": defang_reason(reason)[0]}]
+                    if " ".join(str(reason or "").split()) else []
+                    for identifier, reason in check_cancel.items()}
     unstated = []
     for card in sorted(cards, key=lambda c: _card_sort_key(c["identifier"])):
         target = superseded_by(card.get("description"))
         if target:
             to_cancel[card["identifier"]] = (DEAD_FROM_LINE, target)
+            proofs[card["identifier"]] = [{
+                "source": PROOF_FROM_LINE,
+                "quote": defang_reason(
+                    superseded_line(card.get("description")))[0]}]
             continue
         # The model's call lands in the SAME list as the regex's, with its
         # evidence as the reason beside the other's `Superseded by:` line. A
@@ -1608,6 +1685,11 @@ def propose(cards: list[dict], *, cycles: list[dict], capacity: int = DEFAULT_CA
         verdict = verdicts.get(card["identifier"]) if verdicts else None
         if verdict is not None and verdict.outcome == "likely-done":
             to_cancel[card["identifier"]] = (DEAD_FROM_JUDGEMENT, None)
+            # The pointer the guard would withhold is no proof (DRE-7241):
+            # the row would read only that nothing can be shown.
+            proofs[card["identifier"]] = (
+                [{"source": PROOF_FROM_JUDGEMENT, "quote": verdict.pointer}]
+                if _showable(verdict.pointer) else [])
             continue
         if supersession_gap(card.get("description")):
             unstated.append(card["identifier"])
@@ -1622,19 +1704,28 @@ def propose(cards: list[dict], *, cycles: list[dict], capacity: int = DEFAULT_CA
     # filled, so a refused card is planned like any other and keeps the slot
     # it had; the refusal is said on the page only for a card the walk below
     # puts in the morning's set — outside it nothing was going to be cancelled.
+    # The proof check (DRE-7241) is asked of the row each writer would write,
+    # the same way and in the same place: a Cancel with no proof, and an
+    # epic's Cancel from a writer that cannot say whose work it points at.
     refusing: dict = {}
     for card in cards:
-        refusal = cancel_refusal({"identifier": card["identifier"],
-                                  "open_children": open_children(card)})
+        identifier = card["identifier"]
+        if identifier in check_cancel:
+            source, proof = DEAD_FROM_CHECK, check_proofs[identifier]
+        elif identifier in to_cancel:
+            source, proof = to_cancel[identifier][0], proofs[identifier]
+        else:
+            continue
+        refusal = (cancel_refusal({"identifier": identifier,
+                                   "open_children": open_children(card)})
+                   or cancel_proof_refusal({"identifier": identifier,
+                                            "source": source, "proof": proof,
+                                            "children": child_count(card)}))
         if refusal is None:
             continue
-        if card["identifier"] in check_cancel:
-            refusing[card["identifier"]] = (DEAD_FROM_CHECK, refusal)
-        elif card["identifier"] in to_cancel:
-            refusing[card["identifier"]] = (to_cancel[card["identifier"]][0],
-                                            refusal)
-        check_cancel.pop(card["identifier"], None)
-        to_cancel.pop(card["identifier"], None)
+        refusing[identifier] = (source, refusal)
+        check_cancel.pop(identifier, None)
+        to_cancel.pop(identifier, None)
 
     collisions = collision_report(cards)
     broken: list = []
@@ -1718,14 +1809,17 @@ def propose(cards: list[dict], *, cycles: list[dict], capacity: int = DEFAULT_CA
                              check_cancel[row["identifier"]])[0],
                          "position": len(dead) + 1, "epic": row["epic"],
                          "band": row["band"],
-                         "open_children": row["open_children"]})
+                         "open_children": row["open_children"],
+                         "children": row["children"],
+                         "proof": check_proofs[row["identifier"]]})
             continue
         if row["identifier"] in declined:
             later_rows.append({"identifier": row["identifier"],
                                "title": row["title"], "repo": row["repo"],
                                "reconsidered_in": None, "projected": False,
                                "older_than_window": False,
-                               "open_children": row["open_children"]})
+                               "open_children": row["open_children"],
+                               "children": row["children"]})
             continue
         row = planned[row["identifier"]]
         if row["cycle"] in batch_numbers and row["identifier"] in to_cancel:
@@ -1735,7 +1829,9 @@ def propose(cards: list[dict], *, cycles: list[dict], capacity: int = DEFAULT_CA
                          "superseded_by": target, "source": source,
                          "position": len(dead) + 1, "epic": row["epic"],
                          "band": row["band"],
-                         "open_children": row["open_children"]})
+                         "open_children": row["open_children"],
+                         "children": row["children"],
+                         "proof": proofs[row["identifier"]]})
         elif row["cycle"] in batch_numbers:
             if row["identifier"] in refusing:
                 source, refusal = refusing[row["identifier"]]
@@ -1744,7 +1840,8 @@ def propose(cards: list[dict], *, cycles: list[dict], capacity: int = DEFAULT_CA
             now_rows.append({**{k: row[k] for k in
                                 ("identifier", "title", "position", "cycle",
                                  "cycle_id", "unit", "epic", "repo",
-                                 "projected", "band", "open_children")},
+                                 "projected", "band", "open_children",
+                                 "children")},
                              **({"held": True} if row.get("held") else {}),
                              **({"serves": row["serves"]}
                                 if row.get("serves") else {}),
@@ -1758,7 +1855,8 @@ def propose(cards: list[dict], *, cycles: list[dict], capacity: int = DEFAULT_CA
                                "reconsidered_in": row["cycle"],
                                "projected": row["projected"],
                                "older_than_window": False,
-                               "open_children": row["open_children"]})
+                               "open_children": row["open_children"],
+                               "children": row["children"]})
 
     # The declined rows carry no cycle here either: the sequence is what the
     # console and the audit read, and a row that says `not-now` beside a cycle
@@ -2014,10 +2112,10 @@ def _mark(outcome: str, row: dict, verdict, *, withheld: list,
     Every one of them that a model wrote passes `_showable` first. A refused
     REASON is replaced with the contract's exact sentence and the card is
     listed in `withheld`; a refused trigger falls back to the rules' own, and
-    refused evidence is dropped to None — a Cancel row whose evidence cannot be
-    shown is still reported as judged, its reason is the withheld sentence
-    (`_cancel_mark`), and the run log holds the text nobody could put on the
-    page. A refused LABELLED reason is dropped and the
+    refused evidence is dropped to None — a ranked-read Cancel whose evidence
+    cannot be shown is refused in `propose` and is a batch row here (DRE-7241),
+    its pointer still counted in `withheld`, and the run log holds the text
+    nobody could put on the page. A refused LABELLED reason is dropped and the
     card is listed in `withheld` too, and nothing stands in for it: a label
     with a sentence about the guard under it reads as an answer, and the whole
     point of the five is that the reader can tell what was said from what was
@@ -2069,6 +2167,11 @@ def _mark(outcome: str, row: dict, verdict, *, withheld: list,
     # a `now` the cap moved to `not-now` is not a card the section renders, so
     # its labels are not shown and not guarded (DRE-3764).
     reasons = {}
+    # A `likely-done` in the batch is a refused Cancel (DRE-7241): the pointer
+    # the guard refused is still a reason withheld, and counted as one.
+    if (outcome == "now" and judged and verdict.outcome == "likely-done"
+            and not _showable(verdict.pointer)):
+        withheld.append(identifier)
     if outcome == "now" and judged:
         for label, text in (verdict.reasons or {}).items():
             if _showable(text):
@@ -2091,14 +2194,22 @@ def _cancel_mark(row: dict, verdict, judged: bool, *, withheld: list) -> dict:
     happened" names nothing anyone can check. Evidence the plain-English guard
     refuses is replaced with the contract's exact sentence and counted in
     `withheld`, so the reason is never empty.
+
+    And it ends with each of the row's proof lines (DRE-7241,
+    `proof_reason`), so what the CEO is asked to agree with is on the row
+    itself. `propose` refuses a ranked-read Cancel whose pointer the guard
+    would withhold, so the withheld sentence is no longer a Cancel's reason.
     """
+    proof = row.get("proof")
     if row.get("source") == DEAD_FROM_LINE:
-        return {"reason": _rules_reason("dead", row), "trigger": None,
-                "evidence": None, "judged": False, "reasons": {}}
+        return {"reason": proof_reason(_rules_reason("dead", row), proof),
+                "trigger": None, "evidence": None, "judged": False,
+                "reasons": {}}
     if row.get("source") == DEAD_FROM_CHECK:
         # The evidence the check read, already through the plain-English
         # guard in `groom_verify` and defanged in `propose`.
-        return {"reason": row.get("check_reason") or WITHHELD_REASON,
+        return {"reason": proof_reason(row.get("check_reason")
+                                       or WITHHELD_REASON, proof),
                 "trigger": None, "evidence": row.get("check_reason"),
                 "judged": False, "reasons": {}}
     evidence = (verdict.pointer
@@ -2106,8 +2217,32 @@ def _cancel_mark(row: dict, verdict, judged: bool, *, withheld: list) -> dict:
     if evidence is not None and not _showable(evidence):
         withheld.append(row.get("identifier"))
         evidence = None
-    return {"reason": evidence or WITHHELD_REASON, "trigger": None,
-            "evidence": evidence, "judged": judged, "reasons": {}}
+    return {"reason": proof_reason(evidence or WITHHELD_REASON, proof),
+            "trigger": None, "evidence": evidence, "judged": judged,
+            "reasons": {}}
+
+
+def proof_reason(reason: str | None, proof) -> str:
+    """`reason`, ending with each of the Cancel row's proof lines
+    (`proof_line`, DRE-7241) — one line, the Reason cell's.
+
+    A line the reason already carries is not written twice, so the verify
+    agent's reason (`groom_verify_agent.cancel_reason`, which ends with its
+    proof lines already) is returned as it is, and so is any reason this has
+    already been through. A reason that is nothing but one item's quote is
+    said once, by its proof line. What this adds is defanged with the rest
+    of the line; a reason it adds nothing to is returned unchanged."""
+    said = " ".join(str(reason or "").split())
+    items = [item for item in proof or [] if isinstance(item, dict)]
+    quotes = {" ".join(str(item.get("quote") or "").split())
+              for item in items}
+    keep = bool(said) and said not in quotes
+    missing = [line for line in (proof_line(item) for item in items)
+               if line not in said]
+    if keep and not missing:
+        return reason
+    parts = ([said] if keep else []) + list(dict.fromkeys(missing))
+    return defang_reason("; ".join(parts))[0] if parts else (reason or "")
 
 
 def _annotate(proposal: dict, judgement, verdicts: dict | None, *,
@@ -2983,15 +3118,28 @@ def _render_batch_reasons(proposal: dict) -> list:
 
 def proof_line(item: dict) -> str:
     """One verify proof item as the page writes it: `path:line — quote` for a
-    `file:line` item, `source — quote` for any other. The ONE form, read by
-    the Cancel reason (`groom_verify_agent.cancel_reason`) and the verdict
-    line alike (DRE-5746). Not defanged here — the caller defangs the line it
-    is part of."""
+    `file:line` item, `<fact> — quote` for a done-work or routing item
+    (DRE-7240) — the runner's line from the data it supplied, never the
+    agent's paraphrase — and `source — quote` for any other. The ONE form,
+    read by the Cancel reason (`groom_verify_agent.cancel_reason`) and the
+    verdict line alike (DRE-5746). A done-work item whose `whole` rests on
+    the agent's reading alone says so. Not defanged here — the caller
+    defangs the line it is part of."""
     def one(text) -> str:
         return " ".join(str(text or "").split())
 
     if "file" in item:
         return f"{one(item.get('file'))}:{item.get('line')} — {one(item.get('quote'))}"
+    if "done_card" in item:
+        fact = one(item.get("fact")) or (f"{one(item.get('done_card'))} → "
+                                         f"{one(item.get('pr'))}")
+        line = f"{fact} — {one(item.get('quote'))}"
+        if item.get("covers") == "whole" and item.get("covers_check") == "agent":
+            line += " (whole card: the agent's reading)"
+        return line
+    if "routing" in item:
+        fact = one(item.get("fact")) or one(item.get("routing"))
+        return f"{fact} — {one(item.get('quote'))}"
     return f"{one(item.get('source'))} — {one(item.get('quote'))}"
 
 
@@ -3004,6 +3152,10 @@ def _verdict_line(mark: dict) -> str:
     verdict = mark.get("verdict") or "unverified"
     said = mark.get("reason") if verdict == "unverified" else mark.get("summary")
     line = f"Verified against main: **{_line(verdict)}**"
+    # A Cancel answer a partial pull request turned `partly-solved` says so in
+    # words (DRE-7241), beside the verdict it explains.
+    if mark.get("adjusted"):
+        line += f" {ADJUSTED_WORDS}"
     proofs = [proof_line(item) for item in mark.get("proof") or []
               if isinstance(item, dict)]
     # A Cancel answer the guard refused (DRE-5309) says so instead: the card
@@ -3015,7 +3167,20 @@ def _verdict_line(mark: dict) -> str:
     if parts or proofs:
         sep = "; " if mark.get("refused") else " — "
         line += sep + defang_reason("; ".join(parts + proofs))[0]
-    return line
+    return line + rested_on_words(mark)
+
+
+#: What an `adjusted` verdict says on the page (DRE-7241): the agent answered
+#: Cancel, and a pull request had done only part of the card.
+ADJUSTED_WORDS = "(a pull request did part of it)"
+
+
+def rested_on_words(mark: dict) -> str:
+    """` — rested on: <words>` when the verdict carries `rested_on`, else
+    nothing (DRE-7241): what the verdict line and "What remains" add."""
+    words = [_line(w) for w in mark.get("rested_on") or []
+             if isinstance(w, str) and w.strip()]
+    return f" — rested on: {', '.join(words)}" if words else ""
 
 
 def _render_judgement(proposal: dict) -> list:
@@ -3209,6 +3374,10 @@ def _render_cancel(proposal: dict) -> list:
 
     Nothing at all when the list is empty — no heading, no `- None.` — since
     the reader takes an absent section to mean no cancellation proposed.
+
+    The Reason cell ends with each of the row's proof lines (DRE-7241),
+    whoever wrote the reason: `proof_reason` adds what the reason does not
+    already carry, and the columns are unchanged.
     """
     rows = sorted(proposal["outcomes"]["dead"],
                   key=lambda r: r.get("position") or 0)
@@ -3226,7 +3395,7 @@ def _render_cancel(proposal: dict) -> list:
         w.append(f"| {row.get('position')} | {row['identifier']} | "
                  f"{BAND_LABELS.get(row.get('band'), '—')} | {row['repo']} | "
                  f"{row.get('epic') or '—'} | {_cell(row.get('title'))} | "
-                 f"{_whole_cell(row.get('reason'))} |")
+                 f"{_whole_cell(proof_reason(row.get('reason'), row.get('proof')))} |")
     w.append("")
     return w
 
@@ -3269,7 +3438,8 @@ NO_DRAFT = "(no draft — the agent wrote none)"
 def _what_remains(row: dict) -> str:
     """The agent's summary, defanged, and what became of its draft: posted by
     this run, standing from an earlier one (`draft_stands`, the PT date `post`
-    read off it), or never written."""
+    read off it), or never written. Between the two, what the verdict rested
+    on, and a partial pull request said in words (DRE-7241)."""
     if row.get("draft") is None:
         ending = NO_DRAFT
     elif row.get("draft_stands"):
@@ -3277,6 +3447,10 @@ def _what_remains(row: dict) -> str:
     else:
         ending = DRAFT_POSTED
     said = defang_reason(_line(row.get("summary")))[0]
+    verify = row.get("verify") or {}
+    if verify.get("adjusted"):
+        said += f" {ADJUSTED_WORDS}"
+    said += rested_on_words(verify)
     return _whole_cell(f"{said} {ending}")
 
 

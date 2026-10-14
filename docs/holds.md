@@ -427,6 +427,7 @@ without a person before it holds.
 | `.github/workflows/agent-fix.yml` · Escalate checks the loop structurally cannot fix | `unfixable-check-hold` | `unfixable-check` | `new-head` | sweep, fix-dispatch, medic, limit-recovery | The fix run itself, which read the check |
 | `.github/workflows/agent-fix.yml` · Report (`park_for_human` in `scripts/report_fix_result.sh`) | `park_for_human` | `fix-dispute` | `new-head` | sweep, fix-dispatch, medic, limit-recovery | The fix loop's rounds, up to its budget |
 | `scripts/model_adoption_actions.py` · `<module>` (`QUESTION_LABELS`) | `The question card` | `manual` | `manual` | sweep, fix-dispatch, medic, limit-recovery | None — a person, or a writer creating a card already held, chose it |
+| `scripts/release_deferral.py` · `<module>` (`CARD_LABELS`) | `a person finishes it, nothing builds it` | `manual` | `manual` | sweep, fix-dispatch, medic, limit-recovery | None — a person, or a writer creating a card already held, chose it |
 | `scripts/linear_ops.py` · `_file_operator_hold` (`subissue`, `oneoff`) | `filed as an operator step` | `operator-step` | `blockers-terminal` | fix-dispatch, medic, limit-recovery | None — the card is filed held by design; the sweep lifts it when every blocker is terminal |
 | `scripts/hand_work_migration.py` · `_convert_one` (`operator-backlog`) | `one card of the operator-backlog pass` | `operator-step` | `blockers-terminal` | fix-dispatch, medic, limit-recovery | None — the card already wears the hold; the pass names the reason a person's label left unsaid |
 

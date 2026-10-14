@@ -73,7 +73,12 @@ set -e
 #     reads the Agent Fix lane once more and runs merge_gate.py over the same
 #     records with the fresh lane, until the answer is anything else or the
 #     ceiling is reached, logging one `fix-lane read <n>:` line per read. The
-#     last answer is the one acted on.
+#     last answer is the one acted on. Before that, a hold on a Verifier verdict
+#     for an older head (`verifier_scope=ask`) gets one second look: the card
+#     is read once with `card_snapshot.py take`, the read the Verifier makes,
+#     and merge_gate.py runs again with it, so it asks the Verifier's own
+#     scope rule at this head. No other wake reads the card, and a failed read
+#     writes no file, which holds and never fails the step.
 #  4. Posts one carry note per content id when a verdict carried, and moves a
 #     card it parked for a code-owner review back to In Review once that
 #     review has landed.
@@ -404,6 +409,14 @@ set -e
 # DRE-7209 (2026-10-13). bot/onboard, the onboarding process's routing pull
 #   requests here and in agent-bureau, merges here card-less on the same
 #   terms, as a second literal — never `bot/*`.
+# DRE-7165 (2026-10-13). On agent-bureau #3741 the Verifier passed 4a26218,
+#   the pull request moved to 6b0dbca, and the Verifier's run there declined
+#   it as single-system with no UI signal and posted nothing. The gate called
+#   the earlier verdict stale and held for a fresh verify that could never
+#   come. Now a stale-verifier hold prints `verifier_scope=ask`: the card is
+#   read once, and merge_gate.py asks verify_scope.decide with the compare
+#   record's files and that card. Out of scope merges with a note; in scope,
+#   or an input it could not read, holds and says which.
 
 set -euo pipefail
 
@@ -501,6 +514,8 @@ python3 .bureau-pipeline/scripts/proof_record.py gather \
   --repo "$REPO_FULL" --pr-view-file /tmp/pr-view.json \
   --head-sha "$SHA" --out /tmp/proof-record.json
 
+# Empty until the scope second look below fills it (DRE-7165).
+SCOPE_ARGS=()
 gate_decision() {
   python3 .bureau-pipeline/scripts/merge_gate.py \
     --head-sha "$SHA" \
@@ -521,9 +536,26 @@ gate_decision() {
     --owners-file /tmp/owners.json \
     --pr-body-file /tmp/pr-body.txt \
     --pr-created-at "$CREATED_AT" \
-    --proof-record-file /tmp/proof-record.json
+    --proof-record-file /tmp/proof-record.json \
+    ${SCOPE_ARGS[@]+"${SCOPE_ARGS[@]}"}
 }
 gate_decision | tee /tmp/gate-decision
+
+# The Verifier scope second look (DRE-7165): only after the stale-verifier
+# hold (`verifier_scope=ask`), the card is read ONCE, the read the Verifier
+# makes, and the decision runs again with it. A failed read writes no file,
+# and the gate holds on it; it never fails the step.
+if grep -qx 'verifier_scope=ask' /tmp/gate-decision; then
+  rm -f /tmp/card-snapshot.json
+  if [ -n "$CARD" ]; then
+    python3 .bureau-pipeline/scripts/card_snapshot.py take "$CARD" /tmp/card-snapshot.json \
+      || echo "no snapshot of $CARD — the gate cannot ask the Verifier's rule and holds"
+  fi
+  SCOPE_ARGS=(--card "$CARD" --card-snapshot-file /tmp/card-snapshot.json)
+  gate_decision > /tmp/gate-decision
+  echo "verifier scope: the stale verdict judged by the Verifier's rule at $SHA"
+  cat /tmp/gate-decision
+fi
 
 # Condition F's second look (DRE-6577): only a wait whose reason cites
 # DRE-4486, every wording stranded_fix.lane_refusal emits, and only the lane

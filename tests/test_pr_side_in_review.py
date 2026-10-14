@@ -257,13 +257,15 @@ class TheFromLanesAreThePreReviewLanesTest(unittest.TestCase):
         same line `reconcile.HAND_BUILT_REVIEW_LANES` draws (DRE-4356)."""
         self.assertNotIn("Green Light", _from_lanes())
 
-    def test_both_queue_names_are_from_lanes_until_the_retirement(self):
+    def test_the_queue_is_a_from_lane_under_its_live_name_only(self):
         """A card waiting in the queue with an open pull request is carried to
-        review under either name (DRE-6743): `Queued` joined the step with the
-        sweep's own reads, and `Backlog` stays until DRE-6753 retires it."""
-        for lane in lane_contract.QUEUE_LANES:
-            with self.subTest(lane=lane):
-                self.assertIn(lane, _from_lanes())
+        review from `Queued` (DRE-6743). The name it replaced is retiring
+        (DRE-6753): the vocabulary rule forbids it in a non-comment workflow
+        line, and the sweep's drain moves a card still under it into `Queued`."""
+        self.assertIn(lane_contract.QUEUE_LANE, _from_lanes())
+        for old in lane_contract.lane_names("retiring"):
+            with self.subTest(lane=old):
+                self.assertNotIn(old, _from_lanes())
 
     def test_every_pre_review_flow_lane_but_those_is_present(self):
         flow = lane_contract.flow_lanes()

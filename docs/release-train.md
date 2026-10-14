@@ -89,7 +89,7 @@ One rule set, asked twice: once to build the matrix, and once inside each surfac
 | 8 | `ci-pending` | `no-op` | no candidate is green yet — the newest still checking is named, the train leaves without it, and the run its CI completion fires takes it (never a wait: the train is never stopped) |
 | 9 | `ci-red / ci-absent` | `refuse` | every candidate is red, or no gating check has reported on it — each named in the refusal, with what was read and what was ignored; a red commit is never released |
 | 10 | `walk-bound` | `refuse` | 30 candidates read newest-first and none green, with more behind them — the surface is too far behind to walk; release it by hand, or raise the bound |
-| 11 | `deferred` | `no-op` | the script exited 0 printing `deferred: …` — the deployment is owed to a person, and that is not a failure; a line that ends `— re-arm in <N> minutes` re-arms the train for that minute (DRE-6005) |
+| 11 | `deferred` | `no-op` | the script exited 0 printing `deferred: …` — the deployment is owed to a person, and that is not a failure; a line that ends `— re-arm in <N> minutes` re-arms the train for that minute (DRE-6005), and any other warns and files its card (DRE-5235) |
 | 12 | `released` | `release` | the script ran and the train verified the annotated tag it cut at the released commit |
 
 The brake is the repository variable `RELEASE_HOLD`, read the way `INTAKE_HOLD` is read — see `standards/release-train.md` for where to set it and what the surface script owes.
@@ -101,6 +101,12 @@ The brake is the repository variable `RELEASE_HOLD`, read the way `INTAKE_HOLD` 
 It is a REPORT, and the train is not made less reliable by it. The receipt line above is byte for byte what it was — the outcome is its own line, `release-train: [<surface>] decision recorded: …`, never appended to the line the console parses. The write never raises and never retries, so a refused one is a `decision not recorded: …` clause and the run is as green as it was. The caller's stub grants `deployments: write` for it (`standards/release-train.md`); a stub that has not been updated gets `decision not recorded: caller stub lacks deployments: write` on every run, and the tag stays the only record a release or its recovery depends on.
 
 **Two runs are deliberately not recorded**, because neither decides anything per surface. The first is a run whose triggering CI run did not conclude `success`: the train no-ops in the plan job's own shell with an empty matrix, before any surface is read, and the Record already holds that CI run's own failure. The second is the `channel` command `promote-channel.yml` runs — it prints where the channel stands and promotes it, and it is not a train run.
+
+## A deferral is loud, and owes one card
+
+**DRE-5235.** A `deferred:` line with no re-arm clause is still a `no-op` — its decision, receipt and record are what they were, and the job concludes as it did — but it is no longer silent. The surface job prints a `Release deferred` warning, writes a `## Deferred` block on the run's summary page naming the surface, the commit, the reason and the run, and prints the same facts as one `release-deferred:` line in its log. It then files one card per repo and surface, created in `Green Light`: `<repo>: <surface> release deferred — <first 80 characters of the reason>`, labeled `repo:<repo>`, `no-code`, `needs-human` and `agent:ops`. A later lap comments on that card only when the reason changed, numbers, times and commit ids aside, and the surface's next verified tag closes it `Done` under a `Released as <tag>` comment, whatever lane it sits in by then.
+
+A deferral that names its re-arm minute does none of that: it is the train's own to re-arm, owed to nobody. A deferral an open `RELEASE ROLLED BACK:` or `RELEASE BROKEN:` card on the same repo speaks for is warned of and files no card and no comment — that card, filed by the surface's own train, holds every account's release until a person closes it. A card that cannot be filed — a repository the repo map does not name, no Linear key, an API error, the budget — is one more `::warning::` and one `release-deferred: card not filed — <why>` line, and never a red run.
 
 ## The trigger, and what the stub must declare
 

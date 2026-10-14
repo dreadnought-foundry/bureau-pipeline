@@ -92,10 +92,11 @@ jobs:
           private-key: ${{ secrets.BUREAU_APP_PRIVATE_KEY }}
           owner: dreadnought-foundry
           repositories: bureau-pipeline
-          permission-variables: read
 
       # No continue-on-error: a refused write permission is red, so a person
-      # sees it.
+      # sees it. Neither mint asks for a permission subset — the pinned action
+      # declares no variables input (DRE-7230) — so each token carries the
+      # installation's own permissions on bureau-pipeline, variables included.
       - name: Mint the model-home write token
         id: model_home_write
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
@@ -104,7 +105,6 @@ jobs:
           private-key: ${{ secrets.BUREAU_APP_PRIVATE_KEY }}
           owner: dreadnought-foundry
           repositories: bureau-pipeline
-          permission-variables: write
 
       - name: Carry the merged choices into the home
         env:

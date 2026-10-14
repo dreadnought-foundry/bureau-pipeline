@@ -131,6 +131,12 @@
       "printed_by": "scripts/classifier_cost.py",
       "constant": "TAG",
       "when": "once per run of the planning classifier's cost tally since DRE-7196, when its Linear read succeeds"
+    },
+    {
+      "tag": "release-deferred:",
+      "printed_by": "scripts/release_deferral.py",
+      "constant": "TAG",
+      "when": "every surface job of `release-train.yml` since DRE-5235, in its `Run the surface` step's log: on a deferral that names no re-arm minute, the facts line and then the card lines; on a verified tag, the open-cards line and, when one was open, the closed line"
     }
   ],
   "causes": [

@@ -173,8 +173,12 @@ class TestParkedNamesTheProcessWriter:
     def test_operator_is_not_a_queue_writer(self):
         """The decided change, pinned so a future fix cannot take the easy road
         of widening the lane instead of correcting the verdict. Queued carries
-        Backlog's writers word for word (DRE-6740), so neither name admits one."""
+        Backlog's writers word for word (DRE-6740), and Backlog is retiring and
+        names no writer at all (DRE-6753), so neither name admits one."""
         for lane in lane_contract.QUEUE_LANES:
+            if lane in lane_contract.lane_names("retiring"):
+                assert "clauses" not in lane_contract.lane(lane, status="retiring")
+                continue
             assert "operator" not in lane_contract.lane_writers(lane), (
                 f"{lane} is process-controlled — re-opening by-hand writes would "
                 "make the lane contract describe the old model"
@@ -1000,8 +1004,9 @@ class TestAStaleVerdictIsNotAnApproval:
 # The route is written down
 # ===========================================================================
 class TestTheRouteIsWrittenDown:
-    def test_the_backlog_clauses_state_the_stale_verdict_rule(self):
-        backlog = lane_contract.lane("Backlog", contract=lane_contract.load())
+    def test_the_queue_clauses_state_the_stale_verdict_rule(self):
+        # The queue's clauses are Queued's since Backlog began retiring (DRE-6753).
+        backlog = lane_contract.lane("Queued", contract=lane_contract.load())
         assert "`stale-verdict`" in backlog["clauses"]["exit"]["text"]
         assert "Green Light" in backlog["clauses"]["writers"]["text"]
         assert "send" in backlog["clauses"]["writers"]["text"].lower()
@@ -1021,12 +1026,12 @@ class TestTheRouteIsWrittenDown:
         survive is the clause saying it is still owed."""
         stale = ("DRE-2724", "DRE-2724 writes routing verdicts")
         for clause in lane_contract.clauses(lane_contract.load()):
-            if clause.lane in ("Backlog", "Todo"):
+            if clause.lane in ("Queued", "Todo"):
                 assert (clause.pending or "").strip() not in stale, clause.id
 
     def test_the_lane_contract_carries_the_vocabulary_it_used_to_wait_for(self):
         contract = lane_contract.load()
-        backlog = lane_contract.lane("Backlog", contract=contract)
+        backlog = lane_contract.lane("Queued", contract=contract)
         todo = lane_contract.lane("Todo", contract=contract)
         assert "routing verdict" in backlog["clauses"]["entrance"]["text"]
         # Todo names all three routes the sweep carries, and says where each

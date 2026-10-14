@@ -627,11 +627,12 @@ class TestTheContractSaysSo:
     def test_the_vocabulary_still_checks_out(self):
         assert routing_verdict.config_problems() == []
 
-    def test_the_backlog_exit_clause_says_the_sweep_performs_the_move(self):
+    def test_the_queue_exit_clause_says_the_sweep_performs_the_move(self):
         """The contract is DATA and the sweep reads it — a clause that still
         says "a human moves a WORKBENCH or OPERATOR card" describes a pipeline
-        that no longer exists."""
-        exit_text = lane_contract.lane("Backlog")["clauses"]["exit"]["text"]
+        that no longer exists. The queue's clauses are Queued's since the old
+        name began retiring (DRE-6753)."""
+        exit_text = lane_contract.lane("Queued")["clauses"]["exit"]["text"]
         assert "WORKBENCH" in exit_text and "OPERATOR" in exit_text
         assert "a human moves a WORKBENCH or OPERATOR card" not in exit_text
         assert "sweep promotes" in exit_text

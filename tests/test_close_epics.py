@@ -534,17 +534,18 @@ def test_the_docstrings_name_the_lanes_an_epic_closes_from():
             assert lane in doc, (fn.__name__, lane)
 
 
-def test_the_lane_contract_says_a_finished_epic_leaves_backlog():
-    """The contract is what the board's lanes are read from, so the Backlog
+def test_the_lane_contract_says_a_finished_epic_leaves_the_queue():
+    """The contract is what the board's lanes are read from, so the Queued
     exit names the close; `docs/lane-contract.md` is rendered from it and
-    `tests/test_planning_classify.py` holds the render."""
+    `tests/test_planning_classify.py` holds the render. The lane it replaced is
+    a retiring entry with no clauses of its own (DRE-6753)."""
     import json
 
     contract = json.loads(
         (Path(__file__).resolve().parent.parent / "config" / "lane-contract.json")
         .read_text(encoding="utf-8"))
-    backlog = next(l for l in contract["lanes"] if l["name"] == "Backlog")
+    queued = next(l for l in contract["lanes"] if l["name"] == "Queued")
     assert (
         "An epic here whose children are all closed, with at least one Done, "
         "is closed by the sweep"
-    ) in backlog["clauses"]["exit"]["text"]
+    ) in queued["clauses"]["exit"]["text"]
