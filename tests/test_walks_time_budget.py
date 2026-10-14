@@ -35,26 +35,29 @@ measured then: 1,241.31 seconds by pytest's own count, against 583 recorded
 for it at a desk, a ratio of 2.13 — the walks job's 50-minute limit.
 
 WHAT WAS MEASURED, NOW (DRE-7278). Each walk's `N passed in X s` line in its
-own walks job, on the 13 `Pipeline Tests` runs on `main` from 38445404426 to
-38596919485 (2026-10-13 18:16 to 2026-10-14 16:18 UTC), read on 2026-10-14:
+own walks job, on the 14 `Pipeline Tests` runs on `main` from 38445404426 to
+38603675625 (2026-10-13 18:16 to 2026-10-14 17:05 UTC), read on 2026-10-14:
 38445404426, 38447613635, 38456228202, 38463747175, 38472073985,
 38485715656, 38490524189, 38498076721, 38552055067, 38585458314,
-38586044625, 38589513356 and 38596919485. Every walk there took 17 to 39
-minutes against the 50-minute limit. The slowest of each, over its desk
-record:
+38586044625, 38589513356, 38596919485 and 38603675625. Every walk there took
+17 to 42 minutes against the 50-minute limit. The slowest of each, over its
+desk record:
 
     walk             desk s    slowest on CI    run            ratio
+    every-default    583       2,489.79 s       38603675625    4.27
     project-model    442.62    1,841.82 s       38472073985    4.16
-    every-default    583       2,350.78 s       38586044625    4.03
     agent-move       633.36    1,978.42 s       38485715656    3.12
 
-The slowest reading is the project-model walk's 1,841.82 seconds in run
-38472073985 (job 115553474019): 1,841.82 / 442.62 = 4.161, rounded up to two
-places as 2.13 was rounded from 2.129, so `CI_OVER_DESK` is 4.17. The last of
-those runs, 38596919485, did not finish: its project-model walk (job
-115965972817) was canceled at the 50-minute limit 3,011 seconds in, 6.80
-times its desk record. That is a lower bound, not a reading, and the new
-limit covers it: 6.80 is inside 2 x 4.17 = 8.34.
+The slowest reading is the every-default walk's 2,489.79 seconds in run
+38603675625 (job 115989051918): 2,489.79 / 583 = 4.271, rounded up to two
+places as 2.13 was rounded from 2.129, so `CI_OVER_DESK` is 4.28. The card
+read the first 13 of those runs and found 4.17, from the project-model walk's
+1,841.82 seconds in run 38472073985 (1,841.82 / 442.62 = 4.161); the 14th
+finished after it and is larger, so it is the one used. Run 38596919485 did
+not finish: its project-model walk (job 115965972817) was canceled at the
+50-minute limit 3,011 seconds in, 6.80 times its desk record. That is a lower
+bound, not a reading, and the new limit covers it: 6.80 is inside 2 x 4.28 =
+8.56.
 
 WHAT THE RECORDS ARE. A walk's seconds in `config/unit-test-durations.json`
 are its run alone at a desk, on four cores: 633.36 for the agent-move walk,
@@ -68,11 +71,11 @@ seconds (job 114573848564).
 THE RULE. Since DRE-6935 each walk runs in a job of its own, so the walks
 job's `timeout-minutes` is one walk's clock. It must be at least twice the
 longest a walk could need, `2 * CI_OVER_DESK * recorded seconds`, for every
-walk on the tree. With these records that is 2 x 4.17 x 633.36 = 5,282
-seconds, 88.0 minutes, and the limit is 90 minutes, rounded up to the next
+walk on the tree. With these records that is 2 x 4.28 x 633.36 = 5,422
+seconds, 90.4 minutes, and the limit is 100 minutes, rounded up to the next
 ten as the parts' limit was. (It was 2 x 2.13 x 633.36 = 2,698 seconds and
-50 minutes until DRE-7278.) A walk added with no record, or a record grown past the
-limit, fails here by the walk's name — before the job is canceled at its
+50 minutes until DRE-7278.) A walk added with no record, or a record grown
+past the limit, fails here by the walk's name — before the job is canceled at its
 limit on whichever pull request drew a slow machine.
 """
 from __future__ import annotations
@@ -91,12 +94,12 @@ import unit_test_parts  # noqa: E402
 TESTS_WF = REPO / ".github" / "workflows" / "tests.yml"
 
 #: How much longer a walk has taken on a GitHub-hosted machine than its
-#: desk record: the project-model walk's 1,841.82 seconds in job
-#: 115553474019 (run 38472073985, 2026-10-13) over the 442.62 seconds
-#: recorded for it at a desk on four cores, 4.161, rounded up (DRE-7278).
+#: desk record: the every-default walk's 2,489.79 seconds in job
+#: 115989051918 (run 38603675625, 2026-10-14) over the 583 seconds
+#: recorded for it at a desk on four cores, 4.271, rounded up (DRE-7278).
 #: It was 2.13 until then, from the every-default walk's 1,241.31 seconds in
 #: job 114591044631 (run 38178110152, 2026-10-11) over its 583.
-CI_OVER_DESK = 4.17
+CI_OVER_DESK = 4.28
 
 #: The margin on top of the slowest a walk could need, as with the parts.
 MARGIN = 2
@@ -173,10 +176,10 @@ def test_the_change_walk_record_names_its_measurement():
     assert CHANGE_WALK in note and "114573848564" in note, note
 
 
-def test_the_limit_is_ninety_minutes_from_the_largest_record():
-    """2 x 4.17 x 633.36 = 5,282 s (88.0 minutes), rounded up to the next ten
+def test_the_limit_is_one_hundred_minutes_from_the_largest_record():
+    """2 x 4.28 x 633.36 = 5,422 s (90.4 minutes), rounded up to the next ten
     minutes."""
-    assert limit_seconds() == 90 * 60
+    assert limit_seconds() == 100 * 60
 
 
 def test_a_walk_recorded_past_the_limit_fails_by_name():
