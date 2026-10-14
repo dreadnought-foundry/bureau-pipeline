@@ -435,9 +435,30 @@ verify agent — asks `groomer.cancel_refusal` first, off the `open_children`
 count every row of the sequence carries (a child not Done, Canceled or
 Duplicate, read from the card's own `children`, since its children are rarely
 in the same lane). An epic whose children are all closed is a finished
-container and may be canceled like any card. A refused card stays where the
+container, and only the verify agent may cancel it (DRE-7241, below). A refused card stays where the
 order put it: in its Planning slot with the refusal as its Why, or waiting in
-`not-now`. Each refusal in the morning's set is listed in `cancels_refused` and on the page under
+`not-now`.
+
+**Every Cancel row carries its proof, and an epic is canceled only on the
+verify agent's check (DRE-7241).** Over 13 mornings 3 Cancel rows in 10 were
+wrong, and a ranked-read Cancel whose pointer the plain-English guard withheld
+went on the list with the withheld sentence as its whole reason. So every row
+in `outcomes["dead"]` carries a `proof` list: `{"source": "the card's
+Superseded by line", "quote": <the line>}`, `{"source": "the deterministic
+check", "quote": <check_reason>}`, `{"source": "the ranked read", "quote":
+<the pointer>}`, or the verify agent's own verdict items with their runner
+`fact` lines, beside its `rested_on`. Each writer then asks
+`groomer.cancel_proof_refusal` after `cancel_refusal`: a row with no proof is
+refused `no proof on the row`, and a row from the line, the check or the ranked
+read whose card has any child, in any state, is refused `an epic is canceled
+only on the verify agent's check` — none of the three can say whose work it
+points at. Every row that carries `open_children` carries `children` too
+(`groomer.child_count`), and neither is in the proposal id. A refused card
+keeps its place and is listed under `## Cancels refused` like any other. The
+Cancel table's Reason cell ends with each proof line (`proof_reason`); the
+verdict line and a Rewrite first row's "What remains" add `rested on: <words>`
+when the verdict carries `rested_on`, and an `adjusted` verdict says `(a pull
+request did part of it)`. Each refusal in the morning's set is listed in `cancels_refused` and on the page under
 `## Cancels refused`, after the Cancel list, naming who proposed the Cancel;
 the section is absent on a morning with none. The lane is read 50 cards a page
 (`POPULATION_PAGE`) because the `children` selection makes each page heavier.
@@ -514,8 +535,11 @@ before this card.
 
 A card on the Cancel list always says what it came from, in its reason:
 `superseded by DRE-N` is a declaration a person wrote on the card, and anything
-else is the evidence the ranked read named — or, when the plain-English guard
-refused that evidence, the withheld sentence, never an empty cell. A
+else is the evidence the ranked read named — and the reason ends with the
+row's proof line, which names the source. When the plain-English guard refused
+that evidence there is no proof to show, so the card is not put on the Cancel
+list at all (DRE-7241): it keeps its place and is listed under `## Cancels
+refused`, and its pointer is still counted as a withheld reason. A
 `Superseded by:` line that names nothing checkable is reported as a gap and the
 card is sequenced normally: a recommendation nobody can check is one nobody
 should act on. The page's `Named nothing:` line says so, and it names only a

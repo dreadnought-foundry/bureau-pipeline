@@ -190,12 +190,17 @@ def test_the_cancel_table_shows_the_evidence_and_the_superseding_card():
     assert set(rows) == {"DRE-1", "DRE-2"}
     # The Reason is the seventh cell — what the CEO reads and the drain writes
     # onto the card — and it says which of the two sources is being read.
-    assert rows["DRE-1"][6] == "pull request 274 merged it"
+    # Since DRE-7241 it is the row's proof line.
+    assert rows["DRE-1"][6] == "the ranked read — pull request 274 merged it"
     assert rows["DRE-1"][5] == "DRE-1 does a thing"
-    assert rows["DRE-2"][6] == "superseded by DRE-9"
+    assert rows["DRE-2"][6] == ("superseded by DRE-9; the card's Superseded "
+                                "by line — Superseded by: DRE-9")
 
 
-def test_a_cancel_row_whose_evidence_was_withheld_says_so():
+def test_a_cancel_whose_evidence_was_withheld_is_refused_never_listed():
+    """Before DRE-7241 the row went on the Cancel list with the withheld
+    sentence as its whole reason. No proof, no Cancel: the card keeps its
+    slot and the refusal is said on the page."""
     cards = [card("DRE-1"), card("DRE-2")]
     answer = "\n".join([
         "DRE-1 | likely-done | a merge already did it | see scripts/groomer.py",
@@ -203,11 +208,12 @@ def test_a_cancel_row_whose_evidence_was_withheld_says_so():
     ])
     proposal = groomer.propose(cards, cycles=CYCLES, capacity=5, now=NOW,
                                judgement=with_pack(cards, answer))
-    rows = cancel_rows(groomer.render_proposal(proposal))
-    assert rows["DRE-1"][6] == groomer.WITHHELD_REASON, (
-        "evidence that could not be shown is reported as withheld, never as an "
-        "empty reason"
-    )
+    text = groomer.render_proposal(proposal)
+    assert groomer.CANCEL_HEADING not in text
+    assert "DRE-1" in [r["identifier"] for r in proposal["outcomes"]["now"]]
+    assert proposal["cancels_refused"] == [{
+        "identifier": "DRE-1", "refusal": groomer.NO_CANCEL_PROOF,
+        "source": groomer.DEAD_FROM_JUDGEMENT}]
 
 
 # --------------------------------------------------------------------------

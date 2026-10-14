@@ -499,7 +499,9 @@ def test_a_done_sibling_superseding_it_is_named_and_its_sentence_quoted():
         "source": "other_cards", "card": "DRE-3230",
         "quote": "Supersedes DRE-102.",
         "text": 'DRE-3230 (Done) says: "Supersedes DRE-102."'}
-    assert cancel(got)[0]["reason"] == item["text"]
+    # The Cancel row's reason is its proof line (DRE-7241).
+    assert cancel(got)[0]["reason"] == groomer.proof_line(
+        {"source": groomer.PROOF_FROM_CHECK, "quote": item["text"]})
 
 
 @pytest.mark.parametrize("where", ["search", "related", "siblings"])
@@ -563,7 +565,8 @@ def test_the_cancel_table_reason_names_the_card_and_quotes_the_sentence():
             if line.startswith("|") and "| DRE-102 |" in line]
     assert rows, "the Cancel table has no row for DRE-102"
     reason = rows[0].rstrip(" |").rsplit(" | ", 1)[-1]
-    assert reason == 'DRE-3230 (Done) says: "Supersedes DRE-102."'
+    assert reason == ('the deterministic check — DRE-3230 (Done) says: '
+                      '"Supersedes DRE-102."')
 
 
 # --------------------------------------------------------------------------

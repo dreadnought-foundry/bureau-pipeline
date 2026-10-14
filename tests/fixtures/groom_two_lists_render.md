@@ -60,8 +60,8 @@ The rest of the same set: cards that no longer apply — replaced, superseded or
 
 | # | Card | Pri | Repo | Epic | Title | Reason |
 | -- | -- | -- | -- | -- | -- | -- |
-| 1 | DRE-4102 | — | portico | — | first cut of the intake census | superseded by DRE-4250 |
-| 2 | DRE-4105 | — | agent-bureau | — | a probe of the old board cutover | the cutover ran on 2026-09-07 \| the probe is the proof |
+| 1 | DRE-4102 | — | portico | — | first cut of the intake census | superseded by DRE-4250; the card's Superseded by line — Superseded by: DRE-4250 |
+| 2 | DRE-4105 | — | agent-bureau | — | a probe of the old board cutover | the ranked read — the cutover ran on 2026-09-07 \| the probe is the proof |
 
 ## What the ranked read said
 
