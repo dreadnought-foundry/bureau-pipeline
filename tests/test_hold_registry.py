@@ -108,15 +108,16 @@ class TestTheRealTree:
         )
         assert out.returncode == 0, out.stdout + out.stderr
 
-    def test_seventeen_writer_sites_each_match_exactly_one_row(self):
+    def test_eighteen_writer_sites_each_match_exactly_one_row(self):
         # Fifteen until DRE-6186 folded main()'s two dead-run caps into
         # `hand_dead_run_to_planner`, whose one `hold.apply` serves both;
         # fifteen again since the create seam files an operator step held
         # (DRE-6428); sixteen with the operator-backlog pass (DRE-6429);
-        # seventeen with the one-off critic's bound park (DRE-6456).
+        # seventeen with the one-off critic's bound park (DRE-6456);
+        # eighteen with the deferred-release card filed held (DRE-5235).
         doc = _real_doc()
         sites = hold.discover()
-        assert len(sites) == 17, [s.where for s in sites]
+        assert len(sites) == 18, [s.where for s in sites]
         for site in sites:
             hits = [r for r in doc["sites"] if hold.row_matches(r, site)]
             assert len(hits) == 1, f"{site.where} ({site.scope}) matches {len(hits)} rows"
@@ -124,16 +125,17 @@ class TestTheRealTree:
             hits = [s for s in sites if hold.row_matches(row, s)]
             assert len(hits) == 1, f"row {row['anchor']!r} matches {len(hits)} sites"
 
-    def test_the_eight_files_the_cards_name_are_the_files_discovered(self):
+    def test_the_nine_files_the_cards_name_are_the_files_discovered(self):
         # Six from DRE-6173; `scripts/linear_ops.py` since DRE-6428;
-        # `scripts/hand_work_migration.py` since DRE-6429.
+        # `scripts/hand_work_migration.py` since DRE-6429;
+        # `scripts/release_deferral.py` since DRE-5235.
         files = {s.file for s in hold.discover()}
         assert files == {
             "scripts/reconcile.py", "scripts/dead_run.py",
             "scripts/rereview_watch.py", ".github/workflows/plan.yml",
             ".github/workflows/agent-fix.yml",
             "scripts/model_adoption_actions.py", "scripts/linear_ops.py",
-            "scripts/hand_work_migration.py",
+            "scripts/hand_work_migration.py", "scripts/release_deferral.py",
         }
 
     def test_every_row_carries_reasons_lifts_readers_and_tried_first(self):

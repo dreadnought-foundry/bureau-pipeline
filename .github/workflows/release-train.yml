@@ -508,7 +508,9 @@ jobs:
       # fresh answer, the way the rules are always asked twice. Then runs the
       # surface's script at that commit and verifies the annotated tag it
       # cut. A no-op and a deferral exit 0; a refusal and a failed script
-      # exit non-zero.
+      # exit non-zero. A deferral with no re-arm minute is loud and files its
+      # Green Light card, and a verified tag closes it, through
+      # `scripts/release_deferral.py` under LINEAR_API_KEY (DRE-5235).
       - name: Run the surface
         env:
           GH_TOKEN: ${{ github.token }}

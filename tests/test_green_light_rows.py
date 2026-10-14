@@ -201,6 +201,7 @@ REVIEW_CAP = ("scripts/reconcile.py", "hand_review_nudge_to_person")
 EPIC_GROWTH = ("scripts/reconcile.py", "ask_epic_growth_question")
 BLOCKER_ASK = ("scripts/blocker_ask.py", "resolve")
 RELEASED_EPIC = ("scripts/reconcile.py", "ask_cap_for_released_epic")
+DEFERRAL = ("scripts/release_deferral.py", "file_deferral")
 
 
 # --------------------------------------------------------------------------- #
@@ -267,12 +268,12 @@ class TestTheRepositoryPasses:
         contract = _contract()
         declared = _declared(contract)
         assert set(declared) == {ESCALATE, CMD_EXIT, PARK, REVIEW_CAP, EPIC_GROWTH,
-                                 BLOCKER_ASK, RELEASED_EPIC}
+                                 BLOCKER_ASK, RELEASED_EPIC, DEFERRAL}
         # The cause park writes no lane since DRE-6837, so it has no record.
         # The Triage repair's question is the eighth caller of the escalation
         # (DRE-7178).
         counts = {ESCALATE: 8, CMD_EXIT: 2, PARK: 2, REVIEW_CAP: 1, EPIC_GROWTH: 1,
-                  BLOCKER_ASK: 1, RELEASED_EPIC: 1}
+                  BLOCKER_ASK: 1, RELEASED_EPIC: 1, DEFERRAL: 1}
         for (module, function), callers in declared.items():
             report = lane_callers.callers_of(module, function, str(ROOT))
             assert report.unread == frozenset(), (module, report.unread)
@@ -722,9 +723,9 @@ class TestTheEpicGrowthQuestion:
 @pytest.mark.usefixtures("declared_callers")
 class TestTheDeferredRelease:
     """A release the train deferred (DRE-5234): the train files one `no-code`
-    card of its own in Green Light, from one function and no other. The kind
-    is declared before its site exists — DRE-5235 lands the site and its
-    record together — so these tests hand the check the record themselves."""
+    card of its own in Green Light, from one function and no other. DRE-5235
+    landed the site and its record together; the tests below that need a
+    record elsewhere hand the check one themselves."""
 
     UNIT = "release_deferral.py#file_deferral"
 
@@ -732,10 +733,13 @@ class TestTheDeferredRelease:
         return {"kind": "deferred-release", "writer": "release-train.yml",
                 "where": where, "evidence": "x", "card": "DRE-0"}
 
-    def test_the_kind_is_declared_with_no_record_yet(self):
+    def test_the_kind_is_declared_with_its_one_record_at_the_site(self):
         assert grl.DEFERRED_RELEASE_SITE == self.UNIT
         assert "deferred-release" in grl.kinds()
-        assert [r for r in grl.arrivals() if r["kind"] == "deferred-release"] == []
+        records = [r for r in grl.arrivals() if r["kind"] == "deferred-release"]
+        assert [(r["where"], r["writer"], r["card"]) for r in records] == [
+            (self.UNIT, "release-train.yml", "DRE-5235")]
+        assert records[0]["callers"] == ["release_deferral.py#_deferred"]
 
     def test_a_deferred_release_row_anywhere_else_fails_naming_the_site(self):
         contract = _contract()
