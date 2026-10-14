@@ -1032,6 +1032,28 @@ def test_the_lane_rows_carry_each_path_as_the_card_wrote_it():
                                               "scripts/runners/README.md"]}]
 
 
+def test_intake_cards_count_toward_boilerplate_by_path_never_by_name():
+    """Three Intake cards each citing a different `<dir>/README.md` are three
+    files, so a bare `README.md` stays a file two cards can share — counted
+    by name, they would make it boilerplate and the rule would never fire."""
+    held = card("DRE-1", repo="agent-bureau", description="Edits `README.md`.")
+    others = [card(f"DRE-{10 + i}", repo="agent-bureau",
+                   description=f"Edits `{d}/README.md`.")
+              for i, d in enumerate(("scripts/runners", "console/backend",
+                                     "docs"))]
+    lane = [_lane_card("DRE-80", ["README.md"], repo="agent-bureau")]
+    readiness = groom_readiness.facts(lanes={"In Progress": lane})
+    board = groom_readiness.board(readiness, population=[held, *others],
+                                  threshold=3)
+    assert "README.md" not in board["boilerplate"]
+    assert _row(held, board, "file-named-by-in-flight-card")["names"] == \
+        ["DRE-80"]
+    cited = [card(f"DRE-{20 + i}", repo="agent-bureau",
+                  description="Edits `docs/README.md`.") for i in range(4)]
+    board = groom_readiness.board(readiness, population=cited, threshold=3)
+    assert board["boilerplate"] == {"docs/README.md"}
+
+
 def test_file_paths_keeps_the_directory_and_drops_a_line_reference():
     assert groomer.file_paths("See `render/out.ts:341` and `README.md`.") == \
         {"render/out.ts", "README.md"}
