@@ -63,9 +63,13 @@
 #   Q4 command limits — reading a workflow's TRIGGERS needs the file, which the
 #      Actions API does not carry, so this reads each workflow's contents at
 #      the default branch: roughly one read per workflow per repo per hour,
-#      against an installation's 5,000/hour. A refusal is never retried past
-#      gh_read_retry's bounded backoff and never substituted for an answer.
-#      That hourly request budget is shared by everything the fleet does on
+#      against an installation's 5,000/hour. A refusal is never substituted
+#      for an answer. A GitHub server error (HTTP 5xx) is retried by the
+#      watcher itself, at most gh_read_retry's three attempts with its
+#      backoff between, and at most two retry waits in the whole run, so an
+#      hour of GitHub being down cannot run this job out of time; past that a
+#      5xx is unknown, and every other refusal is read once (DRE-7352). The
+#      hourly request budget is shared by everything the fleet does on
 #      the installation, so it can be spent by others (DRE-6461): a read
 #      GitHub refuses for it is reported as not read this hour — never as
 #      ran, never as a permission failure — and the watcher stops asking for
