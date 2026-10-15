@@ -57,7 +57,10 @@ is the floor. Every rule here exists because its violation shipped a bug.
   `console/design/` or a root `design/` — counts as docs; `.css` and source
   there stay code (DRE-3763). The same formats under a root `architecture/`
   — decisions, forensics, proof records and their screenshots — count as
-  docs by the same rule, and source there stays code (DRE-5311). A root `models.json` counts as DATA, beside
+  docs by the same rule, and source there stays code (DRE-5311). Plain-text
+  evidence — a `.txt` or `.log` capture such as a saved email or a log
+  excerpt — counts as docs under `architecture/` only; under the two design
+  folders and anywhere else it stays code (DRE-7330). A root `models.json` counts as DATA, beside
   `config/` and `agents.yaml`: it is the Anthropic catalog snapshot, derived
   from the vendor's model list and refreshed by hand, and there is no RED
   test to write for a list somebody else publishes (DRE-3879, CEO's signed
