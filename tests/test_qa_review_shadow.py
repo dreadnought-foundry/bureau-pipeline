@@ -21,7 +21,10 @@ grepped:
   * that a bad request is refused before any agent step, by running the two
     refusing steps and walking the job after the failure;
   * that no earlier verdict reaches the replay's context, by running the card
-    context step over a thread that holds one.
+    context step over a thread that holds one;
+  * that `rules_ref` (DRE-7279), a fifth input, puts the rules of a past
+    commit in front of the replay — by running the overlay step against a
+    repository with two commits — and that no step acts on it otherwise.
 
 Every `${{ }}` is evaluated by a small three-valued reading of Actions'
 expression language (`_Eval`), the one `test_planner_queue_wiring.py` walks
@@ -51,6 +54,7 @@ REPLAY_PR = "1081"
 REPLAY_SHA = "42d305b2b6301cfd884ddef4169e64898b57c4ee"
 BASE_OID = "b2a6e72656e691b2449c798fab3be65b1472cba3"
 TODAY_HEAD = "9" * 40
+RULES_REF = "5e1f" * 10
 QA_LOGIN = "agent-bureau-qa-bot[bot]"
 
 
@@ -339,12 +343,13 @@ class _Eval:
 
 
 LIVE = {"inputs.shadow": False, "inputs.model": "",
-        "inputs.replay_pr": "", "inputs.replay_sha": ""}
+        "inputs.replay_pr": "", "inputs.replay_sha": "", "inputs.rules_ref": ""}
 
 
 def _shadow(model: str = "claude-opus-5") -> dict:
     return {"inputs.shadow": True, "inputs.model": model,
-            "inputs.replay_pr": REPLAY_PR, "inputs.replay_sha": REPLAY_SHA}
+            "inputs.replay_pr": REPLAY_PR, "inputs.replay_sha": REPLAY_SHA,
+            "inputs.rules_ref": ""}
 
 
 def _render(text: str, known: dict, blank_unknown: bool = False) -> str:
@@ -543,6 +548,16 @@ class InputsContractTest(unittest.TestCase):
                 self.assertEqual(inputs[name]["default"], default)
                 self.assertIs(type(inputs[name]["default"]), type(default))
 
+    def test_rules_ref_is_declared_as_an_empty_string_by_default(self):
+        # DRE-7279: the sibling card that passes it from Shadow Replay names
+        # the same input.
+        spec = _on(_doc())["workflow_call"]["inputs"].get("rules_ref")
+        self.assertIsNotNone(spec, "qa-review.yml declares no rules_ref input")
+        self.assertEqual(spec.get("type"), "string")
+        self.assertIs(spec.get("required"), False)
+        self.assertEqual(spec.get("default"), "")
+        self.assertIs(type(spec.get("default")), str)
+
     def test_qa_review_stays_workflow_call_only(self):
         self.assertEqual(set(_on(_doc())), {"workflow_call"})
 
@@ -673,6 +688,7 @@ class RefusalTest(unittest.TestCase):
             res = self._run(step, known)
             if res.returncode != 0:
                 self.assertIn("::error::", res.stdout + res.stderr)
+                self.said = res.stdout + res.stderr
                 return step
         self.fail(f"nothing refused {known}")
 
@@ -716,6 +732,42 @@ class RefusalTest(unittest.TestCase):
             for entry in models.get(block) or []:
                 with self.subTest(block=block, model=entry["model"]):
                     self._assert_refused_before_any_agent(_shadow(entry["model"]))
+
+    def _errors(self) -> list[str]:
+        return [l for l in self.said.splitlines() if l.startswith("::error::")]
+
+    def test_a_rules_ref_without_shadow_is_refused(self):
+        # DRE-7279: rules_ref is honored only by a replay. Its own error
+        # line, never the named-model one, and with or without a model.
+        for model in ("", "claude-opus-5"):
+            with self.subTest(model=model):
+                known = dict(LIVE, **{"inputs.model": model,
+                                      "inputs.rules_ref": RULES_REF})
+                self._assert_refused_before_any_agent(known)
+                self.assertEqual(_index(_step(id="shadow_shape")), 0)
+                errors = self._errors()
+                self.assertTrue(errors)
+                self.assertIn("rules_ref", errors[0])
+                self.assertIn("shadow", errors[0])
+                self.assertNotIn("named model", errors[0])
+
+    def test_a_rules_ref_that_is_not_a_whole_commit_id_is_refused(self):
+        for ref in ("main", "v12", "z" * 40, RULES_REF.upper(), RULES_REF[:12],
+                    RULES_REF + "0", f"{RULES_REF[:-1]} "):
+            with self.subTest(ref=ref):
+                self._assert_refused_before_any_agent(
+                    dict(_shadow(), **{"inputs.rules_ref": ref}))
+                errors = self._errors()
+                self.assertEqual(len(errors), 1, self.said)
+                self.assertIn("rules_ref", errors[0])
+                self.assertIn("40 lowercase hex", errors[0])
+                self.assertNotIn("replay_sha", errors[0])
+
+    def test_a_good_request_with_a_rules_ref_passes_the_shape_check(self):
+        known = dict(_shadow(), **{"inputs.rules_ref": RULES_REF})
+        res = self._run(_step(id="shadow_shape"), known)
+        self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
+        self.assertNotIn("::error::", res.stdout + res.stderr)
 
     def test_a_good_request_passes_and_names_the_models_effort(self):
         models = yaml.safe_load((ROOT / "config" / "models.yaml").read_text())
@@ -1039,6 +1091,171 @@ class ShadowVerdictFileTest(unittest.TestCase):
         self.assertGreater(_index(upload), _index(_step(id="shadow_verdict")))
         self.assertIs(_truth(_gate(upload, LIVE)), False)
         self.assertIsNot(_truth(_gate(upload, _shadow(), failed=True)), False)
+
+
+# ── 9. the rules from a past commit (DRE-7279) ──────────────────────────────
+#
+# A replay judges a past pull request, and with `rules_ref` it judges it by
+# the rules in force then: four paths of the pipeline checkout come from that
+# commit, while every script that RUNS the replay stays at `pipeline_ref`.
+
+
+RULES_LINE = re.compile(
+    r"^shadow rules: ([0-9a-f]{40}) — (\d+) files from that commit, "
+    r"kept at pipeline_ref: (.+)$", re.M)
+
+
+def _git(cwd: Path, *args: str) -> str:
+    return subprocess.run(
+        ["git", "-c", "user.name=t", "-c", "user.email=t@t", "-c",
+         "init.defaultBranch=main", "-c", "protocol.file.allow=always", *args],
+        cwd=cwd, check=True, capture_output=True, text=True).stdout.strip()
+
+
+def _commit(repo: Path, files: dict[str, str | None], message: str) -> str:
+    for rel, text in files.items():
+        path = repo / rel
+        if text is None:
+            path.unlink()
+            continue
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text)
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-q", "-m", message)
+    return _git(repo, "rev-parse", "HEAD")
+
+
+# The past commit had no exemptions list yet and a standard since deleted;
+# the current one adds a standard and the list, and changes every file the
+# overlay owns as well as one it does not.
+PAST = {
+    "standards/engineering.md": "PAST ENGINEERING\n",
+    "standards/retired-later.md": "PAST ONLY\n",
+    "briefs/critic.md": "PAST CRITIC BRIEF\n",
+    "briefs/engineer.md": "PAST ENGINEER BRIEF\n",
+    "scripts/check_tdd_commits.py": "print('PAST TDD CHECK')\n",
+    "scripts/assemble_context.py": "print('PAST ASSEMBLER')\n",
+}
+CURRENT = {
+    "standards/engineering.md": "CURRENT ENGINEERING\n",
+    "standards/retired-later.md": None,
+    "standards/whats-new.md": "CURRENT ONLY\n",
+    "briefs/critic.md": "CURRENT CRITIC BRIEF\n",
+    "briefs/engineer.md": "CURRENT ENGINEER BRIEF\n",
+    "scripts/check_tdd_commits.py": "print('CURRENT TDD CHECK')\n",
+    "scripts/assemble_context.py": "print('CURRENT ASSEMBLER')\n",
+    "config/tdd-exemptions.json": '{"current": true}\n',
+}
+
+
+def _with_rules(ref: str = RULES_REF) -> dict:
+    return dict(_shadow(), **{"inputs.rules_ref": ref})
+
+
+class RulesOverlayTest(unittest.TestCase):
+    def _fixture(self, td: Path, past_extra: dict | None = None):
+        """An origin with two commits, and the pipeline checkout as
+        actions/checkout leaves it: a depth-1 clone of the current one, so
+        the past commit is not on the runner until the step fetches it."""
+        origin = td / "origin"
+        origin.mkdir()
+        _git(origin, "init", "-q")
+        past = _commit(origin, dict(PAST, **(past_extra or {})), "past rules")
+        _commit(origin, CURRENT, "current rules")
+        pipeline = td / "pipeline"
+        _git(td, "clone", "-q", "--depth=1", f"file://{origin}", str(pipeline))
+        with self.assertRaises(subprocess.CalledProcessError):
+            _git(pipeline, "cat-file", "-e", f"{past}^{{commit}}")
+        return past, pipeline
+
+    def _overlay(self, td: Path, pipeline: Path, ref: str):
+        bench = _Bench(td)
+        res = bench.run(_step(id="shadow_rules"), {"PIPELINE_DIR": str(pipeline)},
+                        _with_rules(ref))
+        return res
+
+    def test_the_four_paths_come_from_rules_ref_and_the_rest_stays(self):
+        with tempfile.TemporaryDirectory() as raw:
+            td = Path(raw)
+            past, pipeline = self._fixture(td)
+            res = self._overlay(td, pipeline, past)
+            self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
+            read = lambda rel: (pipeline / rel).read_text()
+            # From the past commit.
+            self.assertEqual(read("standards/engineering.md"), "PAST ENGINEERING\n")
+            self.assertEqual(read("standards/retired-later.md"), "PAST ONLY\n")
+            self.assertEqual(read("briefs/critic.md"), "PAST CRITIC BRIEF\n")
+            self.assertEqual(read("scripts/check_tdd_commits.py"), "print('PAST TDD CHECK')\n")
+            # The machinery, and every other brief, stays at pipeline_ref.
+            self.assertEqual(read("scripts/assemble_context.py"), "print('CURRENT ASSEMBLER')\n")
+            self.assertEqual(read("briefs/engineer.md"), "CURRENT ENGINEER BRIEF\n")
+            # What the past commit lacks keeps its pipeline_ref copy.
+            self.assertEqual(read("standards/whats-new.md"), "CURRENT ONLY\n")
+            self.assertEqual(read("config/tdd-exemptions.json"), '{"current": true}\n')
+        lines = RULES_LINE.findall(res.stdout)
+        self.assertEqual(len(lines), 1, res.stdout)
+        ref, count, kept = lines[0]
+        self.assertEqual(ref, past)
+        self.assertEqual(count, "4")
+        self.assertEqual(sorted(kept.split(", ")),
+                         ["config/tdd-exemptions.json", "standards/whats-new.md"])
+        self.assertEqual(res.stdout.count("shadow rules:"), 1)
+
+    def test_nothing_kept_is_named_none(self):
+        with tempfile.TemporaryDirectory() as raw:
+            td = Path(raw)
+            past, pipeline = self._fixture(td, {
+                "standards/whats-new.md": "PAST WHATS NEW\n",
+                "config/tdd-exemptions.json": '{"past": true}\n'})
+            res = self._overlay(td, pipeline, past)
+            self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
+            self.assertEqual((pipeline / "config/tdd-exemptions.json").read_text(),
+                             '{"past": true}\n')
+            self.assertEqual((pipeline / "standards/whats-new.md").read_text(),
+                             "PAST WHATS NEW\n")
+        self.assertEqual(RULES_LINE.findall(res.stdout), [(past, "6", "none")])
+
+    def test_a_commit_the_pipeline_does_not_hold_fails_the_replay(self):
+        # Judging by today's rules after asking for the past's is the drift
+        # this card removes, so a fetch that fails stops the run, loudly.
+        with tempfile.TemporaryDirectory() as raw:
+            td = Path(raw)
+            _past, pipeline = self._fixture(td)
+            res = self._overlay(td, pipeline, "0" * 40)
+            self.assertNotEqual(res.returncode, 0)
+            self.assertIn("::error::", res.stdout + res.stderr)
+            self.assertNotIn("shadow rules:", res.stdout)
+            self.assertEqual((pipeline / "briefs/critic.md").read_text(),
+                             "CURRENT CRITIC BRIEF\n")
+
+    def test_the_overlay_runs_after_the_move_and_before_the_context(self):
+        step = _step(id="shadow_rules")
+        self.assertGreater(_index(step), _index(_step(id="pipeline")))
+        self.assertGreater(_index(step), _index(_step(id="shadow_shape")))
+        self.assertLess(_index(step), _index(_step(id="ctx")))
+        self.assertLess(_index(step), _index(_step(id="decide")))
+
+    def test_the_overlay_runs_only_on_a_replay_that_names_rules_ref(self):
+        step = _step(id="shadow_rules")
+        self.assertIs(_truth(_gate(step, _with_rules())), True)
+        self.assertIs(_truth(_gate(step, _shadow())), False)
+        self.assertIs(_truth(_gate(step, LIVE)), False)
+        self.assertIs(_truth(_gate(step, dict(LIVE, **{"inputs.rules_ref": RULES_REF}))), False)
+        # A refused request never reaches it.
+        self.assertNotIn(step, _walk_after_failure(_step(id="shadow_shape"), _with_rules()))
+
+    def test_no_step_acts_on_rules_ref_unless_a_replay_names_it(self):
+        # The shape check reads it only to refuse it, and on a live review
+        # with no new input set it does not run at all.
+        readers = [s for s in _steps() if "inputs.rules_ref" in yaml.safe_dump(s)]
+        self.assertEqual({s.get("id") for s in readers}, {"shadow_shape", "shadow_rules"})
+        self.assertIs(_truth(_gate(_step(id="shadow_shape"), LIVE)), False)
+        for s in readers:
+            if s.get("id") == "shadow_shape":
+                continue
+            with self.subTest(step=_key(s)):
+                self.assertIs(_truth(_gate(s, LIVE)), False)
+                self.assertIs(_truth(_gate(s, _shadow())), False)
 
 
 if __name__ == "__main__":
