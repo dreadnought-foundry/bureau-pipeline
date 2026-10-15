@@ -62,7 +62,7 @@ never counts, and the pick log says how many it skipped.
   kept when the job log's `Select model` note says `<model> chosen for
   verifier` with the clause, each paired with the `🧪 QA Verifier — VERDICT:`
   comment posted on its pull request while it ran. Every run passed over —
-  an expired log, no verdict comment, a known builder, another model, a pull
+  an unreadable log, no verdict comment, a known builder, another model, a pull
   request already picked — is named. One record per pull request, the newest.
 
 `--from-pick <file> --acted-on-only` re-emits, unchanged, the acted-on
@@ -515,7 +515,8 @@ def verifier_runs(repo: str, workflow: str):
 
 
 def run_log(repo: str, run_id) -> str | None:
-    """The run's whole log, or None when it cannot be read (expired)."""
+    """The run's whole log, or None when it cannot be read — expired, or
+    any other failing `gh run view`."""
     done = _gh("run", "view", str(run_id), "--repo", repo, "--log")
     return done.stdout if done.returncode == 0 and done.stdout.strip() else None
 
@@ -581,7 +582,7 @@ def pick_unknown_builder_verifier(*, recorded_model: str, count: int, repo: str,
             continue
         log = run_log(repo, run_id)
         if log is None:
-            skip(run_id, "its log could not be read (expired)")
+            skip(run_id, "its log could not be read")
             unreadable += 1
             if unreadable == UNREADABLE_LOGS_IN_A_ROW:
                 print(f"pick: {unreadable} run logs in a row could not be read — the older "
