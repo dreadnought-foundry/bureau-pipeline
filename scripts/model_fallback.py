@@ -1952,6 +1952,9 @@ def separated_walk(role: str, walk: list[str], built_on=None, built_on_unknown=F
     that is `claude-opus-5-5`, the Builders' first rung, and the note says so.
     A group added from the console builds too (DRE-6834), so its walk for
     that project counts as a build walk here exactly as the Builders' does.
+    No declared rule reorders what is left (DRE-7281): a rule names one
+    builder, and this one is unknown, so the walk keeps its own order and a
+    project's Reviewers exception that builds nothing still leads it.
 
     Roles the separation does not bind — the medic, every build role — walk
     their ladder untouched, and so does a reviewer looking at a build that ran
@@ -1963,6 +1966,7 @@ def separated_walk(role: str, walk: list[str], built_on=None, built_on_unknown=F
     if built_on_unknown:
         builds = _build_models(KINDS, effective_ladders(CONFIG, slug))
         barred = {m for m in walk[:-1] if m in builds}
+        rules = {}
     else:
         barred = {built_on} & set(walk) if built_on else set()
     if not barred:
@@ -1978,6 +1982,9 @@ def _kept_build_rung(walk: list[str], separated: list[str], built_on_unknown: bo
     """In the `built_on_unknown` case, the rung the reviewer kept although it
     also builds for that scope — the walk's last rung, which stays because
     nothing else was left (DRE-6785) — as `{"model", "builds_for"}`, or None.
+    None too when a rung that builds nothing survived above it (DRE-7281):
+    something else WAS left, and the note names it as a skip if it was
+    passed over. `selection_note` writes the clause only for the chosen rung.
 
     `builds_for` is the project's slug when a build walk of its own is its
     own (it carries an exception for the Builders, or for a group added
@@ -1987,7 +1994,7 @@ def _kept_build_rung(walk: list[str], separated: list[str], built_on_unknown: bo
     walks = effective_ladders(CONFIG, slug)
     builds = _build_models(KINDS, walks)
     kept = [m for m in walk if m in builds]
-    if not kept:
+    if not kept or any(m not in builds for m in walk[:walk.index(kept[-1])]):
         return None
     own = any(walks.get(KINDS[kind]) != LADDERS.get(KINDS[kind])
               for kind in build_kinds(KINDS))
@@ -2154,7 +2161,7 @@ def selection_note(decision: Mapping) -> str:
             "the reviewer does not"
         )
         kept = decision.get("kept_build_rung")
-        if isinstance(kept, Mapping) and kept.get("model"):
+        if isinstance(kept, Mapping) and kept.get("model") and kept["model"] == model:
             note += (
                 f"; {kept['model']}, the walk's last rung, also builds for "
                 f"{kept.get('builds_for') or 'the fleet'} and reviews this one "
