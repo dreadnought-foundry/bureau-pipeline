@@ -28,8 +28,22 @@ epics (DRE-7185, DRE-7187, DRE-7188, DRE-7189) read their bars with it.
   notice. A pull request with none is replayed at its final head with
   `recorded` set to `none`.
 
-It writes the matrix, `[{pr, sha, recorded}]`, as the `matrix` step output,
-and the full records (with each recorded first line) to `--out`.
+Each critic record also names `rules_ref` (DRE-7280): the newest commit on
+bureau-pipeline `main` at or before its recorded verdict was written — the
+Linear copy's `createdAt`, or the pull request comment's `created_at` — read
+with one `gh api repos/dreadnought-foundry/bureau-pipeline/commits?sha=main
+&until=<time>&per_page=1` call. The critic's replay judges by that commit's
+rules (DRE-7279), so a rule written after the review is not counted against
+the model. A record whose commit cannot be read — the read fails, no commit
+is that old, or it has no verdict to date — is still replayed, with
+`rules_ref` empty and so by today's rules, and the pick log names it. "Main
+at that time" is exact for a repo that rides `@main` (bureau-pipeline and
+agent-bureau); a repo on another channel would need that channel's position.
+A verifier record's `rules_ref` is always empty: `verify.yml` takes none.
+
+It writes the matrix, `[{pr, sha, recorded, rules_ref}]`, as the `matrix`
+step output, and the full records (with each recorded first line and the
+verdict's time) to `--out`.
 
 `compare` reads the downloaded artifacts against the pick and prints, in
 this order, one line per pull request and then exactly one summary:
@@ -41,7 +55,9 @@ A replay with no artifact, or with `"verdict": null`, is a mismatch of kind
 `no verdict`, named apart from a `disagreement`. A replay whose recorded
 verdict is `none` has nothing to match: `match=n/a`, outside both counts.
 `<pct>` is rounded down. The report goes to `shadow-replay-report.md` and
-`shadow-replay-report.json`.
+`shadow-replay-report.json`; it names each replay's `rules_ref`, and counts
+the replays that ran with none. The lines above never carry `rules_ref`:
+`config/proof-reach.json` declares them, and DRE-7198's record reads them.
 
 Nothing here writes to GitHub or Linear: it reads, and prints.
 
@@ -83,6 +99,10 @@ _MODEL_LINE_RE = re.compile(r"^" + re.escape(MODEL_LINE) + r"(\S+)", re.M)
 
 #: The recorded verdict of a pull request with none to replay against.
 NONE = "none"
+
+#: Where the rules a critic judges by live, whichever repo is replayed.
+RULES_REPO = "dreadnought-foundry/bureau-pipeline"
+RULES_BRANCH = "main"
 
 DISAGREEMENT = "disagreement"
 NO_VERDICT = "no verdict"
@@ -167,17 +187,56 @@ def pull_request_of(repo: str, sha: str) -> int | None:
     return None
 
 
+def rules_ref_at(verdict_at: str) -> tuple:
+    """`(sha, why)`: the newest commit on bureau-pipeline `main` at or before
+    `verdict_at`, and `""` with the reason when it cannot be read."""
+    moment = _moment(verdict_at)
+    if moment == datetime.min.replace(tzinfo=timezone.utc):
+        return "", f"the verdict's time {verdict_at!r} does not read"
+    until = moment.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    done = _gh("api", f"repos/{RULES_REPO}/commits?sha={RULES_BRANCH}&until={until}&per_page=1")
+    if done.returncode != 0:
+        return "", f"the commits read failed: {done.stderr.strip() or done.returncode}"
+    try:
+        commits = json.loads(done.stdout)
+    except ValueError:
+        return "", "the commits read did not answer JSON"
+    if not isinstance(commits, list) or not commits:
+        return "", f"{RULES_REPO} {RULES_BRANCH} has no commit at or before {until}"
+    sha = commits[0].get("sha") if isinstance(commits[0], dict) else None
+    if not isinstance(sha, str) or not re.fullmatch(r"[0-9a-f]{40}", sha):
+        return "", "the commits read named no whole commit id"
+    return sha, ""
+
+
+def with_rules_refs(records) -> list:
+    """Each record with its `rules_ref`, one commits read per record; a
+    record whose commit cannot be read keeps its place and is named."""
+    for r in records:
+        if r["recorded"] == NONE or not r.get("verdict_at"):
+            sha, why = "", "no recorded verdict to date"
+        else:
+            sha, why = rules_ref_at(r["verdict_at"])
+        r["rules_ref"] = sha
+        if not sha:
+            print(f"pick: pr={r['pr']} rules_ref unreadable ({why}) — replayed by "
+                  "today's rules", file=sys.stderr)
+    return records
+
+
 # --------------------------------------------------------------------------- #
 # pick                                                                         #
 # --------------------------------------------------------------------------- #
 
-def _record(pr: int, sha: str, recorded: str, line: str) -> dict:
-    return {"pr": pr, "sha": sha, "recorded": recorded, "recorded_line": line}
+def _record(pr: int, sha: str, recorded: str, line: str, verdict_at: str = "") -> dict:
+    return {"pr": pr, "sha": sha, "recorded": recorded, "recorded_line": line,
+            "verdict_at": verdict_at, "rules_ref": ""}
 
 
 def matrix(records) -> list:
-    """The replay job's matrix: `{pr, sha, recorded}` per record."""
-    return [{"pr": r["pr"], "sha": r["sha"], "recorded": r["recorded"]} for r in records]
+    """The replay job's matrix: `{pr, sha, recorded, rules_ref}` per record."""
+    return [{"pr": r["pr"], "sha": r["sha"], "recorded": r["recorded"],
+             "rules_ref": r.get("rules_ref") or ""} for r in records]
 
 
 def linear_critic_comments(recorded_model: str, repo_label: str) -> list:
@@ -203,11 +262,11 @@ def pick_recorded_model(comments, *, recorded_model: str, count: int, repo: str,
         found = recorded_verdict(body, marker)
         if found is None or not recorded_on(body, recorded_model):
             continue
-        candidates.append((_moment(c.get("createdAt")), found))
-    candidates.sort(key=lambda pair: pair[0], reverse=True)
+        candidates.append((_moment(c.get("createdAt")), c.get("createdAt") or "", found))
+    candidates.sort(key=lambda entry: entry[0], reverse=True)
 
     picked, prs, gone = [], set(), set()
-    for _, (token, sha, line) in candidates:
+    for _, created, (token, sha, line) in candidates:
         if len(picked) == count:
             break
         if sha in gone:
@@ -220,12 +279,12 @@ def pick_recorded_model(comments, *, recorded_model: str, count: int, repo: str,
         if pr is None or pr in prs:
             continue
         prs.add(pr)
-        picked.append(_record(pr, sha, token, line))
+        picked.append(_record(pr, sha, token, line, created))
     if len(picked) < count:
         raise PickError(
             f"found {len(picked)} eligible critic review(s) recorded on {recorded_model} "
             f"in {repo}, and the batch asks for {count} — nothing is replayed short")
-    return picked
+    return with_rules_refs(picked)
 
 
 def parse_prs(text: str) -> list:
@@ -243,7 +302,8 @@ def parse_prs(text: str) -> list:
 def pick_prs(prs, *, reviewer: str, repo: str,
              qa_login: str = fix_concurrency.QA_BOT_LOGIN) -> list:
     """Each listed pull request at its newest real `reviewer` verdict, or at
-    its final head with `recorded` `none` when it has none."""
+    its final head with `recorded` `none` when it has none. A critic record
+    names its `rules_ref`; a verifier record's stays empty."""
     marker = MARKERS[reviewer]
     picked = []
     for pr in prs:
@@ -256,16 +316,18 @@ def pick_prs(prs, *, reviewer: str, repo: str,
         for c in comments:
             if ((c.get("user") or {}).get("login")) != qa_login:
                 continue
-            latest = recorded_verdict(c.get("body"), marker) or latest
+            found = recorded_verdict(c.get("body"), marker)
+            if found:
+                latest = (*found, c.get("created_at") or "")
         if latest:
-            token, sha, line = latest
-            picked.append(_record(pr, sha, token, line))
+            token, sha, line, created = latest
+            picked.append(_record(pr, sha, token, line, created))
             continue
         head = ((_gh_json("api", f"repos/{repo}/pulls/{pr}").get("head")) or {}).get("sha")
         if not isinstance(head, str) or not re.fullmatch(r"[0-9a-f]{40}", head):
             raise PickError(f"pull request {pr} has no readable head")
         picked.append(_record(pr, head, NONE, ""))
-    return picked
+    return with_rules_refs(picked) if reviewer == "critic" else picked
 
 
 # --------------------------------------------------------------------------- #
@@ -317,6 +379,7 @@ def compare(records, artifacts: Path, *, reviewer: str, model: str,
     matched = of = 0
     for r in records:
         pr, sha, recorded = int(r["pr"]), r["sha"], r["recorded"]
+        rules_ref = r.get("rules_ref") or ""
         verdict, replayed_line, run_url = replays.get(pr, (None, "", ""))
         if recorded == NONE:
             match = "n/a"
@@ -331,11 +394,12 @@ def compare(records, artifacts: Path, *, reviewer: str, model: str,
                     replayed_line = ("(no artifact)" if pr not in replays
                                      else "(no verdict)")
                 mismatches.append({
-                    "pr": pr, "sha": sha, "kind": kind, "recorded": recorded,
+                    "pr": pr, "sha": sha, "rules_ref": rules_ref, "kind": kind,
+                    "recorded": recorded,
                     "replayed": verdict or NONE,
                     "recorded_line": r.get("recorded_line") or "",
                     "replayed_line": replayed_line})
-        rows.append({"pr": pr, "sha": sha, "recorded": recorded,
+        rows.append({"pr": pr, "sha": sha, "rules_ref": rules_ref, "recorded": recorded,
                      "replayed": verdict or NONE, "match": match, "run_url": run_url})
         lines.append(pr_line(pr, sha, recorded, verdict, match))
     summary = summary_line(matched, of, reviewer=reviewer, model=model,
@@ -344,6 +408,7 @@ def compare(records, artifacts: Path, *, reviewer: str, model: str,
     return {
         "reviewer": reviewer, "model": model, "recorded_model": recorded_model or NONE,
         "matched": matched, "of": of, "pct": matched * 100 // of if of else 0,
+        "without_rules_ref": sum(1 for row in rows if not row["rules_ref"]),
         "summary": summary, "replays": rows, "mismatches": mismatches, "lines": lines,
     }
 
@@ -353,10 +418,13 @@ def render_md(report: dict) -> str:
            report["summary"], "",
            f"Recorded on: {report['recorded_model']}. A replay whose recorded "
            "verdict is `none` is `n/a` and outside both counts.", "",
-           "| PR | sha | recorded | replayed | match |",
-           "| -- | -- | -- | -- | -- |"]
+           "Ran with no `rules_ref`, so by today's rules: "
+           f"{report['without_rules_ref']} of {len(report['replays'])} replays.", "",
+           "| PR | sha | rules_ref | recorded | replayed | match |",
+           "| -- | -- | -- | -- | -- | -- |"]
     for row in report["replays"]:
-        out.append(f"| {row['pr']} | `{row['sha']}` | {row['recorded']} | "
+        ref = f"`{row['rules_ref']}`" if row["rules_ref"] else NONE
+        out.append(f"| {row['pr']} | `{row['sha']}` | {ref} | {row['recorded']} | "
                    f"{row['replayed']} | {row['match']} |")
     out += ["", "## Mismatches", ""]
     if not report["mismatches"]:
@@ -407,7 +475,8 @@ def _pick_main(args) -> int:
             fh.write(f"matrix={json.dumps(rows, separators=(',', ':'))}\n")
     print(f"pick: {len(rows)} replay(s), reviewer={args.reviewer}")
     for row in rows:
-        print(f"pick: pr={row['pr']} sha={row['sha']} recorded={row['recorded']}")
+        print(f"pick: pr={row['pr']} sha={row['sha']} recorded={row['recorded']} "
+              f"rules_ref={row['rules_ref'] or NONE}")
     return 0
 
 
