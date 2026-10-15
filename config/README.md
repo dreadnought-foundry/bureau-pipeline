@@ -678,10 +678,18 @@ note says the build model was skipped for separation, and the review fails
 loudly until a Sonnet returns. `tests/test_model_choice_policy.py` holds the
 four scenarios the decision named.
 
-The critic's and the verifier's Select-model steps read the model the build ran
-on off the card's own `model-attempt:` heartbeat
-(`model_fallback.py build-model`) and pass it as `--built-on`, which takes that
-rung off the reviewer's walk. A card they cannot read is `--built-on-unknown`,
+The critic's and the verifier's Select-model steps read **every** model the
+card records as having built the change (`model_fallback.py build-model`,
+DRE-7303) and pass them as `--built-on <a>,<b>`, which takes each of those rungs
+off the reviewer's walk. A build line is `🧠 model-attempt: <model-id> — <role>
+agent starting` with any role but `planner`; an authoring line is one whose role
+is not `fixer`. `build-model` prints the build lines' models oldest first,
+comma-joined, and **nothing** when the thread holds no authoring line — a fixer's
+line alone does not say who built the change. When the barred models are every
+rung on the reviewer's walk, `select` chooses no reviewer: it exits non-zero
+with one `::error::build/review separation: …` line, the Select model step
+fails, and a person decides. A card they cannot read, or one with no authoring
+line, is `--built-on-unknown`,
 which bars **every** model on the reviewer's walk that also sits on that
 project's build walk, **except the walk's last rung**, which stays whatever
 other walk it sits on: absence of evidence that the build ran on something else
@@ -695,8 +703,8 @@ Opus 5.5 it would be `claude-sonnet-5`, the Builders' own last rung.
 **A cardless pull request is the everyday case of that.** A bot PR has no card,
 so its critic runs `--built-on-unknown`, skips both Sonnet rungs and lands on
 the Opus rung — `claude-opus-5-5` since DRE-4836. A hand-built PR on an
-`agent/DRE-<n>-*` branch whose card carries a `model-attempt:` heartbeat naming
-any model but a Sonnet is reviewed on Sonnet 5.5 as usual.
+`agent/DRE-<n>-*` branch whose card carries an authoring line naming any model
+but a Sonnet is reviewed on Sonnet 5.5 as usual.
 `tests/test_review_separation.py::test_an_unknown_build_model_still_never_reviews_on_an_overlap_model`
 is what holds it.
 
