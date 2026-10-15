@@ -1026,10 +1026,138 @@ def api_key(*, env=None, run=None) -> str:
     return key
 
 
+#: The read-only switch (DRE-7285). Exactly `1` turns it on; unset, empty or
+#: any other value changes nothing. The proof shadow (DRE-7286) sets it on its
+#: agent step.
+READ_ONLY_ENV = "BUREAU_LINEAR_READ_ONLY"
+
+_GRAPHQL_NAME = re.compile(r"[_A-Za-z][_0-9A-Za-z]*")
+# GraphQL ends a line at `\n`, `\r\n` or a lone `\r`: a comment or a string
+# that stopped only at `\n` would swallow a mutation after a lone `\r`.
+_GRAPHQL_LINE_END = re.compile(r"[\r\n]")
+
+
+def _mutation_field(document: str) -> str | None:
+    """The first field of the document's first `mutation` operation, `""`
+    when it opens a mutation whose field could not be read, or None when no
+    operation in it is a mutation.
+
+    Read the way GraphQL reads a document, not by its first characters: a
+    byte-order mark, whitespace, commas and `#` comments are ignored, string
+    and block-string literals are skipped, and only the keyword that opens a
+    definition at the top level counts. So a field named `mutation` inside a
+    query, or the word in a comment or a string, is not a write, while a named
+    mutation, an aliased field, or a mutation after a fragment or a query is.
+
+    It is a best-effort reader of GraphQL, not a parser and not a proof: a
+    document it cannot read as a mutation is sent. Its cases are the ones in
+    `tests/test_linear_read_only.py`.
+    """
+    depth = parens = 0
+    at_definition = True
+    in_mutation = expect_field = False
+    i, n = 0, len(document)
+    while i < n:
+        c = document[i]
+        if c == "#":
+            end = _GRAPHQL_LINE_END.search(document, i)
+            i = n if end is None else end.end()
+            continue
+        if c == '"':
+            if document.startswith('"""', i):
+                j = i + 3
+                while True:
+                    end = document.find('"""', j)
+                    if end < 0:
+                        i = n
+                        break
+                    if document[end - 1] != "\\":
+                        i = end + 3
+                        break
+                    j = end + 3
+                continue
+            j = i + 1
+            while j < n and document[j] not in '"\r\n':
+                escaped = document[j] == "\\" and document[j + 1:j + 2] not in ("\r", "\n")
+                j += 2 if escaped else 1
+            i = j + 1
+            continue
+        if c == "(":
+            parens += 1
+        elif c == ")":
+            parens = max(parens - 1, 0)
+        elif parens:
+            pass  # argument values: an object literal's braces are not a selection
+        elif c == "{":
+            if depth == 0:
+                expect_field = in_mutation
+                at_definition = False
+            depth += 1
+        elif c == "}":
+            depth = max(depth - 1, 0)
+            if depth == 0:
+                at_definition = True
+                in_mutation = expect_field = False
+        else:
+            word = _GRAPHQL_NAME.match(document, i)
+            if word:
+                name = word.group()
+                i = word.end()
+                if depth == 0 and at_definition:
+                    at_definition = False
+                    in_mutation = name == "mutation"
+                elif depth == 1 and expect_field:
+                    rest = document[i:].lstrip(" \t\r\n,﻿")
+                    if not rest.startswith(":"):
+                        return name  # an alias is followed by `:`; the field is next
+                continue
+        i += 1
+    return "" if in_mutation else None
+
+
+def _refuse_a_write_when_read_only(query: str) -> None:
+    """Refuse a write when `BUREAU_LINEAR_READ_ONLY` is exactly `1` (DRE-7285).
+
+    With the switch on, a document whose operation is a `mutation` raises
+    `LinearError` before `_send` is called: no request goes out and none is
+    counted against the run's budget. One stderr line opening
+    `linear-read-only: refused` names the mutation's first field. A query goes
+    out exactly as it does today, and with the variable unset, empty or any
+    other value nothing changes. `gql_paged` reaches this through `gql`.
+
+    WHAT THIS DOES NOT GUARD, stated plainly: it guards requests sent through
+    `gql()` and nothing else — `linear_ops.py` and `spoken_thread.py`, the
+    Linear commands the proof brief gives an agent. A step that holds
+    `LINEAR_API_KEY` and can run a shell could send a write straight to
+    Linear's API with the same key, with `curl` or any other HTTP client, and
+    this check does not see that request at all. Linear offers no read-only
+    key scope, so the key stays in the step for its reads; the shadow's
+    instructions (DRE-7286) and the proof card's read of every shadowed
+    card's comments (DRE-7293) cover what this cannot.
+    """
+    if os.environ.get(READ_ONLY_ENV) != "1":
+        return
+    field = _mutation_field(query)
+    if field is None:
+        return
+    field = field or "?"
+    print(
+        f"linear-read-only: refused {field} — {READ_ONLY_ENV}=1, so this "
+        "process sends no Linear write; nothing was sent",
+        file=sys.stderr,
+    )
+    raise LinearError(
+        f"linear-read-only: {field} is a write and {READ_ONLY_ENV}=1 — not sent"
+    )
+
+
 def gql(query: str, variables: dict | None = None, *, landed=None) -> dict:
     # `landed` is a create's look (DRE-6839): see `_send`. A read or an update
     # passes none, and goes exactly as it always has.
     #
+    # The read-only switch comes first (DRE-7285): a refused write is never
+    # sent, never counted, and never spends a fallback or a retry.
+    _refuse_a_write_when_read_only(query)
     # Stop at the first RATELIMITED (DRE-3202): a rate-limited process asks
     # nothing more. Every further request would spend the quota that proves
     # there is none left, against a window that is the whole fleet's.
