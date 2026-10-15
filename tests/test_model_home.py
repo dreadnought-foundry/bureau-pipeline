@@ -84,9 +84,11 @@ def lead(doc: dict, group: str, model: str) -> dict:
 
 
 def scenario_doc() -> dict:
-    """The first criterion's home: Builders lead with Sonnet 5.5, `designer`
-    is in the Reviewers and atlas's Reviewers lead with Opus 5.5."""
+    """The first criterion's home: Builders lead with Sonnet 5.5, `engineer`
+    is in the Builders — whichever group a console save left it in —
+    `designer` is in the Reviewers and atlas's Reviewers lead with Opus 5.5."""
     doc = lead(defaults_doc(), "workhorse", "claude-sonnet-5-5")
+    doc["agents"]["engineer"] = "workhorse"
     doc["agents"]["designer"] = "advisory"
     doc["projects"]["atlas"] = {"advisory": "claude-opus-5-5"}
     return doc
