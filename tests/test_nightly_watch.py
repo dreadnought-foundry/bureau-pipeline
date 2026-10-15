@@ -41,6 +41,7 @@ tests hold this watcher to the same rules:
 
 import base64
 import datetime as dt
+import io
 import json
 import os
 import re
@@ -57,6 +58,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "scripts"))
 import check_act_receipts  # noqa: E402
 import check_workflow_watchers  # noqa: E402
 import cron_clock  # noqa: E402
+import gh_read_retry  # noqa: E402
 import nightly_watch  # noqa: E402
 from gh_read_retry import GhReadError  # noqa: E402
 import pipeline_act  # noqa: E402
@@ -68,6 +70,20 @@ MEDIC_STUB = ROOT / ".github" / "workflows" / "self-medic.yml"
 TESTS_WORKFLOW = ROOT / ".github" / "workflows" / "tests.yml"
 
 NOW = "2026-09-25T12:00:00Z"
+
+#: A server error is retried (DRE-7352), so every test that feeds the watcher a
+#: 5xx would otherwise wait out the real backoff. The read seam's own test hook
+#: makes those waits zero for the whole module; the one test that checks the
+#: real numbers patches the sleep instead.
+_NO_BACKOFF = mock.patch.dict(os.environ, {"BUREAU_GH_READ_BACKOFF": "0,0"})
+
+
+def setUpModule():
+    _NO_BACKOFF.start()
+
+
+def tearDownModule():
+    _NO_BACKOFF.stop()
 
 
 def _ago(hours: float) -> str:
@@ -1348,6 +1364,260 @@ class ThrottleTest(unittest.TestCase):
         bullet = text[start:text.index("\n- **", start)]
         self.assertIn("hourly request budget", bullet)
         self.assertIn("re-confirm", bullet)
+
+
+# --------------------------------------------------------------------------- #
+# 3e. a server error is retried, briefly (DRE-7352)                            #
+# --------------------------------------------------------------------------- #
+
+
+#: Watch run 38672076834's own answer for bureau-pipeline's
+#: `smoke-setup-python-cached.yml`, word for word.
+INCIDENT_503 = ("gh: No server is currently available to service your "
+                "request. Sorry about that. Please try resubmitting your "
+                "request and contact us if the problem persists. (HTTP 503)")
+
+
+def _file_answer(text):
+    """The gh CLI's stdout for a contents read of `text`."""
+    return json.dumps({"encoding": "base64",
+                       "content": base64.b64encode(text.encode()).decode()})
+
+
+def _answers(*steps):
+    """A gh stand-in answering `steps` in order, one per attempt: a string is
+    gh's stdout, and anything else is a callable that raises. Every attempt is
+    recorded in `.calls`."""
+    queue = list(steps)
+
+    def gh():
+        gh.calls += 1
+        step = queue.pop(0) if len(queue) > 1 else queue[0]
+        return step if isinstance(step, str) else step()
+    gh.calls = 0
+    return gh
+
+
+class _GhCli:
+    """`gh_read` replaced by the gh CLI itself: `FakeGitHub`'s records come
+    back as stdout, and `failing(path, attempt)` picks the attempts GitHub
+    answers with the incident's 503 instead. Every read goes through the REAL
+    `_gh_api` — this is what `main(["watch", …])` gets — and every attempt of
+    every path is counted."""
+
+    def __init__(self, repos, failing):
+        self.github = FakeGitHub(repos)
+        self.failing = failing
+        self.calls = []
+
+    def __call__(self, args, log=None):
+        path = args[1]
+        self.calls.append(path)
+        if self.failing(path, self.calls.count(path)):
+            _gh_fails(INCIDENT_503)()
+        return json.dumps(self.github(path))
+
+    def attempts(self, needle):
+        return sum(1 for path in self.calls if needle in path)
+
+
+class ServerErrorTest(unittest.TestCase):
+    """Watch run 38672076834 (2026-10-15 02:38 UTC): GitHub answered one read
+    of a workflow file with a 503 — "No server is currently available" — and
+    the watcher filed `Nightly watcher cannot read a repo's CI` for an outage
+    on GitHub's side that was over in seconds. A server error is now retried a
+    few times before the subject is UNKNOWN, within a bound per run; every
+    other refusal behaves exactly as it did."""
+
+    PORTICO = "dreadnought-foundry/portico"
+    SUBJECT = f"{PORTICO} · CI"
+
+    def _fleet(self):
+        return {self.PORTICO: FakeRepo(
+            workflows={".github/workflows/ci.yml": ("CI", NIGHTLY_CI)},
+            runs={"ci.yml": run_record(hours_ago=2)})}
+
+    def test_the_incidents_503_then_a_good_answer_reads_ok(self):
+        gh = _answers(_gh_fails(INCIDENT_503), _file_answer(NIGHTLY_CI))
+        with mock.patch("sys.stderr"):
+            readings = _GhAnswers(contents=gh).collect(self._fleet())
+        self.assertEqual(_states(readings), {self.SUBJECT: nightly_watch.OK})
+        self.assertFalse(nightly_watch.evaluate(readings).alarm)
+        self.assertEqual(gh.calls, 2)
+
+    def test_a_5xx_on_every_attempt_still_reads_unknown_and_alarms(self):
+        gh = _answers(_gh_fails(INCIDENT_503))
+        with mock.patch("sys.stderr"):
+            readings = _GhAnswers(contents=gh).collect(self._fleet())
+        self.assertEqual(_states(readings),
+                         {self.SUBJECT: nightly_watch.UNKNOWN})
+        verdict = nightly_watch.evaluate(readings)
+        self.assertTrue(verdict.alarm)
+        self.assertEqual(verdict.state, nightly_watch.UNKNOWN)
+        self.assertEqual(gh.calls, gh_read_retry.ATTEMPTS)
+        # GitHub's last answer is what the reading says, exactly as before.
+        self.assertIn("(HTTP 503)", readings[0].detail)
+
+    def test_only_a_5xx_is_attempted_more_than_once(self):
+        """Counted at the read seam: each refusal `_gh_api` is handed, and how
+        many times it asks. Only a 5xx is asked again — and only from GitHub's
+        `(HTTP 5xx)` status, never from digits elsewhere in the message."""
+        once = {
+            "404": _gh_fails(NOT_FOUND),
+            "403": _gh_fails(REFUSALS["403"]),
+            "throttle": _gh_fails(REFUSALS["throttle"], rate_limited=True),
+            "a throttle that says 503": _gh_fails(
+                "gh: API rate limit exceeded (HTTP 503)", rate_limited=True),
+            "stray digits": _gh_fails(
+                "gh: Not Found (HTTP 404) for repos/o/r/contents/503.yml"),
+            "empty": lambda: "",
+            "not JSON": lambda: "<!DOCTYPE html><title>Unicorn</title>",
+        }
+        expected = {**{name: 1 for name in once},
+                    "502": gh_read_retry.ATTEMPTS,
+                    "503": gh_read_retry.ATTEMPTS}
+        cases = {**once, "502": _gh_fails(REFUSALS["5xx"]),
+                 "503": _gh_fails(INCIDENT_503)}
+        for name, refusal in cases.items():
+            with self.subTest(refusal=name):
+                gh = _answers(refusal)
+                with mock.patch.object(nightly_watch, "gh_read",
+                                       lambda args, log=None: gh()), \
+                        mock.patch("sys.stderr"):
+                    with self.assertRaises(nightly_watch.Unreadable):
+                        nightly_watch._gh_api("repos/o/r/contents/x.yml?ref=main")
+                self.assertEqual(gh.calls, expected[name])
+
+    def test_the_attempts_and_waits_are_the_read_seams_own(self):
+        """Imported, never copied: the same three attempts, and the waits
+        `backoff_seconds()` names — 15s then 45s by default."""
+        self.assertIs(nightly_watch.ATTEMPTS, gh_read_retry.ATTEMPTS)
+        self.assertIs(nightly_watch.backoff_seconds,
+                      gh_read_retry.backoff_seconds)
+        gh = _answers(_gh_fails(INCIDENT_503))
+        env = {k: v for k, v in os.environ.items()
+               if k != "BUREAU_GH_READ_BACKOFF"}
+        with mock.patch.dict(os.environ, env, clear=True), \
+                mock.patch.object(nightly_watch.time, "sleep") as sleep, \
+                mock.patch.object(nightly_watch, "gh_read",
+                                  lambda args, log=None: gh()), \
+                mock.patch("sys.stderr"):
+            with self.assertRaises(nightly_watch.Unreadable):
+                nightly_watch._gh_api("repos/o/r/contents/x.yml?ref=main")
+        self.assertEqual([c.args[0] for c in sleep.call_args_list],
+                         list(gh_read_retry.BACKOFF_SECONDS))
+
+    def test_each_retry_is_one_line_in_the_run_log_and_none_on_the_card(self):
+        gh = _answers(_gh_fails(INCIDENT_503))
+        log = io.StringIO()
+        with mock.patch("sys.stderr", log):
+            readings = _GhAnswers(contents=gh).collect(self._fleet())
+        path = ("repos/dreadnought-foundry/portico/contents/"
+                ".github/workflows/ci.yml?ref=main")
+        lines = [line for line in log.getvalue().splitlines() if line]
+        attempts = [f"attempt {n} of {gh_read_retry.ATTEMPTS}"
+                    for n in range(1, gh_read_retry.ATTEMPTS)]
+        self.assertEqual(len(lines), len(attempts), lines)
+        for line, attempt in zip(lines, attempts):
+            self.assertIn(path, line)
+            self.assertIn(attempt, line)
+            self.assertIn("(HTTP 503)", line)
+        detail = nightly_watch.evaluate(readings).detail
+        self.assertNotIn("attempt 1 of", detail)
+        self.assertNotIn("retrying", detail)
+
+    def _watch(self, repos, failing):
+        """One `main(["watch", …])` — the job's own path — over `repos`, with
+        gh answering through `_GhCli`. Returns the readings and the gh."""
+        gh = _GhCli(repos, failing)
+        seen = {}
+        real = nightly_watch.collect
+
+        def spy(api, **kw):
+            seen["readings"] = real(api, **kw)
+            return seen["readings"]
+
+        roster = {name.split("/")[-1]: name for name in repos}
+        with mock.patch.object(nightly_watch, "roster", lambda *a: roster), \
+                mock.patch.object(nightly_watch, "collect", spy), \
+                mock.patch.object(nightly_watch, "gh_read", gh), \
+                mock.patch.dict(os.environ, {"GITHUB_OUTPUT": ""}), \
+                mock.patch("sys.stdout"), mock.patch("sys.stderr"):
+            nightly_watch.main(["watch", "--owner", "dreadnought-foundry",
+                                "--now", NOW])
+        return _states(seen["readings"]), gh
+
+    def _two_repos(self):
+        return {
+            f"dreadnought-foundry/{name}": FakeRepo(
+                workflows={".github/workflows/ci.yml": ("CI", NIGHTLY_CI)},
+                runs={"ci.yml": run_record(hours_ago=2)})
+            for name in ("alpha", "beta")
+        }
+
+    def test_one_run_spends_at_most_two_retry_waits(self):
+        """alpha's file 5xxs on every attempt and spends the run's two waits;
+        beta's 5xx later in the SAME run is attempted once and is UNKNOWN. The
+        next run — a fresh `watch` — gets its two waits back."""
+        self.assertEqual(nightly_watch.SERVER_ERROR_RETRIES_PER_RUN, 2)
+        always = lambda path, attempt: "/contents/" in path  # noqa: E731
+        for run in ("first", "next"):
+            with self.subTest(run=run):
+                states, gh = self._watch(self._two_repos(), always)
+                self.assertEqual(states, {
+                    "dreadnought-foundry/alpha · CI": nightly_watch.UNKNOWN,
+                    "dreadnought-foundry/beta · CI": nightly_watch.UNKNOWN,
+                })
+                self.assertEqual(gh.attempts("alpha/contents/"),
+                                 gh_read_retry.ATTEMPTS)
+                self.assertEqual(gh.attempts("beta/contents/"), 1)
+
+    def test_a_partly_spent_budget_still_retries_what_is_left(self):
+        """alpha's file 5xxs once and then answers (one wait, OK); beta's
+        5xxs every time and gets the one wait that is left: two attempts,
+        then UNKNOWN."""
+        def failing(path, attempt):
+            if "alpha/contents/" in path:
+                return attempt == 1
+            return "beta/contents/" in path
+        states, gh = self._watch(self._two_repos(), failing)
+        self.assertEqual(states, {
+            "dreadnought-foundry/alpha · CI": nightly_watch.OK,
+            "dreadnought-foundry/beta · CI": nightly_watch.UNKNOWN,
+        })
+        self.assertEqual(gh.attempts("alpha/contents/"), 2)
+        self.assertEqual(gh.attempts("beta/contents/"), 2)
+
+    def test_every_watcher_read_retries_a_5xx(self):
+        """The repo, the workflow list, the workflow file, the run listing and
+        the last-changed commit all go through `_gh_api`, and a 5xx on the
+        first attempt of any of them is read again and answers."""
+        cases = {
+            "repo": (lambda p: p == f"repos/{self.PORTICO}", {}),
+            "workflow list": (lambda p: "/actions/workflows?" in p, {}),
+            "workflow file": (lambda p: "/contents/" in p, {}),
+            "run listing": (lambda p: "/runs?" in p, {}),
+            "last-changed commit": (lambda p: "/commits?" in p, {"runs": {}}),
+        }
+        for name, (where, extra) in cases.items():
+            with self.subTest(read=name):
+                repo = {"workflows": {".github/workflows/ci.yml":
+                                      ("CI", NIGHTLY_CI)},
+                        "runs": {"ci.yml": run_record(hours_ago=2)}}
+                repo.update(extra)
+                states, gh = self._watch(
+                    {self.PORTICO: FakeRepo(**repo)},
+                    lambda p, attempt, w=where: w(p) and attempt == 1)
+                self.assertNotIn(nightly_watch.UNKNOWN, states.values())
+                self.assertTrue(any(gh.calls.count(p) == 2 and where(p)
+                                    for p in gh.calls), gh.calls)
+
+    def test_the_docstring_and_the_workflow_say_a_server_error_is_retried(self):
+        self.assertIn("A SERVER ERROR IS RETRIED, BRIEFLY", nightly_watch.__doc__)
+        text = WATCH_WORKFLOW.read_text()
+        q4 = text[text.index("#   Q4"):text.index("#   Q5")]
+        self.assertNotIn("A refusal is never retried past", q4)
+        self.assertIn("server error", q4)
 
 
 # --------------------------------------------------------------------------- #
