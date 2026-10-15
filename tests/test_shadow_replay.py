@@ -776,7 +776,8 @@ class CompareTest(unittest.TestCase):
         self.assertIn("Ran with no `rules_ref`, so by today's rules: 5 of 5 replays.", md)
 
     def test_an_empty_recorded_model_is_none(self):
-        self.assertTrue(self._run(recorded_model="")[-1].endswith("recorded_model=none"))
+        summary = next(ln for ln in self._run(recorded_model="") if " matched " in ln)
+        self.assertTrue(summary.endswith("recorded_model=none"))
 
     def test_the_percentage_rounds_down(self):
         self.assertEqual(
