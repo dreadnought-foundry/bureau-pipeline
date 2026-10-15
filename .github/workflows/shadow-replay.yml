@@ -43,7 +43,9 @@
 #      `secrets: inherit` hands the reusables the same keys a live review
 #      holds. `pick` uses LINEAR_API_KEY to read comments and this run's own
 #      token to read commits and pull requests, bureau-pipeline `main`'s
-#      commit list included.
+#      commit list included — and, since DRE-7304, the verifier stub's runs
+#      and job logs and an earlier run's `shadow-replay-pick` artifact, on
+#      the `actions: read` grant below.
 #   Q3 re-run — re-running failed jobs replays only the failed pull requests
 #      and compares again. Nothing is posted, so there is no receipt a re-run
 #      could trip over.
