@@ -17,6 +17,10 @@
 #            newest bureau-pipeline `main` commit at or before its recorded
 #            verdict (DRE-7280), so the critic replays by the rules of that
 #            day; one it cannot read is replayed by today's rules, and named.
+#            `unknown_builder` picks the reviews run while the build's model
+#            could not be read, the acted-on rejections first (DRE-7304);
+#            `from_run` replays exactly the acted-on records of an earlier
+#            run's pick, the Opus control.
 #   replay   a matrix over the pick, four at a time so a batch does not drain
 #            the subscription in one burst. `uses:` cannot be an expression,
 #            so the replay is two jobs, one per reusable, and `reviewer`
@@ -79,6 +83,26 @@ on:
           with `recorded` none when it has no verdict.
         type: string
         default: ''
+      unknown_builder:
+        description: >-
+          Pick the reviews run while the build's model could not be read
+          (DRE-7304) — the critic's off the card copies, the verifier's off
+          the runs of `verify_workflow`. An empty `recorded_model` then means
+          claude-opus-5-5.
+        type: boolean
+        default: false
+      verify_workflow:
+        description: >-
+          The verifier stub's workflow file whose runs the verifier's
+          `unknown_builder` pick reads.
+        type: string
+        default: ''
+      from_run:
+        description: >-
+          A Shadow Replay run id: replay exactly the acted-on records of its
+          pick (the Opus control), at the same heads and under the same rules.
+        type: string
+        default: ''
 
 # Its own group, never a pull request's: a replay can never cancel, or be
 # cancelled by, a live review.
@@ -114,6 +138,17 @@ jobs:
           requirements: |
             requirements-dev.txt
 
+      # The Opus control (DRE-7304): the earlier run's own records file, so
+      # the control replays the very (pull request, sha) records it did.
+      - name: Download the earlier run's pick
+        if: inputs.from_run != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          FROM_RUN: ${{ inputs.from_run }}
+        run: |
+          gh run download "$FROM_RUN" --repo "$GITHUB_REPOSITORY" -n shadow-replay-pick \
+            -D "$RUNNER_TEMP/from-pick"
+
       - name: Pick the reviews to replay
         id: pick
         env:
@@ -123,12 +158,21 @@ jobs:
           RECORDED_MODEL: ${{ inputs.recorded_model }}
           COUNT: ${{ inputs.count }}
           PRS: ${{ inputs.prs }}
+          UNKNOWN_BUILDER: ${{ inputs.unknown_builder }}
+          VERIFY_WORKFLOW: ${{ inputs.verify_workflow }}
+          FROM_RUN: ${{ inputs.from_run }}
         run: |
+          FLAGS=()
+          if [ "$UNKNOWN_BUILDER" = "true" ]; then FLAGS+=(--unknown-builder); fi
+          if [ -n "$FROM_RUN" ]; then
+            FLAGS+=(--from-pick "$RUNNER_TEMP/from-pick/shadow-replay-pick.json" --acted-on-only)
+          fi
           python3 scripts/shadow_replay.py pick \
             --reviewer "$REVIEWER" --recorded-model "$RECORDED_MODEL" \
             --count "$COUNT" --prs "$PRS" --repo "$GITHUB_REPOSITORY" \
             --out "$RUNNER_TEMP/shadow-replay-pick/shadow-replay-pick.json" \
-            --github-output "$GITHUB_OUTPUT"
+            --github-output "$GITHUB_OUTPUT" \
+            --verify-workflow "$VERIFY_WORKFLOW" "${FLAGS[@]}"
 
       # The full records, with each recorded verdict's first line, for the
       # compare job's report; the matrix carries only {pr, sha, recorded,
