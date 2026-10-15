@@ -591,22 +591,24 @@ _WRITE_FLAGS = {"-X", "--method", "-f", "-F", "--field", "--raw-field", "--input
 
 
 def test_compare_makes_no_write(tmp_path, monkeypatch):
-    for name, fn in inspect.getmembers(linear_ops, inspect.isfunction):
-        if fn.__module__ == linear_ops.__name__ and name != "gql":
-            def refuse(*_a, _name=name, **_k):
-                raise AssertionError(f"compare called linear_ops.{_name}")
-            monkeypatch.setattr(linear_ops, name, refuse)
     world = World()
     three_cards(world)
     fake = FakeLinear({c: ("Done", []) for c in ("DRE-101", "DRE-102", "DRE-103")})
-    monkeypatch.setattr(linear_ops, "gql", fake)
-    code, _ = run(world, "--linear-check", out_dir=tmp_path)
+    # Scoped to the body, so conftest's own resets of the seam run unpatched.
+    with monkeypatch.context() as patch:
+        for name, fn in inspect.getmembers(linear_ops, inspect.isfunction):
+            if fn.__module__ == linear_ops.__name__ and name != "gql":
+                def refuse(*_a, _name=name, **_k):
+                    raise AssertionError(f"compare called linear_ops.{_name}")
+                patch.setattr(linear_ops, name, refuse)
+        patch.setattr(linear_ops, "gql", fake)
+        code, _ = run(world, "--linear-check", out_dir=tmp_path)
     assert code == 0
     assert world.calls, "GitHub was read"
     for call in world.calls:
         assert call[0] == "api", call
         assert not _WRITE_FLAGS & set(call), call
-    assert all("mutation" not in q for q, _ in fake.calls)
+    assert fake.calls and all("mutation" not in q for q, _ in fake.calls)
 
 
 # --------------------------------------------------------------------------- #
