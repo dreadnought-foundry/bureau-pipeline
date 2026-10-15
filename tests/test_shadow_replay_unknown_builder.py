@@ -396,6 +396,18 @@ class CriticUnknownBuilderPickTest(unittest.TestCase):
                          "the rules are dated by the picked rejection's own copy")
         self.assertIn("pr=501 rules_ref unreadable", err)
 
+    def test_a_card_copy_made_after_the_fix_push_is_still_acted_on(self):
+        """The copy is dated after the worker pushed, so acted_on reads from
+        the rejection's own time on the pull request, not the copy's."""
+        self.comments = [node(card_copy("REQUEST_CHANGES", _sha(71)), _at(5, 12))]
+        self.commits = {_sha(71): [507]}
+        self.pr_comments = {"507": [critic_verdict("REQUEST_CHANGES", _sha(71), _at(5, 10)),
+                                    fix_push(1, _at(5, 11))]}
+        got, err = self._pick(1)
+        self.assertEqual([(507, _sha(71), True)],
+                         [(r["pr"], r["sha"], r["acted_on"]) for r in got])
+        self.assertIn("pick: acted-on rejections 1 of 1", err)
+
     def test_the_cli_defaults_an_empty_recorded_model_and_writes_acted_on(self):
         seen = {}
 
@@ -525,6 +537,58 @@ class VerifierUnknownBuilderPickTest(unittest.TestCase):
                 "--prs", "", "--repo", REPO, "--out", str(pick))
         self.assertEqual(1, code)
         self.assertIn("verify_workflow", out + err)
+
+
+class UnreadableLogsInARowTest(unittest.TestCase):
+    """Runs 1001 onward, newest first, each on its own pull request (700 +
+    the run's place). A run whose id has no log in `logs` fails `gh run
+    view`; the last run is on the model with the clause, with its verdict."""
+
+    def _pick(self, logs: dict, total: int):
+        good = 1000 + total
+        runs = {VERIFY_WF: [run(1000 + i, 700 + i, _at(2), _at(2, 1), _sha(700 + i))
+                            for i in range(1, total)]
+                + [run(good, 700 + total, _at(1), _at(1, 1), _sha(700 + total))]}
+        logs = {**logs, good: job_log(_opus())}
+        comments = {str(700 + total): [
+            verifier_verdict("FAIL", _sha(700 + total), "2026-10-01T00:30:00Z")]}
+        err = io.StringIO()
+        with FakeGh(runs=runs, logs=logs, comments=comments) as gh, redirect_stderr(err):
+            try:
+                got = _sr().pick_unknown_builder_verifier(
+                    recorded_model=_opus(), count=1, repo=REPO, workflow=VERIFY_WF)
+            except _sr().PickError as exc:
+                got = exc
+            finally:
+                self.calls = gh.calls()
+        return got, err.getvalue()
+
+    def _log_reads(self) -> list:
+        return [int(c.split()[2]) for c in self.calls if c.startswith("run view ")]
+
+    def test_twenty_unreadable_logs_in_a_row_stop_the_listing(self):
+        self.assertEqual(20, _sr().UNREADABLE_LOGS_IN_A_ROW)
+        got, err = self._pick({}, 21)
+        self.assertIsInstance(got, _sr().PickError)
+        self.assertIn("found 0", str(got))
+        self.assertIn("pick: 20 run logs in a row could not be read", err)
+        self.assertIn("the listing stops here", err)
+        self.assertEqual(list(range(1001, 1021)), self._log_reads(),
+                         "the run past the twentieth unreadable log is never read")
+
+    def test_a_readable_log_between_resets_the_count(self):
+        got, err = self._pick({1020: job_log(_opus(), unknown=False)}, 40)
+        self.assertNotIsInstance(got, _sr().PickError, err)
+        self.assertEqual([740], [r["pr"] for r in got])
+        self.assertNotIn("the listing stops here", err)
+        self.assertEqual(list(range(1001, 1041)), self._log_reads())
+
+    def test_an_unreadable_log_is_not_claimed_expired(self):
+        """Any failing `gh run view` lands here — a rate limit as much as an
+        expired log — so the skip names the failure without guessing why."""
+        _, err = self._pick({}, 2)
+        skipped = [ln for ln in err.splitlines() if ln.startswith("pick: run 1001 skipped")]
+        self.assertEqual(["pick: run 1001 skipped — its log could not be read"], skipped, err)
 
 
 # --------------------------------------------------------------------------- #
