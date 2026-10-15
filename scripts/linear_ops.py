@@ -1032,6 +1032,9 @@ def api_key(*, env=None, run=None) -> str:
 READ_ONLY_ENV = "BUREAU_LINEAR_READ_ONLY"
 
 _GRAPHQL_NAME = re.compile(r"[_A-Za-z][_0-9A-Za-z]*")
+# GraphQL ends a line at `\n`, `\r\n` or a lone `\r`: a comment or a string
+# that stopped only at `\n` would swallow a mutation after a lone `\r`.
+_GRAPHQL_LINE_END = re.compile(r"[\r\n]")
 
 
 def _mutation_field(document: str) -> str | None:
@@ -1045,6 +1048,10 @@ def _mutation_field(document: str) -> str | None:
     definition at the top level counts. So a field named `mutation` inside a
     query, or the word in a comment or a string, is not a write, while a named
     mutation, an aliased field, or a mutation after a fragment or a query is.
+
+    It is a best-effort reader of GraphQL, not a parser and not a proof: a
+    document it cannot read as a mutation is sent. Its cases are the ones in
+    `tests/test_linear_read_only.py`.
     """
     depth = parens = 0
     at_definition = True
@@ -1053,8 +1060,8 @@ def _mutation_field(document: str) -> str | None:
     while i < n:
         c = document[i]
         if c == "#":
-            end = document.find("\n", i)
-            i = n if end < 0 else end + 1
+            end = _GRAPHQL_LINE_END.search(document, i)
+            i = n if end is None else end.end()
             continue
         if c == '"':
             if document.startswith('"""', i):
@@ -1070,8 +1077,9 @@ def _mutation_field(document: str) -> str | None:
                     j = end + 3
                 continue
             j = i + 1
-            while j < n and document[j] not in '"\n':
-                j += 2 if document[j] == "\\" else 1
+            while j < n and document[j] not in '"\r\n':
+                escaped = document[j] == "\\" and document[j + 1:j + 2] not in ("\r", "\n")
+                j += 2 if escaped else 1
             i = j + 1
             continue
         if c == "(":
