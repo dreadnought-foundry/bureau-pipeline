@@ -214,6 +214,61 @@
           "caution": "Fable 5.1 costs more than Opus 5.5: $10/$50 against $4/$20 per million tokens."
         }
       ]
+    },
+    {
+      "key": "proof",
+      "label": "Proof",
+      "purpose": "Run a proof card's checks and record what it saw.",
+      "default_model": "claude-opus-5-5",
+      "fallbacks": [
+        "claude-opus-5",
+        "claude-sonnet-5-5",
+        "claude-sonnet-5"
+      ],
+      "choices": [
+        {
+          "model": "claude-opus-5-5",
+          "allowed": true,
+          "reason": null,
+          "caution": null
+        },
+        {
+          "model": "claude-opus-5",
+          "allowed": true,
+          "reason": null,
+          "caution": "Opus 5 costs more than Opus 5.5: $5/$25 against $4/$20 per million tokens."
+        },
+        {
+          "model": "claude-sonnet-5-5",
+          "allowed": true,
+          "reason": null,
+          "caution": null
+        },
+        {
+          "model": "claude-sonnet-5",
+          "allowed": true,
+          "reason": null,
+          "caution": null
+        },
+        {
+          "model": "claude-haiku-5-5",
+          "allowed": true,
+          "reason": null,
+          "caution": "Haiku 5.5 is a model we set aside; choosing it brings it back for Proof at $0.10/$0.50 per million tokens, against Opus 5.5 at $4/$20."
+        },
+        {
+          "model": "claude-sonnet-4-6",
+          "allowed": true,
+          "reason": null,
+          "caution": null
+        },
+        {
+          "model": "claude-fable-5-1",
+          "allowed": true,
+          "reason": null,
+          "caution": "Fable 5.1 costs more than Opus 5.5: $10/$50 against $4/$20 per million tokens."
+        }
+      ]
     }
   ],
   "add_group": {
@@ -237,6 +292,11 @@
           "group": "judgement",
           "allowed": false,
           "reason": "Move engineer from the Builders group into the Planners group — refused, because only the planner may be in the Planners group — the planner runs once per plan, while engineer runs far more often, which would put many more runs on the most expensive model."
+        },
+        {
+          "group": "proof",
+          "allowed": true,
+          "reason": null
         }
       ]
     },
@@ -256,6 +316,11 @@
           "group": "judgement",
           "allowed": false,
           "reason": "Move frontend from the Builders group into the Planners group — refused, because only the planner may be in the Planners group — the planner runs once per plan, while frontend runs far more often, which would put many more runs on the most expensive model."
+        },
+        {
+          "group": "proof",
+          "allowed": true,
+          "reason": null
         }
       ]
     },
@@ -275,6 +340,11 @@
           "group": "judgement",
           "allowed": false,
           "reason": "Move database-architect from the Builders group into the Planners group — refused, because only the planner may be in the Planners group — the planner runs once per plan, while database-architect runs far more often, which would put many more runs on the most expensive model."
+        },
+        {
+          "group": "proof",
+          "allowed": true,
+          "reason": null
         }
       ]
     },
@@ -294,6 +364,11 @@
           "group": "judgement",
           "allowed": false,
           "reason": "Move devops from the Builders group into the Planners group — refused, because only the planner may be in the Planners group — the planner runs once per plan, while devops runs far more often, which would put many more runs on the most expensive model."
+        },
+        {
+          "group": "proof",
+          "allowed": true,
+          "reason": null
         }
       ]
     },
@@ -313,6 +388,11 @@
           "group": "judgement",
           "allowed": false,
           "reason": "Move fixer from the Builders group into the Planners group — refused, because only the planner may be in the Planners group — the planner runs once per plan, while fixer runs far more often, which would put many more runs on the most expensive model."
+        },
+        {
+          "group": "proof",
+          "allowed": true,
+          "reason": null
         }
       ]
     },
@@ -332,6 +412,11 @@
           "group": "judgement",
           "allowed": false,
           "reason": "Move repairer from the Builders group into the Planners group — refused, because only the planner may be in the Planners group — the planner runs once per plan, while repairer runs far more often, which would put many more runs on the most expensive model."
+        },
+        {
+          "group": "proof",
+          "allowed": true,
+          "reason": null
         }
       ]
     },
@@ -339,9 +424,14 @@
       "name": "proof",
       "label": "Proof",
       "about": "Runs a proof card's checks and records what it saw",
-      "group": "workhorse",
+      "group": "proof",
       "runs_in": "pipeline",
       "moves": [
+        {
+          "group": "workhorse",
+          "allowed": true,
+          "reason": null
+        },
         {
           "group": "advisory",
           "allowed": true,
@@ -350,7 +440,7 @@
         {
           "group": "judgement",
           "allowed": false,
-          "reason": "Move proof from the Builders group into the Planners group — refused, because only the planner may be in the Planners group — the planner runs once per plan, while proof runs far more often, which would put many more runs on the most expensive model."
+          "reason": "Move proof from the Proof group into the Planners group — refused, because only the planner may be in the Planners group — the planner runs once per plan, while proof runs far more often, which would put many more runs on the most expensive model."
         }
       ]
     },
@@ -368,6 +458,11 @@
         },
         {
           "group": "advisory",
+          "allowed": true,
+          "reason": null
+        },
+        {
+          "group": "proof",
           "allowed": true,
           "reason": null
         }
@@ -389,6 +484,11 @@
           "group": "judgement",
           "allowed": false,
           "reason": "Move critic from the Reviewers group into the Planners group — refused, because critic must stay in the Reviewers group — it checks work before it merges, and no person reads the change. Move critic from the Reviewers group into the Planners group — refused, because only the planner may be in the Planners group — the planner runs once per plan, while critic runs far more often, which would put many more runs on the most expensive model."
+        },
+        {
+          "group": "proof",
+          "allowed": false,
+          "reason": "Move critic from the Reviewers group into the Proof group — refused, because critic must stay in the Reviewers group — it checks work before it merges, and no person reads the change."
         }
       ]
     },
@@ -408,6 +508,11 @@
           "group": "judgement",
           "allowed": false,
           "reason": "Move verifier from the Reviewers group into the Planners group — refused, because verifier must stay in the Reviewers group — it checks work before it merges, and no person reads the change. Move verifier from the Reviewers group into the Planners group — refused, because only the planner may be in the Planners group — the planner runs once per plan, while verifier runs far more often, which would put many more runs on the most expensive model."
+        },
+        {
+          "group": "proof",
+          "allowed": false,
+          "reason": "Move verifier from the Reviewers group into the Proof group — refused, because verifier must stay in the Reviewers group — it checks work before it merges, and no person reads the change."
         }
       ]
     },
@@ -427,6 +532,11 @@
           "group": "judgement",
           "allowed": false,
           "reason": "Move medic from the Reviewers group into the Planners group — refused, because only the planner may be in the Planners group — the planner runs once per plan, while medic runs far more often, which would put many more runs on the most expensive model."
+        },
+        {
+          "group": "proof",
+          "allowed": true,
+          "reason": null
         }
       ]
     },
@@ -446,6 +556,11 @@
           "group": "judgement",
           "allowed": false,
           "reason": "Move plan-critic-pre from the Reviewers group into the Planners group — refused, because only the planner may be in the Planners group — the planner runs once per plan, while plan-critic-pre runs far more often, which would put many more runs on the most expensive model."
+        },
+        {
+          "group": "proof",
+          "allowed": true,
+          "reason": null
         }
       ]
     },
@@ -465,6 +580,11 @@
           "group": "judgement",
           "allowed": false,
           "reason": "Move plan-critic-post from the Reviewers group into the Planners group — refused, because only the planner may be in the Planners group — the planner runs once per plan, while plan-critic-post runs far more often, which would put many more runs on the most expensive model."
+        },
+        {
+          "group": "proof",
+          "allowed": true,
+          "reason": null
         }
       ]
     },
@@ -482,6 +602,11 @@
         },
         {
           "group": "judgement",
+          "allowed": true,
+          "reason": null
+        },
+        {
+          "group": "proof",
           "allowed": true,
           "reason": null
         }
@@ -503,6 +628,11 @@
           "group": "judgement",
           "allowed": true,
           "reason": null
+        },
+        {
+          "group": "proof",
+          "allowed": true,
+          "reason": null
         }
       ]
     },
@@ -520,6 +650,11 @@
         },
         {
           "group": "judgement",
+          "allowed": true,
+          "reason": null
+        },
+        {
+          "group": "proof",
           "allowed": true,
           "reason": null
         }
@@ -541,6 +676,11 @@
           "group": "judgement",
           "allowed": true,
           "reason": null
+        },
+        {
+          "group": "proof",
+          "allowed": true,
+          "reason": null
         }
       ]
     },
@@ -558,6 +698,11 @@
         },
         {
           "group": "advisory",
+          "allowed": true,
+          "reason": null
+        },
+        {
+          "group": "proof",
           "allowed": true,
           "reason": null
         }
