@@ -13,7 +13,10 @@
 #            critic reviews recorded on `recorded_model` (read off the
 #            critic's copies on this repo's Linear cards), or the pull
 #            requests `prs` lists. Fewer than `count` fails the run, naming
-#            how many were found.
+#            how many were found. Each critic record names `rules_ref`, the
+#            newest bureau-pipeline `main` commit at or before its recorded
+#            verdict (DRE-7280), so the critic replays by the rules of that
+#            day; one it cannot read is replayed by today's rules, and named.
 #   replay   a matrix over the pick, four at a time so a batch does not drain
 #            the subscription in one burst. `uses:` cannot be an expression,
 #            so the replay is two jobs, one per reusable, and `reviewer`
@@ -35,7 +38,8 @@
 #   Q2 secrets — a dispatched run reads the repo's normal secrets store, and
 #      `secrets: inherit` hands the reusables the same keys a live review
 #      holds. `pick` uses LINEAR_API_KEY to read comments and this run's own
-#      token to read commits and pull requests.
+#      token to read commits and pull requests, bureau-pipeline `main`'s
+#      commit list included.
 #   Q3 re-run — re-running failed jobs replays only the failed pull requests
 #      and compares again. Nothing is posted, so there is no receipt a re-run
 #      could trip over.
@@ -127,7 +131,8 @@ jobs:
             --github-output "$GITHUB_OUTPUT"
 
       # The full records, with each recorded verdict's first line, for the
-      # compare job's report; the matrix carries only {pr, sha, recorded}.
+      # compare job's report; the matrix carries only {pr, sha, recorded,
+      # rules_ref}.
       - name: Upload the pick
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
@@ -146,12 +151,16 @@ jobs:
       matrix:
         replay: ${{ fromJSON(needs.pick.outputs.matrix) }}
     uses: dreadnought-foundry/bureau-pipeline/.github/workflows/qa-review.yml@main
+    # The harness is today's (`pipeline_ref: main`); the rules it judges by
+    # are the ones in force when the recorded verdict was written (DRE-7280).
+    # An empty `rules_ref` replays by today's rules, and the report counts it.
     with:
       pipeline_ref: main
       model: ${{ inputs.model }}
       shadow: true
       replay_pr: ${{ format('{0}', matrix.replay.pr) }}
       replay_sha: ${{ matrix.replay.sha }}
+      rules_ref: ${{ matrix.replay.rules_ref }}
     secrets: inherit
 
   replay-verifier:
