@@ -654,11 +654,12 @@ def test_push_writes_one_ref_with_the_record_and_the_sidecar(checkout):
     (work / "docs" / "proofs" / "dre-1234-proof.md").write_text("# record\n")
     (work / "docs" / "old.md").write_text("changed, not new\n")
     (work / "scratch.txt").write_text("not a record\n")
-    assert ps.push(**push_args(), cwd=work) == 0
+    args = push_args()
+    assert ps.push(**args, cwd=work) == 0
     branch = "proof-shadow/DRE-1234-38638006167"
     assert refs(remote) == ["refs/heads/main", f"refs/heads/{branch}"]
     sidecar = json.loads(git(remote, "show", f"{branch}:proof-shadow.json"))
-    assert sidecar == {"card": "DRE-1234", "model": "claude-sonnet-5-5",
+    assert sidecar == {"card": "DRE-1234", "model": args["model"],
                        "run_url": f"{SHADOW_RUN}38638006167",
                        "dispatched_at": "2026-10-20T18:00:00Z",
                        "record_path": "docs/proofs/dre-1234-proof.md"}
