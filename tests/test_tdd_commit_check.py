@@ -376,6 +376,61 @@ class ClassifyPathTest(unittest.TestCase):
             with self.subTest(path=path):
                 self.assertEqual(check_tdd_commits.classify_path(path), "code")
 
+    # --- plain-text evidence under architecture/ (DRE-7330) ----------------
+    #
+    # agent-bureau #3652 (DRE-5830's proof record, the Sunday edition) failed on
+    # a commit adding only `architecture/proofs/sunday-edition.md`, its `.html`
+    # and `sunday-edition-2026-10-11.txt` — the first Sunday's actual email,
+    # saved as evidence. `.txt` was not a record format, so the commit was
+    # `[code,docs]` and the gate demanded a RED test for a saved email. #3675
+    # (DRE-6123) failed the same way on a `.txt` report. A plain-text capture
+    # under `architecture/` is evidence the way a screenshot is, so `.txt` and
+    # `.log` are records there — and only there.
+
+    def test_plain_text_evidence_under_architecture_is_docs(self):
+        for path in (
+            "architecture/proofs/x-capture.txt",
+            "architecture/forensics/run.log",
+            "architecture/proofs/X-CAPTURE.TXT",
+            # The exact paths that stranded #3652 and #3675.
+            "architecture/proofs/sunday-edition-2026-10-11.txt",
+            "architecture/proofs/linear-parity-full-scope-report.txt",
+        ):
+            with self.subTest(path=path):
+                self.assertEqual(check_tdd_commits.classify_path(path), "docs")
+
+    def test_a_proof_record_with_its_text_capture_is_a_docs_commit(self):
+        self.assertEqual(
+            check_tdd_commits.commit_categories(commit(
+                ["architecture/proofs/x.md", "architecture/proofs/x-capture.txt"],
+                "docs: proof record and its capture",
+            )),
+            {"docs"},
+        )
+
+    def test_plain_text_under_the_design_folders_stays_code(self):
+        # The design folders sit beside application builds; DRE-7330 moved
+        # text under `architecture/` only.
+        for path in (
+            "design/notes.txt",
+            "console/design/build.log",
+            "console/design/specs/web-sign-up.txt",
+        ):
+            with self.subTest(path=path):
+                self.assertEqual(check_tdd_commits.classify_path(path), "code")
+
+    def test_plain_text_outside_architecture_stays_code(self):
+        # The limits of DRE-7330, pinned: the prefix and the extension both
+        # still decide, and a nested `architecture/` is part of the app.
+        for path in (
+            "scripts/notes.txt",
+            "requirements.txt",
+            "architecture/proofs/tool.py",
+            "web/src/architecture/capture.txt",
+        ):
+            with self.subTest(path=path):
+                self.assertEqual(check_tdd_commits.classify_path(path), "code")
+
     def test_the_existing_docs_rules_are_unchanged(self):
         self.assertEqual(check_tdd_commits.classify_path("docs/runbook.html"), "docs")
         self.assertEqual(check_tdd_commits.classify_path("docs/self-hosting.md"), "docs")
@@ -513,6 +568,17 @@ class CheckCommitsTest(unittest.TestCase):
         self.assertEqual(
             reason, "exempt: no non-test code changed (docs/ops/tests only)"
         )
+
+    def test_a_proof_record_with_its_saved_email_passes(self):
+        # agent-bureau #3652's commit 9ea9082 (DRE-7330), path for path.
+        ok, reason = check_tdd_commits.check_commits([
+            commit([
+                "architecture/proofs/sunday-edition.md",
+                "architecture/proofs/sunday-edition-2026-10-11.html",
+                "architecture/proofs/sunday-edition-2026-10-11.txt",
+            ], "docs(DRE-5830): the Sunday edition proof record"),
+        ])
+        self.assertTrue(ok, reason)
 
     def test_source_under_architecture_still_needs_a_test(self):
         ok, reason = check_tdd_commits.check_commits([
