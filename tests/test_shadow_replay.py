@@ -11,7 +11,7 @@ DRE-7187, DRE-7188, DRE-7189) read their bars with it afterwards.
 
 What this file pins:
 
-* the workflow: `workflow_dispatch` only, its five inputs, the two reusables
+* the workflow: `workflow_dispatch` only, its eight inputs, the two reusables
   at `@main` with `shadow: true` and the replay inputs, a `permissions:`
   block of exactly four grants, and a concurrency group that never names a
   pull request;
@@ -208,9 +208,12 @@ class WorkflowShapeTest(unittest.TestCase):
         self.assertEqual("Shadow Replay", self.doc["name"])
         self.assertEqual(["workflow_dispatch"], list(_on(self.doc)))
 
-    def test_the_five_inputs(self):
+    def test_the_eight_inputs(self):
+        """The five of DRE-7197, then DRE-7304's three, which
+        `tests/test_shadow_replay_unknown_builder.py` pins."""
         inputs = _on(self.doc)["workflow_dispatch"]["inputs"]
-        self.assertEqual(["reviewer", "model", "recorded_model", "count", "prs"],
+        self.assertEqual(["reviewer", "model", "recorded_model", "count", "prs",
+                          "unknown_builder", "verify_workflow", "from_run"],
                          list(inputs))
         self.assertEqual("critic", inputs["reviewer"]["default"])
         self.assertEqual(["critic", "verifier"], inputs["reviewer"]["options"])
@@ -730,6 +733,9 @@ class CompareTest(unittest.TestCase):
             f"shadow-replay: pr=5 sha={_sha(5)} recorded=none replayed=APPROVE match=n/a",
             f"shadow-replay: matched 1 of 4 (25%) reviewer=critic model={MODEL} "
             f"recorded_model={OTHER_MODEL}",
+            # DRE-7304's bar, after today's lines; no record here is acted on.
+            "shadow-replay: acted-on rejections 0 of 0 rejected again (0%) "
+            f"reviewer=critic model={MODEL}",
         ], self._run())
 
     def test_the_lines_are_unchanged_by_rules_ref(self):
@@ -770,7 +776,8 @@ class CompareTest(unittest.TestCase):
         self.assertIn("Ran with no `rules_ref`, so by today's rules: 5 of 5 replays.", md)
 
     def test_an_empty_recorded_model_is_none(self):
-        self.assertTrue(self._run(recorded_model="")[-1].endswith("recorded_model=none"))
+        summary = next(ln for ln in self._run(recorded_model="") if " matched " in ln)
+        self.assertTrue(summary.endswith("recorded_model=none"))
 
     def test_the_percentage_rounds_down(self):
         self.assertEqual(
