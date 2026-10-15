@@ -278,12 +278,12 @@ _DESIGN_RECORD_SUFFIXES = (
     ".html", ".md", ".png", ".jpg", ".jpeg", ".svg", ".pen", ".json",
 )
 # Plain-text evidence is a record under a root `architecture/` ONLY (DRE-7330).
-# dreadnought-foundry/agent-bureau#3652, DRE-5830's proof record, failed on a commit adding a
-# `.md`, an `.html` and `sunday-edition-2026-10-11.txt` — the first Sunday's
-# actual email, saved as evidence — because `.txt` was not a record format;
-# #3675 failed the same way on a `.txt` report. An email body, a log excerpt or
-# a command's output saved beside a proof record is evidence the way a
-# screenshot is. The design folders do not take these: they sit beside
+# dreadnought-foundry/agent-bureau#3652, DRE-5830's proof record, failed on a
+# commit adding a `.md`, an `.html` and `sunday-edition-2026-10-11.txt` — the
+# first Sunday's actual email, saved as evidence — because `.txt` was not a
+# record format; #3675 failed the same way on a `.txt` report. An email body, a
+# log excerpt or a command's output saved beside a proof record is evidence the
+# way a screenshot is. The design folders do not take these: they sit beside
 # application builds, so text there stays code, and so does text anywhere
 # outside `architecture/`.
 _ARCHITECTURE_RECORD_PREFIX = "architecture/"
