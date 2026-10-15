@@ -654,7 +654,7 @@ class TheBuildModelIsReadFromTheCardTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             path = Path(td) / "comments.json"
             path.write_text(
-                json.dumps([f"🧠 {fmf.attempt_marker(LOWER)} — devops agent"])
+                json.dumps([f"🧠 {fmf.attempt_marker(LOWER)} — devops agent starting."])
             )
             proc = subprocess.run(
                 [

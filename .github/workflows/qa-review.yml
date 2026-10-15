@@ -1551,11 +1551,18 @@ jobs:
       # workhorse one — and since 2026-09-28 `claude-sonnet-5-5` does too, above
       # it on both (DRE-5116) — so the critic can no longer assume its own ladder is
       # disjoint from the build path — the separation is bought HERE, per pull
-      # request. `build-model` reads the model this card's last attempt ran on
-      # out of its own `model-attempt:` heartbeat, and `--built-on` hands it to
-      # the ladder walk, which takes that rung off this run.
+      # request. `build-model` reads every model the card records as having
+      # built the change — each `model-attempt: <id> — <role> agent starting`
+      # line but the planner's, the fixer's among them, oldest first and
+      # comma-joined (DRE-7303) — and `--built-on` hands that list to the
+      # ladder walk, which takes every one of those rungs off this run. When
+      # they are every model on the critic's walk, `select` chooses no
+      # reviewer: it exits non-zero with one ::error:: line, which fails the
+      # step, and the pull request waits for a person.
       #
-      # A card we cannot read is `--built-on-unknown`, which bars every
+      # A thread with only fixer lines, or none, is no record of who built
+      # the change, so `build-model` prints nothing for it. That, and a card
+      # we cannot read, is `--built-on-unknown`, which bars every
       # declared overlap: absence of evidence that the build ran on something
       # else is not evidence that it did, and "never" has to survive a Linear
       # blip. The substitute is DATA (config/models.yaml `review_separation`),

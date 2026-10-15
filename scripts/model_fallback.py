@@ -1627,6 +1627,19 @@ _ERROR_MARKER_RE = re.compile(
 _ATTEMPT_MARKER_RE = re.compile(
     re.escape(MARKER_PREFIX) + r"\s*([a-z0-9.-]+)", re.IGNORECASE
 )
+# A BUILD line (DRE-7303): `🧠 model-attempt: <model-id> — <role> agent
+# starting`, then anything — the shape `agent-task.yml` posts. The id must be
+# followed by the dash, so `claude-opus-5-5[1m]` or the planning classifier's
+# `<asked> (asked) / … (answered)` receipt never matches; `build_models` then
+# drops the planner's lines and any id `attributable` refuses.
+_BUILD_LINE_RE = re.compile(
+    r"^🧠 " + re.escape(MARKER_PREFIX) + r" (\S+) — ([a-z][a-z0-9-]*) agent starting",
+    re.MULTILINE,
+)
+# The role whose line is no build line, and the build role that authors
+# nothing: a fixer's line counts as a builder only beside an authoring line.
+PLANNER_ROLE = "planner"
+FIXER_ROLE = "fixer"
 
 # Substrings that mean "this model is not available for us" even absent a clean
 # HTTP status (Anthropic's 404 body says "not_found_error" / "not available").
@@ -1923,6 +1936,39 @@ def fallback_for(role: str, model: str, repo: str | None = None) -> str | None:
     return walk[at + 1] if at + 1 < len(walk) else None
 
 
+def builders(built_on) -> list[str]:
+    """`built_on` as a list of distinct model ids, in the order given
+    (DRE-7303): one id, the CLI's comma-joined `<a>,<b>`, or any iterable of
+    ids. Blank entries drop out, and nothing at all is `[]`."""
+    if not built_on:
+        return []
+    items = built_on.split(",") if isinstance(built_on, str) else built_on
+    found = [m.strip() for m in items if isinstance(m, str) and m.strip()]
+    return list(dict.fromkeys(found))
+
+
+class NoReviewerLeft(Exception):
+    """Every rung on a reviewer's walk built the change (DRE-7303). Nothing
+    is chosen: the CLI prints this as one `::error::` line and exits
+    non-zero, which fails the Select model step and leaves the pull request
+    unmerged for a person to decide."""
+
+    def __init__(self, role: str, built_on: list[str]):
+        self.role = role
+        self.built_on = list(built_on)
+        super().__init__(
+            f"build/review separation: this change was built on "
+            f"{_and_list(self.built_on)}, which is every model on the {role}'s "
+            "walk, so no reviewer is chosen")
+
+
+def _and_list(ids: list[str]) -> str:
+    """`a`, `a and b`, `a, b and c`."""
+    if len(ids) < 2:
+        return "".join(ids)
+    return ", ".join(ids[:-1]) + f" and {ids[-1]}"
+
+
 def separated_walk(role: str, walk: list[str], built_on=None, built_on_unknown=False,
                    slug: str | None = None):
     """`(walk, separated)` — the walk a REVIEWER makes once the build/review
@@ -1933,16 +1979,21 @@ def separated_walk(role: str, walk: list[str], built_on=None, built_on_unknown=F
     first, then the fleet's Reviewers ladder — and `slug` names the project,
     so the unknown case below reads that project's build walk.
 
-    `built_on` is the model the pull request in front of this reviewer was
-    BUILT on, read off the card's own `model-attempt:` marker. It comes off
-    the walk and the next model leads, with no written rule needed: the
-    promise is that a pull request is never reviewed by the model that built
-    it. A declared rule that names `built_on`, and whose `reviewers_use` is on
-    what is left, says which model leads instead. A reviewer never falls back
-    onto the build model, even when every other model on its walk is
-    unavailable: `select_with_reasons` returns the walk's last model, the note
-    says the build model was skipped for separation, and the review fails
-    loudly until another model returns.
+    `built_on` is every model the card records as having BUILT the pull
+    request in front of this reviewer — one id, a comma-joined list, or a
+    list (`builders`, DRE-7303) — read off the card's own build lines
+    (`build_models`). Each comes off the walk and the next model leads, with
+    no written rule needed: the promise is that a pull request is never
+    reviewed by a model that built it. A declared rule that names a barred
+    model, and whose `reviewers_use` is on what is left, says which model
+    leads instead. A reviewer never falls back onto a build model, even when
+    every other model on its walk is unavailable: `select_with_reasons`
+    returns the walk's last model, the note says the build model was skipped
+    for separation, and the review fails loudly until another model returns.
+
+    When EVERY rung on the walk built the change, the walk that comes back
+    is empty and nothing is chosen (DRE-7303): `select_with_reasons` raises
+    `NoReviewerLeft`, where it once fell back to the unseparated walk.
 
     `built_on_unknown` fails CLOSED: a card we could not read is not evidence
     the build ran on something else, so every model on the walk that also
@@ -1968,13 +2019,12 @@ def separated_walk(role: str, walk: list[str], built_on=None, built_on_unknown=F
         barred = {m for m in walk[:-1] if m in builds}
         rules = {}
     else:
-        barred = {built_on} & set(walk) if built_on else set()
+        barred = set(builders(built_on)) & set(walk)
     if not barred:
         return list(walk), []
-    reordered, separated = _separate(list(walk), barred, rules)
-    # Defensive: a walk whose every rung is the build model has nothing left to
-    # review on. It must still not strand a dispatch.
-    return (reordered, separated) if reordered else (list(walk), [])
+    # A walk whose every rung built the change comes back empty: there is no
+    # reviewer to choose, and the caller says so rather than review on one.
+    return _separate(list(walk), barred, rules)
 
 
 def _kept_build_rung(walk: list[str], separated: list[str], built_on_unknown: bool,
@@ -2056,6 +2106,9 @@ def select_with_reasons(
     at; running the reviewer on a different model than the build did is the
     DESIGNED path, and a ::warning:: on every Sonnet-5 build would teach the
     fleet to ignore the warning that means a reviewer lost its model.
+    `built_on` may name several models (DRE-7303) and the decision carries
+    them, in the order given, as `built_on`. When they are every rung on the
+    walk, nothing is chosen and `NoReviewerLeft` is raised.
 
     The home is read first (`use_home`, DRE-6939), and a home that could not
     be read makes the decision `degraded` too: the run is on the defaults in
@@ -2076,6 +2129,9 @@ def select_with_reasons(
     where = {"project": project, "exception": exception, "repo": given}
     walk, separated = separated_walk(
         role, walk, built_on, built_on_unknown, slug=project)
+    if not walk:
+        raise NoReviewerLeft(role, builders(built_on))
+    where["built_on"] = [] if built_on_unknown else builders(built_on)
     where["kept_build_rung"] = _kept_build_rung(walk, separated, built_on_unknown, project)
 
     skipped: list[dict[str, str]] = []
@@ -2153,13 +2209,25 @@ def selection_note(decision: Mapping) -> str:
     separated = list(decision.get("separated") or [])
     if separated:
         joined = ", ".join(separated)
-        note += (
-            " — build/review separation: this build's model could not be read, "
-            f"so the reviewer skips every model that also builds ({joined})"
-            if decision.get("built_on_unknown")
-            else f" — build/review separation: this build ran on {joined}, so "
-            "the reviewer does not"
-        )
+        built = list(decision.get("built_on") or [])
+        if decision.get("built_on_unknown"):
+            note += (
+                " — build/review separation: this build's model could not be "
+                f"read, so the reviewer skips every model that also builds ({joined})"
+            )
+        elif len(built) > 1:
+            # Several builders on the card (DRE-7303): name them all, since
+            # one that is on no reviewer walk was still kept off.
+            note += (
+                " — build/review separation: this change was built on "
+                f"{_and_list(built)}, so the reviewer uses "
+                + ("neither" if len(built) == 2 else "none of them")
+            )
+        else:
+            note += (
+                f" — build/review separation: this build ran on {joined}, so "
+                "the reviewer does not"
+            )
         kept = decision.get("kept_build_rung")
         if isinstance(kept, Mapping) and kept.get("model") and kept["model"] == model:
             note += (
@@ -2243,8 +2311,10 @@ def select(
     `built_on_unknown` says we could not find out (DRE-3880). For a role the
     `review_separation` block binds — the critic and the verifier — the build
     model comes off that project's walk, so a pull request is never reviewed
-    by the model that built it at any availability (DRE-6785). Every other
-    role ignores both.
+    by the model that built it at any availability (DRE-6785). `built_on` may
+    name every model the card records as building it (DRE-7303), and all of
+    them come off; when that is the whole walk, `NoReviewerLeft` is raised
+    and no model is returned. Every other role ignores both.
 
     `repo` is a slug or an `owner/name` (DRE-6634): that project's exception,
     when it has one for this role's kind, leads the walk. Nothing, or anything
@@ -2313,6 +2383,37 @@ def last_attempt_model(comment_bodies) -> str | None:
     return None
 
 
+def build_models(comment_bodies) -> list[str]:
+    """Every distinct model on a BUILD line, oldest first — or nothing when the
+    thread holds no AUTHORING line (DRE-7303).
+
+    A build line is `🧠 model-attempt: <model-id> — <role> agent starting`
+    whose role is anything but `planner` and whose id is `attributable`; an
+    authoring line is a build line whose role is not `fixer`. The reviewer
+    keeps off every model here, not only the newest: once a fixer posts its
+    own line, the newest names the fixer and hides who built the change.
+
+    A fixer's line alone is not a record of who built the change — a
+    hand-built card has no build line, and a fixer line on it would make it
+    look known while its real author was not. So without an authoring line
+    the answer is empty, and the caller passes `--built-on-unknown`. That
+    includes a thread whose authoring line has fallen out of the dumped
+    window: it fails closed.
+
+    `last_attempt_model` still answers "the newest attempt" for its other
+    readers; only `build-model` reads this."""
+    models: list[str] = []
+    authored = False
+    for body in comment_bodies or []:
+        for model, role in _BUILD_LINE_RE.findall(body or ""):
+            if role == PLANNER_ROLE or not attributable(model):
+                continue
+            authored = authored or role != FIXER_ROLE
+            if model not in models:
+                models.append(model)
+    return models if authored else []
+
+
 def attempt_marker(model: str) -> str:
     """Marker recording which model an attempt used (the heartbeat)."""
     return f"{MARKER_PREFIX} {model}"
@@ -2367,6 +2468,22 @@ def _build_model_from_thread(path: str) -> str | None:
     builds but the walk's last, so a Linear outage costs a different reviewer
     and never a failed review job.
     """
+    bodies = _thread_bodies(path)
+    return last_attempt_model(bodies) if bodies is not None else None
+
+
+def _build_models_from_thread(path: str) -> list[str]:
+    """Every model on a build line of a dumped comment thread, oldest first
+    (`build_models`, DRE-7303) — read exactly as `_build_model_from_thread`
+    reads it, and empty wherever that one is None."""
+    bodies = _thread_bodies(path)
+    return build_models(bodies) if bodies is not None else []
+
+
+def _thread_bodies(path: str) -> list | None:
+    """The comment bodies of a thread `linear_ops.py dump-comments` wrote — a
+    JSON array of bodies, or the `--with-authors` array of records — or None
+    on a missing file, unreadable JSON or an unexpected shape."""
     import json
 
     try:
@@ -2375,13 +2492,12 @@ def _build_model_from_thread(path: str) -> str | None:
         return None
     if not isinstance(data, list):
         return None
-    bodies = [
+    return [
         entry if isinstance(entry, str)
         else entry.get("body") if isinstance(entry, Mapping)
         else None
         for entry in data
     ]
-    return last_attempt_model(bodies)
 
 
 def main(argv: list[str]) -> int:
@@ -2406,10 +2522,15 @@ def main(argv: list[str]) -> int:
                                    --effort-file writes the effort level the
                                    CHOSEN model runs at, empty when it declares
                                    none (DRE-4836);
-                                   --built-on names the model the pull request
-                                   under review was BUILT on and
+                                   --built-on names the models the pull request
+                                   under review was BUILT on, joined with
+                                   commas (DRE-7303), and every one is barred;
                                    --built-on-unknown says we could not find
-                                   out, which fails closed (DRE-3880);
+                                   out, which fails closed (DRE-3880). When
+                                   the barred models are every rung on the
+                                   walk, nothing is chosen: stdout stays
+                                   empty, one ::error:: line goes to stderr
+                                   and the exit is 1;
                                    --repo names the project — a repo-map slug
                                    or an `owner/name` such as
                                    $GITHUB_REPOSITORY — whose exception leads
@@ -2420,11 +2541,13 @@ def main(argv: list[str]) -> int:
                                    Exit 0 either way: the caller writes
                                    `effort_arg=${EFFORT:+--effort $EFFORT}`, so
                                    an empty answer is "pass no argument"
-      build-model <comments.json>  print the model the build ran on, read from
-                                   the card's own attempt heartbeats — the JSON
+      build-model <comments.json>  print every model on a build line of the
+                                   card's thread, oldest first, joined with
+                                   commas (`build_models`, DRE-7303) — the JSON
                                    array `linear_ops.py dump-comments` writes.
-                                   An unreadable thread prints NOTHING and
-                                   exits 0: the caller's answer is then
+                                   A thread with no authoring line prints
+                                   NOTHING, and so does an unreadable one; both
+                                   exit 0: the caller's answer is then
                                    --built-on-unknown, which is the fail-closed
                                    one, so a Linear blip must not fail the job
       role-of <label,label,...>    print engineer|planner|devops|frontend from
@@ -2454,7 +2577,7 @@ def main(argv: list[str]) -> int:
         print(_role_from_labels([l.strip() for l in labels if l.strip()]))
         return 0
     if cmd == "build-model":
-        print(_build_model_from_thread(rest[0] if rest else "") or "")
+        print(",".join(_build_models_from_thread(rest[0] if rest else "")))
         return 0
     if cmd == "effort":
         print(effort_for(rest[0] if rest else "") or "")
@@ -2494,11 +2617,17 @@ def main(argv: list[str]) -> int:
         # — selection no longer reads card history; availability drives it.
         role = args[0] if args else "engineer"
         clear_availability_cache()
-        decision = select_with_reasons(
-            role, repo=repo, probe=_fake_probe_from_env(), avoid=avoid,
-            out_of_capacity=refused, built_on=built_on,
-            built_on_unknown=built_on_unknown,
-        )
+        try:
+            decision = select_with_reasons(
+                role, repo=repo, probe=_fake_probe_from_env(), avoid=avoid,
+                out_of_capacity=refused, built_on=built_on,
+                built_on_unknown=built_on_unknown,
+            )
+        except NoReviewerLeft as exc:
+            # Nothing on stdout: the step's `MODEL=$(… select …)` takes the
+            # non-zero exit and fails, and this line is its annotation.
+            print(f"::error::{exc}", file=sys.stderr)
+            return 1
         note = selection_note(decision)
         print(decision["model"])
         print(note, file=sys.stderr)
