@@ -262,6 +262,16 @@ SHAPES = {
         "mutation M { issueArchive(id: \"x\") { success } }", "issueArchive"),
     "a byte-order mark and commas": ("﻿,, mutation { issueDelete(id: \"x\") { success } }",
                                      "issueDelete"),
+    # A lone `\r` ends a line in GraphQL as `\n` does: a comment or a string
+    # stops there, and the mutation after it is still read.
+    "a comment ended by a carriage return": (
+        "# note\rmutation { issueArchive(id: \"x\") { success } }", "issueArchive"),
+    "a string ended by a carriage return": (
+        "query { a(b: \"x\r) { id } }\n"
+        "mutation { issueArchive(id: \"y\") { success } }", "issueArchive"),
+    "a string ended by an escaped line break": (
+        "query { a(b: \"x\\\n) { id } }\n"
+        "mutation { issueArchive(id: \"y\") { success } }", "issueArchive"),
 }
 
 
