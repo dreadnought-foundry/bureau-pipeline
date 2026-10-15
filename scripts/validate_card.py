@@ -329,6 +329,7 @@ _FALLBACK_REPO_MAP = {
     "agent-bureau-demo": "dreadnought-foundry/agent-bureau-demo",
     "bureau-pipeline": "dreadnought-foundry/bureau-pipeline",
     "portico": "dreadnought-foundry/portico",
+    "foundry": "dreadnought-foundry/foundry",
 }
 # --- END generated repo mirror ---
 
