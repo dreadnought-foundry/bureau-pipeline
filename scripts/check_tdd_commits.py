@@ -55,7 +55,8 @@ The rule (engineering standard: "commit the failing test FIRST"):
     docs = `docs/` + any `*.md` (README, standards/, briefs/) + a static
            design record (`.html`/`.md`/`.png`/`.jpg`/`.jpeg`/`.svg`/`.pen`/
            `.json` under `console/design/` or a root `design/`, DRE-3763, or
-           under a root `architecture/`, DRE-5311);
+           under a root `architecture/`, DRE-5311) + plain-text evidence
+           (`.txt`/`.log`) under a root `architecture/` only, DRE-7330;
     ops  = `.github/` + `config/` + `agents.yaml` + `models.json`
            (the frozen catalog snapshot — data derived from the
            vendor's model list, added by DRE-3879 on the CEO's signed answer
@@ -276,6 +277,17 @@ _DESIGN_RECORD_PREFIXES = ("console/design/", "design/", "architecture/")
 _DESIGN_RECORD_SUFFIXES = (
     ".html", ".md", ".png", ".jpg", ".jpeg", ".svg", ".pen", ".json",
 )
+# Plain-text evidence is a record under a root `architecture/` ONLY (DRE-7330).
+# dreadnought-foundry/agent-bureau#3652, DRE-5830's proof record, failed on a commit adding a
+# `.md`, an `.html` and `sunday-edition-2026-10-11.txt` — the first Sunday's
+# actual email, saved as evidence — because `.txt` was not a record format;
+# #3675 failed the same way on a `.txt` report. An email body, a log excerpt or
+# a command's output saved beside a proof record is evidence the way a
+# screenshot is. The design folders do not take these: they sit beside
+# application builds, so text there stays code, and so does text anywhere
+# outside `architecture/`.
+_ARCHITECTURE_RECORD_PREFIX = "architecture/"
+_ARCHITECTURE_TEXT_RECORD_SUFFIXES = (".txt", ".log")
 _OPS_PREFIXES = (".github/", "config/")
 # Root-level DATA files, matched by EXACT path — never a prefix, a suffix or a
 # directory, so `console/models.json` and `models.json.bak` stay code.
@@ -693,10 +705,19 @@ def is_design_record(path: str) -> bool:
     (DRE-5311). Like `is_test_path`, this only
     ever moves a path OUT of `code`; source and stylesheets under those
     directories stay code. The extension is compared case-insensitively — a
-    screenshot saved as `.PNG` is the same record as one saved as `.png`."""
+    screenshot saved as `.PNG` is the same record as one saved as `.png`.
+
+    Under `architecture/` only, plain text — `.txt` and `.log`, a saved email
+    or a log excerpt kept as evidence — is a record too (DRE-7330); the same
+    extensions under the two design folders stay code."""
+    lowered = path.lower()
+    if path.startswith(_ARCHITECTURE_RECORD_PREFIX) and lowered.endswith(
+        _ARCHITECTURE_TEXT_RECORD_SUFFIXES
+    ):
+        return True
     return (
         path.startswith(_DESIGN_RECORD_PREFIXES)
-        and path.lower().endswith(_DESIGN_RECORD_SUFFIXES)
+        and lowered.endswith(_DESIGN_RECORD_SUFFIXES)
     )
 
 
