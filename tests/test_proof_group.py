@@ -11,7 +11,8 @@ Each selection runs the selector's CLI against a temporary copy of the real
 config, built and regenerated the way `tests/test_model_choice_levers.py`
 builds one, with every model up (`BUREAU_FAKE_AVAILABLE`) and no network
 call. Every model id a check expects is read off the copy, never typed
-(DRE-6853).
+(DRE-6853), and the group's ladder and label are not asserted as literals:
+they are choices the console can change (DRE-6866).
 
 Run: cd bureau-pipeline && python3 -m pytest tests/test_proof_group.py -q
 """
@@ -116,19 +117,6 @@ def base(tmp_path_factory) -> Path:
 def reordered(tmp_path_factory) -> Path:
     """The copy with the Proof ladder's last rung moved first, regenerated."""
     return build_tree(tmp_path_factory.mktemp("reordered"), last_rung_first)
-
-
-def test_the_proof_kind_is_labeled_proof_and_walks_its_own_ladder():
-    raw = real_raw()
-    assert raw["kinds"]["proof"]["ladder"] == "proof"
-    assert raw["kinds"]["proof"]["label"] == "Proof"
-    assert "proof" in raw["ladders"]
-    assert raw["agents"]["proof"] == "proof"
-
-
-def test_the_proof_ladder_is_the_builders_models_in_the_same_order():
-    raw = real_raw()
-    assert ladder_ids(raw, "proof") == ladder_ids(raw, "workhorse")
 
 
 def test_a_proof_run_selects_the_builders_first_model_from_the_proof_kind(base):

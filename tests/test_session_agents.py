@@ -413,12 +413,22 @@ def _flow_agents(text: str) -> str:
     return "".join(lines[:start] + [f"agents: {{{flow}}}\n\n"] + lines[end:])
 
 
+def _a_builder() -> str:
+    """The committed config's first pipeline agent in the Builders — read off
+    the file, so a move of one agent out of the Builders (DRE-7284 moved
+    `proof`) moves this choice with it."""
+    raw = yaml.safe_load(CONFIG.read_text())
+    session = set(raw.get("session_agents") or ())
+    return next(name for name, group in raw["agents"].items()
+                if group == "workhorse" and name not in session)
+
+
 FAMILIES = [
     # (id, change, edit of the file or None, a phrase the plain line carries)
     ("rules 3 and 8", _move("critic", "workhorse"), None, "Reviewers"),
     ("rule 10", _move("engineer", "judgement"), None, "Planners"),
     ("no such group", _move("proof", "nowhere"), None, "no group called nowhere"),
-    ("already there", _move("proof", "workhorse"), None, "already in the Builders group"),
+    ("already there", _move(_a_builder(), "workhorse"), None, "already in the Builders group"),
     ("no such agent", _move("nobody", "workhorse"), None, "no agent named nobody"),
     ("no registry entry", _move("ghost", "workhorse"), _with_ghost, "ghost"),
     ("already an agent", {"op": "add_agent", "agent": "engineer", "about": "Builds"},

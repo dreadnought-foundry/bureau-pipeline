@@ -68,7 +68,7 @@ def defaults_doc(d: dict | None = None) -> dict:
             key: {"label": d["groups"][key]["label"],
                   "purpose": d["groups"][key]["purpose"],
                   "models": list(d["ladders"][d["kinds"][key]])}
-            for key in mf.ROLE_KINDS
+            for key in d["kinds"]
         },
         "agents": dict(d["agents"]),
         "added_agents": {},
