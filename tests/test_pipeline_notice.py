@@ -135,10 +135,11 @@ class FakeBoard:
     and `gql` refusing so any OTHER call fails the test loudly."""
 
     def __init__(self, *, open_card: str | None = None, search_fails: bool = False,
-                 create_fails: bool = False):
+                 create_fails: bool = False, comment_capped: bool = False):
         self.open_card = open_card
         self.search_fails = search_fails
         self.create_fails = create_fails
+        self.comment_capped = comment_capped
         self.searches: list[str] = []
         self.created: list[dict] = []
         self.comments: list[tuple[str, str]] = []
@@ -165,6 +166,10 @@ class FakeBoard:
         return {"identifier": "DRE-9001", "url": "https://linear.app/x/DRE-9001"}
 
     def cmd_comment(self, identifier, body, *flags):
+        if self.comment_capped:
+            # Linear's comment limit: `linear_ops.cmd_comment` writes nothing
+            # and returns the condition rather than raising (DRE-3343).
+            return linear_ops.COMMENT_CAP_CONDITION
         self.comments.append((identifier, body))
         return None
 
@@ -368,6 +373,17 @@ def test_a_failed_create_is_lost(monkeypatch, capsys, issuer):
         assert _raise() == "lost"
     assert _lines(capsys.readouterr().out) == [
         "pipeline-notice: lost create-failed kind=pipeline_notice:"
+        "medic:atlas:agent-task.yml"]
+
+
+def test_a_fallback_card_at_its_comment_limit_is_lost(monkeypatch, capsys, issuer):
+    board = FakeBoard(open_card="DRE-77", comment_capped=True).install(monkeypatch)
+    with FakeNoticeDoor(status=503) as door:
+        _point(monkeypatch, door, issuer)
+        assert _raise() == "lost"
+    assert board.created == [] and board.comments == []
+    assert _lines(capsys.readouterr().out) == [
+        "pipeline-notice: lost comment-capped kind=pipeline_notice:"
         "medic:atlas:agent-task.yml"]
 
 
