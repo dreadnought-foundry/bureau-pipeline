@@ -337,6 +337,59 @@ class EveryDoorIsWatched(unittest.TestCase):
         )
         self.assertTrue(_named(found, rogue), found)
 
+    # DRE-7451: a writer repointed at the console's notice door hands its old
+    # card's labels to `pipeline_notice.py` as `--fallback-label`, the flag
+    # that module declares as its LABEL_FLAG. Moving a write there must not
+    # move it out of sight.
+    def test_a_workflow_whose_notice_fallback_carries_the_mark_is_named(self):
+        rogue = "zz-label-probe-notice.yml"
+        found = self._problems_with(
+            f".github/workflows/{rogue}",
+            "name: Probe\n"
+            "on: workflow_dispatch\n"
+            "jobs:\n"
+            "  go:\n"
+            "    runs-on: ubuntu-latest\n"
+            "    steps:\n"
+            "      - name: Notice\n"
+            "        run: |\n"
+            "          python3 scripts/pipeline_notice.py raise --notice groom_stall \\\n"
+            "            --severity WARN --title \"$T\" --body-file body.md \\\n"
+            "            --fallback-title \"$T\" --fallback-lane Planning \\\n"
+            "            --fallback-label no-code --fallback-label hand-built\n",
+        )
+        self.assertTrue(_named(found, rogue), found)
+
+    def test_a_workflow_whose_notice_fallback_labels_are_safe_passes(self):
+        rogue = "zz-label-probe-notice-ok.yml"
+        found = self._problems_with(
+            f".github/workflows/{rogue}",
+            "name: Probe\n"
+            "on: workflow_dispatch\n"
+            "jobs:\n"
+            "  go:\n"
+            "    runs-on: ubuntu-latest\n"
+            "    steps:\n"
+            "      - run: |\n"
+            "          python3 scripts/pipeline_notice.py raise --notice groom_stall \\\n"
+            "            --severity WARN --title t --body-file b \\\n"
+            "            --fallback-title t --fallback-label no-code\n",
+        )
+        self.assertFalse(_named(found, rogue), found)
+
+    def test_python_running_the_notice_command_line_with_the_mark_is_named(self):
+        rogue = "zz_label_probe_notice_argv.py"
+        found = self._problems_with(
+            f"scripts/{rogue}",
+            "import subprocess\n"
+            "import sys\n\n"
+            "_NOTICE = 'scripts/pipeline_notice.py'\n\n"
+            "def go():\n"
+            "    subprocess.run([sys.executable, _NOTICE, 'raise', '--notice', 'k',\n"
+            "                    '--fallback-title', 't', '--fallback-label', 'hand-built'])\n",
+        )
+        self.assertTrue(_named(found, f"scripts/{rogue}:7"), found)
+
     def test_python_running_the_command_line_as_one_shell_string_is_named(self):
         rogue = "zz_label_probe_shellstr.py"
         found = self._problems_with(
