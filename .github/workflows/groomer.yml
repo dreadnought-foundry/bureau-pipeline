@@ -290,6 +290,20 @@ jobs:
           private-key: ${{ secrets.BUREAU_APP_PRIVATE_KEY }}
           owner: dreadnought-foundry
           repositories: bureau-pipeline
+
+      # The read door's identity check (review M1), as reconcile.yml runs it.
+      # The door trusts this job's OIDC token for `groomer.yml@<the ref the
+      # stub called>`, but the scripts were checked out at `pipeline_ref`.
+      # Unequal, `targets` would present one ref's identity while executing
+      # another ref's code — so the reusable refuses to run. With BUREAU_READ
+      # off, or no token, there is no identity to protect and it passes.
+      - name: Refuse a pipeline_ref the stub did not call
+        env:
+          BUREAU_READ: ${{ vars.BUREAU_READ || 'off' }}
+          BUREAU_READ_AUDIENCE: ${{ vars.BUREAU_READ_AUDIENCE }}
+          PIPELINE_REF: ${{ inputs.pipeline_ref }}
+        run: python3 .bureau-pipeline/scripts/bureau_read.py check-ref "$PIPELINE_REF"
+
       - name: Groom
         # Identified for the death-cause receipt at the foot of this job
         # (DRE-4340): GitHub's own outcome for this step is what says whether
@@ -336,10 +350,12 @@ jobs:
           # below as the door's own — so `propose`, in this same step, runs
           # exactly as before the door was wired. A stub that grants no
           # `id-token: write` mints no token, and the search falls back to
-          # Linear; it never fails.
+          # Linear; it never fails. `DOOR_PIPELINE_REF` lets the client
+          # refuse a token that names another ref than these scripts.
           DOOR_READ: ${{ vars.BUREAU_READ || 'off' }}
           DOOR_READ_URL: ${{ vars.BUREAU_READ_URL }}
           DOOR_READ_AUDIENCE: ${{ vars.BUREAU_READ_AUDIENCE }}
+          DOOR_PIPELINE_REF: ${{ inputs.pipeline_ref }}
         run: |
           set -euo pipefail
           # Every input through env, never interpolated into the shell line.
@@ -398,6 +414,7 @@ jobs:
             # The door's settings are scoped to this one command.
             BUREAU_READ="$DOOR_READ" BUREAU_READ_URL="$DOOR_READ_URL" \
               BUREAU_READ_AUDIENCE="$DOOR_READ_AUDIENCE" \
+              BUREAU_PIPELINE_REF="$DOOR_PIPELINE_REF" \
               python3 .bureau-pipeline/scripts/groom_verify_agent.py targets \
               --proposal proposal.json --out verify-targets.json \
               --matrix-out matrix.json

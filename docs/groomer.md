@@ -66,7 +66,10 @@ fast path shipped, which the sweep moves straight to Planning (DRE-4150, point
      `targets` alone is handed the read door's settings (DRE-7242), so its
      problem search asks the door before Linear; `propose` is not, and runs
      as before. A stub that grants no `id-token: write` mints no token for
-     the door, and the search falls back to Linear.
+     the door, and the search falls back to Linear. The step before it runs
+     the door's identity check (`bureau_read.py check-ref`), as
+     `reconcile.yml` does: a `pipeline_ref` other than the ref the stub
+     called refuses the run.
    - **`lookup`** (DRE-5429) runs between them, one leg per owner in the
      roster, each on that owner's own App token: an installation token sees
      one installation, and the fleet spans three owners. Each leg runs
