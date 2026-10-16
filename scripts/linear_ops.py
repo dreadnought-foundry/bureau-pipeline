@@ -31,6 +31,14 @@ Subcommands:
                                        `🔬 proof-waiting: <a> — needs <b>` as the
                                        proof-observation-pending act's receipt,
                                        so the console renders `Waiting for proof`
+  proof-waiting-until <DRE-N> "<still to be observed>" "<ISO time with UTC offset>"
+                                       the same hold when it waits only for a
+                                       time (DRE-7228): its needs half is
+                                       written as exactly `not-before=<time>`,
+                                       and the proof dispatcher lifts it once
+                                       the time passes. Refuses a time with no
+                                       offset or that does not parse, and an
+                                       observed half naming the CEO's press
   proof-observed <DRE-N> "<what was observed, with PT time>"
                                        the discharge record for the hold above:
                                        `🔬 proof-observed: <text>`, a PLAIN
@@ -1018,10 +1026,138 @@ def api_key(*, env=None, run=None) -> str:
     return key
 
 
+#: The read-only switch (DRE-7285). Exactly `1` turns it on; unset, empty or
+#: any other value changes nothing. The proof shadow (DRE-7286) sets it on its
+#: agent step.
+READ_ONLY_ENV = "BUREAU_LINEAR_READ_ONLY"
+
+_GRAPHQL_NAME = re.compile(r"[_A-Za-z][_0-9A-Za-z]*")
+# GraphQL ends a line at `\n`, `\r\n` or a lone `\r`: a comment or a string
+# that stopped only at `\n` would swallow a mutation after a lone `\r`.
+_GRAPHQL_LINE_END = re.compile(r"[\r\n]")
+
+
+def _mutation_field(document: str) -> str | None:
+    """The first field of the document's first `mutation` operation, `""`
+    when it opens a mutation whose field could not be read, or None when no
+    operation in it is a mutation.
+
+    Read the way GraphQL reads a document, not by its first characters: a
+    byte-order mark, whitespace, commas and `#` comments are ignored, string
+    and block-string literals are skipped, and only the keyword that opens a
+    definition at the top level counts. So a field named `mutation` inside a
+    query, or the word in a comment or a string, is not a write, while a named
+    mutation, an aliased field, or a mutation after a fragment or a query is.
+
+    It is a best-effort reader of GraphQL, not a parser and not a proof: a
+    document it cannot read as a mutation is sent. Its cases are the ones in
+    `tests/test_linear_read_only.py`.
+    """
+    depth = parens = 0
+    at_definition = True
+    in_mutation = expect_field = False
+    i, n = 0, len(document)
+    while i < n:
+        c = document[i]
+        if c == "#":
+            end = _GRAPHQL_LINE_END.search(document, i)
+            i = n if end is None else end.end()
+            continue
+        if c == '"':
+            if document.startswith('"""', i):
+                j = i + 3
+                while True:
+                    end = document.find('"""', j)
+                    if end < 0:
+                        i = n
+                        break
+                    if document[end - 1] != "\\":
+                        i = end + 3
+                        break
+                    j = end + 3
+                continue
+            j = i + 1
+            while j < n and document[j] not in '"\r\n':
+                escaped = document[j] == "\\" and document[j + 1:j + 2] not in ("\r", "\n")
+                j += 2 if escaped else 1
+            i = j + 1
+            continue
+        if c == "(":
+            parens += 1
+        elif c == ")":
+            parens = max(parens - 1, 0)
+        elif parens:
+            pass  # argument values: an object literal's braces are not a selection
+        elif c == "{":
+            if depth == 0:
+                expect_field = in_mutation
+                at_definition = False
+            depth += 1
+        elif c == "}":
+            depth = max(depth - 1, 0)
+            if depth == 0:
+                at_definition = True
+                in_mutation = expect_field = False
+        else:
+            word = _GRAPHQL_NAME.match(document, i)
+            if word:
+                name = word.group()
+                i = word.end()
+                if depth == 0 and at_definition:
+                    at_definition = False
+                    in_mutation = name == "mutation"
+                elif depth == 1 and expect_field:
+                    rest = document[i:].lstrip(" \t\r\n,﻿")
+                    if not rest.startswith(":"):
+                        return name  # an alias is followed by `:`; the field is next
+                continue
+        i += 1
+    return "" if in_mutation else None
+
+
+def _refuse_a_write_when_read_only(query: str) -> None:
+    """Refuse a write when `BUREAU_LINEAR_READ_ONLY` is exactly `1` (DRE-7285).
+
+    With the switch on, a document whose operation is a `mutation` raises
+    `LinearError` before `_send` is called: no request goes out and none is
+    counted against the run's budget. One stderr line opening
+    `linear-read-only: refused` names the mutation's first field. A query goes
+    out exactly as it does today, and with the variable unset, empty or any
+    other value nothing changes. `gql_paged` reaches this through `gql`.
+
+    WHAT THIS DOES NOT GUARD, stated plainly: it guards requests sent through
+    `gql()` and nothing else — `linear_ops.py` and `spoken_thread.py`, the
+    Linear commands the proof brief gives an agent. A step that holds
+    `LINEAR_API_KEY` and can run a shell could send a write straight to
+    Linear's API with the same key, with `curl` or any other HTTP client, and
+    this check does not see that request at all. Linear offers no read-only
+    key scope, so the key stays in the step for its reads; the shadow's
+    instructions (DRE-7286) and the proof card's read of every shadowed
+    card's comments (DRE-7293) cover what this cannot.
+    """
+    if os.environ.get(READ_ONLY_ENV) != "1":
+        return
+    field = _mutation_field(query)
+    if field is None:
+        return
+    field = field or "?"
+    print(
+        f"linear-read-only: refused {field} — {READ_ONLY_ENV}=1, so this "
+        "process sends no Linear write; nothing was sent",
+        file=sys.stderr,
+    )
+    raise LinearError(
+        f"linear-read-only: {field} is a write and {READ_ONLY_ENV}=1 — not sent"
+    )
+
+
 def gql(query: str, variables: dict | None = None, *, landed=None) -> dict:
     # `landed` is a create's look (DRE-6839): see `_send`. A read or an update
     # passes none, and goes exactly as it always has.
     #
+    # The read-only switch comes first (DRE-7285): a refused write is never
+    # sent, never counted, and never spends a fallback or a retry.
+    _refuse_a_write_when_read_only(query)
     # Stop at the first RATELIMITED (DRE-3202): a rate-limited process asks
     # nothing more. Every further request would spend the quota that proves
     # there is none left, against a window that is the whole fleet's.
@@ -2183,6 +2319,12 @@ def cmd_actor(identifier: str, role: str) -> None:
 # (docs/pipeline-acts.md: console-first).
 PROOF_WAITING_TAG = "proof-waiting"
 
+# The one clause a hold's `needs` half carries when it waits for a time and
+# nothing else (DRE-7228): `proof-waiting-until` writes it, and
+# `proof_record.time_only` reads it — so the proof dispatcher lifts the hold
+# itself once the time passes. Spelled here only.
+NOT_BEFORE = "not-before="
+
 # Deliberately not a `*_TAG` constant: it is not an act and the registry does
 # not declare it, and `pipeline_act.problems()` reads every `*_TAG = "…"` in an
 # emitting file as a tag that must have a row.
@@ -2250,6 +2392,48 @@ def cmd_proof_waiting(identifier: str, observed: str, needs: str) -> None:
         "proof-observation-pending", proof_waiting_line(observed, needs)
     )
     cmd_comment(identifier, body)
+
+
+def cmd_proof_waiting_until(identifier: str, observed: str, when: str) -> None:
+    """Hold a card on an observation that waits only for a time (DRE-7228).
+
+    The ordinary hold, through `cmd_proof_waiting`, with its `needs` half
+    written here and never by the caller: exactly `not-before=<when>`. That
+    is the one shape `proof_record.time_only` reads, so the proof dispatcher
+    lifts the hold itself once `when` has passed. `when` is an ISO 8601 time
+    with a UTC offset; anything else, or an observed half naming the CEO's
+    press, is refused and nothing is posted."""
+    import proof_record  # the reader; it imports this module, so not at the top
+
+    when = (when or "").strip()
+    try:
+        moment = datetime.fromisoformat(when)
+    except ValueError:
+        raise LinearError(
+            f"proof-waiting-until: {when!r} does not parse as an ISO 8601 time "
+            "— write it as 2026-10-12T14:33-07:00."
+        ) from None
+    if moment.tzinfo is None:
+        raise LinearError(
+            f"proof-waiting-until: {when!r} carries no UTC offset, so nothing "
+            "can say when it passes — write it as 2026-10-12T14:33-07:00."
+        )
+    refusal = proof_text_refusal(observed, "what is still to be observed")
+    if refusal:
+        raise LinearError(refusal)
+    if proof_record.CEO_PRESS in observed:
+        raise LinearError(
+            f"proof-waiting-until: what is still to be observed names "
+            f"{proof_record.CEO_PRESS!r}, which only his signed answer "
+            "discharges — a time never lifts it. Use proof-waiting."
+        )
+    needs = f"{NOT_BEFORE}{when}"
+    if proof_record.time_only(proof_waiting_line(observed, needs)) is None:
+        raise LinearError(
+            "proof-waiting-until: the hold would not read back as one that "
+            "waits only for a time — say what is still to be observed on one line."
+        )
+    cmd_proof_waiting(identifier, observed, needs)
 
 
 def cmd_proof_observed(identifier: str, text: str) -> None:
@@ -4716,6 +4900,7 @@ if __name__ == "__main__":
             "comment": cmd_comment,
             "actor": cmd_actor,
             "proof-waiting": cmd_proof_waiting,
+            "proof-waiting-until": cmd_proof_waiting_until,
             "proof-observed": cmd_proof_observed,
             "card-done": cmd_card_done,
             "set-description": set_description,

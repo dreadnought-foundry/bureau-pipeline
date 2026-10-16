@@ -55,7 +55,8 @@ The rule (engineering standard: "commit the failing test FIRST"):
     docs = `docs/` + any `*.md` (README, standards/, briefs/) + a static
            design record (`.html`/`.md`/`.png`/`.jpg`/`.jpeg`/`.svg`/`.pen`/
            `.json` under `console/design/` or a root `design/`, DRE-3763, or
-           under a root `architecture/`, DRE-5311);
+           under a root `architecture/`, DRE-5311) + plain-text evidence
+           (`.txt`/`.log`) under a root `architecture/` only, DRE-7330;
     ops  = `.github/` + `config/` + `agents.yaml` + `models.json`
            (the frozen catalog snapshot — data derived from the
            vendor's model list, added by DRE-3879 on the CEO's signed answer
@@ -153,6 +154,15 @@ The rule (engineering standard: "commit the failing test FIRST"):
     from `attested_pr_author` — plus the exact branch. It is NOT a PR
     exemption: any other path on that branch, or any other line of a routing
     path, is held to the rule like any other.
+  • The same routing PR's per-repo console facts are not code either
+    (DRE-7431). Since DRE-7379 it also writes one `REPO_IDS` entry in
+    `console/backend/github_oidc.py`, one `PROJECT_IDENTITIES` entry in
+    `console/backend/sources.py` (in the same write as that mirror's region)
+    and one new repo under `repos` in `console/backend/runner-routing.json`.
+    `is_routing_entry_change` relieves exactly that one entry, in the shape
+    the step writes, and nothing else: a changed existing entry, a second
+    entry, a comment or an edited function beside it is code. The opener and
+    branch conditions are the mirror rule's, unchanged.
   • Merge commits are skipped: merging an advanced main into the branch
     brings mainline commits that are not the PR's own work.
 
@@ -189,6 +199,7 @@ instead of attempting and blocking.
 from __future__ import annotations
 
 import ast
+import difflib
 import json
 import os
 import re
@@ -276,6 +287,17 @@ _DESIGN_RECORD_PREFIXES = ("console/design/", "design/", "architecture/")
 _DESIGN_RECORD_SUFFIXES = (
     ".html", ".md", ".png", ".jpg", ".jpeg", ".svg", ".pen", ".json",
 )
+# Plain-text evidence is a record under a root `architecture/` ONLY (DRE-7330).
+# dreadnought-foundry/agent-bureau#3652, DRE-5830's proof record, failed on a
+# commit adding a `.md`, an `.html` and `sunday-edition-2026-10-11.txt` — the
+# first Sunday's actual email, saved as evidence — because `.txt` was not a
+# record format; #3675 failed the same way on a `.txt` report. An email body, a
+# log excerpt or a command's output saved beside a proof record is evidence the
+# way a screenshot is. The design folders do not take these: they sit beside
+# application builds, so text there stays code, and so does text anywhere
+# outside `architecture/`.
+_ARCHITECTURE_RECORD_PREFIX = "architecture/"
+_ARCHITECTURE_TEXT_RECORD_SUFFIXES = (".txt", ".log")
 _OPS_PREFIXES = (".github/", "config/")
 # Root-level DATA files, matched by EXACT path — never a prefix, a suffix or a
 # directory, so `console/models.json` and `models.json.bak` stay code.
@@ -353,7 +375,10 @@ ONBOARD_BOT = "agent-bureau-bot"
 # change confined to it. `scripts/validate_card.py`, the card's other path
 # here, is left to the generated-region rule (`_GENERATED_REGION_PROOFS`),
 # which already exempts its mirror region. Exact paths, never a prefix: a
-# neighboring file is held to the rule.
+# neighboring file is held to the rule. Since DRE-7379 the same PR also writes
+# three per-repo console facts, one entry each, and `is_routing_entry_change`
+# relieves exactly that entry (DRE-7431): `sources.py` is a mirror that also
+# holds one of them, and the last two paths are fact files and nothing else.
 ONBOARD_ROUTING_PATHS = frozenset({
     # bureau-pipeline
     "config/repo-map.json",
@@ -365,12 +390,25 @@ ONBOARD_ROUTING_PATHS = frozenset({
     "console/web/src/components/wizard/new-agent/repos.ts",
     "console/web/src/components/flyout/cardMeta.ts",
     "demo/demo_library.py",
+    "console/backend/github_oidc.py",
+    "console/backend/runner-routing.json",
 })
 
 # The markers agent-bureau's mirror generator splices between — the region its
 # `--check` proves (`scripts/sync_fallback_map.py` writes the same phrases).
 _BEGIN_REPO_MIRROR = "BEGIN generated repo mirror"
 _END_REPO_MIRROR = "END generated repo mirror"
+
+# The routing paths that are not slug mirrors (DRE-7431). No generator proves
+# a region in either, so repo-mirror markers written into one relieve nothing.
+_ROUTING_FACT_FILES = frozenset({
+    "console/backend/github_oidc.py",
+    "console/backend/runner-routing.json",
+})
+# The fact file whose one relieved change is a new repo under `repos`.
+_RUNNER_ROUTING = "console/backend/runner-routing.json"
+# Decimal GitHub ids, the way `80_routing` writes them into `REPO_IDS`.
+_DECIMAL_ID = re.compile(r"[0-9]+")
 
 
 def _normalized_bot_login(login: str) -> str:
@@ -482,7 +520,8 @@ def is_onboard_routing_pr(head_ref: str | None,
 def mark_routing_paths(commits) -> list[dict]:
     """Each commit record with a `routing` list: its paths in
     `ONBOARD_ROUTING_PATHS`, which `commit_categories` reads as not code when
-    `is_routing_mirror_change` holds for them. Call it only for a PR
+    `is_routing_mirror_change` or `is_routing_entry_change` holds for them.
+    Call it only for a PR
     `is_onboard_routing_pr` admits."""
     return [
         {**c, "routing": [p for p in c["paths"] if p in ONBOARD_ROUTING_PATHS]}
@@ -648,8 +687,9 @@ def is_routing_mirror_change(
     missing counterpart, Python that will not parse on either side, a missing
     or unterminated region, and a line changed outside a region or on a
     marker are all False. Non-`.py` mirrors (the `.ts` ones) are compared by
-    lines alone; nothing here parses them."""
-    if path not in ONBOARD_ROUTING_PATHS:
+    lines alone; nothing here parses them. A fact file that is not a mirror
+    (`_ROUTING_FACT_FILES`) is always False: nothing proves a region in it."""
+    if path not in ONBOARD_ROUTING_PATHS or path in _ROUTING_FACT_FILES:
         return False
     if before is None or after is None:
         return False
@@ -666,6 +706,225 @@ def is_routing_mirror_change(
     if outside_after is None:
         return False
     return outside_before == outside_after
+
+
+def _repo_mirror_split(lines: list[str]):
+    """`lines` cut at their repo-mirror regions: (the chunks outside them,
+    marker lines included, the chunks inside them), one more outside chunk
+    than inside — or None for a region with no END marker."""
+    outside: list[list[str]] = [[]]
+    inside: list[list[str]] = []
+    in_region = False
+    for line in lines:
+        if in_region:
+            if _END_REPO_MIRROR in line:
+                in_region = False
+                outside.append([line])
+            else:
+                inside[-1].append(line)
+            continue
+        outside[-1].append(line)
+        if _BEGIN_REPO_MIRROR in line:
+            in_region = True
+            inside.append([])
+    if in_region:
+        return None
+    return outside, inside
+
+
+def _with_mirror_regions_of(after: str, before: str) -> list[str] | None:
+    """`after`'s lines with every repo-mirror region holding `before`'s lines
+    again, region for region — the file as it would read had its mirror not
+    been regenerated — or None when either side has an unterminated region or
+    the two hold different numbers of them. The markers stay `after`'s, so a
+    moved marker is still a changed line."""
+    split_after = _repo_mirror_split(after.splitlines())
+    split_before = _repo_mirror_split(before.splitlines())
+    if split_after is None or split_before is None:
+        return None
+    outside_after, inside_after = split_after
+    _, inside_before = split_before
+    if len(inside_after) != len(inside_before):
+        return None
+    lines = list(outside_after[0])
+    for region, rest in zip(inside_before, outside_after[1:]):
+        lines += region + rest
+    return lines
+
+
+def _str_constant(node) -> bool:
+    return isinstance(node, ast.Constant) and isinstance(node.value, str)
+
+
+def _is_repo_ids_value(node) -> bool:
+    """A `REPO_IDS` value as `80_routing` writes it: `("<owner id>", "<repo
+    id>")`, two decimal strings."""
+    return (
+        isinstance(node, ast.Tuple)
+        and len(node.elts) == 2
+        and all(_str_constant(e) and _DECIMAL_ID.fullmatch(e.value)
+                for e in node.elts)
+    )
+
+
+def _is_project_identity_value(node) -> bool:
+    """A `PROJECT_IDENTITIES` value as `80_routing` writes it: `{"name": ...,
+    "client": ...}`, those two keys and string values."""
+    return (
+        isinstance(node, ast.Dict)
+        and all(_str_constant(k) for k in node.keys)
+        and sorted(k.value for k in node.keys) == ["client", "name"]
+        and all(_str_constant(v) for v in node.values)
+    )
+
+
+# The Python fact files: the module-level literal each one's relieved entry
+# goes into, and the shape that entry's value must have (DRE-7379's contract).
+_ROUTING_FACT_LITERALS = {
+    "console/backend/github_oidc.py": ("REPO_IDS", _is_repo_ids_value),
+    "console/backend/sources.py": (
+        "PROJECT_IDENTITIES", _is_project_identity_value),
+}
+
+
+def _dict_literal(tree: ast.Module, name: str):
+    """The dict literal assigned to `name` at module level, or None when
+    there is none or more than one."""
+    found = []
+    for node in tree.body:
+        if isinstance(node, ast.Assign) and len(node.targets) == 1:
+            target = node.targets[0]
+        elif isinstance(node, ast.AnnAssign):
+            target = node.target
+        else:
+            continue
+        if (isinstance(target, ast.Name) and target.id == name
+                and isinstance(node.value, ast.Dict)):
+            found.append(node.value)
+    return found[0] if len(found) == 1 else None
+
+
+def _adds_one_dict_entry(before: list[str], after: list[str], name: str,
+                         value_ok) -> bool:
+    """True iff `after` is `before` with ONE string-keyed entry added to the
+    module-level dict literal `name`, its value `value_ok`, and no other line
+    changed: every line the change adds is that entry's, and no line is
+    removed or edited. A changed existing entry, a second entry, a comment
+    beside it, an edited function, `**` unpacking, a repeated key or source
+    that will not parse are all False."""
+    try:
+        tree_before = ast.parse("\n".join(before))
+        tree_after = ast.parse("\n".join(after))
+    except (SyntaxError, ValueError, RecursionError):
+        return False
+    dict_before = _dict_literal(tree_before, name)
+    dict_after = _dict_literal(tree_after, name)
+    if dict_before is None or dict_after is None:
+        return False
+    if not all(_str_constant(k) for k in dict_before.keys + dict_after.keys):
+        return False
+    keys_before = [k.value for k in dict_before.keys]
+    keys_after = [k.value for k in dict_after.keys]
+    if (len(set(keys_before)) != len(keys_before)
+            or len(set(keys_after)) != len(keys_after)):
+        return False
+    added = [i for i, k in enumerate(keys_after) if k not in keys_before]
+    if len(added) != 1 or len(keys_after) != len(keys_before) + 1:
+        return False
+    i = added[0]
+    key, value = dict_after.keys[i], dict_after.values[i]
+    if not value_ok(value):
+        return False
+    inserted: set[int] = set()
+    matcher = difflib.SequenceMatcher(None, before, after, autojunk=False)
+    for op, _i1, _i2, j1, j2 in matcher.get_opcodes():
+        if op == "equal":
+            continue
+        if op != "insert":
+            return False
+        inserted.update(range(j1 + 1, j2 + 1))
+    if inserted != set(range(key.lineno, value.end_lineno + 1)):
+        return False
+    # The lines prove where the change is; the trees prove that, with the
+    # entry taken out, nothing else in the module differs.
+    del dict_after.keys[i]
+    del dict_after.values[i]
+    try:
+        return ast.dump(tree_after) == ast.dump(tree_before)
+    except RecursionError:
+        return False
+
+
+def _json_document(text: str):
+    """`text` parsed as JSON with every object's member order kept, or None
+    for JSON that will not parse or that repeats a member name — the parser
+    would silently keep the last one, so a repeat could hide a change."""
+    def members(pairs):
+        names = [k for k, _ in pairs]
+        if len(set(names)) != len(names):
+            raise ValueError("repeated member name")
+        return dict(pairs)
+    try:
+        return json.loads(text, object_pairs_hook=members)
+    except (ValueError, RecursionError):
+        return None
+
+
+def _adds_one_runner_routing_repo(before: str, after: str) -> bool:
+    """True iff `after` is `before` with ONE new repo, an object, added under
+    the top-level `repos` object, and nothing else changed — every other
+    member, value and member order compared as JSON."""
+    doc_before, doc_after = _json_document(before), _json_document(after)
+    if not isinstance(doc_before, dict) or not isinstance(doc_after, dict):
+        return False
+    repos_before, repos_after = doc_before.get("repos"), doc_after.get("repos")
+    if not isinstance(repos_before, dict) or not isinstance(repos_after, dict):
+        return False
+    added = [k for k in repos_after if k not in repos_before]
+    if len(added) != 1 or len(repos_after) != len(repos_before) + 1:
+        return False
+    if not isinstance(repos_after[added[0]], dict):
+        return False
+    rest = {**doc_after, "repos": {
+        k: v for k, v in repos_after.items() if k != added[0]}}
+    return json.dumps(rest) == json.dumps(doc_before)
+
+
+def is_routing_entry_change(
+    path: str, before: str | None, after: str | None
+) -> bool:
+    """True iff `path` holds one of the per-repo console facts onboarding's
+    `80_routing` writes (DRE-7379) and its two versions differ ONLY by the one
+    entry that step adds (DRE-7431):
+
+      * `console/backend/github_oidc.py` — one `REPO_IDS` entry,
+        `"<slug>": ("<owner id>", "<repo id>")`;
+      * `console/backend/sources.py` — one `PROJECT_IDENTITIES` entry,
+        `"<slug>": {"name": ..., "client": ...}`. The file is also a slug
+        mirror and the step writes it once, so its repo-mirror regions are
+        put back to `before`'s first — the region is `is_routing_mirror_change`'s
+        to prove, and everything outside it must be the entry alone;
+      * `console/backend/runner-routing.json` — one new repo under `repos`.
+
+    Entry-only, never a whole-file pass: any other line of the file is code.
+    Fail-closed like the mirror rule: a path outside the set, a missing
+    counterpart, source that will not parse and an edited marker are False."""
+    if path not in ONBOARD_ROUTING_PATHS:
+        return False
+    if before is None or after is None:
+        return False
+    if path == _RUNNER_ROUTING:
+        return _adds_one_runner_routing_repo(before, after)
+    literal = _ROUTING_FACT_LITERALS.get(path)
+    if literal is None:
+        return False
+    if path in _ROUTING_FACT_FILES:
+        after_lines = after.splitlines()
+    else:
+        after_lines = _with_mirror_regions_of(after, before)
+        if after_lines is None:
+            return False
+    return _adds_one_dict_entry(before.splitlines(), after_lines, *literal)
 
 
 def is_test_path(path: str) -> bool:
@@ -693,10 +952,19 @@ def is_design_record(path: str) -> bool:
     (DRE-5311). Like `is_test_path`, this only
     ever moves a path OUT of `code`; source and stylesheets under those
     directories stay code. The extension is compared case-insensitively — a
-    screenshot saved as `.PNG` is the same record as one saved as `.png`."""
+    screenshot saved as `.PNG` is the same record as one saved as `.png`.
+
+    Under `architecture/` only, plain text — `.txt` and `.log`, a saved email
+    or a log excerpt kept as evidence — is a record too (DRE-7330); the same
+    extensions under the two design folders stay code."""
+    lowered = path.lower()
+    if path.startswith(_ARCHITECTURE_RECORD_PREFIX) and lowered.endswith(
+        _ARCHITECTURE_TEXT_RECORD_SUFFIXES
+    ):
+        return True
     return (
         path.startswith(_DESIGN_RECORD_PREFIXES)
-        and path.lower().endswith(_DESIGN_RECORD_SUFFIXES)
+        and lowered.endswith(_DESIGN_RECORD_SUFFIXES)
     )
 
 
@@ -733,14 +1001,16 @@ def _classify_in_commit(commit, path: str) -> str:
     and — on an onboarding routing PR — its `routing` list: a routing path
     the rules call `code`, changed only inside its repo-mirror region, is
     regenerated and proved elsewhere, so it is docs, the way a generated
-    region is (DRE-3896, DRE-7209)."""
+    region is (DRE-3896, DRE-7209). So is one changed only by the one
+    console-fact entry the routing step writes (DRE-7431)."""
     sources = commit.get("sources") or {}
     before, after = sources.get(path, (None, None))
     category = classify_path(path, before, after)
     if (
         category == "code"
         and path in (commit.get("routing") or ())
-        and is_routing_mirror_change(path, before, after)
+        and (is_routing_mirror_change(path, before, after)
+             or is_routing_entry_change(path, before, after))
     ):
         return "docs"
     return category
@@ -1140,14 +1410,16 @@ def main(argv: list[str]) -> int:
               f"RED-test")
         return 0
     if is_onboard_routing_pr(head_ref, opener):
-        # Not an exemption of the PR: only a routing path's mirror region
-        # leaves `code`, and everything else is judged below as usual.
+        # Not an exemption of the PR: only a routing path's mirror region or
+        # console-fact entry leaves `code`, and everything else is judged
+        # below as usual.
         commits = mark_routing_paths(commits)
         print(f"routing: the onboarding routing PR — opened by "
               f"{ONBOARD_BOT}[bot] (GitHub-attested), on branch "
               f"{ONBOARD_BRANCH}; a routing path changed only inside its "
-              f"generated repo-mirror region is not code here, and any "
-              f"other line or path is held to the rule")
+              f"generated repo-mirror region, or only by the one console-"
+              f"fact entry the routing step writes, is not code here, and "
+              f"any other line or path is held to the rule")
     try:
         exemptions, source = load_exemptions(base, head)
     except subprocess.CalledProcessError as e:

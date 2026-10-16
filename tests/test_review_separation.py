@@ -654,7 +654,7 @@ class TheBuildModelIsReadFromTheCardTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             path = Path(td) / "comments.json"
             path.write_text(
-                json.dumps([f"🧠 {fmf.attempt_marker(LOWER)} — devops agent"])
+                json.dumps([f"🧠 {fmf.attempt_marker(LOWER)} — devops agent starting."])
             )
             proc = subprocess.run(
                 [
@@ -968,6 +968,131 @@ class TwoSonnetsOnBothLaddersTest(unittest.TestCase):
             _rules(_fixture()),
         )
         self.assertEqual(len(_rules(_fixture())), 2)
+
+
+# The project the sandbox review ran for, read off the frozen document: the one
+# project it carries, with a Builders exception of its own.
+DEMO = next(iter(HOME["projects"]))
+# The note's clause for the rung kept because nothing else was left (DRE-6785).
+_NOTHING_ELSE = "because nothing else was left"
+
+
+class AnUnknownBuildKeepsTheProjectsReviewersExceptionTest(unittest.TestCase):
+    """DRE-7281 — with the build model unknown, no declared rule reorders the
+    reviewer's walk. A rule names ONE builder; applied when the builder is
+    unknown it pulled the build top ahead of a project's Reviewers exception
+    that builds nothing (QA Review run 38598039606, agent-bureau-demo #44), and
+    the note said the build top reviewed "because nothing else was left".
+
+    The fence is unchanged: no model that may have built the change is chosen
+    ahead of one that cannot have, and a known builder's rule still leads."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.tmp = tempfile.TemporaryDirectory()
+        # The sandbox's lever (bureau-pipeline #1121): the planners' last
+        # resort, which no build walk names, first on the project's reviewers.
+        cls.doc = model_fixture.with_project(HOME, DEMO, ADVISORY, PLAN_LAST)
+        tree = model_fixture.fixture_tree(Path(cls.tmp.name) / "tree")
+        cls.mod = model_fixture.fixture_module(tree, doc=cls.doc)
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.tmp.cleanup()
+
+    def setUp(self):
+        fmf.clear_availability_cache()
+        self.mod.clear_availability_cache()
+
+    def _decide(self, mod, role, probe=lambda m: True, **kwargs):
+        mod.clear_availability_cache()
+        return mod.select_with_reasons(role, repo=DEMO, probe=probe, **kwargs)
+
+    def test_the_fixture_is_the_sandbox_case(self):
+        builds = fmf._build_models(fmf.KINDS, fmf.effective_ladders(fmf.CONFIG, DEMO))
+        self.assertNotIn(PLAN_LAST, builds)
+        self.assertIn(UPPER, builds)
+        self.assertEqual(self.mod.ladder_for(REVIEWER_ROLES[0], DEMO),
+                         [PLAN_LAST, *_ADVICE])
+        self.assertEqual(_rules(_fixture())[UPPER], BUILD_TOP)
+
+    def test_the_exception_leads_the_walk_and_is_chosen(self):
+        for role in REVIEWER_ROLES:
+            with self.subTest(role=role):
+                got = self._decide(self.mod, role, built_on_unknown=True)
+                self.assertEqual(got["model"], PLAN_LAST)
+                self.assertEqual(got["ladder"], [PLAN_LAST, BUILD_TOP])
+                self.assertEqual(got["exception"], PLAN_LAST)
+                self.assertEqual(sorted(got["separated"]), sorted([UPPER, LOWER]))
+                self.assertFalse(got["degraded"])
+
+    def test_without_the_exception_the_walk_and_choice_are_todays(self):
+        for role in REVIEWER_ROLES:
+            with self.subTest(role=role):
+                got = self._decide(fmf, role, built_on_unknown=True)
+                self.assertEqual(got["model"], BUILD_TOP)
+                self.assertEqual(got["ladder"], [BUILD_TOP])
+                self.assertIsNone(got["exception"])
+                self.assertEqual(sorted(got["separated"]), sorted([UPPER, LOWER]))
+
+    def test_a_known_builders_rule_still_leads_with_or_without_the_exception(self):
+        for mod, walk in ((fmf, [BUILD_TOP, LOWER]),
+                          (self.mod, [BUILD_TOP, PLAN_LAST, LOWER])):
+            for role in REVIEWER_ROLES:
+                with self.subTest(exception=mod is self.mod, role=role):
+                    got = self._decide(mod, role, built_on=UPPER)
+                    self.assertEqual(got["model"], BUILD_TOP)
+                    self.assertEqual(got["ladder"], walk)
+                    self.assertEqual(got["separated"], [UPPER])
+                    self.assertEqual(mod.reviewers_for(mod.CONFIG, UPPER, DEMO), walk)
+
+    def test_no_build_rung_but_the_walks_last_is_ever_chosen(self):
+        # Every model on the fixture's build walks as the project's Reviewers
+        # exception — and the one that builds nothing — at every availability.
+        import itertools
+        builds = sorted(fmf._build_models(fmf.KINDS, fmf.effective_ladders(fmf.CONFIG, DEMO)))
+        for exception in [*builds, PLAN_LAST]:
+            doc = model_fixture.with_project(HOME, DEMO, ADVISORY, exception)
+            with tempfile.TemporaryDirectory() as td:
+                mod = model_fixture.fixture_module(
+                    model_fixture.fixture_tree(Path(td) / "tree"), doc=doc)
+                project_builds = mod._build_models(
+                    mod.KINDS, mod.effective_ladders(mod.CONFIG, DEMO))
+                self.assertEqual(sorted(project_builds), builds)
+                for role in REVIEWER_ROLES:
+                    walk = mod.ladder_for(role, DEMO)
+                    for n in range(len(walk) + 1):
+                        for down in itertools.combinations(walk, n):
+                            with self.subTest(exception=exception, role=role, down=down):
+                                got = self._decide(
+                                    mod, role, probe=lambda m, d=down: m not in d,
+                                    built_on_unknown=True)
+                                if got["model"] in project_builds:
+                                    self.assertEqual(got["model"], walk[-1])
+                                    # Nothing that builds nothing was left up.
+                                    self.assertTrue(all(
+                                        m in down for m in got["ladder"]
+                                        if m not in project_builds), got)
+
+    def test_the_note_says_nothing_else_was_left_only_when_it_was(self):
+        role = REVIEWER_ROLES[0]
+        led = self.mod.selection_note(self._decide(self.mod, role, built_on_unknown=True))
+        self.assertNotIn(_NOTHING_ELSE, led)
+        self.assertIn(f"exception {PLAN_LAST} leads", led)
+        today = fmf.selection_note(self._decide(fmf, role, built_on_unknown=True))
+        self.assertIn(
+            f"; {BUILD_TOP}, the walk's last rung, also builds for {DEMO} and "
+            f"reviews this one {_NOTHING_ELSE}", today)
+
+    def test_the_note_on_the_exception_down_names_the_skip_not_nothing_else(self):
+        # The build top reviews, but something else was left — the exception,
+        # which the probe passed over and the note names as a skip.
+        got = self._decide(self.mod, REVIEWER_ROLES[0],
+                           probe=lambda m: m != PLAN_LAST, built_on_unknown=True)
+        self.assertEqual(got["model"], BUILD_TOP)
+        note = self.mod.selection_note(got)
+        self.assertNotIn(_NOTHING_ELSE, note)
+        self.assertIn(f"skipped {PLAN_LAST}", note)
 
 
 if __name__ == "__main__":

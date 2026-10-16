@@ -209,6 +209,20 @@ mints (see `models.yaml` below).
   non-default class with no phrase, a phrase under two classes, a `default`
   that is not a class, and an `action` missing or not a `[a-z_]+` module name.
   `docs/blocker-classes.md` is the page a person reads.
+- **`notice-writers.json`** — every writer that files a Linear card
+  automatically (DRE-7452): a `_readme`, `found`, then `writers`, one row per
+  writer with `id`, `repo` (`bureau-pipeline` or `agent-bureau`), `file`,
+  `title` (the pattern it files), `disposition` and `reason`. `notice` is a
+  writer the pipeline-notices epic repoints to a console alert, carrying its
+  `notice_key` from that epic's contract; `kept` stays a card, and its `reason`
+  opens with `work`, `decision` or `record`. A row may name a `site` — the
+  function or workflow step that files its card — when its file holds other
+  writers too. `python3 scripts/notice_writers.py check` DISCOVERS every
+  card-creating file and fails, by name, on one no row declares for its repo;
+  it reads agent-bureau only when given `--agent-bureau-dir`, and this
+  repository's CI runs it without that flag (`tests/test_notice_writers.py`).
+  `report` reads each notice row as `repointed`, `still-files-cards` or
+  `unread`, and always exits 0.
 - **`proof-reach.json`** — what a dispatched proof run can read, declared once
   (DRE-6605). Four keys, in order: `github` (the proof workflow, its two mint
   steps, the `owner` they are scoped by with no `repositories`, the
@@ -391,17 +405,18 @@ no pull request.
 
 Two environment names point a process at the home:
 **`BUREAU_MODEL_HOME_TOKEN`** (a bureau App installation token for this
-repository with `variables: read`; the reader makes one GET with it) and
+repository that can read its variables; the reader makes one GET with it) and
 **`BUREAU_MODEL_HOME_FILE`** (a path to a local copy, read instead of the API).
 A name counts as set when it is in the environment, even empty — an empty token
-is a mint that failed. With neither, nobody asked for a home: the run is on the
+is a mint that failed, and the reader's line says `the token mint was refused`
+and `the built-in defaults are in use`. With neither, nobody asked for a home: the run is on the
 defaults in the code, exactly as before the home.
 
 A run gets the token from its own job (DRE-6940). A run's boot token is
 minted for the calling repository only, so each job holding a step whose
 process reads the home carries a `Mint the model-home read token` step (id
 `model_home`, owner `dreadnought-foundry`, repository `bureau-pipeline`,
-`permission-variables: read`, `continue-on-error: true`), and hands
+`continue-on-error: true`, and no `permission-*` input), and hands
 `${{ steps.model_home.outputs.token }}` to those steps alone — never a job
 output or `$GITHUB_ENV`, so the agent steps beside them never hold it (and the
 harness hands it to its selector child, never to the agent it launches). A
@@ -414,6 +429,24 @@ steps read the home is declared in the scripts: a module-level
 for every one. `scripts/check_model_home_scope.py`, a step of Pipeline Tests,
 fails a reading step without the token and a script that reaches the home
 without the declaration.
+
+**Why the mint asks for no permission subset (DRE-7230).** The pinned
+`actions/create-github-app-token` (v3.2.0, and v3.3.0 after it) declares no
+input for repository variables. Handed the undeclared `permission-variables`,
+it warned, forwarded it anyway, and GitHub refused every mint, so every run
+read the home as unreadable. Each model-home mint — the reads, their
+re-mints, and the two write mints (`model_home_write`, in Model Home Carry
+and Model Adoption) — therefore asks for no subset, and its token carries
+every permission the bureau App's installation grants on `bureau-pipeline`,
+variables included. Two limits hold it: the token is scoped to that one
+repository, and it reaches only the steps that read (or, for a write token,
+write) the home, by the rule above. `scripts/check_model_home_scope.py` fails
+any model-home mint that asks for a subset without variables, or for another
+owner or repository, and `tests/test_app_token_inputs.py` fails any step that
+hands the action an input its pinned release does not declare, read from a
+copy of that release's inputs in
+`tests/fixtures/create-github-app-token-inputs.json`. The write mints keep no
+`continue-on-error`, so a refused write is red.
 
 Every read prints one line tagged `model-home:` to stderr, above the selection
 note, and the note ends with the home's clause:
@@ -659,10 +692,18 @@ note says the build model was skipped for separation, and the review fails
 loudly until a Sonnet returns. `tests/test_model_choice_policy.py` holds the
 four scenarios the decision named.
 
-The critic's and the verifier's Select-model steps read the model the build ran
-on off the card's own `model-attempt:` heartbeat
-(`model_fallback.py build-model`) and pass it as `--built-on`, which takes that
-rung off the reviewer's walk. A card they cannot read is `--built-on-unknown`,
+The critic's and the verifier's Select-model steps read **every** model the
+card records as having built the change (`model_fallback.py build-model`,
+DRE-7303) and pass them as `--built-on <a>,<b>`, which takes each of those rungs
+off the reviewer's walk. A build line is `🧠 model-attempt: <model-id> — <role>
+agent starting` with any role but `planner`; an authoring line is one whose role
+is not `fixer`. `build-model` prints the build lines' models oldest first,
+comma-joined, and **nothing** when the thread holds no authoring line — a fixer's
+line alone does not say who built the change. When the barred models are every
+rung on the reviewer's walk, `select` chooses no reviewer: it exits non-zero
+with one `::error::build/review separation: …` line, the Select model step
+fails, and a person decides. A card they cannot read, or one with no authoring
+line, is `--built-on-unknown`,
 which bars **every** model on the reviewer's walk that also sits on that
 project's build walk, **except the walk's last rung**, which stays whatever
 other walk it sits on: absence of evidence that the build ran on something else
@@ -676,8 +717,8 @@ Opus 5.5 it would be `claude-sonnet-5`, the Builders' own last rung.
 **A cardless pull request is the everyday case of that.** A bot PR has no card,
 so its critic runs `--built-on-unknown`, skips both Sonnet rungs and lands on
 the Opus rung — `claude-opus-5-5` since DRE-4836. A hand-built PR on an
-`agent/DRE-<n>-*` branch whose card carries a `model-attempt:` heartbeat naming
-any model but a Sonnet is reviewed on Sonnet 5.5 as usual.
+`agent/DRE-<n>-*` branch whose card carries an authoring line naming any model
+but a Sonnet is reviewed on Sonnet 5.5 as usual.
 `tests/test_review_separation.py::test_an_unknown_build_model_still_never_reviews_on_an_overlap_model`
 is what holds it.
 

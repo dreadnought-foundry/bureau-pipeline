@@ -628,8 +628,10 @@ jobs:
 
       # The model home (DRE-6939) is a variable on
       # dreadnought-foundry/bureau-pipeline, which a run's boot token in another
-      # organization cannot read. A narrow token for the bureau App's installation
-      # there, handed only to the steps below whose process reads the home
+      # organization cannot read. A token for the bureau App's installation
+      # there, for bureau-pipeline alone and with no permission subset — the
+      # pinned action declares no variables input (DRE-7230) — handed only to
+      # the steps below whose process reads the home
       # (DRE-6940, held by scripts/check_model_home_scope.py). A refused mint
       # leaves it empty and the selector on the defaults in the code — never a
       # failed job.
@@ -643,7 +645,6 @@ jobs:
           private-key: ${{ secrets.BUREAU_APP_PRIVATE_KEY }}
           owner: dreadnought-foundry
           repositories: bureau-pipeline
-          permission-variables: read
       # Model selection for the verifier (DRE-2316). It used to carry a pinned
       # Sonnet id twice in this file — one no config edit could change and the
       # agent registry could not see. The id now comes
@@ -656,9 +657,15 @@ jobs:
       # A SONNET-5 BUILD IS NEVER VERIFIED BY SONNET 5 (DRE-3880). The verifier
       # is the second reviewer role the `review_separation` block binds, and it
       # does this exactly the way the critic's step in qa-review.yml does:
-      # `build-model` reads the model this card's last attempt ran on out of
-      # its own `model-attempt:` heartbeat, `--built-on` hands it to the ladder
-      # walk, and a card we cannot read is `--built-on-unknown`, which bars
+      # `build-model` reads every model the card records as having built the
+      # change — each `model-attempt: <id> — <role> agent starting` line but
+      # the planner's, the fixer's among them, oldest first and comma-joined
+      # (DRE-7303) — and `--built-on` hands that list to the ladder walk, which
+      # takes every one of those rungs off. When they are every model on the
+      # verifier's walk, `select` chooses no reviewer: it exits non-zero with
+      # one ::error:: line, which fails the step, and a person decides. A
+      # thread with only fixer lines, or none, prints nothing, and that or a
+      # card we cannot read is `--built-on-unknown`, which bars
       # every declared overlap. Fail CLOSED — absence of evidence that the
       # build ran on something else is not evidence that it did. The substitute
       # is DATA (config/models.yaml), never a literal here.

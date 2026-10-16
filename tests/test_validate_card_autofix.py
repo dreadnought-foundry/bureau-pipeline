@@ -23,6 +23,7 @@ Inference rules (mirrors the relay's REPO_MAP convention — see validate_card):
 """
 
 import inspect
+import json
 import os
 import sys
 import unittest
@@ -113,14 +114,15 @@ class InferRepoTest(unittest.TestCase):
         self.assertEqual((slug, source), ("portico", "initiative:portico"))
 
     def test_valid_slugs_includes_agent_bureau(self):
+        # DRE-7356: the routed set is read from config/repo-map.json, never
+        # restated here — a literal list turned every onboarding's routing
+        # pull request red the moment it added a repo.
+        repo_map = os.path.join(
+            os.path.dirname(__file__), "..", "config", "repo-map.json")
+        with open(repo_map, encoding="utf-8") as fh:
+            routed = set(json.load(fh))
         self.assertIn("agent-bureau", validate_card.VALID_SLUGS)
-        self.assertEqual(
-            validate_card.VALID_SLUGS,
-            {"atlas", "deltasolv", "agent-bureau",
-             "agent-bureau-demo", "bureau-pipeline",  # DRE-1929 self-host
-             "portico"},  # DRE-2086 docs-platform → portico rename
-            # DRE-2672: vericorr retired — the fleet no longer routes to it.
-        )
+        self.assertEqual(validate_card.VALID_SLUGS, routed)
 
 
 # --- cmd_gate fix-first behavior (linear_ops stubbed) -----------------------

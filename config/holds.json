@@ -423,6 +423,25 @@
       ]
     },
     {
+      "file": "scripts/release_deferral.py",
+      "scope": "<module>",
+      "anchor": "a person finishes it, nothing builds it",
+      "note": "CARD_LABELS: the deferred-release notice card is created in Green Light already held, with no stamp — a person reads it, and the surface's next verified tag closes it Done (DRE-5235).",
+      "reasons": [
+        {
+          "reason": "manual",
+          "lifts": "manual",
+          "tried_first": "none — a person, or a writer creating a card already held, chose it"
+        }
+      ],
+      "readers": [
+        "sweep",
+        "fix-dispatch",
+        "medic",
+        "limit-recovery"
+      ]
+    },
+    {
       "file": "scripts/linear_ops.py",
       "scope": "_file_operator_hold",
       "anchor": "filed as an operator step",

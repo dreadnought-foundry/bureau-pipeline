@@ -291,9 +291,9 @@ def test_today_s_regime_an_unreadable_home_runs_on_the_literal(base, excepted):
     chosen, note = select(tree, BUILDER, "--repo", slug, **LIVE)
     assert chosen == model
     assert note.startswith("DEGRADED ")
-    assert note.endswith("· model-home: unreadable (BUREAU_MODEL_HOME_TOKEN is set and "
-                         "empty, so the token mint failed), running on the defaults in "
-                         "the code")
+    assert note.endswith("· model-home: unreadable (the token mint was refused: "
+                         "BUREAU_MODEL_HOME_TOKEN is set and empty), running on the "
+                         "defaults in the code")
     plain, plain_note = select(base, BUILDER, "--repo", slug, **LIVE)
     assert plain != model
     assert "no exception, fleet ladder · model-home: unreadable" in plain_note

@@ -1705,7 +1705,21 @@ FLEET_OUTAGE_LANE = "Triage"
 # recovery reads `active_cards(SWEPT_LANES)` and replans from Triage
 # (`limit_recovery.REPLAN_FROM`), so handing it this read would start moving
 # parked Triage cards to Planning.
-BOARD_READ_LANES = tuple(dict.fromkeys(SWEPT_LANES + (FLEET_OUTAGE_LANE,)))
+#
+# And the lanes the contract is retiring (DRE-6753), which `drain_retiring_lanes`
+# empties into their replacements. The queue's old name is one for good — Linear
+# keeps a team's only backlog-type status, so the state is never archived — and
+# a drain with a read of its own would spend a Linear request on every repo's
+# sweep, forever, for a lane that should be empty. In this read it costs none.
+# Only the drain asks for these lanes, and `active_cards` filters to the lanes
+# asked, so no other reader starts acting on a card in one.
+RETIRING_LANES = tuple(
+    lane["name"] for lane in lane_contract.lanes(status="retiring")
+    if lane.get("replaced_by")
+)
+BOARD_READ_LANES = tuple(
+    dict.fromkeys(SWEPT_LANES + (FLEET_OUTAGE_LANE,) + RETIRING_LANES)
+)
 
 # How the read door serves those lanes (Stage 2 #6a, DRE-5848). The work
 # lanes, where this repo's own cards are, are one `scope=repo` read. Intake and
@@ -1796,18 +1810,20 @@ def drain_retiring_lanes() -> None:
     third, and the contract entry is deleted fourth. Archiving before the drain
     would fail every in-flight write instead.
 
-    NOTHING IS RETIRING TODAY, and that is deliberate rather than neglect
-    (DRE-2818): the operator confirmed DRE-2726's drain was finished, Linear
-    archived both states, and the two entries were deleted — a retiring entry
-    whose state Linear already dropped is itself drift, and
-    `board.retired_entry_is_deleted` fails on it. This function stays because
-    it is step two of a protocol the contract still defines: `retiring` remains
-    a validated lane status with a mandatory board step, and the Phase-3 rule
-    `board.retiring_lane_is_empty` names this drain as its prerequisite. With
-    an empty retiring set it returns before it reads anything from Linear, and
-    tests/test_lane_fold_in_review.py pins both that inertness and — against an
-    injected retiring lane, since the real file no longer has one — the
-    behaviour it will have on the next retirement.
+    DRE-2818 finished DRE-2726's retirement: the operator confirmed the drain
+    was done, Linear archived both states, and the two entries were deleted —
+    a retiring entry whose state Linear already dropped is itself drift, and
+    `board.retired_entry_is_deleted` fails on it. This function stayed as step
+    two of the protocol, and DRE-6753 is its next use: the queue's old name
+    retires into Queued. Linear keeps a team's only backlog-type status, so
+    that state stays on the board and its entry stays with it — the drain
+    moves any card that lands there, on every sweep, for as long as it does.
+    So the read costs nothing of its own: the lane rides the sweep's one board
+    read (RETIRING_LANES in BOARD_READ_LANES), and in `BUREAU_READ=on` the
+    door serves it (`_door_retiring_cards`). With an empty retiring set it
+    returns before it reads anything at all, and
+    tests/test_lane_fold_in_review.py pins both that inertness and the drain
+    against the real retiring entry.
 
     Idempotent by construction — `cmd_advance` moves a card only while it is
     still in the lane named, so a second sweep finds nothing and a race between
@@ -2174,8 +2190,9 @@ def active_cards(states: tuple[str, ...] = SWEEP_STATES) -> list[dict]:
     byte-identical to its own query's, and the sweep's Linear cost is a
     function of the lanes rather than of the cards in them. A caller asking
     for a lane OUTSIDE that read gets a real query: the read is what was read,
-    and answering from it would be a confident empty (drain_retiring_lanes is
-    that caller by construction).
+    and answering from it would be a confident empty. The retiring lanes are
+    IN the read since DRE-6753, so drain_retiring_lanes is no longer that
+    caller.
 
     THE READ DOOR (Stage 2 #6a, DRE-5848). In `BUREAU_READ=on` the work lanes
     come from the console's door at `scope=repo`, and Intake/Planning
@@ -2184,7 +2201,8 @@ def active_cards(states: tuple[str, ...] = SWEEP_STATES) -> list[dict]:
     door that declines the fleet scope to this repo to the one Linear read of
     those two lanes (`_fleet_or_linear`). In `shadow` the door is read FIRST
     and compared, and Linear's answer is the one used. In `off` (the default)
-    nothing changes.
+    nothing changes. The retiring lanes, which neither of the door's groups
+    carries, are a read of their own (`_door_retiring_cards`).
     """
     global _swept_cards
     wanted = set(states)
@@ -2198,6 +2216,8 @@ def active_cards(states: tuple[str, ...] = SWEEP_STATES) -> list[dict]:
             if bureau_read.mode() == "shadow":
                 _shadow_compare_board(_swept_cards)
         return [card for card in _swept_cards if card["state"]["name"] in wanted]
+    if wanted and wanted <= set(RETIRING_LANES):
+        return [c for c in _door_retiring_cards() if c["state"]["name"] in wanted]
     if not wanted <= set(SWEPT_LANES):
         # The door serves DOOR_WORK_LANES and DOOR_LINEAR_LANES, and neither
         # holds the outage lane: a real query, never a confident empty.
@@ -2302,6 +2322,48 @@ def _fleet_or_linear(lanes: tuple[str, ...], label: str) -> list[dict]:
     if cards is None:
         cards = _fetch_active_cards(lanes)
     _fleet_lane_cards[lanes] = cards
+    return cards
+
+
+def _door_retiring_cards() -> list[dict]:
+    """The retiring lanes in `BUREAU_READ=on` (DRE-6753), with no Linear
+    request of their own: the door's `scope=fleet` read, every repo's card —
+    or, when the door declines that scope to this repo, its `scope=repo` read,
+    this repo's own. A card in one that no repo owns is then drained by the
+    next sweep that reads Linear's board, whose one read carries these lanes.
+
+    Asked once per pass and cached with the fleet groups. A door that cannot
+    answer at all sends the read to Linear, as every read is sent; a
+    `linear-hold` raises BoardHeld and the drain skips this pass (item 34).
+    """
+    if RETIRING_LANES in _fleet_lane_cards:
+        return _fleet_lane_cards[RETIRING_LANES]
+    cards = None
+    for scope in ("fleet", "repo"):
+        if not bureau_read.enabled():
+            break
+        try:
+            read = bureau_read.board(RETIRING_LANES, scope=scope,
+                                     max_age=bureau_read.BOARD_MAX_AGE)
+        except bureau_read.ReadUnknown as e:
+            if e.skip:
+                raise BoardHeld(e.reason) from e
+            if e.unavailable or scope == "repo":
+                print(f"read-door: board unknown ({e}) — read from Linear this pass")
+                break
+            print("read-door: the retiring lanes read at scope=repo this pass — the "
+                  f"door does not serve scope=fleet to this repo ({e.reason})")
+            continue
+        cards = list(read.nodes)
+        for card in cards:
+            _door_sourced.add(card["identifier"])
+            linear_ops.remember_comments(card.get("identifier"), card.get("comments"))
+        break
+    if cards is None:
+        if _door_hold:
+            raise BoardHeld(_door_hold[0])
+        cards = _fetch_active_cards(RETIRING_LANES)
+    _fleet_lane_cards[RETIRING_LANES] = cards
     return cards
 
 

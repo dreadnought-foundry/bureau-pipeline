@@ -15,7 +15,7 @@
     "does not exist, or an actor that is not a permitted writer OF THAT LANE,",
     "fails its own check instead of becoming a dead end. OPERATOR and WORKBENCH",
     "shipped without that binding and sent cards to a turn that never came",
-    "(DRE-2735); PARKED named `operator` on `Backlog`, a lane whose writers are",
+    "(DRE-2735); PARKED named `operator` on the queue, a lane whose writers are",
     "all process (DRE-2824). Both were data, and a check like this one is what",
     "found them.",
     "",

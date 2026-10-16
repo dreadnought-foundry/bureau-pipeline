@@ -47,11 +47,11 @@ CONTRACT = os.path.join(
 # every other list in the pipeline is derived from the contract file.
 # DRE-5320 made it twelve: `Hand-work`, the person-work lane after Todo.
 # DRE-6740 made it thirteen: `Queued`, the queue that replaces Backlog.
+# DRE-6753 made it twelve again: Backlog is retiring, no longer live.
 LIVE_LANES = (
     "Intake",
     "Planning",
     "Green Light",
-    "Backlog",
     "Queued",
     "Todo",
     "Hand-work",
@@ -119,7 +119,9 @@ class TestTheFileExists:
         # `hand_work_migration.py` joined it on DRE-6227: the migration returns
         # a code card with a critic pass from Hand-work here, carrying a fresh
         # FLEET verdict, for the sweep to promote (DRE-6230).
-        assert lane_contract.lane_writers("Backlog") == (
+        # The list moved to Queued with the lane (DRE-6740); the lane it
+        # replaced is retiring and permits no writer (DRE-6753).
+        assert lane_contract.lane_writers("Queued") == (
             "plan.yml", "mid_epic.py", "reconcile.py", "dead_run.py",
             "linear_ops.py", "agent-task.yml", "hygiene.py", "hand_work_migration.py",
         )
@@ -170,8 +172,12 @@ class TestLaneCleanup:
         # DRE-2818. The board half (agent-bureau's config/linear-workspace.json)
         # is done — Linear no longer has either state — so the entries were the
         # last copy of two lanes that do not exist. Keeping them is drift, and
-        # the harness said so by rule id on every trunk commit.
-        assert lane_contract.lanes(status="retiring") == ()
+        # the harness said so by rule id on every trunk commit. The one
+        # retiring entry left is the queue's old name (DRE-6753).
+        retiring = lane_contract.lane_names(status="retiring")
+        for name in RETIRED_LANES:
+            assert name not in retiring
+        assert retiring == ("Backlog",)
 
     def test_the_contract_file_spells_neither_name_anywhere(self):
         # Not just the entries. The rationale prose named them too, and a grep
@@ -183,7 +189,7 @@ class TestLaneCleanup:
                 "no longer has"
             )
 
-    def test_the_thirteen_live_lanes_are_exactly_the_board(self):
+    def test_the_twelve_live_lanes_are_exactly_the_board(self):
         assert set(lane_contract.lane_names(status="live")) == set(LIVE_LANES)
 
     def test_the_merged_lane_keeps_the_longer_stall_window(self):
@@ -294,9 +300,12 @@ class TestTheQueueLanes:
     def test_the_planning_exit_lands_in_queued(self):
         assert lane_contract.planning_exit() == ("Green Light", "Queued")
 
-    def test_both_names_are_live_lanes(self):
-        assert lane_contract.lane("Backlog")["status"] == "live"
+    def test_the_new_name_is_live_and_the_old_one_retiring(self):
+        # DRE-6753: the old name stays on the board and in the alias, so a
+        # reader still resolves it, but it is no longer a lane anybody writes.
         assert lane_contract.lane("Queued")["status"] == "live"
+        assert lane_contract.lane("Backlog", status="retiring")["replaced_by"] == "Queued"
+        assert "Backlog" not in lane_contract.lane_names()
 
     def test_queue_lanes_reads_queued_then_every_name_aliased_to_it(self):
         assert lane_contract.queue_lanes() == ("Queued", "Backlog")

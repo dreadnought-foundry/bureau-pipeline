@@ -150,16 +150,20 @@ def _evaluate(expr: str, values: dict) -> bool:
     return bool(eval(body, {"__builtins__": {}}, {}))  # noqa: S307 — test-only, literals
 
 
-def _fill(template: str, row: dict, temp: Path) -> str:
-    """`${{ runner.temp }}` and `${{ matrix.<key> }}`, filled in."""
+def _fill(template: str, row: dict, temp: Path, model: str = "") -> str:
+    """`${{ runner.temp }}`, `${{ matrix.<key> }}` and the model step's
+    `${{ steps.model.outputs.model }}` (empty when that step was skipped),
+    filled in."""
     value = template.replace("${{ runner.temp }}", str(temp))
+    value = value.replace("${{ steps.model.outputs.model }}", model)
     value = re.sub(r"\$\{\{\s*matrix\.(\w+)\s*\}\}", lambda m: str(row[m.group(1)]), value)
     assert "${{" not in value, f"an expression this test cannot fill: {value!r}"
     return value
 
 
-def _step_env(step: dict, row: dict, temp: Path) -> dict:
-    return {k: _fill(str(v), row, temp) for k, v in (step.get("env") or {}).items()
+def _step_env(step: dict, row: dict, temp: Path, model: str = "") -> dict:
+    return {k: _fill(str(v), row, temp, model)
+            for k, v in (step.get("env") or {}).items()
             if "secrets." not in str(v)}
 
 
@@ -532,7 +536,9 @@ class TestTheAgentStep:
         assert mint["continue-on-error"] is True
         assert mint["with"]["owner"] == "dreadnought-foundry"
         assert mint["with"]["repositories"] == "bureau-pipeline"
-        assert mint["with"]["permission-variables"] == "read"
+        # No permission subset: the pinned action declares no variables
+        # input, and one it does not declare is refused (DRE-7230).
+        assert not [k for k in mint["with"] if k.startswith("permission-")]
         assert (_step("repair", "Select model")["env"]["BUREAU_MODEL_HOME_TOKEN"]
                 == "${{ steps.model_home.outputs.token }}")
 
@@ -696,10 +702,11 @@ class TestThePrompt:
 # --------------------------------------------------------------------------- #
 
 
-def _apply_argv(row: dict, temp: Path, work: Path) -> list[str]:
-    """The `apply` step's own command line, for one matrix card."""
+def _apply_argv(row: dict, temp: Path, work: Path, model: str = "") -> list[str]:
+    """The `apply` step's own command line, for one matrix card, with the
+    model step's output `model` (empty when that step was skipped)."""
     step = next(s for s in _job("repair")["steps"] if _runs(s, "triage_repair.py apply"))
-    result, _, argvs = _bash(step["run"], _step_env(step, row, temp), work)
+    result, _, argvs = _bash(step["run"], _step_env(step, row, temp, model), work)
     assert result.returncode == 0, result.stderr
     assert len(argvs) == 1
     assert argvs[0][0] == f"{_fill(TRUSTED, row, temp)}/scripts/triage_repair.py"

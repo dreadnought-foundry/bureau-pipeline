@@ -411,8 +411,10 @@ def test_an_agreed_cancel_row_is_executed_by_the_drain():
     assert ("DRE-1", "Canceled") in ops.state_writes
     assert {s for _, s in ops.state_writes} == {"Planning", "Canceled"}
     notes = [b for t, b in ops.written if t == "DRE-1"]
-    assert notes == [groomer.cancelled_note(proposal["id"],
-                                            "superseded by DRE-2719")]
+    # The reason ends with the row's proof (DRE-7241): the line itself.
+    assert notes == [groomer.cancelled_note(
+        proposal["id"], "superseded by DRE-2719; the card's Superseded by "
+                        "line — **Superseded by:** DRE-2719")]
 
 
 def test_the_doc_describes_the_drain_as_moving_the_approved_record():

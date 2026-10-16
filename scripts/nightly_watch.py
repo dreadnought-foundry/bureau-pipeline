@@ -91,6 +91,21 @@ is said once a day on the UNKNOWN card, and an ordinary hour's throttle is in
 the step summary and nowhere else. A missing nightly or a genuine UNKNOWN
 beside it still alarms on any hour.
 
+A SERVER ERROR IS RETRIED, BRIEFLY (DRE-7352)
+---------------------------------------------
+Watch run 38672076834 was answered `No server is currently available to
+service your request. … (HTTP 503)` for one workflow file, and filed the
+UNKNOWN card for an outage on GitHub's side that was over in seconds. A read
+GitHub answers with `(HTTP 5xx)` is therefore asked again, up to the read
+seam's own `ATTEMPTS`, waiting its own `backoff_seconds()` between them — and
+only that: a 404, a 403, a throttle, an empty answer and a non-JSON one are
+each decided on the first attempt, as before. One watch run spends at most
+`SERVER_ERROR_RETRIES_PER_RUN` waits on it in all, so an hour of GitHub
+being down cannot run the job out of time; past that, a 5xx is UNKNOWN on its
+first attempt. Each retry is one line in the run log, never on the card, and
+a 5xx that outlasts its retries is UNKNOWN with GitHub's last answer. The
+shared read seam is not changed; this is the watcher's own retry.
+
 KNOWN LIMIT, STATED SO IT IS NOT MISTAKEN FOR COVERAGE
 ------------------------------------------------------
 The 2026-09-22 outside-read audit (DRE-4655..4665) found that production has no
@@ -108,10 +123,12 @@ from __future__ import annotations
 import argparse
 import base64
 import datetime as dt
+import functools
 import json
 import os
 import re
 import sys
+import time
 from dataclasses import dataclass
 from typing import Callable
 
@@ -126,7 +143,9 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 # groomer's lookup legs read.
 from cron_clock import elapsed_days as elapsed, hours_since  # noqa: E402
 from check_workflow_watchers import on_block  # noqa: E402
-from gh_read_retry import GhReadError, read as gh_read  # noqa: E402
+from gh_read_retry import (  # noqa: E402
+    ATTEMPTS, GhReadError, backoff_seconds, read as gh_read,
+)
 from release_train import fleet_owners, fleet_roster as roster  # noqa: E402
 
 #: Hours since the newest schedule run at which a nightly is late. A nightly
@@ -727,8 +746,40 @@ def evaluate(readings: list, *, owner: str = "",
 #: How the gh CLI reports GitHub's 404 on stderr: `gh: Not Found (HTTP 404)`.
 NOT_FOUND_STATUS = re.compile(r"\(HTTP 404\)")
 
+#: …and a server error, the same way: `(HTTP 503)`. Matched on the status, so a
+#: message that merely contains 5xx digits is never read as one (DRE-7352).
+SERVER_ERROR_STATUS = re.compile(r"\(HTTP 5\d\d\)")
 
-def _gh_api(path: str):
+#: Retry waits one watch run may spend on server errors, across every read it
+#: makes. Two is one read's full set of retries — under a minute at the read
+#: seam's default backoff — so an hour of GitHub being down costs the 15-minute
+#: job at most that, and is UNKNOWN as it always was (DRE-7352).
+SERVER_ERROR_RETRIES_PER_RUN = 2
+
+
+class RetryBudget:
+    """The server-error retry waits one watch run has left.
+
+    Made per `watch`, never at import, so one run — or one test — cannot spend
+    another's.
+    """
+
+    def __init__(self, waits: int = SERVER_ERROR_RETRIES_PER_RUN):
+        self.left = waits
+
+    def spend(self) -> bool:
+        if self.left <= 0:
+            return False
+        self.left -= 1
+        return True
+
+
+def _server_error(refusal: GhReadError) -> bool:
+    return (not refusal.rate_limited
+            and bool(SERVER_ERROR_STATUS.search(refusal.stderr or "")))
+
+
+def _gh_api(path: str, *, budget: RetryBudget | None = None):
     """One GitHub read, retried through the shared read seam.
 
     Every refusal — a throttle that outlasted its retries, a 404, a token that
@@ -742,16 +793,39 @@ def _gh_api(path: str):
     `GhReadError` carries no HTTP status, and `gh` says it only on stderr, as
     `Not Found (HTTP 404)`; the match is on that exact status, so a throttle or
     a 5xx whose message merely contains the digits 404 is never mistaken for it.
+
+    A server error — `(HTTP 5xx)` on stderr, and not a throttle — is asked
+    again, up to `ATTEMPTS` in all with `backoff_seconds()` between, while
+    `budget` (the run's, or a fresh one for a lone read) has a wait left
+    (DRE-7352). Nothing else is retried here.
     """
-    try:
-        answer = gh_read(["api", path], log=lambda line: print(line, file=sys.stderr))
-    except GhReadError as refusal:
-        raise Unreadable(
-            str(refusal),
-            not_found=(not refusal.rate_limited
-                       and bool(NOT_FOUND_STATUS.search(refusal.stderr or ""))),
-            throttled=bool(refusal.rate_limited),
-        ) from refusal
+    budget = budget if budget is not None else RetryBudget()
+    waits = backoff_seconds()
+
+    def log(line: str) -> None:
+        print(line, file=sys.stderr)
+
+    for attempt in range(1, ATTEMPTS + 1):
+        try:
+            answer = gh_read(["api", path], log=log)
+            break
+        except GhReadError as refusal:
+            retry = (attempt < ATTEMPTS and _server_error(refusal)
+                     and budget.spend())
+            if not retry:
+                raise Unreadable(
+                    str(refusal),
+                    not_found=(not refusal.rate_limited
+                               and bool(NOT_FOUND_STATUS.search(refusal.stderr or ""))),
+                    throttled=bool(refusal.rate_limited),
+                ) from refusal
+            wait = waits[min(attempt - 1, len(waits) - 1)]
+            log(
+                f"gh-read: GitHub answered `gh api {path}` with a server error "
+                f"on attempt {attempt} of {ATTEMPTS} — retrying in {wait:g}s: "
+                f"{(refusal.stderr or '')[:200]}"
+            )
+            time.sleep(wait)
     if not answer:
         raise Unreadable(f"the answer to {path} was empty")
     try:
@@ -779,8 +853,10 @@ def _cmd_watch(args) -> int:
     reconfirm = should_reconfirm(args.now or None)
     # A throttle alone is said on the one hour a day the watcher already
     # speaks about standing conditions (DRE-6461).
+    # One server-error retry budget for this run's every read (DRE-7352).
+    api = functools.partial(_gh_api, budget=RetryBudget())
     verdict = evaluate(
-        collect(_gh_api, roster=fleet, now=args.now or None),
+        collect(api, roster=fleet, now=args.now or None),
         owner=args.owner or "",
         speak_throttled=reconfirm,
     )

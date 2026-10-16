@@ -15,7 +15,7 @@ keep a census, and a script under `scripts/` was invisible to all four:
 The property: one fixture workflow, written to a temp root twice — once inline
 and once moved with `step_shell.move` — reads the same through all four. The
 fixture carries the shapes the real blocks use: a `linear_ops.py state "$CARD"
-"Backlog"` write, a `pipeline_act.py receipt` posted through `--body-file`, an
+"Queued"` write, a `pipeline_act.py receipt` posted through `--body-file`, an
 `--act=` flag assembled into a variable, a raw post the registry excuses by
 step, and a `code_owner_hold.py hold` that reaches `park`. Each reader's result
 is also checked for what it must contain, so two empty answers never pass as
@@ -70,7 +70,7 @@ FIXTURE = textwrap.dedent("""\
               CARD: DRE-1
             run: |
               # DRE-5220: the shapes the real blocks use.
-              python3 .bureau-pipeline/scripts/linear_ops.py state "$CARD" "Backlog"
+              python3 .bureau-pipeline/scripts/linear_ops.py state "$CARD" "Queued"
               python3 .bureau-pipeline/scripts/pipeline_act.py receipt fixture-bounce \\
                 --body "Bounced <!-- fixture-bounce-tag -->" --out /tmp/fixture-receipt.md
               gh pr comment "$PR" --body-file /tmp/fixture-receipt.md
@@ -226,7 +226,7 @@ def test_ready_lane_writers_discover_the_same_writes(trees):
     assert ready_lane_writers.writes(str(moved)) == writes
     # The workflow's own lane write.
     assert any(
-        w.writer == "fixture.yml" and w.how == "workflow" and w.lane == "Backlog"
+        w.writer == "fixture.yml" and w.how == "workflow" and w.lane == "Queued"
         and w.where.startswith(f"{WORKFLOW}:")
         for w in writes
     ), writes
@@ -252,11 +252,16 @@ def test_ready_lane_writers_read_the_seam_variable_as_the_queue_lane(trees):
 def test_ready_lane_writers_read_the_seam_variable_with_the_exit_moved(trees, monkeypatch):
     """Moving the planning exit (DRE-6742 moved it to Queued) moves what the
     seam prints, and the census reads the moved value — never a name of its
-    own. Put back, it prints the old name."""
-    monkeypatch.setattr(lane_contract, "queue_lane", lambda contract=None: "Backlog")
+    own. Moved to another live lane, it prints that lane; put back to the old
+    name, which is retiring (DRE-6753), it prints a destination no live lane
+    names — unread, never a pass."""
     inline, moved = trees
+    monkeypatch.setattr(lane_contract, "queue_lane", lambda contract=None: "Todo")
     for root in (inline, moved):
-        assert [w.lane for w in _seam_writes(root)] == ["Backlog"]
+        assert [w.lane for w in _seam_writes(root)] == ["Todo"]
+    monkeypatch.setattr(lane_contract, "queue_lane", lambda contract=None: "Backlog")
+    for root in (inline, moved):
+        assert [w.lane for w in _seam_writes(root)] == [None]
 
 
 def test_a_variable_no_seam_assigns_stays_unread(tmp_path):

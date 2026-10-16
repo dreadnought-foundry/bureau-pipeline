@@ -144,6 +144,28 @@ exhausted` or `holding for a human` — the console's `enrich.HOLD_MARKERS` read
 either phrase as a fix-budget hold, and the card would render as the wrong kind
 of stuck on a surface nobody would think to check.
 
+**A hold that waits only for a time** (DRE-7228) is written with
+`proof-waiting-until`, and that is the form to use for one — a day of jobs
+counted from a live-at time, a morning's scheduled run:
+
+    python3 scripts/linear_ops.py proof-waiting-until DRE-N \
+      "the day of jobs on the pinned machine family" "2026-10-12T14:33-07:00"
+
+It posts the same hold through `proof-waiting`, so the trailer and the
+console's `Waiting for proof — <reason>` are unchanged, with the `needs` half
+written by the command and never by the caller:
+`🔬 proof-waiting: <what is still to be observed> — needs not-before=<ISO time
+with offset>`. It refuses a time that does not parse with
+`datetime.fromisoformat`, a time with no UTC offset, and an observed half naming
+`the CEO's press`, and posts nothing. A hold whose `needs` half is that one
+clause and nothing else is **time-only** (`proof_record.time_only`): once every
+open hold on a `Hand-work` PROOF card is time-only and every time has passed, the
+proof dispatcher posts one `🔬 proof-observed` quoting each time and the card
+goes on to its first run on the same pass. A clause beside other words, a hold
+naming the CEO's press, and a date in prose are held exactly as before — nothing
+reads a date out of prose — and a time hold beside any other open hold is never
+lifted by time, because one `🔬 proof-observed` would lift that hold too.
+
 ## The row whose NUMBERS are data — `🚨 fleet-reviewer-outage` (DRE-3433)
 
 | Field | Value |
@@ -533,6 +555,7 @@ last, after every other write of its outcome:
     🩹 triage-repair: rewritten — … The findings, each with its answer:
     🩹 triage-repair: asked — … the card's description is unchanged.
     🩹 triage-repair: replanned — … The findings in front of the planner:
+    🩹 triage-repair: split — … The cards filed: … The findings, each with its answer:
     🩹 triage-repair: unfinished — <what failed or was missing>. Writes already made: <list>.
 
 `replanned` is an epic's (DRE-7181): a card with children that has had no
@@ -543,8 +566,12 @@ bound rewrite, and whose findings are there and name no decision, gets the
 move to Planning, where a fresh planning attempt starts. An epic carrying a
 bound-rewrite receipt anywhere on its thread is `spent`; one whose findings
 name a decision is `escalate`, as the bound itself asks it, and one whose park
-left no findings is `skip`. `split` is the
-split's (DRE-7182). **The receipt key is live**: a pipeline-authored comment whose
+left no findings is `skip`. `split` is a card that is more than one job
+(DRE-7182): narrowed to its first piece with each other piece filed beside it
+through the seam its parent decides (`mid_epic.discovery` under an epic being
+built, `linear_ops.cmd_subissue` under any other parent, `linear_ops.cmd_oneoff`
+with none), or stamped `epic` through `planning_shape.stamp` as the planner,
+then lifted and moved to Planning. **The receipt key is live**: a pipeline-authored comment whose
 first line opens `🩹 triage-repair:` anywhere on the card is the card's one
 repair, so `select` answers `spent` and `claim` exits 3. A comment of that
 shape from any other author counts for nothing.

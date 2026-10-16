@@ -130,6 +130,175 @@ class TestTheConsoleRead:
         assert scenario_mod.console_states(None, {"repo": "o/c"}) is None
 
 
+SPEC = {"repo": "o/console", "module": "linear_states", "symbol": "BOARD_STATES"}
+
+
+def _console_gh(source):
+    gh = MagicMock()
+    gh.default_branch.return_value = ("main", "s" * 40)
+    gh.list_tree.return_value = ["console/backend/linear_states.py"]
+    gh.get_file.return_value = source
+    return gh
+
+
+class TestTheConsoleListIsAnExpression:
+    """DRE-7050: agent-bureau writes BOARD_STATES as names joined with `+`,
+    not as one literal, and the literal-only reader returned None on every
+    harness run — the rule never checked anything. agent-bureau was not
+    readable from the build, so this fixture follows the expression quoted on
+    the card, with QUEUE_LANES written as a `+` join of its own so the nested
+    case is covered."""
+
+    LINEAR_STATES_SRC = (
+        '"""The console\'s Linear state vocabulary."""\n'
+        "from __future__ import annotations\n"
+        "\n"
+        "import os\n"
+        "\n"
+        'ACTIVE_STATES = ("Todo", "In Progress", "In Review")\n'
+        "\n"
+        'HELD_LANES = ["Backlog"]\n'
+        'QUEUE_LANES = HELD_LANES + ("Queued",) + ("Hand-work",)\n'
+        "\n"
+        'PLANNER_STATES: tuple[str, ...] = ("Planning", "Green Light")\n'
+        "\n"
+        "BOARD_STATES = (\n"
+        '    ACTIVE_STATES + ("Intake",) + QUEUE_LANES + ("Triage",) + PLANNER_STATES\n'
+        ")\n"
+        "\n"
+        "\n"
+        "def fetch_filter():\n"
+        '    return {"state": {"name": {"in": list(BOARD_STATES)}}}\n'
+    )
+
+    def test_the_board_list_is_resolved_through_every_name_in_order(self):
+        states = scenario_mod.console_states(_console_gh(self.LINEAR_STATES_SRC), SPEC)
+        assert states == [
+            "Todo", "In Progress", "In Review",
+            "Intake",
+            "Backlog", "Queued", "Hand-work",
+            "Triage",
+            "Planning", "Green Light",
+        ]
+
+    def test_a_name_is_resolved_from_its_module_level_assignment_only(self):
+        # A function-local assignment of the same name is not the module's
+        # list; reading it would check the console against the wrong words.
+        src = (
+            "def helper():\n"
+            '    EXTRA = ("Wrong",)\n'
+            "    return EXTRA\n"
+            'BOARD_STATES = ("Todo",) + EXTRA\n'
+        )
+        states, reason = scenario_mod.resolve_state_list(src, "BOARD_STATES")
+        assert states is None
+        assert "EXTRA" in reason
+
+
+class TestAnUnresolvableListIsUnknown:
+    """Anything the reader cannot resolve is None — never [] and never the
+    resolvable part — and the reason names the piece it could not resolve."""
+
+    def _resolve(self, src):
+        return scenario_mod.resolve_state_list(src, "BOARD_STATES")
+
+    def test_an_imported_name_is_unresolvable(self):
+        src = (
+            "from console.lanes import QUEUE_LANES\n"
+            'BOARD_STATES = ("Todo",) + QUEUE_LANES\n'
+        )
+        states, reason = self._resolve(src)
+        assert states is None
+        assert "QUEUE_LANES" in reason and "import" in reason
+        assert scenario_mod.console_states(_console_gh(src), SPEC) is None
+
+    def test_a_function_call_is_unresolvable(self):
+        src = (
+            'ACTIVE_STATES = ("Todo", "In Progress")\n'
+            'BOARD_STATES = ACTIVE_STATES + tuple(sorted({"Triage", "Intake"}))\n'
+        )
+        states, reason = self._resolve(src)
+        assert states is None
+        assert "tuple(sorted(" in reason
+        assert scenario_mod.console_states(_console_gh(src), SPEC) is None
+
+    def test_a_non_string_element_is_unresolvable_not_dropped(self):
+        # Today's reader silently drops the 42 and returns the rest — a partial
+        # list that would fail lanes for a reason that is not true.
+        src = (
+            'QUEUE_LANES = ("Backlog", 42, "Queued")\n'
+            'BOARD_STATES = ("Todo",) + QUEUE_LANES\n'
+        )
+        states, reason = self._resolve(src)
+        assert states is None
+        assert "QUEUE_LANES" in reason and "42" in reason
+        assert scenario_mod.console_states(_console_gh(src), SPEC) is None
+
+    def test_a_non_string_element_in_the_plain_literal_is_unresolvable(self):
+        src = 'BOARD_STATES = ["Todo", None, "In Progress"]\n'
+        assert self._resolve(src)[0] is None
+        assert scenario_mod.console_states(_console_gh(src), SPEC) is None
+
+    def test_a_comprehension_is_unresolvable(self):
+        src = 'BOARD_STATES = [s for s in ("Todo", "Done")]\n'
+        states, reason = self._resolve(src)
+        assert states is None
+        assert "BOARD_STATES" in reason
+
+    def test_a_name_with_no_assignment_is_unresolvable(self):
+        states, reason = self._resolve('BOARD_STATES = ("Todo",) + MISSING\n')
+        assert states is None
+        assert "MISSING" in reason
+
+    def test_a_cycle_between_names_is_unresolvable(self):
+        src = (
+            'A = ("Todo",) + B\n'
+            'B = ("Done",) + A\n'
+            "BOARD_STATES = A\n"
+        )
+        states, reason = self._resolve(src)
+        assert states is None
+        assert "cycle" in reason
+
+    def test_a_name_bound_twice_is_unresolvable(self):
+        # Which binding a `+` saw depends on statement order; guessing the last
+        # one could hand back a list the console never builds.
+        src = (
+            'A = ("Todo",)\n'
+            'BOARD_STATES = A + ("Done",)\n'
+            'A = ("Canceled",)\n'
+        )
+        states, reason = self._resolve(src)
+        assert states is None
+        assert "A" in reason
+
+    def test_a_missing_symbol_is_unresolvable(self):
+        states, reason = self._resolve('OTHER = ("Todo",)\n')
+        assert states is None
+        assert "BOARD_STATES" in reason
+
+    def test_the_harness_log_names_what_it_could_not_resolve(self, monkeypatch):
+        src = (
+            "from console.lanes import QUEUE_LANES\n"
+            'BOARD_STATES = ("Todo",) + QUEUE_LANES\n'
+        )
+        lines = []
+        monkeypatch.setattr(scenario_mod.contract, "console", lambda: dict(SPEC))
+        monkeypatch.setattr(scenario_mod.contract, "pipeline_vocabulary", lambda: set())
+        ctx = _ctx(gh_console=_console_gh(src), log=lines.append)
+        ctx.state["board"] = {"Todo": 0}
+        scenario_mod.SCENARIO.exercise(ctx)
+        unread = [line for line in lines if "could not be read" in line]
+        assert unread, lines
+        assert "QUEUE_LANES" in unread[0]
+        assert "UNEVALUATED" in unread[0]
+        console = [
+            f for f in ctx.state["report"].findings
+            if f.clause_id == "console.state_lists_carry_every_lane"
+        ]
+        assert console and console[0].status == "unevaluated"
+
+
 class TestTheVerdict:
     def _run(self, ctx, report):
         scenario = scenario_mod.SCENARIO

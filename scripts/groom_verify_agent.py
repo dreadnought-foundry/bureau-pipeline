@@ -12,13 +12,21 @@ Planning list and the spares behind it — gets one agent, holding
 `briefs/groom-verify.md`, the card, and its repo checked out read-only under
 `target/`. The agent asks whether the card's problem can still be seen there,
 and answers `still-needed`, `partly-solved`, `done-elsewhere`, `obsolete` or
-`not-worth-it`, each with a `file:line` proof. This file never calls a model: the vendor action in the workflow does,
-and the four subcommands here are everything around it.
+`not-worth-it`, each with one anchored proof (DRE-7240): a `file:line` in
+`target/`, a Done card with its merged pull request from the row's
+`matched_work`, or a fact from the row's `routing` — the last two checked
+against what the runner handed the agent. A Cancel of a card with children
+counts only a Done card not under it, or a routing fact, and a Cancel on a
+pull request that did part of the card is `partly-solved`. This file never
+calls a model: the vendor action in the workflow does, and the four
+subcommands here are everything around it.
 
   * `targets` — in the groom job, which holds the Linear key: every card to
-    verify, its title, body and board context — age, labels, parent,
-    children, last move, and every comment with who said it — read through
-    `linear_ops` in one request and passed through `sanitize_untrusted`, its
+    verify, its title, body and board context — age, labels, parent and its
+    title, children, relations both ways, last move, and the thread with who
+    said each comment, read in pages of fifty up to `MAX_COMMENTS` and held
+    to the limits below (DRE-7238) — read through `linear_ops` in one
+    request, and one more per older page, and passed through `sanitize_untrusted`, its
     repo mapped through `config/repo-map.json`; and the matrix the workflow
     fans out over. It also decides which cards are EXCLUDED without
     judgement (DRE-5306): a parent epic with an open child, a `hand-built`
@@ -33,7 +41,11 @@ and the four subcommands here are everything around it.
     verdict and every mark, and a mapped card whose own repo did not answer
     is `unverified` with `lookup failed: <why>` whatever the agent said.
   * `prepare` — in the verify job, with no Linear key: the agent's whole
-    input, and the moment it started.
+    input, and the moment it started. After the card and the Layer A
+    evidence come two more fenced sections (DRE-7238): the Done cards and
+    merged pull requests matched to the card's problem (`row["matched_work"]`,
+    each line `matched_line`) and where jobs ran recently (`row["routing"]`,
+    each line `routing_line`), each held to its own limit.
   * `verdict` — always, even when the agent step died or never ran: the raw
     answer, checked, in the fixed shape the proposal reads.
   * `apply` — back in the groom job: a Planning card proved `done-elsewhere`,
@@ -127,11 +139,29 @@ NO_FILE = "no verdict file"
 NO_PROOF = "no proof"
 UNREADABLE = "unreadable answer"
 NO_ARTIFACT = "no verdict artifact"
+#: A Cancel of a card with children left with no anchored item once code
+#: items and items under the card are set aside (DRE-7240).
+CHILD_PROOF = "proof belongs to a child"
 #: Every reason an `unverified` mark may carry, beside `lookup failed: <why>`
 #: (`groom_lookups.LOOKUP_FAILED`). Nothing else reaches the page (DRE-5746):
 #: `_mark` reads any other as `unreadable answer`.
 UNVERIFIED_REASONS = (STEP_FAILED, STEP_SKIPPED, NO_FILE, NO_PROOF,
-                      UNREADABLE, NO_ARTIFACT)
+                      UNREADABLE, NO_ARTIFACT, CHILD_PROOF)
+
+#: The proof kinds (DRE-7240). Three are anchored — a `file:line` in
+#: `target/`, a Done card with its merged pull request from the row's
+#: `matched_work`, a fact from the row's `routing` — and `source` only ever
+#: supports one of them.
+CODE, DONE_WORK, ROUTING = "code", "done-work", "routing"
+#: What a verdict rested on: the kinds of the anchored items that counted,
+#: and the context the agent declared, kept only when it was supplied.
+RESTED_ON = (CODE, DONE_WORK, ROUTING, "thread", "relations", "parent")
+#: A Cancel answer resting on a pull request that did part of the card is
+#: recorded `partly-solved`, saying so.
+ADJUSTED = "partial pull request"
+#: A done-work item's `covers_check`: the files the card names decided
+#: whether the pull request did the whole card, or the agent's `covers` alone.
+COVERS_PATHS, COVERS_AGENT = "paths", "agent"
 #: The fifth exclusion reason (DRE-5746), exact.
 UNMAPPED = "repo not in config/repo-map.json: {slug}"
 #: `prepare`'s whole output for a card no agent may read code for.
@@ -154,17 +184,72 @@ FENCE_BEGIN = "===== BEGIN UNTRUSTED CARD TEXT ====="
 FENCE_END = "===== END UNTRUSTED CARD TEXT ====="
 #: The section `agent_input` writes after the card's body (DRE-5306).
 CONTEXT_HEADING = "## The card's board context"
+#: The two fenced sections after the Layer A evidence (DRE-7238).
+MATCHED_HEADING = ("## Done cards and merged pull requests matched to the "
+                   "card's problem")
+ROUTING_HEADING = "## Where jobs ran recently"
+#: Every heading the input writes inside or between its fences: a line of
+#: card, comment or pull request text that starts one is defanged.
+_HEADINGS = (CONTEXT_HEADING, MATCHED_HEADING, ROUTING_HEADING)
 
-#: The card and its board context, in ONE request per card (DRE-5306): each
-#: list bounded at fifty, so a request asks for at most 150 nested nodes.
+#: The limits on what DRE-7238 adds to one card's input. Together they keep
+#: it under about 65,000 characters however long the thread is.
+#: The comments read, in pages of `COMMENT_PAGE`: Linear serves the newest
+#: first, so a longer thread loses its oldest.
+COMMENT_PAGE = 50
+MAX_COMMENTS = 200
+#: One comment's body is cut here, and says how much was cut.
+MAX_COMMENT_CHARS = 2000
+CUT = "… [cut: {n} more characters]"
+#: The comment bodies shown, newest kept first.
+MAX_THREAD_CHARS = 30000
+THREAD_CUT = ("{n} older comment(s) not shown: the thread passed "
+              f"{MAX_THREAD_CHARS:,} characters")
+#: The matched Done work section, and the line once pull requests past it
+#: are shown by their `matched_line` alone.
+MAX_MATCHED_CHARS = 20000
+MATCHED_CUT = ("{n} matched pull request(s) shown by title only: the section "
+               f"passed {MAX_MATCHED_CHARS:,} characters")
+#: The relations shown, in the order Linear gave them, this card's own
+#: first, and the line naming the rest.
+MAX_RELATIONS = 20
+RELATIONS_CUT = "{n} more relation(s) not shown"
+#: A relation's title, and the parent's, is cut here and ends `…`.
+MAX_TITLE_CHARS = 200
+#: The routing facts shown, the card's own repo first.
+MAX_ROUTING_LINES = 60
+ROUTING_CUT = "{n} more fact(s) not shown"
+#: What a row written before the lookups card reads as (the `matched_work`
+#: contract).
+NOT_SEARCHED = {"searched": False, "why": "not searched", "cards": []}
+
+#: The card and its board context, in ONE request per card (DRE-5306). The
+#: first page of comments is the fifty newest; `commentPages` is the same
+#: connection asking only for its `pageInfo`, and `COMMENT_PAGE_QUERY` reads
+#: the older pages behind it until Linear says there are no more or
+#: `MAX_COMMENTS` were read (DRE-7238). `parentTitle` is the parent's title
+#: beside the identifier and state the board context always carried.
 CARD_QUERY = """query($id: String!) {
   issue(id: $id) {
     identifier title description createdAt
     labels { nodes { name } }
     parent { identifier state { name } }
+    parentTitle: parent { title }
     children(first: 50) { nodes { identifier state { name } } }
     comments(first: 50) { nodes { body createdAt user { id } botActor { id } } }
+    commentPages: comments(first: 50) { pageInfo { hasNextPage endCursor } }
     history(first: 50) { nodes { createdAt fromState { name } toState { name } actor { id } botActor { id } } }
+    relations(first: 50) { nodes { type relatedIssue { identifier title state { name } } } }
+    inverseRelations(first: 50) { nodes { type issue { identifier title state { name } } } }
+  }
+}"""
+#: The older comments, one page of fifty after the cursor Linear gave.
+COMMENT_PAGE_QUERY = """query($id: String!, $after: String!) {
+  issue(id: $id) {
+    comments(first: 50, after: $after) {
+      pageInfo { hasNextPage endCursor }
+      nodes { body createdAt user { id } botActor { id } }
+    }
   }
 }"""
 
@@ -272,6 +357,17 @@ def _fenced(text: str) -> str:
             line = sanitize_untrusted.DEFANG_PREFIX + line
         out.append(line)
     return "\n".join(out)
+
+
+def _defanged(text: str) -> str:
+    """`_fenced`, and a line that starts one of the input's own headings
+    defanged too: the real sections follow inside and between the fences,
+    and no card, comment or pull request text may write a second one."""
+    return "\n".join(
+        sanitize_untrusted.DEFANG_PREFIX + line
+        if any(line.strip().lower().startswith(h.lower()) for h in _HEADINGS)
+        else line
+        for line in _fenced(text).split("\n"))
 
 
 def is_exclusion(reason) -> bool:
@@ -418,11 +514,70 @@ def _moves(issue: dict) -> list[tuple[datetime, dict]]:
     return sorted(found, key=lambda pair: pair[0], reverse=True)
 
 
+def _cut(body: str) -> tuple[str, bool]:
+    """A comment body held to `MAX_COMMENT_CHARS`, saying how much was cut,
+    and whether it was."""
+    if len(body) <= MAX_COMMENT_CHARS:
+        return body, False
+    return (body[:MAX_COMMENT_CHARS] + "\n"
+            + CUT.format(n=len(body) - MAX_COMMENT_CHARS)), True
+
+
+def _shown(said: list[dict]) -> list[dict]:
+    """The newest comments whose bodies fit in `MAX_THREAD_CHARS`, oldest
+    first. A send-back or a diagnosis is usually late in a thread, so the
+    oldest are the ones left out — never one from the middle."""
+    kept, used = [], 0
+    for comment in reversed(said):
+        used += len(comment["body"])
+        if used > MAX_THREAD_CHARS:
+            break
+        kept.append(comment)
+    return kept[::-1]
+
+
+def _relations(issue: dict) -> list[dict]:
+    """The card's relations both ways: `out` is this card's own (it blocks,
+    duplicates or relates to the other), `in` is the other card's."""
+    out = []
+    for field, other, direction in (("relations", "relatedIssue", "out"),
+                                    ("inverseRelations", "issue", "in")):
+        for node in _nodes(issue, field):
+            card = node.get(other) if isinstance(node.get(other), dict) else {}
+            out.append({"type": _clean(node.get("type")),
+                        "direction": direction,
+                        "identifier": _clean(card.get("identifier")),
+                        "title": _clean(card.get("title")),
+                        "state": _clean(_state(card))})
+    return out
+
+
+def _parent(issue: dict) -> dict | None:
+    """The parent's identifier and state, and its title when the read
+    carried one — `parentTitle` in `CARD_QUERY`."""
+    parent = issue.get("parent")
+    if not isinstance(parent, dict):
+        return None
+    found = {"identifier": _clean(parent.get("identifier")),
+             "state": _clean(_state(parent))}
+    title = parent.get("title") or (issue.get("parentTitle") or {}).get("title")
+    if title:
+        found["title"] = _clean(title)
+    return found
+
+
 def board_context(issue: dict, viewer: str, *, card: str, now: datetime,
                   verifier=None) -> dict:
     """The card's board context, every string through `sanitize_untrusted`.
     Who said each comment is `spoken_thread.voices`'s answer, and a comment
-    it withholds is shown by its label alone."""
+    it withholds is shown by its label alone.
+
+    The thread is the `MAX_COMMENTS` newest Linear gave, each body cut at
+    `MAX_COMMENT_CHARS` and the bodies shown held to `MAX_THREAD_CHARS`
+    (DRE-7238). `comments_read` is how many were read, `comments_shown` how
+    many the agent sees, and `thread_whole` is true only when every comment
+    on the card was read and shown in full — `comments.pageInfo.hasNextPage`
+    from `_read_card` says whether Linear held more."""
     created = _moment(issue.get("createdAt"))
     if created is None:
         raise ValueError("Linear gave no readable createdAt for the card")
@@ -436,27 +591,36 @@ def board_context(issue: dict, viewer: str, *, card: str, now: datetime,
     comments = sorted(_nodes(issue, "comments"),
                       key=lambda n: _moment(n.get("createdAt"))
                       or datetime.min.replace(tzinfo=timezone.utc))
+    all_read = len(comments) <= MAX_COMMENTS and not (
+        (issue.get("comments") or {}).get("pageInfo") or {}).get("hasNextPage")
+    comments = comments[-MAX_COMMENTS:]
     said = []
     for voice in spoken_thread.voices(comments, viewer, card=card,
                                       verifier=verifier):
         by = BY_VOICE.get(voice.kind, spoken_thread.UNKNOWN)
-        said.append({"at": _clean(voice.created_at), "by": by,
-                     "body": (_clean(voice.label) if by == WITHHELD
-                              else sanitize_untrusted.sanitize_body(
-                                  voice.body or ""))})
-    parent = issue.get("parent")
+        body, was_cut = ((_clean(voice.label), False) if by == WITHHELD
+                         else _cut(sanitize_untrusted.sanitize_body(
+                             voice.body or "")))
+        said.append({"at": _clean(voice.created_at), "by": by, "body": body,
+                     "cut": was_cut})
+    shown = _shown(said)
+    cut = sum(1 for c in shown if c.pop("cut"))
     return {
         "created_at": _clean(issue.get("createdAt")),
         "age_days": max(0, (now - created).days),
         "labels": [_clean(n.get("name")) for n in _nodes(issue, "labels")],
-        "parent": ({"identifier": _clean(parent.get("identifier")),
-                    "state": _clean(_state(parent))}
-                   if isinstance(parent, dict) else None),
+        "parent": _parent(issue),
         "children": [{"identifier": _clean(n.get("identifier")),
                       "state": _clean(_state(n))}
                      for n in _nodes(issue, "children")],
+        "relations": _relations(issue),
         "last_moved": last,
-        "comments": said,
+        "comments": shown,
+        "comments_read": len(said),
+        "comments_shown": len(shown),
+        "comments_cut": cut,
+        "comments_all_read": all_read,
+        "thread_whole": all_read and len(shown) == len(said) and not cut,
     }
 
 
@@ -487,6 +651,39 @@ def _viewer(lops) -> str | None:
         return None
 
 
+def _read_card(lops, identifier: str) -> dict:
+    """The card through `CARD_QUERY`, and its older comments through
+    `COMMENT_PAGE_QUERY`, page after page until Linear says there are no
+    more or `MAX_COMMENTS` were read. `comments` comes back holding every
+    comment read and `pageInfo.hasNextPage` saying whether Linear held more.
+
+    A page that fails, or a cursor that is missing or repeats, ends the walk
+    with what was read: the thread is then not whole, and the board context
+    says so, rather than the card going unread."""
+    issue = (lops.gql(CARD_QUERY, {"id": identifier}) or {}).get("issue")
+    if not isinstance(issue, dict):
+        raise ValueError("Linear returned no card")
+    nodes = _nodes(issue, "comments")
+    info = (issue.get("commentPages") or {}).get("pageInfo") or {}
+    more, seen = bool(info.get("hasNextPage")), set()
+    while more and len(nodes) < MAX_COMMENTS:
+        after = info.get("endCursor")
+        if not after or after in seen:
+            break
+        seen.add(after)
+        try:
+            page = (((lops.gql(COMMENT_PAGE_QUERY,
+                               {"id": identifier, "after": after}) or {})
+                     .get("issue") or {}).get("comments") or {})
+        except Exception:  # noqa: BLE001 — a page unread leaves the thread part-read
+            break
+        nodes += [n for n in page.get("nodes") or [] if isinstance(n, dict)]
+        info = page.get("pageInfo") or {}
+        more = bool(info.get("hasNextPage"))
+    return {**issue, "comments": {"nodes": nodes,
+                                  "pageInfo": {"hasNextPage": more}}}
+
+
 def targets(proposal: dict, *, lops, repo_map: dict,
             verifier=None) -> list[dict]:
     """Every card to verify, read with its board context in one request
@@ -513,9 +710,7 @@ def targets(proposal: dict, *, lops, repo_map: dict,
             target["excluded"] = EXCLUDE_UNREAD.format(why=VIEWER_UNREAD)
             continue
         try:
-            issue = (lops.gql(CARD_QUERY, {"id": identifier}) or {}).get("issue")
-            if not isinstance(issue, dict):
-                raise ValueError("Linear returned no card")
+            issue = _read_card(lops, identifier)
             context = board_context(issue, viewer, card=identifier, now=now,
                                     verifier=verifier)
         except Exception as e:  # noqa: BLE001 — an unread card is excluded, not fatal
@@ -566,16 +761,22 @@ SHAPE = f"""Write exactly one file, `{RAW_FILE}`, at the workspace root:
   "summary": "One or two sentences.",
   "proof": [
     {{"file": "<path under target/>", "line": 1, "quote": "<the line>"}},
+    {{"done_card": "DRE-N", "pr": "<owner>/<repo>#<n>", "covers": "whole | part", "quote": "<what it solved>"}},
+    {{"routing": "<fact id>", "quote": "<what the fact shows>"}},
     {{"source": "<where>", "quote": "<the words>"}}
   ],
+  "rested_on": ["code | done-work | routing | thread | relations | parent"],
   "rewrite": "<on partly-solved only: the card's updated body, markdown>"
 }}
 ```
 
-Every answer but `unverified` needs at least one `file:line` proof from
-`target/`. If `target/` is absent or empty, the only answer is `unverified`.
-Write `"rewrite"` on a `partly-solved` answer only, and leave it out of every
-other."""
+Every answer but `unverified` needs at least one anchored proof item: a
+`file:line` from `target/`, a Done card with its merged pull request from the
+matched Done work, or a routing fact from where jobs ran. A `source` item
+never counts on its own. For a card with children, a Cancel counts only a
+Done card that is not under it, or a routing fact. If `target/` is absent or
+empty, the only answer is `unverified`. Write `"rewrite"` on a
+`partly-solved` answer only, and leave it out of every other."""
 
 
 def _context_lines(context) -> list[str]:
@@ -587,6 +788,12 @@ def _context_lines(context) -> list[str]:
     def line(text) -> str:
         return _fenced(_one_line(text))
 
+    def title(text) -> str:
+        text = _one_line(text)
+        if len(text) > MAX_TITLE_CHARS:
+            text = text[:MAX_TITLE_CHARS] + "…"
+        return _fenced(text)
+
     parent = context.get("parent")
     moved = context.get("last_moved")
     lines = [f"Age: {context.get('age_days')} days "
@@ -595,31 +802,211 @@ def _context_lines(context) -> list[str]:
                                      in context.get("labels") or []) or "none"),
              "Parent: " + (f"{line(parent.get('identifier'))} "
                            f"({line(parent.get('state'))})"
+                           + (f" — {title(parent['title'])}"
+                              if parent.get("title") else "")
                            if isinstance(parent, dict) else "none")]
     children = context.get("children") or []
     lines.append("Children:" + ("" if children else " none"))
     lines += [f"- {line(c.get('identifier'))} ({line(c.get('state'))})"
               for c in children]
+    # A row written before DRE-7238 carries no relations, and says nothing
+    # about them rather than claiming none.
+    if "relations" in context:
+        relations = context.get("relations") or []
+        lines.append("Relations:" + ("" if relations else " none"))
+        lines += [f"- {line(r.get('type'))}, {line(r.get('direction'))}: "
+                  f"{line(r.get('identifier'))} ({line(r.get('state'))}) — "
+                  f"{title(r.get('title'))}" for r in relations[:MAX_RELATIONS]]
+        if len(relations) > MAX_RELATIONS:
+            lines.append(RELATIONS_CUT.format(n=len(relations) - MAX_RELATIONS))
     lines.append("Last state move: " + (
         f"to {line(moved.get('to'))} on {line(moved.get('at'))}, "
         f"by: {line(moved.get('by'))}" if isinstance(moved, dict) else "none"))
+    if "thread_whole" in context:
+        lines.append(_thread_line(context))
     comments = context.get("comments") or []
     lines.append("Comments, oldest first:" + ("" if comments else " none"))
+    left_out = (context.get("comments_read") or 0) - len(comments)
+    if left_out > 0:
+        lines.append(THREAD_CUT.format(n=left_out))
     for comment in comments:
         lines.append(f"- {line(comment.get('at'))}, by: {line(comment.get('by'))}")
-        body = _fenced(str(comment.get("body") or "")).strip("\n")
+        body = _defanged(str(comment.get("body") or "")).strip("\n")
         lines += [f"  {text}" if text else "" for text in body.split("\n")]
     return lines
 
 
+def _thread_line(context: dict) -> str:
+    """How much of the thread the agent sees, in one line: the counts, and
+    `thread_whole` with what kept it from being whole."""
+    read, shown = context.get("comments_read"), context.get("comments_shown")
+    head = (f"Thread: {read} comment(s) read, {shown} shown, thread_whole: "
+            f"{'true' if context.get('thread_whole') else 'false'}")
+    if context.get("thread_whole"):
+        return head + " — every comment on the card, each in full"
+    why = []
+    if not context.get("comments_all_read"):
+        why.append(f"Linear holds more than the {read} comment(s) read")
+    if (read or 0) > (shown or 0):
+        why.append(f"the {read - shown} oldest read are not shown")
+    if context.get("comments_cut"):
+        why.append(f"{context['comments_cut']} shown comment(s) cut at "
+                   f"{MAX_COMMENT_CHARS:,} characters")
+    return head + " — " + "; ".join(why or ["part of the thread"])
+
+
 def _body(text: str) -> str:
-    """The card's body, fenced — and a line mimicking the board-context
-    heading defanged, since the real section follows it inside the same
-    fence and a body must not be able to write a second one."""
-    return "\n".join(
-        sanitize_untrusted.DEFANG_PREFIX + line
-        if line.strip().lower().startswith(CONTEXT_HEADING.lower()) else line
-        for line in _fenced(text).split("\n"))
+    """The card's body, fenced — and a line mimicking one of the input's
+    headings defanged, since the real board-context section follows it
+    inside the same fence and a body must not be able to write a second
+    one."""
+    return _defanged(text)
+
+
+def _day(iso) -> str:
+    moment = _moment(iso)
+    return moment.strftime("%Y-%m-%d") if moment else ""
+
+
+def matched_line(card: dict, pr: dict | None) -> str:
+    """One matched Done card, or one of its pull requests, in one line —
+    the line the agent reads and the line the runner writes as a counted
+    item's `fact`:
+
+        DRE-5942 (Done 2026-10-07, under DRE-5910) — <title>
+        DRE-5942 → dreadnought-foundry/agent-bureau#3297, merged 2026-10-07 — <PR title>
+
+    A pull request `fold` could not read says `not read: <why>`, and one
+    read but never merged says `not merged`."""
+    ident = _one_line(card.get("identifier"))
+    if pr is None:
+        inside = " ".join(p for p in (_one_line(card.get("state")) or
+                                      "state unknown",
+                                      _day(card.get("completed_at"))) if p)
+        if card.get("parent"):
+            inside += f", under {_one_line(card['parent'])}"
+        text = f"{ident} ({inside}) — {_one_line(card.get('title'))}"
+    else:
+        ref = f"{_one_line(pr.get('repo'))}#{_one_line(pr.get('number'))}"
+        if pr.get("read") is not True:
+            text = (f"{ident} → {ref}, not read: "
+                    f"{_one_line(pr.get('why')) or 'no reason recorded'}")
+        elif _day(pr.get("merged_at")):
+            text = (f"{ident} → {ref}, merged {_day(pr['merged_at'])} — "
+                    f"{_one_line(pr.get('title'))}")
+        else:
+            text = f"{ident} → {ref}, not merged — {_one_line(pr.get('title'))}"
+    return _defanged(_one_line(text))
+
+
+def routing_line(fact: dict) -> str:
+    """One routing fact in one line — the line the agent reads and the line
+    the runner writes as a counted item's `fact`:
+
+        <id>: <jobs> job(s), <first date> to <last date>, runner labels <labels>
+    """
+    labels = ", ".join(_one_line(label) for label in fact.get("labels") or [])
+    return _defanged(_one_line(
+        f"{fact.get('id')}: {fact.get('jobs')} job(s), "
+        f"{_day(fact.get('first_completed_at')) or 'unknown'} to "
+        f"{_day(fact.get('last_completed_at')) or 'unknown'}, "
+        f"runner labels {labels or 'none'}"))
+
+
+def _pr_detail(pr: dict) -> list[str]:
+    """A read pull request's changed files and body, indented under its
+    line. An unread one has neither."""
+    if pr.get("read") is not True:
+        return []
+    files = [_one_line(f) for f in pr.get("files") or []]
+    lines = ["    files: " + (", ".join(files) or "none")
+             + (" (and more not listed)" if pr.get("files_cut") else "")]
+    body = _defanged(str(pr.get("body") or "")).strip("\n")
+    if body:
+        lines.append("    body:")
+        lines += [f"      {text}" if text else "" for text in body.split("\n")]
+    return [_defanged(lines[0])] + lines[1:]
+
+
+def _matched_lines(row: dict) -> list[str]:
+    """The matched Done work section's fenced lines, held to
+    `MAX_MATCHED_CHARS`. Every card and every pull request is named by its
+    `matched_line`, in rank order; a pull request's files and body follow
+    it while they fit, and from the first that would pass the limit every
+    one after it is named alone, under one line saying how many."""
+    work = row.get("matched_work")
+    if not isinstance(work, dict):
+        work = NOT_SEARCHED
+    if work.get("searched") is not True:
+        return [_defanged(_one_line(
+            "Not searched: " + (_one_line(work.get("why")) or "not searched")))]
+    cards = [c for c in work.get("cards") or [] if isinstance(c, dict)]
+    terms = [_one_line(t) for t in work.get("terms") or []]
+    lines = [_defanged(_one_line(
+        f"Searched ({_one_line(work.get('source')) or 'unknown'}) for: "
+        + ("; ".join(terms) or "nothing")))]
+    if not cards:
+        return lines + ["No Done card matched."]
+    # Every card and pull request line is shown whatever happens, so the
+    # room for files and bodies is what is left after them and the cut line.
+    entries = []
+    for card in cards:
+        matched = "; ".join(_one_line(t) for t in card.get("terms") or [])
+        head = [f"- {matched_line(card, None)}"]
+        if matched:
+            head.append(_defanged(f"  matched: {matched}"))
+        entries.append((head, [(f"  - {matched_line(card, pr)}", _pr_detail(pr))
+                               for pr in card.get("prs") or []
+                               if isinstance(pr, dict)]))
+    always = lines + [MATCHED_CUT.format(n=sum(len(p) for _, p in entries))]
+    always += [h for head, _ in entries for h in head]
+    always += [line for _, prs in entries for line, _ in prs]
+    room = MAX_MATCHED_CHARS - sum(len(line) + 1 for line in always)
+    out, note_at, n = [], None, 0
+    for head, prs in entries:
+        out += head
+        for line, detail in prs:
+            size = sum(len(d) + 1 for d in detail)
+            if detail and (note_at is not None or size > room):
+                if note_at is None:
+                    note_at = len(out)
+                n += 1
+                out.append(line)
+                continue
+            room -= size
+            out += [line] + detail
+    if note_at is not None:
+        out.insert(note_at, MATCHED_CUT.format(n=n))
+    return lines + out
+
+
+def _routing_lines(row: dict) -> list[str]:
+    """The routing section's fenced lines: at most `MAX_ROUTING_LINES`
+    facts, the card's own repo first and the rest by newest
+    `last_completed_at`, and one line naming how many more there were. A row
+    with no routing, or one not read, has no facts and says so."""
+    routing = row.get("routing")
+    if not isinstance(routing, dict) or routing.get("read") is not True:
+        why = routing.get("why") if isinstance(routing, dict) else None
+        return [_defanged(_one_line(
+            "Not read: " + (_one_line(why) or "no routing was recorded for "
+                                               "this card")))]
+    lines = [_defanged(_one_line(
+        f"Read {_one_line(routing.get('read_at')) or 'at an unknown time'}"
+        + (f"; cut: {_one_line(routing['why'])}" if routing.get("why")
+           else "")))]
+    facts = [f for f in routing.get("facts") or [] if isinstance(f, dict)]
+    if not facts:
+        return lines + ["No job ran in the window read."]
+    oldest = datetime.min.replace(tzinfo=timezone.utc)
+    facts.sort(key=lambda f: _moment(f.get("last_completed_at")) or oldest,
+               reverse=True)
+    own = row.get("repository")
+    facts.sort(key=lambda f: f.get("repo") != own)
+    lines += [f"- {routing_line(f)}" for f in facts[:MAX_ROUTING_LINES]]
+    if len(facts) > MAX_ROUTING_LINES:
+        lines.append(ROUTING_CUT.format(n=len(facts) - MAX_ROUTING_LINES))
+    return lines
 
 
 def agent_input(row: dict, brief: str) -> str:
@@ -635,6 +1022,13 @@ def agent_input(row: dict, brief: str) -> str:
     lines += [FENCE_END, "", "## The Layer A evidence", "", FENCE_BEGIN]
     lines += ([f"- {_fenced(_one_line(e))}" for e in evidence]
               or ["None recorded."])
+    # The Done work matched to the card's problem, and where jobs ran
+    # (DRE-7238): titles, bodies and paths other people wrote, so each sits
+    # in a fence of its own.
+    lines += [FENCE_END, "", MATCHED_HEADING, "", FENCE_BEGIN]
+    lines += _matched_lines(row)
+    lines += [FENCE_END, "", ROUTING_HEADING, "", FENCE_BEGIN]
+    lines += _routing_lines(row)
     lines += [FENCE_END, "", "## The verdict file", "",
               SHAPE.replace("{card}", card), ""]
     return "\n".join(lines)
@@ -658,22 +1052,43 @@ class _Unreadable(Exception):
 
 
 def _proof_item(item) -> dict:
-    """One proof item in its exact shape, or `_Unreadable`."""
+    """One proof item in one of its four exact shapes (DRE-7240), or
+    `_Unreadable`. Nothing the agent writes beyond the shape is kept: `fact`
+    and `covers_check` are the runner's words, written in `_weigh`."""
     if not isinstance(item, dict):
         raise _Unreadable
+    quote = item.get("quote")
+    if not isinstance(quote, str):
+        raise _Unreadable
+    quote = sanitize_untrusted.sanitize_line(quote)
     if "file" in item:
-        path, line, quote = item.get("file"), item.get("line"), item.get("quote")
+        path, line = item.get("file"), item.get("line")
         if (not isinstance(path, str) or not path.strip()
                 or isinstance(line, bool) or not isinstance(line, int)
-                or line < 1 or not isinstance(quote, str)):
+                or line < 1):
             raise _Unreadable
-        return {"file": _one_line(path), "line": line,
-                "quote": sanitize_untrusted.sanitize_line(quote)}
-    source, quote = item.get("source"), item.get("quote")
-    if not isinstance(source, str) or not isinstance(quote, str):
+        return {"file": _one_line(path), "line": line, "quote": quote}
+    if "done_card" in item:
+        card, ref = item.get("done_card"), item.get("pr")
+        if (not isinstance(card, str) or not card.strip()
+                or not isinstance(ref, str) or not ref.strip()):
+            raise _Unreadable
+        found = {"done_card": _one_line(card), "pr": _one_line(ref),
+                 "quote": quote}
+        # Anything but `whole` or `part` is no `covers` at all: the pull
+        # request is then read as one that did part of the card.
+        if item.get("covers") in ("whole", "part"):
+            found["covers"] = item["covers"]
+        return found
+    if "routing" in item:
+        fid = item.get("routing")
+        if not isinstance(fid, str) or not fid.strip():
+            raise _Unreadable
+        return {"routing": _one_line(fid), "quote": quote}
+    source = item.get("source")
+    if not isinstance(source, str):
         raise _Unreadable
-    return {"source": sanitize_untrusted.sanitize_line(source),
-            "quote": sanitize_untrusted.sanitize_line(quote)}
+    return {"source": sanitize_untrusted.sanitize_line(source), "quote": quote}
 
 
 def is_file_line(item: dict) -> bool:
@@ -684,12 +1099,189 @@ def is_file_line(item: dict) -> bool:
             and ".." not in parts and bool(_one_line(item.get("quote"))))
 
 
-def _counts(item: dict, card_text: str) -> bool:
-    """Is this item proof? Quoted card text is never proof on its own."""
-    if is_file_line(item):
+def _kind(item: dict) -> str | None:
+    """The proof kind an item's shape names, or None for a `source` item."""
+    if "file" in item:
+        return CODE
+    if "done_card" in item:
+        return DONE_WORK
+    if "routing" in item:
+        return ROUTING
+    return None
+
+
+def _pr_ref(pr: dict) -> str:
+    return f"{_one_line(pr.get('repo'))}#{_one_line(pr.get('number'))}"
+
+
+def _done_match(item: dict, row: dict) -> tuple[dict, dict] | None:
+    """The Done card and merged pull request a done-work item names, when
+    the row's `matched_work` holds both — else None. A row with no
+    `matched_work` was never searched, and supplies none."""
+    work = row.get("matched_work")
+    if not isinstance(work, dict) or work.get("searched") is not True:
+        return None
+    for card in work.get("cards") or []:
+        if (not isinstance(card, dict)
+                or _one_line(card.get("identifier")) != item.get("done_card")
+                or card.get("state") != "Done"):
+            continue
+        for pr in card.get("prs") or []:
+            # GitHub reads an owner and a repo name in any case.
+            if (isinstance(pr, dict)
+                    and _pr_ref(pr).lower() == str(item.get("pr")).lower()
+                    and pr.get("merged_at")):
+                return card, pr
+    return None
+
+
+def _routing_match(item: dict, row: dict) -> dict | None:
+    """The routing fact a routing item names, when the row's `routing.facts`
+    holds that `id` — else None. A row with no routing, or one not read,
+    has no facts."""
+    routing = row.get("routing")
+    if not isinstance(routing, dict) or routing.get("read") is not True:
+        return None
+    for found in routing.get("facts") or []:
+        if isinstance(found, dict) and found.get("id") == item.get("routing"):
+            return found
+    return None
+
+
+def _covers(item: dict, pr: dict, row: dict) -> tuple[bool, str]:
+    """`(did the pull request do the whole card, covers_check)`.
+
+    The files decide it when they can: the card names files (`lookups.paths`,
+    none left out) and the pull request's files were read in full. Some but
+    not all of the named paths among them is part of the card, whatever the
+    agent said. Every other case — none of the paths, no path named, more
+    than `groom_lookups.MAX_PATHS`, files not read in full — rests on the
+    agent's own `covers`, and says so."""
+    whole = item.get("covers") == "whole"
+    look = row.get("lookups") if isinstance(row.get("lookups"), dict) else {}
+    paths = {str(p) for p in look.get("paths") or []}
+    files = {str(f) for f in pr.get("files") or []}
+    if (paths and look.get("paths_left_out") == 0 and pr.get("read") is True
+            and pr.get("files_cut") is False and paths & files):
+        return whole and paths <= files, COVERS_PATHS
+    return whole, COVERS_AGENT
+
+
+def _children(row: dict) -> set[str] | None:
+    """The identifiers of the card's children, in any state — or None when
+    the row carries no board context to say."""
+    context = row.get("context")
+    if not isinstance(context, dict):
+        return None
+    return {_one_line(c.get("identifier")) for c in context.get("children") or []
+            if isinstance(c, dict)}
+
+
+def _under(card: dict, row: dict, children: set[str]) -> bool:
+    """Is the matched card under the card being checked? A child, anything
+    whose chain of parents holds the card, and a chain cut before its end —
+    nothing can show that one is not under it."""
+    ancestors = card.get("ancestors")
+    if card.get("ancestors_cut") is not False or not isinstance(ancestors, list):
         return True
-    quote = _one_line(item.get("quote"))
-    return "source" in item and bool(quote) and quote not in card_text
+    me = row.get("card")
+    return (_one_line(card.get("identifier")) in children
+            or me in {_one_line(a) for a in ancestors}
+            or _one_line(card.get("parent")) == me)
+
+
+def _supplied(row: dict) -> set[str]:
+    """The context words whose context the row actually supplied."""
+    context = row.get("context")
+    if not isinstance(context, dict):
+        return set()
+    return {word for word, there in (
+        ("thread", bool(context.get("comments"))),
+        ("relations", bool(context.get("relations"))),
+        ("parent", isinstance(context.get("parent"), dict))) if there}
+
+
+def _weigh(verdict: str, proof: list[dict], row: dict, declared,
+           *, recorded: bool = False) -> dict:
+    """The proof rules (DRE-7240), in one walk `judge` and `_mark` share:
+    `{"verdict", "reason", "proof", "rested_on"}` and `adjusted` on a Cancel
+    turned `partly-solved`. `verdict` is never `unverified` here.
+
+    Each done-work or routing item is checked against what the row supplied,
+    and the runner writes `fact` (and on done work `covers_check`) onto each
+    one that matched; one that did not is left out of `proof`. A Cancel
+    counting any partial done-work item is `partly-solved`, whatever else it
+    counts. With `recorded`, a part the row does not carry — the
+    workflow's `apply` holds no folded targets — is read off the document
+    `verdict` wrote: an item carrying the runner's `fact` is one `judge`
+    matched, and the context words are the ones `judge` kept. A row with no
+    board context names no children, so the child rule stands as `judge`
+    applied it; a row that names children and no matched work counts no
+    recorded Done card toward a Cancel, since nothing shows it is not under
+    the card.
+    """
+    know_work = not recorded or "matched_work" in row
+    know_routing = not recorded or "routing" in row
+    children = _children(row) or set()
+    weighed, counted = [], []
+    for raw in proof:
+        item, kind = dict(raw), _kind(raw)
+        under, whole = False, True
+        if kind == CODE:
+            anchored = is_file_line(item)
+        elif kind == DONE_WORK and know_work:
+            match = _done_match(item, row)
+            item.pop("fact", None)
+            item.pop("covers_check", None)
+            anchored = match is not None
+            if anchored:
+                card, pr = match
+                whole, check = _covers(item, pr, row)
+                item.update(fact=matched_line(card, pr), covers_check=check)
+                under = _under(card, row, children)
+        elif kind == ROUTING and know_routing:
+            found = _routing_match(item, row)
+            item.pop("fact", None)
+            anchored = found is not None
+            if anchored:
+                item["fact"] = routing_line(found)
+        elif kind in (DONE_WORK, ROUTING):
+            anchored = bool(_one_line(item.get("fact")))
+            # Nothing on the row says where a recorded card sits, so it is
+            # under the card whenever the card has children.
+            under = kind == DONE_WORK
+            whole = kind == ROUTING or item.get("covers") == "whole"
+        else:
+            anchored = False
+        # A done-work or routing item the runner did not confirm is dropped,
+        # never shown: on the page it would read like the runner's own line.
+        if anchored or kind not in (DONE_WORK, ROUTING):
+            weighed.append(item)
+        if anchored:
+            counted.append((kind, under, whole))
+    if not counted:
+        return {"verdict": UNVERIFIED, "reason": NO_PROOF, "proof": [],
+                "rested_on": []}
+    # The child rule: a Cancel of a card with children counts only a Done
+    # card not under it, and a routing fact — never a `file:line` quote,
+    # which shows a line exists, not who landed it.
+    if verdict in CANCELS and children:
+        counted = [(k, u, w) for k, u, w in counted
+                   if k == ROUTING or k == DONE_WORK and not u]
+        if not counted:
+            return {"verdict": UNVERIFIED, "reason": CHILD_PROOF, "proof": [],
+                    "rested_on": []}
+    supplied = (_supplied(row) if not recorded or isinstance(
+        row.get("context"), dict) else set(RESTED_ON[3:]))
+    words = {k for k, _, _ in counted} | {
+        w for w in (declared if isinstance(declared, list) else [])
+        if isinstance(w, str) and w in RESTED_ON[3:] and w in supplied}
+    found = {"verdict": verdict, "reason": None, "proof": weighed,
+             "rested_on": [w for w in RESTED_ON if w in words]}
+    if verdict in CANCELS and any(k == DONE_WORK and not w
+                                  for k, _, w in counted):
+        found.update(verdict=PARTLY_SOLVED, adjusted=ADJUSTED)
+    return found
 
 
 def _lookup_state(row: dict) -> str:
@@ -707,8 +1299,9 @@ def _lookup_state(row: dict) -> str:
 
 def judge(raw_path, *, card: str, row: dict, outcome: str) -> dict:
     """`{verdict, summary, proof, reason, lookup}` — the answer as the
-    proposal may read it. The target row first, then the step, then the
-    file."""
+    proposal may read it, and on one that stood `rested_on` (DRE-7240), and
+    `adjusted` on a Cancel a partial pull request made `partly-solved`. The
+    target row first, then the step, then the file, then `_weigh`."""
     # The lookup state FIRST, and on every answer — the unmapped one too, so
     # a morning of unmapped cards still counts in DRE-5317's stop.
     lookup = _lookup_state(row)
@@ -758,17 +1351,17 @@ def judge(raw_path, *, card: str, row: dict, outcome: str) -> dict:
     except (OSError, ValueError, _Unreadable):
         return unverified(UNREADABLE, f"The agent's {RAW_FILE} could not be "
                                       f"read as an answer.")
-    verdict = doc["verdict"]
     summary = sanitize_untrusted.sanitize_line(doc["summary"])
-    card_text = _one_line(f"{row.get('title') or ''} {row.get('body') or ''}")
+    if doc["verdict"] == UNVERIFIED:
+        return unverified(NO_PROOF, summary)
+    # One anchored item at least, checked against what the runner itself
+    # handed the agent — and for a Cancel, the child rule and the partial
+    # pull request (DRE-7240).
+    weighed = _weigh(doc["verdict"], proof, row, doc.get("rested_on"))
+    verdict = weighed["verdict"]
     if verdict == UNVERIFIED:
-        return unverified(NO_PROOF, summary)
-    if not any(is_file_line(p) for p in proof):
-        return unverified(NO_PROOF, summary)
-    if not any(_counts(p, card_text) for p in proof):
-        return unverified(NO_PROOF, summary)
-    answer = {"verdict": verdict, "summary": summary, "proof": proof,
-              "reason": None, "lookup": lookup}
+        return unverified(weighed["reason"], summary)
+    answer = {**weighed, "summary": summary, "lookup": lookup}
     # The drafted body, read on `partly-solved` only (DRE-6666), with the
     # digest of the body it rewrites. Absent or not a string is no draft —
     # the verdict stands either way.
@@ -845,7 +1438,7 @@ def _mark(row: dict, doc: dict | None) -> dict:
               else _LOOKUP_NONE if row.get("excluded") else _LOOKUP_NOT_RUN)
     blank = {"summary": None, "proof": [], "cost_usd": None,
              "duration_ms": None, "model": None, "started_at": None,
-             "finished_at": None, "lookup": lookup}
+             "finished_at": None, "lookup": lookup, "rested_on": []}
     if row.get("excluded"):
         return {**blank, **_spend_of(doc), "verdict": EXCLUDED,
                 "reason": _one_line(row["excluded"])}
@@ -870,11 +1463,18 @@ def _mark(row: dict, doc: dict | None) -> dict:
             "reason": doc.get("reason")}
     if mark["verdict"] not in VERDICTS or mark["verdict"] == EXCLUDED:
         mark.update(verdict=UNVERIFIED, reason=UNREADABLE, proof=[])
-    elif mark["verdict"] not in _UNPROVED and not any(
-            is_file_line(p) for p in mark["proof"]):
-        # `verdict` never writes this; a file that says it anyway is not
-        # allowed to stand, or cancel a card, on no proof.
-        mark.update(verdict=UNVERIFIED, reason=NO_PROOF, proof=[])
+    elif mark["verdict"] not in _UNPROVED:
+        # The proof rules again, over the same row (DRE-7240): `verdict`
+        # never writes an answer that fails them, and a file that says one
+        # anyway is not allowed to stand, or cancel a card, on it — no
+        # anchored item, an epic's Cancel on a child's evidence, or a Cancel
+        # on a pull request that did part of the card.
+        weighed = _weigh(mark["verdict"], mark["proof"], row,
+                         doc.get("rested_on"), recorded=True)
+        if (weighed["verdict"] == PARTLY_SOLVED
+                and doc.get("adjusted") == ADJUSTED):
+            weighed["adjusted"] = ADJUSTED
+        mark.update(weighed)
     elif mark["verdict"] == UNVERIFIED and not mark["reason"]:
         mark["reason"] = NO_PROOF
     elif mark["verdict"] == UNVERIFIED and not is_unverified_reason(
@@ -907,8 +1507,9 @@ def _spend_of(doc: dict | None) -> dict:
 
 
 def cancel_reason(mark: dict) -> str:
-    """`<verdict>: <summary>`, then each proof as `file:line — quote` or
-    `source — quote` — the line the CEO reads and the drain writes onto the
+    """`<verdict>: <summary>`, then each proof as `groomer.proof_line`
+    writes it — `file:line — quote`, `<fact> — quote` or `source — quote`
+    — the line the CEO reads and the drain writes onto the
     card. One line, defanged like every other reason on the page."""
     parts = [f"{mark['verdict']}: {_one_line(mark.get('summary'))}"]
     parts += [groomer.proof_line(item) for item in mark.get("proof") or []]
@@ -940,10 +1541,15 @@ def _rewrite_row(slot: dict, mark: dict) -> dict:
 def _verify_field(mark: dict) -> dict:
     field = {k: mark.get(k) for k in ("verdict", "summary", "proof", "reason",
                                       "cost_usd", "duration_ms", "model")}
-    # Only on a Cancel the guard refused (DRE-5309), so every other row keeps
-    # the shape it had.
+    # What the verdict rested on (DRE-7240), on every row.
+    field["rested_on"] = list(mark.get("rested_on") or [])
+    # Only on a Cancel the guard refused (DRE-5309), and on a Cancel a
+    # partial pull request turned `partly-solved` (DRE-7240), so every other
+    # row keeps the shape it had.
     if mark.get("refused"):
         field["refused"] = mark["refused"]
+    if mark.get("adjusted"):
+        field["adjusted"] = mark["adjusted"]
     return field
 
 
@@ -994,8 +1600,13 @@ def apply(proposal: dict, found: dict[str, dict],
     def refuse(identifier: str) -> bool:
         if marks[identifier]["verdict"] not in CANCELS:
             return False
+        # …and the proof check every Cancel writer asks (DRE-7241), of the
+        # row this one would write: the verdict's own proof items.
         refusal = groomer.cancel_refusal(
-            {"identifier": identifier, **(by_seq.get(identifier) or {})})
+            {"identifier": identifier, **(by_seq.get(identifier) or {})}
+        ) or groomer.cancel_proof_refusal(
+            {**(by_seq.get(identifier) or {}), "identifier": identifier,
+             "source": CANCEL_SOURCE, "proof": marks[identifier]["proof"]})
         if refusal is None:
             return False
         marks[identifier]["refused"] = refusal
@@ -1107,7 +1718,11 @@ def apply(proposal: dict, found: dict[str, dict],
             "source": CANCEL_SOURCE, "position": len(outcomes["dead"]) + 1,
             "epic": base.get("epic"), "band": base.get("band"),
             "reason": reason, "trigger": None, "evidence": reason,
-            "judged": False, "reasons": {}})
+            "judged": False, "reasons": {},
+            # The verdict's own proof items, with the runner's `fact` lines,
+            # and what it rested on (DRE-7241) — the reason ends with them.
+            "proof": [dict(item) for item in marks[identifier]["proof"]],
+            "rested_on": list(marks[identifier].get("rested_on") or [])})
 
     by_now = {r["identifier"]: r for r in kept}
     by_dead = {r["identifier"]: r for r in outcomes["dead"]}
