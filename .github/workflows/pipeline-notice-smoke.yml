@@ -1,0 +1,92 @@
+# Live smoke test for the console's notice door (DRE-7451).
+#
+# WHY THIS EXISTS. scripts/pipeline_notice.py is the one client nine pipeline
+# writers raise and resolve console alerts through. tests/test_pipeline_notice.py
+# drives it against a fake door; nothing there reaches the console. Every
+# writer only meets the real door when something in the fleet breaks, so this
+# is the one live check that does not wait for a failure: the operator
+# dispatches it once for the proof, and its log reads `resolved` or
+# `not-open`, then `raised`, `repeat`, `resolved`.
+#
+# WHAT IT DELIBERATELY CANNOT DO: file a card. No fallback is handed to the
+# client, no Linear key is in the job, and nothing here calls Linear, so
+# a door it cannot reach prints `lost` and fails the run rather than filing
+# anything. tests/test_pipeline_notice_smoke_workflow.py reads all of that
+# from this file.
+#
+# Vendor boundary (standards/vendor-boundaries.md):
+#   Q1 actor — whoever dispatches it; the console checks the OIDC token's
+#      workflow, not the actor.
+#   Q2 secrets — none. The credential is the job's own OIDC token
+#      (`id-token: write`), minted for the notice audience; the door's base
+#      URL is the `BUREAU_READ_URL` repository variable.
+#   Q3 re-run — idempotent: the first call resolves whatever an earlier run
+#      left open, so every run starts from a closed alert.
+#   Q4 limits — a WARN notice never leaves the console, so a smoke is never
+#      emailed.
+#   Q5 crash — an alert a crashed run leaves open is closed by the next run's
+#      first resolve.
+name: Smoke · pipeline notice door
+
+on:
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  smoke:
+    name: resolve, raise, raise, resolve on smoke:pipeline_notice
+    runs-on: ${{ fromJSON(vars.BUREAU_SHORT_RUNS_ON || vars.BUREAU_RUNS_ON || '["ubuntu-latest"]') }}
+    timeout-minutes: 5
+    env:
+      BUREAU_READ_URL: ${{ vars.BUREAU_READ_URL }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.ref }}
+          persist-credentials: false
+
+      # Each call prints exactly one `pipeline-notice:` line, and each is held
+      # to the outcome the proof reads. A raise the door could not take has
+      # no fallback here, so it prints `lost` and exits non-zero on its own.
+      - name: Resolve, raise, raise, resolve
+        run: |
+          set -euo pipefail
+          BODY="$RUNNER_TEMP/smoke-notice.md"
+          printf 'A smoke of the notice door, dispatched by %s (run %s).\n' \
+            "$GITHUB_ACTOR" "$GITHUB_RUN_ID" > "$BODY"
+
+          expect() {
+            local got="$1"; shift
+            echo "$got"
+            for want in "$@"; do
+              [ "$got" = "$want" ] && return 0
+            done
+            echo "::error::the notice door answered '$got', expected one of: $*"
+            exit 1
+          }
+
+          out="$(python3 scripts/pipeline_notice.py resolve --notice smoke:pipeline_notice)"
+          if [ "${out#pipeline-notice: resolve-refused }" != "$out" ]; then
+            # Not judged here: the raise below meets the same door and says
+            # `lost` if it is down.
+            echo "$out"
+            echo "::warning::the first resolve was refused — the raise decides"
+          else
+            expect "$out" \
+              "pipeline-notice: resolved kind=pipeline_notice:smoke:pipeline_notice" \
+              "pipeline-notice: not-open kind=pipeline_notice:smoke:pipeline_notice"
+          fi
+
+          out="$(python3 scripts/pipeline_notice.py raise --notice smoke:pipeline_notice --severity WARN \
+            --title "Notice door smoke" --body-file "$BODY")" || { echo "$out"; exit 1; }
+          expect "$out" "pipeline-notice: raised kind=pipeline_notice:smoke:pipeline_notice"
+
+          out="$(python3 scripts/pipeline_notice.py raise --notice smoke:pipeline_notice --severity WARN \
+            --title "Notice door smoke" --body-file "$BODY")" || { echo "$out"; exit 1; }
+          expect "$out" "pipeline-notice: repeat kind=pipeline_notice:smoke:pipeline_notice"
+
+          out="$(python3 scripts/pipeline_notice.py resolve --notice smoke:pipeline_notice)"
+          expect "$out" "pipeline-notice: resolved kind=pipeline_notice:smoke:pipeline_notice"
