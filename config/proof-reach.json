@@ -133,6 +133,12 @@
       "when": "once per run of the planning classifier's cost tally since DRE-7196, when its Linear read succeeds"
     },
     {
+      "tag": "groom-replay:",
+      "printed_by": "scripts/groom_replay.py",
+      "constant": "TAG",
+      "when": "every groomer run with `replay` set, since DRE-7239 and its wiring in DRE-7242: `base` prints one line in the Groom step's log, and `report` one line per window card and then one count line in the post job's log"
+    },
+    {
       "tag": "release-deferred:",
       "printed_by": "scripts/release_deferral.py",
       "constant": "TAG",
