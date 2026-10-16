@@ -647,3 +647,23 @@ def test_the_log_line_is_declared_in_proof_reach():
 
 def test_proof_reach_check_still_passes():
     assert proof_reach.check(ROOT) == []
+
+
+# ── where a fallback card may go ────────────────────────────────────────────
+
+
+def test_the_fallback_lanes_are_published_and_none_is_ready_work():
+    """`ready_lane_writers.py` cannot read a lane the caller hands in, so the
+    module publishes the lanes a fallback card may go to — the two the
+    repointed writers filed theirs in."""
+    assert pipeline_notice.destinations() == ("Planning", "Triage")
+
+
+def test_a_fallback_lane_outside_them_is_refused_before_any_request(
+        monkeypatch, issuer, board):
+    fallback = pipeline_notice.Fallback(title="t", lane="Todo")
+    with FakeNoticeDoor() as door:
+        _point(monkeypatch, door, issuer)
+        with pytest.raises(ValueError):
+            _raise(fallback=fallback)
+    assert door.requests == [] and board.calls == 0
