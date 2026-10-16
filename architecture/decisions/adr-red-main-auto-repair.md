@@ -58,7 +58,9 @@ exemptions are declared with their reasons: nothing watches the medic,
 because a medic that watched itself is the crash-loop guardrail 2 forbids; and
 Shadow Replay (DRE-7197) is in `NOT_WATCHED`, because its red run is read by
 the operator from its report and a retry would spend another batch of reviewer
-runs.
+runs. So is the notice door's smoke (DRE-7451): the operator dispatches it and
+reads its log, and it files no card on any path, which a medic watching it
+would undo.
 
 ## Decision — fix flow
 
