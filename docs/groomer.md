@@ -63,6 +63,10 @@ fast path shipped, which the sweep moves straight to Planning (DRE-4150, point
      computes the proposal, reads the card's thread and posts nothing, then
      `groom_verify_agent.py targets`, which reads each Planning and spare
      card's text — this job holds the Linear key — and writes the matrix.
+     `targets` alone is handed the read door's settings (DRE-7242), so its
+     problem search asks the door before Linear; `propose` is not, and runs
+     as before. A stub that grants no `id-token: write` mints no token for
+     the door, and the search falls back to Linear.
    - **`lookup`** (DRE-5429) runs between them, one leg per owner in the
      roster, each on that owner's own App token: an installation token sees
      one installation, and the fleet spans three owners. Each leg runs
@@ -70,6 +74,14 @@ fast path shipped, which the sweep moves straight to Planning (DRE-4150, point
      no Linear key and no model credential, and a leg whose token could not
      be minted still uploads a document naming its owner unread. A dead leg
      does not stop `verify`.
+   - **`routing`** (DRE-7242) runs beside `lookup`, never after it, on the
+     same owner matrix: each leg mints a token holding `actions: read` alone,
+     runs `groom_routing.py owner` and uploads `groom-routing-<owner>`. An
+     installation that refuses `actions: read` costs only the routing facts:
+     the leg still uploads a document naming its owner unread. `verify` folds
+     the documents with `groom_routing.py fold` right after the lookups' fold,
+     so every row carries the `routing` block before `prepare`, and a dead
+     leg does not stop `verify`.
    - **`verify`** is that matrix: one read-only agent per card, reading the
      card's repo on its default branch under `target/` with a token that can
      only read that one repo, and holding no Linear key at all. Each agent
@@ -98,7 +110,11 @@ fast path shipped, which the sweep moves straight to Planning (DRE-4150, point
      card whose repo is not in `config/repo-map.json` is `excluded`, naming
      the slug (DRE-5746), and on its leg no code is read and no model is
      called. A leg that dies is `unverified`, never `still-needed`, and one
-     dead leg never cancels the others.
+     dead leg never cancels the others. Each leg's `groom-verdict-<card>`
+     artifact keeps `verify-targets.json`, as the leg held it after both
+     folds, beside `verdict.json` (DRE-7242) — the only copy that holds the
+     `routing` block and the read pull requests under `matched_work`.
+     `apply` reads only the files named `verdict.json`.
    - **`post`** writes the verdicts onto the record
      (`groom_verify_agent.py apply`) and runs
      `post --card DRE-N --proposal proposal-verified.json`, which posts it —
@@ -107,7 +123,17 @@ fast path shipped, which the sweep moves straight to Planning (DRE-4150, point
      not in the batch. After the proposal, `post` puts the drafted rewrite
      of each Rewrite first card on that card, once per body (DRE-6666).
 
-   On a drain only `groom` runs, exactly as before. The page carries a
+   On a drain only `groom` runs, exactly as before.
+
+   **A replay** (DRE-7242) is a hand dispatch with `replay` set to a stored
+   proposal's path inside the pipeline checkout. The `groom` job runs
+   `groom_replay.py base` over it instead of `propose`, and the lookups,
+   routing and verify run as on any morning, over today's code and today's
+   proof rules. The `post` job posts to no card, whatever `card` says, and
+   writes no model-attempt receipt: it prints the page to the log and the
+   step summary, then `groom_replay.py report`'s one `groom-replay:` line per
+   card. A `drain` with `replay` set refuses before any write. The scheduled
+   morning never sets it. The page carries a
    `## Verified against main` section after the Cancel list, and its
    `Verify step:` line is the verify total — cards, dollars and wall clock —
    so the verify total is on the proposal page, never in a separate comment.
