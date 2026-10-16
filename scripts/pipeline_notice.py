@@ -117,6 +117,11 @@ TOTAL_TIMEOUT = 15.0
 
 #: The lane `linear_ops.create_card` defaults to, for a fallback naming none.
 DEFAULT_LANE = "Planning"
+#: The lanes a fallback card may be filed in: the two the repointed writers
+#: filed theirs in — Planning (`linear_ops.py create`'s default) and Triage
+#: (red-main repair, the groom stall, the reviewer outage). A notice card is
+#: never ready work, so any other lane is refused before a request is made.
+FALLBACK_LANES = (DEFAULT_LANE, "Triage")
 #: The flag the CLI's fallback labels arrive under. `label_writers.py` reads
 #: this constant to find the labels a workflow hands this command line, so a
 #: writer that moves its card here does not move its labels out of sight.
@@ -132,6 +137,12 @@ class Fallback:
     lane: str = DEFAULT_LANE
     labels: tuple = ()
     repo: str | None = None
+
+
+def destinations() -> tuple:
+    """The lanes a fallback card can land in, published for
+    `ready_lane_writers.py`, which cannot read a lane the caller hands in."""
+    return FALLBACK_LANES
 
 
 class DoorMissed(Exception):
@@ -389,6 +400,9 @@ def raise_notice(notice: str, *, severity: str, title: str, body: str,
     if severity not in SEVERITIES:
         raise ValueError(f"severity {severity!r} is not one of {'/'.join(SEVERITIES)}")
     fallback = _as_fallback(fallback)
+    if fallback is not None and fallback.lane not in FALLBACK_LANES:
+        raise ValueError(f"fallback lane {fallback.lane!r} is not one of "
+                         f"{'/'.join(FALLBACK_LANES)}")
     payload = {
         "action": "raise",
         "notice": notice,
