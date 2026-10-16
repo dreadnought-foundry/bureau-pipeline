@@ -4,7 +4,8 @@ The verify agent reads three things its workflow did not yet run or
 authorize:
 
 * the read door's search, from `groom_verify_agent.py targets` — which needs
-  the door's three settings and an OIDC token. `groomer.py propose` shares the
+  the door's four settings and an OIDC token, behind the read door's
+  identity check (`bureau_read.py check-ref`). `groomer.py propose` shares the
   Groom step with it and must run exactly as before, so the settings are
   scoped to the `targets` command alone, and the stub grants `id-token: write`;
 * the routing reader, `groom_routing.py`, in its own per-owner job beside the
@@ -44,12 +45,15 @@ import groom_verify_agent  # noqa: E402
 PIPELINE = "dreadnought-foundry/bureau-pipeline"
 RUNS_ON = "fromJSON(vars.BUREAU_RUNS_ON || '[\"ubuntu-latest\"]')"
 
-#: The door's three settings, and the expression each must carry — the one
+#: The door's four settings, and the expression each must carry — the one
 #: every other door-reading workflow here carries (reconcile.yml, verify.yml).
+#: `BUREAU_PIPELINE_REF` lets the client refuse a token that names another ref
+#: than the scripts it runs (review M1); unset, the client skips that check.
 DOOR = {
     "BUREAU_READ": "vars.BUREAU_READ || 'off'",
     "BUREAU_READ_URL": "vars.BUREAU_READ_URL",
     "BUREAU_READ_AUDIENCE": "vars.BUREAU_READ_AUDIENCE",
+    "BUREAU_PIPELINE_REF": "inputs.pipeline_ref",
 }
 
 #: sha256 of the `lookup` job's text on main before this card, from its
@@ -59,6 +63,7 @@ DOOR = {
 LOOKUP_SHA256 = "eb628ff408d7b7eea6092bfa603475ab41b035058dd27c0f43fd4b71bf18b572"
 
 GROOM_STEP = "Groom"
+CHECK_REF_STEP = "Refuse a pipeline_ref the stub did not call"
 POST_STEP = "Post the verified proposal"
 RECEIPT_STEP = "Judgement receipt — the model that answered"
 LOOKUP_FOLD_STEP = "Fold the lookups into the targets"
@@ -150,7 +155,8 @@ def _job_text(text: str, name: str) -> str:
 STUB = '''\
 import json, os, sys
 
-DOOR = ("BUREAU_READ", "BUREAU_READ_URL", "BUREAU_READ_AUDIENCE")
+DOOR = ("BUREAU_READ", "BUREAU_READ_URL", "BUREAU_READ_AUDIENCE",
+        "BUREAU_PIPELINE_REF")
 
 
 def render_proposal(proposal):
@@ -201,7 +207,7 @@ class _RunsSteps(unittest.TestCase):
 
     def run_step(self, step: dict, env: dict) -> subprocess.CompletedProcess:
         base = {k: v for k, v in os.environ.items()
-                if not k.startswith("BUREAU_READ")}
+                if not k.startswith(("BUREAU_READ", "BUREAU_PIPELINE_REF"))}
         return subprocess.run(
             ["bash", "-e", "-c", step["run"]], cwd=self.ws,
             env={**base, "CALLS": str(self.calls),
@@ -223,7 +229,8 @@ def _groom_env(**overrides) -> dict:
            "BATCH_CYCLES": "1", "PRIORITY": "portico", "CARD": "DRE-1",
            "INTAKE_HOLD": "", "JUDGEMENT": "on", "REPLAY": "",
            "DOOR_READ": "on", "DOOR_READ_URL": "https://door.example",
-           "DOOR_READ_AUDIENCE": "door-audience"}
+           "DOOR_READ_AUDIENCE": "door-audience",
+           "DOOR_PIPELINE_REF": "main"}
     env.update(overrides)
     return env
 
@@ -244,7 +251,7 @@ class TheDoorReachesTheTargetsReadOnlyTest(_RunsSteps):
         self.groom = _named(self.doc["jobs"]["groom"], GROOM_STEP)
         self.env = self.groom.get("env") or {}
 
-    def test_the_targets_command_carries_the_doors_three_settings(self):
+    def test_the_targets_command_carries_the_doors_four_settings(self):
         words = shlex.split(_one_line(self.groom["run"]))
         at = next(i for i, w in enumerate(words)
                   if w.endswith("groom_verify_agent.py") and words[i + 1] == "targets")
@@ -281,7 +288,25 @@ class TheDoorReachesTheTargetsReadOnlyTest(_RunsSteps):
                          "propose sees the door's settings")
         self.assertEqual(calls[("groom_verify_agent.py", "targets")], {
             "BUREAU_READ": "on", "BUREAU_READ_URL": "https://door.example",
-            "BUREAU_READ_AUDIENCE": "door-audience"})
+            "BUREAU_READ_AUDIENCE": "door-audience",
+            "BUREAU_PIPELINE_REF": "main"})
+
+    def test_the_groom_job_refuses_a_pipeline_ref_it_was_not_called_at(self):
+        # The read door's identity check (review M1), as reconcile.yml runs
+        # it: before the step that reads through the door, inputs through
+        # env, and a refusal fails the run.
+        names = [s.get("name") for s in self.doc["jobs"]["groom"]["steps"]]
+        self.assertIn(CHECK_REF_STEP, names)
+        self.assertLess(names.index(CHECK_REF_STEP), names.index(GROOM_STEP))
+        check = _named(self.doc["jobs"]["groom"], CHECK_REF_STEP)
+        self.assertIn('bureau_read.py check-ref "$PIPELINE_REF"', check["run"])
+        self.assertNotIn("${{", check["run"])
+        env = check.get("env") or {}
+        self.assertEqual(_expression(env.get("PIPELINE_REF")), "inputs.pipeline_ref")
+        self.assertEqual(_expression(env.get("BUREAU_READ")), DOOR["BUREAU_READ"])
+        self.assertEqual(_expression(env.get("BUREAU_READ_AUDIENCE")),
+                         DOOR["BUREAU_READ_AUDIENCE"])
+        self.assertNotIn("continue-on-error", check)
 
     def test_the_stub_grants_id_token_as_self_reconcile_does(self):
         stub = _text("self-groomer.yml")
