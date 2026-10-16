@@ -16,6 +16,8 @@ What this file pins:
   caller's `scripts/` or `./.github/actions/`;
 * the nested `qa-review.yml` and `verify.yml` calls pass `pipeline_ref` and
   stay `shadow: true`;
+* `pick` and `compare` read the long runner chain, as every reusable job
+  outside the short lane does;
 * a bureau-pipeline dispatch with today's inputs resolves to today's pick
   and compare commands, the script now read from the checkout;
 * `pick` reads the caller's cards under its `repo:<slug>` label, the slug
@@ -163,6 +165,21 @@ class NestedReviewersTest(unittest.TestCase):
                 self.assertEqual(PIPELINE_REF, jobs[job]["with"]["pipeline_ref"])
                 self.assertIs(True, jobs[job]["with"]["shadow"])
                 self.assertEqual("inherit", jobs[job]["secrets"])
+
+
+class RunnerLaneTest(unittest.TestCase):
+    """A reusable now, so `pick` and `compare` read the caller's long chain
+    (tests/test_runs_on_switchable.py): the short lane is exactly the five
+    files tests/test_short_runs_on_lane.py names, and this is not one."""
+
+    def test_pick_and_compare_read_the_long_chain(self):
+        long_chain = "${{ fromJSON(vars.BUREAU_RUNS_ON || '[\"ubuntu-latest\"]') }}"
+        jobs = _doc()["jobs"]
+        for job in ("pick", "compare"):
+            with self.subTest(job=job):
+                self.assertEqual(long_chain, jobs[job]["runs-on"])
+        self.assertFalse("BUREAU_SHORT_RUNS_ON" in WORKFLOW.read_text(encoding="utf-8"),
+                         "shadow-replay.yml names the short-lane variable")
 
 
 class TodaysCommandsTest(unittest.TestCase):
