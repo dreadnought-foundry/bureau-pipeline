@@ -61,6 +61,12 @@ AGENT_BUREAU = (
     "console/web/src/components/flyout/cardMeta.ts",
     "demo/demo_library.py",
 )
+# The two console fact files DRE-7431 adds, which are not slug mirrors and
+# are relieved entry by entry (tests/test_check_tdd_commits_onboard_facts.py).
+CONSOLE_FACTS = (
+    "console/backend/github_oidc.py",
+    "console/backend/runner-routing.json",
+)
 # The routing paths that classify as code without this card — the ones the
 # relief actually moves.
 CODE_ROUTING = tuple(p for p in AGENT_BUREAU if tdd.classify_path(p) == "code")
@@ -106,7 +112,7 @@ class RoutingSetTest(unittest.TestCase):
 
     def test_the_routing_set_is_exactly_the_cards(self):
         self.assertEqual(tdd.ONBOARD_ROUTING_PATHS,
-                         frozenset(HERE + AGENT_BUREAU))
+                         frozenset(HERE + AGENT_BUREAU + CONSOLE_FACTS))
 
     def test_validate_card_is_left_to_the_generated_region_rule(self):
         # Its region-only change is docs already (DRE-3896); listing it here
