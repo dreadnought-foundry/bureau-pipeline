@@ -229,7 +229,12 @@ def _mint() -> str:
         with urllib.request.urlopen(req, timeout=TOTAL_TIMEOUT) as resp:  # nosec B310
             payload = json.loads(resp.read().decode())
     except urllib.error.HTTPError as e:
-        raise DoorMissed("no-token", f"the runner's OIDC endpoint answered {e.code}") from e
+        try:
+            said = e.read().decode("utf-8", "replace").strip()[:300]
+        except Exception:  # noqa: BLE001 — the status alone still names it
+            said = ""
+        raise DoorMissed("no-token", f"the runner's OIDC endpoint answered {e.code}"
+                         + (f": {said}" if said else "")) from e
     except Exception as e:  # noqa: BLE001 — any failure to mint is a miss
         raise DoorMissed("no-token", f"minting failed: {e}") from e
     value = payload.get("value") if isinstance(payload, dict) else None
