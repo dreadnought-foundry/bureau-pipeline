@@ -12,7 +12,9 @@
 # client, no Linear key is in the job, and nothing here calls Linear, so
 # a door it cannot reach prints `lost` and fails the run rather than filing
 # anything. tests/test_pipeline_notice_smoke_workflow.py reads all of that
-# from this file.
+# from this file. Nothing watches it either — the medic would answer a red
+# smoke with a retry and a diagnosis card — so scripts/check_workflow_watchers.py
+# declares it in NOT_WATCHED, with that reason.
 #
 # Vendor boundary (standards/vendor-boundaries.md):
 #   Q1 actor — whoever dispatches it; the console checks the OIDC token's
