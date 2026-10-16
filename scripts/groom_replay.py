@@ -17,7 +17,8 @@ between them (DRE-7242).
     stood, so `groom_verify_agent.window` over the result is the window the
     stored record names. An absolute path, a path with `..`, a link that
     leaves the checkout, a missing file, or a file holding no proposal is
-    refused with exit 2 and the reason, and nothing is written.
+    refused with exit 2 and the reason, and nothing is written. An `--out`
+    that cannot be written is refused the same way.
 
     `verification` is kept. `groomer.py propose` writes it, not the verify
     leg (`groom_verify.settle`), and a groom run's input carries it today.
@@ -39,9 +40,11 @@ between them (DRE-7242).
     `planning`, `cancel`, `rewrite`, `not-verified` or `excluded` — and
     `not-now` for a spare that took no slot and waits where it was, since
     a spare answered `partly-solved` or `still-needed` with no slot to take
-    is on none of the other five. An `unverified` or `excluded` verdict's
-    summary is followed by its reason, in brackets. The proof lines are
-    `groomer.proof_line`'s.
+    is on none of the other five. A card on no outcome list at all — a
+    verify record on a `sequence` row alone — is `unplaced`, never a list it
+    is not on, and the count line then ends `, <p> unplaced`. An
+    `unverified` or `excluded` verdict's summary is followed by its reason,
+    in brackets. The proof lines are `groomer.proof_line`'s.
 
 Every line either subcommand prints opens `TAG`, a refusal too, and a proof
 run reads them from the run's log (`config/proof-reach.json`). It imports
@@ -74,6 +77,8 @@ VERIFY_KEYS = ("verify", "verify_targets")
 (PLANNING, CANCEL, REWRITE, NOT_VERIFIED, EXCLUDED,
  NOT_NOW) = ("planning", "cancel", "rewrite", "not-verified", "excluded",
              "not-now")
+#: A card on no outcome list — said as unknown, never as a list.
+UNPLACED = "unplaced"
 #: The count line's words for each list, in its order.
 COUNT_WORDS = ((PLANNING, "planning"), (CANCEL, "cancel"),
                (REWRITE, "rewrite"), (NOT_VERIFIED, "not verified"),
@@ -190,7 +195,9 @@ def ended(proposal: dict, card: str) -> str:
         return CANCEL
     if on(groom_verify_agent.REWRITE):
         return REWRITE
-    waiting = on("not-now") or {}
+    waiting = on("not-now")
+    if waiting is None:
+        return UNPLACED
     reason = str(waiting.get("reason") or "")
     if reason.startswith(groom_verify_agent.EXCLUDED_PREFIX):
         return EXCLUDED
@@ -228,13 +235,16 @@ def line(card: str, where: str, mark: dict | None) -> str:
 def report(proposal: dict) -> list[str]:
     marks = _records(proposal)
     lines, counts = [], {key: 0 for key, _ in COUNT_WORDS}
+    counts[UNPLACED] = 0
     cards = window(proposal)
     for card in cards:
         where = ended(proposal, card)
         counts[where] += 1
         lines.append(line(card, where, marks.get(card)))
-    lines.append(f"{TAG} {len(cards)} cards — "
-                 + ", ".join(f"{counts[key]} {word}" for key, word in COUNT_WORDS))
+    words = [f"{counts[key]} {word}" for key, word in COUNT_WORDS]
+    if counts[UNPLACED]:
+        words.append(f"{counts[UNPLACED]} {UNPLACED}")
+    lines.append(f"{TAG} {len(cards)} cards — " + ", ".join(words))
     return lines
 
 
@@ -259,9 +269,12 @@ def main(argv=None, *, root: Path = ROOT) -> int:
     try:
         if args.command == "base":
             proposal = base(load_stored(args.stored, root))
-            with open(args.out, "w", encoding="utf-8") as fh:
-                json.dump(proposal, fh, indent=2)
-                fh.write("\n")
+            try:
+                with open(args.out, "w", encoding="utf-8") as fh:
+                    json.dump(proposal, fh, indent=2)
+                    fh.write("\n")
+            except OSError as e:
+                raise ReplayError(f"{args.out} could not be written: {e}")
             n = len(groom_verify_agent.window(proposal))
             print(f"{TAG} base {proposal.get('id')} — {n} cards in the verify "
                   f"window, from {args.stored}")
