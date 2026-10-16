@@ -891,9 +891,9 @@ class WorkflowInputsTest(unittest.TestCase):
     def test_with_the_defaults_pick_is_called_as_today(self):
         argv, tmp = self._pick_argv()
         self.assertEqual([
-            "scripts/shadow_replay.py", "pick", "--reviewer", "critic",
+            ".bureau-pipeline/scripts/shadow_replay.py", "pick", "--reviewer", "critic",
             "--recorded-model", "", "--count", "20", "--prs", "", "--repo", REPO,
-            "--out", f"{tmp}/shadow-replay-pick/shadow-replay-pick.json",
+            "--repo-label", "repo:bureau-pipeline", "--out", f"{tmp}/shadow-replay-pick/shadow-replay-pick.json",
             "--github-output", f"{tmp}/out", "--verify-workflow", ""], argv)
 
 
