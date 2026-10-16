@@ -435,8 +435,11 @@ The list is now **derived, never remembered**. `scripts/check_workflow_watchers.
 The exemptions are declared, each with its reason in the code. Nothing watches
 the medic, because a medic that watched itself rebuilds the 2026-06-28
 crash-loop. And `NOT_WATCHED` names the workflows left unwatched on purpose:
-today only Shadow Replay (DRE-7197), whose red run the operator reads from its
-report, where an automatic retry would spend another batch of reviewer runs.
+Shadow Replay (DRE-7197), whose red run the operator reads from its report,
+where an automatic retry would spend another batch of reviewer runs, and the
+notice door's smoke (DRE-7451), which the operator dispatches and reads, and
+which files no card on any path — a medic watching it would retry it and file
+one.
 Adding any other workflow with no watcher fails CI instead of adding a silent
 failure surface.
 

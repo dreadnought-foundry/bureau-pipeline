@@ -3009,6 +3009,13 @@
       "kind": "not-an-act",
       "means": "The surface cut a verified tag, so the open deferred-release card is closed Done under `Released as <tag>` (DRE-5235).",
       "why": "Part of the deferral card's own record, not an act: the release it names already has its own receipt, the train's decision line and record. The comment says why the notice card left Green Light, for the person it was filed for; nothing downstream reads it, and its wording is the card's acceptance criterion, pinned by tests/test_release_deferral.py."
+    },
+    {
+      "file": "scripts/pipeline_notice.py",
+      "anchor": "linear_ops.cmd_comment(existing, description)",
+      "kind": "not-an-act",
+      "means": "A notice the console's notice door could not take, added to the writer's own card already open under the same title — the comment the writer posted there before the console carried notices, with one line saying the door was not reached and why (DRE-7451).",
+      "why": "The notice itself, not a receipt of something the pipeline did: the writer's diagnosis, escalation or run list, filed where it was filed before. Nothing is refused, recovered or held by posting it, so a trailer would name a state and a next actor it does not have. It lands only while the door is down or not yet live; the alert it stands in for is the console's, and the client's one `pipeline-notice:` line is what a reader of the run keys on."
     }
   ]
 }
