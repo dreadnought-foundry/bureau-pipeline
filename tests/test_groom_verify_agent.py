@@ -1122,7 +1122,11 @@ EXCLUSIONS = {
 @pytest.mark.parametrize("case", sorted(EXCLUSIONS))
 def test_each_exclusion_drops_the_card_from_judgement(tmp_path, case):
     fields, reason = EXCLUSIONS[case]
-    reason = reason.format(day=iso_ago(1)[:10])
+    # The day the fixture's move was stamped, not today's minus one:
+    # EXCLUSIONS is built at import, and a run that crosses UTC midnight
+    # between import and here would expect the next day (DRE-7419).
+    moved = fields.get("history") or [{"createdAt": ""}]
+    reason = reason.format(day=moved[0]["createdAt"][:10])
     lops = CardText(issues={"DRE-101": issue_node("DRE-101", **fields)})
     _, targets, matrix = build_targets(tmp_path, proposal(), lops=lops)
     rows = {r["card"]: r for r in read(targets)}
