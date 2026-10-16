@@ -149,6 +149,16 @@ def test_base_refuses_with_exit_two_and_the_reason(tmp_path, stored, why):
     assert not out.exists()
 
 
+def test_base_refuses_an_out_it_cannot_write_with_exit_two(tmp_path):
+    out = tmp_path / "no-such-dir" / "proposal.json"
+    done = _run("base", "--stored", STORED, "--out", str(out))
+    assert done.returncode == 2
+    assert done.stderr.startswith(TAG)
+    assert f"{out} could not be written" in done.stderr
+    assert "Traceback" not in done.stderr
+    assert done.stdout == ""
+
+
 def test_base_refuses_a_file_that_holds_no_proposal(tmp_path):
     (tmp_path / "x.json").write_text('{"note": "not a proposal"}',
                                      encoding="utf-8")
@@ -220,6 +230,25 @@ def test_report_count_line_adds_up_to_the_window():
     assert {k for k, v in ended.items() if v == "not-now"} == set(SPARES)
     assert {k for k, v in ended.items() if v == "excluded"} == {
         e["identifier"] for e in proposal["verify"]["excluded"]}
+
+
+def test_report_names_a_card_on_no_list_unplaced_not_not_now():
+    # A verify record on a `sequence` row alone: the card is on no outcome
+    # list, so naming one would state a place it is not.
+    proposal = _fixture()["proposal"]
+    proposal["sequence"].append({"identifier": "DRE-NOWHERE", "verify": {
+        "verdict": "still-needed", "summary": "Still wanted."}})
+    assert groom_replay.ended(proposal, "DRE-NOWHERE") == "unplaced"
+    lines = groom_replay.report(proposal)
+    assert _card_lines(lines)["DRE-NOWHERE"].startswith(
+        "groom-replay: DRE-NOWHERE unplaced still-needed — Still wanted.")
+    assert lines[-1].endswith(", 2 not now, 1 unplaced")
+    n, *counts = (int(g) for g in re.findall(r"\d+", lines[-1]))
+    assert n == len(lines) - 1 == sum(counts) == 31
+
+
+def test_report_count_line_names_no_unplaced_when_every_card_is_placed():
+    assert COUNT_RE.fullmatch(groom_replay.report(_fixture()["proposal"])[-1])
 
 
 def test_report_after_todays_apply_names_rewrite_and_not_verified(tmp_path):
