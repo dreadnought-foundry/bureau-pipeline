@@ -117,6 +117,10 @@ TOTAL_TIMEOUT = 15.0
 
 #: The lane `linear_ops.create_card` defaults to, for a fallback naming none.
 DEFAULT_LANE = "Planning"
+#: The flag the CLI's fallback labels arrive under. `label_writers.py` reads
+#: this constant to find the labels a workflow hands this command line, so a
+#: writer that moves its card here does not move its labels out of sight.
+LABEL_FLAG = "--fallback-label"
 
 
 @dataclass(frozen=True)
@@ -437,10 +441,14 @@ def _read(path: str) -> str:
         return f.read()
 
 
-def _parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    sub = parser.add_subparsers(dest="command", required=True)
-    up = sub.add_parser("raise", help="raise a console alert, or file the old card")
+def _flag_values(flags, name: str) -> list:
+    """Every value given as `<name> <value>` in `flags`, in order."""
+    return [flags[i + 1] for i in range(len(flags) - 1) if flags[i] == name]
+
+
+def _raise_parser() -> argparse.ArgumentParser:
+    up = argparse.ArgumentParser(prog="pipeline_notice.py raise",
+                                 description="raise a console alert, or file the old card")
     up.add_argument("--notice", required=True)
     up.add_argument("--severity", required=True, choices=SEVERITIES)
     up.add_argument("--title", required=True)
@@ -449,37 +457,66 @@ def _parser() -> argparse.ArgumentParser:
     up.add_argument("--action-label")
     up.add_argument("--fallback-title")
     up.add_argument("--fallback-lane", default=DEFAULT_LANE)
-    up.add_argument("--fallback-label", action="append", default=[])
+    up.add_argument(LABEL_FLAG, action="append", default=[])
     up.add_argument("--fallback-repo")
-    down = sub.add_parser("resolve", help="resolve a console alert")
+    return up
+
+
+def _resolve_parser() -> argparse.ArgumentParser:
+    down = argparse.ArgumentParser(prog="pipeline_notice.py resolve",
+                                   description="resolve a console alert")
     down.add_argument("--notice", required=True)
     down.add_argument("--recovery-title")
     down.add_argument("--recovery-body-file")
-    return parser
+    return down
 
 
-def main(argv=None) -> int:
-    args = _parser().parse_args(argv)
+def cmd_raise(*flags: str) -> int:
+    args = _raise_parser().parse_args(flags)
+    fallback = None
+    if args.fallback_title:
+        # The labels are read off the flags themselves rather than argparse's
+        # namespace, so `label_writers.py` can follow each one from the
+        # workflow that names it to the card (DRE-6362).
+        labels = _flag_values(flags, LABEL_FLAG)
+        fallback = Fallback(title=args.fallback_title, lane=args.fallback_lane,
+                            labels=tuple(labels), repo=args.fallback_repo)
     try:
-        if args.command == "raise":
-            fallback = None
-            if args.fallback_title:
-                fallback = Fallback(title=args.fallback_title, lane=args.fallback_lane,
-                                    labels=tuple(args.fallback_label),
-                                    repo=args.fallback_repo)
-            outcome = raise_notice(
-                args.notice, severity=args.severity, title=args.title,
-                body=_read(args.body_file), action_url=args.action_url,
-                action_label=args.action_label, fallback=fallback)
-        else:
-            recovery_body = (_read(args.recovery_body_file)
-                             if args.recovery_body_file else None)
-            outcome = resolve_notice(args.notice, recovery_title=args.recovery_title,
-                                     recovery_body=recovery_body)
+        outcome = raise_notice(
+            args.notice, severity=args.severity, title=args.title,
+            body=_read(args.body_file), action_url=args.action_url,
+            action_label=args.action_label, fallback=fallback)
     except (ValueError, OSError) as e:
         _say(f"notice-door: refused before any request — {e}")
         return 2
     return 1 if outcome == "lost" else 0
+
+
+def cmd_resolve(*flags: str) -> int:
+    args = _resolve_parser().parse_args(flags)
+    try:
+        recovery_body = (_read(args.recovery_body_file)
+                         if args.recovery_body_file else None)
+        resolve_notice(args.notice, recovery_title=args.recovery_title,
+                       recovery_body=recovery_body)
+    except (ValueError, OSError) as e:
+        _say(f"notice-door: refused before any request — {e}")
+        return 2
+    return 0
+
+
+#: The command line, by subcommand. A dict of handlers, the shape
+#: `label_writers.py` reads a command line in.
+COMMANDS = {"raise": cmd_raise, "resolve": cmd_resolve}
+
+
+def main(argv=None) -> int:
+    argv = sys.argv[1:] if argv is None else list(argv)
+    if not argv or argv[0] not in COMMANDS:
+        _say("usage: pipeline_notice.py raise|resolve --notice <key> … (see the "
+             "module docstring)")
+        return 2
+    return COMMANDS[argv[0]](*argv[1:])
 
 
 if __name__ == "__main__":
