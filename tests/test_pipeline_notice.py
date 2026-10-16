@@ -323,6 +323,21 @@ def test_no_oidc_token_files_the_fallback_card(monkeypatch, capsys, issuer, boar
     _assert_fallback(capsys, board, "no-token")
 
 
+def test_a_refusing_oidc_endpoint_names_its_answer(monkeypatch, capsys, issuer, board):
+    """A refused mint carries the endpoint's own words to stderr, not only
+    its status — a bare 500 is the unattributable red run the urlopen audit
+    in tests/test_linear_error_body.py exists to stop."""
+    issuer.status = 500
+    with FakeNoticeDoor() as door:
+        _point(monkeypatch, door, issuer)
+        assert _raise() == "fallback-card"
+        assert door.requests == []
+    err = capsys.readouterr().err
+    assert "the runner's OIDC endpoint answered 500" in err
+    assert "issuer refused" in err
+    assert len(board.created) == 1
+
+
 def test_no_bureau_read_url_files_the_fallback_card(monkeypatch, capsys, issuer, board):
     with FakeNoticeDoor() as door:
         _point(monkeypatch, door, issuer)
