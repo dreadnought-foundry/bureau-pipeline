@@ -30,7 +30,11 @@ and created with `linear_ops.create_card` when it is not, the body carrying
 one added line that says the console door was not reached and why. A search
 that fails files NOTHING: a card minted on a search that never answered is
 the duplicate the search exists to prevent (medic.yml's rule). So until the
-door is live, or whenever it is down, a writer behaves exactly as it did.
+door is live, or whenever it is down, a writer behaves exactly as it did. An
+open card already at Linear's comment limit takes nothing
+(`linear_ops.COMMENT_CAP_CONDITION`), so that raise is `lost comment-capped`,
+never reported as filed — and no second card is minted beside it, because
+every later search would find the full one again.
 
 A raise handed no fallback that the door could not take is `lost`: nothing is
 filed and the CLI exits non-zero. Only the smoke workflow raises that way. A
@@ -372,7 +376,11 @@ def _file_card_quietly(fallback: Fallback, description: str) -> tuple[str | None
         return None, "search-failed"
     try:
         if existing:
-            linear_ops.cmd_comment(existing, description)
+            capped = linear_ops.cmd_comment(existing, description)
+            if capped:
+                _say(f"notice-door: {existing} cannot take the notice ({capped}); "
+                     "filing nothing")
+                return None, "comment-capped"
             return existing, None
         issue = linear_ops.create_card(
             fallback.title, description, repo_slug=_repo_slug(fallback),
