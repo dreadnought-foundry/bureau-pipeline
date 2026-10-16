@@ -323,7 +323,8 @@ class WatchListTest(unittest.TestCase):
           * the workflows `check_workflow_watchers.NOT_WATCHED` declares,
             each with its reason — Shadow Replay (DRE-7197), whose red run is
             read by the operator from its report, where a retry would spend
-            another batch of reviewer runs.
+            another batch of reviewer runs, and the notice door's smoke
+            (DRE-7451), which files no card on any path.
         """
         watched = set(self._watch("self-medic.yml"))
         for fname, doc in _all_workflows().items():

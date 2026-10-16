@@ -14,16 +14,24 @@ The operator dispatches it once for the proof, and its log must read
 * it runs the client four times — resolve, raise, raise, resolve — on
   `smoke:pipeline_notice` at WARN, with no fallback card and no Linear call,
   so a door it cannot reach prints `lost` and fails the run rather than
-  filing anything.
+  filing anything;
+* nothing watches it: the medic would answer a red smoke with a retry that
+  raises a real alert again and then a diagnosis card, and the smoke files no
+  card on any path. `check_workflow_watchers.NOT_WATCHED` declares that.
 """
 from __future__ import annotations
 
 import re
+import sys
 from pathlib import Path
 
 import yaml
 
 ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT / "scripts"))
+
+import check_workflow_watchers as cww  # noqa: E402
+
 WORKFLOW = ROOT / ".github" / "workflows" / "pipeline-notice-smoke.yml"
 KEY = "smoke:pipeline_notice"
 
@@ -104,3 +112,16 @@ def test_each_outcome_is_checked():
     joined = "\n".join(scripts)
     for outcome in ("resolved", "not-open", "raised", "repeat"):
         assert f"pipeline-notice: {outcome} kind=pipeline_notice:{KEY}" in joined
+
+
+def test_nothing_watches_it_and_the_watcher_check_says_why():
+    name = _doc()["name"]
+    for stub in ("self-medic.yml", "self-red-main-repair.yml"):
+        watched = cww.watched(cww.on_block(yaml.safe_load(
+            (ROOT / ".github" / "workflows" / stub).read_text())))
+        assert name not in watched, stub
+    assert name in cww.NOT_WATCHED
+    reason = cww.NOT_WATCHED[name]
+    assert "operator" in reason and "card" in reason
+    violations, _ = cww.check_dir()
+    assert [v for v in violations if name in v] == []
