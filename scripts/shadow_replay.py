@@ -9,7 +9,7 @@ verdict to the `shadow-verdict-<role>-<pr>` artifact and posting nothing.
 its two ends. The noise-floor reading is taken with it, and the model-switch
 epics (DRE-7185, DRE-7187, DRE-7188, DRE-7189) read their bars with it.
 
-`pick` chooses the batch, one of two ways:
+`pick` chooses the batch, by default one of two ways:
 
 * `--recorded-model` (critic only): the critic's copies on Linear cards
   labeled `repo:<this repo>` that carry `🧠 model: <recorded_model>` — the
@@ -41,15 +41,50 @@ at that time" is exact for a repo that rides `@main` (bureau-pipeline and
 agent-bureau); a repo on another channel would need that channel's position.
 A verifier record's `rules_ref` is always empty: `verify.yml` takes none.
 
+`--unknown-builder` (DRE-7304) picks the reviews the selector ran while this
+build's model could not be read — the clause is read off
+`model_fallback.selection_note`, never retyped — on `--recorded-model`, which
+then defaults to `UNKNOWN_BUILDER_MODEL`. A clause review on another model
+never counts, and the pick log says how many it skipped.
+
+* critic: the same card copies as `--recorded-model`, kept only when their
+  `🧠 model:` line names the model and carries the clause. A pull request
+  rejected, fixed and approved carries copies on several heads, so it is
+  picked at its newest *acted-on* rejection, at that rejection's own head,
+  whenever it has one — a `REQUEST_CHANGES` followed, before the next critic
+  verdict, by the worker bot's `🔧 Fix attempt … pushed — CI and critic
+  review re-running` (a conflict round's push does not count). Its other
+  pull requests contribute their newest review. One record per pull request,
+  because a replay's artifact and `read_replays` are keyed by pull request
+  alone. Acted-on records come first, newest first, then the rest, and each
+  record carries `acted_on`.
+* verifier: the runs of the stub `--verify-workflow` names, newest first,
+  kept when the job log's `Select model` note says `<model> chosen for
+  verifier` with the clause, each paired with the `🧪 QA Verifier — VERDICT:`
+  comment posted on its pull request while it ran. Every run passed over —
+  an unreadable log, no verdict comment, a known builder, another model, a pull
+  request already picked — is named. One record per pull request, the newest.
+
+`--from-pick <file> --acted-on-only` re-emits, unchanged, the acted-on
+records of an earlier pick's records file and reads nothing else, so the
+Opus control replays the very records the earlier run replayed.
+
 It writes the matrix, `[{pr, sha, recorded, rules_ref}]`, as the `matrix`
 step output, and the full records (with each recorded first line and the
 verdict's time) to `--out`.
 
 `compare` reads the downloaded artifacts against the pick and prints, in
-this order, one line per pull request and then exactly one summary:
+this order, one line per pull request, one summary, and the bar the role's
+model switch waits on (DRE-7304):
 
     shadow-replay: pr=<n> sha=<40hex> recorded=<token|none> replayed=<token|none> match=<yes|no|n/a>
     shadow-replay: matched <k> of <n> (<pct>%) reviewer=<role> model=<id> recorded_model=<id|none>
+    shadow-replay: acted-on rejections <k> of <n> rejected again (<pct>%) reviewer=critic model=<id>
+    shadow-replay: recorded FAIL replayed PASS <k> of <n> reviewer=verifier model=<id>
+
+The last two are one per role; the verifier's `<n>` counts the replayed
+records whose recorded verdict is FAIL. A replay with no verdict is neither
+rejected again nor PASS, and the report names it apart.
 
 A replay with no artifact, or with `"verdict": null`, is a mismatch of kind
 `no verdict`, named apart from a `disagreement`. A replay whose recorded
@@ -65,6 +100,10 @@ CLI:
 
     python3 scripts/shadow_replay.py pick --reviewer critic --recorded-model <id> \\
         --count 20 --prs '' --repo <owner/name> --out pick.json --github-output "$GITHUB_OUTPUT"
+    python3 scripts/shadow_replay.py pick --reviewer verifier --unknown-builder \\
+        --verify-workflow <stub.yml> --count 20 --repo <owner/name> --out pick.json
+    python3 scripts/shadow_replay.py pick --reviewer critic --from-pick <earlier.json> \\
+        --acted-on-only --repo <owner/name> --out pick.json
     python3 scripts/shadow_replay.py compare --reviewer critic --model <id> \\
         --recorded-model <id> --pick pick.json --artifacts <dir> --out-dir <dir>
 """
@@ -81,9 +120,12 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import fix_budget  # noqa: E402
 import fix_concurrency  # noqa: E402
+import fix_dead_run  # noqa: E402
 import linear_ops  # noqa: E402
 import merge_gate  # noqa: E402
+import model_fallback  # noqa: E402
 
 #: The tag every compare line opens with. `config/proof-reach.json` declares
 #: the line against this constant, and that file's check holds it here.
@@ -116,6 +158,52 @@ CRITIC_COPIES_QUERY = """query($label: String!, $model: String!, $after: String)
     issue: {labels: {name: {eq: $label}}}
   }) { nodes { createdAt body issue { identifier labels { nodes { name } } } }
        pageInfo { hasNextPage endCursor } } }"""
+
+#: The model whose unknown-builder reviews the switch epic reads (DRE-7304):
+#: under `--unknown-builder`, an empty `--recorded-model` means this one.
+UNKNOWN_BUILDER_MODEL = "claude-opus-5-5"
+
+REQUEST_CHANGES = "REQUEST_CHANGES"
+FAIL = "FAIL"
+PASS = "PASS"
+
+#: The worker bot's fix-loop push (`🔧 Fix attempt N pushed — …`), which is
+#: what makes a rejection acted on. A conflict round's push carries the same
+#: marker and opens `🔀 Conflict resolution`, so it does not count.
+FIX_ATTEMPT = fix_budget.BUDGETS["fix"][0]
+PUSH_MARKER = fix_dead_run.PUSH_MARKER
+
+#: After this many runs in a row whose log cannot be read, the older runs'
+#: logs have expired too (a run's log expires by age, and the runs are read
+#: newest first): the verifier's listing stops there, and says so.
+UNREADABLE_LOGS_IN_A_ROW = 20
+
+# Where a printed line starts in `gh run view --log`: behind the
+# `job\tstep\ttimestamp ` prefix (check_linear_budget._LINE_START, DRE-5201),
+# so the echoed script that merely names the note is never read as it.
+_LOG_LINE_START = (
+    r"^(?:[^\t\n]*\t[^\t\n]*\t)?﻿?"
+    r"(?:\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z )?"
+)
+_VERIFIER_NOTE_RE = re.compile(
+    _LOG_LINE_START + r"(?:DEGRADED )?model-policy: (\S+) chosen for verifier\b(.*)$", re.M)
+_MODEL_LINES_RE = re.compile(r"^" + re.escape(MODEL_LINE) + r"(\S+)(.*)$", re.M)
+
+
+def unknown_builder_clause() -> str:
+    """The words the selector's note says when this build's model could not
+    be read, taken off `model_fallback.selection_note` itself and never
+    retyped: where the unknown builder's separation sentence parts from a
+    known builder's, back to the sentence's start, up to its first comma."""
+    decision = {"model": "m", "role": "r", "separated": ["b"]}
+    unknown = model_fallback.selection_note({**decision, "built_on_unknown": True})
+    known = model_fallback.selection_note({**decision, "built_on_unknown": False})
+    start = os.path.commonprefix([unknown, known]).rfind(": ") + 2
+    return unknown[start:].split(",", 1)[0].strip()
+
+
+#: The unknown-builder clause, as the selector writes it.
+UNKNOWN_BUILDER_CLAUSE = unknown_builder_clause()
 
 
 class PickError(Exception):
@@ -287,6 +375,266 @@ def pick_recorded_model(comments, *, recorded_model: str, count: int, repo: str,
     return with_rules_refs(picked)
 
 
+def _pr_comments(repo: str, pr: int) -> list:
+    try:
+        return merge_gate.flatten_pages(_gh_json(
+            "api", f"repos/{repo}/issues/{pr}/comments", "--paginate", "--slurp"))
+    except ValueError as exc:
+        raise PickError(f"pull request {pr}'s comments did not read: {exc}") from exc
+
+
+def _login(comment: dict) -> str:
+    return ((comment.get("user") or {}).get("login")) or ""
+
+
+def acted_on(comments, verdict_at: str, *, worker_login: str = fix_dead_run.WORKER_LOGIN,
+             qa_login: str = fix_concurrency.QA_BOT_LOGIN) -> bool:
+    """A rejection recorded at `verdict_at` was acted on: the worker bot
+    posted a `🔧 Fix attempt … pushed — CI and critic review re-running`
+    comment after it and before the next critic verdict. A conflict round's
+    push, a push before the verdict, and anyone else's comment do not count;
+    a `could not run` notice is not the next verdict."""
+    start = _moment(verdict_at)
+    later = [c for c in comments or () if isinstance(c, dict)
+             and _moment(c.get("created_at")) > start]
+    for c in sorted(later, key=lambda c: _moment(c.get("created_at"))):
+        body = (c.get("body") or "").lstrip()
+        if _login(c) == qa_login and recorded_verdict(body, MARKERS["critic"]):
+            return False
+        if (_login(c).removesuffix("[bot]") == worker_login
+                and body.startswith(FIX_ATTEMPT) and PUSH_MARKER in body):
+            return True
+    return False
+
+
+def _rejection_time(comments, token: str, sha: str, copied_at: str,
+                    qa_login: str = fix_concurrency.QA_BOT_LOGIN) -> str:
+    """When the rejection the card copy records was posted on the pull
+    request: the newest qa-bot critic comment with the same verdict and sha
+    at or before the copy, else the copy's own time."""
+    copied, found = _moment(copied_at), ""
+    for c in comments or ():
+        if not isinstance(c, dict) or _login(c) != qa_login:
+            continue
+        verdict = recorded_verdict(c.get("body"), MARKERS["critic"])
+        created = c.get("created_at") or ""
+        if verdict and verdict[:2] == (token, sha) and _moment(created) <= copied:
+            if not found or _moment(created) > _moment(found):
+                found = created
+    return found or copied_at
+
+
+def _unknown_builder_copy(body: str | None, model: str) -> str:
+    """`kept` when a `🧠 model:` line names `model` and carries the
+    unknown-builder clause, `elsewhere` when only a line naming another model
+    carries it, and `""` for a copy that is no unknown-builder review."""
+    lines = _MODEL_LINES_RE.findall(body or "")
+    if any(m == model and UNKNOWN_BUILDER_CLAUSE in rest for m, rest in lines):
+        return "kept"
+    if any(UNKNOWN_BUILDER_CLAUSE in rest for _, rest in lines):
+        return "elsewhere"
+    return ""
+
+
+def pick_unknown_builder_critic(comments, *, recorded_model: str, count: int, repo: str,
+                                repo_label: str | None = None,
+                                qa_login: str = fix_concurrency.QA_BOT_LOGIN) -> list:
+    """`count` critic reviews recorded on `recorded_model` while this build's
+    model could not be read, one per pull request: the pull request's newest
+    acted-on rejection, at that rejection's own head, whenever it has one,
+    else its newest review. The acted-on records come first, newest first,
+    then the rest, newest first. Raises PickError naming the number found
+    when short."""
+    label = repo_label or "repo:" + repo.rsplit("/", 1)[-1]
+    copies, elsewhere = [], 0
+    for c in comments or ():
+        if not isinstance(c, dict) or not _labeled(c, label):
+            continue
+        body = c.get("body")
+        found = recorded_verdict(body, MARKERS["critic"])
+        kind = _unknown_builder_copy(body, recorded_model) if found else ""
+        elsewhere += kind == "elsewhere"
+        if kind == "kept":
+            copies.append((_moment(c.get("createdAt")), c.get("createdAt") or "", found))
+    print(f"pick: skipped {elsewhere} unknown-builder critic copie(s) recorded on another "
+          f"model than {recorded_model}", file=sys.stderr)
+    copies.sort(key=lambda entry: entry[0], reverse=True)
+
+    by_pr, pr_of = {}, {}
+    for moment, created, (token, sha, line) in copies:
+        if sha not in pr_of:
+            if not commit_exists(repo, sha):
+                print(f"pick: {sha} is gone from {repo} — dropped", file=sys.stderr)
+                pr_of[sha] = None
+                continue
+            pr_of[sha] = pull_request_of(repo, sha)
+        if pr_of[sha] is not None:
+            by_pr.setdefault(pr_of[sha], []).append((moment, created, token, sha, line))
+
+    acted, rest = [], []
+    for pr, reviews in by_pr.items():
+        chosen, is_acted = reviews[0], False
+        if any(review[2] == REQUEST_CHANGES for review in reviews):
+            pr_comments = _pr_comments(repo, pr)
+            for review in reviews:
+                _, created, token, sha, _ = review
+                if token == REQUEST_CHANGES and acted_on(
+                        pr_comments, _rejection_time(pr_comments, token, sha, created, qa_login),
+                        qa_login=qa_login):
+                    chosen, is_acted = review, True
+                    break
+        moment, created, token, sha, line = chosen
+        record = {**_record(pr, sha, token, line, created), "acted_on": is_acted}
+        (acted if is_acted else rest).append((moment, record))
+    acted.sort(key=lambda entry: entry[0], reverse=True)
+    rest.sort(key=lambda entry: entry[0], reverse=True)
+    picked = [record for _, record in acted + rest][:count]
+    if len(picked) < count:
+        raise PickError(
+            f"found {len(picked)} eligible unknown-builder critic review(s) recorded on "
+            f"{recorded_model} in {repo}, and the batch asks for {count} — nothing is "
+            "replayed short")
+    print(f"pick: acted-on rejections {sum(r['acted_on'] for r in picked)} of {count}",
+          file=sys.stderr)
+    return with_rules_refs(picked)
+
+
+def verifier_runs(repo: str, workflow: str):
+    """The completed runs of the verifier stub `workflow`, newest first."""
+    page = 1
+    while True:
+        doc = _gh_json("api", f"repos/{repo}/actions/workflows/{workflow}/runs"
+                              f"?status=completed&per_page=100&page={page}")
+        runs = doc.get("workflow_runs") if isinstance(doc, dict) else None
+        if not isinstance(runs, list) or not runs:
+            return
+        yield from (run for run in runs if isinstance(run, dict))
+        if len(runs) < 100:
+            return
+        page += 1
+
+
+def run_log(repo: str, run_id) -> str | None:
+    """The run's whole log, or None when it cannot be read — expired, or
+    any other failing `gh run view`."""
+    done = _gh("run", "view", str(run_id), "--repo", repo, "--log")
+    return done.stdout if done.returncode == 0 and done.stdout.strip() else None
+
+
+def verifier_note(log: str | None):
+    """`(model, the rest of the note)` off the run's `Select model` note."""
+    m = _VERIFIER_NOTE_RE.search(log or "")
+    return (m.group(1), m.group(2)) if m else None
+
+
+def _run_pr(repo: str, run: dict) -> int | None:
+    for pull in run.get("pull_requests") or ():
+        if isinstance(pull, dict) and isinstance(pull.get("number"), int):
+            return pull["number"]
+    head = run.get("head_sha")
+    if not isinstance(head, str) or not re.fullmatch(r"[0-9a-f]{40}", head):
+        return None
+    try:
+        return pull_request_of(repo, head)
+    except PickError:
+        return None
+
+
+def _run_verdict(comments, run: dict, qa_login: str):
+    """`(token, sha, first_line, created)` of the newest qa-bot verifier
+    verdict posted while the run ran, or None."""
+    began, ended = _moment(run.get("created_at")), _moment(run.get("updated_at"))
+    found = None
+    for c in comments or ():
+        if not isinstance(c, dict) or _login(c) != qa_login:
+            continue
+        verdict = recorded_verdict(c.get("body"), MARKERS["verifier"])
+        created = c.get("created_at") or ""
+        if verdict and began <= _moment(created) <= ended:
+            if found is None or _moment(created) >= _moment(found[3]):
+                found = (*verdict, created)
+    return found
+
+
+def pick_unknown_builder_verifier(*, recorded_model: str, count: int, repo: str,
+                                  workflow: str,
+                                  qa_login: str = fix_concurrency.QA_BOT_LOGIN) -> list:
+    """`count` verifier verdicts whose run chose `recorded_model` while this
+    build's model could not be read, one per pull request (its newest), each
+    at the verdict comment its run posted. Every run passed over is named.
+    Raises PickError naming the number found when short."""
+    picked, prs, comments_of = [], set(), {}
+    elsewhere = unreadable = 0
+
+    def skip(run_id, why):
+        print(f"pick: run {run_id} skipped — {why}", file=sys.stderr)
+
+    for run in verifier_runs(repo, workflow):
+        if len(picked) == count:
+            break
+        run_id = run.get("id")
+        pr = _run_pr(repo, run)
+        if pr is None:
+            skip(run_id, "it names no pull request")
+            continue
+        if pr in prs:
+            skip(run_id, f"pr={pr} is already picked at a newer run")
+            continue
+        log = run_log(repo, run_id)
+        if log is None:
+            skip(run_id, "its log could not be read")
+            unreadable += 1
+            if unreadable == UNREADABLE_LOGS_IN_A_ROW:
+                print(f"pick: {unreadable} run logs in a row could not be read — the older "
+                      "runs' logs have expired too, so the listing stops here", file=sys.stderr)
+                break
+            continue
+        unreadable = 0
+        note = verifier_note(log)
+        if note is None:
+            skip(run_id, "its log carries no Select model note for the verifier")
+            continue
+        model, rest = note
+        if UNKNOWN_BUILDER_CLAUSE not in rest:
+            skip(run_id, f"its builder's model was read (chosen {model})")
+            continue
+        if model != recorded_model:
+            elsewhere += 1
+            skip(run_id, f"chosen on {model}, not {recorded_model}")
+            continue
+        if pr not in comments_of:
+            comments_of[pr] = _pr_comments(repo, pr)
+        verdict = _run_verdict(comments_of[pr], run, qa_login)
+        if verdict is None:
+            skip(run_id, f"no verifier verdict comment on pr={pr} was posted while it ran")
+            continue
+        token, sha, line, created = verdict
+        prs.add(pr)
+        picked.append(_record(pr, sha, token, line, created))
+    print(f"pick: skipped {elsewhere} unknown-builder verifier run(s) chosen on another "
+          f"model than {recorded_model}", file=sys.stderr)
+    if len(picked) < count:
+        raise PickError(
+            f"found {len(picked)} eligible unknown-builder verifier review(s) recorded on "
+            f"{recorded_model} in {repo}'s {workflow} runs, and the batch asks for {count} — "
+            "nothing is replayed short")
+    return picked
+
+
+def pick_from(path: str) -> list:
+    """Every acted-on record of an earlier pick's records file, unchanged."""
+    try:
+        records = json.loads(Path(path).read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        raise PickError(f"the earlier pick {path} could not be read ({exc})") from exc
+    if not isinstance(records, list):
+        raise PickError(f"the earlier pick {path} is not a list of records")
+    kept = [r for r in records if isinstance(r, dict) and r.get("acted_on") is True]
+    if not kept:
+        raise PickError(f"the earlier pick {path} holds no acted-on record — nothing to replay")
+    return kept
+
+
 def parse_prs(text: str) -> list:
     out = []
     for part in (text or "").split(","):
@@ -307,14 +655,10 @@ def pick_prs(prs, *, reviewer: str, repo: str,
     marker = MARKERS[reviewer]
     picked = []
     for pr in prs:
-        try:
-            comments = merge_gate.flatten_pages(_gh_json(
-                "api", f"repos/{repo}/issues/{pr}/comments", "--paginate", "--slurp"))
-        except ValueError as exc:
-            raise PickError(f"pull request {pr}'s comments did not read: {exc}") from exc
+        comments = _pr_comments(repo, pr)
         latest = None
         for c in comments:
-            if ((c.get("user") or {}).get("login")) != qa_login:
+            if _login(c) != qa_login:
                 continue
             found = recorded_verdict(c.get("body"), marker)
             if found:
@@ -372,6 +716,46 @@ def summary_line(matched: int, of: int, *, reviewer: str, model: str,
             f"model={model} recorded_model={recorded_model or NONE}")
 
 
+def acted_on_line(rejected_again: int, of: int, *, model: str) -> str:
+    """The critic's bar (DRE-7304): how many acted-on rejections the replay
+    rejected again."""
+    pct = rejected_again * 100 // of if of else 0
+    return (f"{TAG} acted-on rejections {rejected_again} of {of} rejected again ({pct}%) "
+            f"reviewer=critic model={model}")
+
+
+def fail_to_pass_line(replayed_pass: int, of: int, *, model: str) -> str:
+    """The verifier's bar (DRE-7304): how many recorded FAILs the replay
+    turned into PASS, of the recorded FAILs a zero rests on."""
+    return (f"{TAG} recorded FAIL replayed PASS {replayed_pass} of {of} "
+            f"reviewer=verifier model={model}")
+
+
+def _bar(rows, *, reviewer: str, model: str) -> tuple:
+    """`(report key, the bar's numbers and pull requests)`. A replay with no
+    verdict counts as not rejected again, and as not PASS, and is named
+    apart."""
+    if reviewer == "critic":
+        rows = [r for r in rows if r["acted_on"] and r["recorded"] == REQUEST_CHANGES]
+        hit = [r["pr"] for r in rows if r["replayed"] == REQUEST_CHANGES]
+        bar = {"line": acted_on_line(len(hit), len(rows), model=model),
+               "rejected_again": len(hit), "of": len(rows),
+               "pct": len(hit) * 100 // len(rows) if rows else 0,
+               "prs_rejected_again": hit,
+               "prs_not_rejected_again": [r["pr"] for r in rows
+                                          if r["replayed"] not in (REQUEST_CHANGES, NONE)]}
+        key = "acted_on_rejections"
+    else:
+        rows = [r for r in rows if r["recorded"] == FAIL]
+        hit = [r["pr"] for r in rows if r["replayed"] == PASS]
+        bar = {"line": fail_to_pass_line(len(hit), len(rows), model=model),
+               "replayed_pass": len(hit), "of": len(rows), "prs_replayed_pass": hit,
+               "prs_not_pass": [r["pr"] for r in rows if r["replayed"] not in (PASS, NONE)]}
+        key = "recorded_fail_replayed_pass"
+    bar["prs_no_verdict"] = [r["pr"] for r in rows if r["replayed"] == NONE]
+    return key, bar
+
+
 def compare(records, artifacts: Path, *, reviewer: str, model: str,
             recorded_model: str) -> dict:
     replays = read_replays(artifacts, reviewer)
@@ -399,17 +783,23 @@ def compare(records, artifacts: Path, *, reviewer: str, model: str,
                     "replayed": verdict or NONE,
                     "recorded_line": r.get("recorded_line") or "",
                     "replayed_line": replayed_line})
-        rows.append({"pr": pr, "sha": sha, "rules_ref": rules_ref, "recorded": recorded,
-                     "replayed": verdict or NONE, "match": match, "run_url": run_url})
+        row = {"pr": pr, "sha": sha, "rules_ref": rules_ref, "recorded": recorded,
+               "replayed": verdict or NONE, "match": match, "run_url": run_url}
+        if reviewer == "critic":
+            row["acted_on"] = r.get("acted_on") is True
+        rows.append(row)
         lines.append(pr_line(pr, sha, recorded, verdict, match))
     summary = summary_line(matched, of, reviewer=reviewer, model=model,
                            recorded_model=recorded_model)
     lines.append(summary)
+    bar_key, bar = _bar(rows, reviewer=reviewer, model=model)
+    lines.append(bar["line"])
     return {
         "reviewer": reviewer, "model": model, "recorded_model": recorded_model or NONE,
         "matched": matched, "of": of, "pct": matched * 100 // of if of else 0,
         "without_rules_ref": sum(1 for row in rows if not row["rules_ref"]),
-        "summary": summary, "replays": rows, "mismatches": mismatches, "lines": lines,
+        "summary": summary, "replays": rows, "mismatches": mismatches,
+        bar_key: bar, "lines": lines,
     }
 
 
@@ -433,7 +823,27 @@ def render_md(report: dict) -> str:
         out += [f"### PR {m['pr']} — {m['kind']}", "",
                 f"- recorded ({m['recorded']}): {m['recorded_line'] or '(not kept)'}",
                 f"- replayed ({m['replayed']}): {m['replayed_line']}", ""]
+    out += _render_bar(report)
     return "\n".join(out).rstrip() + "\n"
+
+
+def _prs(prs) -> str:
+    return ", ".join(f"PR {pr}" for pr in prs) or "none"
+
+
+def _render_bar(report: dict) -> list:
+    if "acted_on_rejections" in report:
+        bar = report["acted_on_rejections"]
+        return ["", "## Acted-on rejections", "", bar["line"], "",
+                f"- rejected again: {_prs(bar['prs_rejected_again'])}",
+                f"- not rejected again: {_prs(bar['prs_not_rejected_again'])}",
+                "- no verdict, counted as not rejected again: "
+                f"{_prs(bar['prs_no_verdict'])}"]
+    bar = report["recorded_fail_replayed_pass"]
+    return ["", "## Recorded FAIL replayed PASS", "", bar["line"], "",
+            f"- replayed PASS: {_prs(bar['prs_replayed_pass'])}",
+            f"- not PASS: {_prs(bar['prs_not_pass'])}",
+            f"- no verdict, counted as not PASS: {_prs(bar['prs_no_verdict'])}"]
 
 
 # --------------------------------------------------------------------------- #
@@ -442,14 +852,30 @@ def render_md(report: dict) -> str:
 
 def _pick_main(args) -> int:
     try:
-        if args.count < 1:
+        if bool(args.from_pick) != args.acted_on_only:
+            raise PickError("`--from-pick` and `--acted-on-only` go together: the control "
+                            "replays exactly the acted-on records of an earlier pick")
+        label = args.repo_label or "repo:" + args.repo.rsplit("/", 1)[-1]
+        recorded_model = args.recorded_model or UNKNOWN_BUILDER_MODEL
+        if args.from_pick:
+            records = pick_from(args.from_pick)
+        elif args.count < 1:
             raise PickError(f"`count` must be at least 1 — got {args.count}")
-        prs = parse_prs(args.prs)
-        if prs:
+        elif prs := parse_prs(args.prs):
             records = pick_prs(prs, reviewer=args.reviewer, repo=args.repo)
+        elif args.unknown_builder and args.reviewer == "critic":
+            records = pick_unknown_builder_critic(
+                linear_critic_comments(recorded_model, label), recorded_model=recorded_model,
+                count=args.count, repo=args.repo, repo_label=args.repo_label)
+        elif args.unknown_builder:
+            if not args.verify_workflow:
+                raise PickError("the verifier's unknown-builder pick reads the runs of the "
+                                "verifier stub — name its workflow file in `verify_workflow`")
+            records = pick_unknown_builder_verifier(
+                recorded_model=recorded_model, count=args.count, repo=args.repo,
+                workflow=args.verify_workflow)
         elif args.reviewer == "critic" and args.recorded_model:
-            comments = linear_critic_comments(
-                args.recorded_model, args.repo_label or "repo:" + args.repo.rsplit("/", 1)[-1])
+            comments = linear_critic_comments(args.recorded_model, label)
             records = pick_recorded_model(
                 comments, recorded_model=args.recorded_model, count=args.count,
                 repo=args.repo, repo_label=args.repo_label)
@@ -514,6 +940,16 @@ def build_parser() -> argparse.ArgumentParser:
                       help="the Linear label of this repo's cards (default repo:<name>)")
     pick.add_argument("--out", required=True, help="the full records, as JSON")
     pick.add_argument("--github-output", default="")
+    pick.add_argument("--unknown-builder", action="store_true",
+                      help="pick the reviews run while the build's model could not be read "
+                           f"(an empty --recorded-model means {UNKNOWN_BUILDER_MODEL})")
+    pick.add_argument("--verify-workflow", default="",
+                      help="the verifier stub's workflow file, whose runs the verifier's "
+                           "unknown-builder pick reads")
+    pick.add_argument("--from-pick", default="",
+                      help="an earlier pick's records file (shadow-replay-pick.json)")
+    pick.add_argument("--acted-on-only", action="store_true",
+                      help="with --from-pick: re-emit only its acted-on records")
 
     cmp_ = sub.add_parser("compare", help="compare the replays with the recorded verdicts")
     cmp_.add_argument("--reviewer", choices=REVIEWERS, required=True)

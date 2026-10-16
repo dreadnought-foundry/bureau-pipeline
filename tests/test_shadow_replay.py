@@ -11,7 +11,7 @@ DRE-7187, DRE-7188, DRE-7189) read their bars with it afterwards.
 
 What this file pins:
 
-* the workflow: `workflow_dispatch` only, its five inputs, the two reusables
+* the workflow: `workflow_dispatch` only, its eight inputs, the two reusables
   at `@main` with `shadow: true` and the replay inputs, a `permissions:`
   block of exactly four grants, and a concurrency group that never names a
   pull request;
@@ -204,13 +204,18 @@ class WorkflowShapeTest(unittest.TestCase):
         self.doc = _load(WORKFLOW)
         self.jobs = self.doc.get("jobs") or {}
 
-    def test_named_and_dispatch_only(self):
+    def test_named_dispatched_or_called(self):
+        """Called by a product repo's stub since DRE-7306, whose inputs
+        `tests/test_shadow_replay_callable.py` pins."""
         self.assertEqual("Shadow Replay", self.doc["name"])
-        self.assertEqual(["workflow_dispatch"], list(_on(self.doc)))
+        self.assertEqual(["workflow_dispatch", "workflow_call"], list(_on(self.doc)))
 
-    def test_the_five_inputs(self):
+    def test_the_eight_inputs(self):
+        """The five of DRE-7197, then DRE-7304's three, which
+        `tests/test_shadow_replay_unknown_builder.py` pins."""
         inputs = _on(self.doc)["workflow_dispatch"]["inputs"]
-        self.assertEqual(["reviewer", "model", "recorded_model", "count", "prs"],
+        self.assertEqual(["reviewer", "model", "recorded_model", "count", "prs",
+                          "unknown_builder", "verify_workflow", "from_run"],
                          list(inputs))
         self.assertEqual("critic", inputs["reviewer"]["default"])
         self.assertEqual(["critic", "verifier"], inputs["reviewer"]["options"])
@@ -243,12 +248,14 @@ class WorkflowShapeTest(unittest.TestCase):
         pick = self.jobs["pick"]
         self.assertIn("matrix", pick["outputs"])
         runs = "\n".join(s.get("run", "") for s in pick["steps"])
-        self.assertIn("python3 scripts/shadow_replay.py pick", runs)
+        self.assertIn("python3 .bureau-pipeline/scripts/shadow_replay.py pick", runs)
 
     def _replay_jobs(self) -> dict:
         return {name: job for name, job in self.jobs.items() if "uses" in job}
 
     def test_replay_calls_each_reusable_at_main_in_shadow_mode(self):
+        """`uses:` cannot be an expression, so it stays `@main`; the
+        caller's `pipeline_ref` reaches the internal checkouts (DRE-7306)."""
         calls = self._replay_jobs()
         by_target = {job["uses"]: (name, job) for name, job in calls.items()}
         base = "dreadnought-foundry/bureau-pipeline/.github/workflows/"
@@ -265,7 +272,7 @@ class WorkflowShapeTest(unittest.TestCase):
                           "one red replay must not cancel the rest of the batch")
             self.assertIn("needs.pick.outputs.matrix", str(job["strategy"]["matrix"]))
             w = job["with"]
-            self.assertEqual("main", w["pipeline_ref"])
+            self.assertEqual("${{ inputs.pipeline_ref || 'main' }}", w["pipeline_ref"])
             self.assertIs(True, w["shadow"])
             self.assertEqual("${{ inputs.model }}", w["model"])
             self.assertIn("matrix.", w["replay_pr"])
@@ -276,12 +283,13 @@ class WorkflowShapeTest(unittest.TestCase):
 
     def test_the_critic_replay_is_handed_its_rules_ref(self):
         """DRE-7280: the critic judges by the rules in force when the
-        recorded verdict was written; `pipeline_ref` stays `main`, so the
-        harness running the replay is today's. The verifier takes no
+        recorded verdict was written; `pipeline_ref` is the caller's (`main`
+        on a dispatch here), so the harness running the replay is the
+        caller's. The verifier takes no
         `rules_ref` (DRE-7279 left `verify.yml` alone)."""
         critic = self.jobs["replay-critic"]["with"]
         self.assertEqual("${{ matrix.replay.rules_ref }}", critic["rules_ref"])
-        self.assertEqual("main", critic["pipeline_ref"])
+        self.assertEqual("${{ inputs.pipeline_ref || 'main' }}", critic["pipeline_ref"])
         self.assertNotIn("rules_ref", self.jobs["replay-verifier"]["with"])
 
     def test_compare_always_runs_and_publishes_the_report(self):
@@ -292,7 +300,7 @@ class WorkflowShapeTest(unittest.TestCase):
             self.assertIn(name, needs)
         steps = compare["steps"]
         runs = "\n".join(s.get("run", "") for s in steps)
-        self.assertIn("python3 scripts/shadow_replay.py compare", runs)
+        self.assertIn("python3 .bureau-pipeline/scripts/shadow_replay.py compare", runs)
         self.assertIn("grep", runs)
         self.assertIn("shadow-replay:", runs)
         downloads = [s for s in steps if "download-artifact" in s.get("uses", "")]
@@ -730,6 +738,9 @@ class CompareTest(unittest.TestCase):
             f"shadow-replay: pr=5 sha={_sha(5)} recorded=none replayed=APPROVE match=n/a",
             f"shadow-replay: matched 1 of 4 (25%) reviewer=critic model={MODEL} "
             f"recorded_model={OTHER_MODEL}",
+            # DRE-7304's bar, after today's lines; no record here is acted on.
+            "shadow-replay: acted-on rejections 0 of 0 rejected again (0%) "
+            f"reviewer=critic model={MODEL}",
         ], self._run())
 
     def test_the_lines_are_unchanged_by_rules_ref(self):
@@ -770,7 +781,8 @@ class CompareTest(unittest.TestCase):
         self.assertIn("Ran with no `rules_ref`, so by today's rules: 5 of 5 replays.", md)
 
     def test_an_empty_recorded_model_is_none(self):
-        self.assertTrue(self._run(recorded_model="")[-1].endswith("recorded_model=none"))
+        summary = next(ln for ln in self._run(recorded_model="") if " matched " in ln)
+        self.assertTrue(summary.endswith("recorded_model=none"))
 
     def test_the_percentage_rounds_down(self):
         self.assertEqual(

@@ -124,7 +124,7 @@
       "tag": "shadow-replay:",
       "printed_by": "scripts/shadow_replay.py",
       "constant": "TAG",
-      "when": "every run of `shadow-replay.yml` since DRE-7197, in its compare job's log: one line per replayed pull request, then one summary line"
+      "when": "every run of `shadow-replay.yml` since DRE-7197, in its compare job's log: one line per replayed pull request, then one summary line, then since DRE-7304 the line of the bar its reviewer's model switch waits on"
     },
     {
       "tag": "classifier-cost:",
