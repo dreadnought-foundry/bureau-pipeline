@@ -1465,7 +1465,8 @@ and nobody knows.
 `nightly-watch.yml` runs **hourly in this repo, on a schedule of its own** — it
 must not depend on the repos it watches running anything — and raises one
 deduplicated Linear card through `linear_ops.py`, the shape
-`red-main-repair.yml` files its card in. The decision is
+`red-main-repair.yml` filed its cards in until DRE-7454 made them console
+alerts. The decision is
 `scripts/nightly_watch.py`.
 
 - **Who is watched is computed, never listed.** Every workflow, in every repo
