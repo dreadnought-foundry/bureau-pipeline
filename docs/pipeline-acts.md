@@ -348,7 +348,7 @@ repair still running never alarms.
 
 The hourly **summary** the pass posts to its standing card is not one of these:
 it is a report about the pass, declared `not-an-act` in the `unconverted`
-block, the way Nightly Watch's report is.
+block.
 
 ## The row that starts a proof — `🔬 proof-run` (DRE-5926)
 
