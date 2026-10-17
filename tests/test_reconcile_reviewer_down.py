@@ -371,7 +371,8 @@ def test_a_quiet_sweep_makes_no_linear_request_at_all():
         raise AssertionError("a quiet sweep must not touch Linear")
 
     with patch.object(reconcile, "gh",
-                      side_effect=lambda *a: json.dumps([_pr()])), \
+                      side_effect=lambda *a: json.dumps(
+                          [_pr(comments=[_verdict_comment()])])), \
         patch.object(reconcile, "pipeline_notice", notices), \
         patch.object(reconcile.bureau_read, "mode", return_value="off"), \
         patch.object(reconcile.linear_ops, "find_open_prefix",
@@ -721,6 +722,7 @@ def test_a_door_that_is_not_there_files_todays_card_in_one_mutation(monkeypatch)
     world = _file_world(_medic_note())
     with patch.object(linear_ops, "gql", side_effect=fake_gql), \
         patch.object(linear_ops, "find_open", return_value=None), \
+        patch.object(linear_ops, "find_open_prefix", return_value=None), \
         patch.object(linear_ops, "state_id",
                      side_effect=lambda team, lane: f"state:{lane}"), \
         patch.object(linear_ops, "_team_label_ids",

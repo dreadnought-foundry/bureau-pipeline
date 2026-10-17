@@ -218,6 +218,9 @@ def test_the_outage_hands_the_client_todays_card_as_its_fallback():
     fallback = kw["fallback"]
     assert isinstance(fallback, pipeline_notice.Fallback)
     assert fallback.title == kw["title"]
+    # The title carries the counts, so the client finds the card by the part
+    # of it that does not move.
+    assert fallback.dedupe_prefix == reviewer_down.TITLE_PREFIX
     assert fallback.lane == "Triage" == reconcile.FLEET_OUTAGE_LANE
     assert tuple(fallback.labels) == ("repo:agent-bureau", linear_ops.NO_CODE_LABEL)
 
@@ -242,7 +245,7 @@ def test_the_all_clear_names_the_sweeps_own_time_in_pt(monkeypatch):
 
     monkeypatch.setattr(reconcile, "datetime", _Later)
     notices = FakeNotices()
-    _sweep([], notices)
+    _sweep(QUIET_PRS, notices)
     (_, kw), = notices.of("resolve")
     assert kw["recovery_body"] == (
         "The reconcile sweep at 20:41 PT found the fleet-wide reviewer outage "
@@ -255,6 +258,120 @@ def test_an_outage_raised_then_cleared_is_resolved_on_the_next_quiet_sweep():
     _sweep(QUIET_PRS, notices)
     assert [kind for kind, _, _ in notices.calls] == ["raise", "resolve"]
     assert notices.open == {}
+
+
+#: Three crashes that have aged out of the half-hour window: the outage no
+#: longer shows in it, but nothing says the reviewer has run since.
+AGED_PRS = [_pr(141, [_neutral(141, 50)]), _pr(142, [_neutral(142, 45, 2)]),
+            _pr(143, [_neutral(143, 40, 3)])]
+
+
+def test_an_empty_window_with_no_verdict_resolves_nothing():
+    """The all-clear tells the CEO reviews are running again, so it is sent
+    on a review that ran — never on quiet. A sweep that sees no crash and no
+    verdict has seen nothing either way, and leaves the alert alone."""
+    notices = FakeNotices()
+    _sweep([], notices)
+    assert notices.calls == []
+
+
+def test_crashes_aged_out_of_the_window_with_no_verdict_since_resolve_nothing():
+    """A reviewer still broken that nobody has asked to review for half an
+    hour: the crashes leave the window, and the alert stays raised."""
+    notices = FakeNotices()
+    _sweep(OUTAGE_PRS, notices)
+    _sweep(AGED_PRS, notices)
+    assert [kind for kind, _, _ in notices.calls] == ["raise"]
+    assert notices.open == {"reviewer_outage:fleet": "CRITICAL"}
+
+
+def test_a_verdict_older_than_the_last_crash_resolves_nothing():
+    notices = FakeNotices()
+    prs = AGED_PRS + [_pr(144, [_verdict(55)])]
+    _sweep(prs, notices)
+    assert notices.calls == []
+
+
+def test_a_verdict_after_the_last_aged_out_crash_resolves_with_the_all_clear():
+    notices = FakeNotices()
+    _sweep(OUTAGE_PRS, notices)
+    _sweep(AGED_PRS + [_pr(144, [_verdict(20)])], notices)
+    assert [kind for kind, _, _ in notices.calls] == ["raise", "resolve"]
+    (_, kw), = notices.of("resolve")
+    assert kw["recovery_title"] == RECOVERY_TITLE
+    assert notices.open == {}
+
+
+def _witness_card(minutes_ago):
+    """An active card carrying the medic's note about a crash in portico."""
+    note = (f"{reviewer_down.MEDIC_BACKOFF_MARKER} — the review run crashed "
+            "at startup; retrying once.\n\nRun: "
+            "https://github.com/dreadnought-foundry/portico/actions/runs/34512000888")
+    return {"id": "uuid-DRE-9001", "identifier": "DRE-9001", "title": "a card",
+            "description": "work", "updatedAt": _iso(minutes_ago),
+            "state": {"name": "Todo"},
+            "labels": {"nodes": [{"name": "repo:portico"}]},
+            "comments": {"nodes": [{"body": note, "createdAt": _iso(minutes_ago)}]}}
+
+
+def test_a_verdict_older_than_another_repos_last_crash_resolves_nothing():
+    """The witness counts too: a crash in another repository, seen through the
+    medic's note, newer than every verdict here keeps the alert raised."""
+    notices = FakeNotices()
+    _sweep([_pr(144, [_verdict(55)])], notices, cards=[_witness_card(45)])
+    assert notices.calls == []
+
+
+class FallbackBoard:
+    """`linear_ops` behind the REAL client's fallback: open cards by title,
+    searched the way the client searches them."""
+
+    def __init__(self):
+        self.created: list = []
+        self.comments: list = []
+
+    def find_open(self, title):
+        return next((c["identifier"] for c in self.created if c["title"] == title),
+                    None)
+
+    def find_open_prefix(self, prefix):
+        card = next((c for c in self.created if c["title"].startswith(prefix)),
+                    None)
+        return {**card, "duplicates": []} if card else None
+
+    def create_card(self, title, description, *, repo_slug, labels=(),
+                    lane="Planning"):
+        ident = f"DRE-{9001 + len(self.created)}"
+        self.created.append({"identifier": ident, "title": title,
+                             "lane": lane, "labels": list(labels)})
+        return {"identifier": ident, "url": f"https://linear.app/x/{ident}"}
+
+    def cmd_comment(self, identifier, body, *flags):
+        self.comments.append((identifier, body))
+        return None
+
+
+def test_two_sweeps_with_different_counts_file_one_fallback_card(monkeypatch):
+    """The door is down for both sweeps, and the second sees one more crashed
+    run, so its title says `4 runs` where the first said `3 runs`. The client
+    files the first card and comments on it after — one card, not two."""
+    monkeypatch.delenv("BUREAU_READ_URL", raising=False)
+    board = FallbackBoard()
+    for name in ("find_open", "find_open_prefix", "create_card", "cmd_comment"):
+        monkeypatch.setattr(linear_ops, name, getattr(board, name))
+    more = OUTAGE_PRS + [_pr(144, [_neutral(144, 2, 4)])]
+    for prs in (OUTAGE_PRS, more):
+        with patch.object(reconcile, "gh", side_effect=_gh(prs)), \
+            patch.object(reconcile, "gh_actions_read", side_effect=_actions), \
+            patch.object(reconcile, "active_cards", side_effect=lambda *a, **k: []), \
+            patch.object(reconcile.linear_ops, "gql",
+                         side_effect=AssertionError("no Linear request")):
+            reconcile.reset_sweep_cards()
+            reconcile.report_fleet_reviewer_outage()
+    assert [c["title"] for c in board.created] == [
+        reviewer_down.card_title(_iso(12), 3, 1)]
+    assert [ident for ident, _ in board.comments] == ["DRE-9001"]
+    assert reconcile._write_failures == []
 
 
 def test_a_crash_below_the_threshold_neither_raises_nor_resolves():
