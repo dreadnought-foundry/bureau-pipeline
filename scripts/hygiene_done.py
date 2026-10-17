@@ -310,7 +310,8 @@ def no_run(card: dict, repo: str, labels: list, ctx: hygiene.Context, cache: dic
     nodes = linear_ops.window_nodes(card.get("comments"))  # oldest → newest
     if any((n.get("body") or "").lstrip().startswith(reconcile._LIFE_PREFIXES) for n in nodes):
         return []
-    receipts = [n for n in nodes if reconcile._TODO_REDISPATCH_NOTE in (n.get("body") or "")]
+    receipts = [n for n in nodes
+                if any(note in (n.get("body") or "") for note in reconcile._TODO_REDISPATCH_NOTES)]
     if len(receipts) < MIN_REDISPATCHES:
         return []
     at = _when(receipts[-1].get("createdAt"))
