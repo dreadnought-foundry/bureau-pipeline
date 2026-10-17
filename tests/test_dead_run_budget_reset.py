@@ -261,7 +261,7 @@ def test_unpark_clears_the_label_posts_the_reset_and_returns_to_todo():
     ) as remove_label, patch.object(
         linear_ops, "cmd_comment", side_effect=lambda *a: order.append(("comment", a))
     ) as cmd_comment, patch.object(
-        linear_ops, "cmd_state", side_effect=lambda *a: order.append(("state", a))
+        linear_ops, "cmd_state", side_effect=lambda *a, **k: order.append(("state", a))
     ) as cmd_state:
         linear_ops.cmd_unpark("DRE-2308")
     remove_label.assert_called_once_with("DRE-2308", dead_run.HOLD_LABEL)
