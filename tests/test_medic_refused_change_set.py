@@ -156,7 +156,11 @@ def _jobs_that_run(outputs: dict, *, attempt: int) -> set:
 
 
 def _files_a_card(job: dict) -> bool:
-    return "linear_ops.py create" in yaml.safe_dump(job, width=10_000)
+    # Since DRE-7453 the medic raises its diagnosis as a console alert, and
+    # the notice client files the old card as its fallback: a raise is a card
+    # when the console cannot take it, so it counts as one here.
+    text = yaml.safe_dump(job, width=10_000)
+    return "linear_ops.py create" in text or "pipeline_notice.py raise" in text
 
 
 # ── the decision ────────────────────────────────────────────────────────────
