@@ -43,6 +43,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 import yaml
 
@@ -304,6 +305,211 @@ class TheHandoff(unittest.TestCase):
             mints=2, stderr=stderr, run=self._run(), post=self.posted.append,
         )
         self.assertNotIn("ghs_aBcD1234567890aBcD1234567890aBcD12", self.posted[0])
+
+
+# --------------------------------------------------------------------------
+# 2b. THE CAUSE — a refused dispatch says which fix applies (DRE-7476)
+# --------------------------------------------------------------------------
+# What GitHub answers a dispatch depends on the token as much as on the file:
+# under a token with no Actions permission the workflow lookup answers 403
+# whether the file is there or not (DRE-1254), and under one holding
+# `actions: write` a missing file answers 404. So the dispatch's own error
+# decides nothing, and both shapes are driven against every probe answer.
+DISPATCH_FAILURES = {
+    "403": "HTTP 403: Resource not accessible by integration "
+           "(https://api.github.com/repos/dreadnought-foundry/agent-bureau/"
+           "actions/workflows/deliver-rescue.yml)",
+    "404": "HTTP 404: Not Found (https://api.github.com/repos/"
+           "dreadnought-foundry/agent-bureau/actions/workflows/"
+           "deliver-rescue.yml)",
+}
+
+# What `gh api --include` hands back for the workflow file's contents read.
+PROBE_ANSWERS = {
+    "404": (1, 'HTTP/2.0 404 Not Found\nContent-Type: application/json\n\n'
+               '{"message":"Not Found"}', "gh: Not Found (HTTP 404)"),
+    "200": (0, 'HTTP/2.0 200 OK\nContent-Type: application/json\n\n'
+               '{"name":"deliver-rescue.yml","type":"file"}', ""),
+    "401": (1, 'HTTP/2.0 401 Unauthorized\nContent-Type: application/json\n\n'
+               '{"message":"Bad credentials"}', "gh: Bad credentials (HTTP 401)"),
+    "raise": OSError("gh: the read could not be made"),
+}
+
+PROBE_CAUSES = {"404": "missing", "200": "refused", "401": "unknown",
+                "raise": "unknown"}
+
+APP_TOKEN = "the App token (no GH_DISPATCH_TOKEN)"
+JOB_TOKEN = "the job's own token (GH_DISPATCH_TOKEN)"
+FIX_BRANCH = f"agent/{CARD}-console-release-train"
+
+
+def cause_sentence(cause: str, *, workflow: str = "deliver-rescue.yml",
+                   repo: str = REPO, credential: str = APP_TOKEN,
+                   status: str = "") -> str:
+    """The contract's sentence, spelled out here rather than imported: the
+    proof card reads it off the card, so a reword is a decision."""
+    if cause == "missing":
+        return (
+            f"cause: missing — `{workflow}` is not in `{repo}` (a contents read "
+            f"as {credential} answered 404). Install the Deliver Rescue stub, "
+            f"and check that the calling stub grants `actions: write`, or the "
+            f"dispatch is still refused after the install."
+        )
+    if cause == "refused":
+        return (
+            f"cause: refused — `{workflow}` is in `{repo}` (a contents read as "
+            f"{credential} answered 200), so the dispatch itself was turned "
+            f"down. The calling `agent-task.yml` or `agent-fix.yml` stub must "
+            f"grant `actions: write`, and `GH_DISPATCH_TOKEN` must reach the "
+            f"step."
+        )
+    return (
+        f"cause: unknown — could not tell whether `{workflow}` is missing from "
+        f"`{repo}` or the dispatch was refused (a contents read as {credential} "
+        f"answered {status})."
+    )
+
+
+class TheRefusedDispatchNamesItsCause(unittest.TestCase):
+    """After ANY failed dispatch, `handoff()` reads the workflow file through
+    the contents API and the card says which of the two fixes applies."""
+
+    def setUp(self):
+        self.posted: list[str] = []
+        self.calls: list[tuple[list[str], dict]] = []
+        patcher = mock.patch.dict(os.environ)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        os.environ.pop("GH_DISPATCH_TOKEN", None)
+
+    def _run(self, *, dispatch_err="", dispatch_code=1, probe=None):
+        def run(argv, **kw):
+            self.calls.append((list(argv), kw))
+            if argv[:3] == ["gh", "workflow", "run"]:
+                return dispatch_code, "", dispatch_err
+            if argv[:2] == ["gh", "api"]:
+                if isinstance(probe, BaseException):
+                    raise probe
+                return probe
+            return 0, "", ""
+        return run
+
+    def handoff(self, *, branch="", repo=REPO, **kw):
+        return deliver_rescue.handoff(
+            CARD, repo=repo, run_id=RUN_ID, artifact=ARTIFACT, status="400",
+            mints=2, branch=branch, run=self._run(**kw),
+            post=self.posted.append,
+        )
+
+    def probes(self) -> list[tuple[list[str], dict]]:
+        return [(argv, kw) for argv, kw in self.calls if argv[:2] == ["gh", "api"]]
+
+    def paragraph_after_the_refusal(self) -> str:
+        self.assertEqual(len(self.posted), 1, self.posted)
+        paragraphs = self.posted[0].split("\n\n")
+        at = [i for i, p in enumerate(paragraphs) if "could NOT be dispatched" in p]
+        self.assertEqual(len(at), 1, self.posted[0])
+        self.assertLess(at[0] + 1, len(paragraphs), self.posted[0])
+        return paragraphs[at[0] + 1]
+
+    def test_every_dispatch_failure_by_every_probe_answer_on_both_shapes(self):
+        """Two dispatch failures by four probe answers, on the build-run and
+        the fix-run branch: sixteen cases."""
+        cases = 0
+        for branch in ("", FIX_BRANCH):
+            for failure, err in DISPATCH_FAILURES.items():
+                for answer, probe in PROBE_ANSWERS.items():
+                    with self.subTest(branch=branch or "build", dispatch=failure,
+                                      probe=answer):
+                        self.posted.clear()
+                        self.calls.clear()
+                        outcome = self.handoff(branch=branch, dispatch_err=err,
+                                               probe=probe)
+                        cases += 1
+                        cause = PROBE_CAUSES[answer]
+                        self.assertFalse(outcome.dispatched)
+                        self.assertEqual(outcome.cause, cause)
+                        status = {"401": "401", "raise": "no answer"}.get(answer, "")
+                        self.assertEqual(self.paragraph_after_the_refusal(),
+                                         cause_sentence(cause, status=status))
+                        # GitHub's own last line is still quoted, and the
+                        # human recovery is still there.
+                        self.assertIn(err, self.posted[0])
+                        self.assertIn(f"gh run download {RUN_ID} --name {ARTIFACT}",
+                                      self.posted[0])
+                        self.assertIn("reconcile sweep re-checks", self.posted[0])
+                        probes = self.probes()
+                        self.assertEqual(len(probes), 1, self.calls)
+                        self.assertEqual(
+                            probes[0][0][-1],
+                            f"repos/{REPO}/contents/.github/workflows/"
+                            f"deliver-rescue.yml",
+                        )
+        self.assertEqual(cases, 16)
+
+    def test_the_self_host_repo_probes_its_own_stub(self):
+        repo = "dreadnought-foundry/bureau-pipeline"
+        outcome = self.handoff(repo=repo, dispatch_err=DISPATCH_FAILURES["404"],
+                               probe=PROBE_ANSWERS["404"])
+        self.assertEqual(outcome.cause, "missing")
+        self.assertEqual(
+            self.probes()[0][0][-1],
+            f"repos/{repo}/contents/.github/workflows/self-deliver-rescue.yml",
+        )
+        self.assertEqual(self.paragraph_after_the_refusal(),
+                         cause_sentence("missing", workflow="self-deliver-rescue.yml",
+                                        repo=repo))
+
+    def test_the_probe_rides_the_dispatchs_own_token(self):
+        """Never the Report step's ambient GH_TOKEN: that is the token minted
+        at job start, dead at the hour, and a rescue happens on exactly the
+        runs that outlived it."""
+        os.environ["GH_DISPATCH_TOKEN"] = "job-token"
+        os.environ["GH_TOKEN"] = "dead-start-token"
+        outcome = self.handoff(dispatch_err=DISPATCH_FAILURES["403"],
+                               probe=PROBE_ANSWERS["200"])
+        self.assertEqual(outcome.cause, "refused")
+        dispatch = [kw for argv, kw in self.calls if argv[:2] == ["gh", "workflow"]]
+        (_, probe_kw), = self.probes()
+        self.assertEqual(probe_kw.get("env"), dispatch[0].get("env"))
+        self.assertEqual(probe_kw["env"]["GH_TOKEN"], "job-token")
+        self.assertEqual(self.paragraph_after_the_refusal(),
+                         cause_sentence("refused", credential=JOB_TOKEN))
+
+    def test_without_the_job_token_the_probe_inherits_and_says_so(self):
+        os.environ["GH_TOKEN"] = "app-token"
+        outcome = self.handoff(dispatch_err=DISPATCH_FAILURES["403"],
+                               probe=PROBE_ANSWERS["401"])
+        self.assertEqual(outcome.cause, "unknown")
+        (_, probe_kw), = self.probes()
+        self.assertIsNone(probe_kw.get("env"))
+        self.assertEqual(self.paragraph_after_the_refusal(),
+                         cause_sentence("unknown", credential=APP_TOKEN,
+                                        status="401"))
+
+    def test_a_successful_dispatch_makes_no_probe(self):
+        outcome = self.handoff(dispatch_code=0, probe=PROBE_ANSWERS["404"])
+        self.assertTrue(outcome.dispatched)
+        self.assertEqual(outcome.cause, "")
+        self.assertEqual(self.probes(), [])
+        self.assertNotIn("cause:", self.posted[0])
+
+    def test_a_probe_that_raises_or_answers_garbage_still_posts(self):
+        for probe in (RuntimeError("boom"), (0, "<html>not an answer</html>", ""),
+                      None, (0, "", "")):
+            with self.subTest(probe=probe):
+                self.posted.clear()
+                self.calls.clear()
+                outcome = self.handoff(dispatch_err=DISPATCH_FAILURES["403"],
+                                       probe=probe)
+                self.assertEqual(outcome.cause, "unknown")
+                self.assertEqual(len(self.posted), 1)
+                self.assertEqual(self.paragraph_after_the_refusal(),
+                                 cause_sentence("unknown", status="no answer"))
+
+    def test_the_handoff_keeps_its_three_field_construction(self):
+        handoff = deliver_rescue.Handoff(dispatched=True, workflow="w", detail="")
+        self.assertEqual(handoff.cause, "")
 
 
 # --------------------------------------------------------------------------
@@ -674,6 +880,33 @@ class TheFleetFacingInstructions(unittest.TestCase):
                 mine, theirs,
                 f"{stub.name} and the README's {marker} template disagree",
             )
+
+    def test_the_calling_templates_grant_the_read_the_probe_makes(self):
+        """DRE-7476: after a refused dispatch, `handoff()` reads the workflow
+        file through the contents API under the job's own token, whose scope
+        is what the calling stub grants."""
+        for marker in ("agent-task.yml", "agent-fix.yml"):
+            with self.subTest(template=marker):
+                self.assertEqual(
+                    self.permissions(readme_stub(marker)).get("contents"), "write")
+
+    def test_the_deliver_rescue_sample_is_the_scaffolds_stub(self):
+        """DRE-7476: the sample rides `@stable` like every other fleet stub
+        (DRE-2553) and maps the three secrets the reusable declares by name —
+        the same shape as the file the operator copies. This repo's own
+        `self-deliver-rescue.yml` stays the `@main` canary."""
+        job = readme_stub("deliver-rescue.yml")["jobs"]["call"]
+        self.assertEqual(
+            job.get("uses"),
+            "dreadnought-foundry/bureau-pipeline/.github/workflows/"
+            "deliver-rescue.yml@stable",
+        )
+        self.assertEqual(job["with"].get("pipeline_ref"), "stable")
+        self.assertEqual(job.get("secrets"), {
+            "LINEAR_API_KEY": "${{ secrets.LINEAR_API_KEY }}",
+            "BUREAU_APP_ID": "${{ secrets.BUREAU_APP_ID }}",
+            "BUREAU_APP_PRIVATE_KEY": "${{ secrets.BUREAU_APP_PRIVATE_KEY }}",
+        })
 
 
 # --------------------------------------------------------------------------
