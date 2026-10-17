@@ -599,7 +599,11 @@ def test_the_wrapper_reads_the_active_account_from_the_environment(monkeypatch):
 
 
 def _full_sweep_mocks(cards):
+    # `sweep_idle` asks Linear one question before the board is read; None is
+    # "this repo has work", the full pass these tests drive. Unstubbed, it went
+    # to the live API and only a 401 kept it green — a DNS fault failed it.
     return {
+        "sweep_idle": MagicMock(return_value=None),
         "unstick_conflicts": MagicMock(),
         "retrigger_dead_heads": MagicMock(),
         "check_dependabot_capacity": MagicMock(),
