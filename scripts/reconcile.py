@@ -210,6 +210,11 @@ import plan_run  # noqa: E402
 # The tags below stay exactly where they are — they are live idempotency keys
 # and per-sha budget counters, not prose.
 import pipeline_act  # noqa: E402
+# DRE-7455: the notice door's ONE client (DRE-7451). The fleet reviewer outage
+# and the groom stall are console alerts raised and resolved through it, not
+# cards; when the door cannot take a raise it files the card each filed before.
+import pipeline_notice  # noqa: E402
+from pipeline_notice import Fallback as NoticeFallback  # noqa: E402
 # DRE-5177: ONE reading of the fleet-wide planner line — a card waiting its
 # turn for a planner is not a dead planner, and its wait has its own bound.
 import planning_escalation  # noqa: E402 — the plain-English check for CEO-facing text
@@ -256,7 +261,8 @@ import runner_lost  # noqa: E402
 # DRE-3433: ONE reading of "is the reviewer down across the FLEET, and what
 # should the ONE card say?" — the threshold, the two witness shapes, the
 # file/append/close decision and every line the card carries live there, pure.
-# This file is the wrapper (DRE-3435): it reads the payloads, makes the writes.
+# This file is the wrapper (DRE-3435): it reads the payloads, and since
+# DRE-7455 raises the console alert with the title and body it composes.
 import reviewer_down  # noqa: E402
 # DRE-3428: ONE reading of "the runner cannot run Claude" — the four
 # signatures, the medic's evidence note and how to read a cause back off it,
@@ -1688,19 +1694,20 @@ SWEPT_LANES = tuple(
     dict.fromkeys(SWEEP_STATES + WATCHDOG_LANES + PLANNING_LANE + INTAKE_LANE)
 )
 
-#: The lane an outage card is CREATED in (DRE-5292). Created there, never moved
-#: there: Planning entry is what the relay dispatches the planner on, and
-#: DRE-5273 — created in Planning, moved to Triage one second later — got an
-#: Agent Plan run (36658173529) off that one second. The relay dispatches from
-#: Triage only for an `agent:planner` card (the DRE-3013 probe's reading of
-#: it), and this card wears no `agent:*` role at all.
+#: The lane the outage's FALLBACK card is created in (DRE-5292, DRE-7455): the
+#: card `pipeline_notice` files when the console door cannot take the alert.
+#: Created there, never moved there: Planning entry is what the relay
+#: dispatches the planner on, and DRE-5273 — created in Planning, moved to
+#: Triage one second later — got an Agent Plan run (36658173529) off that one
+#: second. The relay dispatches from Triage only for an `agent:planner` card
+#: (the DRE-3013 probe's reading of it), and this card wears no `agent:*` role.
 FLEET_OUTAGE_LANE = "Triage"
 
 # What the sweep's ONE paged board read covers (DRE-6576): every lane it acts
-# on, and the lane its own outage card sits in. `report_fleet_reviewer_outage`
-# finds its open card in that read for as long as the card is open — the open
-# card was otherwise looked up only while a crash was still in the window, and
-# DRE-6568 sat in Triage until a person closed it. SWEPT_LANES stays what the
+# on, and Triage, where the outage card used to sit. Since DRE-7455 the outage
+# is a console alert and nothing reads Triage off this read any more; the
+# lane stays in it until a card of its own takes it out, so this card does
+# not also change the read every sweep suite pins. SWEPT_LANES stays what the
 # sweep ACTS on, and the lane sets derived from it stay as they are: the limit
 # recovery reads `active_cards(SWEPT_LANES)` and replans from Triage
 # (`limit_recovery.REPLAN_FROM`), so handing it this read would start moving
@@ -1756,8 +1763,9 @@ QUEUE_STATE_FILTER = "state: {name: {in: %s}}" % json.dumps(list(QUEUE_LANES))
 # Intake, Planning and Green Light hold an epic whose plan is still being
 # written, reviewed or approved — a re-plan may be about to add children — and
 # Hand-work is a person's lane the sweep never puts an epic in. Green Light is
-# not read at all, and Triage only for the outage alarm (BOARD_READ_LANES,
-# DRE-6576): neither holds a finished epic by design, so neither is closed from.
+# not read at all, and Triage only as part of the one board read
+# (BOARD_READ_LANES, DRE-6576): neither holds a finished epic by design, so
+# neither is closed from.
 EPIC_CLOSE_LANES = SWEEP_STATES + QUEUE_LANES
 
 # The lanes `move_hand_built_to_review` reads a hand-built card OUT of
@@ -1872,8 +1880,8 @@ def drain_retiring_lanes() -> None:
 # ONE board read per sweep (DRE-2929). Four callers ask active_cards() for
 # four lane sets, SWEPT_LANES is already their union, and every one of them was
 # its own paged query — so a fleet of four repos paid four board reads per
-# sweep for the same rows. The read is of BOARD_READ_LANES, which adds the
-# outage card's lane to that union (DRE-6576). None of them mutates the list it
+# sweep for the same rows. The read is of BOARD_READ_LANES, which adds Triage
+# to that union (DRE-6576). None of them mutates the list it
 # gets back, and the writes that DO happen mid-sweep are already read from the
 # pre-write snapshot on purpose (flag_stranded's hold labels are the documented
 # example: main() skips a card flagged this very sweep off the returned
@@ -4004,13 +4012,15 @@ GROOM_RELEASE_TO = "Planning"
 #: person's removal is honored one pass later at most. Ten minutes does both.
 GROOM_LABEL_FRESH_MINUTES = 10
 
-#: The lane a stalled queue's notice is CREATED in (DRE-5292's rule, the
-#: fleet-outage card's): created there, never moved there, `no-code` and no
-#: `agent:*` role — nothing is built or planned off it.
+#: The lane a stalled queue's FALLBACK card is created in (DRE-5292's rule,
+#: the fleet-outage card's) — the card `pipeline_notice` files when the console
+#: door cannot take the `groom_stall` alert (DRE-7455): created there, never
+#: moved there, `no-code` and no `agent:*` role — nothing is built or planned
+#: off it.
 GROOM_STALL_LANE = "Triage"
 
-#: The stall notice's one fixed title, so `linear_ops.find_open` finds the
-#: card already open and a stall files one card, never one per pass.
+#: The stall notice's one fixed title — the alert's, and its fallback card's,
+#: which the client dedupes on the exact title.
 GROOM_STALL_TITLE = (
     "bureau-pipeline: the groom queue has stalled — approved cards are not "
     "reaching Planning"
@@ -4127,10 +4137,11 @@ def release_groom_queue(free: int) -> list[str]:
 
     A STALL — the queue is not empty, this pass had a free slot, released
     nothing, and nothing has changed the queue for the planner line's own
-    bound (`planner_queue.waiting_max()`) — is ONE `no-code` card created in
-    Triage, never a second while the first is open. Waiting in the queue is
-    never escalated to the CEO: a queued card is in Intake, where no Planning
-    watchdog, no planner line and no age-out reads it.
+    bound (`planner_queue.waiting_max()`) — raises the `groom_stall` console
+    alert at WARN (DRE-7455), and a pass that read the queue and found no
+    stall resolves it. Waiting in the queue is never escalated to the CEO: a
+    queued card is in Intake, where no Planning watchdog, no planner line and
+    no age-out reads it, and a WARN never leaves the console.
 
     Returns the cards released. Raises whatever a Linear READ raises.
     """
@@ -4148,6 +4159,7 @@ def release_groom_queue(free: int) -> list[str]:
     standing = groomer.queue_standing(records)
     if not standing and not groomer.wrongly_dropped(records):
         print("groom queue: empty — nothing to release")
+        _clear_groom_stall()
         return released
     board = {c["identifier"]: c for c in active_cards(SWEPT_LANES)}
     # A card a row wrongly took out goes back in the line first (DRE-6640),
@@ -4158,6 +4170,7 @@ def release_groom_queue(free: int) -> list[str]:
         standing = groomer.queue_standing(records)
     if not standing:
         print("groom queue: empty — nothing to release")
+        _clear_groom_stall()
         return released
     # Each batch's proposal record, off the thread already read: a released
     # card's note names its position on the approved list (DRE-3326).
@@ -4269,6 +4282,8 @@ def release_groom_queue(free: int) -> list[str]:
           f"{free} slot(s) free at the start of the pass")
     if remaining and free > 0 and not released and not changes:
         _report_groom_stall(records, remaining)
+    else:
+        _clear_groom_stall()
     return released
 
 
@@ -4286,22 +4301,28 @@ def _groom_noted(ident: str, pid: str) -> bool:
     return False
 
 
+def _clear_groom_stall() -> None:
+    """Resolve the `groom_stall` alert on a pass that read the queue and found
+    no stall (DRE-7455). No all-clear copy: a WARN never left the console, so
+    its resolve simply clears the panel, and the door answers `not-open` when
+    nothing was raised."""
+    pipeline_notice.resolve_notice("groom_stall")
+
+
 def _report_groom_stall(records: list[dict], remaining: list[dict]) -> None:
-    """File the ONE Triage card for a groom queue that has stood still past the
-    planner line's bound with a slot free — or say why it did not."""
+    """Raise the `groom_stall` console alert for a groom queue that has stood
+    still past the planner line's bound with a slot free, resolve it when the
+    queue moved inside the bound — or say why neither."""
     bound = planner_queue.waiting_max()
     changed = [_moment(at) for _record, at in groomer.queue_records(records)]
     changed = [at for at in changed if at is not None]
     if not changed:
         print("groom queue: no release this pass, and no time on the queue's "
-              "own records to measure a stall by — not filed")
+              "own records to measure a stall by — nothing raised")
         return
     still = (datetime.now(UTC) - max(changed)).total_seconds() / 60
     if still < bound:
-        return
-    if linear_ops.find_open(GROOM_STALL_TITLE):
-        print(f"groom queue: stalled {still / 60:.1f} h — the stall card is "
-              "already open; nothing filed")
+        _clear_groom_stall()
         return
     batches = list(dict.fromkeys(entry["id"] for entry in remaining))
     last = next((record.get("body") or "" for record, _at
@@ -4326,18 +4347,24 @@ def _report_groom_stall(records: list[dict], remaining: list[dict]) -> None:
         "Once the moves land the queue drains on its own; close this card "
         "then.",
     ])
-    try:
-        issue = linear_ops.create_card(GROOM_STALL_TITLE, body,
-                                       repo_slug=epic_cap.START_OWNER_SLUG,
-                                       labels=(linear_ops.NO_CODE_LABEL,),
-                                       lane=GROOM_STALL_LANE)
-    except Exception as e:  # noqa: BLE001 — record loudly, never kill the sweep
-        _write_failures.append(f"groom queue stall card: {e}")
-        print(f"ERROR: groom queue: the stall card was not filed: {e}",
-              file=sys.stderr)
+    # Every stalled pass raises again: the alert's one row per key is the
+    # dedupe, and a raise while it is open is a repeat that delivers nothing.
+    # The fallback is the card this pass filed before the door existed.
+    outcome = pipeline_notice.raise_notice(
+        "groom_stall", severity="WARN", title=GROOM_STALL_TITLE, body=body,
+        fallback=NoticeFallback(
+            title=GROOM_STALL_TITLE, lane=GROOM_STALL_LANE,
+            labels=(f"repo:{epic_cap.START_OWNER_SLUG}", linear_ops.NO_CODE_LABEL)),
+    )
+    if outcome == "lost":
+        _write_failures.append("groom queue stall alert: the console door did not "
+                               "take it and its fallback card was not filed")
+        print("ERROR: groom queue: the stall alert was not raised and its "
+              "fallback card was not filed — the pipeline-notice line above "
+              "says why", file=sys.stderr)
         return
-    print(f"groom queue: stalled {still / 60:.1f} h — filed "
-          f"{issue['identifier']} in {GROOM_STALL_LANE}")
+    print(f"groom queue: stalled {still / 60:.1f} h — the groom_stall alert: "
+          f"{outcome}")
 
 
 # Human-park dispatch gate (DRE-2024). The PR backstops below dispatch
@@ -4376,18 +4403,20 @@ _BRANCH_CARD = re.compile(r"DRE-\d+", re.IGNORECASE)
 # `ready_lane_writers.DESTINATIONS_HOOK`. `ready_lane_writers._published_destinations`
 # reads this set for EVERY call site in this module whose lane it cannot read
 # at the call — today `drain_retiring_lanes`'s `to`, `REVIEW_LANE` at three
-# sites, `_fleet_outage_state`'s `lane`, and the `move` handed to
-# `limit_recovery.recover`. So a new computed write here must either name its
-# lane at the call site or add that lane to this set; one left out is
-# attributed a lane it does not write. Green Light is not in it, and must not
+# sites, and the `move` handed to `limit_recovery.recover`. So a new computed
+# write here must either name its lane at the call site or add that lane to
+# this set; one left out is attributed a lane it does not write. Green Light is not in it, and must not
 # be: nothing here writes the CEO's queue.
 def destinations() -> tuple[str, ...]:
     """Every lane a computed write in this module can put a card in.
 
     Pure: no Linear call and no environment read. The retiring lanes'
     replacements come off the lane contract, the same reading
-    `drain_retiring_lanes` makes (none today); the two `_fleet_outage_state`
-    lanes are the literals its two callers pass. The dead-run park writes
+    `drain_retiring_lanes` makes (none today). Canceled and Done were the two
+    lanes the fleet-outage card's close and duplicate cancel passed until
+    DRE-7455 made the outage a console alert; they stay published, because a
+    lane here that no computed write reaches costs nothing and one missing
+    misattributes a write. The dead-run park writes
     `QUEUE_LANE`, read here when asked so it follows the planning exit
     (DRE-6743).
     """
@@ -12746,35 +12775,21 @@ def recover_crashed_reviews() -> None:
 # 2026-09-08 outage actually asked (DRE-3416): seven runs across two
 # repositories died the same way inside 68 minutes, every one of them got its
 # neutral could-not-run receipt, and NOTHING aggregated them — so no surface
-# anywhere said "the reviewer is down". This is that sentence, said once, as
-# ONE Linear card that appends to itself and closes itself.
+# anywhere said "the reviewer is down". This is that sentence, said once.
+#
+# Since DRE-7455 it is said as ONE console alert, `reviewer_outage:fleet` at
+# CRITICAL, raised and resolved through `pipeline_notice` — no longer as a
+# Linear card the sweep filed, appended to, retitled and closed. The alert's
+# one row per key is the dedupe: every sweep that finds the outage raises the
+# key again, and the door answers a raise while the row is open with a
+# `repeat` that delivers nothing, so two repositories' sweeps crossing the
+# threshold in the same minute are one alert, not two cards to reconcile.
 #
 # The DECISION is not here. `scripts/reviewer_down.py` (DRE-3433) is pure:
-# given the outcomes a sweep can see, it answers file / append / close /
-# nothing, with the threshold read off the act row in config/pipeline-acts.json
-# so an operator retunes the alarm by editing a number. This is the wrapper.
-#
-# THE ACT IS NAMED BY ITS LITERAL at every composing call below, and that is
-# not a slip of the "ONE literal for one fact" rule — it is what the rule's own
-# enforcer requires. `check_act_receipts._receipt_act` reads the composing
-# call's first argument off the AST and can only read a CONSTANT, so
-# `pipeline_act.receipt(reviewer_down.ACT, …)` composes as `<computed>` and the
-# registry's emission guard goes blind on the one act this file adds — the
-# exact silence epic DRE-3420 is named after. `pending_acts()` says so in its
-# own docstring: "the file that composes an act has to spell its name". Every
-# other receipt in this file spells it the same way, and
-# tests/test_reconcile_reviewer_down.py pins the four spellings to
-# `reviewer_down.ACT` so the two cannot drift.
-
-#: How many outage cards ONE sweep may file. `0` disables FILING fleet-wide —
-#: appends and closes still run, so an open card is never orphaned by the off
-#: switch. Default 1 because there is one outage at a time: the card appends to
-#: itself, and a sweep that could file two would be filing the noise this
-#: mechanism exists to remove.
-FLEET_OUTAGE_SWEEP_CAP = int(os.environ.get("FLEET_OUTAGE_SWEEP_CAP", "1"))
-
-# FLEET_OUTAGE_LANE, the lane the outage card is created in, is declared beside
-# SWEPT_LANES: the sweep's one board read carries it (DRE-6576).
+# given the outcomes a sweep can see, it answers whether the threshold is met
+# and composes the title and body, with the threshold read off the act row in
+# config/pipeline-acts.json so an operator retunes the alarm by editing a
+# number. This is the wrapper.
 
 
 def _fleet_outage_crashed_run(sha: str) -> tuple[str, str]:
@@ -12818,11 +12833,12 @@ def _fleet_outage_crashed_run(sha: str) -> tuple[str, str]:
 
 
 def _fleet_outage_first_run(outcome, prs: list[dict]) -> reviewer_down.FirstRun:
-    """The evidence the FIRST crashed run leaves, for the card's body.
+    """The evidence the FIRST crashed run leaves, for the alert's body.
 
-    Read only when the decision is `file` — this is three reads (a run
-    listing, an Actions log, a file) and an outage card is filed once. Every
-    one of them degrades to a stated absence rather than to a guess:
+    Read only on a sweep that raises the outage — three reads (a run listing,
+    an Actions log, a file), made while the outage holds and never on a quiet
+    sweep. Every one of them degrades to a stated absence rather than to a
+    guess:
 
       * the run url is the head's own crashed review workflow run
         (`_fleet_outage_crashed_run`, DRE-5292) — not the run that happens to
@@ -12831,7 +12847,7 @@ def _fleet_outage_first_run(outcome, prs: list[dict]) -> reviewer_down.FirstRun:
       * the log tail goes through `gh_actions_read`, i.e. the GH_DISPATCH_TOKEN
         swap, because the App token 403s the Actions API (DRE-2525). `None`
         there means UNREADABLE, and an unreadable log says so and points at the
-        run. A fabricated error line on an outage card would send the operator
+        run. A fabricated error line on an outage alert would send the operator
         to the wrong one of the three suspects, which is exactly what DRE-3416
         cost;
       * the action reference is read off THIS checkout's own qa-review.yml —
@@ -12871,86 +12887,23 @@ def _fleet_outage_failed(what: str, exc: BaseException) -> None:
     """One failed write on this path, RECORDED rather than raised.
 
     A failed write lands on the fail-loudly rail and takes the sweep red (the
-    DRE-1254 discipline), and its caller stops rather than carrying on: a sweep
-    that kept going after a failed create would comment onto an identifier it
-    does not have. Nothing is lost by stopping — a card created but not yet
-    receipted is found by prefix on the next sweep, which appends to it
-    rather than filing a second.
-
-    Only the FAILURE is a helper. Every `linear_ops.cmd_comment` on this path
-    is written out as its own call with `pipeline_act.receipt()` around its
-    body, because `check_act_receipts` reads posting sites off the AST: a
-    `cmd_comment` handed to a helper as a callable is a form that guard cannot
-    see, and a form nobody scans is a form nobody converts.
+    DRE-1254 discipline). Since DRE-7455 the one write is the alert: a raise
+    the door refused AND whose fallback card could not be filed either comes
+    back `lost`, and that is what lands here.
     """
-    err = f"fleet-reviewer-outage: {what} failed: {exc}"
+    err = f"reviewer-outage: {what} failed: {exc}"
     _write_failures.append(err)
     print(f"ERROR: {err}", file=sys.stderr)
 
 
-def _fleet_outage_state(what: str, identifier: str, lane: str) -> bool:
-    """Move the outage card, recording a refusal rather than raising."""
-    try:
-        linear_ops.cmd_state(identifier, lane)
-        return True
-    except Exception as e:  # noqa: BLE001 — record loudly, never kill the sweep
-        _fleet_outage_failed(what, e)
-        return False
-
-
-def _fleet_outage_resolve_duplicates(keep: str, duplicates: list) -> None:
-    """The cross-repo filing race, resolved on the next sweep.
-
-    Two repositories' sweeps can cross the threshold in the same minute and
-    each file a card — neither read the other, because neither existed yet.
-    The remedy is not a lock: it is that the NEXT sweep finds both, keeps the
-    oldest (which is the one carrying the ledger) and says on the newer where
-    the outage is being tracked before cancelling it. One outage, one alarm,
-    without anything having to be atomic.
-    """
-    for dupe in duplicates or []:
-        identifier = (dupe or {}).get("identifier")
-        if not identifier or identifier == keep:
-            continue
-        try:
-            linear_ops.cmd_comment(identifier, pipeline_act.receipt(
-                "reviewer-outage-fleet-wide", (
-                    f"\U0001f6a8 {reviewer_down.OUTAGE_TAG}: this is a second "
-                    f"card for one fleet-wide reviewer outage — two sweeps "
-                    f"crossed the threshold in the same minute. {keep} is the "
-                    f"one being kept and appended to; this one is closed as a "
-                    f"duplicate so there is ONE alarm. Nothing is lost: every "
-                    f"counted run is recorded on {keep}."
-                )))
-        except Exception as e:  # noqa: BLE001 — record loudly, sweep the rest
-            _fleet_outage_failed(f"duplicate note on {identifier}", e)
-            continue
-        _fleet_outage_state(f"cancel {identifier}", identifier, "Canceled")
-
-
-def _fleet_outage_open_card() -> dict | None:
-    """The open outage card, in `linear_ops.find_open_prefix`'s shape, or None.
-
-    Off the board this pass already read (DRE-6576): the one paged read covers
-    BOARD_READ_LANES, which carries `FLEET_OUTAGE_LANE`, so every card there
-    whose title opens with the prefix is an open alarm — in Triage where it was
-    filed, or in any lane the sweep reads that a person moved it to. Oldest
-    `createdAt` first: the oldest is the card, and the rest are the
-    `duplicates` the cross-repo filing race leaves. No Linear request beyond
-    that read, which the witness below needs anyway.
-    """
-    alarms = sorted(
-        (card for card in active_cards(BOARD_READ_LANES)
-         if (card.get("title") or "").startswith(reviewer_down.TITLE_PREFIX)),
-        key=lambda card: card.get("createdAt") or "",
-    )
-    if not alarms:
-        return None
-    return {**alarms[0], "duplicates": alarms[1:]}
+#: The all-clear's title, word for word as the notice contract gives it: the
+#: CEO was emailed when the outage was raised, and is emailed this when it
+#: clears, rather than the "Reviewer down since …" text again or nothing.
+FLEET_OUTAGE_RECOVERY_TITLE = "Reviewer back — reviews are running again"
 
 
 def report_fleet_reviewer_outage() -> None:
-    """Is the reviewer down across the FLEET? File ONE card, append, or close.
+    """Is the reviewer down across the FLEET? Raise the alert, or clear it.
 
     FULL sweeps only, immediately after `recover_crashed_reviews` — the two
     read the SAME open-pull-request listing (`_open_pr_listing`), that one
@@ -12958,68 +12911,46 @@ def report_fleet_reviewer_outage() -> None:
 
     What it reads, in order:
 
-      1. THE OPEN CARD, off the board snapshot this sweep already holds
-         (`_fleet_outage_open_card`, DRE-6576) — zero Linear requests, except
-         under `BUREAU_READ=on`, where it is the one `find_open_prefix`
-         request per pass, said here rather than hidden.
-      2. LOCAL outcomes — `reviewer_down.outcomes_from_pr` over the shared
+      1. LOCAL outcomes — `reviewer_down.outcomes_from_pr` over the shared
          listing. Only the neutral could-not-run receipt and critic verdicts
          count; the runner-environment HOLD receipt (DRE-3428) is NOT an
          outcome — it records a second crash whose evidence note is already
-         counted, so reading it would count one outage twice. DRE-3431 has
-         since wired the sibling above to that module — this file names it now
-         — and this backstop is untouched by that: the reading it depends on
-         is still `reviewer_down.outcomes_from_pr`, which counts only the
-         neutral receipt and verdicts, so every hold the sweep above now posts
-         is invisible here by that module's own rule.
-      3. THE FLEET WITNESS — a second repository's crashes reach this sweep
+         counted, so reading it would count one outage twice.
+      2. THE FLEET WITNESS — a second repository's crashes reach this sweep
          only through the medic's note on the Linear card, attributed to the
          repository its run link names (DRE-5291), and `active_cards()`
          has already been read once for this sweep and is served from the pass
          cache. So this step costs ZERO Linear requests, which is the whole
          reason the fleet half is affordable at all.
-      4. EARLY EXIT. No could-not-run inside the window from either source AND
-         no open card, and the sweep says so in one line and stops. A quiet
-         sweep — the common case, every fifteen minutes, in every repo — must
-         cost nothing.
 
-    The consequence of ordering it that way, stated rather than discovered: an
-    open card is read on every sweep for as long as it is open, however long
-    ago its crashes were. `decide` reads the card's whole ledger, so once
-    every crash has aged past `window_s` the card still closes on the first
-    verdict in a counted repository after that repository's last counted
-    crash. DRE-6568 was filed after its reviewer was back, and no sweep read
-    it again once its crashes left the window, so a person closed it.
+    What it does with them (DRE-7455):
 
-    A backstop must never take the sweep down with it (DRE-2035): every write
-    is recorded on the fail-loudly rail and the sweep continues, red.
+      * NO could-not-run inside the window from either source: the outage
+        does not hold, so `reviewer_outage:fleet` is resolved with the
+        all-clear copy, timed at this sweep in PT. The door answers
+        `not-open` when nothing was raised and delivers nothing, so a quiet
+        sweep — the common case, every fifteen minutes, in every repo — costs
+        one POST and no Linear request.
+      * The threshold met: the alert is raised at CRITICAL with the title and
+        body `reviewer_down` composes, the first crashed run's evidence and
+        the run list included. A long run list is cut to fit by the client,
+        never refused. When the door cannot take it, the client files the
+        card this sweep used to file — the same title, in Triage, labelled
+        `repo:<slug>` and `no-code` — and a raise that could file neither is
+        recorded on the fail-loudly rail.
+      * Crashes in the window that do not meet the threshold: neither. A
+        sweep sees its own repository's crashes on its pull requests and
+        another's only through the medic's notes, so two sweeps can read the
+        same outage differently; while any crash is still in the window
+        another sweep may be raising, and a resolve between two of its raises
+        would open the alert again and deliver the outage to the CEO twice.
+
+    A backstop must never take the sweep down with it (DRE-2035): a lost
+    raise is recorded on the fail-loudly rail and the sweep continues, red.
     """
     prs = _open_pr_listing()
     if prs is None:
         return  # unreadable listing — recorded there, never acted on here
-    if bureau_read.mode() == "on":
-        # The door's snapshot is DOOR_WORK_LANES, which does not hold the
-        # alarm lane — so on this path, and only on it, the open card costs the
-        # one `find_open_prefix` request, on every pass (DRE-6576). Folding the
-        # lane into the door's read is the console's to do.
-        try:
-            found = linear_ops.find_open_prefix(reviewer_down.TITLE_PREFIX)
-        except Exception as e:  # noqa: BLE001 — an unreadable board is not an empty one
-            _read_failures.append(f"fleet-reviewer-outage: open-card lookup failed: {e}")
-            print(f"ERROR: fleet-reviewer-outage: open-card lookup failed: {e}",
-                  file=sys.stderr)
-            return
-    else:
-        found = _fleet_outage_open_card()
-    open_card = None
-    if found:
-        bodies = [node.get("body") or ""
-                  for node in linear_ops.window_nodes(found.get("comments"))]
-        open_card = reviewer_down.OpenCard(
-            identifier=found["identifier"],
-            filed_at=found.get("createdAt") or "",
-            text="\n".join([found.get("description") or "", *bodies]),
-        )
 
     local = []
     for pr in prs:
@@ -13037,123 +12968,76 @@ def report_fleet_reviewer_outage() -> None:
     now = datetime.now(UTC).isoformat().replace("+00:00", "Z")
     # The DECIDER's own window question, asked with the decider's own function:
     # a second "is this recent?" spelled here would be a second answer waiting
-    # to disagree with the one that files the card.
+    # to disagree with the one that raises the alert.
     fresh = [
         o for o in reviewer_down._window(local + witness, now, threshold.window_s)
         if o.kind == reviewer_down.COULD_NOT_RUN
     ]
-    if not fresh and open_card is None:
+    if not fresh:
         print(
-            "fleet-reviewer-outage: nothing to report — 0 could-not-run in "
+            "reviewer-outage: nothing to report — 0 could-not-run in "
             f"the last {threshold.window_s // 60} min"
         )
-        return
-
-    if open_card is not None:
-        _fleet_outage_resolve_duplicates(open_card.identifier,
-                                         found.get("duplicates") or [])
-
-    decision = reviewer_down.decide(local, witness, open_card, now, threshold)
-    if decision.action == reviewer_down.NOTHING:
-        print(
-            f"fleet-reviewer-outage: {len(fresh)} could-not-run in the window, "
-            "nothing to say" + (f" on {open_card.identifier}" if open_card else
-                                " — below the threshold")
+        pipeline_notice.resolve_notice(
+            "reviewer_outage:fleet",
+            recovery_title=FLEET_OUTAGE_RECOVERY_TITLE,
+            recovery_body=(f"The reconcile sweep at {reviewer_down.pt(now)} found "
+                           "the fleet-wide reviewer outage cleared."),
         )
         return
 
-    if decision.action == reviewer_down.CLOSE:
-        try:
-            linear_ops.cmd_comment(open_card.identifier, pipeline_act.receipt(
-                "reviewer-outage-fleet-wide", decision.resolve_note))
-        except Exception as e:  # noqa: BLE001 — record loudly, never kill the sweep
-            _fleet_outage_failed(f"resolve note on {open_card.identifier}", e)
-            return
-        _fleet_outage_state(f"close {open_card.identifier}",
-                            open_card.identifier, "Done")
-        print(f"fleet-reviewer-outage: {open_card.identifier} closed — "
-              f"{decision.resolve_note}")
-        return
-
-    if decision.action == reviewer_down.APPEND:
-        for line in decision.lines:
-            try:
-                linear_ops.cmd_comment(open_card.identifier, pipeline_act.receipt(
-                    "reviewer-outage-fleet-wide", line))
-            except Exception as e:  # noqa: BLE001 — record loudly, sweep on
-                _fleet_outage_failed(f"ledger line on {open_card.identifier}", e)
-                return
-        try:
-            # The title carries the counts, so it is recomputed from the whole
-            # ledger. A crash between the comments above and this write is
-            # harmless: the next sweep reads the ledger and recomputes it.
-            linear_ops.set_title(open_card.identifier, decision.title)
-        except Exception as e:  # noqa: BLE001 — record loudly, sweep on
-            _fleet_outage_failed(f"retitle {open_card.identifier}", e)
+    decision = reviewer_down.decide(local, witness, None, now, threshold)
+    if decision.action != reviewer_down.FILE:
         print(
-            f"fleet-reviewer-outage: appended {len(decision.lines)} run(s) to "
-            f"{open_card.identifier} — {decision.title}"
+            f"reviewer-outage: {len(fresh)} could-not-run in the window, below "
+            "the threshold — nothing raised, and nothing cleared while a crash "
+            "is still in the window"
         )
         return
-
-    # file
     if REPO_SLUG not in validate_card.VALID_SLUGS:
         # The sandbox (DRE-4577). bureau-harness is outside config/repo-map.json
-        # BY DESIGN, so `linear_ops.create_card` refuses its slug — and on
-        # 2026-09-22 (run 35670916057) that refused write took the sandbox's
-        # sweep red, which a harness run waiting on the sandbox read as
-        # "sandbox down". A repo nothing routes to has no card to file; what
-        # it saw is on this log, and a served repo's sweep — which counts the
-        # same fleet witness — files the card. Not a failure: nothing was
+        # BY DESIGN, so the alert's fallback — a card under its slug — is one
+        # `linear_ops.create_card` refuses, and on 2026-09-22 (run
+        # 35670916057) that refused write took the sandbox's sweep red, which
+        # a harness run waiting on the sandbox read as "sandbox down". What it
+        # saw is on this log, and a served repo's sweep — which counts the
+        # same fleet witness — raises the alert. Not a failure: nothing was
         # attempted, so nothing lands on the fail-loudly rail.
         print(
-            f"fleet-reviewer-outage: {len(fresh)} could-not-run in the window, "
+            f"reviewer-outage: {len(fresh)} could-not-run in the window, "
             f"but {REPO_SLUG!r} is not a repo the pipeline serves "
-            "(config/repo-map.json), so no card is filed from here — the "
-            "outage is on this log, and a served repo's sweep files the card"
+            "(config/repo-map.json), so nothing is raised from here — the "
+            "outage is on this log, and a served repo's sweep raises the alert"
         )
         return
-    if FLEET_OUTAGE_SWEEP_CAP < 1:
-        print(
-            "fleet-reviewer-outage: FLEET_OUTAGE_SWEEP_CAP=0 — filing is off "
-            f"fleet-wide; would have filed {decision.title!r}"
-        )
-        return
-    # The evidence is read HERE and only here: three reads, on the one sweep in
-    # a fleet's week that files this card. The earliest LOCAL crash, because a
-    # witness outcome is a note about a run in another repository — this sweep
-    # can read neither its check runs nor its log, and the card would carry a
-    # first run with no evidence at all under it.
+    # The evidence is read only on a sweep that raises: three reads, while the
+    # outage holds. The earliest LOCAL crash, because a witness outcome is a
+    # note about a run in another repository — this sweep can read neither
+    # its check runs nor its log, and the alert would carry a first run with
+    # no evidence at all under it.
     first = next((o for o in fresh if o.pr is not None and o.repo == REPO_SLUG),
                  None)
     decision = reviewer_down.decide(
         local, witness, None, now, threshold,
         first_run=_fleet_outage_first_run(first, prs) if first else None,
     )
-    try:
-        # Triage, the red-main-repair precedent: the CARD is not broken, the
-        # pipeline is, and this is the lane a person scans for a pipeline that
-        # cannot run. reconcile.py is a permitted Triage writer in
-        # config/lane-contract.json. CREATED there in the one write that mints
-        # it (DRE-5292): creating in the default lane and moving it afterwards
-        # passed the card through Planning, and the relay dispatched the
-        # planner at an alarm. `no-code` and no `agent:*` role — this is not
-        # work to build or plan, and every gate reads `no-code` as "no run is
-        # coming for this card".
-        issue = linear_ops.create_card(decision.title, decision.body,
-                                       repo_slug=REPO_SLUG,
-                                       labels=(linear_ops.NO_CODE_LABEL,),
-                                       lane=FLEET_OUTAGE_LANE)
-    except Exception as e:  # noqa: BLE001 — record loudly, never kill the sweep
-        _fleet_outage_failed("create", e)
+    # The fallback is the card this sweep filed before the door existed:
+    # Triage, the red-main-repair precedent — the CARD is not broken, the
+    # pipeline is. `no-code` and no `agent:*` role: not work to build or plan,
+    # and every gate reads `no-code` as "no run is coming for this card".
+    outcome = pipeline_notice.raise_notice(
+        "reviewer_outage:fleet", severity="CRITICAL",
+        title=decision.title, body=decision.body,
+        fallback=NoticeFallback(
+            title=decision.title, lane=FLEET_OUTAGE_LANE,
+            labels=(f"repo:{REPO_SLUG}", linear_ops.NO_CODE_LABEL)),
+    )
+    if outcome == "lost":
+        _fleet_outage_failed("raise", RuntimeError(
+            "the console door did not take the alert and its fallback card "
+            "was not filed — the pipeline-notice line above says why"))
         return
-    identifier = issue["identifier"]
-    try:
-        linear_ops.cmd_comment(identifier, pipeline_act.receipt(
-            "reviewer-outage-fleet-wide", reviewer_down.outage_receipt(decision)))
-    except Exception as e:  # noqa: BLE001 — record loudly, never kill the sweep
-        _fleet_outage_failed(f"outage receipt on {identifier}", e)
-    print(f"fleet-reviewer-outage: filed {identifier} — {decision.title}")
+    print(f"reviewer-outage: {outcome} — {decision.title}")
 
 
 # Dependabot slot-capacity monitor (DRE-2119, found by the DRE-2110
@@ -14507,7 +14391,7 @@ OFF_RAIL_SKIPPED: dict[str, str] = {
     "recover_limit_deaths":
         "re-entered the stage a limit death left on unlabeled cards",
     "report_fleet_reviewer_outage":
-        "appended to or closed the fleet's one reviewer-outage card",
+        "raised or cleared the fleet's reviewer-outage console alert",
     "flag_stranded":
         "labeled off-rail cards and escalated stalled unlabeled Planning cards",
     "advance_urgent_intake":
