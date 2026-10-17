@@ -208,8 +208,23 @@ def ready_lanes(contract: dict | None = None, doc: dict | None = None) -> tuple:
     card to, read from the shape and routing vocabularies. Move a verdict's
     destination and this moves with it, which is the difference between policing
     the lanes that matter and policing the two somebody remembered.
+
+    Plus the start lane, `lane_contract.START_LANE` (DRE-7109): the lane every
+    restart writes is ready work by definition — a card in it is built — so it
+    is policed the moment the flip sets it to `In Progress`, whether or not
+    FLEET's destination has moved beside it. It passes the segment test the
+    vocabulary's lanes pass, and a contract that predates `build_start`
+    (DRE-7105) adds nothing.
     """
-    return planning_escalation.work_lanes_reachable_from_planning(contract, doc)
+    lanes = planning_escalation.work_lanes_reachable_from_planning(contract, doc)
+    if "build_start" not in (contract or lane_contract.load()):
+        return lanes
+    start = lane_contract.start_lane(contract)
+    try:
+        work = lane_contract.lane(start, contract=contract).get("segment") == "work"
+    except lane_contract.UnknownLane:
+        work = False
+    return lanes if start in lanes or not work else lanes + (start,)
 
 
 def is_ready(lane: str | None, ready: tuple, contract: dict | None = None) -> bool:
