@@ -3767,11 +3767,11 @@ class TheSecondCriticReadsBeforeGreenLight(unittest.TestCase):
         flight for neither; the SIGHT is wider, because two plans read at the
         same moment both sit in Planning and must see each other."""
         self.assertEqual(pc.IN_FLIGHT_EPIC_STATES,
-                         ("Green Light", "Todo", "In Progress"))
+                         ("Green Light", "In Progress", "Todo"))
         self.assertEqual(pc.SIGHT_STATES,
                          pc.IN_FLIGHT_EPIC_STATES + (pc.REVIEW_LANE,))
         self.assertEqual(pc.SIGHT_STATES,
-                         ("Green Light", "Todo", "In Progress", "Planning"))
+                         ("Green Light", "In Progress", "Todo", "Planning"))
 
     SIGHT_EPICS = [
         {"identifier": "DRE-2700", "title": "The intake gate", "state": "In Progress"},
@@ -4602,3 +4602,87 @@ class TheDecideStepWritesTheLines(unittest.TestCase):
         self.assertEqual(bare["out"], full["out"])
         self.assertEqual(bare["record"], full["record"])
         self.assertEqual(1, len(full["record"].strip().split("\n")))
+
+
+def _contract_without_todo():
+    """The shipped lane contract with Todo's entry deleted — the board the
+    Todo retirement leaves (DRE-7105's own fixture, `tests/test_build_start.py`)."""
+    import copy
+
+    import lane_contract
+
+    doc = copy.deepcopy(lane_contract.load())
+    doc["build_start"]["lane"] = "In Progress"
+    doc["lanes"] = [entry for entry in doc["lanes"] if entry["name"] != "Todo"]
+    return doc
+
+
+class TheInFlightLanesAreTheStartLanes(unittest.TestCase):
+    """DRE-7113. An epic in flight is in Green Light or a start lane, and the
+    start lanes are the lane contract's (`lane_contract.START_LANES`, DRE-7105)
+    — so deleting Todo's entry narrows both with no edit here."""
+
+    def test_the_shipped_contract_keeps_todays_set(self):
+        import lane_contract
+
+        self.assertEqual(pc.IN_FLIGHT_EPIC_STATES,
+                         ("Green Light", "In Progress", "Todo"))
+        self.assertEqual(pc.IN_FLIGHT_EPIC_STATES,
+                         ("Green Light",) + lane_contract.START_LANES)
+        self.assertEqual(pc.in_flight_epic_states(), pc.IN_FLIGHT_EPIC_STATES)
+
+    def test_a_contract_without_todo_drops_it(self):
+        self.assertEqual(pc.in_flight_epic_states(_contract_without_todo()),
+                         ("Green Light", "In Progress"))
+
+    def test_the_charter_names_the_queue_and_the_waiting_start_lanes(self):
+        shipped = " ".join(pc.child_state_block().split())
+        self.assertIn("Anything else — Queued, Todo, Triage — is still to build",
+                      shipped)
+        flipped = " ".join(pc.child_state_block(_contract_without_todo()).split())
+        self.assertIn("Anything else — Queued, Triage — is still to build", flipped)
+
+    def test_both_charters_read_the_contracts_block(self):
+        for stage in (pc.STAGE_PRE, pc.STAGE_POST):
+            self.assertIn(pc.child_state_block(), pc.charter(stage))
+
+
+#: The planner's and the repairers' scripts DRE-7113 rewords. None of them
+#: writes the lane; after it none of them names it in a string either.
+STOPPED_NAMING_TODO = (
+    "plan_critic", "mid_epic", "hand_work_migration", "break_glass",
+    "backlog_cutover", "repair_card", "model_adoption_actions",
+    "dependabot_card", "structural_repair", "proof_and_demo", "planning_route",
+)
+
+
+class TheseScriptsNoLongerNameTodo(unittest.TestCase):
+    """DRE-7113. Every string constant in the eleven files — docstrings
+    included — is read off the AST; a `#` comment is not a constant, so one
+    recording an incident keeps its wording."""
+
+    def test_no_string_constant_names_the_lane(self):
+        import ast
+        import re
+
+        word = re.compile(r"\bTodo\b")
+        hits = []
+        for name in STOPPED_NAMING_TODO:
+            path = os.path.join(SCRIPTS, f"{name}.py")
+            with open(path, encoding="utf-8") as f:
+                tree = ast.parse(f.read(), filename=path)
+            hits += [
+                f"scripts/{name}.py:{node.lineno}"
+                for node in ast.walk(tree)
+                if isinstance(node, ast.Constant) and isinstance(node.value, str)
+                and word.search(node.value)
+            ]
+        self.assertEqual([], hits)
+
+    def test_the_walk_would_see_a_docstring_that_names_it(self):
+        import ast
+
+        tree = ast.parse('"""A card entering Todo is dispatched."""\n')
+        self.assertTrue(any(
+            isinstance(node, ast.Constant) and "Todo" in node.value
+            for node in ast.walk(tree)))
