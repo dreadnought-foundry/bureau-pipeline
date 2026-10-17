@@ -52,6 +52,7 @@ os.environ.setdefault("REPO_SLUG", "agent-bureau")
 os.environ.setdefault("GH_TOKEN", "x")
 
 import dead_run  # noqa: E402
+import lane_contract  # noqa: E402
 import linear_ops  # noqa: E402
 import reconcile  # noqa: E402
 import step_shell  # noqa: E402
@@ -264,7 +265,7 @@ def test_unpark_clears_the_label_posts_the_reset_and_returns_to_todo():
     ) as cmd_state:
         linear_ops.cmd_unpark("DRE-2308")
     remove_label.assert_called_once_with("DRE-2308", dead_run.HOLD_LABEL)
-    cmd_state.assert_called_once_with("DRE-2308", "Todo")
+    cmd_state.assert_called_once_with("DRE-2308", lane_contract.START_LANE, restart=True)
     body = cmd_comment.call_args.args[1]
     assert dead_run.RESET_TAG in body
     assert dead_run.DEAD_TAG not in body
