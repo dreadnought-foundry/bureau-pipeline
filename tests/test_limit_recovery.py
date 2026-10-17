@@ -56,6 +56,8 @@ import dead_run  # noqa: E402
 import lane_contract  # noqa: E402
 import limit_recovery  # noqa: E402
 import reconcile  # noqa: E402
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import build_started  # noqa: E402 — a card whose build started (DRE-7108)
 
 RUN = "33912345678"
 RESET = datetime(2026, 9, 5, 20, 30, tzinfo=UTC)          # 13:30 PT
@@ -641,13 +643,20 @@ def test_the_nudge_loop_resumes_once_a_newer_receipt_follows_the_marker():
     After the recovery's own receipt the card is ordinary again."""
     receipt = f"{limit_recovery.RECOVERY_MARK} re-entered build — window reset at 2026-09-05 13:30 PT."
     ordinary = card(bodies=[marker(), receipt])
-    with patch.multiple(reconcile, **_full_sweep_mocks([ordinary])), patch.object(
+    # The build had started before the limit killed it (DRE-7108): its start
+    # receipt is the oldest comment, so the loop reads a dead run, not a card
+    # that never started.
+    ordinary["comments"]["nodes"].append(
+        {"body": build_started.START_RECEIPT, "createdAt": build_started.RECEIPT_AT})
+    with build_started.entered(), patch.multiple(
+        reconcile, **_full_sweep_mocks([ordinary])
+    ), patch.object(
         reconcile.linear_ops, "count_comments", return_value=0
     ), patch.object(reconcile.linear_ops, "cmd_state") as cmd_state, patch.object(
         reconcile.linear_ops, "cmd_comment"
     ), patch.object(reconcile.linear_ops, "add_label"):
         reconcile.main()
-    cmd_state.assert_called_once_with("DRE-3062", "Todo")
+    cmd_state.assert_called_once_with("DRE-3062", reconcile.QUEUE_LANE, "--park")
 
 
 def test_a_full_sweep_reenters_a_reset_card_exactly_once():

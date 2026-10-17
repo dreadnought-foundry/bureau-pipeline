@@ -35,6 +35,8 @@ os.environ.setdefault("GH_TOKEN", "x")
 
 import lane_contract  # noqa: E402
 import reconcile  # noqa: E402
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import build_started  # noqa: E402 — a card whose build started (DRE-7108)
 import step_shell  # noqa: E402
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -165,7 +167,7 @@ class TestTheMergedLaneDoesBothJobs:
 
     def test_no_pr_requeues_under_the_shared_dead_run_cap(self):
         mocks = _sweep_mocks()
-        with patch.multiple(reconcile, **mocks), patch.object(
+        with build_started.entered(), patch.multiple(reconcile, **mocks), patch.object(
             reconcile.linear_ops, "count_comments", return_value=1
         ), patch.object(reconcile.linear_ops, "add_label") as add_label, patch.object(
             reconcile.linear_ops, "cmd_state"
@@ -173,7 +175,8 @@ class TestTheMergedLaneDoesBothJobs:
             reconcile.linear_ops, "cmd_comment"
         ) as cmd_comment:
             reconcile.main()
-        cmd_state.assert_called_once_with("DRE-2726", "Todo")
+        # To the queue since DRE-7108, deliberately: `promote_ready` brings it back.
+        cmd_state.assert_called_once_with("DRE-2726", reconcile.QUEUE_LANE, "--park")
         add_label.assert_not_called()
         bodies = [c.args[1] for c in cmd_comment.call_args_list]
         assert any(reconcile.DEAD_TAG in b for b in bodies)
