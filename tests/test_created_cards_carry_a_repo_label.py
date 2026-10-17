@@ -160,13 +160,15 @@ class EveryCallSitePassesTheRepoThatFailed(unittest.TestCase):
 
     def test_the_call_sites_are_found(self):
         # Guards the guard: if the match stops firing, everything below passes
-        # over an empty list and proves nothing. Three are live: medic,
-        # model-adoption and nightly-watch. The retired Model drift job's two
-        # left with DRE-3899, the channel-staleness alarm's one with DRE-6053,
-        # and red-main-repair's two became console alerts with DRE-7454 (its
-        # fallback card is filed by pipeline_notice.py, which takes the slug
-        # from `--fallback-label "repo:$REPO_SLUG"`).
-        self.assertGreaterEqual(len(_create_call_sites()), 3)
+        # over an empty list and proves nothing. Two are live: model-adoption
+        # and nightly-watch. The retired Model drift job's two left with
+        # DRE-3899, the channel-staleness alarm's one with DRE-6053, the
+        # medic's with DRE-7453 (it raises a console alert now, and the
+        # client files its fallback card) and red-main-repair's two became
+        # console alerts with DRE-7454 (its fallback card is filed by
+        # pipeline_notice.py, which takes the slug from
+        # `--fallback-label "repo:$REPO_SLUG"`).
+        self.assertGreaterEqual(len(_create_call_sites()), 2)
 
     def test_every_call_site_passes_a_repo(self):
         for name, line, _ in _create_call_sites():
