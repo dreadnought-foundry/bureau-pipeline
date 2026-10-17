@@ -118,16 +118,22 @@ with open(os.environ["CALLS"], "a", encoding="utf-8") as fh:
     fh.write(json.dumps({"tool": os.path.basename(sys.argv[0]), "args": sys.argv[1:]}) + "\n")
 '''
 
-# `gh`, answering `gh run list` with FAKE_RUNS (or failing on FAKE_GH_RC).
+# `gh`, answering `gh run list` with FAKE_RUNS and `gh api` with FAKE_TIP
+# (failing every call on FAKE_GH_RC, or only `gh api` on FAKE_TIP_RC).
 _GH_STUB = r'''#!/usr/bin/env python3
 import json, os, sys
 with open(os.environ["CALLS"], "a", encoding="utf-8") as fh:
     fh.write(json.dumps({"tool": "gh", "args": sys.argv[1:]}) + "\n")
 rc = int(os.environ.get("FAKE_GH_RC", "0"))
+if sys.argv[1:2] == ["api"]:
+    rc = rc or int(os.environ.get("FAKE_TIP_RC", "0"))
 if rc:
     print("HTTP 403: Resource not accessible by integration", file=sys.stderr)
     sys.exit(rc)
-print(os.environ.get("FAKE_RUNS", "[]"))
+if sys.argv[1:2] == ["api"]:
+    print(os.environ.get("FAKE_TIP", ""))
+else:
+    print(os.environ.get("FAKE_RUNS", "[]"))
 '''
 
 
@@ -417,7 +423,9 @@ def _runs(*rows) -> str:
         for i, (wf, status, conclusion, event) in enumerate(rows)])
 
 
-DECIDE_ENV = {"HEAD_SHA": HEAD_SHA, "GITHUB_RUN_ID": "999"}
+DECIDE_ENV = {"HEAD_SHA": HEAD_SHA, "GITHUB_RUN_ID": "999",
+              "DEFAULT_BRANCH": "main", "FAKE_TIP": HEAD_SHA}
+NEWER_SHA = "b" * 40
 
 
 def _decide(tmp_path, runs: str, **extra):
@@ -432,10 +440,44 @@ def test_the_decide_step_goes_when_every_run_is_green(tmp_path):
         ("Integration Harness", "completed", "skipped", "push")))
     assert done.returncode == 0, done.stderr
     assert "go=true" in output.splitlines()
-    gh = [c for c in calls if c["tool"] == "gh"][0]["args"]
-    assert gh[:2] == ["run", "list"]
-    assert _flag(gh, "--commit") == HEAD_SHA
-    assert _flag(gh, "--repo") == REPO
+    gh = [c["args"] for c in calls if c["tool"] == "gh"]
+    listing = [a for a in gh if a[:2] == ["run", "list"]]
+    assert len(listing) == 1
+    assert _flag(listing[0], "--commit") == HEAD_SHA
+    assert _flag(listing[0], "--repo") == REPO
+    tip = [a for a in gh if a[:1] == ["api"]]
+    assert len(tip) == 1
+    assert tip[0][1] == f"repos/{REPO}/commits/main"
+    assert _flag(tip[0], "--jq") == ".sha"
+
+
+def test_clear_notices_reads_the_default_branch_tip():
+    step = _clear_step("red_main_clear.py decide")
+    env = step.get("env") or {}
+    assert env.get("DEFAULT_BRANCH") == "${{ github.event.repository.default_branch }}"
+    assert '--head-sha "$HEAD_SHA"' in step["run"]
+    assert '--tip-sha "$TIP_SHA"' in step["run"]
+
+
+def test_the_decide_step_stops_when_main_has_moved_on(tmp_path):
+    """A late or re-run green run on an older main commit — the medic's
+    retry-once among them — must not close the alerts while the newest main
+    commit is still red."""
+    done, _, _, output = _decide(tmp_path, _runs(
+        ("Pipeline Tests", "completed", "success", "push")), FAKE_TIP=NEWER_SHA)
+    assert done.returncode == 0, done.stderr
+    lines = output.splitlines()
+    assert "go=false" in lines
+    assert "reason=stale-sha" in lines
+
+
+def test_the_decide_step_stops_when_the_tip_cannot_be_read(tmp_path):
+    done, _, _, output = _decide(tmp_path, _runs(
+        ("Pipeline Tests", "completed", "success", "push")), FAKE_TIP_RC="1")
+    assert done.returncode == 0, done.stderr
+    lines = output.splitlines()
+    assert "go=false" in lines
+    assert "reason=tip-unreadable" in lines
 
 
 def test_the_decide_step_stops_beside_a_red_run(tmp_path):
@@ -540,6 +582,34 @@ def test_stop_when_the_listing_is_not_a_list_of_runs():
     for raw in ("", "unreadable", "{}", "[1, 2]"):
         assert red_main_clear.judge_text(raw).go is False, raw
         assert red_main_clear.judge_text(raw).reason == "unreadable", raw
+
+
+def test_go_when_the_green_commit_is_still_the_tip():
+    assert red_main_clear.judge_tip(HEAD_SHA, HEAD_SHA) is None
+
+
+def test_stop_when_the_green_commit_is_no_longer_the_tip():
+    verdict = red_main_clear.judge_tip(HEAD_SHA, NEWER_SHA)
+    assert verdict.go is False
+    assert verdict.reason == "stale-sha"
+
+
+@pytest.mark.parametrize("tip", ["", None, "   "])
+def test_stop_when_the_tip_could_not_be_read(tip):
+    verdict = red_main_clear.judge_tip(HEAD_SHA, tip)
+    assert verdict.go is False
+    assert verdict.reason == "tip-unreadable"
+
+
+def test_the_cli_stops_on_a_stale_sha_beside_all_green_runs(tmp_path):
+    runs = tmp_path / "runs.json"
+    runs.write_text(json.dumps([_run("success")]))
+    done = subprocess.run(
+        [sys.executable, str(ROOT / "scripts" / "red_main_clear.py"), "decide",
+         "--runs-file", str(runs), "--head-sha", HEAD_SHA, "--tip-sha", NEWER_SHA],
+        capture_output=True, text=True, check=False)
+    assert done.returncode == 0, done.stderr
+    assert done.stdout.splitlines()[:2] == ["go=false", "reason=stale-sha"]
 
 
 def test_red_outranks_unfinished():
