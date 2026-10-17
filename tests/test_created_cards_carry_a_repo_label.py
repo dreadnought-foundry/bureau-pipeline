@@ -160,11 +160,12 @@ class EveryCallSitePassesTheRepoThatFailed(unittest.TestCase):
 
     def test_the_call_sites_are_found(self):
         # Guards the guard: if the match stops firing, everything below passes
-        # over an empty list and proves nothing. Five are live: medic,
+        # over an empty list and proves nothing. Four are live:
         # red-main-repair x2, model-adoption and nightly-watch. The retired
         # Model drift job's two left with DRE-3899, the channel-staleness
-        # alarm's one with DRE-6053.
-        self.assertGreaterEqual(len(_create_call_sites()), 5)
+        # alarm's one with DRE-6053, the medic's with DRE-7453 (it raises a
+        # console alert now, and the client files its fallback card).
+        self.assertGreaterEqual(len(_create_call_sites()), 4)
 
     def test_every_call_site_passes_a_repo(self):
         for name, line, _ in _create_call_sites():

@@ -1007,8 +1007,9 @@ class ComputeVerifyPostTest(unittest.TestCase):
 
     def test_the_jobs_are_groom_lookup_verify_and_post(self):
         """DRE-5429 put the per-owner lookups between the groom and the
-        verify matrix."""
-        self.assertEqual(list(self.jobs), ["groom", "lookup", "verify", "post"])
+        verify matrix, and DRE-7242 the per-owner routing reads beside them."""
+        self.assertEqual(list(self.jobs),
+                         ["groom", "lookup", "routing", "verify", "post"])
 
     def test_post_needs_both_and_runs_whatever_verify_did(self):
         post = self.jobs["post"]
@@ -1058,7 +1059,7 @@ class ComputeVerifyPostTest(unittest.TestCase):
 
     def test_the_verify_job_fans_out_over_the_groom_output(self):
         verify = self.jobs["verify"]
-        self.assertEqual(set(_needs(verify)), {"groom", "lookup"})
+        self.assertEqual(set(_needs(verify)), {"groom", "lookup", "routing"})
         condition = _expression(verify.get("if"))
         for clause in ("inputs.mode != 'drain'",
                        "needs.groom.outputs.verify_matrix != ''",
@@ -1226,7 +1227,9 @@ class UnmappedRepoReadsNoCodeTest(unittest.TestCase):
         upload = steps[verdict_at + 1]
         with_ = upload.get("with") or {}
         self.assertEqual(with_.get("name"), "groom-verdict-${{ matrix.card }}")
-        self.assertEqual(with_.get("path"), "verdict.json")
+        # DRE-7242: the folded targets ride beside the verdict, for the proof.
+        self.assertEqual(str(with_.get("path")).split(),
+                         ["verdict.json", "verify-targets.json"])
         self.assertIs(with_.get("overwrite"), True)
         self.assertIn("always()", str(upload.get("if")))
 
@@ -1614,7 +1617,7 @@ class VerifyReadsTheLookupsTest(unittest.TestCase):
         self.fold = _named(self.job, FOLD_STEP)
 
     def test_a_dead_lookup_leg_never_stops_the_verify_matrix(self):
-        self.assertEqual(set(_needs(self.job)), {"groom", "lookup"})
+        self.assertEqual(set(_needs(self.job)), {"groom", "lookup", "routing"})
         condition = _expression(self.job.get("if"))
         self.assertTrue(condition.startswith("always()"),
                         "verify's `if` must open with always()")
