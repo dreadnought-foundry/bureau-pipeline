@@ -32,6 +32,13 @@ A listing that cannot be read, or holds no run that judges the commit, is a
 stop. A missed all-clear costs one more green run; a false one tells the CEO
 main is green while it is red.
 
+The commit must also still be the default branch's tip (`judge_tip`). A late
+or re-run green run on an older main commit — the medic's retry-once among
+them — says nothing about the newest one, which may be the commit that is
+red, so a sha that is no longer the tip is a `stale-sha` stop, and a tip that
+could not be read is a `tip-unreadable` stop. The next green run on the tip
+sends the all-clear.
+
 ## recovery-body — the all-clear copy
 
 The contract's red-main copy, with the green run's workflow name, the time it
@@ -42,7 +49,8 @@ completed in PT and its URL:
 
 ## Usage
 
-    red_main_clear.py decide --runs-file <gh run list JSON> [--self-run-id <id>]
+    red_main_clear.py decide --runs-file <gh run list JSON> [--self-run-id <id>] \\
+        [--head-sha <green sha> --tip-sha <default branch tip>]
     red_main_clear.py recovery-body --workflow-name <w> --repo <slug> \\
         --run-url <u> [--at <ISO 8601>] --out <file>
 
@@ -67,7 +75,8 @@ LISTENER_EVENT = "workflow_run"
 @dataclass(frozen=True)
 class Verdict:
     go: bool
-    reason: str  # all-green | red | unfinished | no-runs | unreadable
+    # all-green | red | unfinished | no-runs | unreadable | stale-sha | tip-unreadable
+    reason: str
     detail: str
 
 
@@ -95,6 +104,20 @@ def judge(runs: list[dict], *, self_run_id: str | int | None = None) -> Verdict:
             for r in unfinished))
     return Verdict(True, "all-green",
                    f"{len(judged)} run(s) on this commit, none red or unfinished")
+
+
+def judge_tip(head_sha: str, tip_sha: str | None) -> Verdict | None:
+    """A stop when the green commit is no longer the default branch's tip, or
+    the tip could not be read; None when it is still the tip."""
+    tip = (tip_sha or "").strip()
+    if not tip:
+        return Verdict(False, "tip-unreadable",
+                       "the default branch's tip could not be read")
+    if tip != head_sha.strip():
+        return Verdict(False, "stale-sha",
+                       f"{head_sha[:7]} is no longer the default branch's tip "
+                       f"({tip[:7]} is), so its green run says nothing about main")
+    return None
 
 
 def judge_text(raw: str, *, self_run_id: str | int | None = None) -> Verdict:
@@ -140,6 +163,8 @@ def main(argv: list[str] | None = None) -> int:
     d = sub.add_parser("decide", help="go=true when main is green on this commit")
     d.add_argument("--runs-file", required=True)
     d.add_argument("--self-run-id")
+    d.add_argument("--head-sha", help="the green run's commit")
+    d.add_argument("--tip-sha", help="the default branch's tip; empty = unread")
     r = sub.add_parser("recovery-body", help="write the all-clear copy")
     r.add_argument("--workflow-name", required=True)
     r.add_argument("--repo", required=True)
@@ -154,7 +179,11 @@ def main(argv: list[str] | None = None) -> int:
                 raw = f.read()
         except OSError:
             raw = ""
-        verdict = judge_text(raw, self_run_id=args.self_run_id)
+        verdict = None
+        if args.head_sha is not None:
+            verdict = judge_tip(args.head_sha, args.tip_sha)
+        if verdict is None:
+            verdict = judge_text(raw, self_run_id=args.self_run_id)
         print(f"go={'true' if verdict.go else 'false'}")
         print(f"reason={verdict.reason}")
         word = "main is green" if verdict.go else "no all-clear"

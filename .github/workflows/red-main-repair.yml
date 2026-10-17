@@ -1039,18 +1039,21 @@ jobs:
   # only when every run on that commit is done and none is red
   # (`red_main_clear.py decide`), so a green run of one workflow beside a red or
   # unfinished one sends no false all-clear — the last to finish green sends
-  # it. A key that is not open answers `not-open` and sends nothing, so a green
-  # run after a quiet main says nothing to anyone.
+  # it — and only while that commit is still the default branch's tip, so a
+  # late or re-run green run on an older commit cannot clear a newer red. A
+  # key that is not open answers `not-open` and sends nothing, so a green run
+  # after a quiet main says nothing to anyone.
   #
   # Premortem (standards/vendor-boundaries.md). Q1 actor: whoever produced the
   # green run; no bot gate is involved, nothing here runs a model. Q2 secrets:
   # none. The job holds no Linear secret because a resolve never falls back to
   # a card, and its token is an OIDC token for the door plus github.token for
-  # the listing. Q3 retry: a re-run resolves again and the door answers
-  # `not-open`, and a second green run of another workflow does the same.
+  # the listing and the tip. Q3 retry: a re-run resolves again and the door
+  # answers `not-open`, and a second green run of another workflow does the
+  # same.
   # Q4 limits: `gh run list` reads at most 200 runs on one commit. Q5 our own
-  # crash: a listing that cannot be read is a stop, and the next green run
-  # tries again. A missed all-clear costs one run; a false one lies.
+  # crash: a listing or a tip that cannot be read is a stop, and the next
+  # green run tries again. A missed all-clear costs one run; a false one lies.
   #
   # Unlike the repair job this job declares `permissions:` — exactly what it
   # uses, and less than every red-main stub grants (actions: read,
@@ -1077,12 +1080,16 @@ jobs:
       # which the stub grants). A listing that cannot be read is written as a
       # marker the decision reads as a stop. This job's own run, and every run
       # started by `workflow_run` (this rail, the medic), do not judge the
-      # commit and are not waited on — red_main_clear.py says why.
+      # commit and are not waited on — red_main_clear.py says why. The commit
+      # must still be the default branch's tip: a late or re-run green run on
+      # an older main commit says nothing about the newest one, so a moved tip
+      # is a stop, and so is a tip that cannot be read.
       - name: Is every run on this commit green?
         id: green
         env:
           GH_TOKEN: ${{ github.token }}
           HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
         run: |
           if ! gh run list --repo "$GITHUB_REPOSITORY" --commit "$HEAD_SHA" --limit 200 \
               --json databaseId,workflowName,status,conclusion,event \
@@ -1090,9 +1097,14 @@ jobs:
             echo "the runs on ${HEAD_SHA:0:7} could not be listed — no all-clear this time"
             echo "unreadable" > /tmp/red-main-commit-runs.json
           fi
+          if ! TIP_SHA=$(gh api "repos/$GITHUB_REPOSITORY/commits/$DEFAULT_BRANCH" --jq .sha); then
+            echo "the tip of $DEFAULT_BRANCH could not be read — no all-clear this time"
+            TIP_SHA=""
+          fi
           python3 .bureau-pipeline/scripts/red_main_clear.py decide \
             --runs-file /tmp/red-main-commit-runs.json \
-            --self-run-id "$GITHUB_RUN_ID" >> "$GITHUB_OUTPUT"
+            --self-run-id "$GITHUB_RUN_ID" \
+            --head-sha "$HEAD_SHA" --tip-sha "$TIP_SHA" >> "$GITHUB_OUTPUT"
 
       # The contract's red-main all-clear copy: the green run's workflow name,
       # the time it completed in PT, and its URL. A resolve the door refuses is

@@ -220,8 +220,9 @@ the bot's GitHub quota burned twice). Repair must not rebuild it:
   console's one row per key is the duplicate suppression while the alert is
   open. The workflow's `clear-notices` job closes both red-main alerts, with
   the all-clear copy, when a watched workflow's run on the default branch
-  concludes `success` and no other run on that commit is red or unfinished
-  (`scripts/red_main_clear.py`).
+  concludes `success` on the commit that is still its tip and no other run
+  on that commit is red or unfinished (`scripts/red_main_clear.py`). A late
+  or re-run green run on an older commit closes nothing.
 - **Repair never watches itself.** The trigger is the product repo's CI on
   the default branch only — a repair run's own failure routes through the
   existing medic, and a repair PR's review rejections route through the
