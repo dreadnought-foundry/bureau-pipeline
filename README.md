@@ -435,8 +435,11 @@ The list is now **derived, never remembered**. `scripts/check_workflow_watchers.
 The exemptions are declared, each with its reason in the code. Nothing watches
 the medic, because a medic that watched itself rebuilds the 2026-06-28
 crash-loop. And `NOT_WATCHED` names the workflows left unwatched on purpose:
-today only Shadow Replay (DRE-7197), whose red run the operator reads from its
-report, where an automatic retry would spend another batch of reviewer runs.
+Shadow Replay (DRE-7197), whose red run the operator reads from its report,
+where an automatic retry would spend another batch of reviewer runs, and the
+notice door's smoke (DRE-7451), which the operator dispatches and reads, and
+which files no card on any path — a medic watching it would retry it and file
+one.
 Adding any other workflow with no watcher fails CI instead of adding a silent
 failure surface.
 
@@ -1461,9 +1464,13 @@ and nobody knows.
 
 `nightly-watch.yml` runs **hourly in this repo, on a schedule of its own** — it
 must not depend on the repos it watches running anything — and raises one
-deduplicated Linear card through `linear_ops.py`, the shape
-`red-main-repair.yml` files its card in. The decision is
-`scripts/nightly_watch.py`.
+console alert per condition per owner through `scripts/pipeline_notice.py`
+(DRE-7456): `nightly_watch:<owner>:did_not_run` for a nightly that did not
+run, `nightly_watch:<owner>:cannot_read` for a repo it could not read, both at
+WARN. An hour that finds the condition gone resolves its key. When the
+console's door cannot take a raise, the client files the deduplicated Linear
+card the watcher filed before — its title, lane `Planning`, label
+`repo:bureau-pipeline`. The decision is `scripts/nightly_watch.py`.
 
 - **Who is watched is computed, never listed.** Every workflow, in every repo
   in `config/repo-map.json`, whose file on the default branch triggers on
@@ -1501,27 +1508,30 @@ deduplicated Linear card through `linear_ops.py`, the shape
 - **UNKNOWN never passes.** A repo the token cannot read, a workflow file that
   will not fetch, a run listing GitHub declines: each is reported unknown and
   alarms, never as "nightly ok" (`standards/console-honesty.md` rules 1-3). A
-  missing nightly takes the card title when both are true, because it is the
-  actionable one, but the unknown is still named in the body. A throttle is
+  missing nightly takes the alert when both are true, because it is the
+  actionable one, but the unknown is still named in the body. A key is
+  resolved only by an hour that read everything it needs to say the condition
+  is gone — a subject not read is never a condition cleared. A throttle is
   not an unknown (DRE-6461): a read GitHub refuses because the installation's
   hourly request budget is spent is listed as not read this hour, never as
   ran, and the watcher stops reading for the rest of that run. A throttle
-  alone files no card on the hour it is seen — it is said only on the daily
-  re-confirm hour, on the same card — while a missing nightly or any other
-  unreadable subject still alarms on any hour.
+  alone raises nothing on the hour it is seen — it is said only on the daily
+  re-confirm hour, as the `cannot_read` alert — while a missing nightly or any
+  other unreadable subject still alarms on any hour.
 - **One token per owner.** An App installation token is scoped to one
   installation and the roster spans three owners, so the watch job is a matrix
   over the roster's owners with a token minted per owner — the shape the
-  groomer's lookup legs use — and each owner gets its own card title, so three concurrent jobs
-  cannot race for one card.
-- **It holds no write anywhere**, and a test fails if one appears. A red run is
+  groomer's lookup legs use — and each owner gets its own keys and fallback
+  card titles, so three concurrent jobs cannot race for one alert or card.
+- **It holds no write on what it watches**, and a test fails if one appears.
+  The one thing it sends is its own alert, with the OIDC token the watch job's
+  `id-token: write` mints for the console's door. A red run is
   diagnosed by the medic (`Nightly Watch` is in its watch list). A run that
   never fires at all is not detected by anything in this repo — nothing polls
   for its absence — and that is stated here rather than papered over.
-- **Known limit.** The 2026-09-22 outside-read audit (DRE-4655..4665) found
-  production has no alert-delivery environment, so CRITICAL alarms do not
-  currently reach the CEO. This alarm reaches exactly as far as the card
-  mechanism it rides, and no further.
+- **Known limit.** A WARN alert stays on the console and is never emailed.
+  This alarm reaches exactly as far as the console's panel — or the fallback
+  card while the door is down — and no further.
 
 ## Layout
 

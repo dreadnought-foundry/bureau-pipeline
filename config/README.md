@@ -209,6 +209,20 @@ mints (see `models.yaml` below).
   non-default class with no phrase, a phrase under two classes, a `default`
   that is not a class, and an `action` missing or not a `[a-z_]+` module name.
   `docs/blocker-classes.md` is the page a person reads.
+- **`notice-writers.json`** — every writer that files a Linear card
+  automatically (DRE-7452): a `_readme`, `found`, then `writers`, one row per
+  writer with `id`, `repo` (`bureau-pipeline` or `agent-bureau`), `file`,
+  `title` (the pattern it files), `disposition` and `reason`. `notice` is a
+  writer the pipeline-notices epic repoints to a console alert, carrying its
+  `notice_key` from that epic's contract; `kept` stays a card, and its `reason`
+  opens with `work`, `decision` or `record`. A row may name a `site` — the
+  function or workflow step that files its card — when its file holds other
+  writers too. `python3 scripts/notice_writers.py check` DISCOVERS every
+  card-creating file and fails, by name, on one no row declares for its repo;
+  it reads agent-bureau only when given `--agent-bureau-dir`, and this
+  repository's CI runs it without that flag (`tests/test_notice_writers.py`).
+  `report` reads each notice row as `repointed`, `still-files-cards` or
+  `unread`, and always exits 0.
 - **`proof-reach.json`** — what a dispatched proof run can read, declared once
   (DRE-6605). Four keys, in order: `github` (the proof workflow, its two mint
   steps, the `owner` they are scoped by with no `repositories`, the

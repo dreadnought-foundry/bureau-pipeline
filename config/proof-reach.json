@@ -133,10 +133,22 @@
       "when": "once per run of the planning classifier's cost tally since DRE-7196, when its Linear read succeeds"
     },
     {
+      "tag": "groom-replay:",
+      "printed_by": "scripts/groom_replay.py",
+      "constant": "TAG",
+      "when": "every groomer run with `replay` set, since DRE-7239 and its wiring in DRE-7242: `base` prints one line in the Groom step's log, and `report` one line per window card and then one count line in the post job's log"
+    },
+    {
       "tag": "release-deferred:",
       "printed_by": "scripts/release_deferral.py",
       "constant": "TAG",
       "when": "every surface job of `release-train.yml` since DRE-5235, in its `Run the surface` step's log: on a deferral that names no re-arm minute, the facts line and then the card lines; on a verified tag, the open-cards line and, when one was open, the closed line"
+    },
+    {
+      "tag": "pipeline-notice:",
+      "printed_by": "scripts/pipeline_notice.py",
+      "constant": "TAG",
+      "when": "every raise or resolve through the notice door's client since DRE-7451, one line on stdout per call: the door's outcome, the fallback card it filed, a refused resolve, or `lost`; `pipeline-notice-smoke.yml` prints four, in its `Resolve, raise, raise, resolve` step's log"
     }
   ],
   "causes": [

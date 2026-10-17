@@ -1173,7 +1173,7 @@
       "tag": "fleet-reviewer-outage",
       "adopted": true,
       "kind": "hold",
-      "means": "The code reviewer is down across the FLEET, not on one pull request: enough runs could not run, recently enough and in enough repositories, that the pipeline has stopped and handed the outage to a person as ONE card.",
+      "means": "The code reviewer is down across the FLEET, not on one pull request: enough runs could not run, recently enough and in enough repositories, that the pipeline has stopped and handed the outage to a person as ONE CRITICAL console alert, `reviewer_outage:fleet` (one card in a human queue lane until DRE-7455).",
       "state": "escalated",
       "next_actor": "operator",
       "discharges": null,
@@ -1186,7 +1186,7 @@
         "repos": 2
       },
       "threshold_why": "Read off the 2026-09-08 incident (DRE-3416): seven could-not-run outcomes landed across two repositories inside 68 minutes, the first three of them inside seven — so a half-hour window, three consecutive crashes or two repositories at once would have fired at 15:26 PT instead of never. The numbers are DATA on this row rather than literals in code, so an operator can retune the alarm without a pull request against the decision.",
-      "why": "DRE-3433, from the hole DRE-3416 left. On 2026-09-08 15:19–16:27 PT every critic run in the fleet died in about thirteen seconds with 'Claude Code native binary not found'. PER-RUN DETECTION WORKED — each pull request got the neutral could-not-run receipt (medic_classify.CRITIC_NEUTRAL_MARKER) — and nothing aggregated it, so seven runs across two repositories failed identically and no surface anywhere said the reviewer was down. This act is that missing sentence, said once. A HOLD and not a recovery: re-dispatching reviews into a reviewer that cannot start is the DRE-1921 loop with a new cause. The epic asked for an 'alert' kind; the registry's kind vocabulary is closed (refusal / recovery / hold / progress) and the console mirrors it, so this is declared the thing it actually is and `means` says out loud that it is the fleet-wide alarm. ESCALATED rather than held, because unlike the other holds here this one MOVES something — it files one card into a human queue lane, which is the whole deliverable. The witness reads BOTH shapes of the medic's note, the generic infra-crash line and (after DRE-3430) reviewer_environment.evidence_note for the environment class, because a detector reading only the generic literal would be blind to exactly the crash class this epic is named after. It discharges nothing: a hold starts an obligation, it does not end one, and what ends this one is the first successful verdict the sweep can see in a repository the card counted, posted after that repository's last counted crash (DRE-6576).",
+      "why": "DRE-3433, from the hole DRE-3416 left. On 2026-09-08 15:19–16:27 PT every critic run in the fleet died in about thirteen seconds with 'Claude Code native binary not found'. PER-RUN DETECTION WORKED — each pull request got the neutral could-not-run receipt (medic_classify.CRITIC_NEUTRAL_MARKER) — and nothing aggregated it, so seven runs across two repositories failed identically and no surface anywhere said the reviewer was down. This act is that missing sentence, said once. A HOLD and not a recovery: re-dispatching reviews into a reviewer that cannot start is the DRE-1921 loop with a new cause. The epic asked for an 'alert' kind; the registry's kind vocabulary is closed (refusal / recovery / hold / progress) and the console mirrors it, so this is declared the thing it actually is and `means` says out loud that it is the fleet-wide alarm. ESCALATED rather than held, because unlike the other holds here this one MOVES something — it hands the outage to a person, which is the whole deliverable: as one card filed into a human queue lane until DRE-7455, and as one CRITICAL console alert since, raised through scripts/pipeline_notice.py with that card as its fallback when the console cannot take it. The witness reads BOTH shapes of the medic's note, the generic infra-crash line and (after DRE-3430) reviewer_environment.evidence_note for the environment class, because a detector reading only the generic literal would be blind to exactly the crash class this epic is named after. It discharges nothing: a hold starts an obligation, it does not end one, and what ended the card was the first successful verdict the sweep could see in a repository the card counted, posted after that repository's last counted crash (DRE-6576); what resolves the alert, with the all-clear copy, is a sweep with no crash left in the window and a verdict after the newest crash it can see (reviewer_down.back_after, DRE-7455). `emits` still names outage_receipt(), the receipt's composer, though since DRE-7455 the sweep posts it on no card.",
       "emits": {
         "file": "scripts/reviewer_down.py",
         "anchor": "def outage_receipt("
@@ -2189,14 +2189,6 @@
       "why": "A REPORT about the run, not something the pipeline did on its own. It requeues nothing, parks nothing and moves no lane — the card stays in Hand-work, and the dispatcher's second-dispatch rule (DRE-5926) is the only thing that acts on a dead proof run. The three questions a trailer answers all read 'not applicable'. It is deliberately never tagged as the dispatcher's own receipt, because DRE-5922 counts those as dispatches."
     },
     {
-      "file": ".github/workflows/nightly-watch.yml",
-      "anchor": "🌙 Still true today:",
-      "step": "Raise the alarm where a human will see it",
-      "kind": "not-an-act",
-      "means": "A standing alarm — a repo's nightly full CI run on main did not run — is re-confirmed on its existing card rather than filed again.",
-      "why": "A REPORT about the world, not something the pipeline did to a piece of work. The fact it carries is that a nightly did not run in somebody else's repository: it creates no obligation, hands the work to nobody and has nothing to discharge, so the three questions a trailer answers all read 'not applicable'. An act is a refusal, a recovery, a hold or a progress act; this is a fact. Declared exactly as the retired channel-staleness alarm's row was (DRE-2552, retired by DRE-6053) — the same shape of watcher, the same mechanism, the same reason it is not an act."
-    },
-    {
       "file": ".github/workflows/groomer.yml",
       "anchor": "\"$CARD\" \"$(cat receipt.txt)\"",
       "step": "Judgement receipt — the model that answered",
@@ -2593,22 +2585,6 @@
       "kind": "not-an-act",
       "means": "The card-side half of the critic's verdict.",
       "why": "A VERDICT, not an act. It is a judgement about the WORK, where an act is something the pipeline did about the work on its own. It has its own writer, its own vocabulary and its own readers, and a second grammar on the same comment would give them two keys to disagree over. The PR-side half is declared just above it, for the same reason: the merge gate reads that one as an approval credential, and standards/untrusted-content.md forbids verdict-shaped text anywhere else."
-    },
-    {
-      "file": ".github/workflows/red-main-repair.yml",
-      "anchor": "🛑 Main is still red at this commit and the automated repair budget is spent",
-      "step": "Budget exhausted → triage card for a human",
-      "kind": "undeclared-act",
-      "means": "The automated repair budget for a red default branch is spent, and the work goes to a person.",
-      "why": "Act-shaped, and the registry has no row for it. DRE-2825 declared thirteen acts by reading reconcile.py's ten tag constants, the fix loop's three notices and the medic; this receipt was not among them. Giving it a row is a REGISTRY change — a tag, a kind, a state, a next actor, a subscriber, and the reasoning that fixes each — not an emission change, and this card converts what the registry declares. Named here so the debt is countable rather than invisible. The registry declares no act for the red-main repair loop at all; this is its terminal hold."
-    },
-    {
-      "file": ".github/workflows/red-main-repair.yml",
-      "anchor": "/tmp/repair-question.md",
-      "step": "Report",
-      "kind": "undeclared-act",
-      "means": "The repair agent paused rather than guess at a broken main build, and asks for a human call.",
-      "why": "Act-shaped, and the registry has no row for it. DRE-2825 declared thirteen acts by reading reconcile.py's ten tag constants, the fix loop's three notices and the medic; this receipt was not among them. Giving it a row is a REGISTRY change — a tag, a kind, a state, a next actor, a subscriber, and the reasoning that fixes each — not an emission change, and this card converts what the registry declares. Named here so the debt is countable rather than invisible. The registry declares no act for the red-main repair loop at all; this is its escalation."
     },
     {
       "file": ".github/workflows/verify.yml",
@@ -3009,6 +2985,13 @@
       "kind": "not-an-act",
       "means": "The surface cut a verified tag, so the open deferred-release card is closed Done under `Released as <tag>` (DRE-5235).",
       "why": "Part of the deferral card's own record, not an act: the release it names already has its own receipt, the train's decision line and record. The comment says why the notice card left Green Light, for the person it was filed for; nothing downstream reads it, and its wording is the card's acceptance criterion, pinned by tests/test_release_deferral.py."
+    },
+    {
+      "file": "scripts/pipeline_notice.py",
+      "anchor": "linear_ops.cmd_comment(existing, description)",
+      "kind": "not-an-act",
+      "means": "A notice the console's notice door could not take, added to the writer's own card already open under the same title — the comment the writer posted there before the console carried notices, with one line saying the door was not reached and why (DRE-7451).",
+      "why": "The notice itself, not a receipt of something the pipeline did: the writer's diagnosis, escalation or run list, filed where it was filed before. Nothing is refused, recovered or held by posting it, so a trailer would name a state and a next actor it does not have. It lands only while the door is down or not yet live; the alert it stands in for is the console's, and the client's one `pipeline-notice:` line is what a reader of the run keys on."
     }
   ]
 }

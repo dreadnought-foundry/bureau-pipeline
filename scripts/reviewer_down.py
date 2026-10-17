@@ -538,6 +538,26 @@ def _first_verdict_after(local, crashes, anywhere: bool = False) -> Outcome | No
     return min(candidates, key=_sort_key) if candidates else None
 
 
+def back_after(local, witness) -> Outcome | None:
+    """The earliest LOCAL verdict after every crash this sweep can see, or None.
+
+    What clears the fleet alert (DRE-7455). The all-clear tells the CEO reviews
+    are running again, so it needs a review that RAN — quiet is not proof: a
+    reviewer still broken that nobody asked to review for half an hour leaves
+    the window empty too. Every crash counts here, aged out of the window or
+    not, local or witnessed; no crash at all needs one verdict.
+
+    One verdict after the newest crash, not one per crashed repository as the
+    card's close rule read it (DRE-5291): the alert keeps no ledger of which
+    repositories it counted, and verdicts are local, so a per-repository rule
+    would leave two repositories' sweeps each waiting on a verdict only the
+    other can read. The window still holds the line DRE-5273 drew — no sweep
+    clears while a crash anywhere is inside it.
+    """
+    crashes = [o for o in list(local) + list(witness) if o.kind == COULD_NOT_RUN]
+    return _first_verdict_after(local, crashes, anywhere=True)
+
+
 def _threshold_met(window, threshold: Threshold) -> bool:
     """Either rule fires on its own, and they catch different outages.
 

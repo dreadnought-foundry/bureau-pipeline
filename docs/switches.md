@@ -56,9 +56,11 @@ is still printed: it shows as `off — no reason given`. It is never left out.
 Every line, plus the `linear-budget:` spend line, is copied into the run's step
 summary under `### Switches — spend`.
 
-The step never changes a variable. It writes to the board in only two cases,
-both after a switch's reason clears: it posts one receipt, and later it may
-file one alarm card (see [The receipt and the alarm](#the-receipt-and-the-alarm)).
+The step never changes a variable. It writes to the board in only one case,
+after a switch's reason clears: it posts one receipt. Later it may raise a
+console alert, and a switch that reads on resolves its alert; only when the
+console cannot take that alert does a card reach the board (see
+[The receipt and the alarm](#the-receipt-and-the-alarm)).
 
 ### The line grammar
 
@@ -116,13 +118,31 @@ repository posts its own receipt and none repeats. The step's line says
 
 **The alarm.** The receipt's time is when the reason cleared. If the receipt
 is at least `alarm_after_hours` old (12 in `config/switches.json`) and the
-switch is still off, the step files one card into `Planning`:
+switch is still off, the step raises a console alert at WARN, keyed
+`switch_off:<repo>:<SWITCH>` with `<repo>` the repository's slug, through the
+notice client `scripts/pipeline_notice.py` (DRE-7455). It is titled:
 
 ```
 Switch PROOF_DISPATCH_LIVE in agent-bureau is still off after its reason cleared
 ```
 
-The alarm is an operator step, so it is filed as an operator card: beside
+Every pass past the bound raises the same key again. The console keeps one
+alert per key, so a raise while it is open is a repeat: the text is refreshed
+and nothing is delivered again. A WARN alert stays on the console and is
+never emailed.
+
+The alarm names the switch, the repository, the receipt's time, the hours
+since and the cards. It then gives the operator the step, as a step and never
+a question: either turn the switch on and delete its reason, or give it a new
+reason naming the cards it now waits on — each with its one command. It ends
+with a `## Acceptance criteria` section of two items: the switch reads `true`
+and its companion is deleted, or the companion names at least one open card;
+and the card is Canceled or Done with a comment saying which.
+
+**The fallback.** When the console door cannot be reached or refuses the
+alert, the client files the card this step filed before the door existed:
+the same title and body, into `Planning`, deduplicated on the exact title.
+The alarm is an operator step, so that card is an operator card: beside
 `repo:<slug>` it carries `agent:devops` and `no-code`. `no-code` is the label
 the routing vocabulary reads as OPERATOR at precedence 1
 (`config/routing-verdicts.json`, `labels.map`), so Planning's label route moves
@@ -130,15 +150,10 @@ the card to the operator's queue on the label and never asks a model, and the
 sweep stamps `operator-step` when it carries the card to `Hand-work`. It never
 carries `needs-human`: that label is a hold, and the alarm holds nothing.
 
-The card names the switch, the repository, the receipt's time, the hours since
-and the cards. It then gives the operator the step, as a step and never a
-question: either turn the switch on and delete its reason, or give it a new
-reason naming the cards it now waits on — each with its one command — and in
-both cases close the card. It ends with a `## Acceptance criteria` section of
-two items: the switch reads `true` and its companion is deleted, or the
-companion names at least one open card; and the card is Canceled or Done with a
-comment saying which. Before filing, the step looks for an open card with
-exactly that title and files nothing if it finds one.
+**The resolve.** A switch that reads on resolves its `switch_off:<repo>:<SWITCH>`
+alert on every pass, with no all-clear copy — the console answers `not-open`
+when the switch never alarmed. A fallback card filed while the door was down
+is still closed by a person.
 
 The receipt is written first, and the alarm is timed only from the receipt. A
 pass that stops between the two loses nothing: the next pass finds the receipt
@@ -146,10 +161,11 @@ and times the alarm from it.
 
 The step reads no thread when the switch is on, when any named card is not yet
 terminal or is `unread`, or when `REPO` names no repository. If a read, a post
-or a filing fails, the step prints why and the pass still exits 0.
+or a raise fails, the step prints why and the pass still exits 0.
 
 Outside GitHub Actions, or with `--dry-run`, the step writes nothing. It prints
-`would: post <card> — <receipt line>` or `would: alarm — <title>` instead.
+`would: post <card> — <receipt line>`, `would: alarm — <title>` or
+`would: resolve <key>` instead.
 
 The receipt is the `switch-reason-cleared` act in `config/pipeline-acts.json`
 (`docs/pipeline-acts.md`).

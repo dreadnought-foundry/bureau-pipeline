@@ -161,14 +161,18 @@ class TestMedicDuplicateSuppression:
         assert linear_ops.CREATE_LANE in cwp.live_lanes()
         assert linear_ops.CREATE_LANE not in ("Done", "Canceled", "Duplicate")
 
-    def test_the_search_runs_before_any_card_is_created(self):
+    def test_the_search_runs_before_the_diagnosis_is_delivered(self):
+        # DRE-7453: the medic files no card of its own any more. A diagnosis
+        # with no card to go to is raised as a console alert, whose repeat
+        # the console suppresses; the repair-card search still runs first.
         import medic_retry
 
         assert "find_open(" in Path(medic_retry.__file__).read_text(encoding="utf-8")
         text = self._medic_text()
+        assert "linear_ops.py create" not in text
         assert "medic_retry.py diagnosis-target" in text
         assert text.index("medic_retry.py diagnosis-target") < text.index(
-            "linear_ops.py create"
+            "pipeline_notice.py raise"
         )
 
     def test_the_prompt_no_longer_sends_the_agent_searching(self):
