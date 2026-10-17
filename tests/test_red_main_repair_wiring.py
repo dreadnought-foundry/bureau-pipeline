@@ -8,8 +8,8 @@ four guardrail mechanisms exactly as pinned there:
     branch — and NO schedule trigger anywhere in the stage or its stub (the
     reconcile sweep stays the only scheduled job in the system);
   * guardrail 2 (no crash-loop): the decide step runs red_main_repair.py
-    BEFORE any agent, and the budget-exhausted path raises a deduplicated
-    Linear triage card instead of a third attempt;
+    BEFORE any agent, and the budget-exhausted path raises a CRITICAL console
+    alert (DRE-7454) instead of a third attempt;
   * guardrail 3 (concurrency lock): job-level Actions concurrency group
     red-main-repair-<repo> with cancel-in-progress: false;
   * guardrail 4 (quota isolation): the worker token is minted through the
@@ -17,7 +17,8 @@ four guardrail mechanisms exactly as pinned there:
   * fix flow: the agent authors a normal PR as the worker identity (the
     qa-bot merges it — author != merger), forward-fix only, with the
     stale-test-vs-broken-code claim required in the PR body; the
-    can't-confidently-fix path escalates to Triage.
+    can't-confidently-fix path raises a console alert whose fallback card
+    lands in Triage.
 
 The self-host stub (self-red-main-repair.yml) puts THIS repo's own main on
 the repair rail, and the medic watches the stage (a repair run's failure is
@@ -83,9 +84,13 @@ class ConcurrencyLockTest(unittest.TestCase):
     """Guardrail 3: one repair in flight per repo, duplicates queue behind."""
 
     def test_job_level_concurrency_group(self):
+        # One REPAIR job, so the lock covers the whole repair. The only other
+        # job is the all-clear (DRE-7454), which runs on the opposite
+        # conclusion and repairs nothing.
         jobs = doc(REUSABLE).get("jobs") or {}
-        self.assertEqual(len(jobs), 1, "one job — the lock covers the whole run")
-        job = next(iter(jobs.values()))
+        self.assertEqual(sorted(jobs), ["clear-notices", "repair"])
+        self.assertIn("conclusion == 'success'", jobs["clear-notices"]["if"])
+        job = jobs["repair"]
         conc = job.get("concurrency") or {}
         self.assertIn("red-main-repair-", str(conc.get("group")))
         self.assertIs(conc.get("cancel-in-progress"), False)
@@ -119,11 +124,14 @@ class DecideBeforeDispatchTest(unittest.TestCase):
     def test_agent_is_gated_on_the_decision(self):
         self.assertIn("steps.decide.outputs.go == 'true'", src(REUSABLE))
 
-    def test_budget_exhaustion_raises_a_deduplicated_triage_card(self):
+    def test_budget_exhaustion_raises_a_console_alert(self):
+        # DRE-7454: one row per key on the console is the duplicate
+        # suppression now, so the step no longer searches Linear itself.
         body = src(REUSABLE)
         self.assertIn("steps.decide.outputs.escalate == 'true'", body)
-        self.assertIn("linear_ops.py", body)
-        self.assertIn("find-open", body)
+        self.assertIn("pipeline_notice.py raise", body)
+        self.assertIn('--notice "red_main:$REPO_SLUG:budget_exhausted"', body)
+        self.assertNotIn("find-open", body)
 
     def test_uncertain_agent_parks_in_triage(self):
         body = src(REUSABLE)
@@ -216,9 +224,9 @@ class RepeatedTimeoutHistoryTest(unittest.TestCase):
 
     def test_the_budget_exhausted_card_names_the_step_and_the_clock(self):
         # The human who picks this up is told which step and which clock, not
-        # just "main is red" — that card is the whole handover.
+        # just "main is red" — that alert is the whole handover.
         steps = self._steps()
-        card = steps[self._index(steps, "linear_ops.py")]
+        card = steps[self._index(steps, "budget_exhausted")]
         env = card.get("env") or {}
         self.assertEqual(env.get("TIMEOUT_STEP"),
                          "${{ steps.decide.outputs.timeout_step }}")

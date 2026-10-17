@@ -160,13 +160,16 @@ class EveryCallSitePassesTheRepoThatFailed(unittest.TestCase):
 
     def test_the_call_sites_are_found(self):
         # Guards the guard: if the match stops firing, everything below passes
-        # over an empty list and proves nothing. Two are live: red-main-repair
-        # x2. The retired Model drift job's two left with DRE-3899, the
-        # channel-staleness alarm's one with DRE-6053, the medic's with
-        # DRE-7453, and model-adoption's and nightly-watch's with DRE-7456 —
-        # each raises a console alert now, its old card the notice client's
-        # fallback.
-        self.assertGreaterEqual(len(_create_call_sites()), 2)
+        # over an empty list and proves nothing. None is live now: the retired
+        # Model drift job's two left with DRE-3899, the channel-staleness
+        # alarm's one with DRE-6053, the medic's with DRE-7453, model-adoption's
+        # and nightly-watch's with DRE-7456, and red-main-repair's two with
+        # DRE-7454 — each raises a console alert, its old card the notice
+        # client's fallback (pipeline_notice.py takes the slug from
+        # `--fallback-label "repo:$REPO_SLUG"`). So the guard checks the
+        # matcher against a sample line instead of counting live sites.
+        self.assertIsNotNone(_CREATE_CALL_RE.search(
+            'python3 scripts/linear_ops.py create --repo "$REPO_SLUG"'))
 
     def test_every_call_site_passes_a_repo(self):
         for name, line, _ in _create_call_sites():

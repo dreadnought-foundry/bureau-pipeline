@@ -2587,22 +2587,6 @@
       "why": "A VERDICT, not an act. It is a judgement about the WORK, where an act is something the pipeline did about the work on its own. It has its own writer, its own vocabulary and its own readers, and a second grammar on the same comment would give them two keys to disagree over. The PR-side half is declared just above it, for the same reason: the merge gate reads that one as an approval credential, and standards/untrusted-content.md forbids verdict-shaped text anywhere else."
     },
     {
-      "file": ".github/workflows/red-main-repair.yml",
-      "anchor": "🛑 Main is still red at this commit and the automated repair budget is spent",
-      "step": "Budget exhausted → triage card for a human",
-      "kind": "undeclared-act",
-      "means": "The automated repair budget for a red default branch is spent, and the work goes to a person.",
-      "why": "Act-shaped, and the registry has no row for it. DRE-2825 declared thirteen acts by reading reconcile.py's ten tag constants, the fix loop's three notices and the medic; this receipt was not among them. Giving it a row is a REGISTRY change — a tag, a kind, a state, a next actor, a subscriber, and the reasoning that fixes each — not an emission change, and this card converts what the registry declares. Named here so the debt is countable rather than invisible. The registry declares no act for the red-main repair loop at all; this is its terminal hold."
-    },
-    {
-      "file": ".github/workflows/red-main-repair.yml",
-      "anchor": "/tmp/repair-question.md",
-      "step": "Report",
-      "kind": "undeclared-act",
-      "means": "The repair agent paused rather than guess at a broken main build, and asks for a human call.",
-      "why": "Act-shaped, and the registry has no row for it. DRE-2825 declared thirteen acts by reading reconcile.py's ten tag constants, the fix loop's three notices and the medic; this receipt was not among them. Giving it a row is a REGISTRY change — a tag, a kind, a state, a next actor, a subscriber, and the reasoning that fixes each — not an emission change, and this card converts what the registry declares. Named here so the debt is countable rather than invisible. The registry declares no act for the red-main repair loop at all; this is its escalation."
-    },
-    {
       "file": ".github/workflows/verify.yml",
       "anchor": "comment \"$CARD\" \"$(cat /tmp/verify-comment.md)\"",
       "step": "Post verdict or neutral status",
