@@ -84,9 +84,13 @@ class ConcurrencyLockTest(unittest.TestCase):
     """Guardrail 3: one repair in flight per repo, duplicates queue behind."""
 
     def test_job_level_concurrency_group(self):
+        # One REPAIR job, so the lock covers the whole repair. The only other
+        # job is the all-clear (DRE-7454), which runs on the opposite
+        # conclusion and repairs nothing.
         jobs = doc(REUSABLE).get("jobs") or {}
-        self.assertEqual(len(jobs), 1, "one job — the lock covers the whole run")
-        job = next(iter(jobs.values()))
+        self.assertEqual(sorted(jobs), ["clear-notices", "repair"])
+        self.assertIn("conclusion == 'success'", jobs["clear-notices"]["if"])
+        job = jobs["repair"]
         conc = job.get("concurrency") or {}
         self.assertIn("red-main-repair-", str(conc.get("group")))
         self.assertIs(conc.get("cancel-in-progress"), False)
