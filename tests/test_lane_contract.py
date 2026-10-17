@@ -333,6 +333,14 @@ class TestTheQueueLanes:
         doc = self.fixture(to="Queued")
         assert lane_contract.queue_lane(doc) in lane_contract.queue_lanes(doc)
 
+    def test_todo_stays_live_while_it_names_what_replaces_it(self):
+        # DRE-7105: a forward declaration, the shape Backlog's entry carried
+        # before it retired. The retirement card sets the status later.
+        todo = lane_contract.lane("Todo")
+        assert todo["status"] == "live"
+        assert todo["replaced_by"] == lane_contract.DISPATCH_LANE
+        assert "Todo" in lane_contract.START_LANES
+
     def test_the_offline_check_passes(self):
         report = lane_contract.check(vocabulary=lane_contract.pipeline_vocabulary())
         board_rules = {
