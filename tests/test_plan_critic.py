@@ -3783,7 +3783,7 @@ class TheSecondCriticReadsBeforeGreenLight(unittest.TestCase):
         caller that reads IN_FLIGHT_EPIC_STATES — `epics-in-flight` today —
         gets a block naming those three lanes and no Planning paragraph."""
         block = pc.sight_block(self.EPIC, self.SIGHT_EPICS[:1])
-        self.assertIn("That list is every epic in Green Light, Todo, In Progress "
+        self.assertIn("That list is every epic in Green Light, In Progress, Todo "
                       "on the DRE board at the moment this run started.", block)
         self.assertNotIn("Planning", block)
         self.assertNotIn("a plan under review", block)
@@ -4658,31 +4658,15 @@ STOPPED_NAMING_TODO = (
 
 class TheseScriptsNoLongerNameTodo(unittest.TestCase):
     """DRE-7113. Every string constant in the eleven files — docstrings
-    included — is read off the AST; a `#` comment is not a constant, so one
-    recording an incident keeps its wording."""
+    included — read as `lane_contract` reads the pipeline's vocabulary, the
+    same walk DRE-6747 runs for `Backlog` (`tests/test_planner_queue.py`). A
+    `#` comment is not a constant, so one recording an incident keeps its
+    wording."""
 
     def test_no_string_constant_names_the_lane(self):
-        import ast
-        import re
+        import lane_contract
 
-        word = re.compile(r"\bTodo\b")
-        hits = []
-        for name in STOPPED_NAMING_TODO:
-            path = os.path.join(SCRIPTS, f"{name}.py")
-            with open(path, encoding="utf-8") as f:
-                tree = ast.parse(f.read(), filename=path)
-            hits += [
-                f"scripts/{name}.py:{node.lineno}"
-                for node in ast.walk(tree)
-                if isinstance(node, ast.Constant) and isinstance(node.value, str)
-                and word.search(node.value)
-            ]
-        self.assertEqual([], hits)
-
-    def test_the_walk_would_see_a_docstring_that_names_it(self):
-        import ast
-
-        tree = ast.parse('"""A card entering Todo is dispatched."""\n')
-        self.assertTrue(any(
-            isinstance(node, ast.Constant) and "Todo" in node.value
-            for node in ast.walk(tree)))
+        for script in STOPPED_NAMING_TODO:
+            with self.subTest(script=script):
+                path = os.path.join(SCRIPTS, f"{script}.py")
+                self.assertEqual(lane_contract._scan_python(path, ["Todo"]), set())
