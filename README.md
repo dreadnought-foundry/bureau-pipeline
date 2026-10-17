@@ -335,7 +335,9 @@ The one stub whose absence costs a finished build. When a run outlives its
 credential and the Push rescue step's own two fresh mints are BOTH refused, the
 work is uploaded as `rescue-<CARD>.patch` and the run's last step dispatches a
 follow-up that replays it with a credential of its own. The dispatch names a
-workflow file **in the product repo**, so that repo needs one:
+workflow file **in the product repo**, so that repo needs one. The file to
+install is agent-bureau's `scaffold/customer-repo/.github/workflows/deliver-rescue.yml`;
+the sample below shows it:
 
 ```yaml
 # .github/workflows/deliver-rescue.yml in the product repo
@@ -352,14 +354,17 @@ permissions:
   actions: read
 jobs:
   call:
-    uses: dreadnought-foundry/bureau-pipeline/.github/workflows/deliver-rescue.yml@main
+    uses: dreadnought-foundry/bureau-pipeline/.github/workflows/deliver-rescue.yml@stable
     with:
       run_id: ${{ inputs.run_id }}
       card: ${{ inputs.card }}
       artifact: ${{ inputs.artifact }}
       card_url: ${{ inputs.card_url }}
-      pipeline_ref: main
-    secrets: inherit
+      pipeline_ref: stable
+    secrets:
+      LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+      BUREAU_APP_ID: ${{ secrets.BUREAU_APP_ID }}
+      BUREAU_APP_PRIVATE_KEY: ${{ secrets.BUREAU_APP_PRIVATE_KEY }}
 ```
 
 **Two permissions carry this, and both live in a stub — neither is fixable
@@ -385,12 +390,25 @@ this is the one workflow whose failure leaves somebody's only copy of finished
 work undelivered, and it is safe to retry (it refuses to act when its branch
 already has a pull request).
 
-A repo without it **degrades, it does not break**: the dispatch 404s, the run
-says so on the card beside the `🚨 rescue-push-failed` line naming the artifact
-and the run id, and the reconcile sweep tries the dispatch once more before
-falling back to the requeue this card replaced. So the fleet loses the automatic
-delivery until its stub is updated — a human can still recover the work in two
-minutes from the card — and loses nothing else.
+A repo without it **degrades, it does not break**: the dispatch is refused, the
+run says so on the card beside the `🚨 rescue-push-failed` line naming the
+artifact and the run id, and the reconcile sweep tries the dispatch once more
+before falling back to the requeue this card replaced. So the fleet loses the
+automatic delivery until its stub is updated — a human can still recover the
+work in two minutes from the card — and loses nothing else.
+
+GitHub's answer to that dispatch depends on the token as much as on the file.
+Under a token with no Actions permission (the App token, or a job token whose
+calling stub does not grant `actions`) it is a 403 whether the stub is there or
+not; under one holding `actions: write` a missing stub is a 404. So the card now
+names the cause (DRE-7476): after any refused dispatch the run reads the
+workflow file through the contents API, with the token the dispatch itself was
+handed, and adds one `cause:` paragraph — `missing` (a 404: install the stub,
+and check the calling stub grants `actions: write`), `refused` (a 200: the stub
+is there, so the calling `agent-task.yml` or `agent-fix.yml` stub must grant
+`actions: write` and `GH_DISPATCH_TOKEN` must reach the step) or `unknown` (any
+other answer, which claims neither). That read needs `contents` on the job's
+token, which the `agent-task.yml` and `agent-fix.yml` templates above grant.
 
 What the product repo still carries:
 
