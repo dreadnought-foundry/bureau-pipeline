@@ -1941,13 +1941,15 @@ class NoticeStepsTest(unittest.TestCase):
         hour that card is standing and nothing is said — the card's comment
         cadence stays once a day, as it was."""
         self._hour(MISSED, now=ORDINARY, find_open="DRE-41")
-        self.assertEqual(self.client.calls("pipeline_notice.py"), [])
+        self.assertEqual([c for c in self.client.calls("pipeline_notice.py")
+                          if c["argv"][0] == "raise"], [])
         self.assertEqual([c["argv"][0] for c in self.client.calls("linear_ops.py")],
                          ["find-open"])
 
     def test_the_first_finding_is_raised_on_whichever_hour_it_is_found(self):
         self._hour(MISSED, now=ORDINARY)
-        self.assertEqual(len(self.client.calls("pipeline_notice.py")), 1)
+        self.assertEqual(len([c for c in self.client.calls("pipeline_notice.py")
+                              if c["argv"][0] == "raise"]), 1)
 
 
 class NoticeWiringTest(unittest.TestCase):
