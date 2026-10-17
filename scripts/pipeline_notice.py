@@ -141,6 +141,11 @@ class Fallback:
     lane: str = DEFAULT_LANE
     labels: tuple = ()
     repo: str | None = None
+    #: The stable start of a title that carries counts (the fleet outage's
+    #: `Reviewer down since …`): when set, the open card is found by this
+    #: prefix rather than the exact title, so a title whose numbers moved
+    #: between raises comments on the card it filed instead of filing another.
+    dedupe_prefix: str | None = None
 
 
 def destinations() -> tuple:
@@ -373,10 +378,15 @@ def _file_card_quietly(fallback: Fallback, description: str) -> tuple[str | None
     """(the card the notice went to, None), or (None, the word for why not)."""
     import linear_ops  # noqa: PLC0415 — Linear only on the path that needs it
 
+    searched = fallback.dedupe_prefix or fallback.title
     try:
-        existing = linear_ops.find_open(fallback.title)
+        if fallback.dedupe_prefix:
+            found = linear_ops.find_open_prefix(fallback.dedupe_prefix)
+            existing = found["identifier"] if found else None
+        else:
+            existing = linear_ops.find_open(fallback.title)
     except Exception as e:  # noqa: BLE001 — an unanswered search files nothing
-        _say(f"notice-door: the duplicate search for {fallback.title!r} failed "
+        _say(f"notice-door: the duplicate search for {searched!r} failed "
              f"({e}); filing nothing")
         return None, "search-failed"
     try:
