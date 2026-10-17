@@ -191,7 +191,8 @@ class NoCardRaisesTheNoticeTest(unittest.TestCase):
     def test_a_raise_that_fails_warns_and_never_reds_the_job(self):
         proc, calls, _ = _deliver("notice", raise_rc=1)
         self.assertEqual(0, proc.returncode, proc.stdout + proc.stderr)
-        self.assertIn("::warning", proc.stdout)
+        self.assertIn("::warning title=Diagnosis not raised::", proc.stdout)
+        self.assertIn("the diagnosis, in plain English", proc.stdout)
 
     def test_a_target_step_with_no_title_still_hands_today_s_title(self):
         proc, calls, _ = _deliver("", workflow="Reconcile", title="")
