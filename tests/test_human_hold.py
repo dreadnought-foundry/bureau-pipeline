@@ -37,6 +37,8 @@ os.environ.setdefault("REPO_SLUG", "agent-bureau")
 
 import linear_ops  # noqa: E402
 import reconcile  # noqa: E402
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import build_started  # noqa: E402 — a card whose build started (DRE-7108)
 import routing_verdict  # noqa: E402
 
 
@@ -189,14 +191,23 @@ def _full_sweep_mocks(extra=None):
     return m
 
 
+@pytest.fixture(autouse=True)
+def _entered_its_lane():
+    """The lane-history read `build_started` makes of a card with a receipt."""
+    with build_started.entered():
+        yield
+
+
 def _inprogress_card(labels=None):
-    return {
+    """A build that started and died (DRE-7108): the start receipt is what
+    puts the card on the dead-run path rather than the not-started re-fire."""
+    return build_started.started({
         "identifier": "DRE-1331",
         "description": "**Repo:** agent-bureau\nwork",
         "state": {"name": "In Progress"},
         "labels": {"nodes": labels or []},
         "updatedAt": "2026-06-12T00:00:00Z",
-    }
+    })
 
 
 def test_in_progress_holds_after_cap():
@@ -219,7 +230,7 @@ def test_in_progress_holds_after_cap():
 
 
 def test_in_progress_requeues_below_cap():
-    """Below the cap, the dead run still requeues to Todo (existing behaviour)."""
+    """Below the cap, the dead run still requeues — to the queue since DRE-7108."""
     reconcile._write_failures.clear()
     mocks = _full_sweep_mocks({"active_cards": MagicMock(return_value=[_inprogress_card()])})
     with patch.multiple(reconcile, **mocks), patch.object(
@@ -228,7 +239,7 @@ def test_in_progress_requeues_below_cap():
         reconcile.linear_ops, "cmd_state"
     ) as cmd_state, patch.object(reconcile.linear_ops, "cmd_comment"):
         reconcile.main()
-    cmd_state.assert_called_once_with("DRE-1331", "Todo")
+    cmd_state.assert_called_once_with("DRE-1331", reconcile.QUEUE_LANE, "--park")
     add_label.assert_not_called()
 
 

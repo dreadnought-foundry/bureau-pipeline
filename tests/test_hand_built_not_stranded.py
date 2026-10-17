@@ -62,6 +62,8 @@ os.environ.setdefault("REPO_SLUG", "portico")
 os.environ.setdefault("GH_TOKEN", "x")
 
 import reconcile  # noqa: E402
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import build_started  # noqa: E402 — a card whose build started (DRE-7108)
 import validate_card  # noqa: E402
 
 _SOURCE = (ROOT / "scripts" / "reconcile.py").read_text()
@@ -517,7 +519,7 @@ def _run_sweep(cards, extra=None):
         reconcile.linear_ops, "cmd_advance"
     ) as cmd_advance, mock.patch.object(
         reconcile.linear_ops, "count_comments", return_value=0
-    ):
+    ), build_started.entered():
         reconcile.main()
     reconcile._write_failures.clear()
     return SimpleNamespace(
@@ -571,8 +573,9 @@ def test_hand_built_card_in_progress_is_not_parked_after_the_requeue_cap():
 
 def test_without_the_label_a_dead_in_progress_card_is_still_requeued():
     """Control: the dead-run requeue (DRE-1403/DRE-2032) is untouched."""
-    s = _run_sweep([_card(state="In Progress", labels=("repo:portico",))])
-    s.cmd_state.assert_called_once_with("DRE-2499", "Todo")
+    s = _run_sweep([build_started.started(_card(state="In Progress", labels=("repo:portico",)))])
+    # To the queue since DRE-7108, deliberately: `promote_ready` brings it back.
+    s.cmd_state.assert_called_once_with("DRE-2499", reconcile.QUEUE_LANE, "--park")
 
 
 # The guard is scoped to the NO-PR branches on purpose: once a hand-built card

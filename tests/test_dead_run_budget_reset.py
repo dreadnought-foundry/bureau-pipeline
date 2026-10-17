@@ -54,6 +54,8 @@ os.environ.setdefault("GH_TOKEN", "x")
 import dead_run  # noqa: E402
 import linear_ops  # noqa: E402
 import reconcile  # noqa: E402
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import build_started  # noqa: E402 — a card whose build started (DRE-7108)
 import step_shell  # noqa: E402
 
 
@@ -348,8 +350,10 @@ def _card(state):
 def test_reconcile_counts_deaths_since_the_reset(state, extra):
     """BOTH sweep death-count sites must be reset-aware, or an un-parked card
     still re-holds on its first death through the reconcile path."""
-    mocks = _sweep_mocks(_card(state), extra)
-    with patch.multiple(reconcile, **mocks), patch.object(
+    # A started build (DRE-7108): a card that never started is re-fired, and
+    # counts no death.
+    mocks = _sweep_mocks(build_started.started(_card(state)), extra)
+    with build_started.entered(), patch.multiple(reconcile, **mocks), patch.object(
         reconcile.linear_ops, "count_comments", return_value=0
     ) as count_comments, patch.object(
         reconcile.linear_ops, "add_label"
