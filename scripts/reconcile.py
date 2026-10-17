@@ -12925,12 +12925,15 @@ def report_fleet_reviewer_outage() -> None:
 
     What it does with them (DRE-7455):
 
-      * NO could-not-run inside the window from either source: the outage
-        does not hold, so `reviewer_outage:fleet` is resolved with the
-        all-clear copy, timed at this sweep in PT. The door answers
-        `not-open` when nothing was raised and delivers nothing, so a quiet
-        sweep — the common case, every fifteen minutes, in every repo — costs
-        one POST and no Linear request.
+      * NO could-not-run inside the window from either source, AND a local
+        verdict after the newest crash this sweep can see
+        (`reviewer_down.back_after`): the outage does not hold, so
+        `reviewer_outage:fleet` is resolved with the all-clear copy, timed at
+        this sweep in PT. The door answers `not-open` when nothing was raised
+        and delivers nothing, so a quiet sweep — the common case, every
+        fifteen minutes, in every repo — costs one POST and no Linear request.
+        No verdict since the last crash is not proof the reviewer is back,
+        only that nobody asked it, so nothing is resolved then.
       * The threshold met: the alert is raised at CRITICAL with the title and
         body `reviewer_down` composes, the first crashed run's evidence and
         the run list included. A long run list is cut to fit by the client,
@@ -12974,9 +12977,18 @@ def report_fleet_reviewer_outage() -> None:
         if o.kind == reviewer_down.COULD_NOT_RUN
     ]
     if not fresh:
+        back = reviewer_down.back_after(local, witness)
+        if back is None:
+            print(
+                "reviewer-outage: nothing to report — 0 could-not-run in "
+                f"the last {threshold.window_s // 60} min, and no verdict after "
+                "the last crash, so nothing is cleared"
+            )
+            return
         print(
             "reviewer-outage: nothing to report — 0 could-not-run in "
-            f"the last {threshold.window_s // 60} min"
+            f"the last {threshold.window_s // 60} min, and a verdict at "
+            f"{reviewer_down.pt(back.at)} after the last crash ({back.src})"
         )
         pipeline_notice.resolve_notice(
             "reviewer_outage:fleet",
@@ -13028,9 +13040,12 @@ def report_fleet_reviewer_outage() -> None:
     outcome = pipeline_notice.raise_notice(
         "reviewer_outage:fleet", severity="CRITICAL",
         title=decision.title, body=decision.body,
+        # The title carries its counts, which move from sweep to sweep, so the
+        # client finds the open card by the part that does not.
         fallback=NoticeFallback(
             title=decision.title, lane=FLEET_OUTAGE_LANE,
-            labels=(f"repo:{REPO_SLUG}", linear_ops.NO_CODE_LABEL)),
+            labels=(f"repo:{REPO_SLUG}", linear_ops.NO_CODE_LABEL),
+            dedupe_prefix=reviewer_down.TITLE_PREFIX),
     )
     if outcome == "lost":
         _fleet_outage_failed("raise", RuntimeError(
