@@ -23,6 +23,7 @@ No test here reaches the console, GitHub or Linear: the issuer is
 from __future__ import annotations
 
 import base64
+import dataclasses
 import json
 import sys
 import threading
@@ -141,11 +142,13 @@ class FakeBoard:
         self.create_fails = create_fails
         self.comment_capped = comment_capped
         self.searches: list[str] = []
+        self.prefix_searches: list[str] = []
         self.created: list[dict] = []
         self.comments: list[tuple[str, str]] = []
 
     def install(self, monkeypatch):
         monkeypatch.setattr(linear_ops, "find_open", self.find_open)
+        monkeypatch.setattr(linear_ops, "find_open_prefix", self.find_open_prefix)
         monkeypatch.setattr(linear_ops, "create_card", self.create_card)
         monkeypatch.setattr(linear_ops, "cmd_comment", self.cmd_comment)
         monkeypatch.setattr(linear_ops, "gql", self.gql)
@@ -156,6 +159,15 @@ class FakeBoard:
         if self.search_fails:
             raise linear_ops.LinearError("search answered 500")
         return self.open_card
+
+    def find_open_prefix(self, prefix):
+        self.prefix_searches.append(prefix)
+        if self.search_fails:
+            raise linear_ops.LinearError("search answered 500")
+        if self.open_card:
+            return {"identifier": self.open_card, "duplicates": []}
+        card = next((c for c in self.created if c["title"].startswith(prefix)), None)
+        return {"identifier": "DRE-9001", "duplicates": []} if card else None
 
     def create_card(self, title, description, *, repo_slug, labels=(), lane="Planning"):
         if self.create_fails:
@@ -368,6 +380,36 @@ def test_a_fallback_title_already_open_is_commented_on(monkeypatch, capsys, issu
     assert _lines(capsys.readouterr().out) == [
         "pipeline-notice: fallback-card http-503 kind=pipeline_notice:"
         "medic:atlas:agent-task.yml card=DRE-77"]
+
+
+def test_a_fallback_with_a_dedupe_prefix_files_one_card_as_its_title_moves(
+        monkeypatch, capsys, issuer):
+    """A title that carries counts changes between raises. With `dedupe_prefix`
+    the client finds the open card by the part that does not move, and the
+    second raise comments on the first card instead of filing a second."""
+    board = FakeBoard().install(monkeypatch)
+    first = pipeline_notice.Fallback(
+        title="Reviewer down since 15:19 PT — 3 runs, 1 repos", lane="Triage",
+        labels=("repo:atlas", "no-code"), dedupe_prefix="Reviewer down since ")
+    second = dataclasses.replace(
+        first, title="Reviewer down since 15:19 PT — 5 runs, 2 repos")
+    with FakeNoticeDoor(status=503) as door:
+        _point(monkeypatch, door, issuer)
+        assert _raise(fallback=first) == "fallback-card"
+        assert _raise(fallback=second) == "fallback-card"
+    assert [c["title"] for c in board.created] == [first.title]
+    assert [ident for ident, _ in board.comments] == ["DRE-9001"]
+    assert board.prefix_searches == ["Reviewer down since "] * 2
+    assert board.searches == []
+
+
+def test_a_failed_prefix_search_files_nothing_and_is_lost(monkeypatch, capsys, issuer):
+    board = FakeBoard(search_fails=True).install(monkeypatch)
+    fallback = dataclasses.replace(FALLBACK, dedupe_prefix="Pipeline failure: ")
+    with FakeNoticeDoor(status=503) as door:
+        _point(monkeypatch, door, issuer)
+        assert _raise(fallback=fallback) == "lost"
+    assert board.created == [] and board.comments == []
 
 
 def test_a_failed_duplicate_search_files_nothing_and_is_lost(monkeypatch, capsys, issuer):

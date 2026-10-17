@@ -182,7 +182,8 @@ thirteen seconds with `Claude Code native binary not found` (DRE-3416).
 **Per-run detection worked** — each pull request got the neutral could-not-run
 receipt — and nothing aggregated it, so seven runs across two repositories
 failed identically and no surface anywhere said the reviewer was down. This act
-is that missing sentence, said once, as one card in a human queue lane.
+is that missing sentence, said once — as one card in a human queue lane until
+DRE-7455, and as one console alert since.
 
 Two things about the row are worth reading before the next one is written.
 
@@ -194,8 +195,9 @@ to a person. That it is the fleet-wide alarm is said in `means` and `why`,
 which is where a reader looks for it.
 
 **`state` is `escalated`, which no other hold here declares.** Every other hold
-leaves the work where it was and lives entirely in its receipt; this one FILES
-A CARD into a human queue lane, and that card is the whole deliverable.
+leaves the work where it was and lives entirely in its receipt; this one handed
+the outage to a person — as a card in a human queue lane until DRE-7455, and as
+a CRITICAL console alert since — and that hand-off is the whole deliverable.
 
 **The threshold is DATA on the row** — `window_s`, `consecutive` and `repos`,
 plus a `threshold_why` saying where each came from — read through
@@ -203,29 +205,36 @@ plus a `threshold_why` saying where each came from — read through
 and putting the numbers here is what lets an operator retune the alarm by
 editing a file they can read instead of a comparison buried in a decision.
 
-**Who posts it (DRE-3435).** The row's `emits` anchor points at the decision
-module, because that is where the body is composed; the WRITER is the reconcile
-sweep's `report_fleet_reviewer_outage()` backstop, on full sweeps only, sitting
-immediately after `recover_crashed_reviews` because the two read the same open
-pull requests — that one re-dispatching per head, this one counting across the
-fleet. It files ONE card, CREATED in `Triage` and marked `no-code` with no
-`agent:*` role, so it never passes through `Planning` and no planner or build
-run is dispatched at it (DRE-5292). Its first crashed run is the head's own
-failed review workflow run, or "no run found" when none can be read — never a
-check run's `details_url`. It appends one comment per newly counted
-run and rewrites the title's counts, and closes the card on the first
-successful verdict it can see in a repository the card counted, posted after
-that repository's last counted crash — whenever that verdict was posted
-(DRE-6576). It finds its open card in the board read it already makes, which
-carries `Triage`, so it reads the card on every sweep for as long as the card
-is open, however long ago the crashes were. Under `BUREAU_READ=on` that lookup
-is one Linear request per sweep. A repository whose newest crash already has a
-later verdict there does not count toward the two-repository rule, so the
-alarm stays quiet when the reviewer is back before it files. Every comment it
-posts composes through this act, so the console's alert per open card is
-unchanged by the trailer. `FLEET_OUTAGE_SWEEP_CAP=0` is the off switch: it stops the sweep
-FILING fleet-wide, and deliberately leaves appends and closes running, so an
-outage card that is already open is never orphaned by the switch.
+**Who posts it (DRE-3435) — nobody, since DRE-7455.** The row's `emits`
+anchor points at the decision module, because that is where the receipt body
+is composed. Its writer was the reconcile sweep's
+`report_fleet_reviewer_outage()` backstop, which filed one `Triage` card,
+appended to it, retitled it and closed it, receipting each write through this
+act. DRE-7455 made the outage a console alert instead, and the receipt is no
+longer posted anywhere — `check_act_receipts.pending_acts()` now reads this
+act as one nothing posts, which lifts by itself if a poster spells it again.
+
+The backstop still runs on full sweeps only, immediately after
+`recover_crashed_reviews`, because the two read the same open pull requests —
+that one re-dispatching per head, this one counting across the fleet. When the
+threshold is met it raises the alert `reviewer_outage:fleet` at CRITICAL
+through `scripts/pipeline_notice.py`, with the title and body
+`reviewer_down.py` composes: the first crashed run (the head's own failed
+review workflow run, or "no run found" when none can be read — never a check
+run's `details_url`), the three suspects and the run list. Every sweep that
+finds the outage raises the key again; the console keeps one alert per key,
+so that is a repeat and nothing is delivered twice. A sweep that sees no
+could-not-run inside the window resolves the key with the all-clear copy —
+`Reviewer back — reviews are running again`, and the sweep's own time in PT —
+so the CEO, emailed when it went down, is emailed when it clears. A sweep that
+still sees a crash in the window but not the threshold does neither, because
+another repository's sweep may still be raising. A repository whose newest
+crash already has a later verdict there does not count toward the
+two-repository rule, so the alarm stays quiet when the reviewer is back before
+it is raised. When the console door cannot take the raise, the client files
+the card the sweep used to file — its title, CREATED in `Triage`, `repo:<slug>`
+and `no-code` with no `agent:*` role, so it never passes through `Planning`
+(DRE-5292) — and a person closes that card.
 
 ## The row that stops a WRITE from shouting — `🛑 fix-agent-absent` (DRE-4378)
 

@@ -4,7 +4,9 @@
 `ready_lane_writers.writes()` reads a lane write at its call site, and six of
 `reconcile.py`'s sites hand the write layer a lane it cannot read there: a
 retiring lane's `replaced_by`, `REVIEW_LANE` three times, `_fleet_outage_state`'s
-`lane` parameter, and the `move` lambda handed to `limit_recovery.recover`.
+`lane` parameter (gone since DRE-7455: the fleet outage is a console alert now,
+and its fallback card's lane is the notice client's), and the `move` lambda
+handed to `limit_recovery.recover`.
 The ready-work writer check lets them through only because `reconcile.py` is
 permitted in every ready-work lane; the Green Light writer check (DRE-5282)
 has no such escape and would report every one. The module publishes
