@@ -5,7 +5,14 @@ Builders' models in the same order. Nothing about a proof run's model changes
 on the day it lands: the top of the Proof ladder is the top of the Builders
 ladder. What changes is that the proof model can move alone — a reorder of the
 Proof ladder moves the model chosen for `proof` and leaves every build role
-where it was.
+that is not on it where it was.
+
+The console can change every one of those choices, and
+`tests/test_console_change_keeps_the_suite_green.py` runs this file in a copy
+after each change it can save — a group's default changed, `proof` moved to
+another group, a build role moved onto Proof. So each check reads the kind
+`agents.proof` names in the copy, and the roles on it, rather than assume
+today's mapping.
 
 Each selection runs the selector's CLI against a temporary copy of the real
 config, built and regenerated the way `tests/test_model_choice_levers.py`
@@ -48,9 +55,14 @@ def real_raw() -> dict:
 
 def ladder_ids(raw: dict, kind: str) -> list[str]:
     """The model ids `kind` walks in a raw config."""
+    return [r["model"] if isinstance(r, dict) else r
+            for r in raw["ladders"][ladder_of(raw, kind)]]
+
+
+def ladder_of(raw: dict, kind: str) -> str:
+    """The name of the ladder `kind` walks in a raw config."""
     spec = raw["kinds"][kind]
-    name = spec["ladder"] if isinstance(spec, dict) else spec
-    return [r["model"] if isinstance(r, dict) else r for r in raw["ladders"][name]]
+    return spec["ladder"] if isinstance(spec, dict) else spec
 
 
 def build_tree(dest: Path, edit: Callable[[dict], None] | None = None) -> Path:
@@ -101,9 +113,14 @@ def select(tree: Path, role: str) -> tuple[str, str]:
     return proc.stdout.strip(), note.read_text().rstrip("\n")
 
 
+def proof_kind(raw: dict) -> str:
+    """The kind `agents.proof` names in a raw config."""
+    return raw["agents"]["proof"]
+
+
 def last_rung_first(raw: dict) -> None:
-    """The Proof ladder of a raw config with its last rung moved first."""
-    rungs = raw["ladders"][raw["kinds"]["proof"]["ladder"]]
+    """The ladder proof walks in a raw config, its last rung moved first."""
+    rungs = raw["ladders"][ladder_of(raw, proof_kind(raw))]
     rungs.insert(0, rungs.pop())
 
 
@@ -115,26 +132,35 @@ def base(tmp_path_factory) -> Path:
 
 @pytest.fixture(scope="module")
 def reordered(tmp_path_factory) -> Path:
-    """The copy with the Proof ladder's last rung moved first, regenerated."""
+    """The copy with proof's ladder's last rung moved first, regenerated."""
     return build_tree(tmp_path_factory.mktemp("reordered"), last_rung_first)
 
 
-def test_a_proof_run_selects_the_builders_first_model_from_the_proof_kind(base):
-    top = ladder_ids(tree_raw(base), "workhorse")[0]
+def test_a_proof_run_selects_the_first_model_of_the_kind_it_is_on(base):
+    raw = tree_raw(base)
+    kind = proof_kind(raw)
+    top = ladder_ids(raw, kind)[0]
     chosen, note = select(base, "proof")
     assert chosen == top
-    assert f"{top} chosen for proof (proof kind)" in note
+    assert f"{top} chosen for proof ({kind} kind)" in note
 
 
-def test_reordering_the_proof_ladder_moves_proof_and_no_build_role(base, reordered):
-    moved = ladder_ids(tree_raw(reordered), "proof")[0]
-    assert moved == ladder_ids(tree_raw(base), "proof")[-1]
+def test_reordering_the_proof_ladder_moves_proof_and_only_the_build_roles_on_it(
+        base, reordered):
+    raw = tree_raw(base)
+    kind = proof_kind(raw)
+    moved = ladder_ids(tree_raw(reordered), kind)[0]
+    assert moved == ladder_ids(raw, kind)[-1]
 
     before, _ = select(base, "proof")
     after, note = select(reordered, "proof")
     assert after == moved
     assert after != before
-    assert f"{moved} chosen for proof (proof kind)" in note
+    assert f"{moved} chosen for proof ({kind} kind)" in note
 
+    ladder = ladder_of(raw, kind)
     for role in BUILD_ROLES:
-        assert select(reordered, role)[0] == select(base, role)[0], role
+        if ladder_of(raw, raw["agents"][role]) == ladder:
+            assert select(reordered, role)[0] == moved, role
+        else:
+            assert select(reordered, role)[0] == select(base, role)[0], role
