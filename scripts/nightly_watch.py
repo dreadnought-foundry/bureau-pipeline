@@ -20,9 +20,10 @@ What nothing watches is the run that **never happens**: a schedule GitHub
 disabled after 60 days of repo inactivity, a cron typo, a workflow that errors
 before any job starts, runs stuck in the queue. Nothing fails, because nothing
 ran. It is the shape of the retired channel-staleness alarm (DRE-2552,
-retired by DRE-6053) pointed at a different silence, and it raises its alarm
-through the mechanism `red-main-repair.yml` already uses — one deduplicated
-Linear card — so no new surface is added.
+retired by DRE-6053) pointed at a different silence. It raises its alarm as a
+console alert through `scripts/pipeline_notice.py` (DRE-7456), and the
+deduplicated Linear card it filed before is that client's fallback — see
+THE CONSOLE ALERT below.
 
 WHO IS WATCHED — COMPUTED, NEVER LISTED
 ---------------------------------------
@@ -69,7 +70,7 @@ This watcher reads repos it does not live in, across three App installations,
 so "I could not look" is a routine answer and must never render as "nightly
 ok" (standards/console-honesty.md rules 1-3). A repo the token cannot read, a
 workflow file that will not fetch, a run listing GitHub declines: each is
-reported UNKNOWN and alarms. A missing nightly takes the card title when both
+reported UNKNOWN and alarms. A missing nightly takes the alert when both
 are true, because it is the actionable one, but the unknown is still named in
 the body — an alarm that quietly shrinks the world to what it happened to be
 able to read is the failure this file is about.
@@ -87,7 +88,7 @@ seam's minute of backoff, paid once per refused file, would time the job out,
 and a job that times out says nothing at all. A throttle never passes and has
 its own block, but it has a known end and nothing for anybody to do, so a
 throttle alone is said only on the daily re-confirm hour — one that persists
-is said once a day on the UNKNOWN card, and an ordinary hour's throttle is in
+is raised once a day as the UNKNOWN alert, and an ordinary hour's throttle is in
 the step summary and nowhere else. A missing nightly or a genuine UNKNOWN
 beside it still alarms on any hour.
 
@@ -106,12 +107,35 @@ first attempt. Each retry is one line in the run log, never on the card, and
 a 5xx that outlasts its retries is UNKNOWN with GitHub's last answer. The
 shared read seam is not changed; this is the watcher's own retry.
 
+THE CONSOLE ALERT (DRE-7456)
+----------------------------
+Each condition is one console alert per owner, at WARN: a missing nightly is
+`nightly_watch:<owner>:did_not_run` and a repo the watcher could not read is
+`nightly_watch:<owner>:cannot_read` — `DID_NOT_RUN` and `CANNOT_READ` below,
+the key's last part. `notice_actions()` decides, from the hour's readings and
+verdict, which key the hour raises and which it resolves:
+
+  * it raises the key of the verdict's title — the card it used to file —
+    and nothing else, so a missing nightly beside an unreadable repo raises
+    `did_not_run` and names the unreadable repo in its body, as the card did;
+  * it resolves a key only when the hour shows the condition GONE: everything
+    was read and no nightly is missing resolves `did_not_run`, and nothing
+    unreadable or throttled resolves `cannot_read`. A subject not read is
+    not a condition gone — a missing nightly may be hiding in it — so an hour
+    that could not see leaves the key as it stands.
+
+The workflow raises on every hour the condition holds; the console answers
+`repeat` to a key already open and delivers nothing, so the daily re-confirm
+is a raise of the same key. When the door cannot take a raise, the client
+files today's card — its title, lane `Planning`, label `repo:bureau-pipeline`
+— and on any hour but the re-confirm one the workflow says nothing while that
+card is open, so the card is commented on at most once a day, as it was.
+
 KNOWN LIMIT, STATED SO IT IS NOT MISTAKEN FOR COVERAGE
 ------------------------------------------------------
-The 2026-09-22 outside-read audit (DRE-4655..4665) found that production has no
-alert-delivery environment, so CRITICAL alarms do not currently reach the CEO.
-This alarm reaches exactly as far as the mechanism it rides — one deduplicated
-Linear card — and no further. It does not fix delivery.
+A WARN alert stays on the console: it is never emailed. This alarm reaches
+exactly as far as the console's panel, or the fallback card when the door is
+down, and no further.
 
 The decision here is pure: no network, no clock of its own, the
 `promote_channel.py` shape. `collect()` takes the GitHub reader as an argument
@@ -169,8 +193,10 @@ INTERVAL_HOURS = 1.0
 #: above: running hourly is how a missing nightly is FOUND within the hour, and
 #: re-confirming hourly is how the card becomes 24 comments a day that nobody
 #: reads. Daily reads as deliberate rather than as a stuck process. Only the
-#: re-confirmation waits — the card itself is filed on whichever hour the
-#: alarm first fires.
+#: re-confirmation waits — the alert itself is raised on whichever hour the
+#: alarm first fires. Since DRE-7456 it governs two things: a throttle alone,
+#: said only on this hour, and the fallback card a door outage left open,
+#: commented on only on this hour.
 RECONFIRM_AFTER_HOURS = 24.0
 
 #: …and the hour it speaks on, in UTC. 07:00 UTC — a morning hour, chosen
@@ -198,15 +224,21 @@ THROTTLED_HEADING = ("Not read this hour (GitHub's hourly request budget for "
                      "this installation was spent):")
 
 #: The verdict states. LATE/STUCK/NEVER all mean one thing to a reader — the
-#: nightly did not run — so they share a title and a card.
+#: nightly did not run — so they share a title and an alert.
 MISSING = "missing"
 
 #: Which readings are worth waking somebody for.
 ALARMING = (LATE, STUCK, NEVER)
 
-#: Exact, stable titles — `linear_ops.py find-open` matches on equality, so a
-#: title that moved with the numbers would mint a fresh card every hour and the
-#: alarm would become the inbox we are escaping. The OWNER is part of the
+#: The last part of each console alert's key, `nightly_watch:<owner>:<part>`
+#: (DRE-7456) — the missing nightly's and the unreadable repo's.
+DID_NOT_RUN = "did_not_run"
+CANNOT_READ = "cannot_read"
+
+#: Exact, stable titles — the alert's, and its fallback card's.
+#: `linear_ops.find_open` matches on equality, so a title that moved with the
+#: numbers would mint a fresh fallback card every hour and the alarm would
+#: become the inbox we are escaping. The OWNER is part of the
 #: title, and that is not decoration: the watcher runs once per App
 #: installation, three matrix jobs at the same minute, and one shared title
 #: would have two of them racing to create the same card.
@@ -288,7 +320,7 @@ def is_nightly(text: str) -> bool | None:
     """Does this workflow file declare PR CI with a nightly behind it?
 
     True/False is the answer; **None is "I could not read it"** and stays
-    unknown all the way to the card. A file that will not parse might be the
+    unknown all the way to the alert. A file that will not parse might be the
     nightly that stopped, and a watcher that quietly skipped it would report
     the repo as fine.
     """
@@ -621,12 +653,12 @@ def evaluate(readings: list, *, owner: str = "",
 
     Order, and every step of it is load-bearing:
       1. a nightly that did not run is the actionable finding and takes the
-         card, however many repos we also could not read;
+         alert, however many repos we also could not read;
       2. what we could not read is UNKNOWN, never a reassuring silence;
       3. what GitHub's hourly budget kept us from reading is THROTTLED, never
          a pass. It alarms, under the UNKNOWN title, only when
          `speak_throttled` — the daily re-confirm hour (DRE-6461). Any other
-         hour it is said in the step summary and files no card: the window
+         hour it is said in the step summary and raises nothing: the window
          resets within the hour and there is nothing for anybody to do;
       4. otherwise every nightly we can see has run, and nobody is told
          anything. Silence is the ordinary outcome. A new nightly still
@@ -736,6 +768,25 @@ def evaluate(readings: list, *, owner: str = "",
                  f"scheduled run.")
     return Verdict(state=OK, alarm=False, title="", headline=head,
                    detail=_detail(head))
+
+
+def notice_actions(readings: list, verdict: Verdict) -> tuple:
+    """`(the key part to raise or None, the key parts to resolve)`. Pure.
+
+    The raise is the verdict's title as a key; a key is resolved only when the
+    readings show its condition gone — see THE CONSOLE ALERT above.
+    """
+    states = {r.state for r in readings}
+    unread = bool(states & {UNKNOWN, THROTTLED})
+    raised = None
+    if verdict.alarm:
+        raised = DID_NOT_RUN if verdict.state == MISSING else CANNOT_READ
+    resolved = []
+    if not states & set(ALARMING) and not unread:
+        resolved.append(DID_NOT_RUN)
+    if not unread:
+        resolved.append(CANNOT_READ)
+    return raised, tuple(resolved)
 
 
 # --------------------------------------------------------------------------- #
@@ -855,11 +906,10 @@ def _cmd_watch(args) -> int:
     # speaks about standing conditions (DRE-6461).
     # One server-error retry budget for this run's every read (DRE-7352).
     api = functools.partial(_gh_api, budget=RetryBudget())
-    verdict = evaluate(
-        collect(api, roster=fleet, now=args.now or None),
-        owner=args.owner or "",
-        speak_throttled=reconfirm,
-    )
+    readings = collect(api, roster=fleet, now=args.now or None)
+    verdict = evaluate(readings, owner=args.owner or "",
+                       speak_throttled=reconfirm)
+    raised, resolved = notice_actions(readings, verdict)
 
     print(verdict.detail)
 
@@ -879,6 +929,10 @@ def _cmd_watch(args) -> int:
             fh.write(
                 f"reconfirm={'true' if reconfirm else 'false'}\n"
             )
+            # The console alert's key parts (DRE-7456): the one to raise, and
+            # the ones to resolve, space-separated.
+            fh.write(f"raise={raised or ''}\n")
+            fh.write(f"resolve={' '.join(resolved)}\n")
     # A fleet whose nightlies all ran is the ordinary outcome, not a failure:
     # the caller branches on `alarm`, never on an exit code (promote_channel's
     # rule).
