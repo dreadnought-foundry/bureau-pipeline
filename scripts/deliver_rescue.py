@@ -28,8 +28,12 @@ So this module is the two halves of "the run still delivers":
      grammar a reader and a machine can both use, that the push failed and
      WHERE the work is, and it hands the delivery to a `deliver-rescue`
      workflow_dispatch carrying the run id. The comment is posted whatever the
-     dispatch answers: the dispatch can 404 in a repo with no stub, and the card
-     is the channel that always survives.
+     dispatch answers, and the card is the channel that always survives. In a
+     repo with no stub the dispatch answers 403 under a token with no Actions
+     permission and 404 under one holding `actions: write` — and the 403 is
+     the same answer a present stub gets under that token — so a refused
+     dispatch is followed by one read of the workflow file, and the card names
+     the cause: missing, refused or unknown (DRE-7476).
   2. `deliver()` — what that follow-up run executes. A NEW job, a NEW token:
      download the artifact, apply it on a fresh branch off the base, push, open
      the pull request, say so on the card. Nothing it spends was minted by the
@@ -182,6 +186,18 @@ _TOKEN_RE = secret_shapes.SHAPES["github-token"]
 #: the receipt stays readable — the log has the rest.
 _STDERR_LIMIT = 300
 
+#: Why a dispatch was refused, as the workflow file's contents read decides it
+#: (DRE-7476): a 404 means the stub is not in the repo, a 200 means it is and
+#: the dispatch itself was turned down, and any other answer decides nothing.
+CAUSE_MISSING = "missing"
+CAUSE_REFUSED = "refused"
+CAUSE_UNKNOWN = "unknown"
+
+#: The status line `gh api --include` writes first, and the `(HTTP 404)` its
+#: error line ends with — whichever the read left behind.
+_PROBE_STATUS_RE = re.compile(r"^HTTP/[\d.]+\s+(\d{3})\b")
+_PROBE_ERROR_RE = re.compile(r"\bHTTP (\d{3})\b")
+
 
 class Marker(NamedTuple):
     """The artifact fact, as the card carries it."""
@@ -218,6 +234,9 @@ class Handoff(NamedTuple):
     dispatched: bool
     workflow: str
     detail: str
+    #: Why a refused dispatch was refused (DRE-7476): CAUSE_MISSING,
+    #: CAUSE_REFUSED or CAUSE_UNKNOWN; "" when the dispatch went through.
+    cause: str = ""
 
 
 class Delivery:
@@ -351,6 +370,80 @@ def dispatch_env() -> dict | None:
     return {**os.environ, "GH_TOKEN": token, "GITHUB_TOKEN": token}
 
 
+def probe_argv(repo: str, workflow: str) -> list[str]:
+    """The contents read that tells a missing stub from a refused dispatch."""
+    return ["gh", "api", "--include",
+            f"repos/{repo}/contents/.github/workflows/{workflow}"]
+
+
+def probe_status(code, out, err) -> str:
+    """The HTTP status the contents read answered, or "" when it named none.
+
+    The status line `--include` writes is read first, then the `(HTTP 404)`
+    gh's error line ends with. A 200 counts only when the read also exited 0:
+    it is the one answer that claims the dispatch itself was turned down.
+    """
+    first = (str(out or "").lstrip().splitlines() or [""])[0]
+    match = _PROBE_STATUS_RE.match(first) or _PROBE_ERROR_RE.search(str(err or ""))
+    status = match.group(1) if match else ""
+    if status == "200" and code != 0:
+        return ""
+    return status
+
+
+def probe_cause(repo: str, workflow: str, *, env, run) -> tuple[str, str]:
+    """(cause, status) for a dispatch GitHub refused (DRE-7476).
+
+    The dispatch's own answer cannot say why. Under a token with no Actions
+    permission — the App token when `GH_DISPATCH_TOKEN` is absent, or a job
+    token whose calling stub does not grant `actions` — the workflow lookup
+    answers 403 whether the file is there or not (DRE-1254); under one
+    holding `actions: write` a missing file answers 404. The contents API
+    answers by the file alone, so it is asked instead.
+
+    `env` is the one `dispatch_env()` handed the dispatch, never the step's
+    ambient `GH_TOKEN`: that is the job's start token, dead at the hour, and a
+    rescue happens on exactly the runs that outlived it (DRE-3165's 401). The
+    job token's scope is the calling stub's, and the README's templates grant
+    `contents: write`. Never raises: an answer it cannot read is "unknown".
+    """
+    try:
+        code, out, err = run(probe_argv(repo, workflow), env=env)
+        status = probe_status(code, out, err)
+    except Exception as exc:  # the probe must never cost the comment
+        _log(f"rescue delivery: the contents read of {workflow} failed — {exc}")
+        return CAUSE_UNKNOWN, ""
+    if status == "404":
+        return CAUSE_MISSING, status
+    if status == "200":
+        return CAUSE_REFUSED, status
+    return CAUSE_UNKNOWN, status
+
+
+def cause_sentence(cause: str, *, repo: str, workflow: str, status: str,
+                   credential: str) -> str:
+    """The card's cause paragraph — the contract the proof card reads."""
+    read = f"a contents read as {credential} answered {status or 'no answer'}"
+    if cause == CAUSE_MISSING:
+        return (
+            f"cause: missing — `{workflow}` is not in `{repo}` ({read}). "
+            f"Install the Deliver Rescue stub, and check that the calling stub "
+            f"grants `actions: write`, or the dispatch is still refused after "
+            f"the install."
+        )
+    if cause == CAUSE_REFUSED:
+        return (
+            f"cause: refused — `{workflow}` is in `{repo}` ({read}), so the "
+            f"dispatch itself was turned down. The calling `agent-task.yml` or "
+            f"`agent-fix.yml` stub must grant `actions: write`, and "
+            f"`GH_DISPATCH_TOKEN` must reach the step."
+        )
+    return (
+        f"cause: unknown — could not tell whether `{workflow}` is missing from "
+        f"`{repo}` or the dispatch was refused ({read})."
+    )
+
+
 def _post_comment(card: str, body: str) -> None:
     """The card write, through the pipeline's one Linear client."""
     import linear_ops
@@ -374,10 +467,14 @@ def handoff(
     """Say the push failed, and hand the delivery to something that can do it.
 
     The comment goes out WHATEVER the dispatch answers. A product repo with no
-    `deliver-rescue` stub answers 404 to the dispatch, and in that repo the
-    card is the only channel left — reporting the artifact there is the
-    difference between a human who can recover the work in two minutes and a
-    card that gets rebuilt from nothing.
+    `deliver-rescue` stub refuses the dispatch — 403 under a token with no
+    Actions permission, 404 under one holding `actions: write` — and in that
+    repo the card is the only channel left: reporting the artifact there is
+    the difference between a human who can recover the work in two minutes and
+    a card that gets rebuilt from nothing. Since that 403 is also what a repo
+    WITH the stub answers under such a token, a refused dispatch is followed
+    by `probe_cause()`, and the card names the cause — missing, refused or
+    unknown — so its reader knows which fix applies (DRE-7476).
 
     Never raises: this runs in the run's last step, after something has already
     gone wrong, and a crash here would replace a recoverable loss with a red
@@ -393,9 +490,18 @@ def handoff(
                         mints=mints, branch=branch)
     workflow = delivery_workflow(repo)
     argv = dispatch_argv(repo, run_id=run_id, card=card, artifact=artifact)
-    code, _, err = run(argv, env=dispatch_env())
+    env = dispatch_env()
+    code, _, err = run(argv, env=env)
     detail = (redact(err).strip().splitlines() or [""])[-1][:_STDERR_LIMIT]
     dispatched = code == 0
+    cause, why = "", ""
+    if not dispatched:
+        cause, status = probe_cause(repo, workflow, env=env, run=run)
+        why = cause_sentence(
+            cause, repo=repo, workflow=workflow, status=status,
+            credential=("the job's own token (GH_DISPATCH_TOKEN)" if env
+                        else "the App token (no GH_DISPATCH_TOKEN)"),
+        )
 
     parts = [line, ""]
     if dispatched and branch:
@@ -432,6 +538,8 @@ def handoff(
             f"then `git am -3` it on a branch off the default branch. The "
             f"reconcile sweep re-checks this card off the artifact fact above."
         )
+    if why:
+        parts.append(why)
     if stderr.strip():
         parts += ["", f"GitHub refused the push with: `{redact(stderr).strip()[:_STDERR_LIMIT]}`"]
     body = "\n\n".join(parts)
@@ -442,8 +550,10 @@ def handoff(
     _log(
         f"rescue delivery: {'dispatched' if dispatched else 'COULD NOT dispatch'} "
         f"{workflow} for {card} (run {run_id}, artifact {artifact})"
+        f"{'' if dispatched else ' — cause: ' + cause}"
     )
-    return Handoff(dispatched=dispatched, workflow=workflow, detail=detail)
+    return Handoff(dispatched=dispatched, workflow=workflow, detail=detail,
+                   cause=cause)
 
 
 # --------------------------------------------------------------------------
