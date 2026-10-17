@@ -31,6 +31,26 @@ Planning exit is the transition **Green Light → Queued** — where the second 
 | Canceled | terminal and off the path; the card makes no claim to justify |
 | Duplicate | terminal and off the path; the card makes no claim to justify |
 
+## How a build starts
+
+| Name | Lane(s) |
+| --- | --- |
+| Start lane — a writer puts a card here to start its build | Todo |
+| Dispatch lane — entering it is the build dispatch | In Progress |
+| Dispatched from | Intake, Planning, Green Light, Queued, Triage, Backlog |
+| Start lanes — a started card sits in one | In Progress, Todo |
+| Start window | 15 min |
+
+How a build starts (DRE-7105). Today the sweep promotes a card to Todo, the relay dispatches its build run when it enters Todo, and the run moves it to In Progress. After the Todo retirement the sweep promotes straight to In Progress and that move is the dispatch. This block names the facts that change, so every reader learns them first and one later card, the flip, turns them — the shape the queue's cutover took (DRE-6741). It moves no card by itself.
+
+`lane` is lane_contract.START_LANE: the lane a writer puts a card in to START its build, Todo until the flip sets it to In Progress. It is the dispatch lane, or a lane whose `replaced_by` is the dispatch lane.
+
+`dispatch_lane` is lane_contract.DISPATCH_LANE: a card that is not an epic moving into it from a `dispatch_from` lane is a build dispatch. A card created in it, with no lane before it, is not.
+
+`dispatch_from` is the lanes that move comes from. lane_contract.DISPATCH_FROM adds every old name the aliases map onto one of them while the contract still carries that name as a lane. Hand-work, In Review, Done and the dispatch lane itself are never among them: a person builds a Hand-work card, the next two are past the build, and a card already in the dispatch lane is not starting.
+
+`start_minutes` is lane_contract.START_MINUTES: how long a card may sit in lane_contract.START_LANES — the dispatch lane and every lane it replaces — with no start receipt (the build run's 🧠 model-attempt comment) newer than its entry before the sweep re-fires its dispatch. It equals Todo's stale_minutes on purpose.
+
 ## The lanes
 
 ### Intake
