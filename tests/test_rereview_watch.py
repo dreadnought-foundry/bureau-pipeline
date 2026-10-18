@@ -973,6 +973,21 @@ class TheLanes(unittest.TestCase):
     def test_in_progress_it_is_still_overdue_past_the_grace(self):
         self.assertIsNotNone(_overdue(lane=pc.APPROVAL_LANE))
 
+    def test_an_epic_in_a_waiting_start_lane_reads_the_general_line(self):
+        """DRE-7112: an epic in a start lane other than the dispatch lane —
+        Todo until it retires — is in a lane its plan does not explain, and
+        says so in the one line every such lane gets."""
+        import lane_contract
+
+        waiting = [lane for lane in lane_contract.START_LANES
+                   if lane != lane_contract.DISPATCH_LANE]
+        self.assertEqual(waiting, ["Todo"])
+        for lane in waiting + ["Done"]:
+            with self.subTest(lane=lane):
+                self.assertEqual(rw._lane_refusal(lane), (
+                    f"the epic is in {lane}, not {pc.REVIEW_LANE} or "
+                    f"{pc.APPROVAL_LANE} — nothing here is waiting on a review"))
+
     def test_green_light_and_todo_are_quiet_with_a_line_saying_why(self):
         for lane in ("Green Light", "Todo"):
             with self.subTest(lane=lane):

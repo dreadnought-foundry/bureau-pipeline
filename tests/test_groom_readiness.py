@@ -868,6 +868,49 @@ def test_a_closed_parent_is_not_this_rule(state):
 
 
 # --------------------------------------------------------------------------
+# the start lanes (DRE-7112) — read off the contract, never spelled here
+# --------------------------------------------------------------------------
+def _waiting_start_lanes() -> tuple:
+    """The start lanes ahead of the dispatch lane: Todo until it retires."""
+    import lane_contract
+
+    return tuple(lane for lane in lane_contract.START_LANES
+                 if lane != lane_contract.DISPATCH_LANE)
+
+
+def test_the_open_and_in_flight_lanes_are_read_off_the_start_lanes():
+    import lane_contract
+
+    assert groom_readiness.OPEN_STATES == (
+        "Planning", "Green Light", *lane_contract.QUEUE_LANES,
+        *lane_contract.START_LANES, "In Review")
+    assert groom_readiness.IN_FLIGHT_LANES == (
+        "Planning", *lane_contract.START_LANES, "In Review")
+
+
+def test_a_parent_waiting_in_a_start_lane_has_not_started_and_one_dispatched_has():
+    # An epic in the dispatch lane is activated (rule 3's own name), so only
+    # the start lanes ahead of it hold a child.
+    import lane_contract
+
+    assert _waiting_start_lanes() == ("Todo",)
+    assert groom_readiness.PARENT_NOT_STARTED == (
+        "Intake", "Planning", "Green Light", *lane_contract.QUEUE_LANES,
+        *_waiting_start_lanes(), "Triage")
+    assert lane_contract.DISPATCH_LANE not in groom_readiness.PARENT_NOT_STARTED
+
+
+@pytest.mark.parametrize("lane", __import__("lane_contract").START_LANES)
+def test_a_card_in_each_start_lane_is_open_and_in_flight(lane):
+    c = card("DRE-1", description="Edits `shared.py`.")
+    held = _board([c], {"DRE-1": _waits("DRE-60")},
+                  named={"DRE-60": _light("DRE-60", lane)},
+                  lanes={lane: [_lane_card("DRE-80", ["shared.py"], state=lane)]})
+    assert _rules(c, held) == ["read-waits-on-open-card",
+                               "file-named-by-in-flight-card"]
+
+
+# --------------------------------------------------------------------------
 # rule 4 — an undecided question, quoted and sent nowhere
 # --------------------------------------------------------------------------
 def test_the_question_is_quoted_with_its_heading_and_count():

@@ -144,15 +144,17 @@ owns the requeue once the run has actually CONCLUDED without a PR: dead-run
 handling as today, never over a live run.
 
 The cap is a budget, and a human can REFILL it: `linear_ops.py unpark <CARD>`
-clears the hold label, posts a `dead-run-budget-reset` marker, and returns the
-card to Todo. The prior dead count is then only the `dead-run-requeue` comments
+clears the hold label, posts a `dead-run-budget-reset` marker, and restarts the
+card's build in the start lane, `lane_contract.START_LANE` (DRE-7109). The prior
+dead count is then only the `dead-run-requeue` comments
 AFTER that marker (linear_ops.count_comments(..., since=RESET_TAG)) — so a card
 held for a reason that was never about the card (a fleet-wide model outage;
 DRE-2308/2309/2310) gets a genuinely fresh set of attempts instead of re-holding
 on its first death forever.
 
 This module is the no-I/O core that decides — given the prior dead count and the
-death class — whether to REQUEUE (→ Todo) or HOLD (→ Queued + needs-human), and
+death class — whether to REQUEUE (→ Queued, which the sweep promotes again) or
+HOLD (→ Queued + needs-human), and
 what comment(s) to post. The workflow does the Linear writes; the decision is
 unit-tested here so the "is_error counts toward the cap" regression is pinned.
 """
@@ -189,8 +191,10 @@ import stream_watchdog  # noqa: E402 — after the path insert, by design
 # The queue lane (DRE-6745): the park writes `QUEUE_LANE`, the planning exit's
 # destination — the lane `Queued` replaces until DRE-6742 moves the exit, then
 # `Queued` — and never a name of its own. Read where it is written, so a test
-# that moves the exit moves the park and every receipt that names it.
-from lane_contract import QUEUE_LANE  # noqa: E402 — after the path insert, by design
+# that moves the exit moves the park and every receipt that names it. A requeue
+# lands there too (DRE-7111), where the sweep requeues a dead run (DRE-7108),
+# and the un-park's receipt names the start lane its restart writes (DRE-7109).
+from lane_contract import QUEUE_LANE, START_LANE  # noqa: E402 — after the path insert, by design
 
 DEAD_TAG = "dead-run-requeue"
 HOLD_LABEL = "needs-human"
@@ -758,7 +762,8 @@ class LimitDeath:
 class Decision:
     """What to do about a dead run.
 
-    action   — "requeue" (→ Todo), "hold" (→ Queued + needs-human label),
+    action   — "requeue" (→ `QUEUE_LANE`, promoted again by the sweep —
+               DRE-7111), "hold" (→ Queued + needs-human label),
                "replan" (DRE-4366: a turn-cap death before implementation
                green — → Planning, no label, no retry; DRE-6178: a silent
                death at the dead-run cap whose budget has not tried the
@@ -1067,7 +1072,7 @@ def decide(
                 f"🪦 {TURN_TAG}: the agent ran out of steps — it hit {facts}, "
                 f"having reached {_marker(last_progress)}. That is budget, not "
                 f"size: the work "
-                f"was finished and the run was not. Requeued to Todo for one "
+                f"was finished and the run was not. Requeued to {QUEUE_LANE} for one "
                 f"more attempt at the same budget (turn exhaustion "
                 f"{prior_dead + 1}/{turn_cap + 1}). If that run also dies past "
                 f"implementation green, the card parks in {QUEUE_LANE} with the "
@@ -1126,7 +1131,7 @@ def decide(
         return Decision(
             "requeue",
             [
-                f"🪦 {DEAD_TAG}: {note}. Requeued to Todo for a fresh attempt "
+                f"🪦 {DEAD_TAG}: {note}. Requeued to {QUEUE_LANE} for a fresh attempt "
                 f"(attempt {prior_dead + 1}/{cap + 1}).{kept}{run_suffix}"
             ],
         )
@@ -1166,7 +1171,7 @@ def decide(
     return Decision(
         "requeue",
         [
-            f"🪦 {DEAD_TAG}: agent died with {cause} — requeued to Todo for a "
+            f"🪦 {DEAD_TAG}: agent died with {cause} — requeued to {QUEUE_LANE} for a "
             f"fresh attempt (dead run {prior_dead + 1}/{cap + 1})."
             f"{run_suffix}{error_marker_line}"
         ],
@@ -1447,7 +1452,7 @@ def reset_comment(note: str = "") -> str:
     tail = f" Operator note: {note}" if note else ""
     return (
         f"♻️ {RESET_TAG}: un-parked by a human — the '{HOLD_LABEL}' label is "
-        f"cleared and the card is back in Todo with a FULL set of attempts "
+        f"cleared and the card is back in {START_LANE} with a FULL set of attempts "
         f"({REQUEUE_CAP + 1}). Agent deaths recorded above this line no longer "
         f"count toward the hold cap; only deaths after it do.{tail}"
     )
@@ -1511,7 +1516,7 @@ def _cmd_park(identifier: str, reason: str = "") -> int:
     def write_state() -> None:
         # --park: a deliberate HOLD-cap park (DRE-1403). Without it the
         # DRE-1885 building-card guard re-routes this In Progress → queue-lane
-        # move back to Todo and the loop returns. The destination is
+        # move to the start lane and the loop returns. The destination is
         # `lane_contract.QUEUE_LANE`, imported by name and readable statically,
         # so this stays the ONE lane this module can write
         # (ready_lane_writers.py, DRE-2859; DRE-6745).

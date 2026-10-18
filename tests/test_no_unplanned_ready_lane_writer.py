@@ -138,7 +138,7 @@ class TheDiscoveryActuallyFindsSomething(unittest.TestCase):
             ("reconcile.py", "Todo"),      # the sweep promoting a FLEET card
             ("reconcile.py", "Queued"),    # the dead-run park
             ("linear_ops.py", "Queued"),   # an epic's children
-            ("agent-task.yml", "Todo"),    # the build run requeueing itself
+            ("agent-task.yml", "Queued"),  # the build run parking or requeueing itself
         ):
             self.assertIn(expected, pairs)
 
