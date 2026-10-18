@@ -282,7 +282,7 @@ def test_the_refusal_comment_names_both_fixes_and_the_return_lane():
     assert "blockedBy" in body                       # recovery 1: add the relation
     assert "Blocked by" in body and "Depends on" in body and "Serialize after" in body
     assert f"`{lane_contract.QUEUE_LANE}`" in body   # the return lane…
-    assert "Todo" in body                            # …named against the wrong one
+    assert "`In Progress`" in body                   # …named against the wrong one
 
 
 def test_the_return_lane_is_the_queue_the_writers_write():
@@ -292,6 +292,18 @@ def test_the_return_lane_is_the_queue_the_writers_write():
     assert prose_blockers.RETURN_LANE == lane_contract.QUEUE_LANE
     assert prose_blockers.RETURN_LANE in lane_contract.QUEUE_LANES
     assert f"`{lane_contract.QUEUE_LANE}`" in prose_blockers.card_refusal("DRE-900", {"DRE-700"})
+
+
+def test_the_lane_the_notice_warns_off_is_the_dispatch_lane():
+    """DRE-7112: the lane the author must not move the card to is the one
+    whose entry dispatches a run, `lane_contract.DISPATCH_LANE` — `In
+    Progress` on the shipped contract — never a lane spelled here."""
+    assert lane_contract.DISPATCH_LANE == "In Progress"
+    body = prose_blockers.card_refusal("DRE-900", {"DRE-700"})
+    assert (f"**Then move the card back to `{lane_contract.QUEUE_LANE}`, not "
+            f"`{lane_contract.DISPATCH_LANE}`.**") in body
+    assert f"while `{lane_contract.DISPATCH_LANE}` dispatches an agent run" in body
+    assert "Todo" not in body
 
 
 def test_a_defective_card_is_moved_to_triage():

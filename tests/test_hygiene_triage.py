@@ -2,8 +2,9 @@
 
 `scripts/hygiene_triage.py` reads the broken-card lane once and fixes the
 mechanical defects the standard already names, returning the card to the
-queue, `lane_contract.QUEUE_LANE` (DRE-6748) — never `Todo` — with the cause
-named:
+queue, `lane_contract.QUEUE_LANE` (DRE-6748) — never a start lane
+(`lane_contract.START_LANES`, DRE-7112), whose entry dispatches — with the
+cause named:
 
   1. a prose blocker with no relation — the relation is added, which makes the
      sentence true, and a card carrying a routing verdict returns to the queue;
@@ -631,6 +632,15 @@ class TestTheWholeFixture:
         lanes = [w.lane for a in actions(items) for w in a.writes if w.kind == "linear_state"]
         assert lanes
         assert not {"Todo", "In Progress", "Done"} & set(lanes)
+        assert not set(lane_contract.START_LANES) & set(lanes)
+
+    def test_the_return_lane_is_no_start_lane_and_the_rule_names_the_dispatch_lane(self):
+        # DRE-7112: the rule is stated in the contract's names — the lane the
+        # card returns to is the queue, never one whose entry starts a build.
+        assert lane.return_lane() not in lane_contract.START_LANES
+        doc = " ".join((lane.__doc__ or "").split())
+        assert "never the dispatch lane" in doc
+        assert "never the dispatch lane" in " ".join((lane.return_lane.__doc__ or "").split())
         for action in actions(items):
             for write in action.writes:
                 hygiene.guard(write, ctx)

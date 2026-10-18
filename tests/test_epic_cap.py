@@ -384,7 +384,15 @@ def test_a_child_under_either_queue_name_has_not_run(queue):
 
 
 def test_the_activated_states_are_the_contract():
-    assert epic_cap.ACTIVATED_STATES == ("Todo", "In Progress", "In Review", "Done")
+    # DRE-7112: the start lanes are the contract's (`lane_contract.START_LANES`),
+    # so a child in In Progress counts exactly where one in Todo did.
+    assert epic_cap.ACTIVATED_STATES == ("In Progress", "Todo", "In Review", "Done")
+    assert epic_cap.ACTIVATED_STATES == (*lane_contract.START_LANES, "In Review", "Done")
+
+
+@pytest.mark.parametrize("lane", lane_contract.START_LANES)
+def test_a_child_in_each_start_lane_means_activated(lane):
+    assert epic_cap.activated_before(_with_children(lane, "Backlog"))
 
 
 # --------------------------------------------------------------------------
