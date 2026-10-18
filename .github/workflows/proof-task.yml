@@ -1773,7 +1773,8 @@ jobs:
         continue-on-error: true
         env:
           CLAUDE_EXECUTION_FILE: ${{ steps.claude_result.outputs.execution_file }}
-          EFFORT_ARG: ${{ steps.model.outputs.effort_arg }}
+          # A shadow ran at the checked model's effort, as the agent steps do.
+          EFFORT_ARG: ${{ inputs.shadow && steps.shadow_model.outputs.effort_arg || !inputs.shadow && steps.model.outputs.effort_arg || '' }}
           SCRUB_GITHUB_TOKEN: ${{ github.token }}
           SCRUB_ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           SCRUB_BUREAU_APP_ID: ${{ secrets.BUREAU_APP_ID }}
