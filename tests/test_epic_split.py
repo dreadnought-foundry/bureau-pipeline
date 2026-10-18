@@ -652,12 +652,16 @@ class TestTheLaneContract:
 
     def test_the_published_destinations_are_the_two_lanes_it_writes(self):
         """`ready_lane_writers.py` reads this rather than the call site, so it
-        has to name exactly where `activate` puts cards — neither of which is
-        ready work."""
+        has to name exactly where `activate` puts cards. Since the flip
+        (DRE-7120) the parent's lane, In Progress, is ready work, so the split's
+        writer must be declared there — and is."""
         import ready_lane_writers
         lanes = epic_split.lanes()
         assert set(epic_split.destinations()) == {lanes["child_to"], lanes["parent_to"]}
-        assert not set(epic_split.destinations()) & set(ready_lane_writers.ready_lanes())
+        ready = set(epic_split.destinations()) & set(ready_lane_writers.ready_lanes())
+        assert ready == {lane_contract.DISPATCH_LANE}
+        for lane in ready:
+            assert "plan.yml" in lane_contract.lane_writers(lane)
 
     def test_a_contract_that_drops_the_writer_is_a_problem(self):
         import copy
