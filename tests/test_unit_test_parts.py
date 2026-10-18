@@ -543,14 +543,17 @@ def test_every_clause_of_the_old_note_is_carried_over_word_for_word():
     assert len(clauses) == 31, len(clauses)
     general, *per_file = clauses
     assert _named_files(general) == []
-    named = sorted({f for c in per_file for f in _named_files(c)})
-    assert len(named) == 33, named
-    missing = [f for f in named if f not in provenance]
-    assert missing == [], f"not keyed in `provenance`: {missing}"
     split = [c for c in per_file if WALKS_SENTENCE in c]
     assert len(split) == 1, split
     walk_rest, walks_sentence = split[0].split(WALKS_SENTENCE)
     walks_sentence = WALKS_SENTENCE[2:] + walks_sentence
+    # The files the clauses measured — less the walks sentence, which names
+    # the budget test that reads the walks' seconds, not a file it measured.
+    named = sorted({f for c in per_file
+                    for f in _named_files(walk_rest if c is split[0] else c)})
+    assert len(named) == 33, named
+    missing = [f for f in named if f not in provenance]
+    assert missing == [], f"not keyed in `provenance`: {missing}"
     assert "4.28" in walks_sentence and "(DRE-7016)" in walks_sentence
     # The general clause and the walks multiplier make the shared entry.
     assert general in method and walks_sentence in method, method

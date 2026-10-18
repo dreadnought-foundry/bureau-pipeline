@@ -143,7 +143,9 @@ def problems(walks: list[str], records: dict[str, float],
             found.append(
                 f"{walk} has no recorded seconds in "
                 f"config/unit-test-durations.json, so nothing says it fits "
-                f"the walks job's {limit // 60}-minute limit — measure it")
+                f"the walks job's {limit // 60}-minute limit — measure it, "
+                f"and record its seconds under `seconds` and where they came "
+                f"from under `provenance`, both keyed by its path")
             continue
         need = MARGIN * CI_OVER_DESK * seconds
         if need > limit:
