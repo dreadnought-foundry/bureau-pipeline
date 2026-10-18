@@ -69,8 +69,9 @@ LABEL = "automation"
 ROLE_LABEL = "agent:devops"
 
 #: Where the card lands: the lane a carded pull request in review sits in.
-#: Never Intake, Planning or Todo — there is nothing to plan or dispatch; the
-#: pull request already exists and the critic and gate already handle it.
+#: Never Intake, Planning or a start lane — there is nothing to plan or
+#: dispatch; the pull request already exists and the critic and gate already
+#: handle it.
 LANE = "In Review"
 
 #: Dependabot's fixed branch namespace (`merge_gate.DEPENDABOT_BRANCH_PREFIX`,

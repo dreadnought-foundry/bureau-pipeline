@@ -1500,7 +1500,7 @@ class EpicsInFlight(unittest.TestCase):
 
     def test_in_flight_itself_is_unchanged(self):
         self.assertEqual(pc.IN_FLIGHT_EPIC_STATES,
-                         ("Green Light", "Todo", "In Progress"))
+                         ("Green Light", "In Progress", "Todo"))
 
     def test_the_docstring_names_the_second_critic(self):
         doc = self.linear_ops.cmd_epics_in_flight.__doc__ or ""
