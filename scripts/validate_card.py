@@ -19,8 +19,8 @@ bouncing (the original behavior). It:
      the deprecated `**Repo:**` stamp).
 On a successful repair the card PROCEEDS (no bounce) and gets a 🔧 comment.
 It is BOUNCED to Planning ONLY when the repo cannot be inferred (no initiative
-label) or the inference yields a slug that isn't a real repo — the one case
-where a fix would be a wrong-repo guess. See infer_repo / VALID_SLUGS for the
+label that names a repo) or the inference yields a slug that isn't a real repo —
+the one case where a fix would be a wrong-repo guess. See infer_repo / VALID_SLUGS for the
 mapping (mirrors the relay's REPO_MAP, single source).
 
 One other card is stopped, and before any repair: an EPIC in Todo (DRE-5319).
@@ -54,8 +54,9 @@ CLI:
   check-children <EPIC>
                  read-only post-plan sweep (DRE-1715): runs `missing()` — the
                  SAME validation core the gate uses — over EVERY child of an
-                 epic, in WHATEVER state (children are created in Backlog, which
-                 the gate path deliberately leaves alone). Exit 0 iff every child
+                 epic, in WHATEVER state (children are created in the queue,
+                 `Queued` under either of its names, which the gate path
+                 deliberately leaves alone). Exit 0 iff every child
                  carries a resolvable repo + an agent:* role and a non-placeholder
                  body; exit 1 listing the offenders otherwise, so plan.yml fails
                  the plan before it completes rather than shipping a broken child
@@ -328,6 +329,7 @@ _FALLBACK_REPO_MAP = {
     "agent-bureau-demo": "dreadnought-foundry/agent-bureau-demo",
     "bureau-pipeline": "dreadnought-foundry/bureau-pipeline",
     "portico": "dreadnought-foundry/portico",
+    "foundry": "dreadnought-foundry/foundry",
 }
 # --- END generated repo mirror ---
 
@@ -373,6 +375,15 @@ VALID_SLUGS = set(_REPO_MAP)
 # slug and is then rejected by the VALID_SLUGS guard — never silently dropped.
 # Byte-aligned with the relay's _INITIATIVE_ALIAS.
 _INITIATIVE_ALIAS = {"bureau": "agent-bureau"}
+
+# Initiatives that name no single repo, so identity must not apply (DRE-7075).
+# `initiative:foundry` tags the whole Dreadnought Foundry initiative, which
+# spans several products — and `foundry` is also the studio's build repo,
+# which joins the routing map when DRE-7076 onboards it. From then on, without
+# this set every card carrying the initiative label alone would be auto-fixed
+# to `repo:foundry` and built there. Such a label is skipped, so a
+# card that names nothing else is bounced for its repo, never guessed at.
+_NON_REPO_INITIATIVES = frozenset({"foundry"})
 
 # There is no second alias table here, and its absence is deliberate (DRE-2874).
 # A map from a Linear project's NAME prefix ("Bureau: Console" → agent-bureau)
@@ -443,20 +454,23 @@ def infer_repo(labels: list[str]) -> tuple[str | None, str | None]:
     the auto-fix comment, or (None, None) when the repo cannot be inferred.
 
     ONE route (rule 2 of DRE-1405, narrowed by DRE-2874): an `initiative:<x>`
-    label, aliased bureau→agent-bureau and identity otherwise. The card's Linear
+    label, aliased bureau→agent-bureau and identity otherwise. An initiative in
+    `_NON_REPO_INITIATIVES` names no single repo and is skipped (DRE-7075):
+    `initiative:foundry` must not resolve to the `foundry` repo that will share
+    its slug once DRE-7076 onboards it. The card's Linear
     project name used to be a second route and is not read here any more — see
     the note above `_INITIATIVE_PREFIX`. Labels, and only labels, decide.
 
     The returned candidate is NOT yet validated against VALID_SLUGS — the caller
     (cmd_gate) does that, so a candidate that is a real-looking slug but not a
-    real repo (e.g. initiative:foundry → "foundry") is rejected as a wrong-repo
-    guess rather than silently treated as "uninferable".
+    real repo (e.g. a typo'd initiative:atlass → "atlass") is rejected as a
+    wrong-repo guess rather than silently treated as "uninferable".
     """
     for label in labels or []:
         low = label.lower()
         if low.startswith(_INITIATIVE_PREFIX):
             raw = low[len(_INITIATIVE_PREFIX):].strip()
-            if raw:
+            if raw and raw not in _NON_REPO_INITIATIVES:
                 slug = _INITIATIVE_ALIAS.get(raw, raw)
                 return slug, f"initiative:{raw}"
     return None, None
@@ -541,7 +555,7 @@ def cmd_gate(identifier: str) -> None:
         return
 
     # --- Fix-first: decide the FULL repair before mutating anything, so a card
-    # we can't fully fix is bounced clean (never left half-repaired in Backlog).
+    # we can't fully fix is bounced clean (never left half-repaired in the queue).
     new_labels: list[str] = []
     fixed: list[str] = []          # human-readable bits for the auto-fix comment
     sources: set[str] = set()
@@ -560,7 +574,7 @@ def cmd_gate(identifier: str) -> None:
             why = (
                 f"inferred repo {slug!r} is not a known repo"
                 if slug is not None
-                else "could not infer a repo (no initiative label)"
+                else "could not infer a repo (no initiative label names one)"
             )
             # Break glass (DRE-2737): the ONE sanctioned way past this gate at
             # 2am. An operator-applied `break-glass` marker suppresses the
@@ -705,17 +719,17 @@ def _bounce(linear_ops, identifier: str, gaps: list[str], why: str,
             detail: str | None = None) -> None:
     """Refuse a card the gate cannot repair, and return it to Planning.
 
-    Planning, not Backlog (DRE-2858). This is the one writer that knows for
+    Planning, not the queue (DRE-2858). This is the one writer that knows for
     CERTAIN a card is invalid, and it was putting it in the lane the rest of the
     system reads as ready work — where `reconcile.promote_ready` would pick it
     up again and walk it back into this same refusal. What the card owes is the
     classification it is missing, and Planning is the lane that owes one.
 
-    The comment body moves with the lane. It used to say "Returned to Backlog;
-    fix and move to Todo again", which after this change was wrong twice: the
-    card is not in Backlog, and moving it straight to Todo skips the very
-    classification the bounce is asking for — the shortcut this card closes. A
-    refused card still carries its plain-English reason, and
+    The comment body moves with the lane. It used to send the card back to the
+    queue to be fixed and moved to Todo again, which after this change was
+    wrong twice: the card is not in the queue, and moving it straight to Todo
+    skips the very classification the bounce is asking for — the shortcut this
+    card closes. A refused card still carries its plain-English reason, and
     `tests/test_writers_point_at_planning.py` asserts the text byte for byte
     rather than assuming it."""
     body = (
@@ -761,7 +775,7 @@ def _card_from(issue: dict) -> dict:
 
 # --- Post-plan child sweep (DRE-1715) ----------------------------------------
 #
-# After the planner creates children (in Backlog), confirm EVERY child is
+# After the planner creates children (in the queue), confirm EVERY child is
 # complete and valid before the plan is allowed to finish — reusing this gate's
 # `missing()` (single source of truth, no parallel checker) plus the shared
 # body-placeholder guard. The gate's own cmd_gate intentionally only acts on

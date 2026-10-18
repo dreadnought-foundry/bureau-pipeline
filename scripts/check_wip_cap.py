@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """One WIP cap across every promotion path (DRE-2529, continues DRE-2527).
 
-Three workflows here promote Backlog children through the dependency gate by
+Three workflows here promote Queued children through the dependency gate by
 running `reconcile.py`: the `reconcile.yml` cron sweep, `plan.yml`'s
 epic-activate route, and `linear-sync.yml`'s merge handler. Only the first
 took a `max_wip` workflow_call input; the other two — both `--promote-only`,

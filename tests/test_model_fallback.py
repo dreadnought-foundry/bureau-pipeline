@@ -779,5 +779,58 @@ class FableIsNotABuildModelTest(unittest.TestCase):
                 self.assertEqual(out, walk(role)[0])
 
 
+class TheCommittedChoicesAreNotReadTest(unittest.TestCase):
+    """DRE-6939: the choices live in the home, and with no home the selector
+    runs on the defaults in the code — never on the choices still written in
+    config/models.yaml. That file is read for the code-side facts only."""
+
+    def _edited(self, raw: dict) -> dict:
+        name = raw["kinds"]["workhorse"]["ladder"]
+        raw["ladders"][name] = list(reversed(raw["ladders"][name]))
+        raw["excluded"] = list(raw.get("excluded") or []) + [
+            {"model": "claude-test-excluded", "reason": "a code-side fact this test adds"}]
+        return raw
+
+    def test_load_config_takes_the_choices_from_the_code(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "models.yaml"
+            raw = self._edited(yaml.safe_load((ROOT / "config" / "models.yaml").read_text()))
+            path.write_text(yaml.safe_dump(raw, sort_keys=False))
+            self.assertEqual([], mf.policy_errors(raw))
+            original = mf._CONFIG_PATH
+            mf._CONFIG_PATH = path
+            try:
+                loaded = mf._load_config()
+            finally:
+                mf._CONFIG_PATH = original
+        defaults = mf.code_defaults()
+        for key in ("ladders", "kinds", "agents", "projects", "ungrouped", "default_ladder"):
+            self.assertEqual(loaded[key], defaults[key], key)
+        # The code-side facts are still the file's.
+        self.assertIn("claude-test-excluded", loaded["excluded"])
+
+    def test_the_selector_cli_answers_from_the_code_not_the_file(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tree = model_fixture.fixture_tree(Path(tmp) / "tree")
+            path = tree / "config" / "models.yaml"
+            raw = self._edited(yaml.safe_load(path.read_text()))
+            path.write_text(yaml.safe_dump(raw, sort_keys=False))
+            env = {k: v for k, v in os.environ.items()
+                   if k not in ("BUREAU_MODEL_HOME_TOKEN", "BUREAU_MODEL_HOME_FILE")}
+            env["BUREAU_FAKE_AVAILABLE"] = "{}"
+            proc = subprocess.run(
+                [sys.executable, str(tree / "scripts" / "model_fallback.py"), "select",
+                 "engineer"], capture_output=True, text=True, env=env)
+        self.assertEqual(0, proc.returncode, proc.stderr)
+        self.assertEqual(proc.stdout.strip(), default_ladder()[0])
+        self.assertNotIn("REFUSING", proc.stderr)
+
+    def test_code_defaults_is_a_fresh_copy_of_the_literal(self):
+        first = mf.code_defaults()
+        first["ladders"]["workhorse"].append("claude-test-scribble")
+        self.assertNotIn("claude-test-scribble", mf.code_defaults()["ladders"]["workhorse"])
+        self.assertEqual(mf.code_defaults(), mf._normalize_config(mf._FALLBACK_MODEL_CONFIG))
+
+
 if __name__ == "__main__":
     unittest.main()

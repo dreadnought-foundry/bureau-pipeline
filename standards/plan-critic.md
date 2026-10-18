@@ -175,7 +175,7 @@ card before it prints a finding.
   note cannot say "not a collision" and then list one two paragraphs below.
 * **In Progress, In Review.** A run or a pull request is in flight. Judge the
   card on what it will land, not on whether its files are in the tree yet.
-* **Backlog, Todo, Triage — still to build**, and every finding stands,
+* **Queued, Todo, Triage — still to build**, and every finding stands,
   "this is already implemented" included. Same card, same files, different
   answer: the state is the whole of the difference.
 * **No state at all** is UNKNOWN, never "delivered". The note says *no child
@@ -225,7 +225,7 @@ is one as soon as the first critic passes it. The text is fixed from that
 moment, and the CEO's click changes none of it. So the second critic reads the
 plan the first critic passed, and it reads it before the CEO does. This is the
 last point at which a gap is free to fix: after it the plan goes to the CEO,
-and once he approves it the cards enter Backlog and agents build them.
+and once he approves it the cards enter Queued and agents build them.
 
 **Superseded: DRE-2721's placement.** DRE-2721 put this critic after the CEO's
 approval, on this reasoning: *"An adversarial pass is only worth much against a
@@ -252,7 +252,7 @@ plan after its approval, so nothing can send an approved plan back.
 Todo, In Progress), **and every other epic under review in Planning** —
 `plan_critic.SIGHT_STATES` (DRE-5276). Two plans read at the same moment must
 see each other. The critic's prompt names those epics one by one and states
-what it cannot see — Backlog, Intake and Done epics, other Linear teams,
+what it cannot see — Queued, Intake and Done epics, other Linear teams,
 unmerged branches. Never "consider other work": a critic that does not know
 what it was shown cannot tell you what it missed. The cost of this decision is
 a vaguer critic, and it was taken deliberately (D3, 2026-08-25) because this is
@@ -700,7 +700,7 @@ sweep is the ONE promoter of an epic's children, and it releases a child only
 when the epic carries a `stage=post` round for the current planning attempt
 that let the plan through — a PASS. A send-back holds,
 the bound parks, and a tombstone holds until the review is re-run. Until then
-the child stays in `Backlog` and the sweep says so, naming the epic. Nothing else
+the child stays in `Queued` and the sweep says so, naming the epic. Nothing else
 promotes: the activate route runs that same promoter when the CEO approves,
 rather than promoting on its own.
 
@@ -752,7 +752,7 @@ counted separately, so the tripwire is measurable rather than remembered:
     {"caught_at_review": 1, "found_later": 0}
 
 The first number comes from the critic's own `collisions: <n>` line. The second
-is written by whoever finds a collision after the cards reached Backlog — the
+is written by whoever finds a collision after the cards reached Queued — the
 engineer who hits it, the fixer who resolves the conflict, the operator who
 spots it:
 
@@ -760,5 +760,5 @@ spots it:
       --with <OTHER-EPIC> --detail "both rewrite scripts/reconcile.py" \
       | xargs -0 python3 scripts/linear_ops.py comment <EPIC>
 
-**A collision reaching Backlog is the signal that this check has to split back
+**A collision reaching Queued is the signal that this check has to split back
 out into its own pass** — rather than the critic being asked to do more.

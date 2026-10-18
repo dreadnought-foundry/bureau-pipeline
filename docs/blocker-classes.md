@@ -1,7 +1,7 @@
 # Blocker classes — what a blocked card's reason means, and what happens to the card
 
 A build agent that cannot build its card writes a note, and the workflow posts
-it on the card as a `🛑 Agent blocked:` comment and parks the card in Backlog.
+it on the card as a `🛑 Agent blocked:` comment and parks the card in Queued.
 Before DRE-6438 the sweep then held the card until a person replied, whatever
 the note said. Most notes say one of a few mechanical things — there is nothing
 to change, the card went to the wrong repository, the work is on a branch with
@@ -108,14 +108,16 @@ The reader never raises and always returns one of the four names.
 ## The marker — what the poster writes and the sweep reads
 
 ```
-🛑 Agent blocked: class=<class> · <reason> — parked in Backlog until … Run: <url>
+🛑 Agent blocked: class=<class> · <reason> — parked in Queued until … Run: <url>
 ```
 
 The prefix `🛑 Agent blocked:` is unchanged, so every reader of the old marker
 still sees it. Then `class=<class>`, then `·`, then the reason, which may run to
 several lines, then the poster's trailing clause with the run URL. The reason is
-the text between the `·` and the LAST ` — parked in Backlog`, so a multi-line
-reason survives whole. A legacy marker carries no `class=`; its reason runs from
+the text between the `·` and the LAST ` — parked in <lane>`, so a multi-line
+reason survives whole. The lane is the queue under either of its names
+(`lane_contract.QUEUE_LANES`, DRE-6747), so a marker posted before the cutover,
+which names the column `Queued` replaced, still reads. A legacy marker carries no `class=`; its reason runs from
 the prefix to the same clause, and its class is read off its wording.
 
 ## Which blocker is open
@@ -139,7 +141,7 @@ REPO=<owner/repo> REPO_SLUG=<slug> python3 scripts/blocker_class.py board
 than its fifty newest comments. `board` decides "open" exactly as the sweep
 does, with the sweep's own predicate, and prints one
 `DRE-<n> class=<class> · <the first 80 characters of the reason>` line per open
-blocker on the repo's Backlog cards. It refuses to run without both `REPO` and
+blocker on the repo's Queued cards. It refuses to run without both `REPO` and
 `REPO_SLUG`, because a missing `REPO_SLUG` would read another repo's board and
 print nothing. Both commands only read.
 
@@ -159,7 +161,7 @@ one names the blocker's class:
   returns nothing, and the sweep asks the person.
 - **The card could not be read live.** The board read named the card, and the
   live re-read before acting failed.
-- **The card left Backlog, or was resolved, since the board was read.** Someone
+- **The card left Queued, or was resolved, since the board was read.** Someone
   moved it or replied in between, so there is nothing left to act on.
 - **The pass is not the full sweep.** A narrower pass, such as the merge path's
   read of one card's dependents, names the class and leaves the acting to the

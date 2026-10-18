@@ -89,6 +89,45 @@ class TheRealWriteLayer(unittest.TestCase):
         )
 
 
+class TheRefusalStaysOnTodoThroughTheFlip(unittest.TestCase):
+    """DRE-7109: the restarts write `lane_contract.START_LANE`, and the flip
+    sets it to `In Progress`. The refusal is NOT moved with it — an epic
+    entering `In Progress` is the CEO's approval and must stay writable — so
+    the finding keeps reading `Todo` until the retirement card deletes it."""
+
+    def _flipped(self):
+        import copy
+        import json
+        from unittest import mock
+
+        import lane_contract
+
+        doc = copy.deepcopy(lane_contract.load())
+        doc["build_start"]["lane"] = "In Progress"
+        tmp = tempfile.mkdtemp(prefix="rlw-flip-")
+        self.addCleanup(shutil.rmtree, tmp, True)
+        path = os.path.join(tmp, "lane-contract.json")
+        with open(path, "w", encoding="utf-8") as fh:
+            json.dump(doc, fh)
+        patcher = mock.patch.object(lane_contract, "CONTRACT_PATH", path)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        self.assertEqual(lane_contract.start_lane(), "In Progress")
+
+    def test_the_finding_still_names_todo(self):
+        self.assertEqual(rlw.epic_todo_gate.TODO, "Todo")
+        with _Copy(_without_refusal(_source(), "guarded_state_write")) as root:
+            self._flipped()
+            problems = rlw.epic_gate_problems(root)
+        self.assertEqual(len(problems), 1, problems)
+        self.assertIn("can put a card in 'Todo'", problems[0])
+
+    def test_the_real_write_layer_is_clean_under_the_flip(self):
+        self._flipped()
+        self.assertEqual(rlw.epic_gate_problems(), [])
+        self.assertIn("guarded_state_write", rlw.todo_seams())
+
+
 class AGuardedSeamWithoutItsCallIsNamed(unittest.TestCase):
     def test_guarded_state_write_without_the_refusal_is_one_finding(self):
         with _Copy(_without_refusal(_source(), "guarded_state_write")) as root:

@@ -35,9 +35,12 @@ part 1 past its 30-minute limit (run 38142539090) with no test failed, and
 every pull request paid for it. So `discover` and `list` leave the walks out,
 `check` names a walk a part ran, and `walks` lists them by that file name
 alone — a walk added later needs no edit here or in `tests.yml`. `run-walks`
-runs each walk on its own, in `tests.yml`'s walks job, and prints how long
-each took (and writes it to the job summary), so the walks' clock is watched
-rather than discovered at its limit.
+runs each walk on its own and prints how long each took (and writes it to the
+job summary), so the walks' clock is watched rather than discovered at its
+limit. In `tests.yml` each walk has a job of its own (DRE-6935): `walks --json`
+hands the job list to the matrix, and `run-walks --only FILE` runs that one,
+on a clock `tests/test_walks_time_budget.py` holds to each walk's recorded
+seconds (DRE-7016).
 
 `measure` rebuilds the durations record from pytest `--junit-xml` reports, or
 from the GitHub Actions logs of the parts' `pytest -v` (each result line is
@@ -314,14 +317,21 @@ def _took(seconds: float) -> str:
     return f"{minutes}m{secs:02d}s"
 
 
-def run_walks(root: Path) -> int:
-    """Every walk, one pytest run each, timed. 1 when a walk failed or there
-    is no walk at all — a pattern that matches nothing is a silent green."""
+def run_walks(root: Path, only: str | None = None) -> int:
+    """Every walk, or only the walk `only` names, one pytest run each, timed.
+    1 when a walk failed or there is no walk at all — a pattern that matches
+    nothing is a silent green — and 2 when `only` names no walk."""
     found = walks(root)
     if not found:
         print(f"unit_test_parts: no walk ({WALK}) under {root / 'tests'} — "
               f"the walks' job would prove nothing", file=sys.stderr)
         return 1
+    if only is not None:
+        if only not in found:
+            print(f"unit_test_parts: {only} is not a walk under "
+                  f"{root / 'tests'} — the walks are {found}", file=sys.stderr)
+            return 2
+        found = [only]
     rows = []
     for rel in found:
         print(f"running walk {rel}", flush=True)
@@ -363,9 +373,13 @@ def main(argv: list[str] | None = None) -> int:
 
     p_walks = sub.add_parser("walks", help="print the walks")
     p_walks.add_argument("--root", type=Path, default=ROOT)
+    p_walks.add_argument("--json", action="store_true",
+                         help="one JSON list on one line, for a job matrix; "
+                              "no walk is an error")
 
     p_run = sub.add_parser("run-walks", help="run every walk, timed")
     p_run.add_argument("--root", type=Path, default=ROOT)
+    p_run.add_argument("--only", help="run only this walk, repo-relative")
 
     p_measure = sub.add_parser("measure", help="rebuild the durations record")
     p_measure.add_argument("reports", type=Path, nargs="+")
@@ -400,11 +414,20 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if args.cmd == "walks":
-        print("\n".join(walks(args.root)))
+        found = walks(args.root)
+        if args.json:
+            if not found:
+                print(f"unit_test_parts: no walk ({WALK}) under "
+                      f"{args.root / 'tests'} — the walks' jobs would prove "
+                      f"nothing", file=sys.stderr)
+                return 1
+            print(json.dumps(found))
+            return 0
+        print("\n".join(found))
         return 0
 
     if args.cmd == "run-walks":
-        return run_walks(args.root)
+        return run_walks(args.root, args.only)
 
     seconds = measure(args.reports)
     DURATIONS.write_text(json.dumps(

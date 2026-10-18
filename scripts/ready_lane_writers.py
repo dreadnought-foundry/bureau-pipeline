@@ -30,9 +30,15 @@ a writer this sweep would never see, and it is reported as such.
 layer a lane — a step moved to `scripts/<name>.sh` (DRE-3488) read through
 to its script by `step_shell.workflow_source`, so it still writes as its
 workflow (DRE-5220). The destination of each is resolved statically — a
-literal, a module constant, a parameter default, a pure vocabulary reader called with
-literal arguments, or, when the call site computes it, the module's own
-published `destinations()`. A destination no rule can read is reported as
+literal, a module constant (imported by name or computed by a pure reader, as
+`lane_contract.QUEUE_LANE` is — DRE-6744), a parameter default, a pure vocabulary
+reader called with literal arguments, or, when the call site computes it, the module's own
+published `destinations()`. A step shell's lane variable is read when the
+shell assigned it a module's constant through the seam the step shells read
+every pipeline constant by, `$(python3 -c '…; import M; print(M.NAME)')`, as
+the module's own value (DRE-6745). `QUEUE_LANE` is the planning exit's destination, so
+the planner's writers reach `Queued` only once DRE-6742 flips that exit, and
+that card is the one that asserts it (DRE-6749). A destination no rule can read is reported as
 UNREAD rather than assumed innocent: unknown is never a pass.
 
 A writer is named the way the lane contract names it — a module that a workflow
@@ -79,8 +85,8 @@ otherwise is worse than none:
   * **Linear's team-level default.** `defaultIssueState` is a setting on the
     Linear team, mirrored in agent-bureau's `config/linear-workspace.json`
     (nested, as `team.defaultIssueState`, since DRE-2751). It is a writer no
-    code path touches and the highest-leverage one — it carried `Backlog` when
-    this was written. `observed_default()` reads it from a workspace
+    code path touches and the highest-leverage one — it carried the lane
+    `Queued` replaces when this was written. `observed_default()` reads it from a workspace
     declaration in reach, at `team.defaultIssueState` or a top-level
     `defaultIssueState`, or from Linear itself; with neither, it returns None
     and `default_problems(None)` REPORTS it as UNKNOWN, naming both paths,
@@ -202,8 +208,35 @@ def ready_lanes(contract: dict | None = None, doc: dict | None = None) -> tuple:
     card to, read from the shape and routing vocabularies. Move a verdict's
     destination and this moves with it, which is the difference between policing
     the lanes that matter and policing the two somebody remembered.
+
+    Plus the start lane, `lane_contract.START_LANE` (DRE-7109): the lane every
+    restart writes is ready work by definition — a card in it is built — so it
+    is policed the moment the flip sets it to `In Progress`, whether or not
+    FLEET's destination has moved beside it. It passes the segment test the
+    vocabulary's lanes pass, and a contract that predates `build_start`
+    (DRE-7105) adds nothing.
     """
-    return planning_escalation.work_lanes_reachable_from_planning(contract, doc)
+    lanes = planning_escalation.work_lanes_reachable_from_planning(contract, doc)
+    if "build_start" not in (contract or lane_contract.load()):
+        return lanes
+    start = lane_contract.start_lane(contract)
+    try:
+        work = lane_contract.lane(start, contract=contract).get("segment") == "work"
+    except lane_contract.UnknownLane:
+        work = False
+    return lanes if start in lanes or not work else lanes + (start,)
+
+
+def is_ready(lane: str | None, ready: tuple, contract: dict | None = None) -> bool:
+    """Is a card in `lane` in ready work — under the lane's own name, or
+    under a retired name the contract aliases to one?
+
+    The vocabularies name the lane a card is sent to, never the name it
+    replaced: since DRE-6742 they say `Queued`, and the queue's old name is an
+    alias for it. A card written under the old name is still in the queue, so
+    a writer or a team default that lands one there is the same hole.
+    """
+    return lane in ready or lane_contract.aliases(contract).get(lane) in ready
 
 
 def unseen_writers(contract: dict | None = None) -> tuple:
@@ -335,6 +368,8 @@ class _Repo:
                     "tree": tree,
                     "source": source,
                     "consts": _module_constants(tree),
+                    "values": _module_values(tree),
+                    "imports": _module_imports(tree),
                     "funcs": _functions(tree),
                 }
             )
@@ -352,6 +387,45 @@ def _module_constants(tree) -> dict:
             if isinstance(target, ast.Name):
                 out[target.id] = node.value.value
     return out
+
+
+def _module_values(tree) -> dict:
+    """Module-level names bound to an expression that is not a literal —
+    `QUEUE_LANE = queue_lane()` — resolved where they are read (DRE-6744)."""
+    out: dict = {}
+    for node in getattr(tree, "body", []):
+        if not isinstance(node, ast.Assign) or isinstance(node.value, ast.Constant):
+            continue
+        for target in node.targets:
+            if isinstance(target, ast.Name):
+                out[target.id] = node.value
+    return out
+
+
+def _module_imports(tree) -> dict:
+    """`from <module> import <name>` at module level: local name → (module, name)."""
+    out: dict = {}
+    for node in getattr(tree, "body", []):
+        if isinstance(node, ast.ImportFrom) and node.module and not node.level:
+            for alias in node.names:
+                out[alias.asname or alias.name] = (node.module, alias.name)
+    return out
+
+
+def _module_value(repo: _Repo, module_name: str, name: str, depth: int) -> set:
+    """What module `module_name`'s top-level `name` can be: a literal, or the
+    expression it is bound to, read in that module's own scope."""
+    mod = repo.module(module_name)
+    if not mod:
+        return set()
+    if name in mod["consts"]:
+        return {mod["consts"][name]}
+    if name in mod["values"]:
+        return _resolve(mod["values"][name], repo, module_name, None, depth + 1)
+    if name in mod["imports"]:
+        other, attr = mod["imports"][name]
+        return _module_value(repo, other, attr, depth + 1)
+    return set()
 
 
 def _local_assignments(fn, name: str) -> list:
@@ -486,15 +560,10 @@ def _resolve(node, repo: _Repo, module_name: str, fn, depth: int = 0) -> set:
         default = _param_default(fn, node.id)
         if default is not None:
             return _resolve(default, repo, module_name, fn, depth + 1)
-        mod = repo.module(module_name)
-        if mod and node.id in mod["consts"]:
-            return {mod["consts"][node.id]}
-        return set()
+        return _module_value(repo, module_name, node.id, depth)
     if isinstance(node, ast.Attribute):
         if isinstance(node.value, ast.Name):
-            other = repo.module(node.value.id)
-            if other and node.attr in other["consts"]:
-                return {other["consts"][node.attr]}
+            return _module_value(repo, node.value.id, node.attr, depth)
         return set()
     if isinstance(node, ast.Call):
         args = [a.value for a in node.args if isinstance(a, ast.Constant)]
@@ -725,6 +794,32 @@ def cli_lane_arguments(root: str = ROOT, lane_params: dict | None = None) -> dic
 _CONTINUATION = re.compile(r"\\\s*\n\s*")
 _INVOCATION = re.compile(r"linear_ops\.py((?:\\\s*\n|[^\n])*)")
 
+#: A shell variable assigned one of the pipeline's own constants through the
+#: seam every step shell reads one by (DRE-6745):
+#: `QUEUE_LANE=$(python3 -c '…; import lane_contract; print(lane_contract.QUEUE_LANE)')`.
+#: Only that exact shape is read — the module's top-level name, printed — and
+#: anything else assigned to a variable stays unread.
+_SEAM_ASSIGNMENT = re.compile(
+    r"^[ \t]*(?P<var>[A-Za-z_]\w*)=\$\(python3 -c '(?P<code>[^']*)'\)[ \t]*$", re.M)
+_SEAM_PRINT = re.compile(
+    r"\bimport (?P<module>\w+); print\((?P=module)\.(?P<name>[A-Za-z_]\w*)\)$")
+_SHELL_VARIABLE = re.compile(r"^\$(?:\{(?P<braced>\w+)\}|(?P<bare>\w+))$")
+
+
+def _seam_values(text: str, root: str) -> dict:
+    """variable → every string the seam can print into it, read as the module's
+    own top-level value, exactly as a Python writer naming it is read."""
+    out: dict = {}
+    repo = None
+    for match in _SEAM_ASSIGNMENT.finditer(text):
+        printed = _SEAM_PRINT.search(match.group("code").strip())
+        if not printed:
+            continue
+        repo = repo or _Repo(root)
+        out[match.group("var")] = out.get(match.group("var"), set()) | _module_value(
+            repo, printed.group("module"), printed.group("name"), 0)
+    return out
+
 
 def _workflow_writes(root: str, live: set, lane_args: dict) -> list:
     found: list[LaneWrite] = []
@@ -734,6 +829,7 @@ def _workflow_writes(root: str, live: set, lane_args: dict) -> list:
         except OSError:
             continue
         writer = os.path.basename(path)
+        seam = None
         for match in _INVOCATION.finditer(text):
             args = _shell_args(_CONTINUATION.sub(" ", match.group(1)))
             if not args:
@@ -744,6 +840,14 @@ def _workflow_writes(root: str, live: set, lane_args: dict) -> list:
             line = text.count("\n", 0, match.start()) + 1
             where = f"{os.path.relpath(path, root)}:{line}"
             value = args[index + 1] if len(args) > index + 1 else None
+            variable = _SHELL_VARIABLE.match(value or "")
+            if variable:
+                seam = _seam_values(text, root) if seam is None else seam
+                lanes = seam.get(variable.group("braced") or variable.group("bare"), set())
+                if lanes and lanes <= live:
+                    found += [LaneWrite(writer, where, lane, "workflow", value)
+                              for lane in sorted(lanes)]
+                    continue
             found.append(
                 LaneWrite(writer, where, value if value in live else None, "workflow",
                           value if value is not None else "<no argument>")
@@ -851,7 +955,7 @@ def default_problems(default: str | None, *, contract: dict | None = None,
             "which is not a live lane — a card created without a state lands "
             "somewhere the contract does not name"
         ]
-    if default in ready:
+    if is_ready(default, ready, contract):
         return [
             f"{LINEAR_DEFAULT_WRITER}: Linear's team default is {default!r}, a "
             "lane the pipeline treats as ready work. Anything that creates a "
@@ -1074,7 +1178,7 @@ def writer_problems(root: str = ROOT, contract: dict | None = None,
                 f"`{DESTINATIONS_HOOK}()` in the module"
             )
             continue
-        if write.lane not in ready:
+        if not is_ready(write.lane, ready, contract):
             continue
         permitted = lane_contract.lane_writers(write.lane, contract=contract)
         if write.writer not in permitted:

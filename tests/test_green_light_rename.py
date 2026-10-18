@@ -137,8 +137,9 @@ class NoStaleLaneNameTest(unittest.TestCase):
     def test_the_alias_is_declared_exactly_once(self):
         # One literal, so the board rename is one deletion and cannot leave half
         # the transition behind. The write direction inverts this dict instead of
-        # repeating it.
-        self.assertEqual({OLD_LANE: NEW_LANE}, lane_scope.LANE_ALIASES)
+        # repeating it. The table carries other renames too (DRE-6741's
+        # Backlog → Queued), so this pins the one entry it owns.
+        self.assertEqual(NEW_LANE, lane_scope.LANE_ALIASES[OLD_LANE])
         self.assertEqual(
             1,
             len([1 for rel, _, _ in retired_lane_mentions()

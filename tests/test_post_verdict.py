@@ -9,7 +9,9 @@ says what it does before what happened to it — and the file runs as a file.
 
 The end-to-end case runs `bash scripts/post_verdict.sh` by path, with no
 rewriting, so it reads and writes the fixed `/tmp/qa-*.md` paths the
-workflow uses. Whatever stood at those paths before the test is put back.
+workflow uses. Whatever stood at those paths before the test is put back,
+and the test holds `fixed_tmp`'s machine-wide lock throughout, so another copy
+of the suite on the same machine never deletes its files mid-run (DRE-7025).
 """
 
 from __future__ import annotations
@@ -32,6 +34,7 @@ DELEGATION = 'bash "$PIPELINE_DIR/scripts/post_verdict.sh"'
 sys.path.insert(0, str(ROOT / "scripts"))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+import fixed_tmp  # noqa: E402
 import step_shell  # noqa: E402
 from test_verdict_evidence_scenario import APPROVE, _gate, _gh_stub  # noqa: E402
 
@@ -78,7 +81,8 @@ class TheStepDelegatesTest(unittest.TestCase):
     def test_it_keeps_its_id_and_condition(self):
         step = _step()
         self.assertEqual(step.get("id"), "post")
-        self.assertEqual(step.get("if"), "always() && !cancelled() && steps.decide.outputs.review == 'true'")
+        # A shadow replay posts nothing (DRE-7193): its verdict is a file.
+        self.assertEqual(step.get("if"), "always() && !cancelled() && steps.decide.outputs.review == 'true' && !inputs.shadow")
 
 
 class TheScriptFileTest(unittest.TestCase):
@@ -110,6 +114,7 @@ class TheFileRunsAsAFileTest(unittest.TestCase):
     """One approved verdict, through the real gates, posted by the file itself."""
 
     def setUp(self):
+        fixed_tmp.hold(self)
         saved = {}
         for name in TMP_FILES:
             path = Path("/tmp") / name

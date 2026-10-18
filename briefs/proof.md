@@ -133,6 +133,22 @@ asks for a reading the declaration does not hold is a cause row, below.
   sign-in ration counter (DRE-5928, DRE-6035). When no caller provides one, the
   Identities section records `aws: none` and every criterion that needs the
   product's own identities is `Not observed.` with that reason.
+
+  Every sign-in you hold was made when the job started: `GH_READ_TOKEN` and
+  `GH_TOKEN` live one hour and nothing in the run can renew them, and the AWS
+  session lives `PROOF_SESSION_SECONDS` seconds. Make every GitHub read, and
+  the one refused write, before anything that waits; a push made after the
+  first hour is refused, so commit the record on the branch and leave the push
+  and the pull request to the workflow's push-rescue step. Before a hold or any
+  other wait, add up the wait, the window the card reads after it and the
+  reads themselves; if that ends after the AWS session does, make the hold
+  anyway, write each window's start and end in PT into the record, and write
+  every row you could not read as `Not observed.` with that reason, so the
+  next run on the branch reads those windows. Never run a hold a second time:
+  the job ends at 120 minutes; when a release or a backend start lands inside
+  a hold, quote it, read each row as the card words it, and write a count the
+  card's window can no longer reach as `Not met.` with the lines you saw.
+  (DRE-7020)
 - **Never:** never a person's account, never the CEO's account, never a
   sign-in typed into a web page by the run itself. Hosted sign-ins are rationed
   by the product's own script — three a Pacific day (DRE-5671) — and a hosted
@@ -175,14 +191,15 @@ asks for a reading the declaration does not hold is a cause row, below.
   request or a comment.
 
 ## The lanes, which you never write
-The board is `Intake` → `Planning` → `Green Light` → `Backlog` → `Todo` →
+The board is `Intake` → `Planning` → `Green Light` → `Queued` → `Todo` →
 `In Progress` → `In Review` → `Done`, with `Triage` off to the side and
 `Hand-work` beside `Todo` as the lane where a person's work waits. A proof card
 is dispatched from `Hand-work` and you never move it. The workflow does, in
 three moves and no other (DRE-5925): your escalation file parks it in
-`Green Light`, the CEO's "needs you" queue; the run his signed answer
-dispatches returns it to `Hand-work` before you start; and an open record pull
-request carries it to `In Review`. `Triage` is the broken-card lane, and a
+`Green Light`, the CEO's "needs you" queue, only when it names a press or a
+decision — a file of cause rows leaves the card `In Review` for the operator
+(DRE-6840); the run his signed answer dispatches returns it to `Hand-work`
+before you start; and an open record pull request carries it to `In Review`. `Triage` is the broken-card lane, and a
 proof card reaches it only through a step that is not yours — the escalation
 file is the one thing you write that asks for anything. Read a lane in
 `config/lane-contract.json`, never from memory.
@@ -378,9 +395,34 @@ accepted row. The gate checks only that a link of the right shape is present —
 it does not open it, so the critic is the reader who follows it.
 
 ## A press only the CEO can make, and his answer
-Some criteria can be satisfied only by a press the CEO's own login can make — a
-console button only his account sees. You do not sign in as him and you do not
-infer it. The row reads
+**Which press is his.** A press is the CEO's only when it is a business decision
+of his — what it changes is a choice about the business he has not made: which
+model a real project runs on, whether a real proposal is approved, whether a
+real card is removed from a proposal. A press the operator can make is the
+operator's row and never his: a press on the sandbox project, a press from the
+operator's signed-in session under the operator's standing permission of
+2026-10-07, or the recording of a removal or decision the CEO has already made.
+On 2026-10-10 two proofs reached his list on presses that were the operator's:
+DRE-6638 (one project's Builders set to Sonnet 5.5, on the sandbox project) and
+DRE-6663 (Not doing pressed on one groom card).
+
+**The operator's press.** When a criterion names a press the operator can make
+— the press is on the sandbox project, or is a console press the card's words
+say the operator may make — record it as an event row, even when the card
+words it `needs the CEO's press:`:
+
+    Not observed. waiting for the operator's press: <the press>
+
+and write no escalation file for it. The dispatcher holds the card for the
+operator under a `🔬 proof-waiting` hold naming the press (DRE-6814); its
+first half says `the press named on the card` where the criterion says the
+CEO's (DRE-6837), so the operator's `🔬 proof-observed` discharges it, and the
+next pass re-runs the proof to observe the result. It never reaches
+`Green Light`.
+
+**The CEO's press.** Only when the card's words name a business decision of his
+is the press his. You do not sign in as him and you do not infer it. The row
+reads
 
     Not observed. needs the CEO's press: <the press>
 
@@ -456,7 +498,10 @@ push the record and open its pull request, then write
     cause: <cause-word> — “<criterion, cut to 70>” — <what was seen instead>
 
 The Finding says how many rows and which causes, the Question is that sentence
-word for word, and the Recommendation names your own pick and why. Each
+word for word, and the Recommendation names your own pick and why. That
+Question line, word for word, is what tells the workflow a cause file from a
+decision: a file whose Question is any other is the CEO's decision, its
+`cause:` lines set under it. Each
 `cause:` line copies the criterion from its row, cut to 70 characters, and the
 text after the row's dash. For example:
 
@@ -468,9 +513,10 @@ text after the row's dash. For example:
 
 A cause row and a press row in one record are one file, written once: the
 press lines keep their shape, as the section above has them, beside the three
-lines and the `cause:` lines. The workflow posts the hold and the question from
-that file and parks the card in `Green Light` — you never post either, and
-never move the card.
+lines and the `cause:` lines. Once the record pull request is open, the
+workflow holds the card `In Review` for the operator and posts the operator's
+question from a file of cause rows; only a press or a decision parks the card
+in `Green Light`. You never post either, and never move the card.
 
 ## Heartbeats
 One line each on the card, never skipping 1/5 — it is your "alive" signal:

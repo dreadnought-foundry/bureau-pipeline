@@ -1027,7 +1027,7 @@ class CrossEpicSight(unittest.TestCase):
         written out, both halves of it."""
         block = pc.sight_block("DRE-2721", self.EPICS).lower()
         self.assertIn("cannot see", block)
-        for unseen in ("backlog", "team", "branch"):
+        for unseen in ("queued", "team", "branch"):
             self.assertIn(unseen, block)
 
     def test_no_other_epic_in_flight_is_stated_not_implied(self):
@@ -2209,6 +2209,8 @@ class ThePostMarkerReleasesTheChildren(unittest.TestCase):
             self._cycle(pc.marker(pc.STAGE_POST, 1, pc.SEND_BACK, "a gap")))
         self.assertEqual(pc.refusal_tag(missing), pc.POST_UNREAD_TAG)
         self.assertEqual(pc.refusal_tag(held), pc.POST_SENT_BACK_TAG)
+        # DRE-6747: the children wait in the queue, by its name.
+        self.assertIn("The children stay in Queued until the gap is settled", held)
         self.assertNotEqual(pc.POST_UNREAD_TAG, pc.POST_SENT_BACK_TAG)
         self.assertNotIn(pc.POST_UNREAD_TAG, pc.POST_SENT_BACK_TAG)
         self.assertNotIn(pc.POST_SENT_BACK_TAG, pc.POST_UNREAD_TAG)
@@ -2985,6 +2987,8 @@ class ADeadReviewLeavesATombstone(unittest.TestCase):
         self.assertNotIn(self.ROUND_ONE, refusal)
         self.assertNotIn(pc.POST_SENT_BACK_TAG, refusal)
         self.assertEqual(pc.refusal_tag(refusal), pc.POST_DIED_TAG)
+        self.assertIn("the children stay in Queued until the review runs again",
+                      " ".join(refusal.split()))
 
     def test_the_died_refusal_names_the_card_the_epic_and_the_run(self):
         refusal = pc.promotion_refusal(
@@ -3763,11 +3767,11 @@ class TheSecondCriticReadsBeforeGreenLight(unittest.TestCase):
         flight for neither; the SIGHT is wider, because two plans read at the
         same moment both sit in Planning and must see each other."""
         self.assertEqual(pc.IN_FLIGHT_EPIC_STATES,
-                         ("Green Light", "Todo", "In Progress"))
+                         ("Green Light", "In Progress", "Todo"))
         self.assertEqual(pc.SIGHT_STATES,
                          pc.IN_FLIGHT_EPIC_STATES + (pc.REVIEW_LANE,))
         self.assertEqual(pc.SIGHT_STATES,
-                         ("Green Light", "Todo", "In Progress", "Planning"))
+                         ("Green Light", "In Progress", "Todo", "Planning"))
 
     SIGHT_EPICS = [
         {"identifier": "DRE-2700", "title": "The intake gate", "state": "In Progress"},
@@ -3779,7 +3783,7 @@ class TheSecondCriticReadsBeforeGreenLight(unittest.TestCase):
         caller that reads IN_FLIGHT_EPIC_STATES — `epics-in-flight` today —
         gets a block naming those three lanes and no Planning paragraph."""
         block = pc.sight_block(self.EPIC, self.SIGHT_EPICS[:1])
-        self.assertIn("That list is every epic in Green Light, Todo, In Progress "
+        self.assertIn("That list is every epic in Green Light, In Progress, Todo "
                       "on the DRE board at the moment this run started.", block)
         self.assertNotIn("Planning", block)
         self.assertNotIn("a plan under review", block)
@@ -3808,7 +3812,7 @@ class TheSecondCriticReadsBeforeGreenLight(unittest.TestCase):
         self.assertIn("a plan under review that the CEO has not approved", block)
         self.assertIn("name it all the same", block)
         # The cannot-see sentence is unchanged.
-        self.assertIn("epics in Backlog, Intake or Done", block)
+        self.assertIn("epics in Queued, Intake or Done", block)
 
     # --- the words -----------------------------------------------------------
 
@@ -3831,6 +3835,16 @@ class TheSecondCriticReadsBeforeGreenLight(unittest.TestCase):
         self.assertEqual(pc.question(pc.STAGE_PRE), "Is this fit to take the CEO's time?")
         self.assertEqual(pc.question(pc.STAGE_POST),
                          "Given this is now the specification, what is missing?")
+
+    def test_both_charters_say_a_child_still_to_build_waits_in_queued(self):
+        """DRE-6747: a child the critic must still judge sits in `Queued`, the
+        queue's name, in both charters' reading of a lane."""
+        for stage in ("pre", "post"):
+            out = self._run("charter", stage)
+            self.assertEqual(out.returncode, 0, out.stderr)
+            text = " ".join(out.stdout.split())
+            self.assertIn("Anything else — Queued, Todo, Triage — is still to build", text)
+            self.assertNotIn("Backlog", text)
 
     def test_the_post_charter_is_the_last_reader_before_green_light(self):
         out = self._run("charter", "post")
@@ -3857,6 +3871,8 @@ class TheSecondCriticReadsBeforeGreenLight(unittest.TestCase):
         note = pc.death_note(self.EPIC, row)
         self.assertIn(f"**The second critic's review of {self.EPIC} did not finish**",
                       note)
+        self.assertIn("the children stay in Queued until the review runs again",
+                      " ".join(note.split()))
 
     def test_a_second_death_parks_in_triage(self):
         self.assertIn(pc.BOUND_PARK_LANE, pc.DEAD_REVIEW_NEXT)
@@ -4586,3 +4602,71 @@ class TheDecideStepWritesTheLines(unittest.TestCase):
         self.assertEqual(bare["out"], full["out"])
         self.assertEqual(bare["record"], full["record"])
         self.assertEqual(1, len(full["record"].strip().split("\n")))
+
+
+def _contract_without_todo():
+    """The shipped lane contract with Todo's entry deleted — the board the
+    Todo retirement leaves (DRE-7105's own fixture, `tests/test_build_start.py`)."""
+    import copy
+
+    import lane_contract
+
+    doc = copy.deepcopy(lane_contract.load())
+    doc["build_start"]["lane"] = "In Progress"
+    doc["lanes"] = [entry for entry in doc["lanes"] if entry["name"] != "Todo"]
+    return doc
+
+
+class TheInFlightLanesAreTheStartLanes(unittest.TestCase):
+    """DRE-7113. An epic in flight is in Green Light or a start lane, and the
+    start lanes are the lane contract's (`lane_contract.START_LANES`, DRE-7105)
+    — so deleting Todo's entry narrows both with no edit here."""
+
+    def test_the_shipped_contract_keeps_todays_set(self):
+        import lane_contract
+
+        self.assertEqual(pc.IN_FLIGHT_EPIC_STATES,
+                         ("Green Light", "In Progress", "Todo"))
+        self.assertEqual(pc.IN_FLIGHT_EPIC_STATES,
+                         ("Green Light",) + lane_contract.START_LANES)
+        self.assertEqual(pc.in_flight_epic_states(), pc.IN_FLIGHT_EPIC_STATES)
+
+    def test_a_contract_without_todo_drops_it(self):
+        self.assertEqual(pc.in_flight_epic_states(_contract_without_todo()),
+                         ("Green Light", "In Progress"))
+
+    def test_the_charter_names_the_queue_and_the_waiting_start_lanes(self):
+        shipped = " ".join(pc.child_state_block().split())
+        self.assertIn("Anything else — Queued, Todo, Triage — is still to build",
+                      shipped)
+        flipped = " ".join(pc.child_state_block(_contract_without_todo()).split())
+        self.assertIn("Anything else — Queued, Triage — is still to build", flipped)
+
+    def test_both_charters_read_the_contracts_block(self):
+        for stage in (pc.STAGE_PRE, pc.STAGE_POST):
+            self.assertIn(pc.child_state_block(), pc.charter(stage))
+
+
+#: The planner's and the repairers' scripts DRE-7113 rewords. None of them
+#: writes the lane; after it none of them names it in a string either.
+STOPPED_NAMING_TODO = (
+    "plan_critic", "mid_epic", "hand_work_migration", "break_glass",
+    "backlog_cutover", "repair_card", "model_adoption_actions",
+    "dependabot_card", "structural_repair", "proof_and_demo", "planning_route",
+)
+
+
+class TheseScriptsNoLongerNameTodo(unittest.TestCase):
+    """DRE-7113. Every string constant in the eleven files — docstrings
+    included — read as `lane_contract` reads the pipeline's vocabulary, the
+    same walk DRE-6747 runs for `Backlog` (`tests/test_planner_queue.py`). A
+    `#` comment is not a constant, so one recording an incident keeps its
+    wording."""
+
+    def test_no_string_constant_names_the_lane(self):
+        import lane_contract
+
+        for script in STOPPED_NAMING_TODO:
+            with self.subTest(script=script):
+                path = os.path.join(SCRIPTS, f"{script}.py")
+                self.assertEqual(lane_contract._scan_python(path, ["Todo"]), set())

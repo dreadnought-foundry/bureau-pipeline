@@ -1,5 +1,5 @@
 # Model trial (DRE-3897) — ONE real agent run on a candidate model, before any
-# adoption PR is written.
+# adoption is written into the home (DRE-6943).
 #
 # `model-adoption.yml` (DRE-3898) discovers a model in the live catalog and
 # sorts it by the CEO's rule. Before this trial, a newly found model went from
@@ -128,8 +128,10 @@ jobs:
       run_url: ${{ steps.verify.outputs.run_url }}
       summary: ${{ steps.verify.outputs.summary }}
     steps:
-      # The caller's repo — the one holding config/models.yaml, which is the
-      # file the trial task reads.
+      # The caller's repo — the one holding config/model-prices.yaml, which is
+      # the file the trial task reads. The catalog of prices, since DRE-6971:
+      # a code-side fact that stays in the repository and is never empty,
+      # where the choices the task once counted leave config/models.yaml.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       # The pipeline's own checkout: the shared install action below and the
@@ -217,13 +219,12 @@ jobs:
             You are a bounded trial run on a candidate model. Do exactly the
             task below, and nothing else.
 
-            1. Read the file config/models.yaml in this repository.
-            2. Count the entries under its top-level `ladders:` key — how many
-               named ladders the file declares, NOT how many models are on
-               them.
+            1. Read the file config/model-prices.yaml in this repository.
+            2. Count the entries under its top-level `prices:` key — how many
+               models the file prices, NOT how many fields each entry has.
             3. Write a single line of the form
 
-                   ladders=<n>
+                   prices=<n>
 
                to a file named trial-answer.txt in the repository root, where
                <n> is that count in decimal digits. Nothing else in the file,
@@ -298,7 +299,7 @@ jobs:
           # The task's two files, named once so the prompt above, this script
           # and the tests cannot drift apart.
           ANSWER_FILE: trial-answer.txt
-          CONFIG_FILE: config/models.yaml
+          CONFIG_FILE: config/model-prices.yaml
           # What the limits step above wrote.
           LIMITS_FILE: ${{ runner.temp }}/model-limits.json
           BUREAU_SERVER_URL: ${{ github.server_url }}
@@ -330,12 +331,12 @@ jobs:
           try:
               import yaml
               doc = yaml.safe_load(pathlib.Path(config_file).read_text())
-              ladders = (doc or {}).get("ladders")
-              if not isinstance(ladders, dict) or not ladders:
-                  raise ValueError(f"{config_file} declares no ladders mapping")
-              expected = len(ladders)
+              prices = (doc or {}).get("prices")
+              if not isinstance(prices, dict) or not prices:
+                  raise ValueError(f"{config_file} declares no prices mapping")
+              expected = len(prices)
           except Exception as exc:
-              config_error = f"could not count the ladders in {config_file}: {exc}"
+              config_error = f"could not count the prices in {config_file}: {exc}"
 
           # 2. What the agent actually wrote. Capped before it is quoted: the
           #    file is agent output, so it is the one untrusted string in this
@@ -355,7 +356,7 @@ jobs:
           seconds = round(duration / 1000) if isinstance(duration, (int, float)) else "?"
           step_outcome = (os.environ.get("CLAUDE_OUTCOME") or "").strip()
 
-          matched = expected is not None and answer == f"ladders={expected}"
+          matched = expected is not None and answer == f"prices={expected}"
           outcome = "passed" if (
               matched and death == "none" and record and step_outcome != "failure"
           ) else "failed"
@@ -390,7 +391,7 @@ jobs:
           elif not answer:
               why = f"no {answer_file}"
           else:
-              why = f"{answer_file} says {answer!r}, expected 'ladders={expected}'"
+              why = f"{answer_file} says {answer!r}, expected 'prices={expected}'"
           # One LINE, whatever an exception or a hostile answer file contained.
           why = " ".join(why.split())
 

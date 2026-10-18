@@ -104,8 +104,21 @@ The rule, in order:
         reason says which file could not be read.
      e. `refresh` when a new test in the since-run payload names a source
         file the pull request changes, or a new test in the pull request
-        names a source file the since-run payload changed. Otherwise
-        `proceed`.
+        names a source file the since-run payload changed. Otherwise step f.
+     f. A new test polices other tests (DRE-6967) when the lines its `patch`
+        adds name at least `POLICING_MIN_NAMED` (3) other test files. A name
+        is a maximal run of letters, digits, `_`, `.` and `-`, trailing dots
+        dropped, that is a test-shaped basename in full; each distinct name
+        counts once, and the test's own basename does not count. A new test
+        with no `patch` polices nothing and is named in the reason, as in d.
+        `refresh` when the pull request adds a policing test and the
+        since-run payload has a new test file, or the since-run payload has a
+        policing test and the pull request adds a new test file. Otherwise
+        `proceed`. This is the clash e cannot see, because neither side's
+        test names a source file: bureau-pipeline #1030 added a guard that
+        reads the whole `tests/` folder, its allow-list naming 28 test
+        files, while #1031 landed `tests/test_model_caution.py`, which the
+        guard refused once the two met on `main`.
 
 Known limit, stated rather than hidden: GitHub's compare API lists at most 300
 files per side. A `main` that gained more than that since the merge base can
@@ -185,6 +198,12 @@ _TEST_BASENAME = re.compile(
     r"test_.*\.py|.*_test\.py|.+\.(?:test|spec)\.[^.]+")
 # Shorter names match too much ordinary text to mean the file.
 MIN_NAME_LENGTH = 6
+# Rule 6f (DRE-6967): a new test whose added lines name at least this many
+# other test files polices other tests. #1030's guard named 28; a third of
+# the day's new tests named three or more.
+POLICING_MIN_NAMED = 3
+# A name in an added line: a maximal run of these, trailing dots dropped.
+_NAME_RUN = re.compile(r"[A-Za-z0-9_.-]+")
 
 NO_TEST_RUN_REASON = ("no test run of this head exists, so there is nothing "
                       "a refresh would re-test against — merging as today")
@@ -353,6 +372,37 @@ def _first_naming(tests, sources, unread):
     return None
 
 
+def _named_tests(test, patch) -> set:
+    """The other test files the lines `patch` adds name, each once, by
+    basename. The test's own basename is not one of them."""
+    own = posixpath.basename(test)
+    named = set()
+    for line in patch.splitlines():
+        if not line.startswith("+"):
+            continue
+        for run in _NAME_RUN.findall(line[1:]):
+            name = run.rstrip(".")
+            if name != own and _TEST_BASENAME.fullmatch(name):
+                named.add(name)
+    return named
+
+
+def _first_policing(tests, unread):
+    """The first `(test, count)` among new tests whose added lines name at
+    least `POLICING_MIN_NAMED` other test files, in payload order. A test
+    with no `patch` polices nothing and is recorded in `unread`."""
+    for test, entry in tests:
+        patch = entry.get("patch")
+        if not isinstance(patch, str):
+            if test not in unread:
+                unread.append(test)
+            continue
+        count = len(_named_tests(test, patch))
+        if count >= POLICING_MIN_NAMED:
+            return test, count
+    return None
+
+
 def _new_tests_rule(*, compare, since_run, bodies, behind_by,
                     no_fork) -> Decision:
     """Rule 6, reached only with the switch on, the branch behind, and the
@@ -386,6 +436,22 @@ def _new_tests_rule(*, compare, since_run, bodies, behind_by,
         return Decision(REFRESH, _one_line(
             f"this pull request adds {hit[0]}, which names {hit[1]}, changed "
             f"on main"), rule=RULE_NEW_TESTS)
+
+    # 6f — a new test that polices other tests meets a new test file from the
+    # other side (DRE-6967).
+    ours_new, theirs_new = _new_tests(ours), _new_tests(theirs)
+    hit = _first_policing(ours_new, unread)
+    if hit and theirs_new:
+        return Decision(REFRESH, _one_line(
+            f"this pull request adds {hit[0]}, which polices other tests (it "
+            f"names {hit[1]} of them), and main added {theirs_new[0][0]} "
+            f"since this head's last test run"), rule=RULE_NEW_TESTS)
+    hit = _first_policing(theirs_new, unread)
+    if hit and ours_new:
+        return Decision(REFRESH, _one_line(
+            f"main added {hit[0]}, which polices other tests (it names "
+            f"{hit[1]} of them), and this pull request adds {ours_new[0][0]}"),
+            rule=RULE_NEW_TESTS)
     reason = f"{no_fork}, and no new test names a file the other side changed"
     if unread:
         reason += (f" — could not read {', '.join(unread)}: the compare "

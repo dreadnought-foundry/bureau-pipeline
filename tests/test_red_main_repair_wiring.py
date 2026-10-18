@@ -8,8 +8,8 @@ four guardrail mechanisms exactly as pinned there:
     branch — and NO schedule trigger anywhere in the stage or its stub (the
     reconcile sweep stays the only scheduled job in the system);
   * guardrail 2 (no crash-loop): the decide step runs red_main_repair.py
-    BEFORE any agent, and the budget-exhausted path raises a deduplicated
-    Linear triage card instead of a third attempt;
+    BEFORE any agent, and the budget-exhausted path raises a CRITICAL console
+    alert (DRE-7454) instead of a third attempt;
   * guardrail 3 (concurrency lock): job-level Actions concurrency group
     red-main-repair-<repo> with cancel-in-progress: false;
   * guardrail 4 (quota isolation): the worker token is minted through the
@@ -17,7 +17,8 @@ four guardrail mechanisms exactly as pinned there:
   * fix flow: the agent authors a normal PR as the worker identity (the
     qa-bot merges it — author != merger), forward-fix only, with the
     stale-test-vs-broken-code claim required in the PR body; the
-    can't-confidently-fix path escalates to Triage.
+    can't-confidently-fix path raises a console alert whose fallback card
+    lands in Triage.
 
 The self-host stub (self-red-main-repair.yml) puts THIS repo's own main on
 the repair rail, and the medic watches the stage (a repair run's failure is
@@ -83,9 +84,13 @@ class ConcurrencyLockTest(unittest.TestCase):
     """Guardrail 3: one repair in flight per repo, duplicates queue behind."""
 
     def test_job_level_concurrency_group(self):
+        # One REPAIR job, so the lock covers the whole repair. The only other
+        # job is the all-clear (DRE-7454), which runs on the opposite
+        # conclusion and repairs nothing.
         jobs = doc(REUSABLE).get("jobs") or {}
-        self.assertEqual(len(jobs), 1, "one job — the lock covers the whole run")
-        job = next(iter(jobs.values()))
+        self.assertEqual(sorted(jobs), ["clear-notices", "repair"])
+        self.assertIn("conclusion == 'success'", jobs["clear-notices"]["if"])
+        job = jobs["repair"]
         conc = job.get("concurrency") or {}
         self.assertIn("red-main-repair-", str(conc.get("group")))
         self.assertIs(conc.get("cancel-in-progress"), False)
@@ -119,11 +124,14 @@ class DecideBeforeDispatchTest(unittest.TestCase):
     def test_agent_is_gated_on_the_decision(self):
         self.assertIn("steps.decide.outputs.go == 'true'", src(REUSABLE))
 
-    def test_budget_exhaustion_raises_a_deduplicated_triage_card(self):
+    def test_budget_exhaustion_raises_a_console_alert(self):
+        # DRE-7454: one row per key on the console is the duplicate
+        # suppression now, so the step no longer searches Linear itself.
         body = src(REUSABLE)
         self.assertIn("steps.decide.outputs.escalate == 'true'", body)
-        self.assertIn("linear_ops.py", body)
-        self.assertIn("find-open", body)
+        self.assertIn("pipeline_notice.py raise", body)
+        self.assertIn('--notice "red_main:$REPO_SLUG:budget_exhausted"', body)
+        self.assertNotIn("find-open", body)
 
     def test_uncertain_agent_parks_in_triage(self):
         body = src(REUSABLE)
@@ -216,9 +224,9 @@ class RepeatedTimeoutHistoryTest(unittest.TestCase):
 
     def test_the_budget_exhausted_card_names_the_step_and_the_clock(self):
         # The human who picks this up is told which step and which clock, not
-        # just "main is red" — that card is the whole handover.
+        # just "main is red" — that alert is the whole handover.
         steps = self._steps()
-        card = steps[self._index(steps, "linear_ops.py")]
+        card = steps[self._index(steps, "budget_exhausted")]
         env = card.get("env") or {}
         self.assertEqual(env.get("TIMEOUT_STEP"),
                          "${{ steps.decide.outputs.timeout_step }}")
@@ -371,7 +379,7 @@ class FinishUnlandedWiringTest(unittest.TestCase):
         return found[0]
 
     def test_the_comparisons_are_gathered_between_the_records_and_the_decision(self):
-        records = self._index("git/matching-refs/heads/repair/")
+        records = self._index("red_main_repair.py gather-records")
         gather = self._index("/tmp/repair-compares.json")
         decide = self._index("red_main_repair.py decide")
         self.assertGreater(records, -1)
@@ -380,13 +388,21 @@ class FinishUnlandedWiringTest(unittest.TestCase):
         self.assertLess(records, gather)
         self.assertLess(gather, decide)
 
-    def test_the_gather_matches_refs_through_record_refs(self):
+    def test_the_gather_matches_refs_through_the_script(self):
+        # DRE-6963: the comparisons ride the same wait-and-retry as the
+        # records, in the script, which also owns the record rule
+        # (`record_refs`) and the null-per-unreadable-compare shape.
         run = self._gather()["run"]
-        self.assertIn("red_main_repair.py record-refs", run)
+        self.assertIn("red_main_repair.py gather-compares", run)
         self.assertIn("--refs-file /tmp/repair-refs.json", run)
         self.assertIn('--head-sha "$HEAD_SHA"', run)
-        self.assertIn("/compare/", run)
-        self.assertIn("FETCH-FAILED", run)
+        self.assertIn('--default-branch "$DEFAULT_BRANCH"', run)
+        self.assertIn("--out /tmp/repair-compares.json", run)
+        # DRE-6963: the records' pulls file too, so a failed records gather
+        # costs no second wait here (the decision is already made).
+        self.assertIn("--pulls-file /tmp/repair-pulls.json", run)
+        self.assertNotIn("gh api", run)
+        self.assertNotIn("2>/dev/null", run)
         # The regex lives once, in the script.
         self.assertNotIn("DRE-[0-9]", run)
 
@@ -452,6 +468,71 @@ class FinishUnlandedWiringTest(unittest.TestCase):
 
     def test_the_concurrency_comment_names_the_ending(self):
         self.assertIn("finish-unlanded", src(REUSABLE).split("concurrency:")[0])
+
+
+class GatherRecordsRetryWiringTest(unittest.TestCase):
+    """DRE-6963: the attempt records are read by the script that says why a
+    read failed and waits the call limit out, and a read that never comes
+    back fails the run instead of ending it green."""
+
+    @staticmethod
+    def _steps():
+        return doc(REUSABLE)["jobs"]["repair"]["steps"]
+
+    @classmethod
+    def _step(cls, name):
+        found = [s for s in cls._steps() if s.get("name") == name]
+        assert len(found) == 1, f"exactly one step named {name!r}"
+        return found[0]
+
+    @classmethod
+    def records_step(cls):
+        return cls._step("Gather repair attempt records")
+
+    def test_the_reason_is_no_longer_thrown_away(self):
+        run = self.records_step()["run"]
+        self.assertNotIn("2>/dev/null || echo 'FETCH-FAILED'", run)
+        self.assertNotIn("2>/dev/null || echo 'FETCH-FAILED'", src(REUSABLE))
+        self.assertNotIn("gh api", run)
+
+    def test_the_step_calls_the_new_command(self):
+        run = self.records_step()["run"]
+        self.assertIn("red_main_repair.py gather-records", run)
+        self.assertIn('--repo "$GITHUB_REPOSITORY"', run)
+        self.assertIn("--refs-out /tmp/repair-refs.json", run)
+        self.assertIn("--pulls-out /tmp/repair-pulls.json", run)
+        self.assertNotIn("${{", run)
+
+    def test_a_failed_gather_fails_the_step(self):
+        # Never swallowed: the step's non-zero exit is the red run the medic
+        # and the alerts read.
+        step = self.records_step()
+        self.assertNotIn("continue-on-error", step)
+        self.assertNotIn("||", step["run"])
+        self.assertEqual((step.get("env") or {}).get("GH_TOKEN"),
+                         "${{ steps.app.outputs.token }}")
+
+    def test_the_decision_still_answers_after_a_failed_gather(self):
+        # The decide step still runs after the gather failed, and answers
+        # records-unreadable with go=false; every step that acts is gated on
+        # its outputs, so nothing dispatches.
+        decide = [s for s in self._steps() if s.get("id") == "decide"][0]
+        self.assertEqual(decide.get("if"), "${{ !cancelled() }}")
+        compares = self._step(
+            "Gather repair branch comparisons (pushed and never opened?)")
+        self.assertEqual(compares.get("if"), "${{ !cancelled() }}")
+
+    def test_the_job_outlasts_the_twenty_minute_wait(self):
+        job = doc(REUSABLE)["jobs"]["repair"]
+        self.assertGreaterEqual(int(job["timeout-minutes"]), 25)
+
+    def test_the_comment_states_the_new_behavior(self):
+        body = src(REUSABLE)
+        comment = body[:body.index("- name: Gather repair attempt records")]
+        comment = comment[comment.rindex("\n\n"):]
+        self.assertIn("DRE-6963", comment)
+        self.assertIn("rate limit", comment)
+        self.assertNotIn("the next failure event retries", comment)
 
 
 _FINISH_STUB = """\
@@ -560,6 +641,127 @@ class AlreadyOpenIsSafeToRepeatTest(unittest.TestCase):
         self.assertEqual(result["finish"], "already-open")
         self.assertEqual(result["pr_url"], PR_URL)
         self.assertEqual(created, [])
+
+
+class SupersededExitWiringTest(unittest.TestCase):
+    """DRE-5700: the agent's third ending — the fault is already gone from the
+    default branch — and the Report step's exit for it, which re-asks the
+    superseded rule (DRE-5069) instead of believing the agent."""
+
+    NOTE = "/tmp/repair-superseded.txt"
+    ERROR_LINE = ReportFinishesTheRepairTest.ERROR_LINE
+
+    @staticmethod
+    def _steps():
+        return doc(REUSABLE)["jobs"]["repair"]["steps"]
+
+    @classmethod
+    def _report(cls):
+        found = [s for s in cls._steps() if s.get("name") == "Report"]
+        assert len(found) == 1, "exactly one Report step"
+        return found[0]
+
+    @classmethod
+    def _prompt(cls):
+        return [s for s in cls._steps()
+                if "claude-code-action" in (s.get("uses") or "")][0]["with"]["prompt"]
+
+    def test_the_agent_has_a_numbered_seventh_step_for_it(self):
+        prompt = self._prompt()
+        self.assertIn("6. ESCALATE instead", prompt)
+        self.assertIn("\n7. ", prompt.replace("\n            ", "\n"))
+        step7 = prompt[prompt.index("7. "):]
+        self.assertIn(self.NOTE, step7)
+        self.assertIn("open NO PR", step7)
+        self.assertIn("push NOTHING", step7)
+        self.assertIn("stop", step7)
+        self.assertIn("already gone from the default branch", step7)
+        self.assertLess(prompt.index("6. ESCALATE instead"),
+                        prompt.index("7. "))
+
+    def test_the_three_exits_are_read_in_order_before_the_failure(self):
+        run = self._report()["run"]
+        pr = run.index("card_pr.py find")
+        escalation = run.index("/tmp/repair-escalation.txt")
+        superseded = run.index(self.NOTE)
+        failure = run.index(self.ERROR_LINE)
+        self.assertLess(pr, escalation)
+        self.assertLess(escalation, superseded)
+        self.assertLess(superseded, failure)
+        # A branch the agent pushed is real work: it is opened before the
+        # note is read, so the note can never orphan a pushed fix.
+        self.assertLess(run.index("repair_finish.py finish"), superseded)
+
+    def test_the_exit_is_taken_only_on_a_non_empty_note(self):
+        run = self._report()["run"]
+        self.assertIn(f"elif [ -f {self.NOTE} ] && [ -s {self.NOTE} ]; then", run)
+
+    def test_the_failure_branch_is_still_present(self):
+        run = self._report()["run"]
+        self.assertIn(self.ERROR_LINE, run)
+        self.assertIn("exit 1", run[run.index(self.ERROR_LINE):])
+
+    def test_the_report_step_re_gathers_the_run_listing(self):
+        run = self._report()["run"]
+        exit_ = run[run.index(self.NOTE):run.index(self.ERROR_LINE)]
+        self.assertIn("repair_history.py gather", exit_)
+        # The same call the "Gather repair history" step makes, flag for flag.
+        for flag in ('--repo "$GITHUB_REPOSITORY"',
+                     '--workflow-id "$WORKFLOW_ID"', '--run-id "$RUN_ID"',
+                     '--run-attempt "$RUN_ATTEMPT"',
+                     '--run-created-at "$RUN_CREATED_AT"',
+                     '--branch "$DEFAULT_BRANCH"',
+                     '--workflow-path "$WORKFLOW_PATH"',
+                     '--head-sha "$HEAD_SHA"'):
+            self.assertIn(flag, exit_)
+        # Its own file: the decide step's listing is the one that was too early.
+        self.assertIn("--out /tmp/repair-history-report.json", exit_)
+        self.assertNotIn("--out /tmp/repair-history.json", exit_)
+
+    def test_the_gather_env_is_the_earlier_gather_steps_env(self):
+        earlier = [s for s in self._steps()
+                   if s.get("name", "").startswith("Gather repair history")][0]
+        env = self._report().get("env") or {}
+        for key in ("WORKFLOW_ID", "RUN_ID", "RUN_ATTEMPT", "RUN_CREATED_AT",
+                    "WORKFLOW_PATH", "HEAD_SHA", "DEFAULT_BRANCH"):
+            self.assertEqual(env.get(key), earlier["env"][key], key)
+        # actions:read lives on github.token, which the App lacks (DRE-1346);
+        # the step's own GH_TOKEN stays the worker's for the PR reads.
+        self.assertEqual(env.get("HISTORY_GH_TOKEN"), earlier["env"]["GH_TOKEN"])
+        self.assertEqual(env.get("GH_TOKEN"), "${{ steps.worker.outputs.token }}")
+        self.assertIn('GH_TOKEN="$HISTORY_GH_TOKEN"', self._report()["run"])
+
+    def test_the_decision_is_the_scripts_never_the_shells(self):
+        run = self._report()["run"]
+        exit_ = run[run.index(self.NOTE):run.index(self.ERROR_LINE)]
+        self.assertIn("red_main_repair.py superseded", exit_)
+        self.assertIn("--history-file /tmp/repair-history-report.json", exit_)
+        # No second copy of "later and green" in shell.
+        for rule in ("success", "conclusion", "created_at", "jq "):
+            self.assertNotIn(rule, exit_)
+        self.assertNotIn("${{", run)
+
+    def test_the_verified_exit_prints_and_summarizes_the_green_run(self):
+        run = self._report()["run"]
+        exit_ = run[run.index(self.NOTE):run.index(self.ERROR_LINE)]
+        self.assertIn('echo "superseded:', exit_)
+        self.assertIn("$GITHUB_STEP_SUMMARY", exit_)
+        self.assertNotIn("linear_ops.py", exit_)
+        self.assertNotIn("gh pr", exit_)
+
+    def test_the_unverified_exit_fails(self):
+        run = self._report()["run"]
+        exit_ = run[run.index(self.NOTE):run.index(self.ERROR_LINE)]
+        self.assertIn("::error::the repair agent claimed the fault was "
+                      "superseded", exit_)
+        self.assertIn("exit 1", exit_)
+
+    def test_the_header_comment_names_the_third_ending(self):
+        body = src(REUSABLE)
+        comment = body[:body.index("      - name: Report\n")]
+        comment = comment[comment.rindex("\n\n"):]
+        self.assertIn("DRE-5700", comment)
+        self.assertIn("repair-superseded.txt", comment)
 
 
 class RegistryTest(unittest.TestCase):

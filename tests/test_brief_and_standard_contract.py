@@ -388,3 +388,118 @@ class TestTheStandardsTheWaveChanged:
             "the record must name who does check it, or the check is simply "
             "gone rather than moved"
         )
+
+
+class TestTheQueueIsCalledQueued:
+    """DRE-6751: what people and briefed agents read names the queue `Queued`.
+
+    The planning exit has landed in `Queued` since DRE-6742, and the pipeline's
+    writers write it. A brief still teaching `Backlog` sends an agent, or a
+    person, looking for the column the cards are no longer in. What stays is
+    history — a measurement, a census, a split as it landed on a date — and
+    the one sentence saying which name `Queued` replaced; each is declared
+    below by a phrase on its line, so a new live mention has nowhere to hide.
+    """
+
+    # The documents the card names. A line naming `Backlog` must carry one of
+    # its file's phrases.
+    HISTORY = {
+        "README.md": (
+            "260 Backlog cards",  # DRE-3236's measured merge-sync
+            "Backlog held **226** cards",  # the 2026-08-26 census
+        ),
+        # Once Backlog retired (DRE-6753) it is a retired alias, which no
+        # brief or standard may name at all (test_agent_docs_lane_vocabulary),
+        # so neither standard keeps a history line naming it.
+        "standards/architecture.md": (),
+        "standards/card-quality.md": (),
+        "docs/groomer.md": ("of a 226-card Backlog",),
+        "docs/hand-built-migration.md": ("were parked in Backlog",),
+        "docs/hand-work-migration.md": (
+            "  in Backlog.",  # DRE-5412's epic, 2026-09-30
+            "Auto-promoted Backlog → Hand-work",  # receipts quoted as posted
+            "`Backlog -> Hand-work`",  # Linear's history, quoted
+        ),
+        "docs/blocker-classes.md": (),
+        "docs/epic-comment-cap.md": (),
+    }
+
+    LANE_ORDER = (
+        "`Intake` → `Planning` → `Green Light` → `Queued` → `Todo` → "
+        "`In Progress` → `In Review` → `Done`"
+    )
+
+    @staticmethod
+    def _flat(text: str) -> str:
+        return re.sub(r"\s+", " ", text)
+
+    def _documents(self) -> list[Path]:
+        named = [ROOT / rel for rel in self.HISTORY]
+        return sorted(BRIEFS.glob("*.md")) + sorted(STANDARDS.glob("*.md")) + named
+
+    def test_backlog_is_named_only_as_history(self):
+        offenders = []
+        for doc in self._documents():
+            rel = str(doc.relative_to(ROOT))
+            allowed = self.HISTORY.get(rel, ())
+            for n, line in enumerate(_read(doc).splitlines(), 1):
+                if re.search(r"\bBacklog\b", line) and not any(p in line for p in allowed):
+                    offenders.append(f"{rel}:{n}: {line.strip()}")
+        assert not offenders, (
+            "a document still names `Backlog` as the live queue; the planning "
+            "exit writes `Queued` (DRE-6742):\n" + "\n".join(offenders)
+        )
+
+    def test_every_declared_history_line_is_still_there(self):
+        # A phrase that matches nothing is an exemption nobody needs, and the
+        # next live mention could be written to fit it.
+        stale = [
+            f"{rel}: {phrase!r}"
+            for rel, phrases in self.HISTORY.items()
+            for phrase in phrases
+            if phrase not in _read(ROOT / rel)
+        ]
+        assert not stale, "; ".join(stale)
+
+    def test_the_planner_lane_order_line_reads_queued(self):
+        body = self._flat(_read(BRIEFS / "planner.md"))
+        assert f"The board is {self.LANE_ORDER}," in body
+
+    def test_every_brief_that_draws_the_board_draws_queued(self):
+        drawn = []
+        for brief in sorted(BRIEFS.glob("*.md")):
+            body = self._flat(_read(brief))
+            if "The board is `Intake`" not in body:
+                continue
+            drawn.append(brief.name)
+            assert "`Green Light` → `Queued` → `Todo`" in body, (
+                f"{brief.name}'s board line does not put `Queued` between "
+                "`Green Light` and `Todo`"
+            )
+        assert set(BUILD_BRIEFS) <= set(drawn), (
+            f"a build brief stopped drawing the board: {sorted(set(BUILD_BRIEFS) - set(drawn))}"
+        )
+
+    def test_the_planner_table_lands_a_subissue_in_queued(self):
+        rows = [
+            ln for ln in _read(BRIEFS / "planner.md").splitlines()
+            if ln.startswith("| **subissue** |")
+        ]
+        assert len(rows) == 1
+        assert rows[0].split("|")[3].strip() == "`Queued`"
+
+    def test_the_parked_row_lands_in_queued(self):
+        for doc in (STANDARDS / "card-quality.md", BRIEFS / "planner.md"):
+            rows = [ln for ln in _read(doc).splitlines() if ln.startswith("| **PARKED** |")]
+            assert len(rows) == 1, f"{doc.name} has {len(rows)} PARKED rows"
+            assert rows[0].split("|")[3].strip().startswith("`Queued`"), (
+                f"{doc.name}'s PARKED row does not land the card in `Queued`"
+            )
+
+    def test_a_mechanical_blocker_parks_in_queued(self):
+        # report_agent_result.sh parks the card in lane_contract.QUEUE_LANE.
+        for name in AGENT_TASK_BRIEFS:
+            body = self._flat(_read(BRIEFS / name))
+            assert "parks the card in `Queued`" in body, (
+                f"{name} does not say a mechanical blocker parks in `Queued`"
+            )

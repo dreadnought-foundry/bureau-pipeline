@@ -9,8 +9,9 @@ nothing on the board recorded that the repair happened (PR #340, 2026-09-09).
 What these tests pin, one class per acceptance criterion:
 
   * the loop files the card BEFORE the agent runs, through the existing
-    `linear_ops` create seam, in `In Progress` (never Todo — a card entering
-    Todo is dispatched by the relay, and this work is already being done), with
+    `linear_ops` create seam, created directly in `In Progress` (a card
+    created there has no lane before it, and only a move into it from a
+    waiting lane is a build dispatch — this work is already being done), with
     the routing verdict stamped through `routing_verdict.stamp_card`, the ONE
     writer of that vocabulary;
   * the branch is `repair/DRE-<n>-<sha12>` and every `repair/*` matcher in the
@@ -58,9 +59,12 @@ SLUG = "bureau-pipeline"
 #: merge-gate.yml's branch gate, spelled as the shell spells it. Written once
 #: here and asserted against the workflow below (DRE-3879 added the two
 #: scheduled jobs' own branches; DRE-6049 and DRE-6056 retired both jobs, so
-#: neither is left); two copies of this string in one module is how it comes
-#: to name a gate nobody runs.
-MERGE_GATE_PATTERN = "agent/*|repair/*|dependabot/*|bot/standards-sync"
+#: neither is left; DRE-7209 added the onboarding routing branch as a literal);
+#: two copies of this string in one module is how it comes to name a gate
+#: nobody runs.
+MERGE_GATE_PATTERN = (
+    "agent/*|repair/*|dependabot/*|bot/standards-sync|bot/onboard"
+)
 
 
 def wf(name: str) -> str:
@@ -101,6 +105,15 @@ class FakeOps:
             raise RuntimeError("Linear says 500")
         self.stamped.append((identifier, name, why))
         return 0
+
+
+class OnlyCreates(FakeOps):
+    """The seam with no way to move a card: any call beyond the four the
+    module makes — a state write, a move — fails the test that made it."""
+
+    def __getattr__(self, name):
+        raise AssertionError(f"repair_card called ops.{name}: only create_card "
+                             "may place the card in a lane")
 
 
 class CardShapeTest(unittest.TestCase):
@@ -258,12 +271,23 @@ class OpenCardTest(unittest.TestCase):
         self.assertEqual(CARD, result["card"])
         self.assertFalse(result["card_owed"])
 
-    def test_never_todo(self):
-        # A card entering Todo is dispatched by the relay — a SECOND agent on
-        # work an agent is already doing.
-        ops = FakeOps()
+    def test_created_in_its_lane_and_never_moved_into_it(self):
+        # DRE-7113: a MOVE into the dispatch lane from a waiting lane is a
+        # build dispatch — a SECOND agent on work an agent is already doing.
+        # The card is created in its lane, with no lane before it, and nothing
+        # moves it afterwards, so it is never built.
+        import lane_contract
+
+        ops = OnlyCreates()
         self._open(ops)
-        self.assertNotEqual("Todo", ops.created[0]["lane"])
+        (made,) = ops.created
+        self.assertEqual(repair_card.LANE, made["lane"])
+        self.assertFalse(lane_contract.is_build_dispatch(None, made["lane"]))
+        # The lane IS the dispatch lane: only the way the card got there keeps
+        # it from being built.
+        self.assertEqual(lane_contract.DISPATCH_LANE, made["lane"])
+        for waiting in lane_contract.DISPATCH_FROM:
+            self.assertTrue(lane_contract.is_build_dispatch(waiting, made["lane"]))
 
     def test_stamps_the_routing_verdict_through_the_one_writer(self):
         ops = FakeOps()

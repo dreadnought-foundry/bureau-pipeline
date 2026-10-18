@@ -131,8 +131,14 @@ class ScriptInvocationTest(unittest.TestCase):
         self.assertIn("body", m.group(1).split(","))
         self.assertIn("createdAt", m.group(1).split(","))
         code = step_shell.code_lines(self.run_block)
-        self.assertEqual(sum("gh pr view" in ln for ln in code), 2,
-                         "one read, plus DRE-2117's re-read after a refused merge")
+        self.assertEqual(sum("gh pr view" in ln for ln in code), 3,
+                         "one read, its one more read on GitHub's server error "
+                         "(DRE-7026), plus DRE-2117's re-read after a refused merge")
+        # The one more read is the same read: every field, nothing else.
+        reads = re.findall(r'gh pr view "\$PR" --json (\S+) > /tmp/pr-view\.json',
+                           self.run_block)
+        self.assertEqual(len(reads), 2, reads)
+        self.assertEqual(reads[0], reads[1])
         self.assertIn(
             "jq -r '.body // \"\"' /tmp/pr-view.json > /tmp/pr-body.txt",
             self.run_block,

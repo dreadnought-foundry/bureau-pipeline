@@ -1,14 +1,15 @@
 """RED-first: the hygiene agent's Triage lane (DRE-5410).
 
 `scripts/hygiene_triage.py` reads the broken-card lane once and fixes the
-mechanical defects the standard already names, returning the card to
-`Backlog` — never `Todo` — with the cause named:
+mechanical defects the standard already names, returning the card to the
+queue, `lane_contract.QUEUE_LANE` (DRE-6748) — never `Todo` — with the cause
+named:
 
   1. a prose blocker with no relation — the relation is added, which makes the
-     sentence true, and a card carrying a routing verdict returns to Backlog;
-  2. a dependency loop a Done card already broke — the card returns to
-     Backlog with the loop named;
-  3. a retired-repo card — marked `operator-step` and parked in Backlog;
+     sentence true, and a card carrying a routing verdict returns to the queue;
+  2. a dependency loop a Done card already broke — the card returns to the
+     queue with the loop named;
+  3. a retired-repo card — marked `operator-step` and parked in the queue;
   4. a proof with an open pull request — moved to In Review;
   5. a card whose parent epic is Canceled or Duplicate — canceled;
   6. a card held `no-route` (DRE-6190) — its newest `🔒 hold:` stamp says so,
@@ -16,7 +17,14 @@ mechanical defects the standard already names, returning the card to
   7. a card held on a planning reason (DRE-6451) — `plan-critic-bound` or
      `epic-rereview-twice`: one `Left` row naming the reason, its age in
      Triage and the park note, and once past `HYGIENE_TRIAGE_ALARM_HOURS` an
-     alarm receipt the core's (tag, cause) key posts once.
+     alarm receipt the core's (tag, cause) key posts once;
+  8. the same card once its one automatic repair is spent (DRE-7183) — its
+     newest pipeline-authored `🩹 triage-repair:` receipt finished and it
+     parked again, or did not finish, or `started` 2 hours ago with no
+     outcome: the alarm on the first pass, under
+     `HYGIENE_TRIAGE_REPAIRED_ALARM_HOURS` (default 0), held or not for the
+     last two. A `started` younger than that is a repair in flight, never an
+     alarm.
 
 Everything else is a `Left` row naming what a person must do.
 
@@ -38,7 +46,7 @@ import os
 import re
 import subprocess
 import sys
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -48,9 +56,11 @@ sys.path.insert(0, str(ROOT / "scripts"))
 os.environ.setdefault("REPO", "dreadnought-foundry/bureau-pipeline")
 
 import hygiene  # noqa: E402
+import lane_contract  # noqa: E402
 import linear_ops  # noqa: E402
 import reconcile  # noqa: E402
 import routing_verdict  # noqa: E402
+import triage_repair  # noqa: E402
 
 MODULE_PATH = ROOT / "scripts" / "hygiene_triage.py"
 FIXTURE = ROOT / "tests" / "fixtures" / "hygiene-triage-2026-09-30.json"
@@ -105,16 +115,26 @@ class FixtureGh:
         return self.answers[key]
 
 
+#: The pipeline's own Linear user — who `viewer { id }` names (DRE-7183).
+PIPELINE_USER = "u-pipeline"
+VIEWER = "viewer"
+
+
 class FixtureLinear:
     """The read-only `ctx.linear`: one issue read by identifier, answered from
-    `ISSUES`, and Linear's own refusal for an id that names no card."""
+    `ISSUES`, and Linear's own refusal for an id that names no card. The
+    viewer read answers `PIPELINE_USER`, recorded as `VIEWER`."""
 
-    def __init__(self, issues=None):
+    def __init__(self, issues=None, viewer=PIPELINE_USER):
         self.issues = dict(ISSUES if issues is None else issues)
+        self.viewer = viewer
         self.calls: list = []
 
     def __call__(self, query, variables=None):
         assert not query.lstrip().lower().startswith("mutation")
+        if "viewer" in query:
+            self.calls.append(VIEWER)
+            return {"viewer": {"id": self.viewer} if self.viewer else None}
         ident = (variables or {}).get("id")
         self.calls.append(ident)
         if ident not in self.issues:
@@ -220,7 +240,7 @@ class TestAProseBlocker:
         assert action.cause == "relation added, blocked by DRE-4301"
         first = note.body.splitlines()[0]
         assert first.startswith("🧹 hygiene: hyg-triage-returned — relation added, blocked by DRE-4301")
-        assert state.lane == "Backlog" and state.park is False
+        assert state.lane == lane_contract.QUEUE_LANE and state.park is False
         assert lefts(items, "DRE-4401") == []
 
     def test_the_writes_carry_the_board_card_never_a_bare_id(self):
@@ -299,7 +319,7 @@ class TestADependencyLoop:
         assert action.act == "hygiene-triage-return"
         assert action.cause == "loop DRE-4411 → DRE-4310 → DRE-4411 broken, DRE-4310 is Done"
         assert kinds(action) == ["linear_comment", "linear_state"]
-        assert action.writes[1].lane == "Backlog" and action.writes[1].park is False
+        assert action.writes[1].lane == lane_contract.QUEUE_LANE and action.writes[1].park is False
         assert comment_of(action).splitlines()[0].startswith(
             "🧹 hygiene: hyg-triage-returned — loop DRE-4411 → DRE-4310 → DRE-4411 broken")
         assert lefts(items, "DRE-4411") == []
@@ -360,7 +380,7 @@ class TestARetiredRepo:
         assert all(getattr(w, "label", None) != routing_verdict.HAND_BUILT_LABEL
                    for w in action.writes)
         assert note.body.splitlines()[0].startswith(f"🧹 hygiene: hyg-triage-returned — {cause}")
-        assert (state.lane, state.park) == ("Backlog", True)
+        assert (state.lane, state.park) == (lane_contract.QUEUE_LANE, True)
         for write in action.writes:
             hygiene.guard(write, ctx)
 
@@ -479,7 +499,7 @@ class TestAHeldNoRouteCard:
         assert action.act == "hygiene-triage-return"
         assert kinds(action) == ["linear_label", "linear_comment", "linear_state"]
         assert action.writes[0].label == "operator-step"
-        assert (action.writes[2].lane, action.writes[2].park) == ("Backlog", True)
+        assert (action.writes[2].lane, action.writes[2].park) == (lane_contract.QUEUE_LANE, True)
 
     def test_a_newer_stamp_of_another_reason_decides_and_the_card_is_retired(self):
         doc = fixture()
@@ -638,6 +658,37 @@ class TestTheWholeFixture:
 
 
 # --------------------------------------------------------------------------- #
+# the queue it returns a card to (DRE-6748)                                    #
+# --------------------------------------------------------------------------- #
+
+#: The fixture's cards a pass returns to the queue: the prose blockers, the
+#: broken loop and the two retired repos.
+RETURNED = {"DRE-4401", "DRE-4404", "DRE-4411", "DRE-4421", "DRE-4422"}
+
+
+class TestTheQueue:
+    def test_every_return_lands_in_the_queue_lane(self):
+        items, _ctx, _gh, _linear = plan()
+        lanes = {w.card: w.lane for a in actions(items) if a.act == "hygiene-triage-return"
+                 for w in a.writes if w.kind == "linear_state"}
+        assert lanes == {ident: lane_contract.QUEUE_LANE for ident in RETURNED}
+
+    def test_with_the_planning_exit_flipped_every_return_lands_in_queued(self, monkeypatch):
+        # `QUEUE_LANE` reads Backlog until DRE-6742 flips the planning exit;
+        # flipped, the lane writes Queued and the core's guard admits it.
+        monkeypatch.setattr(lane_contract, "QUEUE_LANE", "Queued")
+        sent, ledger = run(fixture(), monkeypatch)
+        lanes = {w.card: w.lane for w in sent
+                 if w.kind == "linear_state" and w.card in RETURNED}
+        assert lanes == {ident: "Queued" for ident in RETURNED}
+        outcomes = {a["outcome"] for a in ledger["actions"] if a["target"] in RETURNED}
+        assert outcomes == {"executed"}
+
+    def test_no_string_in_the_lane_names_the_retired_queue(self):
+        assert lane_contract._scan_python(str(MODULE_PATH), ["Backlog"]) == set()
+
+
+# --------------------------------------------------------------------------- #
 # idempotency, through the core's key                                          #
 # --------------------------------------------------------------------------- #
 
@@ -689,7 +740,7 @@ class TestIdempotency:
                      if w.kind == "linear_relation" and w.card == "DRE-4401"]
         assert relations == ["DRE-4302"]
         assert [w.lane for w in sent2 if w.kind == "linear_state" and w.card == "DRE-4401"] == [
-            "Backlog"]
+            lane_contract.QUEUE_LANE]
 
     def test_a_card_back_under_a_parent_in_a_new_state_is_a_new_cause(self, monkeypatch):
         doc = fixture()
@@ -713,9 +764,15 @@ REREVIEW_STAMP = ("🔒 hold: reason=epic-rereview-twice at=none lifts=manual "
 PARKED = "🛑 Parked in Triage with needs-human for an operator — "
 ALARM_CAUSE = ("held plan-critic-bound in Triage since 2026-09-30T06:00:00Z past the "
                "8-hour bound")
+REPAIR_WAY_BACK = ("read the 🩹 triage-repair: receipt, fix what it left open, clear "
+                   "needs-human and move the card to Planning")
 WAY_BACK = ("read the park note's own way back — clear needs-human and move the card to "
             "Planning for a fresh planning attempt, or answer the Green Light question "
-            "when the exit asked one")
+            "when the exit asked one; after the card's one automatic repair, "
+            + REPAIR_WAY_BACK)
+#: An unrepaired plan-critic-bound card is the Triage Repair run's first.
+NEXT_PASS = ("the Triage Repair run takes it on its next pass, the card's one automatic "
+             "repair, while TRIAGE_REPAIR_LIVE is true; otherwise " + WAY_BACK)
 
 
 def park_note(doc, ident):
@@ -754,7 +811,7 @@ class TestAPlanningHeldCard:
         assert rows[0].why.startswith("held plan-critic-bound for 15 hours in Triage — ")
         assert rows[0].why == ("held plan-critic-bound for 15 hours in Triage — "
                                + park_note(doc, "DRE-4424")[:160])
-        assert rows[0].recommendation == WAY_BACK
+        assert rows[0].recommendation == NEXT_PASS
         action = the_action(items, "DRE-4424")
         assert action.act == "hygiene-triage-alarm"
         assert action.cause == ALARM_CAUSE
@@ -953,6 +1010,327 @@ class TestTheAlarmIsSaidOnce:
         add_receipts(doc, sent2)
         sent3, _ledger3 = run(doc, monkeypatch)
         assert [w for w in sent3 if w.card == "DRE-4424"] == []
+
+
+# --------------------------------------------------------------------------- #
+# (7) a card whose one automatic repair is spent (DRE-7183)                    #
+# --------------------------------------------------------------------------- #
+
+REPAIRED_VAR = "HYGIENE_TRIAGE_REPAIRED_ALARM_HOURS"
+REPAIR_LIFT = ("🔓 hold lifted: reason=plan-critic-bound because=triage-repair "
+               "by=triage_repair.py")
+NOW_ISO = "2026-09-30T21:05:00.000Z"
+REPAIRED_AT = "2026-09-30T04:00:00.000Z"
+SPENT = "so the repair is spent and a person owns it"
+RUNNING = ("nothing yet — the Triage Repair run is answering the park note, and this "
+           "agent alarms when the repair has recorded no outcome 2 hours after it started")
+UNFINISHED_CAUSE = ("in Triage since 2026-09-30T06:00:00Z: its one automatic repair did "
+                    "not finish")
+
+
+@pytest.fixture(autouse=True)
+def _no_repaired_override(monkeypatch):
+    monkeypatch.delenv(REPAIRED_VAR, raising=False)
+
+
+def repair_body(outcome: str) -> str:
+    """The receipt as `triage_repair.py` words it, where it has the words."""
+    return {
+        "started": triage_repair.started_body("Synthetic card text."),
+        "rewritten": triage_repair.rewritten_body(["the criteria name no test"],
+                                                  "1. each criterion now names its test"),
+        "asked": triage_repair.asked_body(False),
+        "unfinished": triage_repair.unfinished_body("the planner wrote no revised-card.md", []),
+    }.get(outcome, f"{triage_repair.RECEIPT_KEY} {outcome} — the card left Triage.")
+
+
+def receipt(outcome, at, *, by=PIPELINE_USER, body=None):
+    return {"body": body or repair_body(outcome), "createdAt": at, "user": {"id": by}}
+
+
+def iso(when) -> str:
+    return when.strftime("%Y-%m-%dT%H:%M:%S.000Z")
+
+
+def reparked(doc, outcome, *, entered, by=PIPELINE_USER):
+    """DRE-4424 repaired once — `outcome` posted at `REPAIRED_AT` — then back
+    through Planning and parked again: its park note and stamp still newest,
+    and its newest Triage entry `entered`."""
+    held = card(doc, "DRE-4424")
+    held["comments"]["nodes"][-2:-2] = [receipt(outcome, REPAIRED_AT, by=by)]
+    held["history"]["nodes"].append({"createdAt": entered, "toState": {"name": "Triage"}})
+    return held
+
+
+def unheld(doc):
+    """DRE-4424 with its hold lifted by the repair: no `needs-human`, and the
+    repair's own lift line newest."""
+    held = card(doc, "DRE-4424")
+    held["labels"]["nodes"] = [n for n in held["labels"]["nodes"] if n["name"] != "needs-human"]
+    held["comments"]["nodes"] += [receipt("started", "2026-09-30T20:30:00.000Z"),
+                                  comment(REPAIR_LIFT, at="2026-09-30T20:50:00.000Z")]
+    return held
+
+
+class TestARepairedCard:
+    def test_the_bounds_and_the_way_back_are_named_once(self):
+        assert lane.TRIAGE_REPAIR_RUNNING_HOURS == 2
+        assert lane.DEFAULT_REPAIRED_ALARM_HOURS == 0
+        assert lane.repaired_alarm_hours() == 0
+        assert lane.alarm_hours() == 8
+        assert lane.PLANNING_WAY_BACK == WAY_BACK
+
+    def test_a_pass_over_cards_with_no_repair_receipt_never_reads_the_viewer(self):
+        _items, _ctx, _gh, linear = plan()
+        assert VIEWER not in linear.calls
+
+    @pytest.mark.parametrize("outcome", ["rewritten", "asked", "replanned", "split"])
+    def test_a_card_parked_again_after_its_repair_alarms_on_the_first_pass(self, outcome):
+        doc = fixture()
+        reparked(doc, outcome, entered=NOW_ISO)
+        items, ctx, _gh, linear = plan(doc)
+        action = the_action(items, "DRE-4424")
+        assert action.act == "hygiene-triage-alarm"
+        assert action.cause == ("held plan-critic-bound in Triage since 2026-09-30T21:05:00Z "
+                                "after its one automatic repair")
+        assert action.evidence == [CRITIC_STAMP, f"repair {outcome} 2026-09-30T04:00:00Z",
+                                   "entered Triage 2026-09-30T21:05:00Z"]
+        assert kinds(action) == ["linear_comment"]
+        for write in action.writes:
+            hygiene.guard(write, ctx)
+        rows = lefts(items, "DRE-4424")
+        assert len(rows) == 1
+        assert rows[0].why == ("held plan-critic-bound for 0 hours in Triage — parked again "
+                               f"after its one automatic repair, {SPENT} — "
+                               + park_note(doc, "DRE-4424")[:160])
+        assert rows[0].recommendation == REPAIR_WAY_BACK
+        assert linear.calls.count(VIEWER) == 1
+
+    @pytest.mark.parametrize("minutes", [3, 119])
+    def test_a_repair_in_flight_is_a_row_and_never_an_alarm(self, minutes):
+        doc = fixture()
+        started = NOW - timedelta(minutes=minutes)
+        note = park_note(doc, "DRE-4424")
+        card(doc, "DRE-4424")["comments"]["nodes"].append(receipt("started", iso(started)))
+        items, _ctx, _gh, _linear = plan(doc)
+        # 15 hours in Triage, past the 8-hour bound — the repair still holds it.
+        assert actions(items, "DRE-4424") == []
+        rows = lefts(items, "DRE-4424")
+        assert len(rows) == 1
+        assert rows[0].why == (
+            f"held plan-critic-bound in Triage — its one automatic repair started "
+            f"{started:%Y-%m-%dT%H:%M:%SZ} and is still running — " + note[:160])
+        assert rows[0].recommendation == RUNNING
+
+    def test_a_started_two_hours_old_recorded_no_outcome_and_alarms(self):
+        doc = fixture()
+        card(doc, "DRE-4424")["comments"]["nodes"].append(
+            receipt("started", "2026-09-30T19:05:00.000Z"))
+        items, _ctx, _gh, _linear = plan(doc)
+        action = the_action(items, "DRE-4424")
+        assert action.act == "hygiene-triage-alarm"
+        assert action.cause == ("in Triage since 2026-09-30T06:00:00Z: its one automatic "
+                                "repair started 2026-09-30T19:05:00Z and recorded no outcome")
+        assert action.evidence == [CRITIC_STAMP, "repair started 2026-09-30T19:05:00Z",
+                                   "entered Triage 2026-09-30T06:00:00Z"]
+        rows = lefts(items, "DRE-4424")
+        assert len(rows) == 1
+        assert rows[0].why.startswith(
+            "held plan-critic-bound for 15 hours in Triage — its one automatic repair "
+            f"started 2026-09-30T19:05:00Z and recorded no outcome, {SPENT} — ")
+        assert rows[0].recommendation == REPAIR_WAY_BACK
+
+    def test_a_held_card_whose_repair_did_not_finish_alarms_on_the_first_pass(self):
+        doc = fixture()
+        card(doc, "DRE-4424")["comments"]["nodes"] += [
+            receipt("started", "2026-09-30T20:30:00.000Z"),
+            receipt("unfinished", "2026-09-30T20:50:00.000Z")]
+        items, _ctx, _gh, _linear = plan(doc)
+        action = the_action(items, "DRE-4424")
+        assert action.cause == UNFINISHED_CAUSE
+        assert action.evidence == [CRITIC_STAMP, "repair unfinished 2026-09-30T20:50:00Z",
+                                   "entered Triage 2026-09-30T06:00:00Z"]
+
+    @pytest.mark.parametrize("what, made", [
+        ("the write to move the card to Planning failed (a guard refused the move to Planning)",
+         [triage_repair.W_DESCRIPTION, triage_repair.W_DECISIONS, triage_repair.W_LIFT]),
+        ("the escalation stood down and moved nothing — the card is no longer the "
+         "escalation's to move", [triage_repair.W_LIFT, triage_repair.W_ESCALATE]),
+    ], ids=["failed-move", "stood-down"])
+    def test_an_unheld_card_whose_repair_did_not_finish_alarms_on_the_first_pass(
+            self, what, made):
+        doc = fixture()
+        unheld(doc)["comments"]["nodes"].append(
+            receipt("unfinished", "2026-09-30T20:51:00.000Z",
+                    body=triage_repair.unfinished_body(what, made)))
+        items, ctx, _gh, _linear = plan(doc)
+        action = the_action(items, "DRE-4424")
+        assert action.act == "hygiene-triage-alarm"
+        assert action.cause == UNFINISHED_CAUSE
+        assert action.evidence == ["repair unfinished 2026-09-30T20:51:00Z",
+                                   "entered Triage 2026-09-30T06:00:00Z"]
+        assert kinds(action) == ["linear_comment"]
+        for write in action.writes:
+            hygiene.guard(write, ctx)
+        rows = lefts(items, "DRE-4424")
+        assert len(rows) == 1
+        assert rows[0].why.startswith(
+            "in Triage for 15 hours, no longer held — its one automatic repair did not "
+            f"finish, {SPENT} — ")
+        assert rows[0].recommendation == REPAIR_WAY_BACK
+
+    def test_an_unheld_card_whose_started_is_two_hours_old_alarms(self):
+        doc = fixture()
+        held = card(doc, "DRE-4424")
+        held["labels"]["nodes"] = [n for n in held["labels"]["nodes"]
+                                   if n["name"] != "needs-human"]
+        held["comments"]["nodes"] += [receipt("started", "2026-09-30T18:00:00.000Z"),
+                                      comment(REPAIR_LIFT, at="2026-09-30T18:40:00.000Z")]
+        items, _ctx, _gh, _linear = plan(doc)
+        assert the_action(items, "DRE-4424").cause == (
+            "in Triage since 2026-09-30T06:00:00Z: its one automatic repair started "
+            "2026-09-30T18:00:00Z and recorded no outcome")
+
+    @pytest.mark.parametrize("newest", [
+        receipt("started", "2026-09-30T20:30:00.000Z"),
+        receipt("rewritten", "2026-09-30T20:55:00.000Z"),
+    ], ids=["started-young", "rewritten"])
+    def test_an_unheld_card_is_rule_threes_only_for_a_spent_repair_in_triage(self, newest):
+        doc = fixture()
+        held = card(doc, "DRE-4424")
+        held["labels"]["nodes"] = [n for n in held["labels"]["nodes"]
+                                   if n["name"] != "needs-human"]
+        held["comments"]["nodes"] += [comment(REPAIR_LIFT, at="2026-09-30T20:20:00.000Z"),
+                                      newest]
+        items, _ctx, _gh, _linear = plan(doc)
+        assert actions(items, "DRE-4424") == []
+        assert lefts(items, "DRE-4424")[0].why == (
+            "in Triage with no mechanical defect this agent fixes")
+
+    def test_the_newest_receipt_by_its_time_decides_whichever_way_the_window_runs(self):
+        doc = fixture()
+        nodes = card(doc, "DRE-4424")["comments"]["nodes"]
+        nodes += [receipt("unfinished", "2026-09-30T20:50:00.000Z"),
+                  receipt("started", "2026-09-30T20:30:00.000Z")]
+        items, _ctx, _gh, _linear = plan(doc)
+        assert the_action(items, "DRE-4424").cause == UNFINISHED_CAUSE
+
+    def test_a_receipt_the_pipeline_did_not_write_grants_nothing(self):
+        doc = fixture()
+        reparked(doc, "rewritten", entered=NOW_ISO, by="u-synthetic")
+        items, _ctx, _gh, _linear = plan(doc)
+        assert actions(items, "DRE-4424") == []
+        rows = lefts(items, "DRE-4424")
+        assert rows[0].why.startswith("held plan-critic-bound for 0 hours in Triage — ")
+        assert rows[0].recommendation == NEXT_PASS
+
+        doc = fixture()
+        unheld(doc)["comments"]["nodes"].append(
+            receipt("unfinished", "2026-09-30T20:51:00.000Z", by="u-synthetic"))
+        items, _ctx, _gh, _linear = plan(doc)
+        assert actions(items, "DRE-4424") == []
+        assert lefts(items, "DRE-4424")[0].why == (
+            "in Triage with no mechanical defect this agent fixes")
+
+    def test_a_viewer_read_that_names_nobody_skips_the_card_and_no_other(self, capsys):
+        doc = fixture()
+        reparked(doc, "rewritten", entered=NOW_ISO)
+        items, _ctx, _gh, _linear = plan(doc, linear=FixtureLinear(viewer=None))
+        assert actions(items, "DRE-4424") == [] and lefts(items, "DRE-4424") == []
+        assert {a.target for a in actions(items)} == set(EXPECTED) - {"DRE-4424"}
+        assert "DRE-4424 skipped" in capsys.readouterr().err
+
+    def test_an_unrepaired_card_waits_out_the_eight_hour_bound_as_today(self):
+        doc = fixture()
+        card(doc, "DRE-4424")["history"]["nodes"].append(
+            {"createdAt": "2026-09-30T20:05:00.000Z", "toState": {"name": "Triage"}})
+        items, _ctx, _gh, _linear = plan(doc)
+        assert actions(items, "DRE-4424") == []
+        rows = lefts(items, "DRE-4424")
+        assert len(rows) == 1
+        assert rows[0].why.startswith("held plan-critic-bound for 1 hour in Triage — ")
+        assert rows[0].recommendation == NEXT_PASS
+
+        doc = fixture()
+        card(doc, "DRE-4424")["history"]["nodes"].append(
+            {"createdAt": "2026-09-30T13:05:00.000Z", "toState": {"name": "Triage"}})
+        items, _ctx, _gh, _linear = plan(doc)
+        assert the_action(items, "DRE-4424").cause == (
+            "held plan-critic-bound in Triage since 2026-09-30T13:05:00Z past the 8-hour bound")
+
+    @pytest.mark.parametrize("value", ["-1", "soon", "nan", "inf"])
+    def test_a_repaired_bound_that_is_not_hours_stops_the_lane(self, monkeypatch, value):
+        monkeypatch.setenv(REPAIRED_VAR, value)
+        with pytest.raises(ValueError, match=REPAIRED_VAR):
+            lane.repaired_alarm_hours()
+        with pytest.raises(ValueError, match=REPAIRED_VAR):
+            plan()
+
+    def test_half_an_hour_is_a_bound(self, monkeypatch):
+        monkeypatch.setenv(REPAIRED_VAR, "0.5")
+        assert lane.repaired_alarm_hours() == 0.5
+        doc = fixture()
+        reparked(doc, "rewritten", entered="2026-09-30T20:45:00.000Z")
+        items, _ctx, _gh, _linear = plan(doc)
+        assert actions(items, "DRE-4424") == []
+        doc = fixture()
+        reparked(doc, "rewritten", entered="2026-09-30T20:35:00.000Z")
+        items, _ctx, _gh, _linear = plan(doc)
+        assert the_action(items, "DRE-4424").act == "hygiene-triage-alarm"
+        monkeypatch.setenv(REPAIRED_VAR, "0")
+        assert lane.repaired_alarm_hours() == 0
+
+
+class TestTheRepairedAlarmIsSaidOncePerPark:
+    def test_a_second_pass_proposes_nothing_and_a_new_park_a_new_alarm(self, monkeypatch):
+        doc = fixture()
+        held = reparked(doc, "rewritten", entered="2026-09-30T20:00:00.000Z")
+        park, stamp = copy.deepcopy(held["comments"]["nodes"][-2:])
+        first = ("held plan-critic-bound in Triage since 2026-09-30T20:00:00Z after its one "
+                 "automatic repair")
+        sent, ledger = run(doc, monkeypatch)
+        mine = [a for a in ledger["actions"] if a["target"] == "DRE-4424"]
+        assert [(a["act"], a["cause"], a["outcome"]) for a in mine] == [
+            ("hygiene-triage-alarm", first, "executed")]
+        assert [w.kind for w in sent if w.card == "DRE-4424"] == ["linear_comment"]
+
+        add_receipts(doc, sent)
+        sent2, ledger2 = run(doc, monkeypatch)
+        assert [w for w in sent2 if w.card == "DRE-4424"] == []
+        assert [a["outcome"] for a in ledger2["actions"] if a["target"] == "DRE-4424"] == [
+            "suppressed"]
+
+        # A person lifts it, it goes back through Planning, and is parked again.
+        held["comments"]["nodes"] += [
+            comment("🔓 hold lifted: reason=plan-critic-bound because=operator by=hold.py",
+                    at="2026-09-30T20:20:00.000Z"),
+            {**park, "createdAt": "2026-09-30T21:00:05.000Z"},
+            {**stamp, "createdAt": "2026-09-30T21:00:10.000Z"}]
+        held["history"]["nodes"] += [
+            {"createdAt": "2026-09-30T20:20:00.000Z", "toState": {"name": "Planning"}},
+            {"createdAt": "2026-09-30T21:00:00.000Z", "toState": {"name": "Triage"}}]
+        sent3, ledger3 = run(doc, monkeypatch)
+        mine = [a for a in ledger3["actions"] if a["target"] == "DRE-4424"]
+        assert [(a["act"], a["cause"], a["outcome"]) for a in mine] == [
+            ("hygiene-triage-alarm", first.replace("20:00:00Z", "21:00:00Z"), "executed")]
+
+        add_receipts(doc, sent3)
+        sent4, _ledger4 = run(doc, monkeypatch)
+        assert [w for w in sent4 if w.card == "DRE-4424"] == []
+
+
+class TestTheRegistrySaysTheSecondBound:
+    def test_the_alarm_rows_means_and_why_name_the_repaired_bound(self):
+        rows = json.loads((ROOT / "config" / "pipeline-acts.json").read_text("utf-8"))["acts"]
+        row = next(r for r in rows if r["name"] == "hygiene-triage-alarm")
+        for field in ("means", "why"):
+            assert REPAIRED_VAR in row[field], field
+            assert "automatic repair" in row[field], field
+        assert "HYGIENE_TRIAGE_ALARM_HOURS (default 8)" in row["why"]
+
+    def test_the_acts_page_names_both_bounds(self):
+        text = (ROOT / "docs" / "pipeline-acts.md").read_text("utf-8")
+        assert REPAIRED_VAR in text and "HYGIENE_TRIAGE_ALARM_HOURS" in text
 
 
 # --------------------------------------------------------------------------- #

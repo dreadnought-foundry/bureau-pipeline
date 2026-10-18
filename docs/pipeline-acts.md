@@ -144,6 +144,28 @@ exhausted` or `holding for a human` — the console's `enrich.HOLD_MARKERS` read
 either phrase as a fix-budget hold, and the card would render as the wrong kind
 of stuck on a surface nobody would think to check.
 
+**A hold that waits only for a time** (DRE-7228) is written with
+`proof-waiting-until`, and that is the form to use for one — a day of jobs
+counted from a live-at time, a morning's scheduled run:
+
+    python3 scripts/linear_ops.py proof-waiting-until DRE-N \
+      "the day of jobs on the pinned machine family" "2026-10-12T14:33-07:00"
+
+It posts the same hold through `proof-waiting`, so the trailer and the
+console's `Waiting for proof — <reason>` are unchanged, with the `needs` half
+written by the command and never by the caller:
+`🔬 proof-waiting: <what is still to be observed> — needs not-before=<ISO time
+with offset>`. It refuses a time that does not parse with
+`datetime.fromisoformat`, a time with no UTC offset, and an observed half naming
+`the CEO's press`, and posts nothing. A hold whose `needs` half is that one
+clause and nothing else is **time-only** (`proof_record.time_only`): once every
+open hold on a `Hand-work` PROOF card is time-only and every time has passed, the
+proof dispatcher posts one `🔬 proof-observed` quoting each time and the card
+goes on to its first run on the same pass. A clause beside other words, a hold
+naming the CEO's press, and a date in prose are held exactly as before — nothing
+reads a date out of prose — and a time hold beside any other open hold is never
+lifted by time, because one `🔬 proof-observed` would lift that hold too.
+
 ## The row whose NUMBERS are data — `🚨 fleet-reviewer-outage` (DRE-3433)
 
 | Field | Value |
@@ -160,7 +182,8 @@ thirteen seconds with `Claude Code native binary not found` (DRE-3416).
 **Per-run detection worked** — each pull request got the neutral could-not-run
 receipt — and nothing aggregated it, so seven runs across two repositories
 failed identically and no surface anywhere said the reviewer was down. This act
-is that missing sentence, said once, as one card in a human queue lane.
+is that missing sentence, said once — as one card in a human queue lane until
+DRE-7455, and as one console alert since.
 
 Two things about the row are worth reading before the next one is written.
 
@@ -172,8 +195,9 @@ to a person. That it is the fleet-wide alarm is said in `means` and `why`,
 which is where a reader looks for it.
 
 **`state` is `escalated`, which no other hold here declares.** Every other hold
-leaves the work where it was and lives entirely in its receipt; this one FILES
-A CARD into a human queue lane, and that card is the whole deliverable.
+leaves the work where it was and lives entirely in its receipt; this one handed
+the outage to a person — as a card in a human queue lane until DRE-7455, and as
+a CRITICAL console alert since — and that hand-off is the whole deliverable.
 
 **The threshold is DATA on the row** — `window_s`, `consecutive` and `repos`,
 plus a `threshold_why` saying where each came from — read through
@@ -181,29 +205,36 @@ plus a `threshold_why` saying where each came from — read through
 and putting the numbers here is what lets an operator retune the alarm by
 editing a file they can read instead of a comparison buried in a decision.
 
-**Who posts it (DRE-3435).** The row's `emits` anchor points at the decision
-module, because that is where the body is composed; the WRITER is the reconcile
-sweep's `report_fleet_reviewer_outage()` backstop, on full sweeps only, sitting
-immediately after `recover_crashed_reviews` because the two read the same open
-pull requests — that one re-dispatching per head, this one counting across the
-fleet. It files ONE card, CREATED in `Triage` and marked `no-code` with no
-`agent:*` role, so it never passes through `Planning` and no planner or build
-run is dispatched at it (DRE-5292). Its first crashed run is the head's own
-failed review workflow run, or "no run found" when none can be read — never a
-check run's `details_url`. It appends one comment per newly counted
-run and rewrites the title's counts, and closes the card on the first
-successful verdict it can see in a repository the card counted, posted after
-that repository's last counted crash — whenever that verdict was posted
-(DRE-6576). It finds its open card in the board read it already makes, which
-carries `Triage`, so it reads the card on every sweep for as long as the card
-is open, however long ago the crashes were. Under `BUREAU_READ=on` that lookup
-is one Linear request per sweep. A repository whose newest crash already has a
-later verdict there does not count toward the two-repository rule, so the
-alarm stays quiet when the reviewer is back before it files. Every comment it
-posts composes through this act, so the console's alert per open card is
-unchanged by the trailer. `FLEET_OUTAGE_SWEEP_CAP=0` is the off switch: it stops the sweep
-FILING fleet-wide, and deliberately leaves appends and closes running, so an
-outage card that is already open is never orphaned by the switch.
+**Who posts it (DRE-3435) — nobody, since DRE-7455.** The row's `emits`
+anchor points at the decision module, because that is where the receipt body
+is composed. Its writer was the reconcile sweep's
+`report_fleet_reviewer_outage()` backstop, which filed one `Triage` card,
+appended to it, retitled it and closed it, receipting each write through this
+act. DRE-7455 made the outage a console alert instead, and the receipt is no
+longer posted anywhere — `check_act_receipts.pending_acts()` now reads this
+act as one nothing posts, which lifts by itself if a poster spells it again.
+
+The backstop still runs on full sweeps only, immediately after
+`recover_crashed_reviews`, because the two read the same open pull requests —
+that one re-dispatching per head, this one counting across the fleet. When the
+threshold is met it raises the alert `reviewer_outage:fleet` at CRITICAL
+through `scripts/pipeline_notice.py`, with the title and body
+`reviewer_down.py` composes: the first crashed run (the head's own failed
+review workflow run, or "no run found" when none can be read — never a check
+run's `details_url`), the three suspects and the run list. Every sweep that
+finds the outage raises the key again; the console keeps one alert per key,
+so that is a repeat and nothing is delivered twice. A sweep that sees no
+could-not-run inside the window resolves the key with the all-clear copy —
+`Reviewer back — reviews are running again`, and the sweep's own time in PT —
+so the CEO, emailed when it went down, is emailed when it clears. A sweep that
+still sees a crash in the window but not the threshold does neither, because
+another repository's sweep may still be raising. A repository whose newest
+crash already has a later verdict there does not count toward the
+two-repository rule, so the alarm stays quiet when the reviewer is back before
+it is raised. When the console door cannot take the raise, the client files
+the card the sweep used to file — its title, CREATED in `Triage`, `repo:<slug>`
+and `no-code` with no `agent:*` role, so it never passes through `Planning`
+(DRE-5292) — and a person closes that card.
 
 ## The row that stops a WRITE from shouting — `🛑 fix-agent-absent` (DRE-4378)
 
@@ -260,11 +291,11 @@ epics under itself, and each child is planned and green-lit on its own
 (`standards/card-quality.md`). `python3 scripts/epic_split.py check` refuses a
 split that is not one. `activate` then posts this receipt ONCE on the parent,
 naming every child in `blockedBy` order with its slice's first sentence, what
-blocks it, and whether it is sent to Planning or waits in Backlog. After that
-it sends to Planning each child still in Backlog that no open sibling blocks,
+blocks it, and whether it is sent to Planning or waits in Queued. After that
+it sends to Planning each child still in the queue that no open sibling blocks,
 where the relay starts that child's planner run, and moves the parent to
 In Progress, where the sweep's ordinary epic close finds it. Meanwhile, a
-child blocked by an open sibling waits in Backlog for the sweep's auto-advance
+child blocked by an open sibling waits in Queued for the sweep's auto-advance
 (DRE-6591): the seam rule plans it only on what that sibling observed, so it
 is carried on to its planner run once every sibling it waits on is Done. A
 sibling already Done, Canceled or Duplicate holds nothing.
@@ -316,9 +347,17 @@ from the console's `ACTS` (agent-bureau PR #3023, DRE-5367) — three holds and
 eleven recoveries — so they agree tag by tag. The idempotency key is the pair (tag,
 cause), applied by the core's write seam and never restated by a lane.
 
+`hygiene-triage-alarm` has two bounds. A card a planning exit parked in Triage
+alarms once its wait reaches `HYGIENE_TRIAGE_ALARM_HOURS` (default 8). A card
+whose one automatic repair (`scripts/triage_repair.py`) is spent alarms once it
+reaches `HYGIENE_TRIAGE_REPAIRED_ALARM_HOURS` (default 0, the first hourly pass
+that sees it), held or not: it parked again after the repair, or the repair did
+not finish, or it started two hours ago and recorded no outcome (DRE-7183). A
+repair still running never alarms.
+
 The hourly **summary** the pass posts to its standing card is not one of these:
 it is a report about the pass, declared `not-an-act` in the `unconverted`
-block, the way Nightly Watch's report is.
+block.
 
 ## The row that starts a proof — `🔬 proof-run` (DRE-5926)
 
@@ -439,7 +478,7 @@ writes nothing.
 DRE-4198 found five Backlog cards refused promotion for the same reason across
 thirty hours, and found them only by reading a sweep log: the refusal was
 posted once and never read again, so each looked exactly like a card waiting
-its turn. `promote_ready` now records every card it leaves in Backlog for a
+its turn. `promote_ready` now records every card it leaves in the queue for a
 reason that is not a declared wait, dated by the oldest comment carrying that
 refusal's receipt — never by a count of sweeps kept somewhere
 (`scripts/promotion_stall.py`, DRE-4207).
@@ -503,6 +542,58 @@ skipping` instead.
 
 The console learned the act first (DRE-6440): the `act registry consumers`
 job refuses a row the console does not carry.
+
+## The row that records a Triage repair — `🩹 triage-repair` (DRE-7178)
+
+| Field | Value |
+| -- | -- |
+| tag | `triage-repair-receipt` |
+| act name | `triage-repair` |
+| kind · state · next actor | `recovery` · `dispatched` · `plan.yml` |
+| discharges | nothing |
+| cadence | `6900` — plan.yml's plan job, `timeout-minutes: 115`, the run a rewritten card's entry to Planning fires |
+| emitted by | `scripts/triage_repair.py`, at the `pipeline_act.receipt("triage-repair", …)` call in `_post` |
+
+A card the plan critic's bound parks in Triage, held `plan-critic-bound`, gets
+one automatic repair, once per card (epic DRE-7174). `triage_repair.py select`
+reads every finding of the newest park note off the card's whole thread;
+`claim` posts the first receipt before the planner runs; `apply` posts the
+last, after every other write of its outcome:
+
+    🩹 triage-repair: started — … The description as it stood before the repair, so a person can put it back:
+    🩹 triage-repair: rewritten — … The findings, each with its answer:
+    🩹 triage-repair: asked — … the card's description is unchanged.
+    🩹 triage-repair: replanned — … The findings in front of the planner:
+    🩹 triage-repair: split — … The cards filed: … The findings, each with its answer:
+    🩹 triage-repair: unfinished — <what failed or was missing>. Writes already made: <list>.
+
+`replanned` is an epic's (DRE-7181): a card with children that has had no
+bound rewrite, and whose findings are there and name no decision, gets the
+`🔁 bound-rewrite:` receipt — posted through
+`plan_bound.post_receipt`, so that row's text and act are still emitted from
+`plan_bound.py` — with every finding the bound left open, the lift, and the
+move to Planning, where a fresh planning attempt starts. An epic carrying a
+bound-rewrite receipt anywhere on its thread is `spent`; one whose findings
+name a decision is `escalate`, as the bound itself asks it, and one whose park
+left no findings is `skip`. `split` is a card that is more than one job
+(DRE-7182): narrowed to its first piece with each other piece filed beside it
+through the seam its parent decides (`mid_epic.discovery` under an epic being
+built, `linear_ops.cmd_subissue` under any other parent, `linear_ops.cmd_oneoff`
+with none), or stamped `epic` through `planning_shape.stamp` as the planner,
+then lifted and moved to Planning. **The receipt key is live**: a pipeline-authored comment whose
+first line opens `🩹 triage-repair:` anywhere on the card is the card's one
+repair, so `select` answers `spent` and `claim` exits 3. A comment of that
+shape from any other author counts for nothing.
+
+The tag is `triage-repair-receipt`, never the bare act name. The repair lifts
+the hold with the contract's line, `🔓 hold lifted: reason=plan-critic-bound
+because=triage-repair by=triage_repair.py`, and no hold line may carry a
+registry tag (`docs/holds.md`), so a `tag in body` count of this act never
+reads a lift line as one of its receipts.
+
+The console must learn this act before this row merges. The `act registry
+consumers` job refuses a row the console does not carry, and it knows an act
+by its tag or its name.
 
 ## Why this exists
 

@@ -201,6 +201,7 @@ REVIEW_CAP = ("scripts/reconcile.py", "hand_review_nudge_to_person")
 EPIC_GROWTH = ("scripts/reconcile.py", "ask_epic_growth_question")
 BLOCKER_ASK = ("scripts/blocker_ask.py", "resolve")
 RELEASED_EPIC = ("scripts/reconcile.py", "ask_cap_for_released_epic")
+DEFERRAL = ("scripts/release_deferral.py", "file_deferral")
 
 
 # --------------------------------------------------------------------------- #
@@ -267,10 +268,12 @@ class TestTheRepositoryPasses:
         contract = _contract()
         declared = _declared(contract)
         assert set(declared) == {ESCALATE, CMD_EXIT, PARK, REVIEW_CAP, EPIC_GROWTH,
-                                 BLOCKER_ASK, RELEASED_EPIC}
+                                 BLOCKER_ASK, RELEASED_EPIC, DEFERRAL}
         # The cause park writes no lane since DRE-6837, so it has no record.
-        counts = {ESCALATE: 7, CMD_EXIT: 2, PARK: 2, REVIEW_CAP: 1, EPIC_GROWTH: 1,
-                  BLOCKER_ASK: 1, RELEASED_EPIC: 1}
+        # The Triage repair's question is the eighth caller of the escalation
+        # (DRE-7178).
+        counts = {ESCALATE: 8, CMD_EXIT: 2, PARK: 2, REVIEW_CAP: 1, EPIC_GROWTH: 1,
+                  BLOCKER_ASK: 1, RELEASED_EPIC: 1, DEFERRAL: 1}
         for (module, function), callers in declared.items():
             report = lane_callers.callers_of(module, function, str(ROOT))
             assert report.unread == frozenset(), (module, report.unread)
@@ -611,8 +614,8 @@ class TestTheAgentEscalationGate:
         root = _copy_repo(tmp_path)
         _edit(root / self.REPORT_SCRIPT,
               'python3 .bureau-pipeline/scripts/linear_ops.py comment "$CARD" \\\n'
-              '    "$(cat /tmp/escalation-comment.md)"',
-              'cat /tmp/escalation-comment.md')
+              '    "$(cat "${RUNNER_TEMP:-/tmp}/escalation-comment.md")"',
+              'cat "${RUNNER_TEMP:-/tmp}/escalation-comment.md"')
         found = grl.problems(str(root))
         assert _named(found, "agent-task.yml#Report result to Linear",
                       "agent-escalation"), found
@@ -715,6 +718,75 @@ class TestTheEpicGrowthQuestion:
             r for r in _entrance(contract)["arrivals"] if r["where"] != self.UNIT]
         found = grl.problems(str(root), contract)
         assert _named(found, self.UNIT, "no arrival on its entrance declares it"), found
+
+
+@pytest.mark.usefixtures("declared_callers")
+class TestTheDeferredRelease:
+    """A release the train deferred (DRE-5234): the train files one `no-code`
+    card of its own in Green Light, from one function and no other. DRE-5235
+    landed the site and its record together; the tests below that need a
+    record elsewhere hand the check one themselves."""
+
+    UNIT = "release_deferral.py#file_deferral"
+
+    def _record(self, where: str) -> dict:
+        return {"kind": "deferred-release", "writer": "release-train.yml",
+                "where": where, "evidence": "x", "card": "DRE-0"}
+
+    def test_the_kind_is_declared_with_its_one_record_at_the_site(self):
+        assert grl.DEFERRED_RELEASE_SITE == self.UNIT
+        assert "deferred-release" in grl.kinds()
+        records = [r for r in grl.arrivals() if r["kind"] == "deferred-release"]
+        assert [(r["where"], r["writer"], r["card"]) for r in records] == [
+            (self.UNIT, "release-train.yml", "DRE-5235")]
+        assert records[0]["callers"] == ["release_deferral.py#_deferred"]
+
+    def test_a_deferred_release_row_anywhere_else_fails_naming_the_site(self):
+        contract = _contract()
+        _entrance(contract)["arrivals"].append(
+            self._record("release_train.py#run_surface"))
+        found = grl.problems(contract=contract)
+        site = _named(found, grl.DEFERRED_RELEASE_SITE)
+        assert len(site) == 1, found
+        assert _named(site, "release_train.py#run_surface", "deferred-release"), site
+
+    def test_a_deferred_release_row_at_the_site_raises_no_site_problem(self):
+        contract = _contract()
+        _entrance(contract)["arrivals"].append(self._record(self.UNIT))
+        found = grl.problems(contract=contract)
+        assert _named(found, "is declared a 'deferred-release' arrival") == [], found
+        assert grl._gate_problems(self._record(self.UNIT), [], str(ROOT),
+                                  grl.lane_name()) == []
+
+    def test_the_contract_names_the_kind_and_the_train_as_its_writer(self):
+        green = lane_contract.lane(grl.lane_name())["clauses"]
+        text = green["entrance"]["text"]
+        assert text.startswith("Seven kinds of row, and no other")
+        for needle in ("(g) The release train deferred a surface",
+                       "RELEASE ROLLED BACK:", "RELEASE BROKEN:",
+                       "release deferred — <first 80 characters of the reason>",
+                       "`Released as <tag>`", "approval of DRE-5234"):
+            assert needle in text, needle
+        assert "release-train.yml" in green["writers"]["who"]
+        assert "DRE-5234" in green["writers"]["text"]
+        done = lane_contract.lane("Done")["clauses"]
+        assert "release-train.yml" in done["writers"]["who"]
+        assert "`Released as <tag>` comment (DRE-5234)" in done["entrance"]["text"]
+        assert "the verified tag its `Released as <tag>` comment names" in (
+            done["evidence"]["text"])
+
+    def test_the_glossary_no_longer_says_the_train_moves_no_card(self):
+        writers = lane_contract.load()["writers"]
+        what = writers["release-train.yml"]["what"]
+        assert "it moves no card" not in what
+        assert "straight into Green Light" in what and "closes that card Done" in what
+        readme = " ".join(writers["_readme"])
+        assert "`release-train.yml` is one" not in readme
+        assert "until DRE-5234 made it a writer of Green Light and Done" in readme
+        # The glossary renders; its `_readme` prose does not.
+        rendered = (ROOT / "docs" / "lane-contract.md").read_text(encoding="utf-8")
+        assert "closes that card Done when the surface next cuts a verified tag" in rendered
+        assert "it moves no card, and is here as the actor" not in rendered
 
 
 @pytest.mark.usefixtures("declared_callers")
@@ -832,14 +904,15 @@ class TestUnreadDestinations:
 
     def test_an_unread_write_from_a_writer_permitted_everywhere_is_still_reported(
             self, tmp_path):
-        # agent-task.yml is permitted in the fleet's ready-work lanes (Backlog,
-        # Todo), which is exactly the writer the sibling check skips when it
+        # agent-task.yml is permitted in the fleet's ready-work lanes (Queued,
+        # Todo — Queued since Backlog retired, DRE-6753), which is exactly the
+        # writer the sibling check skips when it
         # cannot read the destination. (Hand-work joined the ready lanes with
         # DRE-5321 and is a person's lane, so the build run is not its writer.)
         # Green Light is not a ready-work lane, so that escape does not carry
         # here.
         assert "agent-task.yml" in set.intersection(
-            *[set(lane_contract.lane_writers(n)) for n in ("Backlog", "Todo")])
+            *[set(lane_contract.lane_writers(n)) for n in ("Queued", "Todo")])
         root = _copy_repo(tmp_path)
         _edit(root / ".github" / "workflows" / "agent-task.yml",
               "      - name: Report result to Linear\n",

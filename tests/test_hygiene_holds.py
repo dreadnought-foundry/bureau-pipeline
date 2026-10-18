@@ -48,6 +48,7 @@ os.environ.setdefault("REPO", "dreadnought-foundry/bureau-pipeline")
 
 import hold  # noqa: E402
 import hygiene  # noqa: E402
+import lane_contract  # noqa: E402
 import linear_ops  # noqa: E402
 
 MODULE_PATH = ROOT / "scripts" / "hygiene_holds.py"
@@ -496,8 +497,9 @@ class TestNewHeadFromTriage:
         card = issue("DRE-12", "Triage", [stamp(reason, SHA)])
         assert plan(card)[0] == []
 
-    @pytest.mark.parametrize("lane_name", ["Backlog", "Todo", "In Progress", "In Review",
-                                           "Green Light", "Planning"])
+    # The queue under every name it carries (DRE-6748).
+    @pytest.mark.parametrize("lane_name", [*lane_contract.QUEUE_LANES, "Todo", "In Progress",
+                                           "In Review", "Green Light", "Planning"])
     @pytest.mark.parametrize("reason", ["fix-dispute", "unfixable-check"])
     def test_any_lane_but_triage_is_two_writes_and_no_move(self, reason, lane_name):
         card = issue("DRE-12", lane_name, [stamp(reason, SHA)])
@@ -558,8 +560,8 @@ class TestRepoOnRail:
         card = issue("DRE-11", "Triage", [stamp("no-route", "repo:none")], repo=None)
         assert plan(card)[0] == []
 
-    @pytest.mark.parametrize("lane_name", ["Backlog", "Todo", "Planning", "Green Light",
-                                           "In Review"])
+    @pytest.mark.parametrize("lane_name", [*lane_contract.QUEUE_LANES, "Todo", "Planning",
+                                           "Green Light", "In Review"])
     def test_any_lane_but_triage_is_two_writes_and_no_move(self, lane_name):
         card = issue("DRE-11", lane_name, [stamp("no-route", "repo:legacy-site")],
                      repo="portico")

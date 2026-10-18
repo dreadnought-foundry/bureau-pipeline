@@ -28,6 +28,7 @@ Run: cd bureau-pipeline && python3 -m pytest tests/test_model_config_change.py -
 from __future__ import annotations
 
 import json
+import os
 import re
 import subprocess
 import sys
@@ -106,6 +107,26 @@ def _apply(*changes: dict, text: str | None = None):
 
 def _reasons(refusals) -> str:
     return "\n".join(reason for refusal in refusals for reason in refusal["reasons"])
+
+
+def _excluded(doc: dict) -> list[str]:
+    return [e["model"] if isinstance(e, dict) else e for e in doc.get("excluded") or []]
+
+
+def _what_changes(body: str) -> list[str]:
+    """Every line under `## What changes`, stripped, as the CEO reads them."""
+    section = body.split("## What changes", 1)[1].split("\n## ", 1)[0]
+    return [line.strip() for line in section.splitlines() if line.strip()]
+
+
+#: The frozen file's ids the DRE-6789 scenarios name. The card fixes the
+#: sentences they produce, so each is checked against the frozen file below
+#: rather than derived from it.
+HAIKU = "claude-haiku-5-5"
+FABLE_5_1 = "claude-fable-5-1"
+OPUS_5_5 = "claude-opus-5-5"
+SONNET_5_5 = "claude-sonnet-5-5"
+SONNET_4_6 = "claude-sonnet-4-6"
 
 
 # --------------------------------------------------------------------------- #
@@ -319,20 +340,47 @@ def test_the_policy_gate_refuses_a_per_card_role_on_the_planners_kind():
     assert "planner" in _reasons(refusals)
 
 
-def test_the_policy_gate_refuses_a_fourth_group():
-    """`policy_errors` admits exactly the three kinds today; a group the console
-    adds is refused with that rule's own words until the policy changes."""
-    _, refusals = _apply({"op": "add_group", "group": "product-design",
-                          "label": "Product & design",
-                          "purpose": "Decide what to build and how it looks.",
-                          "model": TOP})
-    assert "kinds: must declare exactly" in _reasons(refusals)
+def test_the_policy_gate_admits_an_added_group():
+    """DRE-6834, in the place of DRE-6624's refusal of the same change: a group
+    the console adds is a build group beside the three, and the policy takes
+    it — its own kind, its own ladder, the chosen model first."""
+    before = yaml.safe_load(_text())
+    text, refusals = _apply({"op": "add_group", "group": "product-design",
+                             "label": "Product & design",
+                             "purpose": "Decide what to build and how it looks.",
+                             "model": TOP})
+    assert refusals == [], _reasons(refusals)
+    doc = yaml.safe_load(text)
+    assert list(doc["kinds"]) == list(before["kinds"]) + ["product-design"]
+    assert _ladder(doc, "product-design") == [TOP]
+    assert _comments(text) == _comments(_text())
 
 
-def test_the_policy_gate_refuses_an_excluded_model():
-    _, refusals = _apply({"op": "set_default_model", "group": "workhorse",
-                          "model": "claude-haiku-5-5"})
-    assert "excluded" in _reasons(refusals)
+def test_choosing_an_excluded_model_lifts_its_exclusion_and_says_so():
+    """DRE-6789 item 1, in the place of DRE-6624's refusal of the same change:
+    a console choice of an excluded model brings it back for that use."""
+    before = yaml.safe_load(_text())
+    assert HAIKU in _excluded(before) and HAIKU not in BUILDERS
+    change = {"op": "set_default_model", "group": "workhorse", "model": HAIKU}
+    text, refusals = _apply(change)
+    assert refusals == [], _reasons(refusals)
+    doc = yaml.safe_load(text)
+    assert _ladder(doc, "workhorse") == [HAIKU] + BUILDERS
+    assert HAIKU not in _excluded(doc)
+    assert doc["excluded"] == [e for e in before["excluded"] if e["model"] != HAIKU]
+    for name in ("advisory", "judgement"):
+        assert doc["ladders"][name] == before["ladders"][name]
+    assert {k: v for k, v in doc.items() if k not in ("ladders", "excluded")} == \
+        {k: v for k, v in before.items() if k not in ("ladders", "excluded")}
+    assert _comments(text) == _comments(_text())
+    # Two lines out (the entry), two in (the new rung), and nothing else moved.
+    removed = [line for line in _text().splitlines() if line not in text.splitlines()]
+    assert len(removed) == 2 and HAIKU in removed[0]
+    assert policy_errors(doc) == []
+    body = mcc.pr_body({"requested_by": "ceo@example.com", "changes": [change]},
+                       yaml.safe_load(_text()))
+    assert ("Haiku 5.5 was set aside on 2026-10-08 and is brought back by this "
+            "choice for Builders.") in _what_changes(body)
 
 
 def test_the_policy_gate_refuses_an_unknown_project():
@@ -558,3 +606,409 @@ def test_render_prints_the_title_and_the_body(tmp_path):
     body = _cli(tree, "render", "pr-body", "--changes", str(path))
     assert body.returncode == 0, body.stderr
     assert body.stdout.startswith("What's new: none")
+
+
+# --------------------------------------------------------------------------- #
+# 5. DRE-6789 — a console choice is complete: an exclusion lifted or set     #
+#    again, the review separation said, the caution carried                    #
+# --------------------------------------------------------------------------- #
+
+import model_choice  # noqa: E402
+import model_fallback  # noqa: E402
+
+#: The CEO's four cases of 2026-10-10, and the two that bring Haiku 5.5 back.
+PLANNERS_OPUS = {"op": "set_default_model", "group": "judgement", "model": OPUS_5_5}
+BUILDERS_FABLE = {"op": "set_default_model", "group": "workhorse", "model": FABLE_5_1}
+REVIEWERS_OPUS = {"op": "set_default_model", "group": "advisory", "model": OPUS_5_5}
+ATLAS_SONNET_4_6 = {"op": "set_project_model", "project": "atlas",
+                    "group": "workhorse", "model": SONNET_4_6}
+BUILDERS_HAIKU = {"op": "set_default_model", "group": "workhorse", "model": HAIKU}
+ATLAS_HAIKU = {"op": "set_project_model", "project": "atlas",
+               "group": "workhorse", "model": HAIKU}
+ATLAS_CLEAR = {"op": "clear_project_model", "project": "atlas", "group": "workhorse"}
+
+SET_ASIDE_AGAIN = ("Haiku 5.5 is set aside: no group or project runs on it now, "
+                   "and it can be chosen again from the console.")
+CLEARED_REASON = (f"set aside on {TODAY}: atlas's Builders ran on it from the console "
+                  "until that choice was cleared, and no group or project names it now.")
+REPLACED_REASON = (f"set aside on {TODAY}: atlas's Builders ran on it from the console "
+                   "until Sonnet 4.6 replaced it, and no group or project names it now.")
+
+
+def test_the_dre_6789_ids_are_where_the_frozen_file_puts_them():
+    """The sentences below are the card's, so the state they read is pinned
+    here once: if the fixture is re-frozen past it, this names why."""
+    walks = {k: _ladder(FROZEN, k) for k in ("workhorse", "advisory", "judgement")}
+    assert walks["workhorse"][0] == OPUS_5_5 and OPUS_5_5 in walks["advisory"]
+    assert walks["advisory"][0] == SONNET_5_5 and SONNET_5_5 in walks["workhorse"]
+    assert walks["judgement"][0] == FABLE_5_1 and FABLE_5_1 not in walks["workhorse"]
+    assert SONNET_4_6 not in walks["workhorse"]
+    assert _excluded(FROZEN)[0] == HAIKU
+    assert "atlas" not in (FROZEN.get("projects") or {})
+    assert "portico" not in (FROZEN.get("projects") or {})
+
+
+def _body(*changes: dict, config: dict | None = None) -> list[str]:
+    change_set = {"requested_by": "ceo@example.com", "changes": list(changes)}
+    return _what_changes(mcc.pr_body(change_set, config or yaml.safe_load(_text())))
+
+
+def _then(first: tuple[dict, ...], *changes: dict):
+    """The frozen text with `first` applied, then `changes` applied to it:
+    `(start text, result text, refusals)`."""
+    start, refusals = _apply(*first)
+    assert refusals == [], _reasons(refusals)
+    text, refusals = _apply(*changes, text=start)
+    return start, text, refusals
+
+
+def _known(doc: dict) -> set[str]:
+    """The four keys `KNOWN_MODELS` and `model_adoption._known_ids` derive
+    from, read off a parsed file — never off the live module."""
+    ids = {m for name in doc["ladders"] for m in _ladder(doc, name)}
+    ids |= model_fallback._project_ids(doc)
+    ids |= {e["model"] if isinstance(e, dict) else e for e in doc.get("retired") or []}
+    return ids | set(_excluded(doc))
+
+
+# -- item 1: an excluded model chosen is brought back -------------------------
+
+def test_a_project_choice_of_an_excluded_model_lifts_it_too():
+    text, refusals = _apply(ATLAS_HAIKU)
+    assert refusals == [], _reasons(refusals)
+    doc = yaml.safe_load(text)
+    assert doc["projects"]["atlas"] == {"workhorse": HAIKU}
+    assert HAIKU not in _excluded(doc)
+    assert policy_errors(doc) == []
+    assert _comments(text) == _comments(_text())
+    assert ("Haiku 5.5 was set aside on 2026-10-08 and is brought back by this "
+            "choice for atlas's Builders.") in _body(ATLAS_HAIKU)
+
+
+def test_lifting_the_last_exclusion_leaves_the_block_empty():
+    one = _text().replace(
+        '  - model: claude-fable-5\n    reason: "off every ladder on cost policy '
+        '(2026-08-12)"\n', "")
+    assert _excluded(yaml.safe_load(one)) == [HAIKU]
+    text = mcc.edit_text(one, BUILDERS_HAIKU, TODAY)
+    assert "\nexcluded: []\n" in text
+    assert yaml.safe_load(text) == mcc.edit_data(yaml.safe_load(one), BUILDERS_HAIKU, TODAY)
+
+
+def test_the_set_aside_line_drops_the_date_when_the_reason_has_none():
+    config = yaml.safe_load(_text())
+    config["excluded"][0]["reason"] = "on no list until he says otherwise"
+    assert ("Haiku 5.5 was set aside and is brought back by this choice for "
+            "Builders.") in _body(BUILDERS_HAIKU, config=config)
+
+
+def test_an_added_group_on_a_set_aside_model_says_it_is_brought_back():
+    change = {"op": "add_group", "group": "product-design", "label": "Product & design",
+              "purpose": "Decide what to build and how it looks.", "model": HAIKU}
+    assert ("Haiku 5.5 was set aside on 2026-10-08 and is brought back by this "
+            "choice for Product & design.") in _body(change)
+
+
+def test_a_model_not_excluded_writes_no_set_aside_line():
+    assert not any("was set aside" in line for line in _body(BUILDERS_FABLE))
+
+
+# -- item 2: the review separation is said, never written --------------------
+
+def test_reviewers_on_opus_5_5_say_where_an_opus_build_is_reviewed(tmp_path):
+    text, refusals = _apply(REVIEWERS_OPUS)
+    assert refusals == [], _reasons(refusals)
+    doc = yaml.safe_load(text)
+    assert doc["review_separation"] == FROZEN["review_separation"]
+    assert policy_errors(doc) == []
+    assert ("Opus 5.5 now builds and reviews; a pull request built on it is "
+            "reviewed on Sonnet 5.5.") in _body(REVIEWERS_OPUS)
+
+    tree = _tree(tmp_path / "tree")
+    (tree / "config" / "models.yaml").write_text(text)
+    sync = tree / "scripts" / "sync_model_config.py"
+    assert subprocess.run([sys.executable, str(sync)], cwd=tree).returncode == 0
+    for role in ("critic", "verifier"):
+        proc = subprocess.run(
+            [sys.executable, str(tree / "scripts" / "model_fallback.py"), "select",
+             role, "--built-on", OPUS_5_5],
+            cwd=tree, capture_output=True, text=True,
+            env={**os.environ, "BUREAU_FAKE_AVAILABLE": "{}"})
+        assert proc.returncode == 0, proc.stderr
+        assert proc.stdout.strip() == SONNET_5_5, (role, proc.stderr)
+
+
+def test_a_project_builder_on_a_reviewer_model_says_where_it_is_reviewed():
+    text, refusals = _apply({"op": "set_project_model", "project": "atlas",
+                             "group": "workhorse", "model": SONNET_5_5})
+    assert refusals == [], _reasons(refusals)
+    assert yaml.safe_load(text)["review_separation"] == FROZEN["review_separation"]
+    assert ("Sonnet 5.5 now builds and reviews; a pull request built on it is "
+            "reviewed on Opus 5.5.") in _body({"op": "set_project_model",
+                                               "project": "atlas",
+                                               "group": "workhorse",
+                                               "model": SONNET_5_5})
+
+
+@pytest.mark.parametrize("change", [
+    BUILDERS_FABLE,
+    PLANNERS_OPUS,
+    {"op": "set_project_model", "project": "atlas", "group": "judgement",
+     "model": OPUS_5_5},
+], ids=["builders-fable", "planners-opus", "atlas-planners-opus"])
+def test_no_separation_line_where_the_choice_builds_or_reviews_nothing_new(change):
+    """Fable 5.1 is on one walk only; the planning model neither builds nor
+    reviews a pull request, whatever both fleet walks hold (Opus 5.5 is on
+    both today)."""
+    text, refusals = _apply(change)
+    assert refusals == [], _reasons(refusals)
+    assert yaml.safe_load(text)["review_separation"] == FROZEN["review_separation"]
+    assert not any("now builds and reviews" in line for line in _body(change))
+
+
+# -- item 3: the caution rides in the body -----------------------------------
+
+def _line_for(change: dict, config: dict | None = None) -> str:
+    """The `- ` line `pr_body` writes for `change`, alone in its set."""
+    lines = [line for line in _body(change, config=config) if line.startswith("- ")]
+    assert len(lines) == 1, lines
+    return lines[0]
+
+
+def test_builders_on_fable_5_1_carry_the_costs_more_caution():
+    assert _line_for(BUILDERS_FABLE).endswith(
+        "Fable 5.1 costs more than Opus 5.5: $10/$50 against $4/$20 per million "
+        "tokens, and Builders is the busiest group.")
+
+
+@pytest.mark.parametrize("change", [PLANNERS_OPUS, ATLAS_SONNET_4_6],
+                         ids=["planners-opus", "atlas-builders-sonnet-4-6"])
+def test_a_cheaper_choice_carries_no_caution(change):
+    line = _line_for(change)
+    assert line == f"- {mcc.describe(change, yaml.safe_load(_text()))}"
+
+
+def test_a_project_replacing_its_exception_is_cautioned_against_that_exception():
+    config = yaml.safe_load(_apply(ATLAS_SONNET_4_6)[0])
+    change = dict(ATLAS_SONNET_4_6, model=OPUS_5_5)
+    assert _line_for(change, config).endswith(
+        "Opus 5.5 costs more than Sonnet 4.6: $4/$20 against $3/$15 per million "
+        "tokens.")
+
+
+def _new_group(model: str) -> dict:
+    return {"op": "add_group", "group": "product-design", "label": "Product & design",
+            "purpose": "Decide what to build and how it looks.", "model": model}
+
+
+def test_an_added_group_on_fable_5_1_is_cautioned_against_the_builders_default():
+    """DRE-6834: a new group has no model of its own yet, so its first one is
+    priced against the Builders' default, the group it is built beside — and
+    the Builders' busiest-group words are not said of it."""
+    assert _line_for(_new_group(FABLE_5_1)).endswith(
+        "Fable 5.1 costs more than Opus 5.5: $10/$50 against $4/$20 per million "
+        "tokens.")
+
+
+def test_an_added_group_on_a_set_aside_model_says_it_comes_back_for_that_group():
+    line = _line_for(_new_group(HAIKU))
+    assert (f"{model_choice.model_label(HAIKU)} is a model we set aside; choosing it "
+            "brings it back for Product & design") in line, line
+    assert "against Opus 5.5 at $4/$20" in line, line
+
+
+def test_an_added_group_on_the_builders_default_carries_no_caution():
+    change = _new_group(OPUS_5_5)
+    assert _line_for(change) == f"- {mcc.describe(change, yaml.safe_load(_text()))}"
+
+
+# -- item 4: an added group's model is a choice, and a choice is complete -----
+
+@pytest.mark.parametrize("model", [HAIKU, OPUS_5_5])
+def test_an_added_groups_model_is_a_complete_choice(model):
+    """DRE-6834, in the place of DRE-6789's pin that a fourth group is refused
+    before anything is composed: the group is added, and an excluded model
+    chosen for it is lifted in the same change, as a Builders choice lifts it."""
+    before = yaml.safe_load(_text())
+    change = {"op": "add_group", "group": "product-design", "label": "Product & design",
+              "purpose": "Decide what to build and how it looks.", "model": model}
+    text, refusals = _apply(change)
+    assert refusals == [], _reasons(refusals)
+    doc = yaml.safe_load(text)
+    assert _ladder(doc, "product-design") == [model]
+    assert model not in _excluded(doc)
+    assert _excluded(doc) == [m for m in _excluded(before) if m != model]
+    assert _comments(text) == _comments(_text())
+
+
+# -- item 5: what is still refused, plainly ----------------------------------
+
+def test_an_unpriced_model_is_refused_with_the_policys_own_sentence():
+    _, refusals = _apply({"op": "set_default_model", "group": "workhorse",
+                          "model": "claude-nonesuch-9"})
+    assert [r["reasons"] for r in refusals] == [
+        ["claude-nonesuch-9 has no declared price, so it cannot be chosen."]]
+
+
+def test_a_model_the_pinned_claude_code_cannot_run_is_refused():
+    change_set = {"requested_by": "ceo@example.com", "changes": [ATLAS_SONNET_4_6]}
+    text, refusals = mcc.apply_change_set(
+        _text(), change_set, today=TODAY, floors={SONNET_4_6: "9.0.0"},
+        installed="2.1.284")
+    assert text == _text()
+    assert [r["reasons"] for r in refusals] == [
+        ["Our pinned Claude Code cannot run Sonnet 4.6 yet."]]
+    # The same floor met is no refusal.
+    _, refusals = mcc.apply_change_set(
+        _text(), change_set, today=TODAY, floors={SONNET_4_6: "2.1.0"},
+        installed="2.1.284")
+    assert refusals == []
+
+
+@pytest.mark.parametrize("priced", [False, True], ids=["unpriced", "priced"])
+def test_a_retired_model_is_refused_as_retired_whether_or_not_it_has_a_price(priced):
+    retired = FROZEN["retired"][0]["model"]
+    assert retired == "claude-opus-4-8"
+    prices = model_fixture.fixture_prices()
+    assert retired not in prices
+    if priced:
+        prices = dict(prices, **{retired: {"input": 1.0, "output": 5.0}})
+    change_set = {"requested_by": "ceo@example.com", "changes": [
+        {"op": "set_default_model", "group": "workhorse", "model": retired}]}
+    text, refusals = mcc.apply_change_set(_text(), change_set, today=TODAY,
+                                          prices=prices)
+    assert text == _text()
+    assert [r["reasons"] for r in refusals] == [
+        ["claude-opus-4-8 is retired — kept readable, never selectable"]]
+
+
+@pytest.mark.parametrize("change", [
+    {"op": "set_default_model", "group": "workhorse", "model": "claude-nonesuch-9"},
+    {"op": "set_default_model", "group": "workhorse", "model": "claude-opus-4-8"},
+    {"op": "add_group", "group": "workhorse", "label": "Product & design",
+     "purpose": "Decide what to build and how it looks.", "model": HAIKU},
+], ids=["unpriced", "retired", "taken-group-name"])
+def test_a_refused_choice_exits_2_and_writes_nothing(tmp_path, change):
+    tree = _tree(tmp_path / "tree")
+    proc = _cli(tree, "apply", "--changes", str(_write_set(tmp_path, change)))
+    assert proc.returncode == 2, proc.stdout + proc.stderr
+    assert any(line.startswith("::error::") for line in proc.stdout.splitlines())
+    assert (tree / "config/models.yaml").read_text() == _text()
+
+
+# -- item 6: a model a cleared or replaced choice leaves on nothing ----------
+
+def test_clearing_a_project_choice_sets_its_model_aside_again():
+    start, text, refusals = _then((ATLAS_HAIKU,), ATLAS_CLEAR)
+    assert refusals == [], _reasons(refusals)
+    before, doc = yaml.safe_load(start), yaml.safe_load(text)
+    assert HAIKU not in _excluded(before)
+    assert doc["projects"] == FROZEN["projects"]
+    assert doc["excluded"] == before["excluded"] + [
+        {"model": HAIKU, "reason": CLEARED_REASON}]
+    assert {k: v for k, v in doc.items() if k not in ("projects", "excluded")} == \
+        {k: v for k, v in before.items() if k not in ("projects", "excluded")}
+    assert _comments(text) == _comments(start)
+    assert policy_errors(doc) == []
+    assert model_choice.set_aside_date(doc, HAIKU) == TODAY
+    assert HAIKU in _known(doc)
+    assert SET_ASIDE_AGAIN in _body(ATLAS_CLEAR, config=before)
+
+
+def test_clearing_the_only_exception_leaves_projects_empty_and_sets_aside(tmp_path):
+    start, refusals = _apply(ATLAS_HAIKU, text=_no_exceptions())
+    assert refusals == [], _reasons(refusals)
+    text, refusals = _apply(ATLAS_CLEAR, text=start)
+    assert refusals == [], _reasons(refusals)
+    doc = yaml.safe_load(text)
+    assert doc["projects"] == {}
+    assert _excluded(doc)[-1] == HAIKU
+    assert doc["excluded"][-1]["reason"] == CLEARED_REASON
+
+
+def test_replacing_a_project_choice_sets_the_replaced_model_aside_again():
+    start, text, refusals = _then((ATLAS_HAIKU,), ATLAS_SONNET_4_6)
+    assert refusals == [], _reasons(refusals)
+    before, doc = yaml.safe_load(start), yaml.safe_load(text)
+    assert doc["projects"]["atlas"] == {"workhorse": SONNET_4_6}
+    assert doc["excluded"] == before["excluded"] + [
+        {"model": HAIKU, "reason": REPLACED_REASON}]
+    assert policy_errors(doc) == []
+    assert HAIKU in _known(doc)
+    lines = _body(ATLAS_SONNET_4_6, config=before)
+    assert SET_ASIDE_AGAIN in lines
+    own = next(line for line in lines if line.startswith("- "))
+    assert own.endswith("Sonnet 4.6 costs more than Haiku 5.5: $3/$15 against "
+                        "$0.10/$0.50 per million tokens.")
+
+
+@pytest.mark.parametrize("first", [
+    ({"op": "set_project_model", "project": "atlas", "group": "workhorse",
+      "model": SONNET_5_5},),
+    (ATLAS_HAIKU, {"op": "set_project_model", "project": "portico",
+                   "group": "workhorse", "model": HAIKU}),
+], ids=["a-ladder-model", "still-named-by-another-project"])
+def test_a_model_still_named_elsewhere_is_not_set_aside(first):
+    start, text, refusals = _then(first, ATLAS_CLEAR)
+    assert refusals == [], _reasons(refusals)
+    assert yaml.safe_load(text)["excluded"] == yaml.safe_load(start)["excluded"]
+    assert SET_ASIDE_AGAIN not in _body(ATLAS_CLEAR, config=yaml.safe_load(start))
+
+
+def test_the_text_and_the_parsed_edit_agree_on_a_set_aside():
+    start, _ = _apply(ATLAS_HAIKU)
+    for change in (ATLAS_CLEAR, ATLAS_SONNET_4_6):
+        after = mcc.edit_text(start, change, TODAY)
+        assert yaml.safe_load(after) == mcc.edit_data(yaml.safe_load(start), change, TODAY)
+        assert after.endswith("no group or project names it now.\"\n")
+
+
+# -- the words, and the generator on every scenario --------------------------
+
+#: Each scenario: the change set applied first (none, or the Haiku exception),
+#: then the change whose body lines are read.
+SCENARIOS = {
+    "planners-opus": ((), PLANNERS_OPUS),
+    "builders-fable": ((), BUILDERS_FABLE),
+    "reviewers-opus": ((), REVIEWERS_OPUS),
+    "atlas-builders-sonnet-4-6": ((), ATLAS_SONNET_4_6),
+    "builders-haiku": ((), BUILDERS_HAIKU),
+    "atlas-builders-sonnet-5-5": ((), dict(ATLAS_SONNET_4_6, model=SONNET_5_5)),
+    "atlas-planners-opus": ((), dict(PLANNERS_OPUS, op="set_project_model",
+                                     project="atlas")),
+    "atlas-haiku-cleared": ((ATLAS_HAIKU,), ATLAS_CLEAR),
+    "atlas-haiku-replaced": ((ATLAS_HAIKU,), ATLAS_SONNET_4_6),
+    "added-group-haiku": ((), {"op": "add_group", "group": "product-design",
+                               "label": "Product & design",
+                               "purpose": "Decide what to build and how it looks.",
+                               "model": HAIKU}),
+}
+
+
+@pytest.mark.parametrize("name", list(SCENARIOS))
+def test_every_line_the_writer_composes_is_in_plain_words(name):
+    first, change = SCENARIOS[name]
+    start, text, refusals = _then(first, change) if first else (_text(), *_apply(change))
+    assert refusals == [], _reasons(refusals)
+    lines = _body(change, config=yaml.safe_load(start))
+    assert lines
+    for line in lines:
+        assert model_choice.plain_words_problems(line) == [], line
+    for entry in yaml.safe_load(text)["excluded"]:
+        if entry not in yaml.safe_load(start)["excluded"]:
+            assert model_choice.plain_words_problems(entry["reason"]) == []
+
+
+def test_the_generator_is_in_sync_on_every_scenario(tmp_path):
+    tree = _tree(tmp_path / "tree")
+    sync = tree / "scripts" / "sync_model_config.py"
+    for name, (first, change) in SCENARIOS.items():
+        start, text, refusals = _then(first, change) if first else (_text(), *_apply(change))
+        assert refusals == [], (name, _reasons(refusals))
+        (tree / "config" / "models.yaml").write_text(text)
+        proc = subprocess.run([sys.executable, str(sync)], cwd=tree,
+                              capture_output=True, text=True)
+        assert proc.returncode == 0, (name, proc.stdout + proc.stderr)
+        check = subprocess.run([sys.executable, str(sync), "--check"], cwd=tree,
+                               capture_output=True, text=True)
+        assert check.returncode == 0, (name, check.stdout + check.stderr)

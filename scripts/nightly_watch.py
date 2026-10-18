@@ -20,9 +20,10 @@ What nothing watches is the run that **never happens**: a schedule GitHub
 disabled after 60 days of repo inactivity, a cron typo, a workflow that errors
 before any job starts, runs stuck in the queue. Nothing fails, because nothing
 ran. It is the shape of the retired channel-staleness alarm (DRE-2552,
-retired by DRE-6053) pointed at a different silence, and it raises its alarm
-through the mechanism `red-main-repair.yml` already uses — one deduplicated
-Linear card — so no new surface is added.
+retired by DRE-6053) pointed at a different silence. It raises its alarm as a
+console alert through `scripts/pipeline_notice.py` (DRE-7456), and the
+deduplicated Linear card it filed before is that client's fallback — see
+THE CONSOLE ALERT below.
 
 WHO IS WATCHED — COMPUTED, NEVER LISTED
 ---------------------------------------
@@ -69,7 +70,7 @@ This watcher reads repos it does not live in, across three App installations,
 so "I could not look" is a routine answer and must never render as "nightly
 ok" (standards/console-honesty.md rules 1-3). A repo the token cannot read, a
 workflow file that will not fetch, a run listing GitHub declines: each is
-reported UNKNOWN and alarms. A missing nightly takes the card title when both
+reported UNKNOWN and alarms. A missing nightly takes the alert when both
 are true, because it is the actionable one, but the unknown is still named in
 the body — an alarm that quietly shrinks the world to what it happened to be
 able to read is the failure this file is about.
@@ -87,16 +88,54 @@ seam's minute of backoff, paid once per refused file, would time the job out,
 and a job that times out says nothing at all. A throttle never passes and has
 its own block, but it has a known end and nothing for anybody to do, so a
 throttle alone is said only on the daily re-confirm hour — one that persists
-is said once a day on the UNKNOWN card, and an ordinary hour's throttle is in
+is raised once a day as the UNKNOWN alert, and an ordinary hour's throttle is in
 the step summary and nowhere else. A missing nightly or a genuine UNKNOWN
 beside it still alarms on any hour.
 
+A SERVER ERROR IS RETRIED, BRIEFLY (DRE-7352)
+---------------------------------------------
+Watch run 38672076834 was answered `No server is currently available to
+service your request. … (HTTP 503)` for one workflow file, and filed the
+UNKNOWN card for an outage on GitHub's side that was over in seconds. A read
+GitHub answers with `(HTTP 5xx)` is therefore asked again, up to the read
+seam's own `ATTEMPTS`, waiting its own `backoff_seconds()` between them — and
+only that: a 404, a 403, a throttle, an empty answer and a non-JSON one are
+each decided on the first attempt, as before. One watch run spends at most
+`SERVER_ERROR_RETRIES_PER_RUN` waits on it in all, so an hour of GitHub
+being down cannot run the job out of time; past that, a 5xx is UNKNOWN on its
+first attempt. Each retry is one line in the run log, never on the card, and
+a 5xx that outlasts its retries is UNKNOWN with GitHub's last answer. The
+shared read seam is not changed; this is the watcher's own retry.
+
+THE CONSOLE ALERT (DRE-7456)
+----------------------------
+Each condition is one console alert per owner, at WARN: a missing nightly is
+`nightly_watch:<owner>:did_not_run` and a repo the watcher could not read is
+`nightly_watch:<owner>:cannot_read` — `DID_NOT_RUN` and `CANNOT_READ` below,
+the key's last part. `notice_actions()` decides, from the hour's readings and
+verdict, which key the hour raises and which it resolves:
+
+  * it raises the key of the verdict's title — the card it used to file —
+    and nothing else, so a missing nightly beside an unreadable repo raises
+    `did_not_run` and names the unreadable repo in its body, as the card did;
+  * it resolves a key only when the hour shows the condition GONE: everything
+    was read and no nightly is missing resolves `did_not_run`, and nothing
+    unreadable or throttled resolves `cannot_read`. A subject not read is
+    not a condition gone — a missing nightly may be hiding in it — so an hour
+    that could not see leaves the key as it stands.
+
+The workflow raises on every hour the condition holds; the console answers
+`repeat` to a key already open and delivers nothing, so the daily re-confirm
+is a raise of the same key. When the door cannot take a raise, the client
+files today's card — its title, lane `Planning`, label `repo:bureau-pipeline`
+— and on any hour but the re-confirm one the workflow says nothing while that
+card is open, so the card is commented on at most once a day, as it was.
+
 KNOWN LIMIT, STATED SO IT IS NOT MISTAKEN FOR COVERAGE
 ------------------------------------------------------
-The 2026-09-22 outside-read audit (DRE-4655..4665) found that production has no
-alert-delivery environment, so CRITICAL alarms do not currently reach the CEO.
-This alarm reaches exactly as far as the mechanism it rides — one deduplicated
-Linear card — and no further. It does not fix delivery.
+A WARN alert stays on the console: it is never emailed. This alarm reaches
+exactly as far as the console's panel, or the fallback card when the door is
+down, and no further.
 
 The decision here is pure: no network, no clock of its own, the
 `promote_channel.py` shape. `collect()` takes the GitHub reader as an argument
@@ -108,10 +147,12 @@ from __future__ import annotations
 import argparse
 import base64
 import datetime as dt
+import functools
 import json
 import os
 import re
 import sys
+import time
 from dataclasses import dataclass
 from typing import Callable
 
@@ -126,7 +167,9 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 # groomer's lookup legs read.
 from cron_clock import elapsed_days as elapsed, hours_since  # noqa: E402
 from check_workflow_watchers import on_block  # noqa: E402
-from gh_read_retry import GhReadError, read as gh_read  # noqa: E402
+from gh_read_retry import (  # noqa: E402
+    ATTEMPTS, GhReadError, backoff_seconds, read as gh_read,
+)
 from release_train import fleet_owners, fleet_roster as roster  # noqa: E402
 
 #: Hours since the newest schedule run at which a nightly is late. A nightly
@@ -150,8 +193,10 @@ INTERVAL_HOURS = 1.0
 #: above: running hourly is how a missing nightly is FOUND within the hour, and
 #: re-confirming hourly is how the card becomes 24 comments a day that nobody
 #: reads. Daily reads as deliberate rather than as a stuck process. Only the
-#: re-confirmation waits — the card itself is filed on whichever hour the
-#: alarm first fires.
+#: re-confirmation waits — the alert itself is raised on whichever hour the
+#: alarm first fires. Since DRE-7456 it governs two things: a throttle alone,
+#: said only on this hour, and the fallback card a door outage left open,
+#: commented on only on this hour.
 RECONFIRM_AFTER_HOURS = 24.0
 
 #: …and the hour it speaks on, in UTC. 07:00 UTC — a morning hour, chosen
@@ -179,15 +224,21 @@ THROTTLED_HEADING = ("Not read this hour (GitHub's hourly request budget for "
                      "this installation was spent):")
 
 #: The verdict states. LATE/STUCK/NEVER all mean one thing to a reader — the
-#: nightly did not run — so they share a title and a card.
+#: nightly did not run — so they share a title and an alert.
 MISSING = "missing"
 
 #: Which readings are worth waking somebody for.
 ALARMING = (LATE, STUCK, NEVER)
 
-#: Exact, stable titles — `linear_ops.py find-open` matches on equality, so a
-#: title that moved with the numbers would mint a fresh card every hour and the
-#: alarm would become the inbox we are escaping. The OWNER is part of the
+#: The last part of each console alert's key, `nightly_watch:<owner>:<part>`
+#: (DRE-7456) — the missing nightly's and the unreadable repo's.
+DID_NOT_RUN = "did_not_run"
+CANNOT_READ = "cannot_read"
+
+#: Exact, stable titles — the alert's, and its fallback card's.
+#: `linear_ops.find_open` matches on equality, so a title that moved with the
+#: numbers would mint a fresh fallback card every hour and the alarm would
+#: become the inbox we are escaping. The OWNER is part of the
 #: title, and that is not decoration: the watcher runs once per App
 #: installation, three matrix jobs at the same minute, and one shared title
 #: would have two of them racing to create the same card.
@@ -269,7 +320,7 @@ def is_nightly(text: str) -> bool | None:
     """Does this workflow file declare PR CI with a nightly behind it?
 
     True/False is the answer; **None is "I could not read it"** and stays
-    unknown all the way to the card. A file that will not parse might be the
+    unknown all the way to the alert. A file that will not parse might be the
     nightly that stopped, and a watcher that quietly skipped it would report
     the repo as fine.
     """
@@ -602,12 +653,12 @@ def evaluate(readings: list, *, owner: str = "",
 
     Order, and every step of it is load-bearing:
       1. a nightly that did not run is the actionable finding and takes the
-         card, however many repos we also could not read;
+         alert, however many repos we also could not read;
       2. what we could not read is UNKNOWN, never a reassuring silence;
       3. what GitHub's hourly budget kept us from reading is THROTTLED, never
          a pass. It alarms, under the UNKNOWN title, only when
          `speak_throttled` — the daily re-confirm hour (DRE-6461). Any other
-         hour it is said in the step summary and files no card: the window
+         hour it is said in the step summary and raises nothing: the window
          resets within the hour and there is nothing for anybody to do;
       4. otherwise every nightly we can see has run, and nobody is told
          anything. Silence is the ordinary outcome. A new nightly still
@@ -719,6 +770,25 @@ def evaluate(readings: list, *, owner: str = "",
                    detail=_detail(head))
 
 
+def notice_actions(readings: list, verdict: Verdict) -> tuple:
+    """`(the key part to raise or None, the key parts to resolve)`. Pure.
+
+    The raise is the verdict's title as a key; a key is resolved only when the
+    readings show its condition gone — see THE CONSOLE ALERT above.
+    """
+    states = {r.state for r in readings}
+    unread = bool(states & {UNKNOWN, THROTTLED})
+    raised = None
+    if verdict.alarm:
+        raised = DID_NOT_RUN if verdict.state == MISSING else CANNOT_READ
+    resolved = []
+    if not states & set(ALARMING) and not unread:
+        resolved.append(DID_NOT_RUN)
+    if not unread:
+        resolved.append(CANNOT_READ)
+    return raised, tuple(resolved)
+
+
 # --------------------------------------------------------------------------- #
 # CLI                                                                          #
 # --------------------------------------------------------------------------- #
@@ -727,8 +797,40 @@ def evaluate(readings: list, *, owner: str = "",
 #: How the gh CLI reports GitHub's 404 on stderr: `gh: Not Found (HTTP 404)`.
 NOT_FOUND_STATUS = re.compile(r"\(HTTP 404\)")
 
+#: …and a server error, the same way: `(HTTP 503)`. Matched on the status, so a
+#: message that merely contains 5xx digits is never read as one (DRE-7352).
+SERVER_ERROR_STATUS = re.compile(r"\(HTTP 5\d\d\)")
 
-def _gh_api(path: str):
+#: Retry waits one watch run may spend on server errors, across every read it
+#: makes. Two is one read's full set of retries — under a minute at the read
+#: seam's default backoff — so an hour of GitHub being down costs the 15-minute
+#: job at most that, and is UNKNOWN as it always was (DRE-7352).
+SERVER_ERROR_RETRIES_PER_RUN = 2
+
+
+class RetryBudget:
+    """The server-error retry waits one watch run has left.
+
+    Made per `watch`, never at import, so one run — or one test — cannot spend
+    another's.
+    """
+
+    def __init__(self, waits: int = SERVER_ERROR_RETRIES_PER_RUN):
+        self.left = waits
+
+    def spend(self) -> bool:
+        if self.left <= 0:
+            return False
+        self.left -= 1
+        return True
+
+
+def _server_error(refusal: GhReadError) -> bool:
+    return (not refusal.rate_limited
+            and bool(SERVER_ERROR_STATUS.search(refusal.stderr or "")))
+
+
+def _gh_api(path: str, *, budget: RetryBudget | None = None):
     """One GitHub read, retried through the shared read seam.
 
     Every refusal — a throttle that outlasted its retries, a 404, a token that
@@ -742,16 +844,39 @@ def _gh_api(path: str):
     `GhReadError` carries no HTTP status, and `gh` says it only on stderr, as
     `Not Found (HTTP 404)`; the match is on that exact status, so a throttle or
     a 5xx whose message merely contains the digits 404 is never mistaken for it.
+
+    A server error — `(HTTP 5xx)` on stderr, and not a throttle — is asked
+    again, up to `ATTEMPTS` in all with `backoff_seconds()` between, while
+    `budget` (the run's, or a fresh one for a lone read) has a wait left
+    (DRE-7352). Nothing else is retried here.
     """
-    try:
-        answer = gh_read(["api", path], log=lambda line: print(line, file=sys.stderr))
-    except GhReadError as refusal:
-        raise Unreadable(
-            str(refusal),
-            not_found=(not refusal.rate_limited
-                       and bool(NOT_FOUND_STATUS.search(refusal.stderr or ""))),
-            throttled=bool(refusal.rate_limited),
-        ) from refusal
+    budget = budget if budget is not None else RetryBudget()
+    waits = backoff_seconds()
+
+    def log(line: str) -> None:
+        print(line, file=sys.stderr)
+
+    for attempt in range(1, ATTEMPTS + 1):
+        try:
+            answer = gh_read(["api", path], log=log)
+            break
+        except GhReadError as refusal:
+            retry = (attempt < ATTEMPTS and _server_error(refusal)
+                     and budget.spend())
+            if not retry:
+                raise Unreadable(
+                    str(refusal),
+                    not_found=(not refusal.rate_limited
+                               and bool(NOT_FOUND_STATUS.search(refusal.stderr or ""))),
+                    throttled=bool(refusal.rate_limited),
+                ) from refusal
+            wait = waits[min(attempt - 1, len(waits) - 1)]
+            log(
+                f"gh-read: GitHub answered `gh api {path}` with a server error "
+                f"on attempt {attempt} of {ATTEMPTS} — retrying in {wait:g}s: "
+                f"{(refusal.stderr or '')[:200]}"
+            )
+            time.sleep(wait)
     if not answer:
         raise Unreadable(f"the answer to {path} was empty")
     try:
@@ -779,11 +904,12 @@ def _cmd_watch(args) -> int:
     reconfirm = should_reconfirm(args.now or None)
     # A throttle alone is said on the one hour a day the watcher already
     # speaks about standing conditions (DRE-6461).
-    verdict = evaluate(
-        collect(_gh_api, roster=fleet, now=args.now or None),
-        owner=args.owner or "",
-        speak_throttled=reconfirm,
-    )
+    # One server-error retry budget for this run's every read (DRE-7352).
+    api = functools.partial(_gh_api, budget=RetryBudget())
+    readings = collect(api, roster=fleet, now=args.now or None)
+    verdict = evaluate(readings, owner=args.owner or "",
+                       speak_throttled=reconfirm)
+    raised, resolved = notice_actions(readings, verdict)
 
     print(verdict.detail)
 
@@ -803,6 +929,10 @@ def _cmd_watch(args) -> int:
             fh.write(
                 f"reconfirm={'true' if reconfirm else 'false'}\n"
             )
+            # The console alert's key parts (DRE-7456): the one to raise, and
+            # the ones to resolve, space-separated.
+            fh.write(f"raise={raised or ''}\n")
+            fh.write(f"resolve={' '.join(resolved)}\n")
     # A fleet whose nightlies all ran is the ordinary outcome, not a failure:
     # the caller branches on `alarm`, never on an exit code (promote_channel's
     # rule).

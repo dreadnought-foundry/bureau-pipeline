@@ -120,6 +120,12 @@ if args[:2] == ["pr", "view"]:
     if opt("--jq"):
         # The merge-refusal re-read of the head (DRE-2117).
         emit(str(fx.get("head_after_merge", view["headRefOid"])))
+    # One answer per full read, in order; past the list GitHub answers (DRE-7026).
+    reads = sum(1 for ln in open(os.environ["GH_LOG"])
+                if json.loads(ln)[:2] == ["pr", "view"] and "--jq" not in json.loads(ln))
+    errors = fx.get("view_errors", [])
+    if reads <= len(errors):
+        fail(errors[reads - 1])
     emit({f: view[f] for f in opt("--json").split(",") if f in view})
 
 if args[:2] == ["pr", "merge"]:
@@ -321,6 +327,7 @@ def run_gate(fixture: dict, seed=(APPROVE,), linear_stub=False) -> Run:
                 "GH_LOG": str(td / "gh.log"),
                 "LINEAR_LOG": str(td / "linear.log"),
                 "MERGE_RETRY_SECONDS": "0",
+                "READ_RETRY_SECONDS": "0",
             },
         )
         calls = [json.loads(ln) for ln in (td / "gh.log").read_text().splitlines() if ln]
@@ -643,6 +650,53 @@ class GitHubsServerErrorIsTriedOnceMoreTest(unittest.TestCase):
         self.assertEqual(len(run.merges), 2, run.explain())
         self.assertEqual(len(update_branch_puts(run)), 1, run.explain())
         self.assertEqual(len(update_notes(run)), 1, run.comments)
+
+
+# --------------------------------------------------------------------------
+# 1c. The same server error on the one read: one more read (DRE-7026)
+# --------------------------------------------------------------------------
+# Sandbox merge gate run 38251745890 on bureau-harness #4440: green, approved,
+# and the gate's opening `gh pr view` answered SERVER_ERROR's text. The step
+# died before it decided anything, nothing in the sandbox re-runs a red gate,
+# and main's harness timed out at 1200s waiting for the merge (DRE-6242 again,
+# one call earlier).
+class GitHubsServerErrorOnTheOneReadIsReadOnceMoreTest(unittest.TestCase):
+    def test_a_second_read_github_answers_reaches_the_merge(self):
+        fx = green_fixture()
+        fx["view_errors"] = [SERVER_ERROR]
+        run = run_gate(fx)
+        self.assertEqual(run.proc.returncode, 0, run.explain())
+        self.assertEqual(run.decision(), "merge", run.explain())
+        self.assertEqual(len(run.merges), 1, run.explain())
+        self.assertEqual(len(run.views), 2, run.explain())
+
+    def test_the_second_read_is_the_same_read(self):
+        fx = green_fixture()
+        fx["view_errors"] = [SERVER_ERROR]
+        run = run_gate(fx)
+        self.assertEqual(run.calls[0], run.calls[1], run.explain())
+
+    def test_the_server_error_still_reaches_the_log(self):
+        fx = green_fixture()
+        fx["view_errors"] = [SERVER_ERROR]
+        run = run_gate(fx)
+        self.assertIn(SERVER_ERROR, run.proc.stderr, run.explain())
+
+    def test_only_one_more_read(self):
+        fx = green_fixture()
+        fx["view_errors"] = [SERVER_ERROR, SERVER_ERROR]
+        run = run_gate(fx)
+        self.assertNotEqual(run.proc.returncode, 0, run.explain())
+        self.assertEqual(len(run.calls), 2, run.explain())
+        self.assertEqual(run.merges, [])
+
+    def test_any_failure_of_the_second_read_kills_the_step(self):
+        fx = green_fixture()
+        fx["view_errors"] = [SERVER_ERROR, "HTTP 502: Bad Gateway"]
+        run = run_gate(fx)
+        self.assertNotEqual(run.proc.returncode, 0, run.explain())
+        self.assertEqual(len(run.calls), 2, run.explain())
+        self.assertEqual(run.merges, [])
 
 
 class EveryReadFailsTheWayItDidTest(unittest.TestCase):

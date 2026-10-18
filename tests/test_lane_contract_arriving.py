@@ -20,8 +20,9 @@ state on the board, then flipped the entry to live, deleting the three arriving
 keys and changing nothing else. The tests of the MECHANISM below run against
 `arriving_doc()`, the shipped contract with Hand-work put back the way DRE-5315
 declared it. The tests of the SHIPPED entry say it is live. The shipped file
-may carry other arriving lanes — `Queued` since DRE-6710, pinned in
-tests/test_queued_lane.py — so nothing here assumes Hand-work is the only one.
+may carry other arriving lanes — `Queued` was one from DRE-6710 until DRE-6740
+flipped it live, pinned in tests/test_queued_lane.py — so nothing here assumes
+Hand-work is the only one.
 """
 
 import copy
@@ -95,7 +96,10 @@ def failed_rules(report):
 
 
 def live_board(doc, *extra):
-    return {name: 0 for name in list(lane_contract.lane_names("live", doc)) + list(extra)}
+    # The board as Linear holds it: every live lane, and every retiring one
+    # still on it, empty — Backlog stays there with nothing in it (DRE-6753).
+    return {name: 0 for name in list(lane_contract.lane_names("live", doc))
+            + list(lane_contract.lane_names("retiring", doc)) + list(extra)}
 
 
 # --------------------------------------------------------------------------- #
@@ -365,8 +369,10 @@ class TestTheRewrittenClauses:
         assert EPIC in text and HAND_WORK in text
         assert EPIC in clause["pending"]
 
-    def test_backlog_exit_defers_to_the_vocabulary_and_keeps_dre_5275(self):
-        clause = lane_contract.lane("Backlog")["clauses"]["exit"]
+    def test_the_queue_exit_defers_to_the_vocabulary_and_keeps_dre_5275(self):
+        # Backlog's clauses moved to Queued with the lane (DRE-6740); the
+        # retiring entry carries none (DRE-6753).
+        clause = lane_contract.lane("Queued")["clauses"]["exit"]
         text = clause["text"]
         assert DRE_5275_SENTENCE in text
         assert "config/routing-verdicts.json" in text
@@ -390,7 +396,7 @@ class TestTheDocument:
     def test_the_rewritten_clauses_are_rendered(self):
         text = self.committed()
         assert lane_contract.lane("Todo")["clauses"]["entrance"]["text"] in text
-        assert lane_contract.lane("Backlog")["clauses"]["exit"]["text"] in text
+        assert lane_contract.lane("Queued")["clauses"]["exit"]["text"] in text
 
     def test_an_arriving_lane_renders_its_own_section_and_stays_out_of_the_flow(self):
         text = lane_contract.render_markdown(arriving_doc())

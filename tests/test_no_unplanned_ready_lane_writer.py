@@ -94,9 +94,10 @@ class TheReadyWorkLanesAreDerived(unittest.TestCase):
     """A ready-work lane is one the planning segment can send a card to and the
     pipeline then treats as work. Read out of the vocabularies, never typed."""
 
-    def test_the_ready_work_lanes_are_backlog_todo_and_hand_work_today(self):
-        # Hand-work joined when DRE-5321 pointed WORKBENCH and OPERATOR at it.
-        self.assertEqual(rlw.ready_lanes(), ("Backlog", "Todo", "Hand-work"))
+    def test_the_ready_work_lanes_are_queued_todo_and_hand_work_today(self):
+        # Hand-work joined when DRE-5321 pointed WORKBENCH and OPERATOR at it,
+        # and Queued replaced Backlog when DRE-6742 moved the planning exit.
+        self.assertEqual(rlw.ready_lanes(), ("Queued", "Todo", "Hand-work"))
 
     def test_a_lane_becomes_ready_work_because_the_vocabulary_says_so(self):
         # Re-point a shape's exit and the set moves with it. A hardcoded pair
@@ -135,8 +136,8 @@ class TheDiscoveryActuallyFindsSomething(unittest.TestCase):
         pairs = {(w.writer, w.lane) for w in rlw.writes()}
         for expected in (
             ("reconcile.py", "Todo"),      # the sweep promoting a FLEET card
-            ("reconcile.py", "Backlog"),   # the dead-run park
-            ("linear_ops.py", "Backlog"),  # an epic's children
+            ("reconcile.py", "Queued"),    # the dead-run park
+            ("linear_ops.py", "Queued"),   # an epic's children
             ("agent-task.yml", "Todo"),    # the build run requeueing itself
         ):
             self.assertIn(expected, pairs)
@@ -193,6 +194,11 @@ class TheRepositoryIsClean(unittest.TestCase):
         # so a failure here is actionable without opening this test.
         self.assertEqual(problems, [], "\n".join(problems))
 
+    def test_no_string_constant_in_the_check_names_the_old_lane(self):
+        # A lane name in a string does not follow the switch (DRE-6749).
+        path = str(ROOT / "scripts" / "ready_lane_writers.py")
+        self.assertEqual(lane_contract._scan_python(path, ["Backlog"]), set())
+
 
 class ADeclaredWriterIsOneThatPassedThroughPlanning(unittest.TestCase):
     """Why "declared" is the same claim as "passed through Planning".
@@ -247,6 +253,9 @@ class ANewWriterWithAWrongDestinationIsCaught(unittest.TestCase):
             "        run: |\n"
             '          python3 .bureau-pipeline/scripts/linear_ops.py state "$CARD" "Backlog"\n'
         )
+        # `Backlog` is not in the vocabularies since DRE-6742, but the
+        # contract aliases it to Queued: a write under the old name is still
+        # a write into the queue, and is named.
         with _Staged(f".github/workflows/{rogue}", source):
             problems = rlw.writer_problems()
         self.assertTrue(_named(problems, rogue), problems)
@@ -264,6 +273,30 @@ class ANewWriterWithAWrongDestinationIsCaught(unittest.TestCase):
         with _Staged(f"scripts/{rogue}", source):
             problems = rlw.writer_problems()
         self.assertTrue(_named(problems, rogue), problems)
+
+    def test_a_new_writer_naming_the_queue_lane_by_its_contract_name_is_read(self):
+        # Writers name the queue lane `QUEUE_LANE`, never a literal (DRE-6744).
+        # A name computed in `lane_contract` is still a destination the check
+        # reads — imported bare or reached through the module — so a rogue
+        # writer is named for the lane it reaches, not as merely unread.
+        lane = lane_contract.QUEUE_LANE
+        for rogue, source in (
+            ("zz_rogue_queue_import.py",
+             "from lane_contract import QUEUE_LANE\nimport linear_ops\n\n"
+             "def park(card):\n"
+             "    linear_ops.cmd_state(card, QUEUE_LANE)\n"),
+            ("zz_rogue_queue_attribute.py",
+             "import lane_contract\nimport linear_ops\n\n"
+             "def park(card):\n"
+             "    linear_ops.cmd_state(card, lane_contract.QUEUE_LANE)\n"),
+        ):
+            with self.subTest(rogue=rogue), _Staged(f"scripts/{rogue}", source):
+                problems = rlw.writer_problems()
+                self.assertTrue(
+                    _named([p for p in problems if rogue in p],
+                           f"puts a card in {lane!r}"),
+                    problems,
+                )
 
     def test_a_new_writer_pointed_at_a_lane_it_is_declared_for_is_not_named(self):
         # The check must not simply hate every new file: reconcile.py is a
@@ -294,6 +327,14 @@ class LinearsOwnTeamDefaultIsCovered(unittest.TestCase):
         problems = rlw.default_problems("Backlog")
         self.assertTrue(_named(problems, "Backlog"), problems)
         self.assertTrue(_named(problems, rlw.LINEAR_DEFAULT_WRITER), problems)
+
+    def test_a_team_default_of_either_queue_name_is_reported(self):
+        # DRE-6742: the vocabularies name Queued, and Backlog is the name the
+        # contract aliases to it — a card landing under either is in the
+        # queue, so a default of either is the same hole.
+        for lane in lane_contract.QUEUE_LANES:
+            problems = rlw.default_problems(lane)
+            self.assertTrue(_named(problems, lane), (lane, problems))
 
     def test_a_team_default_outside_the_work_segment_is_clean(self):
         self.assertEqual(rlw.default_problems("Intake"), [])
@@ -407,6 +448,82 @@ class TheTeamDefaultIsReadWhereTheWorkspaceKeepsIt(unittest.TestCase):
         self.assertTrue(line.strip().startswith("[UNKNOWN]"), result.stdout)
         self.assertIn("`team.defaultIssueState`", line)
         self.assertIn("top-level `defaultIssueState`", line)
+
+
+class TheStartLaneIsReadyWorkThroughTheFlip(unittest.TestCase):
+    """DRE-7109: the write layer restarts a build in `lane_contract.START_LANE`,
+    and the flip card sets it to `In Progress` with FLEET's destination beside
+    it. The start lane is ready work by definition — a card in it is built —
+    so the check polices it whether or not the vocabulary has moved yet, and
+    under the flip the sweep's promotion is read as the declared promoter it
+    is (`reconcile.py` already writes `In Progress` in the contract).
+
+    The sweep's own reading of which lanes it carries a card into is
+    `routing_verdict.sweep_promotes`, which stops short of `In Progress` today;
+    moving it is the flip's, and nothing here reads it."""
+
+    #: The writers of `In Progress` the flip has to declare, because each
+    #: writes that lane once it is ready work: the write layer's restarts (a
+    #: writer of `Todo` today), the operator (likewise), and the red-main
+    #: repair, which already files its card straight into `In Progress`.
+    FLIP_DECLARES = ("linear_ops.py", "operator", "red-main-repair.yml")
+
+    def _flip(self, *, fleet_to=None, declare=()):
+        import routing_verdict
+
+        tmp = tempfile.mkdtemp(prefix="rlw-flip-")
+        self.addCleanup(lambda: __import__("shutil").rmtree(tmp, True))
+        contract = copy.deepcopy(lane_contract.load())  # load() is cached, shared
+        contract["build_start"]["lane"] = "In Progress"
+        for entry in contract["lanes"]:
+            if entry.get("name") == "In Progress":
+                who = entry["clauses"]["writers"]["who"]
+                who.extend(w for w in declare if w not in who)
+        path = os.path.join(tmp, "lane-contract.json")
+        Path(path).write_text(json.dumps(contract), encoding="utf-8")
+        patches = [mock.patch.object(lane_contract, "CONTRACT_PATH", path)]
+        if fleet_to:
+            vocab = copy.deepcopy(routing_verdict.load())
+            for record in vocab["verdicts"]:
+                if record["name"] == "FLEET":
+                    record["destination"] = fleet_to
+            vpath = os.path.join(tmp, "routing-verdicts.json")
+            Path(vpath).write_text(json.dumps(vocab), encoding="utf-8")
+            patches.append(mock.patch.object(routing_verdict, "CONFIG_PATH", vpath))
+        for patcher in patches:
+            patcher.start()
+            self.addCleanup(patcher.stop)
+        self.assertEqual(lane_contract.start_lane(), "In Progress")
+
+    def _restart_lanes(self):
+        return {w.lane for w in rlw.writes()
+                if w.writer == "linear_ops.py" and w.lane in ("Todo", "In Progress")}
+
+    def test_the_restarts_write_todo_under_the_shipped_contract(self):
+        self.assertEqual(self._restart_lanes(), {"Todo"})
+
+    def test_the_restarts_write_the_start_lane_under_the_flip(self):
+        self._flip()
+        self.assertEqual(self._restart_lanes(), {"In Progress"})
+
+    def test_the_start_lane_is_ready_work_before_the_vocabulary_moves(self):
+        self._flip()
+        self.assertIn("In Progress", rlw.ready_lanes())
+        self.assertIn("Hand-work", rlw.ready_lanes())
+
+    def test_the_check_passes_under_the_flip_with_fleets_destination_in_progress(self):
+        self._flip(fleet_to="In Progress", declare=self.FLIP_DECLARES)
+        self.assertIn("In Progress", rlw.ready_lanes())
+        problems = rlw.writer_problems() + rlw.default_problems("Intake")
+        self.assertEqual(problems, [], "\n".join(problems))
+
+    def test_under_the_flip_an_undeclared_restart_is_named(self):
+        # The flip has to declare the write layer in `In Progress`, or the
+        # check names its restarts — the proof the start lane is policed.
+        self._flip(fleet_to="In Progress")
+        problems = rlw.writer_problems()
+        self.assertFalse(_named(problems, "reconcile.py ("), problems)
+        self.assertTrue(_named(problems, "linear_ops.py (scripts/linear_ops.py:"), problems)
 
 
 class TheWritersThisCannotSeeAreNamed(unittest.TestCase):

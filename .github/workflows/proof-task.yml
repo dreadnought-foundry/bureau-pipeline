@@ -21,7 +21,7 @@
 # proof; `Hand-work` carries no stall window by contract. So there is no
 # `Card → In Progress` step, and agent-task.yml's report script is not used
 # here: its lane moves read the card out of `In Progress,Todo` only, and its
-# dead-run exits requeue to `Todo`, park in `Backlog` or replan to
+# dead-run exits requeue to `Todo`, park in `Queued` or replan to
 # `Planning` — three lanes a proof card must never enter. `qa-review.yml`
 # carries the card to `In Review` when the record's pull request opens
 # (DRE-4179), and the sweep's `move_hand_built_to_review` is the backstop.
@@ -332,6 +332,24 @@ jobs:
             echo "no .github/bureau/setup.sh — skipping product setup"
           fi
 
+      # The model home (DRE-6939) is a variable on
+      # dreadnought-foundry/bureau-pipeline, which a run's boot token in another
+      # organization cannot read. A token for the bureau App's installation
+      # there, for bureau-pipeline alone and with no permission subset — the
+      # pinned action declares no variables input (DRE-7230) — handed only to
+      # the steps below whose process reads the home
+      # (DRE-6940, held by scripts/check_model_home_scope.py). A refused mint
+      # leaves it empty and the selector on the defaults in the code — never a
+      # failed job.
+      - name: Mint the model-home read token
+        id: model_home
+        continue-on-error: true
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: ${{ secrets.BUREAU_APP_ID }}
+          private-key: ${{ secrets.BUREAU_APP_PRIVATE_KEY }}
+          owner: dreadnought-foundry
+          repositories: bureau-pipeline
       # Model selection for role `proof` (config/models.yaml maps it to the
       # WORKHORSE ladder), with agent-task.yml's runtime availability probe
       # (DRE-1490) and its --explain-file note. No turn rung is chosen here:
@@ -340,6 +358,7 @@ jobs:
       - name: Select model
         id: model
         env:
+          BUREAU_MODEL_HOME_TOKEN: ${{ steps.model_home.outputs.token }}
           # The probe authenticates with the same CLAUDE token the agent uses.
           ANTHROPIC_API_KEY: ${{ vars.CLAUDE_AUTH_MODE != 'subscription' && secrets.ANTHROPIC_API_KEY || '' }}
           CLAUDE_CODE_OAUTH_TOKEN: ${{ vars.CLAUDE_AUTH_MODE == 'subscription' && secrets.CLAUDE_CODE_OAUTH_TOKEN || '' }}
@@ -625,6 +644,12 @@ jobs:
           role-to-assume: ${{ secrets.PROOF_ROLE_ARN }}
           role-session-name: proof-${{ github.event.client_payload.identifier }}
           aws-region: ${{ inputs.aws_region }}
+          # The session's length, the caller's own variable (DRE-7020). No
+          # default on purpose: unset, the input is empty and the pinned
+          # action uses its own 3,600 seconds, today's one hour exactly. A
+          # value above the role's maximum session is refused by AWS, and
+          # the run goes on with no session and costs its AWS rows.
+          role-duration-seconds: ${{ vars.PROOF_ROLE_DURATION_SECONDS }}
 
       - name: Record the caller's proof identity
         env:
@@ -782,6 +807,12 @@ jobs:
           PROOF_LOCAL_TAG: ${{ steps.local.outputs.tag }}
           PROOF_PYTHON: ${{ steps.local.outputs.python || '' }}
           PROOF_LOGIN_FILE: ${{ runner.temp }}/proof-login.json
+          # How long the AWS session above lives, in seconds (DRE-7020): the
+          # caller's variable, or the action's own one hour when it is unset.
+          # A number, not a credential — the read token cannot read
+          # repository variables on every installation, and a run cannot
+          # read its own step summary (briefs/proof.md, Identities).
+          PROOF_SESSION_SECONDS: ${{ vars.PROOF_ROLE_DURATION_SECONDS || '3600' }}
         with:
           path_to_claude_code_executable: ${{ steps.install_claude.outputs.executable }}
           anthropic_api_key: ${{ vars.CLAUDE_AUTH_MODE != 'subscription' && secrets.ANTHROPIC_API_KEY || '' }}
@@ -874,10 +905,16 @@ jobs:
                the brief says — only if none is open for the branch. Post
                `⏳ 5/5 PR opened`, and again on every amended push.
             4. A criterion only the CEO's own press can satisfy: never sign in
-               as him and never wait for it. Its row reads
-               `Not observed. needs the CEO's press: <the press>`. AFTER the
-               pull request is open, write one plain sentence naming the press
-               and the one decision asked, with your recommendation, to
+               as him and never wait for it. That is a press that is a business
+               decision of his, and only its row reads
+               `Not observed. needs the CEO's press: <the press>`. A press on
+               the sandbox project, or one the card's words say the operator may
+               make under the operator's standing permission of 2026-10-07, is
+               the operator's row instead, with no escalation file:
+               `Not observed. waiting for the operator's press: <the press>`.
+               briefs/proof.md says which press is whose. For the CEO's press,
+               AFTER the pull request is open, write one plain sentence naming
+               the press and the one decision asked, with your recommendation, to
                /tmp/agent-escalation.txt. Never ask twice for a press already
                asked and not yet answered.
             5. A row you cannot observe as worded reads
@@ -921,7 +958,7 @@ jobs:
           # probe asks about the first name on it.
           ALLOWED_BOTS: agent-bureau-bot,agent-bureau-bot-2,agent-bureau-bot-3,agent-bureau-bot-4,github-actions
         run: |
-          EXEC_FILE="${CLAUDE_EXECUTION_FILE:-/home/runner/work/_temp/claude-execution-output.json}"
+          EXEC_FILE="${CLAUDE_EXECUTION_FILE:-${RUNNER_TEMP:-/tmp}/claude-execution-output.json}"
           # A pushed branch is the other proof the agent ran, and it is read
           # the same way agent-task.yml's Report step reads it. A record branch a
           # previous run left reads as "ran", which only ever costs a retry.
@@ -961,7 +998,7 @@ jobs:
           DELAY: ${{ steps.retry1.outputs.delay }}
           CLAUDE_EXECUTION_FILE: ${{ steps.claude.outputs.execution_file }}
         run: |
-          EXEC_FILE="${CLAUDE_EXECUTION_FILE:-/home/runner/work/_temp/claude-execution-output.json}"
+          EXEC_FILE="${CLAUDE_EXECUTION_FILE:-${RUNNER_TEMP:-/tmp}/claude-execution-output.json}"
           rm -f "$EXEC_FILE"
           echo "waiting ${DELAY:-60}s, then agent attempt 2 of 3"
           sleep "${DELAY:-60}"
@@ -994,6 +1031,12 @@ jobs:
           PROOF_LOCAL_TAG: ${{ steps.local.outputs.tag }}
           PROOF_PYTHON: ${{ steps.local.outputs.python || '' }}
           PROOF_LOGIN_FILE: ${{ runner.temp }}/proof-login.json
+          # How long the AWS session above lives, in seconds (DRE-7020): the
+          # caller's variable, or the action's own one hour when it is unset.
+          # A number, not a credential — the read token cannot read
+          # repository variables on every installation, and a run cannot
+          # read its own step summary (briefs/proof.md, Identities).
+          PROOF_SESSION_SECONDS: ${{ vars.PROOF_ROLE_DURATION_SECONDS || '3600' }}
         with:
           path_to_claude_code_executable: ${{ steps.install_claude.outputs.executable }}
           anthropic_api_key: ${{ vars.CLAUDE_AUTH_MODE != 'subscription' && secrets.ANTHROPIC_API_KEY || '' }}
@@ -1086,10 +1129,16 @@ jobs:
                the brief says — only if none is open for the branch. Post
                `⏳ 5/5 PR opened`, and again on every amended push.
             4. A criterion only the CEO's own press can satisfy: never sign in
-               as him and never wait for it. Its row reads
-               `Not observed. needs the CEO's press: <the press>`. AFTER the
-               pull request is open, write one plain sentence naming the press
-               and the one decision asked, with your recommendation, to
+               as him and never wait for it. That is a press that is a business
+               decision of his, and only its row reads
+               `Not observed. needs the CEO's press: <the press>`. A press on
+               the sandbox project, or one the card's words say the operator may
+               make under the operator's standing permission of 2026-10-07, is
+               the operator's row instead, with no escalation file:
+               `Not observed. waiting for the operator's press: <the press>`.
+               briefs/proof.md says which press is whose. For the CEO's press,
+               AFTER the pull request is open, write one plain sentence naming
+               the press and the one decision asked, with your recommendation, to
                /tmp/agent-escalation.txt. Never ask twice for a press already
                asked and not yet answered.
             5. A row you cannot observe as worded reads
@@ -1133,7 +1182,7 @@ jobs:
           # probe asks about the first name on it.
           ALLOWED_BOTS: agent-bureau-bot,agent-bureau-bot-2,agent-bureau-bot-3,agent-bureau-bot-4,github-actions
         run: |
-          EXEC_FILE="${CLAUDE_EXECUTION_FILE:-/home/runner/work/_temp/claude-execution-output.json}"
+          EXEC_FILE="${CLAUDE_EXECUTION_FILE:-${RUNNER_TEMP:-/tmp}/claude-execution-output.json}"
           # A pushed branch is the other proof the agent ran, and it is read
           # the same way agent-task.yml's Report step reads it. A record branch a
           # previous run left reads as "ran", which only ever costs a retry.
@@ -1171,7 +1220,7 @@ jobs:
           DELAY: ${{ steps.retry2.outputs.delay }}
           CLAUDE_EXECUTION_FILE: ${{ steps.claude_retry1.outputs.execution_file }}
         run: |
-          EXEC_FILE="${CLAUDE_EXECUTION_FILE:-/home/runner/work/_temp/claude-execution-output.json}"
+          EXEC_FILE="${CLAUDE_EXECUTION_FILE:-${RUNNER_TEMP:-/tmp}/claude-execution-output.json}"
           rm -f "$EXEC_FILE"
           echo "waiting ${DELAY:-60}s, then agent attempt 3 of 3"
           sleep "${DELAY:-60}"
@@ -1204,6 +1253,12 @@ jobs:
           PROOF_LOCAL_TAG: ${{ steps.local.outputs.tag }}
           PROOF_PYTHON: ${{ steps.local.outputs.python || '' }}
           PROOF_LOGIN_FILE: ${{ runner.temp }}/proof-login.json
+          # How long the AWS session above lives, in seconds (DRE-7020): the
+          # caller's variable, or the action's own one hour when it is unset.
+          # A number, not a credential — the read token cannot read
+          # repository variables on every installation, and a run cannot
+          # read its own step summary (briefs/proof.md, Identities).
+          PROOF_SESSION_SECONDS: ${{ vars.PROOF_ROLE_DURATION_SECONDS || '3600' }}
         with:
           path_to_claude_code_executable: ${{ steps.install_claude.outputs.executable }}
           anthropic_api_key: ${{ vars.CLAUDE_AUTH_MODE != 'subscription' && secrets.ANTHROPIC_API_KEY || '' }}
@@ -1296,10 +1351,16 @@ jobs:
                the brief says — only if none is open for the branch. Post
                `⏳ 5/5 PR opened`, and again on every amended push.
             4. A criterion only the CEO's own press can satisfy: never sign in
-               as him and never wait for it. Its row reads
-               `Not observed. needs the CEO's press: <the press>`. AFTER the
-               pull request is open, write one plain sentence naming the press
-               and the one decision asked, with your recommendation, to
+               as him and never wait for it. That is a press that is a business
+               decision of his, and only its row reads
+               `Not observed. needs the CEO's press: <the press>`. A press on
+               the sandbox project, or one the card's words say the operator may
+               make under the operator's standing permission of 2026-10-07, is
+               the operator's row instead, with no escalation file:
+               `Not observed. waiting for the operator's press: <the press>`.
+               briefs/proof.md says which press is whose. For the CEO's press,
+               AFTER the pull request is open, write one plain sentence naming
+               the press and the one decision asked, with your recommendation, to
                /tmp/agent-escalation.txt. Never ask twice for a press already
                asked and not yet answered.
             5. A row you cannot observe as worded reads
@@ -1382,7 +1443,7 @@ jobs:
           # reading at all. The account itself stays unattributed.
           CLAUDE_AUTH_MODE: ${{ vars.CLAUDE_AUTH_MODE }}
         run: |
-          EXEC_FILE="${CLAUDE_EXECUTION_FILE:-/home/runner/work/_temp/claude-execution-output.json}"
+          EXEC_FILE="${CLAUDE_EXECUTION_FILE:-${RUNNER_TEMP:-/tmp}/claude-execution-output.json}"
           python3 .bureau-pipeline/scripts/usage_reading.py emit \
             --execution-file "$EXEC_FILE" \
             --out "${RUNNER_TEMP:-/tmp}/claude-usage-reading.json" \
@@ -1438,7 +1499,7 @@ jobs:
           CARD: ${{ github.event.client_payload.identifier }}
           CLAUDE_AUTH_MODE: ${{ vars.CLAUDE_AUTH_MODE }}
         run: |
-          EXEC_FILE="${CLAUDE_EXECUTION_FILE:-/home/runner/work/_temp/claude-execution-output.json}"
+          EXEC_FILE="${CLAUDE_EXECUTION_FILE:-${RUNNER_TEMP:-/tmp}/claude-execution-output.json}"
           python3 .bureau-pipeline/scripts/death_receipt.py emit \
             --execution-file "$EXEC_FILE" \
             --out "${RUNNER_TEMP:-/tmp}/death-receipt.json" \
@@ -1644,7 +1705,7 @@ jobs:
       # Written fresh for the proof run: agent-task.yml's report script reads
       # the card out of `In Progress,Todo` only, so every move it makes would
       # refuse a card in `Hand-work`, and its dead-run exits requeue to
-      # `Todo`, park in `Backlog` or replan to `Planning`. This step has four
+      # `Todo`, park in `Queued` or replan to `Planning`. This step has four
       # exits:
       #
       #   1. a record pull request is OPEN (card_pr.py find, the predicate the

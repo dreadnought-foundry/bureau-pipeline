@@ -79,7 +79,7 @@ out is the sweep's carry (DRE-5347). Get it right and the gate is a no-op.
   `Triage`** (DRE-2676). The sweep refuses to promote it, says so once on the
   card naming both fixes — set the relation, or reword the line so it does not
   open with a declaring phrase — and moves it to the broken-card lane; the card
-  returns to `Backlog`, where the gate re-evaluates it, never to `Todo`. The
+  returns to `Queued`, where the gate re-evaluates it, never to `Todo`. The
   refusal is named `prose-blocker-no-relation` in the sweep log and on the card.
   On an EPIC the same defect refuses and comments but moves nothing, and the
   sweep run goes red once it has stood two hours. Nothing rewrites a
@@ -121,7 +121,7 @@ question carries the three declared lines — Finding, Question and
 Recommendation, rendered by `scripts/console_escalation.py` — with
 `none given — …` on the Recommendation line where the agent stated none. The
 CEO answers and moves the card back to `Todo` to proceed (a fresh run picks up
-the guidance) or to `Backlog` to drop it.
+the guidance) or to `Queued` to drop it.
 
 **NOT `Triage`, and the distinction is the point.** Triage is the *broken-card*
 lane: an unroutable `repo:` label, an archived repo, a card the readiness guard
@@ -144,7 +144,7 @@ the model exists to avoid; routine, reversible choices are just built and noted
 in the PR.
 
 `Green Light` (decision needed, build can proceed once answered) is distinct
-from `Backlog` (a build agent's blocker: a mechanical class the sweep acts on
+from `Queued` (a build agent's blocker: a mechanical class the sweep acts on
 within one pass; a question is asked in Green Light), and from `Triage` (the
 card itself is malformed and cannot proceed as written, whoever answers).
 
@@ -228,7 +228,7 @@ own, and stays. Two live verdicts on one card are still refused.
 | **FLEET** | Buildable unattended in one PR | `Todo` — the sweep promotes it, an agent run builds it. The ONLY verdict that is dispatched. |
 | **WORKBENCH** | A person works it at an interactive session, against live system state | `Hand-work`, with no mark — kept for historical demo cards and the pipeline's own record cards (`repair_card`, `model_adoption_actions`); the acceptance criteria never produce it (DRE-6227). Nothing is dispatched. |
 | **OPERATOR** | Not code — a deploy, a migration run, a secret | `Hand-work`, marked `operator-step` + `no-code` — the sweep promotes it and stamps the marks; the operator does the step there, and no code is produced. Nothing is dispatched. |
-| **PARKED** | Well-formed and deliberately not to be built | `Backlog` — landed there by the planning-exit writer, and nobody picks it up. Never promoted, and **never reported as stalled** by any sweep. |
+| **PARKED** | Well-formed and deliberately not to be built | `Queued` — landed there by the planning-exit writer, and nobody picks it up. Never promoted, and **never reported as stalled** by any sweep. |
 | **NEEDS WORK** | Not buildable as written | `Planning` — the planner, with the specific missing thing named. |
 
 **The rule is mechanical:** route on whether an unattended agent can SATISFY
@@ -252,12 +252,12 @@ every visual card: about four in ten name no rendered outcome and fall through
 to judgement, which is the designed behaviour and not a promise broken.
 `standards/design-parity.md` states the live caveat.
 
-**PARKED is landed by the process, not by a person (DRE-2824).** `Backlog` is
+**PARKED is landed by the process, not by a person (DRE-2824).** `Queued` is
 process-controlled and no human may write it, so the actor on a PARKED card is
 the planning-exit writer that stamps the verdict and lands the card there. There
 is no one waiting to pick it up, because for PARKED nobody is. Reviving it is a
 separate, later human act — nothing in the pipeline takes a PARKED card back out
-of Backlog: no sweep, no run, no label.
+of Queued: no sweep, no run, no label.
 
 An **epic never gets a buildability verdict.** "Could an agent build this
 unattended" is meaningless for a card the planner owns; an epic gets a plan
@@ -431,10 +431,16 @@ record and nothing waits on him. The closing line on the card (condition 5)
 names who reads the record, not who moves the card, and stays verbatim. The
 card still routes `OPERATOR`, by its `agent:ops` label, and the five conditions
 do not change: the run does the operator's observing, and the operator and the CEO
-stay the accountable readers. A criterion only the CEO's own login can satisfy
-is written on the card in the words `needs the CEO's press: <the press>`; a run
-that meets one records everything else, parks the card once in Green Light
-naming the press, and nobody chases it.
+stay the accountable readers. A press is the CEO's only when it is a business
+decision of his — which model a real project runs on, whether a real proposal
+is approved, whether a real card is removed from a proposal — and it is written
+on the card in the words `needs the CEO's press: <the press>`; a run that meets
+one records everything else, parks the card once in Green Light naming the
+press, and nobody chases it. A press the operator can make — on the sandbox
+project, or under the operator's standing permission of 2026-10-07 — is the
+operator's event row and never his:
+`waiting for the operator's press: <the press>`, held for the operator and
+never parked in Green Light (`briefs/planner.md`).
 
 Five conditions, and each is checked on the planner's OUTPUT rather than on
 any document that states the convention — a convention nothing checks is a
@@ -573,7 +579,7 @@ still describe what we are doing?**
     python3 scripts/mid_epic.py discovery <EPIC> --kind amendment --because "<one line>"
 
 - **Addition** — the plan holds, there is just more of it (a second call site
-  needs the same fix). A sibling card lands in Backlog carrying a **verdict**
+  needs the same fix). A sibling card lands in Queued carrying a **verdict**
   and promotes normally. **No new green light**: that decision was already made
   for this epic.
 - **Amendment** — the plan no longer describes the work (the fix must be split
@@ -581,7 +587,7 @@ still describe what we are doing?**
   and is re-green-lit.
 
 Guessing wrong is cheap — the artifact update catches an amendment mislabelled
-as an addition. What is NOT cheap is adding the card by hand: a Backlog child of
+as an addition. What is NOT cheap is adding the card by hand: a Queued child of
 an active epic dispatches an agent within fifteen minutes, so a card added after
 the epic's green light **without a verdict is refused promotion** and said so on
 the card. Planning's routing verdict is a sign-off the gate accepts as much as
@@ -589,7 +595,7 @@ the discovery route's `mid-epic-verdict` (DRE-5900): either one means somebody
 read the card, and where the verdict sends it is still the routing gate's call,
 so a PARKED card stays put. A card carrying neither is told so once and
 sent to `Planning` once for a routing verdict, rather than refused on every
-pass; Planning's exit lands it back in Backlog carrying one, and it promotes.
+pass; Planning's exit lands it back in Queued carrying one, and it promotes.
 The green light is the epic's newest `In Progress` entry, read off the epic's
 newest history. The epic's own description carries the growth record —
 green-lit at N cards, running M — and names any card that joined without the
@@ -680,7 +686,7 @@ raise it to — the pipeline looks at how far that run got, the furthest
   at the same budget (counted by the `turn-exhaustion-requeue` tag; the cap is
   in `scripts/dead_run.py`), and the retry resumes the dead run's own branch
   once DRE-4368 lands. If that run also dies past implementation green, the
-  card parks in `Backlog` with the `needs-human` label — the next section.
+  card parks in `Queued` with the `needs-human` label — the next section.
 - **Before implementation green, or no marker at all** — size, not budget:
   another run at the same ceiling buys more of the same. **Nothing is
   retried, at any count.** The card goes to `Planning` with no label and
@@ -830,7 +836,7 @@ could not finish reading fifteen cards at the old ceiling — the plan was too
 long to be reviewed in one pass, which means nobody read all of it.
 
 **The split as it landed on the board.** DRE-3164 kept seven cards. DRE-3245
-took eight, blocked on it, sitting in Backlog until part 1 is Done.
+took eight, blocked on it, sitting in the queue until part 1 is Done.
 
 ### What the planner files instead
 

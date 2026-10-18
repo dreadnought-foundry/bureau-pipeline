@@ -40,6 +40,17 @@ nothing: the card stays in the lane it is in while its record is amended.
   4. It is not held: no `needs-human`, and no `🔬 proof-waiting` hold the
      thread has not discharged — by a later `🔬 proof-observed` line, or, for
      a hold naming `the CEO's press`, by his signed answer after it.
+
+     A time-only hold lifts itself (DRE-7228). When every open hold is the
+     one `linear_ops.py proof-waiting-until` writes — `— needs
+     not-before=<T>` and nothing else (`proof_record.time_only`) — and every
+     `<T>` is at or before the pass's time, this phase posts one
+     `🔬 proof-observed` quoting each time, under the pipeline's key, and the
+     card goes on to conditions 5–7 on the same pass. Not live, `would: lift`
+     and nothing written; a note not posted is a failure, and the card is
+     held on that pass. Before its time the line adds `— lifts at <PT>`. A
+     time hold beside any other open hold lifts nothing — one note would
+     lift that hold too — and the line names the hold that still holds.
   5. Nobody else is on it and its run is not alive: only `none`,
      `never-started` and `dead` go on.
   6. The first-run budget: two dispatches. The second names why the first
@@ -53,7 +64,8 @@ read first, off the lane read, where the lane read already answers it — a
 shows with no `🔬 proof-observed` line and no console answer after it. That
 card is named on its line every pass and spends none of the candidate reads.
 A hold the window shows something after, or does not show at all, is the
-thread read's to decide, in order, as before.
+thread read's to decide, in order, as before — and so is a newest hold that is
+time-only with its time passed (DRE-7228), which the thread read may lift.
 
 ## The return after the CEO's answer
 
@@ -245,6 +257,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import card_pr  # noqa: E402
 import hold  # noqa: E402 — the sweep's review-cap stamp, read as the holds lane reads it
+import lane_contract  # noqa: E402 — the queue's names, which the promotion receipt carries
 import linear_ops  # noqa: E402
 import merge_gate  # noqa: E402 — the critic's marker for `standing_verdict`
 import pipeline_act  # noqa: E402
@@ -362,8 +375,11 @@ GATE_UNANSWERED_NEEDS = ("an operator reading the gate's declined note and the "
                          "re-run's thread")
 
 #: What the sweep's promotion posts as a card lands in `Hand-work` — the one
-#: time on the lane read that says when the card entered the lane.
-PROMOTED_MARK = f"🧹 Auto-promoted Backlog → {FIRST_RUN_LANE}"
+#: time on the lane read that says when the card entered the lane. The receipt
+#: names `QUEUE_LANE` (DRE-6743), so one mark per name the queue carries: a
+#: card promoted on either side of the planning exit's flip is dated by it.
+PROMOTED_MARK = tuple(f"🧹 Auto-promoted {name} → {FIRST_RUN_LANE}"
+                      for name in lane_contract.QUEUE_LANES)
 
 #: The fields the condition-7 lookup needs; `mergeCommit` is the merge's sha.
 PR_FIELDS = "number,url,headRefName,state,mergeCommit"
@@ -720,6 +736,16 @@ UNCHECKED_NOTE = ("a console answer after it COULD NOT BE CHECKED (the "
                   "console's key could not be read) — it counts for nothing "
                   "until a pass that can check it")
 
+#: Who lifted a time-only hold (DRE-7228), and why that was all it needed.
+LIFTED_BY = "lifted by the proof dispatcher"
+LIFTED_ONE = "the hold waited for that time and nothing else"
+LIFTED_MANY = "the holds waited for those times and nothing else"
+
+
+def _lifts_at(until: datetime | None) -> str:
+    """` — lifts at <PT>` for a time-only hold still to come, else nothing."""
+    return f" — lifts at {_pt(until)}" if until is not None else ""
+
 
 def _past_cause_hold(holds: list) -> list:
     """`holds` without the cause park's own holds — every one whose `needs`
@@ -821,7 +847,11 @@ class _Pass:
                or (v.body or "").lstrip().startswith(OBSERVED_MARK)
                for v in voices[marks[-1] + 1:]):
             return None
-        return f"held by {_first_line(voices[marks[-1]].body)}"
+        line = _first_line(voices[marks[-1]].body)
+        until = proof_record.time_only(line)
+        if until is not None and until <= self.now:
+            return None  # a time that has passed: the thread read may lift it
+        return f"held by {line}{_lifts_at(until)}"
 
     def first_run(self, card: dict) -> tuple:
         """`(reason, count)` for an eligible first-run candidate, or raises
@@ -833,8 +863,7 @@ class _Pass:
         comments, viewer, voices = self._thread(card)
         holds = _open_holds(voices)
         if holds:
-            note = f"; {UNCHECKED_NOTE}" if _unchecked_after_hold(voices) else ""
-            raise _condition(4, "hold", f"held by {holds[-1]}{note}", "held")
+            self._lift_or_hold(ident, holds, voices)
 
         got = self.run_state(self.repo, ident, comments, viewer,
                              read=self.read, now=self.now)
@@ -847,6 +876,47 @@ class _Pass:
         reason = self._budget(card, got, voices)
         self._released(issue, ident)
         return reason, FIRST_COUNT.format(n=got.dispatches + 1)
+
+    def _lift_or_hold(self, ident: str, holds: list, voices: list) -> None:
+        """Condition 4 over the open holds (DRE-7228): when every one is
+        time-only (`proof_record.time_only`) and every time is at or before
+        the pass's `now`, one `🔬 proof-observed` lifts them and the card goes
+        on; otherwise `_Refused`, naming the hold that still holds. One note
+        lifts every open hold but the CEO's press, so a time hold beside any
+        other is never lifted by time."""
+        timed = [(h, proof_record.time_only(h)) for h in holds]
+        standing = [(h, t) for h, t in timed if t is None or t > self.now]
+        if not standing:
+            self._lift(ident, holds)
+            return
+        untimed = [h for h, t in standing if t is None]
+        if untimed:
+            line, until = untimed[-1], None
+        else:
+            line, until = max(standing, key=lambda pair: pair[1])
+        note = f"; {UNCHECKED_NOTE}" if _unchecked_after_hold(voices) else ""
+        raise _condition(4, "hold", f"held by {line}{_lifts_at(until)}{note}", "held")
+
+    def _lift(self, ident: str, holds: list) -> None:
+        """Post the one `🔬 proof-observed` that lifts time-only holds whose
+        times have passed, under the pipeline's key. Not live, `would:` and
+        nothing written; a note not posted is a failure of the pass, and the
+        card is held on it."""
+        clauses = list(dict.fromkeys(proof_record.time_only_clause(h) for h in holds))
+        text = (f"{', '.join(clauses)} {'has' if len(clauses) == 1 else 'have'} "
+                f"passed (read at {_pt(self.now)}) — {LIFTED_BY}; "
+                + (LIFTED_ONE if len(clauses) == 1 else LIFTED_MANY))
+        if not self.live:
+            print(f"would: lift {ident} — {text}")
+            return
+        try:
+            linear_ops.cmd_proof_observed(ident, text)
+        except Exception as error:  # noqa: BLE001
+            self.tally.failures.append(f"{ident}: the lift could not be posted: {error}")
+            raise _condition(4, "hold", f"held by {holds[-1]} — its time has passed, "
+                                        f"and the lift could not be posted: {error}",
+                             "held")
+        _say(ident, f"lifted: {text}")
 
     def _budget(self, card: dict, got, voices: list) -> str:
         """Condition 6: the reason this dispatch spends, or the refusal."""

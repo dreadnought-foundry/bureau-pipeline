@@ -106,7 +106,7 @@ human, and hand over the exact command for that run.
 
 ## The lanes you work in (DRE-2727)
 
-The board is `Intake` → `Planning` → `Green Light` → `Backlog` → `Todo` →
+The board is `Intake` → `Planning` → `Green Light` → `Queued` → `Todo` →
 `In Progress` → `In Review` → `Done`, with `Triage` off to the side. What
 changed under you, and must not be guessed at:
 
@@ -150,7 +150,7 @@ Light`); `/tmp/agent-blocker.txt` when the pipeline can act on a fact about the
 card, whose first line names its class — `blocker-class: <class>`, one of the
 four in `.bureau-pipeline/config/blocker-classes.json`. A mechanical class
 (`nothing-to-change`, `wrong-repo`, `branch-without-pr`) parks the card in
-`Backlog` and the sweep acts on it within one pass; a `question` is asked in
+`Queued` and the sweep acts on it within one pass; a `question` is asked in
 `Green Light` with the Finding / Question / Recommendation lines and is never
 parked silently. `/tmp/agent-handback.txt` when the card is fine but is bigger
 than one PR (→ `Planning`). Write at most ONE of the three.

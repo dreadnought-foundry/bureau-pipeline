@@ -4,7 +4,7 @@ On every merge, `linear-sync.yml` asks `merge_sweep_gate.py` which scoped
 passes the merge can have made worth running. Before this card that question
 was always one Linear read (`merge_sweep_gate.QUERY`). In `on` it is answered
 by the console's read door — the SAME rebuild Reconcile's merge path makes
-(`/cards?ids=<merged>` + `/cards/<merged>/dependents?lanes=Backlog`, BP-2) —
+(`/cards?ids=<merged>` + `/cards/<merged>/dependents?lanes=<the queue>`, BP-2) —
 and costs no Linear request.
 
 The bar each test holds:
@@ -15,7 +15,8 @@ The bar each test holds:
     makes no Linear call (item 34);
   * the merged card's OWN lane is never a door fact: `card-done` wrote it
     seconds before the gate runs, and the door's copy predates that write
-    (`door-older`). A Backlog dependent still runs the promotion pass, whose
+    (`door-older`). A queued dependent — under either name the queue carries
+    (DRE-6748) — still runs the promotion pass, whose
     live re-check (item 45) is the gate on every promotion;
   * the epic half cannot be decided from the door (it serves no child
     states), so a live parent falls open to the close pass, as an unknown
@@ -39,6 +40,7 @@ os.environ.setdefault("REPO", "dreadnought-foundry/portico")
 os.environ.setdefault("REPO_SLUG", "portico")
 
 import bureau_read  # noqa: E402
+import lane_contract  # noqa: E402
 import linear_ops  # noqa: E402
 import merge_sweep_gate as gate  # noqa: E402
 import reconcile  # noqa: E402
@@ -102,8 +104,21 @@ def test_on_a_backlog_dependent_runs_the_promotion_with_no_linear_request(monkey
     with door_at(monkeypatch, merged, dep) as door, wired(linear):
         assert gate.decide("DRE-801") == [PROMOTE]
     assert linear.requests == 0
-    assert door.asked("/cards/DRE-801/dependents")[0]["query"]["lanes"] == "Backlog"
+    asked = door.asked("/cards/DRE-801/dependents")[0]["query"]["lanes"]
+    assert asked == ",".join(lane_contract.QUEUE_LANES)
     assert door.asked("/cards")[0]["query"]["ids"] == "DRE-801"
+
+
+@pytest.mark.parametrize("queue", lane_contract.QUEUE_LANES)
+def test_on_a_dependent_under_either_queue_name_runs_the_promotion(monkeypatch, queue):
+    # DRE-6748: the door is asked for the queue under every name it carries,
+    # so a dependent waiting in Queued justifies the pass as one in Backlog.
+    merged = _c("DRE-801", "Done")
+    dep = _c("DRE-802", queue, blockers=(("DRE-801", "Done"),))
+    linear = Linear(merged, dep)
+    with door_at(monkeypatch, merged, dep), wired(linear):
+        assert gate.decide("DRE-801") == [PROMOTE]
+    assert linear.requests == 0
 
 
 def test_on_the_merged_cards_own_lane_is_not_read_from_the_door(monkeypatch):
@@ -194,9 +209,10 @@ def test_on_linear_hold_runs_no_pass_and_makes_no_linear_call(monkeypatch, capsy
 # ── shadow: compared, decided on Linear ─────────────────────────────────────
 
 
-def test_shadow_decides_on_linear_and_prints_the_comparison(monkeypatch, capsys):
+@pytest.mark.parametrize("queue", lane_contract.QUEUE_LANES)
+def test_shadow_decides_on_linear_and_prints_the_comparison(monkeypatch, capsys, queue):
     merged = _c("DRE-801", "Done")
-    dep_live = _c("DRE-802", "Backlog", blockers=(("DRE-801", "Done"),))
+    dep_live = _c("DRE-802", queue, blockers=(("DRE-801", "Done"),))
     linear = Linear(merged, dep_live)
     with door_at(monkeypatch, merged, mode="shadow") as door, wired(linear):
         # The door has not seen the relation yet: it lists no dependent.
@@ -280,7 +296,7 @@ def test_a_dispatched_card_done_pass_decides_on_the_door_and_promotes_after_a_li
     assert _advanced(linear) == ["DRE-802"]
     assert _gate_reads(linear) == []  # neither the gate nor the scope read Linear
     # The one Linear read on the whole path is the dependent's live re-check.
-    assert [q for q in linear.queries if 'eq: "Backlog"' in q] == linear.queries
+    assert [q for q in linear.queries if reconcile.QUEUE_STATE_FILTER in q] == linear.queries
 
 
 def test_on_a_dependent_blocked_live_is_still_held(monkeypatch):

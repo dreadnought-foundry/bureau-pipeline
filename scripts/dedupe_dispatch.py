@@ -329,15 +329,17 @@ def _canonical_lane(lane: str) -> str:
     """The contract's name for a lane, matched case-insensitively and through
     the contract's own rename aliases. The relay lower-cases the lane it
     sends; Linear answers in the board's own casing; and a board mid-rename
-    must not read as a card that moved."""
+    must not read as a card that moved. The aliases are read first: a lane
+    being replaced stays live on the board until no card is left under its
+    old name (the queue, DRE-4125), and it is still the lane it aliases."""
     if not lane:
         return ""
-    for known in (*lane_scope.LANE_FLOW, *lane_scope.OFF_FLOW):
-        if known.casefold() == lane.casefold():
-            return known
     for old, new in lane_scope.LANE_ALIASES.items():
         if old.casefold() == lane.casefold():
             return new
+    for known in (*lane_scope.LANE_FLOW, *lane_scope.OFF_FLOW):
+        if known.casefold() == lane.casefold():
+            return known
     return lane
 
 

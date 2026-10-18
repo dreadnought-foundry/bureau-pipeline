@@ -36,7 +36,7 @@ name: Red-Main Repair
 
 on:
   workflow_run:
-    workflows: [Pipeline Tests, Integration Harness]
+    workflows: [Pipeline Tests, Integration Harness, Model home carry]
     types: [completed]
 
 permissions:

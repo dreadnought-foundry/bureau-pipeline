@@ -12,7 +12,7 @@ one's work. A build failure is loud; a shallow review is silent, which makes
 this the more dangerous half.
 
 The rule: **availability is not permission.** On 2026-08-09 Anthropic enabled
-`claude-fable-5`, the probe stopped returning 404, and a best-first ladder
+Fable 5, the probe stopped returning 404, and a best-first ladder
 promoted the whole fleet onto it with no human deciding anything. PR #134 took
 Fable off the build path as DATA. This card makes it STRUCTURAL:
 
@@ -53,24 +53,24 @@ tests/test_review_separation.py; what stays here is everything that did not
 change, above all the 2026-08-09 guard: the strongest model we run is still
 unreachable from a build ladder at any availability.
 
-Which file each test reads (DRE-6860)
--------------------------------------
-The console rewrites config/models.yaml on every save — which model leads a
-group, which group an agent is in, which agents exist — so no test here asserts
-a choice that file holds today. A RULE of the policy or of selection runs
-against the frozen model files (`model_fixture.FIXTURE_NAME`, through
-tests/model_fixture.py) or against a config the test builds from them, and
-reads every model id and every role it expects off the fixture through
-`model_fixture.ladder`, never from a literal. A test of the COMMITTED file
-checks only what must hold in any saved state, and derives whatever it expects
-from that file.
+Which file each test reads (DRE-6860, DRE-6988)
+-----------------------------------------------
+The console changes a choice on every save — which model leads a group, which
+group an agent is in, which agents exist — so no test here asserts a choice
+that is in force today. Since the selector selects on the home (DRE-6939), a
+scenario about a CHOICE is a home document built from
+`model_fixture.fixture_home()`, judged by `model_home.home_errors` and handed
+to a tree's selector through `home_env` or `fixture_module(..., doc=...)`. A
+rule about a CODE-SIDE fact — `discovery`, `excluded`, `retired`,
+`session_agents`, `review_separation` — is proved by `policy_errors` on a copy
+of the frozen `models.yaml`. Every model id and every role a test expects is
+read off the frozen document through `model_fixture.ladder`, never from a
+literal. A test of the COMMITTED file checks only what must hold in any saved
+state, and derives whatever it expects from that file.
 
 These tests are the pin. Every one of them fails if its behaviour is removed.
 """
 
-import copy
-import json
-import os
 import re
 import subprocess
 import sys
@@ -93,13 +93,18 @@ sys.path.insert(0, str(ROOT / "tests"))
 import model_catalog as mc  # noqa: E402
 import model_fallback as mf  # noqa: E402
 import model_fixture  # noqa: E402
-from model_config_text import with_session_agents_ungrouped  # noqa: E402
+from model_fixture import fixture_home, home_env, lead_with, move_agent  # noqa: E402
 
 # The predecessor Fable id, excluded from every ladder on cost policy
-# (2026-08-12) and kept readable for attribution. It is on no ladder, so no
-# console save can move it; the ids that ARE on a ladder are read off the
-# fixture below, never spelled here.
-FABLE = "claude-fable-5"
+# (2026-08-12) and kept readable for attribution: the code's own name for it.
+# It is on no ladder, so no console save can move it; the ids that ARE on a
+# ladder are read off the frozen document below, never spelled here.
+FABLE = mf.FABLE
+
+# Two ids no catalog offers and no config names: a model the catalog has just
+# shown us, and one we saw before.
+NOVA = "claude-nova"
+RELIC = "claude-relic"
 
 WORKHORSE = "workhorse"
 ADVISORY = "advisory"
@@ -118,7 +123,7 @@ SELECTORS = {
 
 
 # Every file that states the role-kind rule in prose a human acts on — config,
-# the selector and its generator, the roster, and the workflows that select.
+# the selector and the catalog, the roster, and the workflows that select.
 # The staleness sweeps below read all of them, so a new kind cannot leave a
 # sentence behind in one of them.
 KIND_DOCUMENTS = (
@@ -126,24 +131,26 @@ KIND_DOCUMENTS = (
     ROOT / "config" / "README.md",
     MODEL_FALLBACK,
     MODEL_CATALOG,
-    ROOT / "scripts" / "sync_model_config.py",
     AGENTS,
     WORKFLOWS / "plan.yml",
     WORKFLOWS / "agent-task.yml",
 )
 
 # One fixture tree for every rule test that only reads: today's scripts on the
-# frozen model files, and its selector imported as `fmf`. A test that edits a
-# config builds a tree of its own with `_copy_tree`.
+# frozen model files, its selector imported as `fmf` having read the frozen
+# home document, and its home reader as `fmh`. A test that runs the selector
+# CLI builds a tree of its own with `_copy_tree`.
 _SHARED = None
 fmf = None
+fmh = None
 
 
 def setUpModule():
-    global _SHARED, fmf
+    global _SHARED, fmf, fmh
     _SHARED = tempfile.TemporaryDirectory()
-    fmf = model_fixture.fixture_module(
-        model_fixture.fixture_tree(Path(_SHARED.name) / "tree"))
+    tree = model_fixture.fixture_tree(Path(_SHARED.name) / "tree")
+    fmf = model_fixture.fixture_module(tree, doc=fixture_home())
+    fmh = model_fixture.fixture_module(tree, "model_home")
 
 
 def tearDownModule():
@@ -151,8 +158,18 @@ def tearDownModule():
 
 
 def _canonical() -> dict:
-    """The frozen `models.yaml`, parsed afresh — a test may edit its copy."""
+    """The frozen `models.yaml`, parsed afresh — a test may edit its copy to
+    break a rule `policy_errors` holds about a code-side fact."""
     return model_fixture.fixture_config()
+
+
+def _home_errors(doc: dict, side: dict | None = None) -> list[str]:
+    """`model_home.home_errors` on `doc`, judged as every writer judges it, by
+    the fixture tree's own facts: its prices, its code-side facts (or `side`)
+    and its repo map."""
+    return fmh.home_errors(doc, fmh.mf.declared_prices(),
+                           fmh.code_side() if side is None else side,
+                           fmh.mf.declared_repo_slugs())
 
 
 def _committed() -> dict:
@@ -166,53 +183,64 @@ def _copy_tree(tmp: Path) -> Path:
     return model_fixture.fixture_tree(tmp / "tree")
 
 
-def _write_config(tree: Path, cfg: dict) -> None:
-    (tree / "config" / "models.yaml").write_text(yaml.safe_dump(cfg, sort_keys=False))
-
-
-def _run_sync(tree: Path, *args: str) -> subprocess.CompletedProcess:
-    return subprocess.run(
-        [sys.executable, str(tree / "scripts" / "sync_model_config.py"), *args],
-        capture_output=True,
-        text=True,
-    )
-
-
 def _all_up() -> dict:
-    """Every rung of every fixture ladder, and the excluded Fable, reported up."""
-    cfg = _canonical()
-    up = {m: True for kind in cfg["kinds"] for m in model_fixture.ladder(cfg, kind)}
+    """Every model of every group of the frozen document, and the excluded
+    Fable, reported up."""
+    doc = fixture_home()
+    up = {m: True for kind in doc["groups"] for m in model_fixture.ladder(doc, kind)}
     up[FABLE] = True
     return up
 
 
-def _cli_select(tree: Path, agent: str, available=None, explain=False):
-    """Run the selector CLI in `tree` with a STUBBED availability probe. Returns
-    (model, explanation) — the explanation is what the workflow records."""
-    env = dict(os.environ)
-    env["BUREAU_FAKE_AVAILABLE"] = json.dumps(
-        available if available is not None else _all_up()
-    )
+def _cli_run(tree: Path, agent: str, available=None, explain=False, doc=None):
+    """Run the selector CLI in `tree` on the home document `doc` (the frozen
+    one when None), with a STUBBED availability probe. Returns
+    `(process, explanation)` — the explanation is what the workflow records."""
+    env = home_env(tree, fixture_home() if doc is None else doc,
+                   BUREAU_FAKE_AVAILABLE=available if available is not None else _all_up())
     argv = [sys.executable, str(tree / "scripts" / "model_fallback.py"), "select", agent]
     why_path = tree / "why.txt"
     if explain:
         argv += ["--explain-file", str(why_path)]
     proc = subprocess.run(argv, capture_output=True, text=True, env=env)
     assert proc.returncode == 0, f"select {agent} failed: {proc.stdout}\n{proc.stderr}"
+    assert "model-home: read" in proc.stderr, proc.stderr
     note = why_path.read_text().strip() if explain else ""
+    return proc, note
+
+
+def _cli_select(tree: Path, agent: str, available=None, explain=False, doc=None):
+    """`(model, explanation)` of `_cli_run`."""
+    proc, note = _cli_run(tree, agent, available, explain, doc)
     return proc.stdout.strip(), note
 
 
-def _advisory_ladder(cfg=None) -> list:
-    return model_fixture.ladder(cfg or _canonical(), ADVISORY)
+def _cli_check(tree: Path, doc: dict) -> subprocess.CompletedProcess:
+    """`model_home.py check` in `tree` on `doc`: what every writer runs before
+    it writes a document."""
+    path = home_env(tree, doc)["BUREAU_MODEL_HOME_FILE"]
+    return subprocess.run(
+        [sys.executable, str(tree / "scripts" / "model_home.py"), "check", path],
+        capture_output=True, text=True, cwd=tree)
 
 
-def _workhorse_ladder(cfg=None) -> list:
-    return model_fixture.ladder(cfg or _canonical(), WORKHORSE)
+def _advisory_ladder(doc=None) -> list:
+    return model_fixture.ladder(doc or fixture_home(), ADVISORY)
 
 
-def _judgement_ladder(cfg=None) -> list:
-    return model_fixture.ladder(cfg or _canonical(), JUDGEMENT)
+def _workhorse_ladder(doc=None) -> list:
+    return model_fixture.ladder(doc or fixture_home(), WORKHORSE)
+
+
+def _judgement_ladder(doc=None) -> list:
+    return model_fixture.ladder(doc or fixture_home(), JUDGEMENT)
+
+
+def _rule_10(agent: str) -> str:
+    """The sentence `home_errors` refuses `agent` in the judgement group with."""
+    owners = " and ".join(fmf.JUDGEMENT_ROLES)
+    return (f"Only {owners} and the session agents may be in the {JUDGEMENT} "
+            f"group, and {agent} is in it.")
 
 
 def _roles_of(kind: str) -> list:
@@ -233,14 +261,17 @@ class RoleKindsTest(unittest.TestCase):
     def setUp(self):
         fmf.clear_availability_cache()
 
-    def test_config_declares_exactly_the_three_kinds(self):
+    def test_config_declares_the_three_kinds_and_any_added_group_on_its_own_ladder(self):
         # The committed file, in any saved state: the kinds the code knows,
-        # each on a ladder of its own.
+        # each on a ladder of its own. Since DRE-6834 a save may add a group
+        # beside them, and an added group walks the ladder of its own name.
         cfg = _committed()
-        self.assertEqual(
-            sorted(cfg["kinds"]), sorted(mf.ROLE_KINDS),
-            "config/models.yaml declares exactly the role kinds the selector knows",
+        self.assertTrue(
+            set(mf.ROLE_KINDS) <= set(cfg["kinds"]),
+            "config/models.yaml declares every role kind the selector knows",
         )
+        for kind in set(cfg["kinds"]) - set(mf.ROLE_KINDS):
+            self.assertEqual(cfg["kinds"][kind]["ladder"], kind, kind)
         ladders = {kind: spec["ladder"] for kind, spec in cfg["kinds"].items()}
         for kind, ladder in ladders.items():
             self.assertIn(ladder, cfg["ladders"], f"kind {kind}: unknown ladder")
@@ -272,20 +303,19 @@ class RoleKindsTest(unittest.TestCase):
             self.assertIn(kind, cfg["kinds"], f"{role}: {kind!r} is not a role kind")
 
     def test_the_critic_and_verifier_may_be_nothing_but_advisory(self):
-        # Rule 3: the roles that gate unattended merges are advisory, and every
-        # other kind is refused for each of them.
+        # Rule 3: the roles that gate unattended merges are advisory, and a
+        # document putting either of them in any other group is refused.
         self.assertIn("critic", fmf.BACKSTOP_ROLES)
         self.assertIn("verifier", fmf.BACKSTOP_ROLES)
         for role in fmf.BACKSTOP_ROLES:
             self.assertEqual(fmf.kind_for(role), ADVISORY, role)
             for kind in (WORKHORSE, JUDGEMENT):
                 with self.subTest(role=role, kind=kind):
-                    cfg = _canonical()
-                    cfg["agents"][role] = kind
-                    self.assertTrue(
-                        any(e.startswith(f"agents.{role}: must be 'advisory'")
-                            for e in fmf.policy_errors(cfg)),
-                        f"{role} moved to {kind} was not refused",
+                    errors = _home_errors(move_agent(fixture_home(), role, kind))
+                    self.assertIn(
+                        f"The {role} must be in the {ADVISORY} group, because it "
+                        f"reviews before an unattended merge, and it is in {kind}.",
+                        errors, f"{role} moved to {kind} was not refused",
                     )
 
     def test_the_critic_runs_the_advisory_model(self):
@@ -315,9 +345,8 @@ class RoleKindsTest(unittest.TestCase):
     def test_an_unknown_role_gets_the_workhorse_kind(self):
         # select() must never block a build on a role it does not recognize —
         # and an unrecognized role must land on the CHEAP side of the fence.
-        cfg = _canonical()
-        self.assertEqual(cfg["kinds"][WORKHORSE]["ladder"], cfg["default_ladder"])
         self.assertEqual(fmf.kind_for("no-such-role"), WORKHORSE)
+        self.assertEqual(fmf.KINDS[WORKHORSE], fmf.CONFIG["default_ladder"])
         self.assertEqual(fmf.ladder_for("no-such-role"), _workhorse_ladder())
 
     def test_advisory_falls_back_onto_the_workhorse_model(self):
@@ -384,15 +413,17 @@ class IncidentConditionTest(unittest.TestCase):
         # model when it is selected. Proved in full in
         # tests/test_review_separation.py and tests/test_model_choice_policy.py
         # — this is the hinge, kept beside the incident it used to be confused
-        # with.
-        cfg = _canonical()
-        overlap = set(_advisory_ladder(cfg)[:1]) & set(_workhorse_ladder(cfg))
+        # with. The overlap is the frozen document's; the fence is a code-side
+        # fact of the frozen models.yaml, judged by `policy_errors`.
+        overlap = set(_advisory_ladder()[:1]) & set(_workhorse_ladder())
         self.assertTrue(overlap, "the fixture's advisory top does not overlap the build path")
+        self.assertEqual(_home_errors(fixture_home()), [])
+        cfg = _canonical()
         self.assertEqual(fmf.policy_errors(cfg), [])
         stripped = _canonical()
         stripped.pop("review_separation", None)
         self.assertEqual(fmf.policy_errors(stripped), [])
-        top = _advisory_ladder(cfg)[0]
+        top = _advisory_ladder()[0]
         self.assertNotEqual(fmf.reviewers_for(stripped, top)[0], top)
 
     def test_the_cli_path_holds_the_same_line(self):
@@ -406,7 +437,7 @@ class IncidentConditionTest(unittest.TestCase):
                 with self.subTest(kind=kind):
                     self.assertEqual(
                         _cli_select(tree, _role_of(kind))[0],
-                        model_fixture.ladder(_canonical(), kind)[0],
+                        model_fixture.ladder(fixture_home(), kind)[0],
                     )
             self.assertNotEqual(
                 _cli_select(tree, _role_of(WORKHORSE))[0], _judgement_ladder()[0])
@@ -453,57 +484,43 @@ class JudgementKindTest(unittest.TestCase):
         # DRE-6833. A session agent's group selects nothing — the selector
         # answers it as an unknown name — so a session agent in Planners puts
         # no run on the strongest model, and rule 10 does not apply to it.
-        # From the fixture with every session agent in no group (DRE-6889), so
-        # the move below is the one under test.
-        cfg = yaml.safe_load(with_session_agents_ungrouped(model_fixture.fixture_text()))
-        self.assertTrue(cfg["session_agents"], "the fixture has a session agent")
-        agent = cfg["session_agents"][0]
-        self.assertIn(agent, cfg["ungrouped"])
-        rule_10 = "'judgement' is the planner's kind"
+        # The frozen document has every session agent in no group, so the
+        # move below is the one under test; which agents are session agents
+        # is a code-side fact of the tree.
+        side = fmh.code_side()
+        self.assertTrue(side["session_agents"], "the fixture has a session agent")
+        agent = side["session_agents"][0]
+        self.assertNotIn(agent, fixture_home()["agents"])
 
-        exempt = copy.deepcopy(cfg)
-        exempt["agents"][agent] = JUDGEMENT
-        exempt["ungrouped"].remove(agent)
-        errors = fmf.policy_errors(exempt)
-        self.assertFalse([e for e in errors if rule_10 in e], errors)
-        self.assertEqual(errors, [])
+        exempt = move_agent(fixture_home(), agent, JUDGEMENT)
+        self.assertEqual(_home_errors(exempt), [])
 
-        not_session = copy.deepcopy(exempt)
-        not_session["session_agents"].remove(agent)
-        errors = fmf.policy_errors(not_session)
-        self.assertTrue(
-            any(e.startswith(f"agents.{agent}: ") and rule_10 in e for e in errors),
-            errors,
-        )
+        not_session = dict(side, session_agents=[
+            name for name in side["session_agents"] if name != agent])
+        self.assertIn(_rule_10(agent), _home_errors(exempt, side=not_session))
 
     def test_rule_10_still_refuses_every_pipeline_role(self):
         # Every pipeline role of the fixture that rule 10 does not name.
-        cfg = _canonical()
         others = [r for r in fmf.AGENT_KINDS if r not in fmf.JUDGEMENT_ROLES]
         self.assertTrue(others)
         for role in others:
             with self.subTest(role=role):
-                trial = copy.deepcopy(cfg)
-                trial["agents"][role] = JUDGEMENT
-                errors = fmf.policy_errors(trial)
-                self.assertTrue(
-                    any(e.startswith(f"agents.{role}: 'judgement' is the planner's kind")
-                        for e in errors),
-                    (role, errors),
-                )
-        # A name under `agents` in neither JUDGEMENT_ROLES nor `session_agents`.
-        trial = copy.deepcopy(cfg)
-        trial["agents"]["stranger"] = JUDGEMENT
-        self.assertTrue(any(
-            e.startswith("agents.stranger: 'judgement' is the planner's kind")
-            for e in fmf.policy_errors(trial)))
+                errors = _home_errors(move_agent(fixture_home(), role, JUDGEMENT))
+                self.assertIn(_rule_10(role), errors)
+        # A name in neither JUDGEMENT_ROLES nor the session agents.
+        errors = _home_errors(move_agent(fixture_home(), "stranger", JUDGEMENT))
+        self.assertIn(_rule_10("stranger"), errors)
 
     def test_a_session_agents_entry_for_nobody_is_refused(self):
+        # A code-side fact: which agents run in a person's session is the
+        # frozen models.yaml's, and `policy_errors` refuses a record for
+        # nobody in the words it always has.
         trial = _canonical()
         trial["session_agents"].append("nobody-at-all")
-        errors = fmf.policy_errors(trial)
-        self.assertTrue(
-            any(e.startswith("session_agents.nobody-at-all: ") for e in errors), errors)
+        self.assertEqual(fmf.policy_errors(trial), [
+            "session_agents.nobody-at-all: names no agent in `agents` or "
+            "`ungrouped` — a record for nobody is a typo or an agent that was "
+            "removed"])
 
     def test_the_planner_runs_on_the_strongest_model_when_it_is_available(self):
         planner = _role_of(JUDGEMENT)
@@ -589,36 +606,28 @@ class JudgementKindTest(unittest.TestCase):
         # an explicit choice of any priced model is admissible for any group.
         # What still guards the incident is that nothing AUTOMATIC climbs — see
         # test_no_build_role_reaches_the_strongest_model_at_full_availability.
-        cfg = _canonical()
-        strongest = _judgement_ladder(cfg)[0]
-        cfg["ladders"][cfg["kinds"][WORKHORSE]["ladder"]].insert(
-            0, {"model": strongest, "reason": "the CEO's choice"}
-        )
-        self.assertEqual(fmf.policy_errors(cfg), [])
+        strongest = _judgement_ladder()[0]
+        self.assertEqual(_home_errors(lead_with(fixture_home(), WORKHORSE, strongest)), [])
 
     def test_a_dearer_model_below_the_fallback_is_a_persons_choice_too(self):
         # Rule 4b refused this until 2026-10-10; what is left of it is the
-        # price, and both rungs here have one.
-        cfg = _canonical()
-        build_rung, strongest = _workhorse_ladder(cfg)[0], _judgement_ladder(cfg)[0]
-        cfg["ladders"][cfg["kinds"][JUDGEMENT]["ladder"]] = [
-            {"model": build_rung, "reason": "the build model first"},
-            {"model": strongest, "reason": "…and the premium one below it"},
-        ]
-        self.assertEqual(fmf.policy_errors(cfg), [])
+        # price, and both models here have one.
+        doc = fixture_home()
+        build_rung, strongest = _workhorse_ladder(doc)[0], _judgement_ladder(doc)[0]
+        doc["groups"][JUDGEMENT]["models"] = [build_rung, strongest]
+        self.assertEqual(_home_errors(doc), [])
 
     def test_the_selector_honours_a_chosen_strongest_model_on_the_build_path(self):
-        # The choice validates, so the selector loads it rather than degrading.
+        # The choice is admissible, so the selector reads it from the home
+        # rather than running on the defaults.
+        strongest = _judgement_ladder()[0]
+        doc = lead_with(fixture_home(), WORKHORSE, strongest)
         with tempfile.TemporaryDirectory() as td:
             tree = _copy_tree(Path(td))
-            cfg = _canonical()
-            strongest = _judgement_ladder(cfg)[0]
-            cfg["ladders"][cfg["kinds"][WORKHORSE]["ladder"]].insert(
-                0, {"model": strongest, "reason": "the CEO's choice"}
-            )
-            _write_config(tree, cfg)
-            model, _ = _cli_select(tree, _role_of(WORKHORSE))
+            model, _ = _cli_select(tree, _role_of(WORKHORSE), doc=doc)
             self.assertEqual(model, strongest)
+            # …and the frozen document, which does not lead with it, does not.
+            self.assertNotEqual(_cli_select(tree, _role_of(WORKHORSE))[0], strongest)
 
     def test_discovery_may_not_target_the_judgement_ladder(self):
         # A newly-discovered model may never land on a BUILD **or a PLANNING**
@@ -634,20 +643,22 @@ class JudgementKindTest(unittest.TestCase):
         )
         self.assertNotIn(JUDGEMENT, fmf.DISCOVERY_TARGETS)
 
-    def test_ci_goes_red_on_a_discovery_targeting_judgement(self):
+    def test_the_home_check_goes_red_on_a_build_role_in_the_planners_group(self):
+        # What every writer runs before it writes a document: a build role in
+        # the judgement group is the planning-side half of the incident, and
+        # the check exits 1 naming it in a plain sentence.
+        role = _role_of(WORKHORSE)
         with tempfile.TemporaryDirectory() as td:
             tree = _copy_tree(Path(td))
-            cfg = _canonical()
-            cfg["discovery"]["on_new_model"] = JUDGEMENT
-            _write_config(tree, cfg)
-            proc = _run_sync(tree, "--check")
-            self.assertNotEqual(proc.returncode, 0, "CI must fail on this config")
-            self.assertIn("on_new_model", proc.stdout + proc.stderr)
+            proc = _cli_check(tree, move_agent(fixture_home(), role, JUDGEMENT))
+            self.assertEqual(proc.returncode, 1, "a writer must refuse this document")
+            self.assertIn(_rule_10(role), proc.stdout.splitlines())
+            self.assertEqual(_cli_check(tree, fixture_home()).returncode, 0)
 
     def test_the_registry_shows_the_planners_kind_and_model(self):
         # The roster is the surface a human reads to ask "what is the planner
         # running on, and why is it allowed to be the expensive one?" — the
-        # generator writes what the config it read says.
+        # frozen tree's roster says what the frozen document says.
         with tempfile.TemporaryDirectory() as td:
             tree = _copy_tree(Path(td))
             roster = {a["name"]: a
@@ -708,58 +719,55 @@ class SchemaRejectsAutoPromotionTest(unittest.TestCase):
         self.assertEqual(mf.policy_errors(_committed()), [])
 
     def test_the_excluded_fable_on_a_build_ladder_is_rejected(self):
-        cfg = _canonical()
-        cfg["ladders"][cfg["kinds"][WORKHORSE]["ladder"]].insert(
-            0, {"model": FABLE, "reason": "someone's well-meaning edit"}
-        )
-        errors = fmf.policy_errors(cfg)
-        self.assertTrue(errors, "an excluded model must not reach a build ladder")
-        self.assertTrue(any(FABLE in e for e in errors), f"unhelpful errors: {errors}")
+        # Excluded is a code-side fact; a document leading the builders with
+        # an excluded model is refused, naming it.
+        self.assertIn(FABLE, fmh.code_side()["excluded"])
+        errors = _home_errors(lead_with(fixture_home(), WORKHORSE, FABLE))
+        self.assertEqual(errors, [f"{FABLE} is excluded, so it cannot be chosen."])
 
     def test_demoting_the_critic_to_a_build_kind_is_rejected(self):
-        cfg = _canonical()
-        cfg["agents"]["critic"] = WORKHORSE
-        errors = fmf.policy_errors(cfg)
-        self.assertTrue(errors, "the critic must stay advisory")
-        self.assertTrue(any("critic" in e for e in errors), f"unhelpful: {errors}")
+        # The plain sentence a writer prints, whole: which agent, which group
+        # it must be in and why, and where the document put it.
+        doc = move_agent(fixture_home(), "critic", WORKHORSE)
+        errors = _home_errors(doc)
+        self.assertEqual(errors, [
+            "The critic must be in the advisory group, because it reviews before "
+            "an unattended merge, and it is in workhorse."])
 
     def test_a_role_cannot_be_pointed_at_a_raw_ladder(self):
-        # Roles are assigned KINDS, not ladders: that is what stops a future
-        # edit from inventing a third ladder and quietly putting builds on it.
-        cfg = _canonical()
+        # Roles are assigned GROUPS the document declares: that is what stops
+        # an edit from naming a group nobody chose models for and quietly
+        # putting builds on it.
         role = _role_of(WORKHORSE)
-        cfg["agents"][role] = cfg["kinds"][ADVISORY]["ladder"] + "-copy"
-        cfg["ladders"][cfg["agents"][role]] = [{"model": FABLE, "reason": "x"}]
-        self.assertTrue(
-            any(e.startswith(f"agents.{role}: ") for e in fmf.policy_errors(cfg)))
+        group = f"{ADVISORY}-copy"
+        errors = _home_errors(move_agent(fixture_home(), role, group))
+        self.assertIn(f"The agent {role} is in the group {group}, which the "
+                      "document does not declare.", errors)
 
-    def test_ci_goes_red_on_a_rejected_config(self):
+    def test_the_home_check_goes_red_on_the_critic_in_the_build_group(self):
+        doc = move_agent(fixture_home(), "critic", WORKHORSE)
         with tempfile.TemporaryDirectory() as td:
             tree = _copy_tree(Path(td))
-            cfg = _canonical()
-            cfg["discovery"]["on_new_model"] = WORKHORSE
-            _write_config(tree, cfg)
-            proc = _run_sync(tree, "--check")
-            self.assertNotEqual(proc.returncode, 0, "CI must fail on this config")
-            self.assertIn("on_new_model", proc.stdout + proc.stderr)
+            proc = _cli_check(tree, doc)
+            self.assertEqual(proc.returncode, 1, "a writer must refuse this document")
+            self.assertEqual(proc.stdout.splitlines(), _home_errors(doc))
 
     def test_the_selector_degrades_rather_than_honouring_a_rejected_config(self):
-        # A config that violates policy is NOT loaded: the fleet keeps running
-        # the last-known-good ladders (and says so) instead of adopting the
-        # thing the policy exists to prevent.
+        # A home naming a model this release excludes is not obeyed on that
+        # model: the reader sets it aside (and says so), and the build path
+        # walks what is left instead of adopting the thing the policy exists
+        # to prevent.
+        doc = lead_with(fixture_home(), WORKHORSE, FABLE)
         with tempfile.TemporaryDirectory() as td:
             tree = _copy_tree(Path(td))
-            cfg = _canonical()
-            cfg["ladders"][cfg["kinds"][WORKHORSE]["ladder"]].insert(
-                0, {"model": FABLE, "reason": "the incident, as a config edit"}
-            )
-            _write_config(tree, cfg)
-            model, _ = _cli_select(tree, _role_of(WORKHORSE))
+            proc, _ = _cli_run(tree, _role_of(WORKHORSE), doc=doc)
+            model = proc.stdout.strip()
             self.assertNotEqual(model, FABLE)
             self.assertEqual(
                 model, _workhorse_ladder()[0],
-                "a policy-violating config must not reach the build path",
+                "an excluded model in the home must not reach the build path",
             )
+            self.assertIn(f"set aside as unknown to this release: {FABLE}", proc.stderr)
 
 
 class SelectionIsRecordedTest(unittest.TestCase):
@@ -877,23 +885,24 @@ class DiscoveryJoinsAdvisoryOnlyTest(unittest.TestCase):
         known = _workhorse_ladder()[0]
         catalog = [
             {"id": known, "display_name": "Known", "created_at": "2026-08-01T00:00:00Z"},
-            {"id": "claude-nova-9", "display_name": "Nova 9",
-             "created_at": "2026-09-01T00:00:00Z"},
+            {"id": NOVA, "display_name": "Nova", "created_at": "2026-09-01T00:00:00Z"},
         ]
         found = [e["id"] for e in mc.new_models(catalog, known_ids=fmf.KNOWN_MODELS)]
-        self.assertEqual(found, ["claude-nova-9"])
+        self.assertEqual(found, [NOVA])
 
     def test_known_ids_and_dated_snapshots_are_not_discoveries(self):
         # A rung, a retired id, an excluded id, and a dated snapshot of a rung.
+        # Retired and excluded are code-side facts of the frozen models.yaml.
         cfg = _canonical()
         retired = cfg["retired"][0]
+        retired = retired["model"] if isinstance(retired, dict) else retired
         excluded = cfg["excluded"][0]
         excluded = excluded["model"] if isinstance(excluded, dict) else excluded
-        rung = _judgement_ladder(cfg)[-1]
+        rung = _judgement_ladder()[-1]
         catalog = [
             {"id": model, "display_name": None, "created_at": None}
             for model in (rung, retired, excluded, FABLE,
-                          f"{_workhorse_ladder(cfg)[1]}-20260801")
+                          f"{_workhorse_ladder()[1]}-20260801")
         ]
         self.assertEqual(mc.new_models(catalog, known_ids=fmf.KNOWN_MODELS), [])
 
@@ -903,13 +912,13 @@ class DiscoveryJoinsAdvisoryOnlyTest(unittest.TestCase):
         # weekly watch would re-alert on every model Anthropic offers that we
         # simply do not run — noise that trains the alert into wallpaper.
         catalog = [
-            {"id": "claude-nova-9", "display_name": None, "created_at": None},
-            {"id": "claude-relic-2", "display_name": None, "created_at": None},
+            {"id": NOVA, "display_name": None, "created_at": None},
+            {"id": RELIC, "display_name": None, "created_at": None},
         ]
-        known = set(fmf.KNOWN_MODELS) | {"claude-relic-2"}
+        known = set(fmf.KNOWN_MODELS) | {RELIC}
         self.assertEqual(
             [e["id"] for e in mc.new_models(catalog, known_ids=known)],
-            ["claude-nova-9"],
+            [NOVA],
         )
 
     def test_the_discovery_target_is_read_from_the_config(self):

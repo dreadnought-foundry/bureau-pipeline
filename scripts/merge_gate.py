@@ -190,6 +190,21 @@ not a critic catch).
    - PRESENT verdict proves the PR is in Verifier scope, so a MISSING or
      STALE SHA must HOLD for a fresh verify (DRE-1990 asymmetry — treating
      it as absent would fail OPEN and merge code the Verifier never ran).
+   - STALE, ASKED AGAIN (DRE-7165). A verdict proves the scope of the head
+     it was for, not of this one: the Verifier decides afresh on every head
+     (`verify_scope.decide`, the rule's one writer) and, out of scope, posts
+     nothing. agent-bureau #3741 (2026-10-12) had a PASS for 4a26218, a
+     head 6b0dbca the Verifier declined as single-system with no UI signal,
+     and a gate holding for a fresh verify that would never come. So the
+     stale arm — a verdict for an older head that does not carry — asks
+     that same function with the Verifier's two inputs at the CURRENT head:
+     the compare record's `files[]` and the card snapshot. In scope holds,
+     naming the signal; out of scope ignores the earlier verdict (never
+     carried) and a merge says so in a `note=`; an input the gate cannot
+     read — a failed compare read, a record at the 300-file cap, a card on
+     the branch with no snapshot — holds, naming it. The Verifier reads an
+     unreadable input as out of scope; the gate is the merge and holds. The
+     card is read only after the stale hold, once per run, by the workflow.
    - Bound to the current head: PASS proceeds; SKIP is advisory and
      proceeds too (DRE-1991 / #61 — the Verifier brief promises a SKIP
      never blocks); anything else (FAIL, neutral) holds.
@@ -367,7 +382,10 @@ Contract with merge-gate.yml:
     and GitHub's `createdAt` — condition W, DRE-5511; an empty or unreadable
     body, or an empty or unparseable time, is OFF), --proof-record-file (the
     record `proof_record.py gather` writes — condition P, DRE-6141; on a
-    proof-record branch unreadable holds, elsewhere it is not read), all optional;
+    proof-record branch unreadable holds, elsewhere it is not read),
+    --card / --card-snapshot-file (the card the branch names and the
+    snapshot `card_snapshot.py take` wrote — condition 3's scope record,
+    DRE-7165; a card with no readable snapshot holds), all optional;
     omitted = the pre-DRE-2039/2416 behavior for every caller that never
     passes them. The compare payload must NOT be trimmed (DRE-2340): its
     `files[]` is what the head's content id is computed from.
@@ -382,7 +400,10 @@ Contract with merge-gate.yml:
     whenever --owners-file was passed (condition O, DRE-4341) — a
     `code_owner_review=` line (met | unmet | not_required | unknown), plus,
     only on a code-owner hold, an `owner_hold=` line carrying JSON
-    `[{"owners": […], "folders": […]}, …]` for the note and the card.
+    `[{"owners": […], "folders": […]}, …]` for the note and the card; and —
+    only on the stale-verifier hold decided with no --card-snapshot-file —
+    a `verifier_scope=ask` line, on which the workflow reads the card once
+    and runs the decision again with it (DRE-7165).
   exit 0 = decided; exit 2 = malformed input (the job fails loudly and
     nothing merges — never fail open).
 
@@ -439,6 +460,12 @@ import code_owner_hold  # noqa: E402
 # when the rule is on and what a line must look like live in ONE module, read
 # by the gate, the critic's context, the collector and the train alike.
 import whats_new  # noqa: E402
+
+# Condition 3's scope question (DRE-7165). Whether the Verifier gates a pull
+# request is decided in ONE function, `verify_scope.decide`, which verify.yml's
+# scope step calls too: the gate asks it and restates no part of the rule.
+import verify_scope  # noqa: E402
+from verdict_content import COMPARE_STATUSES, MAX_COMPARE_FILES  # noqa: E402
 
 # Condition 1's record (DRE-6532). Every shape `gh api` writes for a commit's
 # check runs — the bare object, a flat list, the array of pages
@@ -572,6 +599,68 @@ class Decision:
     #: On a code-owner hold, whose review is missing and for which folders —
     #: `(((owner, …), (folder, …)), …)`. Empty on every other decision.
     owner_hold: tuple = ()
+    #: Condition 3 (DRE-7165): True only on the stale-verifier hold decided
+    #: with no scope record. The workflow then reads the card once and asks
+    #: again with it (`verifier_scope=ask`).
+    ask_verifier_scope: bool = False
+
+
+@dataclass(frozen=True)
+class VerifierScope:
+    """`verify_scope.decide`'s answer at the current head (DRE-7165), or why
+    the gate could not ask it: `decision` is None and `unreadable` names the
+    input it could not read."""
+    decision: Optional[verify_scope.Decision] = None
+    unreadable: str = ""
+
+
+def read_verifier_scope(compare_payload, card: str, snapshot_path: str) -> VerifierScope:
+    """Ask the Verifier's own rule whether it gates the current head, with the
+    two inputs the Verifier reads (DRE-7165): the changed paths — every
+    `filename` in the three-dot compare record's `files[]`, the diff `gh pr
+    diff --name-only` lists — and the card, out of the snapshot
+    `card_snapshot.py take` wrote.
+
+    An input that cannot be read is NOT "no signal" here, although the
+    Verifier reads it so: the gate is the merge, and an unreadable input must
+    never admit one. A failed compare read (`{}`), a record at GitHub's
+    300-file cap (the list may be cut off) and a card on the branch with no
+    snapshot are each `unreadable`. A branch naming no card (`card` empty)
+    gives no card signal, as it does the Verifier, and the paths decide; so
+    does a snapshot with an empty description (`card_from_snapshot`'s rule).
+    """
+    if not isinstance(compare_payload, dict) or compare_payload.get("status") not in COMPARE_STATUSES:
+        return VerifierScope(unreadable="the compare record is unreadable (a failed read), "
+                                        "so there are no changed paths to ask with")
+    files = compare_payload.get("files")
+    if not isinstance(files, list) or not all(
+            isinstance(f, dict) and f.get("filename") for f in files):
+        return VerifierScope(unreadable="the compare record carries no readable files list")
+    if len(files) >= MAX_COMPARE_FILES:
+        return VerifierScope(unreadable=f"the compare record lists {len(files)} files, "
+                                        "GitHub's cap, so the list may be cut off")
+    snap = None
+    if card:
+        import card_snapshot  # only on this path, as verify_scope reads it
+
+        if card_snapshot.load(snapshot_path) is None:
+            return VerifierScope(unreadable=f"no snapshot of {card} — a failed Linear "
+                                            "read or a Linear hold")
+        snap = verify_scope.card_from_snapshot(snapshot_path)
+    changed = [str(f["filename"]) for f in files]
+    return VerifierScope(decision=verify_scope.decide(changed, snap))
+
+
+def _scope_signals(decision) -> str:
+    """The signals that put a head in the Verifier's scope, for a reason."""
+    signals = []
+    if decision.design:
+        signals.append("design: the card carries a design line")
+    if decision.ui_role:
+        signals.append("ui_role: a UI role label on a frontend diff")
+    if decision.multi:
+        signals.append("multi: " + ", ".join(sorted(decision.buckets)))
+    return "; ".join(signals) or "in scope"
 
 
 def first_line(body: Optional[str]) -> str:
@@ -747,7 +836,11 @@ def last_test_run(workflow_runs,
     `created_at` among the head's `pull_request` runs at no review path, or
     None when there is none. It is the anchor of the new-test rule
     (order_sensitive_refresh.py, DRE-6871): `main`'s tip when it was created
-    is the `main` its result was earned against.
+    is the `main` its result was earned against. That tip is read on `main`'s
+    first-parent line (`tip_at`, DRE-6966), never as the newest-dated commit
+    before the run: a pull request that merged after the run began but was
+    written before it put a side-branch commit there, and bureau-pipeline
+    #1032 merged without the refresh it was owed.
 
     The review exclusion is `unfinished_runs`'s, because a review run is
     created later than the tests whenever a description is edited or a draft
@@ -764,6 +857,55 @@ def last_test_run(workflow_runs,
     if not candidates:
         return None
     return max(candidates, key=lambda r: str(r.get("created_at") or ""))
+
+
+def _instant(value) -> Optional[datetime]:
+    """An ISO-8601 timestamp carrying its offset, or None."""
+    if not isinstance(value, str):
+        return None
+    try:
+        moment = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return moment if moment.tzinfo is not None else None
+
+
+def tip_at(commits, start, at) -> Optional[str]:
+    """`main`'s tip at `at` (DRE-6966): the first commit on the first-parent
+    line from `start` whose committer date is not later than `at`, or None.
+
+    `commits` is GitHub's commit listing for the branch, in page order. Every
+    commit on `main`'s first-parent line is a merge into `main` or a direct
+    push, so the first one dated by then is the tip `main` stood at. The
+    listing's own order is no answer: it holds every commit reachable from
+    the branch, side branches included, so the newest-dated commit before
+    `at` is a side branch's whenever a pull request merged later was written
+    earlier (bureau-pipeline #1032).
+
+    None when the walk leaves the listing before it finds one, when a commit
+    on the way has no parents, or when a date cannot be read — the gate then
+    waits rather than merging on a tip it could not find.
+    """
+    when = _instant(at)
+    if when is None:
+        return None
+    by_sha = {c["sha"]: c for c in commits
+              if isinstance(c, dict) and isinstance(c.get("sha"), str)}
+    sha, seen = start, set()
+    while isinstance(sha, str) and sha in by_sha and sha not in seen:
+        seen.add(sha)
+        entry = by_sha[sha]
+        committer = (entry.get("commit") or {}).get("committer") or {}
+        dated = _instant(committer.get("date"))
+        if dated is None:
+            return None
+        if dated <= when:
+            return sha
+        parents = entry.get("parents") or []
+        if not isinstance(parents[0] if parents else None, dict):
+            return None
+        sha = parents[0].get("sha")
+    return None
 
 
 def owning_run(check_run, workflow_runs) -> Optional[dict]:
@@ -1265,6 +1407,7 @@ def evaluate_verifier(
     head_sha: str,
     head_content_id: Optional[str] = None,
     pr_commit_shas=frozenset(),
+    scope: Optional[VerifierScope] = None,
 ) -> tuple[Optional[Decision], str]:
     """Condition 3, given the first line of the latest counted verifier
     comment ('' if none). Returns (decision-or-None, advisory note);
@@ -1275,6 +1418,15 @@ def evaluate_verifier(
     verifier scope — a present-but-stale verifier verdict HOLDs, and a hold
     is not lifted by a fresh gate wake). The present-but-stale HOLD
     asymmetry is preserved for every case where the ids do not match.
+
+    `scope` (DRE-7165) is `read_verifier_scope`'s answer, and it is read on
+    the stale arm alone: a verdict for an older head that does not carry.
+    In scope at the current head holds for a fresh verify, naming the
+    signal; out of scope proceeds with a note, because the Verifier will
+    decline this head and no fresh verdict would ever come (agent-bureau
+    #3741); unreadable holds, naming the input. The default (None) is
+    today's hold, marked `ask_verifier_scope` so the workflow reads the card
+    and asks again.
     """
     if not line:
         return None, "no verifier verdict (verify out of scope / not run) — not a gate"
@@ -1291,13 +1443,41 @@ def evaluate_verifier(
     if sha != head_sha and not carries_content(
         line, sha, head_content_id, pr_commit_shas
     ):
-        return (
-            Decision(
-                "hold",
-                f"verifier verdict is for {sha} but head is now {head_sha} — "
-                "stale; holding for a fresh verify",
-            ),
-            "",
+        if scope is None:
+            return (
+                Decision(
+                    "hold",
+                    f"verifier verdict is for {sha} but head is now {head_sha} — "
+                    "stale; holding for a fresh verify",
+                    ask_verifier_scope=True,
+                ),
+                "",
+            )
+        if scope.decision is None:
+            return (
+                Decision(
+                    "hold",
+                    f"the gate could not ask whether the verifier gates head "
+                    f"{head_sha} ({scope.unreadable}); its verdict is for {sha} — "
+                    "stale; holding for a fresh verify",
+                ),
+                "",
+            )
+        if scope.decision.in_scope:
+            return (
+                Decision(
+                    "hold",
+                    f"verifier gates head {head_sha} "
+                    f"({_scope_signals(scope.decision)}); its verdict is for "
+                    f"{sha} — stale; holding for a fresh verify",
+                ),
+                "",
+            )
+        buckets = ", ".join(sorted(scope.decision.buckets)) or "none"
+        return None, (
+            f"verifier does not gate head {head_sha} (single-system, no UI "
+            f"signal; buckets: {buckets}); its earlier verdict for {sha} is "
+            "not a requirement"
         )
     token = verdict_token(line, VERIFIER_MARKER)
     if token == "PASS":
@@ -1458,6 +1638,7 @@ def _decide(
     pr_created_at=None,
     proof=None,
     workflow_runs=None,
+    verifier_scope: Optional[VerifierScope] = None,
 ) -> Decision:
     """The whole gate: conditions 0 → D → 1 → 2 → 3 → P → S → F → 4 → W → O,
     first blocker wins.
@@ -1534,7 +1715,13 @@ def _decide(
     which condition 1 reads to call a check run finished that GitHub still
     lists as unfinished. Every decision past condition 1 then carries one
     note per such check, so a merge made on the rule can be traced. The
-    default (None) reproduces the pre-DRE-6570 behavior."""
+    default (None) reproduces the pre-DRE-6570 behavior.
+
+    `verifier_scope` is condition 3's scope record (DRE-7165),
+    `read_verifier_scope`'s answer at the current head, read only when the
+    Verifier's verdict is for an older head and does not carry. A verdict
+    the Verifier no longer gates is ignored, never carried. The default
+    (None) reproduces the pre-DRE-7165 behavior."""
     blocked = evaluate_conflict(merge_state)
     if blocked:
         return blocked
@@ -1576,12 +1763,17 @@ def _decide(
         latest_verdict_comment(comments, qa_login, VERIFIER_MARKER)
     )
     blocked, note = evaluate_verifier(
-        verifier_line, head_sha, head_content_id, pr_commit_shas
+        verifier_line, head_sha, head_content_id, pr_commit_shas,
+        scope=verifier_scope,
     )
     if blocked:
         return _noted(blocked)
     verifier_sha = verdict_sha(verifier_line)
-    if verifier_sha and verifier_sha != head_sha:
+    # Only a verdict that CARRIED is reported as carried: one the Verifier
+    # no longer gates was ignored, not honoured (DRE-7165).
+    if verifier_sha and verifier_sha != head_sha and carries_content(
+        verifier_line, verifier_sha, head_content_id, pr_commit_shas
+    ):
         carried.append(f"verifier@{verifier_sha}")
 
     def _decided(decision: Decision) -> Decision:
@@ -1750,6 +1942,18 @@ def build_parser() -> argparse.ArgumentParser:
                              "record not fully met is a hold, and so is a "
                              "file that cannot be read; on any other branch "
                              "it is not read")
+    # Condition 3's scope record (DRE-7165) — optional; omitting the snapshot
+    # flag reproduces the pre-DRE-7165 behavior for every caller.
+    parser.add_argument("--card", default="",
+                        help="the card the branch names (DRE-N), as the "
+                             "workflow derives it; empty = the branch names "
+                             "no card, so the card gives no scope signal")
+    parser.add_argument("--card-snapshot-file", default=None,
+                        help="the card snapshot `card_snapshot.py take` wrote "
+                             "(DRE-7165). Passed, a verifier verdict for an "
+                             "older head is judged by verify_scope.decide at "
+                             "the current head; a card with no readable "
+                             "snapshot holds")
     return parser
 
 
@@ -1795,6 +1999,23 @@ def build_last_test_run_parser() -> argparse.ArgumentParser:
     parser.add_argument("--review-workflows",
                         default=",".join(DEFAULT_REVIEW_WORKFLOWS),
                         help="the same review paths condition 1 excludes")
+    return parser
+
+
+def build_tip_at_parser() -> argparse.ArgumentParser:
+    """`merge_gate.py tip-at`: `main`'s tip when the last test run began."""
+    parser = argparse.ArgumentParser(
+        prog="merge_gate.py tip-at",
+        description="Print the commit the branch's tip stood at a moment, "
+                    "walked on its first-parent line from the listing's "
+                    "first commit (DRE-6966), as sha=<40 hex>, or sha=none.",
+    )
+    parser.add_argument("--commits-file", required=True,
+                        help="raw REST payload of GET commits?sha=<branch>: "
+                             "one page, or an array of pages in order; a "
+                             "file that cannot be read exits 2 with no line")
+    parser.add_argument("--at", required=True,
+                        help="the moment — the last test run's created_at")
     return parser
 
 
@@ -1893,12 +2114,40 @@ def last_test_run_main(argv) -> int:
     return 0
 
 
+def tip_at_main(argv) -> int:
+    """Exit 0 with `sha=<40 hex>` or `sha=none`. A listing that cannot be
+    read, or a tip that is not a full sha, exits 2 and prints no line: the
+    gate then keeps `{}`, and the decision waits (DRE-6966)."""
+    args = build_tip_at_parser().parse_args(argv)
+    try:
+        with open(args.commits_file) as f:
+            payload = json.load(f)
+    except (OSError, json.JSONDecodeError) as e:
+        _die(f"cannot read the commit listing: {e}")
+    if not isinstance(payload, list):
+        _die("the commit listing is not an array")
+    if payload and all(isinstance(page, list) for page in payload):
+        payload = [c for page in payload for c in page]
+    start = payload[0].get("sha") if payload and isinstance(payload[0], dict) else None
+    tip = tip_at(payload, start, args.at)
+    if tip is None:
+        print("sha=none")
+        return 0
+    # It goes into the compare's URL, so only a full sha passes.
+    if not _HEAD_SHA_RE.match(tip):
+        _die(f"the tip the walk found is not a full sha: {tip!r}")
+    print(f"sha={tip}")
+    return 0
+
+
 def main(argv=None) -> int:
     argv = sys.argv[1:] if argv is None else list(argv)
     if argv[:1] == ["precheck"]:
         return precheck_main(argv[1:])
     if argv[:1] == ["last-test-run"]:
         return last_test_run_main(argv[1:])
+    if argv[:1] == ["tip-at"]:
+        return tip_at_main(argv[1:])
     args = build_parser().parse_args(argv)
 
     if not _HEAD_SHA_RE.match(args.head_sha or ""):
@@ -2030,6 +2279,13 @@ def main(argv=None) -> int:
             proof = {"applies": True, "text": None,
                      "detail": f"cannot read the proof record file: {e}"}
 
+    # DRE-7165: the Verifier's own rule at the current head, over the compare
+    # record read above and the card snapshot — only when one was passed.
+    verifier_scope = None
+    if args.card_snapshot_file is not None:
+        verifier_scope = read_verifier_scope(
+            payload, (args.card or "").strip(), args.card_snapshot_file)
+
     decision = decide(
         args.head_sha, args.qa_login, check_runs, comments, review_suites,
         compare_status, args.head_branch, args.pr_author, pr_commits,
@@ -2037,6 +2293,7 @@ def main(argv=None) -> int:
         unfinished, stack, branch_commits, owners=owners,
         pr_body=pr_body, pr_created_at=args.pr_created_at or None,
         proof=proof, workflow_runs=workflow_runs,
+        verifier_scope=verifier_scope,
     )
     if body_note:
         decision.notes.append(body_note)
@@ -2063,6 +2320,10 @@ def main(argv=None) -> int:
         print("owner_hold=" + json.dumps(
             [{"owners": list(o), "folders": list(f)} for o, f in decision.owner_hold]
         ))
+    # DRE-7165: only on the stale-verifier hold decided with no card snapshot.
+    # The workflow reads the card once and runs the decision again with it.
+    if decision.ask_verifier_scope:
+        print("verifier_scope=ask")
     return 0
 
 

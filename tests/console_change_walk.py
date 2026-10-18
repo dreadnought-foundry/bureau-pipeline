@@ -80,11 +80,12 @@ def regenerate(tree: Path) -> None:
     assert proc.returncode == 0, (proc.stdout, proc.stderr)
 
 
-def save(tree: Path, changes: list[dict], tmp: Path) -> None:
+def save(tree: Path, changes: list[dict], tmp: Path,
+         requested_by: str = "ceo@example.com") -> None:
     """What `model-config-change.yml` does with one Save changes."""
     change_set = tmp / "change-set.json"
     change_set.write_text(json.dumps(
-        {"requested_by": "ceo@example.com", "changes": changes}))
+        {"requested_by": requested_by, "changes": changes}))
     for args in (
         ("scripts/model_config_change.py", "apply", "--changes", str(change_set)),
         ("scripts/sync_model_config.py",),

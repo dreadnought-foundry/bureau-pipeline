@@ -50,6 +50,7 @@ import yaml
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 import step_shell  # noqa: E402 — a moved step's shell, where it now lives (DRE-3488)
+import proof_cause_park  # noqa: E402 — the cause question the step tells a cause file by
 
 WORKFLOWS = ROOT / ".github" / "workflows"
 PROOF_TASK = WORKFLOWS / "proof-task.yml"
@@ -67,11 +68,21 @@ APP_TOKEN_VERSION = "v3.2.0"
 
 AWS_NONE = "proof identity: aws — none, PROOF_ROLE_ARN not provided"
 AWS_ASSUMED = "proof identity: aws — role assumed as proof-"
+AWS_REFUSED = ("proof identity: aws — none, PROOF_ROLE_ARN provided but the "
+               "role could not be assumed")
+
+#: The caller's repository variable that sets the AWS session's length
+#: (DRE-7020). Unset, the input is empty and the pinned action uses its own
+#: 3,600 seconds; the agent steps read the same variable with that fallback.
+SESSION_VAR = "${{ vars.PROOF_ROLE_DURATION_SECONDS }}"
+SESSION_ENV = "PROOF_SESSION_SECONDS"
+SESSION_VALUE = "${{ vars.PROOF_ROLE_DURATION_SECONDS || '3600' }}"
 
 RESULT_STEP = "Report proof result to Linear"
 RETURN_STEP = "Return from Green Light on the CEO's answer"
 NO_RECORD = "🤖 proof run ended with no record"
 PARK_RECEIPT = "🙋 The proof run met a press only the CEO can make, and asks:"
+DECISION_RECEIPT = "🙋 The proof run asks a decision only the CEO can make:"
 RETURN_REASON = "re-run after the CEO's answer"
 
 
@@ -474,6 +485,38 @@ class CallerAwsIdentityTest(unittest.TestCase):
                          with_["role-session-name"])
         self.assertEqual("${{ inputs.aws_region }}", with_["aws-region"])
 
+    def test_the_session_length_is_the_callers_variable_and_nothing_else_moved(self):
+        """DRE-7020: the step gains `role-duration-seconds` read from the
+        caller's variable with no fallback — unset, the input is empty and the
+        pinned action's own 3,600 applies, today's behavior exactly — and
+        every other field of the step is what it was."""
+        step = _step(self.ASSUME)
+        self.assertEqual(
+            f"{AWS_CREDS}@e1253824e5c10ff9df46874f81ed3ec929e19cfd", step["uses"])
+        self.assertEqual("steps.proof_role.outputs.provided == 'true'", step["if"])
+        self.assertIs(True, step["continue-on-error"])
+        self.assertEqual("aws", step["id"])
+        self.assertEqual({
+            "role-to-assume": "${{ secrets.PROOF_ROLE_ARN }}",
+            "role-session-name": "proof-${{ github.event.client_payload.identifier }}",
+            "aws-region": "${{ inputs.aws_region }}",
+            "role-duration-seconds": SESSION_VAR,
+        }, step["with"])
+        self.assertEqual(
+            {"name", "id", "if", "continue-on-error", "uses", "with"}, set(step))
+
+    def test_the_session_length_input_says_what_unset_and_too_long_cost(self):
+        src = PROOF_TASK.read_text().splitlines()
+        at = [i for i, l in enumerate(src)
+              if l.strip() == f"role-duration-seconds: {SESSION_VAR}"]
+        self.assertEqual(1, len(at), "one role-duration-seconds input, as written")
+        start = max(i for i, l in enumerate(src[:at[0]])
+                    if l.strip() == f"- name: {self.ASSUME}")
+        comment = " ".join(l.strip().lstrip("#").strip()
+                           for l in src[start:at[0]] if l.strip().startswith("#"))
+        for phrase in ("3,600", "unset", "maximum", "AWS rows"):
+            self.assertIn(phrase, comment)
+
     def test_it_runs_only_when_the_role_is_provided(self):
         """The secrets context cannot be read in an `if:`, and a job-level
         mirror would put the role in the agent step's env chain. So one step
@@ -498,6 +541,38 @@ class CallerAwsIdentityTest(unittest.TestCase):
         runs = _runs()
         self.assertIn(AWS_NONE, runs)
         self.assertIn(AWS_ASSUMED + "$CARD", runs)
+
+    def test_the_record_step_writes_its_three_lines_character_for_character(self):
+        """DRE-7020 changes the session's length, never the line the record
+        copies: the step writes exactly these three, and no fourth."""
+        run = _step("Record the caller's proof identity")["run"]
+        lines = re.findall(r'^\s*LINE="([^"\n]*)"\s*$', run, re.M)
+        self.assertEqual([AWS_NONE, AWS_ASSUMED + "$CARD", AWS_REFUSED], lines)
+
+
+class ProofSessionLengthTest(unittest.TestCase):
+    """The run learns its AWS session's length from its env (DRE-7020): a
+    number, not a credential — the read token cannot read repository
+    variables on every installation, and a run cannot read its own step
+    summary."""
+
+    def test_every_agent_step_carries_the_length_with_the_one_hour_fallback(self):
+        agents = _agent_steps()
+        self.assertEqual(3, len(agents))
+        for _i, step in agents:
+            self.assertEqual(SESSION_VALUE, (step.get("env") or {}).get(SESSION_ENV),
+                             f"{step['name']} does not carry {SESSION_ENV}")
+
+    def test_no_other_step_carries_it(self):
+        agent_ids = {i for i, _s in _agent_steps()}
+        for i, step in enumerate(_steps()):
+            if i in agent_ids:
+                continue
+            self.assertNotIn(SESSION_ENV, step.get("env") or {}, step.get("name"))
+        self.assertNotIn(SESSION_ENV, _job().get("env") or {})
+        self.assertNotIn(SESSION_ENV, _doc().get("env") or {})
+        self.assertEqual(3, PROOF_TASK.read_text().count(SESSION_ENV),
+                         "the name appears once per agent step and nowhere else")
 
 
 #: `linear_ops.py advance <card> "<to>" "<from>"`, as a run step writes it.
@@ -586,6 +661,24 @@ if not answer:
 print(answer)
 """
 
+#: The one writer of a cause park (DRE-6837), stubbed: it records its argv and
+#: prints its result line last, as the real CLI does, and exits as
+#: `FAKE_PARK_EXIT` says. Its `QUESTION` is the real module's — the step imports
+#: it to tell a cause file from a decision, and an import records nothing.
+_PROOF_CAUSE_PARK_STUB = f"""\
+import json, os, sys
+QUESTION = {proof_cause_park.QUESTION!r}
+if __name__ == "__main__":
+    open(os.environ["CALLS"], "a").write(json.dumps(["proof_cause_park"] + sys.argv[1:]) + "\\n")
+    code = int(os.environ.get("FAKE_PARK_EXIT") or 0)
+    if code == 0:
+        print(f"proof_cause_park: {{sys.argv[2]}} — held, asked")
+        print(f"left {{sys.argv[2]}} in In Review for the operator")
+    else:
+        print("proof_cause_park: refused", file=sys.stderr)
+    sys.exit(code)
+"""
+
 RUN_URL = "https://github.example/acme/widgets/actions/runs/42"
 
 
@@ -598,6 +691,19 @@ Observe the release.
 - [ ] needs the CEO's press: Approve the release in the console
 - [ ] The CEO closes this card after reading the record
 """
+
+
+#: A card description that marks no press.
+NO_PRESS = "- [ ] The page names v3\n- [ ] The report goes out weekly\n"
+
+#: An escalation of cause rows and nothing else: the three lines, its Question
+#: the module's own, and one cause line.
+CAUSE_FILE = (
+    "🔎 Finding: 1 row of the proof record cannot be observed as worded (cause: out-of-reach).\n"
+    f"❓ Question: {proof_cause_park.QUESTION}\n"
+    "💡 Recommendation: Reword it on a new card — the read token is not granted variables.\n"
+    "cause: out-of-reach — “The repo variable PROOF_POOL_SIZE reads 5” — 403 on gh "
+    "variable get\n")
 
 
 class _StepHarness(unittest.TestCase):
@@ -622,8 +728,14 @@ class _StepHarness(unittest.TestCase):
 
     #: Harness-only names, never the step's own env.
     _HARNESS = ("PATH", "CALLS", "FAKE_PR", "FAKE_LANE", "FAKE_ANSWER",
-                "FAKE_REFUSE_HOLD", "FAKE_NOT_ADVANCING", "RUNNER_TEMP",
-                "GITHUB_STEP_SUMMARY")
+                "FAKE_REFUSE_HOLD", "FAKE_NOT_ADVANCING", "FAKE_PARK_EXIT",
+                "RUNNER_TEMP", "GITHUB_STEP_SUMMARY")
+
+    def _install_cause_park(self) -> None:
+        """The stub writer, and the real three lines it is read beside."""
+        scripts = self.tmp / ".bureau-pipeline" / "scripts"
+        (scripts / "proof_cause_park.py").write_text(_PROOF_CAUSE_PARK_STUB)
+        shutil.copy(ROOT / "scripts" / "console_escalation.py", scripts)
 
     def _exec(self, env: dict) -> tuple:
         step = _step(self.STEP)
@@ -650,7 +762,7 @@ class ResultStepTest(_StepHarness):
 
     def _run(self, *, pr: str = "", escalation: str | None = None,
              description: str = DESCRIPTION, refuse_hold: bool = False,
-             not_advancing: bool = False) -> list:
+             not_advancing: bool = False, park_exit: int | None = None) -> list:
         if escalation is not None:
             self.escalation.write_text(escalation)
         env = {
@@ -668,8 +780,14 @@ class ResultStepTest(_StepHarness):
             env["FAKE_REFUSE_HOLD"] = "1"
         if not_advancing:
             env["FAKE_NOT_ADVANCING"] = "1"
+        if park_exit is not None:
+            env["FAKE_PARK_EXIT"] = str(park_exit)
         done, posted, lines = self._exec(env)
         self.assertEqual(0, done.returncode, done.stdout + done.stderr)
+        self.stdout = done.stdout
+        # The writer's calls apart: what the step posted is linear_ops'.
+        self.parks = [c for c in posted if c[0] == "proof_cause_park"]
+        posted = [c for c in posted if c[0] != "proof_cause_park"]
         card_pr = [l for l in lines if l.startswith("card_pr ")]
         self.assertEqual(["card_pr find DRE-77 --branch agent/DRE-77-proof-record"], card_pr)
         for call in posted:
@@ -796,6 +914,69 @@ class ResultStepTest(_StepHarness):
         self.assertEqual(1, len(posted))
         self.assertTrue(posted[0][3].startswith(NO_RECORD), posted[0])
         self.assertIn("could not be read", posted[0][3])
+
+    # --- the escalation sorted by what it names (DRE-6840) -----------------
+
+    def _park_argv(self) -> list:
+        return ["proof_cause_park", "park", "DRE-77", "--escalation-file",
+                str(self.escalation), "--run-url", RUN_URL]
+
+    def _summary(self) -> str:
+        return self.summary.read_text() if self.summary.exists() else ""
+
+    def test_cause_rows_with_an_open_record_go_to_the_one_writer(self):
+        self._install_cause_park()
+        posted = self._run(pr="OPEN\thttps://github.example/acme/widgets/pull/9",
+                           escalation=CAUSE_FILE, description=NO_PRESS)
+        self.assertEqual([self._park_argv()], self.parks)
+        # The pull request's report and its In Review move, and nothing else:
+        # no hold, no question and no Green Light move of the step's own.
+        self.assertEqual(["comment", "advance"], [c[1] for c in posted])
+        self.assertEqual([("In Review", "Hand-work")], self._moves(posted))
+        self.assertFalse(any(c.startswith("🙋") for c in self._comments(posted)))
+        # The writer's own result line closes the run's log, never a lane assumed.
+        self.assertIn("proof result: record pull request, then left DRE-77 in "
+                      "In Review for the operator\n", self.stdout)
+        self.assertNotIn("only the CEO can make", self._summary())
+        self.assertNotIn("only the CEO can make", self.stdout)
+
+    def test_a_file_with_no_press_and_no_cause_line_is_a_decision(self):
+        posted = self._run(escalation="Keep the weekly report on Saturdays, or move it "
+                                      "to Monday?\n", description=NO_PRESS)
+        self.assertEqual(["proof-waiting", "comment", "advance"], [c[1] for c in posted])
+        hold, ask, park = posted
+        self.assertEqual("the CEO's press: Keep the weekly report on Saturdays, or move "
+                         "it to Monday?", hold[4])
+        self.assertTrue(ask[3].startswith(DECISION_RECEIPT), ask[3])
+        self.assertNotIn(PARK_RECEIPT, ask[3])
+        self.assertEqual(("Green Light", "Hand-work,In Review"), tuple(park[3:]))
+        self.assertIn("proof park: decision", self._summary())
+        self.assertNotIn("proof park: press", self._summary())
+
+    def test_a_writer_that_finds_no_cause_row_sends_the_file_to_the_decision(self):
+        self._install_cause_park()
+        posted = self._run(pr="OPEN\thttps://github.example/acme/widgets/pull/9",
+                           escalation=CAUSE_FILE, description=NO_PRESS, park_exit=2)
+        self.assertEqual([self._park_argv()], self.parks)
+        self.assertEqual(["comment", "advance", "proof-waiting", "comment", "advance"],
+                         [c[1] for c in posted])
+        self.assertTrue(posted[3][3].startswith(DECISION_RECEIPT), posted[3][3])
+        self.assertEqual([("In Review", "Hand-work"), ("Green Light", "Hand-work,In Review")],
+                         self._moves(posted))
+
+    def test_a_writer_that_refuses_leaves_a_warning_and_moves_nothing(self):
+        self._install_cause_park()
+        posted = self._run(pr="OPEN\thttps://github.example/acme/widgets/pull/9",
+                           escalation=CAUSE_FILE, description=NO_PRESS, park_exit=1)
+        self.assertEqual([self._park_argv()], self.parks)
+        # Never the press or decision fallback: that would put the operator's
+        # question in the CEO's queue.
+        self.assertEqual(["comment", "advance"], [c[1] for c in posted])
+        self.assertEqual([("In Review", "Hand-work")], self._moves(posted))
+        self.assertIn("::warning::", self.stdout)
+        self.assertIn("proof park: the cause park could not be completed for DRE-77 — the "
+                      "dispatcher's next pass parks the record off its rows", self._summary())
+        self.assertNotIn("only the CEO can make", self._summary())
 
 
 class ReturnStepTest(_StepHarness):

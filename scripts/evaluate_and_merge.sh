@@ -28,6 +28,7 @@ set -e
 #   LINEAR_API_KEY  for the card writes linear_ops.py and code_owner_hold.py
 #                   make.
 # Its pauses, from the env too, each with a default; the tests set them to 0:
+#   READ_RETRY_SECONDS                15, before the one read's one retry (step 0).
 #   MERGE_RETRY_SECONDS               15, before a merge's one retry (step 7).
 #   FIX_LANE_RECHECK_SECONDS          15, between Agent Fix lane re-reads (step 3).
 #   FIX_LANE_RECHECK_CEILING_SECONDS  60, the most those re-reads wait in all.
@@ -38,11 +39,13 @@ set -e
 # In order, it:
 #  0. Reads the pull request ONCE, every field in one `gh pr view`, into
 #     /tmp/pr-view.json. A failed read kills the step, and so does a field a
-#     decision is made on that comes back absent or null.
+#     decision is made on that comes back absent or null. GitHub's own server
+#     error earns one more read first (DRE-7026).
 #  1. Stops at a pull request that is not open, or whose branch is not one of
 #     the pipeline's own: agent/* (card work), repair/* (red-main repair),
-#     dependabot/* (dependency bumps), and the scheduled branch
-#     bot/standards-sync, matched as a literal. The dependabot and bot branches carry no card. The set is
+#     dependabot/* (dependency bumps), the scheduled branch
+#     bot/standards-sync and the onboarding branch bot/onboard, each matched
+#     as a literal. The dependabot and bot branches carry no card. The set is
 #     the one reconcile.PIPELINE_BRANCH_PREFIXES holds. It echoes the
 #     `bureau-card` line when the branch names a card.
 #  2. Gathers the records the decision reads, each from GitHub's own answer.
@@ -70,7 +73,12 @@ set -e
 #     reads the Agent Fix lane once more and runs merge_gate.py over the same
 #     records with the fresh lane, until the answer is anything else or the
 #     ceiling is reached, logging one `fix-lane read <n>:` line per read. The
-#     last answer is the one acted on.
+#     last answer is the one acted on. Before that, a hold on a Verifier verdict
+#     for an older head (`verifier_scope=ask`) gets one second look: the card
+#     is read once with `card_snapshot.py take`, the read the Verifier makes,
+#     and merge_gate.py runs again with it, so it asks the Verifier's own
+#     scope rule at this head. No other wake reads the card, and a failed read
+#     writes no file, which holds and never fails the step.
 #  4. Posts one carry note per content id when a verdict carried, and moves a
 #     card it parked for a code-owner review back to In Review once that
 #     review has landed.
@@ -374,19 +382,55 @@ set -e
 #   last-test-run` over the runs listing already read: the newest
 #   `pull_request` run at a non-review path, so a review run created later on
 #   `edited` never moves it. Its record does not name `main`'s tip, so the tip
-#   at its `created_at` is read (`commits?until=`), then the compare from it
-#   to `main`, handed over as --since-run-file. A head with no test run is
+#   at its `created_at` is read, then the compare from it to `main`, handed
+#   over as --since-run-file. A head with no test run is
 #   `{"no_test_run": true}`, which merges as today; a failed read is `{}`,
 #   which waits. The key off or absent reads nothing more. On `rule=new-tests`,
 #   read by its key because `prefix=` is empty there, the same pinned update
 #   runs and the note is `Merge gate: refreshed for new tests onto <tip>`,
 #   the receipt that holds the rule to one refresh per pull request.
+#
+# DRE-6966 (2026-10-11). bureau-pipeline #1032 merged without the refresh the
+#   rule owed it. The tip was read as the newest-dated commit `main` held
+#   before the run began, and #1029, merged during the run, had a branch
+#   commit written before it: that commit was read as the tip, and #1029's
+#   own change to scripts/reconcile.py dropped out of the comparison. The tip
+#   is now `merge_gate.py tip-at` over `main`'s commit listing, walked on its
+#   first-parent line, where every commit is a merge into `main` or a direct
+#   push. `sha=none` keeps `{}`, which waits.
+#
+# DRE-7026 (2026-10-12). The sandbox gate woke on the critic's APPROVE on
+#   bureau-harness #4440, green, and its one read of the pull request answered
+#   DRE-6242's server error. The step died before deciding anything, and
+#   main's harness waited 1200s for the merge. That text on the one read now
+#   earns ONE more read, the same read, after READ_RETRY_SECONDS (15 by
+#   default). GitHub's error still goes to the log. Any other failure, and a
+#   second failure of any kind, kills the step as before.
+# DRE-7209 (2026-10-13). bot/onboard, the onboarding process's routing pull
+#   requests here and in agent-bureau, merges here card-less on the same
+#   terms, as a second literal — never `bot/*`.
+# DRE-7165 (2026-10-13). On agent-bureau #3741 the Verifier passed 4a26218,
+#   the pull request moved to 6b0dbca, and the Verifier's run there declined
+#   it as single-system with no UI signal and posted nothing. The gate called
+#   the earlier verdict stale and held for a fresh verify that could never
+#   come. Now a stale-verifier hold prints `verifier_scope=ask`: the card is
+#   read once, and merge_gate.py asks verify_scope.decide with the compare
+#   record's files and that card. Out of scope merges with a note; in scope,
+#   or an input it could not read, holds and says which.
 
 set -euo pipefail
 
 # ONE read of the pull request (Stage 2 #19). No fallback: a failed read kills
-# the step, as each of the eight reads it replaces did.
-gh pr view "$PR" --json headRefName,state,mergeStateStatus,isDraft,headRefOid,baseRefName,body,createdAt,author,url,files > /tmp/pr-view.json
+# the step, as each of the eight reads it replaces did. GitHub's own server
+# error is not an answer about the pull request: one more read, the same read,
+# and any second failure kills the step (DRE-7026).
+if ! gh pr view "$PR" --json headRefName,state,mergeStateStatus,isDraft,headRefOid,baseRefName,body,createdAt,author,url,files > /tmp/pr-view.json 2>/tmp/pr-view-error.txt; then
+  cat /tmp/pr-view-error.txt >&2
+  grep -qF 'Something went wrong while executing your query' /tmp/pr-view-error.txt || exit 1
+  echo "GitHub answered the read with its own server error — reading once more"
+  sleep "${READ_RETRY_SECONDS:-15}"
+  gh pr view "$PR" --json headRefName,state,mergeStateStatus,isDraft,headRefOid,baseRefName,body,createdAt,author,url,files > /tmp/pr-view.json
+fi
 # A field a decision is made on: absent or null kills the step, never an empty value (DRE-3467).
 pr_field() {
   jq -r --arg f "$1" 'if .[$f] == null then empty else .[$f] | tostring end' /tmp/pr-view.json | grep . \
@@ -396,7 +440,7 @@ BRANCH=$(pr_field headRefName)
 STATE=$(pr_field state)
 [ "$STATE" != "OPEN" ] && { echo "PR #$PR is $STATE — nothing to do"; exit 0; }
 # The pipeline's own branches, as literals (DRE-2426 keeps this set and reconcile's one).
-case "$BRANCH" in agent/*|repair/*|dependabot/*|bot/standards-sync) ;; *) echo "not an agent branch — skip"; exit 0;; esac
+case "$BRANCH" in agent/*|repair/*|dependabot/*|bot/standards-sync|bot/onboard) ;; *) echo "not an agent branch — skip"; exit 0;; esac
 CARD=$(printf '%s' "$BRANCH" | grep -oiE 'DRE-[0-9]+' | head -1 | tr '[:lower:]' '[:upper:]' || true)
 # The ECHOED line only: this job's name is a check-run name (DRE-4407).
 if [ -n "$CARD" ]; then echo "bureau-card: $CARD"; fi
@@ -470,6 +514,8 @@ python3 .bureau-pipeline/scripts/proof_record.py gather \
   --repo "$REPO_FULL" --pr-view-file /tmp/pr-view.json \
   --head-sha "$SHA" --out /tmp/proof-record.json
 
+# Empty until the scope second look below fills it (DRE-7165).
+SCOPE_ARGS=()
 gate_decision() {
   python3 .bureau-pipeline/scripts/merge_gate.py \
     --head-sha "$SHA" \
@@ -490,9 +536,26 @@ gate_decision() {
     --owners-file /tmp/owners.json \
     --pr-body-file /tmp/pr-body.txt \
     --pr-created-at "$CREATED_AT" \
-    --proof-record-file /tmp/proof-record.json
+    --proof-record-file /tmp/proof-record.json \
+    ${SCOPE_ARGS[@]+"${SCOPE_ARGS[@]}"}
 }
 gate_decision | tee /tmp/gate-decision
+
+# The Verifier scope second look (DRE-7165): only after the stale-verifier
+# hold (`verifier_scope=ask`), the card is read ONCE, the read the Verifier
+# makes, and the decision runs again with it. A failed read writes no file,
+# and the gate holds on it; it never fails the step.
+if grep -qx 'verifier_scope=ask' /tmp/gate-decision; then
+  rm -f /tmp/card-snapshot.json
+  if [ -n "$CARD" ]; then
+    python3 .bureau-pipeline/scripts/card_snapshot.py take "$CARD" /tmp/card-snapshot.json \
+      || echo "no snapshot of $CARD — the gate cannot ask the Verifier's rule and holds"
+  fi
+  SCOPE_ARGS=(--card "$CARD" --card-snapshot-file /tmp/card-snapshot.json)
+  gate_decision > /tmp/gate-decision
+  echo "verifier scope: the stale verdict judged by the Verifier's rule at $SHA"
+  cat /tmp/gate-decision
+fi
 
 # Condition F's second look (DRE-6577): only a wait whose reason cites
 # DRE-4486, every wording stranded_fix.lane_refusal emits, and only the lane
@@ -656,9 +719,21 @@ if [ "$BEHIND" -gt 0 ] && [ -f .github/bureau/merge-recheck.json ]; then
     if [ "$ANCHOR" = "none" ]; then
       echo '{"no_test_run": true}' > /tmp/since-run.json
     elif [ -n "$ANCHOR" ]; then
-      TIP_THEN=$(gh api "repos/$REPO_FULL/commits?sha=$BASE&until=$ANCHOR&per_page=1" 2>/dev/null \
-        | python3 -c 'import json, re, sys; c = json.load(sys.stdin); s = c[0].get("sha") if isinstance(c, list) and c and isinstance(c[0], dict) else None; print(s if isinstance(s, str) and re.fullmatch("[0-9a-f]{40}", s) else "")' 2>/dev/null || true)
-      if [ -n "$TIP_THEN" ]; then
+      # $BASE's tip at the anchor, walked on its first-parent line (DRE-6966):
+      # 100 commits a page, a next page only while a full one has not reached
+      # the anchor, at most three. `sha=none` or a failed read leaves `{}`.
+      TIP_THEN=""
+      echo '[]' > /tmp/main-commits.json
+      for PAGE in 1 2 3; do
+        gh api "repos/$REPO_FULL/commits?sha=$BASE&per_page=100&page=$PAGE" > /tmp/main-commits-page.json 2>/dev/null || break
+        python3 -c 'import json, sys; page = json.load(open(sys.argv[2])); assert isinstance(page, list); json.dump(json.load(open(sys.argv[1])) + [page], open(sys.argv[1], "w"))' \
+          /tmp/main-commits.json /tmp/main-commits-page.json 2>/dev/null || break
+        TIP_THEN=$(python3 .bureau-pipeline/scripts/merge_gate.py tip-at --commits-file /tmp/main-commits.json --at "$ANCHOR" 2>/dev/null \
+          | grep -m1 '^sha=' | cut -d= -f2- || true)
+        [ "$TIP_THEN" = "none" ] || break
+        python3 -c 'import json, sys; sys.exit(0 if len(json.load(open(sys.argv[1]))) >= 100 else 1)' /tmp/main-commits-page.json 2>/dev/null || break
+      done
+      if [ -n "$TIP_THEN" ] && [ "$TIP_THEN" != "none" ]; then
         gh api "repos/$REPO_FULL/compare/$TIP_THEN...$BASE" > /tmp/since-run.json 2>/dev/null \
           || echo '{}' > /tmp/since-run.json
       fi

@@ -393,6 +393,33 @@ jobs:
              || steps.pool.outputs.n == '4' && secrets.BUREAU_APP_PRIVATE_KEY_4
              || secrets.BUREAU_APP_PRIVATE_KEY }}
 
+      # THE GITHUB CALLS BEFORE POINT (DRE-6916, epic DRE-6911): agent-task.yml's
+      # step, copied. One point on each login's hourly meter here, after the
+      # mints, and one at the end of the job (`emit`, beside the working log);
+      # the console attributes the climb between them. Every login this job
+      # WORKS with, each installation once: the worker — `reader` is the same
+      # installation and is not listed again — and the boot bot. The worker
+      # first, because when the pool picks slot 1 the two are one installation
+      # and the script keeps the first one named. The pool probe tokens are
+      # never listed. Each token is a NAMED env var, never an argument, and
+      # every `${{ }}` is in env:. continue-on-error: a point not taken is a
+      # log line, never a red build. Pinned by
+      # tests/test_github_calls_wiring_agents.py.
+      - name: Take the GitHub calls before point
+        continue-on-error: true
+        env:
+          GH_CALLS_WORKER_APP: ${{ steps.worker.outputs.app-slug }}
+          GH_CALLS_WORKER_INSTALLATION: ${{ steps.worker.outputs.installation-id }}
+          GH_CALLS_WORKER_TOKEN: ${{ steps.worker.outputs.token }}
+          GH_CALLS_BOT_APP: ${{ steps.app.outputs.app-slug }}
+          GH_CALLS_BOT_INSTALLATION: ${{ steps.app.outputs.installation-id }}
+          GH_CALLS_BOT_TOKEN: ${{ steps.app.outputs.token }}
+        run: |
+          python3 .bureau-pipeline/scripts/github_calls_reading.py before \
+            --out "${RUNNER_TEMP:-/tmp}/github-calls-before.json" \
+            --login "$GH_CALLS_WORKER_APP:$GH_CALLS_WORKER_INSTALLATION:GH_CALLS_WORKER_TOKEN" \
+            --login "$GH_CALLS_BOT_APP:$GH_CALLS_BOT_INSTALLATION:GH_CALLS_BOT_TOKEN"
+
       # DRE-3451: the expensive half of the comment gate. The job `if` above
       # admitted a User comment on a pull request; this decides whether that
       # comment is an OPERATOR DECISION the loop may act on, and it decides it
@@ -1018,6 +1045,25 @@ jobs:
             > .bureau-pipeline/agent-context.md
           echo "assembled $(wc -l < .bureau-pipeline/agent-context.md) lines of fix context"
 
+      # The model home (DRE-6939) is a variable on
+      # dreadnought-foundry/bureau-pipeline, which a run's boot token in another
+      # organization cannot read. A token for the bureau App's installation
+      # there, for bureau-pipeline alone and with no permission subset — the
+      # pinned action declares no variables input (DRE-7230) — handed only to
+      # the steps below whose process reads the home
+      # (DRE-6940, held by scripts/check_model_home_scope.py). A refused mint
+      # leaves it empty and the selector on the defaults in the code — never a
+      # failed job.
+      - name: Mint the model-home read token
+        id: model_home
+        if: steps.pr.outputs.go == 'true' && steps.unfixable.outputs.escalate != 'true'
+        continue-on-error: true
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: ${{ secrets.BUREAU_APP_ID }}
+          private-key: ${{ secrets.BUREAU_APP_PRIVATE_KEY }}
+          owner: dreadnought-foundry
+          repositories: bureau-pipeline
       # Model selection for the fixer (DRE-2316). The id used to be pinned as
       # an output of the Resolve-PR step above, where no config edit could
       # reach it; it now comes from config/models.yaml (agent `fixer`, the
@@ -1054,6 +1100,7 @@ jobs:
         id: model
         if: steps.pr.outputs.go == 'true' && steps.unfixable.outputs.escalate != 'true'
         env:
+          BUREAU_MODEL_HOME_TOKEN: ${{ steps.model_home.outputs.token }}
           # The probe authenticates with the same CLAUDE token the fixer uses.
           ANTHROPIC_API_KEY: ${{ vars.CLAUDE_AUTH_MODE != 'subscription' && secrets.ANTHROPIC_API_KEY || '' }}
           CLAUDE_CODE_OAUTH_TOKEN: ${{ vars.CLAUDE_AUTH_MODE == 'subscription' && secrets.CLAUDE_CODE_OAUTH_TOKEN || '' }}
@@ -1547,7 +1594,20 @@ jobs:
                ordinary commit carries the push.
             5. Commit with message "fix(${{ steps.pr.outputs.card }}): address review
                findings (attempt ${{ steps.pr.outputs.attempt }})" and push to the
-               SAME branch. Do NOT open a new PR. Do NOT force-push. The PR
+               SAME branch. When that fix changes code, it is TWO commits,
+               test first (DRE-3009): every code commit needs a test commit
+               since the previous code commit, so first commit the test
+               files alone as "test(${{ steps.pr.outputs.card }}): RED for
+               review findings (attempt ${{ steps.pr.outputs.attempt }})",
+               then the code in the fix commit. A commit carrying both is not
+               its own test, and the TDD commit-order check has no
+               add-a-commit path to green, so get the order right before the
+               push. A fix whose code change is purely a refactor (or
+               configuration, or a whole generated file) may instead end the
+               fix commit's message with the trailer line
+               `TDD-Exempt: refactor` (or `config`, `generated`) — only when
+               it is true, because the critic reads the claim against the
+               diff. Do NOT open a new PR. Do NOT force-push. The PR
                description is already final at this point (step 4b) — this
                push is what the next reviewer reads it off.
                For the What's new exception in step 4b the commit is empty,
@@ -1632,7 +1692,7 @@ jobs:
           CARD: ${{ steps.pr.outputs.card }}
           CLAUDE_AUTH_MODE: ${{ vars.CLAUDE_AUTH_MODE }}
         run: |
-          EXEC_FILE="${CLAUDE_EXECUTION_FILE:-/home/runner/work/_temp/claude-execution-output.json}"
+          EXEC_FILE="${CLAUDE_EXECUTION_FILE:-${RUNNER_TEMP:-/tmp}/claude-execution-output.json}"
           python3 .bureau-pipeline/scripts/usage_reading.py emit \
             --execution-file "$EXEC_FILE" \
             --out "${RUNNER_TEMP:-/tmp}/claude-usage-reading.json" \
@@ -1682,7 +1742,7 @@ jobs:
           CARD: ${{ steps.pr.outputs.card }}
           CLAUDE_AUTH_MODE: ${{ vars.CLAUDE_AUTH_MODE }}
         run: |
-          EXEC_FILE="${CLAUDE_EXECUTION_FILE:-/home/runner/work/_temp/claude-execution-output.json}"
+          EXEC_FILE="${CLAUDE_EXECUTION_FILE:-${RUNNER_TEMP:-/tmp}/claude-execution-output.json}"
           python3 .bureau-pipeline/scripts/death_receipt.py emit \
             --execution-file "$EXEC_FILE" \
             --out "${RUNNER_TEMP:-/tmp}/death-receipt.json" \
@@ -1701,6 +1761,76 @@ jobs:
           path: ${{ steps.death.outputs.path }}
           if-no-files-found: warn
           retention-days: 90
+
+      # THE GITHUB CALLS READING'S OWN MINTS (DRE-6916). The reading below
+      # runs after `Fix`, the one step here whose duration is not bounded in
+      # seconds, so it may not spend a token minted before it — DRE-4320's
+      # rule, pinned by tests/test_agent_fix_token_remint.py. This file's
+      # other re-mints (`Mint fresh push token`, `Mint fresh report token`)
+      # sit after `Keep the run's working log`, too late for a step that sits
+      # immediately before it, so the reading mints its own: the BOOT App's
+      # pair again, for the bot's meter, and the selected pool slot again,
+      # for the worker's — each token reads its own installation's meter, so
+      # neither stands in for the other. Gated exactly as the Report's
+      # re-mint is, `always()` included: a `Fix` that failed is a run whose
+      # spend is still worth reading. continue-on-error: a mint that fails
+      # leaves the run as it was, and the reading falls back to the job-start
+      # token behind a `||` and reads an expired one as unread, never as 0.
+      - name: Mint fresh GitHub calls token (bot)
+        id: callsbot
+        if: always() && steps.pr.outputs.go == 'true' && steps.unfixable.outputs.escalate != 'true'
+        continue-on-error: true
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: ${{ secrets.BUREAU_APP_ID }}
+          private-key: ${{ secrets.BUREAU_APP_PRIVATE_KEY }}
+
+      - name: Mint fresh GitHub calls token (selected pool app)
+        id: callsworker
+        if: always() && steps.pr.outputs.go == 'true' && steps.unfixable.outputs.escalate != 'true'
+        continue-on-error: true
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: >-
+            ${{ steps.pool.outputs.n == '2' && secrets.BUREAU_APP_ID_2
+             || steps.pool.outputs.n == '3' && secrets.BUREAU_APP_ID_3
+             || steps.pool.outputs.n == '4' && secrets.BUREAU_APP_ID_4
+             || secrets.BUREAU_APP_ID }}
+          private-key: >-
+            ${{ steps.pool.outputs.n == '2' && secrets.BUREAU_APP_PRIVATE_KEY_2
+             || steps.pool.outputs.n == '3' && secrets.BUREAU_APP_PRIVATE_KEY_3
+             || steps.pool.outputs.n == '4' && secrets.BUREAU_APP_PRIVATE_KEY_4
+             || secrets.BUREAU_APP_PRIVATE_KEY }}
+
+      # THE GITHUB CALLS READING (DRE-6916): the after point on the same
+      # logins as `Take the GitHub calls before point`, written as one document
+      # and put in the agent-log store over the run's OIDC login. Each login
+      # is read on the mint just above for its own installation, falling back
+      # to the job's own mint when that one did not run. `always()` +
+      # `continue-on-error`, and the script exits 0 on every path: keeping a
+      # reading never changes the job's conclusion. `escalate != 'true'` like
+      # every step past the unfixable gate. `--workflow` names this reusable,
+      # because inside a called workflow `$GITHUB_WORKFLOW_REF` names the
+      # caller's stub.
+      - name: Keep the run's GitHub calls reading
+        id: github_calls
+        if: always() && steps.unfixable.outputs.escalate != 'true'
+        continue-on-error: true
+        env:
+          GH_CALLS_WORKER_APP: ${{ steps.worker.outputs.app-slug }}
+          GH_CALLS_WORKER_INSTALLATION: ${{ steps.worker.outputs.installation-id }}
+          GH_CALLS_WORKER_TOKEN: ${{ steps.callsworker.outputs.token || steps.worker.outputs.token }}
+          GH_CALLS_BOT_APP: ${{ steps.app.outputs.app-slug }}
+          GH_CALLS_BOT_INSTALLATION: ${{ steps.app.outputs.installation-id }}
+          GH_CALLS_BOT_TOKEN: ${{ steps.callsbot.outputs.token || steps.app.outputs.token }}
+        run: |
+          python3 .bureau-pipeline/scripts/github_calls_reading.py emit \
+            --before "${RUNNER_TEMP:-/tmp}/github-calls-before.json" \
+            --out "${RUNNER_TEMP:-/tmp}/github-calls-reading.json" \
+            --login "$GH_CALLS_WORKER_APP:$GH_CALLS_WORKER_INSTALLATION:GH_CALLS_WORKER_TOKEN" \
+            --login "$GH_CALLS_BOT_APP:$GH_CALLS_BOT_INSTALLATION:GH_CALLS_BOT_TOKEN" \
+            --workflow agent-fix.yml \
+            --github-output "$GITHUB_OUTPUT"
 
       # THE RUN'S WORKING LOG (DRE-4269, epic DRE-4267). The fix agent's
       # transcript, scrubbed and put straight into our own store over OIDC —

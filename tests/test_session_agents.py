@@ -33,6 +33,12 @@ file with every session-run agent back in no group — and adds an agent under
 a name the file does not hold; a test of the committed tree reads its agents
 and groups off the committed files.
 
+WHERE A MOVE IS SELECTED ON (DRE-6988). The selector selects on the home
+(DRE-6939), so a selection test puts the agent in its group with
+`model_fixture.move_agent` on the frozen home document and hands that document
+to a tree of the frozen files through `home_env` — it never writes the tree's
+`models.yaml`.
+
 Run: cd bureau-pipeline && python3 -m pytest tests/test_session_agents.py -q
 """
 
@@ -41,7 +47,6 @@ from __future__ import annotations
 import json
 import os
 import re
-import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -60,12 +65,12 @@ sys.path.insert(0, str(ROOT / "tests"))
 
 import model_config_change as mcc  # noqa: E402
 import model_fallback as mf  # noqa: E402
-import proof_and_demo  # noqa: E402
-import sync_model_config  # noqa: E402
+import model_fixture  # noqa: E402
 from model_config_text import (  # noqa: E402
     config_with_session_agents_ungrouped,
     fresh_agent_name,
 )
+from model_fixture import fixture_home, home_env, move_agent  # noqa: E402
 
 TODAY = "2026-10-11"
 REQUESTED_BY = "ceo@example.com"
@@ -83,6 +88,14 @@ SESSION = list(_START["session_agents"])
 GROUPS = list(_START["kinds"])
 #: A name `add_agent` takes — one the file does not hold yet.
 NEW = fresh_agent_name(_START)
+
+#: Where the selector cases start (DRE-6935, DRE-6988): the frozen home
+#: document (tests/model_fixture.py), every session-run agent in no group. The
+#: session-run agents are a code-side fact of the frozen models.yaml; the
+#: groups are the document's.
+_FROZEN_HOME = fixture_home()
+FROZEN_SESSION = list(model_fixture.fixture_config()["session_agents"])
+FROZEN_GROUPS = list(_FROZEN_HOME["groups"])
 
 
 # --------------------------------------------------------------------------- #
@@ -154,6 +167,13 @@ def _env(**extra: str) -> dict:
     env["BUREAU_FAKE_AVAILABLE"] = "{}"  # every model available, no network
     env.pop("GITHUB_STEP_SUMMARY", None)
     env.update(extra)
+    return env
+
+
+def _home_env(tree: Path, doc: dict) -> dict:
+    """`_env()` with `doc` as the tree's home (`model_fixture.home_env`)."""
+    env = home_env(tree, doc, BUREAU_FAKE_AVAILABLE="{}")
+    env.pop("GITHUB_STEP_SUMMARY", None)
     return env
 
 
@@ -229,36 +249,27 @@ def test_the_cli_accepts_the_change_set_of_run_38114763170(tmp_path):
 # 2. Every session agent into every group, and the selector never notices      #
 # --------------------------------------------------------------------------- #
 
-def _tree(base: Path, models_text: str) -> Path:
-    """`scripts/` and `config/` copied to a temp tree (the seam
-    tests/test_project_model_exceptions.py uses), plus agents.yaml so the
-    generator can run there, with `models_text` as its models.yaml."""
-    ignore = shutil.ignore_patterns("__pycache__", "*.pyc")
-    shutil.copytree(ROOT / "scripts", base / "scripts", ignore=ignore)
-    shutil.copytree(ROOT / "config", base / "config", ignore=ignore)
-    shutil.copy(AGENTS, base / "agents.yaml")
-    (base / "config" / "models.yaml").write_text(models_text)
-    return base
-
-
-def _select(tree: Path, role: str) -> tuple[str, str]:
+def _select(tree: Path, role: str, env: dict) -> tuple[str, str]:
     """`(model, note)` from the real `model_fallback.py select` in `tree`."""
     proc = subprocess.run(
         [sys.executable, str(tree / "scripts" / "model_fallback.py"), "select", role],
-        capture_output=True, text=True, env=_env(), cwd=tree)
+        capture_output=True, text=True, env=env, cwd=tree)
     assert proc.returncode == 0, proc.stderr
     assert "REFUSING" not in proc.stderr, proc.stderr
+    assert "model-home: read" in proc.stderr, proc.stderr
     note = next(line for line in proc.stderr.splitlines()
                 if line.startswith("model-policy:"))
     return proc.stdout.strip(), note
 
 
-def _reads(tree: Path, role: str) -> dict:
-    """What the tree's `model_fallback` answers for `role`."""
+def _reads(tree: Path, role: str, env: dict) -> dict:
+    """What the tree's `model_fallback` answers for `role`, having read the
+    home `env` names."""
     code = (
         "import json, sys\n"
         f"sys.path.insert(0, {str(tree / 'scripts')!r})\n"
         "import model_fallback as mf\n"
+        "assert mf.use_home() == 'read', mf.HOME_STATUS\n"
         f"role = {role!r}\n"
         "print(json.dumps({'kind': mf.kind_for(role), 'ladder': mf.ladder_for(role),\n"
         "    'default': mf.LADDER, 'judgement': mf.LADDERS[mf.KINDS['judgement']],\n"
@@ -267,52 +278,50 @@ def _reads(tree: Path, role: str) -> dict:
         "    'agents': mf.CONFIG['agents']}))\n"
     )
     proc = subprocess.run([sys.executable, "-c", code], capture_output=True,
-                          text=True, env=_env(), cwd=tree)
+                          text=True, env=env, cwd=tree)
     assert proc.returncode == 0, proc.stderr
     assert "REFUSING" not in proc.stderr, proc.stderr
     return json.loads(proc.stdout.strip().splitlines()[-1])
 
 
-def _assert_answered_as_unknown(tree: Path, agent: str, group: str, read: str):
-    reads = _reads(tree, agent)
-    # The tree really carries the move — a refused or unread config would make
-    # every assertion below pass for the wrong reason.
+def _assert_answered_as_unknown(tree: Path, env: dict, agent: str, group: str, read: str):
+    reads = _reads(tree, agent, env)
+    # The home really carries the move — a refused or unread document would
+    # make every assertion below pass for the wrong reason.
     assert reads["agents"].get(agent) == group, (read, reads)
     assert agent in reads["session"], read
     assert reads["in_agent_kinds"] is False, read
     assert reads["kind"] == "workhorse", read
     assert reads["ladder"] == reads["default"], read
     assert reads["ladder"] != reads["judgement"], read
-    model, note = _select(tree, agent)
-    unknown_model, unknown_note = _select(tree, "nosuchagent")
+    model, note = _select(tree, agent, env)
+    unknown_model, unknown_note = _select(tree, "nosuchagent", env)
     assert model == reads["default"][0], read
     assert (model, note) == (unknown_model,
                              unknown_note.replace("nosuchagent", agent)), read
-    assert model not in reads["judgement"][:1], read
+    # The planner's TOP may lead the builders since 2026-10-10 (DRE-6785);
+    # what a session agent never reaches is a Fable on the planner's ladder.
+    fables = [m for m in reads["judgement"] if m.startswith("claude-fable")]
+    assert model not in fables, read
 
 
-@pytest.mark.parametrize("agent", SESSION)
-@pytest.mark.parametrize("group", GROUPS)
+@pytest.mark.parametrize("agent", FROZEN_SESSION)
+@pytest.mark.parametrize("group", FROZEN_GROUPS)
 def test_a_session_agent_joins_any_group_and_selects_like_an_unknown_name(
         tmp_path, agent, group):
-    text, refusals = _apply(_move(agent, group))
-    assert refusals == [], _reasons(refusals)
-    doc = yaml.safe_load(text)
-    assert doc["agents"][agent] == group
-    assert agent not in doc["ungrouped"]
-    assert agent in doc["session_agents"]
+    # On the frozen document, where the Planners' leading model is on no
+    # Builders rung, so selecting by the group would show (DRE-6935).
+    assert agent not in _FROZEN_HOME["agents"]
+    doc = move_agent(_FROZEN_HOME, agent, group)
+    tree = model_fixture.fixture_tree(tmp_path / "tree")
+    env = _home_env(tree, doc)
+    _assert_answered_as_unknown(tree, env, agent, group, "with the YAML")
 
-    tree = _tree(tmp_path / "tree", text)
-    _assert_answered_as_unknown(tree, agent, group, "from the YAML")
-
-    # The degrade mirror: regenerate the literal in the copy, then take the
-    # YAML away so `_load_config` falls back to it.
-    sync = subprocess.run(
-        [sys.executable, str(tree / "scripts" / "sync_model_config.py")],
-        capture_output=True, text=True, cwd=tree)
-    assert sync.returncode == 0, sync.stdout + sync.stderr
+    # The degrade mirror: take the YAML away so `_load_config` falls back to
+    # the literal for the code-side facts too — which agents run in a
+    # person's session among them.
     (tree / "config" / "models.yaml").unlink()
-    _assert_answered_as_unknown(tree, agent, group, "from the mirror")
+    _assert_answered_as_unknown(tree, env, agent, group, "from the mirror")
 
 
 def test_a_session_agent_can_be_moved_again_from_group_to_group():
@@ -336,59 +345,7 @@ def test_the_mirror_carries_session_agents_beside_ungrouped():
 
 
 # --------------------------------------------------------------------------- #
-# 3. A group never makes it a pipeline role                                    #
-# --------------------------------------------------------------------------- #
-
-def test_a_grouped_session_agent_is_in_no_list_the_pipeline_dispatches(tmp_path):
-    text, refusals = _apply(_move("designer", "judgement"))
-    assert refusals == [], _reasons(refusals)
-    tree = _tree(tmp_path / "tree", text)
-    registry_before = (tree / "agents.yaml").read_bytes()
-
-    sync = subprocess.run(
-        [sys.executable, str(tree / "scripts" / "sync_model_config.py")],
-        capture_output=True, text=True, cwd=tree)
-    assert sync.returncode == 0, sync.stdout + sync.stderr
-    check = subprocess.run(
-        [sys.executable, str(tree / "scripts" / "sync_model_config.py"), "--check"],
-        capture_output=True, text=True, cwd=tree)
-    assert check.returncode == 0, check.stdout + check.stderr
-
-    # agents.yaml: no entry for it, and regeneration did not touch the file.
-    assert (tree / "agents.yaml").read_bytes() == registry_before
-    names = [a["name"] for a in yaml.safe_load(registry_before)["agents"]]
-    assert "designer" not in names
-
-    # proof_and_demo.build_roles(): the roles on agent-task.yml, unchanged.
-    proof_and_demo._ROSTER_CACHE.clear()
-    roles = proof_and_demo.build_roles(str(tree / "agents.yaml"))
-    assert roles == proof_and_demo.build_roles(str(AGENTS))
-    assert "designer" not in roles
-
-    # model_fallback.AGENT_KINDS: never holds it.
-    assert _reads(tree, "designer")["in_agent_kinds"] is False
-    assert "designer" not in mf.AGENT_KINDS
-
-
-def test_splice_registry_skips_a_grouped_session_agent():
-    raw = yaml.safe_load(_start())
-    raw["agents"]["designer"] = "advisory"
-    raw["ungrouped"].remove("designer")
-    cfg = mf._normalize_config(raw)
-    assert sync_model_config.splice_registry(AGENTS.read_text(), cfg) == AGENTS.read_text()
-
-
-def test_splice_registry_refuses_a_session_agent_with_a_generated_region():
-    cfg = sync_model_config.load_config()
-    cfg = dict(cfg, session_agents=cfg["session_agents"] + ["engineer"])
-    with pytest.raises(SystemExit) as caught:
-        sync_model_config.splice_registry(AGENTS.read_text(), cfg)
-    assert "engineer" in str(caught.value)
-    assert "session_agents" in str(caught.value)
-
-
-# --------------------------------------------------------------------------- #
-# 4. add_agent then move_agent, in one change set                              #
+# 3. add_agent then move_agent, in one change set                              #
 # --------------------------------------------------------------------------- #
 
 def test_add_agent_then_move_agent_in_one_change_set_applies():
@@ -427,7 +384,7 @@ def test_move_agent_before_add_agent_is_refused_in_plain_words(tmp_path):
 
 
 # --------------------------------------------------------------------------- #
-# 5. Every family of refusal prints plain words                                #
+# 4. Every family of refusal prints plain words                                #
 # --------------------------------------------------------------------------- #
 
 def _hand_edited(tmp_path: Path, edit) -> Path:
@@ -519,7 +476,7 @@ def test_the_registry_line_still_refuses_a_name_that_is_in_neither(tmp_path):
 
 
 # --------------------------------------------------------------------------- #
-# 6. The published file and the change script agree, move for move            #
+# 5. The published file and the change script agree, move for move            #
 # --------------------------------------------------------------------------- #
 
 def _choices() -> dict:

@@ -46,11 +46,13 @@ CONTRACT = os.path.join(
 # lanes. Written out ONCE, here, as the thing the tests below compare against —
 # every other list in the pipeline is derived from the contract file.
 # DRE-5320 made it twelve: `Hand-work`, the person-work lane after Todo.
+# DRE-6740 made it thirteen: `Queued`, the queue that replaces Backlog.
+# DRE-6753 made it twelve again: Backlog is retiring, no longer live.
 LIVE_LANES = (
     "Intake",
     "Planning",
     "Green Light",
-    "Backlog",
+    "Queued",
     "Todo",
     "Hand-work",
     "In Progress",
@@ -117,7 +119,9 @@ class TestTheFileExists:
         # `hand_work_migration.py` joined it on DRE-6227: the migration returns
         # a code card with a critic pass from Hand-work here, carrying a fresh
         # FLEET verdict, for the sweep to promote (DRE-6230).
-        assert lane_contract.lane_writers("Backlog") == (
+        # The list moved to Queued with the lane (DRE-6740); the lane it
+        # replaced is retiring and permits no writer (DRE-6753).
+        assert lane_contract.lane_writers("Queued") == (
             "plan.yml", "mid_epic.py", "reconcile.py", "dead_run.py",
             "linear_ops.py", "agent-task.yml", "hygiene.py", "hand_work_migration.py",
         )
@@ -132,8 +136,12 @@ class TestTheFileExists:
         # are filed (tests/test_returned_child_split.py). `hygiene.py` joined
         # it on DRE-5368, for one class only: a childless card under a
         # Canceled or Duplicate parent (tests/test_hygiene.py).
+        # `model-adoption.yml` joined it on DRE-6943, for one class only: the
+        # record card of a daily adoption run that wrote nothing into the home
+        # (tests/test_model_adoption_actions.py).
         assert lane_contract.lane_writers("Canceled") == (
             "operator", "reconcile.py", "groomer.py", "plan.yml", "hygiene.py",
+            "model-adoption.yml",
         )
 
     def test_every_lanes_permitted_writers_are_defined_in_the_glossary(self):
@@ -164,8 +172,12 @@ class TestLaneCleanup:
         # DRE-2818. The board half (agent-bureau's config/linear-workspace.json)
         # is done — Linear no longer has either state — so the entries were the
         # last copy of two lanes that do not exist. Keeping them is drift, and
-        # the harness said so by rule id on every trunk commit.
-        assert lane_contract.lanes(status="retiring") == ()
+        # the harness said so by rule id on every trunk commit. The one
+        # retiring entry left is the queue's old name (DRE-6753).
+        retiring = lane_contract.lane_names(status="retiring")
+        for name in RETIRED_LANES:
+            assert name not in retiring
+        assert retiring == ("Backlog",)
 
     def test_the_contract_file_spells_neither_name_anywhere(self):
         # Not just the entries. The rationale prose named them too, and a grep
@@ -259,3 +271,94 @@ class TestLoaderRefusesToGuess:
         broken.write_text(json.dumps(doc), encoding="utf-8")
         with pytest.raises(lane_contract.ContractError):
             lane_contract.load(str(broken))
+
+
+class TestTheQueueLanes:
+    """DRE-6741: the switch the Backlog → Queued cutover turns on. A READER
+    tests membership in `QUEUE_LANES`; a WRITER writes `QUEUE_LANE`. The first
+    is read off the alias, the second off the planning exit, so the readers
+    read both names from the day the alias lands and no writer moved until
+    DRE-6742 moved the planning exit."""
+
+    def fixture(self, **planning_exit):
+        doc = json.loads(open(CONTRACT, encoding="utf-8").read())
+        doc["planning_exit"].update(planning_exit)
+        return doc
+
+    def test_backlog_is_an_alias_for_queued(self):
+        assert lane_contract.aliases()["Backlog"] == "Queued"
+
+    def test_the_alias_line_carries_its_shim_marker(self):
+        lines = [
+            line for line in open(CONTRACT, encoding="utf-8").read().splitlines()
+            if '"from": "Backlog"' in line
+        ]
+        assert len(lines) == 1
+        assert '"to": "Queued"' in lines[0]
+        assert "lane-rename-shim DRE-4125" in lines[0]
+
+    def test_the_planning_exit_lands_in_queued(self):
+        assert lane_contract.planning_exit() == ("Green Light", "Queued")
+
+    def test_the_new_name_is_live_and_the_old_one_retiring(self):
+        # DRE-6753: the old name stays on the board and in the alias, so a
+        # reader still resolves it, but it is no longer a lane anybody writes.
+        assert lane_contract.lane("Queued")["status"] == "live"
+        assert lane_contract.lane("Backlog", status="retiring")["replaced_by"] == "Queued"
+        assert "Backlog" not in lane_contract.lane_names()
+
+    def test_queue_lanes_reads_queued_then_every_name_aliased_to_it(self):
+        assert lane_contract.queue_lanes() == ("Queued", "Backlog")
+        assert lane_contract.QUEUE_LANES == ("Queued", "Backlog")
+
+    def test_queue_lanes_is_derived_from_the_alias(self):
+        doc = self.fixture()
+        doc["aliases"]["entries"] = [
+            entry for entry in doc["aliases"]["entries"] if entry["to"] != "Queued"
+        ]
+        assert lane_contract.queue_lanes(doc) == ("Queued",)
+
+    def test_queue_lanes_ignores_an_alias_for_another_lane(self):
+        assert "Plan " + "Review" not in lane_contract.QUEUE_LANES
+
+    def test_queue_lane_is_the_planning_exit(self):
+        assert lane_contract.queue_lane() == lane_contract.planning_exit()[1]
+        assert lane_contract.QUEUE_LANE == "Queued"
+
+    def test_queue_lane_follows_the_planning_exit_when_it_moves(self):
+        assert lane_contract.queue_lane(self.fixture(to="Backlog")) == "Backlog"
+
+    def test_the_queue_lane_is_always_one_of_the_queue_lanes(self):
+        assert lane_contract.QUEUE_LANE in lane_contract.QUEUE_LANES
+        doc = self.fixture(to="Queued")
+        assert lane_contract.queue_lane(doc) in lane_contract.queue_lanes(doc)
+
+    def test_todo_stays_live_while_it_names_what_replaces_it(self):
+        # DRE-7105: a forward declaration, the shape Backlog's entry carried
+        # before it retired. The retirement card sets the status later.
+        todo = lane_contract.lane("Todo")
+        assert todo["status"] == "live"
+        assert todo["replaced_by"] == lane_contract.DISPATCH_LANE
+        assert "Todo" in lane_contract.START_LANES
+
+    def test_the_offline_check_passes(self):
+        report = lane_contract.check(vocabulary=lane_contract.pipeline_vocabulary())
+        board_rules = {
+            f.clause_id for f in report.failures() if f.clause_id.startswith("board.")
+        }
+        assert {f.clause_id for f in report.failures()} == board_rules
+
+
+class TestTheContractScriptsNameNoRetiringLane:
+    """DRE-6741: `_scan_python` reads every string constant, docstrings
+    included, so the two scripts that carry the contract say Queued."""
+
+    @pytest.mark.parametrize("script", ["lane_contract.py", "lane_scope.py"])
+    def test_no_string_constant_names_backlog(self, script):
+        path = os.path.join(os.path.dirname(__file__), "..", "scripts", script)
+        assert lane_contract._scan_python(path, ["Backlog"]) == set()
+
+    def test_the_scan_would_see_a_docstring(self, tmp_path):
+        probe = tmp_path / "probe.py"
+        probe.write_text('"""Cards wait in Backlog."""\n', encoding="utf-8")
+        assert lane_contract._scan_python(str(probe), ["Backlog"]) == {"Backlog"}

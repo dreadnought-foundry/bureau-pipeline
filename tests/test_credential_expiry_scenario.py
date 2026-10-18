@@ -185,6 +185,15 @@ class Fixture:
                        check=True)
         subprocess.run([self.real_git, "init", "-q", "-b", "main", str(self.work)],
                        check=True)
+        # Every commit, fetch and push otherwise leaves a detached `git
+        # maintenance run --auto` behind, still writing under `.git` after the
+        # command returns — and racing the temporary directory's cleanup into
+        # `Directory not empty` on a loaded runner (DRE-6873).
+        for repo in (self.bare, self.work):
+            subprocess.run([self.real_git, "-C", str(repo), "config",
+                            "maintenance.auto", "false"], check=True)
+        subprocess.run([self.real_git, "-C", str(self.bare), "config",
+                        "receive.autogc", "false"], check=True)
         self._git("config", "user.email", "bot@example.com")
         self._git("config", "user.name", "agent-bureau-bot")
         (self.work / "README.md").write_text("base\n", encoding="utf-8")

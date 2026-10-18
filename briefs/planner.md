@@ -25,7 +25,7 @@ question — *how is this work structured, and what gate does it owe*.
 
 | Shape | What it produces | Destination | Who acts there |
 | -- | -- | -- | -- |
-| **one-off** | One card, one pull request. No plan artifact, no green light — it leaves carrying its routing verdict, and that verdict IS its approval | `Backlog` | the sweep (`reconcile.py`) promotes it |
+| **one-off** | One card, one pull request. No plan artifact, no green light — it leaves carrying its routing verdict, and that verdict IS its approval | `Queued` | the sweep (`reconcile.py`) promotes it |
 | **epic** | A set of children that ship separately, plus ONE plan artifact the CEO approves before any of them run | `Green Light` | the CEO |
 | **roll-up** | A plan too big for one epic. It is split into child epics under this card — each a native sub-issue titled [EPIC], planned and green-lit on its own — and this card is the parent that rolls them up: never approved for building, never built, closed when every child is Done. A plan cut at an observation-gated seam is one too: two child epics, the second blocked on the first | `Planning` | `plan.yml` hands it to you to split |
 
@@ -170,7 +170,7 @@ brief. The two writes you make today are these:
 
 | Command | What it creates | Lands in | Why |
 | -- | -- | -- | -- |
-| **subissue** | a child of the epic you are planning | `Backlog` | its approval is its epic's, so it owes no classification of its own — and `reconcile.promote_ready` reads `backlog_children()`, so a child created anywhere else is a child nothing ever promotes (DRE-2858) |
+| **subissue** | a child of the epic you are planning | `Queued` | its approval is its epic's, so it owes no classification of its own — and `reconcile.promote_ready` reads `backlog_children()`, so a child created anywhere else is a child nothing ever promotes (DRE-2858) |
 | **oneoff** | a parentless card the plan concludes stands alone | `Planning` | it has been through nobody's planning run — no shape, no verdict — and the sweep refuses a parentless card without one, so `Planning` is where the classification it is missing gets made (DRE-2858) |
 
 A brief that tells a planner its output lands somewhere the write layer does not
@@ -403,7 +403,7 @@ the plan afterwards needs to know.
 
 ## The lanes, and the verdict you owe every card (DRE-2724 / DRE-2824)
 
-The board is `Intake` → `Planning` → `Green Light` → `Backlog` → `Todo` →
+The board is `Intake` → `Planning` → `Green Light` → `Queued` → `Todo` →
 `In Progress` → `In Review` → `Done`, with `Triage` off to the side. Three
 things you must not get from memory:
 
@@ -441,10 +441,10 @@ it. Read the file, not this table, when the two ever disagree.
 | **FLEET** | Buildable unattended in one PR | `Todo` | the build run — the ONLY verdict that is dispatched |
 | **WORKBENCH** | A person works it against live system state — never produced by the acceptance criteria (DRE-6227) | `Hand-work`, no mark | the operator, at an interactive session — kept for historical demo cards and the pipeline's own record cards; you never route a card here |
 | **OPERATOR** | Not code — a deploy, a migration run, a secret | `Hand-work`, marked `operator-step` + `no-code` | the operator |
-| **PARKED** | Well-formed and deliberately not to be built | `Backlog` | the planning-exit writer lands it; nobody picks it up |
+| **PARKED** | Well-formed and deliberately not to be built | `Queued` | the planning-exit writer lands it; nobody picks it up |
 | **NEEDS WORK** | Not buildable as written | `Planning` | you, with the specific missing thing named |
 
-**PARKED is landed by the process, not by a person (DRE-2824).** `Backlog` is
+**PARKED is landed by the process, not by a person (DRE-2824).** `Queued` is
 process-controlled and no human writes it, so the actor on a PARKED card is the
 planning-exit writer that stamps the verdict and lands the card there — not
 somebody waiting to pick it up, because for PARKED nobody is. Reviving a PARKED
@@ -576,11 +576,27 @@ The record path on the `**Files:**` line is where the proof run writes — it is
 already the card's footprint, and the run opens it as a pull request on
 `agent/DRE-<n>-proof-record`. Live facts name the scripted identity they are
 read as ("as the proof-reader identity"), because that is the identity the run
-holds. A step only the CEO's login can make is written as its own criterion
-opening `needs the CEO's press:` and naming the press, so the run can name it
-back; everything else in the card is written so a run with read access can
-observe it. The card closes on the approved merge of the record (DRE-5919, the
-hygiene agent), and the closing line the check reads stays verbatim.
+holds. A press is the CEO's only when it is a business decision of his — what it
+changes is a choice about the business he has not made: which model a real
+project runs on, whether a real proposal is approved, whether a real card is
+removed from a proposal. Such a step is written as its own criterion opening
+`needs the CEO's press:` and naming the press, so the run can name it back and
+park the card once in `Green Light`. A press the operator can make is the
+operator's row and never his: a press on the sandbox project, a press from the
+operator's signed-in session under the operator's standing permission of
+2026-10-07, or the recording of a removal or decision the CEO has already made.
+Write it as an event row, the criterion's own words opening
+`waiting for the operator's press:` and naming the press, so the run records
+`Not observed. waiting for the operator's press: <the press>` and the dispatcher
+holds the card for the operator under a `🔬 proof-waiting` hold naming the press
+(DRE-6814); the operator makes the press and records `🔬 proof-observed`, and the
+next pass re-runs the proof to observe the result. No escalation is written for
+it, so it never reaches `Green Light`. DRE-6638 (one project's Builders set to
+Sonnet 5.5, on the sandbox project) and DRE-6663 (Not doing pressed on one groom
+card) reached the CEO's list on 2026-10-10 worded as his press, and both were
+the operator's. Everything else in the card is written so a run with read access
+can observe it. The card closes on the approved merge of the record (DRE-5919,
+the hygiene agent), and the closing line the check reads stays verbatim.
 
 **A log read the card prescribes is a quoted phrase (DRE-6778).** A CloudWatch
 Logs filter pattern for a literal phrase is written as a quoted phrase,
@@ -632,7 +648,7 @@ Five conditions, all checked on the cards you create:
 **You never stamp this card yourself.** The check writes the
 `🧭 routing-verdict` comment it computed onto it — the same comment
 every other verdict uses — so the promotion gate reads it and leaves the card
-in Backlog until a person picks it up. One writer, the one that already knows
+in Queued until a person picks it up. One writer, the one that already knows
 the answer: before DRE-3039 the check computed the verdict, printed it and
 stamped nothing, and the sweep promoted the card to an engineer agent the
 moment its siblings reached Done.

@@ -7,7 +7,7 @@ for a human. Both are right on their own, and until this module nothing joined
 them — so on 2026-09-01 they contradicted each other inside a minute:
 
     16:36  DRE-2937's second turn-cap death spends the `turn-exhaustion-requeue`
-           cap. The card is parked in Backlog with `needs-human`: "this card
+           cap. The card is parked in the queue with `needs-human`: "this card
            does not fit inside one run; split it".
     16:37  the medic re-runs the FIRST dead run as attempt 2. The card returns
            to In Progress and a third ~$16 build starts on a card the pipeline
@@ -18,7 +18,8 @@ The park says stop; the retry says go; the retry won. Two rules close it, and
 this module is where the medic asks them:
 
   1. **THE CARD IS PARKED.** A card carrying `needs-human`, or sitting in
-     Backlog with a `held-for-human` receipt NEWER than the run, is a card a
+     the queue lane — `Queued`, or the lane it replaces (`QUEUE_LANES`,
+     DRE-6745) — with a `held-for-human` receipt NEWER than the run, is a card a
      person now owns. Nothing may dispatch at it — that is already the rule the
      reconcile sweep and `agent-fix.yml` both obey, and the medic was the one
      door left open.
@@ -127,12 +128,17 @@ CLI:
         --branch <head-ref> --default-branch <name>
     python3 medic_retry.py failure-card-body --report <file> --workflow <name> \
         --branch <head-ref> --head-sha <sha> --run-url <url>
+    python3 medic_retry.py notice-workflow-file --path <workflow file path> \
+        --repo <slug>
 
 `diagnosis-target` prints `kind`, `target` and `title` for the diagnosis job
 and leaves the target card's facts in the snapshot file the agent reads (see
 `diagnosis_target`). `repair-card` prints the open red-main repair card for the
 run, or nothing, and exits 1 when the search did not answer; `failure-card-body`
-prints a new failure card's description (DRE-6521, `failure_card_body`).
+prints the diagnosis the medic raises, criteria appended, which is also its
+fallback card's description (DRE-6521, `failure_card_body`);
+`notice-workflow-file` prints the workflow part of the medic's notice key
+(DRE-7453, `notice_key`).
 
 `decide` prints four `key=value` lines for `$GITHUB_OUTPUT` — `retry`, `rule`,
 `card`, `detail` — one line each, and exits 0 whatever it decides. `post`
@@ -154,6 +160,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import check_agent_result  # noqa: E402
 import dead_run  # noqa: E402
+from lane_contract import QUEUE_LANES  # noqa: E402 — the park lane, under either name (DRE-6745)
 import execution_result  # noqa: E402
 import hold  # noqa: E402
 import out_of_memory  # noqa: E402
@@ -237,7 +244,7 @@ _CHANGE_REASON = re.compile(r"^(?:::error::|##\[error\])(?P<reason>change \d+ of
 # both caps reach ("🚨 held-for-human (dead-run-requeue cap reached)" and
 # "… (turn-exhaustion-requeue cap reached)"). Deliberately NOT the unlanded
 # receipt's wording: `park_unlanded_comment()` says the park did not land, and
-# a card that is not in Backlog and carries no label is not parked.
+# a card that is not in the queue lane and carries no label is not parked.
 # tests/test_medic_retry_honours_the_park.py pins this against a real
 # `dead_run.decide()` hold, so a reword there fails at the diff.
 HELD_RECEIPT_MARK = "held-for-human ("
@@ -602,7 +609,7 @@ _WHY_NOT = {
         "the second run in a row on this card that started up and then went "
         "quiet. Two in a row is not a passing blip, so no third build was "
         "started and nothing more was charged to this card. Nothing is wrong "
-        "with the work — the agent never got as far as reading the code — "
+        "with the work — nothing was reviewed and nothing was rejected — "
         "and nothing else is coming until someone looks at why the runs are "
         "going silent."
     ),
@@ -688,9 +695,13 @@ def park_reason(
          live stamp decides, the label with no live stamp or a reason the
          registry does not know is held, and the sentence names the reason;
       2. the park LANE plus the hold receipt that put the card there, newer
-         than the run. The receipt is required because Backlog is not by itself
-         a hold — it is also where a blocked card and a PARKED routing verdict
-         sit, and neither of those is this run's business;
+         than the run. The lane is the queue under either of its names,
+         `QUEUE_LANES` (DRE-6745): the park writes `QUEUE_LANE`, which moves to
+         `Queued` with the planning exit, and a card parked before that move
+         still sits under the old name. The receipt is required because the
+         queue is not by itself a hold — it is also where a blocked card and a
+         PARKED routing verdict sit, and neither of those is this run's
+         business;
       3. Planning plus the replan receipt that sent the card there, newer
          than the run (DRE-4366) — or the dead-run cap's hand-off to the
          planner, `DEAD_SPLIT_RECEIPT_MARK` (DRE-6178). Required for the same
@@ -726,7 +737,8 @@ def park_reason(
             f"before implementation green, so the card owes a split, not a "
             f"rerun"
         )
-    if (state or "").strip().lower() != dead_run.PARK_STATE.lower():
+    lane = (state or "").strip()
+    if lane.lower() not in {name.lower() for name in QUEUE_LANES}:
         return ""
     held = _newest_after(receipts, HELD_RECEIPT_MARK, run_started_at)
     if not held:
@@ -734,7 +746,7 @@ def park_reason(
     when = (held.get("created_at") or "").strip()
     at = f" at {when}" if when else ""
     return (
-        f"it was moved to {dead_run.PARK_STATE}{at} by the pipeline's own "
+        f"it was moved to {lane}{at} by the pipeline's own "
         f"hold, after this run started"
     )
 
@@ -760,9 +772,20 @@ def repeat_stall(stall, receipt_bodies, *, run_id: str, attempt: str) -> str:
     )
     if not earlier:
         return ""
+    # What was measured, and nothing more (DRE-6995): "after it started up"
+    # only when nothing arrived after `system/init`, the time it worked when
+    # the stall carries it, and neither when the log predates the measure.
+    streamed = stall.streamed_seconds
+    if streamed is None:
+        quiet = f"emitted nothing for {stall.silence_seconds} seconds"
+    elif streamed > 0:
+        quiet = (f"had been working for {streamed / 60.0:.1f} minutes and "
+                 f"then emitted nothing for {stall.silence_seconds} seconds")
+    else:
+        quiet = (f"emitted nothing for {stall.silence_seconds} seconds after "
+                 f"it started up")
     return (
-        f"this run went silent too: “{stall.step}” emitted nothing for "
-        f"{stall.silence_seconds} seconds after it started up, and this card "
+        f"this run went silent too: “{stall.step}” {quiet}, and this card "
         f"already carries {len(earlier)} stall record(s) from an earlier run"
     )
 
@@ -920,9 +943,18 @@ def card_facts(identifier: str, *, detail: bool = False) -> dict:
 
 # Where a diagnosis lands, as `diagnosis_target` answers it:
 TARGET_CARD = "card"  # the head branch names a card: comment on it
-TARGET_FAILURE_CARD = "failure-card"  # an open "Pipeline failure: <wf>" card exists
-TARGET_NEW = "new"  # the search answered: none yet, so create one
-TARGET_UNKNOWN = "unknown"  # the search did not answer: ask again before creating
+TARGET_REPAIR_CARD = "repair-card"  # the red-main repair card is open: comment on it
+TARGET_NOTICE = "notice"  # no card: raise the medic's console alert (DRE-7453)
+TARGET_UNKNOWN = "unknown"  # the repair search did not answer: ask again first
+
+#: The medic's notice key is `medic:<repo>:<workflow file>` (DRE-7453, the
+#: epic's contract). medic.yml writes the `medic:` and the colons itself, so
+#: `notice_writers.py report` reads the key off the step; this module makes the
+#: workflow part and `notice_key` the whole, which the tests hold equal.
+NOTICE_PREFIX = "medic"
+#: The contract's key: `^[A-Za-z0-9_.:-]{1,120}$`.
+NOTICE_KEY_LIMIT = 120
+_NOT_IN_A_KEY = re.compile(r"[^A-Za-z0-9_.-]")
 
 
 def failure_card_title(workflow) -> str:
@@ -930,6 +962,28 @@ def failure_card_title(workflow) -> str:
     it crosses a `$GITHUB_OUTPUT` boundary and the run name is agent-influenced
     text."""
     return "Pipeline failure: " + " ".join(str(workflow or "").split())
+
+
+def notice_workflow_file(path, repo: str = "") -> str:
+    """The workflow part of the medic's notice key: the base name of the failed
+    run's workflow file (`.github/workflows/agent-task.yml` → `agent-task.yml`),
+    every character outside `[A-Za-z0-9_.-]` replaced by `_`.
+
+    The FILE, not the run's display name: the console's Record keys a
+    workflow's runs by its file, and the closer monitor (DRE-7459) finds the
+    passing run that clears the alert by it. Cut so that the whole key,
+    `medic:<repo>:<this>`, fits the contract's 120 characters — a key the
+    client refuses would raise nothing and file no fallback card either.
+    """
+    name = str(path or "").rstrip("/").rsplit("/", 1)[-1]
+    part = _NOT_IN_A_KEY.sub("_", name) or "unknown"
+    room = NOTICE_KEY_LIMIT - len(f"{NOTICE_PREFIX}:{repo}:")
+    return part[:max(room, 1)]
+
+
+def notice_key(repo: str, workflow_path) -> str:
+    """`medic:<repo>:<workflow file>` — the key medic.yml raises under."""
+    return f"{NOTICE_PREFIX}:{repo}:{notice_workflow_file(workflow_path, repo)}"
 
 
 def repair_card_title(branch: str, workflow: str, head_sha: str,
@@ -969,21 +1023,26 @@ def diagnosis_target(branch: str, workflow: str, snapshot_path: str = "", *,
 
     Before Stage 2 fix #23 the diagnosis agent held the fleet's Linear key and
     found its card itself, with whatever queries it chose. Everything it needed
-    is knowable before it starts: the head branch's card, or the open failure
-    card for this workflow (`linear_ops.find_open`, by title and open-ness, so
-    every lane), or none yet. One read for a branch card, two for a failure
-    card found by title, one when there is none.
+    is knowable before it starts: the head branch's card, or the red-main
+    repair card open for this run, or no card at all.
 
-    On the default branch the red-main repair card comes first (DRE-6521): an
-    open one is the target, as `card`, and the diagnosis is a comment there.
-    That costs one more read, and only on the default branch.
+    On the default branch the red-main repair card is looked for (DRE-6521):
+    an open one is the target, as `repair-card`, and the diagnosis is a
+    comment there. That costs one read, and only on the default branch.
 
-    A search that FAILED is `unknown`, never `new`: `new` creates a card, and
-    a search that did not answer is not a search that found nothing. A card
-    that could not be read still names its target; the snapshot says why it
-    carries no history. Never raises — no answer here must not cost the
-    diagnosis, and the delivery step resolves the target itself when this one
-    could not.
+    No card is `notice` (DRE-7453): the delivery step raises the medic's
+    console alert, `medic:<repo>:<workflow file>`. There is no search for an
+    open "Pipeline failure: <workflow>" card any more — a second failure while
+    the alert is open is a raise of the same key, which the console answers
+    `repeat`, so the duplicate suppression lives there. `failure_title` is
+    still carried: it is the title of the card the client files when the
+    console cannot be reached.
+
+    A repair search that FAILED is `unknown`, never `notice`: the delivery
+    step asks again before it raises, because a raise beside an open repair
+    card is the duplicate DRE-6521 removed. A card that could not be read
+    still names its target; the snapshot says why it carries no history.
+    Never raises — no answer here must not cost the diagnosis.
     """
     title = failure_card_title(workflow)
     card = card_from_branch(branch)
@@ -991,14 +1050,9 @@ def diagnosis_target(branch: str, workflow: str, snapshot_path: str = "", *,
     if card:
         kind, target = TARGET_CARD, card
     else:
-        kind, target = TARGET_NEW, ""
-        searches = (
-            (repair_card_title(branch, workflow, head_sha, default_branch), TARGET_CARD),
-            (title, TARGET_FAILURE_CARD),
-        )
-        for searched, answer in searches:
-            if not searched:
-                continue
+        kind, target = TARGET_NOTICE, ""
+        searched = repair_card_title(branch, workflow, head_sha, default_branch)
+        if searched:
             try:
                 import linear_ops  # local: only the Linear seam needs it
 
@@ -1007,11 +1061,10 @@ def diagnosis_target(branch: str, workflow: str, snapshot_path: str = "", *,
                 print(f"::warning::medic diagnosis: could not search for "
                       f"'{searched}' ({e}) — the delivery step will search "
                       f"again.", file=sys.stderr)
-                kind, target = TARGET_UNKNOWN, ""
-                break
-            if found:
-                kind, target = answer, found
-                break
+                kind = TARGET_UNKNOWN
+            else:
+                if found:
+                    kind, target = TARGET_REPAIR_CARD, found
     snapshot.update(kind=kind, target=target)
     if target:
         try:
@@ -1041,8 +1094,11 @@ def _one_line(text) -> str:
 
 def failure_card_body(report: str, *, workflow: str, branch: str,
                       head_sha: str, run_url: str) -> str:
-    """The description of a failure card the medic creates: the agent's report,
+    """The diagnosis the medic raises when no card is open: the agent's report,
     byte for byte, then an acceptance-criteria section this script writes.
+    It is also the description of the fallback card the notice client files
+    when the console cannot take the raise (DRE-7453), so that card is the
+    one the medic filed before.
 
     DRE-6521. `linear_ops.py create` lands the card in Planning as new work
     owing a classification, and on 2026-10-09 the planning exit refused
@@ -1276,6 +1332,11 @@ def main(argv=None) -> int:
     body.add_argument("--head-sha", default="")
     body.add_argument("--run-url", default="")
 
+    # DRE-7453: the workflow part of the medic's notice key.
+    wf_file = sub.add_parser("notice-workflow-file")
+    wf_file.add_argument("--path", default="")
+    wf_file.add_argument("--repo", default="")
+
     note = sub.add_parser("post")
     note.add_argument("--card", required=True)
     note.add_argument("--rule", required=True)
@@ -1313,6 +1374,9 @@ def main(argv=None) -> int:
         sys.stdout.write(failure_card_body(
             report, workflow=args.workflow, branch=args.branch,
             head_sha=args.head_sha, run_url=args.run_url))
+        return 0
+    if args.command == "notice-workflow-file":
+        print(notice_workflow_file(args.path, args.repo))
         return 0
     if args.command == "post":
         decision = Decision(DECLINE, args.rule, args.detail)

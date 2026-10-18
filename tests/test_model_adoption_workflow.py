@@ -11,8 +11,10 @@ schedule that makes the three rules happen without him:
   * `ignore` — a line in the summary table and nothing else;
   * `ask`    — ONE question card per candidate, for the CEO's queue;
   * `adopt`  — the FIRST candidate only, one in flight at a time: a trial,
-               then (passed) a record card, the edit, a branch and an ordinary
-               pull request, or (failed) ONE `Model trial failed:` card;
+               then (passed) ONE write of the model home under the adoption's
+               own name and a record card (DRE-6943 — no branch, no pull
+               request), or (failed) ONE `model_trial:<candidate>` console
+               alert, its `Model trial failed:` card the fallback (DRE-7456);
   * a `degraded` trial, or a pinned Claude Code that cannot run the candidate
     at full strength, opens DRE-5121's pin-raise pull request instead.
 
@@ -54,18 +56,34 @@ NAME = "Model adoption"
 CRON = "17 7 * * *"
 TRIAL_USES = "./.github/workflows/model-trial.yml"
 
-# Every write the workflow may make, and the only ones. `ignore` has none.
-CARD_WRITES = ("open-question-card", "open-record-card", "linear_ops.py create")
+# Every write the workflow may make, and the only ones. `ignore` has none. A
+# failed trial raises a console alert, not a card (DRE-7456), and a passed one
+# resolves it — both through the notice client.
+CARD_WRITES = ("open-question-card", "open-record-card", "pipeline_notice.py raise",
+               "pipeline_notice.py resolve")
 GITHUB_WRITES = ("git push", "gh pr create")
 
-# The adoption, in the order the card fixes (after the trial job).
+# The adoption, in the order DRE-6943 fixes (after the trial job): the home is
+# written, then the record card says what the write did.
 ADOPT_ORDER = (
-    "model_adoption_actions.py open-record-card",
     "model_adoption_actions.py apply",
-    "python3 scripts/sync_model_config.py\n",
-    "python3 scripts/sync_model_config.py --check",
-    "git push",
-    "gh pr create",
+    "model_adoption_actions.py open-record-card",
+)
+
+# The three scripts whose every step holds the model-home read token — one
+# rule for the file (DRE-6943), named with or without `.py`, so a heredoc
+# that imports one is held to it too.
+HOME_SCRIPTS = re.compile(r"\b(model_adoption_actions|model_adoption|claude_code_pin)\b")
+HOME_TOKEN = "${{ steps.model_home.outputs.token }}"
+WRITE_TOKEN = "${{ steps.model_home_write.outputs.token }}"
+# The steps that built the adoption's pull request, gone with it.
+PR_STEPS = (
+    "Render the adoption pull request",
+    "Create the adoption branch off origin/main, or reuse it",
+    "Regenerate the derived model regions",
+    "Run the model tests (informational)",
+    "Commit and push the adoption branch",
+    "Open the adoption pull request",
 )
 
 
@@ -289,8 +307,13 @@ def _decision(candidate: str, rule: str, reason: str = "evidence") -> dict:
     }
 
 
-def _pick(tmp_path: Path, decisions: list[dict]):
+HOME_READ = {"state": "read", "written_at": "2026-10-11T18:03:12Z",
+             "line": "model-home: read — written 2026-10-11T18:03:12Z by console"}
+
+
+def _pick(tmp_path: Path, decisions: list[dict], home: dict | None = None):
     (tmp_path / "decisions.json").write_text(json.dumps(decisions))
+    (tmp_path / "home-read.json").write_text(json.dumps(home or HOME_READ))
     return _run_step(tmp_path, _step_by_id(_job("classify"), "pick"))
 
 
@@ -306,6 +329,7 @@ def test_a_day_with_no_candidate_hands_nothing_on(tmp_path):
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert out["candidate"] == ""
     assert out["asks"] == "0"
+    assert out["written_at"] == HOME_READ["written_at"]
     assert "No candidate today" in summary
     _, route, _ = _route(tmp_path, CANDIDATE=out["candidate"])
     assert route["route"] == "", "no candidate must route to no trial"
@@ -315,7 +339,7 @@ def test_an_ignore_only_day_is_a_summary_line_and_nothing_else(tmp_path):
     proc, out, summary = _pick(tmp_path, [
         _decision("old-haiku-3", "ignore", "superseded by what we run")])
     assert proc.returncode == 0, proc.stdout + proc.stderr
-    assert out == {"candidate": "", "asks": "0"}
+    assert out == {"candidate": "", "asks": "0", "written_at": HOME_READ["written_at"]}
     assert "| `old-haiku-3` | ignore | superseded by what we run |" in summary
     assert not list(tmp_path.glob("ask-*.json"))
     assert not (tmp_path / "decision.json").exists()
@@ -355,8 +379,34 @@ def test_only_the_first_adopt_decision_is_acted_on(tmp_path):
 
 def test_an_unreadable_classification_fails_the_run(tmp_path):
     (tmp_path / "decisions.json").write_text("not json")
+    (tmp_path / "home-read.json").write_text(json.dumps(HOME_READ))
     proc, _, _ = _run_step(tmp_path, _step_by_id(_job("classify"), "pick"))
     assert proc.returncode != 0
+
+
+@pytest.mark.parametrize("state, line", [
+    ("unreadable", "model-home: unreadable — the GitHub API answered HTTP 403 for "
+                   "BUREAU_MODEL_CHOICES; running on the defaults in the code"),
+    ("not set", "model-home: not set — running on the defaults in the code"),
+])
+def test_a_home_that_was_not_read_stops_green_with_its_line(tmp_path, state, line):
+    """An adoption is never decided against the defaults in the code: the run
+    classifies nothing, says the home's line in its summary, and stays green."""
+    proc, out, summary = _pick(tmp_path, [], {"state": state, "written_at": None,
+                                              "line": line})
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert out == {"candidate": "", "asks": "0", "written_at": ""}
+    assert line in summary
+    assert "No candidate today" not in summary
+    _, route, _ = _route(tmp_path, CANDIDATE=out["candidate"])
+    assert route["route"] == ""
+
+
+def test_the_classify_step_records_the_home_it_read():
+    step = next(s for s in _steps(_job("classify"))
+                if "model_adoption.py classify" in (s.get("run") or ""))
+    assert '--home-out "$RUNNER_TEMP/home-read.json"' in step["run"]
+    assert _job("classify")["outputs"]["written_at"] == "${{ steps.pick.outputs.written_at }}"
 
 
 def test_the_route_trials_a_supported_or_unknown_candidate(tmp_path):
@@ -446,16 +496,15 @@ def test_ask_opens_one_question_card_per_candidate():
 
 def test_the_workflow_writes_only_the_cards_the_three_rules_name():
     """`ignore` has no card write of any kind: the only Linear writes in the
-    file are the question card (ask), the record card (adopt, passed) and the
-    trial-failure card (adopt, failed)."""
+    file are the question card (ask) and the record card (adopt, passed). A
+    failed trial is a console alert (DRE-7456), whose card is the notice
+    client's fallback and never this file's."""
     runs = _run_steps()
     writes = re.findall(r"open-question-card|open-record-card|linear_ops\.py \w[\w-]*",
                         runs)
-    assert sorted(set(writes)) == sorted({
-        "open-question-card", "open-record-card",
-        "linear_ops.py find-open", "linear_ops.py create"})
+    assert sorted(set(writes)) == sorted({"open-question-card", "open-record-card"})
     assert "ignore" not in " ".join(str(s.get("if") or "") for s in _all_steps())
-    assert "linear_ops.py comment" not in runs
+    assert "linear_ops" not in runs
 
 
 def test_every_card_write_push_and_pr_is_guarded_by_dry_run():
@@ -465,6 +514,12 @@ def test_every_card_write_push_and_pr_is_guarded_by_dry_run():
         for step in steps:
             assert "env.DRY_RUN != 'true'" in str(step.get("if") or ""), (
                 f"`{step.get('name')}` runs {needle} without the dry-run guard")
+    # The home write too: every `apply` but the `--check` preview.
+    writes = [s for s in _steps_running("model_adoption_actions.py apply")
+              if "--check" not in s["run"]]
+    assert writes
+    for step in writes:
+        assert "env.DRY_RUN != 'true'" in str(step.get("if") or ""), step.get("name")
 
 
 def test_dry_run_is_false_on_a_schedule():
@@ -474,8 +529,9 @@ def test_dry_run_is_false_on_a_schedule():
 def test_a_dry_run_still_prints_the_rendered_texts():
     runs = _run_steps()
     assert "render question-title" in runs and "render question-body" in runs
-    assert "render pr-title" in runs and "render pr-body" in runs
-    assert "apply \"$CANDIDATE\" --snapshot \"$RUNNER_TEMP/catalog.json\" --check" in runs
+    assert "render pr-title" in runs
+    assert ('apply "$CANDIDATE" --snapshot "$RUNNER_TEMP/catalog.json" '
+            '--expect-written-at "$EXPECT_WRITTEN_AT" --check') in runs
     for needle in ("render question-title", "--check"):
         for step in _steps_running(needle):
             if "sync_model_config" in step["run"]:
@@ -507,51 +563,156 @@ def test_the_trial_result_is_written_to_runner_temp_trial_json():
     assert '"trial.json"' in runs
     for key in ("model", "outcome", "run_url", "summary"):
         assert f'"{key}"' in runs
-    assert '--trial "$RUNNER_TEMP/trial.json"' in runs
+    record = _step_by_id(_job("adopt"), "record")["run"]
+    assert '--trial "$RUNNER_TEMP/trial.json"' in record
 
 
-def test_the_record_card_names_this_run_and_its_outputs_name_the_branch():
+def test_the_record_card_names_this_run_and_says_what_apply_did():
     step = _step_by_id(_job("adopt"), "record")
     assert '--run-url "$RUN_URL"' in step["run"]
+    assert '--applied "$RUNNER_TEMP/applied.json"' in step["run"]
     assert '>> "$GITHUB_OUTPUT"' in step["run"]
     assert "actions/runs/${{ github.run_id }}" in step["env"]["RUN_URL"]
-    branch = _step_by_id(_job("adopt"), "branch")
-    assert branch["env"]["BRANCH"] == "${{ steps.record.outputs.branch }}"
+    assert "env.DRY_RUN != 'true'" in step["if"]
 
 
-def test_the_branch_is_cut_from_origin_main_or_reused_after_a_crash():
-    run = _step_by_id(_job("adopt"), "branch")["run"]
-    assert 'git checkout -B "$BRANCH" origin/main' in run
-    assert 'git ls-remote --exit-code --heads origin "$BRANCH"' in run
-    assert "reuse=true" in run
-    for step in _steps(_job("adopt")):
-        run = step.get("run") or ""
-        if ("model_adoption_actions.py apply" in run and "--check" not in run) \
-                or "sync_model_config.py" in run or "git push" in run:
-            assert "steps.branch.outputs.reuse != 'true'" in step["if"], step["name"]
+def _apply_step() -> dict:
+    return _step_by_id(_job("adopt"), "apply")
 
 
-def test_the_model_tests_are_informational():
-    step = _step_by_id(_job("adopt"), "tests")
+def test_apply_writes_the_home_with_the_written_at_classify_recorded():
+    step = _apply_step()
+    assert step["name"] == "Apply the adoption to the home"
+    assert "env.DRY_RUN != 'true'" in step["if"]
+    env = step["env"]
+    assert env["EXPECT_WRITTEN_AT"] == "${{ needs.classify.outputs.written_at }}"
+    assert env["BUREAU_MODEL_HOME_WRITE_TOKEN"] == WRITE_TOKEN
     run = step["run"]
-    assert ("python3 -m pytest tests/test_model_policy.py tests/test_model_config.py "
-            "tests/test_model_choices.py -q") in run
-    assert "set +e" in run, "a red model test must not stop the pull request"
-    assert "result=" in run
-    pr = [s for s in _steps(_job("adopt")) if "gh pr create" in (s.get("run") or "")][0]
-    assert pr["env"]["TESTS"] == "${{ steps.tests.outputs.result }}"
+    assert 'apply "$CANDIDATE" --snapshot "$RUNNER_TEMP/catalog.json"' in run
+    assert '--expect-written-at "$EXPECT_WRITTEN_AT"' in run
+    assert '--result "$RUNNER_TEMP/applied.json"' in run
+    preview = [s for s in _steps(_job("adopt")) if "--check" in (s.get("run") or "")]
+    assert len(preview) == 1
+    assert '--expect-written-at "$EXPECT_WRITTEN_AT"' in preview[0]["run"]
+    assert preview[0]["env"]["EXPECT_WRITTEN_AT"] == env["EXPECT_WRITTEN_AT"]
 
 
-def test_the_commit_touches_only_the_model_config():
-    run = [s for s in _steps(_job("adopt")) if "git push" in (s.get("run") or "")][0]["run"]
-    # The console's file is the generator's third target (DRE-6635): an
-    # adoption that moves a ladder rewrites it, so it is staged and allowed.
-    assert ("git add -- config/models.yaml agents.yaml scripts/model_fallback.py "
-            "config/model-choices.json") in run
-    assert "git add ." not in run and "git add -A" not in run
-    assert ("config/models.yaml|agents.yaml|scripts/model_fallback.py"
-            "|config/model-choices.json) ;;") in run
-    assert 'user.name="agent-bureau-bot[bot]"' in run
+def test_the_adopt_job_mints_the_write_token_for_the_home():
+    steps = _steps(_job("adopt"))
+    mint = _step_by_id(_job("adopt"), "model_home_write")
+    assert mint["uses"].split("@")[0] == "actions/create-github-app-token"
+    assert mint["with"]["owner"] == "dreadnought-foundry"
+    assert mint["with"]["repositories"] == "bureau-pipeline"
+    # DRE-7230: no permission subset — v3.2.0 declares no variables input, so
+    # the token carries the installation's own permissions, variables: write
+    # among them. No continue-on-error: a refused write is red.
+    assert not [k for k in mint["with"] if k.startswith("permission-")], mint["with"]
+    assert "continue-on-error" not in mint
+    assert "env.DRY_RUN != 'true'" in mint["if"]
+    assert steps.index(mint) < steps.index(_apply_step())
+    # The write token reaches the one step that writes, and no other.
+    holders = [s.get("name") for s in _all_steps()
+               if "BUREAU_MODEL_HOME_WRITE_TOKEN" in (s.get("env") or {})]
+    assert holders == ["Apply the adoption to the home"]
+
+
+def test_the_adopt_job_opens_no_pull_request():
+    names = [s.get("name") for s in _steps(_job("adopt"))]
+    for gone in PR_STEPS:
+        assert gone not in names, gone
+    assert "Apply the adoption to config/models.yaml" not in names
+    runs = _run_steps(_job("adopt"))
+    for needle in ("git checkout -B", "sync_model_config", "pytest", "git commit",
+                   "git push", "gh pr create", "render pr-body"):
+        assert needle not in runs, needle
+
+
+def _home_doc(tmp_path: Path, written_at: str) -> Path:
+    sys.path.insert(0, str(ROOT / "tests"))
+    import model_fixture
+
+    doc = model_fixture.fixture_home()
+    doc["written_at"] = written_at
+    path = tmp_path / "home.json"
+    path.write_text(json.dumps(doc))
+    return path
+
+
+def test_the_apply_step_as_written_writes_nothing_on_a_home_changed_mid_trial(tmp_path):
+    """The step's real `run:`, against a home a console save moved on: it
+    ends green, says the one sentence in the summary and writes the result
+    the record card reads — and with no write made, no network is touched."""
+    home = _home_doc(tmp_path, "2026-10-12T09:30:00Z")
+    proc, _, summary = _run_step(tmp_path, _apply_step(), {
+        "CANDIDATE": "claude-opus-5-6",
+        "EXPECT_WRITTEN_AT": "2026-10-11T00:00:00Z",
+        "BUREAU_MODEL_HOME_FILE": str(home),
+        "BUREAU_MODEL_HOME_WRITE_TOKEN": "",
+    })
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    sentence = ("the home changed at 2026-10-12T09:30:00Z while the trial ran; "
+                "nothing written; tomorrow's run sorts again")
+    assert sentence in proc.stdout
+    assert sentence in summary
+    applied = json.loads((tmp_path / "applied.json").read_text())
+    assert applied["outcome"] == "home-changed"
+
+
+def test_every_step_that_runs_an_adoption_script_holds_the_read_token():
+    """One rule for the file: a step that runs or imports model_adoption.py,
+    model_adoption_actions.py or claude_code_pin.py holds
+    BUREAU_MODEL_HOME_TOKEN from its job's mint, whatever it runs."""
+    held = {}
+    for job_name, job in _jobs().items():
+        for step in _steps(job or {}):
+            run = "\n".join(line for line in (step.get("run") or "").splitlines()
+                            if not line.lstrip().startswith("#"))
+            if HOME_SCRIPTS.search(run):
+                env = {**(job.get("env") or {}), **(step.get("env") or {})}
+                held.setdefault(job_name, []).append(step.get("name"))
+                assert env.get("BUREAU_MODEL_HOME_TOKEN") == HOME_TOKEN, (
+                    f"{job_name}: {step.get('name')}")
+    assert set(held) == {"classify", "adopt", "pin-raise", "pin-pr"}
+    # The steps the card names, by what they run.
+    for name in ("Classify every candidate", "Is an adoption already in flight",
+                 "Does the pinned Claude Code run it at full strength",
+                 "Ask the CEO — one question card per candidate",
+                 "Dry run — print the questions"):
+        assert name in held["classify"], name
+    for name in ("Apply the adoption to the home", "Open the record card",
+                 "Dry run — preview the home write"):
+        assert name in held["adopt"], name
+    for name in ("Find the oldest release that runs it at full strength",
+                 "Render the pin-raise pull request",
+                 "Raise the pin on its branch and push it"):
+        assert name in held["pin-raise"], name
+    assert "Open the pin-raise pull request" in held["pin-pr"]
+
+
+@pytest.mark.parametrize("job_name", ["classify", "adopt", "pin-raise", "pin-pr"])
+def test_each_job_that_runs_one_mints_the_read_token_before_it(job_name):
+    steps = _steps(_job(job_name))
+    mint = _step_by_id(_job(job_name), "model_home")
+    assert mint["name"] == "Mint the model-home read token"
+    assert mint["uses"].split("@")[0] == "actions/create-github-app-token"
+    assert mint["continue-on-error"] is True
+    assert mint["with"]["owner"] == "dreadnought-foundry"
+    assert mint["with"]["repositories"] == "bureau-pipeline"
+    assert not [k for k in mint["with"] if k.startswith("permission-")], mint["with"]
+    first = next(i for i, s in enumerate(steps) if HOME_SCRIPTS.search(s.get("run") or ""))
+    assert steps.index(mint) < first
+
+
+def test_the_model_home_scope_check_passes():
+    proc = subprocess.run([sys.executable, str(ROOT / "scripts" / "check_model_home_scope.py")],
+                          cwd=ROOT, capture_output=True, text=True)
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+
+
+def test_the_action_pin_check_passes():
+    proc = subprocess.run([sys.executable, str(ROOT / "scripts" / "check_action_pins.py")],
+                          cwd=ROOT, capture_output=True, text=True)
+    assert proc.returncode == 0, proc.stdout + proc.stderr
 
 
 def test_nothing_pushes_to_main():
@@ -576,18 +737,6 @@ def test_the_pr_is_made_with_the_app_token():
         assert step["env"]["GH_TOKEN"] == "${{ steps.app.outputs.token }}"
 
 
-def test_the_pr_title_and_body_come_from_render():
-    step = [s for s in _steps(_job("adopt")) if "gh pr create" in (s.get("run") or "")][0]
-    run = step["run"]
-    assert ('--title "$(python3 scripts/model_adoption_actions.py render pr-title '
-            '--decision "$RUNNER_TEMP/decision.json")"') in run
-    assert '--body-file "$RUNNER_TEMP/pr-body.md"' in run
-    render = _run_steps(_job("adopt"))
-    assert ('model_adoption_actions.py render pr-body --decision "$RUNNER_TEMP/decision.json"'
-            in render)
-    assert '> "$RUNNER_TEMP/pr-body.md"' in render
-
-
 def test_an_open_pr_on_the_branch_is_not_duplicated():
     for step in _steps_running("gh pr create"):
         run = step["run"]
@@ -599,23 +748,23 @@ def test_an_open_pr_on_the_branch_is_not_duplicated():
 # 7. adopt — failed: ONE trial-failure card and nothing else                   #
 # --------------------------------------------------------------------------- #
 
-def test_a_failed_trial_files_one_card_and_does_nothing_else():
+def test_a_failed_trial_raises_one_notice_and_does_nothing_else():
     job = _job("trial-failed")
     assert "needs.trial.outputs.outcome == 'failed'" in _job_if("trial-failed")
     runs = _run_steps(job)
-    assert 'TITLE="Model trial failed: $CANDIDATE"' in runs
-    assert runs.index("linear_ops.py find-open") < runs.index("linear_ops.py create")
-    assert '--repo "$REPO_SLUG" --label agent:devops' in runs
-    assert "basename \"$GITHUB_REPOSITORY\"" in runs
+    assert len(_notice_steps(job, "raise")) == 1
+    assert "linear_ops.py create" not in runs
+    assert "linear_ops" not in runs
     for other in ("open-record-card", "open-question-card", "git push",
-                  "gh pr create", "model_adoption_actions.py apply"):
+                  "gh pr create", "model_adoption_actions.py apply",
+                  "pipeline_notice.py resolve"):
         assert other not in runs, other
 
 
 def _failure_body(tmp_path: Path, **env) -> str:
     step = next(s for s in _steps(_job("trial-failed"))
                 if "trial-failed.md" in (s.get("run") or "")
-                and "linear_ops" not in s["run"])
+                and "pipeline_notice" not in s["run"])
     proc, _, _ = _run_step(tmp_path, step, env)
     assert proc.returncode == 0, proc.stdout + proc.stderr
     return (tmp_path / "trial-failed.md").read_text()
@@ -644,6 +793,179 @@ def test_a_pin_raise_whose_trial_did_not_pass_reaches_the_failure_card():
     cond = _job_if("trial-failed")
     assert "!cancelled()" in cond
     assert "needs.pin-trial.outputs.outcome != 'passed'" in cond
+
+
+# --------------------------------------------------------------------------- #
+# 7b. the trial's console alert — raised on a failure, resolved on a pass      #
+# --------------------------------------------------------------------------- #
+#
+# DRE-7456: a failed trial raises `model_trial:<candidate>` at WARN instead of
+# filing its card, and the card it filed before is the notice client's
+# fallback, exactly. The two jobs that run on a passed trial resolve the same
+# key for the candidate they acted on, with no all-clear copy — a WARN never
+# leaves the console — so a candidate that failed and later passes leaves no
+# alert standing.
+
+NOTICE_JOBS = ("trial-failed", "adopt", "pin-pr")
+READ_URL = "${{ vars.BUREAU_READ_URL }}"
+CANDIDATE_EXPR = "${{ needs.classify.outputs.candidate }}"
+# What every one of the three held before: no job-level block, so the
+# workflow's own `permissions:`.
+WORKFLOW_PERMISSIONS = {"contents": "read", "pull-requests": "read"}
+
+# A fake `scripts/pipeline_notice.py` and `scripts/linear_ops.py`: each call is
+# one JSON line in $FAKE_CALLS, with the body file's text read at call time.
+FAKE_SCRIPT = r'''
+import json, os, sys
+argv = sys.argv[1:]
+call = {"script": os.path.basename(__file__), "argv": argv}
+if "--body-file" in argv:
+    with open(argv[argv.index("--body-file") + 1], encoding="utf-8") as fh:
+        call["body"] = fh.read()
+with open(os.environ["FAKE_CALLS"], "a", encoding="utf-8") as fh:
+    fh.write(json.dumps(call) + "\n")
+'''
+
+
+def _notice_steps(job: dict, verb: str) -> list[dict]:
+    return [s for s in _steps(job)
+            if f"pipeline_notice.py {verb}" in (s.get("run") or "")]
+
+
+def _flag(argv: list, name: str) -> list:
+    return [argv[i + 1] for i in range(len(argv) - 1) if argv[i] == name]
+
+
+def _run_with_fake_client(tmp_path: Path, step: dict, env: dict) -> list[dict]:
+    """Run a step's real `run:` block in a checkout whose notice client and
+    Linear layer are fakes. Returns every call they recorded."""
+    checkout = tmp_path / "checkout"
+    (checkout / "scripts").mkdir(parents=True)
+    for name in ("pipeline_notice.py", "linear_ops.py"):
+        (checkout / "scripts" / name).write_text(FAKE_SCRIPT)
+    calls = tmp_path / "calls.jsonl"
+    calls.write_text("")
+    script = tmp_path / "notice-step.sh"
+    script.write_text("set -eo pipefail\n" + step["run"])
+    full = {k: v for k, v in os.environ.items()
+            if k not in ("GITHUB_OUTPUT", "GITHUB_STEP_SUMMARY")}
+    full.update({"RUNNER_TEMP": str(tmp_path),
+                 "GITHUB_REPOSITORY": "dreadnought-foundry/bureau-pipeline",
+                 "FAKE_CALLS": str(calls)})
+    full.update(env)
+    proc = subprocess.run(["bash", str(script)], cwd=checkout, env=full,
+                          capture_output=True, text=True)
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    return [json.loads(line) for line in calls.read_text().splitlines()]
+
+
+def test_the_failure_raises_model_trial_candidate_at_warn(tmp_path):
+    (step,) = _notice_steps(_job("trial-failed"), "raise")
+    (tmp_path / "trial-failed.md").write_text("the trial of new-sonnet-9 failed\n")
+    calls = _run_with_fake_client(tmp_path, step, {"CANDIDATE": "new-sonnet-9"})
+    assert [c["script"] for c in calls] == ["pipeline_notice.py"]
+    argv = calls[0]["argv"]
+    assert argv[0] == "raise"
+    assert _flag(argv, "--notice") == ["model_trial:new-sonnet-9"]
+    assert _flag(argv, "--severity") == ["WARN"]
+    assert _flag(argv, "--title") == ["Model trial failed: new-sonnet-9"]
+    # Today's body, as written by the step before it.
+    assert calls[0]["body"] == "the trial of new-sonnet-9 failed\n"
+    assert "--recovery-title" not in argv
+
+
+def test_the_failure_runs_no_linear_ops_create():
+    runs = _run_steps(_job("trial-failed"))
+    assert "linear_ops.py create" not in runs
+    assert "find-open" not in runs
+
+
+def test_the_failure_fallback_is_exactly_todays_card(tmp_path):
+    """Title `Model trial failed: <candidate>`, lane `Planning` (where
+    `linear_ops.py create` filed it), labels `repo:<slug>` — derived from the
+    run's own repository, as `--repo` was — and `agent:devops`."""
+    (step,) = _notice_steps(_job("trial-failed"), "raise")
+    (tmp_path / "trial-failed.md").write_text("body\n")
+    (call,) = _run_with_fake_client(tmp_path, step, {"CANDIDATE": "new-sonnet-9"})
+    argv = call["argv"]
+    assert _flag(argv, "--fallback-title") == ["Model trial failed: new-sonnet-9"]
+    assert _flag(argv, "--fallback-lane") == ["Planning"]
+    assert _flag(argv, "--fallback-label") == ["repo:bureau-pipeline", "agent:devops"]
+    assert 'basename "$GITHUB_REPOSITORY"' in step["run"]
+
+
+def test_the_failure_raise_reads_the_candidate_and_the_body_it_wrote():
+    (step,) = _notice_steps(_job("trial-failed"), "raise")
+    assert step["env"]["CANDIDATE"] == CANDIDATE_EXPR
+    names = [s.get("name") for s in _steps(_job("trial-failed"))]
+    writer = next(s for s in _steps(_job("trial-failed"))
+                  if "trial-failed.md" in (s.get("run") or "")
+                  and "pipeline_notice" not in s["run"])
+    assert names.index(writer["name"]) < names.index(step["name"])
+
+
+@pytest.mark.parametrize("job_name", ["adopt", "pin-pr"])
+def test_a_passed_trial_resolves_the_candidates_alert(tmp_path, job_name):
+    (step,) = _notice_steps(_job(job_name), "resolve")
+    assert step["env"]["CANDIDATE"] == CANDIDATE_EXPR, \
+        "the candidate the job acted on — the one the trial ran"
+    calls = _run_with_fake_client(tmp_path, step, {"CANDIDATE": "new-sonnet-9"})
+    assert [c["argv"] for c in calls] == [
+        ["resolve", "--notice", "model_trial:new-sonnet-9"]]
+
+
+@pytest.mark.parametrize("job_name", ["adopt", "pin-pr"])
+def test_the_resolve_carries_no_all_clear_copy(job_name):
+    (step,) = _notice_steps(_job(job_name), "resolve")
+    assert 'pipeline_notice.py resolve --notice "model_trial:$CANDIDATE"' in step["run"]
+    assert "--recovery-title" not in step["run"]
+    assert "--recovery-body-file" not in step["run"]
+
+
+@pytest.mark.parametrize("job_name", ["adopt", "pin-pr"])
+def test_the_resolve_waits_for_the_trial_record_and_nothing_else(job_name):
+    """It runs as soon as the job has recorded the passed trial, so a home
+    write or a pull request that fails later does not leave the alert of a
+    trial that passed standing."""
+    steps = _steps(_job(job_name))
+    names = [s.get("name") for s in steps]
+    (step,) = _notice_steps(_job(job_name), "resolve")
+    record = next(s for s in steps if '"trial.json"' in (s.get("run") or ""))
+    assert names.index(record["name"]) < names.index(step["name"])
+    for later in ("model_adoption_actions.py apply", "gh pr create"):
+        for s in steps:
+            if later in (s.get("run") or ""):
+                assert names.index(step["name"]) < names.index(s["name"]), later
+
+
+@pytest.mark.parametrize("job_name", NOTICE_JOBS)
+def test_every_notice_job_grants_id_token_write_and_keeps_what_it_held(job_name):
+    assert _job(job_name).get("permissions") == {**WORKFLOW_PERMISSIONS,
+                                                 "id-token": "write"}
+
+
+def test_the_workflow_permissions_are_what_the_jobs_held_before():
+    assert _doc()["permissions"] == WORKFLOW_PERMISSIONS
+
+
+def test_exactly_the_three_jobs_raise_or_resolve():
+    raising = {name for name, job in _jobs().items()
+               if _notice_steps(job or {}, "raise") or _notice_steps(job or {}, "resolve")}
+    assert raising == set(NOTICE_JOBS)
+
+
+def test_every_raising_or_resolving_step_reads_the_console_url():
+    steps = _steps_running("pipeline_notice.py")
+    assert len(steps) == 3
+    for step in steps:
+        assert (step.get("env") or {}).get("BUREAU_READ_URL") == READ_URL, step.get("name")
+
+
+def test_the_notice_writers_report_reads_the_trial_as_repointed():
+    out = subprocess.run(
+        [sys.executable, str(ROOT / "scripts" / "notice_writers.py"), "report"],
+        cwd=ROOT, capture_output=True, text=True, check=True).stdout
+    assert "notice-writers: model-trial repointed" in out.splitlines()
 
 
 # --------------------------------------------------------------------------- #
@@ -718,3 +1040,10 @@ def test_python_tooling_is_installed_through_the_shared_cached_action(job):
     names = [s.get("name") for s in _steps(_job(job))
              if s.get("uses") == "./.github/actions/setup-python-cached"]
     assert names and all(names), f"{job}: a named setup-python-cached step"
+
+
+def test_a_written_at_that_is_not_one_plain_line_never_reaches_the_output(tmp_path):
+    proc, out, _ = _pick(tmp_path, [], dict(HOME_READ, written_at="x\nroute=pin"))
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert out["written_at"] == "unusable"
+    assert "route" not in out

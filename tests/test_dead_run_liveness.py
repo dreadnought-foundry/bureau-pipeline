@@ -256,18 +256,36 @@ def _full_sweep_mocks(extra=None):
 
 
 def _inprogress_card():
+    """A card whose build STARTED: its `🧠 model-attempt` receipt is newer
+    than its entry into In Progress (`_entered_in_progress`). Since DRE-7108
+    a card with no start receipt is re-fired as not started, never read as a
+    dead run, so the receipt is what puts it on this branch."""
     return {
         "identifier": "DRE-2023",
         "description": "**Repo:** agent-bureau\nwork",
         "state": {"name": "In Progress"},
         "labels": {"nodes": []},
         "updatedAt": "2026-07-10T20:07:00Z",
+        "comments": {"nodes": [{
+            "body": "🧠 model-attempt: claude-opus-5-5 — engineer agent starting",
+            "createdAt": "2026-07-10T20:07:00Z",
+        }]},
     }
+
+
+@pytest.fixture(autouse=True)
+def _entered_in_progress():
+    """The lane history `build_started` reads: the card entered In Progress
+    a minute before its start receipt."""
+    with patch.object(reconcile.linear_ops, "lane_history", return_value=[
+        {"createdAt": "2026-07-10T20:06:00Z", "toState": {"name": "In Progress"}},
+    ]):
+        yield
 
 
 def test_sweep_leaves_live_card_alone():
     """MUTATION CHECK: delete the agent_run_alive consult in main()'s
-    In-Progress-no-PR branch and this requeues DRE-2023 to Todo — the exact
+    In-Progress-no-PR branch and this requeues DRE-2023 — the exact
     kill vector of 2026-07-10 (the Todo transition re-dispatches, and the
     fresh run cancels the live one via the concurrency group)."""
     reconcile._write_failures.clear()
@@ -317,12 +335,20 @@ def test_sweep_still_requeues_dead_card_below_cap():
         reconcile.linear_ops, "cmd_state"
     ) as cmd_state, patch.object(reconcile.linear_ops, "cmd_comment"):
         reconcile.main()
-    cmd_state.assert_called_once_with("DRE-2023", "Todo")
+    # To the queue since DRE-7108, deliberately: `promote_ready` brings it back.
+    cmd_state.assert_called_once_with("DRE-2023", reconcile.QUEUE_LANE, "--park")
     add_label.assert_not_called()
 
 
-def test_sweep_still_holds_dead_card_at_cap():
-    """The DRE-1403 hold cap is unchanged for genuinely dead runs."""
+@pytest.mark.parametrize("lane", ["shipped", "Backlog"])
+def test_sweep_still_holds_dead_card_at_cap(monkeypatch, lane):
+    """The DRE-1403 hold cap is unchanged for genuinely dead runs, and the
+    park lands in `QUEUE_LANE` (DRE-6745): `Queued` under the shipped
+    contract since DRE-6742 moved the planning exit, `Backlog` before it."""
+    if lane == "shipped":
+        assert reconcile.QUEUE_LANE == "Queued"
+    else:
+        monkeypatch.setattr(reconcile, "QUEUE_LANE", lane)
     reconcile._write_failures.clear()
     mocks = _full_sweep_mocks({
         "active_cards": MagicMock(return_value=[_inprogress_card()]),
@@ -336,7 +362,7 @@ def test_sweep_still_holds_dead_card_at_cap():
     ) as cmd_state, patch.object(reconcile.linear_ops, "cmd_comment"):
         reconcile.main()
     add_label.assert_called_once_with("DRE-2023", reconcile.HOLD_LABEL)
-    cmd_state.assert_called_once_with("DRE-2023", "Backlog", "--park")
+    cmd_state.assert_called_once_with("DRE-2023", reconcile.QUEUE_LANE, "--park")
 
 
 # --------------------------------------------------------------------------

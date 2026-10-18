@@ -46,6 +46,7 @@ import checkbox_marks  # noqa: E402
 import dead_run  # noqa: E402
 import linear_ops  # noqa: E402
 import routing_verdict  # noqa: E402
+from lane_contract import QUEUE_LANES  # noqa: E402 — the queue, read under either name (DRE-6747)
 
 #: The resolver's receipt for this class's hand-off to Planning, matched by
 #: its words — the receipt's tag is the resolver's alone to name.
@@ -77,7 +78,7 @@ def resolve(card: dict, reason: str, *, repo: str) -> tuple[str, str] | None:
     criteria = len(routing_verdict.acceptance_criteria(card.get("description") or ""))
     lines = attested(reason)
     if criteria and lines >= criteria:
-        if not linear_ops.cmd_state(identifier, "Canceled", expect=("Backlog",),
+        if not linear_ops.cmd_state(identifier, "Canceled", expect=QUEUE_LANES,
                                     labels_absent=(dead_run.HOLD_LABEL,)):
             raise blocker_class.NotNow("Linear refused the Canceled write")
         return "canceled", f"the agent attested every criterion: {(reason or '')[:QUOTE]}"
@@ -85,7 +86,7 @@ def resolve(card: dict, reason: str, *, repo: str) -> tuple[str, str] | None:
         # The planner has read this card once for this reason; a second note
         # that still attests fewer is a person's call.
         return None
-    linear_ops.cmd_advance(identifier, "Planning", "Backlog", held=True)
+    linear_ops.cmd_advance(identifier, "Planning", ",".join(QUEUE_LANES), held=True)
     lane = (linear_ops.get_issue(identifier, fresh=True).get("state") or {}).get("name")
     if lane != "Planning":
         raise blocker_class.NotNow(f"Planning move did not land — the card is in {lane}")

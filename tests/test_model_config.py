@@ -87,6 +87,9 @@ _TREE_FILES = (
     # The generator judges each published move as the change script does, and
     # renders its reason with the change script's words (DRE-6833).
     "scripts/model_config_change.py",
+    # The words a group's choice is shown with (DRE-6786), which the
+    # generator imports.
+    "scripts/model_choice.py",
     "config/models.yaml",
     # Schema validation reads the DECLARED price of a rung sitting below the
     # workhorse fallback (DRE-3880), so the throwaway tree carries it too.
@@ -240,20 +243,20 @@ class CanonicalConfigTest(unittest.TestCase):
         for name, kind in cfg["agents"].items():
             self.assertIn(kind, cfg["kinds"], f"{name}: unknown kind {kind!r}")
 
-    def test_the_build_ladder_holds_neither_fable_nor_the_planners_top(self):
-        # The 2026-08-09 policy, on whatever the console last saved: Fable is
-        # not reachable from the build ladder at any availability — neither the
-        # excluded `claude-fable-5` nor the model topping the planner's ladder
-        # as the file is written (DRE-3015). Which model LEADS the builders is
-        # the console's choice, and no test of the committed file pins it
-        # (DRE-6861); the rule that refuses the move is proved on the fixture
-        # below.
+    def test_no_ladder_holds_an_excluded_model(self):
+        # The 2026-08-09 policy, on whatever the console last saved: the
+        # excluded `claude-fable-5` is not reachable from any ladder at any
+        # availability, and neither is any other excluded model. Which model
+        # LEADS a group is the console's choice, and no test of the committed
+        # file pins it (DRE-6861). The Planners' top on the build ladder was
+        # rule 4 until DRE-6785 retired it; the test below proves the new rule
+        # on the fixture, and since DRE-6935 nothing here compares the two.
         cfg = _canonical()
-        workhorse = _ladder_models(cfg["ladders"][cfg["default_ladder"]])
-        judgement = _ladder_models(
-            cfg["ladders"][cfg["kinds"][mf.JUDGEMENT_KIND]["ladder"]])
-        self.assertNotIn(FABLE, workhorse)
-        self.assertNotIn(judgement[0], workhorse)
+        excluded = {entry["model"] for entry in cfg["excluded"]}
+        self.assertIn(FABLE, excluded)
+        for name, rungs in cfg["ladders"].items():
+            self.assertFalse(excluded & set(_ladder_models(rungs)),
+                             f"ladders.{name} holds an excluded model")
 
     def test_the_policy_allows_the_planners_top_on_the_build_ladder(self):
         # Refused by rule 4 until the CEO's decision of 2026-10-10 (DRE-6785):
@@ -640,7 +643,10 @@ def _swap_workhorse(tree: Path) -> None:
 
 
 class ConfigDrivesTheFleetTest(unittest.TestCase):
-    """Editing ONLY config/models.yaml changes what the fleet runs on.
+    """Editing config/models.yaml and running the generator changes what the
+    fleet runs on when no home is set; the edit ALONE no longer does (DRE-6939:
+    the selector runs on the home or on the defaults in the code, never on the
+    choices written in that file).
 
     Rules of the selector and the generator, so they run on the frozen fixture
     and every id they expect is read off its ladders — never a literal, and
@@ -661,17 +667,18 @@ class ConfigDrivesTheFleetTest(unittest.TestCase):
         """The first rung of `agent`'s ladder in the fixture, as written."""
         return model_fixture.ladder(self.cfg, self.cfg["agents"][agent])[0]
 
-    def test_config_edit_alone_changes_what_the_ci_path_selects(self):
-        # No regeneration: the CI path READS the config, so the edit is live on
-        # the next dispatch. (The generated mirror is only the degrade path.)
+    def test_config_edit_alone_no_longer_changes_what_the_ci_path_selects(self):
+        # No regeneration: since DRE-6939 the CI path reads its choices from
+        # the home or the defaults in the code, never from the config, so the
+        # edit alone changes nothing until the generator carries it there.
         with tempfile.TemporaryDirectory() as td:
             tree = _fixture_tree(td)
             self.assertEqual(_cli_select(tree, "engineer"), self.build[0])
             _swap_workhorse(tree)
             self.assertNotEqual(self.build[-1], self.build[0])
             self.assertEqual(
-                _cli_select(tree, "engineer"), self.build[-1],
-                "editing config/models.yaml did not change the selected model",
+                _cli_select(tree, "engineer"), self.build[0],
+                "editing config/models.yaml alone changed the selected model",
             )
 
     def test_config_edit_plus_generator_updates_every_mirror(self):
@@ -717,6 +724,8 @@ class ConfigDrivesTheFleetTest(unittest.TestCase):
                              if cfg["kinds"][k]["ladder"] == advisory and m != lone]:
                     del entry[kind]
             path.write_text(yaml.safe_dump(cfg, sort_keys=False))
+            # …and the generator carries it into the code (DRE-6939).
+            self.assertEqual(_run_sync(tree).returncode, 0)
             self.assertEqual(_cli_select(tree, "critic"), lone)
             # …and the build fleet is untouched by that edit.
             self.assertEqual(_cli_select(tree, "engineer"), self.build[0])
@@ -788,13 +797,21 @@ class WorkflowModelPinTest(unittest.TestCase):
         body = (ROOT / ".github" / "workflows" / "agent-task.yml").read_text()
         self.assertIn('model_fallback.py select "$ROLE"', body)
 
+    # The selected model, or — in a shadow replay only — the model the replay's
+    # caller named, handed on by the step that read its effort level
+    # (DRE-7193, tests/test_qa_review_shadow.py; DRE-7194,
+    # tests/test_verify_shadow.py). Never a literal id either way.
+    SELECTED_MODEL = re.compile(
+        r"--model \$\{\{ (?:inputs\.shadow && steps\.shadow_model\.outputs\.model \|\| )?"
+        r"steps\.model\.outputs\.model \}\}")
+
     def test_agent_steps_consume_the_selected_model(self):
         # A Select-model step that nothing reads is theatre: the claude_args
         # block must interpolate the step output.
         for wf in ("qa-review.yml", "verify.yml", "medic.yml"):
             with self.subTest(workflow=wf):
                 body = (ROOT / ".github" / "workflows" / wf).read_text()
-                self.assertIn("--model ${{ steps.model.outputs.model }}", body)
+                self.assertRegex(body, self.SELECTED_MODEL)
 
     def test_selected_model_is_used_by_every_claude_invocation(self):
         # qa-review and verify each run TWO agent attempts (attempt 1 + retry);
@@ -803,7 +820,7 @@ class WorkflowModelPinTest(unittest.TestCase):
             with self.subTest(workflow=wf):
                 body = (ROOT / ".github" / "workflows" / wf).read_text()
                 self.assertEqual(
-                    body.count("--model ${{ steps.model.outputs.model }}"), expected,
+                    len(self.SELECTED_MODEL.findall(body)), expected,
                     f"{wf}: both agent attempts must use the selected model",
                 )
 

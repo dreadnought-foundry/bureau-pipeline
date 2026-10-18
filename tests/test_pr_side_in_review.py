@@ -234,6 +234,8 @@ class TheVerdictIsNeverAtRiskTest(unittest.TestCase):
         self.assertIn("'reopened'", condition)
 
 
+
+
 class TheFromLanesAreThePreReviewLanesTest(unittest.TestCase):
     def test_every_from_lane_is_a_lane_the_contract_carries(self):
         for lane in _from_lanes():
@@ -255,7 +257,17 @@ class TheFromLanesAreThePreReviewLanesTest(unittest.TestCase):
         same line `reconcile.HAND_BUILT_REVIEW_LANES` draws (DRE-4356)."""
         self.assertNotIn("Green Light", _from_lanes())
 
-    def test_every_pre_review_flow_lane_but_that_one_is_present(self):
+    def test_the_queue_is_a_from_lane_under_its_live_name_only(self):
+        """A card waiting in the queue with an open pull request is carried to
+        review from `Queued` (DRE-6743). The name it replaced is retiring
+        (DRE-6753): the vocabulary rule forbids it in a non-comment workflow
+        line, and the sweep's drain moves a card still under it into `Queued`."""
+        self.assertIn(lane_contract.QUEUE_LANE, _from_lanes())
+        for old in lane_contract.lane_names("retiring"):
+            with self.subTest(lane=old):
+                self.assertNotIn(old, _from_lanes())
+
+    def test_every_pre_review_flow_lane_but_those_is_present(self):
         flow = lane_contract.flow_lanes()
         upstream = [
             name for name in flow[: flow.index(REVIEW_LANE)]
@@ -279,6 +291,7 @@ class _Linear:
         "Planning": ("st-planning", "backlog"),
         "Green Light": ("st-greenlight", "backlog"),
         "Backlog": ("st-backlog", "backlog"),
+        "Queued": ("st-queued", "unstarted"),
         "Todo": ("st-todo", "unstarted"),
         "Hand-work": ("st-handwork", "unstarted"),
         "In Progress": ("st-inprogress", "started"),

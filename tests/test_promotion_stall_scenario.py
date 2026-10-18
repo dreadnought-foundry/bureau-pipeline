@@ -61,6 +61,7 @@ os.environ.setdefault("REPO_SLUG", "bureau-pipeline")
 import blocker_resolve  # noqa: E402
 import dead_run  # noqa: E402
 import hold  # noqa: E402
+import lane_contract  # noqa: E402
 import plan_critic  # noqa: E402
 import promotion_stall  # noqa: E402
 import reconcile  # noqa: E402
@@ -95,8 +96,8 @@ def _comment(body: str, minutes: float) -> dict:
 
 
 def _card(identifier, *, comments=(), parent=EPIC, parent_state="In Progress",
-          labels=(), title=None, blockers=()):
-    return {
+          labels=(), title=None, blockers=(), lane=None):
+    card = {
         "id": f"uuid-{identifier}",
         "identifier": identifier,
         "title": title or f"Build piece {identifier}",
@@ -111,11 +112,14 @@ def _card(identifier, *, comments=(), parent=EPIC, parent_state="In Progress",
             for b, s in blockers
         ]},
     }
+    if lane is not None:
+        card["state"] = {"name": lane}
+    return card
 
 
-def card_a(identifier=A):
+def card_a(identifier=A, lane=None):
     """A child of an active, released epic, carrying no routing verdict."""
-    return _card(identifier)
+    return _card(identifier, lane=lane)
 
 
 def card_b():
@@ -341,7 +345,7 @@ class TestCase1ThePerCardClock:
             line = board.idle_line(minutes)
             assert line is not None, minutes
             assert line.startswith(f"{promotion_stall.IDLE_LINE_OPENER}{reconcile.MAX_WIP}:")
-            assert " 1 card in Backlog" in line, line
+            assert f" 1 card in {lane_contract.QUEUE_LANE}" in line, line
             assert A in line, line
             for other in (B, C, D):
                 assert other not in line, line
@@ -389,6 +393,30 @@ class TestCase1ThePerCardClock:
         assert board.posted == []
 
 
+class TestTheLedgerReadsEitherQueueName:
+    """The queue carries two names until the alias is deleted (DRE-6741), and
+    the ledger counts a card under either the same way (DRE-6749): the same
+    receipt, the same idle line, the same red entries, sweep by sweep."""
+
+    @staticmethod
+    def _ledger(board):
+        return ([board.idle_line(m) for m in SWEEPS],
+                [board.defects[m] for m in SWEEPS],
+                [(b, t) for _, b, t in board.posted])
+
+    def test_a_card_under_each_queue_name_stalls_alike(self, capsys):
+        ledgers = {queue: self._ledger(_Sweeps(card_a(lane=queue), card_b()).run(capsys))
+                   for queue in lane_contract.QUEUE_LANES}
+        assert set(ledgers) >= {"Queued", "Backlog"}
+        first, *rest = ledgers.values()
+        for ledger in rest:
+            assert ledger == first
+        lines, defects, posted = first
+        assert all(line is not None and A in line for line in lines), lines
+        assert any(e.startswith(_stall_entry(A)) for e in defects[-1]), defects[-1]
+        assert any(b.startswith(promotion_stall.STALL_MARK) for b, _ in posted), posted
+
+
 # --------------------------------------------------------------------------- #
 # Case 2 — held cards are the alarm, never clocked                             #
 # --------------------------------------------------------------------------- #
@@ -419,7 +447,7 @@ class TestCase2HeldCardsAreTheAlarm:
         for minutes in SWEEPS:
             line = board.idle_line(minutes)
             assert line is not None, minutes
-            assert " 2 cards in Backlog" in line, line
+            assert f" 2 cards in {lane_contract.QUEUE_LANE}" in line, line
             assert f"lowest {min(G, H)}" in line, line
             assert B not in line
 
@@ -517,7 +545,7 @@ class TestCase3UnknownAgeNeverAges:
         assert board.posted_on(E) == []
         for minutes in SWEEPS:
             line = board.idle_line(minutes)
-            assert line is not None and " 2 cards in Backlog" in line, line
+            assert line is not None and f" 2 cards in {lane_contract.QUEUE_LANE}" in line, line
         for minutes in (0, 15, 30, 45):
             assert not any(e.startswith(_idle_entry()) for e in board.defects[minutes])
         for minutes in SWEEPS[4:]:

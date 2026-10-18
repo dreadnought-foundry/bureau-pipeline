@@ -1,28 +1,30 @@
 """DRE-6634 — `model_fallback.py select --repo` leads with that project's
 exception, and review separation still holds.
 
-DRE-6633 made `projects.<slug>.<kind>: <model>` a validated key of
-config/models.yaml. This file proves selection honors it: the walk for a project
-and a kind is `effective_ladders(CONFIG, slug)[<that kind's ladder>]` — the
-exception first, then the kind's ladder with it removed — and the critic's
-build/review separation is applied to that walk exactly as it is to the fleet
-ladder.
+DRE-6633 made `projects.<slug>.<kind>: <model>` a validated key of a project's
+choices. This file proves selection honors it: the walk for a project and a
+kind is `effective_ladders(CONFIG, slug)[<that kind's ladder>]` — the exception
+first, then the kind's ladder with it removed — and the critic's build/review
+separation is applied to that walk exactly as it is to the fleet ladder.
 
-THE TREE
---------
-Every scenario runs against `model_fixture.fixture_tree` — today's `scripts/`
-on the FROZEN model files (DRE-6859) — whose models.yaml then carries
-`projects: {atlas: {workhorse: <a build rung below the top>}}` and nothing for
-`portico`. The console rewrites the committed file on every save, so a rule
-proved on it went red when the CEO moved a role or led a group with another
-model (DRE-6863). `model_fallback` reads its config off its own file's path, so
-the tree is the only way to drive the real CLI on a config the repo does not
-ship. The probe is stubbed (`BUREAU_FAKE_AVAILABLE`), so nothing reaches the
-network, and every model is available.
+THE DOCUMENT AND THE TREE (DRE-6989)
+-----------------------------------
+Since DRE-6939 the selector runs on the home or on the defaults in the code,
+never on the choices in a tree's `config/models.yaml`. So the scenario is a
+home document: the frozen one (`model_fixture.fixture_home()`, DRE-6972) with
+`with_project(doc, "atlas", "workhorse", <a build rung below the top>)` and
+nothing for `portico`, handed to a `model_fixture.fixture_tree` — today's
+`scripts/` on the FROZEN model files (DRE-6859) — through `home_env`. The
+console's saves change the home, so a rule proved on today's choices went red
+when the CEO moved a role or led a group with another model (DRE-6863). The
+code-side facts the scenarios lean on — `review_separation`, `effort`,
+`ungrouped` — are read off the frozen `models.yaml`. The probe is stubbed
+(`BUREAU_FAKE_AVAILABLE`), so nothing reaches the network, and every model is
+available.
 
-Expected ids are read off the frozen ladders, and the role each scenario runs
-off the frozen `agents:` map, never typed: `test_the_fixture_holds_the_scenario`
-pins the shape the names below rely on.
+Expected ids are read off the frozen document's groups, and the role each
+scenario runs off its `agents:` map, never typed:
+`test_the_fixture_holds_the_scenario` pins the shape the names below rely on.
 
 Run: cd bureau-pipeline && python3 -m pytest tests/test_project_model_exceptions.py -q
 """
@@ -30,13 +32,11 @@ Run: cd bureau-pipeline && python3 -m pytest tests/test_project_model_exceptions
 from __future__ import annotations
 
 import json
-import os
 import subprocess
 import sys
 from pathlib import Path
 
 import pytest
-import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
@@ -44,67 +44,61 @@ sys.path.insert(0, str(ROOT / "tests"))
 
 import model_fallback as mf  # noqa: E402
 import model_fixture  # noqa: E402
-from model_fixture import ladder  # noqa: E402
+import model_home  # noqa: E402
+from model_fixture import fixture_home, home_env, ladder, with_project  # noqa: E402
 
 FIXTURE = model_fixture.fixture_config()
-WORK = ladder(FIXTURE, "workhorse")
-# The build ladder's top: what a repo with no exception runs.
+HOME = fixture_home()
+WORK = ladder(HOME, "workhorse")
+# The build group's top: what a repo with no exception runs.
 TOP = WORK[0]
-# The exception: a build rung below the top that also tops the advisory ladder,
-# so the same id drives the review-separation scenarios.
-EXCEPTION = ladder(FIXTURE, "advisory")[0]
-PROJECTS = {"atlas": {"workhorse": EXCEPTION}}
+# The exception: a build rung below the top that also tops the Reviewers, so
+# the same id drives the review-separation scenarios.
+EXCEPTION = ladder(HOME, "advisory")[0]
+# The document every scenario on the module's tree runs on.
+DOC = with_project(HOME, "atlas", "workhorse", EXCEPTION)
 
-# The roles the scenarios run, read off the frozen `agents:` and `ungrouped:`.
-BUILDER = next(r for r, k in FIXTURE["agents"].items()
+# The roles the scenarios run, read off the frozen document's `agents:` and
+# the frozen `ungrouped:` and `review_separation` (code-side facts).
+BUILDER = next(r for r, k in HOME["agents"].items()
                if k == "workhorse" and r not in (FIXTURE.get("session_agents") or []))
 REVIEWER = FIXTURE["review_separation"]["roles"][0]
 NO_GROUP = FIXTURE["ungrouped"][0]
 
-
-def make_tree(base: Path, projects: dict) -> Path:
-    """The frozen fixture tree at `base`, its models.yaml carrying `projects`."""
-    model_fixture.fixture_tree(base)
-    cfg = model_fixture.fixture_config()
-    cfg["projects"] = projects
-    (base / "config" / "models.yaml").write_text(yaml.safe_dump(cfg, sort_keys=False))
-    return base
+# How every note on a document the reader accepted ends.
+READ = model_home.status_clause({"state": model_home.READ})
 
 
-def tree_config(tree: Path) -> dict:
-    return yaml.safe_load((tree / "config" / "models.yaml").read_text())
-
-
-def env() -> dict:
-    out = dict(os.environ)
-    out["BUREAU_FAKE_AVAILABLE"] = "{}"  # every model available, no network
-    return out
-
-
-def select(tree: Path, *args: str, tmp: Path) -> tuple[str, str]:
-    """`(model, note)` from the real CLI in `tree`."""
+def select(tree: Path, *args: str, tmp: Path, doc: dict = DOC) -> tuple[str, str]:
+    """`(model, note)` from the real CLI in `tree`, on `doc`."""
     note = tmp / "note.txt"
     if note.exists():
         note.unlink()
     proc = subprocess.run(
         [sys.executable, str(tree / "scripts" / "model_fallback.py"), "select",
          *args, "--explain-file", str(note)],
-        capture_output=True, text=True, env=env(), cwd=tree,
+        capture_output=True, text=True, env=env(tree, doc), cwd=tree,
     )
     assert proc.returncode == 0, proc.stderr
     assert "REFUSING" not in proc.stderr, proc.stderr
     return proc.stdout.strip(), note.read_text().rstrip("\n")
 
 
-def py(tree: Path, code: str):
-    """Run `code` in `tree`'s scripts dir; it prints one JSON value."""
+def env(tree: Path, doc: dict = DOC, available: dict | None = None) -> dict:
+    """`doc` as the tree's home, every model available unless `available`
+    says otherwise — no network."""
+    return home_env(tree, doc, BUREAU_FAKE_AVAILABLE=available or {})
+
+
+def py(tree: Path, code: str, doc: dict = DOC):
+    """Run `code` in `tree`'s scripts dir on `doc`; it prints one JSON value."""
     proc = subprocess.run(
         [sys.executable, "-c",
          "import json, sys\n"
          f"sys.path.insert(0, {str(tree / 'scripts')!r})\n"
          "import model_fallback as mf\n"
          "probe = lambda m: True\n" + code],
-        capture_output=True, text=True, env=env(), cwd=tree,
+        capture_output=True, text=True, env=env(tree, doc), cwd=tree,
     )
     assert proc.returncode == 0, proc.stderr
     assert "REFUSING" not in proc.stderr, proc.stderr
@@ -113,26 +107,30 @@ def py(tree: Path, code: str):
 
 @pytest.fixture(scope="module")
 def tree(tmp_path_factory) -> Path:
-    return make_tree(tmp_path_factory.mktemp("dre6634"), PROJECTS)
+    return model_fixture.fixture_tree(tmp_path_factory.mktemp("dre6634"))
 
 
 # --------------------------------------------------------------------------- #
-# The tree really carries the exception                                        #
+# The tree really reads the exception                                          #
 # --------------------------------------------------------------------------- #
 
-def test_the_tree_s_config_loads_with_its_project_entry(tree):
-    """A refused config falls back to the generated literal with `projects: {}`
-    and every scenario below would pass for the wrong reason."""
-    assert py(tree, "print(json.dumps(mf.CONFIG['projects']))") == PROJECTS
+def test_the_tree_reads_the_document_with_its_project_entry(tree):
+    """A refused document leaves the selector on the defaults in the code,
+    with no atlas entry, and every scenario below would pass for the wrong
+    reason."""
+    got = py(tree, "mf.use_home()\n"
+                   "print(json.dumps([mf.HOME_STATUS, mf.CONFIG['projects']]))")
+    assert got == [model_home.READ, DOC["projects"]]
+    assert DOC["projects"]["atlas"] == {"workhorse": EXCEPTION}
 
 
-def test_the_fixture_holds_the_scenario(tree):
-    cfg = tree_config(tree)
-    assert ladder(cfg, "workhorse") == WORK
+def test_the_fixture_holds_the_scenario():
+    assert ladder(DOC, "workhorse") == WORK
     assert EXCEPTION in WORK and EXCEPTION != TOP
-    assert EXCEPTION in {r["built_on"] for r in cfg["review_separation"]["rules"]}
-    assert BUILDER in cfg["agents"] and cfg["agents"][BUILDER] == "workhorse"
-    assert NO_GROUP not in cfg["agents"]
+    assert EXCEPTION in {r["built_on"] for r in FIXTURE["review_separation"]["rules"]}
+    assert DOC["agents"].get(BUILDER) == "workhorse"
+    assert NO_GROUP not in DOC["agents"]
+    assert "portico" not in DOC["projects"]
 
 
 # --------------------------------------------------------------------------- #
@@ -143,7 +141,7 @@ def test_a_builder_on_atlas_runs_the_exception(tree, tmp_path):
     model, note = select(tree, BUILDER, "--repo", "atlas", tmp=tmp_path)
     assert model == EXCEPTION
     assert note.endswith(
-        f" — project atlas: exception {EXCEPTION} leads the workhorse walk")
+        f" — project atlas: exception {EXCEPTION} leads the workhorse walk{READ}")
 
 
 def test_an_exception_leading_the_walk_is_not_a_degradation(tree, tmp_path):
@@ -155,8 +153,8 @@ def test_an_exception_leading_the_walk_is_not_a_degradation(tree, tmp_path):
 
 def test_a_builder_on_portico_runs_the_fleet_top(tree, tmp_path):
     model, note = select(tree, BUILDER, "--repo", "portico", tmp=tmp_path)
-    assert model == ladder(tree_config(tree), "workhorse")[0] == TOP
-    assert note.endswith(" — project portico: no exception, fleet ladder")
+    assert model == ladder(DOC, "workhorse")[0] == TOP
+    assert note.endswith(f" — project portico: no exception, fleet ladder{READ}")
 
 
 def test_a_rung_skipped_below_the_exception_is_reported_as_today(tree, tmp_path):
@@ -167,17 +165,16 @@ def test_a_rung_skipped_below_the_exception_is_reported_as_today(tree, tmp_path)
         [sys.executable, str(tree / "scripts" / "model_fallback.py"), "select",
          BUILDER, "--repo", "atlas", "--explain-file", str(note)],
         capture_output=True, text=True, cwd=tree,
-        env=dict(env(), BUREAU_FAKE_AVAILABLE=json.dumps({EXCEPTION: False})),
+        env=env(tree, available={EXCEPTION: False}),
     )
     assert proc.returncode == 0, proc.stderr
-    walk = [EXCEPTION] + [m for m in ladder(tree_config(tree), "workhorse")
-                         if m != EXCEPTION]
+    walk = [EXCEPTION] + [m for m in ladder(DOC, "workhorse") if m != EXCEPTION]
     assert proc.stdout.strip() == walk[1]
     text = note.read_text().strip()
     assert text.startswith("DEGRADED ")
     assert f"skipped {EXCEPTION} (" in text
     assert text.endswith(
-        f" — project atlas: exception {EXCEPTION} leads the workhorse walk")
+        f" — project atlas: exception {EXCEPTION} leads the workhorse walk{READ}")
 
 
 # --------------------------------------------------------------------------- #
@@ -185,51 +182,69 @@ def test_a_rung_skipped_below_the_exception_is_reported_as_today(tree, tmp_path)
 # --------------------------------------------------------------------------- #
 
 def test_a_reviewer_on_atlas_built_on_the_exception_skips_it(tree, tmp_path):
-    cfg = tree_config(tree)
     rule = {r["built_on"]: r["reviewers_use"]
-            for r in cfg["review_separation"]["rules"]}
+            for r in FIXTURE["review_separation"]["rules"]}
     model, note = select(tree, REVIEWER, "--repo", "atlas", "--built-on",
                          EXCEPTION, tmp=tmp_path)
     assert model == rule[EXCEPTION] != EXCEPTION
     assert f"this build ran on {EXCEPTION}, so the reviewer does not" in note
-    assert note.endswith(" — project atlas: no exception, fleet ladder")
+    assert note.endswith(f" — project atlas: no exception, fleet ladder{READ}")
 
 
 def test_a_reviewer_on_portico_built_on_the_fleet_top_runs_the_advisory_top(tree, tmp_path):
     model, note = select(tree, REVIEWER, "--repo", "portico", "--built-on",
                          TOP, tmp=tmp_path)
-    assert model == ladder(tree_config(tree), "advisory")[0]
-    assert note.endswith(" — project portico: no exception, fleet ladder")
+    assert model == ladder(DOC, "advisory")[0]
+    assert note.endswith(f" — project portico: no exception, fleet ladder{READ}")
 
 
 def test_separation_is_applied_to_an_advisory_exception_too(tmp_path):
     """The project walk is what separation narrows: an advisory exception on
-    Sonnet 5.5 still loses that rung to a Sonnet-5.5 build."""
-    tree = make_tree(tmp_path / "t", {"atlas": {"advisory": EXCEPTION}})
+    the Reviewers' top still loses that rung to a build on it."""
+    doc = with_project(HOME, "atlas", "advisory", EXCEPTION)
+    tree = model_fixture.fixture_tree(tmp_path / "t")
     model, note = select(tree, REVIEWER, "--repo", "atlas", "--built-on",
-                         EXCEPTION, tmp=tmp_path)
+                         EXCEPTION, tmp=tmp_path, doc=doc)
     assert model != EXCEPTION
     assert f"this build ran on {EXCEPTION}" in note
     assert note.endswith(
-        f" — project atlas: exception {EXCEPTION} leads the advisory walk")
+        f" — project atlas: exception {EXCEPTION} leads the advisory walk{READ}")
+
+
+def test_a_reviewers_model_for_atlas_leads_the_critic_on_the_owner_name(tmp_path):
+    """DRE-6989: a document that gives atlas a Reviewers model of its own makes
+    `select critic --repo EveryBite/atlas` lead with it — the model below the
+    fleet's Reviewers top, so the fleet walk alone would not."""
+    chosen = ladder(HOME, "advisory")[1]
+    doc = with_project(HOME, "atlas", "advisory", chosen)
+    assert ladder(doc, "advisory")[0] != chosen
+    tree = model_fixture.fixture_tree(tmp_path / "t")
+    model, note = select(tree, "critic", "--repo", "EveryBite/atlas",
+                         tmp=tmp_path, doc=doc)
+    assert model == chosen
+    assert note.endswith(
+        f" — project atlas: exception {chosen} leads the advisory walk{READ}")
+    assert py(tree, "print(json.dumps(mf.ladder_for('critic', 'atlas')))", doc) == \
+        [chosen] + [m for m in ladder(doc, "advisory") if m != chosen]
 
 
 def test_an_exception_off_its_kinds_ladder_leads_the_walk(tmp_path):
-    """DRE-6785: an exception may name any priced model. Sonnet 4.6 is on the
-    judgement ladder only, and atlas's builders walk it first, then the
-    Builders' ladder — through the CLI, `ladder_for` and `--fallback-file`."""
-    sonnet46 = "claude-sonnet-4-6"
-    tree = make_tree(tmp_path / "t", {"atlas": {"workhorse": sonnet46}})
-    fleet = ladder(tree_config(tree), "workhorse")
-    assert sonnet46 not in fleet
-    model, note = select(tree, "engineer", "--repo", "atlas", tmp=tmp_path)
-    assert model == sonnet46
+    """DRE-6785: an exception may name any priced model. The Planners' last
+    model is in their group only, and atlas's builders walk it first, then the
+    Builders' group — through the CLI, `ladder_for` and `--fallback-file`."""
+    off = ladder(HOME, "judgement")[-1]
+    doc = with_project(HOME, "atlas", "workhorse", off)
+    tree = model_fixture.fixture_tree(tmp_path / "t")
+    fleet = ladder(doc, "workhorse")
+    assert off not in fleet
+    model, note = select(tree, "engineer", "--repo", "atlas", tmp=tmp_path, doc=doc)
+    assert model == off
     assert note.endswith(
-        f" — project atlas: exception {sonnet46} leads the workhorse walk")
-    assert py(tree, "print(json.dumps(mf.ladder_for('engineer', 'atlas')))") == \
-        [sonnet46] + fleet
+        f" — project atlas: exception {off} leads the workhorse walk{READ}")
+    assert py(tree, "print(json.dumps(mf.ladder_for('engineer', 'atlas')))", doc) == \
+        [off] + fleet
     assert py(tree, "print(json.dumps(mf.fallback_for('engineer', "
-                    f"{sonnet46!r}, repo='atlas')))") == fleet[0]
+                    f"{off!r}, repo='atlas')))", doc) == fleet[0]
 
 
 # --------------------------------------------------------------------------- #
@@ -257,27 +272,27 @@ def test_resolve_repo_slug_reads_both_spellings_and_nothing_else(tree):
 
 def test_an_unknown_value_walks_the_fleet_ladder(tree, tmp_path):
     model, note = select(tree, BUILDER, "--repo", "nowhere", tmp=tmp_path)
-    assert model == ladder(tree_config(tree), "workhorse")[0]
-    assert note.endswith(" — project unknown (nowhere): fleet ladder")
+    assert model == ladder(DOC, "workhorse")[0]
+    assert note.endswith(f" — project unknown (nowhere): fleet ladder{READ}")
 
 
 @pytest.mark.parametrize("args", [["--repo", ""], ["--repo", "   "], []],
                          ids=["empty", "whitespace", "no-flag"])
 def test_no_project_walks_the_fleet_ladder(tree, tmp_path, args):
     model, note = select(tree, BUILDER, *args, tmp=tmp_path)
-    assert model == ladder(tree_config(tree), "workhorse")[0]
-    assert note.endswith(" — project none: fleet ladder")
+    assert model == ladder(DOC, "workhorse")[0]
+    assert note.endswith(f" — project none: fleet ladder{READ}")
 
 
 def test_a_role_in_no_group_keeps_the_default_ladder_on_every_project(tree, tmp_path):
-    cfg = tree_config(tree)
-    assert NO_GROUP in cfg["ungrouped"]
-    assert NO_GROUP not in cfg["agents"]
-    default_top = [r["model"] for r in cfg["ladders"][cfg["default_ladder"]]][0]
+    # The defaults' Builders are the default walk, on a home as in the code.
+    assert NO_GROUP in FIXTURE["ungrouped"]
+    assert NO_GROUP not in DOC["agents"]
+    default_top = ladder(DOC, "workhorse")[0]
     for repo in ("atlas", "EveryBite/atlas", "portico"):
         model, note = select(tree, NO_GROUP, "--repo", repo, tmp=tmp_path)
         assert model == default_top, repo
-        assert note.endswith(": no exception, fleet ladder"), note
+        assert note.endswith(f": no exception, fleet ladder{READ}"), note
 
 
 # --------------------------------------------------------------------------- #
@@ -292,7 +307,7 @@ for repo in ('atlas', 'portico', 'nowhere', '', None):
     out[str(repo)] = [d['project'], d['exception'], d['model']]
 print(json.dumps(out))
 """)
-    top = ladder(tree_config(tree), "workhorse")[0]
+    top = ladder(DOC, "workhorse")[0]
     assert got == {
         "atlas": ["atlas", EXCEPTION, EXCEPTION],
         "portico": ["portico", None, top],
@@ -306,7 +321,7 @@ def test_ladder_for_is_the_project_walk(tree):
     got = py(tree, f"print(json.dumps([mf.ladder_for({BUILDER!r}, 'atlas'), "
                    f"mf.ladder_for({BUILDER!r}), mf.ladder_for({BUILDER!r}, 'portico'), "
                    f"mf.ladder_for({NO_GROUP!r}, 'atlas')]))")
-    fleet = ladder(tree_config(tree), "workhorse")
+    fleet = ladder(DOC, "workhorse")
     assert got[0] == [EXCEPTION] + [m for m in fleet if m != EXCEPTION]
     assert got[1] == got[2] == got[3] == fleet
 
@@ -314,7 +329,7 @@ def test_ladder_for_is_the_project_walk(tree):
 def test_fallback_for_reads_the_rung_below_on_the_project_walk(tree):
     got = py(tree, f"print(json.dumps([mf.fallback_for({BUILDER!r}, {EXCEPTION!r}, "
                    f"repo='atlas'), mf.fallback_for({BUILDER!r}, {EXCEPTION!r})]))")
-    fleet = ladder(tree_config(tree), "workhorse")
+    fleet = ladder(DOC, "workhorse")
     walk = [EXCEPTION] + [m for m in fleet if m != EXCEPTION]
     assert got[0] == walk[1] == TOP
     assert got[1] == fleet[fleet.index(EXCEPTION) + 1]
@@ -325,7 +340,7 @@ def test_the_fallback_file_agrees_with_the_chosen_walk(tree, tmp_path):
     proc = subprocess.run(
         [sys.executable, str(tree / "scripts" / "model_fallback.py"), "select",
          BUILDER, "--repo", "atlas", "--fallback-file", str(fallback)],
-        capture_output=True, text=True, env=env(), cwd=tree,
+        capture_output=True, text=True, env=env(tree), cwd=tree,
     )
     assert proc.returncode == 0, proc.stderr
     assert proc.stdout.strip() == EXCEPTION
@@ -337,10 +352,10 @@ def test_effort_is_per_model_and_unchanged(tree, tmp_path):
     proc = subprocess.run(
         [sys.executable, str(tree / "scripts" / "model_fallback.py"), "select",
          BUILDER, "--repo", "atlas", "--effort-file", str(effort)],
-        capture_output=True, text=True, env=env(), cwd=tree,
+        capture_output=True, text=True, env=env(tree), cwd=tree,
     )
     assert proc.returncode == 0, proc.stderr
-    want = tree_config(tree).get("effort", {}).get(EXCEPTION) or ""
+    want = FIXTURE.get("effort", {}).get(EXCEPTION) or ""
     assert effort.read_text().strip() == want
 
 

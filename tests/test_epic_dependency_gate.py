@@ -47,8 +47,12 @@ os.environ.setdefault("LINEAR_API_KEY", "test-key")
 os.environ.setdefault("REPO", "dreadnought-foundry/agent-bureau")
 os.environ.setdefault("REPO_SLUG", "agent-bureau")
 
+import lane_contract  # noqa: E402
 import reconcile  # noqa: E402
 import routing_verdict  # noqa: E402
+
+#: Every move out of the queue is guarded on every name it carries (DRE-6743).
+QUEUE_FROM = ",".join(lane_contract.QUEUE_LANES)
 
 # Since DRE-3385 a Backlog card carrying NO routing verdict is refused
 # promotion outright, so every candidate below carries one — a fixture held
@@ -194,7 +198,7 @@ def test_promote_ready_promotes_children_of_unblocked_epic():
     ) as advance, patch.object(reconcile.linear_ops, "cmd_comment"):
         promoted = reconcile.promote_ready(active_count=0)
     assert promoted == 1
-    advance.assert_called_once_with("DRE-900", "Todo", "Backlog")
+    advance.assert_called_once_with("DRE-900", "Todo", QUEUE_FROM)
 
 
 def test_promote_ready_evaluates_each_epic_once_per_sweep():
@@ -240,15 +244,15 @@ def test_done_blocker_epic_advances_dependent_backlog_to_planning():
     dependent epic takes any other."""
     with patch.object(reconcile.linear_ops, "gql", return_value=_forward_blocks("DRE-700", "DRE-800")), \
         patch.object(reconcile.linear_ops, "comment_bodies", return_value=[]), \
-        patch.object(reconcile, "card_state", return_value="Backlog"), \
+        patch.object(reconcile, "card_state", return_value=reconcile.QUEUE_LANE), \
         patch.object(reconcile, "epic_blockers_unmet", return_value=False), \
         patch.object(reconcile.linear_ops, "cmd_advance") as advance, \
         patch.object(reconcile.linear_ops, "cmd_comment") as comment:
         reconcile.advance_unblocked_epics("DRE-700")
-    advance.assert_called_once_with("DRE-800", "Planning", "Backlog")
+    advance.assert_called_once_with("DRE-800", "Planning", QUEUE_FROM)
     comment.assert_called_once()
     receipt = comment.call_args.args[1]
-    assert receipt.startswith("🧹 Auto-advanced Backlog → Planning:"), receipt
+    assert receipt.startswith(f"🧹 Auto-advanced {reconcile.QUEUE_LANE} → Planning:"), receipt
     assert "DRE-700 is Done" in receipt
     assert "dispatches the planner" in receipt
     assert "a person still approves the plan" in receipt
@@ -260,7 +264,7 @@ def test_advance_never_moves_epic_to_in_progress():
     In Progress and not Triage — assert the literal transition target."""
     with patch.object(reconcile.linear_ops, "gql", return_value=_forward_blocks("DRE-700", "DRE-800")), \
         patch.object(reconcile.linear_ops, "comment_bodies", return_value=[]), \
-        patch.object(reconcile, "card_state", return_value="Backlog"), \
+        patch.object(reconcile, "card_state", return_value=reconcile.QUEUE_LANE), \
         patch.object(reconcile, "epic_blockers_unmet", return_value=False), \
         patch.object(reconcile.linear_ops, "cmd_advance") as advance, \
         patch.object(reconcile.linear_ops, "cmd_comment"):
@@ -274,7 +278,7 @@ def test_advance_never_moves_epic_to_in_progress():
 def test_advance_holds_epic_with_another_unmet_blocker():
     """B blocked-by A AND C; A Done but C not Done → B stays in Backlog."""
     with patch.object(reconcile.linear_ops, "gql", return_value=_forward_blocks("DRE-700", "DRE-800")), \
-        patch.object(reconcile, "card_state", return_value="Backlog"), \
+        patch.object(reconcile, "card_state", return_value=reconcile.QUEUE_LANE), \
         patch.object(reconcile, "epic_blockers_unmet", return_value=True), \
         patch.object(reconcile.linear_ops, "cmd_advance") as advance, \
         patch.object(reconcile.linear_ops, "cmd_comment"):
@@ -351,7 +355,7 @@ def test_close_finished_epics_no_advance_when_epic_stays_open():
 ROLLUP_PARENT, ROLLUP_BLOCKER, ROLLUP_WAITER = "DRE-6585", "DRE-6587", "DRE-6589"
 
 
-def _backlog_epic(identifier, *blocked_by, state="Backlog", more=False):
+def _backlog_epic(identifier, *blocked_by, state=reconcile.QUEUE_LANE, more=False):
     """An epic as the pass's epic record carries it (`EPIC_RECORD_GQL`)."""
     return {
         "id": f"uuid-{identifier}",
@@ -413,11 +417,11 @@ def test_dre_6585_replay_a_hand_closed_sibling_returns_the_waiter_to_planning():
     with patch.object(reconcile, "_close_epic_if_finished") as close:
         advance, comment = _return_pass(linear, {ROLLUP_WAITER})
     close.assert_not_called()
-    advance.assert_called_once_with(ROLLUP_WAITER, "Planning", "Backlog")
+    advance.assert_called_once_with(ROLLUP_WAITER, "Planning", QUEUE_FROM)
     comment.assert_called_once()
     who, receipt = comment.call_args.args
     assert who == ROLLUP_WAITER
-    assert receipt.startswith("🧹 Auto-advanced Backlog → Planning:"), receipt
+    assert receipt.startswith(f"🧹 Auto-advanced {reconcile.QUEUE_LANE} → Planning:"), receipt
     first_line = receipt.splitlines()[0]
     assert ROLLUP_BLOCKER in first_line
     assert "dispatches the planner" in receipt
@@ -429,7 +433,7 @@ def test_the_pass_releases_on_an_ordinary_card_blocker_done():
     """The blocker need not be an epic: an ordinary card Done releases too."""
     linear = _EpicRecords(_backlog_epic("DRE-800", ("DRE-701", "Done")))
     advance, comment = _return_pass(linear, {"DRE-800"})
-    advance.assert_called_once_with("DRE-800", "Planning", "Backlog")
+    advance.assert_called_once_with("DRE-800", "Planning", QUEUE_FROM)
     assert "DRE-701" in comment.call_args.args[1].splitlines()[0]
 
 
@@ -438,7 +442,7 @@ def test_the_pass_releases_on_a_canceled_blocker():
     linear = _EpicRecords(_backlog_epic(
         "DRE-800", ("DRE-700", "Canceled"), ("DRE-701", "Duplicate")))
     advance, comment = _return_pass(linear, {"DRE-800"})
-    advance.assert_called_once_with("DRE-800", "Planning", "Backlog")
+    advance.assert_called_once_with("DRE-800", "Planning", QUEUE_FROM)
     first_line = comment.call_args.args[1].splitlines()[0]
     assert "DRE-700" in first_line and "DRE-701" in first_line
 
@@ -493,7 +497,7 @@ def test_the_pass_returns_an_epic_a_person_sent_to_backlog():
     ]}
     linear = _EpicRecords(rejected)
     advance, comment = _return_pass(linear, {"DRE-800"})
-    advance.assert_called_once_with("DRE-800", "Planning", "Backlog")
+    advance.assert_called_once_with("DRE-800", "Planning", QUEUE_FROM)
     assert "a person still approves the plan" in comment.call_args.args[1]
 
 
@@ -504,7 +508,7 @@ def test_the_pass_posts_no_receipt_when_the_move_is_refused(capsys):
     that runs every sweep never repeats a false receipt."""
     linear = _EpicRecords(_backlog_epic("DRE-800", ("DRE-700", "Done")))
     advance, comment = _return_pass(linear, {"DRE-800"}, lambda *_: False)
-    advance.assert_called_once_with("DRE-800", "Planning", "Backlog")
+    advance.assert_called_once_with("DRE-800", "Planning", QUEUE_FROM)
     comment.assert_not_called()
     assert "DRE-800" in capsys.readouterr().out
     assert "DRE-800" not in reconcile._returned_epics
@@ -514,14 +518,14 @@ def test_the_hook_posts_no_receipt_when_the_move_is_refused():
     """The merge-time hook goes through the same helper, so the same holds."""
     with patch.object(reconcile.linear_ops, "gql", return_value=_forward_blocks("DRE-700", "DRE-800")), \
         patch.object(reconcile.linear_ops, "comment_bodies", return_value=[]), \
-        patch.object(reconcile, "card_state", return_value="Backlog"), \
+        patch.object(reconcile, "card_state", return_value=reconcile.QUEUE_LANE), \
         patch.object(reconcile, "epic_blockers_unmet", return_value=False), \
         patch.object(reconcile.linear_ops, "cmd_advance", return_value=False) as advance, \
         patch.object(reconcile.linear_ops, "cmd_comment") as comment:
         reconcile.reset_sweep_cards()
         reconcile.advance_unblocked_epics("DRE-700")
     reconcile.reset_sweep_cards()
-    advance.assert_called_once_with("DRE-800", "Planning", "Backlog")
+    advance.assert_called_once_with("DRE-800", "Planning", QUEUE_FROM)
     comment.assert_not_called()
 
 
@@ -572,7 +576,7 @@ def test_the_pass_does_not_return_an_epic_the_hook_already_returned():
         reconcile._return_epic_to_planning("DRE-800", "blocker DRE-700 is Done")
         reconcile.return_waiting_epics({"DRE-800"})
     reconcile.reset_sweep_cards()
-    advance.assert_called_once_with("DRE-800", "Planning", "Backlog")
+    advance.assert_called_once_with("DRE-800", "Planning", QUEUE_FROM)
     comment.assert_called_once()
 
 
@@ -619,7 +623,7 @@ def test_the_close_only_path_runs_no_pass():
 
 def test_the_promotion_read_hands_its_backlog_epics_to_the_pass():
     """`promote_ready(close_epics=True)` records the epics it read in Backlog —
-    the same set `closable_epics(cards, BACKLOG_LANE)` hands the close — less
+    the same set `closable_epics(cards, QUEUE_LANE)` hands the close — less
     the ones it closed."""
     epic = {**_child(identifier="DRE-800", parent=None),
             "parent": None, "children": {"nodes": [{"id": "kid"}]}}
@@ -636,3 +640,120 @@ def test_the_promotion_read_hands_its_backlog_epics_to_the_pass():
     assert reconcile._backlog_epics == {"DRE-800"}
     reconcile.reset_sweep_cards()
     assert reconcile._backlog_epics == set()
+
+
+# ---------------------------------------------------------------------------
+# DRE-6743: every gate gives the same answer under either queue name. A card
+# or an epic waiting in `Queued` is waiting exactly as one in `Backlog` is, so
+# each gate below is driven once per name in `lane_contract.QUEUE_LANES`.
+# ---------------------------------------------------------------------------
+import json  # noqa: E402
+import re  # noqa: E402
+
+_STATE_FILTER = re.compile(r'state: \{name: \{(eq|in): (\[[^\]]*\]|"[^"]*")\}\}')
+
+
+def _queued_child(lane, identifier="DRE-900"):
+    return {**_child(identifier=identifier), "state": {"name": lane},
+            "title": "a child", "createdAt": "2026-07-01T00:00:00.000Z",
+            "children": {"nodes": []}}
+
+
+def _queue_read(*cards):
+    """The promotion read's Linear: it serves the cards whose lane the query's
+    state filter names, so a read that asks for one name sees half the queue."""
+    def gql(query, variables=None):
+        found = _STATE_FILTER.search(query)
+        if "issues(" not in query or found is None:
+            raise reconcile.linear_ops.LinearError("unexpected query")
+        kind, names = found.groups()
+        wanted = set(json.loads(names)) if kind == "in" else {json.loads(names)}
+        return {"issues": {
+            "nodes": [c for c in cards if c["state"]["name"] in wanted],
+            "pageInfo": {"hasNextPage": False, "endCursor": None},
+        }}
+    return gql
+
+
+def _promote_from(lane, *, unmet, refusal=None):
+    """`promote_ready` over one child of an In Progress epic, read from `lane`
+    through the real promotion read. Returns (promoted, the from-lanes each
+    move was guarded on, the children the epic cap was asked about)."""
+    reconcile._write_failures.clear()
+    reconcile.reset_sweep_cards()
+    asked = []
+    with patch.object(reconcile.bureau_read, "mode", return_value="off"), \
+        patch.object(reconcile.linear_ops, "gql",
+                     side_effect=_queue_read(_queued_child(lane))), \
+        patch.object(reconcile, "epic_blockers_unmet", return_value=unmet), \
+        patch.object(reconcile, "card_state", return_value="Done"), \
+        patch.object(reconcile, "epic_records", return_value={}), \
+        patch.object(reconcile, "whole_epic_thread", return_value=[]), \
+        patch.object(reconcile.mid_epic, "last_green_light",
+                     return_value="2026-08-01T00:00:00.000Z"), \
+        patch.object(reconcile.epic_cap, "promotion_refusal",
+                     side_effect=lambda ident, *a: asked.append(ident) or refusal), \
+        patch.object(reconcile.linear_ops, "count_comments", return_value=0), \
+        patch.object(reconcile.linear_ops, "cmd_advance") as advance, \
+        patch.object(reconcile.linear_ops, "cmd_comment"):
+        promoted = reconcile.promote_ready(active_count=0)
+    reconcile._write_failures.clear()
+    reconcile.reset_sweep_cards()
+    return promoted, [c.args[2] for c in advance.call_args_list], asked
+
+
+@pytest.mark.parametrize("lane", lane_contract.QUEUE_LANES)
+def test_the_dependency_gate_answers_the_same_under_either_queue_name(lane):
+    """Blocked epic: the child holds. Unblocked: it promotes, out of a move
+    guarded on the lane it sits in."""
+    assert _promote_from(lane, unmet=True)[:2] == (0, [])
+    promoted, guards, _ = _promote_from(lane, unmet=False)
+    assert promoted == 1
+    assert len(guards) == 1 and lane in guards[0].split(",")
+
+
+@pytest.mark.parametrize("lane", lane_contract.QUEUE_LANES)
+def test_the_epic_caps_hold_reads_a_child_under_either_queue_name(lane):
+    """The cap's hold is asked about the child whichever name it waits under,
+    and holds it."""
+    promoted, guards, asked = _promote_from(
+        lane, unmet=False, refusal="⏸️ epic-cap-undecided: held")
+    assert asked == ["DRE-900"]
+    assert (promoted, guards) == (0, [])
+
+
+@pytest.mark.parametrize("lane", lane_contract.QUEUE_LANES)
+def test_advance_unblocked_epics_answers_the_same_under_either_queue_name(lane):
+    with patch.object(reconcile.linear_ops, "gql", return_value=_forward_blocks("DRE-700", "DRE-800")), \
+        patch.object(reconcile, "card_state", return_value=lane), \
+        patch.object(reconcile, "epic_blockers_unmet", return_value=False), \
+        patch.object(reconcile.linear_ops, "cmd_advance", return_value=True) as advance, \
+        patch.object(reconcile.linear_ops, "cmd_comment") as comment:
+        reconcile.reset_sweep_cards()
+        reconcile.advance_unblocked_epics("DRE-700")
+        reconcile.reset_sweep_cards()
+    advance.assert_called_once()
+    who, to, guard = advance.call_args.args
+    assert (who, to) == ("DRE-800", "Planning") and lane in guard.split(",")
+    assert comment.call_args.args[1].startswith(
+        f"🧹 Auto-advanced {reconcile.QUEUE_LANE} → Planning:")
+
+
+@pytest.mark.parametrize("lane", lane_contract.QUEUE_LANES)
+def test_the_return_pass_answers_the_same_under_either_queue_name(lane):
+    linear = _EpicRecords(_backlog_epic("DRE-800", ("DRE-700", "Done"), state=lane))
+    advance, comment = _return_pass(linear, {"DRE-800"},
+                                    advance_effect=lambda *a, **k: True)
+    advance.assert_called_once()
+    assert lane in advance.call_args.args[2].split(",")
+    comment.assert_called_once()
+
+
+@pytest.mark.parametrize("lane", lane_contract.QUEUE_LANES)
+def test_close_finished_epics_closes_from_either_queue_name(lane):
+    """An epic read in the queue is one `close_finished_epics` is handed,
+    under either name — `EPIC_CLOSE_LANES` carries both."""
+    assert lane in reconcile.EPIC_CLOSE_LANES
+    epic = {**_child(identifier="DRE-800", parent=None), "parent": None,
+            "children": {"nodes": [{"id": "kid"}]}}
+    assert reconcile.closable_epics([epic], lane) == {"DRE-800"}

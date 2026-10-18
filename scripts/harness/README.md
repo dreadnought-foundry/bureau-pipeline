@@ -411,7 +411,10 @@ Three properties, pinned by `tests/test_harness_lane_contract.py`:
 * **Unknown is never a pass.** A console it cannot reach reports UNEVALUATED,
   never agreement and never an empty list; the contract names the phase from
   which that unevaluated state becomes a hard failure. The console token is
-  minted `continue-on-error` for exactly that reason.
+  minted `continue-on-error` for exactly that reason. The console's list is
+  resolved through the module's own names joined with `+` (DRE-7050); a piece
+  it cannot resolve — an import, a call, a non-string element, a cycle — makes
+  the whole read unknown, never a partial list, and the log names that piece.
 * **A report that asserted nothing fails.** A green run that checked nothing is
   the failure mode the card exists to prevent.
 

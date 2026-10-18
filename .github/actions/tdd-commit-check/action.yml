@@ -1,5 +1,13 @@
 # The TDD commit-order check, callable by any product repo's own CI (DRE-2694).
 #
+# THE RULE (DRE-3009), as `scripts/check_tdd_commits.py` prints it: every code
+# commit needs a test commit since the previous code commit — for the first
+# code commit, since the branch began. Any code commit after the first may
+# instead carry an exemption from `config/tdd-exemptions.json`: a deletion is
+# detected from the diff, and the others are claimed with a `TDD-Exempt: <id>`
+# trailer on the commit. The list is the copy fetched beside the script, at the
+# caller's ref — the pull request under check cannot edit it.
+#
 # THE DETECTION GAP. `scripts/check_tdd_commits.py` (DRE-2022) has been wired
 # into exactly ONE workflow in the fleet — this repo's `tests.yml`. The sweep
 # of 2026-08-23 checked all four open PRs for commit order:
@@ -53,9 +61,11 @@
 # checkout appears.
 name: TDD commit discipline
 description: >-
-  Fail a pull request whose first code commit is not preceded by a commit
-  touching tests/ — the bureau's test-first discipline, enforced mechanically
-  from one source (DRE-2022, distributed by DRE-2694).
+  Fail a pull request with a code commit that has no test commit since the
+  previous code commit (for the first code commit, since the branch began)
+  and, after the first, no exemption from config/tdd-exemptions.json — the
+  bureau's test-first discipline, enforced mechanically from one source
+  (DRE-2022, distributed by DRE-2694, per change since DRE-3009).
 
 inputs:
   base-ref:

@@ -46,13 +46,27 @@ repository checked out at `RELEASE_SHA`. In return:
    than it should have been.
 6. **`deferred: <reason>` when a person is owed the deployment.** Exit 0,
    print one line beginning `deferred:`, and cut no tag. The train reports the
-   line verbatim as a no-op, the job concludes success, nothing alerts, and
-   deploy-lag goes on reading BEHIND until whoever the reason names has acted.
-   A deferral is not a failure and must never be dressed as one. A deferral
-   that is transient — another writer is mid-release, and the surface is free
-   in minutes — may end its line with `— re-arm in <N> minutes`, exactly
+   line verbatim as a no-op, the job concludes success, and deploy-lag goes on
+   reading BEHIND until whoever the reason names has acted. A deferral is not
+   a failure and must never be dressed as one. A deferral that is transient —
+   another writer is mid-release, and the surface is free in minutes — may end
+   its line with `— re-arm in <N> minutes`, exactly
    `deferred: <reason> — re-arm in <N> minutes`, and the train re-arms itself
    for that minute (DRE-6005). Without the clause the line behaves as above.
+
+   A deferral is loud all the same (DRE-5235). For a line with no re-arm
+   clause the train prints a `Release deferred` warning on the run, writes a
+   `## Deferred` block on its summary page, prints one `release-deferred:`
+   line in its log, and files one card per repo and surface in Green Light —
+   `<repo>: <surface> release deferred — <first 80 characters of the reason>`,
+   labeled `repo:<repo>`, `no-code`, `needs-human` and `agent:ops`. A later
+   lap comments on it only when the reason changed, numbers, times and commit
+   ids aside, and the surface's next verified tag closes it Done under a
+   `Released as <tag>` comment. A re-arming deferral does none of that. A
+   deferral an open `RELEASE ROLLED BACK:` or `RELEASE BROKEN:` card on the
+   same repo speaks for is warned of and files no card. None of it changes the
+   decision, its receipt or the job's conclusion, and a card that cannot be
+   filed is one more warning, never a red run.
 
 Anything else the surface needs — a smoke test, a cache invalidation — stays
 inside the script, where it already is.

@@ -780,6 +780,11 @@ class JudgedReadReachableTest(unittest.TestCase):
         )
 
 
+# The model home's read token (DRE-6940): a mint in the groom job, but not a
+# merged-PR read — see tests/test_model_home_scope.py.
+MODEL_HOME_MINT_ID = "model_home"
+
+
 class MergedPrTokenTest(unittest.TestCase):
     """DRE-4964: the context pack's merged-PR read has a token to read with —
     and since DRE-5746, one per owner.
@@ -808,8 +813,12 @@ class MergedPrTokenTest(unittest.TestCase):
         self.groom = _step(self.doc, GROOM_STEP)
 
     def _mints(self) -> list:
+        """The merged-PR read mints — not the model home's read token
+        (DRE-6940), which reads one repository's variables, is handed to the
+        drain too, and is held by tests/test_model_home_scope.py."""
         return [s for s in self.steps
-                if str(s.get("uses") or "").startswith(self.ACTION)]
+                if str(s.get("uses") or "").startswith(self.ACTION)
+                and s.get("id") != MODEL_HOME_MINT_ID]
 
     def _mint(self, owner: str) -> dict:
         found = [s for s in self._mints()
@@ -915,6 +924,7 @@ def groomer_owner_wiring_gaps(doc: dict, owners) -> list:
         mints = [s for s in steps
                  if str(s.get("uses") or "").startswith(
                      "actions/create-github-app-token@")
+                 and s.get("id") != MODEL_HOME_MINT_ID
                  and (s.get("with") or {}).get("owner") == owner]
         if len(mints) != 1 or not mints[0].get("id"):
             gaps.append(f"{owner}: {len(mints)} mint step(s) with an id")
@@ -997,8 +1007,9 @@ class ComputeVerifyPostTest(unittest.TestCase):
 
     def test_the_jobs_are_groom_lookup_verify_and_post(self):
         """DRE-5429 put the per-owner lookups between the groom and the
-        verify matrix."""
-        self.assertEqual(list(self.jobs), ["groom", "lookup", "verify", "post"])
+        verify matrix, and DRE-7242 the per-owner routing reads beside them."""
+        self.assertEqual(list(self.jobs),
+                         ["groom", "lookup", "routing", "verify", "post"])
 
     def test_post_needs_both_and_runs_whatever_verify_did(self):
         post = self.jobs["post"]
@@ -1048,7 +1059,7 @@ class ComputeVerifyPostTest(unittest.TestCase):
 
     def test_the_verify_job_fans_out_over_the_groom_output(self):
         verify = self.jobs["verify"]
-        self.assertEqual(set(_needs(verify)), {"groom", "lookup"})
+        self.assertEqual(set(_needs(verify)), {"groom", "lookup", "routing"})
         condition = _expression(verify.get("if"))
         for clause in ("inputs.mode != 'drain'",
                        "needs.groom.outputs.verify_matrix != ''",
@@ -1216,7 +1227,9 @@ class UnmappedRepoReadsNoCodeTest(unittest.TestCase):
         upload = steps[verdict_at + 1]
         with_ = upload.get("with") or {}
         self.assertEqual(with_.get("name"), "groom-verdict-${{ matrix.card }}")
-        self.assertEqual(with_.get("path"), "verdict.json")
+        # DRE-7242: the folded targets ride beside the verdict, for the proof.
+        self.assertEqual(str(with_.get("path")).split(),
+                         ["verdict.json", "verify-targets.json"])
         self.assertIs(with_.get("overwrite"), True)
         self.assertIn("always()", str(upload.get("if")))
 
@@ -1604,7 +1617,7 @@ class VerifyReadsTheLookupsTest(unittest.TestCase):
         self.fold = _named(self.job, FOLD_STEP)
 
     def test_a_dead_lookup_leg_never_stops_the_verify_matrix(self):
-        self.assertEqual(set(_needs(self.job)), {"groom", "lookup"})
+        self.assertEqual(set(_needs(self.job)), {"groom", "lookup", "routing"})
         condition = _expression(self.job.get("if"))
         self.assertTrue(condition.startswith("always()"),
                         "verify's `if` must open with always()")

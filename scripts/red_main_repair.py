@@ -57,10 +57,31 @@ gathers the inputs from GitHub's own records and acts on the output:
     is the record's own order (`created_at`, which a re-run keeps), never a
     comparison of sha strings. A later run still in progress, cancelled or
     failed does not count: the same fault may still stand.
+  * …asked twice (DRE-5700). The rule runs here once, before the agent, and
+    a fix that merges while the agent works is invisible to it. The agent
+    may then say so — one line in `/tmp/repair-superseded.txt`, no pull
+    request — and the Report step re-gathers the listing and asks the same
+    rule through `superseded` before it believes it. On 2026-10-03 repair run
+    37092915226 decided before main went green, its agent rightly opened
+    nothing, and the Report step failed the run as a dead agent 41 seconds
+    after main went green on 44eb259.
   * Fail-closed. Unreadable attempt records mean NO dispatch (a blind
-    dispatch could double-run a repair; the next failure event retries with
-    fresh records), and only a validated full 40-hex SHA ever becomes a
-    branch name.
+    dispatch could double-run a repair), and only a validated full 40-hex
+    SHA ever becomes a branch name.
+  * …and a run that cannot read its records is a FAILED run (DRE-6963). The
+    records are read by `gather-records`, which says why each read failed
+    (which read, the HTTP status, the message's first line — never the
+    token), reads the login's own rate limit and waits until its reset plus
+    ten seconds (two minutes when the rate limit cannot be read or is not
+    spent), and reads again: at most three tries, at most twenty minutes of
+    waiting. A read that never comes back leaves the FETCH-FAILED marker,
+    the decide step still answers `records-unreadable` with no dispatch, and
+    the gather exits 1 with one line — "the repair could not read its
+    attempt records after N tries: <reason>" — so the run ends red for the
+    medic and the alerts. On 2026-10-11 run 38169396180 ran out of calls,
+    said only "unreadable", and ended green; nothing else starts the repair
+    while main is red, because nothing merges onto a red main. The
+    comparisons (`gather-compares`) ride the same retry.
 
 CLI (stdout appends verbatim to $GITHUB_OUTPUT; humans read stderr):
 
@@ -71,6 +92,15 @@ CLI (stdout appends verbatim to $GITHUB_OUTPUT; humans read stderr):
         [--compares-file <f>]
 
     red_main_repair.py record-refs --refs-file <f> --head-sha <sha>
+
+    red_main_repair.py gather-records --repo <owner/name> \
+        --refs-out <f> --pulls-out <f>
+
+    red_main_repair.py gather-compares --repo <owner/name> \
+        --default-branch <d> --head-sha <sha> --refs-file <f> \
+        --pulls-file <f> --out <f>
+
+    red_main_repair.py superseded --history-file <f>
 
   --refs-file  raw REST payload of GET git/matching-refs/heads/repair/
   --pulls-file raw REST payload of GET pulls?state=all&per_page=100
@@ -93,6 +123,18 @@ attempt at `--head-sha` (`_sha_record_re`), one per line, so the workflow's
 comparison gather never restates the rule. A bad sha or an unreadable file
 prints nothing; exit 0 either way.
 
+`gather-records` writes the two record payloads `decide` reads, through
+`gather_reads` (the retry above, its sleeps injected so it is tested without
+waiting); exit 1 when a read never came back. `gather-compares` writes the
+`--compares-file` document the same way, a comparison that never came back
+null for its ref, and makes no call when the records are unreadable; exit 0. Their stdout is the job log, not $GITHUB_OUTPUT.
+
+`superseded` reads a `--history-file` through `superseding_run` — the same
+rule `decide` asks — and prints the green run's id with exit 0, or says why
+not on stderr and exits 1. A missing, marker-filled or malformed file exits 1:
+unreadable is never green. Its stdout is the run id alone, not
+$GITHUB_OUTPUT.
+
 Emits go=, branch=, attempt=, escalate=, reason=, the timeout_* detail
 (job / step / limit / commits) and superseded_by= (the green run's id, empty
 unless the reason is `superseded`) through `github_output`, so a
@@ -106,9 +148,12 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
+import subprocess
 import sys
-from datetime import datetime
+import time
+from datetime import datetime, timezone
 
 import fix_dead_run
 import github_output
@@ -441,6 +486,35 @@ def superseding_run(history) -> str:
     return ""
 
 
+def superseded(history_file: str, *, say=None) -> tuple[int, str]:
+    """The Report step's check of an agent that says the fault is gone (DRE-5700).
+
+    The decide step asks `superseding_run` once, before the agent; a fix that
+    lands while the agent works is invisible to it. On 2026-10-03 repair run
+    37092915226 decided at 03:21 UTC, main went green on 44eb259 at 04:00:14Z,
+    and the agent correctly opened nothing — which the Report step, 41 seconds
+    later, reported as a dead agent. So the agent may now say the fault is gone
+    (`/tmp/repair-superseded.txt`), and the step asks the SAME rule again on a
+    freshly gathered listing rather than believing it.
+
+    `(0, <green run id>)` when the rule names a run; `(1, "")` otherwise — a
+    history the gather could not read included, because unreadable is never
+    green.
+    """
+    say = say or (lambda line: print(line, file=sys.stderr))
+    history = load_history(history_file)
+    if history is None:
+        say("repair superseded: the run listing could not be read — the "
+            "agent's claim is not verified")
+        return 1, ""
+    green = superseding_run(history)
+    if not green:
+        say("repair superseded: no later green run of this workflow on another "
+            "commit of the default branch — the agent's claim is not verified")
+        return 1, ""
+    return 0, green
+
+
 def load_history(path: str):
     """The gathered history document, or None for "no history".
 
@@ -660,6 +734,10 @@ def _load_records(refs_file: str, pulls_file: str):
             raw_refs = json.load(f)
         with open(pulls_file) as f:
             raw_pulls = json.load(f)
+        # Both payloads are lists. GitHub's error object (the rate-limit
+        # answer of 2026-10-11, DRE-6963) is JSON too, and is not records.
+        if not isinstance(raw_refs, list) or not isinstance(raw_pulls, list):
+            return None
         refs = [
             (r.get("ref") or "").removeprefix("refs/heads/")
             for r in raw_refs
@@ -709,6 +787,226 @@ def record_refs(refs_file: str, head_sha: str) -> list[str]:
         return []
     rule = _sha_record_re(head_sha)
     return [name for name in names if rule.match(name)]
+
+
+# --------------------------------------------------------------------------- #
+# The reads, and waiting out the call limit (DRE-6963)                         #
+# --------------------------------------------------------------------------- #
+
+#: How many times a read is made before it is given up.
+GATHER_TRIES = 3
+
+#: The most one gather waits in total, across all its tries.
+GATHER_BUDGET_SECONDS = 20 * 60
+
+#: The wait when the login's own rate limit cannot be read, or does not show
+#: the limit spent (a 502, a secondary limit: the reset is not what failed).
+RATE_LIMIT_FALLBACK_SECONDS = 2 * 60
+
+#: Read again this long after the limit's reset, never on the second itself.
+RESET_MARGIN_SECONDS = 10
+
+#: What a read that never came back leaves in its file. Not JSON, so
+#: `_load_records` and `load_compares` read it as unreadable.
+FETCH_FAILED = "FETCH-FAILED"
+
+#: How much of a read's error message a reason line carries.
+REASON_CHARS = 300
+
+#: The environment values a reason line must never carry.
+_TOKEN_ENV = ("GH_TOKEN", "GITHUB_TOKEN", "GH_ENTERPRISE_TOKEN")
+
+_HTTP_STATUS = re.compile(r"\s*\(HTTP (\d{3})\)\s*$")
+
+#: How long one `gh api` call may take before it counts as a failed read.
+GH_TIMEOUT_SECONDS = 60
+
+
+def gh_api(path: str):
+    """`gh api <path>` as `(exit code, stdout, stderr)`; never raises."""
+    try:
+        done = subprocess.run(["gh", "api", path], capture_output=True,
+                              text=True, timeout=GH_TIMEOUT_SECONDS,
+                              check=False)
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return 1, "", f"gh api could not run: {type(exc).__name__}"
+    return done.returncode, done.stdout or "", done.stderr or ""
+
+
+def _redact(text: str) -> str:
+    for name in _TOKEN_ENV:
+        value = os.environ.get(name) or ""
+        if len(value) >= 4:
+            text = text.replace(value, "***")
+    return text
+
+
+def failure_reason(stdout: str, stderr: str) -> str:
+    """`HTTP <status>: <the message's first line>` for a failed read, the
+    status left out when there is none. The message is GitHub's own, off the
+    JSON body `gh api` prints; else the first line `gh` said. Never a token."""
+    lines = [line.strip() for line in (stderr or "").splitlines()
+             if line.strip()]
+    first = lines[0] if lines else ""
+    seen = _HTTP_STATUS.search(first)
+    status = seen.group(1) if seen else ""
+    message = ""
+    try:
+        body = json.loads(stdout or "")
+    except ValueError:
+        body = None
+    if isinstance(body, dict) and isinstance(body.get("message"), str):
+        message = body["message"]
+    if not message.strip():
+        message = _HTTP_STATUS.sub("", first).removeprefix("gh: ")
+    message = (message.strip().splitlines() or ["no error text"])[0]
+    message = _redact(message)[:REASON_CHARS]
+    return f"HTTP {status}: {message}" if status else message
+
+
+def rate_limit_wait(reader, now) -> tuple[int, str]:
+    """How long to wait before the next try, and why.
+
+    The login's own rate limit (`rate_limit`, which costs no call): spent,
+    the wait runs to its reset plus RESET_MARGIN_SECONDS. A read that fails,
+    an answer that cannot be read, or a limit with calls left is
+    RATE_LIMIT_FALLBACK_SECONDS.
+    """
+    fallback = RATE_LIMIT_FALLBACK_SECONDS
+    rc, out, err = reader("rate_limit")
+    if rc != 0:
+        return fallback, ("the rate limit could not be read either ("
+                          f"{failure_reason(out, err)})")
+    try:
+        core = json.loads(out)["resources"]["core"]
+        remaining, reset = int(core["remaining"]), int(core["reset"])
+    except (ValueError, KeyError, TypeError):
+        return fallback, "the rate limit answer could not be read"
+    if remaining > 0:
+        return fallback, f"the call limit is not spent ({remaining} left)"
+    reset_at = datetime.fromtimestamp(reset, timezone.utc)
+    return (max(reset + RESET_MARGIN_SECONDS - int(now()), 0),
+            f"the call limit is spent and resets at "
+            f"{reset_at:%H:%M:%S} UTC")
+
+
+def gather_reads(reads: dict, *, reader, sleep, now, say,
+                 tries: int = GATHER_TRIES,
+                 budget: int = GATHER_BUDGET_SECONDS) -> dict:
+    """Make each read in `reads` (`{name: api path}`), waiting out the call
+    limit between tries.
+
+    Every failed read is said, one line per read per try. After a try with a
+    failure the login's own rate limit says how long to wait
+    (`rate_limit_wait`), then only the reads that failed are made again — at
+    most `tries` tries, and at most `budget` seconds of waiting in all.
+    `reader(path)` answers `(exit code, stdout, stderr)`; `sleep` and `now`
+    are injected so the tests never wait.
+
+    Returns `bodies` (`{name: stdout}`, None for a read that never came
+    back), `failed` (`{name: its last reason}`), `tries` and `waited`.
+    """
+    bodies = {name: None for name in reads}
+    failed = {}
+    pending = list(reads)
+    waited = 0
+    attempt = 0
+    for attempt in range(1, tries + 1):
+        still = []
+        for name in pending:
+            rc, out, err = reader(reads[name])
+            if rc == 0:
+                bodies[name] = out
+                failed.pop(name, None)
+                continue
+            failed[name] = failure_reason(out, err)
+            say(f"repair gather: read {name} failed on try {attempt}/{tries}"
+                f" — {failed[name]}")
+            still.append(name)
+        pending = still
+        if not pending or attempt == tries:
+            break
+        wanted, why = rate_limit_wait(reader, now)
+        wait = max(min(wanted, budget - waited), 0)
+        if wanted > wait:
+            # The reset lies past what is left of the budget, so the next try
+            # comes before it — said, never a "waiting 0s".
+            why += (f" — past the {budget - waited}s left of the {budget}s"
+                    f" wait budget")
+        if not wait:
+            say(f"repair gather: try {attempt + 1}/{tries} now, without "
+                f"waiting — {why}")
+            continue
+        say(f"repair gather: waiting {wait}s before try {attempt + 1}/"
+            f"{tries} — {why}")
+        sleep(wait)
+        waited += wait
+    return {"bodies": bodies, "failed": failed, "tries": attempt,
+            "waited": waited}
+
+
+def _write(path: str, text: str) -> None:
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(text)
+
+
+def gather_records(repo: str, refs_out: str, pulls_out: str, *, reader,
+                   sleep, now, say) -> int:
+    """The attempt records — the repair/* refs and the pull requests — into
+    their files. Exit 0 when both were read; otherwise each unread file holds
+    the FETCH-FAILED marker (`records-unreadable` at the decide step), the
+    one-line summary is said as an error annotation, and the exit is 1: a
+    run that could not read its records is a failed run, never a green one
+    that found nothing to do."""
+    files = {"refs": refs_out, "pulls": pulls_out}
+    result = gather_reads(
+        {"refs": f"repos/{repo}/git/matching-refs/heads/repair/",
+         "pulls": f"repos/{repo}/pulls?state=all&per_page=100"},
+        reader=reader, sleep=sleep, now=now, say=say)
+    for name, path in files.items():
+        body = result["bodies"][name]
+        _write(path, body if body is not None else FETCH_FAILED + "\n")
+    if not result["failed"]:
+        return 0
+    name, reason = list(result["failed"].items())[-1]
+    say(f"::error::the repair could not read its attempt records after "
+        f"{result['tries']} tries: {name} — {reason}")
+    return 1
+
+
+def gather_compares(repo: str, default_branch: str, head_sha: str,
+                    refs_file: str, pulls_file: str, out: str, *, reader,
+                    sleep, now, say) -> int:
+    """Each record branch at `head_sha` compared with the default branch, as
+    `{"<ref>": {status, ahead_by} | null}` into `out`. A comparison that
+    never comes back is null for its ref, which `decide` reads as "nothing
+    known" — `duplicate-event`, never `finish-unlanded` (DRE-6526). Exit 0.
+
+    Records that cannot be read (`_load_records` is None — the refs read
+    came back and the pulls read did not, say) make no call and no wait:
+    `decide` answers `records-unreadable` whatever the comparisons hold, and
+    a second twenty minutes of waiting would only spend the job's 45."""
+    refs = record_refs(refs_file, head_sha)
+    if _load_records(refs_file, pulls_file) is None:
+        _write(out, json.dumps({ref: None for ref in refs}) + "\n")
+        say("compared no repair branch: the attempt records are unreadable,"
+            " so the decision is records-unreadable whatever they would say")
+        return 0
+    result = gather_reads(
+        {ref: f"repos/{repo}/compare/{default_branch}...{ref}" for ref in refs},
+        reader=reader, sleep=sleep, now=now, say=say)
+    compares = {}
+    for ref in refs:
+        try:
+            payload = json.loads(result["bodies"][ref] or "")
+        except ValueError:
+            payload = None
+        compares[ref] = ({"status": payload.get("status"),
+                          "ahead_by": payload.get("ahead_by")}
+                         if isinstance(payload, dict) else None)
+    _write(out, json.dumps(compares) + "\n")
+    say(f"compared {len(refs)} repair branch(es) with {default_branch}")
+    return 0
 
 
 def outputs(decision: dict) -> str:
@@ -762,12 +1060,44 @@ def main(argv: list[str]) -> int:
     r = sub.add_parser("record-refs")
     r.add_argument("--refs-file", required=True)
     r.add_argument("--head-sha", required=True)
+    g = sub.add_parser("gather-records")
+    g.add_argument("--repo", required=True)
+    g.add_argument("--refs-out", required=True)
+    g.add_argument("--pulls-out", required=True)
+    c = sub.add_parser("gather-compares")
+    c.add_argument("--repo", required=True)
+    c.add_argument("--default-branch", required=True)
+    c.add_argument("--head-sha", required=True)
+    c.add_argument("--refs-file", required=True)
+    c.add_argument("--pulls-file", required=True)
+    c.add_argument("--out", required=True)
+    # DRE-5700: the Report step's re-ask of the superseded rule. Prints the
+    # green run's id and exits 0, or exits 1.
+    s = sub.add_parser("superseded")
+    s.add_argument("--history-file", required=True)
     args = parser.parse_args(argv)
+
+    if args.cmd == "superseded":
+        code, green = superseded(args.history_file)
+        if green:
+            print(green)
+        return code
 
     if args.cmd == "record-refs":
         for name in record_refs(args.refs_file, args.head_sha):
             print(name)
         return 0
+
+    # DRE-6963: the reads, on the real `gh` and the real clock.
+    live = {"reader": gh_api, "sleep": time.sleep, "now": time.time,
+            "say": lambda line: print(line, flush=True)}
+    if args.cmd == "gather-records":
+        return gather_records(args.repo, args.refs_out, args.pulls_out,
+                              **live)
+    if args.cmd == "gather-compares":
+        return gather_compares(args.repo, args.default_branch, args.head_sha,
+                               args.refs_file, args.pulls_file, args.out,
+                               **live)
 
     # Stdout is the output FILE for this step, so the decision is made with
     # that channel shut: anything this module or anything it imports prints
@@ -782,7 +1112,8 @@ def main(argv: list[str]) -> int:
                         "superseded_by": "", "infra_signature": "",
                         "infra_line": "", "compare_unreadable": ""}
             print("repair decide: attempt records unreadable — fail-closed, no "
-                  "dispatch (the next failure event retries with fresh records)",
+                  "dispatch (the gather step already waited out the call "
+                  "limit, said why each read failed, and fails this run)",
                   file=sys.stderr)
         else:
             refs, pulls = records

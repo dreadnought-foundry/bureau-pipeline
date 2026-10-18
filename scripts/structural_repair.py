@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
 """Structural label repair, parents first (DRE-2681).
 
-A deterministic sweep over the WHOLE Backlog — every row, not the first
+A deterministic sweep over the WHOLE queue — every row, not the first
 hundred — that repairs the one thing inheritance can settle without judgment:
 a card carrying no `initiative:<x>` label when its parent carries one.
 
 Why parents first. A pass that walks the card list top to bottom repairs a
 child whose parent is already labelled and reports the rest as unrepairable —
 including children whose parent sits further down the same list and is itself
-repairable. On the 2026-08-23 census, 66 of the Backlog's cards carried no
+repairable. On the 2026-08-23 census, 66 of the queue's cards carried no
 `initiative:*` label: 26 could inherit from a parent and 40 could not. Resolving
 parents first means a parent repaired in THIS pass can supply the value to its
 own children in the same run.
@@ -34,7 +34,11 @@ CLI:
   repair            applies the planned labels, then prints the same report.
 
 Both print the same proof line: whether this run repaired a card BEYOND the
-100th row of the Backlog. A run that touched only the first 100 rows has not
+100th row of the queue.
+
+The queue is `Queued`, read under every name it carries (`lane_contract.
+QUEUE_LANES`, DRE-6746): a card filed under either name is in the census, and
+reads the same. A run that touched only the first 100 rows has not
 proven the pagination fix and says so itself, in those words.
 
 Auth: LINEAR_API_KEY env var (shared with linear_ops.py).
@@ -42,10 +46,12 @@ Auth: LINEAR_API_KEY env var (shared with linear_ops.py).
 
 from __future__ import annotations
 
+import json
 import os
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from lane_contract import QUEUE_LANES  # noqa: E402 — the queue, read under every name (DRE-6746)
 import linear_ops  # noqa: E402
 import validate_card  # noqa: E402
 
@@ -97,7 +103,7 @@ def _number(card: dict) -> int:
 def parents_first(cards: list[dict]) -> list[dict]:
     """`cards` reordered so a card's parent — when the parent is in the set —
     always comes first. Cards whose parent is absent (most parents are epics
-    outside the Backlog) are roots. Stable by card number otherwise.
+    outside the queue) are roots. Stable by card number otherwise.
 
     Marks a card visited BEFORE recursing, so a parent cycle terminates with an
     odd order instead of hanging the pass.
@@ -243,8 +249,8 @@ def format_report(cards: list[dict], repairs: list[dict], gaps: list[dict],
     and whether it proved anything about the pages past the first."""
     verb = "repaired" if applied is not None else "repairable (nothing written)"
     lines = [
-        f"structural repair: {len(cards)} Backlog card(s) read "
-        "(pagination followed to exhaustion)",
+        f"structural repair: {len(cards)} card(s) read from "
+        f"{' and '.join(QUEUE_LANES)} (pagination followed to exhaustion)",
         f"{verb} {len(repairs) if applied is None else len(applied)}:",
     ]
     lines += [
@@ -261,15 +267,15 @@ def format_report(cards: list[dict], repairs: list[dict], gaps: list[dict],
 
 
 def fetch_backlog() -> list[dict]:
-    """Every Backlog card with its parent's state AND labels — the parent's
-    labels inline, so inheritance costs no extra read per card. Paginated to
-    exhaustion: a repair pass that stops at row 100 cannot repair the rows this
-    card exists for."""
+    """Every card in the queue, under any name in `QUEUE_LANES`, with its
+    parent's state AND labels — the parent's labels inline, so inheritance
+    costs no extra read per card. Paginated to exhaustion: a repair pass that
+    stops at row 100 cannot repair the rows this card exists for."""
     return linear_ops.gql_paged(
         """query($after: String) {
            issues(first: 100, after: $after, filter: {
              team: {key: {eq: "DRE"}},
-             state: {name: {eq: "Backlog"}}
+             state: {name: {in: %s}}
            }) { nodes {
              identifier
              state { name }
@@ -277,7 +283,7 @@ def fetch_backlog() -> list[dict]:
              parent {
                identifier state { name } labels { nodes { name } }
              }
-           } pageInfo { hasNextPage endCursor } } }"""
+           } pageInfo { hasNextPage endCursor } } }""" % json.dumps(list(QUEUE_LANES))
     )
 
 
@@ -285,9 +291,10 @@ def apply_repairs(repairs: list[dict]) -> list[dict]:
     """Write the planned labels. Returns the repairs that actually LANDED —
     the report counts those, never the ones it merely intended.
 
-    One 🔧 comment per card, in the Todo gate's own words — the repair has to be
-    visible on the card, not only in a run log nobody keeps. A write failure is
-    reported and the pass continues: one bad card must not strand the rest.
+    One 🔧 comment per card, in the card-validation gate's own words — the
+    repair has to be visible on the card, not only in a run log nobody keeps.
+    A write failure is reported and the pass continues: one bad card must not
+    strand the rest.
     """
     applied: list[dict] = []
     for r in repairs:

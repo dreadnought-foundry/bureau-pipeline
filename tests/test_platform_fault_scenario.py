@@ -236,6 +236,7 @@ def run_report(
     local_work="false",
     env_extra=None,
     card_pr_exit=0,
+    handback="",
 ):
     """Execute the real Report block. Returns (proc, journal).
 
@@ -243,6 +244,8 @@ def run_report(
     DELIVERY through (tests/test_push_rescue_delivery.py): the rescue's own
     outputs reach the step through its `env:` block, and exit 3 from
     `card_pr.py` is the unreadable PR lookup that used to have the last word.
+    `handback` is the agent's hand-back note, written to this run's own notes
+    directory when it is not empty (DRE-7163).
     """
     _checkout(td, card_pr_exit=card_pr_exit)
     binary = _git_stub(td)
@@ -257,12 +260,14 @@ def run_report(
             fh.write(pre_agent_log)
 
     # The three stop-before-a-PR notes the step checks for. None of them
-    # exists in any of these scenarios, and a leftover from another test would
-    # silently take the branch — so they are cleared, not assumed absent.
-    for path in ("/tmp/agent-handback.txt", "/tmp/agent-escalation.txt",
-                 "/tmp/agent-blocker.txt"):
-        if os.path.exists(path):
-            os.remove(path)
+    # exists in any of these scenarios, and a note from another test — or
+    # another copy of this suite — would silently take the branch. So the step
+    # reads them from an empty directory of this run's own (DRE-6961).
+    notes = os.path.join(td, "notes")
+    os.makedirs(notes)
+    if handback:
+        with open(os.path.join(notes, "agent-handback.txt"), "w", encoding="utf-8") as fh:
+            fh.write(handback)
 
     # DRE-3484: the Report block carries NO `${{ }}` any more. Its five values
     # arrive as env instead (below), because a run block containing even one
@@ -283,6 +288,7 @@ def run_report(
         env=dict(
             os.environ,
             PATH=binary + os.pathsep + os.environ["PATH"],
+            AGENT_NOTES_DIR=notes,
             CARD=CARD,
             MODEL_USED="claude-opus-5",
             CLAUDE_OUTCOME=claude_outcome,
@@ -454,6 +460,58 @@ class TurnCapDeathScenario(unittest.TestCase):
         counted = ops(journal, "count-comments")
         self.assertEqual(len(counted), 1)
         self.assertIn(dead_run.TURN_TAG, counted[0]["args"])
+
+
+#: A hand-back note longer than a pipe holds: 1,600 lines of 64 bytes. The
+#: receipt quotes it whole, and it still fits one argument (128 KiB).
+LONG_HANDBACK = "".join(
+    f"- piece {n:04d}: a split line the agent wrote before the cap.......\n"
+    for n in range(1600)
+)
+
+#: What a Linux pipe holds before its writer blocks, what `head` reads at a
+#: time, and the most one argument may carry (MAX_ARG_STRLEN).
+PIPE_BUFFER = 65536
+HEAD_READ = 8192
+ARGUMENT_LIMIT = 131072
+
+
+class DecisionReadScenario(unittest.TestCase):
+    """DRE-7163: the receipt must not depend on how `decide`'s lines reach a pipe.
+
+    The block reads the action off `decide`'s first line. It used to do that
+    with `printf '%s\\n' "$DECISION" | head -1`, under `set -eo pipefail`.
+    `printf` writes line by line, and `head` exits once it has the first line.
+    When `head` ran between two of those writes, the next write met a closed
+    pipe and died of SIGPIPE, which made the pipeline exit 141. `set -e` then
+    ended the block before it posted anything. That was the random
+    IndexError on `comments(journal)[0]`, seen in the suite-green job where
+    four copies of the suite share four cores. A decision longer than the pipe
+    holds turns the race into a certainty, so this drives one.
+    """
+
+    def report(self):
+        with tempfile.TemporaryDirectory() as td:
+            return run_report(td, execution=TURN_CAP_DEATH, handback=LONG_HANDBACK)
+
+    def test_the_fixture_is_longer_than_a_pipe_holds(self):
+        # Guards the fixture: a shorter note would make the tests below pass
+        # most of the time on the old block too, and a longer one could not
+        # be posted as one argument at all.
+        self.assertGreater(len(LONG_HANDBACK), PIPE_BUFFER + HEAD_READ)
+        self.assertLess(len(LONG_HANDBACK) + 4096, ARGUMENT_LIMIT)
+
+    def test_a_long_decision_still_posts_its_receipt(self):
+        proc, journal = self.report()
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertEqual(len(comments(journal)), 1, comments(journal))
+        body = comments(journal)[0]
+        self.assertIn(dead_run.TURN_TAG, body)
+        self.assertIn("piece 1599", body)
+
+    def test_a_long_decision_still_moves_the_card(self):
+        _, journal = self.report()
+        self.assertEqual([e["args"][1] for e in ops(journal, "advance")], ["Planning"])
 
 
 class UnlandedParkScenario(unittest.TestCase):

@@ -63,6 +63,13 @@ fast path shipped, which the sweep moves straight to Planning (DRE-4150, point
      computes the proposal, reads the card's thread and posts nothing, then
      `groom_verify_agent.py targets`, which reads each Planning and spare
      card's text — this job holds the Linear key — and writes the matrix.
+     `targets` alone is handed the read door's settings (DRE-7242), so its
+     problem search asks the door before Linear; `propose` is not, and runs
+     as before. A stub that grants no `id-token: write` mints no token for
+     the door, and the search falls back to Linear. The step before it runs
+     the door's identity check (`bureau_read.py check-ref`), as
+     `reconcile.yml` does: a `pipeline_ref` other than the ref the stub
+     called refuses the run.
    - **`lookup`** (DRE-5429) runs between them, one leg per owner in the
      roster, each on that owner's own App token: an installation token sees
      one installation, and the fleet spans three owners. Each leg runs
@@ -70,15 +77,35 @@ fast path shipped, which the sweep moves straight to Planning (DRE-4150, point
      no Linear key and no model credential, and a leg whose token could not
      be minted still uploads a document naming its owner unread. A dead leg
      does not stop `verify`.
+   - **`routing`** (DRE-7242) runs beside `lookup`, never after it, on the
+     same owner matrix: each leg mints a token holding `actions: read` alone,
+     runs `groom_routing.py owner` and uploads `groom-routing-<owner>`. An
+     installation that refuses `actions: read` costs only the routing facts:
+     the leg still uploads a document naming its owner unread. `verify` folds
+     the documents with `groom_routing.py fold` right after the lookups' fold,
+     so every row carries the `routing` block before `prepare`, and a dead
+     leg does not stop `verify`.
    - **`verify`** is that matrix: one read-only agent per card, reading the
      card's repo on its default branch under `target/` with a token that can
      only read that one repo, and holding no Linear key at all. Each agent
      asks whether the card's problem can still be seen in that code — not
      whether the card's own fix merged — and answers `still-needed`,
      `partly-solved`, `done-elsewhere`, `obsolete`, `not-worth-it` or
-     `unverified` (DRE-5304). Every answer but `unverified` needs a
-     `file:line` proof from the code, or it is recorded `unverified` with
-     the reason `no proof`. `done-elsewhere`, `obsolete` and `not-worth-it`
+     `unverified` (DRE-5304). Every answer but `unverified` needs one
+     anchored proof item, or it is recorded `unverified` with the reason
+     `no proof` (DRE-7240): a `file:line` from the code, a Done card with
+     its merged pull request from the row's `matched_work`, or a fact from
+     the row's `routing` — the last two counted only when the runner itself
+     handed them to the agent, and each shown on the page by the runner's
+     own `fact` line, and one the runner did not confirm left out of the
+     proof. A Cancel of a card with children, in any state,
+     counts only a Done card not under it or a routing fact, never a
+     `file:line` quote, else it is `unverified` with `proof belongs to a
+     child`; a Cancel counting a pull request that did part of the card,
+     even beside other proof, is recorded `partly-solved` with `adjusted:
+     partial pull request`; and
+     each verdict carries `rested_on`, what it rested on.
+     `done-elsewhere`, `obsolete` and `not-worth-it`
      put the card on the Cancel list; `partly-solved` puts a Planning card on
      the Rewrite first list, with the agent's drafted body, and `unverified`
      takes a Planning card out of the batch and leaves it in Intake (DRE-6666).
@@ -86,7 +113,11 @@ fast path shipped, which the sweep moves straight to Planning (DRE-4150, point
      card whose repo is not in `config/repo-map.json` is `excluded`, naming
      the slug (DRE-5746), and on its leg no code is read and no model is
      called. A leg that dies is `unverified`, never `still-needed`, and one
-     dead leg never cancels the others.
+     dead leg never cancels the others. Each leg's `groom-verdict-<card>`
+     artifact keeps `verify-targets.json`, as the leg held it after both
+     folds, beside `verdict.json` (DRE-7242) — the only copy that holds the
+     `routing` block and the read pull requests under `matched_work`.
+     `apply` reads only the files named `verdict.json`.
    - **`post`** writes the verdicts onto the record
      (`groom_verify_agent.py apply`) and runs
      `post --card DRE-N --proposal proposal-verified.json`, which posts it —
@@ -95,7 +126,17 @@ fast path shipped, which the sweep moves straight to Planning (DRE-4150, point
      not in the batch. After the proposal, `post` puts the drafted rewrite
      of each Rewrite first card on that card, once per body (DRE-6666).
 
-   On a drain only `groom` runs, exactly as before. The page carries a
+   On a drain only `groom` runs, exactly as before.
+
+   **A replay** (DRE-7242) is a hand dispatch with `replay` set to a stored
+   proposal's path inside the pipeline checkout. The `groom` job runs
+   `groom_replay.py base` over it instead of `propose`, and the lookups,
+   routing and verify run as on any morning, over today's code and today's
+   proof rules. The `post` job posts to no card, whatever `card` says, and
+   writes no model-attempt receipt: it prints the page to the log and the
+   step summary, then `groom_replay.py report`'s one `groom-replay:` line per
+   card. A `drain` with `replay` set refuses before any write. The scheduled
+   morning never sets it. The page carries a
    `## Verified against main` section after the Cancel list, and its
    `Verify step:` line is the verify total — cards, dollars and wall clock —
    so the verify total is on the proposal page, never in a separate comment.
@@ -285,7 +326,7 @@ rule — `id`, a plain-English `reason` and `condition` with placeholders, and
 evaluators disagree on the ids. The six rules:
 
 1. `read-waits-on-open-card` — the ranked read's `depends on` line names a
-   card that is open: Planning, Green Light, Backlog, Todo, In Progress or In
+   card that is open: Planning, Green Light, Queued, Todo, In Progress or In
    Review. A named card with no child and no `[EPIC]` title holds the card
    until it is Done. A named epic holds it until the epic is **built out or
    Done**, read exactly as the sweep's epic gate reads a blocker
@@ -294,14 +335,20 @@ evaluators disagree on the ids. The six rules:
    epic not yet In Progress is not built out. So rule 1 holds a card for
    another epic until that epic is built out, and never for the card's own
    parent: a child waiting on its own epic is DRE-6664's in-flight case.
-2. `file-named-by-in-flight-card` — a file the card names in backticks is
-   named by a card in Planning, Todo, In Progress or In Review, in the same
-   repo, each lane read once a morning. A file cited by more than
+2. `file-named-by-in-flight-card` — a path the card names in backticks is
+   named by a card in Planning, Todo, In Progress or In Review, each lane read
+   once a morning. Two cards match only on the **same path in the same repo**
+   (DRE-6908), never on the bare file name: on 2026-10-11 the basename tied
+   `scripts/runners/README.md` to `console/backend/monitors/README.md`, and
+   the Ready when cell waited on a card that had nothing to do with it. A path
+   with no directory is the repo's own file at that bare path, so `README.md`
+   matches only another card's bare `README.md` in the same repo. The Reason
+   cell prints each path as the card wrote it. A path cited by more than
    `BOILERPLATE_THRESHOLD` cards across Intake and the four lanes is
-   reference, not ownership — `collision_report`'s rule. Ready when that card
-   is Done.
+   reference, not ownership — `collision_report`'s rule, counted by path.
+   Ready when that card is Done.
 3. `child-of-epic-not-in-progress` — the card's parent epic is in Intake,
-   Planning, Green Light, Backlog, Todo or Triage. Ready when the epic is In
+   Planning, Green Light, Queued, Todo or Triage. Ready when the epic is In
    Progress. The epic card itself trips nothing and keeps its slot as a unit
    of one, and the verify step's own exclusion keeps it in Intake with its
    reason on the page — nothing of the unit moves until a person moves the
@@ -423,9 +470,30 @@ verify agent — asks `groomer.cancel_refusal` first, off the `open_children`
 count every row of the sequence carries (a child not Done, Canceled or
 Duplicate, read from the card's own `children`, since its children are rarely
 in the same lane). An epic whose children are all closed is a finished
-container and may be canceled like any card. A refused card stays where the
+container, and only the verify agent may cancel it (DRE-7241, below). A refused card stays where the
 order put it: in its Planning slot with the refusal as its Why, or waiting in
-`not-now`. Each refusal in the morning's set is listed in `cancels_refused` and on the page under
+`not-now`.
+
+**Every Cancel row carries its proof, and an epic is canceled only on the
+verify agent's check (DRE-7241).** Over 13 mornings 3 Cancel rows in 10 were
+wrong, and a ranked-read Cancel whose pointer the plain-English guard withheld
+went on the list with the withheld sentence as its whole reason. So every row
+in `outcomes["dead"]` carries a `proof` list: `{"source": "the card's
+Superseded by line", "quote": <the line>}`, `{"source": "the deterministic
+check", "quote": <check_reason>}`, `{"source": "the ranked read", "quote":
+<the pointer>}`, or the verify agent's own verdict items with their runner
+`fact` lines, beside its `rested_on`. Each writer then asks
+`groomer.cancel_proof_refusal` after `cancel_refusal`: a row with no proof is
+refused `no proof on the row`, and a row from the line, the check or the ranked
+read whose card has any child, in any state, is refused `an epic is canceled
+only on the verify agent's check` — none of the three can say whose work it
+points at. Every row that carries `open_children` carries `children` too
+(`groomer.child_count`), and neither is in the proposal id. A refused card
+keeps its place and is listed under `## Cancels refused` like any other. The
+Cancel table's Reason cell ends with each proof line (`proof_reason`); the
+verdict line and a Rewrite first row's "What remains" add `rested on: <words>`
+when the verdict carries `rested_on`, and an `adjusted` verdict says `(a pull
+request did part of it)`. Each refusal in the morning's set is listed in `cancels_refused` and on the page under
 `## Cancels refused`, after the Cancel list, naming who proposed the Cancel;
 the section is absent on a morning with none. The lane is read 50 cards a page
 (`POPULATION_PAGE`) because the `children` selection makes each page heavier.
@@ -502,8 +570,11 @@ before this card.
 
 A card on the Cancel list always says what it came from, in its reason:
 `superseded by DRE-N` is a declaration a person wrote on the card, and anything
-else is the evidence the ranked read named — or, when the plain-English guard
-refused that evidence, the withheld sentence, never an empty cell. A
+else is the evidence the ranked read named — and the reason ends with the
+row's proof line, which names the source. When the plain-English guard refused
+that evidence there is no proof to show, so the card is not put on the Cancel
+list at all (DRE-7241): it keeps its place and is listed under `## Cancels
+refused`, and its pointer is still counted as a withheld reason. A
 `Superseded by:` line that names nothing checkable is reported as a gap and the
 card is sequenced normally: a recommendation nobody can check is one nobody
 should act on. The page's `Named nothing:` line says so, and it names only a
@@ -541,7 +612,7 @@ to ten cards behind it, in proposal order:
 — the description's own line, or a card or PR the ranked read's evidence names
 — stands only if X is **Done**, is a **merged PR**, or is **approved and in
 flight** — in a live lane of the lane contract's `work` segment other than
-Done, read off `config/lane-contract.json`: Backlog, Todo, Hand-work (live
+Done, read off `config/lane-contract.json`: Queued, Todo, Hand-work (live
 since DRE-5320), In Progress or In Review (DRE-5348).
 Otherwise the Cancel is
 rejected, and the card stays on the Planning list with the reason as its Why.
@@ -629,14 +700,17 @@ in `## Why each card is in the batch`.
 **The proof line (DRE-5746).** That verdict is one plain line —
 `Verified against main: **<verdict>** — <summary>; <proof>; <proof>` — and
 every proof the agent gave is on it, in the form the Cancel reason already
-uses: `path:line — quote` for a `file:line` item, `source — quote` for any
-other (`groomer.proof_line`, the one formatter both read). Not a new
+uses: `path:line — quote` for a `file:line` item, `<fact> — quote` for a
+done-work or routing item, ending `(whole card: the agent's reading)` when
+the files could not check the agent's `whole` (DRE-7240), and
+`source — quote` for any other (`groomer.proof_line`, the one formatter
+both read). Not a new
 `- **Label:**` line and not a column of the batch table: the console and the
 drain parse both, and they render byte for byte as before. A Planning card
 with no proof is one whose verdict is `unverified`, and its line carries the
 reason instead, one of exactly `agent step failed`, `agent step skipped`,
-`no verdict file`, `no proof`, `unreadable answer`, `no verdict artifact` or
-`lookup failed: <why>` (`groom_verify_agent.UNVERIFIED_REASONS`); a verdict
+`no verdict file`, `no proof`, `unreadable answer`, `no verdict artifact`,
+`proof belongs to a child` or `lookup failed: <why>` (`groom_verify_agent.UNVERIFIED_REASONS`); a verdict
 document naming any other reason is read as `unreadable answer`. An
 `excluded` card is never on the Planning list. A cost or clock the step could not read
 says `unknown`, never zero. A record with no `verify` block renders byte for
@@ -644,9 +718,25 @@ byte as before. The drain still reads the posted comment, never the artifact,
 and reads a verify-agent Cancel row exactly like any other.
 
 **What verify excludes without judging (DRE-5306).** `groom_verify_agent.py
-targets` reads each card with its board context — age, labels, parent,
-children, the last move and every comment with who said it — in one Linear
-request per card, and excludes five kinds before any agent runs, never by the
+targets` reads each card with its board context — age, labels, parent and
+its title, children, relations both ways, the last move and the thread with
+who said each comment — in one Linear request per card, plus one per older
+page of fifty comments up to 200 (DRE-7238). `prepare` holds what that adds
+to the agent's input to known limits: each comment cut at 2,000 characters,
+the thread shown held to 30,000 characters with the newest kept, the board
+context saying `comments_read`, `comments_shown` and `thread_whole`, and at
+most 20 relations shown (`<n> more relation(s) not shown` names the rest),
+each title and the parent's cut at 200 characters. Children and labels are
+not cut: Linear returns at most fifty of each.
+Two fenced sections follow the Layer A evidence: the Done cards and merged
+pull requests matched to the card's problem (`matched_work`, at most 20,000
+characters, a pull request past that shown by its line alone) and where jobs
+ran recently (`routing`, at most 60 facts, the card's own repo first). A row
+at every limit — 200 long comments, 50 relations each way, 50 children and
+50 labels of 40 characters — adds 64,013 characters, under the 65,000 target
+and roughly 16,000 tokens. A label name is the one field not held to a
+length, so that figure assumes labels of that size. It also
+excludes five kinds before any agent runs, never by the
 model: `parent epic with <n> open child(ren)` (a child not Done, Canceled or
 Duplicate — an epic with no open child is judged like any card),
 `hand-built` or `operator-step` (whichever hand mark the card carries, read
@@ -681,8 +771,9 @@ backticked file paths in its body, the first `MAX_PATHS` = 3 of them; a card
 naming more says how many were left out. In the groom job, which holds the
 Linear key, `groom_lookups.cards` asks Linear for newer cards naming those
 paths, which costs one Linear request per card that names a file and none for
-any other — a 30-card morning adds at most 30 requests to the fleet key's
-2,500 an hour. Then the GitHub half runs once per owner, on that owner's own
+any other. The problem search below adds at most two more per card that is
+not excluded, so a 30-card morning adds at most 90 requests to the fleet
+key's 2,500 an hour. Then the GitHub half runs once per owner, on that owner's own
 token, because an App installation token sees one installation: for each
 repo, the commits that touched each path since the card was filed, and the
 merged pull requests they belong to. In the verify leg `groom_lookups.py fold`
@@ -719,6 +810,29 @@ proposal" step and a warning on the run's summary page, it is
 `verify.not_posted_why` in the kept `proposal-verified.json`, and on a real
 morning the judgement receipt still lands on the standing card carrying the
 not-posted clause, while a dry run posts nothing at all.
+
+**The work matched to a card's problem (DRE-7236).** On 2026-10-10 two cards
+were removed although their problems had been fixed elsewhere: DRE-4049's by
+DRE-5942 in another file, and DRE-5657's by DRE-5658. The path lookups could
+not see either. So `groom_lookups.cards` also searches for each card that is
+not excluded, including one that names no file, and writes the result to the
+row's `matched_work`. The search terms come from `problem_terms`: the card's
+identifier, its paths, up to three backticked spans, and up to six two-word
+phrases from its title, at most `MAX_TERMS` = 12 in all. The read door's
+search (`bureau_read.search`) is asked first. When the door is off, has no
+token, or cannot answer every term, Linear's `searchIssues` is asked instead,
+and `source` records which one answered. From what the search finds, the
+groomer keeps the Done cards completed after the card was filed, never the
+card itself. They are ranked by how many terms each matched and then by
+newest completion, at most `MAX_MATCHED_CARDS` = 8. Each kept card carries its
+parent chain, read `MAX_ANCESTRY` = 4 levels up, and the GitHub pull requests
+on its attachments, at most `MAX_MATCHED_PRS` = 3. Each owner's leg reads
+those pull requests in its own repos after its path lookups and under the
+same budget and clock: the merge time, the title, the body (cut at 1,500
+characters) and up to `MAX_PR_FILES` = 30 files. `fold` writes them onto
+every row that carries them. A search that fails, or that cannot run (no
+Linear key, an excluded card), writes `searched: false` and the reason. It
+never changes the card's `lookups` block or its lookup state.
 
 ### Rewrite first (DRE-6666)
 

@@ -35,8 +35,8 @@
     },
     "plan-critic-bound": {
       "lifts": "manual",
-      "why": "Every bound park ends in Triage for an operator and the way back is plan_critic.REAPPROVE_HOW, a person's act that leaves no fact a sweep can read.",
-      "lift_sends": "nothing moves"
+      "why": "Every bound park ends in Triage, and no sweep reads a fact that lifts it. It gets one automatic repair first, once per card (scripts/triage_repair.py, DRE-7178): the planner answers every finding of the park note, and the repair lifts the hold with because=triage-repair as it moves the card out. After that repair, or one that did not finish, the way back is plan_critic.REAPPROVE_HOW, a person's act.",
+      "lift_sends": "Triage to Planning (rewritten, or an epic re-planned) or Green Light (a question), when the Triage repair lifts it; nothing moves otherwise"
     },
     "fix-dispute": {
       "lifts": "new-head",
@@ -50,8 +50,8 @@
     },
     "operator-step": {
       "lifts": "blockers-terminal",
-      "why": "A planner-filed operator step is a person's to do once the work before it is finished; the card's blockedBy relations say when, and the sweep's promotion gate reads them and lifts the hold itself. Without its stamp the label would read manual and sit in Backlog forever (DRE-6408).",
-      "lift_sends": "Backlog to Hand-work"
+      "why": "A planner-filed operator step is a person's to do once the work before it is finished; the card's blockedBy relations say when, and the sweep's promotion gate reads them and lifts the hold itself. Without its stamp the label would read manual and sit in Queued forever (DRE-6408).",
+      "lift_sends": "Queued to Hand-work"
     },
     "manual": {
       "lifts": "manual",
@@ -77,7 +77,7 @@
     "limit-recovery": "limit_recovery: a held card's stages are not re-entered, save its sync bookkeeping."
   },
   "stamp": "🔒 hold: reason=<code> at=<qualifier or none> lifts=<lift-kind> by=<writer-file>",
-  "lift_line": "🔓 hold lifted: reason=<code> because=<lift-kind or card-closed or operator> by=<writer-file>",
+  "lift_line": "🔓 hold lifted: reason=<code> because=<lift-kind or card-closed or operator or triage-repair> by=<writer-file>",
   "sites": [
     {
       "file": "scripts/reconcile.py",
@@ -89,8 +89,8 @@
           "reason": "stranded-no-run",
           "lifts": "run-started",
           "tried_first": {
-            "step": "The sweep re-sends a card that sat in Todo with no run, once, before it stamps the strand (DRE-5743). A second unattended re-send is the move that already failed.",
-            "receipt": "card sat in Todo with no run — re-dispatched"
+            "step": "The sweep re-sends a promoted card no run started on, once, before it stamps the strand (DRE-5743, DRE-7108). A second unattended re-send is the move that already failed.",
+            "receipt": "card was promoted and no run started — re-dispatched"
           }
         },
         {
@@ -135,7 +135,7 @@
       "file": "scripts/reconcile.py",
       "scope": "hand_dead_run_to_planner",
       "anchor": "held-for-human",
-      "note": "The sweep's two no-PR dead-run caps — In Progress with no live run and the rescue route spent, and In Review with its pull request gone — both reach this helper: handed to Planning once on a budget, then parked in Backlog.",
+      "note": "The sweep's two no-PR dead-run caps — In Progress with no live run and the rescue route spent, and In Review with its pull request gone — both reach this helper: handed to Planning once on a budget, then parked in Queued.",
       "reasons": [
         {
           "reason": "dead-run-cap",
@@ -156,7 +156,7 @@
     {
       "file": "scripts/dead_run.py",
       "scope": "_cmd_park",
-      "anchor": "PARK_STATE",
+      "anchor": "QUEUE_LANE",
       "note": "`dead_run.py park`, reached from the build run's Report step (scripts/report_agent_result.sh): the dead-run-requeue budget's cap, or the turn-exhaustion-requeue budget's.",
       "reasons": [
         {
@@ -423,6 +423,25 @@
       ]
     },
     {
+      "file": "scripts/release_deferral.py",
+      "scope": "<module>",
+      "anchor": "a person finishes it, nothing builds it",
+      "note": "CARD_LABELS: the deferred-release notice card is created in Green Light already held, with no stamp — a person reads it, and the surface's next verified tag closes it Done (DRE-5235).",
+      "reasons": [
+        {
+          "reason": "manual",
+          "lifts": "manual",
+          "tried_first": "none — a person, or a writer creating a card already held, chose it"
+        }
+      ],
+      "readers": [
+        "sweep",
+        "fix-dispatch",
+        "medic",
+        "limit-recovery"
+      ]
+    },
+    {
       "file": "scripts/linear_ops.py",
       "scope": "_file_operator_hold",
       "anchor": "filed as an operator step",
@@ -444,7 +463,7 @@
       "file": "scripts/hand_work_migration.py",
       "scope": "_convert_one",
       "anchor": "one card of the operator-backlog pass",
-      "note": "The one-time operator-backlog pass: a Backlog card held `needs-human` + `no-code` with no stamp — filed before the create seam stamped it — is marked `operator-step` and stamped, then lifted and moved to Hand-work when nothing is left to wait on, so the sweep lifts the rest (DRE-6429).",
+      "note": "The one-time operator-backlog pass: a Queued card held `needs-human` + `no-code` with no stamp — filed before the create seam stamped it — is marked `operator-step` and stamped, then lifted and moved to Hand-work when nothing is left to wait on, so the sweep lifts the rest (DRE-6429).",
       "reasons": [
         {
           "reason": "operator-step",

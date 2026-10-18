@@ -21,6 +21,12 @@
       "reader": ".github/workflows/hygiene.yml",
       "step": "Decide dry run",
       "means": "The scheduled hygiene run writes to the board, instead of running dry."
+    },
+    {
+      "name": "TRIAGE_REPAIR_LIVE",
+      "reader": ".github/workflows/triage-repair.yml",
+      "step": "Decide dry run",
+      "means": "The scheduled Triage Repair run claims parked cards and has the planner repair them, instead of printing what it would repair."
     }
   ]
 }

@@ -80,6 +80,19 @@ OWNER_MINT_IDS = {"next_token"}
 PORTAL_MINT_IDS = {"app_portal"}
 PORTAL_CHECKOUT = "Plan artifact — portal checkout (review)"
 CHECKOUT_ACTION = "actions/checkout"
+# The model home's read tokens (DRE-6940): mints, not re-mints of the reader —
+# they are for the dreadnought-foundry installation's `variables: read` and
+# nothing else, and are held by tests/test_model_home_scope.py. `model_home` is
+# minted once, up front, for the steps before the first model step; each
+# `model_home_<id>` mints it again directly before a home-reading step that
+# follows a model step, gated as that step is, so no model run ages the token
+# those steps read.
+MODEL_HOME_MINT_PREFIX = "model_home"
+
+
+def _is_model_home_mint(step_id) -> bool:
+    step_id = str(step_id or "")
+    return step_id == MODEL_HOME_MINT_PREFIX or step_id.startswith(MODEL_HOME_MINT_PREFIX + "_")
 # The second critic's own route (DRE-5280), as the step gates spell it.
 REVIEW_MODE = "steps.route.outputs.mode == 'review'"
 
@@ -228,6 +241,7 @@ class EveryReMintIsTheReaderMintAgain(unittest.TestCase):
             and s.get("id") not in POOL_STEP_IDS
             and s.get("id") not in OWNER_MINT_IDS
             and s.get("id") not in PORTAL_MINT_IDS
+            and not _is_model_home_mint(s.get("id"))
         ]
 
     def test_there_are_re_mints(self):

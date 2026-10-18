@@ -106,6 +106,44 @@ def _own_runner_temp(monkeypatch, tmp_path_factory) -> None:
     monkeypatch.setenv("RUNNER_TEMP", str(tmp_path_factory.mktemp("runner-temp")))
 
 
+def _own_agent_notes(monkeypatch, tmp_path_factory) -> None:
+    """`scripts/report_agent_result.sh` reads the agent's three notes from
+    `AGENT_NOTES_DIR`, and from /tmp when it is unset (DRE-6961). Two copies
+    of this suite on one machine share /tmp, so a harness that hands the
+    script `os.environ` would read another copy's note. Each test gets an
+    empty directory of its own; a test that writes a note names its own."""
+    monkeypatch.setenv("AGENT_NOTES_DIR", str(tmp_path_factory.mktemp("agent-notes")))
+
+
+#: The two names the model home's reader honors (DRE-6939).
+MODEL_HOME_NAMES = ("BUREAU_MODEL_HOME_TOKEN", "BUREAU_MODEL_HOME_FILE")
+
+
+def _no_model_home(monkeypatch) -> None:
+    """Every test starts with no model home named (DRE-6939): the read is
+    `not set`, and the selector runs on the defaults in the code with no
+    `model-home` clause on its note — exactly what it ran on before the home.
+    No test reads the network, and a token in an engineer agent's own
+    environment never reaches the suite. A test about the home sets its own
+    name, and the test after it starts not set again.
+
+    Deliberately no document: one named for the whole session would be read
+    by every throwaway tree's selector too, which would then select on the
+    repository's defaults instead of the tree's own."""
+    for name in MODEL_HOME_NAMES:
+        monkeypatch.delenv(name, raising=False)
+
+
+def _reset_model_home() -> None:
+    """The selector reads the home once per PROCESS (DRE-6939) and keeps the
+    answer, the choices it put in place with it; one test's home must never
+    be the next test's."""
+    model_fallback = sys.modules.get("model_fallback")
+    reset = getattr(model_fallback, "reset_home", None)
+    if reset is not None:
+        reset()
+
+
 #: CI's own value for the Linear key (tests.yml sets `LINEAR_API_KEY: test-key`).
 CI_LINEAR_KEY = "test-key"
 #: The other Linear keys a job can carry; CI carries none of them.
@@ -132,15 +170,19 @@ def _no_live_linear_key(monkeypatch) -> None:
 def fresh_sweep_board(monkeypatch, tmp_path_factory):
     _no_live_linear_key(monkeypatch)
     _no_ambient_event(monkeypatch)
+    _no_model_home(monkeypatch)
     _own_runner_temp(monkeypatch, tmp_path_factory)
+    _own_agent_notes(monkeypatch, tmp_path_factory)
     _lift_drain_slots(monkeypatch)
     _empty_epic_queue(monkeypatch)
     _reset_sweep_board()
     _reset_linear_budget()
     _reset_workflow_states()
     _reset_read_door()
+    _reset_model_home()
     yield
     _reset_sweep_board()
     _reset_linear_budget()
     _reset_workflow_states()
     _reset_read_door()
+    _reset_model_home()
