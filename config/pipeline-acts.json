@@ -200,7 +200,7 @@
       "tag": "stranded-watchdog",
       "adopted": true,
       "kind": "hold",
-      "means": "A Todo or In Progress card sits in an active lane with no evidence any run ever started — no route, or no run receipt.",
+      "means": "A card in a start lane (lane_contract.START_LANES) sits there with no evidence any run ever started — no route, or no run receipt.",
       "state": "held",
       "next_actor": "operator",
       "discharges": null,
@@ -903,14 +903,14 @@
       "tag": "hyg-triage-returned",
       "adopted": true,
       "kind": "recovery",
-      "means": "A Triage card whose mechanical defect the agent fixed — a prose blocker made true by the relation it added, a dependency loop a Done card already broke, a retired-repo card marked operator-step and parked — is returned to Queued, never Todo.",
+      "means": "A Triage card whose mechanical defect the agent fixed — a prose blocker made true by the relation it added, a dependency loop a Done card already broke, a retired-repo card marked operator-step and parked — is returned to Queued, never a start lane.",
       "state": "unchanged",
       "next_actor": "reconcile.py",
       "discharges": null,
       "subscriber": "hygiene.yml",
       "cadence_s": null,
       "cadence_why": "Null: the card is the sweep's again, and scripts/reconcile.py re-reads it at its own gate on the next ~15-minute pass; nothing speaks on this receipt's behalf.",
-      "why": "DRE-5368, the hygiene agent's core; the lane that decides it is a sibling card under DRE-5365, and the core holds the one table of tags so every lane's receipt reads the same. Its idempotency key is (tag, cause): scripts/hygiene.py's write seam suppresses the act when the target already carries a receipt with this tag and the same cause line, so a repeat is never sent and a new cause always is. Its state is `unchanged` because the registry's states name an obligation an act leaves open — a run expected back, a person's hold, a human queue — and this act leaves none of its own: the move it makes is one the lane contract admits `hygiene.py` to make, and the receipt is the record of it. It discharges nothing. Queued and never Todo, because the promotion gate is what decides a card is ready, and the agent fixed a defect rather than deciding that.",
+      "why": "DRE-5368, the hygiene agent's core; the lane that decides it is a sibling card under DRE-5365, and the core holds the one table of tags so every lane's receipt reads the same. Its idempotency key is (tag, cause): scripts/hygiene.py's write seam suppresses the act when the target already carries a receipt with this tag and the same cause line, so a repeat is never sent and a new cause always is. Its state is `unchanged` because the registry's states name an obligation an act leaves open — a run expected back, a person's hold, a human queue — and this act leaves none of its own: the move it makes is one the lane contract admits `hygiene.py` to make, and the receipt is the record of it. It discharges nothing. Queued and never a start lane, because the promotion gate is what decides a card is ready, and the agent fixed a defect rather than deciding that.",
       "emits": {
         "file": "scripts/hygiene.py",
         "anchor": "\"hyg-triage-returned\""
@@ -1748,7 +1748,7 @@
       "file": "scripts/reconcile.py",
       "anchor": "🧹 Auto-promoted {QUEUE_LANE} → {destination}",
       "kind": "undeclared-act",
-      "means": "A Queued card whose blockers are all Done is promoted on its own, to the lane its routing verdict names: Todo for FLEET, Hand-work for WORKBENCH and OPERATOR (DRE-5322).",
+      "means": "A Queued card whose blockers are all Done is promoted on its own, to the lane its routing verdict names: In Progress for FLEET, where the move is the dispatch (DRE-7120), Hand-work for WORKBENCH and OPERATOR (DRE-5322).",
       "why": "Act-shaped, and the registry has no row for it. DRE-2825 declared thirteen acts by reading reconcile.py's ten tag constants, the fix loop's three notices and the medic; this receipt was not among them. Giving it a row is a REGISTRY change — a tag, a kind, a state, a next actor, a subscriber, and the reasoning that fixes each — not an emission change, and this card converts what the registry declares. Named here so the debt is countable rather than invisible."
     },
     {
@@ -1818,7 +1818,7 @@
       "file": "scripts/reconcile.py",
       "anchor": "f\"🧹 Reconcile: {_TODO_REDISPATCH_NOTE}.\"",
       "kind": "undeclared-act",
-      "means": "A promoted card with no start receipt newer than its entry into its start lane — Todo or In Progress — is re-dispatched as a build once its start window has passed and nothing says it is alive (no run in flight, no standing runner-line hold), and the receipt follows the dispatch's real outcome (DRE-7108).",
+      "means": "A promoted card with no start receipt newer than its entry into its start lane — one of lane_contract.START_LANES — is re-dispatched as a build once its start window has passed and nothing says it is alive (no run in flight, no standing runner-line hold), and the receipt follows the dispatch's real outcome (DRE-7108).",
       "why": "Act-shaped, and the registry has no row for it. DRE-2825 declared thirteen acts by reading reconcile.py's ten tag constants, the fix loop's three notices and the medic; this receipt was not among them. Giving it a row is a REGISTRY change — a tag, a kind, a state, a next actor, a subscriber, and the reasoning that fixes each — not an emission change, and this card converts what the registry declares. Named here so the debt is countable rather than invisible. Its wording is `_TODO_REDISPATCH_NOTE` because the stranded-card watchdog matches on it, so it already carries a key another act reads."
     },
     {
@@ -1923,14 +1923,14 @@
       "file": "scripts/validate_card.py",
       "anchor": "🔧 Auto-fixed by the Todo gate",
       "kind": "undeclared-act",
-      "means": "The Todo gate repairs what it can on a card and lets the build start.",
+      "means": "The start gate repairs what it can on a card and lets the build start.",
       "why": "Act-shaped, and the registry has no row for it. DRE-2825 declared thirteen acts by reading reconcile.py's ten tag constants, the fix loop's three notices and the medic; this receipt was not among them. Giving it a row is a REGISTRY change — a tag, a kind, a state, a next actor, a subscriber, and the reasoning that fixes each — not an emission change, and this card converts what the registry declares. Named here so the debt is countable rather than invisible."
     },
     {
       "file": "scripts/validate_card.py",
       "anchor": "linear_ops.cmd_comment(identifier, body)",
       "kind": "undeclared-act",
-      "means": "The Todo gate refuses a card it cannot repair and returns it to Planning.",
+      "means": "The start gate refuses a card it cannot repair and returns it to Planning.",
       "why": "Act-shaped, and the registry has no row for it. DRE-2825 declared thirteen acts by reading reconcile.py's ten tag constants, the fix loop's three notices and the medic; this receipt was not among them. Giving it a row is a REGISTRY change — a tag, a kind, a state, a next actor, a subscriber, and the reasoning that fixes each — not an emission change, and this card converts what the registry declares. Named here so the debt is countable rather than invisible. Its wording is asserted byte for byte by `tests/test_writers_point_at_planning.py`, so a trailer here has to be additive in the way this epic means it — which is an argument for a row, not against one."
     },
     {
@@ -2934,8 +2934,8 @@
       "file": "scripts/epic_todo_gate.py",
       "anchor": "ops.cmd_comment(identifier, body)",
       "kind": "undeclared-act",
-      "means": "A write that would have put an epic in Todo was refused and nothing was written; the card is told the right move — In Progress for an approved epic, where its children promote, or Green Light for the CEO's approval (DRE-5316).",
-      "why": "Act-shaped — the pipeline refused a lane write by itself and says so on the card — and the registry has no row for it. Giving it a row is a REGISTRY change (a tag, a kind, a state, a next actor, a subscriber), and since DRE-3081/DRE-3090 a new act must reach the console's receipts.py:ACTS BEFORE the pipeline declares it (DRE-3091), which is a change in another repository this card does not own. So the refusal ships first as an undeclared act, exactly as DRE-4150's urgent fast path did. This is the ONE posting site: the write seam (linear_ops.guarded_state_write) and the two siblings that carry an epic out of Todo (DRE-5319, DRE-5347) all post through epic_todo_gate.post_refusal and add no second row. Its opener `🚫 epic-not-todo: <identifier> → <move>` is a live key: post_refusal posts only when no comment on the card already carries it, so a writer retrying every sweep says it once per card and move. A trailer after the body would not touch the opener."
+      "means": "A write that would have put an epic in the lane In Progress replaces was refused and nothing was written; the card is told the right move — In Progress for an approved epic, where its children promote, or Green Light for the CEO's approval (DRE-5316).",
+      "why": "Act-shaped — the pipeline refused a lane write by itself and says so on the card — and the registry has no row for it. Giving it a row is a REGISTRY change (a tag, a kind, a state, a next actor, a subscriber), and since DRE-3081/DRE-3090 a new act must reach the console's receipts.py:ACTS BEFORE the pipeline declares it (DRE-3091), which is a change in another repository this card does not own. So the refusal ships first as an undeclared act, exactly as DRE-4150's urgent fast path did. This is the ONE posting site: the write seam (linear_ops.guarded_state_write) and the two siblings that carry an epic out of that lane (DRE-5319, DRE-5347) all post through epic_todo_gate.post_refusal and add no second row. Its opener `🚫 epic-not-todo: <identifier> → <move>` is a live key: post_refusal posts only when no comment on the card already carries it, so a writer retrying every sweep says it once per card and move. A trailer after the body would not touch the opener."
     },
     {
       "file": "scripts/hygiene.py",

@@ -11,8 +11,9 @@ below is the one way a verdict gets onto a card.
 
 ## Promoted is not the same as dispatched (DRE-3385)
 
-Three verdicts leave Queued by the sweep — FLEET to `Todo`, WORKBENCH and
-OPERATOR to `Hand-work`, the person-work lane (DRE-5321) — and the sweep
+Three verdicts leave Queued by the sweep — FLEET to `In Progress`, where the
+move is the dispatch (DRE-7120), WORKBENCH and OPERATOR to `Hand-work`, the
+person-work lane (DRE-5321) — and the sweep
 performs the move for all three. Only FLEET is handed to an agent. That
 distinction lives in two readers here: `sweep_promotes` (is this card's
 destination a lane the sweep carries cards into) and `is_promotable` (may a run
@@ -362,54 +363,56 @@ def is_promotable(name: str, doc: dict | None = None) -> bool:
     return bool(record(name, doc)["promotable"])
 
 
-#: The lane a build run reports into — the first lane past the waiting lanes.
-#: The sweep never promotes a Queued card to it or past it: a card reaches In
-#: Progress because work started, In Review because a pull request opened, and
-#: Done because it merged. Bounding the carried lanes here is what stops a
-#: one-word vocabulary edit (WORKBENCH → `Done`) from having the sweep close a
-#: card nobody built (the critic on #703).
-BUILD_LANE = "In Progress"
+#: The lane a build run reports into — the first lane past the waiting lanes,
+#: and the lane whose entry is a build dispatch (DRE-7120): read off the lane
+#: contract, never a literal. The sweep carries a card INTO it only on a
+#: promotable verdict, whose promotion there is the dispatch, and never past
+#: it: a card reaches In Review because a pull request opened, and Done
+#: because it merged. Bounding the carried lanes here is what stops a one-word
+#: vocabulary edit (WORKBENCH → `Done`, or WORKBENCH → the dispatch lane) from
+#: having the sweep close or start a card nobody built (the critic on #703).
+BUILD_LANE = lane_contract.DISPATCH_LANE
 
 
-def _carried_lanes() -> tuple:
+def _carried_lanes(promotable: bool = False) -> tuple:
     """The lanes the sweep may carry a Queued card INTO, off the lane contract:
     the live work-segment lanes strictly between the one the planning exit lands
     in (Queued — where a card waits for its turn, the lane the sweep promotes
-    OUT of) and `BUILD_LANE`. In the contract's flow order that is Todo and
-    Hand-work: the two lanes a card waits in for whoever builds it.
+    OUT of) and `BUILD_LANE`. In the contract's flow order that is the lane
+    In Progress replaces, and Hand-work: the lanes a card waits in for whoever
+    builds it.
 
-    And the lane a build starts in, `lane_contract.START_LANE` (DRE-7108),
-    when it is not already one of them: Todo until the flip, which sets it to
-    the dispatch lane — and then FLEET's destination is that lane, which the
-    sweep must still carry a card into."""
+    And, for a `promotable` verdict alone, `BUILD_LANE` itself (DRE-7120): the
+    flip sends FLEET there, and the move is the dispatch. Every other verdict
+    stays bounded below it."""
     landing = lane_contract.planning_exit()[1]
     work = [lane["name"] for lane in lane_contract.lanes("live") if lane["segment"] == "work"]
     if landing not in work or BUILD_LANE not in work:
         return ()
     between = tuple(work[work.index(landing) + 1:work.index(BUILD_LANE)])
-    start = lane_contract.START_LANE
-    return between if start in between or start not in work else between + (start,)
+    return between + (BUILD_LANE,) if promotable else between
 
 
 def sweep_promotes(name: str, doc: dict | None = None) -> bool:
     """Does the sweep MOVE a Queued card carrying this verdict?
 
-    True when the verdict's destination is a work-segment lane other than the
-    planning exit's landing lane (DRE-5321): FLEET (to Todo), WORKBENCH and
-    OPERATOR (to Hand-work). PARKED stays in Queued on purpose, and NEEDS WORK
-    goes back to Planning, which is the planner's move and never the sweep's.
+    True when the verdict's destination is a lane the sweep carries it into
+    (DRE-5321, DRE-7120): FLEET (to In Progress, where the move is the
+    dispatch), WORKBENCH and OPERATOR (to Hand-work). PARKED stays in Queued on
+    purpose, and NEEDS WORK goes back to Planning, which is the planner's move
+    and never the sweep's.
 
     Read off the destination and the lane contract rather than listed, so a
     route added or re-pointed in the vocabulary changes what the sweep does
     without anybody remembering to edit a tuple in the promoter.
     """
-    return destination(name, doc) in _carried_lanes()
+    return destination(name, doc) in _carried_lanes(is_promotable(name, doc))
 
 
 def sweep_lanes(doc: dict | None = None) -> tuple:
     """Every lane the sweep carries a card into, in the vocabulary's order,
     each once: the destinations of the verdicts `sweep_promotes`. Today
-    ("Todo", "Hand-work")."""
+    ("In Progress", "Hand-work")."""
     out: list[str] = []
     for name in verdicts(doc):
         lane = destination(name, doc)
@@ -559,8 +562,8 @@ def config_problems(doc: dict | None = None) -> list:
     # on the sweep being able to make these moves, so a lane the promoter may
     # not write is a dead end for every route that lands there, and it fails
     # here rather than in a live sweep. Every lane the sweep carries to is
-    # bound, read off the vocabulary — Todo for FLEET, Hand-work for WORKBENCH
-    # and OPERATOR — not one lane named in a constant.
+    # bound, read off the vocabulary — In Progress for FLEET, Hand-work for
+    # WORKBENCH and OPERATOR — not one lane named in a constant.
     carried = sweep_lanes(doc)
     if not carried:
         problems.append(
@@ -621,6 +624,16 @@ def config_problems(doc: dict | None = None) -> list:
             f"exactly one verdict may be dispatched unattended; {promotable} are"
         )
     for name in promotable:
+        # The lane a writer starts a build in is the one the dispatched verdict
+        # goes to (DRE-7120): FLEET routed anywhere else is a promotion the
+        # relay does not dispatch on, or a build started somewhere the
+        # promoter never puts it.
+        if destination(name, doc) != lane_contract.START_LANE:
+            problems.append(
+                f"verdict {name!r} is dispatched unattended but routes to "
+                f"{destination(name, doc)!r}, not lane_contract.START_LANE "
+                f"{lane_contract.START_LANE!r} — the lane a build starts in"
+            )
         # A verdict the relay dispatches at a lane the sweep never carries a
         # card into is a dispatch that never happens.
         if not sweep_promotes(name, doc):
