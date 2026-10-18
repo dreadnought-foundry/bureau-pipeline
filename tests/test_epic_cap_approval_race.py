@@ -276,7 +276,7 @@ class TestUnderTheCapTheEpicStartsAsToday:
         board.activate()
         promoted = board.sweep()  # the activate step's own --promote-only
         assert promoted == 3
-        assert [board.lanes[i] for i in WORK] == ["Todo"] * 3
+        assert [board.lanes[i] for i in WORK] == ["In Progress"] * 3
 
     def test_a_start_the_sweep_made_from_the_line_releases_them_too(self):
         """A waiting epic the sweep started carries `▶️ epic-started:` — the
@@ -305,7 +305,7 @@ class TestAnEpicRunningBeforeTheCap:
     def test_its_backlog_child_still_promotes(self):
         board = self._board()
         assert board.sweep() == 1
-        assert board.lanes[WORK[2]] == "Todo"
+        assert board.lanes[WORK[2]] == "In Progress"
         assert not [b for _, b in board.posted if "epic-cap-undecided" in b]
 
     def test_rule_one_still_starts_it_at_the_cap(self, capsys):
@@ -426,7 +426,7 @@ class TestTheStartIsReadOffTheWholeThread:
         window = board.comment_records(EPIC)
         assert not epic_cap.start_on_record(window, APPROVED_AT)
         assert board.sweep() == 3
-        assert [board.lanes[i] for i in WORK] == ["Todo"] * 3
+        assert [board.lanes[i] for i in WORK] == ["In Progress"] * 3
         assert not [b for _, b in board.posted if epic_cap.UNDECIDED_TAG in b]
 
     def test_the_whole_thread_is_read_once_per_epic_per_sweep(self):

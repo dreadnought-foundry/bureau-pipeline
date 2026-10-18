@@ -43,9 +43,13 @@ import pytest
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "scripts"))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+# Collected early, so these defaults become the process's: they match the
+# suites that read `reconcile.REPO` off the environment (agent-bureau), and the
+# fixture below patches the repo each case here runs as. The helper modules
+# imported below default to portico, and set nothing once these are set.
 os.environ.setdefault("LINEAR_API_KEY", "test-key")
-os.environ.setdefault("REPO", "dreadnought-foundry/portico")
-os.environ.setdefault("REPO_SLUG", "portico")
+os.environ.setdefault("REPO", "dreadnought-foundry/agent-bureau")
+os.environ.setdefault("REPO_SLUG", "agent-bureau")
 os.environ.setdefault("GH_TOKEN", "x")
 
 import lane_contract  # noqa: E402

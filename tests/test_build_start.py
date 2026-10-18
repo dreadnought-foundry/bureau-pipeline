@@ -50,7 +50,7 @@ def build_start_failures(doc):
 class TestTheShippedContract:
     def test_the_block_is_exactly_what_the_siblings_share(self):
         block = shipped()["build_start"]
-        assert block["lane"] == "Todo"
+        assert block["lane"] == "In Progress"
         assert block["dispatch_lane"] == "In Progress"
         assert block["dispatch_from"] == [
             "Intake", "Planning", "Green Light", "Queued", "Triage",
@@ -58,9 +58,10 @@ class TestTheShippedContract:
         assert block["start_minutes"] == 15
         assert block["why"] and all(line.strip() for line in block["why"])
 
-    def test_start_lane_is_todo_until_the_flip(self):
-        assert lane_contract.start_lane() == "Todo"
-        assert lane_contract.START_LANE == "Todo"
+    def test_start_lane_is_in_progress_since_the_flip(self):
+        # The flip (DRE-7120) set it to the dispatch lane.
+        assert lane_contract.start_lane() == "In Progress"
+        assert lane_contract.START_LANE == "In Progress"
 
     def test_dispatch_lane_is_in_progress(self):
         assert lane_contract.dispatch_lane() == "In Progress"
