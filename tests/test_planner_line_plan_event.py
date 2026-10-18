@@ -253,8 +253,12 @@ PLANNER_LINE_SITES = {
     ("planner_queue.py", "_cmd_dispatch"),
     ("reconcile.py", "serve_planner_line"),
 }
-# None since DRE-7108: the reconcile re-dispatch names the build event below.
-LABEL_RULE_SITES: set = set()
+# The write layer's in-place restart of a card already in the start lane
+# (DRE-7109) keeps the label rule; the sweep's `redispatch` no longer does
+# (DRE-7108).
+LABEL_RULE_SITES = {
+    ("linear_ops.py", "_redispatch_in_place"),
+}
 # The sweep's re-fire of a promoted card no run started on is a BUILD, named
 # outright as `plan_run.EXECUTE_EVENT` (DRE-7108).
 BUILD_SITES = {
