@@ -172,8 +172,19 @@ def test_the_change_walk_has_its_measured_record():
 
 
 def test_the_change_walk_record_names_its_measurement():
-    note = json.loads(unit_test_parts.DURATIONS.read_text(encoding="utf-8"))["measured"]
-    assert CHANGE_WALK in note and "114573848564" in note, note
+    # The change walk's own provenance entry (DRE-7508), not a shared note.
+    record = json.loads(unit_test_parts.DURATIONS.read_text(encoding="utf-8"))
+    entry = record["provenance"][CHANGE_WALK]
+    assert CHANGE_WALK in entry and "114573848564" in entry, entry
+
+
+def test_the_measure_it_message_names_the_keyed_provenance_entry():
+    new = "tests/test_console_moved_twice_keeps_the_suite_green.py"
+    (found,) = problems([new], {}, limit_seconds())
+    assert "measure it" in found, found
+    assert "`seconds`" in found and "`provenance`" in found, found
+    assert "keyed by its path" in found, found
+    assert "clause" not in found and "note" not in found, found
 
 
 def test_the_limit_is_one_hundred_minutes_from_the_largest_record():
