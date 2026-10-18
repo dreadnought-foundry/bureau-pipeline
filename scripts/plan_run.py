@@ -2,10 +2,13 @@
 """The planner's dispatch — ONE payload and ONE `repository_dispatch` for the
 callers that genuinely make one.
 
-Six of them remain:
+Seven of them remain:
 
   * `reconcile.redispatch` — the sweep re-firing a Todo card's dispatch, with
     the failure kept in its write ledger so the run goes red;
+  * `linear_ops._redispatch_in_place` — a restart (`unpark`, the building-card
+    reroute) that finds the card already in `lane_contract.START_LANE`, where a
+    same-lane write fires no webhook (DRE-7109);
   * `review_rerun.py dispatch` — the ask for the second critic's review, with
     the `trigger_state` and `reason` it is given (DRE-3286, DRE-5277);
   * `planner_queue.py dispatch` and `reconcile.serve_planner_line` — the
