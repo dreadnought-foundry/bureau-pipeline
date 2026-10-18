@@ -71,9 +71,14 @@ never counts, and the pick log says how many it skipped.
   picked, is skipped without a read. A few logs listed past the run the pick
   stops on may be read too, and are discarded unapplied. Every 50 runs read,
   and once more when it stops, it prints `pick: read <R> run(s), picked <K> of
-  <count>`. It stops at its `VERIFIER_PICK_BUDGET_SECONDS` (600-second) time
-  budget, inside the pick job's 15 minutes, and a short batch then says it
-  stopped there and how many runs it read (DRE-7507).
+  <count>, <U> log(s) unreadable`. It stops at its
+  `VERIFIER_PICK_BUDGET_SECONDS` (600-second) time budget, inside the pick
+  job's 15 minutes, and a short batch then says it stopped there and how many
+  runs it read (DRE-7507). It stops, too, on `UNREADABLE_LOGS_IN_A_ROW` (20)
+  unreadable logs in a row from runs created more than `LOG_RETENTION_DAYS`
+  (90) days before it started, whose logs have expired. A log inside
+  retention that cannot be read is read once more, then skipped without
+  counting toward the twenty (DRE-7590).
 
 `--from-pick <file> --acted-on-only` re-emits, unchanged, the acted-on
 records of an earlier pick's records file and reads nothing else, so the
@@ -129,7 +134,7 @@ import subprocess
 import sys
 import time
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -186,9 +191,17 @@ PASS = "PASS"
 FIX_ATTEMPT = fix_budget.BUDGETS["fix"][0]
 PUSH_MARKER = fix_dead_run.PUSH_MARKER
 
-#: After this many runs in a row whose log cannot be read, the older runs'
-#: logs have expired too (a run's log expires by age, and the runs are read
-#: newest first): the verifier's listing stops there, and says so.
+#: How many days GitHub keeps a run's log: its default, and the
+#: `retention-days` `.github/workflows/shadow-replay.yml` gives its own
+#: artifacts. A run is past retention when it was created more than this many
+#: days before the verifier pick started (DRE-7590).
+LOG_RETENTION_DAYS = 90
+
+#: After this many runs past retention in a row whose log cannot be read, the
+#: older runs' logs have expired too (a run's log expires by age, and the runs
+#: are read newest first): the verifier's listing stops there, and says so.
+#: An unreadable log inside retention is a failed read, not an expired log,
+#: and never counts toward it (DRE-7590).
 UNREADABLE_LOGS_IN_A_ROW = 20
 
 #: The verifier pick's own time limit, in seconds from its start on `clock`
@@ -208,6 +221,12 @@ VERIFIER_PROGRESS_EVERY = 50
 
 #: The clock the verifier pick's budget is read on; the tests replace it.
 clock = time.monotonic
+
+
+def now() -> datetime:
+    """The date the verifier pick starts on, which a run's age is read
+    against; the tests replace it. `clock` cannot date a run."""
+    return datetime.now(timezone.utc)
 
 # Where a printed line starts in `gh run view --log`: behind the
 # `job\tstep\ttimestamp ` prefix (check_linear_budget._LINE_START, DRE-5201),
@@ -552,6 +571,18 @@ def run_log(repo: str, run_id) -> str | None:
     return done.stdout if done.returncode == 0 and done.stdout.strip() else None
 
 
+def run_log_twice(repo: str, run_id) -> str | None:
+    """`run_log`, read once more when the first read fails (DRE-7590)."""
+    log = run_log(repo, run_id)
+    return log if log is not None else run_log(repo, run_id)
+
+
+def past_retention(run: dict, started: datetime) -> bool:
+    """Whether `run` was created more than `LOG_RETENTION_DAYS` before
+    `started`, so its log has expired by age."""
+    return _moment(run.get("created_at")) < started - timedelta(days=LOG_RETENTION_DAYS)
+
+
 def verifier_note(log: str | None):
     """`(model, the rest of the note)` off the run's `Select model` note."""
     m = _VERIFIER_NOTE_RE.search(log or "")
@@ -602,12 +633,19 @@ def pick_unknown_builder_verifier(*, recorded_model: str, count: int, repo: str,
     run is applied and before each read is dispatched: once it reads
     `VERIFIER_PICK_BUDGET_SECONDS` gone, no further run is applied and no
     further read dispatched. A read past the run the pick stops on is
-    discarded unapplied, and one not yet started is canceled."""
+    discarded unapplied, and one not yet started is canceled.
+
+    A run's age is read against `now` at the start (DRE-7590). Only an
+    unreadable log past `LOG_RETENTION_DAYS` counts toward the
+    `UNREADABLE_LOGS_IN_A_ROW` that stop the listing, and it is read once. A
+    log inside retention that fails is read once more, and skipped when that
+    fails too, without counting: the time budget bounds a long run of those."""
     picked, prs, comments_of = [], set(), {}
-    elsewhere = unreadable = read = 0
+    elsewhere = unreadable = expired_in_a_row = read = 0
     out_of_time = False
     readers = max(1, VERIFIER_LOG_READERS)
     started = clock()
+    started_on = now()
     listing = iter(verifier_runs(repo, workflow))
     # (run, its pull request, its log read or None), in listing order.
     window = collections.deque()
@@ -619,7 +657,8 @@ def pick_unknown_builder_verifier(*, recorded_model: str, count: int, repo: str,
         return clock() - started >= VERIFIER_PICK_BUDGET_SECONDS
 
     def progress():
-        print(f"pick: read {read} run(s), picked {len(picked)} of {count}", file=sys.stderr)
+        print(f"pick: read {read} run(s), picked {len(picked)} of {count}, "
+              f"{unreadable} log(s) unreadable", file=sys.stderr)
 
     def top_up(pool) -> bool:
         """Fill the window from the listing; False once the budget is spent."""
@@ -632,13 +671,14 @@ def pick_unknown_builder_verifier(*, recorded_model: str, count: int, repo: str,
             if pr is not None and pr not in prs:
                 if spent():
                     return False
-                reading = pool.submit(run_log, repo, run.get("id"))
+                reader = run_log if past_retention(run, started_on) else run_log_twice
+                reading = pool.submit(reader, repo, run.get("id"))
             window.append((run, pr, reading))
         return True
 
     def apply(run, pr, reading) -> bool:
         """Give `run` its outcome; True when the listing stops here."""
-        nonlocal unreadable, elsewhere
+        nonlocal unreadable, expired_in_a_row, elsewhere
         run_id = run.get("id")
         if pr is None:
             skip(run_id, "it names no pull request")
@@ -652,12 +692,16 @@ def pick_unknown_builder_verifier(*, recorded_model: str, count: int, repo: str,
         if log is None:
             skip(run_id, "its log could not be read")
             unreadable += 1
-            if unreadable == UNREADABLE_LOGS_IN_A_ROW:
-                print(f"pick: {unreadable} run logs in a row could not be read — the older "
-                      "runs' logs have expired too, so the listing stops here", file=sys.stderr)
+            if not past_retention(run, started_on):
+                return False
+            expired_in_a_row += 1
+            if expired_in_a_row == UNREADABLE_LOGS_IN_A_ROW:
+                print(f"pick: {expired_in_a_row} run logs in a row could not be read — the "
+                      "older runs' logs have expired too, so the listing stops here",
+                      file=sys.stderr)
                 return True
             return False
-        unreadable = 0
+        expired_in_a_row = 0
         note = verifier_note(log)
         if note is None:
             skip(run_id, "its log carries no Select model note for the verifier")
