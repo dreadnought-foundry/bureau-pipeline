@@ -158,7 +158,7 @@ class TestThePromotionRefusal:
     def test_a_card_with_no_verdict_is_told_where_each_route_lands(self):
         refusal = routing_verdict.promotion_refusal("DRE-1", [])
         assert routing_verdict.NO_VERDICT_TAG in refusal
-        assert "Todo" in refusal and HAND_WORK in refusal
+        assert "In Progress" in refusal and HAND_WORK in refusal
 
 
 # --------------------------------------------------------------------------- #
@@ -232,11 +232,13 @@ class TestTheCheck:
         assert any("WORKBENCH" in p and HAND_WORK in p and "live" in p for p in problems), problems
         assert any("OPERATOR" in p and HAND_WORK in p for p in problems), problems
 
-    def test_the_todo_binding_is_still_checked(self, contract):
-        writers = _lane_entry(contract, "Todo")["clauses"]["writers"]
+    def test_the_fleet_binding_is_still_checked(self, contract):
+        """FLEET's lane is In Progress since the flip (DRE-7120)."""
+        lane = routing_verdict.destination("FLEET")
+        writers = _lane_entry(contract, lane)["clauses"]["writers"]
         writers["who"] = [w for w in writers["who"] if w != routing_verdict.PROMOTER]
         problems = routing_verdict.config_problems()
-        assert any("'Todo'" in p and routing_verdict.PROMOTER in p for p in problems), problems
+        assert any(f"'{lane}'" in p and routing_verdict.PROMOTER in p for p in problems), problems
 
 
 # --------------------------------------------------------------------------- #
