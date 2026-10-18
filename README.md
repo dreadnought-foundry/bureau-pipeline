@@ -457,7 +457,9 @@ Shadow Replay (DRE-7197), whose red run the operator reads from its report,
 where an automatic retry would spend another batch of reviewer runs, and the
 notice door's smoke (DRE-7451), which the operator dispatches and reads, and
 which files no card on any path — a medic watching it would retry it and file
-one.
+one — and Proof Shadow (DRE-7287), a proof run repeated on another model as a
+measurement, whose red run the operator reads, where a retry would spend
+another model run on a card nobody owns.
 Adding any other workflow with no watcher fails CI instead of adding a silent
 failure surface.
 
