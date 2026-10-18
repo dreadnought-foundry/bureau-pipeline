@@ -15,17 +15,20 @@ Re-entry is the stage's own front door, never a fresh run of something else:
     trigger is Planning ENTRY (agent-bureau's relay: "card enters Planning →
     agent-plan"), so a card already sitting in Planning is bounced out through
     Intake — the lane before Planning exit, which nothing polices — and back.
-  * `build` — In Progress → Todo, the sweep's own requeue move; a card already
-    in Todo gets the sweep's own re-dispatch, because a same-lane write fires
-    no webhook.
+  * `build` — In Progress or the queue → the start lane,
+    `lane_contract.START_LANE` (DRE-7111); a card already in the start lane
+    gets the sweep's own re-dispatch, because a same-lane write fires no
+    webhook. Under the shipped contract that is Todo; once the flip sets
+    `build_start.lane` to In Progress, a card dying In Progress is
+    re-dispatched in place.
   * `fix` / `review` / `sync` — the ORIGINAL GitHub run named in the marker is
     re-run, failed jobs only. Never a workflow_dispatch: the rerun keeps the
     run's own event, PR and head.
 
 The lane writes are INJECTED rather than made here (DRE-2859): the lane
 contract attributes a write to the actor that runs the module, and the actor
-is the sweep — `reconcile.py` is a declared writer of Todo, this module is
-not. The second half of this file pins that seam: the sweep calls recovery
+is the sweep — `reconcile.py` is a declared writer of the start lane, this
+module is not. The second half of this file pins that seam: the sweep calls recovery
 once per full pass, survives an exception inside it, hands it only this repo's
 cards, and leaves a limit-parked card alone in its own nudge loop — the loop
 that would otherwise spend a strike on an In Progress card sixty minutes after
@@ -37,6 +40,8 @@ Run: cd bureau-pipeline && python3 -m pytest tests/test_limit_recovery.py -v
 from __future__ import annotations
 
 import ast
+import copy
+import importlib
 import inspect
 import os
 import sys
@@ -56,6 +61,11 @@ import dead_run  # noqa: E402
 import lane_contract  # noqa: E402
 import limit_recovery  # noqa: E402
 import reconcile  # noqa: E402
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import build_started  # noqa: E402 — a card whose build started (DRE-7108)
+
+#: The lane a build re-enters through: `lane_contract.START_LANE` (DRE-7111).
+START_LANE = lane_contract.START_LANE
 
 RUN = "33912345678"
 RESET = datetime(2026, 9, 5, 20, 30, tzinfo=UTC)          # 13:30 PT
@@ -135,7 +145,7 @@ class Seams:
 def test_reset_passed_reenters_build_from_in_progress():
     s = Seams()
     lines = s.recover([card(bodies=[marker()])])
-    assert s.moves == [("DRE-3062", "Todo")]
+    assert s.moves == [("DRE-3062", START_LANE)]
     assert s.dispatched == [] and s.reruns == []
     assert len(s.comments) == 1
     ident, body = s.comments[0]
@@ -157,7 +167,7 @@ def test_reset_not_passed_waits():
 def test_account_switch_triggers_before_the_reset():
     s = Seams()
     s.recover([card(bodies=[marker(account="main")])], now=BEFORE, active_account="work")
-    assert s.moves == [("DRE-3062", "Todo")]
+    assert s.moves == [("DRE-3062", START_LANE)]
     assert "account switched main → work" in s.comments[0][1]
 
 
@@ -197,7 +207,7 @@ def test_claude_with_unknown_reset_but_a_recorded_account_waits_for_the_switch()
         "a card waiting on a switch says which account it is waiting to leave"
     )
     s.recover([card(bodies=[marker(reset=None, account="main")])], now=AFTER, active_account="work")
-    assert s.moves == [("DRE-3062", "Todo")]
+    assert s.moves == [("DRE-3062", START_LANE)]
 
 
 def test_a_marker_nothing_can_trigger_is_handed_to_a_human_once():
@@ -242,19 +252,75 @@ def test_a_planning_stage_marker_on_a_working_card_reruns_the_run_never_replans(
 # --------------------------------------------------------------------------
 # re-entry is the stage's own front door
 # --------------------------------------------------------------------------
-def test_build_from_todo_is_a_redispatch_not_a_same_lane_write():
+def test_build_from_the_start_lane_is_a_redispatch_not_a_same_lane_write():
     s = Seams()
-    s.recover([card(lane="Todo", bodies=[marker()])])
+    s.recover([card(lane=START_LANE, bodies=[marker()])])
     assert s.dispatched == ["DRE-3062"]
     assert s.moves == []
     assert "re-dispatched" in s.comments[0][1].lower()
 
 
 @pytest.mark.parametrize("lane", lane_contract.QUEUE_LANES)
-def test_build_from_the_queue_moves_to_todo(lane):
+def test_build_from_the_queue_moves_to_the_start_lane(lane):
     s = Seams()
     s.recover([card(lane=lane, bodies=[marker()])])
-    assert s.moves == [("DRE-3062", "Todo")]
+    assert s.moves == [("DRE-3062", START_LANE)]
+
+
+def _flipped_contract() -> dict:
+    """The shipped contract with the one word the flip card turns."""
+    doc = copy.deepcopy(lane_contract.load())  # load() is cached, shared
+    doc["build_start"]["lane"] = "In Progress"
+    assert lane_contract.build_start_problems(doc) == []
+    return doc
+
+
+CONTRACTS = {
+    "shipped": lambda: lane_contract.load(),
+    "flipped": _flipped_contract,
+}
+
+
+@pytest.fixture(params=sorted(CONTRACTS))
+def start_lane(request, monkeypatch):
+    """The module under each contract (DRE-7111): `START_LANE` set where
+    `lane_contract` publishes it, and this module read again on top of it, so
+    its build lane is whatever the contract's is. Read back afterwards, so no
+    other test sees the flipped lane."""
+    lane = lane_contract.start_lane(CONTRACTS[request.param]())
+    monkeypatch.setattr(lane_contract, "START_LANE", lane)
+    importlib.reload(limit_recovery)
+    yield lane
+    monkeypatch.undo()
+    importlib.reload(limit_recovery)
+
+
+def test_build_moves_a_queued_card_to_the_start_lane_and_redispatches_one_already_there(
+        start_lane):
+    """DRE-7111: the build branch writes `lane_contract.START_LANE`. A card in
+    the queue is moved there, and its entry dispatches the run; a card already
+    there — Todo under the shipped contract, In Progress once the flip sets
+    `build_start.lane` — is re-dispatched in place, because a same-lane write
+    fires no webhook. The rule the write layer follows (DRE-7109)."""
+    queued = Seams()
+    queued.recover([card(lane=lane_contract.QUEUE_LANE, bodies=[marker()])])
+    assert queued.moves == [("DRE-3062", start_lane)]
+    assert queued.dispatched == []
+    assert f"Moved {lane_contract.QUEUE_LANE} → {start_lane}, which dispatches" in (
+        queued.comments[0][1])
+
+    there = Seams()
+    there.recover([card(lane=start_lane, bodies=[marker()])])
+    assert there.moves == []
+    assert there.dispatched == ["DRE-3062"]
+    assert (f"Re-dispatched from {start_lane} (a same-lane write fires no webhook)"
+            in there.comments[0][1])
+
+
+def test_the_module_names_no_build_lane_of_its_own():
+    """The build lane is the contract's: no string here names Todo, so the
+    receipts, the way back and the docstrings follow `START_LANE` (DRE-7111)."""
+    assert lane_contract._scan_python(limit_recovery.__file__, ["Todo"]) == set()
 
 
 @pytest.mark.parametrize("stage", ["plan", "classify"])
@@ -426,7 +492,7 @@ def test_the_recoverys_own_receipt_counts_so_nothing_dispatches_twice():
 def test_a_human_comment_after_the_marker_does_not_cancel_recovery():
     s = Seams()
     s.recover([card(bodies=[marker(), "Looking at this now — Sid"])])
-    assert s.moves == [("DRE-3062", "Todo")]
+    assert s.moves == [("DRE-3062", START_LANE)]
 
 
 @pytest.mark.parametrize(
@@ -442,7 +508,7 @@ def test_a_human_comment_that_opens_with_an_emoji_is_not_a_receipt(note):
     assert not limit_recovery.is_receipt(note)
     s = Seams()
     s.recover([card(bodies=[marker(), note])])
-    assert s.moves == [("DRE-3062", "Todo")], note
+    assert s.moves == [("DRE-3062", START_LANE)], note
 
 
 @pytest.mark.parametrize(
@@ -497,7 +563,7 @@ def test_a_card_without_a_marker_is_not_touched():
 def test_a_failed_write_is_reported_and_no_receipt_is_posted():
     s = Seams(move_raises=RuntimeError("Linear refused the write"))
     lines = s.recover([card(ident="DRE-1", bodies=[marker()]),
-                       card(ident="DRE-2", lane="Todo", bodies=[marker()])])
+                       card(ident="DRE-2", lane=START_LANE, bodies=[marker()])])
     assert [ident for ident, _ in s.comments] == ["DRE-2"]
     assert any(line.startswith("ERROR:") and "DRE-1" in line for line in lines)
     assert s.dispatched == ["DRE-2"], "one card's failure never costs the next its turn"
@@ -599,7 +665,11 @@ def test_the_wrapper_reads_the_active_account_from_the_environment(monkeypatch):
 
 
 def _full_sweep_mocks(cards):
+    # `sweep_idle` asks Linear one question before the board is read; None is
+    # "this repo has work", the full pass these tests drive. Unstubbed, it went
+    # to the live API and only a 401 kept it green — a DNS fault failed it.
     return {
+        "sweep_idle": MagicMock(return_value=None),
         "unstick_conflicts": MagicMock(),
         "retrigger_dead_heads": MagicMock(),
         "check_dependabot_capacity": MagicMock(),
@@ -637,13 +707,20 @@ def test_the_nudge_loop_resumes_once_a_newer_receipt_follows_the_marker():
     After the recovery's own receipt the card is ordinary again."""
     receipt = f"{limit_recovery.RECOVERY_MARK} re-entered build — window reset at 2026-09-05 13:30 PT."
     ordinary = card(bodies=[marker(), receipt])
-    with patch.multiple(reconcile, **_full_sweep_mocks([ordinary])), patch.object(
+    # The build had started before the limit killed it (DRE-7108): its start
+    # receipt is the oldest comment, so the loop reads a dead run, not a card
+    # that never started.
+    ordinary["comments"]["nodes"].append(
+        {"body": build_started.START_RECEIPT, "createdAt": build_started.RECEIPT_AT})
+    with build_started.entered(), patch.multiple(
+        reconcile, **_full_sweep_mocks([ordinary])
+    ), patch.object(
         reconcile.linear_ops, "count_comments", return_value=0
     ), patch.object(reconcile.linear_ops, "cmd_state") as cmd_state, patch.object(
         reconcile.linear_ops, "cmd_comment"
     ), patch.object(reconcile.linear_ops, "add_label"):
         reconcile.main()
-    cmd_state.assert_called_once_with("DRE-3062", "Todo")
+    cmd_state.assert_called_once_with("DRE-3062", reconcile.QUEUE_LANE, "--park")
 
 
 def test_a_full_sweep_reenters_a_reset_card_exactly_once():
@@ -656,7 +733,7 @@ def test_a_full_sweep_reenters_a_reset_card_exactly_once():
         reconcile.linear_ops, "cmd_comment"
     ) as cmd_comment, patch.object(reconcile.linear_ops, "add_label"):
         reconcile.main()
-    cmd_state.assert_called_once_with("DRE-3062", "Todo")
+    cmd_state.assert_called_once_with("DRE-3062", START_LANE)
     count.assert_not_called()
     bodies = [c.args[1] for c in cmd_comment.call_args_list]
     assert len(bodies) == 1 and bodies[0].startswith(limit_recovery.RECOVERY_MARK)
@@ -672,7 +749,7 @@ def _dre_4811_board():
     holds far more than 12 active cards once epics, hand-built cards and
     automation cards are counted. Promotion said `WIP 3+0/12`; recovery said
     the room was spent."""
-    dead = card(ident="DRE-4811", lane="Todo",
+    dead = card(ident="DRE-4811", lane=START_LANE,
                 bodies=[marker(kind="linear", reset=datetime(2026, 1, 1, tzinfo=UTC))])
     work = [card(ident=f"DRE-{n}") for n in (101, 102)]
     epics = [
@@ -821,7 +898,7 @@ def test_planning_cards_do_not_spend_the_wip_room(monkeypatch, capsys):
     widened list and the six Planning cards spend it, so the dead build card
     sits in Todo printing "WIP room is spent" beside a promotion with room."""
     monkeypatch.setattr(reconcile, "MAX_WIP", 3)
-    dead = card(ident="DRE-4811", lane="Todo",
+    dead = card(ident="DRE-4811", lane=START_LANE,
                 bodies=[marker(kind="linear", reset=datetime(2026, 1, 1, tzinfo=UTC))])
     working = card(ident="DRE-101")
     planning = [card(ident=f"DRE-{500 + n}", lane="Planning") for n in range(6)]
@@ -914,7 +991,7 @@ def test_three_assumed_deaths_in_a_day_hand_the_card_to_a_person_once():
     assert "three times in a day" in body
     assert "named no reset time" in body and "assumed five-hour clock" in body
     assert "not the five-hour usage window" in body
-    for way_back in ("Intake then Planning", "Todo for a build", "Re-run failed jobs"):
+    for way_back in ("Intake then Planning", f"{START_LANE} for a build", "Re-run failed jobs"):
         assert way_back in body, way_back
     assert any("DRE-5640 handed to a human" in line for line in lines)
     assert not any(line.startswith("ERROR:") for line in lines)
@@ -1033,7 +1110,7 @@ def test_a_third_assumed_review_death_on_a_planning_card_is_handed_off():
     import review_rerun
     assert f"`{review_rerun.RERUN_REVIEW_ACT}` on the epic" in body
     assert "Not Re-run failed jobs" in body
-    for other in ("Intake then Planning", "Todo for a build"):
+    for other in ("Intake then Planning", f"{START_LANE} for a build"):
         assert other not in body, other
 
 
@@ -1254,7 +1331,7 @@ def test_row_watcher_past_the_window_says_the_watcher_did_not_come():
 @pytest.mark.parametrize("age", [FRESH, STOOD])
 def test_row_trigger_with_room_reenters_as_today(age):
     s, lines = _run("room", age)
-    assert s.moves == [("DRE-4208", "Todo")]
+    assert s.moves == [("DRE-4208", START_LANE)]
     assert len(s.comments) == 1 and s.comments[0][1].startswith(limit_recovery.RECOVERY_MARK)
     assert _errors(lines) == []
 
@@ -1340,7 +1417,7 @@ def test_a_stated_reset_still_ahead_is_reentered_when_it_arrives():
     s.recover([card], now=NOW)
     assert limit_recovery.waiting(limit_recovery._bodies(card)) is not None
     s.recover([card], now=LATER + timedelta(minutes=5))
-    assert s.moves == [("DRE-4208", "Todo")]
+    assert s.moves == [("DRE-4208", START_LANE)]
     assert len(s.comments) == 1 and s.comments[0][1].startswith(limit_recovery.RECOVERY_MARK)
 
 

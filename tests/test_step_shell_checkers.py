@@ -264,6 +264,18 @@ def test_ready_lane_writers_read_the_seam_variable_with_the_exit_moved(trees, mo
         assert [w.lane for w in _seam_writes(root)] == [None]
 
 
+def test_the_report_step_requeues_a_dead_run_through_the_seam():
+    """DRE-7111: the real Report step's death requeue is read as a write of
+    `lane_contract.QUEUE_LANE`, beside the blocker's park — two writes through
+    `$QUEUE_LANE` — and the build run writes no Todo of its own."""
+    report = [w for w in ready_lane_writers.writes()
+              if w.writer == "agent-task.yml" and w.how == "workflow"]
+    assert report, "the census read nothing of agent-task.yml"
+    assert "Todo" not in {w.lane for w in report}, report
+    seam = [w for w in report if w.expression == "$QUEUE_LANE"]
+    assert [w.lane for w in seam] == [lane_contract.QUEUE_LANE] * 2, seam
+
+
 def test_a_variable_no_seam_assigns_stays_unread(tmp_path):
     """Unknown is never a pass: a lane variable assigned any other way is
     still a destination this cannot read."""

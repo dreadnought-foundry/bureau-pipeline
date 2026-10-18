@@ -259,7 +259,8 @@ def test_the_replay_holds_the_cards_a_person_removed():
     by = {(r["identifier"], r["rule"]): r for r in rows}
     assert by[("DRE-3602", "file-named-by-in-flight-card")]["names"] == ["DRE-3546"]
     assert by[("DRE-3602", "file-named-by-in-flight-card")]["reason"] == (
-        "names `release_row.py`, which DRE-3546 (In Progress) also names")
+        "names `console/backend/release_row.py`, which DRE-3546 (In Progress) "
+        "also names")
     assert by[("DRE-3602", "file-named-by-in-flight-card")]["condition"] == \
         "DRE-3546 is Done"
     rule1 = by[("DRE-4054", "read-waits-on-open-card")]
@@ -867,6 +868,49 @@ def test_a_closed_parent_is_not_this_rule(state):
 
 
 # --------------------------------------------------------------------------
+# the start lanes (DRE-7112) — read off the contract, never spelled here
+# --------------------------------------------------------------------------
+def _waiting_start_lanes() -> tuple:
+    """The start lanes ahead of the dispatch lane: Todo until it retires."""
+    import lane_contract
+
+    return tuple(lane for lane in lane_contract.START_LANES
+                 if lane != lane_contract.DISPATCH_LANE)
+
+
+def test_the_open_and_in_flight_lanes_are_read_off_the_start_lanes():
+    import lane_contract
+
+    assert groom_readiness.OPEN_STATES == (
+        "Planning", "Green Light", *lane_contract.QUEUE_LANES,
+        *lane_contract.START_LANES, "In Review")
+    assert groom_readiness.IN_FLIGHT_LANES == (
+        "Planning", *lane_contract.START_LANES, "In Review")
+
+
+def test_a_parent_waiting_in_a_start_lane_has_not_started_and_one_dispatched_has():
+    # An epic in the dispatch lane is activated (rule 3's own name), so only
+    # the start lanes ahead of it hold a child.
+    import lane_contract
+
+    assert _waiting_start_lanes() == ("Todo",)
+    assert groom_readiness.PARENT_NOT_STARTED == (
+        "Intake", "Planning", "Green Light", *lane_contract.QUEUE_LANES,
+        *_waiting_start_lanes(), "Triage")
+    assert lane_contract.DISPATCH_LANE not in groom_readiness.PARENT_NOT_STARTED
+
+
+@pytest.mark.parametrize("lane", __import__("lane_contract").START_LANES)
+def test_a_card_in_each_start_lane_is_open_and_in_flight(lane):
+    c = card("DRE-1", description="Edits `shared.py`.")
+    held = _board([c], {"DRE-1": _waits("DRE-60")},
+                  named={"DRE-60": _light("DRE-60", lane)},
+                  lanes={lane: [_lane_card("DRE-80", ["shared.py"], state=lane)]})
+    assert _rules(c, held) == ["read-waits-on-open-card",
+                               "file-named-by-in-flight-card"]
+
+
+# --------------------------------------------------------------------------
 # rule 4 — an undecided question, quoted and sent nowhere
 # --------------------------------------------------------------------------
 def test_the_question_is_quoted_with_its_heading_and_count():
@@ -959,6 +1003,104 @@ def test_another_intake_card_naming_the_file_is_not_this_rule():
     a = card("DRE-1", description="Edits `shared.py`.")
     b = card("DRE-2", description="Edits `shared.py`.")
     assert _rules(a, _board([a, b])) == []
+
+
+# --------------------------------------------------------------------------
+# rule 2 — the same path in the same repo, never the bare name (DRE-6908)
+# --------------------------------------------------------------------------
+def test_the_2026_10_11_replay_holds_on_the_real_match_alone():
+    """Proposal ab09ece4ddee tied DRE-3454 to DRE-6902 over two different
+    files both called `README.md`. The real match is `scripts/runners/README.md`
+    with DRE-6535; DRE-6902 names `console/backend/monitors/README.md`."""
+    held = card("DRE-3454", repo="agent-bureau",
+                description="The runbook is `scripts/runners/README.md`.")
+    real = _lane_card("DRE-6535", ["scripts/runners/README.md"],
+                      repo="agent-bureau")
+    false = _lane_card("DRE-6902", ["console/backend/monitors/README.md"],
+                       repo="agent-bureau")
+    board = _board([held], lanes={"In Progress": [false, real]})
+    row = _row(held, board, "file-named-by-in-flight-card")
+    assert row["names"] == ["DRE-6535"]
+    assert row["reason"] == ("names `scripts/runners/README.md`, which DRE-6535 "
+                             "(In Progress) also names")
+    assert row["condition"] == "DRE-6535 is Done"
+    assert "DRE-6902" not in row["reason"]
+    assert "DRE-6902" not in row["condition"]
+
+
+def test_the_root_readme_of_one_repo_still_matches_the_same_bare_path():
+    """DRE-2709 and DRE-6899 both name bureau-pipeline's root `README.md` —
+    the match that morning that was real."""
+    held = card("DRE-2709", repo="bureau-pipeline",
+                description="Fix the sentence in `README.md`.")
+    other = _lane_card("DRE-6899", ["README.md"], repo="bureau-pipeline")
+    row = _row(held, _board([held], lanes={"In Progress": [other]}),
+               "file-named-by-in-flight-card")
+    assert row["names"] == ["DRE-6899"]
+    assert row["reason"] == ("names `README.md`, which DRE-6899 (In Progress) "
+                             "also names")
+
+
+def test_a_bare_name_does_not_match_a_path_with_a_directory():
+    held = card("DRE-1", repo="agent-bureau",
+                description="Edits `README.md`.")
+    other = _lane_card("DRE-80", ["scripts/runners/README.md"],
+                       repo="agent-bureau")
+    assert _rules(held, _board([held], lanes={"In Progress": [other]})) == []
+    deep = card("DRE-2", repo="agent-bureau",
+                description="Edits `console/backend/monitors/README.md`.")
+    bare = _lane_card("DRE-81", ["README.md"], repo="agent-bureau")
+    assert _rules(deep, _board([deep], lanes={"In Progress": [bare]})) == []
+
+
+def test_two_repos_each_with_a_root_readme_do_not_match():
+    held = card("DRE-1", repo="bureau-pipeline",
+                description="Edits `README.md`.")
+    other = _lane_card("DRE-80", ["README.md"], repo="agent-bureau")
+    assert _rules(held, _board([held], lanes={"In Progress": [other]})) == []
+    same = _lane_card("DRE-81", ["README.md"], repo="bureau-pipeline")
+    assert _rules(held, _board([held], lanes={"In Progress": [other, same]})) \
+        == ["file-named-by-in-flight-card"]
+    assert _row(held, _board([held], lanes={"In Progress": [other, same]}),
+                "file-named-by-in-flight-card")["names"] == ["DRE-81"]
+
+
+def test_the_lane_rows_carry_each_path_as_the_card_wrote_it():
+    other = _lane_card("DRE-80", ["scripts/runners/README.md", "README.md"],
+                       repo="agent-bureau")
+    rows = groom_readiness.facts(lanes={"In Progress": [other]})["lanes"]
+    assert rows["In Progress"] == [{"identifier": "DRE-80",
+                                    "repo": "agent-bureau",
+                                    "files": ["README.md",
+                                              "scripts/runners/README.md"]}]
+
+
+def test_intake_cards_count_toward_boilerplate_by_path_never_by_name():
+    """Three Intake cards each citing a different `<dir>/README.md` are three
+    files, so a bare `README.md` stays a file two cards can share — counted
+    by name, they would make it boilerplate and the rule would never fire."""
+    held = card("DRE-1", repo="agent-bureau", description="Edits `README.md`.")
+    others = [card(f"DRE-{10 + i}", repo="agent-bureau",
+                   description=f"Edits `{d}/README.md`.")
+              for i, d in enumerate(("scripts/runners", "console/backend",
+                                     "docs"))]
+    lane = [_lane_card("DRE-80", ["README.md"], repo="agent-bureau")]
+    readiness = groom_readiness.facts(lanes={"In Progress": lane})
+    board = groom_readiness.board(readiness, population=[held, *others],
+                                  threshold=3)
+    assert "README.md" not in board["boilerplate"]
+    assert _row(held, board, "file-named-by-in-flight-card")["names"] == \
+        ["DRE-80"]
+    cited = [card(f"DRE-{20 + i}", repo="agent-bureau",
+                  description="Edits `docs/README.md`.") for i in range(4)]
+    board = groom_readiness.board(readiness, population=cited, threshold=3)
+    assert board["boilerplate"] == {"docs/README.md"}
+
+
+def test_file_paths_keeps_the_directory_and_drops_a_line_reference():
+    assert groomer.file_paths("See `render/out.ts:341` and `README.md`.") == \
+        {"render/out.ts", "README.md"}
+    assert groomer.file_references("See `render/out.ts:341`.") == {"out.ts"}
 
 
 # --------------------------------------------------------------------------

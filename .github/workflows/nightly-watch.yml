@@ -18,11 +18,12 @@
 # This file only gathers GitHub's records and acts on the verdict; the
 # decision, the thresholds and where they came from live in
 # scripts/nightly_watch.py, unit-tested in tests/test_nightly_watch.py. It
-# raises its alarm through the mechanism the retired channel-staleness alarm
-# used (DRE-2552, retired by DRE-6053) — ONE deduplicated Linear card,
-# commented on rather than duplicated while the condition lasts — so no new
-# surface is added. tests/test_nightly_watch.py pins that mechanism with the
-# values it read off the channel alarm's step before that job was removed.
+# raises its alarm as ONE console alert per condition per owner (DRE-7456),
+# through scripts/pipeline_notice.py: `nightly_watch:<owner>:did_not_run` for a
+# nightly that did not run and `nightly_watch:<owner>:cannot_read` for a repo
+# it could not read, both at WARN, each resolved by the hour that finds its
+# condition gone. When the console's door cannot take a raise, the client
+# files the deduplicated Linear card this file filed before, exactly.
 #
 # WHO IS WATCHED: computed, never listed. Every workflow, in every repo in
 # config/repo-map.json, whose file on the default branch triggers on BOTH
@@ -31,9 +32,12 @@
 # the `check_workflow_watchers.py` rule, because a list that is remembered is a
 # list that drifts in the direction of watching less.
 #
-# WHAT IT DELIBERATELY CANNOT DO: change anything. Read-only permissions, no
-# ref write, no dispatch, no POST anywhere in the file, and a test that fails
-# if one appears. An alarm that can touch what it watches is not an alarm.
+# WHAT IT DELIBERATELY CANNOT DO: change anything it watches. Read-only
+# permissions on GitHub, no ref write, no dispatch, no `gh api` write, and a
+# test that fails if one appears. The one thing it sends is its own alert, to
+# the console's notice door, with the OIDC token `id-token: write` lets the
+# watch job mint — a token that names this run and writes nothing on GitHub.
+# An alarm that can touch what it watches is not an alarm.
 #
 # WHAT IF THE WATCHER ITSELF STOPS: "Nightly Watch" is in the medic's watch
 # list (self-medic.yml), so a red run is diagnosed — and
@@ -49,23 +53,30 @@
 #      the identity.
 #   Q2 secrets — a schedule-triggered run in THIS repo reads the repo's normal
 #      secrets store (never the separate Dependabot store), so LINEAR_API_KEY
-#      and the App keys resolve. The CROSS-REPO reads cannot use
+#      (the fallback card's) and the App keys resolve, and the
+#      BUREAU_READ_URL variable names the console's door. The CROSS-REPO reads cannot use
 #      `github.token`, which is scoped to this repository and 404s on every
 #      other one — that would report the whole fleet UNKNOWN. An App
 #      installation token is scoped to ONE installation and this fleet spans
 #      three owners, so the watch job is a matrix over the roster's owners with
 #      a token minted per owner, exactly as the groomer's lookup legs read.
-#   Q3 re-run — idempotent by construction: the card lookup is by exact title
-#      and the titles are constants per owner, so a re-run comments on the open
-#      card instead of minting a second. A card CANCELED while the condition
-#      still holds invites a fresh one next hour — park it in Queued instead,
-#      the model-drift rule.
+#   Q3 re-run — idempotent by construction: the alert's key is a constant per
+#      condition per owner, so a re-run's raise is answered `repeat` and its
+#      resolve `not-open`, and nothing is delivered twice. The fallback card's
+#      lookup is by exact title, a constant per owner, so a re-run comments on
+#      the open card instead of minting a second. A fallback card CANCELED
+#      while the condition still holds and the door is down invites a fresh
+#      one next hour — park it in Queued instead, the model-drift rule.
 #   Q4 command limits — reading a workflow's TRIGGERS needs the file, which the
 #      Actions API does not carry, so this reads each workflow's contents at
 #      the default branch: roughly one read per workflow per repo per hour,
-#      against an installation's 5,000/hour. A refusal is never retried past
-#      gh_read_retry's bounded backoff and never substituted for an answer.
-#      That hourly request budget is shared by everything the fleet does on
+#      against an installation's 5,000/hour. A refusal is never substituted
+#      for an answer. A GitHub server error (HTTP 5xx) is retried by the
+#      watcher itself, at most gh_read_retry's three attempts with its
+#      backoff between, and at most two retry waits in the whole run, so an
+#      hour of GitHub being down cannot run this job out of time; past that a
+#      5xx is unknown, and every other refusal is read once (DRE-7352). The
+#      hourly request budget is shared by everything the fleet does on
 #      the installation, so it can be spent by others (DRE-6461): a read
 #      GitHub refuses for it is reported as not read this hour — never as
 #      ran, never as a permission failure — and the watcher stops asking for
@@ -119,6 +130,13 @@ jobs:
     needs: owners
     runs-on: ${{ fromJSON(vars.BUREAU_SHORT_RUNS_ON || vars.BUREAU_RUNS_ON || '["ubuntu-latest"]') }}
     timeout-minutes: 15
+    # Every permission the workflow grants, and `id-token: write`: the OIDC
+    # token the console's notice door reads (DRE-7456). A job-level block
+    # replaces the workflow's, so the two reads are restated.
+    permissions:
+      contents: read
+      actions: read
+      id-token: write
     strategy:
       # One owner's missing or under-permissioned installation must not stop
       # the other owners being read — and it does not go quiet either: those
@@ -166,46 +184,77 @@ jobs:
             --body-file "$RUNNER_TEMP/alarm-body.md" \
             >> "$GITHUB_STEP_SUMMARY"
 
-      # ONE card per condition per owner, and it keeps saying it. The title is
-      # a constant, so next hour's identical finding comments on this hour's
-      # card instead of minting a second — an alarm that mints a card an hour
-      # is the inbox this programme exists to escape.
+      # ONE console alert per condition per owner, and it keeps saying it
+      # (DRE-7456). The key is a constant, so next hour's identical finding is
+      # answered `repeat`: its text is refreshed in place and nothing is
+      # delivered again. The daily re-confirm is a raise of the same key.
       #
-      # Two cadences, and the difference is the whole reason this runs hourly.
-      # The card is FILED on whichever hour the alarm first fires, so a nightly
-      # that stopped is found within the hour. RE-CONFIRMING it is daily
+      # The fallback is the card this step filed before — its title, lane
+      # `Planning`, label `repo:<this repo>` — filed by the client when the
+      # door cannot take the raise. Two cadences, and the difference is the
+      # whole reason this runs hourly: the alert is RAISED on whichever hour
+      # the alarm first fires, so a nightly that stopped is found within the
+      # hour; a fallback card left open by a door outage is RE-CONFIRMED daily
       # (`nightly_watch.RECONFIRM_AFTER_HOURS`, on one morning hour,
-      # `RECONFIRM_HOUR_UTC`): twenty-four "still true" comments a day on one
-      # standing card is the same noise as a card a day, arriving somewhere
-      # else.
-      - name: Raise the alarm where a human will see it
-        if: steps.decide.outputs.alarm == 'true'
+      # `RECONFIRM_HOUR_UTC`), because twenty-four "still true" comments a day
+      # on one standing card is the same noise as a card a day.
+      - name: Raise the alarm on the console
+        if: steps.decide.outputs.raise != ''
         env:
+          BUREAU_READ_URL: ${{ vars.BUREAU_READ_URL }}
           LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-          HEADLINE: ${{ steps.decide.outputs.headline }}
+          OWNER: ${{ matrix.owner }}
+          RAISE: ${{ steps.decide.outputs.raise }}
           RECONFIRM: ${{ steps.decide.outputs.reconfirm }}
         run: |
-          # The repo the CARD is filed against — this one, which owns the
-          # watcher; the repos the alarm is ABOUT are named in its body.
+          # The repo the fallback CARD is filed against — this one, which owns
+          # the watcher; the repos the alarm is ABOUT are named in its body.
           # Derived, not hardcoded (DRE-2680): the card needs a repo:<slug>
           # label or the readiness gate cannot route it out of Planning.
           REPO_SLUG=$(basename "$GITHUB_REPOSITORY" | tr '[:upper:]' '[:lower:]')
           TITLE="$(cat "$RUNNER_TEMP/alarm-title.txt")"
-          EXISTING="$(python3 scripts/linear_ops.py find-open "$TITLE" || true)"
-          if [ -n "$EXISTING" ]; then
-            if [ "$RECONFIRM" != "true" ]; then
-              echo "$EXISTING is open and this is not the daily re-confirm" \
-                   "tick — the finding already stands, so nothing is posted"
+          case "$RAISE" in
+            did_not_run) NOTICE="nightly_watch:$OWNER:did_not_run" ;;
+            cannot_read) NOTICE="nightly_watch:$OWNER:cannot_read" ;;
+            *) echo "::error::the decision named a notice this step does not know: $RAISE"
+               exit 1 ;;
+          esac
+          if [ "$RECONFIRM" != "true" ]; then
+            EXISTING="$(python3 scripts/linear_ops.py find-open "$TITLE" || true)"
+            if [ -n "$EXISTING" ]; then
+              echo "$EXISTING — the fallback card a door outage filed — is open" \
+                   "and this is not the daily re-confirm tick, so nothing is said"
               exit 0
             fi
-            python3 scripts/linear_ops.py comment "$EXISTING" \
-              "🌙 Still true today: $HEADLINE  Watch run: $RUN_URL"
-          else
-            {
-              cat "$RUNNER_TEMP/alarm-body.md"
-              echo ""
-              echo "Watch run: $RUN_URL"
-            } > "$RUNNER_TEMP/alarm-card.md"
-            python3 scripts/linear_ops.py create "$TITLE" "$RUNNER_TEMP/alarm-card.md" --repo "$REPO_SLUG"
           fi
+          {
+            cat "$RUNNER_TEMP/alarm-body.md"
+            echo ""
+            echo "Watch run: $RUN_URL"
+          } > "$RUNNER_TEMP/alarm-notice.md"
+          python3 scripts/pipeline_notice.py raise --notice "$NOTICE" --severity WARN \
+            --title "$TITLE" --body-file "$RUNNER_TEMP/alarm-notice.md" \
+            --fallback-title "$TITLE" --fallback-lane Planning \
+            --fallback-label "repo:$REPO_SLUG"
+
+      # A condition this hour shows GONE is resolved: everything read and no
+      # nightly missing clears `did_not_run`, nothing unreadable clears
+      # `cannot_read` (nightly_watch.notice_actions). No all-clear copy — a
+      # WARN never leaves the console — and a key that is not open answers
+      # `not-open`. A resolve the door refuses is logged, never a card.
+      - name: Resolve what has cleared
+        if: steps.decide.outputs.resolve != ''
+        env:
+          BUREAU_READ_URL: ${{ vars.BUREAU_READ_URL }}
+          OWNER: ${{ matrix.owner }}
+          RESOLVE: ${{ steps.decide.outputs.resolve }}
+        run: |
+          for CLEARED in $RESOLVE; do
+            case "$CLEARED" in
+              did_not_run) python3 scripts/pipeline_notice.py resolve --notice "nightly_watch:$OWNER:did_not_run" ;;
+              cannot_read) python3 scripts/pipeline_notice.py resolve --notice "nightly_watch:$OWNER:cannot_read" ;;
+              *) echo "::error::the decision named a notice this step does not know: $CLEARED"
+                 exit 1 ;;
+            esac
+          done

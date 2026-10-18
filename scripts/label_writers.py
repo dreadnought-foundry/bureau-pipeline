@@ -140,6 +140,9 @@ SEAM_PRIMITIVES = (LABEL_FIELD,) + LABEL_LOOKUPS
 
 #: The write layer's command-line flag for a label: `create`, `oneoff` and
 #: `subissue` take `--label <name>`, repeatable, in their trailing flags.
+#: A module whose own command line carries labels under another flag says so
+#: with a module constant of this same name — `pipeline_notice.py`'s
+#: `--fallback-label` (DRE-7451) — and its invocations are read by that flag.
 LABEL_FLAG = "--label"
 
 #: A planned write applied later by its own executor: `hygiene.linear_label`
@@ -169,8 +172,13 @@ _FUNCTION = (ast.FunctionDef, ast.AsyncFunctionDef)
 _SCOPE = (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)
 _MAX_DEPTH = 150
 
-#: The selector a `--label` flag sequence is read through.
+#: The selector a `--label` flag sequence is read through. A selector
+#: `("flag", <flag>)` reads one spelled with another flag.
 _FLAG = ("flag",)
+
+
+def _flag_of(selector: tuple) -> str:
+    return selector[1] if len(selector) > 1 else LABEL_FLAG
 
 
 @dataclass(frozen=True)
@@ -179,7 +187,8 @@ class LabelParams:
 
     positions: tuple   # positional indexes
     names: tuple       # parameter names, positional or keyword-only
-    flags: int | None  # index of the trailing flags that carry `--label <name>`
+    flags: int | None  # index of the trailing flags that carry `<flag> <name>`
+    flag: str = LABEL_FLAG  # the flag those trailing pairs are spelled with
 
 
 @dataclass(frozen=True)
@@ -822,14 +831,15 @@ class _Reader:
     # -- containers ----------------------------------------------------------
 
     def _sequence(self, node, ctx, path) -> _Read:
-        if path and path[0] == _FLAG:
+        if path and path[0][0] == _FLAG[0]:
             out = _Read()
             elts = node.elts
+            flag = _flag_of(path[0])
             for index, elt in enumerate(elts):
                 if isinstance(elt, ast.Starred):
                     out.add(self.read(elt.value, ctx, path))
                 elif index and isinstance(elts[index - 1], ast.Constant) \
-                        and elts[index - 1].value == LABEL_FLAG:
+                        and elts[index - 1].value == flag:
                     out.add(self.read(elt, ctx, path[1:]))
             return out
         if path and path[0][0] == "index" and isinstance(node, ast.Tuple) \
@@ -1600,10 +1610,21 @@ def _command_lines(repo: _Repo, params: dict, commands: set) -> dict:
             (positional.index(name),) if name in positional else (),
             (name,) if name != vararg else (),
             len(positional) if name == vararg else None,
+            _module_label_flag(mod),
         )
         for sub in mod.dispatch.get(handler, ()):
             out.setdefault(module, {})[sub] = entry
     return out
+
+
+def _module_label_flag(mod) -> str:
+    """The flag `mod`'s command line carries labels under: its own
+    `LABEL_FLAG` constant when it binds one to a string literal, else the
+    write layer's."""
+    for value, index in mod.assigns.get("LABEL_FLAG", []):
+        if index is None and isinstance(value, ast.Constant) and isinstance(value.value, str):
+            return value.value
+    return LABEL_FLAG
 
 
 def _shell_args(rest: str) -> list:
@@ -1640,7 +1661,7 @@ def _text_writes(rel: str, how: str, text: str, lines: dict, first_line: int = 1
                 unread.append(f"no argument at position {index + 1}")
         if entry.flags is not None:
             tail = rest[entry.flags:]
-            values += [tail[i + 1] for i, word in enumerate(tail[:-1]) if word == LABEL_FLAG]
+            values += [tail[i + 1] for i, word in enumerate(tail[:-1]) if word == entry.flag]
         if not values and not unread:
             continue
         line = text.count("\n", 0, match.start()) + first_line
@@ -1683,7 +1704,7 @@ def _python_command_writes(repo: _Repo, reader, lines: dict) -> list:
                              else _unknown(f"no argument at position {position + 1}"))
                 if entry.flags is not None:
                     tail = ast.Tuple(elts=list(rest[entry.flags:]), ctx=ast.Load())
-                    read.add(reader.read(tail, ctx, (_FLAG,)))
+                    read.add(reader.read(tail, ctx, (_FLAG + (entry.flag,),)))
                 found.append(_write(f"{mod.rel}:{node.lineno}", "python", _unparse(node), read))
     return found
 

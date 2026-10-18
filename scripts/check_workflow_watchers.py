@@ -42,7 +42,8 @@ The exemptions are declared, in data, with their reasons. The medic is the
 terminal watcher: a medic that watched itself would rebuild the 2026-06-28
 medic-crash-loop the ADR forbids, so nothing watches it by design. And
 `NOT_WATCHED` names, by workflow name, the few whose red run a person reads
-and an automatic retry would only make dearer — Shadow Replay (DRE-7197).
+and an automatic retry would only make dearer — Shadow Replay (DRE-7197), and
+the notice door's smoke (DRE-7451).
 
 Deterministic, PyYAML-only. Run from anywhere:
 
@@ -97,6 +98,12 @@ NOT_WATCHED = {
         "a red replay is read by the operator from its report "
         "(shadow-replay-report), and an automatic retry would spend another "
         "batch of reviewer runs (DRE-7197)"
+    ),
+    "Smoke · pipeline notice door": (
+        "the operator dispatches it and reads its one log, and it files no card "
+        "on any path: a red smoke says the console's notice door is down, which "
+        "the medic would answer with a retry that raises a real alert again and "
+        "then a diagnosis card (DRE-7451)"
     ),
 }
 

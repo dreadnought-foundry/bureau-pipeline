@@ -209,7 +209,7 @@ def test_a_demo_card_in_motion_runs_the_pass_as_before(capsys):
              "advance_urgent_intake", "repair_frozen_planning_holds", "serve_planner_line",
              "release_groom_queue", "move_hand_built_to_review", "carry_epics_out_of_todo",
              "report_break_glass", "report_epic_growth", "pr_for", "agent_run_alive",
-             "redeliver_rescued_work")
+             "redeliver_rescued_work", "build_run_refusal", "redispatch")
     with mock.patch.object(reconcile, "rereview_watch_scope",
                            return_value=(set(), lambda e: None)):
         _pass(board, stub=stubs)
@@ -276,11 +276,11 @@ def test_with_the_door_on_the_idle_check_costs_no_linear_request(monkeypatch, ca
     # the fleet to no repo while the console's PIPELINE_READ_UNROUTED is off
     # (DRE-5848) — Planning and Intake and the planner line's Green Light, and
     # the NO-ROUTE watchdog's Todo and In Progress, which the door cannot serve
-    # for cards no repo owns (the PR #687 critic's item 2) — and the outage
-    # alarm's one open-card lookup, which the door's board does not hold the
-    # lane for, made on every pass (DRE-6576).
+    # for cards no repo owns (the PR #687 critic's item 2). The outage alarm's
+    # open-card lookup (DRE-6576) is gone: the outage is a console alert since
+    # DRE-7455, so there is no card to look up.
     assert reconcile.IDLE_QUERY not in board.queries
-    assert board.requests == 4
+    assert board.requests == 3
     assert "idle: agent-bureau-demo — no card of this repo is in motion" in capsys.readouterr().out
 
 

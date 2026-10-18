@@ -11,7 +11,7 @@ DRE-7187, DRE-7188, DRE-7189) read their bars with it afterwards.
 
 What this file pins:
 
-* the workflow: `workflow_dispatch` only, its five inputs, the two reusables
+* the workflow: `workflow_dispatch` only, its eight inputs, the two reusables
   at `@main` with `shadow: true` and the replay inputs, a `permissions:`
   block of exactly four grants, and a concurrency group that never names a
   pull request;
@@ -22,6 +22,11 @@ What this file pins:
 * `pick`, against fixture Linear comments and a fake `gh` on PATH, and with
   `prs`, against fixture pull request comments;
 * `compare`, over fixture artifacts: its lines, its counts and its reports;
+* `rules_ref` (DRE-7280): each critic record names the newest bureau-pipeline
+  `main` commit at or before its recorded verdict, read off a recorded fake
+  of the commits API; the critic's replay is handed it, and the report
+  names it per replay and counts the replays that ran with none — while the
+  `shadow-replay:` lines stay byte for byte what they were;
 * the three log lines `config/proof-reach.json` declares for a proof run.
 
 Run: python3 -m pytest tests/test_shadow_replay.py -v
@@ -134,6 +139,19 @@ FAKE_GH = textwrap.dedent("""\
     if m:
         print(json.dumps([fx["comments"].get(m.group(1), [])]))
         sys.exit(0)
+    m = re.fullmatch(r"repos/dreadnought-foundry/bureau-pipeline/commits\\?(.*)", path)
+    if m:
+        query = dict(part.split("=", 1) for part in m.group(1).split("&"))
+        if fx["main"] is None or query.get("until") in fx["main_fail"]:
+            sys.stderr.write("gh: Server Error (HTTP 502)\\n")
+            sys.exit(1)
+        if query.get("sha") != "main":
+            sys.exit("fake gh: the commits list is read only on main")
+        older = sorted((c for c in fx["main"] if c["date"] <= query["until"]),
+                       key=lambda c: c["date"], reverse=True)
+        print(json.dumps([{"sha": c["sha"], "commit": {"committer": {"date": c["date"]}}}
+                          for c in older[:int(query.get("per_page", "30"))]]))
+        sys.exit(0)
     m = re.fullmatch(r"repos/[^/]+/[^/]+/pulls/(\\d+)", path)
     if m:
         print(json.dumps({"number": int(m.group(1)),
@@ -146,7 +164,8 @@ FAKE_GH = textwrap.dedent("""\
 class FakeGh:
     """A `gh` on PATH that answers from a fixture and logs every call."""
 
-    def __init__(self, *, commits=None, comments=None, heads=None):
+    def __init__(self, *, commits=None, comments=None, heads=None, main=None,
+                 main_fail=()):
         self.tmp = tempfile.TemporaryDirectory()
         d = Path(self.tmp.name)
         gh = d / "gh"
@@ -155,7 +174,8 @@ class FakeGh:
         self.fixture = d / "fixture.json"
         self.fixture.write_text(json.dumps({
             "commits": commits or {}, "comments": comments or {},
-            "heads": heads or {}}), encoding="utf-8")
+            "heads": heads or {}, "main": main, "main_fail": list(main_fail)}),
+            encoding="utf-8")
         self.log = d / "calls.log"
         self.log.write_text("", encoding="utf-8")
         self.env = {"PATH": f"{d}{os.pathsep}{os.environ.get('PATH', '')}",
@@ -184,13 +204,18 @@ class WorkflowShapeTest(unittest.TestCase):
         self.doc = _load(WORKFLOW)
         self.jobs = self.doc.get("jobs") or {}
 
-    def test_named_and_dispatch_only(self):
+    def test_named_dispatched_or_called(self):
+        """Called by a product repo's stub since DRE-7306, whose inputs
+        `tests/test_shadow_replay_callable.py` pins."""
         self.assertEqual("Shadow Replay", self.doc["name"])
-        self.assertEqual(["workflow_dispatch"], list(_on(self.doc)))
+        self.assertEqual(["workflow_dispatch", "workflow_call"], list(_on(self.doc)))
 
-    def test_the_five_inputs(self):
+    def test_the_eight_inputs(self):
+        """The five of DRE-7197, then DRE-7304's three, which
+        `tests/test_shadow_replay_unknown_builder.py` pins."""
         inputs = _on(self.doc)["workflow_dispatch"]["inputs"]
-        self.assertEqual(["reviewer", "model", "recorded_model", "count", "prs"],
+        self.assertEqual(["reviewer", "model", "recorded_model", "count", "prs",
+                          "unknown_builder", "verify_workflow", "from_run"],
                          list(inputs))
         self.assertEqual("critic", inputs["reviewer"]["default"])
         self.assertEqual(["critic", "verifier"], inputs["reviewer"]["options"])
@@ -223,12 +248,14 @@ class WorkflowShapeTest(unittest.TestCase):
         pick = self.jobs["pick"]
         self.assertIn("matrix", pick["outputs"])
         runs = "\n".join(s.get("run", "") for s in pick["steps"])
-        self.assertIn("python3 scripts/shadow_replay.py pick", runs)
+        self.assertIn("python3 .bureau-pipeline/scripts/shadow_replay.py pick", runs)
 
     def _replay_jobs(self) -> dict:
         return {name: job for name, job in self.jobs.items() if "uses" in job}
 
     def test_replay_calls_each_reusable_at_main_in_shadow_mode(self):
+        """`uses:` cannot be an expression, so it stays `@main`; the
+        caller's `pipeline_ref` reaches the internal checkouts (DRE-7306)."""
         calls = self._replay_jobs()
         by_target = {job["uses"]: (name, job) for name, job in calls.items()}
         base = "dreadnought-foundry/bureau-pipeline/.github/workflows/"
@@ -245,7 +272,7 @@ class WorkflowShapeTest(unittest.TestCase):
                           "one red replay must not cancel the rest of the batch")
             self.assertIn("needs.pick.outputs.matrix", str(job["strategy"]["matrix"]))
             w = job["with"]
-            self.assertEqual("main", w["pipeline_ref"])
+            self.assertEqual("${{ inputs.pipeline_ref || 'main' }}", w["pipeline_ref"])
             self.assertIs(True, w["shadow"])
             self.assertEqual("${{ inputs.model }}", w["model"])
             self.assertIn("matrix.", w["replay_pr"])
@@ -253,6 +280,17 @@ class WorkflowShapeTest(unittest.TestCase):
             self.assertIn("matrix.", w["replay_sha"])
             self.assertIn(".sha", w["replay_sha"])
             self.assertEqual("inherit", job["secrets"])
+
+    def test_the_critic_replay_is_handed_its_rules_ref(self):
+        """DRE-7280: the critic judges by the rules in force when the
+        recorded verdict was written; `pipeline_ref` is the caller's (`main`
+        on a dispatch here), so the harness running the replay is the
+        caller's. The verifier takes no
+        `rules_ref` (DRE-7279 left `verify.yml` alone)."""
+        critic = self.jobs["replay-critic"]["with"]
+        self.assertEqual("${{ matrix.replay.rules_ref }}", critic["rules_ref"])
+        self.assertEqual("${{ inputs.pipeline_ref || 'main' }}", critic["pipeline_ref"])
+        self.assertNotIn("rules_ref", self.jobs["replay-verifier"]["with"])
 
     def test_compare_always_runs_and_publishes_the_report(self):
         compare = self.jobs["compare"]
@@ -262,7 +300,7 @@ class WorkflowShapeTest(unittest.TestCase):
             self.assertIn(name, needs)
         steps = compare["steps"]
         runs = "\n".join(s.get("run", "") for s in steps)
-        self.assertIn("python3 scripts/shadow_replay.py compare", runs)
+        self.assertIn("python3 .bureau-pipeline/scripts/shadow_replay.py compare", runs)
         self.assertIn("grep", runs)
         self.assertIn("shadow-replay:", runs)
         downloads = [s for s in steps if "download-artifact" in s.get("uses", "")]
@@ -354,9 +392,9 @@ class PickRecordedModelTest(unittest.TestCase):
         with FakeGh(commits=self.commits):
             got = self._pick(3)
         self.assertEqual(
-            [{"pr": 105, "sha": _sha(5), "recorded": "REQUEST_CHANGES"},
-             {"pr": 103, "sha": _sha(4), "recorded": "APPROVE"},
-             {"pr": 102, "sha": _sha(2), "recorded": "REQUEST_CHANGES"}],
+            [{"pr": 105, "sha": _sha(5), "recorded": "REQUEST_CHANGES", "rules_ref": ""},
+             {"pr": 103, "sha": _sha(4), "recorded": "APPROVE", "rules_ref": ""},
+             {"pr": 102, "sha": _sha(2), "recorded": "REQUEST_CHANGES", "rules_ref": ""}],
             _sr().matrix(got))
         self.assertEqual(f"🔎 QA Critic — VERDICT: REQUEST_CHANGES @{_sha(5)}",
                          got[0]["recorded_line"])
@@ -414,8 +452,8 @@ class PickRecordedModelTest(unittest.TestCase):
 # 3. pick — the `prs` path                                                     #
 # --------------------------------------------------------------------------- #
 
-def pr_comment(body: str, login: str = QA) -> dict:
-    return {"user": {"login": login}, "body": body}
+def pr_comment(body: str, login: str = QA, created: str = "2026-10-01T00:00:00Z") -> dict:
+    return {"user": {"login": login}, "body": body, "created_at": created}
 
 
 class PickPrsTest(unittest.TestCase):
@@ -439,8 +477,8 @@ class PickPrsTest(unittest.TestCase):
         with FakeGh(comments=self.comments, heads=self.heads):
             got = _sr().pick_prs([201, 202], reviewer="critic", repo=REPO)
         self.assertEqual(
-            [{"pr": 201, "sha": _sha(22), "recorded": "APPROVE"},
-             {"pr": 202, "sha": _sha(24), "recorded": "none"}],
+            [{"pr": 201, "sha": _sha(22), "recorded": "APPROVE", "rules_ref": ""},
+             {"pr": 202, "sha": _sha(24), "recorded": "none", "rules_ref": ""}],
             _sr().matrix(got))
         self.assertEqual("", got[1]["recorded_line"])
 
@@ -458,8 +496,8 @@ class PickPrsTest(unittest.TestCase):
         with FakeGh(comments=comments, heads={"301": _sha(34), "302": _sha(35)}):
             got = _sr().pick_prs([301, 302], reviewer="verifier", repo=REPO)
         self.assertEqual(
-            [{"pr": 301, "sha": _sha(32), "recorded": "FAIL"},
-             {"pr": 302, "sha": _sha(35), "recorded": "none"}],
+            [{"pr": 301, "sha": _sha(32), "recorded": "FAIL", "rules_ref": ""},
+             {"pr": 302, "sha": _sha(35), "recorded": "none", "rules_ref": ""}],
             _sr().matrix(got))
 
     def test_parse_prs(self):
@@ -490,8 +528,8 @@ class PickCliTest(unittest.TestCase):
             line = gh_out.read_text(encoding="utf-8").strip()
             self.assertTrue(line.startswith("matrix="))
             self.assertEqual(
-                [{"pr": 201, "sha": _sha(22), "recorded": "APPROVE"},
-                 {"pr": 202, "sha": _sha(24), "recorded": "none"}],
+                [{"pr": 201, "sha": _sha(22), "recorded": "APPROVE", "rules_ref": ""},
+                 {"pr": 202, "sha": _sha(24), "recorded": "none", "rules_ref": ""}],
                 json.loads(line[len("matrix="):]))
             self.assertEqual(2, len(json.loads(pick.read_text(encoding="utf-8"))))
 
@@ -521,8 +559,123 @@ class PickCliTest(unittest.TestCase):
 
 
 # --------------------------------------------------------------------------- #
+# 3b. pick — the rules in force when each verdict was recorded (DRE-7280)      #
+# --------------------------------------------------------------------------- #
+
+RULES_OLD, RULES_MID, RULES_NEW = _sha(0xA1), _sha(0xA2), _sha(0xA3)
+
+#: A recorded answer of `commits?sha=main`: bureau-pipeline's `main` at three
+#: moments.
+MAIN = [{"sha": RULES_OLD, "date": "2026-10-01T12:00:00Z"},
+        {"sha": RULES_MID, "date": "2026-10-03T12:00:00Z"},
+        {"sha": RULES_NEW, "date": "2026-10-05T12:00:00Z"}]
+
+
+def commits_call(until: str) -> str:
+    return ("api repos/dreadnought-foundry/bureau-pipeline/commits"
+            f"?sha=main&until={until}&per_page=1")
+
+
+class RulesRefPickTest(unittest.TestCase):
+    """Three critic reviews: one recorded between two `main` commits, one at
+    the very second of a commit, and one whose commits read fails."""
+
+    def setUp(self):
+        self.comments = [
+            node(critic_card_copy("APPROVE", _sha(1)), "2026-10-02T08:30:00.000Z"),
+            node(critic_card_copy("REQUEST_CHANGES", _sha(2)), "2026-10-03T12:00:00.000Z"),
+            node(critic_card_copy("APPROVE", _sha(3)), "2026-10-04T09:15:00.000Z"),
+        ]
+        self.commits = {_sha(1): [101], _sha(2): [102], _sha(3): [103]}
+
+    def _pick(self, **gh):
+        err = io.StringIO()
+        with FakeGh(commits=self.commits, main=MAIN, **gh) as fake, redirect_stderr(err):
+            got = _sr().pick_recorded_model(self.comments, recorded_model=MODEL,
+                                            count=3, repo=REPO)
+            calls = fake.calls()
+        return {r["pr"]: r for r in got}, calls, err.getvalue()
+
+    def test_between_two_commits_it_is_the_older_and_at_a_commit_it_is_that_one(self):
+        got, _, _ = self._pick(main_fail=["2026-10-04T09:15:00Z"])
+        self.assertEqual(RULES_OLD, got[101]["rules_ref"])
+        self.assertEqual(RULES_MID, got[102]["rules_ref"])
+        self.assertEqual({"pr": 102, "sha": _sha(2), "recorded": "REQUEST_CHANGES",
+                          "rules_ref": RULES_MID}, _sr().matrix([got[102]])[0])
+
+    def test_one_commits_read_per_record_on_bureau_pipeline_main(self):
+        _, calls, _ = self._pick()
+        self.assertEqual(
+            sorted([commits_call("2026-10-02T08:30:00Z"), commits_call("2026-10-03T12:00:00Z"),
+                    commits_call("2026-10-04T09:15:00Z")]),
+            sorted(c for c in calls if "commits?" in c))
+
+    def test_an_unreadable_answer_is_replayed_with_none_and_named(self):
+        got, _, err = self._pick(main_fail=["2026-10-04T09:15:00Z"])
+        self.assertEqual("", got[103]["rules_ref"])
+        self.assertEqual(3, len(got), "the record is still replayed")
+        named = [ln for ln in err.splitlines() if "rules_ref" in ln]
+        self.assertEqual(1, len(named), err)
+        self.assertIn("pr=103", named[0])
+        self.assertIn("today's rules", named[0])
+
+    def test_no_main_commit_before_the_verdict_is_none_and_named(self):
+        self.comments[0] = node(critic_card_copy("APPROVE", _sha(1)), "2026-09-01T00:00:00Z")
+        got, _, err = self._pick()
+        self.assertEqual("", got[101]["rules_ref"])
+        self.assertIn("pr=101", err)
+
+    def test_the_prs_path_reads_the_verdict_comments_own_time(self):
+        comments = {
+            "201": [pr_comment(f"🔎 QA Critic — VERDICT: APPROVE @{_sha(22)}",
+                               created="2026-10-03T13:00:00Z")],
+            "202": [pr_comment("a person's comment", login="someone")],
+        }
+        err = io.StringIO()
+        with FakeGh(comments=comments, heads={"201": _sha(23), "202": _sha(24)},
+                    main=MAIN) as fake, redirect_stderr(err):
+            got = _sr().pick_prs([201, 202], reviewer="critic", repo=REPO)
+            calls = fake.calls()
+        self.assertEqual([RULES_MID, ""], [r["rules_ref"] for r in got])
+        self.assertEqual([commits_call("2026-10-03T13:00:00Z")],
+                         [c for c in calls if "commits?" in c])
+        self.assertIn("pr=202", err.getvalue(), "a pull request with no verdict is named")
+
+    def test_the_verifier_reads_no_rules_ref(self):
+        comments = {"301": [pr_comment(f"🧪 QA Verifier — VERDICT: FAIL @{_sha(32)}")]}
+        with FakeGh(comments=comments, heads={"301": _sha(34)}, main=MAIN) as fake:
+            got = _sr().pick_prs([301], reviewer="verifier", repo=REPO)
+            calls = fake.calls()
+        self.assertEqual("", got[0]["rules_ref"])
+        self.assertEqual([], [c for c in calls if "commits?" in c])
+
+    def test_the_cli_carries_rules_ref_in_the_matrix_and_the_log(self):
+        comments = {"201": [pr_comment(f"🔎 QA Critic — VERDICT: APPROVE @{_sha(22)}",
+                                       created="2026-10-05T12:00:00Z")]}
+        out = io.StringIO()
+        with tempfile.TemporaryDirectory() as tmp, \
+                FakeGh(comments=comments, heads={"201": _sha(23)}, main=MAIN), \
+                redirect_stdout(out), redirect_stderr(io.StringIO()):
+            gh_out = Path(tmp) / "out"
+            code = _sr().main([
+                "pick", "--reviewer", "critic", "--count", "20", "--prs", "201",
+                "--repo", REPO, "--out", str(Path(tmp) / "pick.json"),
+                "--github-output", str(gh_out)])
+            line = gh_out.read_text(encoding="utf-8").strip()
+        self.assertEqual(0, code)
+        self.assertEqual([{"pr": 201, "sha": _sha(22), "recorded": "APPROVE",
+                           "rules_ref": RULES_NEW}], json.loads(line[len("matrix="):]))
+        self.assertIn(f"pick: pr=201 sha={_sha(22)} recorded=APPROVE rules_ref={RULES_NEW}",
+                      out.getvalue())
+
+
+# --------------------------------------------------------------------------- #
 # 4. compare                                                                   #
 # --------------------------------------------------------------------------- #
+
+RULES_A = "a" * 40
+RULES_B = "b" * 40
+
 
 def write_artifact(root: Path, role: str, pr: int, sha: str, verdict, md: str) -> None:
     d = root / f"shadow-verdict-{role}-{pr}"
@@ -541,15 +694,16 @@ class CompareTest(unittest.TestCase):
         self.arts = root / "artifacts"
         self.out = root / "report"
         self.records = [
-            {"pr": 1, "sha": _sha(1), "recorded": "APPROVE",
+            {"pr": 1, "sha": _sha(1), "recorded": "APPROVE", "rules_ref": RULES_A,
              "recorded_line": f"🔎 QA Critic — VERDICT: APPROVE @{_sha(1)}"},
-            {"pr": 2, "sha": _sha(2), "recorded": "APPROVE",
+            {"pr": 2, "sha": _sha(2), "recorded": "APPROVE", "rules_ref": RULES_B,
              "recorded_line": f"🔎 QA Critic — VERDICT: APPROVE @{_sha(2)}"},
-            {"pr": 3, "sha": _sha(3), "recorded": "REQUEST_CHANGES",
+            {"pr": 3, "sha": _sha(3), "recorded": "REQUEST_CHANGES", "rules_ref": "",
              "recorded_line": f"🔎 QA Critic — VERDICT: REQUEST_CHANGES @{_sha(3)}"},
-            {"pr": 4, "sha": _sha(4), "recorded": "APPROVE",
+            {"pr": 4, "sha": _sha(4), "recorded": "APPROVE", "rules_ref": RULES_A,
              "recorded_line": f"🔎 QA Critic — VERDICT: APPROVE @{_sha(4)}"},
-            {"pr": 5, "sha": _sha(5), "recorded": "none", "recorded_line": ""},
+            {"pr": 5, "sha": _sha(5), "recorded": "none", "rules_ref": "",
+             "recorded_line": ""},
         ]
         write_artifact(self.arts, "critic", 1, _sha(1), "APPROVE", "VERDICT: APPROVE\n\nok\n")
         write_artifact(self.arts, "critic", 2, _sha(2), "REQUEST_CHANGES",
@@ -584,10 +738,51 @@ class CompareTest(unittest.TestCase):
             f"shadow-replay: pr=5 sha={_sha(5)} recorded=none replayed=APPROVE match=n/a",
             f"shadow-replay: matched 1 of 4 (25%) reviewer=critic model={MODEL} "
             f"recorded_model={OTHER_MODEL}",
+            # DRE-7304's bar, after today's lines; no record here is acted on.
+            "shadow-replay: acted-on rejections 0 of 0 rejected again (0%) "
+            f"reviewer=critic model={MODEL}",
         ], self._run())
 
+    def test_the_lines_are_unchanged_by_rules_ref(self):
+        """`config/proof-reach.json` declares the `shadow-replay:` tag and
+        DRE-7198's record reads its lines: the same records with and
+        without `rules_ref` print the same bytes."""
+        with_refs = self._run()
+        for r in self.records:
+            r.pop("rules_ref")
+        self.assertEqual(with_refs, self._run())
+
+    def test_the_report_names_each_replays_rules_ref(self):
+        self._run()
+        report = json.loads((self.out / "shadow-replay-report.json").read_text(encoding="utf-8"))
+        self.assertEqual({1: RULES_A, 2: RULES_B, 3: "", 4: RULES_A, 5: ""},
+                         {r["pr"]: r["rules_ref"] for r in report["replays"]})
+        self.assertEqual(2, report["without_rules_ref"])
+        self.assertEqual({2: RULES_B, 3: "", 4: RULES_A},
+                         {m["pr"]: m["rules_ref"] for m in report["mismatches"]})
+        self.assertEqual(
+            f"shadow-replay: matched 1 of 4 (25%) reviewer=critic model={MODEL} "
+            f"recorded_model={OTHER_MODEL}", report["summary"])
+
+        md = (self.out / "shadow-replay-report.md").read_text(encoding="utf-8")
+        self.assertIn("| PR | sha | rules_ref | recorded | replayed | match |", md)
+        self.assertIn(f"| 1 | `{_sha(1)}` | `{RULES_A}` | APPROVE | APPROVE | yes |", md)
+        self.assertIn(f"| 3 | `{_sha(3)}` | none | REQUEST_CHANGES | none | no |", md)
+        self.assertIn("Ran with no `rules_ref`, so by today's rules: 2 of 5 replays.", md)
+
+    def test_a_pick_from_before_rules_ref_counts_every_replay_as_without_one(self):
+        for r in self.records:
+            r.pop("rules_ref")
+        self._run()
+        report = json.loads((self.out / "shadow-replay-report.json").read_text(encoding="utf-8"))
+        self.assertEqual(5, report["without_rules_ref"])
+        self.assertEqual({""}, {r["rules_ref"] for r in report["replays"]})
+        md = (self.out / "shadow-replay-report.md").read_text(encoding="utf-8")
+        self.assertIn("Ran with no `rules_ref`, so by today's rules: 5 of 5 replays.", md)
+
     def test_an_empty_recorded_model_is_none(self):
-        self.assertTrue(self._run(recorded_model="")[-1].endswith("recorded_model=none"))
+        summary = next(ln for ln in self._run(recorded_model="") if " matched " in ln)
+        self.assertTrue(summary.endswith("recorded_model=none"))
 
     def test_the_percentage_rounds_down(self):
         self.assertEqual(

@@ -234,6 +234,33 @@ class FakePaged:
         return list(self.cards)
 
 
+class FlakyPaged(FakePaged):
+    """A board read that answers with each outcome in turn: an exception is
+    raised, anything else is the cards that attempt returns."""
+
+    def __init__(self, *outcomes, remaining=None):
+        super().__init__(remaining=remaining)
+        self.outcomes = list(outcomes)
+
+    def __call__(self, query, variables=None, **_kwargs):
+        outcome = self.outcomes[len(self.calls)]
+        self.calls.append((query, variables))
+        if isinstance(outcome, BaseException):
+            raise outcome
+        if self.remaining is not None:
+            linear_ops._budget["last"] = self.remaining
+            linear_ops._budget["first"] = self.remaining
+        return list(outcome)
+
+
+@pytest.fixture
+def sleeps(monkeypatch):
+    """Every wait the read asks for, recorded instead of slept."""
+    waited: list = []
+    monkeypatch.setattr(hygiene.time, "sleep", waited.append)
+    return waited
+
+
 @pytest.fixture
 def no_gql(monkeypatch):
     calls: list = []
@@ -345,6 +372,84 @@ class TestRead:
         assert code == 1
         assert "go=false" in output.splitlines()
         assert not out.exists()
+
+    # DRE-7271: run 38574111175 went red on one slow Linear answer. The whole
+    # board read is tried three times, 30 s then 60 s apart, on a transient
+    # fault only; anything else is answered exactly as before, on one attempt.
+
+    def test_the_waits_between_board_reads_are_thirty_then_sixty_seconds(self):
+        assert hygiene.BOARD_READ_WAITS_SECONDS == (30, 60)
+
+    def test_a_timeout_then_a_board_is_read_on_the_second_attempt(
+        self, tmp_path, monkeypatch, capsys, sleeps, no_gql
+    ):
+        paged = FlakyPaged(TimeoutError("The read operation timed out"),
+                           [card("DRE-1", "Todo")], remaining=2000)
+        code, out, output = _read(tmp_path, monkeypatch, paged)
+        assert code == 0
+        assert "go=true" in output.splitlines()
+        assert [c["identifier"] for c in json.loads(out.read_text())["lanes"]["Todo"]] == ["DRE-1"]
+        assert len(paged.calls) == 2
+        assert sleeps == [30]
+        err = capsys.readouterr().err
+        assert "The read operation timed out" in err
+        assert "30" in err and "attempt 2 of 3" in err
+
+    def test_a_board_that_times_out_every_time_ends_the_documented_way(
+        self, tmp_path, monkeypatch, capsys, sleeps, no_gql
+    ):
+        paged = FlakyPaged(*[TimeoutError("The read operation timed out")] * 3)
+        code, out, output = _read(tmp_path, monkeypatch, paged)
+        assert code == 1
+        assert "go=false" in output.splitlines()
+        why = [line for line in output.splitlines() if line.startswith("why=")]
+        assert len(why) == 1
+        assert why[0].startswith("why=hygiene: the board could not be read")
+        assert "The read operation timed out" in why[0]
+        assert not out.exists()
+        assert len(paged.calls) == 3
+        assert sleeps == [30, 60]
+        err = capsys.readouterr().err
+        assert "attempt 2 of 3" in err and "attempt 3 of 3" in err
+        assert "hygiene: the board could not be read — The read operation timed out" in err
+
+    def test_a_wrapped_connection_reset_is_retried_too(self, tmp_path, monkeypatch, sleeps, no_gql):
+        import urllib.error
+
+        paged = FlakyPaged(urllib.error.URLError(ConnectionResetError("reset by peer")), [])
+        code, _, output = _read(tmp_path, monkeypatch, paged)
+        assert code == 0
+        assert "go=true" in output.splitlines()
+        assert len(paged.calls) == 2
+        assert sleeps == [30]
+
+    @pytest.mark.parametrize("error", [
+        linear_ops.LinearError("linear error from api.linear.app: 500"),
+        linear_ops.LinearRateLimited("linear rate limit reached"),
+    ], ids=["linear-error", "rate-limited"])
+    def test_a_linear_error_is_answered_on_one_attempt(
+        self, tmp_path, monkeypatch, sleeps, no_gql, error
+    ):
+        paged = FlakyPaged(error)
+        code, out, output = _read(tmp_path, monkeypatch, paged)
+        assert code == 1
+        assert "go=false" in output.splitlines()
+        why = [line for line in output.splitlines() if line.startswith("why=")]
+        assert len(why) == 1 and why[0].startswith("why=hygiene: the board could not be read")
+        assert not out.exists()
+        assert len(paged.calls) == 1
+        assert sleeps == []
+
+    def test_an_error_that_is_not_transient_propagates_on_one_attempt(
+        self, tmp_path, monkeypatch, sleeps, no_gql
+    ):
+        error = ValueError("not a network fault")
+        assert not linear_ops.is_transient(error)
+        paged = FlakyPaged(error)
+        with pytest.raises(ValueError, match="not a network fault"):
+            _read(tmp_path, monkeypatch, paged)
+        assert len(paged.calls) == 1
+        assert sleeps == []
 
     def test_without_github_output_it_still_reads_and_exits_zero(self, tmp_path, monkeypatch, no_gql):
         monkeypatch.setattr(linear_ops, "gql_paged", FakePaged([], remaining=10))
@@ -707,6 +812,24 @@ class TestIdempotency:
 # --------------------------------------------------------------------------- #
 # the guard — by shape, never by substring                                     #
 # --------------------------------------------------------------------------- #
+
+
+class TestTheStartLanes:
+    """DRE-7112. The board read and the guard's refusal name the start lanes
+    through `lane_contract.START_LANES` (DRE-7105), so the read covers a card
+    in In Progress exactly as one in Todo, and deleting Todo's entry narrows
+    both with no edit here."""
+
+    def test_the_board_read_covers_every_start_lane(self):
+        assert hygiene.LANES == ("Green Light", *lane_contract.START_LANES, "Triage",
+                                 "In Review")
+        assert sorted(hygiene.LANES) == sorted(FIVE)
+
+    def test_the_guard_names_every_start_lane_it_refuses(self):
+        assert hygiene.REFUSED_LANES == (*lane_contract.START_LANES, "Green Light",
+                                         "Triage", "Intake")
+        for lane in lane_contract.START_LANES:
+            assert lane not in hygiene.destinations()
 
 
 class TestGuard:

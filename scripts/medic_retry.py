@@ -128,12 +128,17 @@ CLI:
         --branch <head-ref> --default-branch <name>
     python3 medic_retry.py failure-card-body --report <file> --workflow <name> \
         --branch <head-ref> --head-sha <sha> --run-url <url>
+    python3 medic_retry.py notice-workflow-file --path <workflow file path> \
+        --repo <slug>
 
 `diagnosis-target` prints `kind`, `target` and `title` for the diagnosis job
 and leaves the target card's facts in the snapshot file the agent reads (see
 `diagnosis_target`). `repair-card` prints the open red-main repair card for the
 run, or nothing, and exits 1 when the search did not answer; `failure-card-body`
-prints a new failure card's description (DRE-6521, `failure_card_body`).
+prints the diagnosis the medic raises, criteria appended, which is also its
+fallback card's description (DRE-6521, `failure_card_body`);
+`notice-workflow-file` prints the workflow part of the medic's notice key
+(DRE-7453, `notice_key`).
 
 `decide` prints four `key=value` lines for `$GITHUB_OUTPUT` — `retry`, `rule`,
 `card`, `detail` — one line each, and exits 0 whatever it decides. `post`
@@ -654,10 +659,11 @@ def _newest_after(receipts, needle: str, run_started_at: str) -> dict | None:
 
     "After the run began" is what makes the receipt THIS run's: a park from a
     previous life of the card (since un-parked, the label cleared, the card back
-    in Todo) says nothing about the failure in hand, and reading it as one would
-    freeze every later retry. An unreadable timestamp on either side is treated
-    as in range — the ordering is unknown, and the fact the receipt exists at
-    all is the stronger signal.
+    in a start lane, `lane_contract.START_LANES` — DRE-7111) says nothing about
+    the failure in hand, and reading it as one would freeze every later retry.
+    An unreadable timestamp on either side is treated as in range — the
+    ordering is unknown, and the fact the receipt exists at all is the
+    stronger signal.
     """
     started = _moment(run_started_at)
     found = None
@@ -938,9 +944,18 @@ def card_facts(identifier: str, *, detail: bool = False) -> dict:
 
 # Where a diagnosis lands, as `diagnosis_target` answers it:
 TARGET_CARD = "card"  # the head branch names a card: comment on it
-TARGET_FAILURE_CARD = "failure-card"  # an open "Pipeline failure: <wf>" card exists
-TARGET_NEW = "new"  # the search answered: none yet, so create one
-TARGET_UNKNOWN = "unknown"  # the search did not answer: ask again before creating
+TARGET_REPAIR_CARD = "repair-card"  # the red-main repair card is open: comment on it
+TARGET_NOTICE = "notice"  # no card: raise the medic's console alert (DRE-7453)
+TARGET_UNKNOWN = "unknown"  # the repair search did not answer: ask again first
+
+#: The medic's notice key is `medic:<repo>:<workflow file>` (DRE-7453, the
+#: epic's contract). medic.yml writes the `medic:` and the colons itself, so
+#: `notice_writers.py report` reads the key off the step; this module makes the
+#: workflow part and `notice_key` the whole, which the tests hold equal.
+NOTICE_PREFIX = "medic"
+#: The contract's key: `^[A-Za-z0-9_.:-]{1,120}$`.
+NOTICE_KEY_LIMIT = 120
+_NOT_IN_A_KEY = re.compile(r"[^A-Za-z0-9_.-]")
 
 
 def failure_card_title(workflow) -> str:
@@ -948,6 +963,28 @@ def failure_card_title(workflow) -> str:
     it crosses a `$GITHUB_OUTPUT` boundary and the run name is agent-influenced
     text."""
     return "Pipeline failure: " + " ".join(str(workflow or "").split())
+
+
+def notice_workflow_file(path, repo: str = "") -> str:
+    """The workflow part of the medic's notice key: the base name of the failed
+    run's workflow file (`.github/workflows/agent-task.yml` → `agent-task.yml`),
+    every character outside `[A-Za-z0-9_.-]` replaced by `_`.
+
+    The FILE, not the run's display name: the console's Record keys a
+    workflow's runs by its file, and the closer monitor (DRE-7459) finds the
+    passing run that clears the alert by it. Cut so that the whole key,
+    `medic:<repo>:<this>`, fits the contract's 120 characters — a key the
+    client refuses would raise nothing and file no fallback card either.
+    """
+    name = str(path or "").rstrip("/").rsplit("/", 1)[-1]
+    part = _NOT_IN_A_KEY.sub("_", name) or "unknown"
+    room = NOTICE_KEY_LIMIT - len(f"{NOTICE_PREFIX}:{repo}:")
+    return part[:max(room, 1)]
+
+
+def notice_key(repo: str, workflow_path) -> str:
+    """`medic:<repo>:<workflow file>` — the key medic.yml raises under."""
+    return f"{NOTICE_PREFIX}:{repo}:{notice_workflow_file(workflow_path, repo)}"
 
 
 def repair_card_title(branch: str, workflow: str, head_sha: str,
@@ -987,21 +1024,26 @@ def diagnosis_target(branch: str, workflow: str, snapshot_path: str = "", *,
 
     Before Stage 2 fix #23 the diagnosis agent held the fleet's Linear key and
     found its card itself, with whatever queries it chose. Everything it needed
-    is knowable before it starts: the head branch's card, or the open failure
-    card for this workflow (`linear_ops.find_open`, by title and open-ness, so
-    every lane), or none yet. One read for a branch card, two for a failure
-    card found by title, one when there is none.
+    is knowable before it starts: the head branch's card, or the red-main
+    repair card open for this run, or no card at all.
 
-    On the default branch the red-main repair card comes first (DRE-6521): an
-    open one is the target, as `card`, and the diagnosis is a comment there.
-    That costs one more read, and only on the default branch.
+    On the default branch the red-main repair card is looked for (DRE-6521):
+    an open one is the target, as `repair-card`, and the diagnosis is a
+    comment there. That costs one read, and only on the default branch.
 
-    A search that FAILED is `unknown`, never `new`: `new` creates a card, and
-    a search that did not answer is not a search that found nothing. A card
-    that could not be read still names its target; the snapshot says why it
-    carries no history. Never raises — no answer here must not cost the
-    diagnosis, and the delivery step resolves the target itself when this one
-    could not.
+    No card is `notice` (DRE-7453): the delivery step raises the medic's
+    console alert, `medic:<repo>:<workflow file>`. There is no search for an
+    open "Pipeline failure: <workflow>" card any more — a second failure while
+    the alert is open is a raise of the same key, which the console answers
+    `repeat`, so the duplicate suppression lives there. `failure_title` is
+    still carried: it is the title of the card the client files when the
+    console cannot be reached.
+
+    A repair search that FAILED is `unknown`, never `notice`: the delivery
+    step asks again before it raises, because a raise beside an open repair
+    card is the duplicate DRE-6521 removed. A card that could not be read
+    still names its target; the snapshot says why it carries no history.
+    Never raises — no answer here must not cost the diagnosis.
     """
     title = failure_card_title(workflow)
     card = card_from_branch(branch)
@@ -1009,14 +1051,9 @@ def diagnosis_target(branch: str, workflow: str, snapshot_path: str = "", *,
     if card:
         kind, target = TARGET_CARD, card
     else:
-        kind, target = TARGET_NEW, ""
-        searches = (
-            (repair_card_title(branch, workflow, head_sha, default_branch), TARGET_CARD),
-            (title, TARGET_FAILURE_CARD),
-        )
-        for searched, answer in searches:
-            if not searched:
-                continue
+        kind, target = TARGET_NOTICE, ""
+        searched = repair_card_title(branch, workflow, head_sha, default_branch)
+        if searched:
             try:
                 import linear_ops  # local: only the Linear seam needs it
 
@@ -1025,11 +1062,10 @@ def diagnosis_target(branch: str, workflow: str, snapshot_path: str = "", *,
                 print(f"::warning::medic diagnosis: could not search for "
                       f"'{searched}' ({e}) — the delivery step will search "
                       f"again.", file=sys.stderr)
-                kind, target = TARGET_UNKNOWN, ""
-                break
-            if found:
-                kind, target = answer, found
-                break
+                kind = TARGET_UNKNOWN
+            else:
+                if found:
+                    kind, target = TARGET_REPAIR_CARD, found
     snapshot.update(kind=kind, target=target)
     if target:
         try:
@@ -1059,8 +1095,11 @@ def _one_line(text) -> str:
 
 def failure_card_body(report: str, *, workflow: str, branch: str,
                       head_sha: str, run_url: str) -> str:
-    """The description of a failure card the medic creates: the agent's report,
+    """The diagnosis the medic raises when no card is open: the agent's report,
     byte for byte, then an acceptance-criteria section this script writes.
+    It is also the description of the fallback card the notice client files
+    when the console cannot take the raise (DRE-7453), so that card is the
+    one the medic filed before.
 
     DRE-6521. `linear_ops.py create` lands the card in Planning as new work
     owing a classification, and on 2026-10-09 the planning exit refused
@@ -1294,6 +1333,11 @@ def main(argv=None) -> int:
     body.add_argument("--head-sha", default="")
     body.add_argument("--run-url", default="")
 
+    # DRE-7453: the workflow part of the medic's notice key.
+    wf_file = sub.add_parser("notice-workflow-file")
+    wf_file.add_argument("--path", default="")
+    wf_file.add_argument("--repo", default="")
+
     note = sub.add_parser("post")
     note.add_argument("--card", required=True)
     note.add_argument("--rule", required=True)
@@ -1331,6 +1375,9 @@ def main(argv=None) -> int:
         sys.stdout.write(failure_card_body(
             report, workflow=args.workflow, branch=args.branch,
             head_sha=args.head_sha, run_url=args.run_url))
+        return 0
+    if args.command == "notice-workflow-file":
+        print(notice_workflow_file(args.path, args.repo))
         return 0
     if args.command == "post":
         decision = Decision(DECLINE, args.rule, args.detail)

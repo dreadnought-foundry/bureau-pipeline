@@ -96,6 +96,10 @@ _OWN_RULES = (
     "The names are the `rules:` block the test writes into a frozen-fixture "
     "tree itself and reads back from that tree's module; no console save "
     "touches it.")
+_RECORDED_ON = (
+    "The id is the model past reviews were recorded on, a contracted constant "
+    "of the code under test (DRE-7304) that names history; a console save "
+    "changes no review already recorded.")
 
 # `"tests/<file>.py::<Class.test_name or test_name>"` -> why the literal in
 # that test is not a pin. One entry per test; every entry is checked to still
@@ -222,6 +226,8 @@ ALLOWED: dict[str, str] = {
         _OWN_MOVE,
     "tests/test_session_agents.py::test_the_change_set_of_run_38114763170_validates_and_applies":
         _OWN_MOVE,
+    "tests/test_shadow_replay_unknown_builder.py::ClauseTest.test_an_empty_recorded_model_means_opus_5_5":
+        _RECORDED_ON,
     "tests/test_tdd_commit_check.py::ClassifyPathGeneratedRegionTest.test_a_path_with_no_proving_generator_stays_code":
         _SAMPLE_REGION,
     "tests/test_tdd_commit_check.py::ClassifyPathGeneratedRegionTest.test_generated_region_change_classifies_as_docs":

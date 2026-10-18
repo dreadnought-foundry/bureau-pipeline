@@ -971,7 +971,17 @@ def file_references(description: str | None) -> set[str]:
     `Thread.tsx`, the next `rails/CommentsRail/Thread.tsx`. Comparing full paths
     would miss the collision that costs a merge conflict.
     """
-    return {ref.split("/")[-1] for ref in _FILE_REF.findall(description or "")}
+    return {ref.split("/")[-1] for ref in file_paths(description)}
+
+
+def file_paths(description: str | None) -> set[str]:
+    """The files a card says it touches, each path as the card wrote it.
+
+    What the readiness rule `file-named-by-in-flight-card` compares (DRE-6908):
+    on 2026-10-11 the basename tied `scripts/runners/README.md` to
+    `console/backend/monitors/README.md`, two files that share only a name.
+    """
+    return set(_FILE_REF.findall(description or ""))
 
 
 def blockers_of(card: dict) -> set[str]:

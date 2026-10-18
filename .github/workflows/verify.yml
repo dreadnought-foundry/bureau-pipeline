@@ -657,9 +657,15 @@ jobs:
       # A SONNET-5 BUILD IS NEVER VERIFIED BY SONNET 5 (DRE-3880). The verifier
       # is the second reviewer role the `review_separation` block binds, and it
       # does this exactly the way the critic's step in qa-review.yml does:
-      # `build-model` reads the model this card's last attempt ran on out of
-      # its own `model-attempt:` heartbeat, `--built-on` hands it to the ladder
-      # walk, and a card we cannot read is `--built-on-unknown`, which bars
+      # `build-model` reads every model the card records as having built the
+      # change — each `model-attempt: <id> — <role> agent starting` line but
+      # the planner's, the fixer's among them, oldest first and comma-joined
+      # (DRE-7303) — and `--built-on` hands that list to the ladder walk, which
+      # takes every one of those rungs off. When they are every model on the
+      # verifier's walk, `select` chooses no reviewer: it exits non-zero with
+      # one ::error:: line, which fails the step, and a person decides. A
+      # thread with only fixer lines, or none, prints nothing, and that or a
+      # card we cannot read is `--built-on-unknown`, which bars
       # every declared overlap. Fail CLOSED — absence of evidence that the
       # build ran on something else is not evidence that it did. The substitute
       # is DATA (config/models.yaml), never a literal here.

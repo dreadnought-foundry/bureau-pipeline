@@ -415,6 +415,10 @@ STDOUT_WRITERS = {
     # `agent/` branch name and its hex digest — and every refusal goes to
     # stderr; it calls no module that talks (DRE-6624).
     "model_config_change.py": "safe",
+    # `decide` prints `go=true|false` and a reason from a fixed vocabulary;
+    # its one human line goes to stderr, and it imports nothing that talks
+    # (DRE-7454).
+    "red_main_clear.py": "safe",
 }
 
 #: The ones above that render through the safe writer. Named, because "it

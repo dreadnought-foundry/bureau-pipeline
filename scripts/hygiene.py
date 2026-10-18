@@ -16,8 +16,9 @@ One command per job of the workflow (DRE-5369).
 
 ## `read` — the board, once, and the budget floor
 
-The five lanes in `LANES` — plus `Hand-work` the day the lane contract declares
-that lane (DRE-5240) — in ONE paged query through `board_snapshot.read_board`,
+The lanes in `LANES`, the start lanes among them as the contract names them
+(`lane_contract.START_LANES`) — plus `Hand-work` the day the lane contract
+declares that lane (DRE-5240) — in ONE paged query through `board_snapshot.read_board`,
 in the shape `board_snapshot.CARD_QUERY` returns, written to a file keyed by
 lane. Then the floor: the fleet key's remaining requests off
 `linear_ops._budget["last"]` — the figure `budget_line()` prints — and, below
@@ -27,7 +28,10 @@ the floor is then NOT applied, because standing down on an unknown would
 silence the agent for good the day Linear renamed a header, and a stand-down
 naming a number nobody saw would be a false record. Exit 0 either way; a board
 that could not be read at all is not an empty board (DRE-2034) — `go=false`
-and exit 1, so the medic sees it.
+and exit 1, so the medic sees it. A read that fails on a transient network
+fault — a timeout, a connection reset — is read again whole, after the waits in
+`BOARD_READ_WAITS_SECONDS`, before it counts as unreadable (DRE-7271); a
+`LinearError` is answered on the first attempt.
 
 ## `run` — one owner's leg
 
@@ -92,6 +96,7 @@ import os  # noqa: E402
 import re  # noqa: E402
 import shlex  # noqa: E402
 import subprocess  # noqa: E402
+import time  # noqa: E402
 from collections.abc import Callable, Iterator  # noqa: E402
 from dataclasses import dataclass, field  # noqa: E402
 from datetime import UTC, datetime  # noqa: E402
@@ -108,10 +113,12 @@ import reconcile  # noqa: E402 — gate_workflow(), the gate stub's rule
 
 ROOT = Path(__file__).resolve().parent.parent
 
-#: The lanes the board read covers. `Hand-work` joins them when the contract
-#: declares it (`board_lanes`); until then it is absent and skipped, never an
-#: error.
-LANES = ("Green Light", "Todo", "Triage", "In Progress", "In Review")
+#: The lanes the board read covers. The start lanes are the contract's
+#: (`lane_contract.START_LANES`, DRE-7112), so a card in any of them is read
+#: and a retiring one's deleted entry narrows the read with no edit here.
+#: `Hand-work` joins them when the contract declares it (`board_lanes`); until
+#: then it is absent and skipped, never an error.
+LANES = ("Green Light", *lane_contract.START_LANES, "Triage", "In Review")
 HAND_WORK = "Hand-work"
 
 #: Where lane modules are discovered, and the glob that finds them.
@@ -125,6 +132,12 @@ HOME_OWNER = "dreadnought-foundry"
 REPO_MAP_PATH = ROOT / "config" / "repo-map.json"
 
 DEFAULT_FLOOR = 100
+
+#: The waits between whole board reads when one fails on a transient network
+#: fault (DRE-7271): three attempts in all, 30 s then 60 s apart. The 15 s
+#: per-request limit and the single retry inside `linear_ops` are not touched;
+#: this gives Linear about a minute and a half more to recover.
+BOARD_READ_WAITS_SECONDS = (30, 60)
 
 #: The open pull requests every lane reads, one `gh pr list` per repo.
 PR_FIELDS = ("number", "title", "body", "headRefName", "headRefOid",
@@ -170,7 +183,7 @@ _RECEIPT_LINE = re.compile(
 _SUMMARY_LINE = re.compile(rf"^{re.escape(SUMMARY_MARK)} (?P<digest>[0-9a-f]{{12}})\b")
 
 #: The lanes the guard names when it refuses one: never written by this agent.
-REFUSED_LANES = ("In Progress", "Todo", "Green Light", "Triage", "Intake")
+REFUSED_LANES = (*lane_contract.START_LANES, "Green Light", "Triage", "Intake")
 #: The lanes that close a card, and so refuse a card with children (an epic).
 CLOSING_LANES = ("Done", "Canceled")
 
@@ -753,11 +766,36 @@ def _output(pairs: list) -> None:
             fh.write(github_output.render(pairs))
 
 
+def _read_board_with_waits(lanes: tuple[str, ...]) -> list:
+    """The board, read whole up to `len(BOARD_READ_WAITS_SECONDS) + 1` times.
+
+    Only a fault `linear_ops.is_transient` names is tried again — a
+    `LinearError` (`LinearRateLimited` with it) or any other error leaves on
+    the first attempt, as before. A retry cannot write anything: every query of
+    `read_board` passes `assert_read_only`. The last attempt's fault is raised.
+    """
+    attempts = len(BOARD_READ_WAITS_SECONDS) + 1
+    for attempt, wait in enumerate(BOARD_READ_WAITS_SECONDS, start=1):
+        try:
+            return board_snapshot.read_board(lanes)[0]
+        except linear_ops.LinearError:
+            raise
+        except Exception as e:
+            if not linear_ops.is_transient(e):
+                raise
+            print(f"hygiene: the board read hit a transient fault — {e}; waiting "
+                  f"{wait} s, then attempt {attempt + 1} of {attempts}", file=sys.stderr)
+            time.sleep(wait)
+    return board_snapshot.read_board(lanes)[0]
+
+
 def cmd_read(out: str) -> int:
     lanes = board_lanes()
     try:
-        cards, _requests = board_snapshot.read_board(lanes)
-    except linear_ops.LinearError as e:
+        cards = _read_board_with_waits(lanes)
+    except Exception as e:
+        if not (isinstance(e, linear_ops.LinearError) or linear_ops.is_transient(e)):
+            raise
         why = f"hygiene: the board could not be read — {e}"
         print(why, file=sys.stderr)
         _output([("go", "false"), ("why", why.splitlines()[0])])

@@ -26,8 +26,9 @@ holds.
    the sweep's epic gate reads a blocker (`reconcile._not_built_out`,
    DRE-6407). The card's own parent never holds it — that is DRE-6664's
    in-flight case.
-2. `file-named-by-in-flight-card` — a file the card names in backticks is
-   named by a card in Planning, Todo, In Progress or In Review.
+2. `file-named-by-in-flight-card` — a path the card names in backticks is
+   named, the same path in the same repo, by a card in Planning, a start lane
+   (`lane_contract.START_LANES`, DRE-7112) or In Review (DRE-6908).
 3. `child-of-epic-not-in-progress` — the card's parent epic has not started.
 4. `undecided-question` — a `decide before building` section with a question
    still beneath it, and no `## Decisions from the CEO` block.
@@ -63,7 +64,11 @@ import answer_into_card  # noqa: E402 — the CEO's decisions block, one heading
 import epic_cap  # noqa: E402 — buildable(), counts_against_cap(), IN_MOTION_NODE
 import groomer  # noqa: E402 — file references, repo labels, the boilerplate rule
 import mid_epic  # noqa: E402 — the one reading of "is this card an epic"
-from lane_contract import QUEUE_LANES  # noqa: E402 — the queue, read under either name (DRE-6742)
+from lane_contract import (  # noqa: E402 — the queue, read under either name (DRE-6742)
+    DISPATCH_LANE,
+    QUEUE_LANES,
+    START_LANES,  # the start lanes, read where Todo was (DRE-7112)
+)
 
 ROOT = Path(__file__).resolve().parents[1]
 RULES_PATH = ROOT / "config" / "groom-readiness.json"
@@ -75,18 +80,22 @@ APPLIED_HERE = "groom_readiness"
 #: Done, Canceled and Duplicate clear it (`standards/card-quality.md`:
 #: "Canceled clears the blocker without claiming delivery"). The queue is read
 #: under every name it carries, so a card the moved writers file in Queued
-#: holds its dependents as one in the old lane did (DRE-6742).
-OPEN_STATES = ("Planning", "Green Light", *QUEUE_LANES, "Todo", "In Progress",
-               "In Review")
+#: holds its dependents as one in the old lane did (DRE-6742). The start lanes
+#: are the contract's (DRE-7112), so a card in the dispatch lane holds them as
+#: one in Todo did.
+OPEN_STATES = ("Planning", "Green Light", *QUEUE_LANES, *START_LANES, "In Review")
 
 #: The lanes whose cards own the files they name, for rule 2. Each is read
 #: once a morning with `groomer.read_population` (`groomer._readiness`).
-IN_FLIGHT_LANES = ("Planning", "Todo", "In Progress", "In Review")
+IN_FLIGHT_LANES = ("Planning", *START_LANES, "In Review")
 
 #: A parent epic in one of these has not started, so its child waits (rule 3).
 #: Intake is the lane itself: an epic in the same population is a member of
-#: the same unit, and the epic card is what the rule leaves in the walk.
-PARENT_NOT_STARTED = ("Intake", "Planning", "Green Light", *QUEUE_LANES, "Todo",
+#: the same unit, and the epic card is what the rule leaves in the walk. Of
+#: the start lanes only those ahead of the dispatch lane count: an epic in the
+#: dispatch lane is activated, which is the rule's own name (DRE-7112).
+PARENT_NOT_STARTED = ("Intake", "Planning", "Green Light", *QUEUE_LANES,
+                      *(lane for lane in START_LANES if lane != DISPATCH_LANE),
                       "Triage")
 
 #: Rule 4 reads a `##` or `###` heading whose text contains this, any case.
@@ -286,7 +295,7 @@ def read_epics(lops, named: dict) -> dict:
 
 def _lane_rows(cards: list[dict]) -> list[dict]:
     return [{"identifier": c.get("identifier"), "repo": groomer.repo_of(c),
-             "files": sorted(groomer.file_references(c.get("description")))}
+             "files": sorted(groomer.file_paths(c.get("description")))}
             for c in cards or []]
 
 
@@ -313,11 +322,12 @@ def board(readiness: dict, *, population=(), verdicts: dict | None = None,
           threshold: int | None = None) -> dict:
     """What `evaluate` reads: the facts, the verdicts, and the files cited so
     often across the five lanes that they are reference, not ownership —
-    `collision_report`'s boilerplate rule, over Intake and the four lanes."""
+    `collision_report`'s boilerplate rule, over Intake and the four lanes,
+    counted by path as rule 2 compares them (DRE-6908)."""
     threshold = groomer.BOILERPLATE_THRESHOLD if threshold is None else threshold
     counts: Counter = Counter()
     for c in population:
-        counts.update(groomer.file_references(c.get("description")))
+        counts.update(groomer.file_paths(c.get("description")))
     for rows in (readiness.get("lanes") or {}).values():
         for row in rows:
             counts.update(set(row.get("files") or ()))
@@ -376,7 +386,10 @@ def _waits_on_open_card(card: dict, board: dict, record: dict) -> dict | None:
 
 
 def _file_named_in_flight(card: dict, board: dict, record: dict) -> dict | None:
-    mine = groomer.file_references(card.get("description")) - \
+    # The same path, never the bare name (DRE-6908): `scripts/runners/README.md`
+    # and `console/backend/monitors/README.md` are two files, and a bare
+    # `README.md` is the repo's root file, matching only another bare one.
+    mine = groomer.file_paths(card.get("description")) - \
         set(board.get("boilerplate") or ())
     if not mine:
         return None
