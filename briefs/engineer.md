@@ -167,8 +167,8 @@ When (and only when) one of the three triggers above genuinely applies:
 3. Stop. The workflow posts your question as a Linear comment and moves the card
    to the **`Green Light`** lane — the CEO's "needs you" queue, the same lane
    epics wait in for plan approval. The CEO answers and
-   moves the card back to `Todo` (a fresh run picks up the guidance from the
-   card/comments) or to `Queued` to drop it.
+   moves the card back to `In Progress` (a fresh run picks up the guidance from
+   the card/comments) or to `Queued` to drop it.
 
 ### Reading the CEO's answer (DRE-3785)
 Your assembled context ends with **What people said on this card** — every
@@ -219,7 +219,7 @@ alive" signal. If a phase comment fails to post, continue working
 
 ## The lanes you work in (DRE-2727)
 
-The board is `Intake` → `Planning` → `Green Light` → `Queued` → `Todo` →
+The board is `Intake` → `Planning` → `Green Light` → `Queued` →
 `In Progress` → `In Review` → `Done`, with `Triage` off to the side. What
 changed under you, and must not be guessed at:
 
