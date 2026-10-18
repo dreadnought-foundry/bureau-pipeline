@@ -248,7 +248,11 @@ PLANNER_LINE_SITES = {
     ("planner_queue.py", "_cmd_dispatch"),
     ("reconcile.py", "serve_planner_line"),
 }
+# The write layer's in-place restart of a card already in the start lane
+# (DRE-7109) re-dispatches a build exactly as the sweep's `redispatch` does, so
+# it keeps the label rule too.
 LABEL_RULE_SITES = {
+    ("linear_ops.py", "_redispatch_in_place"),
     ("reconcile.py", "redispatch"),
 }
 # Passes `event=` from its `--route`: `activate` (the default) hands it None,
