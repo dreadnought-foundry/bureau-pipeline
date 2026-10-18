@@ -3122,7 +3122,7 @@ def flag_stranded() -> set[str]:
                 # holds lane lands (DRE-6180), so today's re-send clears it.
                 f"To re-send it, run `linear_ops.py unpark {ident}`, which "
                 f"clears the hold for you, or remove the '{HOLD_LABEL}' label "
-                "and move the card out of In Progress and back. Once the hygiene "
+                f"and move the card out of {state} and back. Once the hygiene "
                 "agent's holds lane is live (DRE-6172), a re-send needs no "
                 "clearing: the hold lifts itself on the first run receipt "
                 "newer than its stamp."
