@@ -178,6 +178,21 @@ mints (see `models.yaml` below).
   or two sites, when a row names a lift kind the contract does not fix for its
   reason, or when a `tried_first` receipt occurs nowhere under `scripts/` or
   `.github/workflows/`. `docs/holds.md` is the page a person reads.
+- **`triage-reasons.json`** — every code path that moves a card into
+  `Triage`, and the reason it writes on the card (DRE-7525). In `holds.json`'s
+  shape — a `_readme`, `version`, then `reasons`, one row per unit that posts a
+  reason: `unit` (`<file>#<function>` or `<file>#<step>`, as
+  `green_light_rows.unit_of` names it), `reason_at` (the unit whose text
+  carries the reason: the unit itself or a discovered caller of it), `anchor`
+  (a phrase of that reason, or a constant the unit names, never the lane-write
+  line) and `note` (what the reason tells a reader); and `unreasoned`, one row
+  per unit that posts none, with its `why`. Read only through
+  `scripts/triage_reasons.py`. `python3 scripts/triage_reasons.py check`
+  DISCOVERS the Triage writes (`ready_lane_writers.writes`) and fails when a
+  unit has no row, a row names a unit that no longer writes Triage, an anchor
+  is not in its `reason_at` text, a `reason_at` is not a caller, an
+  `unreasoned` row has no `why`, a unit is in both blocks, or a write's lane
+  cannot be read. `docs/triage-reasons.md` is the page a person reads.
 - **`switches.json`** — every pipeline switch (DRE-6434): a repository
   variable a reusable workflow reads from `vars.*` and treats as live only when
   it is exactly `true`. In `holds.json`'s shape — a `_readme`, `version`, the
