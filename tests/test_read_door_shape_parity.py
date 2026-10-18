@@ -117,7 +117,7 @@ def _merge(*trees: dict) -> dict:
     return out
 
 
-ACTIVE = _node_selection(_captured(reconcile._fetch_active_cards, ("Todo",)))
+ACTIVE = _node_selection(_captured(reconcile._fetch_active_cards, ("In Progress",)))
 BACKLOG = _node_selection(_captured(reconcile._fetch_backlog_linear, None))
 BACKLOG_ONE = _node_selection(_captured(reconcile._fetch_backlog_linear, ["DRE-1"]))
 

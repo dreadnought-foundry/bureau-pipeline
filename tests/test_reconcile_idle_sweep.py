@@ -330,7 +330,9 @@ def test_the_idle_check_is_one_small_page_that_fails_open():
     assert 1 < reconcile.IDLE_PAGE <= 100
     # Hand-work counts as in motion (DRE-5322): a person's card there is owed
     # the move to review and the idle alarm, which an idle pass skips.
-    assert reconcile.IDLE_LANES == ("Todo", "In Progress", "In Review", "Hand-work",
+    # Todo left it when it began retiring (DRE-7129): the drain and the epic
+    # carry that empty it are fleet-wide and run on an idle pass too.
+    assert reconcile.IDLE_LANES == ("In Progress", "In Review", "Hand-work",
                                    *reconcile.QUEUE_LANES)
 
 
@@ -343,7 +345,7 @@ def test_the_idle_check_is_one_small_page_that_fails_open():
 
 def test_an_owner_qualified_repo_label_is_not_idle():
     board = TeamBoard(*_busy_elsewhere(),
-                      card("DRE-94", "Todo",
+                      card("DRE-94", "In Progress",
                            labels=(f"repo:dreadnought-foundry/{DEMO}",)))
     assert _busy(board)
 
@@ -359,7 +361,7 @@ def test_a_longer_slug_that_contains_this_one_is_another_repos_work(monkeypatch)
     the demo's card, and the sweep's own repo test turns it away."""
     monkeypatch.setattr(reconcile, "REPO_SLUG", "agent-bureau")
     board = TeamBoard(*_busy_elsewhere(),
-                      card("DRE-96", "Todo", labels=(f"repo:{DEMO}",)))
+                      card("DRE-96", "In Progress", labels=(f"repo:{DEMO}",)))
     assert not _busy(board)
 
 
@@ -368,7 +370,7 @@ def test_a_full_page_of_near_misses_is_not_proof_of_idle(monkeypatch):
     more: this repo's card could be on the next page. Unknown is not idle."""
     monkeypatch.setattr(reconcile, "REPO_SLUG", "agent-bureau")
     page = getattr(reconcile, "IDLE_PAGE", 1)
-    board = TeamBoard(*[card(f"DRE-{200 + n}", "Todo", labels=(f"repo:{DEMO}",))
+    board = TeamBoard(*[card(f"DRE-{200 + n}", "In Progress", labels=(f"repo:{DEMO}",))
                         for n in range(page + 1)])
     assert _busy(board)
     assert len(board.queries) == 1  # still one request: it fails open, it does not page

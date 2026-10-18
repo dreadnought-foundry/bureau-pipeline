@@ -1880,7 +1880,7 @@ def guarded_state_write(
          but it decided from a read taken BEFORE the caller's own work, so the
          window was seconds wide. DRE-2316 lost it by 280 ms: linear-sync set
          DRE-2316 Done on the PR #137 merge at 22:22:30.349, and the dead-run
-         requeue — which had read "In Review" — wrote Todo at 22:22:30.629.
+         requeue — which had read "In Review" — wrote the start lane at 22:22:30.629.
          The card then dispatched a second agent onto shipped work. After (1)
          the window is one API round trip.
 
@@ -1892,9 +1892,9 @@ def guarded_state_write(
     a concurrent terminal transition can still land. (2) is a compensating
     write, not prevention: the card really does flap Done → ours → Done, and
     anything that reacts to the intermediate state (the relay dispatches on a
-    Todo transition) has already reacted by the time we repair it. What (2)
+    start-lane transition) has already reacted by the time we repair it. What (2)
     buys is that the FINISHED state is the one that survives, instead of a Done
-    card sitting silently in Todo. Closing the window completely needs a
+    card sitting silently in a start lane. Closing the window completely needs a
     primitive Linear does not expose.
 
     The read-back is best effort: it verifies a write that already succeeded,
@@ -1907,11 +1907,12 @@ def guarded_state_write(
     nothing, so its read-back had no entry of its own to find and "restored"
     Done from a person's reopen instead.
 
-    An EPIC is never written into Todo (DRE-5316): on a write to Todo the card's
-    comments are read (one extra read, only then) and `epic_todo_gate.refusal`
-    decides, with the card's current lane as the lane before Todo. On a refusal
-    nothing is sent, the refusal is posted once, and it returns False. The
-    DRE-3621 write — In Progress to Todo — is the one this refuses.
+    An EPIC is never written into the old start lane, `epic_todo_gate.TODO`
+    (DRE-5316): on a write to it the card's comments are read (one extra read,
+    only then) and `epic_todo_gate.refusal` decides, with the card's current
+    lane as the lane before it. On a refusal nothing is sent, the refusal is
+    posted once, and it returns False. The DRE-3621 write — In Progress into
+    that lane — is the one this refuses.
 
     `expect` / `labels_absent` make the write FROM-LANE-CONDITIONAL (Stage 2
     item 33): the pre-write re-read in (1) — the read this pays for anyway —
@@ -1952,7 +1953,9 @@ def guarded_state_write(
     if current.get("id") == target_id:
         print(f"{identifier} is already in {state_name!r} — nothing to write.")
         return True
-    if not terminal_target and state_name.strip().lower() == epic_todo_gate.TODO.lower():
+    if not terminal_target and epic_todo_gate.TODO is not None and (
+        state_name.strip().lower() == epic_todo_gate.TODO.lower()
+    ):
         # An unreadable thread is no shape stamp, exactly as `_stamped_shape`
         # has it: the title and the children still answer.
         try:
@@ -2281,7 +2284,7 @@ def cmd_advance(
 def set_description(identifier: str, body: str) -> None:
     """Overwrite a card's description (generic helper / `set-description` CLI).
 
-    NOTE (DRE-1699): the Todo-entry gate's fix-first repair NO LONGER calls this
+    NOTE (DRE-1699): the start gate's fix-first repair NO LONGER calls this
     to prepend a `**Repo:** <slug>` stamp — the `repo:<slug>` label is now the
     canonical repo signal, so the gate adds only the label and leaves the body
     alone. This remains a general-purpose description setter.
@@ -3411,7 +3414,7 @@ def _reject_unless_creatable(kind: str, title: str, description: str,
     AND SO IS THE `needs-human` / `no-code` PAIR (DRE-3512). A card filed as a
     human's to finish carries both or neither; this is the ONE seam that judges
     it, because on the board the same word is the pipeline's hold label — see
-    `validate_card.needs_human_without_no_code` for why the Todo gate and the
+    `validate_card.needs_human_without_no_code` for why the start gate and the
     post-plan sweep deliberately do not."""
     problem = body_problem(description)
     if problem is not None:
@@ -3512,7 +3515,7 @@ def _create_card(team_id: str, title: str, description: str, labels: list[str],
     rest of the system reads as ready. The ONE caller that passes something else
     is `cmd_subissue` — see the note there.
 
-    Never an epic in Todo (DRE-5316): a new card can be an epic only by an
+    Never an epic in `epic_todo_gate.TODO` (DRE-5316): a new card can be an epic only by an
     `[EPIC]` title, and one is refused before anything is written. Nor with a
     label no agent may apply (DRE-6361) — `cmd_oneoff` asks first and
     `child_labels_from` drops one, so this is the backstop for a caller that
@@ -3859,7 +3862,7 @@ def cmd_create(title: str, description_file: str, *flags: str) -> None:
     either default (DRE-3533): the red-main repair loop files a card for the
     repair its agent is ALREADY building, so that one needs the role and marks
     the readiness gate reads, and it belongs in a working lane rather than
-    Planning — a card that entered Todo would be dispatched by the relay onto
+    Planning — a card that entered a start lane would be dispatched by the relay onto
     work an agent is already doing."""
     slug = required_repo_slug(flags)
     labels, _ = _parse_flags(flags)
@@ -3899,7 +3902,7 @@ def create_card(title: str, description: str, *, repo_slug: str,
     The `repo:<slug>` label is applied first and always; `labels` ride after it
     in the order given, deduplicated by `_team_label_ids`.
 
-    Never an epic in Todo (DRE-5316), refused as `_create_card` refuses it.
+    Never an epic in `epic_todo_gate.TODO` (DRE-5316), refused as `_create_card` refuses it.
     Never a label no agent may apply (DRE-6361), refused before any request.
     """
     refuse_agent_labels("create", title, labels)

@@ -904,15 +904,16 @@ class TestUnreadDestinations:
 
     def test_an_unread_write_from_a_writer_permitted_everywhere_is_still_reported(
             self, tmp_path):
-        # agent-task.yml is permitted in the fleet's ready-work lanes (Queued,
-        # Todo — Queued since Backlog retired, DRE-6753), which is exactly the
+        # agent-task.yml is permitted in the fleet's ready-work lanes (Queued
+        # and In Progress since the old start lane began retiring, DRE-7129),
+        # which is exactly the
         # writer the sibling check skips when it
         # cannot read the destination. (Hand-work joined the ready lanes with
         # DRE-5321 and is a person's lane, so the build run is not its writer.)
         # Green Light is not a ready-work lane, so that escape does not carry
         # here.
         assert "agent-task.yml" in set.intersection(
-            *[set(lane_contract.lane_writers(n)) for n in ("Queued", "Todo")])
+            *[set(lane_contract.lane_writers(n)) for n in ("Queued", "In Progress")])
         root = _copy_repo(tmp_path)
         _edit(root / ".github" / "workflows" / "agent-task.yml",
               "      - name: Report result to Linear\n",

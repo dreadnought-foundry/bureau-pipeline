@@ -37,6 +37,7 @@
     "tests/test_shadow_replay.py": "tests/test_shadow_replay.py, new for DRE-7197, at 3.57 s, read the same way off its pytest -v result lines in CI run 38402318122, job 115312797139 (part 1, 2026-10-13, head 1f65bc9)",
     "tests/test_shadow_replay_callable.py": "tests/test_shadow_replay_callable.py, new for DRE-7306, at 0.43 s, read off its pytest -v result lines in CI run 38827451803, job 116738120158 (part 1, 2026-10-16, head 4b53174)",
     "tests/test_suite_green_time_budget.py": "tests/test_suite_green_time_budget.py, new for DRE-7511, at 0.46 s, read off its pytest --junit-xml suite time measured locally (2026-10-18, 4 cores, its 7 tests in one pytest run), because no CI run had timed that file yet",
+    "tests/test_todo_retired.py": "tests/test_todo_retired.py, new for DRE-7129, at 3.2 s, read off its pytest -v result lines in CI run 39155900339, job 117758943620 (part 3, 2026-10-18, head ebf49ea), because it took the record under its 90% coverage",
     "tests/test_unpark_restarts_build.py": "tests/test_unpark_restarts_build.py, new for DRE-7109, at 0.23 s, read off its pytest --junit-xml suite time measured locally (2026-10-18, 4 cores, its 9 tests in one pytest run), because it took the record under its 90% coverage",
     "tests/test_validate_card_start_lanes.py": "tests/test_plan_gate_hands_back_build.py and tests/test_validate_card_start_lanes.py, new for DRE-7110, at 4.05 s and 0.82 s, read off their pytest -v result lines in CI run 39106291672, jobs 117612731707 (part 1) and 117612731629 (part 2) (PR #1158, 2026-10-18, head c9f4abc), because the two of them took the record under its 90% coverage"
   },
@@ -696,6 +697,7 @@
     "tests/test_terminal_guard_race.py": 0.08,
     "tests/test_test_names_are_not_infra.py": 1.71,
     "tests/test_tests_workflow_nightly.py": 1.82,
+    "tests/test_todo_retired.py": 3.2,
     "tests/test_triage_repair_split.py": 0.41,
     "tests/test_triage_repair_workflow.py": 3.49,
     "tests/test_turn_budget.py": 1.85,

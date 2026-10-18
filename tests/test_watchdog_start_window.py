@@ -79,7 +79,7 @@ def _iso(minutes_ago: float, now: datetime | None = None) -> str:
     return at.strftime("%Y-%m-%dT%H:%M:%S.000Z")
 
 
-def _card(updated: str, comments=(), identifier=CARD, state="Todo"):
+def _card(updated: str, comments=(), identifier=CARD, state="In Progress"):
     """A Todo build card the way the board read returns it. `comments` are
     (body, createdAt) pairs, oldest first, as a person reads the thread."""
     return {
