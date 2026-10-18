@@ -203,6 +203,7 @@ WALKED = {
     ("epic_cap", "_child_is_epic"),
     ("epic_todo_gate", "is_epic_card"),
     ("groom_readiness", "_is_epic"),
+    ("dedupe_dispatch", "stamped_one_off"),
 }
 
 
@@ -466,6 +467,17 @@ class TestEveryCallerIsWalked:
             PROBE_TITLE, False, [_stamp("one-off")]) is False
         assert epic_todo_gate.is_epic_card(
             PROBE_TITLE, False, [_stamp("epic")]) is True
+
+    def test_the_planner_guard_hands_back_a_planner_owned_one_off(self):
+        """`dedupe_dispatch.stamped_one_off` (DRE-7110) — the planner's guard
+        hands a one-off sent to it on entering In Progress back as a build.
+        Reading the label here would plan every one-off as an approved epic;
+        reading an epic stamp as a one-off would build an epic."""
+        import dedupe_dispatch
+
+        assert dedupe_dispatch.stamped_one_off(PROBE_TITLE, False, "one-off") is True
+        assert dedupe_dispatch.stamped_one_off(PROBE_TITLE, False, "epic") is False
+        assert dedupe_dispatch.stamped_one_off(PROBE_TITLE, False, None) is False
 
     def _named_on_a_depends_on_line(self, title: str, *, children: int = 0):
         """A card whose ranked read waits on DRE-3018, In Progress and read
