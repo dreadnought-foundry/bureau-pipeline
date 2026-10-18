@@ -163,16 +163,21 @@ class ParkedCardIsNotRetriedTest(unittest.TestCase):
 
     def test_the_park_read_follows_the_contract_not_a_name(self):
         """A lane outside `QUEUE_LANES` is not the park lane, whatever a
-        receipt says — and a name the contract adds is read with no edit."""
-        self.assertEqual(
-            "",
-            medic_retry.park_reason(
-                state="Todo",
-                labels=[],
-                receipts=_dre2937_receipts(),
-                run_started_at=RUN_STARTED_AT,
-            ),
-        )
+        receipt says — and a name the contract adds is read with no edit.
+        A start lane, `START_LANES` (DRE-7111), is where a build runs: a card
+        there was started, never parked."""
+        self.assertTrue(lane_contract.START_LANES)
+        for lane in lane_contract.START_LANES:
+            with self.subTest(lane=lane):
+                self.assertEqual(
+                    "",
+                    medic_retry.park_reason(
+                        state=lane,
+                        labels=[],
+                        receipts=_dre2937_receipts(),
+                        run_started_at=RUN_STARTED_AT,
+                    ),
+                )
         with mock.patch.object(medic_retry, "QUEUE_LANES", ("Queued",)):
             self.assertEqual(
                 "",
