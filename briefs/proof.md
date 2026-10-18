@@ -191,9 +191,9 @@ asks for a reading the declaration does not hold is a cause row, below.
   request or a comment.
 
 ## The lanes, which you never write
-The board is `Intake` → `Planning` → `Green Light` → `Queued` → `Todo` →
+The board is `Intake` → `Planning` → `Green Light` → `Queued` →
 `In Progress` → `In Review` → `Done`, with `Triage` off to the side and
-`Hand-work` beside `Todo` as the lane where a person's work waits. A proof card
+`Hand-work` beside `In Progress` as the lane where a person's work waits. A proof card
 is dispatched from `Hand-work` and you never move it. The workflow does, in
 three moves and no other (DRE-5925): your escalation file parks it in
 `Green Light`, the CEO's "needs you" queue, only when it names a press or a
