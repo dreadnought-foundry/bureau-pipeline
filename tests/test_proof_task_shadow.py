@@ -588,6 +588,16 @@ def _outputs(path: Path) -> dict:
     return out
 
 
+# What a dispatched proof run's context holds, unless a test says otherwise.
+RUN_CONTEXT = {
+    "github.event.client_payload.identifier": CARD,
+    "github.event.client_payload.dispatched_at": DISPATCHED_AT,
+    "github.run_id": RUN_ID,
+    "github.server_url": "https://github.com",
+    "github.repository": REPO,
+}
+
+
 def _run_step(step: dict, cwd: Path, known: dict, env: dict | None = None):
     """Runs a step's block as Actions would, in `cwd`, with `.bureau-pipeline`
     there pointing at this checkout. Returns the process and its outputs."""
@@ -596,6 +606,7 @@ def _run_step(step: dict, cwd: Path, known: dict, env: dict | None = None):
         pipeline.symlink_to(ROOT)
     out = cwd.parent / f"{cwd.name}-github-output"
     out.write_text("")
+    known = dict(RUN_CONTEXT, **known)
     script = _render(step["run"], known)
     leftover = re.findall(r"<(?:[\w-]+(?:\.[\w-]+)+|\?|\w+\(\))>", script)
     assert not leftover, f"unresolved expressions in the block: {leftover}"
@@ -692,12 +703,19 @@ class RefusalTest(unittest.TestCase):
 
     def test_a_retired_or_excluded_model_is_refused(self):
         models = yaml.safe_load((ROOT / "config" / "models.yaml").read_text())
+        prices = yaml.safe_load((ROOT / "config" / "model-prices.yaml").read_text())["prices"]
+        named = 0
         for block in ("excluded", "retired"):
             for entry in models.get(block) or []:
                 with self.subTest(block=block, model=entry["model"]):
                     step = self._assert_refused_before_any_agent(_shadow(entry["model"]))
                     self.assertEqual(step.get("id"), "shadow_model")
-                    self.assertIn(block, self.said)
+                    # An unpriced one is refused on its price first.
+                    if entry["model"] in prices:
+                        self.assertIn(block, self.said)
+                        named += 1
+        # At least one is priced, so the out-of-use refusal itself is run.
+        self.assertGreater(named, 0)
 
     def test_a_model_that_is_not_a_model_id_is_refused(self):
         for model in ("Claude Sonnet", "claude-sonnet-5-5; rm -rf /", "-x"):
