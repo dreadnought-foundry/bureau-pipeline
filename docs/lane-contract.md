@@ -15,11 +15,10 @@ Wave phase reached: **2** — the lane contract asserted by the harness. A claus
 | 2 | Planning | planning | 120 min |
 | 3 | Green Light | planning | — |
 | 4 | Queued | work | — |
-| 5 | Todo | work | 15 min |
-| 6 | Hand-work | work | — |
-| 7 | In Progress | work | 60 min |
-| 8 | In Review | work | 120 min |
-| 9 | Done | work | — |
+| 5 | Hand-work | work | — |
+| 6 | In Progress | work | 60 min |
+| 7 | In Review | work | 120 min |
+| 8 | Done | work | — |
 
 Planning exit is the transition **Green Light → Queued** — where the second critic writes its verdict, and the boundary the guard's scope is derived from.
 
@@ -101,19 +100,6 @@ _Waiting on: the sweep carries every verdict it promotes out of this lane and re
 Permitted writers: `plan.yml`, `mid_epic.py`, `reconcile.py`, `dead_run.py`, `linear_ops.py`, `agent-task.yml`, `hygiene.py`, `hand_work_migration.py` | Phase 2 — live |
 | **evidence** | A routing verdict comment; and, for a child of an epic, an epic that has passed Planning exit.  
 _Waiting on: the marker exists and the sweep reads it (DRE-2724); asserting that every Queued card carries one needs the writer at planning exit (DRE-2721)._ | Phase 5 — promised |
-
-### Todo
-
-| Clause | What it requires | Enforcement |
-| --- | --- | --- |
-| **entrance** | Nothing promotes into Todo any more (DRE-7120): no routing verdict's destination is this lane. FLEET's is In Progress, the lane that replaces this one, where the sweep's promotion is the dispatch; WORKBENCH and OPERATOR are bound for Hand-work (DRE-5321, DRE-5322). A card found here is one the board still answers for — put here by hand, or promoted here before the flip — and the sweep reads it as a promoted card in a start lane: started once its run posts a start receipt, re-fired once its start window passes with none (DRE-7108). The lane stays live until the retirement card sets it retiring (DRE-7129).  
-_Waiting on: the sweep stopped promoting into Todo at the flip (DRE-7120) and carries a FLEET card to In Progress instead; asserting that Todo is empty of fresh promotions needs the transition history Phase 5 records._ | Phase 5 — promised |
-| **exit** | A dispatched run posts its start receipt and the card moves to In Progress — or, on a card a person builds — one marked `operator-step`, or one the CEO marked `hand-built`, which only he asks for — the person working it opens the pull request. Or the hygiene agent closes a card whose pull request merged while it sat here (DRE-5365).  
-_Waiting on: needs the transition history Phase 5 records._ | Phase 5 — promised |
-| **writers** | No promoter any more. reconcile.py's promote_ready() moved a FLEET card into Todo until the flip (DRE-7120), and now moves it to In Progress; a WORKBENCH or OPERATOR card it carries to Hand-work (DRE-3385, DRE-5322). The writers named here are the ones that still meet a card in Todo: the build run takes it out to In Progress, the guarded write layer moves it on, the sweep carries an epic out of it (DRE-5347), and a person can still drag a card here by hand.  
-Permitted writers: `reconcile.py`, `agent-task.yml`, `linear_ops.py`, `operator` | Phase 2 — live |
-| **evidence** | A promotion receipt from before the flip (DRE-7120), or a person's move, and no unmet blocking relation; once its start window passes, a run's start receipt or the sweep's re-fire (DRE-7108). A card a person builds needs no room — one marked `operator-step`, or `hand-built`, the CEO's mark that nothing automatic applies: nothing is dispatched for it, so it takes no slot and never counts against the cap while it sits here (DRE-3385).  
-_Waiting on: needs the transition history Phase 5 records._ | Phase 5 — promised |
 
 ### Hand-work
 
@@ -217,6 +203,12 @@ Lanes the pipeline no longer writes to, still on the board until the workspace a
 The queue lane a card waited in between the planning exit and its verdict's destination, replaced by Queued. Its `backlog` type made Linear draw it first on the board whatever its position, and Linear cannot change a state's type after creation, so the queue moved to Queued, a lane of type `unstarted` (DRE-6740). The pipeline's writers write Queued since DRE-6742, and the sweep drains every card still here into Queued (reconcile.drain_retiring_lanes), on every repo's sweep, for as long as this entry stands.
 
 **Board step:** There is nothing to archive: Linear keeps at least one backlog-type status per team, and this is the DRE team's only one. So the state stays on the board, empty, and the operator hides it with the board's "Show empty groups" option. This entry STAYS, so the drain keeps the lane empty and board.retiring_lane_is_empty keeps asserting it; delete it only if Linear ever archives the state, which board.retired_entry_is_deleted then requires.
+
+### Todo — retired by DRE-7072
+
+The lane a promoted card waited in between Queued and In Progress until the flip (DRE-7120). A promoted card now goes from Queued straight to In Progress, and that move is the dispatch, so a lane between them only made the board show two waiting lanes. Nothing writes Todo since the flip, and the sweep drains every card still here into In Progress (reconcile.drain_retiring_lanes), on every repo's sweep, for as long as this entry stands, a card dropped here later included — except an epic: the drain leaves an epic where it is, and reconcile.carry_epics_out_of_todo, later in the same sweep, carries it by its own rule (to In Progress only when it came here from there, to Planning otherwise), so a drag can never approve an epic. A drained card is not started, so the sweep's start window (DRE-7108) re-fires its dispatch unless its run is already in flight.
+
+**Board step:** Once the lane is empty — board.retiring_lane_is_empty holds — delete the Todo state in Linear's team workflow settings. Linear offers Delete on a status that is not its category's last, and Todo is not: Queued, Intake, Triage and Hand-work are also `unstarted`. Then delete this entry, which board.retired_entry_is_deleted asks for by name once the state is gone.
 
 ## The rules the harness asserts
 
