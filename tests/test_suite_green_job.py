@@ -305,10 +305,15 @@ def test_the_job_is_named_and_its_parts_report_as_part_n():
     _, job = _job()
     parts = job["strategy"]["matrix"]["part"]
     count = _part_count()
-    assert parts == list(range(1, count + 1)), (parts, count)
+    # At least the parts the cases need, not exactly that many: this test also
+    # runs inside the job's own changed copies, and a change that moves a model
+    # between groups walks fewer cases there, so the need computed in a copy
+    # can be lower than the matrix the real tree needs.
+    assert parts == list(range(1, len(parts) + 1)), parts
+    assert len(parts) >= count, (parts, count)
     assert job["strategy"].get("fail-fast") is False
     names = [str(job["name"]).replace("${{ matrix.part }}", str(n)) for n in parts]
-    assert names == [f"{JOB_NAME} (part {n})" for n in range(1, count + 1)]
+    assert names == [f"{JOB_NAME} (part {n})" for n in range(1, len(parts) + 1)]
     # The harness's skip reason sends the reader to this job by name.
     assert f'"{JOB_NAME}"' in _harness_constant("SKIP_REASON")
 
@@ -320,7 +325,8 @@ def test_the_pytest_step_sets_the_three_names_with_the_part_values():
     parts = _job()[1]["strategy"]["matrix"]["part"]
     assert env[_harness_constant("RUN_ENV")] == "1"
     assert env[_harness_constant("PART_ENV")] == "${{ matrix.part }}"
-    assert str(env[_harness_constant("OF_ENV")]) == str(_part_count()) == str(len(parts))
+    assert str(env[_harness_constant("OF_ENV")]) == str(len(parts))
+    assert len(parts) >= _part_count(), (parts, _part_count())
 
 
 def test_the_three_names_are_set_in_this_step_and_nowhere_else_in_the_workflow():
