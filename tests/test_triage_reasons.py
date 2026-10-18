@@ -52,7 +52,6 @@ REGISTRY = ROOT / "config" / "triage-reasons.json"
 #: the receipt the unit itself posts, used where a rule needs a real row.
 STRANDED = "reconcile.py#flag_stranded"
 STRANDED_ANCHOR = "isn't on the dispatch"
-STRANDED_MOVE = 'linear_ops.cmd_advance(ident, "Triage", "Todo,In Progress")'
 
 
 # --------------------------------------------------------------------------- #
@@ -81,6 +80,15 @@ def _edit(path: Path, old: str, new: str) -> None:
 
 def _named(problems, *needles) -> list:
     return [p for p in problems if all(n in p for n in needles)]
+
+
+def _stranded_move(root: Path = ROOT) -> str:
+    """The watchdog's lane-write line, as the discovery reads it — never a
+    pinned literal, so an edit to that line does not strand these tests."""
+    lines = [tr._write_line(str(root), w).strip()
+             for w, unit in tr.triage_writes(str(root)) if unit == STRANDED]
+    assert len(lines) == 1, lines
+    return lines[0]
 
 
 def _row(doc: dict, unit: str) -> dict:
@@ -219,7 +227,7 @@ class TestAnAnchorRemovedFromItsReasoningUnit:
 
     def test_an_anchor_that_is_the_lane_write_line_fails(self):
         doc = _registry()
-        _row(doc, STRANDED)["anchor"] = STRANDED_MOVE
+        _row(doc, STRANDED)["anchor"] = _stranded_move()
         found = tr.problems(doc)
         assert _named(found, STRANDED, "lane-write line"), found
 
@@ -235,8 +243,9 @@ class TestAnAnchorRemovedFromItsReasoningUnit:
 class TestARowWhoseUnitNoLongerWritesTriage:
     def test_a_site_moved_to_another_lane_fails_by_name(self, tmp_path):
         root = _copy_repo(tmp_path)
-        _edit(root / "scripts" / "reconcile.py", STRANDED_MOVE,
-              STRANDED_MOVE.replace('"Triage"', '"Planning"'))
+        move = _stranded_move(root)
+        _edit(root / "scripts" / "reconcile.py", move,
+              move.replace('"Triage"', '"Planning"'))
         found = tr.problems(root=str(root))
         assert _named(found, STRANDED, "no Triage write"), found
 
