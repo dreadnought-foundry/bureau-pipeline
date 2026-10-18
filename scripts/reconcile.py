@@ -1245,7 +1245,8 @@ def gh_read(*args: str) -> str:
     this seam goes out as that App — `pr_for` once per card, the unlanded
     watchdog's branch listing, the reads that emptied installation 123249480
     on 2026-09-17 (DRE-4132). The WRITES do not move: the receipts
-    `_worker_receipt_count` counts are counted by `WORKER_BOT_LOGIN`, so the
+    `_worker_receipt_count` counts are counted by `WORKER_BOT_LOGIN` (only
+    the crashed-review re-dispatch receipt counts every pool slot, DRE-7510), so the
     App that writes them must be the App that login names, and they stay on
     `GH_TOKEN`. Unset — a stub without the pool pairs, linear-sync.yml's and
     plan.yml's reconcile steps, a local run — the read goes out as GH_TOKEN,
@@ -11150,6 +11151,32 @@ def is_worker_bot_comment(comment: dict) -> bool:
     return login.removesuffix("[bot]") == WORKER_BOT_LOGIN
 
 
+#: The fleet's own worker bots: the four slots of the dispatch pool
+#: (`dispatch_pool.py`, DRE-2013). An explicit list, never a pattern: the
+#: GraphQL comment shape carries no `[bot]` suffix, so `agent-bureau-bot-<n>`
+#: would also admit a person's account named that way. A fifth slot is added
+#: here (DRE-7510).
+WORKER_BOT_POOL_LOGINS = (
+    WORKER_BOT_LOGIN,
+    f"{WORKER_BOT_LOGIN}-2",
+    f"{WORKER_BOT_LOGIN}-3",
+    f"{WORKER_BOT_LOGIN}-4",
+)
+
+
+def is_worker_pool_comment(comment: dict) -> bool:
+    """True iff the PR comment was authored by ANY slot of the worker pool.
+
+    DRE-7510. `is_worker_bot_comment` matches slot 1 alone, so a
+    `crashed-review-redispatch` receipt written by `agent-bureau-bot-2/3/4`
+    never counted toward its head's cap: PR #981 carried seven at one head.
+    Read only for that receipt — every other tag still counts slot 1 alone.
+    Anyone outside the four (a person, the qa-bot, a look-alike) stays
+    invisible, the DRE-1998 rule."""
+    login = (comment.get("author") or {}).get("login") or ""
+    return login.removesuffix("[bot]") in WORKER_BOT_POOL_LOGINS
+
+
 def retry_dead_fix_runs() -> None:
     """DRE-2018: re-dispatch the fix agent for a PR whose last fix run died
     of a model/API error (is_error — an outage, not an agent failure), or
@@ -11779,21 +11806,22 @@ def is_dependabot_pr(pr: dict) -> bool:
     return login.removeprefix("app/").removesuffix("[bot]") == "dependabot"
 
 
-def _worker_receipt_count(pr: dict, tag: str) -> int:
+def _worker_receipt_count(pr: dict, tag: str, by=is_worker_bot_comment) -> int:
     """How many WORKER-BOT receipts carrying `tag` cover the PR's current
     head — the per-sha dispatch count the receipt caps bound (DRE-2071,
     generalised for DRE-2282). Forged receipts by other authors are
     invisible (DRE-1998 discipline): a forger can neither suppress a review
     nor exhaust the retry budget — the worst achieved is one extra review.
     Receipts bound to a superseded sha don't count either: a new head
-    re-arms a fresh budget."""
+    re-arms a fresh budget. `by` is who counts as the worker — slot 1 unless
+    the caller passes `is_worker_pool_comment` (DRE-7510)."""
     sha = pr.get("headRefOid") or ""
     if not sha:
         return 0
     return sum(
         1
         for c in pr.get("comments", [])
-        if is_worker_bot_comment(c)
+        if by(c)
         and tag in (c.get("body") or "")
         and sha in (c.get("body") or "")
     )
@@ -12226,6 +12254,52 @@ STALE_VERDICT_TAG = "stale-verdict-watchdog"
 #: review always posts its verdict before its job completes (DRE-1994), so
 #: any of these with no bound verdict is the crash case.
 _REVIEW_CRASH_CONCLUSIONS = ("failure", "timed_out", "cancelled")
+#: How many comments `gh pr list --json comments` answers per pull request:
+#: its FIRST page, and no more. A listing carrying this many may be cut short.
+GH_LIST_COMMENT_PAGE = 100
+#: Set on a listed pull request whose thread is at least a page long and whose
+#: full read failed (DRE-7510): its comments may be missing a verdict or a
+#: receipt, so the crashed-review sweep acts on nothing there.
+THREAD_UNREADABLE = "_threadUnreadable"
+
+
+def _read_whole_threads(prs: list[dict]) -> None:
+    """Replace each cut-short thread in the listing with the whole of it.
+
+    DRE-7510, PR #1134 on 2026-10-18: `gh pr list --json comments` answered
+    100 of its 115 comments, and every one from #101 on — three critic
+    verdicts at the head and the sweep's own re-dispatch receipts — was
+    invisible. The sweep read "no verdict, no receipt" and re-dispatched the
+    critic again. `gh pr view <n> --json comments` pages through the whole
+    thread in the same `author.login` / `body` / `createdAt` shape, so no
+    reader changes. A thread shorter than the page is already whole and costs
+    no read.
+
+    A read that fails marks the pull request `THREAD_UNREADABLE` and is
+    recorded on the fail-loudly rail naming it — never acted on as though the
+    page were the thread (DRE-2034).
+    """
+    for pr in prs:
+        if len(pr.get("comments") or []) < GH_LIST_COMMENT_PAGE:
+            continue
+        try:
+            thread = json.loads(gh_read(
+                "pr", "view", str(pr["number"]), "--repo", REPO,
+                "--json", "comments",
+            ))["comments"]
+            if not isinstance(thread, list):
+                raise ValueError(f"comments is {type(thread).__name__}, not a list")
+        except Exception as e:  # noqa: BLE001 — record loudly, never kill the sweep
+            pr[THREAD_UNREADABLE] = True
+            err = (
+                f"crashed-review recovery: PR #{pr.get('number')} has "
+                f"{GH_LIST_COMMENT_PAGE}+ comments and its full thread could "
+                f"not be read: {e}"
+            )
+            _write_failures.append(err)
+            print(f"ERROR: {err}", file=sys.stderr)
+            continue
+        pr["comments"] = thread
 
 
 def _open_pr_listing() -> list[dict] | None:
@@ -12250,6 +12324,11 @@ def _open_pr_listing() -> list[dict] | None:
     silent skip for every later reader in the sweep, and the rail already
     records each failure loudly; the honest cost of an unreadable listing is
     that the next caller tries again.
+
+    Every thread the listing cut short at gh's page is read whole before the
+    memo is filled (`_read_whole_threads`, DRE-7510), so each reader sees a
+    pull request's complete thread; one whose full read failed carries
+    `THREAD_UNREADABLE` and its first page.
     """
     global _pr_listing
     if _pr_listing is not None:
@@ -12264,6 +12343,7 @@ def _open_pr_listing() -> list[dict] | None:
         _write_failures.append(f"crashed-review recovery: PR listing failed: {e}")
         print(f"ERROR: crashed-review recovery: PR listing failed: {e}", file=sys.stderr)
         return None
+    _read_whole_threads(prs)
     _pr_listing = prs
     return prs
 
@@ -12472,7 +12552,7 @@ def _report_reviewer_down(pr: dict, receipts: int, bodies=None) -> None:
 # timestamps, decides, and posts through that module's one writer.
 
 
-def _newest_worker_receipt_at(pr: dict, tag: str) -> str:
+def _newest_worker_receipt_at(pr: dict, tag: str, by=is_worker_bot_comment) -> str:
     """When the NEWEST worker-bot receipt carrying `tag` and bound to this
     head was posted, or "" when there is none.
 
@@ -12481,10 +12561,12 @@ def _newest_worker_receipt_at(pr: dict, tag: str) -> str:
     bot's authorship (DRE-1998 — a forged receipt can neither manufacture a
     hold nor release one), the tag, and the FULL head sha (a receipt on a
     superseded commit is history and a new commit re-arms everything).
+    `by` is the same authorship seam as there (DRE-7510).
 
     ISO-8601 UTC strings sort as text, which is how `_hold_state` below
     compares two comment times; every timestamp here comes from the same
-    `gh pr list --json comments` payload, so they are one clock.
+    GraphQL comment payload (`gh pr list --json comments`, or `gh pr view`'s
+    for a thread longer than the listing's page), so they are one clock.
     """
     sha = pr.get("headRefOid") or ""
     if not sha:
@@ -12492,7 +12574,7 @@ def _newest_worker_receipt_at(pr: dict, tag: str) -> str:
     times = [
         (c.get("createdAt") or "")
         for c in pr.get("comments", [])
-        if is_worker_bot_comment(c)
+        if by(c)
         and tag in (c.get("body") or "")
         and sha in (c.get("body") or "")
     ]
@@ -12568,7 +12650,11 @@ def _hold_state(pr: dict, verdict: tuple | None) -> _HoldState:
     held_at = _newest_worker_receipt_at(pr, reviewer_environment.HOLD_TAG)
     if not held_at:
         return _HoldState("", "")
-    if _newest_worker_receipt_at(pr, CRASHED_REVIEW_DISPATCH_TAG) > held_at:
+    # Any pool slot may have posted that re-dispatch receipt (DRE-7510).
+    redispatched_at = _newest_worker_receipt_at(
+        pr, CRASHED_REVIEW_DISPATCH_TAG, by=is_worker_pool_comment
+    )
+    if redispatched_at > held_at:
         return _HoldState("", "")  # released once already, and re-dispatched
     if _newest_release_act(pr) > held_at:
         return _HoldState(held_at, f"the re-run act on PR #{pr['number']}")
@@ -12764,6 +12850,14 @@ def recover_crashed_reviews() -> None:
         try:
             if not card_branch(pr.get("headRefName")) or pr.get("isDraft"):
                 continue
+            if pr.get(THREAD_UNREADABLE):
+                # DRE-7510: the verdict or the receipt may sit past the page
+                # we hold — recorded by the listing, never acted on here.
+                print(
+                    f"crashed-review: PR #{pr['number']} — its full comment "
+                    "thread could not be read; nothing dispatched, nothing posted"
+                )
+                continue
             if pr.get("mergeStateStatus") == "DIRTY":
                 continue  # unstick_conflicts owns conflicted PRs; the fix re-arms
             sha = pr.get("headRefOid") or ""
@@ -12816,7 +12910,12 @@ def recover_crashed_reviews() -> None:
                 if hold.held_at:
                     released.append((pr, hold.release))
                     continue
-                receipts = _worker_receipt_count(pr, CRASHED_REVIEW_DISPATCH_TAG)
+                # DRE-7510: a receipt by any slot of the worker pool spends
+                # the head's one re-dispatch — #981 carried seven at one head,
+                # six of them by slots 2-4 that slot 1 alone never counted.
+                receipts = _worker_receipt_count(
+                    pr, CRASHED_REVIEW_DISPATCH_TAG, by=is_worker_pool_comment
+                )
                 if receipts >= CRASHED_REVIEW_RETRY_CAP:
                     _report_crashed_review_cap(pr, receipts)
                     continue

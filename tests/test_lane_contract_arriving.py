@@ -37,6 +37,7 @@ os.environ.setdefault("REPO", "dreadnought-foundry/bureau-pipeline")
 os.environ.setdefault("GH_TOKEN", "x")
 
 import lane_contract  # noqa: E402
+import routing_verdict  # noqa: E402
 
 HAND_WORK = "Hand-work"
 EPIC = "DRE-5240"
@@ -64,9 +65,11 @@ ARRIVING_KEYS = {
 }
 
 # The sentence DRE-5275 wrote into Backlog's exit. This card rewrites only the
-# verdict-destination sentences around it, so it must survive verbatim.
+# verdict-destination sentences around it, so it must survive verbatim — with
+# the destination the flip (DRE-7120) moved from Todo to In Progress.
 DRE_5275_SENTENCE = (
-    "It promotes a FLEET card to Todo once the dependency gate clears, the WIP "
+    "It promotes a FLEET card to In Progress — the move the relay dispatches "
+    "the build on (DRE-7120) — once the dependency gate clears, the WIP "
     "cap has room and — for a child of an epic — both critics passed the plan "
     "on its current planning attempt before the green light (DRE-3059, DRE-5268)."
 )
@@ -361,13 +364,16 @@ def test_an_unknown_status_is_still_refused():
 
 
 class TestTheRewrittenClauses:
-    def test_todo_entrance_defers_to_the_vocabulary(self):
+    def test_todo_entrance_says_no_verdict_lands_there_and_the_vocabulary_agrees(self):
+        # Since the flip (DRE-7120) nothing promotes into Todo: the clause says
+        # so, and names where FLEET and a person's verdicts go instead.
         clause = lane_contract.lane("Todo")["clauses"]["entrance"]
         text = clause["text"]
-        assert "config/routing-verdicts.json" in text
-        assert "never this sentence" in text
-        assert EPIC in text and HAND_WORK in text
-        assert EPIC in clause["pending"]
+        assert "no routing verdict's destination is this lane" in text
+        assert routing_verdict.destination("FLEET") in text and HAND_WORK in text
+        assert "DRE-7120" in text and "DRE-7120" in clause["pending"]
+        assert "Todo" not in {routing_verdict.destination(name)
+                              for name in routing_verdict.verdicts()}
 
     def test_the_queue_exit_defers_to_the_vocabulary_and_keeps_dre_5275(self):
         # Backlog's clauses moved to Queued with the lane (DRE-6740); the

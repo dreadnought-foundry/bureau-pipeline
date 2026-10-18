@@ -226,7 +226,7 @@ def test_in_progress_holds_after_cap():
     # building-card reroute (otherwise an In Progress → Queued hold would be
     # re-routed to Todo and loop forever past the cap).
     cmd_state.assert_called_once_with("DRE-1331", "Queued", "--park")
-    assert ("DRE-1331", "Todo") not in [c.args for c in cmd_state.call_args_list]
+    assert ("DRE-1331", reconcile.lane_contract.START_LANE) not in [c.args for c in cmd_state.call_args_list]
 
 
 def test_in_progress_requeues_below_cap():
@@ -299,4 +299,4 @@ def test_promote_ready_promotes_unheld_card():
     ) as advance, patch.object(reconcile.linear_ops, "cmd_comment"):
         promoted = reconcile.promote_ready(active_count=0)
     assert promoted == 1
-    advance.assert_called_once_with("DRE-1331", "Todo", reconcile.QUEUE_FROM)
+    advance.assert_called_once_with("DRE-1331", "In Progress", reconcile.QUEUE_FROM)

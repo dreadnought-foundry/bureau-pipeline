@@ -165,10 +165,10 @@ class TestTheFourCells:
     """The whole decision table, each cell asserted by DESTINATION — the only
     thing that matters to a card sitting in Backlog is which lane it ends in."""
 
-    def test_parent_active_with_fleet_verdict_promotes_to_todo(self):
+    def test_parent_active_with_fleet_verdict_promotes_to_in_progress(self):
         board = _Board(_card(parent_state="In Progress", comments=[FLEET]))
         assert board.promote() == 1
-        assert board.lane_of("DRE-2735") == "Todo"
+        assert board.lane_of("DRE-2735") == "In Progress"
 
     def test_parent_active_without_a_verdict_stays_in_backlog_too(self):
         """This cell flipped in DRE-3385. It was "a verdictless CHILD promotes
@@ -184,12 +184,12 @@ class TestTheFourCells:
             for b in board.comments_on("DRE-2735")
         )
 
-    def test_parentless_with_fleet_verdict_promotes_to_todo(self):
+    def test_parentless_with_fleet_verdict_promotes_to_in_progress(self):
         """The new behaviour: no parent, so the verdict IS the approval."""
         board = _Board(_card(parent_state=None, comments=[FLEET]))
         assert board.promote() == 1
-        assert board.lane_of("DRE-2735") == "Todo"
-        assert board.advanced == [("DRE-2735", "Todo", reconcile.QUEUE_FROM)]
+        assert board.lane_of("DRE-2735") == "In Progress"
+        assert board.advanced == [("DRE-2735", "In Progress", reconcile.QUEUE_FROM)]
 
     def test_parentless_without_a_verdict_stays_in_backlog(self):
         """Nothing has approved it: no epic a human moved, and no verdict."""
@@ -266,14 +266,15 @@ class TestTheRefusalsAreDistinguishable:
 # A one-off is not exempt from anything else
 # --------------------------------------------------------------------------
 class TestAOneOffPassesEveryOtherGate:
-    def test_a_verdict_routed_away_from_todo_is_still_refused(self):
+    def test_a_verdict_routed_away_from_the_sweep_lanes_is_still_refused(self):
         """PARKED is deliberately inert and NEEDS WORK belongs to the planner —
-        the sweep promotes to Todo and nowhere else.
+        the sweep promotes to In Progress or Hand-work and nowhere else.
 
         This test used to use WORKBENCH, on the reading that only FLEET leaves
-        Backlog at all. DRE-3385 corrected that: WORKBENCH names Todo as its
-        destination, so it leaves — marked `hand-built`, with nothing dispatched
-        (see test_operator_card_promotion.py). What is refused is a wrong
+        Backlog at all. DRE-3385 corrected that: WORKBENCH names a lane the
+        sweep promotes into as its destination, so it leaves — marked
+        `hand-built`, with nothing dispatched (see
+        test_operator_card_promotion.py). What is refused is a wrong
         DESTINATION, which is what these two are."""
         for verdict in (PARKED, NEEDS_WORK):
             board = _Board(_card(parent_state=None, comments=[verdict]))
@@ -378,7 +379,7 @@ class TestParentlessPromotionRefusal:
         assert routing_verdict.parentless_promotion_refusal("DRE-2735", [FLEET]) is None
 
     def test_a_workbench_verdict_is_not_a_refusal_at_all(self):
-        """It names Todo, and the sweep goes to Todo (DRE-3385)."""
+        """It names Hand-work, and the sweep goes there (DRE-3385, DRE-5322)."""
         assert routing_verdict.parentless_promotion_refusal(
             "DRE-2735", [WORKBENCH]) is None
 
@@ -427,8 +428,8 @@ class TestTheOneOffJourney:
 
     The unit cells above prove the gate. This proves the ROUTE: the CEO files a
     one-off, Planning classifies it and stamps the verdict that lands it in
-    Backlog, the sweep promotes it, and the Todo backstop dispatches it as an
-    engineer run. Unit-green is not live-working, and this is the walk that the
+    Backlog, the sweep promotes it to In Progress, and that move dispatches it
+    as an engineer run. Unit-green is not live-working, and this is the walk that the
     hole in `promote_ready` swallowed.
     """
 
@@ -450,7 +451,7 @@ class TestTheOneOffJourney:
         verdict = routing_verdict.verdict_comment(
             "FLEET", "the acceptance criteria are unit-testable"
         )
-        assert routing_verdict.destination("FLEET") == "Todo"
+        assert routing_verdict.destination("FLEET") == "In Progress"
 
         # Planning exit lands the parentless card in Backlog, carrying it.
         lanes.append("Backlog")
@@ -463,7 +464,8 @@ class TestTheOneOffJourney:
         lanes.append(board.lane_of("DRE-2735"))
         writers.append("reconcile.py")
 
-        # The Todo backstop dispatches it — an engineer run, not a plan run.
+        # The move into In Progress dispatches it — an engineer run, not a
+        # plan run.
         dispatched: dict = {}
 
         def fake_run(argv, **kw):
@@ -482,7 +484,7 @@ class TestTheOneOffJourney:
             assert reconcile.redispatch(card) is True
         writers.append("reconcile.py")
 
-        assert lanes == ["Intake", "Planning", "Backlog", "Todo"]
+        assert lanes == ["Intake", "Planning", "Backlog", "In Progress"]
         assert "Green Light" not in lanes
         assert set(writers) <= {"plan.yml", "linear_ops.py", "reconcile.py"}
         assert dispatched["event_type"] == "agent-execute"

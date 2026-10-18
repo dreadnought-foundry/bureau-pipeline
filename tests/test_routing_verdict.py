@@ -158,6 +158,60 @@ class TestTheFiveRoutes:
 # ===========================================================================
 # DRE-2824: Backlog is process-written, so PARKED cannot name a human
 # ===========================================================================
+class TestTheSweepCarriesAPromotableCardIntoTheDispatchLane:
+    """The flip (DRE-7120): FLEET's destination is the dispatch lane, and the
+    sweep's carried lanes stay bounded below it for every verdict that is not
+    promotable — so a one-word vocabulary edit still cannot carry a card to
+    In Review or Done (the critic on #703)."""
+
+    @pytest.mark.parametrize("name", ["FLEET", "WORKBENCH", "OPERATOR"])
+    def test_the_sweep_carries_the_three(self, name):
+        assert routing_verdict.sweep_promotes(name) is True
+
+    @pytest.mark.parametrize("name", ["PARKED", "NEEDS WORK"])
+    def test_the_sweep_leaves_the_two(self, name):
+        assert routing_verdict.sweep_promotes(name) is False
+
+    def test_the_build_lane_is_the_dispatch_lane(self):
+        """Read off the contract, never a literal of its own."""
+        import ast
+
+        assert routing_verdict.BUILD_LANE == lane_contract.DISPATCH_LANE
+        tree = ast.parse(Path(routing_verdict.__file__).read_text(encoding="utf-8"))
+        value = next(
+            node.value for node in tree.body
+            if isinstance(node, ast.Assign)
+            and any(getattr(t, "id", None) == "BUILD_LANE" for t in node.targets)
+        )
+        assert ast.unparse(value) == "lane_contract.DISPATCH_LANE"
+
+    def test_fleet_lands_in_the_start_lane(self):
+        assert routing_verdict.destination("FLEET") == lane_contract.START_LANE
+        assert routing_verdict.sweep_lanes() == ("In Progress", "Hand-work")
+
+    @pytest.mark.parametrize("name", ["WORKBENCH", "OPERATOR", "PARKED", "NEEDS WORK"])
+    def test_a_verdict_that_is_not_promotable_is_never_carried_to_in_progress(self, name):
+        doc = json.loads(json.dumps(routing_verdict.load()))
+        routing_verdict.record(name, doc)["destination"] = "In Progress"
+        assert routing_verdict.sweep_promotes(name, doc) is False
+
+    @pytest.mark.parametrize("lane", ["In Review", "Done"])
+    def test_fleet_pointed_past_the_dispatch_lane_is_not_carried(self, lane):
+        doc = json.loads(json.dumps(routing_verdict.load()))
+        routing_verdict.record("FLEET", doc)["destination"] = lane
+        assert routing_verdict.sweep_promotes("FLEET", doc) is False
+
+    def test_fleet_pointed_anywhere_but_the_start_lane_is_a_config_problem(self):
+        doc = json.loads(json.dumps(routing_verdict.load()))
+        routing_verdict.record("FLEET", doc)["destination"] = "Hand-work"
+        problems = routing_verdict.config_problems(doc)
+        assert any("FLEET" in p and "lane_contract.START_LANE" in p for p in problems), problems
+
+    def test_the_shipped_vocabulary_points_fleet_at_the_start_lane(self):
+        assert not [p for p in routing_verdict.config_problems()
+                    if "START_LANE" in p]
+
+
 class TestParkedNamesTheProcessWriter:
     """Two shipped files contradicted each other and the Phase 3 gate caught it.
 
@@ -724,7 +778,7 @@ class TestThePromoterRoutesOnTheVerdict:
     def test_a_fleet_card_promotes(self):
         board = _PromotionBoard([routing_verdict.verdict_comment("FLEET", "unit-testable")])
         assert board.promote() == 1
-        assert board.advanced == [("DRE-2799", "Todo", reconcile.QUEUE_FROM)]
+        assert board.advanced == [("DRE-2799", "In Progress", reconcile.QUEUE_FROM)]
         assert board.labelled == []
 
     @pytest.mark.parametrize("verdict", ["WORKBENCH", "OPERATOR"])
@@ -917,7 +971,7 @@ class TestAStaleVerdictIsNotAnApproval:
     def test_a_planning_exit_promotes_as_today(self):
         board = _StaleBoard("FLEET", [_move(EXIT_AT, "Planning", "Backlog")], parent=None)
         assert board.promote() == 1
-        assert board.advanced == [("DRE-2799", "Todo", reconcile.QUEUE_FROM)]
+        assert board.advanced == [("DRE-2799", "In Progress", reconcile.QUEUE_FROM)]
         assert board.reads == ["DRE-2799"]
 
     def test_a_build_run_s_park_promotes_once_its_blockers_clear(self):
@@ -932,7 +986,7 @@ class TestAStaleVerdictIsNotAnApproval:
         assert board.advanced == []
         board.card["inverseRelations"]["nodes"][0]["issue"]["state"]["name"] = "Done"
         assert board.promote() == 1
-        assert board.advanced == [("DRE-2799", "Todo", reconcile.QUEUE_FROM)]
+        assert board.advanced == [("DRE-2799", "In Progress", reconcile.QUEUE_FROM)]
         assert not any(routing_verdict.STALE_VERDICT_NEEDLE in b for _, b in board.posted)
 
     def test_the_history_is_read_only_for_a_card_that_passed_every_other_gate(self):
