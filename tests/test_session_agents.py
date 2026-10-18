@@ -413,19 +413,39 @@ def _flow_agents(text: str) -> str:
     return "".join(lines[:start] + [f"agents: {{{flow}}}\n\n"] + lines[end:])
 
 
+def _a_builder() -> str:
+    """The committed config's first pipeline agent in the Builders — read off
+    the file, so a move of one agent out of the Builders (DRE-7284 moved
+    `proof`) moves this choice with it."""
+    raw = yaml.safe_load(CONFIG.read_text())
+    session = set(raw.get("session_agents") or ())
+    return next(name for name, group in raw["agents"].items()
+                if group == "workhorse" and name not in session)
+
+
+def _a_proof_move() -> dict:
+    """A move of `proof` the console allows today, read off the committed
+    `config/model-choices.json` — so a save that moves `proof` into the
+    Reviewers (DRE-7284 gave it a group of its own) moves this choice with
+    it."""
+    choices = json.loads(CHOICES.read_text(encoding="utf-8"))
+    agent = next(a for a in choices["agents"] if a["name"] == "proof")
+    return _move("proof", next(m["group"] for m in agent["moves"] if m["allowed"]))
+
+
 FAMILIES = [
     # (id, change, edit of the file or None, a phrase the plain line carries)
     ("rules 3 and 8", _move("critic", "workhorse"), None, "Reviewers"),
     ("rule 10", _move("engineer", "judgement"), None, "Planners"),
     ("no such group", _move("proof", "nowhere"), None, "no group called nowhere"),
-    ("already there", _move("proof", "workhorse"), None, "already in the Builders group"),
+    ("already there", _move(_a_builder(), "workhorse"), None, "already in the Builders group"),
     ("no such agent", _move("nobody", "workhorse"), None, "no agent named nobody"),
     ("no registry entry", _move("ghost", "workhorse"), _with_ghost, "ghost"),
     ("already an agent", {"op": "add_agent", "agent": "engineer", "about": "Builds"},
      None, "already an agent named engineer"),
-    ("already fails", _move("proof", "advisory"), _discovery_on_workhorse,
+    ("already fails", _a_proof_move(), _discovery_on_workhorse,
      "nothing to do with this change"),
-    ("could not be edited", _move("proof", "advisory"), _flow_agents, "by hand"),
+    ("could not be edited", _a_proof_move(), _flow_agents, "by hand"),
 ]
 
 
@@ -455,8 +475,7 @@ def test_a_move_line_names_the_change_as_the_pull_request_body_does(tmp_path):
 
 def test_a_file_that_already_fails_sends_its_findings_to_the_log_only(tmp_path):
     config = _hand_edited(tmp_path, _discovery_on_workhorse)
-    proc, errors, bullets = _cli_apply(tmp_path, _move("proof", "advisory"),
-                                       config=config)
+    proc, errors, bullets = _cli_apply(tmp_path, _a_proof_move(), config=config)
     assert proc.returncode == 2
     assert "discovery.on_new_model" in proc.stdout, "the findings reach the log"
     assert not any("discovery" in line for line in errors + bullets)

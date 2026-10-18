@@ -2516,6 +2516,14 @@
     },
     {
       "file": ".github/workflows/plan.yml",
+      "anchor": "🚨 The critic's second read of this card could NOT be started",
+      "step": "One-off critic — read it again after no result",
+      "kind": "undeclared-act",
+      "means": "The second read of a one-off card whose critic decided nothing could not be dispatched, so nothing is running — said plainly rather than claimed as started (`plan_run.fire`'s rc rule, DRE-2034), and the step goes red for the medic (DRE-7491).",
+      "why": "Act-shaped, and the registry has no row for it — the same debt as the revised card's re-read failure note beside it. Giving it a row is a REGISTRY change, not an emission change."
+    },
+    {
+      "file": ".github/workflows/plan.yml",
       "anchor": "\"$(cat \"$PARK_NOTE\")\"",
       "step": "One-off critic — park in Triage",
       "kind": "undeclared-act",
