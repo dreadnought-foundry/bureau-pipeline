@@ -249,6 +249,113 @@ def test_a_write_that_fails_posts_no_refusal_and_the_sweep_goes_on():
 
 
 # --------------------------------------------------------------------------
+# The retirement (DRE-7129): the drain leaves an epic for the carry
+# --------------------------------------------------------------------------
+class _Board(_Linear):
+    """`_Linear` over a board the writes change: the drain's `cmd_advance`
+    and the carry's `cmd_state` both move the card, so the phase that runs
+    second reads the lane the first one left."""
+
+    def __init__(self, cards, before):
+        super().__init__(before)
+        self.cards = cards
+        self.advances: list[tuple] = []
+
+    def active_cards(self, states=reconcile.SWEEP_STATES):
+        return [c for c in self.cards if c["state"]["name"] in states]
+
+    def _move(self, identifier, lane):
+        for card in self.cards:
+            if card["identifier"] == identifier:
+                card["state"] = {"name": lane}
+
+    def cmd_advance(self, identifier, to, from_lanes):
+        self.advances.append((identifier, to, from_lanes))
+        self._move(identifier, to)
+
+    def cmd_state(self, identifier, lane, *flags):
+        super().cmd_state(identifier, lane, *flags)
+        self._move(identifier, lane)
+
+
+def _drain_then_carry(board: _Board):
+    """The two phases in the order the full sweep runs them."""
+    reconcile._write_failures.clear()
+    with mock.patch.object(
+        reconcile, "active_cards", side_effect=board.active_cards
+    ), mock.patch.object(
+        reconcile.linear_ops, "gql", side_effect=board.gql
+    ), mock.patch.object(
+        reconcile.linear_ops, "cmd_advance", side_effect=board.cmd_advance
+    ), mock.patch.object(
+        reconcile.linear_ops, "cmd_state", side_effect=board.cmd_state
+    ), mock.patch.object(
+        reconcile.linear_ops, "cmd_comment", side_effect=board.cmd_comment
+    ), mock.patch.object(
+        reconcile.linear_ops, "count_comments", side_effect=board.count_comments
+    ):
+        reconcile.drain_retiring_lanes()
+        reconcile.carry_epics_out_of_todo()
+    failures = list(reconcile._write_failures)
+    reconcile._write_failures.clear()
+    return failures
+
+
+def test_the_sweep_drains_a_one_off_and_carries_an_unapproved_epic_to_planning():
+    """A drag can never approve an epic: the drain, whose destination is the
+    dispatch lane, leaves the epic where it is, and the carry that runs later in
+    the same sweep sends it to Planning because it did not come from In
+    Progress."""
+    one_off = _card("DRE-5400", title="bureau-pipeline: a small fix", children=())
+    board = _Board([_card(), one_off], {EPIC: "Green Light", "DRE-5400": "Queued"})
+    assert _drain_then_carry(board) == []
+    assert board.advances == [("DRE-5400", "In Progress", gate.TODO)]
+    assert board.states == [(EPIC, "Planning")]
+    assert [c["state"]["name"] for c in board.cards] == ["Planning", "In Progress"]
+    drained = [body for ident, body in board.comments if ident == "DRE-5400"]
+    assert len(drained) == 1 and drained[0].startswith(
+        f"🧹 Reconcile: the '{gate.TODO}' lane is being retired (DRE-7072)"
+    )
+    refused = [body for ident, body in board.comments if ident == EPIC]
+    assert len(refused) == 1
+    assert refused[0].splitlines()[0] == gate.opener(EPIC, "Green Light")
+
+
+def test_the_sweep_carries_an_approved_epic_back_to_in_progress():
+    board = _Board([_card()], {EPIC: "In Progress"})
+    assert _drain_then_carry(board) == []
+    assert board.advances == []
+    assert board.states == [(EPIC, "In Progress")]
+
+
+def test_the_full_sweep_drains_before_it_carries():
+    order: list[str] = []
+    stubs = {name: mock.MagicMock() for name in _FULL_SWEEP_PHASES}
+    stubs.update(
+        flag_stranded=mock.MagicMock(return_value=set()),
+        repair_frozen_planning_holds=mock.MagicMock(return_value=set()),
+        active_cards=mock.MagicMock(return_value=[]),
+        report_epic_growth=mock.MagicMock(return_value=[]),
+        merged_card_scope=mock.MagicMock(return_value=None),
+        drain_retiring_lanes=mock.MagicMock(
+            side_effect=lambda: order.append("drain")),
+        carry_epics_out_of_todo=mock.MagicMock(
+            side_effect=lambda: order.append("carry")),
+        backlog_children=mock.MagicMock(return_value=[]),
+    )
+    reconcile._write_failures.clear()
+    reconcile._read_failures.clear()
+    with mock.patch.multiple(reconcile, **stubs):
+        try:
+            reconcile.main()
+        except SystemExit:
+            pass
+    reconcile._write_failures.clear()
+    reconcile._read_failures.clear()
+    assert order == ["drain", "carry"]
+
+
+# --------------------------------------------------------------------------
 # The contract: DRE-5316's rule, read — never restated
 # --------------------------------------------------------------------------
 def _function(name: str) -> ast.FunctionDef:

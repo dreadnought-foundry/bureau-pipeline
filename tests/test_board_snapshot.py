@@ -160,11 +160,11 @@ def test_the_lanes_are_the_sweeps_own_plus_the_queue():
 
 @pytest.mark.parametrize("queue", lane_contract.QUEUE_LANES)
 def test_the_snapshot_reads_a_card_under_either_queue_name(queue):
-    fake = FakeLinear([_raw_card("DRE-1", queue), _raw_card("DRE-2", "Todo")])
+    fake = FakeLinear([_raw_card("DRE-1", queue), _raw_card("DRE-2", "In Progress")])
     with patch.object(linear_ops, "gql", fake.gql):
         snapshot = board_snapshot.take()
     lanes = {c["identifier"]: c["state"]["name"] for c in snapshot["cards"]}
-    assert lanes == {"DRE-1": queue, "DRE-2": "Todo"}
+    assert lanes == {"DRE-1": queue, "DRE-2": "In Progress"}
 
 
 def test_no_string_constant_in_the_snapshot_names_the_old_lane():
@@ -553,18 +553,23 @@ def _contract_without_todo():
 
 
 def test_the_deal_reads_the_start_lanes_and_keeps_its_six_slots():
-    """DRE-7112: the deal's first slot is the start lane ahead of the dispatch
-    lane — Todo on the shipped contract, so the replay's recorded board is
-    unchanged — and the dispatch lane once Todo's entry is gone, so a card
-    sits in In Progress exactly where it sat in Todo and none is re-dealt."""
+    """DRE-7112: the deal's first slot is the live start lane ahead of the
+    dispatch lane, and the dispatch lane once none is — so a card sits in In
+    Progress exactly where it sat in Todo and none is re-dealt. Since Todo
+    began retiring (DRE-7129) the sweep drains it, so no live start lane is
+    ahead of In Progress on the shipped contract either."""
     shipped = board_snapshot.synthetic_deal()
     assert shipped == board_snapshot._SYNTHETIC_DEAL
-    assert shipped == ("Todo", "In Progress", "In Review", "Planning", "Intake",
-                       lane_contract.QUEUE_LANE)
-    assert set(shipped[:2]) == set(lane_contract.START_LANES)
+    assert shipped == ("In Progress", "In Progress", "In Review", "Planning",
+                       "Intake", lane_contract.QUEUE_LANE)
     assert shipped[1] == lane_contract.DISPATCH_LANE
     flipped = board_snapshot.synthetic_deal(_contract_without_todo())
-    assert flipped == ("In Progress", "In Progress") + shipped[2:]
+    assert flipped == shipped
+    live_todo = json.loads(json.dumps(lane_contract.load()))
+    for entry in live_todo["lanes"]:
+        if entry["name"] == "Todo":
+            entry["status"] = "live"
+    assert board_snapshot.synthetic_deal(live_todo)[0] == "Todo"
 
 
 def test_the_extra_lanes_take_cards_from_the_deals_first_slot():

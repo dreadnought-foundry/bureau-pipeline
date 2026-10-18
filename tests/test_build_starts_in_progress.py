@@ -351,7 +351,7 @@ def test_the_scan_sees_the_lane_entry_it_exempts():
     own = next(e for e in doc["lanes"] if e["name"] == LANE)
     assert any(WORD.search(text) for _, text in _strings(own))
     assert own["replaced_by"] == "In Progress"
-    assert own["status"] == "live"
+    assert own["status"] == "retiring"  # DRE-7129
 
 
 if __name__ == "__main__":

@@ -102,7 +102,7 @@ def _iso(minutes_ago: float) -> str:
 
 def _card(
     identifier="DRE-2929",
-    state="Todo",
+    state="In Progress",
     labels=("repo:agent-bureau",),
     minutes_stale=45.0,
     bodies=(),
@@ -233,7 +233,7 @@ def _watchdog_requests(card_count: int) -> FakeLinear:
     """Run the whole watchdog (both passes) over `card_count` Todo cards and
     `card_count` Planning cards, and report what it cost."""
     active = [
-        _card(f"DRE-{9000 + n}", state="Todo", minutes_stale=45.0)
+        _card(f"DRE-{9000 + n}", state="In Progress", minutes_stale=45.0)
         for n in range(card_count)
     ] + [
         _card(f"DRE-{9500 + n}", state="Planning", minutes_stale=6000.0)
@@ -315,7 +315,7 @@ def test_stranded_watchdog_gates_on_age_before_reading_comments():
     than something read past it. What must not happen before the gate is any
     other reading of the card's comments, and — since DRE-2929 — any request at
     all: the receipt is read off the board snapshot the card arrived in."""
-    young = _card("DRE-1003", state="Todo",
+    young = _card("DRE-1003", state="In Progress",
                   minutes_stale=reconcile.WATCHDOG_MINUTES - 5)
     fake = FakeLinear(active=[young])
     with _linear(fake), patch.object(
@@ -413,7 +413,7 @@ def _fixed_board(scale: int = 1):
     cards."""
     active = []
     for n in range(4 * scale):
-        active.append(_card(f"DRE-{7000 + n}", state="Todo", minutes_stale=600.0))
+        active.append(_card(f"DRE-{7000 + n}", state="In Progress", minutes_stale=600.0))
         active.append(_card(f"DRE-{7300 + n}", state="Planning",
                             minutes_stale=6000.0))
         active.append(_card(f"DRE-{7600 + n}", state="Intake", labels=(),

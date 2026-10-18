@@ -583,10 +583,10 @@ class TestTheEscalationReReadsTheLaneBeforeItParks:
     # --- the segment is read from the contract, never enumerated -------------
     def test_the_segment_test_reads_the_contract(self):
         doc = _mutated_contract()
-        _lane(doc, "Todo")["segment"] = lane_contract.lane(
+        _lane(doc, "Hand-work")["segment"] = lane_contract.lane(
             planning_escalation.ORIGIN)["segment"]
-        assert planning_escalation.in_escalation_segment("Todo", contract=doc)
-        assert not planning_escalation.in_escalation_segment("Todo")
+        assert planning_escalation.in_escalation_segment("Hand-work", contract=doc)
+        assert not planning_escalation.in_escalation_segment("Hand-work")
 
     def test_a_lane_the_contract_does_not_carry_is_not_ours(self):
         """Unknown is never a pass: a lane nobody declared cannot be shown to

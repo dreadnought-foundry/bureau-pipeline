@@ -220,7 +220,7 @@ def test_a_stamped_one_off_wearing_agent_planner_is_repaired_as_a_build(
     assert fake.added_labels == ["repo:atlas"]
     assert fake.states == []
     assert len(fake.comments) == 1
-    assert fake.comments[0].startswith("🔧 Auto-fixed by the Todo gate: added repo:atlas")
+    assert fake.comments[0].startswith("🔧 Auto-fixed by the start gate: added repo:atlas")
     assert SKIPPED not in out
 
 
@@ -233,7 +233,7 @@ def test_a_stamped_one_off_missing_its_role_label_is_repaired_as_a_build(
     assert role == "engineer"
     assert fake.added_labels == ["agent:engineer"]
     assert fake.states == []
-    assert fake.comments[0].startswith("🔧 Auto-fixed by the Todo gate: added agent:engineer")
+    assert fake.comments[0].startswith("🔧 Auto-fixed by the start gate: added agent:engineer")
     assert SKIPPED not in out
 
 

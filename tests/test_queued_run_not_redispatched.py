@@ -269,7 +269,7 @@ def _todo_card():
         "identifier": CARD,
         "title": "portico: MCP read tools for forms and threads",
         "description": "**Repo:** portico\nwork",
-        "state": {"name": "Todo"},
+        "state": {"name": "In Progress"},
         "labels": {"nodes": [{"name": "agent:engineer"}]},
         "updatedAt": "2026-09-24T21:59:34Z",
     }
