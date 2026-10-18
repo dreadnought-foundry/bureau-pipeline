@@ -310,6 +310,45 @@ is guidance to the session. Nothing in the pipeline checks it. What the pipeline
 does check begins at the pull request: the TDD commit order, the critic's
 verdict and the merge gate, the same as for any card.
 
+## Every step that needs the CEO is agreed before the work starts (DRE-7521)
+
+Some work has a step only the CEO can unblock: a sign-in of his, a press from
+his own session, a production apply he has to OK, or a name only he can give.
+**Every such step is listed in the one question he answers before the work
+starts. It is never found partway through.** The CEO, 2026-10-18: "We need to
+make sure everybody, every agent in our system, knows that they need to ask for
+this before they start doing the work so we don't have to get stuck like this."
+
+- **Where the list goes.** It goes in whatever he already says yes to before
+  anything runs:
+  - an epic's plan, for an epic;
+  - the card's own question, for a card that escalates;
+  - the plan, for a proof's operator steps.
+
+  Each step is named in plain words: what it does, where, and in whose name.
+- **His yes covers every step on the list.** It is recorded on the card with
+  its time in PT, and no one asks him again when the step comes up.
+- **Anything an agent can look up is looked up, never asked.** That includes a
+  person's role in a product, which account a thing lives in, and whether an
+  identity holds a permission. Those facts come from the product's own read,
+  not from him.
+- **A step that needs him and was not on the list is a defect in the plan.**
+  Whoever finds it says so on the card in those words, then asks him once. A
+  step the run cannot finish without him is never parked silently.
+
+**Why.** On 2026-10-17 at 10:33 PM PT, Portico's portals release was held on one
+document that had to be republished by hand (DRE-7494). The republish names a
+Portico moderator as its publisher and runs against production. The session
+running the proof (DRE-7235) found that out at 6:16 AM PT, after two laps of
+work. Only then did it ask which sign-in to use, although Portico's own
+`whoami` answered it and the CEO had already agreed to the plan. The release
+stood stuck on the console for more than ten hours over a question he could
+have answered the night before.
+
+**What is guidance and what is checked.** Today this is guidance; nothing in
+the pipeline checks it. A plan-critic check that refuses a plan whose hand steps
+are missing from its question is follow-up work, filed as its own card.
+
 ## Epics
 Expressed by Linear **native parent/child** (not a label, not frontmatter).
 `[EPIC]` in the title OR having children ⇒ the gate infers `agent:planner`. The
