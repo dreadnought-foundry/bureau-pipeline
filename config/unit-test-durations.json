@@ -18,6 +18,7 @@
     "tests/test_groomer_verify_wiring.py": "tests/test_groomer_verify_wiring.py, new for DRE-7242, at 2.51 s, read off its pytest -v result lines in CI run 38975776338, job 117224744141 (part 4, 2026-10-16, head c8726bc), because it took the record under its 90% coverage",
     "tests/test_lane_contract_done_no_record_return.py": "tests/test_lane_contract_done_no_record_return.py, new for DRE-7327, at 0.08 s, read the same way in CI run 38788237731, job 116605720524 (part 1, 2026-10-15, head 580a8f0)",
     "tests/test_linear_read_only.py": "tests/test_linear_read_only.py, new for DRE-7285, at 1.98 s, read off its pytest -v result lines in CI run 38788660860, job 116638220963 (part 4, 2026-10-15, head dd2d4c7)",
+    "tests/test_medic_resume.py": "tests/test_medic_resume.py, new for DRE-7526, at 2.55 s, read off its pytest --junit-xml suite time measured locally (2026-10-18, 4 cores, its 37 tests in one pytest run), because it took the record under its 90% coverage",
     "tests/test_merge_gate_verifier_scope.py": "tests/test_merge_gate_verifier_scope.py, new for DRE-7165, at 6.18 s, read off its pytest -v result lines in CI run 38420970102, job 115397534726 (part 4, 2026-10-13, head 9f17342)",
     "tests/test_model_adoption_actions_lane.py": "tests/test_model_adoption_actions_lane.py, new for DRE-7113, at 0.1 s, read off its pytest -v result lines in CI run 39080775145, job 117547676099 (part 2, 2026-10-18, head 3c7027a), because it took the record under its 90% coverage",
     "tests/test_notice_writers.py": "tests/test_notice_writers.py, new for DRE-7452, at 3.47 s, read off its pytest --junit-xml suite time measured locally (2026-10-16), because one more unmeasured file took the record under its 90% coverage",
@@ -734,6 +735,7 @@
     "tests/test_worker_pool_allowed_bots.py": 0.32,
     "tests/test_workflow_expression_budget.py": 6.72,
     "tests/test_workflow_prompt_lanes.py": 0.37,
-    "tests/test_writers_point_at_planning.py": 1.32
+    "tests/test_writers_point_at_planning.py": 1.32,
+    "tests/test_medic_resume.py": 2.55
   }
 }
