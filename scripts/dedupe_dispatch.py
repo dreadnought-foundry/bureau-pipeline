@@ -2,7 +2,7 @@
 """Duplicate-dispatch guard for agent-task (DRE-2057).
 
 A single card's promotion into a start lane (`lane_contract.START_LANES` —
-Todo before the flip, In Progress after it) sometimes produces TWO agent-execute
+the old start lane before the flip, In Progress after it) sometimes produces TWO agent-execute
 dispatches ~60s apart (webhook double-fire around create/state-set, or a
 relay retry). The stub's per-card concurrency group serializes them —
 cancel-in-progress stays false on purpose (DRE-2032) — so the dup doesn't
@@ -36,9 +36,9 @@ The decision (any condition skips; all unreadable → proceed):
 
 ## WHY (b) GREW A SECOND HALF (DRE-4830, portico, 2026-09-24)
 
-Seven portico cards were promoted to Todo at 14:59 PT and dispatched. The
+Seven portico cards were promoted to the old start lane at 14:59 PT and dispatched. The
 mini was saturated — 78 jobs waiting at 17:00 — so every run sat `queued`,
-posted no heartbeat, and the reconcile sweep's Todo branch read "no run
+posted no heartbeat, and the reconcile sweep's start-lane branch read "no run
 receipt" as "no run" and re-dispatched six of them sixteen minutes later.
 That writer is fixed at its own end (`reconcile.build_run_refusal`); this
 is the consumer's half, and it is what catches whatever produces the next
@@ -817,7 +817,7 @@ def _hand_back(identifier: str, card: dict) -> None:
 
     Nothing is fired when the build is already running — a build run in
     flight, or a start receipt newer than the card's entry into In Progress
-    (today: the build run's own Todo → In Progress move on a labeled one-off)
+    (today: the build run's own start-lane → In Progress move on a labeled one-off)
     — or when either cannot be read. The sweep's not-started re-fire (DRE-7108)
     starts the card as `agent-execute` within `START_MINUTES` then, and is the
     backstop for a failed fire too."""

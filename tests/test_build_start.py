@@ -71,10 +71,12 @@ class TestTheShippedContract:
         assert lane_contract.start_lanes() == ("In Progress", "Todo")
         assert lane_contract.START_LANES == ("In Progress", "Todo")
 
-    def test_start_minutes_is_fifteen_and_equals_todos_stall_window(self):
+    def test_start_minutes_is_fifteen_the_old_start_lanes_stall_window(self):
+        # It equaled Todo's stall window, which went with Todo's live entry
+        # when the lane began retiring (DRE-7129).
         assert lane_contract.start_minutes() == 15
         assert lane_contract.START_MINUTES == 15
-        assert lane_contract.START_MINUTES == lane_contract.stale_minutes()["Todo"]
+        assert "Todo" not in lane_contract.stale_minutes()
 
     def test_dispatch_from_is_the_five_lanes_and_the_queues_old_name(self):
         assert set(lane_contract.DISPATCH_FROM) == {
@@ -83,11 +85,11 @@ class TestTheShippedContract:
         assert len(lane_contract.DISPATCH_FROM) == 6
         assert lane_contract.dispatch_from() == lane_contract.DISPATCH_FROM
 
-    def test_todo_is_still_live_and_declares_what_replaces_it(self):
-        todo = lane_contract.lane("Todo")
-        assert todo["status"] == "live"
+    def test_todo_is_retiring_and_declares_what_replaces_it(self):
+        # DRE-7129: the second step of its retirement.
+        todo = lane_contract.lane("Todo", status="retiring")
         assert todo["replaced_by"] == "In Progress"
-        assert "Todo" in lane_contract.lane_names()
+        assert "Todo" not in lane_contract.lane_names()
 
     def test_the_offline_check_raises_nothing_against_build_start(self):
         report = lane_contract.check(vocabulary=lane_contract.pipeline_vocabulary())
@@ -210,13 +212,15 @@ class TestTheCheckRefusesAMalformedBlock:
         assert not lane_contract.check(contract=doc, vocabulary=set()).ok
 
     def test_an_arriving_dispatch_lane_is_refused_on_that_field_alone(self):
-        # Todo becomes the dispatch lane and the start lane, so `lane` is
+        # Hand-work becomes the dispatch lane and the start lane, so `lane` is
         # fine because it IS the dispatch lane, and dispatch_from does not
-        # name Todo. The one thing wrong is that Todo is not live.
+        # name Hand-work. The one thing wrong is that Hand-work is not live.
+        # (Todo played this part until it began retiring, DRE-7129: a
+        # retiring entry carries no clauses for an arriving one to owe.)
         doc = shipped()
-        raw_lane(doc, "Todo")["status"] = "arriving"
-        raw_lane(doc, "Todo").update({"arriving_by": "x", "reason": "r", "board_action": "b"})
-        doc["build_start"].update({"lane": "Todo", "dispatch_lane": "Todo"})
+        raw_lane(doc, "Hand-work")["status"] = "arriving"
+        raw_lane(doc, "Hand-work").update({"arriving_by": "x", "reason": "r", "board_action": "b"})
+        doc["build_start"].update({"lane": "Hand-work", "dispatch_lane": "Hand-work"})
         failures = build_start_failures(doc)
         assert [f.clause_id for f in failures] == ["build_start.dispatch_lane"]
 

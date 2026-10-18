@@ -64,6 +64,11 @@ import test_operator_card_promotion as promo  # noqa: E402
 CARD = "DRE-7108"
 NOW = datetime(2026, 10, 17, 20, 0, tzinfo=UTC)
 START = lane_contract.START_MINUTES
+#: The start lanes the sweep reads a card in: the live ones. The retiring one
+#: (Todo, DRE-7129) is drained into In Progress instead.
+LIVE_START_LANES = tuple(
+    lane for lane in lane_contract.START_LANES if lane in lane_contract.lane_names()
+)
 DEAD_WINDOW = reconcile.STALE_MINUTES["In Progress"]
 REDISPATCH_RECEIPT = (
     "🧹 Reconcile: card was promoted and no run started — re-dispatched."
@@ -223,14 +228,22 @@ class TestNotStarted:
     def test_the_start_lanes_are_the_contracts(self):
         assert set(lane_contract.START_LANES) == {"Todo", "In Progress"}
 
-    @pytest.mark.parametrize("lane", lane_contract.START_LANES)
+    def test_the_retiring_start_lane_is_drained_not_watched(self):
+        # Todo is retiring (DRE-7129): the sweep drains a card there into In
+        # Progress, where the start window below reads it on the next pass.
+        assert LIVE_START_LANES == ("In Progress",)
+        sweep = _Sweep(_card("Todo", idle=START + 15)).run()
+        assert sweep.fires == []
+        assert sweep.moves == [("advance", CARD, "In Progress", "Todo")]
+
+    @pytest.mark.parametrize("lane", LIVE_START_LANES)
     def test_left_alone_before_the_start_window(self, lane):
         sweep = _Sweep(_card(lane, idle=START - 5)).run()
         assert sweep.fires == []
         assert sweep.moves == []
         assert sweep.bodies() == []
 
-    @pytest.mark.parametrize("lane", lane_contract.START_LANES)
+    @pytest.mark.parametrize("lane", LIVE_START_LANES)
     def test_redispatched_once_after_the_window_when_nothing_is_in_flight(self, lane):
         """In Progress at 30 minutes is inside its own 60-minute window: what
         acts is the start window, because nothing ever started."""
@@ -239,7 +252,7 @@ class TestNotStarted:
         assert sweep.bodies() == [REDISPATCH_RECEIPT]
         assert sweep.moves == [], "a not-started card changes no lane"
 
-    @pytest.mark.parametrize("lane", lane_contract.START_LANES)
+    @pytest.mark.parametrize("lane", LIVE_START_LANES)
     def test_left_alone_while_a_run_is_queued(self, lane):
         sweep = _Sweep(_card(lane, idle=START + 15),
                        refusal="Agent Task run 1 for DRE-7108 is queued").run()
@@ -247,7 +260,7 @@ class TestNotStarted:
         assert sweep.bodies() == []
         assert sweep.moves == []
 
-    @pytest.mark.parametrize("lane", lane_contract.START_LANES)
+    @pytest.mark.parametrize("lane", LIVE_START_LANES)
     def test_never_a_dead_run_however_long_it_sits(self, lane):
         """Past the In Progress window, with no live run: the old branch
         requeued this card and counted a death. It never started."""
@@ -335,7 +348,7 @@ class TestStartedKeepsTodaysPath:
 # 2: held on the runner line
 # --------------------------------------------------------------------------
 class TestHeldOnTheRunnerLine:
-    @pytest.mark.parametrize("lane", lane_contract.START_LANES)
+    @pytest.mark.parametrize("lane", LIVE_START_LANES)
     def test_a_card_held_three_hours_ago_is_alive(self, lane, capsys):
         card = _card(lane, idle=START + 15, comments=[(_held(), 180)])
         sweep = _Sweep(card).run(capsys)
@@ -348,7 +361,7 @@ class TestHeldOnTheRunnerLine:
             f"{reconcile._pt(_iso(180))}"
         ]
 
-    @pytest.mark.parametrize("lane", lane_contract.START_LANES)
+    @pytest.mark.parametrize("lane", LIVE_START_LANES)
     @pytest.mark.parametrize("newest", [RELEASED, DROPPED])
     def test_released_or_dropped_is_refired_once(self, lane, newest):
         card = _card(lane, idle=START + 15,
@@ -356,7 +369,7 @@ class TestHeldOnTheRunnerLine:
         sweep = _Sweep(card).run()
         assert sweep.refired() == [(CARD, plan_run.EXECUTE_EVENT)]
 
-    @pytest.mark.parametrize("lane", lane_contract.START_LANES)
+    @pytest.mark.parametrize("lane", LIVE_START_LANES)
     def test_a_hold_eight_hours_old_is_refired_once(self, lane):
         card = _card(lane, idle=START + 15, comments=[(_held(), 8 * 60)])
         sweep = _Sweep(card).run()
@@ -373,7 +386,7 @@ class TestHeldOnTheRunnerLine:
     def test_the_hold_is_asked_after_the_run_listing(self):
         """Liveness reads the run listing first; a held card with a queued run
         is still left alone, and the queue is what says so."""
-        card = _card("Todo", idle=START + 15, comments=[(_held(), 180)])
+        card = _card("In Progress", idle=START + 15, comments=[(_held(), 180)])
         sweep = _Sweep(card, refusal="run 1 is queued").run()
         assert sweep.fires == []
 
@@ -381,7 +394,7 @@ class TestHeldOnTheRunnerLine:
         cards = [
             _card(lane, identifier=f"DRE-71{n}{i}", idle=START + 15,
                   comments=[(_held(f"place {n + 1} of 4"), 60 + n)])
-            for n, lane in enumerate(lane_contract.START_LANES)
+            for n, lane in enumerate(LIVE_START_LANES)
             for i in range(2)
         ]
         sweep = _Sweep(*cards).run(capsys)
@@ -406,7 +419,7 @@ class TestTheRefireIsABuild:
         labelled = _card("In Progress", identifier="DRE-7203", idle=START + 15,
                          labels=("agent:planner",), comments=[(one_off, 600)])
         sweep = _Sweep(
-            _card("Todo", identifier="DRE-7201", idle=START + 15),
+            _card("In Progress", identifier="DRE-7201", idle=START + 15),
             _card("In Progress", identifier="DRE-7202", idle=START + 15),
             labelled,
         ).run()
@@ -563,9 +576,11 @@ class TestNoTodoLiteral:
 
     def test_the_lane_tuples_read_the_start_lanes(self):
         assert reconcile.START_WINDOW_MINUTES == lane_contract.START_MINUTES
-        for lane in lane_contract.START_LANES:
+        for lane in LIVE_START_LANES:
             assert lane in reconcile.WATCHDOG_LANES
             assert lane in reconcile.INTAKE_BLOCKED_LANES
+        # The retiring one is drained, never watched (DRE-7129).
+        assert "Todo" not in reconcile.WATCHDOG_LANES
 
     def test_the_redispatch_note_names_no_lane(self):
         assert reconcile._TODO_REDISPATCH_NOTE == (

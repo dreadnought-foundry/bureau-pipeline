@@ -281,10 +281,10 @@ class TestTheDocuments:
         so its clauses move with the vocabulary in the same PR (the critic on
         #703): the queue's exit and Todo's entrance stop saying Todo is where a
         WORKBENCH or OPERATOR card goes today. The queue's exit is Queued's
-        since Backlog began retiring (DRE-6753)."""
+        since Backlog began retiring (DRE-6753), and Todo's entrance went with
+        its clauses when it began retiring too (DRE-7129)."""
         clauses = {
             ("Queued", "exit"): lane_contract.lane("Queued")["clauses"]["exit"],
-            ("Todo", "entrance"): lane_contract.lane("Todo")["clauses"]["entrance"],
         }
         for where, clause in clauses.items():
             for key in ("text", "pending"):

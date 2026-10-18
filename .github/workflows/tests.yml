@@ -457,7 +457,7 @@ jobs:
       # failures behind somebody else's.
       fail-fast: false
       matrix:
-        part: [1, 2, 3]
+        part: [1, 2, 3, 4]
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -509,7 +509,7 @@ jobs:
           REPO_SLUG: agent-bureau
           BUREAU_SUITE_GREEN_RUN: "1"
           BUREAU_SUITE_GREEN_PART: ${{ matrix.part }}
-          BUREAU_SUITE_GREEN_OF: "3"
+          BUREAU_SUITE_GREEN_OF: "4"
         run: python3 -m pytest tests/test_console_change_keeps_the_suite_green.py -v
 
   # The act registry's CONSUMER (DRE-3091). Its own job, because it is the one

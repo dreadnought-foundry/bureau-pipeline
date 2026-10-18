@@ -1921,7 +1921,7 @@
     },
     {
       "file": "scripts/validate_card.py",
-      "anchor": "🔧 Auto-fixed by the Todo gate",
+      "anchor": "🔧 Auto-fixed by the start gate",
       "kind": "undeclared-act",
       "means": "The start gate repairs what it can on a card and lets the build start.",
       "why": "Act-shaped, and the registry has no row for it. DRE-2825 declared thirteen acts by reading reconcile.py's ten tag constants, the fix loop's three notices and the medic; this receipt was not among them. Giving it a row is a REGISTRY change — a tag, a kind, a state, a next actor, a subscriber, and the reasoning that fixes each — not an emission change, and this card converts what the registry declares. Named here so the debt is countable rather than invisible."
@@ -2513,6 +2513,14 @@
       "kind": "undeclared-act",
       "means": "The re-read of a revised one-off card could not be dispatched, so nothing is running — said plainly rather than claimed as started (`plan_run.fire`'s rc rule, DRE-2034), and the step goes red for the medic.",
       "why": "Act-shaped, and the registry has no row for it — the same debt as the dead-review re-run's failure note. Giving it a row is a REGISTRY change, not an emission change."
+    },
+    {
+      "file": ".github/workflows/plan.yml",
+      "anchor": "🚨 The critic's second read of this card could NOT be started",
+      "step": "One-off critic — read it again after no result",
+      "kind": "undeclared-act",
+      "means": "The second read of a one-off card whose critic decided nothing could not be dispatched, so nothing is running — said plainly rather than claimed as started (`plan_run.fire`'s rc rule, DRE-2034), and the step goes red for the medic (DRE-7491).",
+      "why": "Act-shaped, and the registry has no row for it — the same debt as the revised card's re-read failure note beside it. Giving it a row is a REGISTRY change, not an emission change."
     },
     {
       "file": ".github/workflows/plan.yml",

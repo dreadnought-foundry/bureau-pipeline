@@ -582,14 +582,15 @@ class TestThereIsExactlyOnePromoter:
         exit_text = queue["clauses"]["exit"]["text"]
         assert f"promotes a FLEET card to {lane}" in exit_text, exit_text
         assert "DRE-3059" in exit_text, exit_text
-        # Todo's clause says the promoter left it, and names it.
-        todo = lane_contract.lane("Todo")["clauses"]["writers"]["text"]
-        assert "promote_ready" in todo and "No promoter any more" in todo, todo
+        # The old start lane is retiring (DRE-7129): it permits no writer, and
+        # the sweep only drains it.
+        old = lane_contract.lane("To" + "do", status="retiring")
+        assert old["replaced_by"] == lane
+        assert "clauses" not in old
 
     def test_the_route_is_not_a_second_promoter(self):
         lane = routing_verdict.destination("FLEET")
         assert "reconcile.py" in lane_contract.lane_writers(lane)
-        assert "plan.yml" not in lane_contract.lane_writers("Todo")
         # plan.yml writes In Progress for one card only — the roll-up parent it
         # places there (DRE-4717) — and never promotes a FLEET card into it.
         text = lane_contract.lane(lane)["clauses"]["writers"]["text"]

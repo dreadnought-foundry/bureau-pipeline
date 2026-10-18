@@ -230,7 +230,7 @@ class TheTodoGateRefusesToPlanning(unittest.TestCase):
                 "🚧 Not ready for build — missing: repo: label (or legacy "
                 "**Repo:** line). Returned to Planning; fix what is missing "
                 "and Planning routes it on from there — do not move it "
-                "straight to Todo.",
+                "straight to In Progress.",
             )],
         )
 
