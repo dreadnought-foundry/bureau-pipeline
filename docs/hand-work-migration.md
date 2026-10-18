@@ -3,8 +3,9 @@
 A one-time move, run by hand, that takes a person's work out of Todo and puts it
 in Hand-work (DRE-5323, epic DRE-5240).
 
-Todo is the build button: a card that enters it makes the relay dispatch a
-build. Until DRE-5322 the sweep also carried a WORKBENCH or OPERATOR card into
+Todo was the build button when this ran: a card that entered it made the relay
+dispatch a build. Since the flip (DRE-7120, 2026-10-18) that move is the sweep's
+promotion into In Progress, and nothing promotes into Todo. Until DRE-5322 the sweep also carried a WORKBENCH or OPERATOR card into
 Todo, marked `hand-built`, so a proof or an operator job could wait there for
 days next to the fleet's builds, and Todo looked like a stuck queue. The sweep
 now carries those cards to Hand-work instead. This migration moves the ones that

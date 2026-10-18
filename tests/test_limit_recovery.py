@@ -90,7 +90,12 @@ def marker(kind="claude", stage="build", reset=RESET, run=RUN, account=None) -> 
     ).comments[0]
 
 
-def card(ident="DRE-3062", lane="In Progress", bodies=(), labels=("repo:agent-bureau",)):
+def card(ident="DRE-3062", lane=lane_contract.QUEUE_LANE, bodies=(), labels=("repo:agent-bureau",)):
+    """A card as the sweep's board read hands it over. By default in the
+    queue, where a limit-stopped build is requeued (DRE-7111) — off the start
+    lane, so its re-entry is a move the seams record. A card already in the
+    start lane, In Progress since the flip (DRE-7120), is re-dispatched in
+    place instead, and the tests that say so pass `lane=START_LANE`."""
     return {
         "id": f"id-{ident}",
         "identifier": ident,
@@ -142,7 +147,7 @@ class Seams:
 # --------------------------------------------------------------------------
 # the two triggers
 # --------------------------------------------------------------------------
-def test_reset_passed_reenters_build_from_in_progress():
+def test_reset_passed_reenters_build_through_the_start_lane():
     s = Seams()
     lines = s.recover([card(bodies=[marker()])])
     assert s.moves == [("DRE-3062", START_LANE)]
@@ -706,7 +711,7 @@ def test_the_nudge_loop_resumes_once_a_newer_receipt_follows_the_marker():
     """The control: the skip is keyed on the marker being the NEWEST receipt.
     After the recovery's own receipt the card is ordinary again."""
     receipt = f"{limit_recovery.RECOVERY_MARK} re-entered build — window reset at 2026-09-05 13:30 PT."
-    ordinary = card(bodies=[marker(), receipt])
+    ordinary = card(lane="In Progress", bodies=[marker(), receipt])
     # The build had started before the limit killed it (DRE-7108): its start
     # receipt is the oldest comment, so the loop reads a dead run, not a card
     # that never started.
@@ -1140,7 +1145,7 @@ STOOD = 7          # hours: past the six-hour window
 FRESH = 2          # hours: inside it
 
 
-def _clock_card(body, hours_ago, *, ident="DRE-4208", lane="In Progress", labels=()):
+def _clock_card(body, hours_ago, *, ident="DRE-4208", lane=lane_contract.QUEUE_LANE, labels=()):
     return dated_card(ident=ident, lane=lane, nodes=[(body, hours_ago)],
                       labels=("repo:agent-bureau", *labels))
 

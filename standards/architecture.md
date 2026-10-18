@@ -33,9 +33,9 @@ Linear card → relay Lambda → repository_dispatch on the product repo
 
 ## The board (the lane contract)
 ```
-Intake → Planning → Green Light → Queued → Todo → Hand-work → In Progress → In Review → Done
-                                                  off to the side: Triage
-                                                  terminal:  Canceled · Duplicate
+Intake → Planning → Green Light → Queued → Hand-work → In Progress → In Review → Done
+                                           off to the side: Triage
+                                           terminal:  Canceled · Duplicate
 ```
 - **`Intake`** — every writer that creates work writes here first.
 - **`Planning`** — the card owes a decomposition; a build run that finds an epic
@@ -44,8 +44,8 @@ Intake → Planning → Green Light → Queued → Todo → Hand-work → In Pro
   an agent escalation awaiting a decision, in one lane. An epic activates when
   the CEO moves ONLY the epic to `In Progress`.
 - **`Queued`** — process-controlled: a card here carries a routing verdict, and
-  the sweep promotes every card whose verdict it carries — FLEET to `Todo` for a
-  dispatched run, WORKBENCH and OPERATOR to `Hand-work` for a person, stamping
+  the sweep promotes every card whose verdict it carries — FLEET to `In Progress`,
+  the move the relay dispatches the run on, WORKBENCH and OPERATOR to `Hand-work` for a person, stamping
   each verdict's own marks: `operator-step` + `no-code` for OPERATOR, none for
   WORKBENCH (DRE-3385, DRE-5321, DRE-6227). `hand-built` is the CEO's mark,
   applied only when he asks, and nothing automatic writes it. PARKED stays,
@@ -62,12 +62,14 @@ Intake → Planning → Green Light → Queued → Todo → Hand-work → In Pro
   team's only backlog-type status.
 - **`Hand-work`** — the person-work lane (DRE-5240): a card a person builds,
   never dispatched, never reported stalled, carried to `In Review` when its pull
-  request opens. WORKBENCH and OPERATOR land here (DRE-5321), which leaves
-  `Todo` holding only what the fleet builds.
-- **`Todo` → `In Progress` → `In Review` → `Done`** — the build path. ONE review
+  request opens. WORKBENCH and OPERATOR land here (DRE-5321).
+- **`Queued` → `In Progress` → `In Review` → `Done`** — the build path. ONE review
   lane: `In Review` means "a pull request is open and being checked". The two
   lanes that preceded it were retired by DRE-2726 and deleted from the board and
-  the contract by DRE-2818; no document may still name them.
+  the contract by DRE-2818; no document may still name them. Until the flip
+  (DRE-7120, 2026-10-18) the sweep promoted a FLEET card into `Todo` and the
+  build started there; nothing promotes into that lane now, and it stays on the
+  board until its retirement (DRE-7129).
 - **`Triage`** — the BROKEN-CARD lane, and only that: an unroutable `repo:`
   label, an archived repo, a card the readiness guard returned three times. A
   card waiting on a judgement is not broken — that is `Green Light`.

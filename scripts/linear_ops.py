@@ -1689,6 +1689,22 @@ def _dispatch_repo(card: dict) -> str:
     return os.environ.get("REPO", "")
 
 
+def _is_epic_issue(identifier: str, issue: dict) -> bool:
+    """`epic_todo_gate.is_epic_card` on a card already read: its title, its
+    children, and its shape stamp. An unreadable thread is no stamp, as the
+    gate has it."""
+    try:
+        bodies = comment_bodies(identifier)
+    except Exception as e:  # noqa: BLE001 — an unreadable stamp is no stamp
+        print(f"{identifier}: could not read its comments ({e})", file=sys.stderr)
+        bodies = []
+    return epic_todo_gate.is_epic_card(
+        issue.get("title") or "",
+        bool(((issue.get("children") or {}).get("nodes")) or []),
+        bodies,
+    )
+
+
 def _redispatch_in_place(identifier: str) -> bool:
     """Fire the build dispatch for a card a restart found already in the start
     lane (DRE-7109). True ONLY on a confirmed dispatch — a failure is printed,
@@ -2089,6 +2105,14 @@ def cmd_state(
         and not deliberate_park
         and _HOLD_LABEL not in [n.lower() for n in _label_names(issue)]
     ):
+        # An epic is never rerouted (DRE-7120): the start lane is In Progress
+        # since the flip, so the reroute would either fire a build dispatch at
+        # an epic already there or move one into the lane that approves it.
+        # Before the flip the epic gate refused the same write into Todo.
+        if _is_epic_issue(identifier, issue):
+            print(f"{identifier} is an epic — the building-card reroute to "
+                  f"{lane_contract.START_LANE!r} is refused and nothing is written")
+            return False
         start_id, start_type = state_id_and_type(issue["team"]["id"],
                                                  lane_contract.START_LANE)
         in_place = (issue.get("state") or {}).get("id") == start_id
@@ -2157,6 +2181,11 @@ def _held_state_move(
         # DRE-1885, decided on the live card: a building card is re-queued to
         # the start lane, never parked in the queue lane where nothing
         # re-promotes it — and re-dispatched in place when it is already there.
+        # Never an epic (DRE-7120), as on the unheld path.
+        if _is_epic_issue(identifier, fresh):
+            print(f"{identifier} is an epic — the building-card reroute to "
+                  f"{lane_contract.START_LANE!r} is refused and nothing is written")
+            return False
         in_place = current.get("id") == start[0]
         if not guarded_state_write(identifier, fresh, start[0], start[1],
                                    lane_contract.START_LANE,
