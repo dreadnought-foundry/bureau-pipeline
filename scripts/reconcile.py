@@ -805,7 +805,7 @@ GROOM_CARD_ENV = groom_schedule_gate.CARD_VARIABLE
 # OPERATOR marker moving to `operator-step` is a data change.
 HAND_BUILT_LABEL = routing_verdict.HAND_BUILT_LABEL
 
-# The sweep's own Todo-redispatch receipt (posted in main() below). It bumps
+# The sweep's own not-started re-dispatch receipt (posted in main() below). It bumps
 # updatedAt every ~15-minute cycle, so a silently-failing dispatch loop never
 # LOOKS WATCHDOG_MINUTES stale — a prior receipt with still no proof-of-life
 # is the same evidence as the elapsed time: dispatch fired, nothing ran.
@@ -1581,7 +1581,7 @@ def build_workflow() -> str:
     Same resolution as review_workflow()/fix_workflow(), same reason: in
     bureau-pipeline `agent-task.yml` IS the reusable definition (workflow_call
     only), so its runs exist under `self-agent-task.yml`. Nothing here
-    DISPATCHES the build — the Todo branch fires a repository_dispatch, which
+    DISPATCHES the build — the not-started branch fires a repository_dispatch, which
     the relay and `plan_run.fire` own — this is the name the `run list` below
     resolves, and a guard watching the reusable would read permanently idle.
     """
@@ -2918,7 +2918,7 @@ def flag_stranded() -> set[str]:
       (b) NO RUN — a dispatchable card of THIS sweep's repo with zero run
           receipts (the DRE-2032 🧠/⏳ proof-of-life comments; agent-task
           and plan both post them at run start) after WATCHDOG_MINUTES —
-          or after a prior Todo-redispatch receipt, which resets updatedAt
+          or after a prior re-dispatch receipt, which resets updatedAt
           every cycle and would otherwise hide the strand forever, once
           that re-send is START_WINDOW_MINUTES old (DRE-5743). Before it
           stamps, `_no_run_reading` asks whether the missing receipt is
@@ -5534,7 +5534,7 @@ def _build_run_job_names(run_id: str) -> list:
     Unreadable reads as no names, which makes the run UNATTRIBUTED rather than
     "not this card's" — the distinction matters only for the log, because an
     unattributed run cannot refuse anything, and that is the fail-open half the
-    Todo branch needs: a run this guard could not attribute must never strand a
+    not-started branch needs: a run this guard could not attribute must never strand a
     card whose work has genuinely not started.
     """
     if run_id in _build_job_names:
