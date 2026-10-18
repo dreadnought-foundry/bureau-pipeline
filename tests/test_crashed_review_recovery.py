@@ -133,6 +133,16 @@ def _run_factory(state):
             return SimpleNamespace(
                 returncode=0, stdout=json.dumps(state["prs"]), stderr=""
             )
+        if argv[1] == "pr" and argv[2] == "view":
+            # The full-thread read (DRE-7510): a thread the test names, or a
+            # refused read when it names None.
+            thread = state["threads"].get(int(argv[3]))
+            if thread is None:
+                return SimpleNamespace(returncode=1, stdout="",
+                                       stderr="HTTP 502: Bad Gateway")
+            return SimpleNamespace(
+                returncode=0, stdout=json.dumps({"comments": thread}), stderr=""
+            )
         if argv[1] == "api" and any("/check-runs" in a for a in argv[2:]):
             return SimpleNamespace(returncode=0, stdout=_paged(state["checks"]),
                                    stderr="")
@@ -155,14 +165,16 @@ def _run_factory(state):
     return fake_run
 
 
-def _sweep(prs, checks=CRASHED, runs=(), card_bodies=()):
+def _sweep(prs, checks=CRASHED, runs=(), card_bodies=(), threads=None):
     """Run recover_crashed_reviews once. `checks` is the jq'd review-check
     payload for every head; `runs` the workflow_dispatch review runs;
-    `card_bodies` the linked card's existing Linear comments."""
+    `card_bodies` the linked card's existing Linear comments; `threads` the
+    whole comment thread `gh pr view` answers per PR number (None = refused)."""
     state = {
         "prs": prs,
         "checks": checks,
         "runs": list(runs),
+        "threads": dict(threads or {}),
         "gh_calls": [],
         "dispatches": [],
         "receipts": [],
@@ -439,6 +451,151 @@ def test_green_review_checks_with_no_verdict_do_nothing():
 def test_agent_branch_without_card_ref_does_not_crash():
     state = _sweep([_pr(branch="agent/experiment", comments=[_receipt()])])
     assert state["reports"] == []
+
+
+# --------------------------------------------------------------------------
+# DRE-7510: the whole thread, and the whole bot pool
+# --------------------------------------------------------------------------
+# PR #1134, 2026-10-18: `gh pr list --json comments` answers a pull request's
+# FIRST 100 comments and no more. Every comment from #101 on — three verdicts
+# at the head and every re-dispatch receipt — was invisible to the sweep, so
+# it read "no verdict at this head" and "no receipt", and dispatched again.
+GH_LIST_COMMENT_PAGE = 100
+
+
+def _filler(n=GH_LIST_COMMENT_PAGE):
+    """The first page of a long thread: an APPROVE bound to an OLDER sha, then
+    a person's comments — nothing that binds the current head."""
+    return [_verdict(OLD_SHA)] + [
+        {"author": {"login": "sid"}, "body": f"note {i}"} for i in range(n - 1)
+    ]
+
+
+def _request_changes(sha):
+    return {
+        "author": {"login": "agent-bureau-qa-bot"},
+        "body": f"🔎 QA Critic — VERDICT: REQUEST_CHANGES @{sha}\n\nOne finding.",
+    }
+
+
+def _no_writes(state):
+    calls = state["gh_calls"]
+    assert state["dispatches"] == [], "no `gh workflow run`"
+    assert not any(c[:2] == ("run", "rerun") for c in calls), "no `gh run rerun`"
+    assert state["receipts"] == [], "no `gh pr comment`"
+
+
+def test_a_verdict_past_comment_100_settles_the_head():
+    """#1134's shape: the listing's 100 comments carry no verdict at the head,
+    the head-bound review check is at failure (what REQUEST_CHANGES writes),
+    and the full thread's comment #101 is the qa-bot's REQUEST_CHANGES at the
+    head. That verdict settles it — no dispatch, no re-run, no receipt."""
+    first = _filler()
+    state = _sweep(
+        [_pr(comments=first)],
+        checks='[["completed", "failure", "QA critic review"]]',
+        threads={141: first + [_request_changes(SHA)]},
+    )
+    _no_writes(state)
+    assert any(c[:2] == ("pr", "view") for c in state["gh_calls"]), (
+        "a 100-comment listing is gh's page — the whole thread must be read"
+    )
+
+
+def test_a_receipt_past_comment_100_still_counts():
+    """The same listing, and a full thread whose #101 is the sweep's own
+    re-dispatch receipt at this head: the one re-dispatch is spent, so the
+    sweep takes the cap-spent path instead of dispatching a second time."""
+    first = _filler()
+    with patch.object(
+        reconcile, "_report_crashed_review_cap",
+        wraps=reconcile._report_crashed_review_cap,
+    ) as cap:
+        state = _sweep(
+            [_pr(comments=first)],
+            threads={141: first + [_receipt()]},
+        )
+    _no_writes(state)
+    cap.assert_called_once()
+    assert cap.call_args.args[1] == 1, "the receipt at #101 is the one counted"
+
+
+def test_an_unreadable_full_thread_means_no_action():
+    """DRE-2034: a 100-comment listing whose full read fails may be hiding a
+    verdict or a receipt — never act on it, and say so on the fail-loudly
+    rail naming the pull request."""
+    state = _sweep([_pr(comments=_filler())], threads={141: None})
+    _no_writes(state)
+    assert state["reports"] == []
+    assert any("#141" in f for f in reconcile._write_failures), (
+        f"the failed thread read names the PR — got {reconcile._write_failures}"
+    )
+
+
+def test_no_extra_read_below_100_comments():
+    """A thread shorter than gh's page is already whole: no `gh pr view`."""
+    state = _sweep([
+        _pr(number=141, comments=_filler(GH_LIST_COMMENT_PAGE - 1)),
+        _pr(number=142, comments=[_receipt()]),
+        _pr(number=143),
+    ])
+    assert not any(c[:2] == ("pr", "view") for c in state["gh_calls"])
+    assert len(state["dispatches"]) == 2, "141 and 143 still get their one retry"
+
+
+@pytest.mark.parametrize("author", [
+    "agent-bureau-bot-2", "agent-bureau-bot-4", "agent-bureau-bot-3[bot]",
+])
+def test_a_pool_siblings_receipt_counts_toward_the_cap(author):
+    """#981's shape: a receipt written by a dispatch-pool sibling is the
+    fleet's own and spends the head's one re-dispatch."""
+    state = _sweep([_pr(comments=[_receipt(author=author)])])
+    assert state["dispatches"] == [], (
+        f"a {author} receipt at this head must stop a second dispatch"
+    )
+    assert state["receipts"] == []
+
+
+@pytest.mark.parametrize("author", [
+    "mallory", "agent-bureau-qa-bot", "agent-bureau-bot-5", "agent-bureau-bot-2x",
+])
+def test_no_one_outside_the_pool_counts(author):
+    """DRE-1998: a receipt by anyone outside the four pool slots — a person,
+    the qa-bot, a look-alike login — neither spends nor saves the budget."""
+    state = _sweep([_pr(comments=[_receipt(author=author)])])
+    assert len(state["dispatches"]) == 1
+
+
+def test_the_pool_is_exactly_the_four_dispatch_slots():
+    assert set(reconcile.WORKER_BOT_POOL_LOGINS) == {
+        "agent-bureau-bot", "agent-bureau-bot-2",
+        "agent-bureau-bot-3", "agent-bureau-bot-4",
+    }
+
+
+def _hold(sha=SHA, at="2026-10-18T10:00:00Z"):
+    return {
+        "author": {"login": "agent-bureau-bot"},
+        "createdAt": at,
+        "body": f"🛑 {reconcile.reviewer_environment.HOLD_TAG} @{sha}: held",
+    }
+
+
+def _timed_receipt(author, at="2026-10-18T10:30:00Z"):
+    return {**_receipt(author=author), "createdAt": at}
+
+
+def test_a_pool_siblings_redispatch_newer_than_the_hold_spends_it():
+    """`_hold_state`: a re-dispatch receipt newer than the hold means the
+    hold was released and spent — whichever pool slot posted it."""
+    pr = _pr(comments=[_hold(), _timed_receipt("agent-bureau-bot-2")])
+    assert reconcile._hold_state(pr, None) == ("", "")
+
+
+def test_a_forged_redispatch_newer_than_the_hold_does_not_spend_it():
+    pr = _pr(comments=[_hold(), _timed_receipt("agent-bureau-bot-5")])
+    held = reconcile._hold_state(pr, None)
+    assert held.held_at == "2026-10-18T10:00:00Z" and held.release == ""
 
 
 # --------------------------------------------------------------------------
