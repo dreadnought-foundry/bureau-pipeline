@@ -428,9 +428,10 @@ class TestDre4724LeavesPlanningWithAFreshVerdict:
                   else "other") for b in card.posted]
         assert kinds.index("retired") < kinds.index("verdict")
 
-    def test_the_next_sweep_promotes_it_to_todo_without_hand_built(self):
+    def test_the_next_sweep_promotes_it_to_in_progress_without_hand_built(self):
         """The acceptance criterion end to end: before → WORKBENCH, after →
-        FLEET, and the sweep at 09:45 PT carries it to Todo, unmarked."""
+        FLEET, and the sweep at 09:45 PT carries it to In Progress (Todo until
+        the flip, DRE-7120), unmarked."""
         card = _dre_4724_sent_back(labels=[*DRE_4724["labels"], HAND_BUILT])
         card.exit()
         assert HAND_BUILT in card.removed
@@ -438,8 +439,8 @@ class TestDre4724LeavesPlanningWithAFreshVerdict:
 
         card.now = SWEEP_AT
         board = card.sweep()
-        assert board.advanced == [(CARD, "Todo", reconcile.QUEUE_FROM)]
-        assert card.lane == "Todo"
+        assert board.advanced == [(CARD, "In Progress", reconcile.QUEUE_FROM)]
+        assert card.lane == "In Progress"
         assert board.labelled == [], "the sweep put a mark back on"
         assert HAND_BUILT not in card.labels
 

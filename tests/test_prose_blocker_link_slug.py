@@ -260,7 +260,7 @@ def test_the_live_card_is_not_bounced_and_promotes():
         patch.object(reconcile.linear_ops, "cmd_comment") as comment:
         promoted = reconcile.promote_ready(active_count=0)
     assert promoted == 1
-    advance.assert_called_once_with("DRE-3061", "Todo", reconcile.QUEUE_FROM)
+    advance.assert_called_once_with("DRE-3061", "In Progress", reconcile.QUEUE_FROM)
     assert not [
         c for c in comment.call_args_list
         if len(c.args) > 1 and prose_blockers.CARD_TAG in c.args[1]
