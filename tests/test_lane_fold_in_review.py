@@ -366,7 +366,8 @@ class TestTheDocumentedFlowMatches:
     def test_the_card_quality_standard_describes_the_eleven_lane_flow(self):
         text = (ROOT / "standards" / "card-quality.md").read_text(encoding="utf-8")
         assert "In QA" not in text
-        assert "`Todo → In Progress → In Review → Done`" in text
+        # The flow starts at Queued since the flip (DRE-7120, DRE-7122).
+        assert "`Queued → In Progress → In Review → Done`" in text
 
 
 if __name__ == "__main__":

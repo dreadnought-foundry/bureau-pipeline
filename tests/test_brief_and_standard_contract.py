@@ -424,8 +424,11 @@ class TestTheQueueIsCalledQueued:
         "docs/epic-comment-cap.md": (),
     }
 
+    # Since the flip (DRE-7120) nothing is built from `Todo`, so the board
+    # line drawn for an agent goes from `Queued` straight to `In Progress`
+    # (DRE-7122).
     LANE_ORDER = (
-        "`Intake` → `Planning` → `Green Light` → `Queued` → `Todo` → "
+        "`Intake` → `Planning` → `Green Light` → `Queued` → "
         "`In Progress` → `In Review` → `Done`"
     )
 
@@ -472,9 +475,9 @@ class TestTheQueueIsCalledQueued:
             if "The board is `Intake`" not in body:
                 continue
             drawn.append(brief.name)
-            assert "`Green Light` → `Queued` → `Todo`" in body, (
+            assert "`Green Light` → `Queued` → `In Progress`" in body, (
                 f"{brief.name}'s board line does not put `Queued` between "
-                "`Green Light` and `Todo`"
+                "`Green Light` and `In Progress`"
             )
         assert set(BUILD_BRIEFS) <= set(drawn), (
             f"a build brief stopped drawing the board: {sorted(set(BUILD_BRIEFS) - set(drawn))}"
@@ -503,3 +506,105 @@ class TestTheQueueIsCalledQueued:
             assert "parks the card in `Queued`" in body, (
                 f"{name} does not say a mechanical blocker parks in `Queued`"
             )
+
+
+class TestTheLifecycleStartsInProgress:
+    """DRE-7122: what people and briefed agents read follows the flip (DRE-7120).
+
+    The sweep promotes a FLEET card out of `Queued` into `In Progress`, and
+    that move is the one the relay dispatches. A standard or brief still
+    sending a card to `Todo` tells the CEO, the planner and every build agent
+    to put work where nothing builds it. What stays is history: a sentence
+    naming `Todo` must carry a DRE id and a date, so it reads as a record of
+    what the board did then, not as how it works now.
+    """
+
+    LIFECYCLE = "Queued → In Progress → In Review → Done"
+    DOCS = (STANDARDS / "card-quality.md", BRIEFS / "planner.md")
+
+    @staticmethod
+    def _flat(text: str) -> str:
+        return re.sub(r"\s+", " ", text)
+
+    @classmethod
+    def _sentences(cls, text: str) -> list[str]:
+        # A paragraph, list item, heading or table row is a block of its own,
+        # and a block splits into sentences at the end of each.
+        blocks, block = [], []
+        for line in text.splitlines():
+            if not line.strip() or re.match(r"\s*(\||#|[-*>] |\d+\. )", line):
+                blocks.append(" ".join(block))
+                block = []
+            if re.match(r"\s*(\||#|```)", line):
+                blocks.append(line)
+            elif line.strip():
+                block.append(line)
+        blocks.append(" ".join(block))
+        return [
+            sentence
+            for b in blocks
+            for sentence in re.split(r"(?<=[.!?])\s+(?=[A-Z`*(\[])", cls._flat(b))
+            if sentence
+        ]
+
+    def test_the_lifecycle_reads_queued_to_done_through_in_progress(self):
+        for doc in self.DOCS:
+            body = self._flat(_read(doc)).replace("`", "")
+            assert self.LIFECYCLE in body, (
+                f"{doc.name} does not state the lifecycle {self.LIFECYCLE!r}"
+            )
+
+    def test_fleet_routes_to_in_progress(self):
+        for doc in self.DOCS:
+            rows = [ln for ln in _read(doc).splitlines() if ln.startswith("| **FLEET** |")]
+            assert len(rows) == 1, f"{doc.name} has {len(rows)} FLEET rows"
+            assert rows[0].split("|")[3].strip().startswith("`In Progress`"), (
+                f"{doc.name}'s FLEET row does not route the card to `In Progress`"
+            )
+
+    def test_the_contract_agrees_with_the_fleet_row(self):
+        fleet = next(v for v in _verdicts() if v["name"] == "FLEET")
+        assert fleet["destination"] == "In Progress"
+
+    def test_the_ceo_proceeds_by_moving_the_card_back_to_in_progress(self):
+        for doc in self.DOCS + (BRIEFS / "engineer.md",):
+            body = self._flat(_read(doc))
+            assert re.search(r"moves? the card back to `In Progress`", body), (
+                f"{doc.name} does not tell the CEO to move an escalated card "
+                "back to `In Progress` to proceed"
+            )
+
+    def test_no_brief_or_standard_sends_a_card_to_todo(self):
+        offenders = []
+        for doc in sorted(BRIEFS.glob("*.md")) + sorted(STANDARDS.glob("*.md")):
+            for sentence in self._sentences(_read(doc)):
+                if not re.search(r"\bTodo\b", sentence):
+                    continue
+                if re.search(r"\bDRE-\d+\b", sentence) and re.search(r"\b\d{4}-\d{2}-\d{2}\b", sentence):
+                    continue
+                offenders.append(f"{doc.relative_to(ROOT)}: {sentence[:160]}")
+        assert not offenders, (
+            "a brief or standard still names `Todo` as a live lane; mark a "
+            "history sentence with its DRE id and date:\n" + "\n".join(offenders)
+        )
+
+    def test_no_agents_yaml_trigger_names_todo(self):
+        triggers = {}
+        role = None
+        for line in _read(ROOT / "agents.yaml").splitlines():
+            m = re.match(r"\s*-?\s*name:\s*(\S+)", line)
+            if m:
+                role = m.group(1)
+            m = re.match(r"\s*trigger:\s*(.*)", line)
+            if m:
+                triggers[role] = m.group(1)
+        assert triggers, "agents.yaml carries no trigger strings"
+        stale = {r: t for r, t in triggers.items() if re.search(r"\bTodo\b", t)}
+        assert not stale, f"agents.yaml triggers still name Todo: {stale}"
+        for build in ("engineer", "frontend", "devops"):
+            assert "→ Queued → In Progress → relay repository_dispatch (agent-execute)" in triggers[build], (
+                f"the {build} trigger does not start the build at `In Progress`"
+            )
+        assert "→ In Progress → relay repository_dispatch (agent-plan)" in triggers["planner"], (
+            "the planner trigger does not activate an epic at `In Progress`"
+        )

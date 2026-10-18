@@ -761,7 +761,7 @@ jobs:
             # writer, so the card carries why it is held and at which head
             # (DRE-6179).
             python3 .bureau-pipeline/scripts/hold.py apply "$CARD" --reason unfixable-check --at "$HEAD_SHA" --by agent-fix.yml || true
-            python3 .bureau-pipeline/scripts/linear_ops.py advance "$CARD" "Triage" "In Review,In Progress,Todo" || \
+            python3 .bureau-pipeline/scripts/linear_ops.py advance "$CARD" "Triage" "In Review,In Progress" || \
               python3 .bureau-pipeline/scripts/linear_ops.py state "$CARD" "Triage" --park || true
           fi
           echo "escalate=true" >> "$GITHUB_OUTPUT"
@@ -896,7 +896,8 @@ jobs:
           # which executes both step bodies for real.
           #
           # remove-label, NOT unpark: the label is all that is stale here.
-          # unpark would also reset the death budget and move the card to Todo,
+          # unpark would also reset the death budget and restart the card in the
+          # start lane, In Progress (`lane_contract.START_LANE`, DRE-7109),
           # which re-dispatches a whole new build on top of the live PR. It is
           # idempotent (a documented no-op when the label is absent) and, like
           # the announce comment below, `|| true` — Linear bookkeeping must

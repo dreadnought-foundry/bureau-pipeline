@@ -1066,7 +1066,7 @@ priced.
 
 `repo-map.json` is the bureau pipeline's bundled copy of the **canonical routing
 snapshot** — `slug → "owner/repo"` — that the Linear→GitHub relay routes on. It
-is the read path the Todo-entry card-validation gate (`scripts/validate_card.py`)
+is the read path the start-of-build card-validation gate (`scripts/validate_card.py`)
 uses to derive what a *valid* repo slug is, so onboarding a customer is a **data
 edit**, not a two-file code change.
 
