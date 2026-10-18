@@ -701,7 +701,8 @@ def test_the_in_progress_step_succeeds_and_posts_the_start_receipt(tmp_path, lan
     comments = [p["variables"]["input"]["body"] for p in sent
                 if "commentCreate" in p["query"]]
     assert len(comments) == 1
-    assert comments[0].startswith("🧠 model-attempt: claude-opus-5-5 — engineer agent starting")
+    model = _STEP_VALUES["steps.model.outputs.model"]
+    assert comments[0].startswith(f"🧠 model-attempt: {model} — engineer agent starting")
     assert "actions/runs/40000000123" in comments[0]
     writes = [p for p in sent if "issueUpdate" in p["query"]]
     assert len(writes) == (1 if lane == "Todo" else 0)
