@@ -222,7 +222,10 @@ class ASendBackRevisesThenParks(unittest.TestCase):
         text = open(os.path.join(ROOT, "standards", "plan-critic.md")).read()
         self.assertIn("two failed rounds", text.lower())
         self.assertIn("needs-human", text)
-        self.assertIn("never Todo", text)
+        # The approval is the move INTO In Progress; since the flip
+        # (DRE-7120) the standard names no Todo route for an epic (DRE-7122).
+        self.assertIn("**INTO In Progress**", text)
+        self.assertNotIn("never Todo", text)
 
 
 class TheSecondCriticRunsBeforeTheChildrenPromote(unittest.TestCase):

@@ -49,6 +49,17 @@ timestamped by the runner, so a green run's logs ARE a measurement):
     gh run view <run> --log --job <job> > part-1.log   # one per part
     python3 scripts/unit_test_parts.py measure part-*.log --note "<how>"
 
+The record keeps three entries (DRE-7508): `method`, one short line saying how
+the whole record was measured (the `--note`); `seconds`, each file's seconds;
+and `provenance`, one line per file saying where that file's seconds came from
+when they are not from `method`'s run. A pull request that adds a test file
+records it without re-measuring: its seconds in `seconds` and one line in
+`provenance`, both keyed by its path, the `provenance` keys in path order — a
+CI run and job, or a local pytest run, and the card. Each file is a line of its
+own, so two pull requests that each add a test merge without a conflict here,
+as `seconds` always did. `measure` replaces all three: every second it writes
+is from its own reports, so it starts `provenance` empty.
+
 Run: python3 scripts/unit_test_parts.py list --part 1 --of 4
      python3 scripts/unit_test_parts.py check <dir of part-*.txt manifests>
      python3 scripts/unit_test_parts.py run-walks
@@ -384,7 +395,9 @@ def main(argv: list[str] | None = None) -> int:
     p_measure = sub.add_parser("measure", help="rebuild the durations record")
     p_measure.add_argument("reports", type=Path, nargs="+")
     p_measure.add_argument("--note", required=True,
-                           help="when and how the reports were produced")
+                           help="when and how the reports were produced; "
+                                "written as the record's `method` entry, and "
+                                "the `provenance` map starts empty")
 
     args = parser.parse_args(argv)
 
@@ -431,9 +444,9 @@ def main(argv: list[str] | None = None) -> int:
 
     seconds = measure(args.reports)
     DURATIONS.write_text(json.dumps(
-        {"measured": args.note, "seconds": seconds}, indent=2) + "\n",
-        encoding="utf-8")
-    print(f"wrote {len(seconds)} file durations to {DURATIONS.relative_to(ROOT)}")
+        {"method": args.note, "provenance": {}, "seconds": seconds},
+        indent=2) + "\n", encoding="utf-8")
+    print(f"wrote {len(seconds)} file durations to {DURATIONS}")
     return 0
 
 

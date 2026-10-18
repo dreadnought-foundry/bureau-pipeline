@@ -175,9 +175,11 @@ card before it prints a finding.
   note cannot say "not a collision" and then list one two paragraphs below.
 * **In Progress, In Review.** A run or a pull request is in flight. Judge the
   card on what it will land, not on whether its files are in the tree yet.
-* **Queued, Todo, Triage — still to build**, and every finding stands,
+* **Queued, Triage — still to build**, and every finding stands,
   "this is already implemented" included. Same card, same files, different
-  answer: the state is the whole of the difference.
+  answer: the state is the whole of the difference. A start lane other than
+  `In Progress` that a card still waits in for its run reads the same way
+  (`plan_critic.child_state_block`, DRE-7113).
 * **No state at all** is UNKNOWN, never "delivered". The note says *no child
   carried a state* rather than reporting none, because a read that failed
   excuses nothing (`standards/console-honesty.md` rule 1).
@@ -248,8 +250,9 @@ route itself, writes no lane on the way, and the review run moves the epic to
 Planning; it comes back to Green Light passed, for one Approve. Nothing reads a
 plan after its approval, so nothing can send an approved plan back.
 
-**Cross-epic scope: this epic plus every other epic in flight** (Green Light,
-Todo, In Progress), **and every other epic under review in Planning** —
+**Cross-epic scope: this epic plus every other epic in flight** (Green Light
+and the start lanes, `In Progress` among them), **and every other epic under
+review in Planning** —
 `plan_critic.SIGHT_STATES` (DRE-5276). Two plans read at the same moment must
 see each other. The critic's prompt names those epics one by one and states
 what it cannot see — Queued, Intake and Done epics, other Linear teams,
@@ -522,8 +525,8 @@ says so through `plan_critic.REAPPROVE_HOW`.
 
 **The relay has two triggers on this rail** (DRE-3292). One is the move
 **INTO In Progress** — the CEO's approval, which reaches only an epic waiting in
-Green Light: an epic already sitting In Progress cannot make that move (DRE-3241;
-never Todo either — an epic in Todo dispatches nothing). The other is a comment
+Green Light: an epic already sitting In Progress cannot make that move
+(DRE-3241). The other is a comment
 whose **whole body** is `▶️ re-run the review` (DRE-3287). It fires only on an
 epic already In Progress, the rule DRE-3287 built it to, and the record
 confirms it: on DRE-5129 the act was ignored while the epic sat in Green Light.
