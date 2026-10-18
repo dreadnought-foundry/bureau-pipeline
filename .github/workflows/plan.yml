@@ -1,8 +1,9 @@
 # Plans an epic: triggered (via the product-repo stub) by the relay when a
-# card labeled agent:planner enters Todo. The planner decomposes the epic
-# into sub-issues (created in Queued) and posts the plan to the epic as a
-# comment. The human approves by moving children Queued → Todo, which
-# dispatches each through agent-task.yml.
+# card enters Planning. The planner decomposes the epic into sub-issues
+# (created in Queued) and posts the plan to the epic as a comment. The human
+# approves by moving the epic to In Progress, and the sweep promotes each
+# ready child from Queued straight to In Progress, which dispatches it
+# through agent-task.yml.
 #
 # Reusable workflow: concurrency + permissions live in the calling stub.
 name: Agent Plan (reusable)
@@ -263,9 +264,10 @@ jobs:
       # only via agent-plan, which the relay emits only when agent:planner is
       # present — so the agent-label check is moot on this path; the gate here
       # effectively enforces the resolvable-repo rule (and the still-in-a-start-
-      # lane/Triage guard — `lane_contract.START_LANES`, Todo or In Progress,
-      # DRE-7110) before any planning runs. Bounce → Planning + comment,
-      # skip all downstream steps.
+      # lane/Triage guard — it validates a card in `lane_contract.START_LANES`
+      # or Triage, and leaves an approved epic in In Progress alone, DRE-7110)
+      # before any planning runs. Bounce → Planning + comment, skip all
+      # downstream steps.
       - name: Card-validation gate
         id: gate
         env:
@@ -1076,8 +1078,8 @@ jobs:
               # already on the card says so. `mode=queued` gates no step, so
               # nothing below runs while it waits — no activation, no
               # promotion, no hand-back. The children stay put on their own:
-              # the sweep promotes no child of an epic outside Todo and In
-              # Progress.
+              # the sweep promotes no child of an epic outside In Progress
+              # (`reconcile.EPIC_ACTIVE_STATES`).
               python3 .bureau-pipeline/scripts/linear_ops.py add-label "$EPIC" epic-queued
               SAID=$(python3 .bureau-pipeline/scripts/linear_ops.py count-comments "$EPIC" \
                 "⏸️ epic-queued:" --since "plan-cycle: start epic=$EPIC")
@@ -3870,12 +3872,12 @@ jobs:
       # know what it was shown cannot tell you what it missed.
       #
       # `--sight` on both halves (DRE-5280): the epics in
-      # `plan_critic.SIGHT_STATES` — Green Light, Todo, In Progress AND
-      # Planning — and a block that names exactly the lanes read. Under
-      # DRE-5268 a plan is reviewed while its epic sits in Planning, so two
-      # plans read at the same moment would be invisible to each other's
-      # collision check without it; before, both sat in Green Light and saw
-      # each other. `sight --this` still drops this epic from its own list,
+      # `plan_critic.SIGHT_STATES` — the in-flight lanes, Green Light and In
+      # Progress, AND Planning — and a block that names exactly the lanes
+      # read. Under DRE-5268 a plan is reviewed while its epic sits in
+      # Planning, so two plans read at the same moment would be invisible to
+      # each other's collision check without it; before, both sat in Green
+      # Light and saw each other. `sight --this` still drops this epic from its own list,
       # which matters now that it is itself in Planning.
       - name: Second critic — cross-epic sight
         id: sight
