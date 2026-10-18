@@ -280,7 +280,8 @@ class TestTheReviewStepNoLongerNamesIt:
         text = step_shell.workflow_source(
             os.path.join(ROOT, ".github", "workflows", "qa-review.yml"), root=ROOT
         )
-        csv = '"Intake,Triage,Planning,Queued,Todo,Hand-work,In Progress"'
+        # DRE-7121 dropped the old start lane from the same list.
+        csv = '"Intake,Triage,Planning,Queued,Hand-work,In Progress"'
         assert csv in text
         assert uncommented_lines(text, OLD_LANE) == []
 

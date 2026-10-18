@@ -64,6 +64,16 @@ never counts, and the pick log says how many it skipped.
   comment posted on its pull request while it ran. Every run passed over —
   an unreadable log, no verdict comment, a known builder, another model, a pull
   request already picked — is named. One record per pull request, the newest.
+  The logs are read on `VERIFIER_LOG_READERS` (8) readers at once, never more
+  outstanding, and each run is still applied in listing order whatever order
+  its log arrives in, so the pick, its lines and its counts are the same as
+  reading them one at a time — a run naming no pull request, or on one already
+  picked, is skipped without a read. A few logs listed past the run the pick
+  stops on may be read too, and are discarded unapplied. Every 50 runs read,
+  and once more when it stops, it prints `pick: read <R> run(s), picked <K> of
+  <count>`. It stops at its `VERIFIER_PICK_BUDGET_SECONDS` (600-second) time
+  budget, inside the pick job's 15 minutes, and a short batch then says it
+  stopped there and how many runs it read (DRE-7507).
 
 `--from-pick <file> --acted-on-only` re-emits, unchanged, the acted-on
 records of an earlier pick's records file and reads nothing else, so the
@@ -111,11 +121,14 @@ CLI:
 from __future__ import annotations
 
 import argparse
+import collections
 import json
 import os
 import re
 import subprocess
 import sys
+import time
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -177,6 +190,24 @@ PUSH_MARKER = fix_dead_run.PUSH_MARKER
 #: logs have expired too (a run's log expires by age, and the runs are read
 #: newest first): the verifier's listing stops there, and says so.
 UNREADABLE_LOGS_IN_A_ROW = 20
+
+#: The verifier pick's own time limit, in seconds from its start on `clock`
+#: (DRE-7507): past it the pick applies no further run, and a short batch
+#: says it stopped there and how many runs it read. The pick job's
+#: `timeout-minutes` is 15; the 5 left over are its checkout, Python setup
+#: and upload, so the job ends with a number instead of being canceled.
+VERIFIER_PICK_BUDGET_SECONDS = 600
+
+#: How many verify run logs the pick reads at once (DRE-7507). At most this
+#: many reads are outstanding — dispatched and not yet applied, the run
+#: being applied included — so one reader is the old one-at-a-time reading.
+VERIFIER_LOG_READERS = 8
+
+#: Every this many runs applied, the verifier pick says how far it has read.
+VERIFIER_PROGRESS_EVERY = 50
+
+#: The clock the verifier pick's budget is read on; the tests replace it.
+clock = time.monotonic
 
 # Where a printed line starts in `gh run view --log`: behind the
 # `job\tstep\ttimestamp ` prefix (check_linear_budget._LINE_START, DRE-5201),
@@ -562,62 +593,120 @@ def pick_unknown_builder_verifier(*, recorded_model: str, count: int, repo: str,
     """`count` verifier verdicts whose run chose `recorded_model` while this
     build's model could not be read, one per pull request (its newest), each
     at the verdict comment its run posted. Every run passed over is named.
-    Raises PickError naming the number found when short."""
+    Raises PickError naming the number found when short.
+
+    The logs are read on `VERIFIER_LOG_READERS` readers, never more reads
+    outstanding — dispatched and not yet applied, the run being applied
+    included — and each run is applied in listing order, whatever order its
+    read finishes in. `clock` is read here, never on a reader, before each
+    run is applied and before each read is dispatched: once it reads
+    `VERIFIER_PICK_BUDGET_SECONDS` gone, no further run is applied and no
+    further read dispatched. A read past the run the pick stops on is
+    discarded unapplied, and one not yet started is canceled."""
     picked, prs, comments_of = [], set(), {}
-    elsewhere = unreadable = 0
+    elsewhere = unreadable = read = 0
+    out_of_time = False
+    readers = max(1, VERIFIER_LOG_READERS)
+    started = clock()
+    listing = iter(verifier_runs(repo, workflow))
+    # (run, its pull request, its log read or None), in listing order.
+    window = collections.deque()
 
     def skip(run_id, why):
         print(f"pick: run {run_id} skipped — {why}", file=sys.stderr)
 
-    for run in verifier_runs(repo, workflow):
-        if len(picked) == count:
-            break
+    def spent() -> bool:
+        return clock() - started >= VERIFIER_PICK_BUDGET_SECONDS
+
+    def progress():
+        print(f"pick: read {read} run(s), picked {len(picked)} of {count}", file=sys.stderr)
+
+    def top_up(pool) -> bool:
+        """Fill the window from the listing; False once the budget is spent."""
+        while len(window) < readers:
+            run = next(listing, None)
+            if run is None:
+                return True
+            pr = _run_pr(repo, run)
+            reading = None
+            if pr is not None and pr not in prs:
+                if spent():
+                    return False
+                reading = pool.submit(run_log, repo, run.get("id"))
+            window.append((run, pr, reading))
+        return True
+
+    def apply(run, pr, reading) -> bool:
+        """Give `run` its outcome; True when the listing stops here."""
+        nonlocal unreadable, elsewhere
         run_id = run.get("id")
-        pr = _run_pr(repo, run)
         if pr is None:
             skip(run_id, "it names no pull request")
-            continue
+            return False
         if pr in prs:
+            if reading is not None:
+                reading.cancel()
             skip(run_id, f"pr={pr} is already picked at a newer run")
-            continue
-        log = run_log(repo, run_id)
+            return False
+        log = reading.result()
         if log is None:
             skip(run_id, "its log could not be read")
             unreadable += 1
             if unreadable == UNREADABLE_LOGS_IN_A_ROW:
                 print(f"pick: {unreadable} run logs in a row could not be read — the older "
                       "runs' logs have expired too, so the listing stops here", file=sys.stderr)
-                break
-            continue
+                return True
+            return False
         unreadable = 0
         note = verifier_note(log)
         if note is None:
             skip(run_id, "its log carries no Select model note for the verifier")
-            continue
+            return False
         model, rest = note
         if UNKNOWN_BUILDER_CLAUSE not in rest:
             skip(run_id, f"its builder's model was read (chosen {model})")
-            continue
+            return False
         if model != recorded_model:
             elsewhere += 1
             skip(run_id, f"chosen on {model}, not {recorded_model}")
-            continue
+            return False
         if pr not in comments_of:
             comments_of[pr] = _pr_comments(repo, pr)
         verdict = _run_verdict(comments_of[pr], run, qa_login)
         if verdict is None:
             skip(run_id, f"no verifier verdict comment on pr={pr} was posted while it ran")
-            continue
+            return False
         token, sha, line, created = verdict
         prs.add(pr)
         picked.append(_record(pr, sha, token, line, created))
+        return False
+
+    pool = ThreadPoolExecutor(max_workers=readers)
+    try:
+        while len(picked) < count:
+            if spent() or not top_up(pool):
+                out_of_time = True
+                break
+            if not window:
+                break
+            stop = apply(*window.popleft())
+            read += 1
+            if read % VERIFIER_PROGRESS_EVERY == 0:
+                progress()
+            if stop:
+                break
+    finally:
+        pool.shutdown(wait=True, cancel_futures=True)
+    progress()
     print(f"pick: skipped {elsewhere} unknown-builder verifier run(s) chosen on another "
           f"model than {recorded_model}", file=sys.stderr)
     if len(picked) < count:
+        budget = (f". It stopped at its {VERIFIER_PICK_BUDGET_SECONDS}-second time budget "
+                  f"after reading {read} run(s)") if out_of_time else ""
         raise PickError(
             f"found {len(picked)} eligible unknown-builder verifier review(s) recorded on "
             f"{recorded_model} in {repo}'s {workflow} runs, and the batch asks for {count} — "
-            "nothing is replayed short")
+            f"nothing is replayed short{budget}")
     return picked
 
 

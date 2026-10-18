@@ -326,8 +326,8 @@ rule — `id`, a plain-English `reason` and `condition` with placeholders, and
 evaluators disagree on the ids. The six rules:
 
 1. `read-waits-on-open-card` — the ranked read's `depends on` line names a
-   card that is open: Planning, Green Light, Queued, Todo, In Progress or In
-   Review. A named card with no child and no `[EPIC]` title holds the card
+   card that is open: Planning, Green Light, Queued, a start lane
+   (`lane_contract.START_LANES`, `In Progress` among them) or In Review. A named card with no child and no `[EPIC]` title holds the card
    until it is Done. A named epic holds it until the epic is **built out or
    Done**, read exactly as the sweep's epic gate reads a blocker
    (`reconcile._not_built_out`, DRE-6407): In Progress with children, no child
@@ -336,7 +336,7 @@ evaluators disagree on the ids. The six rules:
    another epic until that epic is built out, and never for the card's own
    parent: a child waiting on its own epic is DRE-6664's in-flight case.
 2. `file-named-by-in-flight-card` — a path the card names in backticks is
-   named by a card in Planning, Todo, In Progress or In Review, each lane read
+   named by a card in Planning, a start lane or In Review, each lane read
    once a morning. Two cards match only on the **same path in the same repo**
    (DRE-6908), never on the bare file name: on 2026-10-11 the basename tied
    `scripts/runners/README.md` to `console/backend/monitors/README.md`, and
@@ -348,7 +348,8 @@ evaluators disagree on the ids. The six rules:
    reference, not ownership — `collision_report`'s rule, counted by path.
    Ready when that card is Done.
 3. `child-of-epic-not-in-progress` — the card's parent epic is in Intake,
-   Planning, Green Light, Queued, Todo or Triage. Ready when the epic is In
+   Planning, Green Light, Queued, a start lane ahead of In Progress (DRE-7112)
+   or Triage. Ready when the epic is In
    Progress. The epic card itself trips nothing and keeps its slot as a unit
    of one, and the verify step's own exclusion keeps it in Intake with its
    reason on the page — nothing of the unit moves until a person moves the
@@ -612,8 +613,9 @@ to ten cards behind it, in proposal order:
 — the description's own line, or a card or PR the ranked read's evidence names
 — stands only if X is **Done**, is a **merged PR**, or is **approved and in
 flight** — in a live lane of the lane contract's `work` segment other than
-Done, read off `config/lane-contract.json`: Queued, Todo, Hand-work (live
-since DRE-5320), In Progress or In Review (DRE-5348).
+Done, read off `config/lane-contract.json`: Queued, Hand-work (live since
+DRE-5320), In Progress or In Review (DRE-5348) — and Todo, the start lane
+before the flip (DRE-7120), for as long as the contract keeps it live.
 Otherwise the Cancel is
 rejected, and the card stays on the Planning list with the reason as its Why.
 A replacement the check could not read does not stand either: Cancel is the
@@ -753,7 +755,7 @@ card. On the 2026-10-02 morning DRE-5270, still wearing the retired
 cannot build; `apply` believes this reason off a verdict document as it does
 the other four. The groomer cancels nothing and changes no label for it —
 whether such a card is canceled or relabeled is a person's call on the card,
-and the Todo gate already bounces a retired slug. An excluded card gets no agent and no token, and its
+and the card-validation gate at the start of a build already bounces a retired slug. An excluded card gets no agent and no token, and its
 verdict is `excluded` with the reason. It is dropped from the batch and stays
 where it is on the board: off the Planning list, the next still-needed spare
 joins the Planning list, which is re-ordered by the rules' order and
