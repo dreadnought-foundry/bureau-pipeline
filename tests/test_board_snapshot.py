@@ -568,8 +568,7 @@ def test_the_deal_reads_the_start_lanes_and_keeps_its_six_slots():
 
 
 def test_the_extra_lanes_take_cards_from_the_deals_first_slot():
-    dealt = [board_snapshot._SYNTHETIC_DEAL[i % 6] for i in range(150)]
-    extra = board_snapshot._extra_lane_slots(dealt, 150)
+    extra = board_snapshot._extra_lane_slots(150)
     assert extra
     assert all(i % len(board_snapshot._SYNTHETIC_DEAL) == 0 for i in extra)
 

@@ -633,6 +633,9 @@ class TestTheWholeFixture:
         assert lanes
         assert not {"Todo", "In Progress", "Done"} & set(lanes)
         assert not set(lane_contract.START_LANES) & set(lanes)
+        for action in actions(items):
+            for write in action.writes:
+                hygiene.guard(write, ctx)
 
     def test_the_return_lane_is_no_start_lane_and_the_rule_names_the_dispatch_lane(self):
         # DRE-7112: the rule is stated in the contract's names — the lane the
@@ -641,9 +644,6 @@ class TestTheWholeFixture:
         doc = " ".join((lane.__doc__ or "").split())
         assert "never the dispatch lane" in doc
         assert "never the dispatch lane" in " ".join((lane.return_lane.__doc__ or "").split())
-        for action in actions(items):
-            for write in action.writes:
-                hygiene.guard(write, ctx)
 
     def test_no_cause_carries_a_count_or_a_clock(self):
         items, _ctx, _gh, _linear = plan()
