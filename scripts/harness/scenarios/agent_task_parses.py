@@ -46,8 +46,8 @@ from harness.agent_scenario import CARD_URL, card_identifier
 from harness.framework import ScenarioFailure, scenario_branch
 from harness.github_api import GitHubError
 
-#: The event the bureau-linear-relay fires at a product repo when a card
-#: enters Todo. The rehearsal uses the same door on purpose.
+#: The event the bureau-linear-relay fires at a product repo when a card's
+#: build is dispatched. The rehearsal uses the same door on purpose.
 DISPATCH_EVENT = "agent-execute"
 
 #: What GitHub records as the run's `event` for that dispatch. The dispatch

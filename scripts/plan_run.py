@@ -4,8 +4,9 @@ callers that genuinely make one.
 
 Seven of them remain:
 
-  * `reconcile.redispatch` — the sweep re-firing a Todo card's dispatch, with
-    the failure kept in its write ledger so the run goes red;
+  * `reconcile.redispatch` — the sweep re-firing the dispatch of a card in a
+    start lane (`lane_contract.START_LANES`) that has not started, with the
+    failure kept in its write ledger so the run goes red;
   * `linear_ops._redispatch_in_place` — a restart (`unpark`, the building-card
     reroute) that finds the card already in `lane_contract.START_LANE`, where a
     same-lane write fires no webhook (DRE-7109);
