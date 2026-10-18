@@ -135,7 +135,7 @@ CLI:
                                      cannot be re-raised as a gap.
   decide --stage S --result-file F [--epic E] [--github-output F]
          [--note-file F] [--record-file F] [--escalation-file F]
-         [--execution-file F] [--ceiling M]
+         [--execution-file F] [--ceiling M] [--run-id N]
          [--card-file B] [--card-title T] [--card-labels a,b] [--read-card]
                                      comment thread (JSON array) on stdin,
                                      from `dump-comments --with-authors`.
@@ -143,7 +143,8 @@ CLI:
                                      `--escalation-file` is the one-off stage's
                                      CEO-facing reason, written only on
                                      `escalate` — the critic's QUESTION, or a
-                                     critic that decided nothing (DRE-5376).
+                                     critic that decided nothing (DRE-5376)
+                                     twice in a row (DRE-7491).
                                      A QUESTION whose finding names card text
                                      is `revise`, recorded as SEND_BACK with
                                      the finding as its reason (DRE-6359).
@@ -161,6 +162,11 @@ CLI:
                                      run cut off at its turn ceiling says that
                                      rather than "the reader did not answer"
                                      (DRE-4381); it also publishes `ran_out`.
+                                     A one-off no-result is `rerun` when the
+                                     card's newest one-off round was not one
+                                     too, and the second in a row escalates
+                                     naming both runs: `--run-id` is written
+                                     on the round record (DRE-7491).
   revision-outcome --card C --question-file F --description-file F
                    --summary-file F [--findings-file F] [--escalation-file F]
                    [--park-file F] [--github-output F]
@@ -1345,6 +1351,10 @@ _MARKER = re.compile(
     # still open (DRE-4115). Optional: every marker written before it existed,
     # and every pre-stage one, has no reading, and `parse_markers` says None.
     r"(?:\s+open=(?P<open>\d+))?"
+    # `run=<id>` — the Actions run that wrote the round (DRE-7491), so a
+    # second one-off no-result in a row can name the first. Optional the same
+    # way: a marker written before it existed parses as it did, with None.
+    r"(?:\s+run=(?P<run>\d+))?"
     r"(?:\s+—\s+(?P<reason>.*))?$",
     re.MULTILINE,
 )
@@ -1362,7 +1372,8 @@ _LATE_COLLISION = re.compile(
 
 
 def marker(stage: str, round_n: int, result: str, reason: str = "",
-           collisions: int = 0, open_count: int | None = None) -> str:
+           collisions: int = 0, open_count: int | None = None,
+           run_id: str | int | None = None) -> str:
     """The machine-parseable record of one critic round.
 
     `open_count` is how many of the previous round's findings this round found
@@ -1370,11 +1381,17 @@ def marker(stage: str, round_n: int, result: str, reason: str = "",
     the sweep's gate (`post_release`) can ask the same question `decide`
     answered off the same record, and a marker with no field is honestly
     UNKNOWN rather than silently "answered".
+
+    `run_id` is the Actions run that decided the round (DRE-7491), written
+    after `open=` and before the reason. The one-off stage writes it, so the
+    escalation after a second no-result in a row can name both runs.
     """
     line = (f"{MARKER_PREFIX} stage={stage} round={int(round_n)} "
             f"result={result} collisions={int(collisions)}")
     if open_count is not None:
         line += f" open={int(open_count)}"
+    if run_id is not None:
+        line += f" run={int(run_id)}"
     reason = one_line(reason)
     return line + (f" — {reason}" if reason else "")
 
@@ -1680,6 +1697,8 @@ def parse_markers(bodies: list) -> list[dict]:
             "collisions": int(m.group("collisions")),
             # None, not 0: a marker with no field recorded no reading.
             "open": int(m.group("open")) if m.group("open") is not None else None,
+            # None: the marker predates the field (DRE-7491).
+            "run": m.group("run"),
             "reason": (m.group("reason") or "").strip(),
         })
     return rows
@@ -2809,11 +2828,13 @@ def at_bound(action: str, prior_send_backs: int, result: str,
 # receipt starts the COUNT over (`since_bound_rewrite`) so the rewrite it
 # granted actually runs, while every finding ever raised is still read.
 
-#: The four actions the one-off exit can take. `proceed` runs
+#: The five actions the one-off exit can take. `proceed` runs
 #: `planning_route.py exit`; `escalate` runs `planning_escalation.py escalate`
-#: — the CEO's queue, for a question or for a critic that decided nothing;
-#: `revise` runs the planner over the card and asks for the read again; `park`
-#: moves the card to BOUND_PARK_LANE. Distinct values, so the run's own output
+#: — the CEO's queue, for a question or for a critic that decided nothing
+#: twice in a row; `revise` runs the planner over the card and asks for the
+#: read again; `park` moves the card to BOUND_PARK_LANE; `rerun` asks for the
+#: read again with the card as it stands, after a first no-result (DRE-7491).
+#: Distinct values, so the run's own output
 #: says which happened and nothing downstream has to re-derive it — and
 #: `tests/test_plan_critic_one_off_revise.py` derives plan.yml's gates from
 #: `ONE_OFF_ACTIONS`, so an action no step acts on is a failing test.
@@ -2821,13 +2842,21 @@ PROCEED = "proceed"
 ESCALATE = "escalate"
 REVISE = "revise"
 PARK = "park"
-ONE_OFF_ACTIONS = (PROCEED, REVISE, ESCALATE, PARK)
+RERUN = "rerun"
+ONE_OFF_ACTIONS = (PROCEED, REVISE, ESCALATE, PARK, RERUN)
 
 #: What the run records when the critic produced nothing usable. Its own
 #: sentence rather than the epic route's, because here it is not a shrug.
 NO_CRITIC_NOTE = (
     "the critic produced no result, and on this route that is not a pass — "
     "nothing else reads this card before it is built, so it goes to a person"
+)
+#: ...and when that is the first such read in a row, which is read once more
+#: before anything goes to a person (DRE-7491).
+NO_CRITIC_RERUN_NOTE = (
+    "the critic produced no result, and on this route that is not a pass — "
+    "nothing else reads this card before it is built, so the critic reads it "
+    "once more before a person is asked anything"
 )
 
 
@@ -2935,7 +2964,8 @@ ONE_OFF_PRECHECK_OPENING = (
 def one_off_decide(result: str, reason: str = "",
                    prior_send_backs: int = 0, ran_out=None, *,
                    finding: str = "",
-                   precheck: str | None = None) -> tuple[str, str]:
+                   precheck: str | None = None,
+                   rerun_spent: bool = True) -> tuple[str, str]:
     """`(action, note)` for a one-off exit — `proceed` moves it, `revise` hands
     it back to the planner, `escalate` asks the CEO a question, `park` sends it
     to the operator.
@@ -2974,6 +3004,13 @@ def one_off_decide(result: str, reason: str = "",
     there is one the card's own text decides before the critic's word is
     read: the decision is the one a `SEND_BACK — <precheck>` gets, against the
     same `prior_send_backs`, whatever the critic actually wrote.
+
+    `rerun_spent` says whether this card's newest one-off round already
+    decided nothing (DRE-7491). When it did not, a round the critic decided
+    nothing on — never reached, or out of turns — is `rerun`: the card is read
+    once more, as it stands, before anything goes to the CEO, and the note
+    keeps its own words. The second in a row escalates. It changes no other
+    branch, and its default keeps every direct call answering as before.
     """
     if precheck:
         action, note = one_off_decide(SEND_BACK, precheck,
@@ -3011,7 +3048,9 @@ def one_off_decide(result: str, reason: str = "",
             )
         return PARK, _one_off_park_note(failed)
     if _ran_out_of_turns(result, reason, ran_out):
-        return ESCALATE, one_off_ran_out_note(ran_out)
+        return (ESCALATE if rerun_spent else RERUN), one_off_ran_out_note(ran_out)
+    if not rerun_spent:
+        return RERUN, NO_CRITIC_RERUN_NOTE
     return ESCALATE, NO_CRITIC_NOTE
 
 
@@ -3082,6 +3121,30 @@ NO_RESULT_CHOICES = (
                               "the card goes on without the reader's answer",
                               "proceed"),
 )
+#: The Finding line when the critic decided nothing twice in a row (DRE-7491):
+#: the first no-result was read again on its own, so this one is the second.
+NO_RESULT_TWICE_FINDING = (
+    "the review was started twice and the critic produced no result either time")
+
+
+def _named_run(run) -> str:
+    """One run, as the CEO reads it — and an honest gap for a round recorded
+    before its run was (`parse_markers` reads that as None)."""
+    return f"run {run}" if run else "a run whose number was not recorded"
+
+
+def one_off_twice_what_happened(runs) -> str:
+    """What happened, when the review failed twice in a row (DRE-7491): it was
+    started twice, neither read wrote a verdict, and which two runs they were.
+    `runs` is the earlier no-result's run id (or None) and this run's."""
+    runs = tuple(runs) or (None,)
+    return (
+        "What happened: the review was started twice, and neither read wrote "
+        "a verdict, so nothing has checked this card. The first read was "
+        f"{_named_run(runs[0])} and the second was {_named_run(runs[-1])}. "
+        "We treat that as a stop rather than a yes, because after this point "
+        "the work is simply built."
+    )
 
 
 def _not_fit(what: str, text: str) -> None:
@@ -3142,7 +3205,7 @@ def one_off_escalation(result: str, reason: str = "",
                        prior_send_backs: int = 0, findings=(),
                        ran_out=None, *, finding: str = "",
                        recommendation: str = "", why: str = "", options=(),
-                       who: str = "the critic") -> str:
+                       who: str = "the critic", runs=()) -> str:
     """The plain-English text the CEO is handed when a one-off `escalate`s.
 
     Since DRE-5376 that is two cases and no third: the critic asked him a
@@ -3177,12 +3240,26 @@ def one_off_escalation(result: str, reason: str = "",
 
     WHEN THE READ RAN OUT OF TURNS it is a different text (DRE-4381), decided
     by the same predicate the note on the card is decided by, and unchanged.
+
+    WHEN IT IS THE SECOND NO-RESULT IN A ROW (DRE-7491) `runs` names the two
+    runs — the earlier no-result's id, or None when its record predates the
+    field, and this run's — and the text says the review failed twice,
+    naming both. It replaces the ran-out text: the one re-read is spent, so
+    "it gets more room" is no longer the offer. A question never reads it.
     """
+    stated = one_line(reason)
+    asked = result in (QUESTION, SEND_BACK) and bool(stated)
+    if runs and not asked:
+        esc = console_escalation.Escalation(
+            NO_RESULT_TWICE_FINDING, NO_RESULT_QUESTION, None, NO_RESULT_WHY,
+            NO_RESULT_CHOICES, NO_RESULT_CHOICES[0].id)
+        return "\n\n".join([ONE_OFF_NO_RESULT_OPENING,
+                             one_off_twice_what_happened(runs),
+                             console_escalation.render_with_block(esc)])
     if _ran_out_of_turns(result, reason, ran_out):
         return one_off_ran_out_request(ran_out)
 
-    stated = one_line(reason)
-    if result in (QUESTION, SEND_BACK) and stated:
+    if asked:
         prose = [ONE_OFF_QUESTION_OPENING]
         esc = _asked_lines(stated, finding, recommendation, why, options, who)
     else:
@@ -4022,6 +4099,17 @@ def _cmd_decide(args) -> int:
     ran_out = (_execution_row(args.execution_file, args.ceiling)
                if args.stage == STAGE_ONE_OFF else None)
     precheck = None
+    # This run's id, for the one-off round record (DRE-7491). Digits or
+    # nothing: an empty or unreadable value is a round with no run recorded.
+    run_id = (args.run_id if args.stage == STAGE_ONE_OFF
+              and str(args.run_id or "").isdigit() else None)
+    # "In a row", read off the record (DRE-7491): the rerun is spent exactly
+    # when the card's newest one-off round already decided nothing. The whole
+    # trusted thread — this route posts no boundary — and this stage alone.
+    one_off_rounds = [r for r in parse_markers(thread)
+                      if r["stage"] == STAGE_ONE_OFF]
+    newest = one_off_rounds[-1] if one_off_rounds else None
+    rerun_spent = bool(newest and newest["result"] == NO_RESULT)
     if args.stage == STAGE_ONE_OFF:
         # The bound on THIS route is the card's whole send-back history
         # (DRE-4058): `prior` is how many times the card has already been sent
@@ -4045,6 +4133,12 @@ def _cmd_decide(args) -> int:
         # paths below. `cycle` stays the whole thread, so every finding the
         # card ever had is still read from it.
         #
+        # A round the critic decided nothing on is read once more before it
+        # goes to the CEO (DRE-7491) — once per unbroken run of no-results,
+        # because the escalation after the second lands in Green Light, which
+        # only a person leaves, and the newest record then is still that
+        # no-result. A rerun spends no send-back round, as no-results never do.
+        #
         # The card is read BEFORE the critic's word (DRE-6380): a card the
         # exit's own routing read would refuse for stating no acceptance
         # criteria is decided as a send-back of that finding, whatever the
@@ -4053,7 +4147,8 @@ def _cmd_decide(args) -> int:
         finding = read_finding(result_text)
         prior = send_backs(since_bound_rewrite(cycle), args.stage)
         action, note = one_off_decide(result, reason, prior, ran_out,
-                                      finding=finding, precheck=precheck)
+                                      finding=finding, precheck=precheck,
+                                      rerun_spent=rerun_spent)
         if action in (REVISE, PARK):
             items = all_findings(result_text, decided=SEND_BACK)
         if precheck:
@@ -4128,7 +4223,7 @@ def _cmd_decide(args) -> int:
         icon = "⚠️"
     else:
         icon = {"hold": "🛑", "proceed": "✅", ESCALATE: "🙋",
-                REVISE: "🔁", PARK: "🛑"}[action]
+                REVISE: "🔁", PARK: "🛑", RERUN: "⚠️"}[action]
     seen = stats["rounds"]
     rate_text = (
         f"send-back rate at this critic so far on this planning attempt: "
@@ -4161,6 +4256,11 @@ def _cmd_decide(args) -> int:
                   f"waiting on the CEO — it parks in {BOUND_PARK_LANE}. Fix "
                   "the card so one rewrite answers every finding above and "
                   "send it back through Planning, or take it out of the queue.",
+            RERUN: "This card is not going to the build queue yet, and "
+                   "nothing here is for the CEO yet — it stays in Planning, "
+                   "and the critic reads this card again on a fresh planning "
+                   "run, which has been started. If that read decides nothing "
+                   "too, the card goes to the CEO.",
         }.get(action, "This card is not going to the build queue — it is with "
                       "a person, in the decision queue, with the reason above.")
     elif args.stage == STAGE_POST:
@@ -4207,7 +4307,8 @@ def _cmd_decide(args) -> int:
     # The post record carries the reading (DRE-4115) so the sweep's gate reads
     # the round the way this step decided it; the other stages have none.
     record = marker(args.stage, round_n, recorded, recorded_reason, collisions,
-                    open_count=open_count if args.stage == STAGE_POST else None)
+                    open_count=open_count if args.stage == STAGE_POST else None,
+                    run_id=run_id)
     if args.note_file:
         with open(args.note_file, "w", encoding="utf-8") as f:
             f.write(body + "\n")
@@ -4218,9 +4319,15 @@ def _cmd_decide(args) -> int:
     # reason file left behind by a card that is not going to the CEO is a
     # question nobody owes an answer to. Since DRE-5376 that is the QUESTION
     # and the critic that decided nothing, and never a send-back — the planner
-    # revises those, and the bound parks them for the operator.
+    # revises those, and the bound parks them for the operator. A `rerun`
+    # writes none either: nothing is for the CEO yet (DRE-7491).
     if (args.escalation_file and args.stage == STAGE_ONE_OFF
             and action == ESCALATE):
+        # A critic that decided nothing twice in a row names both runs. A
+        # QUESTION is always decided — `read_result` reads a bare one as
+        # NO_RESULT — so this is the fall-through escalate alone.
+        runs = ((newest["run"], run_id)
+                if rerun_spent and result != QUESTION else ())
         # The critic's own finding, recommendation and choices (DRE-3910),
         # read off the same file in the same process — no step output carries
         # them, because no step needs them.
@@ -4231,7 +4338,7 @@ def _cmd_decide(args) -> int:
                 finding=read_finding(result_text),
                 recommendation=said.recommendation,
                 why=said.recommendation_why,
-                options=read_options(result_text)) + "\n")
+                options=read_options(result_text), runs=runs) + "\n")
     print(body)
     print()
     print(record)
@@ -4583,6 +4690,10 @@ def main(argv: list[str]) -> int:
     # rather than fail the argument parse.
     d.add_argument("--execution-file", default=None)
     d.add_argument("--ceiling", default="")
+    # This Actions run's id (DRE-7491), written on the one-off round record
+    # so a second no-result in a row can name the first. A string for the
+    # same reason `--ceiling` is; anything but digits records no run.
+    d.add_argument("--run-id", default=None)
     # The card the one-off precheck reads (DRE-6380). With none of these the
     # precheck is not attempted and `decide` is exactly what it was. The
     # body file is offline, the title and labels beside it are flags, and

@@ -506,8 +506,11 @@ class TheRerunReason(unittest.TestCase):
             sent.update(json.load(open(argv[argv.index("--input") + 1])))
             return subprocess.CompletedProcess(argv, 0, "", "")
 
-        card = {"identifier": DRE_2498, "state": {"name": "Planning"},
-                "labels": {"nodes": [{"name": "repo:portico"}]}}
+        card = {"id": "uuid-2498", "identifier": DRE_2498,
+                "title": "The share panel tells the truth about documents",
+                "description": "the card as it stands",
+                "labels": {"nodes": [{"name": "repo:portico"}]},
+                "children": {"nodes": []}}
         with mock.patch.object(linear_ops, "gql", return_value={"issue": card}), \
                 mock.patch.object(plan_run.subprocess, "run", gh), \
                 mock.patch.dict(os.environ, {"GITHUB_RUN_ID": "42"}):
