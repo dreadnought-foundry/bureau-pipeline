@@ -1,7 +1,8 @@
-"""RED-first: the hygiene agent's Todo-and-proofs lane (DRE-5411).
+"""RED-first: the hygiene agent's build-lanes-and-proofs lane (DRE-5411).
 
-`scripts/hygiene_done.py` reads the cards in `Todo`, `In Progress`, `In Review`
-and `Hand-work` once and closes what the evidence says is done, under four
+`scripts/hygiene_done.py` reads the cards in the start lanes
+(`lane_contract.START_LANES` — `In Progress` and `Todo` today, DRE-7112),
+`In Review` and `Hand-work` once and closes what the evidence says is done, under four
 rules, each with the cause line the core's (tag, cause) key reads:
 
   1. a card whose pull request merged but never closed — a receipt naming the
@@ -10,8 +11,10 @@ rules, each with the cause line the core's (tag, cause) key reads:
      non-closing row met — a receipt naming the record and the rows met, then
      Done; any other record is a left row "ready for the CEO";
   3. a `PROOF:` card whose parent epic is `Canceled` or `Duplicate` — Canceled;
-  4. a Todo build card re-dispatched at least twice with no run — one note
-     naming the cause, at most once per card per PT day, and a left row.
+  4. a build card in a start lane that has NOT STARTED — no `🧠 model-attempt`
+     newer than its entry into the lane, the sweep's test (DRE-7108) —
+     re-dispatched at least twice with no run — one note naming the cause, at
+     most once per card per PT day, and a left row.
 
 The fixture is `tests/fixtures/hygiene-done-2026-09-30.json`, in the shape every
 hygiene lane fixture takes: `lanes`, `prs` and a `gh` map from an argv joined
@@ -198,6 +201,11 @@ def first_line(body):
     return body.splitlines()[0]
 
 
+def enter(card, lane, at):
+    """The card's newest entry into `lane` at `at`, on its history read."""
+    card["history"]["nodes"].append({"createdAt": at, "toState": {"name": lane}})
+
+
 def add_comment(card, body, at):
     card["comments"]["nodes"].insert(0, {"body": body, "createdAt": at,
                                          "user": {"id": "user-7c1e"}})
@@ -209,8 +217,15 @@ def add_comment(card, body, at):
 
 
 class TestTheLane:
-    def test_its_heading_is_todo_and_proofs(self):
-        assert need_lane().LANE == "Todo and proofs"
+    def test_its_heading_is_build_lanes_and_proofs(self):
+        assert need_lane().LANE == "Build lanes and proofs"
+
+    def test_it_reads_the_start_lanes_then_review_and_hand_work(self):
+        # DRE-7112: the start lanes are the contract's, so deleting Todo's
+        # entry narrows the read with no edit here.
+        assert need_lane().READ_LANES == (*lane_contract.START_LANES, "In Review",
+                                          hygiene.HAND_WORK)
+        assert "In Progress" in need_lane().READ_LANES
 
     def test_the_core_discovers_it_by_the_glob(self):
         assert "hygiene_done" in [m.__name__ for m in hygiene.discover()]
@@ -218,7 +233,7 @@ class TestTheLane:
     def test_every_row_it_returns_takes_its_heading(self):
         items, _ctx, _gh = plan()
         assert items
-        assert {i.lane for i in items} == {"Todo and proofs"}
+        assert {i.lane for i in items} == {"Build lanes and proofs"}
 
     def test_the_named_constants_are_the_cards_words(self):
         mod = need_lane()
@@ -673,7 +688,7 @@ class TestASupersededProof:
 # --------------------------------------------------------------------------- #
 
 
-class TestATodoCardWithNoRun:
+class TestAStartLaneCardThatHasNotStarted:
     def test_two_redispatches_and_no_run_name_the_cause_once(self):
         items, _ctx, _gh = plan()
         (action,) = actions(items, "DRE-9107")
@@ -745,16 +760,46 @@ class TestATodoCardWithNoRun:
         items, _ctx, _gh = plan(doc)
         assert actions(items, "DRE-9107") == [] and lefts(items, "DRE-9107") == []
 
-    def test_a_receipt_inside_the_todo_window_is_too_young(self):
+    def test_a_receipt_inside_the_start_window_is_too_young(self):
         items, _ctx, _gh = plan(now=datetime(2026, 10, 1, 0, 30, tzinfo=UTC))
         assert actions(items, "DRE-9107") == [] and lefts(items, "DRE-9107") == []
 
-    def test_a_heartbeat_means_a_run_started(self):
-        for mark in ("⏳ 1/5 plan", "🧠 model-attempt: claude-opus-5-5"):
-            doc = fixture()
-            add_comment(card_of(doc, "DRE-9107"), mark, "2026-10-01T00:20:00Z")
-            items, _ctx, _gh = plan(doc)
-            assert actions(items, "DRE-9107") == [] and lefts(items, "DRE-9107") == [], mark
+    def test_the_window_is_the_contracts_start_minutes(self, monkeypatch):
+        # DRE-7112: aged by `lane_contract.START_MINUTES`, not Todo's stall
+        # window. At 18:40 PT the newest receipt (17:16 PT) is 84 minutes old.
+        monkeypatch.setattr(lane_contract, "START_MINUTES", 120)
+        items, _ctx, _gh = plan()
+        assert actions(items, "DRE-9107") == [] and lefts(items, "DRE-9107") == []
+        monkeypatch.setattr(lane_contract, "START_MINUTES", 80)
+        items, _ctx, _gh = plan()
+        assert [a.target for a in actions(items, "DRE-9107")] == ["DRE-9107"]
+
+    def test_a_start_receipt_newer_than_its_entry_means_it_started(self):
+        doc = fixture()
+        add_comment(card_of(doc, "DRE-9107"), "🧠 model-attempt: claude-opus-5-5",
+                    "2026-10-01T00:20:00Z")
+        items, _ctx, _gh = plan(doc)
+        assert actions(items, "DRE-9107") == [] and lefts(items, "DRE-9107") == []
+
+    def test_a_start_receipt_from_an_earlier_trip_says_nothing(self):
+        # The sweep's test (DRE-7108): a receipt older than the card's newest
+        # entry into its lane was another trip's. Neither is a `⏳` heartbeat
+        # left by that trip.
+        doc = fixture()
+        card = card_of(doc, "DRE-9107")
+        enter(card, "Todo", "2026-09-30T22:30:00Z")
+        add_comment(card, "🧠 model-attempt: claude-opus-5-5", "2026-09-30T22:00:00Z")
+        add_comment(card, "⏳ 1/5 plan", "2026-09-30T22:05:00Z")
+        items, _ctx, _gh = plan(doc)
+        assert [a.target for a in actions(items, "DRE-9107")] == ["DRE-9107"]
+
+    def test_a_redispatch_before_its_entry_is_not_counted(self):
+        # Entered at 16:30 PT, between the two re-dispatches (16:01, 17:16 PT):
+        # one re-dispatch in this trip through the lane is not enough.
+        doc = fixture()
+        enter(card_of(doc, "DRE-9107"), "Todo", "2026-09-30T23:30:00Z")
+        items, _ctx, _gh = plan(doc)
+        assert actions(items, "DRE-9107") == [] and lefts(items, "DRE-9107") == []
 
     def test_a_hand_built_card_is_not_a_build_card(self):
         doc = fixture()
@@ -782,11 +827,45 @@ class TestATodoCardWithNoRun:
         items, _ctx, _gh = plan(doc)
         assert [a.target for a in actions(items, "DRE-9107")] == ["DRE-9107"]
 
-    def test_only_todo_is_read_for_this_rule(self):
+    @pytest.mark.parametrize("start", lane_contract.START_LANES)
+    def test_a_card_in_each_start_lane_that_has_not_started_is_named(self, start):
+        # DRE-7112: In Progress is reported exactly as Todo is, and the row
+        # names the lane the card is really in.
         doc = fixture()
-        move(doc, "DRE-9107", "In Progress")
+        move(doc, "DRE-9107", start)
+        card = card_of(doc, "DRE-9107")
+        enter(card, start, "2026-09-30T22:30:00Z")
+        # A trip through In Progress before this one left its receipts behind.
+        add_comment(card, "🧠 model-attempt: claude-opus-5-5", "2026-09-30T21:00:00Z")
+        add_comment(card, "⏳ 3/5 green", "2026-09-30T21:40:00Z")
+        items, _ctx, _gh = plan(doc)
+        (action,) = actions(items, "DRE-9107")
+        assert action.cause == "no run after the re-dispatch at 2026-09-30 17:16 PT"
+        (row,) = lefts(items, "DRE-9107")
+        assert row.why.startswith(f"in {start}, not started, re-dispatched 2 times — ")
+
+    @pytest.mark.parametrize("start", lane_contract.START_LANES)
+    def test_a_card_in_each_start_lane_that_has_started_is_left_alone(self, start):
+        doc = fixture()
+        move(doc, "DRE-9107", start)
+        card = card_of(doc, "DRE-9107")
+        enter(card, start, "2026-09-30T22:30:00Z")
+        add_comment(card, "🧠 model-attempt: claude-opus-5-5", "2026-09-30T22:31:00Z")
         items, _ctx, _gh = plan(doc)
         assert actions(items, "DRE-9107") == [] and lefts(items, "DRE-9107") == []
+
+    @pytest.mark.parametrize("lane", ["In Review", "Hand-work"])
+    def test_only_the_start_lanes_are_read_for_this_rule(self, lane):
+        doc = fixture()
+        move(doc, "DRE-9107", lane)
+        enter(card_of(doc, "DRE-9107"), lane, "2026-09-30T22:30:00Z")
+        items, _ctx, _gh = plan(doc)
+        assert actions(items, "DRE-9107") == [] and lefts(items, "DRE-9107") == []
+
+    def test_the_failed_run_row_names_the_lane(self):
+        items, _ctx, _gh = plan()
+        (row,) = lefts(items, "DRE-9109")
+        assert row.why.startswith("in Todo, not started, re-dispatched 2 times — ")
 
 
 # --------------------------------------------------------------------------- #
@@ -955,3 +1034,30 @@ class TestAReadThatFails:
 def test_the_fixture_clock_is_the_pass_clock():
     # The cause-time assertions above read 18:40 PT as the pass's own clock.
     assert hygiene.pt(NOW) == f"{PASS_CLOCK} PT"
+
+
+# --------------------------------------------------------------------------- #
+# the start lanes' readers name no Todo (DRE-7112)                             #
+# --------------------------------------------------------------------------- #
+
+#: The twelve scripts DRE-7112 turns onto the start lanes. Each read `Todo` as
+#: "promoted, waiting for its run", or told somebody to move a card there.
+START_LANE_READERS = (
+    "hygiene_done", "hygiene", "hygiene_triage", "rereview_watch", "blocker_ask",
+    "prose_blockers", "groom_readiness", "epic_cap", "board_snapshot", "plan_run",
+    "check_workflow_prompts", "harness/scenarios/agent_task_parses",
+)
+
+
+@pytest.mark.parametrize("script", START_LANE_READERS)
+def test_no_string_constant_in_a_start_lane_reader_names_todo(script):
+    """Every string constant — docstrings included — read as `lane_contract`
+    reads the pipeline's vocabulary, the walk DRE-7113 runs over its own
+    eleven. A `#` comment is not a constant."""
+    path = ROOT / "scripts" / f"{script}.py"
+    assert path.exists(), path
+    named = [node.value for node in ast.walk(ast.parse(path.read_text(encoding="utf-8")))
+             if isinstance(node, ast.Constant) and isinstance(node.value, str)
+             and "Todo" in node.value]
+    assert named == []
+    assert lane_contract._scan_python(str(path), ["Todo"]) == set()
