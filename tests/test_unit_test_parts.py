@@ -28,6 +28,7 @@ Run: cd bureau-pipeline && python3 -m pytest tests/test_unit_test_parts.py -v
 from __future__ import annotations
 
 import json
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -422,16 +423,268 @@ def test_no_part_takes_more_than_twenty_minutes_on_the_measured_suite():
     )
 
 
+def _coverage_problems(record: dict, files: list[str]) -> list[str]:
+    """What is wrong with a durations record against the test files on a
+    tree: no shared `method` entry, or fewer than 90% of the files with
+    recorded seconds. Empty when the record covers the tree."""
+    found = []
+    if not str(record.get("method") or "").strip():
+        found.append("the record's `method` entry is empty or missing — say "
+                     "when and how the durations were measured")
+    seconds = record.get("seconds") or {}
+    measured = [f for f in files if f in seconds]
+    if len(measured) < 0.9 * len(files):
+        unmeasured = [f for f in files if f not in seconds]
+        found.append(
+            f"{len(measured)} of {len(files)} test files carry recorded "
+            f"seconds, under 90%. For each new test file, add its seconds to "
+            f"`seconds` and one line to `provenance` in "
+            f"config/unit-test-durations.json, both keyed by the file's path, "
+            f"the `provenance` line saying where those seconds came from (a CI "
+            f"run and job, or a local pytest run) — or re-measure the whole "
+            f"suite (python3 scripts/unit_test_parts.py measure "
+            f"<junit.xml or CI log>... --note \"<how>\"). Unmeasured: "
+            f"{unmeasured[:10]}")
+    return found
+
+
 def test_the_durations_record_covers_the_live_tree():
     record = json.loads(parts.DURATIONS.read_text(encoding="utf-8"))
-    assert record.get("measured"), "say when and how the durations were measured"
-    seconds = record["seconds"]
+    found = _coverage_problems(record, parts.discover(ROOT))
+    assert found == [], "\n".join(found)
+
+
+def test_the_coverage_check_fails_under_ninety_percent():
+    record = json.loads(parts.DURATIONS.read_text(encoding="utf-8"))
     files = parts.discover(ROOT)
-    measured = [f for f in files if f in seconds]
-    assert len(measured) >= 0.9 * len(files), (
-        "most test files carry no measurement — re-measure "
-        "(python3 scripts/unit_test_parts.py measure <junit.xml>...)"
-    )
+    assert _coverage_problems(record, files) == []
+    keep = int(0.85 * len(files))
+    thin = dict(record, seconds={f: 1.0 for f in files[:keep]})
+    found = _coverage_problems(thin, files)
+    assert len(found) == 1 and "under 90%" in found[0], found
+    # The message names the keyed entry, never a clause on a shared note.
+    assert "`provenance`" in found[0] and "keyed by the file's path" in found[0]
+    assert "clause" not in found[0] and "measured note" not in found[0]
+
+
+@pytest.mark.parametrize("method", [None, "", "   "])
+def test_the_coverage_check_fails_without_the_shared_method(method):
+    record = json.loads(parts.DURATIONS.read_text(encoding="utf-8"))
+    files = parts.discover(ROOT)
+    planted = dict(record)
+    if method is None:
+        planted.pop("method", None)
+    else:
+        planted["method"] = method
+    found = _coverage_problems(planted, files)
+    assert len(found) == 1 and "`method`" in found[0], found
+
+
+# --- One line per file: the provenance record (DRE-7508) ------------------
+#
+# The record's note on where each measurement came from was one string on one
+# line, 6,888 characters by 2bd0361, and every pull request that added a test
+# file added a clause to it. So any two open pull requests that each added a
+# test conflicted on that one line (#1134, twice). The `seconds` map beside it
+# merged cleanly, because each file is its own line; the provenance is now
+# stored the same way, keyed by the file's path.
+
+#: The note as it stood on `main` at 2bd0361, frozen, so the carry-over can be
+#: checked clause by clause after the note itself is gone.
+OLD_NOTE = ROOT / "tests" / "fixtures" / "unit-test-durations-note-2bd0361.txt"
+
+#: How the old note joined its clauses.
+OLD_CLAUSE_JOIN = r"; (?:and|plus) "
+
+#: The every-default walk's clause carried the walks multiplier; that sentence
+#: moved to the shared `method` entry and the rest stayed with the walk.
+WALKS_SENTENCE = "; every walk (tests/*_keeps_the_suite_green.py)"
+
+#: The longest line the record may hold. The old note's line was 6,888.
+LONGEST_LINE = 1000
+
+
+def _old_clauses() -> list[str]:
+    return re.split(OLD_CLAUSE_JOIN, OLD_NOTE.read_text(encoding="utf-8").rstrip("\n"))
+
+
+def _named_files(clause: str) -> list[str]:
+    return [f for f in re.findall(r"tests/[\w*]+\.py", clause) if "*" not in f]
+
+
+def test_no_line_of_the_durations_record_is_longer_than_a_thousand_characters():
+    lines = parts.DURATIONS.read_text(encoding="utf-8").splitlines()
+    long = [(n, len(line)) for n, line in enumerate(lines, 1)
+            if len(line) > LONGEST_LINE]
+    assert long == [], f"lines over {LONGEST_LINE} characters (line, length): {long}"
+
+
+def test_the_record_keeps_provenance_one_entry_per_file():
+    record = json.loads(parts.DURATIONS.read_text(encoding="utf-8"))
+    assert "measured" not in record, (
+        "the one-string `measured` note is retired — the shared part is "
+        "`method`, and each file's provenance is its own `provenance` entry")
+    assert isinstance(record.get("provenance"), dict)
+    assert list(record["provenance"]) == sorted(record["provenance"]), (
+        "keep `provenance` in path order, so a new file's line has neighbours "
+        "of its own")
+    lines = {line.rstrip(",") for line in
+             parts.DURATIONS.read_text(encoding="utf-8").splitlines()}
+    for path, entry in record["provenance"].items():
+        assert isinstance(entry, str) and entry.strip(), path
+        assert f"    {json.dumps(path)}: {json.dumps(entry)}" in lines, (
+            f"{path}'s provenance is not one line of its own")
+
+
+def test_every_clause_of_the_old_note_is_carried_over_word_for_word():
+    record = json.loads(parts.DURATIONS.read_text(encoding="utf-8"))
+    provenance, method = record["provenance"], record["method"]
+    clauses = _old_clauses()
+    assert len(clauses) == 31, len(clauses)
+    general, *per_file = clauses
+    assert _named_files(general) == []
+    split = [c for c in per_file if WALKS_SENTENCE in c]
+    assert len(split) == 1, split
+    walk_rest, walks_sentence = split[0].split(WALKS_SENTENCE)
+    walks_sentence = WALKS_SENTENCE[2:] + walks_sentence
+    # The files the clauses measured — less the walks sentence, which names
+    # the budget test that reads the walks' seconds, not a file it measured.
+    named = sorted({f for c in per_file
+                    for f in _named_files(walk_rest if c is split[0] else c)})
+    assert len(named) == 33, named
+    missing = [f for f in named if f not in provenance]
+    assert missing == [], f"not keyed in `provenance`: {missing}"
+    assert "4.28" in walks_sentence and "(DRE-7016)" in walks_sentence
+    # The general clause and the walks multiplier make the shared entry.
+    assert general in method and walks_sentence in method, method
+    # Every other clause is its files' whole entry; one naming two files is
+    # the entry of both.
+    for clause in per_file:
+        text = walk_rest if clause is split[0] else clause
+        assert _named_files(text), clause
+        for f in _named_files(text):
+            assert provenance[f] == text, (f, provenance[f], text)
+
+
+def test_every_provenance_key_has_recorded_seconds():
+    record = json.loads(parts.DURATIONS.read_text(encoding="utf-8"))
+    orphans = sorted(set(record["provenance"]) - set(record["seconds"]))
+    assert orphans == [], (
+        f"`provenance` names files `seconds` does not: {orphans}")
+
+
+def _insert_after(mapping: dict, after: str, key: str, value) -> dict:
+    out = {}
+    for k, v in mapping.items():
+        out[k] = v
+        if k == after:
+            out[key] = value
+    assert key in out, after
+    return out
+
+
+def _with_new_file(record: dict, path: str, seconds: float, how: str,
+                   seconds_after: str) -> str:
+    """The record as a pull request adding the test file `path` writes it:
+    its seconds after `seconds_after`, its provenance in path order."""
+    out = dict(record)
+    out["seconds"] = _insert_after(record["seconds"], seconds_after, path, seconds)
+    out["provenance"] = dict(sorted({**record["provenance"], path: how}.items()))
+    return json.dumps(out, indent=2) + "\n"
+
+
+def _merge_file(tmp_path: Path, base: str, ours: str, theirs: str
+                ) -> tuple[int, str]:
+    for name, text in (("base", base), ("ours", ours), ("theirs", theirs)):
+        (tmp_path / f"{name}.json").write_text(text, encoding="utf-8")
+    proc = subprocess.run(
+        ["git", "merge-file", "-p", str(tmp_path / "ours.json"),
+         str(tmp_path / "base.json"), str(tmp_path / "theirs.json")],
+        capture_output=True, text=True)
+    return proc.returncode, proc.stdout
+
+
+#: Two test files two open pull requests might each add; their paths sort to
+#: different places in `provenance`.
+NEW_A = "tests/test_dre7508_alpha_probe.py"
+NEW_Z = "tests/test_tdd_dre7508_zeta_probe.py"
+
+
+def test_two_pull_requests_each_adding_a_test_file_merge_cleanly(tmp_path):
+    base = parts.DURATIONS.read_text(encoding="utf-8")
+    assert json.dumps(json.loads(base), indent=2) + "\n" == base, (
+        "the record is not in the shape `measure` writes, so a hand edit and "
+        "this test disagree on where its lines are")
+    record = json.loads(base)
+    keys = list(record["seconds"])
+    third, two_thirds = keys[len(keys) // 3], keys[2 * len(keys) // 3]
+    prov = sorted(record["provenance"])
+    # The two new files land between different neighbours, not both last.
+    where = [sorted(prov + [f]).index(f) for f in (NEW_A, NEW_Z)]
+    assert where[1] - where[0] >= 2 and where[1] < len(prov), where
+    ours = _with_new_file(record, NEW_A, 1.5, "measured for the alpha probe",
+                          third)
+    theirs = _with_new_file(record, NEW_Z, 2.5, "measured for the zeta probe",
+                            two_thirds)
+    code, merged = _merge_file(tmp_path, base, ours, theirs)
+    assert code == 0, merged
+    assert "<<<<<<<" not in merged and ">>>>>>>" not in merged
+    out = json.loads(merged)
+    for f, s in ((NEW_A, 1.5), (NEW_Z, 2.5)):
+        assert out["seconds"][f] == s
+        assert f in out["provenance"]
+    assert out["method"] == record["method"]
+
+    # The same two pull requests against the old shape — one `measured` note
+    # each appends a clause to — conflict on that one line, which is #1134.
+    old = {"measured": OLD_NOTE.read_text(encoding="utf-8").rstrip("\n"),
+           "seconds": record["seconds"]}
+    old_base = json.dumps(old, indent=2) + "\n"
+
+    def old_shape(path: str, seconds: float, after: str) -> str:
+        return json.dumps({
+            "measured": old["measured"] + f"; and {path}, new, at {seconds} s",
+            "seconds": _insert_after(old["seconds"], after, path, seconds),
+        }, indent=2) + "\n"
+
+    code, merged = _merge_file(tmp_path, old_base,
+                               old_shape(NEW_A, 1.5, third),
+                               old_shape(NEW_Z, 2.5, two_thirds))
+    assert code != 0 and "<<<<<<<" in merged, (
+        "the old one-line note merged cleanly — this test no longer shows "
+        "what the provenance map is for")
+
+
+def test_measure_writes_the_shared_method_and_no_measured_string(tmp_path,
+                                                                 monkeypatch):
+    log = tmp_path / "part-1.log"
+    log.write_text(
+        "u\tt\t2026-10-04T22:14:26.0000000Z "
+        "tests/test_conftest_marker.py::test_a PASSED [  0%]\n"
+        "u\tt\t2026-10-04T22:14:28.5000000Z "
+        "tests/test_unit_test_parts.py::test_b PASSED [  1%]\n")
+    out = tmp_path / "unit-test-durations.json"
+    monkeypatch.setattr(parts, "DURATIONS", out)
+    assert parts.main(["measure", str(log), "--note", "CI run 1, four parts"]) == 0
+    text = out.read_text(encoding="utf-8")
+    record = json.loads(text)
+    assert "measured" not in record, record
+    assert record["method"] == "CI run 1, four parts"
+    assert record["provenance"] == {}
+    assert record["seconds"] == {"tests/test_unit_test_parts.py": 2.5}
+    assert parts.load_weights(out) == {"tests/test_unit_test_parts.py": 2.5}
+
+
+def test_the_measure_instructions_name_the_keyed_provenance_entry():
+    doc = parts.__doc__
+    assert "`provenance`" in doc and "keyed by" in doc, doc
+    assert "clause" not in doc
+    help_text = subprocess.run(
+        [sys.executable, str(SCRIPT), "measure", "--help"],
+        capture_output=True, text=True, check=True).stdout
+    flat = " ".join(help_text.split())
+    assert "method" in flat and "provenance" in flat, flat
+    assert "clause" not in flat
 
 
 def test_measure_reads_seconds_per_file_from_a_ci_log(tmp_path):
