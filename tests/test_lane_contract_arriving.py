@@ -124,7 +124,9 @@ class TestTheHandWorkEntry:
     def test_every_live_reader_sees_it_and_it_has_no_stall_window(self):
         doc = shipped()
         flow = lane_contract.flow_lanes()
-        assert flow[flow.index("Todo") + 1] == HAND_WORK
+        # After Queued since Todo, which it once followed, began retiring
+        # (DRE-7129).
+        assert flow[flow.index("Queued") + 1] == HAND_WORK
         assert HAND_WORK not in lane_contract.stale_minutes()
         assert HAND_WORK not in lane_contract.off_flow()
         assert {c.lane for c in lane_contract.clauses(doc)} >= {HAND_WORK}
@@ -277,7 +279,7 @@ class TestTheHarnessToleratesTheGap:
     def test_a_live_lane_missing_from_the_board_still_fails(self):
         doc = arriving_doc()
         board = live_board(doc, HAND_WORK)
-        board.pop("Todo")
+        board.pop("Queued")
         report = lane_contract.check(
             contract=doc, board=board,
             console=list(lane_contract.lane_names("live", doc)), vocabulary=set(),
@@ -364,14 +366,13 @@ def test_an_unknown_status_is_still_refused():
 
 
 class TestTheRewrittenClauses:
-    def test_todo_entrance_says_no_verdict_lands_there_and_the_vocabulary_agrees(self):
-        # Since the flip (DRE-7120) nothing promotes into Todo: the clause says
-        # so, and names where FLEET and a person's verdicts go instead.
-        clause = lane_contract.lane("Todo")["clauses"]["entrance"]
-        text = clause["text"]
-        assert "no routing verdict's destination is this lane" in text
-        assert routing_verdict.destination("FLEET") in text and HAND_WORK in text
-        assert "DRE-7120" in text and "DRE-7120" in clause["pending"]
+    def test_no_verdict_lands_in_todo_and_its_entry_is_retiring(self):
+        # Since the flip (DRE-7120) nothing promotes into Todo, and since
+        # DRE-7129 its entry is retiring: it carries no clauses, and its
+        # reason names where a promoted card goes instead.
+        entry = lane_contract.lane("Todo", status="retiring")
+        assert "clauses" not in entry
+        assert routing_verdict.destination("FLEET") in entry["reason"]
         assert "Todo" not in {routing_verdict.destination(name)
                               for name in routing_verdict.verdicts()}
 
@@ -401,7 +402,7 @@ class TestTheDocument:
 
     def test_the_rewritten_clauses_are_rendered(self):
         text = self.committed()
-        assert lane_contract.lane("Todo")["clauses"]["entrance"]["text"] in text
+        assert lane_contract.lane("Todo", status="retiring")["reason"] in text
         assert lane_contract.lane("Queued")["clauses"]["exit"]["text"] in text
 
     def test_an_arriving_lane_renders_its_own_section_and_stays_out_of_the_flow(self):

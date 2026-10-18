@@ -66,7 +66,7 @@
       "`lane` is lane_contract.START_LANE: the lane a writer puts a card in to START its build — In Progress since the flip (DRE-7120). It is the dispatch lane, or a lane whose `replaced_by` is the dispatch lane.",
       "`dispatch_lane` is lane_contract.DISPATCH_LANE: a card that is not an epic moving into it from a `dispatch_from` lane is a build dispatch. A card created in it, with no lane before it, is not.",
       "`dispatch_from` is the lanes that move comes from. lane_contract.DISPATCH_FROM adds every old name the aliases map onto one of them while the contract still carries that name as a lane. Hand-work, In Review, Done and the dispatch lane itself are never among them: a person builds a Hand-work card, the next two are past the build, and a card already in the dispatch lane is not starting.",
-      "`start_minutes` is lane_contract.START_MINUTES: how long a card may sit in lane_contract.START_LANES — the dispatch lane and every lane it replaces — with no start receipt (the build run's 🧠 model-attempt comment) newer than its entry before the sweep re-fires its dispatch. It equals the stale_minutes of the lane the dispatch lane replaces, on purpose."
+      "`start_minutes` is lane_contract.START_MINUTES: how long a card may sit in lane_contract.START_LANES — the dispatch lane and every lane it replaces — with no start receipt (the build run's 🧠 model-attempt comment) newer than its entry before the sweep re-fires its dispatch. It equaled the stale_minutes of the lane the dispatch lane replaces, on purpose, until that lane began retiring (DRE-7129) and its stall window went with its live entry."
     ]
   },
 

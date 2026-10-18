@@ -110,7 +110,7 @@ def _iso(minutes_ago: float) -> str:
 
 def _card(
     identifier="DRE-2499",
-    state="Todo",
+    state="In Progress",
     labels=("repo:portico", HAND_BUILT),
     minutes_stale=999.0,
 ):
@@ -535,7 +535,7 @@ def test_hand_built_card_stale_in_todo_is_not_redispatched():
     """The DRE-2524 shape, one layer down: 15 minutes into hand-building, the
     sweep fires `agent-execute` at the same card. No dispatch is coming BY
     DESIGN — so the sweep must not be the one to start one."""
-    s = _run_sweep([_card(state="Todo")])
+    s = _run_sweep([_card(state="In Progress")])
     s.redispatch.assert_not_called()
     s.cmd_state.assert_not_called()
     s.cmd_comment.assert_not_called()
@@ -544,7 +544,7 @@ def test_hand_built_card_stale_in_todo_is_not_redispatched():
 
 def test_without_the_label_a_stale_todo_card_is_still_redispatched():
     """Control: the sweep's whole reason for existing still works."""
-    s = _run_sweep([_card(state="Todo", labels=("repo:portico",))])
+    s = _run_sweep([_card(state="In Progress", labels=("repo:portico",))])
     s.redispatch.assert_called_once()
     assert any(
         reconcile._TODO_REDISPATCH_NOTE in c.args[1]
@@ -615,7 +615,7 @@ def test_no_run_notice_states_what_was_observed():
     assert body.startswith(f"🚨 {reconcile.WATCHDOG_TAG}:")
     assert "no agent run" in body
     assert str(reconcile.WATCHDOG_MINUTES) in body
-    assert "Todo" in body, "the notice must name the lane it observed"
+    assert "In Progress" in body, "the notice must name the lane it observed"
     assert "receipt" in body, "the notice must name the evidence it looked for"
 
 

@@ -389,7 +389,7 @@ def start_minutes(contract: dict | None = None) -> int:
     """How long a card may sit in `start_lanes()` with no start receipt (the
     build run's 🧠 model-attempt comment) newer than its entry before the
     sweep re-fires its dispatch. Equal to the old start lane's stall window
-    on purpose."""
+    on purpose, until that lane began retiring (DRE-7129)."""
     return _build_start(contract)["start_minutes"]
 
 

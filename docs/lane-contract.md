@@ -48,7 +48,7 @@ How a build starts (DRE-7105). Until the flip (DRE-7120) the sweep promoted a ca
 
 `dispatch_from` is the lanes that move comes from. lane_contract.DISPATCH_FROM adds every old name the aliases map onto one of them while the contract still carries that name as a lane. Hand-work, In Review, Done and the dispatch lane itself are never among them: a person builds a Hand-work card, the next two are past the build, and a card already in the dispatch lane is not starting.
 
-`start_minutes` is lane_contract.START_MINUTES: how long a card may sit in lane_contract.START_LANES — the dispatch lane and every lane it replaces — with no start receipt (the build run's 🧠 model-attempt comment) newer than its entry before the sweep re-fires its dispatch. It equals the stale_minutes of the lane the dispatch lane replaces, on purpose.
+`start_minutes` is lane_contract.START_MINUTES: how long a card may sit in lane_contract.START_LANES — the dispatch lane and every lane it replaces — with no start receipt (the build run's 🧠 model-attempt comment) newer than its entry before the sweep re-fires its dispatch. It equaled the stale_minutes of the lane the dispatch lane replaces, on purpose, until that lane began retiring (DRE-7129) and its stall window went with its live entry.
 
 ## The lanes
 
