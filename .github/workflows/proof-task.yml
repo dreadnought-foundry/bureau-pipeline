@@ -36,6 +36,20 @@
 # request is open (the result step), because a returning run pushes to a pull
 # request that was already open and neither mover above fires for it.
 #
+# SHADOW MODE (DRE-7286) — the critic's design (qa-review.yml, DRE-7193),
+# copied. With `shadow` true the job runs the same proof card a second time,
+# on the model the caller names in `model`, and writes nothing but a throwaway
+# branch, `proof-shadow/<CARD>-<run id>`, through `Push the shadow record`
+# (scripts/proof_shadow.py push, DRE-7288). No lane, no comment, no record
+# branch, no pull request: every other writing step's `if:` ends
+# `&& !inputs.shadow`, the agent's `github_token` is minted read-only, and its
+# Linear commands run under BUREAU_LINEAR_READ_ONLY=1 (DRE-7285) — a guard on
+# linear_ops.py and spoken_thread.py, not a lock on Linear, because the agent
+# keeps LINEAR_API_KEY to read the card. The job is named `bureau-shadow:
+# <CARD>`, so nothing that looks for the card's own run reads a shadow as one.
+# With neither input set the job is the proof run it was before, step for
+# step (tests/test_proof_task_shadow.py compares it to a snapshot of main).
+#
 # Reusable workflow: concurrency + permissions live in the calling stub
 # (which owns the trigger context). github.event / github.repository inside
 # this file resolve to the CALLER's event and repo.
@@ -73,6 +87,27 @@ on:
         type: string
         required: false
         default: "us-west-2"
+      # ── Shadow mode (DRE-7286) ───────────────────────────────────────────
+      # The contract the dispatcher card (DRE-7287) and the reader card
+      # (DRE-7288) share: `Proof Shadow` (self-proof-shadow.yml) calls this
+      # file with `shadow: true` and the payload's `shadow_model` as `model`.
+      shadow:
+        description: >-
+          Run the proof card a second time on `model`, writing its record
+          only to a `proof-shadow/<CARD>-<run id>` branch — no lane, no
+          comment, no record branch and no pull request.
+        type: boolean
+        required: false
+        default: false
+      model:
+        description: >-
+          Shadow mode only: the model id the shadow runs on. It needs a
+          declared price in config/model-prices.yaml and must be neither
+          retired nor excluded in config/models.yaml. Set on a proof run that
+          is not a shadow it is REFUSED — the proof run's model is selected.
+        type: string
+        required: false
+        default: ''
     secrets:
       ANTHROPIC_API_KEY:
         required: false
@@ -150,7 +185,11 @@ jobs:
     # had already merged. `reconcile.build_run_refusal` reads this name through
     # `dedupe_dispatch.job_names_this_card` — the same matcher plan.yml's own
     # duplicate guard uses, so there is one parse of the convention, not two.
-    name: "bureau-card: ${{ github.event.client_payload.identifier }}"
+    #
+    # A shadow (DRE-7286) is `bureau-shadow: <CARD>`, never `bureau-card:`:
+    # that matcher, the sweep through it and the medic's `card_from_log` must
+    # never read a shadow as the card's own run.
+    name: "${{ inputs.shadow && 'bureau-shadow' || 'bureau-card' }}: ${{ github.event.client_payload.identifier }}"
     # The LONG chain (DRE-3350), never agent-task.yml's build lane. The build
     # lane (DRE-4846) puts the caller's own CI variable in front for exactly
     # the jobs that run a product's test suite, and a proof run runs none — it
@@ -214,6 +253,41 @@ jobs:
       BUREAU_APP_ID_3: ${{ secrets.BUREAU_APP_ID_3 }}
       BUREAU_APP_ID_4: ${{ secrets.BUREAU_APP_ID_4 }}
     steps:
+      # SHADOW REFUSES A BAD REQUEST FIRST (DRE-7286, qa-review.yml's
+      # DRE-7193 step), before a token is minted or anything is checked out.
+      # The shape of the two inputs only: whether the named model is one the
+      # fleet prices and runs needs the pipeline's config, so that half is the
+      # step after the checkouts.
+      #
+      # A proof run that is not a shadow, naming a model, is refused here too:
+      # its model is selected for role `proof`, and a caller naming one would
+      # step around that. Skipped when neither input is set, so a proof run
+      # runs exactly the steps it ran before. Every `${{ }}` in env:, none in
+      # the script.
+      - name: Refuse a malformed shadow request
+        id: shadow_shape
+        if: inputs.shadow || inputs.model != ''
+        env:
+          SHADOW: ${{ inputs.shadow }}
+          MODEL: ${{ inputs.model }}
+          CARD: ${{ github.event.client_payload.identifier }}
+        run: |
+          if [ "$SHADOW" != "true" ]; then
+            echo "::error::a proof run never runs on a named model (model=$MODEL) — its model is selected for role proof. Set shadow: true to shadow the proof on a named model."
+            exit 1
+          fi
+          if [ -z "$MODEL" ]; then
+            echo "::error::a proof shadow needs model — the model id the shadow runs on"
+            exit 1
+          fi
+          # The id reaches the agent's command line and its prompt, so it is
+          # held to the shape of a model id before the config is asked about it.
+          if ! [[ "$MODEL" =~ ^[a-z0-9][a-z0-9.-]*$ ]]; then
+            echo "::error::model must be a model id — got '$MODEL'"
+            exit 1
+          fi
+          echo "shadow request: card=$CARD model=$MODEL"
+
       # Boot token: the ORIGINAL app (pool slot 1). Used for the checkouts
       # below (a handful of requests) and as slot 1's pool probe;
       # everything quota-heavy after pool selection uses the worker token.
@@ -241,6 +315,92 @@ jobs:
 
       - name: Hide pipeline checkout from product git
         run: echo ".bureau-pipeline/" >> .git/info/exclude
+
+      # The other half of the shadow refusal (DRE-7286), qa-review.yml's
+      # `Refuse a shadow model the fleet does not run`, at the first point the
+      # pipeline's config can be read: the named model must be one the fleet
+      # prices (config/model-prices.yaml) and not one it has put out of use
+      # (`excluded` or `retired` in config/models.yaml). Long before an agent
+      # step. Writes the model it checked and that model's own declared
+      # effort, so the shadow runs it the way the fleet runs it — never at the
+      # effort of the model Select model chose.
+      - name: Refuse a shadow model the fleet does not run
+        id: shadow_model
+        if: inputs.shadow
+        env:
+          MODEL: ${{ inputs.model }}
+        run: |
+          python3 - .bureau-pipeline "$MODEL" <<'PY'
+          import sys
+          from pathlib import Path
+
+          import yaml
+
+          root, model = Path(sys.argv[1]), sys.argv[2]
+          prices = yaml.safe_load((root / "config" / "model-prices.yaml").read_text())
+          models = yaml.safe_load((root / "config" / "models.yaml").read_text())
+          if model not in ((prices or {}).get("prices") or {}):
+              print(f"::error::{model} has no declared price in config/model-prices.yaml — a proof shadow runs only a model the fleet prices")
+              sys.exit(1)
+          for block in ("excluded", "retired"):
+              for entry in (models or {}).get(block) or []:
+                  if isinstance(entry, dict) and entry.get("model") == model:
+                      print(f"::error::{model} is {block} in config/models.yaml — a proof shadow never runs a model the fleet has put out of use")
+                      sys.exit(1)
+          PY
+          EFFORT=$(python3 .bureau-pipeline/scripts/model_fallback.py effort "$MODEL")
+          echo "model=$MODEL" >> "$GITHUB_OUTPUT"
+          echo "effort_arg=${EFFORT:+--effort $EFFORT}" >> "$GITHUB_OUTPUT"
+          echo "shadow model: $MODEL${EFFORT:+ (effort $EFFORT)}"
+
+      # What a shadow's agent is told on top of the proof prompt (DRE-7286),
+      # read into all three attempts' prompts before their Process list. A
+      # proof run skips this step, its output is empty, and the prompt is
+      # byte for byte the one it was. The agent's token cannot push and its
+      # Linear commands cannot write, so the instruction is the one guard on
+      # the one path neither covers: a request sent to Linear with the key
+      # some other way. The proof card's read of every shadowed card's
+      # comments (DRE-7293) is the after-the-fact check on it.
+      - name: Write the shadow run's instructions
+        id: shadow_prompt
+        if: inputs.shadow
+        env:
+          MODEL: ${{ inputs.model }}
+        run: |
+          {
+            echo "text<<SHADOW_EOF"
+            echo ""
+            echo ""
+            cat <<EOF
+          THIS IS A SHADOW RUN (DRE-7286). The same proof card runs a second time,
+          on $MODEL, to measure that model; the real proof run beside it owns the
+          card, its record branch and its pull request. This section overrides
+          every instruction below, the Process list included, wherever the two
+          disagree:
+          - Observe every acceptance criterion as the real run would, and write
+            the record at the path the card's \`**Files:**\` line names, in the
+            shape briefs/proof.md gives. That one file is the only thing you
+            write. Leave it uncommitted in the working tree, on the branch you
+            start on: the workflow's own step commits it to a throwaway branch
+            after you finish.
+          - Write nothing else: no \`⏳\` heartbeats, no actor marker, no
+            /tmp/agent-escalation.txt, no branch, no commit, no push and no pull
+            request. A row that needs the CEO's or the operator's press, and a
+            cause row, is written in the record as the brief says and never
+            asked.
+          - Read Linear only through \`python3 .bureau-pipeline/scripts/linear_ops.py\`
+            and \`python3 .bureau-pipeline/scripts/spoken_thread.py\`, within
+            PROOF_LINEAR_REQUESTS. Never send a request to Linear any other way:
+            no curl, no other HTTP client and no script of your own holding
+            LINEAR_API_KEY. BUREAU_LINEAR_READ_ONLY=1 makes those two commands
+            refuse a write; it is a guard on those two commands, not a lock on
+            Linear.
+          - GH_TOKEN can only read in this run. Make every GitHub read as
+            GH_READ_TOKEN all the same.
+          EOF
+            echo "SHADOW_EOF"
+          } >> "$GITHUB_OUTPUT"
+          echo "shadow instructions written for $MODEL"
 
       # ---- Dispatch-pool worker selection (DRE-2013) ----
       # Four worker-identical GitHub Apps (agent-bureau-bot + -2/-3/-4) give
@@ -321,6 +481,30 @@ jobs:
              || steps.pool.outputs.n == '4' && secrets.BUREAU_APP_PRIVATE_KEY_4
              || secrets.BUREAU_APP_PRIVATE_KEY }}
 
+      # The shadow agent's `github_token` (DRE-7286), qa-review.yml's
+      # read-only critic token: the same pool app as the worker, narrowed by
+      # the action's permission inputs to reads, so a writing step whose
+      # shadow guard was missed — or an agent that pushes anyway — still
+      # cannot write. No continue-on-error: a refused mint stops the shadow
+      # before its agent, which never falls back to a token that can write.
+      - name: Mint the shadow agent's read-only token
+        id: shadow_token
+        if: inputs.shadow
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: >-
+            ${{ steps.pool.outputs.n == '2' && secrets.BUREAU_APP_ID_2
+             || steps.pool.outputs.n == '3' && secrets.BUREAU_APP_ID_3
+             || steps.pool.outputs.n == '4' && secrets.BUREAU_APP_ID_4
+             || secrets.BUREAU_APP_ID }}
+          private-key: >-
+            ${{ steps.pool.outputs.n == '2' && secrets.BUREAU_APP_PRIVATE_KEY_2
+             || steps.pool.outputs.n == '3' && secrets.BUREAU_APP_PRIVATE_KEY_3
+             || steps.pool.outputs.n == '4' && secrets.BUREAU_APP_PRIVATE_KEY_4
+             || secrets.BUREAU_APP_PRIVATE_KEY }}
+          permission-contents: read
+          permission-pull-requests: read
+
       # Product-specific environment setup (submodules, toolchains, test DB).
       # Optional by design: a repo that needs nothing ships no setup.sh.
       - name: Product environment setup (optional)
@@ -352,7 +536,8 @@ jobs:
           owner: dreadnought-foundry
           repositories: bureau-pipeline
       # Model selection for role `proof` (config/models.yaml maps it to the
-      # WORKHORSE ladder), with agent-task.yml's runtime availability probe
+      # Proof group since DRE-7284 — the Builders' models, in the same order),
+      # with agent-task.yml's runtime availability probe
       # (DRE-1490) and its --explain-file note. No turn rung is chosen here:
       # a proof card carries no `turns:`/`size:` label to read, and the run
       # gets the default ceiling, 400 (DRE-4361).
@@ -422,9 +607,11 @@ jobs:
       # `Run: …/actions/runs/<id>` tail is what the run-state reader (DRE-5922)
       # parses to find this run and read it live or dead. It never carries
       # the dispatcher's own receipt tag, because DRE-5922 counts those as
-      # dispatches. No lane move here.
+      # dispatches. No lane move here, and never in a shadow (DRE-7286): its
+      # run tail would read to the run-state reader as the card's own run.
       - name: Record the model attempt
         id: attempt
+        if: ${{ !inputs.shadow }}
         env:
           LINEAR_API_KEY: ${{ vars.LINEAR_AGENT_BUCKET == 'planner' && secrets.LINEAR_PLANNER_KEY || secrets.LINEAR_API_KEY }}
           LINEAR_API_KEY_FALLBACK: ${{ secrets.LINEAR_API_KEY }}
@@ -462,9 +649,10 @@ jobs:
       # names it instead, so they never keep the card parked.
       # No `continue-on-error` — the agent does not run on a card still parked.
       # No `${{ }}` in the script: tests/test_proof_task_workflow.py executes
-      # it as written.
+      # it as written. Never in a shadow (DRE-7286), which moves no lane.
       - name: Return from Green Light on the CEO's answer
         id: return
+        if: ${{ !inputs.shadow }}
         env:
           LINEAR_API_KEY: ${{ vars.LINEAR_AGENT_BUCKET == 'planner' && secrets.LINEAR_PLANNER_KEY || secrets.LINEAR_API_KEY }}
           LINEAR_API_KEY_FALLBACK: ${{ secrets.LINEAR_API_KEY }}
@@ -814,26 +1002,36 @@ jobs:
           # repository variables on every installation, and a run cannot
           # read its own step summary (briefs/proof.md, Identities).
           PROOF_SESSION_SECONDS: ${{ vars.PROOF_ROLE_DURATION_SECONDS || '3600' }}
+          # A shadow's Linear commands refuse every write (DRE-7285, DRE-7286):
+          # `1` in a shadow, empty — off — on a proof run. A guard on
+          # linear_ops.py and spoken_thread.py, not a lock on Linear: the key
+          # above stays, because a shadow reads the card as the real run does.
+          BUREAU_LINEAR_READ_ONLY: ${{ inputs.shadow && '1' || '' }}
         with:
           path_to_claude_code_executable: ${{ steps.install_claude.outputs.executable }}
           anthropic_api_key: ${{ vars.CLAUDE_AUTH_MODE != 'subscription' && secrets.ANTHROPIC_API_KEY || '' }}
           claude_code_oauth_token: ${{ vars.CLAUDE_AUTH_MODE == 'subscription' && secrets.CLAUDE_CODE_OAUTH_TOKEN || '' }}
-          github_token: ${{ steps.worker.outputs.token }}
+          # The worker token, or in a shadow (DRE-7286) the token minted
+          # read-only — and never the worker's in its place.
+          github_token: ${{ inputs.shadow && steps.shadow_token.outputs.token || !inputs.shadow && steps.worker.outputs.token || '' }}
           # github-actions: reconcile dispatches on the workflow's own
           # GITHUB_TOKEN, so its workflow_dispatch runs initiate as
           # github-actions (DRE-2053).
           allowed_bots: agent-bureau-bot,agent-bureau-bot-2,agent-bureau-bot-3,agent-bureau-bot-4,github-actions
+          # DRE-7286: a shadow runs on the model its caller named, at that
+          # model's own effort, both handed on by the step that checked it
+          # (shadow_model). A proof run runs on the selected model, as before.
           claude_args: |
             --max-turns 400
-            --model ${{ steps.model.outputs.model }}
-            ${{ steps.model.outputs.effort_arg }}
+            --model ${{ inputs.shadow && steps.shadow_model.outputs.model || steps.model.outputs.model }}
+            ${{ inputs.shadow && steps.shadow_model.outputs.effort_arg || !inputs.shadow && steps.model.outputs.effort_arg || '' }}
             --allowedTools "Bash,Edit,Write,Read,Glob,Grep,WebSearch,WebFetch"
           prompt: |
             Read .bureau-pipeline/agent-context.md FIRST — it is your assembled
             operating context: the shared bureau standards for your role plus
             your role brief (briefs/proof.md is included at the end of it).
             Then observe this PROOF card's acceptance criteria and write its
-            record. You observe; you never build.
+            record. You observe; you never build.${{ steps.shadow_prompt.outputs.text }}
 
             Card: ${{ github.event.client_payload.identifier }} — ${{ steps.card.outputs.title }}
             Card URL: ${{ github.event.client_payload.url }}
@@ -1038,26 +1236,36 @@ jobs:
           # repository variables on every installation, and a run cannot
           # read its own step summary (briefs/proof.md, Identities).
           PROOF_SESSION_SECONDS: ${{ vars.PROOF_ROLE_DURATION_SECONDS || '3600' }}
+          # A shadow's Linear commands refuse every write (DRE-7285, DRE-7286):
+          # `1` in a shadow, empty — off — on a proof run. A guard on
+          # linear_ops.py and spoken_thread.py, not a lock on Linear: the key
+          # above stays, because a shadow reads the card as the real run does.
+          BUREAU_LINEAR_READ_ONLY: ${{ inputs.shadow && '1' || '' }}
         with:
           path_to_claude_code_executable: ${{ steps.install_claude.outputs.executable }}
           anthropic_api_key: ${{ vars.CLAUDE_AUTH_MODE != 'subscription' && secrets.ANTHROPIC_API_KEY || '' }}
           claude_code_oauth_token: ${{ vars.CLAUDE_AUTH_MODE == 'subscription' && secrets.CLAUDE_CODE_OAUTH_TOKEN || '' }}
-          github_token: ${{ steps.worker.outputs.token }}
+          # The worker token, or in a shadow (DRE-7286) the token minted
+          # read-only — and never the worker's in its place.
+          github_token: ${{ inputs.shadow && steps.shadow_token.outputs.token || !inputs.shadow && steps.worker.outputs.token || '' }}
           # github-actions: reconcile dispatches on the workflow's own
           # GITHUB_TOKEN, so its workflow_dispatch runs initiate as
           # github-actions (DRE-2053).
           allowed_bots: agent-bureau-bot,agent-bureau-bot-2,agent-bureau-bot-3,agent-bureau-bot-4,github-actions
+          # DRE-7286: a shadow runs on the model its caller named, at that
+          # model's own effort, both handed on by the step that checked it
+          # (shadow_model). A proof run runs on the selected model, as before.
           claude_args: |
             --max-turns 400
-            --model ${{ steps.model.outputs.model }}
-            ${{ steps.model.outputs.effort_arg }}
+            --model ${{ inputs.shadow && steps.shadow_model.outputs.model || steps.model.outputs.model }}
+            ${{ inputs.shadow && steps.shadow_model.outputs.effort_arg || !inputs.shadow && steps.model.outputs.effort_arg || '' }}
             --allowedTools "Bash,Edit,Write,Read,Glob,Grep,WebSearch,WebFetch"
           prompt: |
             Read .bureau-pipeline/agent-context.md FIRST — it is your assembled
             operating context: the shared bureau standards for your role plus
             your role brief (briefs/proof.md is included at the end of it).
             Then observe this PROOF card's acceptance criteria and write its
-            record. You observe; you never build.
+            record. You observe; you never build.${{ steps.shadow_prompt.outputs.text }}
 
             Card: ${{ github.event.client_payload.identifier }} — ${{ steps.card.outputs.title }}
             Card URL: ${{ github.event.client_payload.url }}
@@ -1260,26 +1468,36 @@ jobs:
           # repository variables on every installation, and a run cannot
           # read its own step summary (briefs/proof.md, Identities).
           PROOF_SESSION_SECONDS: ${{ vars.PROOF_ROLE_DURATION_SECONDS || '3600' }}
+          # A shadow's Linear commands refuse every write (DRE-7285, DRE-7286):
+          # `1` in a shadow, empty — off — on a proof run. A guard on
+          # linear_ops.py and spoken_thread.py, not a lock on Linear: the key
+          # above stays, because a shadow reads the card as the real run does.
+          BUREAU_LINEAR_READ_ONLY: ${{ inputs.shadow && '1' || '' }}
         with:
           path_to_claude_code_executable: ${{ steps.install_claude.outputs.executable }}
           anthropic_api_key: ${{ vars.CLAUDE_AUTH_MODE != 'subscription' && secrets.ANTHROPIC_API_KEY || '' }}
           claude_code_oauth_token: ${{ vars.CLAUDE_AUTH_MODE == 'subscription' && secrets.CLAUDE_CODE_OAUTH_TOKEN || '' }}
-          github_token: ${{ steps.worker.outputs.token }}
+          # The worker token, or in a shadow (DRE-7286) the token minted
+          # read-only — and never the worker's in its place.
+          github_token: ${{ inputs.shadow && steps.shadow_token.outputs.token || !inputs.shadow && steps.worker.outputs.token || '' }}
           # github-actions: reconcile dispatches on the workflow's own
           # GITHUB_TOKEN, so its workflow_dispatch runs initiate as
           # github-actions (DRE-2053).
           allowed_bots: agent-bureau-bot,agent-bureau-bot-2,agent-bureau-bot-3,agent-bureau-bot-4,github-actions
+          # DRE-7286: a shadow runs on the model its caller named, at that
+          # model's own effort, both handed on by the step that checked it
+          # (shadow_model). A proof run runs on the selected model, as before.
           claude_args: |
             --max-turns 400
-            --model ${{ steps.model.outputs.model }}
-            ${{ steps.model.outputs.effort_arg }}
+            --model ${{ inputs.shadow && steps.shadow_model.outputs.model || steps.model.outputs.model }}
+            ${{ inputs.shadow && steps.shadow_model.outputs.effort_arg || !inputs.shadow && steps.model.outputs.effort_arg || '' }}
             --allowedTools "Bash,Edit,Write,Read,Glob,Grep,WebSearch,WebFetch"
           prompt: |
             Read .bureau-pipeline/agent-context.md FIRST — it is your assembled
             operating context: the shared bureau standards for your role plus
             your role brief (briefs/proof.md is included at the end of it).
             Then observe this PROOF card's acceptance criteria and write its
-            record. You observe; you never build.
+            record. You observe; you never build.${{ steps.shadow_prompt.outputs.text }}
 
             Card: ${{ github.event.client_payload.identifier }} — ${{ steps.card.outputs.title }}
             Card URL: ${{ github.event.client_payload.url }}
@@ -1638,6 +1856,53 @@ jobs:
              || steps.pool.outputs.n == '4' && secrets.BUREAU_APP_PRIVATE_KEY_4
              || secrets.BUREAU_APP_PRIVATE_KEY }}
 
+      # THE SHADOW'S ONE WRITE (DRE-7286): the record the shadow agent left in
+      # the working tree, and the `proof-shadow.json` sidecar, committed on
+      # `proof-shadow/<CARD>-<run id>` and pushed — that one ref, by
+      # scripts/proof_shadow.py push (DRE-7288), the branch's only writer.
+      # Never under `agent/`, so the card's own run state never reads it.
+      #
+      # Only in a shadow, after every agent attempt, and whatever they did: a
+      # shadow whose agent failed still leaves a branch, whose sidecar reads
+      # `record_path: null`, so the reader lists it as unpaired with that
+      # reason instead of losing it. Never when the model check refused the
+      # run — that one has no model to name.
+      #
+      # The credential is the worker's App, freshly minted above (DRE-3043:
+      # the worker token is an hour old by now on a long run), with the worker
+      # token itself only when that mint failed. Git is re-pointed at it the
+      # way the push rescue re-points it: the agent's action left the
+      # read-only token it held in git's config, and that cannot push.
+      # Every `${{ }}` in env:, none in the script.
+      - name: Push the shadow record
+        id: shadow_push
+        if: always() && inputs.shadow && steps.shadow_model.outcome == 'success'
+        env:
+          PUSH_TOKEN: ${{ steps.pushtoken.outputs.token || steps.worker.outputs.token }}
+          CARD: ${{ github.event.client_payload.identifier }}
+          RUN_ID: ${{ github.run_id }}
+          MODEL: ${{ steps.shadow_model.outputs.model }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          DISPATCHED_AT: ${{ github.event.client_payload.dispatched_at }}
+        run: |
+          python3 - <<'PY'
+          import os
+          import subprocess
+          import sys
+
+          sys.path.insert(0, ".bureau-pipeline/scripts")
+          import push_rescue
+
+          def run(argv):
+              done = subprocess.run(argv, capture_output=True, text=True, check=False)
+              return done.returncode, done.stdout, done.stderr
+
+          push_rescue.repoint_git_credential(os.environ["PUSH_TOKEN"], run=run)
+          PY
+          python3 .bureau-pipeline/scripts/proof_shadow.py push \
+            --card "$CARD" --run-id "$RUN_ID" --model "$MODEL" \
+            --run-url "$RUN_URL" --dispatched-at "$DISPATCHED_AT"
+
       # Deliver what the agent could not. push_rescue.py re-points GIT's
       # credential — not only `gh`'s — at the fresh token (unsetting the stale
       # extraheader first: http.extraheader is multi-valued and `git config`
@@ -1651,9 +1916,12 @@ jobs:
       #
       # BEFORE the two steps below on purpose: both resolve this card's branch
       # from `git branch -r`, and both must see the branch this step delivers.
+      #
+      # Never in a shadow (DRE-7286): its one branch is `Push the shadow
+      # record`'s, and it opens no pull request.
       - name: Push rescue
         id: rescue
-        if: always()
+        if: always() && !inputs.shadow
         env:
           # Through the environment, never argv: an argv element is readable by
           # every process on the runner.
@@ -1742,8 +2010,10 @@ jobs:
       # shell lives in scripts/report_proof_result.sh (DRE-6613): the cause
       # park took the block past the 8,000-character run-block ceiling
       # (DRE-3488), so `step_shell.py move` took it out.
+      #
+      # Never in a shadow (DRE-7286): the card is the real run's to report.
       - name: Report proof result to Linear
-        if: always()
+        if: always() && !inputs.shadow
         env:
           LINEAR_API_KEY: ${{ vars.LINEAR_AGENT_BUCKET == 'planner' && secrets.LINEAR_PLANNER_KEY || secrets.LINEAR_API_KEY }}
           LINEAR_API_KEY_FALLBACK: ${{ secrets.LINEAR_API_KEY }}
