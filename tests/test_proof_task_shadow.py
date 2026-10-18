@@ -391,6 +391,16 @@ class ShadowAgentTest(unittest.TestCase):
                 self.assertNotIn("the-selected-model", rendered)
                 self.assertNotIn("--effort low", rendered)
 
+    # upload_agent_log.py stamps --effort onto the log object as the only
+    # record of the effort the agent ran at, so the shadow's log must carry
+    # the checked model's effort and a live run's the selected model's.
+    def test_the_working_log_records_the_effort_the_agent_ran_at(self):
+        efforts = {"steps.shadow_model.outputs.effort_arg": "--effort high",
+                   "steps.model.outputs.effort_arg": "--effort low"}
+        arg = _step(name="Keep the run's working log")["env"]["EFFORT_ARG"]
+        self.assertEqual(_render(arg, dict(_shadow(), **efforts)), "--effort high")
+        self.assertEqual(_render(arg, dict(LIVE, **efforts)), "--effort low")
+
     def test_every_attempt_holds_the_linear_switch_on(self):
         for step in _agent_steps():
             with self.subTest(step=step["id"]):
