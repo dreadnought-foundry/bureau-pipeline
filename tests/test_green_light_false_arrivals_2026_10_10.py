@@ -27,6 +27,13 @@ The six, by their arrival in Green Light (PT):
                                  the classifier as a decision — DRE-6652's
                                  filing and DRE-6654's classifier rule.
 
+One card arrived later and is replayed beside them (DRE-7491). DRE-6673's
+proof record found DRE-2498 in Green Light on 2026-10-13, from the one-off
+plan critic's empty result on round 2 (run 38424453807): the CEO was asked to
+re-run the review or settle the card, and the next read passed it. Its
+arrival is `one-off-no-result`, and it was for the critic, which now reads
+the card again on its own before anything goes to the CEO.
+
 Every fixture is driven through the mechanism its `arrival` names, with the
 siblings' own harnesses, and over every one of them no stubbed lane write —
 `linear_ops.cmd_state` or `cmd_advance` — names `Green Light`. What the rule
@@ -52,6 +59,7 @@ import copy
 import json
 import os
 import re
+import subprocess
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -74,6 +82,7 @@ import planning_classify  # noqa: E402
 import planning_escalation  # noqa: E402
 import planning_route  # noqa: E402
 import planning_shape  # noqa: E402
+import plan_critic  # noqa: E402
 import proof_dispatch  # noqa: E402
 import proof_record  # noqa: E402
 import reconcile  # noqa: E402
@@ -96,6 +105,8 @@ SIX = {
     "DRE-6617": "plan-bound",
     "DRE-6636": "switch-card",
 }
+#: A card from DRE-6673's proof record, not the night of 2026-10-10 (DRE-7491).
+LATER = {"DRE-2498": "one-off-no-result"}
 
 #: The shared schema: every key a fixture carries, and its type.
 REQUIRED = {
@@ -109,13 +120,15 @@ ARRIVALS = {
     "review-cap": "proof-run",
     "blocked-epic": "planner",
     "switch-card": "operator",
+    "one-off-no-result": "critic",
 }
-FOR = {"planner", "proof-run", "operator"}
+FOR = {"planner", "proof-run", "operator", "critic"}
 #: The per-arrival extras the contract names.
 EXTRAS = {
     "review-cap": ("pr", "rebuilt"),
     "blocked-epic": ("relations",),
     "switch-card": ("filed",),
+    "one-off-no-result": ("result", "run_id"),
 }
 
 #: How the text a rule writes instead of Green Light names each recipient,
@@ -126,6 +139,8 @@ NAMES = {
     "planner": re.compile(r"\bplann(?:er|ed)\b"),
     "proof-run": re.compile(rf"^{linear_ops.PROOF_MARK} proof-(?:run|waiting):", re.M),
     "operator": re.compile(r"\*\*Who handles it there:\*\* operator\."),
+    # Kept in step with the `rerun` note `plan_critic._cmd_decide` posts.
+    "critic": re.compile(r"\bthe critic reads (?:this|the) card again\b"),
 }
 
 #: A row the gate's decline note quotes: “criterion…” reads “result…”.
@@ -476,6 +491,40 @@ def _switch_card(monkeypatch, doc: dict, lanes: _Lanes) -> str:
 
 
 # --------------------------------------------------------------------------- #
+# one-off-no-result — DRE-7491                                                 #
+# --------------------------------------------------------------------------- #
+
+
+def _one_off_no_result(doc: dict, tmp_path: Path) -> str:
+    """`plan_critic.py decide --stage one-off` as plan.yml's decision step runs
+    it: the thread on stdin, the result file, this run's id and an escalation
+    path. Returns the note it posts."""
+    paths = {name: tmp_path / f"one-off-{name}.txt"
+             for name in ("result", "note", "record", "escalation", "out")}
+    paths["result"].write_text(doc["result"], encoding="utf-8")
+    out = subprocess.run(
+        [sys.executable, str(ROOT / "scripts" / "plan_critic.py"), "decide",
+         "--stage", plan_critic.STAGE_ONE_OFF, "--epic", doc["card"],
+         "--result-file", str(paths["result"]),
+         "--github-output", str(paths["out"]),
+         "--note-file", str(paths["note"]),
+         "--record-file", str(paths["record"]),
+         "--escalation-file", str(paths["escalation"]),
+         "--run-id", doc["run_id"]],
+        input=json.dumps(doc["comments"]), capture_output=True, text=True)
+    assert out.returncode == 0, out.stderr
+    outputs = dict(line.split("=", 1) for line
+                   in paths["out"].read_text(encoding="utf-8").splitlines()
+                   if "=" in line and not line.startswith(" "))
+    assert outputs["action"] == plan_critic.RERUN, (
+        f"{doc['card']}: the one-off decision answered {outputs['action']!r}")
+    assert not paths["escalation"].exists(), (
+        f"{doc['card']}: a re-run wrote a reason for the CEO")
+    assert f"run={doc['run_id']}" in paths["record"].read_text(encoding="utf-8")
+    return paths["note"].read_text(encoding="utf-8")
+
+
+# --------------------------------------------------------------------------- #
 # the replay                                                                   #
 # --------------------------------------------------------------------------- #
 
@@ -486,6 +535,7 @@ def test_the_directory_holds_the_six_cards():
         f"{FIXTURES.relative_to(ROOT)} holds {len(found)} fixture(s); "
         "the six cards of 2026-10-10 are owed")
     assert set(SIX) <= found, f"missing: {sorted(set(SIX) - found)}"
+    assert set(LATER) <= found, f"missing: {sorted(set(LATER) - found)}"
 
 
 @pytest.mark.parametrize("path", _paths(), ids=_card_id)
@@ -495,6 +545,8 @@ def test_the_card_does_not_land_in_green_light(monkeypatch, tmp_path, capsys, pa
     assert problems == [], f"{path.name}: " + "; ".join(problems)
     if doc["card"] in SIX:
         assert doc["arrival"] == SIX[doc["card"]]
+    if doc["card"] in LATER:
+        assert doc["arrival"] == LATER[doc["card"]]
 
     lanes = _Lanes(monkeypatch)
     arrival = doc["arrival"]
@@ -504,6 +556,8 @@ def test_the_card_does_not_land_in_green_light(monkeypatch, tmp_path, capsys, pa
         written = _review_cap(monkeypatch, doc, lanes)
     elif arrival == "blocked-epic":
         written = _blocked_epic(monkeypatch, doc, lanes, tmp_path, capsys)
+    elif arrival == "one-off-no-result":
+        written = _one_off_no_result(doc, tmp_path)
     else:
         written = _switch_card(monkeypatch, doc, lanes)
 
