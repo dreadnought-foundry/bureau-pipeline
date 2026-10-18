@@ -1,13 +1,23 @@
 #!/usr/bin/env python3
-"""An epic is never put in Todo (DRE-5316) — the rule, written once.
+"""An epic is never put in the old start lane (DRE-5316) — the rule, written once.
 
-Todo is where a card waits for a build run, and nothing builds an epic: its
-children promote from In Progress. The pipeline moved epic DRE-3621 from In
-Progress to Todo at 21:43 PT on 2026-09-12 and it sat there seventeen days with
-four children waiting. Every lane change of an existing card ends in
+The old start lane, `TODO`, is where a card waited for a build run until the
+flip (DRE-7120), and nothing builds an epic: its children promote from In
+Progress. The pipeline moved epic DRE-3621 from In Progress into that lane at
+21:43 PT on 2026-09-12 and it sat there seventeen days with four children
+waiting. Every lane change of an existing card ends in
 `linear_ops.guarded_state_write`, and every new card is created through
 `_create_card` or `create_card`; those three call `refusal()` here, and on an
 answer nothing is written.
+
+## The lane's name, read off the contract
+
+The lane is retiring (DRE-7129, epic DRE-7072): `TODO` is the retiring lane
+whose `replaced_by` is `lane_contract.DISPATCH_LANE`, read off
+`config/lane-contract.json` and never written here as a literal, and every
+caller — `reconcile`, `validate_card`, `linear_ops`, `ready_lane_writers` —
+reads that name. It is None once the entry is deleted, and then no lane is
+refused and no card is found in it.
 
 ## What an epic is
 
@@ -23,27 +33,27 @@ answers equal instead.
 ## Approved, read off the board
 
 An epic the CEO approved is In Progress; approval is that move and only that.
-So the rule reads the lane the epic was in before Todo: at the write seam, the
-card's current lane; for a card already sitting in Todo, the `fromState` of the
-newest history entry into Todo (`lane_before_todo`). In Progress means
+So the rule reads the lane the epic was in before `TODO`: at the write seam,
+the card's current lane; for a card already sitting in it, the `fromState` of
+the newest history entry into it (`lane_before_todo`). In Progress means
 approved; anything else — Green Light included, and a history Linear cannot
-return — means not approved. A drag from Green Light to Todo is deliberately
-NOT approval: Green Light also holds escalations and parked plans no critic
+return — means not approved. A drag from Green Light into the old start lane is
+deliberately NOT approval: Green Light also holds escalations and parked plans no critic
 passed, and the plan-critic's own PASS record is not read for the same reason.
 
 ## The right move
 
 An approved epic stays in, or returns to, In Progress, where its children
 promote. An unapproved one needs the CEO's approval in Green Light, and
-approval is the move to In Progress. A mover that finds an epic already in Todo
-carries it to `carry_lane()`: In Progress when approved, Planning when not —
+approval is the move to In Progress. A mover that finds an epic already in
+`TODO` carries it to `carry_lane()`: In Progress when approved, Planning when not —
 never straight to Green Light, whose only road in is through both critics.
 
 The refusal is posted from ONE site, `post_refusal`, once per card and move.
 
 CLI (read-only — it calls no write function):
 
-    python3 scripts/epic_todo_gate.py explain DRE-N [lane]   # lane defaults to Todo
+    python3 scripts/epic_todo_gate.py explain DRE-N [lane]   # lane defaults to TODO
 """
 
 from __future__ import annotations
@@ -52,24 +62,39 @@ import os
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import lane_contract  # noqa: E402 — the lane's name is read off the contract
 import mid_epic  # noqa: E402 — ONE answer to "is this an epic" (DRE-3038)
 import routing_verdict  # noqa: E402 — ONE tolerant read of the shape stamp
 
 TAG = "epic-not-todo"
 
-TODO = "Todo"
+
+def retiring_start_lane(contract: dict | None = None) -> str | None:
+    """The retiring lane whose `replaced_by` is the dispatch lane: the start
+    lane the flip emptied (DRE-7120), which the sweep drains (DRE-7129). None
+    once its entry is deleted."""
+    doc = contract or lane_contract.load()
+    target = lane_contract.dispatch_lane(doc)
+    for entry in lane_contract.lanes("retiring", doc):
+        if entry.get("replaced_by") == target:
+            return entry["name"]
+    return None
+
+
+TODO = retiring_start_lane()
 IN_PROGRESS = "In Progress"
 GREEN_LIGHT = "Green Light"
 PLANNING = "Planning"
 
 #: How many of the card's newest history entries `lane_before_todo` reads. The
 #: history holds every field change, not only lane moves, so the window is wide
-#: enough that the entry into Todo is in it on any card that is sitting there.
+#: enough that the entry into the lane is in it on any card that is sitting there.
 HISTORY_WINDOW = 50
 
 
-def _same_lane(a: str | None, b: str) -> bool:
-    return (a or "").strip().lower() == b.lower()
+def _same_lane(a: str | None, b: str | None) -> bool:
+    # A lane the contract no longer carries is no lane: nothing is in it.
+    return b is not None and (a or "").strip().lower() == b.lower()
 
 
 def is_epic_card(title: str, has_children: bool, comment_bodies) -> bool:
@@ -81,13 +106,13 @@ def is_epic_card(title: str, has_children: bool, comment_bodies) -> bool:
 
 
 def approved(lane_before_todo: str | None) -> bool:
-    """An epic the CEO approved was In Progress before Todo. Nothing else is
+    """An epic the CEO approved was In Progress before `TODO`. Nothing else is
     approval."""
     return _same_lane(lane_before_todo, IN_PROGRESS)
 
 
 def carry_lane(lane_before_todo: str | None) -> str:
-    """Where a mover carries an epic it finds in Todo. The movers branch on this
+    """Where a mover carries an epic it finds in `TODO`. The movers branch on this
     and write each lane as a literal, so the lane-writer check reads both."""
     return IN_PROGRESS if approved(lane_before_todo) else PLANNING
 
@@ -106,7 +131,7 @@ def refusal(identifier: str, target_state: str, title: str, has_children: bool,
             carried_to: str | None = None) -> str | None:
     """The refusal body for a write of `target_state`, or None when it may go.
 
-    None unless the target is Todo and the card is an epic. `carried_to` is the
+    None unless the target is `TODO` and the card is an epic. `carried_to` is the
     lane a mover wrote (None at the seam, where nothing moves), and the body says
     where the card is now — so it never names a lane the card is not in.
     """
@@ -135,14 +160,14 @@ def refusal(identifier: str, target_state: str, title: str, has_children: bool,
         where = f"It was carried to {carried_to}."
     return (
         f"{opener(identifier, lane_before_todo)}\n\n"
-        "An epic is never dispatched: Todo is where a card waits for a build "
-        f"run, and nothing builds an epic. {why}\n\n{where}"
+        f"An epic is never dispatched: {TODO} is where a card waited for a "
+        f"build run, and nothing builds an epic. {why}\n\n{where}"
     )
 
 
 def lane_before_todo(ops, identifier: str) -> str | None:
-    """The lane the card was in before it entered Todo: the `fromState` of the
-    NEWEST history entry whose `toState` is Todo. None when Linear cannot
+    """The lane the card was in before it entered `TODO`: the `fromState` of the
+    NEWEST history entry whose `toState` is that lane. None when Linear cannot
     answer, or the window holds no such entry — both read as not approved.
 
     `history(first: n)` is the n NEWEST entries, newest first; `last: n` is the
@@ -187,8 +212,8 @@ def post_refusal(ops, identifier: str, body: str) -> bool:
 
 def decision(ops, identifier: str, lane: str = TODO) -> str | None:
     """The refusal the write layer would give a write of `lane`, read through
-    the read functions only. For a card already in Todo the lane before it is
-    read off its history, the way the movers read it."""
+    the read functions only. For a card already in `TODO` the lane before it
+    is read off its history, the way the movers read it."""
     issue = ops.get_issue(identifier, fresh=True)
     current = (issue.get("state") or {}).get("name")
     before = lane_before_todo(ops, identifier) if _same_lane(current, TODO) else current

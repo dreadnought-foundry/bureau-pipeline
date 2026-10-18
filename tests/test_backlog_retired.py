@@ -169,9 +169,10 @@ def raw_entry():
 
 
 class TestTheContractMarksItRetiring:
-    def test_the_retiring_set_is_exactly_the_backlog_entry(self):
+    def test_the_retiring_set_holds_the_backlog_entry(self):
+        # Beside the start lane the flip emptied (DRE-7129).
         retiring = lane_contract.lanes("retiring")
-        assert [entry["name"] for entry in retiring] == [OLD_LANE]
+        assert [entry["name"] for entry in retiring] == [OLD_LANE, "To" + "do"]
 
     def test_it_is_replaced_by_queued_and_retired_by_the_epic(self):
         entry = lane_contract.lane(OLD_LANE, status="retiring")
@@ -207,16 +208,20 @@ class TestTheContractMarksItRetiring:
         assert lane_contract.aliases()[OLD_LANE] == NEW_LANE
         assert OLD_LANE in lane_contract.QUEUE_LANES
 
-    def test_the_drain_reads_exactly_this_entry(self):
+    def test_the_drain_reads_this_entry(self):
         # The sweep's drain keys on a retiring lane with a replacement; this is
-        # the one it finds.
+        # the one that drains into Queued.
         draining = [e for e in lane_contract.lanes("retiring") if e.get("replaced_by")]
-        assert [(e["name"], e["replaced_by"]) for e in draining] == [(OLD_LANE, NEW_LANE)]
+        assert [(e["name"], e["replaced_by"]) for e in draining
+                if e["replaced_by"] == NEW_LANE] == [(OLD_LANE, NEW_LANE)]
 
 
 class TestTheHarness:
     def board(self, **counts):
+        # Every state the contract names, the other retiring lane included.
         board = {name: 0 for name in lane_contract.lane_names()}
+        board.update({name: 0 for name in lane_contract.lane_names("retiring")
+                      if name != OLD_LANE})
         board.update(counts)
         return board
 

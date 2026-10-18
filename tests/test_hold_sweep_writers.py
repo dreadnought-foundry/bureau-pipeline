@@ -76,7 +76,7 @@ def _iso(minutes_ago: float) -> str:
         "+00:00", "Z")
 
 
-def _card(identifier="DRE-7001", state="Todo", labels=("repo:agent-bureau",),
+def _card(identifier="DRE-7001", state="In Progress", labels=("repo:agent-bureau",),
           minutes_stale=45.0, bodies=()):
     return {
         "id": f"uuid-{identifier}",
@@ -162,7 +162,7 @@ def test_the_no_run_receipt_names_the_resend_and_the_lift():
     body = _receipt(writes)
     anchor = pipeline_act.record("card-stranded")["emits"]["anchor"]
     assert anchor in body, "the act's declared anchor phrase must still stand"
-    assert "out of Todo and back" in body
+    assert "out of In Progress and back" in body
     assert "linear_ops.py unpark" in body
     assert "lifts itself on the first run receipt newer than" in body
     # Nothing lifts the hold by itself until the holds lane lands (DRE-6180),
@@ -173,7 +173,7 @@ def test_the_no_run_receipt_names_the_resend_and_the_lift():
     assert "nothing on the card needs clearing" not in body
     assert "merely queued" not in body
     # The sentence comes after the anchor phrase, never before it.
-    assert body.index(anchor) < body.index("out of Todo and back")
+    assert body.index(anchor) < body.index("out of In Progress and back")
 
 
 # --------------------------------------------------------------------------
@@ -181,7 +181,7 @@ def test_the_no_run_receipt_names_the_resend_and_the_lift():
 # --------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("state", ["Todo", "In Progress"])
+@pytest.mark.parametrize("state", ["In Progress"])
 def test_a_no_route_card_is_held_stamped_and_moved_to_triage(state):
     card = _card(state=state, labels=("repo:ghost-product",))
     flagged, writes, _ = _sweep([card])
@@ -192,7 +192,7 @@ def test_a_no_route_card_is_held_stamped_and_moved_to_triage(state):
         ("comment", "DRE-7001", receipt),
         ("label", "DRE-7001", reconcile.HOLD_LABEL),
         ("comment", "DRE-7001", stamp),
-        ("advance", "DRE-7001", "Triage", "Todo,In Progress"),
+        ("advance", "DRE-7001", "Triage", "In Progress,Todo"),
     ]
 
 
@@ -221,7 +221,7 @@ def test_a_card_with_no_repo_label_is_stamped_repo_none():
     flagged, writes, _ = _sweep([_card(labels=())])
     assert flagged == {"DRE-7001"}
     assert ("comment", "DRE-7001", no_route_stamp("none")) in writes
-    assert ("advance", "DRE-7001", "Triage", "Todo,In Progress") in writes
+    assert ("advance", "DRE-7001", "Triage", "In Progress,Todo") in writes
 
 
 def test_a_slug_the_stamp_cannot_carry_is_stamped_repo_none():
@@ -230,7 +230,7 @@ def test_a_slug_the_stamp_cannot_carry_is_stamped_repo_none():
     flagged, writes, _ = _sweep([_card(labels=("repo:Ghost Product",))])
     assert flagged == {"DRE-7001"}
     assert ("comment", "DRE-7001", no_route_stamp("none")) in writes
-    assert writes[-1] == ("advance", "DRE-7001", "Triage", "Todo,In Progress")
+    assert writes[-1] == ("advance", "DRE-7001", "Triage", "In Progress,Todo")
 
 
 def test_the_no_route_stamp_reads_back_as_its_reason():
@@ -294,7 +294,7 @@ def test_the_door_guard_names_the_lane_the_decision_read(door_read):
 
 
 def test_a_door_read_no_route_card_that_left_its_lane_gets_nothing(door_read):
-    card = _card(state="Todo", labels=("repo:ghost-product",))
+    card = _card(state="In Progress", labels=("repo:ghost-product",))
     flagged, writes, reads = _sweep([card], live_lane="In Review")
     assert reads == ["DRE-7001"], "one live read before the first write"
     assert writes == [], "no receipt, no label, no stamp, no move"
@@ -302,13 +302,13 @@ def test_a_door_read_no_route_card_that_left_its_lane_gets_nothing(door_read):
 
 
 def test_a_door_read_no_route_card_still_in_its_lane_is_held_and_moved(door_read):
-    card = _card(state="Todo", labels=("repo:ghost-product",))
-    flagged, writes, reads = _sweep([card], live_lane="Todo")
+    card = _card(state="In Progress", labels=("repo:ghost-product",))
+    flagged, writes, reads = _sweep([card], live_lane="In Progress")
     assert reads == ["DRE-7001"]
     assert flagged == {"DRE-7001"}
     assert ("label", "DRE-7001", reconcile.HOLD_LABEL) in writes
     assert ("comment", "DRE-7001", no_route_stamp("ghost-product")) in writes
-    assert writes[-1] == ("advance", "DRE-7001", "Triage", "Todo,In Progress")
+    assert writes[-1] == ("advance", "DRE-7001", "Triage", "In Progress,Todo")
 
 
 def test_a_linear_read_no_route_card_costs_no_live_read():
@@ -316,7 +316,7 @@ def test_a_linear_read_no_route_card_costs_no_live_read():
     alone, with no request before it."""
     _, writes, reads = _sweep([_card(labels=("repo:ghost-product",))])
     assert reads == []
-    assert writes[-1] == ("advance", "DRE-7001", "Triage", "Todo,In Progress")
+    assert writes[-1] == ("advance", "DRE-7001", "Triage", "In Progress,Todo")
 
 
 # --------------------------------------------------------------------------

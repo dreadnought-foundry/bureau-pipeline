@@ -6,14 +6,18 @@ pipeline when it doesn't. Self-limiting: every nudge comments on the card,
 which bumps updatedAt past the staleness threshold for the next sweep.
 
 Checks (card must carry **Repo:** atlas, any owner-prefix form):
-  Todo        stale >15m, no open PR, no fresh dispatch -> re-fire dispatch
-  In Progress stale >1h: PR open -> advance to the review lane + trigger
-              qa-review; no PR -> back to Todo (relay re-dispatches on the
-              transition)
+  In Progress not started past its start window -> re-fire dispatch
+              (DRE-7108); stale >1h: PR open -> advance to the review lane +
+              trigger qa-review; no PR -> requeued (the next promotion
+              re-dispatches it)
   In Review   stale >2h: PR merged -> Done; verdict bound to the current
               head (DRE-1990) -> merge-gate; verdict missing OR stale/
-              unbound -> re-trigger qa-review; no PR -> back to Todo,
+              unbound -> re-trigger qa-review; no PR -> requeued,
               capped by the shared dead-run cap (DRE-2034)
+
+The old start lane retires (DRE-7129): `drain_retiring_lanes` moves every
+card still in it to In Progress, except an epic, which
+`carry_epics_out_of_todo` carries by its own rule.
 
 The review lane is ONE lane since DRE-2726 — the two that preceded it both
 meant "a pull request is open and being checked", and the split made the
@@ -53,7 +57,7 @@ the fix agent, receipted on the PR, and its card released from the human queue
 on top of the answer. A human comment that mentions an operator decision but
 does not parse as one is reported on the PR instead of held in silence.
 
-Stranded-card watchdog (DRE-1993): every card/epic in Todo / Hand-work / In Progress whose
+Stranded-card watchdog (DRE-1993): every card/epic in a start lane / Hand-work whose
 repo has no route in the routing snapshot, or (this repo's cards) with no run
 receipt, gets — after 30 minutes either way — ONE plain-English comment naming
 the reason plus the needs-human label, so the board never says work is
@@ -63,7 +67,7 @@ only after PLANNING_MINUTES with nothing happening to it (DRE-1978 sat in
 Planning 7 days unseen).
 
 Also runs the dependency gate: Queued children whose parent epic is ACTIVATED
-(= plan approved) are auto-promoted to Todo once every blocker is Done — blockers
+(= plan approved) are auto-promoted to In Progress once every blocker is Done — blockers
 read from Linear's native "blocks" relations AND from "Blocked by: DRE-N" /
 "serialize after DRE-N" lines in the description. A WIP cap (MAX_WIP, default
 DEFAULT_MAX_WIP active cards) throttles promotion so the pipeline never floods.
@@ -92,8 +96,9 @@ moving with it (scripts/mid_epic.py owns the whole mechanism).
 An epic counts as ACTIVATED in In Progress and nowhere else (DRE-5347). The
 CEO's approval is the move of an epic to **In Progress**, and only that — what
 standards/card-quality.md and the planner brief tell them, and what the plan
-comment asks for (DRE-2727). DRE-1893 once let Todo activate an epic too; that
-convention is retired. An epic found in Todo is carried out of it on every full
+comment asks for (DRE-2727). DRE-1893 once let the old start lane activate an
+epic too; that convention is retired. An epic found in that lane
+(`epic_todo_gate.TODO`) is carried out of it on every full
 sweep (`carry_epics_out_of_todo`) — back to In Progress when it was approved, to
 Planning when it was not — and while it sits there it activates nothing: an
 approved epic's children wait at most one sweep, and an unapproved epic's
@@ -816,7 +821,7 @@ HAND_BUILT_LABEL = routing_verdict.HAND_BUILT_LABEL
 _TODO_REDISPATCH_NOTE = "card was promoted and no run started — re-dispatched"
 _TODO_REDISPATCH_NOTES = (
     _TODO_REDISPATCH_NOTE,
-    "card sat in Todo with no run — re-dispatched",
+    f"card sat in {epic_todo_gate.TODO} with no run — re-dispatched",
 )
 
 # The runner line (DRE-7108): a card whose intent the relay is holding until a
@@ -874,8 +879,8 @@ def hand_built(card: dict) -> bool:
     board read already carries, at no request. WORKBENCH declares no marks
     since DRE-6227, so the label alone would leave a WORKBENCH card in
     Hand-work unmarked, and the watchdog would hold it as a build that never
-    started. Only in that lane: a card a person moved on to Todo has been
-    handed to the fleet, and its old verdict must not hold the dispatch back.
+    started. Only in that lane: a card a person moved on to a start lane has
+    been handed to the fleet, and its old verdict must not hold the dispatch back.
 
     The work is done by a human or a local agent rather than a dispatched
     pipeline agent, so "no run receipt", "no dispatch route" and "no PR yet"
@@ -949,7 +954,7 @@ def counts_against_wip(card: dict) -> bool:
     was dispatched for it and nothing will be — so counting it budgets the
     fleet's capacity against work a person is doing by hand.
 
-    Measured on 2026-09-08: 19 such cards sat in Todo / In Progress / In Review
+    Measured on 2026-09-08: 19 such cards sat in the start lanes / In Review
     against agent-bureau's cap of 12, so the sweep printed "WIP at cap — none
     promoted" and no engineer card could ever promote again. The two labels are
     exactly the marks the OPERATOR and WORKBENCH verdicts stamp
@@ -983,7 +988,7 @@ def automation_card(card: dict) -> bool:
     limit-recovery both count (DRE-4934), and `main()`'s board read that
     hands it `mine` — with two effects: the card is out of the WIP base (a dependabot batch of 27 would
     otherwise saturate MAX_WIP and stop promotion fleet-wide), and out of the
-    nudge loop, whose In Review no-PR branch would requeue it into Todo after
+    nudge loop, whose In Review no-PR branch would requeue it for a build after
     STALE_MINUTES and dispatch an agent onto a dependency bump (`pr_for`
     searches `head:agent/DRE-n`, which a dependabot head never matches).
     Distinct from `hand_built` on purpose: that label means a PERSON does the
@@ -1867,6 +1872,16 @@ def drain_retiring_lanes() -> None:
     tests/test_lane_fold_in_review.py pins both that inertness and the drain
     against the real retiring entry.
 
+    DRE-7129 is the third use: the old start lane retires into In Progress,
+    the dispatch lane, so a card drained there is dispatched by the move, and
+    one that is not started is re-fired by the start window (DRE-7108) unless
+    its run is already in flight. EXCEPT AN EPIC: a move into the dispatch lane
+    is the CEO's approval of an epic, and a drag must never stand in for it, so
+    the drain leaves an epic where it is (`epic_todo_gate.is_epic_card`, over
+    the title, the children and the comment bodies the board read carries) and
+    `carry_epics_out_of_todo`, later in the same sweep, carries it by its own
+    rule. A retirement into any other lane drains an epic like any card.
+
     Idempotent by construction — `cmd_advance` moves a card only while it is
     still in the lane named, so a second sweep finds nothing and a race between
     two repos' sweeps costs one no-op.
@@ -1887,6 +1902,7 @@ def drain_retiring_lanes() -> None:
         raise  # skipped by its phase (Stage 2 item 34; an idle pass)
     except Exception as e:  # a read failure here must not kill the sweep
         raise ReconcileWriteError(f"drain: could not list retiring lanes: {e}") from e
+    left: list[str] = []
     for card in stranded:
         ident = card["identifier"]
         was = card["state"]["name"]
@@ -1894,6 +1910,13 @@ def drain_retiring_lanes() -> None:
         if lane is None:
             continue  # not a retiring lane: the state filter is the query's job
         to = lane["replaced_by"]
+        if to == lane_contract.DISPATCH_LANE and epic_todo_gate.is_epic_card(
+            card.get("title") or "",
+            bool(((card.get("children") or {}).get("nodes")) or []),
+            card_comment_bodies(card),
+        ):
+            left.append(ident)
+            continue
         try:
             linear_ops.cmd_advance(ident, to, was)
             linear_ops.cmd_comment(
@@ -1904,9 +1927,12 @@ def drain_retiring_lanes() -> None:
             )
         except Exception as e:
             raise ReconcileWriteError(f"{ident} drain {was}->{to}: {e}") from e
-    if stranded:
-        print(f"drain: moved {len(stranded)} card(s) out of retiring lane(s)")
-    else:
+    if left:
+        print(f"drain: left {len(left)} epic(s) for the epic carry, which moves "
+              f"them by approval: {', '.join(left)}")
+    if len(stranded) > len(left):
+        print(f"drain: moved {len(stranded) - len(left)} card(s) out of retiring lane(s)")
+    elif not stranded:
         print("drain: nothing to move — 0 card(s) in the retiring lane(s) "
               f"{', '.join(draining)}")
 
@@ -2114,15 +2140,16 @@ def card_is_epic(card: dict, bodies: list[str] | None = None) -> bool:
 
 
 def carry_epics_out_of_todo() -> None:
-    """Carry every epic found in Todo to its right lane (DRE-5347).
+    """Carry every epic found in the old start lane to its right lane (DRE-5347).
 
-    The write layer refuses to put an epic in Todo (DRE-5316), but a person can
-    still drag one there — in Linear, or from the console's epic move menu — and
-    nothing comes for it: the relay dispatches nothing for an epic in Todo, and
-    the promoter and the nudge loop skip epics. DRE-3621 sat there seventeen
-    days. So every full sweep reads the Todo cards it has already fetched and,
-    for each one `epic_todo_gate` calls an epic (never the planner-ownership
-    label), writes In Progress when the lane before Todo says it was approved
+    The write layer refuses to put an epic in `epic_todo_gate.TODO` (DRE-5316),
+    but a person can still drag one there — in Linear, or from the console's
+    epic move menu — and nothing comes for it: the relay dispatches nothing for
+    an epic there, and the promoter and the nudge loop skip epics. DRE-3621 sat
+    there seventeen days. So every full sweep reads that lane's cards it has
+    already fetched and, for each one `epic_todo_gate` calls an epic (never the
+    planner-ownership label), writes In Progress when the lane before it says
+    it was approved
     and Planning when it does not. A move to In Progress re-fires `plan.yml`'s
     activate route, the intended re-activation; a move to Planning starts the
     planner, the cost DRE-5316 accepts. Each lane is a literal, so the
@@ -2137,6 +2164,10 @@ def carry_epics_out_of_todo() -> None:
 
     A pass that finds no epic says so in one line (DRE-5519).
     """
+    if epic_todo_gate.TODO is None:
+        # The entry is deleted, and with it the lane: nothing can be in it.
+        print("epic-not-todo: nothing to carry — the contract names no retiring start lane")
+        return
     in_todo = 0
     epics = 0
     for card in active_cards((epic_todo_gate.TODO,)):
@@ -2167,21 +2198,25 @@ def carry_epics_out_of_todo() -> None:
                 moved = linear_ops.cmd_state(ident, "Planning", **_door_guard(card))
                 carried = "Planning"
         except Exception as e:  # noqa: BLE001 — one epic must not stop the rest
-            _write_failures.append(f"epic-not-todo: carrying {ident} out of Todo: {e}")
+            _write_failures.append(
+                f"epic-not-todo: carrying {ident} out of {epic_todo_gate.TODO}: {e}")
             print(f"ERROR: carry_epics_out_of_todo: {ident}: {e}", file=sys.stderr)
             continue
         if moved is False and _door_guard(card):
-            print(f"epic-not-todo: {ident} is no longer in Todo as the door read it — "
+            print(f"epic-not-todo: {ident} is no longer in {epic_todo_gate.TODO} "
+                  "as the door read it — "
                   "not carried, no refusal posted")
             continue
-        print(f"epic-not-todo: {ident} found in Todo (before: {before}) — carried to {carried}")
+        print(f"epic-not-todo: {ident} found in {epic_todo_gate.TODO} "
+              f"(before: {before}) — carried to {carried}")
         body = epic_todo_gate.refusal(
             ident, epic_todo_gate.TODO, title, kids, bodies, before, carried_to=carried
         )
         if body is not None:
             epic_todo_gate.post_refusal(linear_ops, ident, body)
     if not epics:
-        print(f"epic-not-todo: nothing to carry — no epic among the {in_todo} card(s) in Todo")
+        print("epic-not-todo: nothing to carry — no epic among the "
+              f"{in_todo} card(s) in {epic_todo_gate.TODO}")
 
 
 def _fetch_active_cards(states: tuple[str, ...]) -> list[dict]:
@@ -2513,7 +2548,7 @@ def live_rail_slugs() -> frozenset[str] | None:
 
 
 def _watchdog_cards() -> list[dict]:
-    """The cards `flag_stranded` walks: Todo, Hand-work and In Progress, EVERY repo's.
+    """The cards `flag_stranded` walks: the start lanes and Hand-work, EVERY repo's.
 
     Off and shadow read those lanes from Linear, the whole team's, so this is
     `active_cards(WATCHDOG_LANES)` unchanged. With the door ON and serving, the
@@ -2565,7 +2600,7 @@ def _no_run_reading(ident: str, nodes: list[dict], sent: str | None) -> tuple[st
     A build's FIRST act is a Linear write (agent-task's `Card → In Progress`
     posts the run receipt), so a Linear outage is exactly what makes a started
     build look like one that never started. On 2026-10-02 that is how four
-    Todo cards were stamped needs-human — DRE-5595 a minute after its re-send.
+    promoted cards were stamped needs-human — DRE-5595 a minute after its re-send.
     The questions are asked cheapest first: what this sweep's own Linear
     requests met, what the card's own thread records inside the lookback, and
     only then the one GitHub listing the nudge loop already shares.
@@ -2902,7 +2937,7 @@ def flag_stranded() -> set[str]:
           (validate_card.VALID_SLUGS, mirroring the relay's map), so no
           dispatch can EVER start a run. Flagged after WATCHDOG_MINUTES,
           the same grace class (b) always had: a card is genuinely
-          unroutable for a real interval between creation and the Todo
+          unroutable for a real interval between creation and the start
           gate's repair pass (validate_card infers a missing repo label and
           repairs it), and flagging on the first sweep RACES that repair —
           for a permanent consequence, since promote_ready() skips a held
@@ -2956,8 +2991,8 @@ def flag_stranded() -> set[str]:
     run itself is untouched, and once the hygiene agent's holds lane lands
     (DRE-6180) the stamp lifts on the first run receipt newer than it. A NO ROUTE card is a mechanical fix — a person corrects
     its `repo:` label, or the repo joins the rail — and not a decision, so
-    after the stamp it is moved to Triage, the operator's queue, out of Todo
-    or In Progress only (`cmd_advance`). A card the read door's board put in
+    after the stamp it is moved to Triage, the operator's queue, out of a
+    start lane only (`cmd_advance`). A card the read door's board put in
     its lane is read live once before the first write (`_door_lane_still`):
     one that left the lane since gets no receipt, no label and no stamp.
     Fail loud beats fail silent (DRE-1979).
@@ -3088,7 +3123,7 @@ def flag_stranded() -> set[str]:
                 # holds lane lands (DRE-6180), so today's re-send clears it.
                 f"To re-send it, run `linear_ops.py unpark {ident}`, which "
                 f"clears the hold for you, or remove the '{HOLD_LABEL}' label "
-                "and move the card out of Todo and back. Once the hygiene "
+                f"and move the card out of {state} and back. Once the hygiene "
                 "agent's holds lane is live (DRE-6172), a re-send needs no "
                 "clearing: the hold lifts itself on the first run receipt "
                 "newer than its stamp."
@@ -3151,7 +3186,7 @@ def flag_stranded() -> set[str]:
             # Planning has its own rule. The hygiene agent's Triage lane
             # leaves a stamped no-route card where this puts it (DRE-6190).
             try:
-                linear_ops.cmd_advance(ident, "Triage", "Todo,In Progress")
+                linear_ops.cmd_advance(ident, "Triage", ",".join(lane_contract.START_LANES))
             except linear_ops.LinearError as e:
                 _write_failures.append(f"{ident} no-route move to Triage: {e}")
                 print(f"ERROR: watchdog: {ident} was not moved to Triage: {e}",
@@ -5350,7 +5385,7 @@ def agent_run_alive(identifier: str) -> bool:
 
     Origin (2026-07-10 20:07–22:22Z, DRE-2023 on agent-bureau): three builds
     each ran ~45 minutes with real progress receipts on the card; the
-    In-Progress-no-PR branch read the staleness as death, requeued to Todo,
+    In-Progress-no-PR branch read the staleness as death, requeued the card,
     and the fresh dispatch CANCELLED the still-running build via the per-card
     concurrency group (run 29125285930 concluded cancelled at "Gate on agent
     result"). The dead-run cap then parked the card needs-human — the watchdog
@@ -7891,8 +7926,8 @@ def promote_ready(
 
     THREE verdicts leave this lane, not one (DRE-3385). FLEET is promoted and
     dispatched; WORKBENCH and OPERATOR are promoted and NOT dispatched — the
-    marks their verdict declares go on first, so the card never sits in Todo
-    unmarked, and the receipt says whose turn it is. Only a verdict routed
+    marks their verdict declares go on first, so the card never sits in
+    Hand-work unmarked, and the receipt says whose turn it is. Only a verdict routed
     somewhere else (PARKED, NEEDS WORK) or no verdict at all is refused. The
     hand-built promotions do not spend the WIP budget either: nothing is
     dispatched for them, so they take no slot, and a Queued holding 33
@@ -7900,7 +7935,7 @@ def promote_ready(
 
     And they do not WAIT on it. The cap is asked per card, never once for the
     sweep: a fleet at — or over — its cap holds every card a run would be
-    dispatched for, and still carries a WORKBENCH or OPERATOR card to Todo,
+    dispatched for, and still carries a WORKBENCH or OPERATOR card to Hand-work,
     because "a hand-built card needs no room" (the lane contract's words). An
     early return at the cap starved a person's card on every ordinary busy day
     (PR #430's review); so did breaking out of the loop once the budget was
@@ -8609,7 +8644,7 @@ def promote_ready(
 
 
 def close_finished_epics(epic_identifiers: set[str]) -> set[str]:
-    """An epic whose children are all terminal closes itself — from Todo,
+    """An epic whose children are all terminal closes itself — from
     In Progress, In Review or Queued, the lanes `EPIC_CLOSE_LANES` declares,
     and from no other (DRE-6410). The callers choose the epics by lane: the
     full sweep hands over the work lanes' epics off its board read and
@@ -8655,7 +8690,7 @@ def _close_epic_if_finished(epic: str) -> bool:
     lane.
 
     The test is the same whichever lane the epic sits in, and the lanes it is
-    asked about are `EPIC_CLOSE_LANES` — Todo, In Progress, In Review and
+    asked about are `EPIC_CLOSE_LANES` — In Progress, In Review and
     Queued — chosen by the callers of `close_finished_epics` (DRE-6410)."""
     record = epic_records([epic]).get(epic)
     if record is None:
@@ -10405,7 +10440,7 @@ def _flag_one_unlanded_branch(branch: dict, pr_refs: set[str],
 def _flag_hand_built_idle(branches: list[dict], pr_refs: set[str]) -> None:
     """The alarm that replaces what HAND_BUILT_LABEL suppresses (DRE-2682).
 
-    A hand-built card in Todo / Hand-work / In Progress with NO card branch and NO pull
+    A hand-built card in a start lane / Hand-work with NO card branch and NO pull
     request has nothing to point at: the board says work is happening and
     there is no artifact anywhere that agrees. flag_stranded cannot say so —
     it is silenced on this label by design and correctly, because the thing it
@@ -10679,7 +10714,7 @@ def move_hand_built_to_review() -> None:
 
     Neither existing path reaches it. `main()`'s nudge loop already carries
     "open PR → In Review" and is label-blind, but it walks only the lanes it
-    sweeps and has no open-PR branch for Todo at all; the stranded watchdog is
+    sweeps and had no open-PR branch for the old start lane at all; the stranded watchdog is
     silenced on this label by design. So this starts from the OTHER end: the
     open-pull-request listing the sweep already keeps (`_open_pr_listing`),
     and the card is looked up in the board snapshot it already read. Widening
@@ -13858,7 +13893,7 @@ def wip_base(active: list[dict]) -> list[dict]:
 
     limit-recovery used to count the WIDER set — every active card of the
     repo, epics and automation cards included — so the two disagreed about the
-    same number. DRE-4811 died on Linear's hourly quota and sat in Todo for
+    same number. DRE-4811 died on Linear's hourly quota and sat promoted for
     about twenty hours, every sweep printing "the WIP room is spent" beside a
     promotion step reading `WIP 3+0/12`, with seven cards blocked behind it.
     Both now read this helper, so a card promotion would dispatch is
@@ -14015,7 +14050,7 @@ def recover_limit_deaths() -> None:
     The board is every lane the sweep reads, `SWEPT_LANES`, not the default
     `SWEEP_STATES` (DRE-4211). A classify or plan death leaves its card in
     Planning, and the recovery re-enters it from there by bouncing it through
-    Intake. Handed only Todo, In Progress and In Review, the pass never saw
+    Intake. Handed only the start lanes and In Review, the pass never saw
     those cards, and every planner run a limit killed had to be re-sent by
     hand. `SWEPT_LANES` is exactly what the sweep's one board read covers, so
     the wider list costs no Linear request.
@@ -14630,7 +14665,7 @@ OFF_RAIL_SKIPPED: dict[str, str] = {
     "start_queued_epics":
         "started the next waiting epic of any repo, Green Light to In Progress",
     "carry_epics_out_of_todo":
-        "carried unlabeled epics out of Todo",
+        "carried unlabeled epics out of the old start lane",
 }
 
 
@@ -14803,7 +14838,7 @@ def main(
       - plan.yml, the moment an epic activates (In Progress, the one lane the
         gate counts an epic as active in — DRE-5347)
       - linear-sync.yml, the moment a merge flips a card to Done
-    Promotion is pure Linear (the Queued→Todo transition rides the Linear
+    Promotion is pure Linear (the Queued→In Progress transition rides the Linear
     webhook → relay → repository_dispatch for the actual agent start), so
     the event hooks need only LINEAR_API_KEY. (Origin: DRE-1260 activated
     9s after a sweep checked and faced an ~80-minute wait, 2026-06-12.)

@@ -84,7 +84,7 @@ def _active_card(n: int) -> dict:
         "title": f"card {n}",
         "description": "",
         "updatedAt": "2026-08-01T00:00:00Z",
-        "state": {"name": "Todo"},
+        "state": {"name": "In Progress"},
         "labels": {"nodes": [{"name": "repo:bureau-pipeline"}]},
     }
 
@@ -156,10 +156,10 @@ def test_active_cards_still_filters_by_the_states_it_was_asked_for():
         return fake.gql(query, variables)
 
     with patch.object(linear_ops, "gql", spy):
-        cards = reconcile.active_cards(("Todo", "Planning"))
+        cards = reconcile.active_cards(("In Progress", "Planning"))
     assert len(sent) == 2
     assert all(v["states"] == list(reconcile.BOARD_READ_LANES) for v in sent)
-    assert {c["state"]["name"] for c in cards} == {"Todo"}
+    assert {c["state"]["name"] for c in cards} == {"In Progress"}
     assert len(cards) == 149
     assert cards[-1]["identifier"] == THE_150TH
 
