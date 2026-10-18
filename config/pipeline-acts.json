@@ -1818,7 +1818,7 @@
       "file": "scripts/reconcile.py",
       "anchor": "f\"🧹 Reconcile: {_TODO_REDISPATCH_NOTE}.\"",
       "kind": "undeclared-act",
-      "means": "A Todo card with no run is re-dispatched, and the receipt follows the dispatch's real outcome.",
+      "means": "A promoted card with no start receipt newer than its entry into its start lane — Todo or In Progress — is re-dispatched as a build once its start window has passed and nothing says it is alive (no run in flight, no standing runner-line hold), and the receipt follows the dispatch's real outcome (DRE-7108).",
       "why": "Act-shaped, and the registry has no row for it. DRE-2825 declared thirteen acts by reading reconcile.py's ten tag constants, the fix loop's three notices and the medic; this receipt was not among them. Giving it a row is a REGISTRY change — a tag, a kind, a state, a next actor, a subscriber, and the reasoning that fixes each — not an emission change, and this card converts what the registry declares. Named here so the debt is countable rather than invisible. Its wording is `_TODO_REDISPATCH_NOTE` because the stranded-card watchdog matches on it, so it already carries a key another act reads."
     },
     {
@@ -1844,9 +1844,9 @@
     },
     {
       "file": "scripts/reconcile.py",
-      "anchor": "In Progress with no PR past the",
+      "anchor": "with no PR past the",
       "kind": "undeclared-act",
-      "means": "A dead or hung agent run past the staleness window is requeued to Todo, under the shared death counter.",
+      "means": "A started card's dead or hung agent run past the staleness window is requeued to the queue lane (`QUEUE_LANE`, DRE-7108), where the sweep promotes it again on the same gates, under the shared death counter.",
       "why": "Act-shaped, and the registry has no row for it. DRE-2825 declared thirteen acts by reading reconcile.py's ten tag constants, the fix loop's three notices and the medic; this receipt was not among them. Giving it a row is a REGISTRY change — a tag, a kind, a state, a next actor, a subscriber, and the reasoning that fixes each — not an emission change, and this card converts what the registry declares. Named here so the debt is countable rather than invisible. It already carries `DEAD_TAG`, which the sweep counts against `REQUEUE_CAP` — an idempotency key waiting for a row."
     },
     {
@@ -1900,9 +1900,9 @@
     },
     {
       "file": "scripts/reconcile.py",
-      "anchor": "{REVIEW_LANE} with no PR — requeued to Todo",
+      "anchor": "{REVIEW_LANE} with no PR — requeued to {QUEUE_LANE}",
       "kind": "undeclared-act",
-      "means": "A review-lane card with no PR is requeued to Todo, under the same shared death counter.",
+      "means": "A review-lane card with no PR is requeued to the queue lane (`QUEUE_LANE`, DRE-7108), under the same shared death counter.",
       "why": "Act-shaped, and the registry has no row for it. DRE-2825 declared thirteen acts by reading reconcile.py's ten tag constants, the fix loop's three notices and the medic; this receipt was not among them. Giving it a row is a REGISTRY change — a tag, a kind, a state, a next actor, a subscriber, and the reasoning that fixes each — not an emission change, and this card converts what the registry declares. Named here so the debt is countable rather than invisible."
     },
     {

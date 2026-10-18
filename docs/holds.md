@@ -443,7 +443,7 @@ records.
 
 | Reason | What runs first, with no person | The receipt that records it |
 | -- | -- | -- |
-| `stranded-no-run` | The sweep re-sends a card that sat in Todo with no run, once (DRE-5743). | `card sat in Todo with no run — re-dispatched` |
+| `stranded-no-run` | The sweep re-sends a promoted card no run started on, once (DRE-5743), in Todo or In Progress alike (DRE-7108). | `card was promoted and no run started — re-dispatched` |
 | `no-route` | The card moves to the operator's queue under the `card-stranded` act. The move lands with DRE-6177. | `card-stranded` |
 | `review-cap-spent` | Three review re-triggers on the head, then the evidence-built Green Light question. The question lands with DRE-6181. On a proof record the question is the operator's and the card is held In Review, not parked in Green Light (DRE-6841). | `review-nudge-cap` |
 | `dead-run-cap` | Two requeues at the same budget, then — on a silent death, with no pull request and no blocker note — one hand-off to the planner. The Report step's cap has asked `dead_run.decide` since DRE-6178, and the sweep's two no-PR caps ask it through `hand_dead_run_to_planner` since DRE-6186; what the sweep sees at its cap is always the silent death. A credential refusal or an API or model death at the cap holds as today, because neither says anything about the card's size. | `✂️ dead-run-cap → Planning:` (`hold.DEAD_SPLIT_MARK`) |

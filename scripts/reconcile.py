@@ -612,7 +612,15 @@ _LIFE_PREFIXES = ("⏳", "🧠")
 # feeds). It carries no stall window in the contract, so it is NOT in
 # SWEEP_STATES: the nudge loop never dispatches at it, and `flag_stranded`
 # skips a hand-built card outright.
-WATCHDOG_LANES = ("Todo", "Hand-work", "In Progress")
+#
+# The build's lanes are the contract's start lanes (DRE-7108) — every lane a
+# card may sit in once its build was started, Todo among them until the flip —
+# laid out in the board's flow order, so deleting Todo's entry drops it here
+# with no edit.
+WATCHDOG_LANES = tuple(
+    lane for lane in lane_contract.flow_lanes()
+    if lane in (*lane_contract.START_LANES, "Hand-work")
+)
 WATCHDOG_MINUTES = int(os.environ.get("WATCHDOG_MINUTES", "30"))
 WATCHDOG_TAG = "stranded-watchdog"
 
@@ -622,10 +630,18 @@ WATCHDOG_TAG = "stranded-watchdog"
 # needs-human at 14:48 — inside a Linear quota outage that was refusing the
 # build's own "I have started" write. Three more Todo cards were stamped the
 # same half hour, none of them needing a person, and the hold stopped the
-# sweep re-sending any of them. The window is the Todo lane's own stall window
-# — the one the nudge loop re-sends on — so the watchdog judges a re-send no
-# sooner than the sweep would send the next one.
-START_WINDOW_MINUTES = STALE_MINUTES["Todo"]
+# sweep re-sending any of them. The window is the contract's start window
+# (`build_start.start_minutes`, DRE-7108) — the one the nudge loop re-sends a
+# not-started card on — so the watchdog judges a re-send no sooner than the
+# sweep would send the next one.
+START_WINDOW_MINUTES = lane_contract.START_MINUTES
+
+# The start lanes ahead of the dispatch lane (DRE-7108): a card in one was
+# promoted and is waiting for the run its lane sends — Todo until the flip, and
+# none once Todo's entry is gone.
+PROMOTED_LANES = tuple(
+    lane for lane in lane_contract.START_LANES if lane != lane_contract.DISPATCH_LANE
+)
 
 # How far back a failure, or a run GitHub lists, still speaks for the no-run
 # reading (DRE-5743): the watchdog's own window, plus the start window of a
@@ -789,11 +805,28 @@ GROOM_CARD_ENV = groom_schedule_gate.CARD_VARIABLE
 # OPERATOR marker moving to `operator-step` is a data change.
 HAND_BUILT_LABEL = routing_verdict.HAND_BUILT_LABEL
 
-# The sweep's own Todo-redispatch receipt (posted in main() below). It bumps
+# The sweep's own not-started re-dispatch receipt (posted in main() below). It bumps
 # updatedAt every ~15-minute cycle, so a silently-failing dispatch loop never
 # LOOKS WATCHDOG_MINUTES stale — a prior receipt with still no proof-of-life
 # is the same evidence as the elapsed time: dispatch fired, nothing ran.
-_TODO_REDISPATCH_NOTE = "card sat in Todo with no run — re-dispatched"
+# Since DRE-7108 it is posted for a not-started card in any start lane, so it
+# names no lane; the words it carried before stay in `_TODO_REDISPATCH_NOTES`,
+# which is what the watchdog matches, because a card re-sent before the change
+# still carries them.
+_TODO_REDISPATCH_NOTE = "card was promoted and no run started — re-dispatched"
+_TODO_REDISPATCH_NOTES = (
+    _TODO_REDISPATCH_NOTE,
+    "card sat in Todo with no run — re-dispatched",
+)
+
+# The runner line (DRE-7108): a card whose intent the relay is holding until a
+# runner is free has no run and no start receipt, and only the console's hold
+# comment on the card says it is alive. The pattern is the console's own
+# `runner_line.RECEIPT_RE` (agent-bureau, console/backend/runner_line.py, the
+# B1 contract), copied, never re-derived; a hold younger than the console's
+# six-hour maximum plus an hour is standing.
+RUNNER_LINE_RE = re.compile(r"^(⏸|▶|⏹)️?\s*runner-line:\s*(held|released|dropped)\b")
+RUNNER_LINE_HELD_MINUTES = 7 * 60
 
 # And its failure receipt's words (DRE-5743): GitHub refused the re-send, so
 # no build was sent and a missing run receipt says nothing about one. The
@@ -1548,7 +1581,7 @@ def build_workflow() -> str:
     Same resolution as review_workflow()/fix_workflow(), same reason: in
     bureau-pipeline `agent-task.yml` IS the reusable definition (workflow_call
     only), so its runs exist under `self-agent-task.yml`. Nothing here
-    DISPATCHES the build — the Todo branch fires a repository_dispatch, which
+    DISPATCHES the build — the not-started branch fires a repository_dispatch, which
     the relay and `plan_run.fire` own — this is the name the `run list` below
     resolves, and a guard watching the reusable would read permanently idle.
     """
@@ -2885,7 +2918,7 @@ def flag_stranded() -> set[str]:
       (b) NO RUN — a dispatchable card of THIS sweep's repo with zero run
           receipts (the DRE-2032 🧠/⏳ proof-of-life comments; agent-task
           and plan both post them at run start) after WATCHDOG_MINUTES —
-          or after a prior Todo-redispatch receipt, which resets updatedAt
+          or after a prior re-dispatch receipt, which resets updatedAt
           every cycle and would otherwise hide the strand forever, once
           that re-send is START_WINDOW_MINUTES old (DRE-5743). Before it
           stamps, `_no_run_reading` asks whether the missing receipt is
@@ -2985,7 +3018,7 @@ def flag_stranded() -> set[str]:
         # ran" is already the evidence the clock was there to gather — which is
         # why the gate reads the receipt and the receipt alone before any of
         # the checks below look at what the card says.
-        redispatched = any(_TODO_REDISPATCH_NOTE in b for b in bodies)
+        redispatched = any(note in b for note in _TODO_REDISPATCH_NOTES for b in bodies)
         if not redispatched and age_minutes(card["updatedAt"]) < WATCHDOG_MINUTES:
             continue  # young — give the dispatch (and the gate's repair) time
         # …but never sooner than a full start window after the newest re-send
@@ -2994,7 +3027,12 @@ def flag_stranded() -> set[str]:
         # board read carried one, else updatedAt — which the receipt bumped,
         # so it is never earlier than the re-send.
         nodes = linear_ops.window_nodes(card.get("comments"))
-        sent = _newest_receipt_at(nodes, _TODO_REDISPATCH_NOTE) if redispatched else None
+        sent = max(
+            (at for at in (_newest_receipt_at(nodes, note) for note in _TODO_REDISPATCH_NOTES)
+             if at),
+            key=lambda at: _moment(at) or datetime.min.replace(tzinfo=UTC),
+            default=None,
+        ) if redispatched else None
         if redispatched and age_minutes(sent or card["updatedAt"]) < START_WINDOW_MINUTES:
             print(
                 f"watchdog: {ident} was re-sent "
@@ -4918,8 +4956,12 @@ def advance_urgent_intake() -> set[str]:
 # declared `not-an-act` in config/pipeline-acts.json's `unconverted` block.
 INTAKE_BLOCKER_OPENER = "intake-blocker"
 
-#: The work lanes a blocked card is in flow in, by the card's own list.
-INTAKE_BLOCKED_LANES = ("Todo", "In Progress", "In Review")
+#: The work lanes a blocked card is in flow in, by the card's own list: the
+#: contract's start lanes and the review lane, in flow order (DRE-7108).
+INTAKE_BLOCKED_LANES = tuple(
+    lane for lane in lane_contract.flow_lanes()
+    if lane in (*lane_contract.START_LANES, REVIEW_LANE)
+)
 
 _INTAKE_BLOCKER_KEY = re.compile(
     rf"{re.escape(INTAKE_BLOCKER_OPENER)}: (DRE-\d+) holds up (DRE-\d+)(?!\d)"
@@ -5492,7 +5534,7 @@ def _build_run_job_names(run_id: str) -> list:
     Unreadable reads as no names, which makes the run UNATTRIBUTED rather than
     "not this card's" — the distinction matters only for the log, because an
     unattributed run cannot refuse anything, and that is the fail-open half the
-    Todo branch needs: a run this guard could not attribute must never strand a
+    not-started branch needs: a run this guard could not attribute must never strand a
     card whose work has genuinely not started.
     """
     if run_id in _build_job_names:
@@ -6287,6 +6329,69 @@ def hand_dead_run_to_planner(card: dict, dead: int, bodies: list[str]) -> bool:
     return True
 
 
+def build_started(card: dict) -> bool:
+    """Has this card's build started in the lane it is in now? (DRE-7108)
+
+    STARTED means a start receipt — the build run's `🧠 model-attempt`
+    comment, posted at its `Card → In Progress` step — newer than the card's
+    newest entry into its current lane. A receipt from an earlier trip through
+    the lane says nothing about this one.
+
+    No receipt in the window answers False without the lane's history, so the
+    common not-started card costs no request. With one, the entry time is read
+    off Linear's history (`linear_ops.lane_history`, one request); a card whose
+    history holds no entry into the lane was created there, and its creation
+    is the entry. A history read that fails raises `ReconcileReadError`: an
+    unreadable answer is neither started nor not.
+    """
+    receipts = [
+        _moment(node.get("createdAt"))
+        for node in linear_ops.window_nodes(card.get("comments"))
+        if (node.get("body") or "").lstrip().startswith(RUN_MARKER)
+    ]
+    receipts = [at for at in receipts if at is not None]
+    if not receipts:
+        return False
+    ident = card["identifier"]
+    lane = (card.get("state") or {}).get("name") or ""
+    try:
+        moves = linear_ops.lane_history(ident)
+    except Exception as e:  # noqa: BLE001 — any Linear/transport error is unread
+        raise ReconcileReadError(
+            f"lane history of {ident}: {e} — whether its build started is unknown"
+        ) from e
+    entered = next(
+        (move.get("createdAt") for move in moves
+         if ((move.get("toState") or {}).get("name")) == lane),
+        card.get("createdAt"),
+    )
+    entered_at = _moment(entered)
+    return entered_at is None or max(receipts) > entered_at
+
+
+def runner_line_held_since(card: dict) -> str | None:
+    """When the console put this card on the runner line, while that hold
+    stands; None otherwise (DRE-7108).
+
+    The card's NEWEST runner-line comment by `createdAt`, matched by the
+    console's `RECEIPT_RE` (`RUNNER_LINE_RE`), decides: `held` and younger
+    than `RUNNER_LINE_HELD_MINUTES` stands. `released`, `dropped`, an older
+    hold, or no runner-line comment at all does not. Read off the window the
+    board read carried, so it costs nothing.
+    """
+    newest = None
+    for node in linear_ops.window_nodes(card.get("comments")):
+        match = RUNNER_LINE_RE.match((node.get("body") or "").lstrip())
+        at = _moment(node.get("createdAt"))
+        if match and at is not None and (newest is None or at > newest[0]):
+            newest = (at, match.group(2), node["createdAt"])
+    if newest is None or newest[1] != "held":
+        return None
+    if age_minutes(newest[2]) >= RUNNER_LINE_HELD_MINUTES:
+        return None
+    return newest[2]
+
+
 def redispatch(card: dict) -> bool:
     """Re-fire the card's repository_dispatch; True ONLY on confirmed success.
 
@@ -6306,8 +6411,14 @@ def redispatch(card: dict) -> bool:
     the second of two dispatches for one lane entry.) What stays here is the
     sweep's half: a failure lands in the write ledger, so the run goes red
     for medic.
+
+    The re-fire is a BUILD (DRE-7108): the event is named outright as
+    `plan_run.EXECUTE_EVENT`, never left to the labels. Its one caller is the
+    nudge loop's not-started branch, whose cards are `wip_base`'s and so never
+    an epic; left to the labels, a one-off wearing `agent:planner` would be
+    sent to the planner, whose workflow moves it back to Planning.
     """
-    ok, err = plan_run.fire(card, REPO)
+    ok, err = plan_run.fire(card, REPO, event=plan_run.EXECUTE_EVENT)
     if not ok:
         _write_failures.append(err)
         print(f"ERROR: {err}", file=sys.stderr)
@@ -10259,7 +10370,7 @@ def _flag_one_unlanded_branch(branch: dict, pr_refs: set[str],
             return
     if state in structural_repair.TERMINAL_STATES:
         return  # a finished card's leftover branch is route F/I, not this alarm
-    if state == "Todo":
+    if state in PROMOTED_LANES:
         # DRE-4368: a dead run's card waits here for the resume run that
         # continues THIS branch, so "open a pull request from it" names the
         # wrong action. A Todo card never dispatched at all is flag_stranded's
@@ -15052,7 +15163,16 @@ def main(
                 continue  # human-hold: untouched until a human removes the label
             if limit_recovery.waiting(card_comment_bodies(card)):
                 continue  # DRE-3171: a limit death is a wait, and the wall is not down yet
-            if age_minutes(card["updatedAt"]) < STALE_MINUTES.get(state, 9999):
+            # A card in a start lane is first owed its start window (DRE-7108):
+            # a promoted card nobody built is re-fired then, whichever of the
+            # start lanes it sits in. updatedAt is never older than the card's
+            # entry into its lane, and the re-dispatch receipt bumps it, so this
+            # one clock is both the quiet wait after the entry and the gap
+            # between two re-fires. Every other card keeps its lane's window.
+            idle = age_minutes(card["updatedAt"])
+            window = STALE_MINUTES.get(state, 9999)
+            if idle < (min(window, START_WINDOW_MINUTES)
+                       if state in lane_contract.START_LANES else window):
                 continue
 
             try:
@@ -15072,14 +15192,32 @@ def main(
             has_pr = card_pr.has_work_pr(pr)
             merged = has_pr and card_pr.pr_state(pr) == card_pr.MERGED
             is_open = has_pr and card_pr.pr_state(pr) == card_pr.OPEN
+            # THE ONE QUESTION FIRST (DRE-7108): has the build started in this
+            # lane? A card with no pull request in a start lane and no start
+            # receipt newer than its entry is NOT STARTED — promoted, and no run
+            # began. A card that has started, or carries a pull request, is
+            # judged on its lane's own window, exactly as before.
+            not_started = False
+            if state in lane_contract.START_LANES and not has_pr:
+                try:
+                    not_started = not build_started(card)
+                except ReconcileReadError as e:
+                    # Unread is not "not started": act on nothing for this card,
+                    # sweep the rest, and exit red (DRE-2034's rule).
+                    _read_failures.append(str(e))
+                    print(f"ERROR: {e}", file=sys.stderr)
+                    continue
+            if not not_started and idle < window:
+                continue
             print(f"stale: {ident} in {state} (pr={pr['number'] if pr else None})")
 
             if hand_built(card) and not has_pr:
                 # DRE-2524, second half: the label suppresses the sweep's own
                 # dispatch, not just the watchdog's alarm about it. Every no-PR
-                # branch below starts or restarts an agent — Todo redispatches, In
-                # Progress requeues to Todo (which redispatches next sweep) and
-                # then parks to Backlog with HOLD_LABEL. On hand-built work that is
+                # branch below starts or restarts an agent — a not-started card is
+                # re-dispatched, a dead run is requeued to the queue (which the
+                # next sweep promotes, and so dispatches) and then parked with
+                # HOLD_LABEL (DRE-7108). On hand-built work that is
                 # a competing run on a card the label says no run is coming for.
                 # Scoped to `not has_pr` on purpose: once there IS a pull request
                 # the branches below are ordinary PR shepherding (merged → Done,
@@ -15149,9 +15287,14 @@ def main(
                     ident,
                     proof_note or "🧹 Reconcile: PR was already merged — moved to Done.",
                 )
-            elif state == "Todo" and not is_open:
-                # LIVENESS FIRST, exactly as the In Progress branch below does it
-                # (DRE-4830). A card whose first run is still QUEUED has posted
+            elif state in lane_contract.START_LANES and not is_open and not_started:
+                # PROMOTED, NOT STARTED (DRE-7108) — the same path in every start
+                # lane, Todo and In Progress alike, and never a dead run: nothing
+                # ran, so there is no death to count. It was the Todo branch's
+                # until the flip put promoted cards in In Progress, where the
+                # dead-run branch below would have requeued them after an hour.
+                #
+                # LIVENESS FIRST (DRE-4830). A card whose first run is still QUEUED has posted
                 # no heartbeat, so "no run receipt" and "no run" look identical
                 # from here — and on 2026-09-24 this branch re-dispatched six
                 # portico cards sixteen minutes after their dispatch, while all
@@ -15166,6 +15309,14 @@ def main(
                 if refusal:
                     print(f"live: {ident} — {refusal}; not re-dispatching")
                     continue
+                # Then the runner line: a card the relay is holding until a
+                # runner is free has no run to list, and only the console's
+                # hold comment says it is alive. Quiet, like the wait above.
+                held_since = runner_line_held_since(card)
+                if held_since:
+                    print(f"start-window: {ident} held on the runner line since "
+                          f"{_pt(held_since)}")
+                    continue
                 # The receipt follows the dispatch's REAL outcome: a 🧹 success
                 # receipt on a 403'd dispatch is the DRE-1254 false-receipt class.
                 # The success note is _TODO_REDISPATCH_NOTE so the watchdog's
@@ -15179,60 +15330,64 @@ def main(
                         "go through, so no run was started. The sweep run is red; "
                         "medic will pick it up, and the next sweep retries.",
                     )
-            elif state == "In Progress":
-                if is_open:
-                    linear_ops.cmd_advance(ident, REVIEW_LANE, "In Progress")
-                    if _nudge(review_workflow(), pr["number"]):
-                        linear_ops.cmd_comment(
-                            ident,
-                            "🧹 Reconcile: PR exists but card was stuck In Progress — "
-                            f"advanced to {REVIEW_LANE}, critic re-triggered.",
-                        )
+            elif state == "In Progress" and is_open:
+                linear_ops.cmd_advance(ident, REVIEW_LANE, "In Progress")
+                if _nudge(review_workflow(), pr["number"]):
+                    linear_ops.cmd_comment(
+                        ident,
+                        "🧹 Reconcile: PR exists but card was stuck In Progress — "
+                        f"advanced to {REVIEW_LANE}, critic re-triggered.",
+                    )
+            elif state in lane_contract.START_LANES and not is_open:
+                # STARTED, and no PR past the staleness window: dead (silent
+                # crash), HUNG (timed out — never reached agent-task's report
+                # step, so only we see it) — or STILL RUNNING a legitimately long
+                # build. Check liveness FIRST: a queued/in_progress run means not
+                # dead regardless of elapsed time, and a requeue would kill it
+                # (the Todo transition re-dispatches; the fresh run cancels
+                # the live one via the per-card concurrency group — DRE-2032,
+                # run 29125285930 / DRE-2023's three-loop death). Otherwise
+                # requeue a couple of times; after the shared cap, HOLD
+                # instead of looping forever (DRE-1403).
+                if agent_run_alive(ident):
+                    print(f"live: {ident} agent run still going — leaving alone")
+                    continue
+                # THE ARTIFACT FACT, BEFORE THE ABSENT PR (DRE-3262). "No pull
+                # request" is the only thing this branch could see, and on
+                # 2026-09-06 it was true of a card whose 93 minutes of green
+                # work were sitting in `rescue-DRE-3165.patch` — the rescue push
+                # was refused with 400 on both of its own fresh mints. A requeue
+                # there rebuilds from nothing what the artifact is holding. The
+                # card's own marker says where the work is; dispatch the
+                # delivery, once, and requeue only if that route is spent.
+                if redeliver_rescued_work(ident, card_comment_bodies(card)):
+                    continue
+                # since=RESET_TAG: only deaths after the last un-park count.
+                dead = linear_ops.count_comments(ident, DEAD_TAG, since=RESET_TAG)
+                if dead >= REQUEUE_CAP:
+                    # The planner once, then the hold (DRE-6186).
+                    if not hand_dead_run_to_planner(card, dead, card_comment_bodies(card)):
+                        continue
                 else:
-                    # No PR past the staleness window: dead (silent crash), HUNG
-                    # (timed out — never reached agent-task's report step, so only
-                    # we see it) — or STILL RUNNING a legitimately long build.
-                    # Check liveness FIRST: a queued/in_progress run means not
-                    # dead regardless of elapsed time, and a requeue would kill it
-                    # (the Todo transition re-dispatches; the fresh run cancels
-                    # the live one via the per-card concurrency group — DRE-2032,
-                    # run 29125285930 / DRE-2023's three-loop death). Otherwise
-                    # requeue a couple of times; after the shared cap, HOLD
-                    # instead of looping forever (DRE-1403).
-                    if agent_run_alive(ident):
-                        print(f"live: {ident} agent run still going — leaving alone")
+                    # To the queue (DRE-7108): `promote_ready` promotes it again
+                    # on the same gates as the first time, the WIP cap among
+                    # them. `--park` because the move is deliberate: the
+                    # building-card reroute (DRE-1885) would otherwise turn an In
+                    # Progress → queue move into a Todo one.
+                    # From-lane-conditional on the door's reading (item
+                    # 33): requeued only if still in its lane and still
+                    # neither held nor hand-built — no receipt otherwise.
+                    if linear_ops.cmd_state(ident, QUEUE_LANE, "--park", **_door_guard(
+                        card, labels_absent=(HOLD_LABEL, *routing_verdict.hand_marks())
+                    )) is False and _door_guard(card):
                         continue
-                    # THE ARTIFACT FACT, BEFORE THE ABSENT PR (DRE-3262). "No pull
-                    # request" is the only thing this branch could see, and on
-                    # 2026-09-06 it was true of a card whose 93 minutes of green
-                    # work were sitting in `rescue-DRE-3165.patch` — the rescue push
-                    # was refused with 400 on both of its own fresh mints. A requeue
-                    # there rebuilds from nothing what the artifact is holding. The
-                    # card's own marker says where the work is; dispatch the
-                    # delivery, once, and requeue only if that route is spent.
-                    if redeliver_rescued_work(ident, card_comment_bodies(card)):
-                        continue
-                    # since=RESET_TAG: only deaths after the last un-park count.
-                    dead = linear_ops.count_comments(ident, DEAD_TAG, since=RESET_TAG)
-                    if dead >= REQUEUE_CAP:
-                        # The planner once, then the hold (DRE-6186).
-                        if not hand_dead_run_to_planner(card, dead, card_comment_bodies(card)):
-                            continue
-                    else:
-                        # From-lane-conditional on the door's reading (item
-                        # 33): requeued only if still In Progress and still
-                        # neither held nor hand-built — no receipt otherwise.
-                        if linear_ops.cmd_state(ident, "Todo", **_door_guard(
-                            card, labels_absent=(HOLD_LABEL, *routing_verdict.hand_marks())
-                        )) is False and _door_guard(card):
-                            continue
-                        linear_ops.cmd_comment(
-                            ident,
-                            f"🪦 {DEAD_TAG}: In Progress with no PR past the "
-                            f"{STALE_MINUTES['In Progress']}-minute window — agent run "
-                            f"appears dead (hung or lost). Requeued to Todo "
-                            f"(dead run {dead + 1}/{REQUEUE_CAP + 1}).",
-                        )
+                    linear_ops.cmd_comment(
+                        ident,
+                        f"🪦 {DEAD_TAG}: {state} with no PR past the "
+                        f"{STALE_MINUTES[state]}-minute window — agent run "
+                        f"appears dead (hung or lost). Requeued to {QUEUE_LANE} "
+                        f"(dead run {dead + 1}/{REQUEUE_CAP + 1}).",
+                    )
             elif state == REVIEW_LANE and is_open:
                 # ONE review lane since DRE-2726, and the branch it takes is decided
                 # by the EVIDENCE rather than by which of two lanes the card sat in.
@@ -15311,13 +15466,15 @@ def main(
                     if not hand_dead_run_to_planner(card, dead, card_comment_bodies(card)):
                         continue
                 else:
-                    if linear_ops.cmd_state(ident, "Todo", **_door_guard(
+                    # To the queue, deliberately, as the dead-run branch above
+                    # does it (DRE-7108): `promote_ready` brings it back.
+                    if linear_ops.cmd_state(ident, QUEUE_LANE, "--park", **_door_guard(
                         card, labels_absent=(HOLD_LABEL, *routing_verdict.hand_marks())
                     )) is False and _door_guard(card):
                         continue
                     linear_ops.cmd_comment(
                         ident,
-                        f"🪦 {DEAD_TAG}: {REVIEW_LANE} with no PR — requeued to Todo "
+                        f"🪦 {DEAD_TAG}: {REVIEW_LANE} with no PR — requeued to {QUEUE_LANE} "
                         f"(dead run {dead + 1}/{REQUEUE_CAP + 1}).",
                     )
             nudges += 1
