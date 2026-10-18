@@ -793,15 +793,17 @@ class VerifierPickConstantsTest(unittest.TestCase):
 class SpendingClock:
     """Reads a fixed time until `fresh` reads have gone by, then the budget
     spent. At its first spent read it notes how many runs had been applied,
-    and it notes the thread of every read."""
+    and it notes the thread of every read. `events` gets a `clock` for each
+    read, with the runs applied at that moment."""
 
-    def __init__(self, fresh: int, applied):
-        self.fresh, self.applied = fresh, applied
+    def __init__(self, fresh: int, applied, events: list):
+        self.fresh, self.applied, self.events = fresh, applied, events
         self.reads, self.applied_when_spent, self.threads = 0, None, set()
 
     def __call__(self) -> float:
         self.reads += 1
         self.threads.add(threading.current_thread())
+        self.events.append(("clock", self.applied()))
         if self.reads <= self.fresh:
             return 1000.0
         if self.applied_when_spent is None:
@@ -847,8 +849,16 @@ class VerifierPickBudgetTest(unittest.TestCase):
                 picks = [c for c in gh.calls() if "/comments" in c]
                 return len(skips) + len(picks)
 
-            clock = SpendingClock(25, applied)
+            events = []
+
+            class Readers(concurrent.futures.ThreadPoolExecutor):
+                def submit(self, fn, *args):
+                    events.append(("read", None))
+                    return super().submit(fn, *args)
+
+            clock = SpendingClock(25, applied, events)
             with mock.patch.object(_sr(), "clock", clock), \
+                    mock.patch.object(_sr(), "ThreadPoolExecutor", Readers), \
                     self.assertRaises(_sr().PickError) as caught:
                 _sr().pick_unknown_builder_verifier(
                     recorded_model=_opus(), count=40, repo=REPO, workflow=VERIFY_WF)
@@ -866,6 +876,13 @@ class VerifierPickBudgetTest(unittest.TestCase):
                          "a run was applied after the clock read the budget spent")
         self.assertEqual({threading.current_thread()}, clock.threads,
                          "the clock is read on the pick's own thread only")
+        self.assertLessEqual(set(range(read + 1)),
+                             {n for kind, n in events if kind == "clock"},
+                             "a run was applied with no clock read before it")
+        for at, (kind, _) in enumerate(events):
+            if kind == "read":
+                self.assertEqual("clock", events[at - 1][0],
+                                 "a read was dispatched with no clock read just before it")
 
         applied = {r["id"] for r in self.runs[:read]}
         self.assertEqual({int(ln.split()[2]) for ln in skips},
