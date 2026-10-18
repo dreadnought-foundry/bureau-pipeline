@@ -209,7 +209,7 @@ def test_a_demo_card_in_motion_runs_the_pass_as_before(capsys):
              "advance_urgent_intake", "repair_frozen_planning_holds", "serve_planner_line",
              "release_groom_queue", "move_hand_built_to_review", "carry_epics_out_of_todo",
              "report_break_glass", "report_epic_growth", "pr_for", "agent_run_alive",
-             "redeliver_rescued_work")
+             "redeliver_rescued_work", "build_run_refusal", "redispatch")
     with mock.patch.object(reconcile, "rereview_watch_scope",
                            return_value=(set(), lambda e: None)):
         _pass(board, stub=stubs)

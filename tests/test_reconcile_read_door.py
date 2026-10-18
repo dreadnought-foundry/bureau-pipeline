@@ -44,6 +44,7 @@ import merge_sweep_gate  # noqa: E402
 import mid_epic  # noqa: E402
 import plan_critic  # noqa: E402
 import reconcile  # noqa: E402
+import build_started  # noqa: E402 — a card whose build started (DRE-7108)
 import routing_verdict  # noqa: E402
 from bureau_read_fakes import FakeDoor, FakeIssuer, card, door_env  # noqa: E402
 
@@ -382,9 +383,13 @@ def _nudge_stubs(stack, *, dead=0):
     stack.enter_context(mock.patch.object(reconcile, "redeliver_rescued_work",
                                           return_value=False))
     stack.enter_context(mock.patch.object(linear_ops, "count_comments", return_value=dead))
+    stack.enter_context(build_started.entered())
 
 
 def _stale(ident, lane, **kw):
+    # A build that started and died (DRE-7108): the start receipt, newer than
+    # the lane entry `_nudge_stubs` answers, puts it on the dead-run path.
+    kw.setdefault("comments", (FLEET, build_started.START_RECEIPT))
     return _c(ident, lane, updated="2026-01-01T00:00:00.000Z", **kw)
 
 
@@ -397,7 +402,8 @@ def test_R6_a_dead_run_requeue_on_door_data_is_from_lane_conditional(monkeypatch
     # Every hand mark the vocabulary declares is a door the requeue refuses
     # (DRE-6225) — `operator-step` and `hand-built` since DRE-6227 flipped
     # OPERATOR's marks, never `no-code`.
-    assert linear.writes == [("state", "DRE-301", "Todo", (), ("In Progress",),
+    # To the queue since DRE-7108, deliberately: `promote_ready` brings it back.
+    assert linear.writes == [("state", "DRE-301", "Queued", ("--park",), ("In Progress",),
                               ("needs-human", *reconcile.routing_verdict.hand_marks()))]
     assert reconcile.routing_verdict.hand_marks() == ("operator-step", "hand-built")
     assert any(reconcile.DEAD_TAG in body for _i, body in linear.comments)
@@ -453,7 +459,7 @@ def test_off_mode_writes_exactly_as_before(monkeypatch):
         _nudge_stubs(stack)
         reconcile.main()
     # The unconditional call it always was: no expectation keywords at all.
-    assert linear.writes == [("state", "DRE-301", "Todo", (), None, ())]
+    assert linear.writes == [("state", "DRE-301", "Queued", ("--park",), None, ())]
 
 
 def test_R16_carrying_an_epic_out_of_todo_is_conditional(monkeypatch):

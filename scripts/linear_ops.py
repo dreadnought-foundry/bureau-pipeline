@@ -6,9 +6,11 @@ Subcommands:
                                        to un-complete a terminal (Done/Canceled)
                                        card (DRE-1877), and re-routes a BUILDING
                                        card (In Progress) aimed at the queue
-                                       lane (Queued, under either name) to Todo
+                                       lane (Queued, under either name) to the
+                                       start lane (lane_contract.START_LANE)
                                        so it re-dispatches instead of stranding
-                                       (DRE-1885). `--park` opts a deliberate
+                                       (DRE-1885), re-dispatching in place a
+                                       card already there (DRE-7109). `--park` opts a deliberate
                                        hold (blocker / dead-run cap) out of that
                                        reroute — Queued is intended.
   advance <DRE-N> <to-state> <from-states-csv>
@@ -130,7 +132,8 @@ Subcommands:
   unpark <DRE-N> [note]                the operator's release for a card held
                                        by the dead-run cap: clear 'needs-human',
                                        post the dead-run-budget-reset marker,
-                                       and return the card to Todo — in that
+                                       and return the card to the start lane
+                                       (lane_contract.START_LANE) — in that
                                        order, so the re-dispatched run reads a
                                        FRESH death budget instead of the
                                        exhausted history that held it
@@ -168,6 +171,7 @@ import lane_contract  # noqa: E402 — the lane contract, incl. the pending rena
 from lane_contract import QUEUE_LANE, QUEUE_LANES  # noqa: E402 — the queue lane, written and read (DRE-6744)
 import mid_epic  # noqa: E402 — ONE source for "a card has no children" (DRE-2739)
 import pipeline_act  # noqa: E402 — ONE writer for an act's receipt (DRE-2825)
+import plan_run  # noqa: E402 — ONE build dispatch, for a restart no lane move can fire (DRE-7109)
 
 API = "https://api.linear.app/graphql"
 
@@ -1651,14 +1655,67 @@ def _parks_in_the_queue(state_name: str, target_type: str) -> bool:
     return target_type == "backlog" or state_name.strip().lower() in queue
 
 
-def _rerouted_receipt(identifier: str, current_name, state_name: str) -> str:
+# What a restart says when it found the card already in the start lane
+# (DRE-7109). A same-lane write fires no webhook, so the relay never sees it and
+# the write layer fires the build dispatch itself — `limit_recovery`'s build
+# branch, in the same words.
+_IN_PLACE = "re-dispatched in place (a same-lane write fires no webhook)"
+
+
+def _rerouted_receipt(identifier: str, current_name, state_name: str,
+                      in_place: bool = False) -> str:
+    start = lane_contract.START_LANE
+    how = f"{_IN_PLACE} in {start!r}" if in_place else f"re-queued to {start!r}"
     return (
-        f"{identifier} is {current_name!r} (building) — re-queued to 'Todo' "
+        f"{identifier} is {current_name!r} (building) — {how} "
         f"instead of {state_name!r}; an actively-building card is never parked "
         f"in {' or '.join(QUEUE_LANES)} (inert, nothing re-promotes it), only "
-        f"re-dispatched via Todo. Pass --park (or stamp 'needs-human') for a "
+        f"re-dispatched via {start}. Pass --park (or stamp 'needs-human') for a "
         f"deliberate hold."
     )
+
+
+def _dispatch_repo(card: dict) -> str:
+    """The `owner/name` a card's build is dispatched at: its `repo:` label
+    through the routing snapshot the relay routes on (`config/repo-map.json`),
+    else the REPO the running workflow names. An empty answer is refused by
+    `plan_run.fire`, loudly."""
+    import validate_card
+
+    labels = [lbl.get("name") or "" for lbl in ((card.get("labels") or {}).get("nodes") or [])]
+    for slug in validate_card._repo_label_slugs(labels):
+        if slug in validate_card._REPO_MAP:
+            return validate_card._REPO_MAP[slug]
+    return os.environ.get("REPO", "")
+
+
+def _redispatch_in_place(identifier: str) -> bool:
+    """Fire the build dispatch for a card a restart found already in the start
+    lane (DRE-7109). True ONLY on a confirmed dispatch — a failure is printed,
+    and the caller reports the restart as not done (the DRE-2034 false-receipt
+    class)."""
+    card = (gql(plan_run.CARD_QUERY, {"id": identifier}) or {}).get("issue")
+    if not card:
+        print(f"ERROR: {identifier} could not be read, so its build was not re-dispatched")
+        return False
+    ok, err = plan_run.fire(card, _dispatch_repo(card))
+    if not ok:
+        print(f"ERROR: {identifier} is in {lane_contract.START_LANE!r} but its build "
+              f"was not re-dispatched — {err}")
+    return ok
+
+
+def _moved(identifier: str, state_name: str, in_place: bool) -> bool:
+    """The receipt for a move that was written — or, for a restart that found
+    the card already in the lane, the dispatch no lane move could fire. False
+    when that dispatch did not go through."""
+    if not in_place:
+        print(f"{identifier} → {state_name}")
+        return True
+    if not _redispatch_in_place(identifier):
+        return False
+    print(f"{identifier} is already in {state_name!r} — {_IN_PLACE}")
+    return True
 
 
 def _label_names(issue: dict) -> list[str]:
@@ -1933,10 +1990,16 @@ def cmd_state(
     expect: tuple | None = None,
     labels_absent: tuple = (),
     held: bool = False,
+    restart: bool = False,
 ) -> bool:
     """Move a card to `state_name`. True when it is there (written, or already
     there), False when a guard refused the move — so a caller never posts a
     receipt for a move that did not happen.
+
+    `restart` says the move restarts the card's build (`cmd_unpark`, DRE-7109).
+    A card already in `state_name` gets no write, and a same-lane write fires
+    no webhook, so its build dispatch is fired here instead — and a dispatch
+    that did not go through is a False.
 
     `expect` and `labels_absent` are the CONDITIONAL write (`cmd_state_if`,
     Stage 2 item 33): every write a sweep decides from the read door's data
@@ -1965,7 +2028,7 @@ def cmd_state(
         target = state_id_and_type(None, state_name, team_key=_team_key(identifier))
         if target[1] not in _TERMINAL_TYPES:
             return _held_state_move(identifier, state_name, target, deliberate_park,
-                                    expect, labels_absent)
+                                    expect, labels_absent, restart)
         # A terminal target has no pre-write re-read to decide on, so the card
         # is read below exactly as an unheld one is.
     issue = get_issue(identifier)
@@ -2007,8 +2070,10 @@ def cmd_state(
     # re-promoted it — stalling epic E4.1. Same class as DRE-1803, but on the
     # building card rather than the finished one.
     #
-    # If a building card genuinely must be re-queued, send it to Todo (which
-    # re-dispatches via the cascade), NEVER the queue lane (inert — nothing picks
+    # If a building card genuinely must be re-queued, send it to the start lane,
+    # `lane_contract.START_LANE` (which re-dispatches via the cascade — or, for
+    # a card already there, by the dispatch fired in place, DRE-7109), NEVER
+    # the queue lane (inert — nothing picks
     # it up), under either of its names: `Queued`, or the lane it replaces
     # (`QUEUE_LANES`, DRE-6744). Two exemptions keep the LEGITIMATE queue-lane
     # parks working:
@@ -2024,19 +2089,24 @@ def cmd_state(
         and not deliberate_park
         and _HOLD_LABEL not in [n.lower() for n in _label_names(issue)]
     ):
-        todo_id, todo_type = state_id_and_type(issue["team"]["id"], "Todo")
+        start_id, start_type = state_id_and_type(issue["team"]["id"],
+                                                 lane_contract.START_LANE)
+        in_place = (issue.get("state") or {}).get("id") == start_id
         # Same guarded write as the ordinary path: the reroute is a write like
         # any other, and an unguarded one would simply become the new way to
         # clobber a card that went Done mid-decision (DRE-2316).
-        if not guarded_state_write(identifier, issue, todo_id, todo_type, "Todo",
+        if not guarded_state_write(identifier, issue, start_id, start_type,
+                                   lane_contract.START_LANE,
                                    expect=expect, labels_absent=labels_absent):
             return False
-        print(_rerouted_receipt(identifier, current_name, state_name))
+        if in_place and not _redispatch_in_place(identifier):
+            return False
+        print(_rerouted_receipt(identifier, current_name, state_name, in_place))
         return True
+    in_place = restart and (issue.get("state") or {}).get("id") == target_id
     if guarded_state_write(identifier, issue, target_id, target_type, state_name,
                            expect=expect, labels_absent=labels_absent):
-        print(f"{identifier} → {state_name}")
-        return True
+        return _moved(identifier, state_name, in_place)
     return False
 
 
@@ -2047,6 +2117,7 @@ def _held_state_move(
     deliberate_park: bool,
     expect: tuple | None,
     labels_absent: tuple,
+    restart: bool = False,
 ) -> bool:
     """`cmd_state` for a card the caller HOLDS, to a non-terminal lane (Stage 2
     fix #9): ONE read of the card instead of two.
@@ -2060,7 +2131,8 @@ def _held_state_move(
 
       * the finished-card refusal (DRE-1877) and the conditional write's lane
         and labels (item 33) — `guarded_state_write`, on `pre_read`;
-      * the building-card reroute to Todo (DRE-1885) — below, on the same read.
+      * the building-card reroute to the start lane (DRE-1885, DRE-7109) —
+        below, on the same read.
 
     The lanes come first, by the team's key (a held card carries no team id),
     from the process's kept list or the read door; so nothing is sent between
@@ -2069,30 +2141,36 @@ def _held_state_move(
     unchanged.
     """
     target_id, target_type = target
-    todo = None
+    start = None
     if _parks_in_the_queue(state_name, target_type) and not deliberate_park:
-        todo = state_id_and_type(None, "Todo", team_key=_team_key(identifier))
+        start = state_id_and_type(None, lane_contract.START_LANE,
+                                  team_key=_team_key(identifier))
     # (1) THE pre-write re-read (DRE-2316): LIVE, never a memo, and the only
     # read of the card this move makes.
     fresh = get_issue(identifier, fresh=True)
     current = fresh.get("state") or {}
     if (
-        todo is not None
+        start is not None
         and current.get("type") == "started"
         and _HOLD_LABEL not in [n.lower() for n in _label_names(fresh)]
     ):
         # DRE-1885, decided on the live card: a building card is re-queued to
-        # Todo, never parked in the queue lane where nothing re-promotes it.
-        if not guarded_state_write(identifier, fresh, todo[0], todo[1], "Todo",
+        # the start lane, never parked in the queue lane where nothing
+        # re-promotes it — and re-dispatched in place when it is already there.
+        in_place = current.get("id") == start[0]
+        if not guarded_state_write(identifier, fresh, start[0], start[1],
+                                   lane_contract.START_LANE,
                                    expect=expect, labels_absent=labels_absent,
                                    pre_read=fresh):
             return False
-        print(_rerouted_receipt(identifier, current.get("name"), state_name))
+        if in_place and not _redispatch_in_place(identifier):
+            return False
+        print(_rerouted_receipt(identifier, current.get("name"), state_name, in_place))
         return True
+    in_place = restart and current.get("id") == target_id
     if guarded_state_write(identifier, fresh, target_id, target_type, state_name,
                            expect=expect, labels_absent=labels_absent, pre_read=fresh):
-        print(f"{identifier} → {state_name}")
-        return True
+        return _moved(identifier, state_name, in_place)
     return False
 
 
@@ -4649,9 +4727,11 @@ def cmd_unpark(identifier: str, note: str = "") -> None:
 
       1. remove the `needs-human` hold label (idempotent),
       2. post the `dead-run-budget-reset` marker,
-      3. move the card to Todo.
+      3. move the card to the start lane, `lane_contract.START_LANE` (DRE-7109)
+         — or, when it is already there, fire its build dispatch in place,
+         because a same-lane write fires no webhook.
 
-    The marker MUST land before the Todo move: the Todo transition is what
+    The marker MUST land before the move or the fire: either is what
     re-dispatches the card, and the run it starts reads the death count. Post
     it after, and the fresh run races the reset and can still read the old,
     exhausted history.
@@ -4665,8 +4745,12 @@ def cmd_unpark(identifier: str, note: str = "") -> None:
     """
     remove_label(identifier, _HOLD_LABEL)
     cmd_comment(identifier, dead_run.reset_comment(note))
-    cmd_state(identifier, "Todo")
-    print(f"{identifier} un-parked — death budget reset, back in Todo")
+    start = lane_contract.START_LANE
+    if cmd_state(identifier, start, restart=True):
+        print(f"{identifier} un-parked — death budget reset, back in {start}")
+    else:
+        print(f"{identifier} NOT restarted — the death budget is reset, but the "
+              f"build was not started in {start!r} (the line above says why)")
 
 
 def cmd_description(identifier: str) -> None:

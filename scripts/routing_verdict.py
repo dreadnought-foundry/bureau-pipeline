@@ -376,12 +376,19 @@ def _carried_lanes() -> tuple:
     the live work-segment lanes strictly between the one the planning exit lands
     in (Queued — where a card waits for its turn, the lane the sweep promotes
     OUT of) and `BUILD_LANE`. In the contract's flow order that is Todo and
-    Hand-work: the two lanes a card waits in for whoever builds it."""
+    Hand-work: the two lanes a card waits in for whoever builds it.
+
+    And the lane a build starts in, `lane_contract.START_LANE` (DRE-7108),
+    when it is not already one of them: Todo until the flip, which sets it to
+    the dispatch lane — and then FLEET's destination is that lane, which the
+    sweep must still carry a card into."""
     landing = lane_contract.planning_exit()[1]
     work = [lane["name"] for lane in lane_contract.lanes("live") if lane["segment"] == "work"]
     if landing not in work or BUILD_LANE not in work:
         return ()
-    return tuple(work[work.index(landing) + 1:work.index(BUILD_LANE)])
+    between = tuple(work[work.index(landing) + 1:work.index(BUILD_LANE)])
+    start = lane_contract.START_LANE
+    return between if start in between or start not in work else between + (start,)
 
 
 def sweep_promotes(name: str, doc: dict | None = None) -> bool:

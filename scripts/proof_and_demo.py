@@ -57,9 +57,9 @@ before"), and the sweep promoted it the moment its siblings reached Done. A
 rule enforced at plan time and discarded before build time is not enforced.
 
 (That quoted clause is gone — DRE-3385 refuses a verdictless child too — but
-the stamp is still what this check owes: the sweep now CARRIES an OPERATOR card
-to Todo, and the marks it stamps on the way are what keep a build run off it.
-Without the plan-time verdict nothing applies them.)
+the stamp is still what this check owes: the sweep's promotion now CARRIES an
+OPERATOR card, and the marks it stamps on the way are what keep a build run off
+it. Without the plan-time verdict nothing applies them.)
 
 So `check` writes what it computed, as the same `🧭 routing-verdict` comment
 every other verdict uses, through `routing_verdict.stamp_card` — one writer,

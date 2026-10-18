@@ -104,8 +104,10 @@ START_OWNER_SLUG = "bureau-pipeline"
 #: only the activate route promotes a child out of Queued. Read off the
 #: epic's own children, never off its comment thread — `count_comments`
 #: reads the fifty newest comments, and a running epic's `▶️ Epic activated`
-#: comment falls out of that window within a day.
-ACTIVATED_STATES = ("Todo", "In Progress", "In Review", "Done")
+#: comment falls out of that window within a day. The start lanes are the
+#: contract's (`lane_contract.START_LANES`, DRE-7112), so a child in the
+#: dispatch lane counts exactly as one in Todo did.
+ACTIVATED_STATES = (*lane_contract.START_LANES, "In Review", "Done")
 
 IN_PROGRESS = "In Progress"
 GREEN_LIGHT = "Green Light"

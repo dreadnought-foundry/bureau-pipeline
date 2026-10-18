@@ -89,8 +89,8 @@
           "reason": "stranded-no-run",
           "lifts": "run-started",
           "tried_first": {
-            "step": "The sweep re-sends a card that sat in Todo with no run, once, before it stamps the strand (DRE-5743). A second unattended re-send is the move that already failed.",
-            "receipt": "card sat in Todo with no run — re-dispatched"
+            "step": "The sweep re-sends a promoted card no run started on, once, before it stamps the strand (DRE-5743, DRE-7108). A second unattended re-send is the move that already failed.",
+            "receipt": "card was promoted and no run started — re-dispatched"
           }
         },
         {

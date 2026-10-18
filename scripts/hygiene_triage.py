@@ -4,10 +4,12 @@ its mechanical defects fixed.
 
 Discovered by the core's glob (`scripts/hygiene.py`), registered nowhere. It
 reads the cards in `Triage` and fixes the defects the standard already names,
-returning a card to the queue — never `Todo`, which dispatches — with the
-cause named. The queue is `lane_contract.QUEUE_LANE` (DRE-6748), read at each
-write, so it follows the planning exit to Queued when DRE-6742 flips it. One
-action per card, the first of these that applies:
+returning a card to the queue — never the dispatch lane,
+`lane_contract.DISPATCH_LANE`, whose entry dispatches a build, nor a start lane
+waiting to retire into it — with the cause named. The queue is
+`lane_contract.QUEUE_LANE` (DRE-6748), read at each write, so it follows the
+planning exit to Queued when DRE-6742 flips it. One action per card, the first
+of these that applies:
 
 1. **A moot card.** Its parent epic is `Canceled` or `Duplicate` on the board
    read: the person decided on the parent, and the card is canceled with that
@@ -129,7 +131,8 @@ LANE = "Triage"
 
 def return_lane() -> str:
     """Where every write here returns a card to: the queue, the lane the
-    dependency gate and the routing verdict re-evaluate it in. Never Todo.
+    dependency gate and the routing verdict re-evaluate it in — never the
+    dispatch lane, or any of `lane_contract.START_LANES`.
     `lane_contract.QUEUE_LANE`, read at the write so it follows the planning
     exit (DRE-6748)."""
     return lane_contract.QUEUE_LANE

@@ -24,6 +24,8 @@ import sys
 from contextlib import redirect_stdout
 from unittest.mock import patch
 
+import pytest
+
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "scripts"))
 
 import linear_ops  # noqa: E402
@@ -225,6 +227,110 @@ def test_building_card_aimed_at_queued_on_a_board_without_it_is_rerouted():
     fake = _FakeLinear("In Progress")
     _run_state(fake, "Queued")
     assert fake.updates == [_FakeLinear.STATES["Todo"][0]]
+
+
+# --- the reroute writes the start lane (DRE-7109) ----------------------------
+
+
+IN_PLACE = "re-dispatched in place (a same-lane write fires no webhook)"
+
+
+class _StartLaneBoard(_QueuedBoard):
+    """The queue board with state ids on the card, so the write layer can see a
+    card that is already in the lane it is asked for, and the build dispatch's
+    card read answered."""
+
+    def __init__(self, current_state_name, labels=("repo:atlas",)):
+        super().__init__(current_state_name, labels=list(labels))
+        self._issue["state"]["id"] = self.STATES[current_state_name][0]
+        self._issue["description"] = "the card"
+        self.fired = []
+
+    def gql(self, query, variables=None):
+        q = " ".join(query.split())
+        if "issue(id: $id) { id identifier title description" in q:
+            return {"issue": self._issue}
+        return super().gql(query, variables)
+
+    def fire(self, card, repo, **kwargs):
+        self.fired.append((card["identifier"], repo))
+        return True, ""
+
+
+def _flipped(monkeypatch):
+    """START_LANE as the flip card sets it: `build_start.lane = "In Progress"`."""
+    import copy
+
+    import lane_contract
+
+    doc = copy.deepcopy(lane_contract.load())
+    doc["build_start"]["lane"] = "In Progress"
+    assert lane_contract.build_start_problems(doc) == []
+    monkeypatch.setattr(lane_contract, "START_LANE", lane_contract.start_lane(doc))
+
+
+def _run_restart(fake, target, *flags):
+    buf = io.StringIO()
+    with patch.object(linear_ops, "gql", side_effect=fake.gql), \
+            patch.object(linear_ops.plan_run, "fire", side_effect=fake.fire) as fire:
+        with redirect_stdout(buf):
+            moved = linear_ops.cmd_state("DRE-1822", target, *flags)
+    return moved, buf.getvalue(), fire
+
+
+def test_the_reroute_writes_todo_under_the_shipped_contract():
+    import lane_contract
+
+    assert lane_contract.START_LANE == "Todo"
+    fake = _StartLaneBoard("In Progress")
+    moved, out, fire = _run_restart(fake, "Queued")
+    assert moved is True
+    assert fake.updates == [_StartLaneBoard.STATES["Todo"][0]]
+    assert "re-queued to 'Todo'" in out
+    fire.assert_not_called()
+
+
+@pytest.mark.parametrize("flags", [(), ("--held",)])
+def test_the_reroute_under_the_flip_fires_the_build_in_place(monkeypatch, flags):
+    """After the flip a building card is already in the start lane. Writing it
+    there again fires no webhook, so the write layer dispatches the build
+    itself — exactly once — and moves nothing."""
+    _flipped(monkeypatch)
+    fake = _StartLaneBoard("In Progress")
+    moved, out, fire = _run_restart(fake, "Queued", *flags)
+    assert moved is True
+    assert fake.updates == [], f"a card already in the start lane is not moved: {fake.updates}"
+    assert fire.call_count == 1
+    assert fake.fired == [("DRE-1822", "EveryBite/atlas")]
+    assert IN_PLACE in out
+    assert "instead of 'Queued'" in out
+
+
+def test_the_reroute_under_the_flip_says_so_when_the_dispatch_fails(monkeypatch):
+    _flipped(monkeypatch)
+    fake = _StartLaneBoard("In Progress")
+    buf = io.StringIO()
+    with patch.object(linear_ops, "gql", side_effect=fake.gql), \
+            patch.object(linear_ops.plan_run, "fire", return_value=(False, "dispatch 403")):
+        with redirect_stdout(buf):
+            moved = linear_ops.cmd_state("DRE-1822", "Queued")
+    assert moved is False, "no receipt for a restart that did not start"
+    assert "dispatch 403" in buf.getvalue()
+    assert IN_PLACE not in buf.getvalue()
+
+
+def test_the_write_layer_restarts_through_the_start_lane_and_no_literal():
+    """The two restarts name `lane_contract.START_LANE`, never `"Todo"`: the
+    lane-writer check reads the destination off these call sites."""
+    import ast
+
+    tree = ast.parse(open(linear_ops.__file__, encoding="utf-8").read())
+    for fn in (n for n in tree.body if isinstance(n, ast.FunctionDef)):
+        if fn.name not in ("cmd_state", "_held_state_move", "cmd_unpark"):
+            continue
+        literals = [n for n in ast.walk(fn)
+                    if isinstance(n, ast.Constant) and n.value == "Todo"]
+        assert literals == [], f"{fn.name} still writes the literal 'Todo'"
 
 
 def test_rename_fallbacks_are_the_contract_aliases_inverted():

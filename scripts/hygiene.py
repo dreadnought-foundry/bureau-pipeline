@@ -16,8 +16,9 @@ One command per job of the workflow (DRE-5369).
 
 ## `read` — the board, once, and the budget floor
 
-The five lanes in `LANES` — plus `Hand-work` the day the lane contract declares
-that lane (DRE-5240) — in ONE paged query through `board_snapshot.read_board`,
+The lanes in `LANES`, the start lanes among them as the contract names them
+(`lane_contract.START_LANES`) — plus `Hand-work` the day the lane contract
+declares that lane (DRE-5240) — in ONE paged query through `board_snapshot.read_board`,
 in the shape `board_snapshot.CARD_QUERY` returns, written to a file keyed by
 lane. Then the floor: the fleet key's remaining requests off
 `linear_ops._budget["last"]` — the figure `budget_line()` prints — and, below
@@ -112,10 +113,12 @@ import reconcile  # noqa: E402 — gate_workflow(), the gate stub's rule
 
 ROOT = Path(__file__).resolve().parent.parent
 
-#: The lanes the board read covers. `Hand-work` joins them when the contract
-#: declares it (`board_lanes`); until then it is absent and skipped, never an
-#: error.
-LANES = ("Green Light", "Todo", "Triage", "In Progress", "In Review")
+#: The lanes the board read covers. The start lanes are the contract's
+#: (`lane_contract.START_LANES`, DRE-7112), so a card in any of them is read
+#: and a retiring one's deleted entry narrows the read with no edit here.
+#: `Hand-work` joins them when the contract declares it (`board_lanes`); until
+#: then it is absent and skipped, never an error.
+LANES = ("Green Light", *lane_contract.START_LANES, "Triage", "In Review")
 HAND_WORK = "Hand-work"
 
 #: Where lane modules are discovered, and the glob that finds them.
@@ -180,7 +183,7 @@ _RECEIPT_LINE = re.compile(
 _SUMMARY_LINE = re.compile(rf"^{re.escape(SUMMARY_MARK)} (?P<digest>[0-9a-f]{{12}})\b")
 
 #: The lanes the guard names when it refuses one: never written by this agent.
-REFUSED_LANES = ("In Progress", "Todo", "Green Light", "Triage", "Intake")
+REFUSED_LANES = (*lane_contract.START_LANES, "Green Light", "Triage", "Intake")
 #: The lanes that close a card, and so refuse a card with children (an epic).
 CLOSING_LANES = ("Done", "Canceled")
 

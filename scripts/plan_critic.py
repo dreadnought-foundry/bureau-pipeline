@@ -229,6 +229,7 @@ import checkbox_marks
 import console_escalation
 import design_parity
 import execution_result
+import lane_contract
 import plan_footprint
 import send_back_class
 
@@ -302,9 +303,18 @@ LATE_COLLISION_PREFIX = "plan-collision-late:"
 # death as a round. Nothing about it is a verdict.
 DEATH_PREFIX = "plan-critic-died:"
 
-# The lanes an epic occupies while it is in flight (config/lane-contract.json).
-# What the post critic can see is exactly this, and its charter says so.
-IN_FLIGHT_EPIC_STATES = ("Green Light", "Todo", "In Progress")
+
+
+def in_flight_epic_states(contract: dict | None = None) -> tuple:
+    """The lanes an epic occupies while it is in flight: Green Light, then the
+    start lanes (`lane_contract.start_lanes`, DRE-7105) — so a start lane the
+    contract deletes leaves this set with no edit here (DRE-7113)."""
+    return ("Green Light",) + lane_contract.start_lanes(contract)
+
+
+# Read once, off the shipped contract. What the post critic can see is exactly
+# this, and its charter says so.
+IN_FLIGHT_EPIC_STATES = in_flight_epic_states()
 
 # --- The lanes of the new moment (DRE-5268, published by DRE-5276) -----------
 #
@@ -691,7 +701,8 @@ def one_off_ceiling(files, bodies: list) -> tuple[int, str]:
 # Handed to BOTH critics (DRE-3243) and to neither's substitute: the one-off
 # stage reads a single card that has no children, so there is no state block to
 # give it. Interpolated rather than repeated, so the two readings of a lane
-# cannot drift into two answers.
+# cannot drift into two answers. `{still_to_build}` is the queue and every start
+# lane a card waits in for its run, read off the lane contract (DRE-7113).
 _CHILD_STATE_BLOCK = """\
 READ EACH CHILD'S STATE, NOT ONLY ITS TEXT. Every child record carries a
 `state` — the lane the card is in right now — and it is what says whether the
@@ -705,12 +716,24 @@ card is to-build at all.
     merged.
   - **In Progress or In Review: a run or a pull request is in flight.** Judge
     it on what it will LAND, not on whether its files are in the tree yet.
-  - **Anything else — Queued, Todo, Triage — is still to build**, and every
+  - **Anything else — {still_to_build}, Triage — is still to build**, and every
     finding you would normally make stands, this one included.
 
 A card's text and the repository cannot tell you which of those it is. Read the
 state before you report that work already exists: on DRE-3164 that reading cost
 a sound plan its second round and parked it at the bound."""
+
+
+def child_state_block(contract: dict | None = None) -> str:
+    """`_CHILD_STATE_BLOCK` with its to-build lanes named: the queue, then each
+    start lane other than the dispatch lane — a card there is promoted and
+    waiting for its run. The dispatch lane is the in-flight line's own."""
+    waiting = tuple(
+        lane for lane in lane_contract.start_lanes(contract)
+        if lane != lane_contract.dispatch_lane(contract)
+    )
+    return _CHILD_STATE_BLOCK.format(still_to_build=", ".join(
+        (lane_contract.queue_lane(contract),) + waiting))
 
 _PRE_CHARTER = """\
 YOU ARE THE FIRST CRITIC. You review a plan that is still a MOVING DOCUMENT,
@@ -947,7 +970,7 @@ def charter(stage: str, sight: str = "", prior: str = "") -> str:
         *head, last = planning_escalation.OUTCOMES
         return spec["template"].format(
             question=spec["question"],
-            child_state=_CHILD_STATE_BLOCK,
+            child_state=child_state_block(),
             result_prefix=RESULT_PREFIX,
             finding_prefix=FINDING_LINE_PREFIX,
             recommendation_prefix=RECOMMENDATION_LINE_PREFIX,
@@ -959,10 +982,10 @@ def charter(stage: str, sight: str = "", prior: str = "") -> str:
         )
     if stage != STAGE_POST:
         return spec["template"].format(question=spec["question"],
-                                       child_state=_CHILD_STATE_BLOCK)
+                                       child_state=child_state_block())
     return spec["template"].format(
         question=spec["question"],
-        child_state=_CHILD_STATE_BLOCK,
+        child_state=child_state_block(),
         prior=("\n" + prior.rstrip("\n") + "\n") if prior.strip() else "",
         sight=("\n" + sight.rstrip("\n") + "\n") if sight.strip() else "",
     )

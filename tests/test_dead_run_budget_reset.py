@@ -52,8 +52,11 @@ os.environ.setdefault("REPO_SLUG", "agent-bureau")
 os.environ.setdefault("GH_TOKEN", "x")
 
 import dead_run  # noqa: E402
+import lane_contract  # noqa: E402
 import linear_ops  # noqa: E402
 import reconcile  # noqa: E402
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import build_started  # noqa: E402 — a card whose build started (DRE-7108)
 import step_shell  # noqa: E402
 
 
@@ -110,6 +113,20 @@ def test_reset_comment_accepts_an_operator_note():
     body = dead_run.reset_comment("fleet-wide model misconfiguration, not the card")
     assert "fleet-wide model misconfiguration" in body
     assert dead_run.DEAD_TAG not in body
+
+
+def test_reset_comment_names_the_start_lane():
+    """unpark restarts the build in `lane_contract.START_LANE` (DRE-7109), so
+    the reset receipt says the card is back there — Todo under the shipped
+    contract, In Progress once the flip sets `build_start.lane` (DRE-7111)."""
+    assert f"back in {lane_contract.START_LANE} with a FULL set" in dead_run.reset_comment()
+
+
+def test_reset_comment_follows_the_start_lane_not_a_name(monkeypatch):
+    monkeypatch.setattr(dead_run, "START_LANE", "In Progress")
+    body = dead_run.reset_comment()
+    assert "back in In Progress with a FULL set" in body
+    assert "Todo" not in body
 
 
 def test_hold_comment_still_carries_the_death_tag():
@@ -260,11 +277,11 @@ def test_unpark_clears_the_label_posts_the_reset_and_returns_to_todo():
     ) as remove_label, patch.object(
         linear_ops, "cmd_comment", side_effect=lambda *a: order.append(("comment", a))
     ) as cmd_comment, patch.object(
-        linear_ops, "cmd_state", side_effect=lambda *a: order.append(("state", a))
+        linear_ops, "cmd_state", side_effect=lambda *a, **k: order.append(("state", a))
     ) as cmd_state:
         linear_ops.cmd_unpark("DRE-2308")
     remove_label.assert_called_once_with("DRE-2308", dead_run.HOLD_LABEL)
-    cmd_state.assert_called_once_with("DRE-2308", "Todo")
+    cmd_state.assert_called_once_with("DRE-2308", lane_contract.START_LANE, restart=True)
     body = cmd_comment.call_args.args[1]
     assert dead_run.RESET_TAG in body
     assert dead_run.DEAD_TAG not in body
@@ -348,8 +365,10 @@ def _card(state):
 def test_reconcile_counts_deaths_since_the_reset(state, extra):
     """BOTH sweep death-count sites must be reset-aware, or an un-parked card
     still re-holds on its first death through the reconcile path."""
-    mocks = _sweep_mocks(_card(state), extra)
-    with patch.multiple(reconcile, **mocks), patch.object(
+    # A started build (DRE-7108): a card that never started is re-fired, and
+    # counts no death.
+    mocks = _sweep_mocks(build_started.started(_card(state)), extra)
+    with build_started.entered(), patch.multiple(reconcile, **mocks), patch.object(
         reconcile.linear_ops, "count_comments", return_value=0
     ) as count_comments, patch.object(
         reconcile.linear_ops, "add_label"

@@ -541,6 +541,38 @@ def test_the_synthetic_board_is_deterministic():
         board_snapshot.synthetic())
 
 
+def _contract_without_todo():
+    """The shipped lane contract with Todo's entry deleted — the board the
+    Todo retirement leaves (DRE-7105's own fixture, `tests/test_build_start.py`)."""
+    import copy
+
+    doc = copy.deepcopy(lane_contract.load())
+    doc["build_start"]["lane"] = "In Progress"
+    doc["lanes"] = [entry for entry in doc["lanes"] if entry["name"] != "Todo"]
+    return doc
+
+
+def test_the_deal_reads_the_start_lanes_and_keeps_its_six_slots():
+    """DRE-7112: the deal's first slot is the start lane ahead of the dispatch
+    lane — Todo on the shipped contract, so the replay's recorded board is
+    unchanged — and the dispatch lane once Todo's entry is gone, so a card
+    sits in In Progress exactly where it sat in Todo and none is re-dealt."""
+    shipped = board_snapshot.synthetic_deal()
+    assert shipped == board_snapshot._SYNTHETIC_DEAL
+    assert shipped == ("Todo", "In Progress", "In Review", "Planning", "Intake",
+                       lane_contract.QUEUE_LANE)
+    assert set(shipped[:2]) == set(lane_contract.START_LANES)
+    assert shipped[1] == lane_contract.DISPATCH_LANE
+    flipped = board_snapshot.synthetic_deal(_contract_without_todo())
+    assert flipped == ("In Progress", "In Progress") + shipped[2:]
+
+
+def test_the_extra_lanes_take_cards_from_the_deals_first_slot():
+    extra = board_snapshot._extra_lane_slots(150)
+    assert extra
+    assert all(i % len(board_snapshot._SYNTHETIC_DEAL) == 0 for i in extra)
+
+
 def test_the_synthetic_board_carries_no_real_words(snapshot):
     """Every free-text field is visibly synthetic: no title or description a
     real card could have written, and no address of any kind."""

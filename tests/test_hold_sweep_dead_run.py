@@ -41,6 +41,8 @@ os.environ.setdefault("GH_TOKEN", "x")
 import dead_run  # noqa: E402
 import hold  # noqa: E402
 import reconcile  # noqa: E402
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import build_started  # noqa: E402 — a card whose build started (DRE-7108)
 
 CAP_STAMP = "🔒 hold: reason=dead-run-cap at=none lifts=unpark-marker by=reconcile.py"
 FILES = "scripts/reconcile.py, config/holds.json"
@@ -379,6 +381,7 @@ class TestTheHandOffSpendsNoBudget:
 
 
 def _sweep(card, dead):
+    build_started.started(card)  # a build that started and died (DRE-7108)
     mocks = {
         "unstick_conflicts": MagicMock(),
         "retrigger_dead_heads": MagicMock(),
@@ -395,7 +398,7 @@ def _sweep(card, dead):
         "redeliver_rescued_work": MagicMock(return_value=False),
         "hand_dead_run_to_planner": MagicMock(),
     }
-    with patch.multiple(reconcile, **mocks), patch.object(
+    with build_started.entered(), patch.multiple(reconcile, **mocks), patch.object(
         reconcile.linear_ops, "count_comments", return_value=dead
     ), patch.object(reconcile.linear_ops, "add_label") as add_label, patch.object(
         reconcile.linear_ops, "cmd_state"
@@ -419,7 +422,8 @@ class TestBothCapsReachTheHelper:
     def test_below_the_cap_the_branch_requeues_and_never_calls_it(self, lane, dead):
         helper, _, cmd_state = _sweep(_card(lane), dead)
         helper.assert_not_called()
-        cmd_state.assert_called_once_with("DRE-7100", "Todo")
+        # To the queue since DRE-7108, deliberately: `promote_ready` brings it back.
+        cmd_state.assert_called_once_with("DRE-7100", reconcile.QUEUE_LANE, "--park")
 
 
 # --------------------------------------------------------------------------- #
