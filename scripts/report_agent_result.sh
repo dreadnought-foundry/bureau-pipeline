@@ -41,9 +41,9 @@ set -e
 #    - Escalation to Green Light: /tmp/agent-escalation.txt is posted with
 #      its three lines and the card advances to Green Light, the CEO's
 #      "needs you" queue.
-#    - Blocker to Backlog: /tmp/agent-blocker.txt is posted as one marker,
-#      `🛑 Agent blocked: class=<class> · <reason> — parked in Backlog
-#      until …`, and the card parks in Backlog with `state --park`, never
+#    - Blocker to Queued: /tmp/agent-blocker.txt is posted as one marker,
+#      `🛑 Agent blocked: class=<class> · <reason> — parked in Queued
+#      until …`, and the card parks in Queued with `state --park`, never
 #      Todo. The clause after the reason says what the sweep does with the
 #      class. A `question` reaches this branch only when its note left
 #      nothing to ask, and the sweep asks it in Green Light.
@@ -54,7 +54,7 @@ set -e
 #      reconcile sweep re-checks. A run that failed to deliver skips it.
 #    - Otherwise, the dead-run or turn-cap decision. `dead_run.py decide`
 #      reads the budget the death spends and answers requeue (Todo), hold
-#      (`dead_run.py park`: Backlog and the hold label, both or neither,
+#      (`dead_run.py park`: Queued and the hold label, both or neither,
 #      then the stamp naming the budget), replan (Planning — a turn-cap death
 #      short of green, or the dead-run cap trying the planner once on a run
 #      that left no PR and no blocker note), infra (a run warning, the card
@@ -63,6 +63,11 @@ set -e
 # 5. A turn-cap death that an escalation, a blocker, a rescue delivery or
 #    the unreadable receipt took still gets its tagged receipt from
 #    `dead_run.py turn-noted`, so the turn-cap count sees it.
+# 6. Queued, wherever this file names it, is `lane_contract.QUEUE_LANE`,
+#    read once through `python3 -c` like every other pipeline constant a
+#    step shell reads: the lane `Queued` replaces until the planning exit
+#    moves (DRE-6742), then `Queued`. No lane the queue replaces is named
+#    here (DRE-6745).
 #
 # Inputs, all from the step's `env:`:
 #   CARD                   the card's identifier, from the dispatch payload
@@ -98,6 +103,8 @@ set -e
 #   RESCUE_PR_URL          that PR's URL, used only when it has the shape
 #                          https://github.com/<owner>/<repo>/pull/<n>
 # RUNNER_TEMP, which the runner sets, holds the card-thread dump.
+# AGENT_NOTES_DIR, which no workflow sets, is the directory the agent's three
+# notes are read from; unset, it is /tmp, where the prompt puts them.
 #
 # Incident history
 #
@@ -236,6 +243,27 @@ set -e
 #   and this script reports it from the rescue's outputs, because its own
 #   lookup holds the same expired token and reads UNREADABLE. A PR the
 #   rescue only found, or a note it could not deliver, is posted as before.
+# 2026-10-11, DRE-6961. The agent's three notes are read from NOTES_DIR,
+#   which is /tmp unless AGENT_NOTES_DIR names another directory. Tests that
+#   drove this script wrote and deleted the notes at their /tmp paths, so two
+#   copies of the suite on one machine read each other's notes and failed.
+#   Each test now names a directory of its own, and a real run reads /tmp.
+# 2026-10-12, DRE-6873. The hand-back and escalation comments are drafted in
+#   RUNNER_TEMP, as the proof escalation's is. Drafted at fixed /tmp paths,
+#   one copy of the suite truncated the draft another was about to post, and
+#   the suite-green job, which runs its cases side by side, posted an empty
+#   question.
+# 2026-10-13, DRE-7163. `decide`'s action is read off its first line by
+#   parameter expansion, never through a pipe into `head`. `head` exits once
+#   it has that line, and the scenario harnesses run this file under
+#   pipefail. A `printf` write that landed after `head` exited died of
+#   SIGPIPE, `set -e` ended the script and no receipt was posted. It struck
+#   at random in the suite-green job and held the stable channel.
+# The agent's three notes sit where the prompt tells it to write them, /tmp.
+# AGENT_NOTES_DIR moves them, and only a test sets it (DRE-6961).
+NOTES_DIR="${AGENT_NOTES_DIR:-/tmp}"
+# The queue lane a blocker parks in and the escalation offers (DRE-6745).
+QUEUE_LANE=$(python3 -c 'import sys; sys.path.insert(0, ".bureau-pipeline/scripts"); import lane_contract; print(lane_contract.QUEUE_LANE)')
 RUN_URL="$BUREAU_SERVER_URL/$BUREAU_REPOSITORY/actions/runs/$BUREAU_RUN_ID"
 # The card's own branch first, so the PR lookup reads no other card's (DRE-1343).
 BRANCH=$(git branch -r | grep -o "agent/${CARD}-[^ ]*" | head -1 | sed 's|origin/||' || true)
@@ -261,7 +289,7 @@ fi
 
 # How the run died, from the one shared classifier (DRE-2312, DRE-2695).
 EXEC_FILE="$CLAUDE_EXECUTION_FILE"
-[ -n "$EXEC_FILE" ] || EXEC_FILE=/home/runner/work/_temp/claude-execution-output.json
+[ -n "$EXEC_FILE" ] || EXEC_FILE="${RUNNER_TEMP:-/tmp}/claude-execution-output.json"
 # --work-on-runner: committed work GitHub does not have, from the disk (DRE-3043).
 LOCAL_WORK="$RESCUE_LOCAL_WORK"
 DEATH_CLASS=$(python3 .bureau-pipeline/scripts/check_agent_result.py classify "$EXEC_FILE" \
@@ -299,14 +327,14 @@ fi
 
 # A blocker note's class, from the one reader; missing or empty is question (DRE-6438).
 BLOCKER_CLASS=""
-if [ -f /tmp/agent-blocker.txt ]; then
-  BLOCKER_CLASS=$(python3 .bureau-pipeline/scripts/blocker_class.py classify /tmp/agent-blocker.txt || echo question)
+if [ -f "$NOTES_DIR"/agent-blocker.txt ]; then
+  BLOCKER_CLASS=$(python3 .bureau-pipeline/scripts/blocker_class.py classify "$NOTES_DIR"/agent-blocker.txt || echo question)
 fi
 # A question is a person's, so the escalation branch asks it; the agent's own
 # escalation is never overwritten, and that branch's `complete` renders the
 # three lines (DRE-6444).
-if [ "$BLOCKER_CLASS" = "question" ] && [ ! -s /tmp/agent-escalation.txt ]; then
-  python3 .bureau-pipeline/scripts/blocker_class.py reason /tmp/agent-blocker.txt > /tmp/agent-escalation.txt || true
+if [ "$BLOCKER_CLASS" = "question" ] && [ ! -s "$NOTES_DIR"/agent-escalation.txt ]; then
+  python3 .bureau-pipeline/scripts/blocker_class.py reason "$NOTES_DIR"/agent-blocker.txt > "$NOTES_DIR"/agent-escalation.txt || true
 fi
 
 # Which exit took the card, read by the turn-cap tag at the end (DRE-4366).
@@ -319,35 +347,35 @@ elif [ -n "$PR_URL" ] && [ "$PR_URL" != "null" ]; then
   python3 .bureau-pipeline/scripts/linear_ops.py comment "$CARD" \
     "🤖 PR opened: $PR_URL — CI + critic review running. Run: $RUN_URL"
   python3 .bureau-pipeline/scripts/linear_ops.py advance "$CARD" "In Review" "In Progress,Todo"
-elif [ "$DEATH_CLASS" != "turn_exhaustion" ] && [ -f /tmp/agent-handback.txt ] && [ -s /tmp/agent-handback.txt ]; then
+elif [ "$DEATH_CLASS" != "turn_exhaustion" ] && [ -f "$NOTES_DIR"/agent-handback.txt ] && [ -s "$NOTES_DIR"/agent-handback.txt ]; then
   # Hand-back to Planning; never for a turn-cap death (DRE-2727, DRE-4366, DRE-4370).
   {
     echo "🤖 Handed back to Planning: this card was dispatched as one piece of work and is an epic's worth. The agent stopped rather than sprawl it into one unreviewable pull request. The pieces below are its plan for the split (the agent's split proposal, written at its decide-by turn)."
     echo ""
-    cat /tmp/agent-handback.txt
+    cat "$NOTES_DIR"/agent-handback.txt
     echo ""
     echo "Run: $RUN_URL"
-  } > /tmp/handback-comment.md
+  } > "${RUNNER_TEMP:-/tmp}/handback-comment.md"
   python3 .bureau-pipeline/scripts/linear_ops.py comment "$CARD" \
-    "$(cat /tmp/handback-comment.md)"
+    "$(cat "${RUNNER_TEMP:-/tmp}/handback-comment.md")"
   python3 .bureau-pipeline/scripts/linear_ops.py advance "$CARD" "Planning" "In Progress,Todo" || true
-elif [ -f /tmp/agent-escalation.txt ] && [ -s /tmp/agent-escalation.txt ]; then
+elif [ -f "$NOTES_DIR"/agent-escalation.txt ] && [ -s "$NOTES_DIR"/agent-escalation.txt ]; then
   # Escalation to Green Light, checked before the blocker (DRE-1655, DRE-2776).
   {
     echo "🙋 The agent paused for a decision before building — it judged this needs your call rather than a guess."
     echo ""
     # The three lines; a renderer that cannot run never costs the park (DRE-3911).
-    python3 .bureau-pipeline/scripts/console_escalation.py complete /tmp/agent-escalation.txt --question "Which way should this build go?" --who "the build agent" || cat /tmp/agent-escalation.txt
+    python3 .bureau-pipeline/scripts/console_escalation.py complete "$NOTES_DIR"/agent-escalation.txt --question "Which way should this build go?" --who "the build agent" || cat "$NOTES_DIR"/agent-escalation.txt
     echo ""
-    echo "Answer here, then move this card to **Todo** to proceed (the agent picks up your guidance), or to **Backlog** to drop it. Run: $RUN_URL"
-  } > /tmp/escalation-comment.md
+    echo "Answer here, then move this card to **Todo** to proceed (the agent picks up your guidance), or to **$QUEUE_LANE** to drop it. Run: $RUN_URL"
+  } > "${RUNNER_TEMP:-/tmp}/escalation-comment.md"
   EXIT_TAKEN="escalation"
   python3 .bureau-pipeline/scripts/linear_ops.py comment "$CARD" \
-    "$(cat /tmp/escalation-comment.md)"
+    "$(cat "${RUNNER_TEMP:-/tmp}/escalation-comment.md")"
   python3 .bureau-pipeline/scripts/linear_ops.py advance "$CARD" "Green Light" "In Progress,Todo" || \
     python3 .bureau-pipeline/scripts/linear_ops.py state "$CARD" "Green Light" || true
-elif [ -f /tmp/agent-blocker.txt ]; then
-  # Backlog, never Todo: a redispatched blocker hits the same wall (DRE-1286).
+elif [ -f "$NOTES_DIR"/agent-blocker.txt ]; then
+  # The queue lane, never Todo: a redispatched blocker hits the same wall (DRE-1286).
   EXIT_TAKEN="blocker note"
   # The marker names the class and what the sweep does with it (DRE-6444).
   case "$BLOCKER_CLASS" in
@@ -357,11 +385,11 @@ elif [ -f /tmp/agent-blocker.txt ]; then
     *) BLOCKER_CLASS="question"; BLOCKER_UNTIL="the sweep asks it in Green Light" ;;
   esac
   # The stamp line off, everything else verbatim: a repo: line stays first.
-  BLOCKER_REASON=$(python3 .bureau-pipeline/scripts/blocker_class.py reason /tmp/agent-blocker.txt || cat /tmp/agent-blocker.txt)
+  BLOCKER_REASON=$(python3 .bureau-pipeline/scripts/blocker_class.py reason "$NOTES_DIR"/agent-blocker.txt || cat "$NOTES_DIR"/agent-blocker.txt)
   python3 .bureau-pipeline/scripts/linear_ops.py comment "$CARD" \
-    "🛑 Agent blocked: class=$BLOCKER_CLASS · $BLOCKER_REASON — parked in Backlog until $BLOCKER_UNTIL. Run: $RUN_URL"
+    "🛑 Agent blocked: class=$BLOCKER_CLASS · $BLOCKER_REASON — parked in $QUEUE_LANE until $BLOCKER_UNTIL. Run: $RUN_URL"
   # --park, or the DRE-1885 building-card guard re-routes this to Todo.
-  python3 .bureau-pipeline/scripts/linear_ops.py state "$CARD" "Backlog" --park || true
+  python3 .bureau-pipeline/scripts/linear_ops.py state "$CARD" "$QUEUE_LANE" --park || true
 elif [ "$FAILED_DELIVERY" = "failed" ] && [ -n "$RESCUE_PATCH" ] && [ -f "$RESCUE_PATCH" ]; then
   # Rescue delivery, deliberately above the unreadable branch (DRE-3262, DRE-3165).
   EXIT_TAKEN="rescue delivery"
@@ -429,8 +457,8 @@ else
   if [ "$PARK_TAG_FLAGS" = "--turn-exhaustion" ]; then PARK_REASON="turn-cap-park"; fi
   # shellcheck disable=SC2086  # ERR_FLAGS is deliberately word-split
   DECISION=$(python3 .bureau-pipeline/scripts/dead_run.py decide \
-    "${PRIOR:-0}" $ERR_FLAGS --failed-step "$FAILED_STEP" --run-url "$RUN_URL")
-  ACTION=$(printf '%s\n' "$DECISION" | head -1)
+    "${PRIOR:-0}" $ERR_FLAGS --failed-step "$FAILED_STEP" --run-url "$RUN_URL" --handback-file "$NOTES_DIR"/agent-handback.txt)
+  ACTION="${DECISION%%$'\n'*}"  # line 1 with no pipe for `head` to close early (DRE-7163)
   BODY=$(printf '%s\n' "$DECISION" | tail -n +3)
   if [ "$ACTION" = "hold" ] && ! python3 .bureau-pipeline/scripts/dead_run.py park "$CARD" --reason "$PARK_REASON"; then ACTION="hold-unlanded"; fi
   if [ "$ACTION" = "hold-unlanded" ]; then BODY=$(python3 .bureau-pipeline/scripts/dead_run.py park-unlanded --run-url "$RUN_URL" "$PARK_TAG_FLAGS"); fi

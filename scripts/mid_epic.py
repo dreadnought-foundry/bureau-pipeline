@@ -29,7 +29,7 @@ line from whoever found it, required at creation — never a form.
 
 ## The mechanical hazard this exists to close
 
-`reconcile.promote_ready` auto-promotes Backlog children of an active epic once
+`reconcile.promote_ready` auto-promotes Queued children of an active epic once
 their blockers clear. A card added mid-epic therefore dispatches an agent on the
 next sweep — within fifteen minutes — whether or not anyone has read it. Right
 for a card the plan anticipated; wrong for one nobody has seen. So an addition
@@ -124,6 +124,7 @@ from datetime import UTC, datetime
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import lane_scope  # noqa: E402 — the ONE place the retired lane name survives
+from lane_contract import QUEUE_LANE  # noqa: E402 — the lane a sibling waits in (DRE-6746)
 
 # The two kinds, and the question that tells them apart.
 ADDITION = "addition"
@@ -255,7 +256,7 @@ class DiscoveryRefused(Exception):
     """The motion was refused before it touched Linear.
 
     Every refusal in this module is pre-creation on purpose: a sibling created
-    and then questioned is already in Backlog, already promotable, and already
+    and then questioned is already in Queued, already promotable, and already
     the silent-accretion problem it was supposed to avoid.
     """
 
@@ -360,11 +361,12 @@ def fileable_verdicts() -> tuple:
     """The routing verdicts a discovery may be born with.
 
     DERIVED from the vocabulary, never restated: they are exactly the verdicts
-    the sweep carries out of Backlog (`routing_verdict.sweep_promotes`), which
-    is where a filed sibling waits. Until DRE-5321 that was "the verdicts whose
+    the sweep carries out of the queue (`routing_verdict.sweep_promotes`),
+    which is where a filed sibling waits — `QUEUE_LANE`, the lane the create
+    seam writes (DRE-6746). Until DRE-5321 that was "the verdicts whose
     destination is Todo"; once WORKBENCH and OPERATOR landed in Hand-work
     instead, a destination test would have shrunk this to FLEET alone, so the
-    rule changed and the answer did not. PARKED stays in Backlog and NEEDS WORK
+    rule changed and the answer did not. PARKED stays in Queued and NEEDS WORK
     goes back to Planning — either one files a sibling nobody comes for, which
     is the silent accretion this route replaces wearing a verdict. A route
     added to `config/routing-verdicts.json` becomes fileable here on its own,
@@ -403,7 +405,7 @@ def verdict_problem(kind: str, verdict) -> str | None:
         return (
             f"a discovery may be born carrying {', '.join(fileable)} — refusing "
             f"{verdict.strip() or 'nothing'!r}. Those are the verdicts the sweep "
-            f"carries out of Backlog, each to the lane it is picked up in "
+            f"carries out of {QUEUE_LANE}, each to the lane it is picked up in "
             f"({lands}); every other route files a card nobody comes for."
         )
     return None
@@ -476,7 +478,7 @@ def promotion_refusal(identifier, created_at, green_lit_at, comment_bodies,
         "within fifteen minutes, whether or not anyone has read it. That is "
         "right for a card the plan anticipated and wrong for one nobody has "
         f"seen. {SIGN_OFF_STATE} reads the card and stamps the routing verdict "
-        "that says who builds it; back in Backlog with that verdict, it "
+        f"that says who builds it; back in {QUEUE_LANE} with that verdict, it "
         "promotes as any other child does.\n\n"
         "It does NOT need a new green light: that decision was already made "
         f"for {of_epic}. If the plan no longer describes the work, the epic "

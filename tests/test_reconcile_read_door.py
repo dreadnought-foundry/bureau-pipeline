@@ -83,7 +83,7 @@ class Linear:
                      for c in self.cards.values() if c["state"]["name"] in v["states"]]
             return {"issues": {"nodes": nodes,
                                "pageInfo": {"hasNextPage": False, "endCursor": None}}}
-        if 'state: {name: {eq: "Backlog"}}' in q:
+        if reconcile.QUEUE_STATE_FILTER in q:
             numbers = v.get("numbers")
             nodes = [copy.deepcopy(c) for c in self.cards.values()
                      if c["state"]["name"] == "Backlog"
@@ -189,7 +189,7 @@ def _advanced(linear):
 
 
 def _backlog_reads(linear):
-    return [q for q in linear.queries if 'eq: "Backlog"' in q]
+    return [q for q in linear.queries if reconcile.QUEUE_STATE_FILTER in q]
 
 
 def _lane_reads(linear):
@@ -213,7 +213,7 @@ def test_a_door_candidate_that_still_passes_is_promoted_after_one_live_read(monk
         assert reconcile.promote_ready(active_count=0) == 1
     assert _advanced(linear) == ["DRE-101"]
     assert len(_backlog_reads(linear)) == 1  # the re-check, by number, and nothing else
-    assert door.asked("/board")[0]["query"]["lanes"] == "Backlog"
+    assert door.asked("/board")[0]["query"]["lanes"] == ",".join(reconcile.QUEUE_LANES)
 
 
 def test_R1_relation_added_after_the_poll_blocks_promotion_via_live_recheck(monkeypatch):
@@ -442,7 +442,7 @@ def test_a_park_on_door_data_that_still_holds_parks_conditionally(monkeypatch):
         monkeypatch.setattr(reconcile.dead_run, "split_tried", lambda bodies: True)
         reconcile.main()
     assert linear.labels == [("DRE-301", reconcile.HOLD_LABEL)]
-    assert linear.writes == [("state", "DRE-301", "Backlog", ("--park",),
+    assert linear.writes == [("state", "DRE-301", "Queued", ("--park",),
                               ("In Progress",), ())]
 
 
@@ -1309,3 +1309,78 @@ def test_when_every_thread_is_incomplete_the_door_is_asked_once(monkeypatch, cap
     assert linear.thread_reads() == today
     assert ("promotion: epic threads — 0 from the door in one read, 2 read from Linear "
             f"(thread-incomplete: {_EPIC_A}, {_EPIC_B})") in capsys.readouterr().out
+
+
+# ── DRE-6753: the drain reads the retiring lane for no request of its own ───
+# The queue's old name retires into Queued, and its state stays on the board
+# for good (Linear keeps a team's only backlog-type status), so the drain runs
+# against a real lane on every repo's sweep, forever. It must not buy a Linear
+# request each time for a lane that should be empty: in `off` and `shadow` the
+# lane rides the one board read; in `on` the door serves it, at `scope=fleet`
+# or — declined that — at `scope=repo`, and Linear only when the door cannot
+# answer at all, as every read falls back.
+
+_OLD_QUEUE = "Back" + "log"
+
+
+def test_the_retiring_lane_rides_the_one_board_read():
+    assert reconcile.RETIRING_LANES == (_OLD_QUEUE,)
+    assert set(reconcile.RETIRING_LANES) <= set(reconcile.BOARD_READ_LANES)
+
+
+@pytest.mark.parametrize("mode", ["off", "shadow"])
+def test_off_and_shadow_drain_off_the_board_read_already_paid_for(monkeypatch, mode):
+    stranded = _c("DRE-31", _OLD_QUEUE, labels=())
+    linear = Linear(stranded, _c("DRE-32", "Todo"))
+    with door_at(monkeypatch, mode=mode), wired(linear):
+        reconcile.active_cards()  # the sweep's one board read
+        before = len(linear.queries)
+        reconcile.drain_retiring_lanes()
+    assert len(linear.queries) == before, "the drain asked Linear on its own"
+    assert _lane_reads(linear) == [list(reconcile.BOARD_READ_LANES)]
+    assert ("advance", "DRE-31", "Queued", _OLD_QUEUE) in linear.writes
+
+
+def test_on_the_drain_is_served_by_the_doors_fleet_read(monkeypatch):
+    stranded = _c("DRE-33", _OLD_QUEUE, labels=())  # nobody's: the fleet read holds it
+    linear = Linear(stranded)
+    with door_at(monkeypatch, stranded) as door, wired(linear):
+        reconcile.drain_retiring_lanes()
+        assert _fleet_asks(door) == [_OLD_QUEUE]
+    assert linear.queries == []
+    assert ("advance", "DRE-33", "Queued", _OLD_QUEUE) in linear.writes
+    assert "DRE-33" in reconcile._door_sourced
+
+
+def test_on_a_declined_fleet_drains_this_repos_cards_off_the_repo_read(monkeypatch, capsys):
+    mine = _c("DRE-34", _OLD_QUEUE)
+    linear = Linear(mine)
+    with door_at(monkeypatch, mine) as door, wired(linear):
+        door.decline_fleet("lane-not-held")
+        reconcile.drain_retiring_lanes()
+        repo_asks = [r["query"]["lanes"] for r in door.asked("/board")
+                     if r["query"]["scope"] == "repo"]
+    assert repo_asks == [_OLD_QUEUE]
+    assert linear.queries == []
+    assert ("advance", "DRE-34", "Queued", _OLD_QUEUE) in linear.writes
+    assert ("read-door: the retiring lanes read at scope=repo this pass — the door "
+            "does not serve scope=fleet to this repo (lane-not-held)") in capsys.readouterr().out
+
+
+def test_on_a_door_that_cannot_answer_sends_the_drain_to_linear(monkeypatch):
+    stranded = _c("DRE-35", _OLD_QUEUE, labels=())
+    linear = Linear(stranded)
+    with door_at(monkeypatch) as door, wired(linear):
+        door.routes["/board"] = (503, {"error": {"code": "CLOSED"}})
+        reconcile.drain_retiring_lanes()
+    assert _lane_reads(linear) == [list(reconcile.RETIRING_LANES)]
+    assert ("advance", "DRE-35", "Queued", _OLD_QUEUE) in linear.writes
+
+
+def test_on_a_linear_hold_skips_the_drain_with_no_linear_call(monkeypatch):
+    linear = Linear(_c("DRE-36", _OLD_QUEUE))
+    with door_at(monkeypatch) as door, wired(linear):
+        door.routes["/board"] = door.unknown("linear-hold")
+        with pytest.raises(reconcile.BoardHeld):
+            reconcile.drain_retiring_lanes()
+    assert linear.queries == []

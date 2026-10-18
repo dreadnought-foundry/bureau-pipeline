@@ -128,7 +128,7 @@ exactly what behavior you proved or disproved.
 
 ## The lanes you work in (DRE-2727)
 
-The board is `Intake` → `Planning` → `Green Light` → `Backlog` → `Todo` →
+The board is `Intake` → `Planning` → `Green Light` → `Queued` → `Todo` →
 `In Progress` → `In Review` → `Done`, with `Triage` off to the side. What
 changed under you, and must not be guessed at:
 

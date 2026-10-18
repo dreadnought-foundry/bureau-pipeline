@@ -1,15 +1,24 @@
-"""RED-first tests for DRE-3435 — the sweep's fleet-outage backstop.
+"""Tests for the sweep's fleet-outage backstop — DRE-3435, repointed by DRE-7455.
 
 DRE-3433 built the DECISION (`scripts/reviewer_down.py`): pure functions over
-the outcomes a sweep can already see, answering `file` / `append` / `close` /
-`nothing`. Nothing called it. This card is the wrapper — one full-sweep
-backstop, `reconcile.report_fleet_reviewer_outage()`, that feeds the decision
-what it can see and does exactly what it says.
+the outcomes a sweep can already see. DRE-3435 wired it into one full-sweep
+backstop, `reconcile.report_fleet_reviewer_outage()`, which kept ONE Linear
+card in Triage — filed, appended to, retitled and closed by the sweep.
+
+DRE-7455 makes the outage a console alert instead of that card. The backstop
+raises `reviewer_outage:fleet` at CRITICAL through `scripts/pipeline_notice.py`
+with the title and body the decision composes, on every full sweep that finds
+the outage, and resolves it with the all-clear copy on a sweep that finds no
+could-not-run at all. The one-row-per-key alert is the dedupe, so the board
+machinery that kept one card is gone, and when the door cannot take the raise
+the client files today's card — its title, Triage, `repo:<slug>` and
+`no-code`.
 
 The decision itself is NOT re-tested here (tests/test_reviewer_down.py owns
-it). What this file pins is the wrapper: what is read, what is written, under
-which token, and above all that a QUIET SWEEP COSTS NOTHING EXTRA — the alarm
-for a fleet-wide outage must not itself become a fleet-wide expense.
+it), and the raise and resolve are faked: tests/test_pipeline_notice.py owns
+the client. What this file pins is the wrapper: what is read, what is raised,
+under which token, and above all that a QUIET SWEEP COSTS NO LINEAR REQUEST —
+the alarm for a fleet-wide outage must not itself become a fleet-wide expense.
 
 The seams it holds:
 
@@ -20,12 +29,9 @@ The seams it holds:
     and both functions return without acting.
   * The fleet witness comes off `active_cards()` — already read once per sweep
     and served from the pass cache — so the backstop adds ZERO Linear requests
-    to a quiet sweep.
+    to any sweep.
   * A `reviewer_environment.hold_receipt(...)` is NOT an outcome (DRE-3428): it
     records a second crash whose evidence note is already counted.
-  * Every comment composes through `pipeline_act.receipt()` with the one act
-    DRE-3433 declared, so `scripts/check_act_receipts.py` stays green with no
-    edit to `config/pipeline-acts.json`.
 
 Run: cd bureau-pipeline && python3 -m pytest tests/test_reconcile_reviewer_down.py -v
 """
@@ -37,8 +43,6 @@ import os
 import sys
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from types import SimpleNamespace
-from unittest import mock
 from unittest.mock import patch
 
 import pytest
@@ -53,6 +57,7 @@ os.environ.setdefault("GH_TOKEN", "x")
 import linear_ops  # noqa: E402
 import medic_classify  # noqa: E402
 import pipeline_act  # noqa: E402
+import pipeline_notice  # noqa: E402
 import reconcile  # noqa: E402
 import reviewer_down  # noqa: E402
 import reviewer_environment  # noqa: E402
@@ -82,7 +87,6 @@ NATIVE_BINARY_LOG = (
 def _pin_repo(monkeypatch):
     monkeypatch.setattr(reconcile, "REPO", "dreadnought-foundry/agent-bureau")
     monkeypatch.setattr(reconcile, "REPO_SLUG", "agent-bureau")
-    monkeypatch.setattr(reconcile, "FLEET_OUTAGE_SWEEP_CAP", 1, raising=False)
     reconcile._write_failures.clear()
     reconcile._read_failures.clear()
     reconcile._stale_defects.clear()
@@ -178,19 +182,50 @@ def _hold_receipt():
     )
 
 
+
+
 # --------------------------------------------------------------------------
 # the harness
 # --------------------------------------------------------------------------
-class Written:
-    """Everything the backstop wrote, and everything it read from Linear."""
+RECOVERY_TITLE = "Reviewer back — reviews are running again"
 
-    def __init__(self):
+
+class Written:
+    """Everything the backstop raised and resolved, and every Linear write it
+    attempted — of which there must be none."""
+
+    def __init__(self, outcome=None):
+        self.raises: list = []
+        self.resolves: list = []
         self.created: list = []
-        self.created_kw: list = []
         self.comments: list = []
         self.states: list = []
         self.titles: list = []
         self.prefix_reads: int = 0
+        self.outcome = outcome
+        self.open = False
+
+    # the notice client's two calls, answered as the door answers one row
+    def raise_notice(self, notice, *, severity, title, body, action_url=None,
+                     action_label=None, fallback=None):
+        self.raises.append({"notice": notice, "severity": severity,
+                            "title": title, "body": body, "fallback": fallback})
+        if self.outcome:
+            return self.outcome
+        outcome = "repeat" if self.open else "raised"
+        self.open = True
+        return outcome
+
+    def resolve_notice(self, notice, *, recovery_title=None, recovery_body=None):
+        self.resolves.append({"notice": notice, "recovery_title": recovery_title,
+                              "recovery_body": recovery_body})
+        was, self.open = self.open, False
+        return "resolved" if was else "not-open"
+
+    @property
+    def raised(self) -> dict:
+        assert len(self.raises) == 1, self.raises
+        return self.raises[0]
 
 
 def _gh_factory(state):
@@ -239,63 +274,31 @@ def _actions_factory(state, log):
     return fake_actions
 
 
-def _alarm_card(payload, lane=None):
-    """An open outage card the way the sweep's board read returns it
-    (DRE-6576): the snapshot row, in Triage unless the payload says
-    otherwise, its title opening with the prefix the sweep finds it by."""
-    return {
-        "title": reviewer_down.TITLE_PREFIX + "15:19 PT — 1 runs, 1 repos",
-        "description": "",
-        "comments": {"nodes": []},
-        "labels": {"nodes": [{"name": linear_ops.NO_CODE_LABEL}]},
-        **payload,
-        "state": {"name": lane or (payload.get("state") or {}).get("name")
-                  or reconcile.FLEET_OUTAGE_LANE},
-    }
-
-
 @contextlib.contextmanager
-def _outage(prs=(), cards=(), open_card=None, duplicates=(),
-            log=NATIVE_BINARY_LOG, create_fails=False, door=False, **gh_state):
+def _outage(prs=(), cards=(), log=NATIVE_BINARY_LOG, outcome=None, door=False,
+            written=None, **gh_state):
     """Drive `report_fleet_reviewer_outage` over a fixed world.
 
-    The open card and its duplicates are in the board snapshot, where the
-    sweep finds them with no Linear request (DRE-6576). `door=True` is
-    `BUREAU_READ=on`: the door's snapshot does not hold the alarm lane, so the
-    card is found by the one `find_open_prefix` request instead, and nothing
-    in the snapshot carries it."""
-    written = Written()
+    The notice client is `written`, and every Linear write is recorded so a
+    test can say there was none. `door=True` is `BUREAU_READ=on`, which no
+    longer changes anything here: there is no open card to look up."""
+    written = written or Written(outcome)
     state = {"prs": list(prs), "gh_calls": [], "actions_calls": [], **gh_state}
-    alarms = []
-    if open_card is not None:
-        filed = open_card.get("createdAt") or _iso(20)
-        alarms.append(_alarm_card(open_card))
-        for n, dupe in enumerate(duplicates, start=1):
-            alarms.append(_alarm_card({
-                "createdAt": (reviewer_down._dt(filed) + timedelta(seconds=n))
-                .isoformat().replace("+00:00", "Z"),
-                **dupe,
-            }))
-    board = list(cards) + ([] if door else alarms)
+    board = list(cards)
 
     def active_cards(states=reconcile.SWEEP_STATES):
         return [c for c in board if c["state"]["name"] in states]
 
     def find_open_prefix(prefix):
         written.prefix_reads += 1
-        assert prefix == reviewer_down.TITLE_PREFIX
-        if open_card is None or not door:
-            return None
-        return {**open_card, "duplicates": list(duplicates)}
+        return None
 
     def create_card(title, description, *, repo_slug, **kw):
-        if create_fails:
-            raise linear_ops.LinearError("Linear API error 500: issueCreate failed")
-        written.created.append((title, description, repo_slug))
-        written.created_kw.append(kw)
+        written.created.append((title, description, repo_slug, kw))
         return {"identifier": "DRE-9999", "url": "https://linear.app/x/DRE-9999"}
 
-    with patch.object(reconcile, "gh", side_effect=_gh_factory(state)), \
+    with patch.object(reconcile, "pipeline_notice", written), \
+        patch.object(reconcile, "gh", side_effect=_gh_factory(state)), \
         patch.object(reconcile, "gh_actions_read",
                      side_effect=_actions_factory(state, log)), \
         patch.object(reconcile, "active_cards", side_effect=active_cards), \
@@ -329,22 +332,28 @@ def _capture(fn, *a, **kw):
     return buf.getvalue()
 
 
+def _no_linear_write(written):
+    assert written.created == [] and written.comments == []
+    assert written.states == [] and written.titles == []
+
+
 # --------------------------------------------------------------------------
-# 1. the quiet sweep costs nothing
+# 1. the quiet sweep costs no Linear request, and clears the alert
 # --------------------------------------------------------------------------
-def test_a_quiet_sweep_reads_nothing_further_and_files_nothing():
-    """ACCEPTANCE: no could-not-run in the window → one log line, no open-card
-    read, no write. The alarm must not itself become a fleet-wide expense."""
+def test_a_quiet_sweep_reads_nothing_further_and_resolves_the_alert():
+    """No could-not-run in the window → one log line, no Linear write, and
+    the alert resolved with the all-clear copy (the door answers `not-open`
+    when nothing was raised, and sends nothing)."""
     with _outage(prs=[_pr(comments=[_verdict_comment()])],
                  cards=[_card(bodies=[("ordinary chatter", _iso(5))])]) as (w, _):
         out = _capture(reconcile.report_fleet_reviewer_outage)
-    assert "fleet-reviewer-outage: nothing to report" in out
+    assert "reviewer-outage: nothing to report" in out
     assert "0 could-not-run" in out
-    assert w.prefix_reads == 0, (
-        "the open card is read only PAST the early exit — a quiet sweep must "
-        "make no Linear request beyond the board read it already makes"
-    )
-    assert w.created == [] and w.comments == [] and w.states == []
+    assert w.prefix_reads == 0
+    assert w.raises == []
+    assert [r["notice"] for r in w.resolves] == ["reviewer_outage:fleet"]
+    assert w.resolves[0]["recovery_title"] == RECOVERY_TITLE
+    _no_linear_write(w)
 
 
 def test_a_quiet_sweep_makes_no_linear_request_at_all():
@@ -355,23 +364,24 @@ def test_a_quiet_sweep_makes_no_linear_request_at_all():
     reconcile.reset_sweep_cards()
     reconcile._swept_cards = [_card(bodies=[("ordinary chatter", _iso(5))])]
     calls: list = []
+    notices = Written()
 
     def refuse(query, variables=None):
         calls.append(query)
         raise AssertionError("a quiet sweep must not touch Linear")
 
     with patch.object(reconcile, "gh",
-                      side_effect=lambda *a: json.dumps([_pr()])), \
+                      side_effect=lambda *a: json.dumps(
+                          [_pr(comments=[_verdict_comment()])])), \
+        patch.object(reconcile, "pipeline_notice", notices), \
         patch.object(reconcile.bureau_read, "mode", return_value="off"), \
         patch.object(reconcile.linear_ops, "find_open_prefix",
                      side_effect=AssertionError("no open-card lookup")) as lookup, \
         patch.object(reconcile.linear_ops, "gql", side_effect=refuse):
         reconcile.report_fleet_reviewer_outage()
     assert calls == []
-    assert lookup.call_count == 0, (
-        "no open card in the snapshot and no crash in the window: the alarm "
-        "is not looked up at all (DRE-6576)"
-    )
+    assert lookup.call_count == 0, "there is no open card to look up any more"
+    assert len(notices.resolves) == 1
 
 
 def test_a_full_sweep_lists_the_open_pull_requests_once():
@@ -388,6 +398,7 @@ def test_a_full_sweep_lists_the_open_pull_requests_once():
         return "[]"
 
     with patch.object(reconcile, "gh", side_effect=fake_gh), \
+        patch.object(reconcile, "pipeline_notice", Written()), \
         patch.object(reconcile, "verdict_bound", return_value=True), \
         patch.object(reconcile.linear_ops, "gql",
                      side_effect=AssertionError("no Linear read on a quiet sweep")):
@@ -456,7 +467,8 @@ def test_the_listing_carries_the_same_seven_fields_as_today():
 
 def test_a_failed_listing_records_the_same_line_and_neither_function_acts():
     """ACCEPTANCE: the failure path is byte-identical to the one
-    `recover_crashed_reviews` has today, and both functions return."""
+    `recover_crashed_reviews` has today, and both functions return — an
+    unreadable listing neither raises the alert nor clears it."""
     reconcile.reset_sweep_cards()
     with patch.object(reconcile, "gh",
                       side_effect=RuntimeError("HTTP 403: rate limited")):
@@ -469,14 +481,13 @@ def test_a_failed_listing_records_the_same_line_and_neither_function_acts():
     reconcile._write_failures.clear()
     with _outage(prs=[], listing_raises=True) as (w, _):
         reconcile.report_fleet_reviewer_outage()
-    assert w.prefix_reads == 0 and w.created == []
+    assert w.raises == [] and w.resolves == []
     assert reconcile._write_failures, "an unreadable listing takes the sweep red"
 
 
 def test_recover_crashed_reviews_reads_through_the_shared_helper():
-    """The ONLY edit this card makes inside `recover_crashed_reviews` is the
-    swap — so with the listing already memoised it issues no listing of its
-    own."""
+    """With the listing already memoised `recover_crashed_reviews` issues no
+    listing of its own."""
     reconcile.reset_sweep_cards()
     reconcile._pr_listing = []
     calls: list = []
@@ -489,7 +500,7 @@ def test_recover_crashed_reviews_reads_through_the_shared_helper():
 
 
 # --------------------------------------------------------------------------
-# 3. the file path — three crashes, two repos, ONE card
+# 3. the raise — three crashes, ONE alert, no card
 # --------------------------------------------------------------------------
 def _file_world(witness_body):
     return {
@@ -505,55 +516,50 @@ def _file_world(witness_body):
     "witness, repos", [("generic", 1), ("environment", 2)],
     ids=["generic-medic-note", "environment-evidence-note"],
 )
-def test_three_could_not_run_across_two_repos_file_exactly_one_card(witness, repos):
-    """ACCEPTANCE: two local receipts plus one witness → ONE card, titled from
-    the decision, described by `card_body`, receipted once, and CREATED in
-    Triage — never moved there (DRE-5292). The environment note names a run
-    in atlas, so it is a second repository; the generic note names no run, so
-    it is a third run and no repository at all (DRE-5291) — the run rule
-    files it either way."""
+def test_three_could_not_run_across_two_repos_raise_one_critical_alert(witness, repos):
+    """ACCEPTANCE: two local receipts plus one witness → ONE raise of
+    `reviewer_outage:fleet` at CRITICAL, titled from the decision, described
+    by `card_body`, and no card. The environment note names a run in atlas,
+    so it is a second repository; the generic note names no run, so it is a
+    third run and no repository at all (DRE-5291) — the run rule raises it
+    either way."""
     body = (_medic_note() if witness == "generic"
             else _environment_note(ATLAS_RUN_URL))
     written, _ = _run_outage(**_file_world(body))
 
-    assert len(written.created) == 1, "ONE card for one outage — never two"
-    title, description, slug = written.created[0]
-    assert title.startswith(reviewer_down.TITLE_PREFIX)
-    assert title.endswith(f"— 3 runs, {repos} repos"), title
-    assert slug == reconcile.REPO_SLUG
-    assert "The three usual suspects" in description, "the body is card_body's"
-    assert reviewer_down.LEDGER_PREFIX in description
-
-    assert len(written.comments) == 1
-    identifier, receipt = written.comments[0]
-    assert identifier == "DRE-9999"
-    assert reviewer_down.OUTAGE_TAG in receipt
-    assert pipeline_act.trailer(reviewer_down.ACT) in receipt, (
-        "every comment composes through the ONE act DRE-3433 declared"
-    )
-    assert written.created_kw[0].get("lane") == "Triage"
-    assert written.states == [], "created in its lane, so nothing moves it"
+    raised = written.raised
+    assert raised["notice"] == "reviewer_outage:fleet"
+    assert raised["severity"] == "CRITICAL"
+    assert raised["title"].startswith(reviewer_down.TITLE_PREFIX)
+    assert raised["title"].endswith(f"— 3 runs, {repos} repos"), raised["title"]
+    assert "The three usual suspects" in raised["body"], "the body is card_body's"
+    assert raised["body"].count(reviewer_down.LEDGER_PREFIX) == 3, "the run list"
+    assert written.resolves == []
+    _no_linear_write(written)
 
 
 def test_a_note_naming_this_sweeps_own_repository_is_not_counted_again():
     """DRE-5291: the note is attributed to the repository in its run link —
     here this sweep's own — never to the card's `repo:` label. This sweep
     already counts its own crashes off its pull requests, so the note adds
-    nothing: two crashes in one repository, below both rules."""
+    nothing: two crashes in one repository, below both rules — so nothing is
+    raised, and with crashes still in the window nothing is resolved."""
     world = _file_world(_environment_note(RUN_URL))
     world["cards"] = [_card(repo="bureau-pipeline",
                             bodies=[(_environment_note(RUN_URL), _iso(6))])]
-    written, _ = _run_outage(**world)
-    assert written.created == [], "one repository's two crashes file nothing"
+    with _outage(**world) as (written, _):
+        out = _capture(reconcile.report_fleet_reviewer_outage)
+    assert written.raises == [] and written.resolves == []
+    assert "below the threshold" in out, out
 
 
-def test_the_filed_card_carries_the_first_runs_evidence():
+def test_the_raised_alert_carries_the_first_runs_evidence():
     """ACCEPTANCE (step 5): the run url off the head's own QA Review workflow
     run (DRE-5292 — never a check run's `details_url`), the log tail through
     `reviewer_down.error_line`, the action ref off this checkout's own
     qa-review.yml."""
     written, state = _run_outage(**_file_world(_medic_note()))
-    _, description, _ = written.created[0]
+    description = written.raised["body"]
     assert CRASHED_RUN_URL in description
     assert "native binary not found" in description
     assert "anthropics/claude-code-action@" in description
@@ -585,12 +591,12 @@ def _first_run_statement(description):
 
 def test_an_app_homepage_details_url_never_becomes_the_first_run_link():
     """ACCEPTANCE: the DRE-5273 shape — the head's review check run carries
-    the posting App's homepage as its `details_url`. The card links
+    the posting App's homepage as its `details_url`. The alert links
     `…/actions/runs/<id>` for the crashed QA Review run in the crashed
     repository, and the log tail is read from THAT run."""
     written, state = _run_outage(details_url=APP_HOMEPAGE,
                                  **_file_world(_medic_note()))
-    _, description, _ = written.created[0]
+    description = written.raised["body"]
     sentence, log_line = _first_run_statement(description)
     assert f"({CRASHED_RUN_URL})" in sentence, sentence
     assert f"({APP_HOMEPAGE})" not in description
@@ -603,7 +609,7 @@ def test_an_app_homepage_details_url_never_becomes_the_first_run_link():
 
 def test_the_first_crashed_run_is_the_earliest_failed_one_on_the_head():
     """A head collects runs: the crash, a later green re-review, one still
-    going. The card names the run that CRASHED — the earliest failure."""
+    going. The alert names the run that CRASHED — the earliest failure."""
     runs = [
         _crashed_run("34512000009", conclusion="success", minutes_ago=2),
         _crashed_run("34512000005", conclusion="failure", minutes_ago=6),
@@ -611,7 +617,7 @@ def test_the_first_crashed_run_is_the_earliest_failed_one_on_the_head():
         _crashed_run("34512000010", conclusion="", minutes_ago=1),
     ]
     written, state = _run_outage(runs=runs, **_file_world(_medic_note()))
-    sentence, _ = _first_run_statement(written.created[0][1])
+    sentence, _ = _first_run_statement(written.raised["body"])
     assert f"({CRASHED_RUN_URL})" in sentence, sentence
     views = [c for c in state["actions_calls"] if c[:2] == ("run", "view")]
     assert [v[2] for v in views] == [CRASHED_RUN_ID]
@@ -626,83 +632,10 @@ def test_no_resolvable_run_says_so_and_prints_no_url(runs):
     found, prints no URL in its place, and reads no log."""
     written, state = _run_outage(runs=runs, details_url=APP_HOMEPAGE,
                                  **_file_world(_medic_note()))
-    sentence, log_line = _first_run_statement(written.created[0][1])
+    sentence, log_line = _first_run_statement(written.raised["body"])
     assert "no run found" in log_line, log_line
     assert "http" not in sentence and "http" not in log_line, (sentence, log_line)
     assert not [c for c in state["actions_calls"] if c[:2] == ("run", "view")]
-
-
-# --------------------------------------------------------------------------
-# 3b. DRE-5292 — filed straight into Triage, wearing nothing a dispatch reads
-# --------------------------------------------------------------------------
-def test_the_outage_card_is_created_in_triage_and_never_passes_planning():
-    """ACCEPTANCE: the card's first recorded state is Triage. The create names
-    it, and no state write on this path puts the card anywhere — Planning
-    entry is what the relay dispatches the planner on (DRE-5273's Agent Plan
-    run 36658173529)."""
-    written, _ = _run_outage(**_file_world(_medic_note()))
-    assert [kw.get("lane") for kw in written.created_kw] == ["Triage"]
-    assert written.states == []
-
-
-def test_triage_is_a_lane_this_sweep_may_create_in():
-    """The lane contract names reconcile.py a permitted Triage writer."""
-    contract = json.loads((ROOT / "config" / "lane-contract.json").read_text())
-    triage = next(l for l in contract["lanes"] if l["name"] == "Triage")
-    assert "reconcile.py" in triage["clauses"]["writers"]["who"]
-
-
-def test_the_outage_card_wears_no_agent_role_and_is_marked_no_code():
-    """ACCEPTANCE: no `agent:*` role — 25 of 30 earlier outage cards wore
-    `agent:engineer` — and `no-code`, the mark every gate reads as "no run is
-    coming for this": the alarm is not work to build or plan."""
-    written, _ = _run_outage(**_file_world(_medic_note()))
-    labels = [l.lower() for l in written.created_kw[0].get("labels", ())]
-    assert not [l for l in labels if l.startswith("agent:")], labels
-    assert linear_ops.NO_CODE_LABEL in labels
-    assert reconcile.HAND_BUILT_LABEL not in labels
-    assert not reconcile.counts_against_wip(
-        {"labels": {"nodes": [{"name": l} for l in labels]}}
-    )
-
-
-def test_the_real_create_writes_triage_and_the_labels_in_one_mutation():
-    """The same claim one seam down: through the REAL `create_card`, the ONE
-    Linear write that mints the card carries Triage's state id and no
-    `agent:*` label — there is no second write to have got it wrong."""
-    mutations: list = []
-
-    def fake_gql(query, variables=None):
-        if "teams(" in query:
-            return {"teams": {"nodes": [{"id": "team-1"}]}}
-        if "issueCreate" in query:
-            mutations.append(variables["input"])
-            return {"issueCreate": {"success": True, "issue": {
-                "id": "u", "identifier": "DRE-9999",
-                "url": "https://linear.app/x/DRE-9999"}}}
-        raise AssertionError(f"unexpected Linear call: {query[:80]}")
-
-    with patch.object(linear_ops, "gql", side_effect=fake_gql), \
-        patch.object(linear_ops, "state_id",
-                     side_effect=lambda team, lane: f"state:{lane}"), \
-        patch.object(linear_ops, "_team_label_ids",
-                     side_effect=lambda team, names: [f"label:{n}" for n in names]), \
-        patch.object(reconcile, "gh", side_effect=_gh_factory(
-            {"prs": _file_world(_medic_note())["prs"], "gh_calls": []})), \
-        patch.object(reconcile, "gh_actions_read", side_effect=_actions_factory(
-            {"actions_calls": []}, NATIVE_BINARY_LOG)), \
-        patch.object(reconcile, "active_cards",
-                     side_effect=lambda *a, **k: _file_world(_medic_note())["cards"]), \
-        patch.object(reconcile.linear_ops, "find_open_prefix", return_value=None), \
-        patch.object(reconcile.linear_ops, "cmd_comment"), \
-        patch.object(reconcile.linear_ops, "cmd_state",
-                     side_effect=AssertionError("no state write on this path")):
-        reconcile.reset_sweep_cards()
-        reconcile.report_fleet_reviewer_outage()
-    assert len(mutations) == 1
-    assert mutations[0]["stateId"] == "state:Triage"
-    assert not [l for l in mutations[0]["labelIds"] if l.startswith("label:agent:")]
-    assert f"label:{linear_ops.NO_CODE_LABEL}" in mutations[0]["labelIds"]
 
 
 def test_the_evidence_is_the_earliest_LOCAL_crash():
@@ -717,7 +650,7 @@ def test_the_evidence_is_the_earliest_LOCAL_crash():
         # the OLDEST outcome of the three, and unreachable from here
         cards=[_card(bodies=[(_medic_note(), _iso(20))])],
     )
-    _, description, _ = written.created[0]
+    description = written.raised["body"]
     assert CRASHED_RUN_URL in description
     assert "native binary not found" in description
     assert "agent-bureau#141" in description, (
@@ -729,25 +662,108 @@ def test_an_unreadable_actions_log_never_fabricates_a_line():
     """ACCEPTANCE: `gh_actions_read` → None yields the honest sentence and the
     run url, never an invented error."""
     written, _ = _run_outage(log=None, **_file_world(_medic_note()))
-    _, description, _ = written.created[0]
-    assert f"log tail unreadable — see {CRASHED_RUN_URL}" in description
+    assert f"log tail unreadable — see {CRASHED_RUN_URL}" in written.raised["body"]
 
 
-def test_a_failed_create_lands_in_write_failures():
-    """ACCEPTANCE: a failed write takes the sweep red (the DRE-1254
-    discipline) and nothing downstream of it is claimed."""
-    written, _ = _run_outage(create_fails=True, **_file_world(_medic_note()))
-    assert written.comments == [] and written.states == []
-    assert any("fleet-reviewer-outage" in f for f in reconcile._write_failures), (
+# --------------------------------------------------------------------------
+# 3b. the fallback is today's card: Triage, `repo:<slug>`, `no-code`
+# --------------------------------------------------------------------------
+def test_the_fallback_card_is_created_in_triage_and_never_passes_planning():
+    """DRE-5292's rule, kept for the card the client files when the door
+    cannot take the raise: created in Triage — Planning entry is what the
+    relay dispatches the planner on (DRE-5273's Agent Plan run
+    36658173529)."""
+    written, _ = _run_outage(**_file_world(_medic_note()))
+    fallback = written.raised["fallback"]
+    assert isinstance(fallback, pipeline_notice.Fallback)
+    assert fallback.lane == "Triage" == reconcile.FLEET_OUTAGE_LANE
+    assert fallback.title == written.raised["title"]
+
+
+def test_triage_is_a_lane_this_sweep_may_create_in():
+    """The lane contract names reconcile.py a permitted Triage writer."""
+    contract = json.loads((ROOT / "config" / "lane-contract.json").read_text())
+    triage = next(l for l in contract["lanes"] if l["name"] == "Triage")
+    assert "reconcile.py" in triage["clauses"]["writers"]["who"]
+
+
+def test_the_fallback_card_wears_no_agent_role_and_is_marked_no_code():
+    """No `agent:*` role — 25 of 30 earlier outage cards wore
+    `agent:engineer` — and `no-code`, the mark every gate reads as "no run is
+    coming for this": the alarm is not work to build or plan."""
+    written, _ = _run_outage(**_file_world(_medic_note()))
+    labels = [l.lower() for l in written.raised["fallback"].labels]
+    assert labels == ["repo:agent-bureau", linear_ops.NO_CODE_LABEL]
+    assert not [l for l in labels if l.startswith("agent:")], labels
+    assert reconcile.HAND_BUILT_LABEL not in labels
+    assert not reconcile.counts_against_wip(
+        {"labels": {"nodes": [{"name": l} for l in labels]}}
+    )
+
+
+def test_a_door_that_is_not_there_files_todays_card_in_one_mutation(monkeypatch):
+    """The same claim through the REAL client: with no `BUREAU_READ_URL` the
+    door is not reached, so `pipeline_notice` files the fallback — and the ONE
+    Linear write that mints it carries the outage's title, Triage's state id,
+    `repo:<slug>` and `no-code`, and no `agent:*` label."""
+    monkeypatch.delenv("BUREAU_READ_URL", raising=False)
+    mutations: list = []
+
+    def fake_gql(query, variables=None, **_kw):
+        if "teams(" in query:
+            return {"teams": {"nodes": [{"id": "team-1"}]}}
+        if "issueCreate" in query:
+            mutations.append(variables["input"])
+            return {"issueCreate": {"success": True, "issue": {
+                "id": "u", "identifier": "DRE-9999",
+                "url": "https://linear.app/x/DRE-9999"}}}
+        raise AssertionError(f"unexpected Linear call: {query[:80]}")
+
+    world = _file_world(_medic_note())
+    with patch.object(linear_ops, "gql", side_effect=fake_gql), \
+        patch.object(linear_ops, "find_open", return_value=None), \
+        patch.object(linear_ops, "find_open_prefix", return_value=None), \
+        patch.object(linear_ops, "state_id",
+                     side_effect=lambda team, lane: f"state:{lane}"), \
+        patch.object(linear_ops, "_team_label_ids",
+                     side_effect=lambda team, names: [f"label:{n}" for n in names]), \
+        patch.object(reconcile, "gh", side_effect=_gh_factory(
+            {"prs": world["prs"], "gh_calls": []})), \
+        patch.object(reconcile, "gh_actions_read", side_effect=_actions_factory(
+            {"actions_calls": []}, NATIVE_BINARY_LOG)), \
+        patch.object(reconcile, "active_cards",
+                     side_effect=lambda *a, **k: world["cards"]), \
+        patch.object(reconcile.linear_ops, "cmd_comment",
+                     side_effect=AssertionError("no receipt is posted")), \
+        patch.object(reconcile.linear_ops, "cmd_state",
+                     side_effect=AssertionError("no state write on this path")):
+        reconcile.reset_sweep_cards()
+        out = _capture(reconcile.report_fleet_reviewer_outage)
+    assert len(mutations) == 1
+    assert mutations[0]["title"].startswith(reviewer_down.TITLE_PREFIX)
+    assert mutations[0]["stateId"] == "state:Triage"
+    assert mutations[0]["labelIds"] == [
+        "label:repo:agent-bureau", f"label:{linear_ops.NO_CODE_LABEL}"]
+    assert ("pipeline-notice: fallback-card no-url "
+            "kind=pipeline_notice:reviewer_outage:fleet card=DRE-9999") in out, out
+    assert reconcile._write_failures == []
+
+
+def test_a_lost_raise_lands_in_write_failures():
+    """The door refused and the fallback card could not be filed either: a
+    failed write takes the sweep red (the DRE-1254 discipline)."""
+    written, _ = _run_outage(outcome="lost", **_file_world(_medic_note()))
+    _no_linear_write(written)
+    assert any("reviewer-outage" in f for f in reconcile._write_failures), (
         f"got {reconcile._write_failures}"
     )
 
 
 def test_a_recorded_write_failure_takes_the_whole_sweep_red():
     """The other half of the criterion above: `_write_failures` is the rail
-    `main()` exits non-zero on, so a failed create is a red run the medic
-    sees rather than a silent miss (the DRE-1254 discipline)."""
-    written, _ = _run_outage(create_fails=True, **_file_world(_medic_note()))
+    `main()` exits non-zero on, so a lost alert is a red run the medic sees
+    rather than a silent miss (the DRE-1254 discipline)."""
+    _run_outage(outcome="lost", **_file_world(_medic_note()))
     assert reconcile._write_failures
     with patch.object(reconcile, "active_cards", return_value=[]), \
         patch.object(reconcile, "merged_card_scope", return_value=None), \
@@ -769,174 +785,101 @@ def test_a_hold_receipt_alone_contributes_zero_outcomes():
     with _outage(prs=[_pr(141, comments=[hold])], cards=[]) as (w, _):
         out = _capture(reconcile.report_fleet_reviewer_outage)
     assert "nothing to report" in out
-    assert w.created == [] and w.comments == []
+    assert w.raises == []
+    _no_linear_write(w)
 
 
 # --------------------------------------------------------------------------
-# 4. the append path
+# 4. a second sweep raises the same key again — the alert is the dedupe
 # --------------------------------------------------------------------------
-def _open_card_payload(lines, filed_minutes_ago=20.0):
-    return {
-        "identifier": "DRE-9500",
-        "createdAt": _iso(filed_minutes_ago),
-        "description": reviewer_down.card_body(None, lines),
-        "url": "https://linear.app/x/DRE-9500",
-        "comments": {"nodes": []},
-    }
+def test_a_second_sweep_finding_the_same_outage_raises_the_same_key_again():
+    """The door counts it a repeat: the text is refreshed in place and
+    nothing is delivered again. No card is appended to or retitled."""
+    written = Written()
+    _run_outage(written=written, **_file_world(_medic_note()))
+    _run_outage(written=written, **_file_world(_medic_note()))
+    assert [r["notice"] for r in written.raises] == ["reviewer_outage:fleet"] * 2
+    _no_linear_write(written)
 
 
-def _ledger_for(repo, pr, at, src):
-    return reviewer_down.ledger_line(
-        reviewer_down.Outcome(repo, at, reviewer_down.COULD_NOT_RUN, src, pr)
-    )
+def test_a_fourth_crash_raises_the_recomputed_title():
+    """The title carries the counts, so the next raise carries the new ones —
+    the door refreshes the open alert's text in place."""
+    written = Written()
+    world = _file_world(_medic_note())
+    _run_outage(written=written, **world)
+    world["prs"].append(_pr(143, comments=[_neutral(143, _iso(3), n=9)]))
+    _run_outage(written=written, **world)
+    assert written.raises[0]["title"].endswith("— 3 runs, 1 repos")
+    assert written.raises[1]["title"].endswith("— 4 runs, 1 repos")
 
 
-def test_a_fourth_receipt_appends_one_line_and_retitles():
-    """ACCEPTANCE: one comment per NEW ledger line, and the title is
-    recomputed from the whole ledger."""
-    at = [_iso(14), _iso(12), _iso(10)]
-    existing = [
-        _ledger_for("agent-bureau", 141, at[0], "u1"),
-        _ledger_for("agent-bureau", 142, at[1], "u2"),
-        _ledger_for("atlas", None, at[2], "linear:DRE-9001:x"),
-    ]
-    fresh = _neutral(143, _iso(3), n=9)
-    written, _ = _run_outage(
-        prs=[_pr(143, comments=[fresh])],
-        cards=[],
-        open_card=_open_card_payload(existing, filed_minutes_ago=9),
-    )
-    assert written.created == [], "an open card is appended to, never doubled"
-    assert len(written.comments) == 1, "one comment per new ledger line"
-    identifier, body = written.comments[0]
-    assert identifier == "DRE-9500"
-    assert fresh["url"] in body, "the ledger line carries the idempotency key"
-    assert pipeline_act.trailer(reviewer_down.ACT) in body
-    assert written.titles == [("DRE-9500", written.titles[0][1])]
-    assert written.titles[0][1].endswith("— 4 runs, 2 repos"), written.titles
-    assert written.states == [], "an append never moves the card"
-
-
-def test_the_same_sweep_run_twice_posts_nothing_the_second_time():
-    """ACCEPTANCE: idempotent on `src` — the ledger line is the record."""
-    at = [_iso(14), _iso(12), _iso(10)]
-    fresh = _neutral(143, _iso(3), n=9)
-    existing = [
-        _ledger_for("agent-bureau", 141, at[0], "u1"),
-        _ledger_for("agent-bureau", 142, at[1], "u2"),
-        _ledger_for("atlas", None, at[2], "linear:DRE-9001:x"),
-        _ledger_for("agent-bureau", 143, fresh["createdAt"], fresh["url"]),
-    ]
-    written, _ = _run_outage(
-        prs=[_pr(143, comments=[fresh])],
-        cards=[],
-        open_card=_open_card_payload(existing, filed_minutes_ago=9),
-    )
-    assert written.comments == [] and written.titles == []
+def test_two_repositories_raising_in_the_same_minute_is_one_alert():
+    """The cross-repo race the board machinery used to clean up after: two
+    sweeps raise the same key, and the second is a repeat."""
+    written = Written()
+    _run_outage(written=written, **_file_world(_medic_note()))
+    with patch.object(reconcile, "REPO_SLUG", "atlas"), \
+        patch.object(reconcile, "REPO", "EveryBite/atlas"):
+        world = _file_world(_environment_note(RUN_URL))
+        _run_outage(written=written, **world)
+    assert len(written.raises) == 2
+    assert {r["notice"] for r in written.raises} == {"reviewer_outage:fleet"}
+    assert written.open is True
+    _no_linear_write(written)
 
 
 # --------------------------------------------------------------------------
-# 5. the close path
+# 5. the resolve — the all-clear copy, once the outage no longer holds
 # --------------------------------------------------------------------------
-def test_a_verdict_after_the_card_was_filed_closes_it():
-    """ACCEPTANCE: the first successful verdict posted after the card was
-    filed closes it, with the `reviewer back at …` line."""
-    filed = _iso(9)
-    existing = [_ledger_for("agent-bureau", 141, _iso(14), "u1")]
-    written, _ = _run_outage(
-        prs=[_pr(141, comments=[_neutral(141, _iso(14)),
-                                _verdict_comment(at=_iso(2))])],
-        cards=[],
-        open_card={**_open_card_payload(existing), "createdAt": filed},
-    )
-    assert len(written.comments) == 1
-    identifier, body = written.comments[0]
-    assert identifier == "DRE-9500"
-    assert "reviewer back at" in body
-    assert pipeline_act.trailer(reviewer_down.ACT) in body
-    assert written.states == [("DRE-9500", "Done")]
+def test_a_verdict_after_every_crash_aged_out_resolves_with_the_all_clear():
+    """The reviewer is back and no could-not-run is left in the window: the
+    alert is resolved with the contract's all-clear copy, which the console
+    delivers to everyone who was told it went down."""
+    written = Written()
+    _run_outage(written=written, **_file_world(_medic_note()))
+    _run_outage(written=written,
+                prs=[_pr(141, comments=[_neutral(141, _iso(130)),
+                                        _verdict_comment(at=_iso(60))])],
+                cards=[])
+    (resolve,) = written.resolves
+    assert resolve["notice"] == "reviewer_outage:fleet"
+    assert resolve["recovery_title"] == RECOVERY_TITLE
+    assert resolve["recovery_body"].startswith("The reconcile sweep at ")
+    assert resolve["recovery_body"].endswith(
+        " found the fleet-wide reviewer outage cleared.")
+    assert written.open is False
+    _no_linear_write(written)
 
 
-def test_a_second_sweep_after_the_close_does_nothing():
-    """The card is Done, so the snapshot holds no open card and the sweep is
-    back to the quiet path."""
-    with _outage(prs=[_pr(141, comments=[_neutral(141, _iso(14)),
-                                         _verdict_comment(at=_iso(2))])],
-                 cards=[], open_card=None) as (w, _):
-        reconcile.report_fleet_reviewer_outage()
-    assert w.comments == [] and w.states == [] and w.created == []
+def test_a_verdict_with_a_crash_still_in_the_window_resolves_nothing():
+    """Hysteresis, on purpose: while any sweep can still see a crash in the
+    window another repository's sweep may still be raising, and a resolve
+    between two raises would deliver the outage to the CEO twice."""
+    written = Written()
+    _run_outage(written=written, **_file_world(_medic_note()))
+    _run_outage(written=written,
+                prs=[_pr(141, comments=[_neutral(141, _iso(14)),
+                                        _verdict_comment(at=_iso(2))])],
+                cards=[])
+    assert written.resolves == []
+    assert written.open is True
 
 
-# --------------------------------------------------------------------------
-# 6. the cross-repo filing race
-# --------------------------------------------------------------------------
-def test_two_open_cards_the_newer_is_noted_and_canceled():
-    """ACCEPTANCE: two sweeps crossing the threshold in the same minute leave
-    two alarms; the next sweep resolves it — oldest keeps the ledger, newer
-    gets one line naming it and goes to Canceled."""
-    at = [_iso(14), _iso(12)]
-    existing = [
-        _ledger_for("agent-bureau", 141, at[0], "u1"),
-        _ledger_for("atlas", None, at[1], "linear:DRE-9001:x"),
-    ]
-    fresh = _neutral(143, _iso(3), n=9)
-    written, _ = _run_outage(
-        prs=[_pr(143, comments=[fresh])],
-        cards=[],
-        open_card=_open_card_payload(existing, filed_minutes_ago=9),
-        duplicates=[{"identifier": "DRE-9501",
-                     "url": "https://linear.app/x/DRE-9501"}],
-    )
-    assert ("DRE-9501", "Canceled") in written.states
-    dupe = [b for i, b in written.comments if i == "DRE-9501"]
-    assert len(dupe) == 1, "one line on the duplicate, not a second alarm"
-    assert "DRE-9500" in dupe[0], "the note names the card that survives"
-    assert pipeline_act.trailer(reviewer_down.ACT) in dupe[0]
-    assert any(i == "DRE-9500" for i, _ in written.comments), (
-        "the OLDEST card still receives the append"
-    )
+def test_under_the_read_door_nothing_is_looked_up():
+    """`BUREAU_READ=on` used to cost one `find_open_prefix` request on every
+    pass, because the door's snapshot did not hold the alarm lane. There is
+    no open card to look up any more."""
+    with _outage(prs=[_pr(comments=[_verdict_comment()])], cards=[],
+                 door=True) as (w, _):
+        out = _capture(reconcile.report_fleet_reviewer_outage)
+    assert w.prefix_reads == 0
+    assert "nothing to report" in out
+    assert len(w.resolves) == 1
 
 
 # --------------------------------------------------------------------------
-# 7. the off switch
-# --------------------------------------------------------------------------
-def test_the_sweep_cap_at_zero_files_nothing(monkeypatch):
-    """ACCEPTANCE: `FLEET_OUTAGE_SWEEP_CAP=0` disables FILING fleet-wide."""
-    monkeypatch.setattr(reconcile, "FLEET_OUTAGE_SWEEP_CAP", 0)
-    written, _ = _run_outage(**_file_world(_medic_note()))
-    assert written.created == [] and written.states == []
-
-
-def test_the_sweep_cap_at_zero_still_appends_and_closes(monkeypatch):
-    """ACCEPTANCE: appends and closes still run, so an open card is never
-    orphaned by the off switch."""
-    monkeypatch.setattr(reconcile, "FLEET_OUTAGE_SWEEP_CAP", 0)
-    existing = [_ledger_for("agent-bureau", 141, _iso(14), "u1")]
-    fresh = _neutral(143, _iso(3), n=9)
-    written, _ = _run_outage(
-        prs=[_pr(143, comments=[fresh])],
-        cards=[],
-        open_card=_open_card_payload(existing, filed_minutes_ago=9),
-    )
-    assert len(written.comments) == 1 and written.titles
-
-    closed, _ = _run_outage(
-        prs=[_pr(141, comments=[_neutral(141, _iso(14)),
-                                _verdict_comment(at=_iso(2))])],
-        cards=[],
-        open_card=_open_card_payload(existing, filed_minutes_ago=9),
-    )
-    assert closed.states == [("DRE-9500", "Done")]
-
-
-def test_the_cap_default_is_one():
-    assert reconcile.FLEET_OUTAGE_SWEEP_CAP in (0, 1), (
-        "the default is 1 card per sweep; the env may only turn it down"
-    )
-
-
-# --------------------------------------------------------------------------
-# 8. where it sits
+# 6. where it sits
 # --------------------------------------------------------------------------
 def test_the_backstop_sits_immediately_after_recover_crashed_reviews():
     """ACCEPTANCE + the DRE-3431 contract: the two read the same listing, so
@@ -973,8 +916,8 @@ def test_the_backstop_runs_on_full_sweeps_only():
 
 
 def test_report_fleet_reviewer_outage_never_dispatches_a_workflow():
-    """Report-and-file only: the fleet-wide answer to a reviewer that cannot
-    start is a card for a person, never another dispatch (DRE-1921)."""
+    """Report only: the fleet-wide answer to a reviewer that cannot start is
+    an alert for a person, never another dispatch (DRE-1921)."""
     with _outage(**_file_world(_medic_note())) as (_, state):
         with patch.object(reconcile, "_nudge") as nudge, \
             patch.object(reconcile, "gh_dispatch") as dispatch:
@@ -984,11 +927,11 @@ def test_report_fleet_reviewer_outage_never_dispatches_a_workflow():
 
 
 # --------------------------------------------------------------------------
-# 9. linear_ops.find_open_prefix
+# 7. linear_ops.find_open_prefix and set_title stay as linear_ops verbs
 # --------------------------------------------------------------------------
 def test_find_open_prefix_returns_the_oldest_open_match():
-    """ACCEPTANCE: the OLDEST non-terminal DRE card whose title starts with the
-    prefix, with its comment window and the newer matches beside it."""
+    """The OLDEST non-terminal DRE card whose title starts with the prefix,
+    with its comment window and the newer matches beside it."""
     nodes = [
         {"identifier": "DRE-2", "createdAt": "2026-09-08T23:00:00Z",
          "title": reviewer_down.TITLE_PREFIX + "16:00 PT — 1 runs, 1 repos",
@@ -1037,7 +980,7 @@ def test_set_title_writes_the_recomputed_title():
     calls: list = []
     with patch.object(linear_ops, "get_issue", return_value={"id": "uuid-1"}), \
         patch.object(linear_ops, "gql",
-                     side_effect=lambda q, v=None: calls.append((q, v)) or {}):
+                     side_effect=lambda q, v=None, **_kw: calls.append((q, v)) or {}):
         linear_ops.set_title("DRE-9500", "Reviewer down since 15:19 PT — 4 runs, 2 repos")
     query, variables = calls[0]
     assert "issueUpdate" in query
@@ -1045,11 +988,9 @@ def test_set_title_writes_the_recomputed_title():
 
 
 # --------------------------------------------------------------------------
-# 10. the registry is DRE-3433's, untouched here
+# 8. the receipt is no longer posted
 # --------------------------------------------------------------------------
-def test_this_card_edits_no_act_row():
-    """Every comment composes through the act DRE-3433 declared — so the
-    registry needs no edit, and `check_act_receipts` stays green."""
+def test_the_receipt_guard_stays_green_and_the_act_row_is_untouched():
     import check_act_receipts
 
     problems = check_act_receipts.problems()
@@ -1058,12 +999,12 @@ def test_this_card_edits_no_act_row():
     assert record and record["tag"] == reviewer_down.OUTAGE_TAG
 
 
-def test_the_backstop_composes_the_act_by_a_name_the_guard_can_read():
-    """`check_act_receipts._receipt_act` reads the composing call's first
-    argument off the AST and can only read a CONSTANT, so an act named through
-    a module attribute composes as `<computed>` and the registry's emission
-    guard goes blind on it. The four calls therefore spell the literal — and
-    this is what stops the literal drifting away from `reviewer_down.ACT`."""
+def test_the_outage_receipt_is_posted_nowhere():
+    """DRE-7455: the `reviewer-outage-fleet-wide` receipt is no longer posted
+    to a card. Nothing in reconcile.py composes it, and the act reads as one
+    nothing posts — `check_act_receipts.pending_acts()`, which holds the
+    emission guards to that and lifts the exemption the moment a poster
+    spells the act again."""
     import check_act_receipts
 
     ours = [
@@ -1071,149 +1012,38 @@ def test_the_backstop_composes_the_act_by_a_name_the_guard_can_read():
         if site.path == "scripts/reconcile.py"
         and site.composed_as == reviewer_down.ACT
     ]
-    assert len(ours) == 4, (
-        "the file path, the ledger line, the close note and the duplicate "
-        "note — every comment this backstop posts composes through the ONE "
-        f"act, by a name the guard can read; found {len(ours)}"
-    )
+    assert ours == []
+    assert reviewer_down.ACT in check_act_receipts.pending_acts()
 
 
 # --------------------------------------------------------------------------
-# DRE-4577: a repo the pipeline does not serve reports, and files nothing
+# DRE-4577: a repo the pipeline does not serve reports, and raises nothing
 # --------------------------------------------------------------------------
-def test_a_repo_the_pipeline_does_not_serve_reports_the_outage_and_files_no_card(monkeypatch):
+def test_a_repo_the_pipeline_does_not_serve_reports_the_outage_and_raises_nothing(monkeypatch):
     """Live: bureau-harness Reconcile 35670916057 (2026-09-22 00:11Z) reached
-    the file branch and `linear_ops.create_card` refused the slug — `create
-    REFUSED: --repo 'bureau-harness' is not a repo the pipeline serves` — and
-    that refused write took the sandbox sweep red, which a harness run
-    waiting on the sandbox reads as "sandbox down". The sandbox is outside
-    the roster BY DESIGN (config/repo-map.json), so the sweep says what it
-    saw in its own log and writes nothing: no create, no receipt, no lane
-    move, and nothing on the fail-loudly rail."""
-    import io
-
+    the file branch and `linear_ops.create_card` refused the slug, and that
+    refused write took the sandbox sweep red. The sandbox is outside the
+    roster BY DESIGN (config/repo-map.json), and the alert's fallback is a
+    card under its slug that `create_card` would refuse the same way — so the
+    sweep says what it saw in its own log and raises nothing, and nothing
+    lands on the fail-loudly rail. A served repo's sweep raises the alert."""
     monkeypatch.setattr(reconcile, "REPO", "dreadnought-foundry/bureau-harness")
     monkeypatch.setattr(reconcile, "REPO_SLUG", "bureau-harness")
     assert "bureau-harness" not in reconcile.validate_card.VALID_SLUGS, (
         "the sandbox must stay outside the roster for this test to mean anything"
     )
-    buf = io.StringIO()
-    with contextlib.redirect_stdout(buf):
-        written, _ = _run_outage(**_file_world(_medic_note()))
-    out = buf.getvalue()
-    assert written.created == [], "no card for a repo the pipeline does not serve"
-    assert written.comments == [] and written.states == []
+    with _outage(**_file_world(_medic_note())) as (written, _):
+        out = _capture(reconcile.report_fleet_reviewer_outage)
+    assert written.raises == [] and written.resolves == []
+    _no_linear_write(written)
     assert reconcile._write_failures == [], reconcile._write_failures
-    assert "bureau-harness" in out and "no card" in out and "3 could-not-run" in out, out
+    assert "bureau-harness" in out and "3 could-not-run" in out, out
+    assert "a served repo's sweep raises the alert" in out, out
 
 
 # --------------------------------------------------------------------------
-# DRE-6576: the open card is read for as long as it is open, off the board
-# the sweep already holds
-# --------------------------------------------------------------------------
-#: DRE-6568's shape, two hours on: every counted crash is far outside the
-#: window, and the card is still open in Triage.
-AGED_CRASH_MIN = 130
-AGED_FILED_MIN = 120
-
-
-def _aged_alarm(lane=None):
-    ledger = [_ledger_for("agent-bureau", 141, _iso(AGED_CRASH_MIN), "u-aged")]
-    return _alarm_card({**_open_card_payload(ledger),
-                        "createdAt": _iso(AGED_FILED_MIN)}, lane=lane)
-
-
-def _sweep_over_the_snapshot(snapshot, prs):
-    """`report_fleet_reviewer_outage` with the REAL `active_cards` over a
-    board this pass already read, and Linear patched to refuse every read —
-    so any request at all for this alarm is a failure, not a cost."""
-    reconcile.reset_sweep_cards()
-    reconcile._swept_cards = list(snapshot)
-    written = Written()
-
-    def refuse(query, variables=None):
-        raise AssertionError(f"no Linear read on this path: {query[:60]}")
-
-    with patch.object(reconcile, "gh", side_effect=lambda *a: json.dumps(prs)), \
-        patch.object(reconcile.bureau_read, "mode", return_value="off"), \
-        patch.object(reconcile.linear_ops, "gql", side_effect=refuse), \
-        patch.object(reconcile.linear_ops, "find_open_prefix",
-                     side_effect=AssertionError("found in the snapshot")), \
-        patch.object(reconcile.linear_ops, "cmd_comment",
-                     side_effect=lambda i, b, *f: written.comments.append((i, b))), \
-        patch.object(reconcile.linear_ops, "cmd_state",
-                     side_effect=lambda i, s, *f: written.states.append((i, s))):
-        out = _capture(reconcile.report_fleet_reviewer_outage)
-    return written, out
-
-
-def test_an_open_card_with_every_crash_aged_out_is_closed_off_the_snapshot():
-    """ACCEPTANCE: no could-not-run inside the window, an open alarm in
-    Triage, a verdict in the counted repository after its last crash — the
-    sweep does not exit early, reads nothing from Linear, and closes it."""
-    verdict = _verdict_comment(at=_iso(60))
-    written, out = _sweep_over_the_snapshot(
-        [_card(), _aged_alarm()], [_pr(141, comments=[verdict])])
-    assert "nothing to report" not in out, out
-    assert written.states == [("DRE-9500", "Done")]
-    (identifier, note), = written.comments
-    assert identifier == "DRE-9500"
-    assert note.startswith("reviewer back at "), note
-    assert ("first successful verdict in agent-bureau after its last counted "
-            f"crash ({verdict['url']})") in note
-    assert pipeline_act.trailer(reviewer_down.ACT) in note
-
-
-def test_an_open_card_with_no_verdict_to_close_on_says_nothing():
-    written, out = _sweep_over_the_snapshot(
-        [_card(), _aged_alarm()], [_pr(141, comments=[])])
-    assert written.comments == [] and written.states == []
-    assert "nothing to say on DRE-9500" in out, out
-
-
-@pytest.mark.parametrize("lane", ["Todo", "In Progress", "Hand-work"])
-def test_a_card_a_person_moved_into_a_lane_the_sweep_reads_is_still_found(lane):
-    written, _ = _sweep_over_the_snapshot(
-        [_aged_alarm(lane=lane)],
-        [_pr(141, comments=[_verdict_comment(at=_iso(60))])])
-    assert written.states == [("DRE-9500", "Done")]
-
-
-def test_the_oldest_alarm_in_the_snapshot_is_kept_and_the_newer_canceled():
-    newer = _alarm_card({"identifier": "DRE-9501", "createdAt": _iso(AGED_FILED_MIN - 1),
-                         "url": "https://linear.app/x/DRE-9501"})
-    written, _ = _sweep_over_the_snapshot(
-        [newer, _aged_alarm()], [_pr(141, comments=[])])
-    assert written.states == [("DRE-9501", "Canceled")]
-    dupe = [b for i, b in written.comments if i == "DRE-9501"]
-    assert len(dupe) == 1 and "DRE-9500" in dupe[0]
-
-
-def test_under_the_read_door_the_open_card_costs_exactly_one_request():
-    """ACCEPTANCE: `BUREAU_READ=on` serves a snapshot without the alarm lane,
-    so the sweep asks `find_open_prefix` once per pass, BEFORE the early
-    exit — a quiet pass included."""
-    with _outage(prs=[_pr(comments=[_verdict_comment()])], cards=[],
-                 door=True) as (w, _):
-        out = _capture(reconcile.report_fleet_reviewer_outage)
-    assert w.prefix_reads == 1
-    assert "nothing to report" in out
-
-
-def test_under_the_read_door_an_aged_out_card_still_closes():
-    ledger = [_ledger_for("agent-bureau", 141, _iso(AGED_CRASH_MIN), "u-aged")]
-    written, _ = _run_outage(
-        prs=[_pr(141, comments=[_verdict_comment(at=_iso(60))])],
-        cards=[], door=True,
-        open_card={**_open_card_payload(ledger), "createdAt": _iso(AGED_FILED_MIN)},
-    )
-    assert written.prefix_reads == 1
-    assert written.states == [("DRE-9500", "Done")]
-
-
-# --------------------------------------------------------------------------
-# DRE-6576: the board read carries the alarm lane; what the sweep ACTS on
-# does not change
+# DRE-6576: the board read still carries Triage; what the sweep ACTS on does
+# not change
 # --------------------------------------------------------------------------
 def test_swept_lanes_is_unchanged():
     assert reconcile.SWEPT_LANES == (
@@ -1221,19 +1051,20 @@ def test_swept_lanes_is_unchanged():
 
 
 def test_the_board_read_lanes_are_swept_lanes_plus_the_alarm_lane():
+    # And the retiring lanes (DRE-6753): the drain reads them off this read
+    # rather than buying a request of its own on every sweep.
     assert reconcile.BOARD_READ_LANES == (
-        reconcile.SWEPT_LANES + (reconcile.FLEET_OUTAGE_LANE,))
+        reconcile.SWEPT_LANES + (reconcile.FLEET_OUTAGE_LANE,)
+        + reconcile.RETIRING_LANES)
     assert reconcile.FLEET_OUTAGE_LANE == "Triage"
-    for unread in ("Backlog", "Green Light"):
-        assert unread not in reconcile.BOARD_READ_LANES, (
-            "the card body says a person closes a card moved there"
-        )
+    for unread in (reconcile.QUEUE_LANE, "Green Light"):
+        assert unread not in reconcile.BOARD_READ_LANES
 
 
 def test_the_one_board_read_is_made_with_the_board_read_lanes():
     sent: list = []
 
-    def gql(query, variables=None):
+    def gql(query, variables=None, **_kw):
         sent.append((query, dict(variables or {})))
         return {"issues": {"nodes": [], "pageInfo": {"hasNextPage": False,
                                                      "endCursor": None}}}
@@ -1250,8 +1081,10 @@ def test_the_one_board_read_is_made_with_the_board_read_lanes():
 
 
 def test_active_cards_of_swept_lanes_returns_no_triage_card():
+    triage_card = {**_card(identifier="DRE-9500", state="Triage"),
+                   "title": reviewer_down.TITLE_PREFIX + "15:19 PT — 1 runs, 1 repos"}
     reconcile.reset_sweep_cards()
-    reconcile._swept_cards = [_card(state="Todo"), _aged_alarm()]
+    reconcile._swept_cards = [_card(state="Todo"), triage_card]
     with patch.object(reconcile.bureau_read, "mode", return_value="off"), \
         patch.object(linear_ops, "gql", side_effect=AssertionError("cached")):
         swept = reconcile.active_cards(reconcile.SWEPT_LANES)

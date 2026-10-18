@@ -1,12 +1,15 @@
 """RED-first tests for DRE-5573 — the model adoption workflow's pull requests
 carry `What's new: none`.
 
-The adoption workflow opens its pull requests on `agent/` branches —
-`agent/<card>-adopt-<candidate>`, `agent/model-adoption-<candidate>` and
+The adoption workflow opens its pin-raise pull requests on `agent/` branches —
 `agent/claude-code-pin-<version>` — which the What's New gate does not exempt
-(`standards/whats-new.md`, DRE-5508). No brief reaches the two body renderers,
-so they write the line themselves: `model_adoption_actions.pr_body` and
-`claude_code_pin.pr_body` open with `What's new: none` and a blank line.
+(`standards/whats-new.md`, DRE-5508). No brief reaches the body renderer, so it
+writes the line itself: `claude_code_pin.pr_body` opens with `What's new: none`
+and a blank line.
+
+An adoption itself opens no pull request since DRE-6943: it writes the model
+home, so `model_adoption_actions` renders no pull request body at all, and its
+record card — a card, not a pull request — carries no line.
 
 THE TRAPS THESE TESTS PIN.
 
@@ -32,11 +35,13 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
+sys.path.insert(0, str(ROOT / "tests"))
 
 import claude_code_pin as ccp  # noqa: E402
 import model_adoption as ma  # noqa: E402
 import model_adoption_actions as maa  # noqa: E402
 import model_catalog as mc  # noqa: E402
+import model_fixture  # noqa: E402
 from whats_new import parse_line  # noqa: E402
 
 LINE = "What's new: none"
@@ -76,7 +81,8 @@ def adopt_sonnet6():
                        "in_catalog": True}] + list(snap["models"])
     prices = ma.load_prices()
     prices[SONNET6] = {"input": 2.0, "output": 10.0}
-    found = ma.classify_catalog(mc.snapshot_catalog(snap), ma.load_config(), prices)
+    found = ma.classify_catalog(mc.snapshot_catalog(snap),
+                                ma.home_config(model_fixture.fixture_home()), prices)
     (d,) = [json.loads(json.dumps(d)) for d in found if d["candidate"] == SONNET6]
     assert d["rule"] == ma.RULE_ADOPT, d
     return d
@@ -107,32 +113,17 @@ def _assert_opens_with_the_line(body: str) -> str:
 
 
 # --------------------------------------------------------------------------- #
-# model_adoption_actions.pr_body                                               #
+# model_adoption_actions — no pull request, so no body to carry the line       #
 # --------------------------------------------------------------------------- #
 
-@pytest.mark.parametrize("trial", [None, TRIAL], ids=["no-trial", "trial"])
-def test_the_adoption_body_opens_with_whats_new_none(adopt_sonnet6, trial):
-    _assert_opens_with_the_line(maa.pr_body(adopt_sonnet6, trial))
-
-
-@pytest.mark.parametrize("trial", [None, TRIAL], ids=["no-trial", "trial"])
-def test_the_adoption_body_follows_the_line_unchanged(adopt_sonnet6, trial):
-    rest = _assert_opens_with_the_line(maa.pr_body(adopt_sonnet6, trial))
-    assert rest.startswith(maa._summary(adopt_sonnet6))
-    assert LINE not in rest, "exactly one line"
-
-
-def test_the_adoption_cli_prints_the_line_first(tmp_path, adopt_sonnet6):
-    out = _cli("scripts/model_adoption_actions.py", "render", "pr-body",
-               "--decision", _write(tmp_path, "d.json", adopt_sonnet6))
-    _assert_opens_with_the_line(out)
-
-
-def test_the_adoption_cli_prints_the_line_first_with_a_trial(tmp_path, adopt_sonnet6):
-    out = _cli("scripts/model_adoption_actions.py", "render", "pr-body",
-               "--decision", _write(tmp_path, "d.json", adopt_sonnet6),
-               "--trial", _write(tmp_path, "t.json", TRIAL))
-    _assert_opens_with_the_line(out)
+def test_the_adoption_renders_no_pull_request_body(tmp_path, adopt_sonnet6):
+    assert not hasattr(maa, "pr_body")
+    assert "pr-body" not in maa.RENDER_TARGETS
+    done = subprocess.run([sys.executable, "scripts/model_adoption_actions.py",
+                           "render", "pr-body", "--decision",
+                           _write(tmp_path, "d.json", adopt_sonnet6)],
+                          cwd=ROOT, capture_output=True, text=True, timeout=60)
+    assert done.returncode == 2
 
 
 def test_the_record_card_body_gains_no_line(adopt_sonnet6):

@@ -37,7 +37,9 @@ and acts on one of three readings:
 * C — anything else is a person's call: None. One swap per card, so a card
   whose files span two repositories is never swapped back and forth.
 
-A card no longer in Backlog raises `blocker_class.NotNow` before any write.
+A card no longer in the queue — `Queued`, under either of its names
+(`lane_contract.QUEUE_LANES`, DRE-6747) — raises `blocker_class.NotNow`
+before any write.
 The card is never moved: the right repo's sweep promotes it on its own pass.
 """
 
@@ -48,6 +50,7 @@ import re
 import blocker_class
 import linear_ops
 import validate_card
+from lane_contract import QUEUE_LANES
 
 #: The resolver's receipt for this class's act, matched by its words alone.
 RELABEL_RECEIPT = "class=wrong-repo action=relabeled"
@@ -100,8 +103,8 @@ def resolve(card: dict, reason: str, *, repo: str) -> tuple[str, str] | None:
     identifier = card["identifier"]
     live = linear_ops.get_issue(identifier, fresh=True)
     lane = (live.get("state") or {}).get("name")
-    if lane != "Backlog":
-        raise blocker_class.NotNow(f"the card left Backlog — it is in {lane}")
+    if lane not in QUEUE_LANES:
+        raise blocker_class.NotNow(f"the card left the queue — it is in {lane}")
 
     bodies = _thread(card)
     found = blocker_class.newest_marker(bodies)

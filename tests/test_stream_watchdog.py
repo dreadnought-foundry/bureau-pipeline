@@ -37,6 +37,7 @@ import sys
 import tempfile
 import textwrap
 import unittest
+import unittest.mock
 from pathlib import Path
 
 import yaml
@@ -310,6 +311,159 @@ class ThePriorStallsOnTheCardTest(unittest.TestCase):
         )
         self.assertEqual(stream_watchdog.prior_stalls(None, run_id="1",
                                                       attempt="1"), [])
+
+
+REAL_STALL = (ROOT / "tests" / "fixtures"
+              / "stalled-plan-38170959772.log").read_text(encoding="utf-8")
+
+# Run 38170959772 (DRE-6995): the planner worked for 13 minutes 41 seconds
+# after `system/init`, then went quiet, and its card was told it never got as
+# far as reading the code.
+WORKED = stream_watchdog.Stall("Agent Plan / plan", "2026-10-11T20:23:21Z",
+                               300, 821)
+SILENT = stream_watchdog.Stall("Agent Plan / plan", "2026-10-11T20:23:21Z",
+                               300, 0)
+UNKNOWN = stream_watchdog.Stall("Agent Plan / plan", "2026-10-11T20:23:21Z",
+                                300)
+
+
+class HowLongItWorkedTest(unittest.TestCase):
+    """The fourth fact (DRE-6995): how long the run streamed before the
+    silence, so "said nothing" and "worked, then went quiet" are told apart."""
+
+    def test_the_pump_measures_the_time_from_init_to_the_last_event(self):
+        # Events at 10s and 821s, with two more between them: a single 811s
+        # gap would itself be a stall at 310s, and this run kept working.
+        stall, _, _ = drive([(0.0, INIT), (10.0, TOOL), (270.0, TOOL),
+                             (270.0, TOOL), (271.0, TOOL)])
+        self.assertIsNotNone(stall)
+        self.assertEqual(stall.streamed_seconds, 821)
+        self.assertEqual(stall.silence_seconds, 300)
+
+    def test_init_and_then_nothing_streamed_for_zero_seconds(self):
+        stall, _, _ = drive([(0.0, INIT)])
+        self.assertEqual(stall.streamed_seconds, 0)
+
+    def test_one_event_in_the_same_clock_reading_as_init_is_at_least_one(self):
+        # Zero is reserved for "nothing arrived after init": an event that did
+        # arrive is never rounded away into that claim.
+        stall, _, _ = drive([(0.0, INIT), (0.0, TOOL)])
+        self.assertEqual(stall.streamed_seconds, 1)
+
+    def test_a_three_field_stall_still_builds(self):
+        self.assertIsNone(UNKNOWN.streamed_seconds)
+
+    def test_the_line_carries_how_long_it_streamed(self):
+        line = stream_watchdog.stall_line(WORKED)
+        self.assertIn("silence=300s streamed=821s", line)
+        self.assertNotIn("no stream event arrived", line)
+        self.assertEqual(len(line.splitlines()), 1)
+
+    def test_a_run_that_said_nothing_keeps_its_sentence(self):
+        line = stream_watchdog.stall_line(SILENT)
+        self.assertIn("silence=300s streamed=0s", line)
+        self.assertIn("no stream event arrived after system/init", line)
+
+    def test_the_line_reads_back_whole(self):
+        for stall in (WORKED, SILENT, UNKNOWN):
+            self.assertEqual(
+                stream_watchdog.stall_from_log(stream_watchdog.stall_line(stall)),
+                stall,
+            )
+
+    def test_a_line_printed_before_this_change_reads_as_not_recorded(self):
+        found = stream_watchdog.stall_from_log(REAL_STALL)
+        self.assertEqual(found.step, "Agent Plan / plan")
+        self.assertEqual(found.last_event, "2026-10-11T20:23:21Z")
+        self.assertEqual(found.silence_seconds, 300)
+        self.assertIsNone(found.streamed_seconds)
+
+
+class TheCardNoteSaysWhichStallTest(unittest.TestCase):
+    """What the card is told, in each of the three cases and with and without
+    the retry the medic actually started (DRE-6995)."""
+
+    def note(self, stall, **kwargs):
+        return stream_watchdog.stall_record(
+            stall, run_id="38170959772", attempt="1",
+            run_url="https://x/runs/38170959772", **kwargs)
+
+    def test_a_run_that_worked_says_how_long(self):
+        text = self.note(WORKED)
+        self.assertIn("had been working for 13.7 minutes", text)
+        self.assertNotIn("never got as far", text)
+
+    def test_a_run_that_said_nothing_never_read_the_code(self):
+        self.assertIn("never got as far as reading the code", self.note(SILENT))
+
+    def test_an_old_log_says_the_time_was_not_recorded(self):
+        text = self.note(UNKNOWN)
+        self.assertIn("How long it had worked before that was not recorded",
+                      text)
+        self.assertNotIn("never got as far", text)
+
+    def test_a_retry_is_promised_only_when_one_is_starting(self):
+        self.assertIn("is trying once more", self.note(WORKED, retrying=True))
+        text = self.note(WORKED)
+        self.assertNotIn("is trying once more", text)
+        self.assertIn("No automatic retry was started for this run", text)
+
+    def test_a_linear_limit_is_named_and_promises_nothing(self):
+        text = self.note(WORKED, limit=True)
+        self.assertIn("Linear's request limit", text)
+        self.assertNotIn("is trying once more", text)
+
+    def test_every_form_keeps_the_marker_and_the_facts(self):
+        for stall in (WORKED, SILENT, UNKNOWN):
+            for kwargs in ({}, {"retrying": True}, {"limit": True}):
+                text = self.note(stall, **kwargs)
+                self.assertTrue(
+                    text.startswith("\U0001f573 " + stream_watchdog.RECORD_MARKER
+                                    + " run=38170959772 attempt=1"), text)
+                self.assertIn("Agent Plan / plan", text)
+                self.assertIn("2026-10-11T20:23:21Z", text)
+                self.assertIn("300 seconds", text)
+
+
+class TheRecordCommandTest(unittest.TestCase):
+    """`stream_watchdog.py record` is what medic.yml runs, so the promise is
+    proved through it, with the Linear client replaced."""
+
+    def posted(self, *extra):
+        posts = []
+
+        class FakeLinear:
+            @staticmethod
+            def cmd_comment(card, body):
+                posts.append((card, body))
+
+        with tempfile.TemporaryDirectory() as raw:
+            log = Path(raw) / "stall-log.txt"
+            log.write_text(stream_watchdog.stall_line(WORKED) + "\n")
+            argv = ["record", "--card", "DRE-6936", "--log", str(log),
+                    "--run-id", "38170959772", "--run-attempt", "1",
+                    *extra]
+            with unittest.mock.patch.object(stream_watchdog, "_linear_ops",
+                                            return_value=FakeLinear), \
+                    unittest.mock.patch("sys.stdout"):
+                rc = stream_watchdog.main(argv)
+        self.assertEqual(rc, 0)
+        self.assertEqual(len(posts), 1)
+        return posts[0][1]
+
+    def test_retrying_true_promises_the_retry(self):
+        self.assertIn("is trying once more", self.posted("--retrying", "true"))
+
+    def test_no_flag_promises_nothing(self):
+        self.assertNotIn("is trying once more", self.posted())
+
+    def test_retrying_false_promises_nothing(self):
+        self.assertNotIn("is trying once more",
+                         self.posted("--retrying", "false"))
+
+    def test_limit_true_names_the_linear_limit(self):
+        self.assertIn("Linear's request limit",
+                      self.posted("--retrying", "false", "--limit", "true"))
 
 
 # --------------------------------------------------------------------------- #

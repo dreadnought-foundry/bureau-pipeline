@@ -103,7 +103,7 @@ def test_review_lane_requeue_below_cap_counts_the_shared_dead_tag():
 
 
 def test_review_lane_requeue_at_cap_holds_instead_of_looping():
-    """ACCEPTANCE: at the cap the card parks needs-human in Backlog — no
+    """ACCEPTANCE: at the cap the card parks needs-human in Queued — no
     third lap. On the unfixed code this FAILS: it requeues to Todo again.
     Since DRE-6186 that is the second strike: the planner has had the card."""
     mocks = _sweep_mocks(bodies=_HANDED_OFF)
@@ -115,7 +115,7 @@ def test_review_lane_requeue_at_cap_holds_instead_of_looping():
         reconcile.main()
     add_label.assert_called_once_with("DRE-2034", reconcile.HOLD_LABEL)
     # --park: deliberate HOLD-cap park, same DRE-1885 opt-out as In Progress.
-    cmd_state.assert_called_once_with("DRE-2034", "Backlog", "--park")
+    cmd_state.assert_called_once_with("DRE-2034", "Queued", "--park")
     assert ("DRE-2034", "Todo") not in [c.args for c in cmd_state.call_args_list]
 
 

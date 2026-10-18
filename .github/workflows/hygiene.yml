@@ -40,7 +40,9 @@
 #      out by the guard's shape rule, not by permission alone: the only
 #      workflow the agent may dispatch is the gate stub, and no constructor
 #      builds a merge call of any kind. Reads are one paged board
-#      read per pass and one pull-request list per repo per owner leg, hourly;
+#      read per pass — read again whole, up to three attempts 30 s then 60 s
+#      apart, only on a transient network fault (DRE-7271) — and one
+#      pull-request list per repo per owner leg, hourly;
 #      below HYGIENE_BUDGET_FLOOR remaining Linear requests `read` answers
 #      go=false and nothing else runs.
 #   Q5 our crash — a pass that dies repeats next hour and its failure routes

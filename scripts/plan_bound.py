@@ -5,7 +5,7 @@ Every bound site in `plan.yml` — the six epic park steps stamping
 `plan-critic-bound`, and `One-off critic — park in Triage` — did the same
 three things: hold, move to Triage, post the 🛑 note. The card then had no
 owner and no next step. DRE-4059 reached the second critic's bound at
-2026-10-08 20:22 PT and its seven planned children sat in Backlog until an
+2026-10-08 20:22 PT and its seven planned children sat in Queued until an
 operator moved it back by hand at 11:23 PT the next day; DRE-6234 reached the
 one-off critic's third send-back at 19:08 PT and waited for an operator to
 rewrite it by hand. This module decides what a bound does BEFORE anything
@@ -72,6 +72,12 @@ landed. A receipt that cannot be posted after a confirmed dispatch is a crash:
 the caller parks, and the dispatched run finds the card out of Planning and
 stands down (`dedupe_dispatch.lane_left_behind`), so no planner works a card
 whose grant was never recorded.
+
+`post_receipt` is that receipt alone. The Triage repair posts it through the
+same function for an epic parked at the bound with no receipt (DRE-7181) —
+DRE-7072 parked at 2026-10-12 16:25 PT without one — and then moves the card
+to Planning, which fires the planning run, so nothing is dispatched there.
+`context` reads the findings back off it either way.
 
 ## CLI
 
@@ -375,6 +381,21 @@ def _question(card: str, reason: str, choices: dict) -> int:
     return EXIT_PARK
 
 
+def post_receipt(card: str, found: list[str], refused: bool = False) -> str | None:
+    """Post the bound-rewrite receipt: None once it landed, else the problem in
+    words. The receipt half of `_rewrite`, and the one place its text and its
+    act are emitted from. The Triage repair (`triage_repair.py`, DRE-7181)
+    posts it too, for an epic parked at the bound that never had its rewrite:
+    the move to Planning that follows is the planning run, so it dispatches
+    nothing."""
+    body = pipeline_act.receipt("plan-bound-rewrite", receipt_body(found, refused))
+    try:
+        problem = linear_ops.cmd_comment(card, body)
+    except Exception as exc:  # noqa: BLE001 — named to the caller
+        problem = str(exc) or type(exc).__name__
+    return problem or None
+
+
 def _rewrite(card: str, repo: str, found: list[str], refused: bool = False) -> int:
     """Dispatch the fresh planning run, then post the receipt — FROM the
     dispatch's return code (DRE-2034)."""
@@ -385,11 +406,7 @@ def _rewrite(card: str, repo: str, found: list[str], refused: bool = False) -> i
         print(f"{card}: the rewrite's planning run could not be dispatched, so "
               "no receipt is posted. Exit 3: the caller parks as today")
         return EXIT_PARK
-    body = pipeline_act.receipt("plan-bound-rewrite", receipt_body(found, refused))
-    try:
-        problem = linear_ops.cmd_comment(card, body)
-    except Exception as exc:  # noqa: BLE001 — named below, and a crash
-        problem = str(exc) or type(exc).__name__
+    problem = post_receipt(card, found, refused)
     if problem:
         print(f"ERROR: {card}: the rewrite's planning run was dispatched and "
               f"its receipt could not be posted ({problem}). The caller parks, "

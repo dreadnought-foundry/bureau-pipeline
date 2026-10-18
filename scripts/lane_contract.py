@@ -259,6 +259,210 @@ def planning_exit(contract: dict | None = None) -> tuple:
     return (exit_["from"], exit_["to"])
 
 
+# The queue a card waits in between the planning exit and its verdict's
+# destination (DRE-4125). The lane it replaces is an alias entry in the
+# contract, never a name here.
+_QUEUE = "Queued"
+
+
+def queue_lanes(contract: dict | None = None) -> tuple:
+    """Every name a card in the queue may sit under: `Queued`, then each name
+    the contract aliases to it, in the file's order.
+
+    The READER's half of the cutover (DRE-6741). A reader tests membership in
+    this, never equality with `queue_lane()`, so it reads a card under either
+    name from the day the alias lands; deleting the alias narrows it to
+    `("Queued",)` with no edit here.
+    """
+    return (_QUEUE,) + tuple(
+        old for old, new in aliases(contract).items() if new == _QUEUE
+    )
+
+
+def queue_lane(contract: dict | None = None) -> str:
+    """The lane queued work is written into: the planning exit's destination.
+
+    The WRITER's half of the cutover (DRE-6741). It follows the planning exit,
+    so a writer converted to it moves no card until the exit itself moves to
+    `Queued` (DRE-6742), and then every converted writer moves at once.
+    """
+    return planning_exit(contract)[1]
+
+
+# Read once, off the shipped contract: what readers test against and what
+# writers write. A test that needs the flipped exit monkeypatches QUEUE_LANE.
+QUEUE_LANES = queue_lanes()
+QUEUE_LANE = queue_lane()
+
+
+# How a build starts (DRE-7105). `build_start` names the facts the Todo
+# retirement changes, so readers learn them first and one later card — the
+# flip — turns them, in the shape the queue's cutover took above.
+
+# Lanes a dispatch never comes from, whatever `dispatch_from` says: a person
+# builds a Hand-work card, and the other two are past the build.
+_NEVER_DISPATCH_FROM = ("Hand-work", "In Review", "Done")
+
+
+def _build_start(contract: dict | None = None) -> dict:
+    return (contract or load())["build_start"]
+
+
+def start_lane(contract: dict | None = None) -> str:
+    """The lane a writer puts a card in to START its build.
+
+    The WRITER's half of the cutover: every writer that starts a build writes
+    this and no literal. `Todo` until the flip card sets `build_start.lane` to
+    the dispatch lane, and then every converted writer moves at once.
+    """
+    return _build_start(contract)["lane"]
+
+
+def dispatch_lane(contract: dict | None = None) -> str:
+    """The lane whose ENTRY is a build dispatch: a card that is not an epic
+    moving into it from a `dispatch_from()` lane (`is_build_dispatch`)."""
+    return _build_start(contract)["dispatch_lane"]
+
+
+def dispatch_from(contract: dict | None = None) -> tuple:
+    """Every name a build dispatch may come from: `build_start.dispatch_from`,
+    then each old name the aliases map onto one of those lanes, in the file's
+    order — so the queue's old name is in it while its alias stands.
+
+    An old name counts only while the contract still carries it as a lane, of
+    any status: the contract names every state on the board
+    (`board.every_state_is_named`), so an alias whose state is gone is a name
+    no card can be moved out of, and listing it would be a lane that does not
+    exist.
+    """
+    doc = contract or load()
+    lanes_from = tuple(_build_start(doc)["dispatch_from"])
+    named = {entry["name"] for entry in doc["lanes"]}
+    return lanes_from + tuple(
+        old
+        for old, new in aliases(doc).items()
+        if new in lanes_from and old in named and old not in lanes_from
+    )
+
+
+def is_build_dispatch(
+    from_lane: Optional[str], to_lane: str, contract: dict | None = None
+) -> bool:
+    """True when a card moving `from_lane` → `to_lane` is a build dispatch.
+
+    Both names are resolved through `aliases()` first. A card created
+    directly in the dispatch lane has no lane before it — `from_lane` is
+    None — and is not a dispatch. Whether the card is an epic is the
+    caller's to ask: this answers the lanes only.
+    """
+    if from_lane is None:
+        return False
+    alias = aliases(contract)
+    return alias.get(to_lane, to_lane) == dispatch_lane(contract) and alias.get(
+        from_lane, from_lane
+    ) in _build_start(contract)["dispatch_from"]
+
+
+def start_lanes(contract: dict | None = None) -> tuple:
+    """Every lane a card may sit in once its build was started: the dispatch
+    lane, then each lane — live or retiring — whose `replaced_by` is the
+    dispatch lane, in the file's order.
+
+    The READER's half of the cutover. A reader that meant "Todo — promoted,
+    waiting for its run" tests membership in this, and reads the start
+    receipt to tell a started card from one that has not started. Deleting
+    Todo's entry narrows it to the dispatch lane alone with no edit here.
+    """
+    doc = contract or load()
+    target = dispatch_lane(doc)
+    return (target,) + tuple(
+        entry["name"]
+        for status in ("live", "retiring")
+        for entry in lanes(status, doc)
+        if entry.get("replaced_by") == target
+    )
+
+
+def start_minutes(contract: dict | None = None) -> int:
+    """How long a card may sit in `start_lanes()` with no start receipt (the
+    build run's 🧠 model-attempt comment) newer than its entry before the
+    sweep re-fires its dispatch. Equal to Todo's stall window on purpose."""
+    return _build_start(contract)["start_minutes"]
+
+
+def build_start_problems(contract: dict | None = None) -> list:
+    """(field, message) for every way `build_start` is malformed, the field
+    spelled `build_start.<key>`; empty when it is sound. Each message names
+    the field it refuses."""
+    doc = contract or load()
+    block = doc.get("build_start")
+    if not isinstance(block, dict):
+        return [("build_start", "build_start is not an object")]
+    out = []
+    every = {
+        entry["name"]: entry for entry in doc.get("lanes") or () if entry.get("name")
+    }
+
+    target = block.get("dispatch_lane")
+    entry = every.get(target)
+    if not entry or entry.get("status") != "live" or entry.get("segment") != "work":
+        out.append((
+            "build_start.dispatch_lane",
+            f"build_start.dispatch_lane {target!r} is not a live work lane — "
+            "a build dispatched into it would land nowhere the build path reads",
+        ))
+
+    start = block.get("lane")
+    replaced = (every.get(start) or {}).get("replaced_by")
+    if start != target and (start not in every or replaced != target):
+        out.append((
+            "build_start.lane",
+            f"build_start.lane {start!r} is neither the dispatch lane {target!r} "
+            "nor a lane whose replaced_by is the dispatch lane",
+        ))
+
+    origins = block.get("dispatch_from")
+    if not isinstance(origins, list) or not origins or not all(
+        isinstance(name, str) for name in origins
+    ):
+        out.append((
+            "build_start.dispatch_from",
+            f"build_start.dispatch_from {origins!r} is not a list of lane names",
+        ))
+    else:
+        for name in origins:
+            if name not in every:
+                out.append((
+                    "build_start.dispatch_from",
+                    f"build_start.dispatch_from names {name!r}, which is not a "
+                    "lane the contract carries",
+                ))
+            elif name in _NEVER_DISPATCH_FROM or name == target:
+                out.append((
+                    "build_start.dispatch_from",
+                    f"build_start.dispatch_from names {name!r}, and a card "
+                    "moving from it into the dispatch lane is never a build "
+                    "dispatch",
+                ))
+
+    minutes = block.get("start_minutes")
+    if isinstance(minutes, bool) or not isinstance(minutes, int) or minutes <= 0:
+        out.append((
+            "build_start.start_minutes",
+            f"build_start.start_minutes {minutes!r} is not a positive integer",
+        ))
+    return out
+
+
+# Read once, off the shipped contract. A test that needs the flipped contract
+# passes its own to the function, or monkeypatches the constant.
+START_LANE = start_lane()
+DISPATCH_LANE = dispatch_lane()
+DISPATCH_FROM = dispatch_from()
+START_LANES = start_lanes()
+START_MINUTES = start_minutes()
+
+
 def stale_minutes(contract: dict | None = None) -> dict:
     """lane → its stall window, for every lane that declares one."""
     return {
@@ -276,9 +480,9 @@ def lane_writers(name: str, status: str = "live", contract: dict | None = None) 
     """The writer keys THIS lane permits — not the glossary of every writer.
 
     The distinction is the whole of DRE-2824: `operator` is a defined writer,
-    and it is not a `Backlog` writer, so a routing verdict that sent a card to
-    Backlog "for the operator" named somebody who may not legally write the
-    lane. Anything binding an actor to a lane asks here; reaching into the
+    and it is not a writer of the queue lane, `Queued`, so a routing verdict
+    that sent a card to the queue "for the operator" named somebody who may not
+    legally write the lane. Anything binding an actor to a lane asks here; reaching into the
     clause dict at each call site is how a second copy of the answer starts.
     """
     return tuple(lane(name, status, contract)["clauses"]["writers"]["who"])
@@ -541,6 +745,18 @@ def check(
         root=root,
     )
     report = Report()
+    # A contract with no `build_start` predates DRE-7105 — the hand-built
+    # fixtures do. The shipped file cannot lose it quietly: the module reads
+    # START_LANE and its siblings off it at import.
+    if "build_start" in doc:
+        problems = build_start_problems(doc)
+        report.findings.extend(
+            Finding(key, "fail", detail) for key, detail in problems
+        )
+        if not problems:
+            report.findings.append(
+                Finding("build_start", "pass", "build_start declares how a build starts")
+            )
     for clause in clauses(doc):
         report.findings.extend(_run_clause(clause, inputs))
     return report
@@ -746,6 +962,21 @@ def render_markdown(contract: dict | None = None) -> str:
     for name, reason in off_flow(doc).items():
         w(f"| {name} | {reason} |")
     w("")
+
+    if "build_start" in doc:
+        w("## How a build starts")
+        w("")
+        w("| Name | Lane(s) |")
+        w("| --- | --- |")
+        w(f"| Start lane — a writer puts a card here to start its build | {start_lane(doc)} |")
+        w(f"| Dispatch lane — entering it is the build dispatch | {dispatch_lane(doc)} |")
+        w(f"| Dispatched from | {', '.join(dispatch_from(doc))} |")
+        w(f"| Start lanes — a started card sits in one | {', '.join(start_lanes(doc))} |")
+        w(f"| Start window | {start_minutes(doc)} min |")
+        w("")
+        for line in doc["build_start"].get("why") or ():
+            w(line)
+            w("")
 
     w("## The lanes")
     w("")

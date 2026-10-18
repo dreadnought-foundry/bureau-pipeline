@@ -35,7 +35,7 @@ never pinned to the channel it is proving.
 | `qa-review.yml` | calls this repo's `qa-review.yml` — the adversarial critic | `bot_pr_flow`, `dependabot_flow`, `gate_paths` |
 | `merge-gate.yml` | calls this repo's `merge-gate.yml` — CI green + APPROVE ⇒ qa-bot merges | `bot_pr_flow`, `gate_paths` |
 | `reconcile.yml` | calls this repo's `reconcile.yml` — the ~15-minute sweep, and the `workflow_dispatch` review route | `dependabot_flow` |
-| `proof-task.yml` | would call this repo's `proof-task.yml` — the proof run on a PROOF card (DRE-5924). **No sandbox stub is installed and no rehearsal fires it; both are outside this epic and have no card yet.** | none |
+| `proof-task.yml` | calls this repo's `proof-task.yml` — the proof run on a PROOF card (DRE-5924). Installed under DRE-6034 (bureau-harness PR #3551) | `proof_task_parses` |
 | `ci.yml` | the sandbox's OWN product CI — no counterpart here. The merge gate fail-closes to `wait` when a head carries no non-review checks, so the sandbox needs at least one workflow reporting a check run | `bot_pr_flow`, `gate_paths` (indirectly) |
 
 `linear-sync.yml` is deliberately absent: harness branches carry no `DRE-n`
@@ -60,6 +60,7 @@ DRE-4149; the harness now proves `main` once — see `docs/self-hosting.md`,
 | `dependabot_flow` | yes | the real Dependabot PR self-skips clean, the reconcile dispatch route produces a bound verdict, and the receipt lifecycle holds |
 | `gate_paths` | yes | merge-gate semantics: a behind-base merge at the reviewed head, condition D's waiting-for-human state, and a stale-verdict race |
 | `lane_contract` | yes | `config/lane-contract.json`'s conformance rules over the live board, the console's state lists and this checkout's own vocabulary |
+| `proof_task_parses` | yes | a real `proof-execute` `repository_dispatch` produces a run with `jobs > 0`, whose `referenced_workflows` names this repo's `proof-task.yml` with a resolved commit — `agent_task_parses`, copied, for the proof run (DRE-6045) |
 | `noop_resubmission`, `partial_delivery`, `checklist_gaming`, `already_live`, `unverified_claim` | no — opt-in by name | the DRE-2490 adversarial corpus: a real build agent, on the shipped prompt, against a replayed rejection |
 
 ## `agent_task_parses`, and why it must FIRE rather than install (DRE-3486)
@@ -99,6 +100,18 @@ compiled `main`'s workflows, not the pull request's.)
 **A missing stub says so.** Until the operator has installed
 `agent-task.yml` in `bureau-harness`, the rehearsal reports *a missing stub*
 rather than a workflow that fails to parse.
+
+## `proof_task_parses` — the same rehearsal, for the proof run (DRE-6045)
+
+`scripts/harness/scenarios/proof_task_parses.py` is a **copy** of
+`agent_task_parses.py` with its constants changed — nothing lifted, subclassed
+or shared, because a refactor of that module is what ran DRE-3101 into its
+turn cap. It fires `proof-execute` with the sweep's own proof payload
+(`plan_run.payload(card, reason=…)`, as `proof_dispatch.py` sends it) at the
+sandbox's `proof-task.yml` stub, and asserts everything above against this
+repo's `proof-task.yml`. A 404 on the stub is reported as *"bureau-harness has
+no proof-task.yml stub"*, naming DRE-6034, the card that installed it. A fix
+to one of the two modules is probably owed to the other.
 
 ## Adding a workflow to the fleet
 

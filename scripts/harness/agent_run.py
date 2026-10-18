@@ -55,6 +55,13 @@ AGENT_TASK_WORKFLOW = os.path.join(".github", "workflows", "agent-task.yml")
 # which parse the prompt without a sandbox to ask.
 DEFAULT_BRANCH = "main"
 
+# Every run of the harness that reaches an agent scenario reads the model home
+# (DRE-6940): `_select_model` runs `model_fallback.py select engineer` as a
+# child process that inherits this process's environment, token and all.
+READS_MODEL_HOME = ("*",)
+# What reads it — model_home.py's TOKEN_ENV and FILE_ENV — kept from the agent.
+MODEL_HOME_ENV = ("BUREAU_MODEL_HOME_TOKEN", "BUREAU_MODEL_HOME_FILE")
+
 # The agent CLI the action wraps. Overridable so a runner with the CLI already
 # installed skips the npx fetch (and so a pin can be forced in an incident).
 DEFAULT_AGENT_CLI = "npx --yes @anthropic-ai/claude-code@latest"
@@ -76,6 +83,13 @@ AGENT_TIMEOUT_SECONDS = 2700.0
 # ever ADD a way for the agent to decline in a sandbox that has no Linear).
 ESCALATION_PATH = "/tmp/agent-escalation.txt"  # nosec B108 — the prompt's own path
 BLOCKER_PATH = "/tmp/agent-blocker.txt"  # nosec B108 — the prompt's own path
+
+
+def _hatch(path: str) -> str:
+    """`path`, or its name in `AGENT_NOTES_DIR` when that is set. Only a test
+    sets it (DRE-6961): two copies of the suite on one machine share /tmp."""
+    notes = os.environ.get("AGENT_NOTES_DIR")
+    return os.path.join(notes, os.path.basename(path)) if notes else path
 
 _EXPRESSION_RE = re.compile(r"\$\{\{(.*?)\}\}", re.DOTALL)
 
@@ -340,8 +354,8 @@ def run_agent(
         default_branch=default_branch,
     )
 
-    _clear(ESCALATION_PATH)
-    _clear(BLOCKER_PATH)
+    _clear(_hatch(ESCALATION_PATH))
+    _clear(_hatch(BLOCKER_PATH))
 
     cli = shlex.split(os.environ.get("HARNESS_AGENT_CLI", DEFAULT_AGENT_CLI))
     model = os.environ.get("HARNESS_AGENT_MODEL") or _select_model(
@@ -367,6 +381,10 @@ def run_agent(
     argv += ["--allowedTools", ALLOWED_TOOLS]
 
     child_env = dict(env or os.environ)
+    # The model home's read token is for `_select_model`'s child alone
+    # (DRE-6940): the agent runs Bash over a seeded card and reads no home.
+    for name in MODEL_HOME_ENV:
+        child_env.pop(name, None)
     child_env["GH_TOKEN"] = token
     child_env["GITHUB_TOKEN"] = token
 
@@ -391,8 +409,8 @@ def run_agent(
         log(f"agent: timed out after {timeout:.0f}s — the scenario still asserts "
             "on what the sandbox shows")
 
-    result.escalation = _read_hatch(ESCALATION_PATH)
-    result.blocker = _read_hatch(BLOCKER_PATH)
+    result.escalation = _read_hatch(_hatch(ESCALATION_PATH))
+    result.blocker = _read_hatch(_hatch(BLOCKER_PATH))
     result.seconds = time.monotonic() - started
     log(
         f"agent: finished in {result.seconds:.0f}s (exit {result.returncode}"

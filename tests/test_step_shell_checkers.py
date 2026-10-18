@@ -15,11 +15,17 @@ keep a census, and a script under `scripts/` was invisible to all four:
 The property: one fixture workflow, written to a temp root twice — once inline
 and once moved with `step_shell.move` — reads the same through all four. The
 fixture carries the shapes the real blocks use: a `linear_ops.py state "$CARD"
-"Backlog"` write, a `pipeline_act.py receipt` posted through `--body-file`, an
+"Queued"` write, a `pipeline_act.py receipt` posted through `--body-file`, an
 `--act=` flag assembled into a variable, a raw post the registry excuses by
 step, and a `code_owner_hold.py hold` that reaches `park`. Each reader's result
 is also checked for what it must contain, so two empty answers never pass as
 the same answer.
+
+DRE-6745 adds the shape the park shells use: a lane read into a variable
+through the seam the step shells read every pipeline constant from —
+`QUEUE_LANE=$(python3 -c '… import lane_contract; print(lane_contract.QUEUE_LANE)')`
+— and handed to `linear_ops.py state`. The writer census reads that variable
+as the module's own value, under the shipped contract and with the exit moved.
 """
 
 from __future__ import annotations
@@ -37,6 +43,7 @@ sys.path.insert(0, str(ROOT / "scripts"))
 
 import check_act_receipts  # noqa: E402
 import lane_callers  # noqa: E402
+import lane_contract  # noqa: E402
 import pipeline_act  # noqa: E402
 import ready_lane_writers  # noqa: E402
 import step_shell  # noqa: E402
@@ -47,8 +54,9 @@ HOLD = "Hold for the code owner"
 HOLD_MODULE = "scripts/code_owner_hold.py"
 
 # The scripts the readers need in the temp root: the write layer, whose CLI
-# map says which argument is a lane, and the module whose `park` is called.
-SCRIPTS = ("linear_ops.py", "code_owner_hold.py")
+# map says which argument is a lane, the module whose `park` is called, and
+# the lane contract the seam reads the queue lane from (DRE-6745).
+SCRIPTS = ("linear_ops.py", "code_owner_hold.py", "lane_contract.py")
 
 FIXTURE = textwrap.dedent("""\
     name: Fixture
@@ -62,7 +70,7 @@ FIXTURE = textwrap.dedent("""\
               CARD: DRE-1
             run: |
               # DRE-5220: the shapes the real blocks use.
-              python3 .bureau-pipeline/scripts/linear_ops.py state "$CARD" "Backlog"
+              python3 .bureau-pipeline/scripts/linear_ops.py state "$CARD" "Queued"
               python3 .bureau-pipeline/scripts/pipeline_act.py receipt fixture-bounce \\
                 --body "Bounced <!-- fixture-bounce-tag -->" --out /tmp/fixture-receipt.md
               gh pr comment "$PR" --body-file /tmp/fixture-receipt.md
@@ -70,6 +78,8 @@ FIXTURE = textwrap.dedent("""\
               python3 .bureau-pipeline/scripts/linear_ops.py comment "$CARD" \\
                 "Parked for a human" $ACT_FLAG
               python3 .bureau-pipeline/scripts/linear_ops.py comment "$CARD" "Raw fixture notice"
+              QUEUE_LANE=$(python3 -c 'import sys; sys.path.insert(0, ".bureau-pipeline/scripts"); import lane_contract; print(lane_contract.QUEUE_LANE)')
+              python3 .bureau-pipeline/scripts/linear_ops.py state "$CARD" "$QUEUE_LANE" --park
           - name: Hold for the code owner
             run: |
               python3 "$PIPELINE_DIR"/scripts/code_owner_hold.py hold \\
@@ -216,13 +226,53 @@ def test_ready_lane_writers_discover_the_same_writes(trees):
     assert ready_lane_writers.writes(str(moved)) == writes
     # The workflow's own lane write.
     assert any(
-        w.writer == "fixture.yml" and w.how == "workflow" and w.lane == "Backlog"
+        w.writer == "fixture.yml" and w.how == "workflow" and w.lane == "Queued"
         and w.where.startswith(f"{WORKFLOW}:")
         for w in writes
     ), writes
     # A module no glossary names writes as the workflow that runs it.
     hold_writes = [w for w in writes if w.where.startswith(f"{HOLD_MODULE}:")]
     assert hold_writes and {w.writer for w in hold_writes} == {"fixture.yml"}, hold_writes
+
+
+def _seam_writes(root: Path) -> list:
+    return [w for w in ready_lane_writers.writes(str(root))
+            if w.writer == "fixture.yml" and w.expression == "$QUEUE_LANE"]
+
+
+def test_ready_lane_writers_read_the_seam_variable_as_the_queue_lane(trees):
+    """The park through `$QUEUE_LANE` is a write to `lane_contract.QUEUE_LANE`
+    — read, not reported as a destination nobody can name."""
+    inline, moved = trees
+    for root in (inline, moved):
+        seam = _seam_writes(root)
+        assert [w.lane for w in seam] == [lane_contract.QUEUE_LANE] == ["Queued"], seam
+
+
+def test_ready_lane_writers_read_the_seam_variable_with_the_exit_moved(trees, monkeypatch):
+    """Moving the planning exit (DRE-6742 moved it to Queued) moves what the
+    seam prints, and the census reads the moved value — never a name of its
+    own. Moved to another live lane, it prints that lane; put back to the old
+    name, which is retiring (DRE-6753), it prints a destination no live lane
+    names — unread, never a pass."""
+    inline, moved = trees
+    monkeypatch.setattr(lane_contract, "queue_lane", lambda contract=None: "Todo")
+    for root in (inline, moved):
+        assert [w.lane for w in _seam_writes(root)] == ["Todo"]
+    monkeypatch.setattr(lane_contract, "queue_lane", lambda contract=None: "Backlog")
+    for root in (inline, moved):
+        assert [w.lane for w in _seam_writes(root)] == [None]
+
+
+def test_a_variable_no_seam_assigns_stays_unread(tmp_path):
+    """Unknown is never a pass: a lane variable assigned any other way is
+    still a destination this cannot read."""
+    root = _tree(tmp_path)
+    workflow = root / WORKFLOW
+    workflow.write_text(FIXTURE.replace(
+        "QUEUE_LANE=$(python3 -c", "QUEUE_LANE=$(python3 /dev/null -c"))
+    seam = _seam_writes(root)
+    assert seam and [w.lane for w in seam] == [None], seam
 
 
 # --- lane_callers.py --------------------------------------------------------

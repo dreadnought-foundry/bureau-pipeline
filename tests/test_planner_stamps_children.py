@@ -498,6 +498,18 @@ class TheUndecidableCaseTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             plan_child_verdicts.withheld_comment(EPIC, [])
 
+    def test_the_note_names_the_queue_lane(self):
+        """The lane a planner's child is created in is `QUEUE_LANE`, the
+        planning exit's destination (DRE-6746), so that is the lane the note
+        says the card will sit in — `Queued` once DRE-6742 moves the exit."""
+        held = [plan_child_verdicts.ChildVerdict("DRE-901", None, "no criteria",
+                                                 False, held=True)]
+        for lane in ("Queued", "Backlog"):
+            with self.subTest(lane=lane), \
+                    patch.object(plan_child_verdicts, "QUEUE_LANE", lane):
+                body = plan_child_verdicts.withheld_comment(EPIC, held)
+                self.assertIn(f"will sit in {lane} until", body)
+
 
 # ===========================================================================
 # 5 — the replay: DRE-4467's eight children

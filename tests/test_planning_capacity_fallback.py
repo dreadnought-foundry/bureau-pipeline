@@ -1,6 +1,6 @@
 """RED-first: planning falls to Opus 5 the moment Fable is out of capacity (DRE-3970).
 
-What broke. `claude-fable-5-1` refused every planning call on 2026-09-12/13, and
+What broke. Fable 5.1 refused every planning call on 2026-09-12/13, and
 again on 2026-09-14, with one sentence under `is_error: true`:
 
     You've hit your monthly spend limit. Switch to another model to continue.
@@ -31,15 +31,25 @@ to Opus 5." So:
   E. Every planner claude-code-action step carries the ladder's next rung as the
      CLI's `--fallback-model`, computed by the selector, never a literal.
   F. The judgement ladder is Fable-first again — DRE-3969's hotfix is undone.
+     What stays tested is the rule under it: the planner walks its ladder
+     from the top, and the top is no excluded id.
+
+The classifier, the groomer and the selector here are the copies in a tree of
+today's scripts on the frozen model files (tests/model_fixture.py), built with
+`regenerate=False`, and the selector selects on the frozen home document
+(`model_fixture.fixture_home()`, handed over through `home_env` or
+`fixture_module(..., doc=...)`, DRE-6990), so a console save that moves the
+planner or reorders its group leaves these rules standing: every model id below
+is a model of the document's judgement group, named for its place on it.
 """
 
 from __future__ import annotations
 
 import json
-import os
 import shutil
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 import pytest
@@ -47,18 +57,18 @@ import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
+sys.path.insert(0, str(ROOT / "tests"))
 
-import groom_context  # noqa: E402
-import groom_judgement  # noqa: E402
-import model_fallback as mf  # noqa: E402
-import planning_classify  # noqa: E402
+import model_fixture  # noqa: E402
 
 WF = ROOT / ".github" / "workflows" / "plan.yml"
-FABLE51 = "claude-fable-5-1"
-# The planner ladder's Opus rung — `claude-opus-5-5` since DRE-4836
-# (2026-09-25), when the adoption moved it on all three ladders.
-OPUS55 = "claude-opus-5-5"
-SONNET = "claude-sonnet-4-6"
+# The planner's walk in the frozen document: its top rung, the one below it,
+# and the last, which has nowhere to fall.
+HOME = model_fixture.fixture_home()
+JUDGEMENT = model_fixture.ladder(HOME, HOME["agents"]["planner"])
+TOP, SECOND, LAST = JUDGEMENT[0], JUDGEMENT[1], JUDGEMENT[-1]
+# The rung below the second, where a planner started on the second falls.
+THIRD = JUDGEMENT[2]
 
 # The sentence, verbatim, from portico run 34924370626 (2026-09-15 03:17 UTC).
 SPEND_LIMIT = ("You've hit your monthly spend limit. Switch to another model to "
@@ -68,6 +78,45 @@ SPEND_LIMIT = ("You've hit your monthly spend limit. Switch to another model to 
 REFUSAL_RECORD = {"type": "result", "subtype": "success", "is_error": True,
                   "num_turns": 1, "total_cost_usd": 0, "duration_ms": 646,
                   "result": SPEND_LIMIT}
+
+
+def _pipeline_tree(dest: Path) -> Path:
+    """Today's scripts on the frozen model files, with the rest of the repo's
+    config beside them — the lane contract the groomer's imports read — and
+    the brief and standards the classifier builds its prompt from."""
+    tree = model_fixture.fixture_tree(dest, regenerate=False)
+    for path in sorted((ROOT / "config").iterdir()):
+        if path.is_file() and not (tree / "config" / path.name).exists():
+            shutil.copy2(path, tree / "config" / path.name)
+    for name in ("briefs", "standards"):
+        shutil.copytree(ROOT / name, tree / name)
+    return tree
+
+
+# The tree's groomer, and the classifier and selector it imported, so the call
+# seam's errors and the selector's ladder are the ones the groomer sees — the
+# selector already on the frozen document. Built once for the module.
+_TREE = None
+TREE = None
+groom_context = groom_judgement = mf = planning_classify = None
+
+
+def setup_module():
+    global _TREE, TREE, groom_context, groom_judgement, mf, planning_classify
+    _TREE = tempfile.TemporaryDirectory()
+    TREE = _pipeline_tree(Path(_TREE.name) / "tree")
+    groom_judgement = model_fixture.fixture_module(TREE, "groom_judgement", doc=HOME)
+    groom_context = groom_judgement.groom_context
+    planning_classify = groom_judgement.planning_classify
+    mf = planning_classify.model_fallback
+    # The tree's scripts put their own directory on sys.path as they load;
+    # take it off again, so no later import in the session finds the tree.
+    scripts = str((TREE / "scripts").resolve())
+    sys.path[:] = [entry for entry in sys.path if entry != scripts]
+
+
+def teardown_module():
+    _TREE.cleanup()
 
 
 @pytest.fixture(autouse=True)
@@ -167,36 +216,36 @@ def _card() -> dict:
             "has_children": False}
 
 
-def test_a_fable_spend_limit_refusal_is_answered_by_opus_in_the_same_classify():
-    call = _refusing_on(FABLE51, _one_off_answer())
-    decision = planning_classify.classify(_card(), call=call, model=FABLE51)
-    assert call.seen == [FABLE51, OPUS55], "one call per rung, Fable then Opus"
-    assert not decision.transport, "Opus answered — nothing failed to reach a model"
+def test_a_top_rung_spend_limit_refusal_is_answered_one_rung_down_in_the_same_classify():
+    call = _refusing_on(TOP, _one_off_answer())
+    decision = planning_classify.classify(_card(), call=call, model=TOP)
+    assert call.seen == [TOP, SECOND], "one call per rung, the top then the next"
+    assert not decision.transport, "the next rung answered — nothing failed to reach a model"
     assert decision.refusal is None
     assert decision.answered
-    assert decision.asked == FABLE51
-    assert decision.model == OPUS55
-    assert decision.fell_from == FABLE51
+    assert decision.asked == TOP
+    assert decision.model == SECOND
+    assert decision.fell_from == TOP
     receipt = planning_classify.model_receipt(
         decision.asked, decision.model, because=decision.fell_because)
     assert receipt.startswith("DEGRADED"), receipt
-    assert FABLE51 in receipt and OPUS55 in receipt
+    assert TOP in receipt and SECOND in receipt
     assert "out of capacity" in receipt
     assert "model-error:" not in receipt, "a receipt must never read as a death"
 
 
 def test_the_classifier_step_outputs_carry_fell_from():
-    call = _refusing_on(FABLE51, _one_off_answer())
-    decision = planning_classify.classify(_card(), call=call, model=FABLE51)
+    call = _refusing_on(TOP, _one_off_answer())
+    decision = planning_classify.classify(_card(), call=call, model=TOP)
     pairs = dict(planning_classify._model_pairs(decision))
-    assert pairs["fell_from"] == FABLE51
+    assert pairs["fell_from"] == TOP
     assert "out of capacity" in pairs["receipt"]
 
 
 def test_a_clean_classify_carries_no_fell_from():
     call = _refusing_on("nobody", _one_off_answer())
-    decision = planning_classify.classify(_card(), call=call, model=FABLE51)
-    assert call.seen == [FABLE51]
+    decision = planning_classify.classify(_card(), call=call, model=TOP)
+    assert call.seen == [TOP]
     assert decision.fell_from is None
     assert dict(planning_classify._model_pairs(decision))["fell_from"] == ""
 
@@ -205,9 +254,9 @@ def test_a_refusal_that_is_not_capacity_makes_no_second_call():
     error = planning_classify.TransportError(
         "the classification call exited 1: Not logged in · Please run /login",
         "exit 1")
-    call = _refusing_on(FABLE51, _one_off_answer(), error=error)
-    decision = planning_classify.classify(_card(), call=call, model=FABLE51)
-    assert call.seen == [FABLE51]
+    call = _refusing_on(TOP, _one_off_answer(), error=error)
+    decision = planning_classify.classify(_card(), call=call, model=TOP)
+    assert call.seen == [TOP]
     assert decision.transport
 
 
@@ -217,13 +266,13 @@ def test_a_long_genuine_failure_makes_no_second_call():
     error = planning_classify.TransportError(
         f"the classification call reported subtype 'success', is_error True: "
         f"{SPEND_LIMIT}", "success", record=record)
-    call = _refusing_on(FABLE51, _one_off_answer(), error=error)
-    decision = planning_classify.classify(_card(), call=call, model=FABLE51)
-    assert call.seen == [FABLE51]
+    call = _refusing_on(TOP, _one_off_answer(), error=error)
+    decision = planning_classify.classify(_card(), call=call, model=TOP)
+    assert call.seen == [TOP]
     assert decision.transport
 
 
-def test_opus_refused_too_is_still_a_transport_failure_after_one_fall():
+def test_the_next_rung_refused_too_is_still_a_transport_failure_after_one_fall():
     # Two rungs out of capacity: the fall is ONE step, then the DRE-3074
     # requeue budget takes over as before. Never a walk to the bottom in a loop.
     seen = []
@@ -233,10 +282,10 @@ def test_opus_refused_too_is_still_a_transport_failure_after_one_fall():
         raise planning_classify.TransportError(
             f"is_error True: {SPEND_LIMIT}", "success")
 
-    decision = planning_classify.classify(_card(), call=call, model=FABLE51)
-    assert seen == [FABLE51, OPUS55]
+    decision = planning_classify.classify(_card(), call=call, model=TOP)
+    assert seen == [TOP, SECOND]
     assert decision.transport
-    assert decision.asked == FABLE51
+    assert decision.asked == TOP
 
 
 def test_the_claude_code_transport_hands_the_record_to_the_error(monkeypatch):
@@ -250,7 +299,7 @@ def test_the_claude_code_transport_hands_the_record_to_the_error(monkeypatch):
 
     monkeypatch.setattr(subprocess, "run", lambda *a, **k: Done())
     with pytest.raises(planning_classify.TransportError) as caught:
-        planning_classify._call_claude_code(FABLE51, "prompt")
+        planning_classify._call_claude_code(TOP, "prompt")
     assert caught.value.record is not None
     assert caught.value.record.get("num_turns") == 1
     assert mf.capacity_refusal(str(caught.value), record=caught.value.record)
@@ -260,16 +309,16 @@ def test_the_claude_code_transport_hands_the_record_to_the_error(monkeypatch):
 # C. the groomer shares the seam and the rule                                  #
 # --------------------------------------------------------------------------- #
 
-def test_the_groomer_falls_to_opus_on_a_fable_capacity_refusal():
+def test_the_groomer_falls_one_rung_on_a_top_rung_capacity_refusal():
     rows = [{"identifier": "DRE-1", "title": "DRE-1 does a thing", "labels": [],
              "priority": 0, "age_days": 1, "body": ""}]
     answer = "DRE-1 | now | it is wanted"
-    call = _refusing_on(FABLE51, answer)
+    call = _refusing_on(TOP, answer)
     pack = groom_context.pack(now="2026-09-05T12:00:00Z")
-    result = groom_judgement.run(rows, pack, call=call, model=FABLE51)
-    assert call.seen == [FABLE51, OPUS55]
-    assert result.asked == FABLE51
-    assert result.answered == OPUS55
+    result = groom_judgement.run(rows, pack, call=call, model=TOP)
+    assert call.seen == [TOP, SECOND]
+    assert result.asked == TOP
+    assert result.answered == SECOND
     assert result.calls == 2
     assert result.problem is None, result.problem
 
@@ -280,10 +329,10 @@ def test_the_groomer_falls_to_opus_on_a_fable_capacity_refusal():
 
 def test_a_rung_out_of_capacity_is_skipped_with_its_own_reason():
     decision = mf.select_with_reasons(
-        "planner", probe=lambda m: True, out_of_capacity=[FABLE51])
-    assert decision["model"] == OPUS55
+        "planner", probe=lambda m: True, out_of_capacity=[TOP])
+    assert decision["model"] == SECOND
     assert decision["degraded"]
-    assert decision["skipped"] == [{"model": FABLE51, "reason": mf._SKIP_CAPACITY}]
+    assert decision["skipped"] == [{"model": TOP, "reason": mf._SKIP_CAPACITY}]
     note = mf.selection_note(decision)
     assert note.startswith("DEGRADED")
     assert "out of capacity" in note
@@ -292,30 +341,30 @@ def test_a_rung_out_of_capacity_is_skipped_with_its_own_reason():
 
 
 def test_the_fallback_is_the_rung_below_the_chosen_one():
-    assert mf.fallback_for("planner", FABLE51) == OPUS55
-    assert mf.fallback_for("planner", OPUS55) == SONNET
-    assert mf.fallback_for("planner", SONNET) is None
+    for chosen, below in zip(JUDGEMENT, JUDGEMENT[1:]):
+        assert mf.fallback_for("planner", chosen) == below
+    assert mf.fallback_for("planner", LAST) is None
     assert mf.fallback_for("planner", "gpt-9") is None
 
 
 def _run_cli(*args):
-    env = dict(os.environ)
-    env["BUREAU_FAKE_AVAILABLE"] = json.dumps({FABLE51: True, OPUS55: True, SONNET: True})
-    return subprocess.run([sys.executable, str(ROOT / "scripts" / "model_fallback.py"),
+    env = model_fixture.home_env(
+        TREE, HOME, BUREAU_FAKE_AVAILABLE={model: True for model in JUDGEMENT})
+    return subprocess.run([sys.executable, str(TREE / "scripts" / "model_fallback.py"),
                            *args], capture_output=True, text=True, env=env)
 
 
 def test_the_cli_takes_out_of_capacity_and_writes_the_fallback(tmp_path):
     fb = tmp_path / "fallback.txt"
-    out = _run_cli("select", "planner", "--out-of-capacity", FABLE51,
+    out = _run_cli("select", "planner", "--out-of-capacity", TOP,
                    "--fallback-file", str(fb))
-    assert out.stdout.strip() == OPUS55, out.stderr
-    assert fb.read_text().strip() == SONNET
+    assert out.stdout.strip() == SECOND, out.stderr
+    assert fb.read_text().strip() == THIRD
     fb2 = tmp_path / "fallback2.txt"
     out = _run_cli("select", "planner", "--out-of-capacity", "",
                    "--fallback-file", str(fb2))
-    assert out.stdout.strip() == FABLE51, out.stderr
-    assert fb2.read_text().strip() == OPUS55
+    assert out.stdout.strip() == TOP, out.stderr
+    assert fb2.read_text().strip() == SECOND
 
 
 def _step(name: str) -> dict:
@@ -328,24 +377,25 @@ def _step(name: str) -> dict:
 
 
 def _run_select_step(tmp: Path, *, fell_from: str):
-    scripts = tmp / ".bureau-pipeline" / "scripts"
-    scripts.mkdir(parents=True)
-    shutil.copy(ROOT / "scripts" / "model_fallback.py", scripts)
-    shutil.copytree(ROOT / "config", tmp / ".bureau-pipeline" / "config")
-    (scripts / "linear_ops.py").write_text("print(0)\n")
+    # The checkout the step runs in: a fixture tree, its selector reading the
+    # frozen document as its home (DRE-6939), and Linear stubbed.
+    tree = model_fixture.fixture_tree(tmp / ".bureau-pipeline", regenerate=False)
+    (tree / "scripts" / "linear_ops.py").write_text("print(0)\n")
     step = _step("Select model")
     run = step["run"].replace("${{ github.event.client_payload.identifier }}", "DRE-3949")
     out_file = tmp / "gh_output"
-    env = dict(os.environ)
+    env = model_fixture.home_env(tree, HOME)
     env.update({
         "GITHUB_OUTPUT": str(out_file), "GITHUB_STEP_SUMMARY": str(tmp / "summary"),
         "RUNNER_TEMP": str(tmp), "LINEAR_API_KEY": "stub",
         "FELL_FROM": fell_from,
-        "BUREAU_FAKE_AVAILABLE": json.dumps({FABLE51: True, OPUS55: True, SONNET: True}),
+        "BUREAU_FAKE_AVAILABLE": json.dumps({model: True for model in JUDGEMENT}),
     })
     proc = subprocess.run(["bash", "-e", "-c", run], cwd=tmp, env=env,
                           capture_output=True, text=True)
     assert proc.returncode == 0, proc.stdout + proc.stderr
+    # The selector answered from the document, not its defaults in the code.
+    assert "model-home: read" in proc.stderr, proc.stderr
     return dict(line.split("=", 1) for line in out_file.read_text().splitlines()
                 if "=" in line)
 
@@ -355,18 +405,18 @@ def test_select_model_reads_the_classifiers_fell_from():
     assert env.get("FELL_FROM") == "${{ steps.classify.outputs.fell_from }}"
 
 
-def test_a_classifier_that_fell_off_fable_starts_the_planner_on_opus(tmp_path):
-    out = _run_select_step(tmp_path, fell_from=FABLE51)
-    assert out["model"] == OPUS55
+def test_a_classifier_that_fell_off_the_top_starts_the_planner_one_rung_down(tmp_path):
+    out = _run_select_step(tmp_path, fell_from=TOP)
+    assert out["model"] == SECOND
     assert out["why"].startswith("DEGRADED")
     assert "out of capacity" in out["why"]
-    assert out["fallback_arg"] == f"--fallback-model {SONNET}"
+    assert out["fallback_arg"] == f"--fallback-model {THIRD}"
 
 
-def test_a_clean_classify_keeps_the_planner_on_fable(tmp_path):
+def test_a_clean_classify_keeps_the_planner_on_the_top_rung(tmp_path):
     out = _run_select_step(tmp_path, fell_from="")
-    assert out["model"] == FABLE51
-    assert out["fallback_arg"] == f"--fallback-model {OPUS55}"
+    assert out["model"] == TOP
+    assert out["fallback_arg"] == f"--fallback-model {SECOND}"
 
 
 # --------------------------------------------------------------------------- #
@@ -390,11 +440,16 @@ def test_every_planner_step_carries_the_selected_fallback(name):
 
 
 # --------------------------------------------------------------------------- #
-# F. Fable-first again                                                         #
+# F. the planner walks its ladder from the top                                #
 # --------------------------------------------------------------------------- #
 
-def test_the_judgement_ladder_is_fable_first_again():
-    assert mf.ladder_for("planner") == [FABLE51, OPUS55, SONNET]
-    assert FABLE51 not in mf.CONFIG["excluded"]
+def test_the_planner_walks_its_ladder_from_the_top():
+    assert mf.HOME_STATUS == "read", "the selector is not on the document"
+    assert mf.ladder_for("planner") == JUDGEMENT
+    assert TOP not in mf.CONFIG["excluded"]
+
+
+def test_the_committed_model_file_passes_the_policy():
+    # An invariant of every saved state, so it reads the committed file.
     assert mf.policy_errors(yaml.safe_load(
         (ROOT / "config" / "models.yaml").read_text())) == []

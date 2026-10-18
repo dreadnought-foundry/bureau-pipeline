@@ -66,37 +66,44 @@
         {
           "model": "claude-opus-5-5",
           "allowed": true,
-          "reason": null
+          "reason": null,
+          "caution": null
         },
         {
           "model": "claude-opus-5",
           "allowed": true,
-          "reason": null
+          "reason": null,
+          "caution": "Opus 5 costs more than Opus 5.5: $5/$25 against $4/$20 per million tokens."
         },
         {
           "model": "claude-sonnet-5-5",
           "allowed": true,
-          "reason": null
+          "reason": null,
+          "caution": null
         },
         {
           "model": "claude-sonnet-5",
           "allowed": true,
-          "reason": null
+          "reason": null,
+          "caution": null
         },
         {
           "model": "claude-haiku-5-5",
-          "allowed": false,
-          "reason": "claude-haiku-5-5 is not on the workhorse ladder (it is on no ladder) — an exception reorders a kind's own ladder and never adds a model to it; a model joins a ladder only through a reviewed pull request to config/models.yaml"
+          "allowed": true,
+          "reason": null,
+          "caution": "Haiku 5.5 is a model we set aside; choosing it brings it back for Builders at $0.10/$0.50 per million tokens, against Opus 5.5 at $4/$20."
         },
         {
           "model": "claude-sonnet-4-6",
-          "allowed": false,
-          "reason": "claude-sonnet-4-6 is not on the workhorse ladder (it sits on the judgement ladder) — an exception reorders a kind's own ladder and never adds a model to it; a model joins a ladder only through a reviewed pull request to config/models.yaml"
+          "allowed": true,
+          "reason": null,
+          "caution": null
         },
         {
           "model": "claude-fable-5-1",
-          "allowed": false,
-          "reason": "claude-fable-5-1 is not on the workhorse ladder (it sits on the judgement ladder) — an exception reorders a kind's own ladder and never adds a model to it; a model joins a ladder only through a reviewed pull request to config/models.yaml"
+          "allowed": true,
+          "reason": null,
+          "caution": "Fable 5.1 costs more than Opus 5.5: $10/$50 against $4/$20 per million tokens, and Builders is the busiest group."
         }
       ]
     },
@@ -112,38 +119,45 @@
       "choices": [
         {
           "model": "claude-opus-5-5",
-          "allowed": false,
-          "reason": "breaks rule 8 on the walk this exception makes (claude-opus-5-5, claude-sonnet-5-5, claude-sonnet-5) — ladders.advisory: claude-opus-5-5 tops the advisory ladder and also sits on a build ladder — a BARE overlap is refused. Declare it in `review_separation.rules` (which model the reviewers use when a build ran on it) or take it off one of the two ladders; breaks rule 4 on the walk this exception makes (claude-opus-5-5, claude-sonnet-5-5, claude-sonnet-5) — ladders.advisory: claude-opus-5-5 tops the advisory ladder and must not appear on a build ladder — availability is not permission (2026-08-09)"
+          "allowed": true,
+          "reason": null,
+          "caution": "Opus 5.5 costs more than Sonnet 5.5: $4/$20 against $2/$10 per million tokens."
         },
         {
           "model": "claude-opus-5",
-          "allowed": false,
-          "reason": "claude-opus-5 is not on the advisory ladder (it sits on the workhorse ladder) — an exception reorders a kind's own ladder and never adds a model to it; a model joins a ladder only through a reviewed pull request to config/models.yaml"
+          "allowed": true,
+          "reason": null,
+          "caution": "Opus 5 costs more than Sonnet 5.5: $5/$25 against $2/$10 per million tokens."
         },
         {
           "model": "claude-sonnet-5-5",
           "allowed": true,
-          "reason": null
+          "reason": null,
+          "caution": null
         },
         {
           "model": "claude-sonnet-5",
           "allowed": true,
-          "reason": null
+          "reason": null,
+          "caution": null
         },
         {
           "model": "claude-haiku-5-5",
-          "allowed": false,
-          "reason": "claude-haiku-5-5 is not on the advisory ladder (it is on no ladder) — an exception reorders a kind's own ladder and never adds a model to it; a model joins a ladder only through a reviewed pull request to config/models.yaml"
+          "allowed": true,
+          "reason": null,
+          "caution": "Haiku 5.5 is a model we set aside; choosing it brings it back for Reviewers at $0.10/$0.50 per million tokens, against Sonnet 5.5 at $2/$10."
         },
         {
           "model": "claude-sonnet-4-6",
-          "allowed": false,
-          "reason": "claude-sonnet-4-6 is not on the advisory ladder (it sits on the judgement ladder) — an exception reorders a kind's own ladder and never adds a model to it; a model joins a ladder only through a reviewed pull request to config/models.yaml"
+          "allowed": true,
+          "reason": null,
+          "caution": "Sonnet 4.6 costs more than Sonnet 5.5: $3/$15 against $2/$10 per million tokens."
         },
         {
           "model": "claude-fable-5-1",
-          "allowed": false,
-          "reason": "claude-fable-5-1 is not on the advisory ladder (it sits on the judgement ladder) — an exception reorders a kind's own ladder and never adds a model to it; a model joins a ladder only through a reviewed pull request to config/models.yaml"
+          "allowed": true,
+          "reason": null,
+          "caution": "Fable 5.1 costs more than Sonnet 5.5: $10/$50 against $2/$10 per million tokens."
         }
       ]
     },
@@ -151,56 +165,68 @@
       "key": "judgement",
       "label": "Planners",
       "purpose": "Turn an epic into the cards the fleet builds.",
-      "default_model": "claude-fable-5-1",
+      "default_model": "claude-opus-5-5",
       "fallbacks": [
-        "claude-opus-5-5",
+        "claude-fable-5-1",
         "claude-sonnet-4-6"
       ],
       "choices": [
         {
           "model": "claude-opus-5-5",
-          "allowed": false,
-          "reason": "breaks rule 4 on the walk this exception makes (claude-opus-5-5, claude-fable-5-1, claude-sonnet-4-6) — ladders.judgement: claude-opus-5-5 tops the judgement ladder and must not appear on a build ladder — availability is not permission (2026-08-09); breaks rule 4b on the walk this exception makes (claude-opus-5-5, claude-fable-5-1, claude-sonnet-4-6) — ladders.judgement: claude-fable-5-1 sits BELOW the claude-opus-5-5 rung the judgement ladder degrades onto and is DEARER ($10.00/$50.00 against $4.00/$20.00 per MTok) — a stronger model may not hide beneath the fallback"
+          "allowed": true,
+          "reason": null,
+          "caution": null
         },
         {
           "model": "claude-opus-5",
-          "allowed": false,
-          "reason": "claude-opus-5 is not on the judgement ladder (it sits on the workhorse ladder) — an exception reorders a kind's own ladder and never adds a model to it; a model joins a ladder only through a reviewed pull request to config/models.yaml"
+          "allowed": true,
+          "reason": null,
+          "caution": "Opus 5 costs more than Opus 5.5: $5/$25 against $4/$20 per million tokens."
         },
         {
           "model": "claude-sonnet-5-5",
-          "allowed": false,
-          "reason": "claude-sonnet-5-5 is not on the judgement ladder (it sits on the workhorse and advisory ladders) — an exception reorders a kind's own ladder and never adds a model to it; a model joins a ladder only through a reviewed pull request to config/models.yaml"
+          "allowed": true,
+          "reason": null,
+          "caution": null
         },
         {
           "model": "claude-sonnet-5",
-          "allowed": false,
-          "reason": "claude-sonnet-5 is not on the judgement ladder (it sits on the workhorse and advisory ladders) — an exception reorders a kind's own ladder and never adds a model to it; a model joins a ladder only through a reviewed pull request to config/models.yaml"
+          "allowed": true,
+          "reason": null,
+          "caution": null
         },
         {
           "model": "claude-haiku-5-5",
-          "allowed": false,
-          "reason": "claude-haiku-5-5 is not on the judgement ladder (it is on no ladder) — an exception reorders a kind's own ladder and never adds a model to it; a model joins a ladder only through a reviewed pull request to config/models.yaml"
+          "allowed": true,
+          "reason": null,
+          "caution": "Haiku 5.5 is a model we set aside; choosing it brings it back for Planners at $0.10/$0.50 per million tokens, against Opus 5.5 at $4/$20."
         },
         {
           "model": "claude-sonnet-4-6",
           "allowed": true,
-          "reason": null
+          "reason": null,
+          "caution": null
         },
         {
           "model": "claude-fable-5-1",
           "allowed": true,
-          "reason": null
+          "reason": null,
+          "caution": "Fable 5.1 costs more than Opus 5.5: $10/$50 against $4/$20 per million tokens."
         }
       ]
     }
   ],
+  "add_group": {
+    "allowed": true,
+    "reason": null
+  },
   "agents": [
     {
       "name": "engineer",
       "label": "Engineer",
       "about": "Builds a card and opens the PR",
       "group": "workhorse",
+      "runs_in": "pipeline",
       "moves": [
         {
           "group": "advisory",
@@ -210,7 +236,7 @@
         {
           "group": "judgement",
           "allowed": false,
-          "reason": "agents.engineer: 'judgement' is the planner's kind — it admits a role that runs once per epic, and engineer runs per card; volume on the strongest model is the 2026-08-09 incident. A build or fix role is 'workhorse', a reviewer is 'advisory'"
+          "reason": "Move engineer from the Builders group into the Planners group — refused, because only the planner may be in the Planners group — the planner runs once per plan, while engineer runs far more often, which would put many more runs on the most expensive model."
         }
       ]
     },
@@ -219,6 +245,7 @@
       "label": "Frontend",
       "about": "Builds the screens a card asks for and opens the PR",
       "group": "workhorse",
+      "runs_in": "pipeline",
       "moves": [
         {
           "group": "advisory",
@@ -228,7 +255,7 @@
         {
           "group": "judgement",
           "allowed": false,
-          "reason": "agents.frontend: 'judgement' is the planner's kind — it admits a role that runs once per epic, and frontend runs per card; volume on the strongest model is the 2026-08-09 incident. A build or fix role is 'workhorse', a reviewer is 'advisory'"
+          "reason": "Move frontend from the Builders group into the Planners group — refused, because only the planner may be in the Planners group — the planner runs once per plan, while frontend runs far more often, which would put many more runs on the most expensive model."
         }
       ]
     },
@@ -237,6 +264,7 @@
       "label": "Database Architect",
       "about": "Designs the schema and writes the migrations a card needs",
       "group": "workhorse",
+      "runs_in": "pipeline",
       "moves": [
         {
           "group": "advisory",
@@ -246,7 +274,7 @@
         {
           "group": "judgement",
           "allowed": false,
-          "reason": "agents.database-architect: 'judgement' is the planner's kind — it admits a role that runs once per epic, and database-architect runs per card; volume on the strongest model is the 2026-08-09 incident. A build or fix role is 'workhorse', a reviewer is 'advisory'"
+          "reason": "Move database-architect from the Builders group into the Planners group — refused, because only the planner may be in the Planners group — the planner runs once per plan, while database-architect runs far more often, which would put many more runs on the most expensive model."
         }
       ]
     },
@@ -255,6 +283,7 @@
       "label": "Devops",
       "about": "Writes the infrastructure, CI and deploy code a card needs",
       "group": "workhorse",
+      "runs_in": "pipeline",
       "moves": [
         {
           "group": "advisory",
@@ -264,7 +293,7 @@
         {
           "group": "judgement",
           "allowed": false,
-          "reason": "agents.devops: 'judgement' is the planner's kind — it admits a role that runs once per epic, and devops runs per card; volume on the strongest model is the 2026-08-09 incident. A build or fix role is 'workhorse', a reviewer is 'advisory'"
+          "reason": "Move devops from the Builders group into the Planners group — refused, because only the planner may be in the Planners group — the planner runs once per plan, while devops runs far more often, which would put many more runs on the most expensive model."
         }
       ]
     },
@@ -273,6 +302,7 @@
       "label": "Fixer",
       "about": "Answers a review's requested changes on an open PR",
       "group": "workhorse",
+      "runs_in": "pipeline",
       "moves": [
         {
           "group": "advisory",
@@ -282,7 +312,7 @@
         {
           "group": "judgement",
           "allowed": false,
-          "reason": "agents.fixer: 'judgement' is the planner's kind — it admits a role that runs once per epic, and fixer runs per card; volume on the strongest model is the 2026-08-09 incident. A build or fix role is 'workhorse', a reviewer is 'advisory'"
+          "reason": "Move fixer from the Builders group into the Planners group — refused, because only the planner may be in the Planners group — the planner runs once per plan, while fixer runs far more often, which would put many more runs on the most expensive model."
         }
       ]
     },
@@ -291,6 +321,7 @@
       "label": "Repairer",
       "about": "Repairs the main branch when its tests go red",
       "group": "workhorse",
+      "runs_in": "pipeline",
       "moves": [
         {
           "group": "advisory",
@@ -300,7 +331,7 @@
         {
           "group": "judgement",
           "allowed": false,
-          "reason": "agents.repairer: 'judgement' is the planner's kind — it admits a role that runs once per epic, and repairer runs per card; volume on the strongest model is the 2026-08-09 incident. A build or fix role is 'workhorse', a reviewer is 'advisory'"
+          "reason": "Move repairer from the Builders group into the Planners group — refused, because only the planner may be in the Planners group — the planner runs once per plan, while repairer runs far more often, which would put many more runs on the most expensive model."
         }
       ]
     },
@@ -309,6 +340,7 @@
       "label": "Proof",
       "about": "Runs a proof card's checks and records what it saw",
       "group": "workhorse",
+      "runs_in": "pipeline",
       "moves": [
         {
           "group": "advisory",
@@ -318,7 +350,7 @@
         {
           "group": "judgement",
           "allowed": false,
-          "reason": "agents.proof: 'judgement' is the planner's kind — it admits a role that runs once per epic, and proof runs per card; volume on the strongest model is the 2026-08-09 incident. A build or fix role is 'workhorse', a reviewer is 'advisory'"
+          "reason": "Move proof from the Builders group into the Planners group — refused, because only the planner may be in the Planners group — the planner runs once per plan, while proof runs far more often, which would put many more runs on the most expensive model."
         }
       ]
     },
@@ -327,6 +359,7 @@
       "label": "Planner",
       "about": "Turns an epic into the cards the fleet builds",
       "group": "judgement",
+      "runs_in": "pipeline",
       "moves": [
         {
           "group": "workhorse",
@@ -345,16 +378,17 @@
       "label": "Critic",
       "about": "Reviews every pull request before it merges",
       "group": "advisory",
+      "runs_in": "pipeline",
       "moves": [
         {
           "group": "workhorse",
           "allowed": false,
-          "reason": "agents.critic: must be 'advisory' (it gates unattended merges), got 'workhorse'; review_separation.roles: 'critic' is not an advisory role — the separation binds the roles that REVIEW a pull request, and binding a build role would be a spend change wearing a safety rule"
+          "reason": "Move critic from the Reviewers group into the Builders group — refused, because critic must stay in the Reviewers group — it checks work before it merges, and no person reads the change."
         },
         {
           "group": "judgement",
           "allowed": false,
-          "reason": "agents.critic: must be 'advisory' (it gates unattended merges), got 'judgement'; agents.critic: 'judgement' is the planner's kind — it admits a role that runs once per epic, and critic runs per card; volume on the strongest model is the 2026-08-09 incident. A build or fix role is 'workhorse', a reviewer is 'advisory'; review_separation.roles: 'critic' is not an advisory role — the separation binds the roles that REVIEW a pull request, and binding a build role would be a spend change wearing a safety rule"
+          "reason": "Move critic from the Reviewers group into the Planners group — refused, because critic must stay in the Reviewers group — it checks work before it merges, and no person reads the change. Move critic from the Reviewers group into the Planners group — refused, because only the planner may be in the Planners group — the planner runs once per plan, while critic runs far more often, which would put many more runs on the most expensive model."
         }
       ]
     },
@@ -363,16 +397,17 @@
       "label": "Verifier",
       "about": "Tries a UI or multi-system change the way a person would",
       "group": "advisory",
+      "runs_in": "pipeline",
       "moves": [
         {
           "group": "workhorse",
           "allowed": false,
-          "reason": "agents.verifier: must be 'advisory' (it gates unattended merges), got 'workhorse'; review_separation.roles: 'verifier' is not an advisory role — the separation binds the roles that REVIEW a pull request, and binding a build role would be a spend change wearing a safety rule"
+          "reason": "Move verifier from the Reviewers group into the Builders group — refused, because verifier must stay in the Reviewers group — it checks work before it merges, and no person reads the change."
         },
         {
           "group": "judgement",
           "allowed": false,
-          "reason": "agents.verifier: must be 'advisory' (it gates unattended merges), got 'judgement'; agents.verifier: 'judgement' is the planner's kind — it admits a role that runs once per epic, and verifier runs per card; volume on the strongest model is the 2026-08-09 incident. A build or fix role is 'workhorse', a reviewer is 'advisory'; review_separation.roles: 'verifier' is not an advisory role — the separation binds the roles that REVIEW a pull request, and binding a build role would be a spend change wearing a safety rule"
+          "reason": "Move verifier from the Reviewers group into the Planners group — refused, because verifier must stay in the Reviewers group — it checks work before it merges, and no person reads the change. Move verifier from the Reviewers group into the Planners group — refused, because only the planner may be in the Planners group — the planner runs once per plan, while verifier runs far more often, which would put many more runs on the most expensive model."
         }
       ]
     },
@@ -381,6 +416,7 @@
       "label": "Medic",
       "about": "Diagnoses a failed run and says what went wrong",
       "group": "advisory",
+      "runs_in": "pipeline",
       "moves": [
         {
           "group": "workhorse",
@@ -390,7 +426,7 @@
         {
           "group": "judgement",
           "allowed": false,
-          "reason": "agents.medic: 'judgement' is the planner's kind — it admits a role that runs once per epic, and medic runs per card; volume on the strongest model is the 2026-08-09 incident. A build or fix role is 'workhorse', a reviewer is 'advisory'"
+          "reason": "Move medic from the Reviewers group into the Planners group — refused, because only the planner may be in the Planners group — the planner runs once per plan, while medic runs far more often, which would put many more runs on the most expensive model."
         }
       ]
     },
@@ -399,6 +435,7 @@
       "label": "Plan Critic Pre",
       "about": "Checks a plan's cards before they reach the CEO",
       "group": "advisory",
+      "runs_in": "pipeline",
       "moves": [
         {
           "group": "workhorse",
@@ -408,7 +445,7 @@
         {
           "group": "judgement",
           "allowed": false,
-          "reason": "agents.plan-critic-pre: 'judgement' is the planner's kind — it admits a role that runs once per epic, and plan-critic-pre runs per card; volume on the strongest model is the 2026-08-09 incident. A build or fix role is 'workhorse', a reviewer is 'advisory'"
+          "reason": "Move plan-critic-pre from the Reviewers group into the Planners group — refused, because only the planner may be in the Planners group — the planner runs once per plan, while plan-critic-pre runs far more often, which would put many more runs on the most expensive model."
         }
       ]
     },
@@ -417,6 +454,7 @@
       "label": "Plan Critic Post",
       "about": "Reads a passed plan as the spec agents will build from",
       "group": "advisory",
+      "runs_in": "pipeline",
       "moves": [
         {
           "group": "workhorse",
@@ -426,7 +464,45 @@
         {
           "group": "judgement",
           "allowed": false,
-          "reason": "agents.plan-critic-post: 'judgement' is the planner's kind — it admits a role that runs once per epic, and plan-critic-post runs per card; volume on the strongest model is the 2026-08-09 incident. A build or fix role is 'workhorse', a reviewer is 'advisory'"
+          "reason": "Move plan-critic-post from the Reviewers group into the Planners group — refused, because only the planner may be in the Planners group — the planner runs once per plan, while plan-critic-post runs far more often, which would put many more runs on the most expensive model."
+        }
+      ]
+    },
+    {
+      "name": "fullstack-engineer",
+      "label": "Fullstack Engineer",
+      "about": "Builds across the front and back end",
+      "group": "workhorse",
+      "runs_in": "session",
+      "moves": [
+        {
+          "group": "advisory",
+          "allowed": true,
+          "reason": null
+        },
+        {
+          "group": "judgement",
+          "allowed": true,
+          "reason": null
+        }
+      ]
+    },
+    {
+      "name": "ux-ui-engineer",
+      "label": "Ux Ui Engineer",
+      "about": "Turns a design into working screens",
+      "group": "workhorse",
+      "runs_in": "session",
+      "moves": [
+        {
+          "group": "advisory",
+          "allowed": true,
+          "reason": null
+        },
+        {
+          "group": "judgement",
+          "allowed": true,
+          "reason": null
         }
       ]
     },
@@ -434,36 +510,58 @@
       "name": "designer",
       "label": "Designer",
       "about": "Designs screens and systems",
-      "group": null,
-      "moves": []
-    },
-    {
-      "name": "ux-ui-engineer",
-      "label": "Ux Ui Engineer",
-      "about": "Turns a design into working screens",
-      "group": null,
-      "moves": []
-    },
-    {
-      "name": "fullstack-engineer",
-      "label": "Fullstack Engineer",
-      "about": "Builds across the front and back end",
-      "group": null,
-      "moves": []
+      "group": "advisory",
+      "runs_in": "session",
+      "moves": [
+        {
+          "group": "workhorse",
+          "allowed": true,
+          "reason": null
+        },
+        {
+          "group": "judgement",
+          "allowed": true,
+          "reason": null
+        }
+      ]
     },
     {
       "name": "mobile",
       "label": "Mobile",
       "about": "Builds the mobile apps",
-      "group": null,
-      "moves": []
+      "group": "workhorse",
+      "runs_in": "session",
+      "moves": [
+        {
+          "group": "advisory",
+          "allowed": true,
+          "reason": null
+        },
+        {
+          "group": "judgement",
+          "allowed": true,
+          "reason": null
+        }
+      ]
     },
     {
       "name": "product-lead",
       "label": "Product Lead",
       "about": "Decides what to build next and writes the cards",
-      "group": null,
-      "moves": []
+      "group": "judgement",
+      "runs_in": "session",
+      "moves": [
+        {
+          "group": "workhorse",
+          "allowed": true,
+          "reason": null
+        },
+        {
+          "group": "advisory",
+          "allowed": true,
+          "reason": null
+        }
+      ]
     }
   ],
   "projects": []

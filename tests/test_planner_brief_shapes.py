@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import json
 import re
+import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -196,9 +197,18 @@ class TestWhereThePlannerOutputLands:
         source = _read(OPS)
         body = source[source.index("def cmd_subissue(") :]
         body = body[: body.index("\ndef ")]
-        match = re.search(r'lane="([^"]+)"', body)
-        # No explicit lane means the child rides `_create_card`'s default.
-        return match.group(1) if match else self._create_card_default_lane()
+        match = re.search(r'lane=(?:"([^"]+)"|(QUEUE_LANE)\b)', body)
+        if match is None:
+            # No explicit lane means the child rides `_create_card`'s default.
+            return self._create_card_default_lane()
+        if match.group(2):
+            # The queue lane by its contract name (DRE-6744) — read where the
+            # write layer reads it, so the brief is held to the lane it writes.
+            sys.path.insert(0, str(ROOT / "scripts"))
+            import lane_contract
+
+            return lane_contract.QUEUE_LANE
+        return match.group(1)
 
     def test_the_children_row_names_the_lane_subissue_actually_creates_in(self):
         row = _row(_brief(), "subissue")

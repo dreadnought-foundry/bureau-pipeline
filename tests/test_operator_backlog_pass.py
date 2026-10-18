@@ -41,6 +41,7 @@ os.environ.setdefault("GH_TOKEN", "x")
 
 import hand_work_migration as hwm  # noqa: E402
 import hold  # noqa: E402
+import lane_contract  # noqa: E402
 import linear_ops  # noqa: E402
 import ready_lane_writers  # noqa: E402
 import routing_verdict  # noqa: E402
@@ -106,8 +107,10 @@ class Board:
         assert "$after" in query
         label = (variables or {}).get("label")
         assert label == NEEDS_HUMAN, label
+        # The lanes the query's state filter names, as Linear would read them:
+        # a card in a lane the query does not ask for is not answered.
         return [self._node(c) for c in self.cards.values()
-                if c["lane"] == "Backlog" and NEEDS_HUMAN in c["labels"]]
+                if f'"{c["lane"]}"' in query and NEEDS_HUMAN in c["labels"]]
 
     def gql(self, query, variables=None):
         if self.unreadable:
@@ -234,7 +237,7 @@ class TestUnblocked:
         assert OPERATOR_STEP in card["labels"] and card["lane"] == "Hand-work"
         assert hold.reason_of(card["labels"], card["comments"]) is None
 
-    def test_the_move_is_conditional_on_backlog(self):
+    def test_the_move_is_conditional_on_the_queue_under_either_name(self):
         seen = []
         board = Board([_unblocked()])
         real = board.cmd_state
@@ -245,7 +248,22 @@ class TestUnblocked:
 
         board.cmd_state = spy
         _run(board, "--apply")
-        assert seen == [("Backlog",)]
+        assert seen == [lane_contract.QUEUE_LANES]
+
+    @pytest.mark.parametrize("queue", lane_contract.QUEUE_LANES)
+    def test_an_operator_step_in_either_queue_name_is_read_and_moved(self, queue, capsys):
+        # DRE-6748: the pass reads the queue under every name it carries, so
+        # a card waiting in Queued is converted as one in Backlog is.
+        board = Board([_unblocked(lane=queue)])
+        assert _run(board, "--apply") == 0
+        listed = _section(capsys.readouterr().out, "unblocked")
+        assert "DRE-1" in listed and f"{queue} → Hand-work" in listed
+        assert board.cards["DRE-1"]["lane"] == "Hand-work"
+        assert ("state", "DRE-1", "Hand-work") in board.written("DRE-1")
+
+    def test_the_query_asks_for_every_queue_name(self):
+        for name in lane_contract.QUEUE_LANES:
+            assert f'"{name}"' in hwm.OPERATOR_BACKLOG_QUERY, name
 
     def test_a_card_that_moved_since_the_read_is_refused_untouched(self, capsys):
         board = Board([_unblocked()])
@@ -425,6 +443,12 @@ class TestTheCommand:
         assert "hold.OPERATOR_STEP_REASON" in source
         assert "hold.BLOCKERS_TERMINAL" in source
         assert '"operator-step"' not in source and '"blockers-terminal"' not in source
+
+
+class TestNoRetiredName:
+    def test_no_string_in_the_script_names_the_retired_queue(self):
+        path = str(ROOT / "scripts" / "hand_work_migration.py")
+        assert lane_contract._scan_python(path, ["Backlog"]) == set()
 
 
 class TestRegistered:

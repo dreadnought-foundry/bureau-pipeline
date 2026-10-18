@@ -14,9 +14,15 @@ ranking call serves every repo in its census. tests/test_groom_judgement.py
 passes unchanged, and `test_the_groomer_still_picks_with_no_repo` pins the
 omission.
 
-Same temp tree as tests/test_project_model_exceptions.py, with
-`projects: {atlas: {judgement: claude-sonnet-4-6}}`. Expected ids are read off
-the tree's judgement ladder rather than typed.
+The scenario is a home document (DRE-6990): the frozen one
+(`model_fixture.fixture_home()`, DRE-6972) with
+`with_project(doc, "atlas", "judgement", <its judgement group's last model>)` —
+the last, so with no project it has nowhere to fall and on atlas's walk it falls
+to the fleet's top. It is handed through `home_env` to a tree of today's scripts
+on the frozen model files (tests/model_fixture.py), built with
+`regenerate=False`: the selector answers from the document, never from the
+tree's `config/models.yaml`. Expected ids are read off the document's judgement
+group rather than typed.
 
 Run: cd bureau-pipeline && python3 -m pytest tests/test_project_reaches_planner_pickers.py -q
 """
@@ -25,17 +31,24 @@ from __future__ import annotations
 
 import ast
 import json
-import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
 
 import pytest
 
-from test_project_model_exceptions import ROOT, ladder, make_tree, tree_config
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "tests"))
 
-SONNET46 = "claude-sonnet-4-6"
-PROJECTS = {"atlas": {"judgement": SONNET46}}
+import model_fixture  # noqa: E402
+from model_fixture import fixture_home, home_env, ladder, with_project  # noqa: E402
+
+HOME = fixture_home()
+# atlas's planner leads with the fleet's last rung, its exception.
+EXCEPTION = ladder(HOME, "judgement")[-1]
+# The document every scenario runs on.
+DOC = with_project(HOME, "atlas", "judgement", EXCEPTION)
 SPEND_LIMIT = ("You've hit your monthly spend limit. Switch to another model to "
                "continue.")
 
@@ -47,11 +60,10 @@ def _refusal(model):
              "result": SPEND_LIMIT}]
 
 
-def env() -> dict:
-    out = dict(os.environ)
-    out["BUREAU_FAKE_AVAILABLE"] = "{}"
-    out["ANTHROPIC_API_KEY"] = ""  # subscription mode: the top rung, read directly
-    return out
+def env(tree: Path) -> dict:
+    """`DOC` as the tree's home, every model available, no network."""
+    # ANTHROPIC_API_KEY empty: subscription mode, the top rung read directly.
+    return home_env(tree, DOC, BUREAU_FAKE_AVAILABLE="{}", ANTHROPIC_API_KEY="")
 
 
 def py(tree: Path, code: str):
@@ -60,7 +72,7 @@ def py(tree: Path, code: str):
          "import json, sys\n"
          f"sys.path.insert(0, {str(tree / 'scripts')!r})\n"
          "import model_fallback, planning_classify, planner_capacity\n" + code],
-        capture_output=True, text=True, env=env(), cwd=tree,
+        capture_output=True, text=True, env=env(tree), cwd=tree,
     )
     assert proc.returncode == 0, proc.stderr
     assert "REFUSING" not in proc.stderr, proc.stderr
@@ -69,23 +81,39 @@ def py(tree: Path, code: str):
 
 @pytest.fixture(scope="module")
 def tree(tmp_path_factory) -> Path:
-    return make_tree(tmp_path_factory.mktemp("dre6634-planner"), PROJECTS)
+    tree = model_fixture.fixture_tree(tmp_path_factory.mktemp("dre6634-planner"),
+                                      regenerate=False)
+    # The frozen tree carries the model files only; the planner scripts read
+    # the rest of config/ (the lane contract, the planning shapes) as they run,
+    # so today's copies fill in what the tree does not hold (DRE-6863).
+    for path in (ROOT / "config").iterdir():
+        if path.is_file() and not (tree / "config" / path.name).exists():
+            shutil.copy2(path, tree / "config" / path.name)
+    return tree
 
 
 @pytest.fixture(scope="module")
 def fleet(tree) -> list[str]:
-    return ladder(tree_config(tree), "judgement")
+    return ladder(DOC, "judgement")
 
 
 @pytest.fixture(scope="module")
 def walk(fleet) -> list[str]:
-    return [SONNET46] + [m for m in fleet if m != SONNET46]
+    """atlas's walk: its exception, then the fleet ladder without it."""
+    return [EXCEPTION] + [m for m in fleet if m != EXCEPTION]
 
 
-def test_the_tree_s_config_loads_with_its_project_entry(tree, fleet, walk):
-    assert py(tree, "print(json.dumps(model_fallback.CONFIG['projects']))") == PROJECTS
-    assert fleet[-1] == SONNET46, "Sonnet 4.6 must be the fleet ladder's last rung"
-    assert walk == ["claude-sonnet-4-6", "claude-fable-5-1", "claude-opus-5-5"]
+def test_the_tree_reads_the_document_with_its_project_entry(tree, fleet, walk):
+    """A refused document leaves the selector on the defaults in the code,
+    with no atlas entry, and every scenario below would pass for the wrong
+    reason."""
+    got = py(tree, "model_fallback.use_home()\n"
+                   "print(json.dumps([model_fallback.HOME_STATUS, "
+                   "model_fallback.CONFIG['projects']]))")
+    assert got == ["read", DOC["projects"]]
+    assert DOC["projects"]["atlas"] == {"judgement": EXCEPTION}
+    assert fleet[-1] == EXCEPTION, "the exception must be the fleet ladder's last rung"
+    assert walk[0] != fleet[0], "the project's walk must lead with another rung"
 
 
 # --------------------------------------------------------------------------- #
@@ -105,17 +133,17 @@ def test_capacity_fallback_falls_to_the_rung_below_on_the_project_walk(tree, wal
 seen = []
 def call(model, prompt, **kwargs):
     seen.append([model, sorted(kwargs)])
-    if model == {SONNET46!r}:
+    if model == {EXCEPTION!r}:
         raise planning_classify.TransportError(
             "the classification call reported subtype 'success', is_error "
             "True: " + {SPEND_LIMIT!r}, "success")
     return planning_classify.Answer(text="ok", model=model)
 answer, on, fell_from, because, calls = planning_classify.call_with_capacity_fallback(
-    call, {SONNET46!r}, "p", repo="atlas")
+    call, {EXCEPTION!r}, "p", repo="atlas")
 print(json.dumps([on, fell_from, calls, seen]))
 """)
     # `repo` steers the walk and is never handed to the transport.
-    assert got == [walk[1], SONNET46, 2, [[SONNET46, []], [walk[1], []]]]
+    assert got == [walk[1], EXCEPTION, 2, [[EXCEPTION, []], [walk[1], []]]]
 
 
 def test_with_no_repo_the_last_fleet_rung_has_nowhere_to_fall(tree):
@@ -123,7 +151,7 @@ def test_with_no_repo_the_last_fleet_rung_has_nowhere_to_fall(tree):
 def call(model, prompt, **kwargs):
     raise planning_classify.TransportError("x: " + {SPEND_LIMIT!r}, "success")
 try:
-    planning_classify.call_with_capacity_fallback(call, {SONNET46!r}, "p")
+    planning_classify.call_with_capacity_fallback(call, {EXCEPTION!r}, "p")
     print(json.dumps("answered"))
 except planning_classify.TransportError:
     print(json.dumps("raised"))
@@ -171,7 +199,7 @@ def test_the_classify_command_takes_repo(tree):
     proc = subprocess.run(
         [sys.executable, str(ROOT / "scripts" / "planning_classify.py"),
          "classify", "--help"],
-        capture_output=True, text=True, env=env(),
+        capture_output=True, text=True, env=env(tree),
     )
     assert proc.returncode == 0, proc.stderr
     assert "--repo" in proc.stdout
@@ -198,29 +226,29 @@ print(json.dumps(seen))
 
 def test_decide_retries_on_the_rung_below_on_the_project_walk(tree, walk):
     got = py(tree, f"""
-rec = {json.dumps(_refusal(SONNET46)[-1])!r}
+rec = {json.dumps(_refusal(EXCEPTION)[-1])!r}
 import json as j
 rec = j.loads(rec)
-print(json.dumps([planner_capacity.decide(rec, {SONNET46!r}, repo="EveryBite/atlas"),
-                  planner_capacity.decide(rec, {SONNET46!r})]))
+print(json.dumps([planner_capacity.decide(rec, {EXCEPTION!r}, repo="EveryBite/atlas"),
+                  planner_capacity.decide(rec, {EXCEPTION!r})]))
 """)
     with_repo, without = got
     assert with_repo["retry"] == "true"
-    assert with_repo["model"] == walk[1] == "claude-fable-5-1"
+    assert with_repo["model"] == walk[1]
     assert without["retry"] == "false"
 
 
 def test_the_decide_command_writes_the_same_answer(tree, tmp_path, walk):
     record = tmp_path / "exec.json"
-    record.write_text(json.dumps(_refusal(SONNET46)))
+    record.write_text(json.dumps(_refusal(EXCEPTION)))
     outputs = {}
     for name, extra in (("atlas", ["--repo", "atlas"]), ("none", [])):
         out = tmp_path / f"out-{name}"
         proc = subprocess.run(
             [sys.executable, str(tree / "scripts" / "planner_capacity.py"),
-             "decide", str(record), "--model", SONNET46, *extra,
+             "decide", str(record), "--model", EXCEPTION, *extra,
              "--github-output", str(out)],
-            capture_output=True, text=True, env=env(), cwd=tree,
+            capture_output=True, text=True, env=env(tree), cwd=tree,
         )
         assert proc.returncode == 0, proc.stderr
         outputs[name] = dict(line.split("=", 1)

@@ -551,5 +551,13 @@ def test_the_readme_names_break_glass_as_the_sanctioned_exception():
     assert "Planning" in flat
 
 
+def test_no_string_constant_in_the_break_glass_names_the_old_lane():
+    """A lane name in a string does not follow the switch (DRE-6749)."""
+    import lane_contract
+
+    path = str(Path(__file__).resolve().parent.parent / "scripts" / "break_glass.py")
+    assert lane_contract._scan_python(path, ["Backlog"]) == set()
+
+
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__, "-q"]))

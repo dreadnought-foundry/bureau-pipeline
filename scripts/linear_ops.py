@@ -5,11 +5,12 @@ Subcommands:
   state <DRE-N> <state-name> [--park]  move a card to a workflow state. Refuses
                                        to un-complete a terminal (Done/Canceled)
                                        card (DRE-1877), and re-routes a BUILDING
-                                       card (In Progress) aimed at Backlog to
-                                       Todo so it re-dispatches instead of
-                                       stranding (DRE-1885). `--park` opts a
-                                       deliberate hold (blocker / dead-run cap)
-                                       out of that reroute — Backlog is intended.
+                                       card (In Progress) aimed at the queue
+                                       lane (Queued, under either name) to Todo
+                                       so it re-dispatches instead of stranding
+                                       (DRE-1885). `--park` opts a deliberate
+                                       hold (blocker / dead-run cap) out of that
+                                       reroute — Queued is intended.
   advance <DRE-N> <to-state> <from-states-csv>
                                        move ONLY if current state is in the csv
                                        (guards against dragging Done cards back)
@@ -30,6 +31,14 @@ Subcommands:
                                        `🔬 proof-waiting: <a> — needs <b>` as the
                                        proof-observation-pending act's receipt,
                                        so the console renders `Waiting for proof`
+  proof-waiting-until <DRE-N> "<still to be observed>" "<ISO time with UTC offset>"
+                                       the same hold when it waits only for a
+                                       time (DRE-7228): its needs half is
+                                       written as exactly `not-before=<time>`,
+                                       and the proof dispatcher lifts it once
+                                       the time passes. Refuses a time with no
+                                       offset or that does not parse, and an
+                                       observed half naming the CEO's press
   proof-observed <DRE-N> "<what was observed, with PT time>"
                                        the discharge record for the hold above:
                                        `🔬 proof-observed: <text>`, a PLAIN
@@ -49,7 +58,7 @@ Subcommands:
                                        merged with the critic's APPROVE at the
                                        merged head (DRE-5919)
   subissue <DRE-N(parent)> <title> <description-file>
-                                       create a child issue (Backlog) under an epic.
+                                       create a child issue (Queued) under an epic.
                                        Inlines the file's CONTENTS (never a path),
                                        inherits repo:<slug>+role labels from the
                                        parent epic, encodes any **Blocked by:**
@@ -155,7 +164,8 @@ import blocker_prose  # noqa: E402 — ONE anchored blocker-prose grammar (DRE-2
 import bureau_read  # noqa: E402 — the read door: workflow states from our database (Stage 2 #9)
 import dead_run  # noqa: E402 — the dead-run tags/cap live in ONE module
 import epic_todo_gate  # noqa: E402 — ONE rule: an epic is never put in Todo (DRE-5316)
-import lane_scope  # noqa: E402 — the lane contract, incl. the pending rename
+import lane_contract  # noqa: E402 — the lane contract, incl. the pending rename
+from lane_contract import QUEUE_LANE, QUEUE_LANES  # noqa: E402 — the queue lane, written and read (DRE-6744)
 import mid_epic  # noqa: E402 — ONE source for "a card has no children" (DRE-2739)
 import pipeline_act  # noqa: E402 — ONE writer for an act's receipt (DRE-2825)
 
@@ -1016,7 +1026,138 @@ def api_key(*, env=None, run=None) -> str:
     return key
 
 
-def gql(query: str, variables: dict | None = None) -> dict:
+#: The read-only switch (DRE-7285). Exactly `1` turns it on; unset, empty or
+#: any other value changes nothing. The proof shadow (DRE-7286) sets it on its
+#: agent step.
+READ_ONLY_ENV = "BUREAU_LINEAR_READ_ONLY"
+
+_GRAPHQL_NAME = re.compile(r"[_A-Za-z][_0-9A-Za-z]*")
+# GraphQL ends a line at `\n`, `\r\n` or a lone `\r`: a comment or a string
+# that stopped only at `\n` would swallow a mutation after a lone `\r`.
+_GRAPHQL_LINE_END = re.compile(r"[\r\n]")
+
+
+def _mutation_field(document: str) -> str | None:
+    """The first field of the document's first `mutation` operation, `""`
+    when it opens a mutation whose field could not be read, or None when no
+    operation in it is a mutation.
+
+    Read the way GraphQL reads a document, not by its first characters: a
+    byte-order mark, whitespace, commas and `#` comments are ignored, string
+    and block-string literals are skipped, and only the keyword that opens a
+    definition at the top level counts. So a field named `mutation` inside a
+    query, or the word in a comment or a string, is not a write, while a named
+    mutation, an aliased field, or a mutation after a fragment or a query is.
+
+    It is a best-effort reader of GraphQL, not a parser and not a proof: a
+    document it cannot read as a mutation is sent. Its cases are the ones in
+    `tests/test_linear_read_only.py`.
+    """
+    depth = parens = 0
+    at_definition = True
+    in_mutation = expect_field = False
+    i, n = 0, len(document)
+    while i < n:
+        c = document[i]
+        if c == "#":
+            end = _GRAPHQL_LINE_END.search(document, i)
+            i = n if end is None else end.end()
+            continue
+        if c == '"':
+            if document.startswith('"""', i):
+                j = i + 3
+                while True:
+                    end = document.find('"""', j)
+                    if end < 0:
+                        i = n
+                        break
+                    if document[end - 1] != "\\":
+                        i = end + 3
+                        break
+                    j = end + 3
+                continue
+            j = i + 1
+            while j < n and document[j] not in '"\r\n':
+                escaped = document[j] == "\\" and document[j + 1:j + 2] not in ("\r", "\n")
+                j += 2 if escaped else 1
+            i = j + 1
+            continue
+        if c == "(":
+            parens += 1
+        elif c == ")":
+            parens = max(parens - 1, 0)
+        elif parens:
+            pass  # argument values: an object literal's braces are not a selection
+        elif c == "{":
+            if depth == 0:
+                expect_field = in_mutation
+                at_definition = False
+            depth += 1
+        elif c == "}":
+            depth = max(depth - 1, 0)
+            if depth == 0:
+                at_definition = True
+                in_mutation = expect_field = False
+        else:
+            word = _GRAPHQL_NAME.match(document, i)
+            if word:
+                name = word.group()
+                i = word.end()
+                if depth == 0 and at_definition:
+                    at_definition = False
+                    in_mutation = name == "mutation"
+                elif depth == 1 and expect_field:
+                    rest = document[i:].lstrip(" \t\r\n,﻿")
+                    if not rest.startswith(":"):
+                        return name  # an alias is followed by `:`; the field is next
+                continue
+        i += 1
+    return "" if in_mutation else None
+
+
+def _refuse_a_write_when_read_only(query: str) -> None:
+    """Refuse a write when `BUREAU_LINEAR_READ_ONLY` is exactly `1` (DRE-7285).
+
+    With the switch on, a document whose operation is a `mutation` raises
+    `LinearError` before `_send` is called: no request goes out and none is
+    counted against the run's budget. One stderr line opening
+    `linear-read-only: refused` names the mutation's first field. A query goes
+    out exactly as it does today, and with the variable unset, empty or any
+    other value nothing changes. `gql_paged` reaches this through `gql`.
+
+    WHAT THIS DOES NOT GUARD, stated plainly: it guards requests sent through
+    `gql()` and nothing else — `linear_ops.py` and `spoken_thread.py`, the
+    Linear commands the proof brief gives an agent. A step that holds
+    `LINEAR_API_KEY` and can run a shell could send a write straight to
+    Linear's API with the same key, with `curl` or any other HTTP client, and
+    this check does not see that request at all. Linear offers no read-only
+    key scope, so the key stays in the step for its reads; the shadow's
+    instructions (DRE-7286) and the proof card's read of every shadowed
+    card's comments (DRE-7293) cover what this cannot.
+    """
+    if os.environ.get(READ_ONLY_ENV) != "1":
+        return
+    field = _mutation_field(query)
+    if field is None:
+        return
+    field = field or "?"
+    print(
+        f"linear-read-only: refused {field} — {READ_ONLY_ENV}=1, so this "
+        "process sends no Linear write; nothing was sent",
+        file=sys.stderr,
+    )
+    raise LinearError(
+        f"linear-read-only: {field} is a write and {READ_ONLY_ENV}=1 — not sent"
+    )
+
+
+def gql(query: str, variables: dict | None = None, *, landed=None) -> dict:
+    # `landed` is a create's look (DRE-6839): see `_send`. A read or an update
+    # passes none, and goes exactly as it always has.
+    #
+    # The read-only switch comes first (DRE-7285): a refused write is never
+    # sent, never counted, and never spends a fallback or a retry.
+    _refuse_a_write_when_read_only(query)
     # Stop at the first RATELIMITED (DRE-3202): a rate-limited process asks
     # nothing more. Every further request would spend the quota that proves
     # there is none left, against a window that is the whole fleet's.
@@ -1028,13 +1169,13 @@ def gql(query: str, variables: dict | None = None) -> dict:
     _skip_a_known_dead_token()
     payload = json.dumps({"query": query, "variables": variables or {}}).encode()
     try:
-        out = _send(payload)
+        out = _send(payload, landed)
     except _KeyRefused as refused:
         # A dead planner token (DRE-5589): `||` in plan.yml falls back only on
         # an EMPTY secret, and the console never un-publishes a token it could
         # not keep alive. This one request goes again on the fleet key, once.
         _fall_back(refused.why)
-        out = _send(payload)
+        out = _send(payload, landed)
     if out.get("errors"):
         errors = json.dumps(out["errors"])
         condition = rate_limit_condition(errors)
@@ -1068,11 +1209,71 @@ def gql(query: str, variables: dict | None = None) -> dict:
     return out["data"]
 
 
-def _send(payload: bytes) -> dict:
+#: The creates that keep the blind retry (DRE-6839): sent a second time on a
+#: transient fault with no look first. Every other `…Create` mutation in
+#: `scripts/*.py` is sent with `landed`, and
+#: `tests/test_linear_ops_create_once.py` fails on one that is neither — so the
+#: next creating call cannot be added without choosing.
+BLIND_RETRY_CREATES = {
+    "issueLabelCreate": "a team label is looked up by name before it is made, "
+                        "and what a second create of one name does was not tested",
+    "issueRelationCreate": "a relation joins two cards that already exist, and "
+                           "what Linear does with a repeated pair was not tested",
+    "releaseNoteCreate": "the train reads the release's notes and updates one that "
+                         "exists, and a repeated note was not tested",
+}
+
+
+def _look_before_resending(landed):
+    """What the first attempt of a create made, asked of its `landed` look,
+    or None when there is no look or it found nothing. A look that raises is
+    raised: nothing can tell then whether the first attempt landed."""
+    if landed is None:
+        return None
+    found = landed()
+    if found is None:
+        print("create: the first attempt made nothing; sent again", file=sys.stderr)
+        return None
+    print(f"create: the first attempt landed as {_landed_as(found)}; not sent again",
+          file=sys.stderr)
+    return found
+
+
+def _landed_as(found: dict) -> str:
+    """The thing a look found, named for the stderr line: the card's
+    identifier, else the node's id, else the mutation and when it was made."""
+    for field, answer in found.items():
+        for node in (answer or {}).values():
+            if isinstance(node, dict):
+                name = node.get("identifier") or node.get("id")
+                return name or f"{field} at {node.get('createdAt') or '?'}"
+        return field
+    return "?"
+
+
+def _send(payload: bytes, landed=None) -> dict:
     """One request through the one-shot transient retry (DRE-3087), answered
     as parsed JSON. Raises `_KeyRefused` when the key itself was refused and
     there is a different key to fall back to; every other failure raises
-    exactly as it always has."""
+    exactly as it always has.
+
+    A CREATE IS NEVER SENT TWICE BLIND (DRE-6839). This seam is handed bytes
+    and cannot tell a read from a create, and a read sent twice is harmless
+    while a create sent twice makes a second thing: on 2026-10-10 one
+    `oneoff` made DRE-6795 and DRE-6796. A bare `TimeoutError` is a fault
+    while waiting for the answer, so the request had been sent in full and
+    Linear had taken it. So a create passes `landed`: a function of no
+    arguments that answers what the first attempt made, in the shape of the
+    mutation's own answer, or None. After a transient fault — the same line,
+    the same backoff — it is asked before anything is sent again. Something
+    found is this call's answer and nothing more is sent; None sends the
+    create once more, as before; a look that raises is raised.
+
+    WHAT THE LOOK CANNOT SEE, stated plainly: if Linear is still making the
+    card when the look runs — its answer was slow, not lost — the look finds
+    nothing, the create is sent again, and there are two. The look turns
+    "always two" into "two only then". Closing that needs Linear to refuse the
+    second request itself, and nothing here relies on that."""
     for attempt in range(_MAX_ATTEMPTS):
         # A fresh Request per attempt: a retry re-sends the call, it does not
         # re-drive an object urllib has already handled.
@@ -1097,6 +1298,9 @@ def _send(payload: bytes) -> dict:
             if attempt + 1 < _MAX_ATTEMPTS and is_transient(exc):
                 _note_transient(exc)
                 time.sleep(RETRY_BACKOFF_SECONDS)
+                found = _look_before_resending(landed)
+                if found is not None:
+                    return {"data": found}
                 continue
             # CAPTURE THE BODY, NOT THE STATUS (DRE-2923). urllib's own message
             # is `HTTP Error 400: Bad Request` — no endpoint, no reason, and a
@@ -1116,6 +1320,9 @@ def _send(payload: bytes) -> dict:
             if attempt + 1 < _MAX_ATTEMPTS and is_transient(exc):
                 _note_transient(exc)
                 time.sleep(RETRY_BACKOFF_SECONDS)
+                found = _look_before_resending(landed)
+                if found is not None:
+                    return {"data": found}
                 continue
             raise
     if out.get("errors") and _fallback_key() and is_auth_refusal(
@@ -1133,7 +1340,7 @@ def gql_paged(
     Linear serves at most 100 nodes per page and says so ONLY in `pageInfo` — a
     query that never selects it gets the first page and no way to know another
     exists. That is silent by construction, and it is what made the reconcile
-    sweep's world the first 100 rows of a 226-card Backlog: 126 cards were not
+    sweep's world the first 100 rows of a 226-card queue: 126 cards were not
     promotion candidates, not by policy, not reported anywhere, and WHICH 126
     was decided by Linear's default ordering (DRE-2681).
 
@@ -1240,17 +1447,20 @@ def state_id(team_id: str, name: str) -> str:
 # day the workspace is renamed the exact match wins and this goes quiet on its
 # own — which is when the alias gets deleted, in one place, for both readers.
 #
-# That one place is `lane_scope.LANE_ALIASES`, which already records the same
-# pending rename for the guard's lane contract (DRE-2754). It maps board name →
-# contract name because it normalizes what it READS; this is the same fact in
-# the direction we WRITE, so it is inverted rather than restated — one literal,
-# one deletion when the board catches up.
+# That one place is the contract's alias list, `lane_contract.aliases()`, which
+# the guard reads too (`lane_scope.LANE_ALIASES`, DRE-2754). It maps board name →
+# contract name because a reader normalizes what it READS; this is the same fact
+# in the direction we WRITE, so it is inverted rather than restated — one entry,
+# one deletion when the board catches up. The queue's own rename is one of them
+# (DRE-4125): a write of `Queued` to a board that does not carry it yet lands in
+# the lane it replaces, and says so (DRE-6744).
 #
 # Narrow on purpose: only a lane the repo has actually renamed gets a fallback.
 # A lane that was never renamed (Triage) must keep failing loud, because there a
 # missing state is a real misconfiguration and a fallback would hide it.
 _LANE_RENAME_FALLBACKS = {
-    new.lower(): (old,) for old, new in lane_scope.LANE_ALIASES.items()
+    new.lower(): tuple(old for old, to in lane_contract.aliases().items() if to == new)
+    for new in lane_contract.aliases().values()
 }
 
 
@@ -1424,9 +1634,31 @@ def state_id_and_type(team_id: str | None, name: str, *,
 _TERMINAL_TYPES = ("completed", "canceled")
 
 # The hold label a DELIBERATE human-hold stamps on a card before parking it in
-# Backlog (DRE-1403). Its presence is the native "a human owns this now" signal
-# that exempts a Backlog park from the building-card reroute below.
+# the queue lane (DRE-1403). Its presence is the native "a human owns this now"
+# signal that exempts a queue-lane park from the building-card reroute below.
 _HOLD_LABEL = dead_run.HOLD_LABEL  # "needs-human"
+
+
+def _parks_in_the_queue(state_name: str, target_type: str) -> bool:
+    """Whether a move to `state_name` parks a card where nothing re-dispatches
+    it — the move the building-card reroute (DRE-1885) catches.
+
+    Linear's `backlog` bucket, as it always was, OR the queue lane under either
+    of its names (DRE-6744): the reroute reads the queue by membership in
+    `QUEUE_LANES`, so a building card asked for `Queued` is caught whatever
+    bucket the board files that lane in."""
+    queue = {name.lower() for name in QUEUE_LANES}
+    return target_type == "backlog" or state_name.strip().lower() in queue
+
+
+def _rerouted_receipt(identifier: str, current_name, state_name: str) -> str:
+    return (
+        f"{identifier} is {current_name!r} (building) — re-queued to 'Todo' "
+        f"instead of {state_name!r}; an actively-building card is never parked "
+        f"in {' or '.join(QUEUE_LANES)} (inert, nothing re-promotes it), only "
+        f"re-dispatched via Todo. Pass --park (or stamp 'needs-human') for a "
+        f"deliberate hold."
+    )
 
 
 def _label_names(issue: dict) -> list[str]:
@@ -1722,8 +1954,8 @@ def cmd_state(
     first read; see `_held_state_move`.
     """
     # `--park` (passed by the DELIBERATE park callers: the agent-task blocker
-    # branch + both dead-run/hung HOLD-cap paths) opts a Backlog move out of the
-    # building-card reroute below. Everything else is treated as an ordinary
+    # branch + both dead-run/hung HOLD-cap paths) opts a queue-lane move out of
+    # the building-card reroute below. Everything else is treated as an ordinary
     # transition that must NOT be allowed to strand a building card.
     deliberate_park = "--park" in flags
     expect = tuple(expect) if expect is not None else None
@@ -1776,17 +2008,19 @@ def cmd_state(
     # building card rather than the finished one.
     #
     # If a building card genuinely must be re-queued, send it to Todo (which
-    # re-dispatches via the cascade), NEVER Backlog (inert — nothing picks it up).
-    # Two exemptions keep the LEGITIMATE Backlog parks working:
+    # re-dispatches via the cascade), NEVER the queue lane (inert — nothing picks
+    # it up), under either of its names: `Queued`, or the lane it replaces
+    # (`QUEUE_LANES`, DRE-6744). Two exemptions keep the LEGITIMATE queue-lane
+    # parks working:
     #   * `--park` — a deliberate hold caller (the blocker branch, whose Todo
     #     would redispatch agents into the same wall — DRE-1286; and the HOLD-cap
     #     after REQUEUE_CAP dead runs — DRE-1403/1572), and
     #   * the card already carries the `needs-human` hold label (a human owns it).
-    # A not-started card (backlog/unstarted/triage) dropped to Backlog — an
-    # explicit operator/CEO park, or a card that never started — is untouched.
+    # A not-started card (backlog/unstarted/triage) dropped to the queue lane —
+    # an explicit operator/CEO park, or a card that never started — is untouched.
     if (
         current_type == "started"
-        and target_type == "backlog"
+        and _parks_in_the_queue(state_name, target_type)
         and not deliberate_park
         and _HOLD_LABEL not in [n.lower() for n in _label_names(issue)]
     ):
@@ -1797,12 +2031,7 @@ def cmd_state(
         if not guarded_state_write(identifier, issue, todo_id, todo_type, "Todo",
                                    expect=expect, labels_absent=labels_absent):
             return False
-        print(
-            f"{identifier} is {current_name!r} (building) — re-queued to 'Todo' "
-            f"instead of {state_name!r}; an actively-building card is never parked "
-            f"in Backlog (inert, nothing re-promotes it), only re-dispatched via "
-            f"Todo. Pass --park (or stamp 'needs-human') for a deliberate hold."
-        )
+        print(_rerouted_receipt(identifier, current_name, state_name))
         return True
     if guarded_state_write(identifier, issue, target_id, target_type, state_name,
                            expect=expect, labels_absent=labels_absent):
@@ -1841,7 +2070,7 @@ def _held_state_move(
     """
     target_id, target_type = target
     todo = None
-    if target_type == "backlog" and not deliberate_park:
+    if _parks_in_the_queue(state_name, target_type) and not deliberate_park:
         todo = state_id_and_type(None, "Todo", team_key=_team_key(identifier))
     # (1) THE pre-write re-read (DRE-2316): LIVE, never a memo, and the only
     # read of the card this move makes.
@@ -1853,17 +2082,12 @@ def _held_state_move(
         and _HOLD_LABEL not in [n.lower() for n in _label_names(fresh)]
     ):
         # DRE-1885, decided on the live card: a building card is re-queued to
-        # Todo, never parked in Backlog where nothing re-promotes it.
+        # Todo, never parked in the queue lane where nothing re-promotes it.
         if not guarded_state_write(identifier, fresh, todo[0], todo[1], "Todo",
                                    expect=expect, labels_absent=labels_absent,
                                    pre_read=fresh):
             return False
-        print(
-            f"{identifier} is {current.get('name')!r} (building) — re-queued to 'Todo' "
-            f"instead of {state_name!r}; an actively-building card is never parked "
-            f"in Backlog (inert, nothing re-promotes it), only re-dispatched via "
-            f"Todo. Pass --park (or stamp 'needs-human') for a deliberate hold."
-        )
+        print(_rerouted_receipt(identifier, current.get("name"), state_name))
         return True
     if guarded_state_write(identifier, fresh, target_id, target_type, state_name,
                            expect=expect, labels_absent=labels_absent, pre_read=fresh):
@@ -2018,6 +2242,7 @@ def cmd_comment(identifier: str, body: str, *flags: str) -> str | None:
             """mutation($input: CommentCreateInput!) {
                  commentCreate(input: $input) { success } }""",
             {"input": {"issueId": issue["id"], "body": body}},
+            landed=_comment_look(identifier, body, datetime.now(UTC)),
         )
     except CommentCapReached:
         # Named on stderr, for the same reason the budget line is: some of this
@@ -2030,6 +2255,32 @@ def cmd_comment(identifier: str, body: str, *flags: str) -> str | None:
     _pass["threads"].pop(identifier, None)
     print(f"commented on {identifier}")
     return None
+
+
+def _comment_look(identifier: str, body: str, began: datetime):
+    """The `landed` look for a `commentCreate` begun at `began` (DRE-6839).
+
+    Some receipts are COUNTED — two `turn-exhaustion-requeue` tags park a card
+    for a person — so a doubled comment moves a count. A caller's own marker
+    check runs before the first attempt and cannot see what that attempt
+    made; this reads the thread after it, through the reader every other
+    thread read uses, for a comment by this key with exactly this body made at
+    or after `began` less `_READ_BACK_SKEW`."""
+    since = began - _READ_BACK_SKEW
+
+    def landed() -> dict | None:
+        # A pass's cached thread predates the first attempt.
+        _pass["threads"].pop(identifier, None)
+        nodes, me = _thread_and_viewer(identifier, "body", "createdAt", "user")
+        for node in reversed(nodes):
+            at = _history_at(node)
+            if (me and (node.get("user") or {}).get("id") == me
+                    and node.get("body") == body and at is not None and at >= since):
+                return {"commentCreate": {"success": True,
+                                          "comment": {"createdAt": node.get("createdAt")}}}
+        return None
+
+    return landed
 
 
 def cmd_actor(identifier: str, role: str) -> None:
@@ -2067,6 +2318,12 @@ def cmd_actor(identifier: str, role: str) -> None:
 # console, so it may not be reworded without the console moving first
 # (docs/pipeline-acts.md: console-first).
 PROOF_WAITING_TAG = "proof-waiting"
+
+# The one clause a hold's `needs` half carries when it waits for a time and
+# nothing else (DRE-7228): `proof-waiting-until` writes it, and
+# `proof_record.time_only` reads it — so the proof dispatcher lifts the hold
+# itself once the time passes. Spelled here only.
+NOT_BEFORE = "not-before="
 
 # Deliberately not a `*_TAG` constant: it is not an act and the registry does
 # not declare it, and `pipeline_act.problems()` reads every `*_TAG = "…"` in an
@@ -2135,6 +2392,48 @@ def cmd_proof_waiting(identifier: str, observed: str, needs: str) -> None:
         "proof-observation-pending", proof_waiting_line(observed, needs)
     )
     cmd_comment(identifier, body)
+
+
+def cmd_proof_waiting_until(identifier: str, observed: str, when: str) -> None:
+    """Hold a card on an observation that waits only for a time (DRE-7228).
+
+    The ordinary hold, through `cmd_proof_waiting`, with its `needs` half
+    written here and never by the caller: exactly `not-before=<when>`. That
+    is the one shape `proof_record.time_only` reads, so the proof dispatcher
+    lifts the hold itself once `when` has passed. `when` is an ISO 8601 time
+    with a UTC offset; anything else, or an observed half naming the CEO's
+    press, is refused and nothing is posted."""
+    import proof_record  # the reader; it imports this module, so not at the top
+
+    when = (when or "").strip()
+    try:
+        moment = datetime.fromisoformat(when)
+    except ValueError:
+        raise LinearError(
+            f"proof-waiting-until: {when!r} does not parse as an ISO 8601 time "
+            "— write it as 2026-10-12T14:33-07:00."
+        ) from None
+    if moment.tzinfo is None:
+        raise LinearError(
+            f"proof-waiting-until: {when!r} carries no UTC offset, so nothing "
+            "can say when it passes — write it as 2026-10-12T14:33-07:00."
+        )
+    refusal = proof_text_refusal(observed, "what is still to be observed")
+    if refusal:
+        raise LinearError(refusal)
+    if proof_record.CEO_PRESS in observed:
+        raise LinearError(
+            f"proof-waiting-until: what is still to be observed names "
+            f"{proof_record.CEO_PRESS!r}, which only his signed answer "
+            "discharges — a time never lifts it. Use proof-waiting."
+        )
+    needs = f"{NOT_BEFORE}{when}"
+    if proof_record.time_only(proof_waiting_line(observed, needs)) is None:
+        raise LinearError(
+            "proof-waiting-until: the hold would not read back as one that "
+            "waits only for a time — say what is still to be observed on one line."
+        )
+    cmd_proof_waiting(identifier, observed, needs)
 
 
 def cmd_proof_observed(identifier: str, text: str) -> None:
@@ -3047,6 +3346,52 @@ def _reject_unless_creatable(kind: str, title: str, description: str,
         )
 
 
+_CARD_LOOK_QUERY = """query($title: String!, $since: DateTimeOrDuration!) {
+     viewer { id }
+     issues(filter: {title: {eq: $title}, createdAt: {gte: $since}}, first: 10) {
+       nodes { id identifier url title createdAt creator { id } parent { id } } } }"""
+
+
+def _card_look(title: str, began: datetime, parent_id: str | None = None):
+    """The `landed` look for an `issueCreate` begun at `began` (DRE-6839).
+
+    One query: the cards with exactly this title made by this key's own
+    identity at or after `began` less `_READ_BACK_SKEW` — and, for a child,
+    under the same parent. One found is what the first attempt made, answered
+    as `issueCreate` answers. More than one is refused naming them: which of
+    them is ours is a guess, and adopting a guess hangs the blockers and the
+    hold on somebody else's card."""
+    since = began - _READ_BACK_SKEW
+
+    def landed() -> dict | None:
+        data = gql(_CARD_LOOK_QUERY, {"title": title, "since": since.isoformat()})
+        me = (data.get("viewer") or {}).get("id")
+        mine = []
+        for node in ((data.get("issues") or {}).get("nodes")) or []:
+            at = _history_at(node)
+            if (node.get("title") != title or not me
+                    or (node.get("creator") or {}).get("id") != me
+                    or at is None or at < since):
+                continue
+            if parent_id is not None and (node.get("parent") or {}).get("id") != parent_id:
+                continue
+            mine.append(node)
+        if len(mine) > 1:
+            raise LinearError(
+                f"create: the first attempt of {title!r} lost its answer, and "
+                f"{len(mine)} cards with that title were made since — "
+                f"{', '.join(n.get('identifier') or '?' for n in mine)}. Adopting "
+                "none and sending nothing more: a person decides which one stays."
+            )
+        if not mine:
+            return None
+        node = mine[0]
+        return {"issueCreate": {"success": True, "issue": {
+            "id": node["id"], "identifier": node["identifier"], "url": node["url"]}}}
+
+    return landed
+
+
 def _create_card(team_id: str, title: str, description: str, labels: list[str],
                  blockers: list[str], *, parent_id: str | None = None,
                  lane: str = "Planning") -> None:
@@ -3056,7 +3401,7 @@ def _create_card(team_id: str, title: str, description: str, labels: list[str],
 
     `lane` defaults to Planning, the lane Planning owns (DRE-2858): a card this
     seam mints has not been classified, has no shape stamp and carries no
-    routing verdict, so landing it in Backlog puts unproven work in the lane the
+    routing verdict, so landing it in Queued puts unproven work in the lane the
     rest of the system reads as ready. The ONE caller that passes something else
     is `cmd_subissue` — see the note there.
 
@@ -3080,10 +3425,14 @@ def _create_card(team_id: str, title: str, description: str, labels: list[str],
     }
     if parent_id is not None:
         card_input["parentId"] = parent_id
+    # The card a lost answer made is adopted, not made twice (DRE-6839): the
+    # blockers, the operator hold and the receipt below all name it.
+    began = datetime.now(UTC)
     data = gql(
         """mutation($input: IssueCreateInput!) {
              issueCreate(input: $input) { success issue { id identifier url } } }""",
         {"input": card_input},
+        landed=_card_look(title, began, parent_id),
     )
     issue = data["issueCreate"]["issue"]
     rel = _add_blocked_by(issue["id"], blockers) if blockers else []
@@ -3099,7 +3448,7 @@ def _file_operator_hold(issue: dict, labels) -> None:
 
     The planner files an operator step as `needs-human` + `no-code`
     (`briefs/planner.md`). The labels alone are a hold with no stamp, which
-    reads `manual`, and nothing lifts a `manual` hold — the card sat in Backlog
+    reads `manual`, and nothing lifts a `manual` hold — the card sat in the queue
     forever (DRE-6408). So a card carrying the pair is marked `operator-step`
     and its hold stamped `operator-step`: the sweep lifts it once every blocker
     is terminal and carries the card to Hand-work (DRE-6426, DRE-6427).
@@ -3197,26 +3546,32 @@ def cmd_subissue(parent_identifier: str, title: str, description_file: str, *fla
         blockers,
     )
 
-    # 5 — CREATE, under the epic, in Backlog. The children sit there while the
-    # epic is still pre-approval, and the guard leaves them alone until the epic
-    # passes Planning exit (DRE-2754 — see scripts/lane_scope.py).
+    # 5 — CREATE, under the epic, in the queue lane, `Queued`. The children sit
+    # there while the epic is still pre-approval, and the guard leaves them alone
+    # until the epic passes Planning exit (DRE-2754 — see scripts/lane_scope.py).
     #
-    # THE ONE ROUTE THROUGH `_create_card` THAT STAYS IN BACKLOG, and it is not
-    # an oversight (DRE-2858). A child's approval is its epic's — the CEO moved
-    # that epic, and that decision covers everything under it (DRE-1893) — so a
-    # child owes no classification of its own and never passes through Planning
-    # separately. It is also the lane the sweep looks in: `reconcile.
-    # promote_ready` reads `backlog_children()`, whose query is
-    # `state: {name: {eq: "Backlog"}}`, and a child carrying no routing verdict
-    # promotes exactly as before. Children created anywhere else are children
-    # nothing ever promotes.
+    # THE ONE ROUTE THROUGH `_create_card` THAT LANDS IN `Queued` AND NOT IN
+    # PLANNING, the deliberate exception to the Planning default (DRE-2858). A
+    # child's approval is its epic's — the CEO moved that epic, and that decision
+    # covers everything under it (DRE-1893) — so a child owes no classification
+    # of its own and never passes through Planning separately. It is also the
+    # lane the sweep looks in: `reconcile.promote_ready` reads an epic's children
+    # in the queue lane, and a child carrying no routing verdict promotes exactly
+    # as before. Children created anywhere else are children nothing ever
+    # promotes.
+    #
+    # The name is `lane_contract.QUEUE_LANE`, never a literal (DRE-6744): the
+    # planning exit's destination, which is the lane `Queued` replaces until
+    # DRE-6742 moves the exit, and the sweep reads children through
+    # `QUEUE_LANES` (DRE-6743) — so the lane written here and the lanes read
+    # there agree under either exit, by construction.
     #
     # RETURNED, not just printed: the mid-epic route needs the identifier it
     # just created so it can record the growth on the epic in the same motion
     # (DRE-2739, consumed at mid_epic.py:483). The CLI path ignores the value,
     # so behaviour there is unchanged.
     issue = _create_card(parent["team"]["id"], title, description, child_labels,
-                         blockers, parent_id=parent["id"], lane="Backlog")
+                         blockers, parent_id=parent["id"], lane=QUEUE_LANE)
     # 6 — AN OPERATOR STEP IS FILED HELD, under a reason the sweep lifts
     # (DRE-6428).
     _file_operator_hold(issue, child_labels)
@@ -3236,10 +3591,11 @@ def cmd_oneoff(title: str, description_file: str, *flags) -> dict:
 
     Same body path-guard, same validate_card gate and same **Blocked by:** →
     relation handling as a planned child (DRE-2754). It lands in Planning, not
-    Backlog (DRE-2858): a card minted here has been through nobody's Planning
+    Queued (DRE-2858): a card minted here has been through nobody's Planning
     run — it carries no shape stamp and no routing verdict, and the sweep
-    refuses a parentless card without one anyway, so Backlog was a lane it could
-    only sit in. Planning is where the classification it is missing is made.
+    refuses a parentless card without one anyway, so the queue was a lane it
+    could only sit in. Planning is where the classification it is missing is
+    made.
     """
     description = _card_body(description_file)
     labels, cli_blockers = _parse_flags(flags)
@@ -3407,7 +3763,7 @@ def cmd_create(title: str, description_file: str, *flags: str) -> None:
 
 
 #: The lane `create` lands a card in unless the caller names another one.
-#: Planning, not Backlog or Triage — see `cmd_create` for why (DRE-2858). A
+#: Planning, not Queued or Triage — see `cmd_create` for why (DRE-2858). A
 #: NAMED value because readers depend on it: the medic's duplicate search
 #: (`find_open`, by title and open-ness since Stage 2 fix #23) must see the
 #: lane this seam writes, and `tests/test_workflow_prompt_lanes.py` binds the
@@ -3451,6 +3807,9 @@ def create_card(title: str, description: str, *, repo_slug: str,
     # place) would otherwise print `repo:<slug>` twice in a receipt whose write
     # carried it once.
     names = list(dict.fromkeys([f"repo:{slug}", *labels]))
+    # A `find_open` before this call cannot see the card a lost answer is
+    # about to make; the look can (DRE-6839).
+    began = datetime.now(UTC)
     data = gql(
         """mutation($input: IssueCreateInput!) {
              issueCreate(input: $input) { success issue { id identifier url } } }""",
@@ -3463,6 +3822,7 @@ def create_card(title: str, description: str, *, repo_slug: str,
                 "labelIds": _team_label_ids(team_id, names),
             }
         },
+        landed=_card_look(title, began),
     )
     issue = data["issueCreate"]["issue"]
     print(f"created {issue['identifier']} {issue['url']} "
@@ -3553,6 +3913,47 @@ def find_open_prefix(prefix: str) -> dict | None:
     if not nodes:
         return None
     return {**nodes[0], "duplicates": nodes[1:]}
+
+
+def repo_cards_by_title_prefix(prefix: str, *, repo_slug: str,
+                               since: datetime) -> list[dict]:
+    """Every DRE card carrying `repo:<repo_slug>` whose title STARTS WITH
+    `prefix` and that was created at or after `since`, in ANY state.
+
+    `[{"identifier", "description", "state", "createdAt"}]`, `state` as its
+    name. The repair sweep's memory of earlier failures (DRE-6870): a repair
+    card lists the tests that failed, and a Canceled one is a failure main
+    passed on its own — so every state on purpose, unlike `find_open_prefix`.
+
+    Paged to exhaustion through `gql_paged`: measured 2026-10-06 to 10-10,
+    the two busiest repos had 27 red mains between them in five days, so two
+    weeks of one repo's cards can outrun a single page. A page cut short
+    would drop the OLDER cards — exactly the earlier Canceled one this read
+    exists to find — and the sweep would miss the repeat with nothing saying
+    so.
+    """
+    nodes = gql_paged(
+        """query($prefix: String!, $label: String!, $since: DateTimeOrDuration!,
+                 $after: String) {
+             issues(first: 100, after: $after, filter: {
+               team: {key: {eq: "DRE"}},
+               title: {startsWith: $prefix},
+               labels: {name: {eqIgnoreCase: $label}},
+               createdAt: {gte: $since}
+             }) { nodes { identifier description createdAt state { name } }
+                  pageInfo { hasNextPage endCursor } } }""",
+        {"prefix": prefix, "label": f"repo:{repo_slug}",
+         "since": since.isoformat()},
+    )
+    return [
+        {
+            "identifier": node.get("identifier") or "",
+            "description": node.get("description") or "",
+            "state": (node.get("state") or {}).get("name") or "",
+            "createdAt": node.get("createdAt") or "",
+        }
+        for node in nodes
+    ]
 
 
 def find_by_pr_url(pr_url: str) -> str | None:
@@ -4256,7 +4657,7 @@ def cmd_unpark(identifier: str, note: str = "") -> None:
     exhausted history.
 
     Step 3 is a plain transition, never `--park` — `--park` exists only to opt a
-    deliberate Backlog HOLD out of the DRE-1885 building-card reroute, which is
+    deliberate Queued HOLD out of the DRE-1885 building-card reroute, which is
     the exact opposite of what this does.
 
     Idempotent enough to re-run: a card without the label just skips step 1, and
@@ -4499,6 +4900,7 @@ if __name__ == "__main__":
             "comment": cmd_comment,
             "actor": cmd_actor,
             "proof-waiting": cmd_proof_waiting,
+            "proof-waiting-until": cmd_proof_waiting_until,
             "proof-observed": cmd_proof_observed,
             "card-done": cmd_card_done,
             "set-description": set_description,

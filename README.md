@@ -70,7 +70,7 @@ a **plain-English question** as a Linear comment and parks the card in the
 `Green Light` lane — the CEO's "needs you" queue, the same lane epics wait in
 for plan approval (DRE-2776; an escalated card is waiting on a judgement, not
 broken, so it does not belong in the broken-card lane); the CEO answers and
-moves it back to `Todo` to proceed or to `Backlog` to drop it.
+moves it back to `Todo` to proceed or to `Queued` to drop it.
 The critic + tests remain the correctness backstop on every merge.
 
 There is **no propose-first hard stop**. An earlier design (a read-only
@@ -335,7 +335,9 @@ The one stub whose absence costs a finished build. When a run outlives its
 credential and the Push rescue step's own two fresh mints are BOTH refused, the
 work is uploaded as `rescue-<CARD>.patch` and the run's last step dispatches a
 follow-up that replays it with a credential of its own. The dispatch names a
-workflow file **in the product repo**, so that repo needs one:
+workflow file **in the product repo**, so that repo needs one. The file to
+install is agent-bureau's `scaffold/customer-repo/.github/workflows/deliver-rescue.yml`;
+the sample below shows it:
 
 ```yaml
 # .github/workflows/deliver-rescue.yml in the product repo
@@ -352,14 +354,17 @@ permissions:
   actions: read
 jobs:
   call:
-    uses: dreadnought-foundry/bureau-pipeline/.github/workflows/deliver-rescue.yml@main
+    uses: dreadnought-foundry/bureau-pipeline/.github/workflows/deliver-rescue.yml@stable
     with:
       run_id: ${{ inputs.run_id }}
       card: ${{ inputs.card }}
       artifact: ${{ inputs.artifact }}
       card_url: ${{ inputs.card_url }}
-      pipeline_ref: main
-    secrets: inherit
+      pipeline_ref: stable
+    secrets:
+      LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+      BUREAU_APP_ID: ${{ secrets.BUREAU_APP_ID }}
+      BUREAU_APP_PRIVATE_KEY: ${{ secrets.BUREAU_APP_PRIVATE_KEY }}
 ```
 
 **Two permissions carry this, and both live in a stub — neither is fixable
@@ -385,12 +390,25 @@ this is the one workflow whose failure leaves somebody's only copy of finished
 work undelivered, and it is safe to retry (it refuses to act when its branch
 already has a pull request).
 
-A repo without it **degrades, it does not break**: the dispatch 404s, the run
-says so on the card beside the `🚨 rescue-push-failed` line naming the artifact
-and the run id, and the reconcile sweep tries the dispatch once more before
-falling back to the requeue this card replaced. So the fleet loses the automatic
-delivery until its stub is updated — a human can still recover the work in two
-minutes from the card — and loses nothing else.
+A repo without it **degrades, it does not break**: the dispatch is refused, the
+run says so on the card beside the `🚨 rescue-push-failed` line naming the
+artifact and the run id, and the reconcile sweep tries the dispatch once more
+before falling back to the requeue this card replaced. So the fleet loses the
+automatic delivery until its stub is updated — a human can still recover the
+work in two minutes from the card — and loses nothing else.
+
+GitHub's answer to that dispatch depends on the token as much as on the file.
+Under a token with no Actions permission (the App token, or a job token whose
+calling stub does not grant `actions`) it is a 403 whether the stub is there or
+not; under one holding `actions: write` a missing stub is a 404. So the card now
+names the cause (DRE-7476): after any refused dispatch the run reads the
+workflow file through the contents API, with the token the dispatch itself was
+handed, and adds one `cause:` paragraph — `missing` (a 404: install the stub,
+and check the calling stub grants `actions: write`), `refused` (a 200: the stub
+is there, so the calling `agent-task.yml` or `agent-fix.yml` stub must grant
+`actions: write` and `GH_DISPATCH_TOKEN` must reach the step) or `unknown` (any
+other answer, which claims neither). That read needs `contents` on the job's
+token, which the `agent-task.yml` and `agent-fix.yml` templates above grant.
 
 What the product repo still carries:
 
@@ -432,9 +450,16 @@ The list is now **derived, never remembered**. `scripts/check_workflow_watchers.
 | a `push` trigger that reaches the default branch | must be watched by the **Red-Main Repair** caller | its failure means the branch itself is red |
 | can RUN on the default branch at all (`schedule`, `repository_dispatch`, `workflow_dispatch`, `workflow_run`, `issue_comment`) | must be watched by **some** `workflow_run` watcher | usually a crashed run — the medic's job — but "nobody" is never the answer |
 
-One declared exemption, with its reason in the code: nothing watches the medic,
-because a medic that watched itself rebuilds the 2026-06-28 crash-loop. Adding
-a workflow with no watcher fails CI instead of adding a silent failure surface.
+The exemptions are declared, each with its reason in the code. Nothing watches
+the medic, because a medic that watched itself rebuilds the 2026-06-28
+crash-loop. And `NOT_WATCHED` names the workflows left unwatched on purpose:
+Shadow Replay (DRE-7197), whose red run the operator reads from its report,
+where an automatic retry would spend another batch of reviewer runs, and the
+notice door's smoke (DRE-7451), which the operator dispatches and reads, and
+which files no card on any path — a medic watching it would retry it and file
+one.
+Adding any other workflow with no watcher fails CI instead of adding a silent
+failure surface.
 
 **And a PR now says when a red check is not its fault.** The other half of that
 day was that two fix agents and a human could not tell an inherited failure
@@ -480,7 +505,7 @@ from every discovered workflow in turn, rather than by asserting that it would.
 
 ## One WIP cap per repo (DRE-2529)
 
-A repo has ONE work-in-progress cap, and **three** workflows promote Backlog
+A repo has ONE work-in-progress cap, and **three** workflows promote Queued
 children through the dependency gate at it:
 
 | workflow | when it promotes |
@@ -509,7 +534,7 @@ Each pass the gate does run is **scoped to the merge** (DRE-3236): the
 workflow hands `reconcile.py` the merged card as `MERGED_CARD`, and the
 promotion pass evaluates only that card's own dependents while the epic-close
 pass evaluates only its own parent — one read of the card, one read of the
-dependents, never the whole Backlog or every active epic. Measured on a busy
+dependents, never the whole Queued lane or every active epic. Measured on a busy
 repo (260 Backlog cards, 5 active epics) one merge-sync fell from 285 Linear
 read requests to 11. The same card gave the sweep a per-pass read cache in
 `linear_ops.py`: the board reads carry every card's comments inline and every
@@ -553,7 +578,10 @@ paths, from four sources in order:
 
 The variable sits below the stub on purpose: setting it changes nothing while
 a project's stubs still pass a literal, and removing the literal from all
-three stubs hands the number to the variable. A non-empty value at any source
+three stubs hands the number to the variable. This repo's own three `self-`
+stubs pass none (DRE-6783), as atlas's and deltasolv's do, so its number is
+its `BUREAU_MAX_WIP` variable — the default 8 while that is unset. A
+non-empty value at any source
 that is not a whole number of 0 or more (`"lots"`, `"-1"`, `"12.0"`) is
 skipped to the next source with one `promotion: ignored <source> = <value>`
 line in the run log; an empty one is the normal "not set" and says nothing.
@@ -999,9 +1027,12 @@ runs `pytest` without going through the action.
 
 ### `tdd-commit-check` — the test-first commit order, fleet-wide (DRE-2694)
 
-`.github/actions/tdd-commit-check` runs `scripts/check_tdd_commits.py` — the
-DRE-2022 rule that a commit touching `tests/` must appear **strictly before**
-the first commit changing non-test code — from a product repo's own CI:
+`.github/actions/tdd-commit-check` runs `scripts/check_tdd_commits.py` from a
+product repo's own CI. The rule is the sentence the script prints (DRE-3009,
+raised from the DRE-2022 once-per-branch floor): *Every code commit needs a
+test commit since the previous code commit — for the first code commit, since
+the branch began. Any code commit after the first may instead carry an
+exemption from `config/tdd-exemptions.json`.*
 
 ```yaml
 # .github/workflows/ci.yml in a product repo
@@ -1027,6 +1058,27 @@ the detection in one place: portico #343 was **green and mergeable** with its
 test committed after its code, and deltasolv runs no such check either. "Green"
 across the fleet did not mean the order was right.
 
+**The exemptions are data, and a branch cannot grant itself one.** The list in
+`config/tdd-exemptions.json` has four entries. `deletion` is detected from the
+diff: every code path in the commit adds zero lines. `refactor`, `config`
+(configuration outside the ops paths, such as a `Dockerfile` or
+`pyproject.toml`) and `generated` (a whole generated file) are claimed with a
+git trailer, the last line of the commit message:
+
+```
+TDD-Exempt: refactor
+```
+
+An unknown id fails the commit, no exemption covers the first code commit,
+and the run prints every honored claim on its commit's line (`claimed:
+refactor`) for the critic to read against that entry's `critic_checks`. The
+action reads the copy fetched beside the script, at the caller's ref, which
+the pull request under check cannot edit. bureau-pipeline's own `tdd` job reads
+it at the merge base instead, and a branch whose merge base has no list is
+judged by the once-per-branch floor until it merges `main` in or rebases. A
+red run names the failing commit, the code commit before it and every trailer
+it could have claimed.
+
 **Name the job `TDD commit discipline`.** GitHub publishes the check run under
 the job name, and `scripts/unfixable_checks.py` matches on it (nested
 `<caller> / <job>` names match too). A differently named job still gates the
@@ -1034,11 +1086,12 @@ merge; it just loses the fix loop's first-attempt escalation below.
 
 **A red result has no automated path to green.** The finding is the ORDER of
 commits that already exist, and the fix loop can add commits but not reorder
-them. So `agent-fix.yml` consults the registry BEFORE it spends an attempt: it
-posts a hold naming the check and the remedy, parks the card in the CEO's
-"needs you" lane, and stops — on the first attempt, not the second. Clearing it
-is a human reordering the existing commits and force-pushing; the content does
-not change.
+them — a missing trailer, too, is cleared only by rewording a commit that
+already exists. So `agent-fix.yml` consults the registry BEFORE it spends an
+attempt: it posts a hold naming the check and the remedy, parks the card in the
+CEO's "needs you" lane, and stops — on the first attempt, not the second.
+Clearing it is a human reordering or rewording the existing commits and
+force-pushing; the content does not change.
 
 Adoption elsewhere needs a release tag containing this action (see "Which ref a
 repo may use") plus a one-job addition to each repo's own `ci.yml` — per-repo
@@ -1429,9 +1482,13 @@ and nobody knows.
 
 `nightly-watch.yml` runs **hourly in this repo, on a schedule of its own** — it
 must not depend on the repos it watches running anything — and raises one
-deduplicated Linear card through `linear_ops.py`, the shape
-`red-main-repair.yml` files its card in. The decision is
-`scripts/nightly_watch.py`.
+console alert per condition per owner through `scripts/pipeline_notice.py`
+(DRE-7456): `nightly_watch:<owner>:did_not_run` for a nightly that did not
+run, `nightly_watch:<owner>:cannot_read` for a repo it could not read, both at
+WARN. An hour that finds the condition gone resolves its key. When the
+console's door cannot take a raise, the client files the deduplicated Linear
+card the watcher filed before — its title, lane `Planning`, label
+`repo:bureau-pipeline`. The decision is `scripts/nightly_watch.py`.
 
 - **Who is watched is computed, never listed.** Every workflow, in every repo
   in `config/repo-map.json`, whose file on the default branch triggers on
@@ -1469,27 +1526,30 @@ deduplicated Linear card through `linear_ops.py`, the shape
 - **UNKNOWN never passes.** A repo the token cannot read, a workflow file that
   will not fetch, a run listing GitHub declines: each is reported unknown and
   alarms, never as "nightly ok" (`standards/console-honesty.md` rules 1-3). A
-  missing nightly takes the card title when both are true, because it is the
-  actionable one, but the unknown is still named in the body. A throttle is
+  missing nightly takes the alert when both are true, because it is the
+  actionable one, but the unknown is still named in the body. A key is
+  resolved only by an hour that read everything it needs to say the condition
+  is gone — a subject not read is never a condition cleared. A throttle is
   not an unknown (DRE-6461): a read GitHub refuses because the installation's
   hourly request budget is spent is listed as not read this hour, never as
   ran, and the watcher stops reading for the rest of that run. A throttle
-  alone files no card on the hour it is seen — it is said only on the daily
-  re-confirm hour, on the same card — while a missing nightly or any other
-  unreadable subject still alarms on any hour.
+  alone raises nothing on the hour it is seen — it is said only on the daily
+  re-confirm hour, as the `cannot_read` alert — while a missing nightly or any
+  other unreadable subject still alarms on any hour.
 - **One token per owner.** An App installation token is scoped to one
   installation and the roster spans three owners, so the watch job is a matrix
   over the roster's owners with a token minted per owner — the shape the
-  groomer's lookup legs use — and each owner gets its own card title, so three concurrent jobs
-  cannot race for one card.
-- **It holds no write anywhere**, and a test fails if one appears. A red run is
+  groomer's lookup legs use — and each owner gets its own keys and fallback
+  card titles, so three concurrent jobs cannot race for one alert or card.
+- **It holds no write on what it watches**, and a test fails if one appears.
+  The one thing it sends is its own alert, with the OIDC token the watch job's
+  `id-token: write` mints for the console's door. A red run is
   diagnosed by the medic (`Nightly Watch` is in its watch list). A run that
   never fires at all is not detected by anything in this repo — nothing polls
   for its absence — and that is stated here rather than papered over.
-- **Known limit.** The 2026-09-22 outside-read audit (DRE-4655..4665) found
-  production has no alert-delivery environment, so CRITICAL alarms do not
-  currently reach the CEO. This alarm reaches exactly as far as the card
-  mechanism it rides, and no further.
+- **Known limit.** A WARN alert stays on the console and is never emailed.
+  This alarm reaches exactly as far as the console's panel — or the fallback
+  card while the door is down — and no further.
 
 ## Layout
 

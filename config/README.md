@@ -4,9 +4,12 @@ Everything here exists for the same reason: the workflows that read these files
 run in a product repo's GitHub Actions with **no AWS credentials** and **no
 token for a private repo**, so anything they need must be a file in the public
 `bureau-pipeline` checkout they already do (`.bureau-pipeline` @ `main`). None
-of it is ever a runtime lookup.
+of it is ever a runtime lookup. The one exception is the model CHOICES, which
+since DRE-6939 live in a repository variable every run reads with a token it
+mints (see `models.yaml` below).
 
-- **`models.yaml`** — which model each agent runs on (see below).
+- **`models.yaml`** — the code-side facts of model selection; the choices live
+  in the home (see below).
 - **`model-prices.yaml`** — the declared price of each model id, in USD per
   million tokens (DRE-3895). An id absent from it has no price and cannot
   adopt itself.
@@ -34,6 +37,19 @@ of it is ever a runtime lookup.
 - **`repo-map.json`** — the relay's routing snapshot (see further below).
 - **`lane-contract.json`** — the board's lanes, their clauses and their
   permitted writers (DRE-2726). `docs/lane-contract.md` is rendered from it.
+- **`tdd-exemptions.json`** — the exemptions to the TDD commit rule
+  (DRE-3009): every code commit needs a test commit since the previous code
+  commit, and any code commit after the first may instead carry one of these.
+  Four entries, each exactly `id`, `match`, `reason` and `critic_checks`:
+  `deletion` (`match: deletion-only`, detected from the diff) and `refactor`,
+  `config`, `generated` (`match: trailer`, claimed with a `TDD-Exempt: <id>`
+  git trailer). Adding an entry is a data edit with no code change, and it is
+  its own reviewed pull request: bureau-pipeline's own `tdd` job reads the list
+  at the merge base, and every other caller reads the copy beside the script,
+  so a branch is never judged by a list it edited. Read only by
+  `scripts/check_tdd_commits.py`, which exits 2 on a file it cannot read or an
+  unknown `match`; `tests/test_tdd_commit_check.py` loads this copy on every
+  pull request so a break is caught where it is made.
 - **`epic-cap.json`** — the cap on epics in motion and the roll-up switch
   (DRE-5129, DRE-5134): `cap`, how many epics may be In Progress at once, and
   `count_rollup_parents`, whether a roll-up parent takes a slot. Set by the
@@ -193,6 +209,20 @@ of it is ever a runtime lookup.
   non-default class with no phrase, a phrase under two classes, a `default`
   that is not a class, and an `action` missing or not a `[a-z_]+` module name.
   `docs/blocker-classes.md` is the page a person reads.
+- **`notice-writers.json`** — every writer that files a Linear card
+  automatically (DRE-7452): a `_readme`, `found`, then `writers`, one row per
+  writer with `id`, `repo` (`bureau-pipeline` or `agent-bureau`), `file`,
+  `title` (the pattern it files), `disposition` and `reason`. `notice` is a
+  writer the pipeline-notices epic repoints to a console alert, carrying its
+  `notice_key` from that epic's contract; `kept` stays a card, and its `reason`
+  opens with `work`, `decision` or `record`. A row may name a `site` — the
+  function or workflow step that files its card — when its file holds other
+  writers too. `python3 scripts/notice_writers.py check` DISCOVERS every
+  card-creating file and fails, by name, on one no row declares for its repo;
+  it reads agent-bureau only when given `--agent-bureau-dir`, and this
+  repository's CI runs it without that flag (`tests/test_notice_writers.py`).
+  `report` reads each notice row as `repointed`, `still-files-cards` or
+  `unread`, and always exits 0.
 - **`proof-reach.json`** — what a dispatched proof run can read, declared once
   (DRE-6605). Four keys, in order: `github` (the proof workflow, its two mint
   steps, the `owner` they are scoped by with no `repositories`, the
@@ -351,11 +381,149 @@ of it is ever a runtime lookup.
 
 # `models.yaml` — the ONE model config (DRE-2316 / DRE-2317 / DRE-3015)
 
-`models.yaml` is **the only file a human edits to change which model an agent
-uses**. It declares named, ordered fallback **ladders** (best → worst), classes
+## The choices live in the home (DRE-6939)
+
+The CHOICES — which models a group runs on and in what order, which group an
+agent is in, a project's own model — live in **the home**, not in this file:
+the GitHub Actions repository variable **`BUREAU_MODEL_CHOICES`** on
+**`dreadnought-foundry/bureau-pipeline`**, one JSON document for the whole
+fleet, written by the console through the bureau App. Every selecting run reads
+it when it first asks which model to use (`scripts/model_home.py`, through
+`model_fallback.use_home`): the home first, **the defaults in the code**
+(`model_fallback.code_defaults()`, the generated literal) otherwise, and
+**never the choices written in this file**.
+
+Which of the two is in force is read off a run's `model-home:` line, never
+assumed. **`docs/model-choice-levers.md`** (DRE-7195) records the reading with
+the run lines that show it, when a change to this file reaches the fleet, and
+the one-step rollback each sibling of DRE-7184 pulls, and says which runs it
+could read. While a run reads `unreadable` or `not set`, the defaults in the
+code are in force and this file reaches it only through the literal rendered
+from it. Once a run reads `read`, a change
+written to the home is in force on the next run in each organization, with
+no pull request.
+
+Two environment names point a process at the home:
+**`BUREAU_MODEL_HOME_TOKEN`** (a bureau App installation token for this
+repository that can read its variables; the reader makes one GET with it) and
+**`BUREAU_MODEL_HOME_FILE`** (a path to a local copy, read instead of the API).
+A name counts as set when it is in the environment, even empty — an empty token
+is a mint that failed, and the reader's line says `the token mint was refused`
+and `the built-in defaults are in use`. With neither, nobody asked for a home: the run is on the
+defaults in the code, exactly as before the home.
+
+A run gets the token from its own job (DRE-6940). A run's boot token is
+minted for the calling repository only, so each job holding a step whose
+process reads the home carries a `Mint the model-home read token` step (id
+`model_home`, owner `dreadnought-foundry`, repository `bureau-pipeline`,
+`continue-on-error: true`, and no `permission-*` input), and hands
+`${{ steps.model_home.outputs.token }}` to those steps alone — never a job
+output or `$GITHUB_ENV`, so the agent steps beside them never hold it (and the
+harness hands it to its selector child, never to the agent it launches). A
+token lives an hour and a model step can pass it, so a reading step after a
+model step reads a re-mint placed after that step instead, id
+`model_home_<suffix>`, gated as the step is — plan.yml's capacity checks and
+critic selections do. Which
+steps read the home is declared in the scripts: a module-level
+`READS_MODEL_HOME` names the CLI commands whose process reads it, or `("*",)`
+for every one. `scripts/check_model_home_scope.py`, a step of Pipeline Tests,
+fails a reading step without the token and a script that reaches the home
+without the declaration.
+
+**Why the mint asks for no permission subset (DRE-7230).** The pinned
+`actions/create-github-app-token` (v3.2.0, and v3.3.0 after it) declares no
+input for repository variables. Handed the undeclared `permission-variables`,
+it warned, forwarded it anyway, and GitHub refused every mint, so every run
+read the home as unreadable. Each model-home mint — the reads, their
+re-mints, and the two write mints (`model_home_write`, in Model Home Carry
+and Model Adoption) — therefore asks for no subset, and its token carries
+every permission the bureau App's installation grants on `bureau-pipeline`,
+variables included. Two limits hold it: the token is scoped to that one
+repository, and it reaches only the steps that read (or, for a write token,
+write) the home, by the rule above. `scripts/check_model_home_scope.py` fails
+any model-home mint that asks for a subset without variables, or for another
+owner or repository, and `tests/test_app_token_inputs.py` fails any step that
+hands the action an input its pinned release does not declare, read from a
+copy of that release's inputs in
+`tests/fixtures/create-github-app-token-inputs.json`. The write mints keep no
+`continue-on-error`, so a refused write is red.
+
+Every read prints one line tagged `model-home:` to stderr, above the selection
+note, and the note ends with the home's clause:
+
+- ` · model-home: read` — the home's choices are in force. Entries this
+  release cannot judge (a model it holds no price for or holds `excluded` or
+  `retired`, an agent it does not know, a project slug not in `repo-map.json`)
+  are set aside and named on the tagged line; the rest is in force.
+- ` · model-home: unreadable (<reason>), running on the defaults in the code` —
+  and the note opens `DEGRADED`, so every selecting workflow raises its
+  `::warning::`. The reason is one safe line (`model_home.one_line`).
+- nothing, when neither name is set.
+
+`python3 scripts/model_home.py check <file>` holds a document to every rule
+(what each writer runs before it writes), and `render-defaults` prints the
+defaults in the code as a home document — what the operator seeds it with.
+
+What this file still carries is read for the **code-side facts** — `effort`,
+`review_separation`, `discovery`, `retired`, `excluded`, `session_agents`,
+`about` and `rules` — and, until DRE-6982, its old save route regenerates the
+literal from it on every merged save, so a save by that route stays in force
+through the defaults.
+
+**Carried into the home until part 2's switch (DRE-6986).** Once the home is
+seeded a run reads it and not this file, so a save by the old route would be
+in force nowhere. Until the console writes the home itself (part 2,
+DRE-6976), `.github/workflows/model-home-carry.yml` runs on every push to
+`main` that touches this file and carries a merged change to its choices into
+the home within minutes (`scripts/model_home_carry.py`): a group's new first
+model moves to the front of the home's ladder, the home's other rungs as they
+are; an agent's new group; an added group with its ladder; a project's model
+set or cleared. Nothing else is carried — a ladder changed below its first
+rung, a group removed, a whole choice key removed — and the run says so in one
+line and ends green. The write is held to `model_home.home_errors`, re-read
+just before it, and stamped `written_by: console` for a merge from the old
+route's `agent/model-config-` branch, `operator` otherwise. Before the seeding
+nothing is carried: the change is in the defaults in the code, which the
+seeding renders. A push whose queued run GitHub cancelled, or whose run was
+red, is carried by the next run: it compares from the last green run's head
+when that is older than the push's own `before`. Each run prints one line
+tagged `model-home-carry:`. It goes
+with the route it serves (DRE-6981).
+
+**The `rules` block (DRE-6992).** `reviewers_only` (today `[critic,
+verifier]`) and `planners_may_hold` (today `[planner]`): the agents that must stay Reviewers
+(rule 3) and the ones that may sit with the Planners (rule 10).
+`model_fallback` reads them into `BACKSTOP_ROLES` and `JUDGEMENT_ROLES` when
+it loads, and the console reads them to know what its page may offer. A
+file with no block, or a key that is not a non-empty list of names, reads
+today's values. It is a different key from the `rules` under
+`review_separation`. A reviewer added here must be bound by
+`review_separation.roles` too (rule 8).
+
+A marker naming a model the defaults do not — one the home names, say — still
+attributes when the model has a declared price: `model_fallback.attributable`
+answers for `last_attempt_model` and `last_error_model`, and reads
+`config/model-prices.yaml` only for an id outside `KNOWN_MODELS`. That set does
+not grow to every priced id, because the adoption reads it as the models
+already adopted (DRE-6992).
+
+## The file
+
+`models.yaml` was **the only file a human edited to change which model an agent
+uses**, until the home above. It declares named, ordered fallback **ladders** (best → worst), classes
 every agent as one of three **role kinds**, and lists the ids that stay *readable
 but not selectable* (retired ids, and ids excluded by cost policy or because
 the CEO has said we do not use them).
+
+A retired id is named by no ladder and by no `projects.<slug>.<kind>` entry —
+`policy_errors` refuses one that is (DRE-6785). **The daily adoption retires
+nothing** (DRE-6943): it writes the home and edits no file, because this file's
+ladders are still today's route's and still name the old id after the home has
+moved on, so an id appended under `retired:` would turn `policy_errors`, the
+generator's `--check` and the model tests red. The old id stays priced and
+unretired. When it has left every group and every project of the home, the
+adoption's record card says so in one sentence, and retiring it is a code
+change a person makes once part 3 has taken the choices out of this file.
 
 ## The role kinds — workhorse, advisory, judgement
 
@@ -368,9 +536,11 @@ the CEO has said we do not use them).
 The allocation used to be exactly inverted — the cheapest model judging the most
 expensive one's work — and the priciest model sat on the hot path where it could
 drain the account. Both halves are fixed by the split, and the second half is
-also the structural cost fix: **the strongest model is never on the build path,
-so it cannot be consumed at build volume.** That is what makes the planner's
-promotion affordable: it is a decision point, not a hot path.
+also the structural cost fix: **nothing automatic puts the strongest model on
+the build path, so it is never consumed at build volume by accident.** That is
+what makes the planner's promotion affordable: it is a decision point, not a
+hot path. Since 2026-10-10 a person may still choose it for the Builders (see
+*An explicit choice is admissible* below) — a spend decision made in the open.
 
 A role is assigned a **kind**, never a ladder name. That indirection is what
 stops a future edit from inventing a ladder of its own and quietly putting build
@@ -390,28 +560,22 @@ on `main` — never a probe flip. The probe decides how far *down* a ladder we
 walk, never how far up.
 
 What stands between an available model and the fleet, enforced by schema
-validation in `model_fallback.policy_errors()` rather than by convention:
+validation in `model_fallback.policy_errors()` rather than by convention — a
+config that breaks any of these is **refused**: `sync_model_config.py --check`
+fails CI red, and the selector keeps running the last-known-good ladders
+instead of honouring it:
 
-- the model at the **top of a non-build ladder** — the advisory one, the
-  judgement one — must not appear on any build ladder. A config that puts it
-  there is **refused**: `sync_model_config.py --check` fails CI red, and the
-  selector keeps running the last-known-good ladders instead of honouring it.
-  The rungs beneath the top are deliberately shared: that is the DEGRADED fall
-  onto the build model. **One exemption, for the advisory ladder only**
-  (DRE-3880) — see *The declared overlaps* below;
-- nothing **dearer than the rung a non-build ladder degrades onto** may sit
-  below that rung, where the check above cannot see it. The question is the
-  **declared price** in `model-prices.yaml`, so a rung with no declared price is
-  refused: a price is never guessed, and a rung that cannot be shown to be no
-  dearer fails closed. (This used to read "every rung below the fallback is a
-  workhorse model" — a proxy for the same thing, and it stopped working the
-  moment `claude-sonnet-4-6` left the build ladder and stayed the planner's last
-  resort.);
-- an `excluded` id must not appear on **any** ladder, enforced on its own terms
-  rather than as a side effect of the rule above;
+- every rung of every ladder, and every project exception, has a **declared
+  price** in `model-prices.yaml`. A price is never guessed, so an id with none
+  is refused in plain words: `<id> has no declared price, so it cannot be
+  chosen.`;
+- an `excluded` id must not appear on **any** ladder, enforced on its own terms:
+  the change that chooses an excluded model lifts it from `excluded` in the
+  same pull request;
+- an id under `retired` is named by no ladder and no project exception;
 - the critic and verifier must stay `advisory`;
 - only the planner may be `judgement` — **rule 10** (DRE-6633), see *The
-  console's keys* below;
+  console's keys* below; a session agent is exempt (DRE-6833);
 - `default_ladder` must be the workhorse ladder, so an unrecognized role lands on
   the cheap side of the fence;
 - `discovery.on_new_model` may be `advisory` or `none`, and `advisory` now
@@ -425,6 +589,49 @@ validation in `model_fallback.policy_errors()` rather than by convention:
   trialed, reviewed pull request, and never adds one. `discovery.alert` must
   be true.
 
+### An explicit choice is admissible (DRE-6785, CEO decision 2026-10-10)
+
+The CEO, 2026-10-10 17:54 PT, looking at the Planners' dropdown with five of
+seven models grayed out: *"It shouldn't gray out these models. I should be able
+to set it to anything I want. Fix this."* So a person's explicit choice of
+**any model with a declared price** is admissible for any group and for any
+project. That day relaxed three rules that used to sit in the list above: the
+top of the advisory or judgement ladder is no longer refused on a build ladder
+(Opus 5.5 may lead the Planners, Fable 5.1 the Builders); a dearer model may
+sit below a ladder's fallback; and a model on both the advisory and a build
+ladder needs no written rule (*The declared overlaps* below). What is left of
+them is the price. Nothing automatic changed: the probe still walks only down,
+discovery still proposes nothing for a build or planning ladder, and the daily
+adoption still adopts only a same-family successor at no higher price.
+
+What a choice from the console writes: the chosen model **first** on that
+group's ladder or that project's walk; an excluded model lifted from `excluded`
+in the same pull request; and **no reviewer rule**, because a reviewer skips
+the model that built the pull request on that project's walk
+(`model_fallback.reviewers_for`). DRE-6789's change-writer builds the writer;
+this is the contract it writes to.
+
+**A group added from the console is a build group (DRE-6834).** The CEO's
+approved design has "+ Add a group" — a name, what it is for, a model — and
+`add_group` writes it as a new `kinds` entry with its `label` and `purpose` and
+a ladder of the same name whose first model is the one chosen; rule 1 now asks
+for the three kinds and admits any kind beside them whose name is lowercase
+letters, digits and dashes, starting with a letter, on a ladder of its own
+name. Every safety rule has one answer for it: it is treated as the Builders
+are (`model_fallback.build_kinds`). Every rule that refuses a model on the
+Builders' ladder — no declared price, excluded, retired, a model the pinned
+Claude Code cannot run — refuses it on the added group's ladder; a pull request
+built by a role in it is never reviewed by the model that built it, because
+`separated_walk` takes that model off the reviewer's walk and the fail-closed
+`--built-on-unknown` walk counts the added group's models as build models; a
+`review_separation` rule may name a model the Reviewers share with it. The
+critic and the verifier still may not leave Reviewers, and only the planner may
+be in Planners, exactly as before. Any agent that may move into Builders may
+move into an added group, pipeline-run or session-run; a pipeline role there
+selects from that group's ladder with a project's exception in front, and the
+group's default model and a project's exception for it are set and cleared by
+the same operations as any group's. Removing or renaming a group is not built.
+
 ## The three rules — `adopt`, `ignore`, `ask` (CEO decision, 2026-09-14)
 
 Ladder membership is a spend decision, and since 2026-09-14 some of those
@@ -435,9 +642,13 @@ catalog offers that no ladder names into exactly one of three:
   a lower declared price in `config/model-prices.yaml` (input *and* output),
   replaces that family's rung automatically. The daily
   `.github/workflows/model-adoption.yml` gives it one real agent run on the new
-  model (`.github/workflows/model-trial.yml`), then opens an ordinary pull
-  request to this file that the critic reviews and the merge gate lands. No
-  human decision — the rule was the decision.
+  model (`.github/workflows/model-trial.yml`), then writes the home — the
+  ladders it read the candidate against — under its own name,
+  `daily-adoption`, and files a record card saying what moved where (DRE-6943).
+  It reads the home again right before the write and writes nothing when a
+  console save moved it during the trial. The record card lands in Done when
+  the home was written and in Canceled when nothing was. No human decision —
+  the rule was the decision.
 - **`ignore`** — a model older than, or superseded by, what we run gets nothing:
   a line in the run summary, no card, no pull request.
 - **`ask`** — a new family, a model whose declared price is above the rung it
@@ -445,15 +656,20 @@ catalog offers that no ladder names into exactly one of three:
   decision**. The workflow files one plain-English question and adopts nothing
   until it is answered.
 
-## The declared overlaps — a Sonnet build is never reviewed by the same Sonnet
+## The declared overlaps — a pull request is never reviewed by the model that built it
 
 Since 2026-09-16 (CEO decision, DRE-3880) `claude-sonnet-5` **topped the
 advisory ladder and backed the workhorse one**. One model, two ladders — so the
 build / review fence the rule above used to buy by keeping those two lists
 disjoint is bought at **selection time**, per pull request, instead. Since
-2026-09-28 (DRE-5116) there are **two** such models: `claude-sonnet-5-5` tops the
-advisory ladder and is the workhorse ladder's Sonnet rung, and `claude-sonnet-5`
-is the rung below it on both. Each has a rule:
+2026-10-10 (DRE-6785) that takes **no written rule**: on the walk a project's
+reviewers really make — its Reviewers exception first, then the fleet's
+Reviewers ladder — the model that built the pull request comes off and the
+next model leads (`model_fallback.reviewers_for`, `separated_walk`). A bare
+overlap is no longer refused. Since 2026-09-28 (DRE-5116) there are **two**
+models on both ladders: `claude-sonnet-5-5` tops the advisory ladder and is the
+workhorse ladder's Sonnet rung, and `claude-sonnet-5` is the rung below it on
+both. Each carries a declared rule saying which model leads instead:
 
 ```yaml
 review_separation:
@@ -465,53 +681,63 @@ review_separation:
       reviewers_use: claude-opus-5-5
 ```
 
-**Which overlaps need a rule.** Every advisory rung that also sits on a build
-ladder, except the advisory ladder's **last** rung, which is the designed loud
-fall onto the build model (Opus 5.5 today) and may carry a rule but never needs
-one. Until DRE-5116 this read "the advisory top only", which was the same set
-while one Sonnet sat on both ladders; with two, it refused Sonnet 5's rule as
-stale, and without that rule a Sonnet-5 build — which happens exactly when
-Sonnet 5.5 was skipped — would be one unavailable Sonnet 5.5 away from its own
-reviewer. `tests/test_review_separation.py::TwoSonnetsOnBothLaddersTest` holds
-it.
+**No overlap needs a rule.** Until 2026-10-10 every advisory rung above the
+ladder's last that also sat on a build ladder needed one, and a config without
+it was refused. Now a declared rule is honored where it applies — when it names
+the build model and its `reviewers_use` is on what is left, that model leads —
+and none is required. A reviewer **never falls onto the build model**, even when
+every other model on its walk is unavailable: an Opus 5.5 build whose two
+Sonnet reviewers are both down walks `claude-sonnet-5-5, claude-sonnet-5`, the
+note says the build model was skipped for separation, and the review fails
+loudly until a Sonnet returns. `tests/test_model_choice_policy.py` holds the
+four scenarios the decision named.
 
-The critic's and the verifier's Select-model steps read the model the build ran
-on off the card's own `model-attempt:` heartbeat
-(`model_fallback.py build-model`) and pass it as `--built-on`, which takes that
-rung off the reviewer's walk. A card they cannot read is `--built-on-unknown`,
-which bars **every** declared overlap: absence of evidence that the build ran on
-something else is not evidence that it did, and the guarantee has to survive a
-Linear blip. The cost of that fail-closed default is a reviewer on Opus rather
-than Sonnet on any pull request whose card cannot be read.
+The critic's and the verifier's Select-model steps read **every** model the
+card records as having built the change (`model_fallback.py build-model`,
+DRE-7303) and pass them as `--built-on <a>,<b>`, which takes each of those rungs
+off the reviewer's walk. A build line is `🧠 model-attempt: <model-id> — <role>
+agent starting` with any role but `planner`; an authoring line is one whose role
+is not `fixer`. `build-model` prints the build lines' models oldest first,
+comma-joined, and **nothing** when the thread holds no authoring line — a fixer's
+line alone does not say who built the change. When the barred models are every
+rung on the reviewer's walk, `select` chooses no reviewer: it exits non-zero
+with one `::error::build/review separation: …` line, the Select model step
+fails, and a person decides. A card they cannot read, or one with no authoring
+line, is `--built-on-unknown`,
+which bars **every** model on the reviewer's walk that also sits on that
+project's build walk, **except the walk's last rung**, which stays whatever
+other walk it sits on: absence of evidence that the build ran on something else
+is not evidence that it did, every rung might have built it, and the dispatch
+may not strand. The note says so — `; <model>, the walk's last rung, also
+builds for <the fleet | slug> and reviews this one because nothing else was
+left`. The cost of that fail-closed default is a reviewer on Opus rather than
+Sonnet on any pull request whose card cannot be read; with the Reviewers led by
+Opus 5.5 it would be `claude-sonnet-5`, the Builders' own last rung.
 
 **A cardless pull request is the everyday case of that.** A bot PR has no card,
 so its critic runs `--built-on-unknown`, skips both Sonnet rungs and lands on
 the Opus rung — `claude-opus-5-5` since DRE-4836. A hand-built PR on an
-`agent/DRE-<n>-*` branch whose card carries a `model-attempt:` heartbeat naming
-any model but a Sonnet is reviewed on Sonnet 5.5 as usual.
+`agent/DRE-<n>-*` branch whose card carries an authoring line naming any model
+but a Sonnet is reviewed on Sonnet 5.5 as usual.
 `tests/test_review_separation.py::test_an_unknown_build_model_still_never_reviews_on_an_overlap_model`
 is what holds it.
 
 The overlap is not new in principle — the advisory ladder's own fallback is
-`claude-opus-5-5`, the workhorse **primary**, so reviewer and worker have
-coincided whenever the critic falls back. What is new is that the guarantee is
+`claude-opus-5-5`, the workhorse **primary**, so reviewer and worker could
+coincide whenever the critic fell back. What is new is that the guarantee is
 explicit per run instead of incidental.
 
-A declaration is not decoration. `policy_errors` refuses a **bare** overlap (one
-with no rule), a rule that sends the reviewer back to the build model, a
-`reviewers_use` that is not on the advisory ladder, and a **stale** rule
-describing an overlap that no longer exists. That last one is the DRE-3892
-carry-forward: a same-family successor replaces a Sonnet rung on *both* ladders
-at once, so an adoption that leaves the rule behind fails `--check` twice — the new
-rung is a bare overlap, and the old rule names a model that is no longer one.
+A declaration is not decoration. `policy_errors` refuses a rule that sends the
+reviewer back to the build model, a `reviewers_use` that is not on the advisory
+ladder, and a **stale** rule describing an overlap that no longer exists. That
+last one is the DRE-3892 carry-forward: a same-family successor replaces a
+Sonnet rung on *both* ladders at once, so an adoption that leaves the rule
+behind fails `--check` — the old rule names a model that is no longer one.
 **DRE-4836 (2026-09-25) is the first adoption that hit it**: Opus 5.5 replaced
 Opus 5 on all three ladders at once, and the rule moved with the rung.
 
 The separation binds reviewers and **only** reviewers. The medic is advisory too
-and is deliberately absent: it diagnoses a failed run and reviews nothing. The
-judgement ladder gets no such exemption at all — declaring a rule buys nothing
-for the planner's model, because Fable on a build ladder is still the 2026-08-09
-incident.
+and is deliberately absent: it diagnoses a failed run and reviews nothing.
 
 Recording it is **not** a degradation: the selection note names the separation
 and never carries the `DEGRADED` prefix. A `::warning::` on every Sonnet build
@@ -521,22 +747,38 @@ its model.
 ## The console's keys and the per-project exception (DRE-6633)
 
 The console's Settings › Agents & models page reads five more keys. Only
-`projects` reaches selection (DRE-6634, below), and it ships empty.
+`projects` reaches selection (DRE-6634, below). It shipped empty, and the
+console's Save changes writes it (DRE-6624), so the model tests read the
+committed map rather than assume one (DRE-6858).
 
 - **`kinds.<kind>.label`** and **`kinds.<kind>.purpose`** — the group's name on
   the page and the one line under it. `label` defaults to the key title-cased
   (`Workhorse`) and `purpose` to empty. Today: Builders, Reviewers, Planners.
-- **`ungrouped`** — agents that exist but are in no group: the console's
-  interactive agents (`designer`, `ux-ui-engineer`, `fullstack-engineer`,
-  `mobile`, `product-lead`). It is a roster the console reads, not a dispatch
-  table — none of them runs on a pipeline workflow or has an `agents.yaml`
-  entry here, and `sync_model_config.py` generates nothing for them. A name may
-  not be in both `agents` and `ungrouped`.
+- **`ungrouped`** — agents that exist but are in no group: today the
+  console's interactive agents (`designer`, `ux-ui-engineer`,
+  `fullstack-engineer`, `mobile`, `product-lead`). It is a roster the console
+  reads, not a dispatch table. A name may not be in both `agents` and
+  `ungrouped`; moving one into a group takes it off this list.
+- **`session_agents`** (DRE-6833) — the agents that run in a person's session
+  rather than a pipeline workflow: today the same five. Independent of
+  `ungrouped`: a name stays here after it is given a group, so the file still
+  knows it is not a pipeline role. Each must be in `agents` or `ungrouped` (a
+  record for nobody is refused). A session agent may join any group, an added
+  one too (DRE-6834), and its group never makes it a pipeline role: it has no
+  `agents.yaml` entry (`sync_model_config.py` skips it, and refuses one that
+  has a generated region), `model_fallback.AGENT_KINDS` leaves it out, and
+  `kind_for`, `ladder_for` and `select` answer it exactly as an unknown name —
+  the top of the Builders ladder, from the YAML and from the degrade mirror.
+  Its group is a published fact for the console; making it run on that group's
+  model is DRE-6784 in agent-bureau. `add_agent` appends every agent it adds.
 - **`about`** — agent name → one line, for every name in `agents` and
   `ungrouped`. A line for a name in neither is refused.
 - **`projects`** — repo slug → `{ <kind>: <model id> }`, the per-project
   exception. The slug must be a key of `config/repo-map.json`; when that file
-  cannot be read every entry is refused, naming it (fail closed).
+  cannot be read every entry is refused, naming it (fail closed). A model a
+  project names is a **known model** (`model_fallback.KNOWN_MODELS`,
+  `model_adoption._known_ids`), so an adoption never asks about it and a
+  reviewer reads a build's `model-attempt:` marker for it.
 
 **The walk rule.** A project's runs of that kind walk `[the exception]` followed
 by the kind's ladder with the exception removed
@@ -560,45 +802,48 @@ that step passes the card's own repo off its matrix row as `--repo
 "$REPOSITORY"`. `tests/test_select_passes_repo.py` finds every site by regex and
 holds each to its flag.
 
-**The own-kind reading.** The exception must already be a rung of **that kind's
-own ladder** — the one `kinds.<kind>.ladder` names. An exception reorders a
-kind's own ladder and never adds a model to it: a model joins a ladder only
-through a reviewed pull request to `models.yaml` (availability is not
-permission). The wider "on any ladder" reading is rejected because one console
-press would then put `claude-sonnet-4-6`, which sits only on the judgement
-ladder, at the head of a project's every build — undoing the 2026-09-16
-decision that took it off the build ladder with no ladder pull request. The
-refusal says where the model does sit, and is the entry's only reason:
+**Any priced model (DRE-6785).** The own-kind reading — an exception had to be
+a rung of that kind's own ladder, and never added a model to it — was lifted
+by the CEO's decision of 2026-10-10 (*An explicit choice is admissible*,
+above). An exception may name any model with a declared price; when it is not
+a rung of that kind's ladder the walk is one longer, so
+`projects: {atlas: {workhorse: claude-sonnet-4-6}}` has atlas's builders walk
+`claude-sonnet-4-6, claude-opus-5-5, claude-opus-5, claude-sonnet-5-5,
+claude-sonnet-5`. A model with no declared price is refused with that one
+plain reason:
 
 ```
-projects.atlas.workhorse: claude-sonnet-4-6 is not on the workhorse ladder (it sits on the judgement ladder) — …
+projects.atlas.workhorse: claude-nova-9 has no declared price, so it cannot be chosen.
 ```
 
-An exception that passes is then held to rules 4, 4b, 7 and 8 on the walk it
-makes, and every finding the fleet's own ladders do not already carry is
-reported as `projects.<slug>.<kind>: breaks rule <n> …` — the prefix the
-console filters on. A workhorse exception is a reorder of the build ladder and
-no rule reads that order, so it always passes. `judgement: claude-opus-5-5` is
-refused (a build model tops the planner's walk, and Fable sits dearer beneath
-it); `advisory: claude-opus-5-5` is refused (a bare overlap on top of the
-reviewers' walk); `judgement: claude-sonnet-4-6` is admitted.
+An exception that passes is then held to rules 7 and 8 on the walk it makes,
+and every finding the fleet's own ladders do not already carry is reported as
+`projects.<slug>.<kind>: breaks rule <n> …` — the prefix the console filters
+on. `judgement: claude-opus-5-5`, `advisory: claude-opus-5-5` and
+`workhorse: claude-fable-5-1` are all admitted; an excluded model is refused
+until the same change lifts it from `excluded`. A model the pinned Claude Code
+cannot run is caught in CI by
+`tests/test_model_cli_support.py::ProjectExceptionSupportTest`.
 
-The daily adoption carries an exception with its rung
-(`model_adoption_actions._move_projects`): when a same-family successor
-replaces a rung, every `projects.<slug>.<kind>` naming that rung of that kind's
-ladder moves to the successor too, as a text edit. An exception for a kind
-whose ladder the adoption does not touch is left alone. The edit reads the
-block shape shown in `models.yaml`'s comment; anything it could not move is
-caught by the edit's own closing comparison, and nothing is written.
+The daily adoption carries a project's choice with its rung, in the home
+(`model_adoption_actions.adopted_document`, DRE-6943): when a same-family
+successor replaces a rung, every project choice naming a replaced id moves to
+the successor too. The document it would write is judged by
+`model_home.home_errors` first, and a refused one is never written.
 
 **Rule 10 — `judgement` is the planner's kind.** `JUDGEMENT_ROLES` in
-`scripts/model_fallback.py` is `("planner",)`, and any other role assigned `judgement` is refused:
+`scripts/model_fallback.py` is `("planner",)`, read from `rules.planners_may_hold`
+(DRE-6992), and any other role assigned `judgement` is refused:
 `agents.engineer: judgement` would put Fable 5.1 on every build card, which is
 volume on the strongest model — the 2026-08-09 incident. The `kinds.judgement`
 comment said "ONE role, deliberately" from DRE-3015 on and nothing enforced it.
 The rule is one-directional: the planner moving to `advisory` or `workhorse` is
 a spend decrease and stays admissible. `agents.critic: judgement` is refused by
-rule 3 and rule 10, each with its own reason.
+rule 3 and rule 10, each with its own reason. A name in `session_agents` is
+exempt, and nobody else (DRE-6833): the selector never reads a session agent's
+group, so a designer in Planners puts no run on Fable 5.1 and the volume this
+rule guards against cannot arise. Every pipeline role is held to it exactly as
+before.
 
 ## Every run says which model it used, and why anything above it was skipped
 
@@ -630,17 +875,20 @@ The wider design is recorded in `architecture/decisions/adr-model-policy.md` in
 
 ## Who reads it
 
-- **The CI path.** `scripts/model_fallback.py` loads this file and `select()`
-  walks the ladder it names for that agent, returning the first model a runtime
-  availability probe says is up. Every agent workflow — build agents *and* the
+- **The CI path.** `scripts/model_fallback.py` loads this file's code-side
+  facts and `select()` walks the ladder the home (or, with no home, the
+  defaults in the code) names for that agent, returning the first model a
+  runtime availability probe says is up. Every agent workflow — build agents *and* the
   critic, verifier and medic — takes its `--model` from that step. No workflow
   pins a model id; a test reads the workflow files and fails if one does.
 - **The console roster**, indirectly: `agents.yaml`'s per-agent `model:` line is
   a **generated** mirror of this file.
 - **`model-prices.yaml`**, the other way round: schema validation reads the
-  declared price of any rung sitting below the one its ladder degrades onto
-  (DRE-3880), so that file is on the dispatch path too — an entry deleted there
-  makes this config stop validating, and the fleet falls to the mirror.
+  declared price of every rung (DRE-3880, DRE-6785), so an entry deleted there
+  makes this config fail `sync_model_config.py --check`, and the home's reader
+  sets aside a home model with no price. Importing `model_fallback` does not
+  read it (DRE-6992): the load-time check keeps only this file's code-side
+  facts, and the price rule is about the choices it does not keep.
 
 ## Generated mirrors and the drift gate
 
@@ -662,24 +910,38 @@ changes what the fleet selects.
 The literal carries `review_separation` too (DRE-3880): a degrade that dropped
 the fence would review a Sonnet build on the same Sonnet and look exactly like a
 healthy run. And it carries the console's `groups`, `ungrouped`, `about` and
-`projects` (DRE-6633), so the degrade path gives the same answer as a healthy
-checkout.
+`projects` (DRE-6633), and `session_agents` beside `ungrouped` (DRE-6833), so
+the degrade path gives the same answer as a healthy checkout.
 
 The third target is a whole generated file, `config/model-choices.json`
 (DRE-6635) — what the console's Settings › Agents & models page reads instead
 of parsing this file and re-deriving the policy: every model with a declared
 price in `model-prices.yaml` (label, price, and its `excluded` reason or
 `null`), one group per kind with its ladder and a choice per model, every agent
-with a move per other kind, and the per-project exceptions. Every `allowed` and
-`reason` is `model_fallback.policy_errors`' answer on a copy of this file
-carrying that one option as a real entry — a project exception under
-`projects`, an agent moved under `agents` — so the page is read off the same
-gate a pull request meets. A missing or stale file is `STALE` under `--check`,
+— in a group or not — with a move per group it is not in and `runs_in`
+(`pipeline` or `session`, off `session_agents`), and the per-project
+exceptions. Every `allowed` and `reason` is `model_fallback.policy_errors`'
+answer on a copy of this file carrying that one option as a real entry — for a
+group's choice, the change the console would make: the model lifted from
+`excluded` and set as a project exception under `projects`; for a move, the
+edit the change script below would make (`model_config_change.edit_data`),
+after its own pre-flight checks — so the page is read off the same gate a pull
+request meets. A refused move's `reason` is the plain sentence the change
+script prints for it (DRE-6833).
+
+Since DRE-6786 every priced model is allowed for every group, and each choice is
+`{model, allowed, reason, caution}`: `caution` is one plain-English sentence
+with both prices where there is something to say — a model we set aside, or one
+dearer than the group's current model — and `null` otherwise or when the choice
+is refused. The sentences live once, in `scripts/model_choice.py`, which the
+console's change-writer imports too. The one choice still refused is a model the
+pinned Claude Code cannot run (`Our pinned Claude Code cannot run <model>
+yet.`), read off the floor tables in `tests/test_model_cli_support.py` through
+`claude_code_pin.model_floors`. A missing or stale file is `STALE` under `--check`,
 exactly like the two mirrors; `tests/test_model_choices.py` pins its content
 and recomputes every verdict through a real repo slug. The daily
-`.github/workflows/model-adoption.yml` is a writer too: it runs the generator
-after it applies an adoption and stages `config/model-choices.json` beside
-`config/models.yaml`, `agents.yaml` and `scripts/model_fallback.py`.
+`.github/workflows/model-adoption.yml` no longer writes it: an adoption writes
+the home and edits no file (DRE-6943).
 
 The console WRITES this file too, without ever editing YAML itself (DRE-6624).
 Save changes on Settings › Agents & models dispatches
@@ -691,11 +953,22 @@ judged by `model_fallback.policy_errors` before anything is written: one
 refusal fails the run with each refused change's reason and opens no branch.
 An accepted set is regenerated with the generator above and opened as ONE pull
 request on `agent/model-config-<digest>`, the same changes always naming the
-same branch, so pressing Save twice opens one pull request. Two refusals follow
-from the rules as they stand: `kinds` admits exactly the three kinds, so a new
-group is refused until that rule changes, and an interactive agent with no
-`agents.yaml` entry cannot join a group, because the generator writes a model
-for every name in `agents`.
+same branch, so pressing Save twice opens one pull request. A new group is a
+build group beside the three (DRE-6834, *An explicit choice is admissible*
+above), and a name that is taken, empty or not lowercase letters, digits and
+dashes is refused in one plain sentence; the file's top-level `add_group`,
+`{"allowed": true, "reason": null}` today, tells the console the pipeline takes
+one, judged as a move is, and when it does not, `reason` says why in plain
+words. The new group's model carries a caution in the pull request the way a
+Builders choice does, priced against the Builders' default model. A
+session agent joins any group (DRE-6833), and so does an agent added in the same
+change set, since `add_agent` makes it one; a name in neither `agents.yaml` nor
+`session_agents` cannot, because the generator writes a model for every other
+name in `agents`. The console shows the CEO every `::error::` line and summary
+bullet of a refusal word for word, so each is one plain sentence — the change in
+the pull request body's words, then why, groups by their labels — rendered by
+`model_config_change.plain_lines`; the validator's own findings go to the run
+log and to a block under the bullets, for an engineer.
 
 ## The effort level (DRE-4836)
 
@@ -763,20 +1036,29 @@ first daily run after that PR merges.
 
 ## Changing a model
 
-Edit `models.yaml`, run the sync script, commit both. Merging to `main` is
-**instantly live fleet-wide** — treat it as a production change. Remember that
+Where a change takes effect depends on which regime a run's `model-home:` line
+shows, and `docs/model-choice-levers.md` says which one held when it was last
+read. Once the home reads, a change written to it is in force on the next run
+(DRE-6939). The old route — edit `models.yaml`, run the sync script, commit
+both, which is also what the console's save does until it writes the home
+itself (DRE-6976) — changes the defaults in the code, which every run without
+a readable home runs on. Merging it to `main` puts it in force for `@main`
+callers at once, and for tag-pinned callers when `stable` or the next `vN`
+moves past the merge — treat it as a production change. Remember that
 availability decides how far *down* a ladder we walk, never how far up: a model
 that is not on a ladder is never selected, however available it becomes. Ladder
 membership is the spend decision, and it is made here — in this file, in a
 reviewed pull request.
 
-One kind of edit is made for you: the `adopt` rule above. The daily model
+One kind of change is made for you: the `adopt` rule above. The daily model
 adoption workflow (`.github/workflows/model-adoption.yml`, DRE-3898) trials a
-same-family successor at the same or a lower declared price and proposes it as
-an ordinary pull request editing this file, which the critic and the merge gate
-review like any other. Every other ladder change — a new family, a pricier tier,
-an unpriced model — waits on the CEO's answer to the one question that workflow
-files.
+same-family successor at the same or a lower declared price and writes it into
+the home under its own name, `daily-adoption` (DRE-6943); the console's history
+shows the write, and its record card says what moved where. It edits no file.
+Every other ladder change — a new family, a pricier tier, an unpriced model —
+waits on the CEO's answer to the one question that workflow files, which he can
+give on Settings › Agents & models, where the model is offered the day it is
+priced.
 
 ---
 

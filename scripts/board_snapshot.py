@@ -17,7 +17,7 @@ contract and the same shapes, and no real words.
 WHY (DRE-3638). The CI ceiling on the reconcile sweep's Linear spend passes at
 30 while a live pass costs 65 on bureau-pipeline and 92 on agent-bureau. The
 ceiling is not wrong about its own fixture — `tests/test_sweep_request_cuts.py`
-hand-builds 5 epics and 260 Backlog cards and mocks 18 of the sweep's phases
+hand-builds 5 epics and 260 queued cards and mocks 18 of the sweep's phases
 out entirely — so it measures a sweep nobody runs. A hand-built board answers
 only the questions its author thought of; the real one carries the shapes
 nobody would have invented: an epic with thirty children, a card whose comment
@@ -103,6 +103,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import lane_contract  # noqa: E402
 import linear_ops  # noqa: E402
 
 # `reconcile.SWEPT_LANES` is the fact this script must not re-spell: the sweep
@@ -116,12 +117,14 @@ import reconcile  # noqa: E402
 
 TEAM = "DRE"
 
-#: The lanes read: the sweep's own union, plus `Backlog` — where the promotion
-#: gate's candidates live and which `SWEPT_LANES` does not include, because the
-#: sweep buys them in a second query (`reconcile.backlog_children`). `Intake`
-#: and `Planning` are already in `SWEPT_LANES` and named again here because the
+#: The lanes read: the sweep's own union, plus the queue under every name it
+#: carries (`lane_contract.QUEUE_LANES`, DRE-6749) — where the promotion gate's
+#: candidates live and which `SWEPT_LANES` does not include, because the sweep
+#: buys them in a second query (`reconcile.backlog_children`). `Intake` and
+#: `Planning` are already in `SWEPT_LANES` and named again here because the
 #: contract names them; `dict.fromkeys` keeps the order and drops the repeats.
-LANES = tuple(dict.fromkeys(reconcile.SWEPT_LANES + ("Backlog", "Intake", "Planning")))
+LANES = tuple(dict.fromkeys(reconcile.SWEPT_LANES + lane_contract.QUEUE_LANES
+                            + ("Intake", "Planning")))
 
 #: Cards per page. Linear's own maximum for this query and what both of the
 #: sweep's board reads ask for.
@@ -463,8 +466,11 @@ _EPIC_CHILDREN = 12
 #: decisions and its structural checks (nine active epics, the nudge loop's
 #: exhausted comment windows) would change for a reason that has nothing to do
 #: with the sweep. A lane `LANES` gains is given a few cards of its own instead
-#: (`_extra_lane_slots`), and only those cards move.
-_SYNTHETIC_DEAL = ("Todo", "In Progress", "In Review", "Planning", "Intake", "Backlog")
+#: (`_extra_lane_slots`), and only those cards move. The last is the lane the
+#: queue is written to (`QUEUE_LANE`, DRE-6749), so the queue's other name is
+#: the one dealt a few cards: `Queued` until DRE-6742 flips the planning exit.
+_SYNTHETIC_DEAL = ("Todo", "In Progress", "In Review", "Planning", "Intake",
+                   lane_contract.QUEUE_LANE)
 
 #: The lane a person's work waits in, and the marks a card there carries. A
 #: synthetic Hand-work card is a WORKBENCH card, as the sweep would land it.

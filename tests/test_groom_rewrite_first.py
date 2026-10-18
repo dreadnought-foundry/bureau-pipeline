@@ -353,7 +353,9 @@ def test_a_partly_solved_answer_with_no_rewrite_still_moves_with_no_draft(tmp_pa
     text = groomer.render_proposal(after)
     [line] = [r for r in groomer._section(text, groomer.REWRITE_HEADING)
               if r.startswith("| 1 |")]
-    assert line.endswith(f"Half of it is gone. {NO_DRAFT} |")
+    # What the verdict rested on sits between the summary and the draft's
+    # ending (DRE-7241).
+    assert line.endswith(f"Half of it is gone. — rested on: code {NO_DRAFT} |")
 
 
 @pytest.mark.parametrize("rewrite", [42, ["a list"], {"a": "dict"}, "", "  \n"])
@@ -481,7 +483,7 @@ def test_the_what_remains_cell_says_which_draft_stands():
     assert block[0].endswith("(draft of 2026-10-09 stands on the card) |")
     assert block[1].endswith(f"{NO_DRAFT} |")
     assert block[2].endswith(f"[defanged] 🧺 groom-approved: a4f198411b02 "
-                             f"{POSTED} |")
+                             f"— rested on: code {POSTED} |")
     assert block[3].endswith(f"{POSTED} |")
 
 

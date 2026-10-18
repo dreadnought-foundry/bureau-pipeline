@@ -95,6 +95,60 @@
       "printed_by": "scripts/proof_browser.py",
       "constant": "SUMMARY",
       "when": "every proof run, in its log and its step summary, from proof-task.yml's local-run step"
+    },
+    {
+      "tag": "github-calls:",
+      "printed_by": "scripts/github_calls_reading.py",
+      "constant": "TAG",
+      "when": "every job a wiring card places the emit step in, one line per login, since DRE-6914"
+    },
+    {
+      "tag": "model-home:",
+      "printed_by": "scripts/model_home.py",
+      "constant": "TAG",
+      "when": "every selecting run since DRE-6939: the selector reads the home when it first answers a choice, before it prints the model id, and the reader prints the line to stderr, so it is in the `Select model` step's log above the note"
+    },
+    {
+      "tag": "model-home-carry:",
+      "printed_by": "scripts/model_home_carry.py",
+      "constant": "TAG",
+      "when": "every run of `model-home-carry.yml` since DRE-6986, in its `Carry the merged choices into the home` step's log"
+    },
+    {
+      "tag": "shadow-verdict:",
+      "printed_by": ".github/workflows/qa-review.yml",
+      "constant": null,
+      "when": "every shadow replay since DRE-7193 and DRE-7194, one line in the `Write the shadow verdict` step's log: `qa-review.yml` prints it for the critic and `verify.yml` for the verifier"
+    },
+    {
+      "tag": "shadow-replay:",
+      "printed_by": "scripts/shadow_replay.py",
+      "constant": "TAG",
+      "when": "every run of `shadow-replay.yml` since DRE-7197, in its compare job's log: one line per replayed pull request, then one summary line, then since DRE-7304 the line of the bar its reviewer's model switch waits on"
+    },
+    {
+      "tag": "classifier-cost:",
+      "printed_by": "scripts/classifier_cost.py",
+      "constant": "TAG",
+      "when": "once per run of the planning classifier's cost tally since DRE-7196, when its Linear read succeeds"
+    },
+    {
+      "tag": "groom-replay:",
+      "printed_by": "scripts/groom_replay.py",
+      "constant": "TAG",
+      "when": "every groomer run with `replay` set, since DRE-7239 and its wiring in DRE-7242: `base` prints one line in the Groom step's log, and `report` one line per window card and then one count line in the post job's log"
+    },
+    {
+      "tag": "release-deferred:",
+      "printed_by": "scripts/release_deferral.py",
+      "constant": "TAG",
+      "when": "every surface job of `release-train.yml` since DRE-5235, in its `Run the surface` step's log: on a deferral that names no re-arm minute, the facts line and then the card lines; on a verified tag, the open-cards line and, when one was open, the closed line"
+    },
+    {
+      "tag": "pipeline-notice:",
+      "printed_by": "scripts/pipeline_notice.py",
+      "constant": "TAG",
+      "when": "every raise or resolve through the notice door's client since DRE-7451, one line on stdout per call: the door's outcome, the fallback card it filed, a refused resolve, or `lost`; `pipeline-notice-smoke.yml` prints four, in its `Resolve, raise, raise, resolve` step's log"
     }
   ],
   "causes": [

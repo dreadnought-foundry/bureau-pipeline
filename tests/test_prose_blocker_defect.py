@@ -57,6 +57,7 @@ os.environ.setdefault("LINEAR_API_KEY", "test-key")
 os.environ.setdefault("REPO", "dreadnought-foundry/agent-bureau")
 os.environ.setdefault("REPO_SLUG", "agent-bureau")
 
+import lane_contract  # noqa: E402
 import linear_ops  # noqa: E402
 import prose_blockers  # noqa: E402
 import reconcile  # noqa: E402
@@ -211,7 +212,7 @@ def test_a_card_whose_only_unmet_blocker_is_prose_declared_now_promotes():
         patch.object(reconcile.linear_ops, "cmd_comment"):
         promoted = reconcile.promote_ready(active_count=0)
     assert promoted == 1
-    advance.assert_called_once_with("DRE-900", "Todo", "Backlog")
+    advance.assert_called_once_with("DRE-900", "Todo", reconcile.QUEUE_FROM)
 
 
 def test_a_live_relation_still_holds_the_card():
@@ -260,7 +261,7 @@ def test_an_undeclared_prose_claim_refuses_promotion(capsys):
         patch.object(reconcile.linear_ops, "cmd_comment"):
         promoted = reconcile.promote_ready(active_count=0)
     assert promoted == 0
-    assert ("DRE-900", "Todo", "Backlog") not in [c.args for c in advance.mock_calls]
+    assert ("DRE-900", "Todo", reconcile.QUEUE_FROM) not in [c.args for c in advance.mock_calls]
     out = capsys.readouterr().out
     assert prose_blockers.CARD_TAG in out       # the named line
     assert "DRE-900" in out and "DRE-700" in out
@@ -280,8 +281,17 @@ def test_the_refusal_comment_names_both_fixes_and_the_return_lane():
     assert "DRE-700" in body
     assert "blockedBy" in body                       # recovery 1: add the relation
     assert "Blocked by" in body and "Depends on" in body and "Serialize after" in body
-    assert "Backlog" in body                         # the return lane…
+    assert f"`{lane_contract.QUEUE_LANE}`" in body   # the return lane…
     assert "Todo" in body                            # …named against the wrong one
+
+
+def test_the_return_lane_is_the_queue_the_writers_write():
+    """DRE-6747: the lane the notice sends a fixed card back to is
+    `lane_contract.QUEUE_LANE`, the one the planning exit writes, never a
+    name spelled here."""
+    assert prose_blockers.RETURN_LANE == lane_contract.QUEUE_LANE
+    assert prose_blockers.RETURN_LANE in lane_contract.QUEUE_LANES
+    assert f"`{lane_contract.QUEUE_LANE}`" in prose_blockers.card_refusal("DRE-900", {"DRE-700"})
 
 
 def test_a_defective_card_is_moved_to_triage():
@@ -295,7 +305,7 @@ def test_a_defective_card_is_moved_to_triage():
         patch.object(reconcile.linear_ops, "cmd_advance") as advance, \
         patch.object(reconcile.linear_ops, "cmd_comment"):
         reconcile.promote_ready(active_count=0)
-    advance.assert_called_once_with("DRE-900", "Triage", "Backlog")
+    advance.assert_called_once_with("DRE-900", "Triage", reconcile.QUEUE_FROM)
 
 
 def test_a_defective_card_never_reaches_green_light():
@@ -338,7 +348,7 @@ def test_one_defective_card_does_not_stop_its_siblings():
         patch.object(reconcile.linear_ops, "cmd_comment"):
         promoted = reconcile.promote_ready(active_count=0)
     assert promoted == 1
-    assert ("DRE-901", "Todo", "Backlog") in [c.args for c in advance.mock_calls]
+    assert ("DRE-901", "Todo", reconcile.QUEUE_FROM) in [c.args for c in advance.mock_calls]
 
 
 def test_a_failed_triage_move_goes_in_the_ledger_and_the_sweep_continues():
@@ -368,14 +378,15 @@ class _Board:
     comments posted on it. Two sweeps against a mock that forgets would prove
     nothing about repetition, which is the whole question here."""
 
-    def __init__(self, cards):
+    def __init__(self, cards, queue="Backlog"):
         self.cards = list(cards)
-        self.lane = {card["identifier"]: "Backlog" for card in self.cards}
+        self.lane = {card["identifier"]: queue for card in self.cards}
         self.comments: dict = {card["identifier"]: [] for card in self.cards}
         self.moves: list = []
 
     def backlog_children(self):
-        return [c for c in self.cards if self.lane[c["identifier"]] == "Backlog"]
+        return [c for c in self.cards
+                if self.lane[c["identifier"]] in lane_contract.QUEUE_LANES]
 
     def cmd_advance(self, identifier, to_state, from_states_csv):
         # The real write is guarded on the from-lane; a stand-in that ignored
@@ -400,10 +411,12 @@ class _Board:
             return reconcile.promote_ready(active_count=0)
 
 
-def test_two_sweeps_produce_exactly_one_comment_and_one_state_change():
+@pytest.mark.parametrize("queue", lane_contract.QUEUE_LANES)
+def test_two_sweeps_produce_exactly_one_comment_and_one_state_change(queue):
     """The DRE-2723 rule: Triage must not become a lane the sweep re-flags and
-    re-comments on every fifteen minutes."""
-    board = _Board([_defective("DRE-900")])
+    re-comments on every fifteen minutes — for a card parked under either of
+    the queue's names (DRE-6747)."""
+    board = _Board([_defective("DRE-900")], queue=queue)
     board.sweep()
     board.sweep()
     assert board.moves == [("DRE-900", "Triage")]

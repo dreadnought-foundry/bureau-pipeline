@@ -29,15 +29,22 @@ classifier's guarantee, as steps:
 
 A long genuine failure — turn cap, many turns, real spend — is not out of
 capacity, gets no second run, and fails the job as before.
+
+The decisions run in a fixture tree (tests/model_fixture.py) built with
+`regenerate=False`, its selector on the frozen home document
+(`model_fixture.fixture_home()`, handed over through `home_env`, DRE-6990), so
+a console save that moves the planner or reorders its group leaves these rules
+standing: every model id below is a model of the document's judgement group,
+named for its place on it.
 """
 
 from __future__ import annotations
 
 import json
-import os
 import shutil
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 import pytest
@@ -45,14 +52,19 @@ import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
 WF = ROOT / ".github" / "workflows" / "plan.yml"
-SCRIPT = ROOT / "scripts" / "planner_capacity.py"
 sys.path.insert(0, str(ROOT / "scripts"))
+sys.path.insert(0, str(ROOT / "tests"))
 
-FABLE51 = "claude-fable-5-1"
-# The planner ladder's Opus rung — `claude-opus-5-5` since DRE-4836
-# (2026-09-25), when the adoption moved it on all three ladders.
-OPUS55 = "claude-opus-5-5"
-SONNET = "claude-sonnet-4-6"
+import model_fixture  # noqa: E402
+
+# The planner's walk in the frozen document: its top rung, the one below it,
+# and the last, which has nowhere to fall.
+HOME = model_fixture.fixture_home()
+JUDGEMENT = model_fixture.ladder(HOME, HOME["agents"]["planner"])
+TOP, SECOND, LAST = JUDGEMENT[0], JUDGEMENT[1], JUDGEMENT[-1]
+# A model the run also used a little of, on no rung of the planner's walk.
+HELPER = next(m for group in HOME["groups"] for m in model_fixture.ladder(HOME, group)
+              if m not in JUDGEMENT)
 SPEND_LIMIT = ("You've hit your monthly spend limit. Switch to another model to "
                "continue.")
 MODEL_ACTION = "anthropics/claude-code-action"
@@ -73,7 +85,7 @@ SITES = [
 SITE_IDS = [s[1] for s in SITES]
 
 
-def _refusal(model=FABLE51):
+def _refusal(model=TOP):
     return [{"type": "system", "subtype": "init", "model": model},
             {"type": "result", "subtype": "success", "is_error": True,
              "num_turns": 1, "total_cost_usd": 0, "duration_ms": 646,
@@ -85,7 +97,7 @@ def _long_failure():
              "num_turns": 64, "total_cost_usd": 7.9, "duration_ms": 1_900_000,
              "result": "API Error: 500 — after reading the standard that quotes "
                        + SPEND_LIMIT,
-             "modelUsage": {FABLE51: {"outputTokens": 41000}}}]
+             "modelUsage": {TOP: {"outputTokens": 41000}}}]
 
 
 def _turn_cap():
@@ -98,7 +110,7 @@ def _success(answered):
     return [{"type": "result", "subtype": "success", "is_error": False,
              "num_turns": 40, "total_cost_usd": 4.1, "result": "planned",
              "modelUsage": {answered: {"outputTokens": 30000},
-                            "claude-haiku-4-5-20251001": {"outputTokens": 90}}}]
+                            HELPER: {"outputTokens": 90}}}]
 
 
 def _write(tmp: Path, name: str, payload) -> str:
@@ -107,8 +119,34 @@ def _write(tmp: Path, name: str, payload) -> str:
     return str(path)
 
 
+def _pipeline_tree(dest: Path) -> Path:
+    """Today's scripts on the frozen model files, with the rest of the repo's
+    config beside them — the lane contract and the others the steps read."""
+    tree = model_fixture.fixture_tree(dest, regenerate=False)
+    for path in sorted((ROOT / "config").iterdir()):
+        if path.is_file() and not (tree / "config" / path.name).exists():
+            shutil.copy2(path, tree / "config" / path.name)
+    return tree
+
+
+# The script every decision runs: the copy in one such tree, built once for
+# the module.
+_TREE = None
+SCRIPT = None
+
+
+def setup_module():
+    global _TREE, SCRIPT
+    _TREE = tempfile.TemporaryDirectory()
+    SCRIPT = _pipeline_tree(Path(_TREE.name) / "tree") / "scripts" / "planner_capacity.py"
+
+
+def teardown_module():
+    _TREE.cleanup()
+
+
 def _cli(*args, env_extra=None):
-    env = dict(os.environ)
+    env = model_fixture.home_env(SCRIPT.parent.parent, HOME)
     env.update(env_extra or {})
     return subprocess.run([sys.executable, str(SCRIPT), *map(str, args)],
                           capture_output=True, text=True, env=env)
@@ -127,20 +165,22 @@ def _outputs(path: Path) -> dict:
 
 def test_a_spend_limit_refusal_retries_on_the_next_rung(tmp_path):
     out = tmp_path / "out"
-    proc = _cli("decide", _write(tmp_path, "x.json", _refusal()), "--model", FABLE51,
+    proc = _cli("decide", _write(tmp_path, "x.json", _refusal()), "--model", TOP,
                 "--github-output", out)
     assert proc.returncode == 0, proc.stderr
     got = _outputs(out)
     assert got["retry"] == "true"
-    assert got["model"] == OPUS55
+    assert got["model"] == SECOND
     assert got["because"] == "monthly spend limit"
+    # The rung below was read off the document, not the defaults in the code.
+    assert "model-home: read" in proc.stderr, proc.stderr
 
 
 @pytest.mark.parametrize("payload", [_long_failure(), _turn_cap()],
                          ids=["long-genuine-failure", "turn-cap"])
 def test_a_genuine_failure_gets_no_retry(tmp_path, payload):
     out = tmp_path / "out"
-    proc = _cli("decide", _write(tmp_path, "x.json", payload), "--model", FABLE51,
+    proc = _cli("decide", _write(tmp_path, "x.json", payload), "--model", TOP,
                 "--github-output", out)
     assert proc.returncode == 0, proc.stderr
     assert _outputs(out)["retry"] == "false"
@@ -152,21 +192,21 @@ def test_a_credential_failure_gets_no_retry(tmp_path):
                 "num_turns": 1, "total_cost_usd": 0, "duration_ms": 300,
                 "result": "Invalid API key · Please run /login"}]
     out = tmp_path / "out"
-    _cli("decide", _write(tmp_path, "x.json", payload), "--model", FABLE51,
+    _cli("decide", _write(tmp_path, "x.json", payload), "--model", TOP,
          "--github-output", out)
     assert _outputs(out)["retry"] == "false"
 
 
 def test_the_last_rung_has_nowhere_to_fall(tmp_path):
     out = tmp_path / "out"
-    _cli("decide", _write(tmp_path, "x.json", _refusal(SONNET)), "--model", SONNET,
+    _cli("decide", _write(tmp_path, "x.json", _refusal(LAST)), "--model", LAST,
          "--github-output", out)
     assert _outputs(out)["retry"] == "false"
 
 
 def test_a_missing_record_gets_no_retry(tmp_path):
     out = tmp_path / "out"
-    proc = _cli("decide", tmp_path / "absent.json", "--model", FABLE51,
+    proc = _cli("decide", tmp_path / "absent.json", "--model", TOP,
                 "--github-output", out)
     assert proc.returncode == 0
     assert _outputs(out)["retry"] == "false"
@@ -182,7 +222,7 @@ def _finish(tmp_path, *, first, second="skipped", first_exec="", second_exec="",
     args = ["finish", "--first-outcome", first, "--second-outcome", second,
             "--first-execution-file", first_exec,
             "--second-execution-file", second_exec,
-            "--asked", FABLE51, "--second-model", second_model,
+            "--asked", TOP, "--second-model", second_model,
             "--because", because, "--github-output", out]
     if required:
         args.append("--required")
@@ -194,15 +234,15 @@ def test_fable_refused_and_opus_planned_is_a_success_with_a_degraded_receipt(tmp
     proc, got = _finish(
         tmp_path, first="failure", second="success",
         first_exec=_write(tmp_path, "a.json", _refusal()),
-        second_exec=_write(tmp_path, "b.json", _success(OPUS55)),
-        second_model=OPUS55, because="monthly spend limit")
+        second_exec=_write(tmp_path, "b.json", _success(SECOND)),
+        second_model=SECOND, because="monthly spend limit")
     assert proc.returncode == 0, proc.stderr
     assert got["outcome"] == "success"
-    assert got["model"] == OPUS55
+    assert got["model"] == SECOND
     assert got["execution_file"].endswith("b.json")
     receipt = got["receipt"]
     assert receipt.startswith("DEGRADED"), receipt
-    assert f"{FABLE51} (asked) / {OPUS55} (answered)" in receipt
+    assert f"{TOP} (asked) / {SECOND} (answered)" in receipt
     assert "out of capacity (monthly spend limit)" in receipt
     assert "model-error:" not in receipt
     assert "planner agent starting" not in receipt, "the DRE-3824 --since needle"
@@ -212,11 +252,11 @@ def test_both_rungs_refused_fails_required_and_names_the_second(tmp_path):
     proc, got = _finish(
         tmp_path, first="failure", second="failure",
         first_exec=_write(tmp_path, "a.json", _refusal()),
-        second_exec=_write(tmp_path, "b.json", _refusal(OPUS55)),
-        second_model=OPUS55, because="monthly spend limit")
+        second_exec=_write(tmp_path, "b.json", _refusal(SECOND)),
+        second_model=SECOND, because="monthly spend limit")
     assert proc.returncode == 1
     assert got["outcome"] == "failure"
-    assert got["model"] == OPUS55, "the death marker names the model that died last"
+    assert got["model"] == SECOND, "the death marker names the model that died last"
 
 
 def test_a_genuine_failure_with_no_retry_still_fails_the_job(tmp_path):
@@ -224,7 +264,7 @@ def test_a_genuine_failure_with_no_retry_still_fails_the_job(tmp_path):
                         first_exec=_write(tmp_path, "a.json", _long_failure()))
     assert proc.returncode == 1
     assert got["outcome"] == "failure"
-    assert got["model"] == FABLE51
+    assert got["model"] == TOP
     assert got["receipt"] == ""
 
 
@@ -238,7 +278,7 @@ def test_the_step_that_was_already_continue_on_error_never_fails_here(tmp_path):
 
 def test_a_clean_run_on_fable_posts_no_receipt(tmp_path):
     proc, got = _finish(tmp_path, first="success",
-                        first_exec=_write(tmp_path, "a.json", _success(FABLE51)))
+                        first_exec=_write(tmp_path, "a.json", _success(TOP)))
     assert proc.returncode == 0
     assert got["outcome"] == "success"
     assert got["receipt"] == ""
@@ -249,13 +289,13 @@ def test_a_silent_cli_fallback_is_named_by_the_model_that_answered(tmp_path):
     # heartbeat said Fable while Opus planned. The record's modelUsage says who.
     payload = [{"type": "result", "subtype": "success", "is_error": False,
                 "num_turns": 40, "total_cost_usd": 4.1,
-                "modelUsage": {FABLE51: {"outputTokens": 0},
-                               OPUS55: {"outputTokens": 28000}}}]
+                "modelUsage": {TOP: {"outputTokens": 0},
+                               SECOND: {"outputTokens": 28000}}}]
     proc, got = _finish(tmp_path, first="success",
                         first_exec=_write(tmp_path, "a.json", payload))
     assert proc.returncode == 0
     assert got["receipt"].startswith("DEGRADED"), got
-    assert f"{FABLE51} (asked) / {OPUS55} (answered)" in got["receipt"]
+    assert f"{TOP} (asked) / {SECOND} (answered)" in got["receipt"]
 
 
 # --------------------------------------------------------------------------- #
@@ -279,9 +319,14 @@ def _by_id(step_id: str) -> dict:
 
 @pytest.mark.parametrize("site", SITES, ids=SITE_IDS)
 def test_the_five_steps_sit_in_order_right_after_the_planner_step(site):
+    # The capacity read selects a model, so the model-home token is minted
+    # again between it and the planner step that may have aged the first one
+    # past its hour (DRE-6940), and only when the capacity read runs.
     name, orig, cap, mint, retry, done, _mint0, _coe = site
     at = _index(orig)
-    assert [_steps()[at + k].get("id") for k in range(5)] == [orig, cap, mint, retry, done]
+    home = f"model_home_{cap}"
+    assert [_steps()[at + k].get("id") for k in range(6)] == [orig, home, cap, mint, retry, done]
+    assert _by_id(home).get("if") == _by_id(cap).get("if")
 
 
 @pytest.mark.parametrize("site", SITES, ids=SITE_IDS)
@@ -378,15 +423,15 @@ def test_the_second_critic_decision_reads_the_re_plan_that_counted():
 # --------------------------------------------------------------------------- #
 
 def _bash(step: dict, tmp: Path, env_extra: dict):
-    root = tmp / ".bureau-pipeline" / "scripts"
+    tree = tmp / ".bureau-pipeline"
+    root = tree / "scripts"
     if not root.exists():
-        shutil.copytree(ROOT / "scripts", root)
-        shutil.copytree(ROOT / "config", tmp / ".bureau-pipeline" / "config")
+        _pipeline_tree(tree)
         (root / "linear_ops.py").write_text(
             "import json,os,sys\n"
             "open(os.environ['STUB_LINEAR_LOG'],'a').write(json.dumps(sys.argv[1:])+'\\n')\n")
     out = tmp / "gh_output"
-    env = dict(os.environ)
+    env = model_fixture.home_env(tree, HOME)
     env.update({"GITHUB_OUTPUT": str(out), "RUNNER_TEMP": str(tmp),
                 "GITHUB_SERVER_URL": "https://github.com",
                 "GITHUB_REPOSITORY": "dreadnought-foundry/portico",
@@ -403,18 +448,18 @@ def _bash(step: dict, tmp: Path, env_extra: dict):
 def test_the_plan_epic_steps_run_end_to_end_on_a_refusal(tmp_path):
     first = _write(tmp_path, "first.json", _refusal())
     proc, cap = _bash(_by_id("plan_cap"), tmp_path, {
-        "EXEC_FILE": first, "MODEL": FABLE51, "EPIC": "DRE-3949"})
+        "EXEC_FILE": first, "MODEL": TOP, "EPIC": "DRE-3949"})
     assert proc.returncode == 0, proc.stdout + proc.stderr
-    assert cap["retry"] == "true" and cap["model"] == OPUS55
+    assert cap["retry"] == "true" and cap["model"] == SECOND
 
-    second = _write(tmp_path, "second.json", _success(OPUS55))
+    second = _write(tmp_path, "second.json", _success(SECOND))
     (tmp_path / "gh_output").unlink()
     proc, done = _bash(_by_id("plan_done"), tmp_path, {
         "FIRST_OUTCOME": "failure", "SECOND_OUTCOME": "success",
-        "FIRST_EXEC": first, "SECOND_EXEC": second, "ASKED": FABLE51,
-        "SECOND_MODEL": OPUS55, "BECAUSE": cap["because"], "EPIC": "DRE-3949"})
+        "FIRST_EXEC": first, "SECOND_EXEC": second, "ASKED": TOP,
+        "SECOND_MODEL": SECOND, "BECAUSE": cap["because"], "EPIC": "DRE-3949"})
     assert proc.returncode == 0, proc.stdout + proc.stderr
-    assert done["model"] == OPUS55 and done["outcome"] == "success"
+    assert done["model"] == SECOND and done["outcome"] == "success"
     posted = [json.loads(l) for l in (tmp_path / "linear.log").read_text().splitlines()]
     assert len(posted) == 1
     assert posted[0][0] == "comment" and posted[0][1] == "DRE-3949"
@@ -426,12 +471,12 @@ def test_the_plan_epic_steps_run_end_to_end_on_a_refusal(tmp_path):
 def test_the_plan_epic_finish_fails_the_job_on_a_genuine_failure(tmp_path):
     first = _write(tmp_path, "first.json", _long_failure())
     proc, cap = _bash(_by_id("plan_cap"), tmp_path, {
-        "EXEC_FILE": first, "MODEL": FABLE51, "EPIC": "DRE-3949"})
+        "EXEC_FILE": first, "MODEL": TOP, "EPIC": "DRE-3949"})
     assert cap["retry"] == "false"
     (tmp_path / "gh_output").unlink()
     proc, done = _bash(_by_id("plan_done"), tmp_path, {
         "FIRST_OUTCOME": "failure", "SECOND_OUTCOME": "skipped",
-        "FIRST_EXEC": first, "SECOND_EXEC": "", "ASKED": FABLE51,
+        "FIRST_EXEC": first, "SECOND_EXEC": "", "ASKED": TOP,
         "SECOND_MODEL": "", "BECAUSE": "", "EPIC": "DRE-3949"})
     assert proc.returncode != 0
     assert not (tmp_path / "linear.log").exists(), "no receipt for a run nobody fell from"

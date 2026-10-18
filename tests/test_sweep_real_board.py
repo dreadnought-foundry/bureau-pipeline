@@ -172,9 +172,19 @@ REAL_WAITING_LINE = epic_cap.waiting_line
 #: epics' page, because Backlog is read after the carry on purpose (DRE-5347)
 #: and the active close runs before it. 47 + 1 = 48.
 #:
+#: It was 48 until DRE-6742 (measured 2026-10-13: 54) moved the planning exit
+#: to Queued. The board deals its queue cards into the lane the queue is
+#: written to (`board_snapshot._SYNTHETIC_DEAL`), so the few cards it deals
+#: into the queue's other name are now under `Backlog`, where they were under
+#: `Queued` before; and the queue read answers under both names, as Linear's
+#: `in` filter does, where the fake used to answer under `Backlog` alone. Those
+#: six cards are read for the first time, each is promoted, and each promotion
+#: re-reads its card live before it moves: six more requests in
+#: `promote_ready`. 48 + 6 = 54.
+#:
 #: It is the ONLY place the real-board ceiling lives. Each cut sibling lowers
 #: it to what IT measures, ending at 30.
-REAL_BOARD_SWEEP_BUDGET = 48
+REAL_BOARD_SWEEP_BUDGET = 54
 
 #: The replay is a CI test, not a benchmark: the card's 30 seconds, asserted so
 #: a sweep that starts walking the board per card fails here rather than slowing
@@ -294,7 +304,8 @@ class ReplayLinear(FakeLinear):
                 lane = card["state"]["name"]
                 parent_lane = ((card.get("parent") or {}).get("state") or {}).get("name")
                 if lane in v.get("states", ()) or (
-                        lane == "Backlog" and parent_lane in v.get("epicStates", ())):
+                        lane in reconcile.QUEUE_LANES
+                        and parent_lane in v.get("epicStates", ())):
                     nodes.append(card)
             return self._page(nodes, v.get("after"))
         return super().gql(query, variables)
@@ -352,7 +363,7 @@ def _decisions(advance, state, label, refusals) -> dict[str, list[str]]:
             close.append(ident)
         elif to in _ESCALATION_LANES:
             escalate.append(f"{ident} → {to}")
-        elif to == "Backlog" and "--park" in call.args[2:]:
+        elif to == reconcile.QUEUE_LANE and "--park" in call.args[2:]:
             hold.append(f"{ident} parked")
     for call in label.call_args_list:
         if call.args[1:2] == (reconcile.HOLD_LABEL,):
@@ -670,7 +681,7 @@ def test_the_epic_reads_do_not_follow_the_number_of_epics(replay):
     # reads Backlog after the carry. Each is ONE read for all its epics.
     backlog_epics = {
         int(c["identifier"].split("-")[1]) for c in replay.fake.cards.values()
-        if (c.get("state") or {}).get("name") == "Backlog"
+        if (c.get("state") or {}).get("name") in reconcile.QUEUE_LANES
         and reconcile.card_repo(c) == SLUG and reconcile.card_is_epic(c)
     }
     assert backlog_epics, "the board holds no Backlog epic — the second page proves nothing"

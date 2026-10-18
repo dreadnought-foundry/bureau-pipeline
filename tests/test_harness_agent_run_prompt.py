@@ -244,3 +244,55 @@ class TestThePromptDoesNotTransitArgv:
         assert agent_call["text"] is True
         assert agent_call["env"]["GH_TOKEN"] == TOKEN
         assert agent_call["env"]["GITHUB_TOKEN"] == TOKEN
+
+
+class TestTheModelHomeTokenStopsAtTheSelector:
+    """DRE-6940. harness.yml hands the scenarios step BUREAU_MODEL_HOME_TOKEN so
+    `_select_model`'s child can read the model home. The agent CLI beside it
+    runs with Bash over a seeded card and needs no model home, so it must not
+    inherit the token — or the local copy's path — from the step."""
+
+    def test_the_selector_holds_the_token_and_the_agent_does_not(
+        self, sandbox, monkeypatch
+    ):
+        monkeypatch.delenv("HARNESS_AGENT_MODEL")
+        monkeypatch.setenv("BUREAU_MODEL_HOME_TOKEN", "ghs_model_home_fixture")
+        monkeypatch.setenv("BUREAU_MODEL_HOME_FILE", "/tmp/model-home.json")
+        calls: list = []
+
+        agent_run.run_agent(
+            _oversize_card(size=1024),
+            repo="dreadnought-foundry/bureau-harness",
+            token=TOKEN,
+            workdir=sandbox.workdir,
+            pipeline_root=str(ROOT),
+            runner=_recording_runner(calls),
+            log=lambda *a, **k: None,
+        )
+
+        (selector,) = [c for c in calls
+                       if any(str(a).endswith("model_fallback.py") for a in c["argv"])]
+        selector_env = selector.get("env") or os.environ
+        assert selector_env.get("BUREAU_MODEL_HOME_TOKEN") == "ghs_model_home_fixture"
+        agent_call = calls[-1]
+        assert agent_call["input"], "the last call is the agent CLI"
+        assert "BUREAU_MODEL_HOME_TOKEN" not in agent_call["env"]
+        assert "BUREAU_MODEL_HOME_FILE" not in agent_call["env"]
+        assert agent_call["env"]["GH_TOKEN"] == TOKEN
+
+    def test_an_explicit_env_loses_the_token_too(self, sandbox):
+        calls: list = []
+
+        agent_run.run_agent(
+            _oversize_card(size=1024),
+            repo="dreadnought-foundry/bureau-harness",
+            token=TOKEN,
+            workdir=sandbox.workdir,
+            pipeline_root=str(ROOT),
+            runner=_recording_runner(calls),
+            env={"PATH": os.environ.get("PATH", ""),
+                 "BUREAU_MODEL_HOME_TOKEN": "ghs_model_home_fixture"},
+            log=lambda *a, **k: None,
+        )
+
+        assert "BUREAU_MODEL_HOME_TOKEN" not in calls[-1]["env"]

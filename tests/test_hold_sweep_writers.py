@@ -342,7 +342,7 @@ def test_triage_entrance_names_the_no_route_park():
 
 def test_triage_exit_names_both_lifts_and_where_each_sends_the_card():
     text = _lane("Triage")["clauses"]["exit"]["text"]
-    assert "returns the card to Backlog, never Todo" in text, "the old rule stands"
+    assert "returns the card to Queued, never Todo" in text, "the old rule stands"
     assert "holds lane lifts a hold whose condition has cleared" in text
     assert "a `no-route` hold to Planning" in text
     assert "a `fix-dispute` or `unfixable-check` hold to In Review" in text

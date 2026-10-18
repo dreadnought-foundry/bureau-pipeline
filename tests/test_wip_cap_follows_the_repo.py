@@ -169,17 +169,16 @@ class TestTheCapIsReadFromTheRepo:
         assert len(ignored) == 1, ignored
         assert "${{ vars.MAX_WIP }}" in ignored[0]
 
-    def test_this_repo_resolves_through_its_own_self_stub(self):
-        """bureau-pipeline self-hosts through self-reconcile.yml, and an empty
-        input resolves to the cap that stub writes. The expected number is
-        read from the stub itself, so raising the restart cap (3 under
-        DRE-5733, 8 under DRE-5954) changes the stub, not this test."""
-        stub = yaml.safe_load(
-            (ROOT / ".github" / "workflows" / "self-reconcile.yml").read_text())
-        written = int(next(iter(stub["jobs"].values()))["with"]["max_wip"])
+    def test_this_repo_reads_its_own_self_stub_and_finds_no_number(self):
+        """bureau-pipeline self-hosts through self-reconcile.yml, which the
+        reader still finds — and since DRE-6783 that stub writes no max_wip,
+        so an empty input reads past it to the BUREAU_MAX_WIP variable, and
+        with none set to the default. Before DRE-6783 it wrote "8" (3 under
+        DRE-5733, 8 under DRE-5954), which the console could not change."""
         cap, source = reconcile.cap_and_source("", str(ROOT))
-        assert cap == written
+        assert cap == reconcile.DEFAULT_MAX_WIP
         assert "self-reconcile.yml" in source
+        assert "names no max_wip number" in source
 
     def test_the_module_names_where_its_cap_came_from(self):
         assert isinstance(reconcile.MAX_WIP_SOURCE, str) and reconcile.MAX_WIP_SOURCE
@@ -540,3 +539,11 @@ class TestTheReusablesLetTheRepoSpeak:
                     )
                     assert env.get("MAX_WIP") == "${{ inputs.max_wip }}", name
         assert found >= 1, f"{name}: no promotion step found — the check went vacuous"
+
+
+def test_no_string_constant_in_the_wip_cap_check_names_the_old_lane():
+    """A lane name in a string does not follow the switch (DRE-6749)."""
+    import lane_contract
+
+    path = str(Path(__file__).resolve().parent.parent / "scripts" / "check_wip_cap.py")
+    assert lane_contract._scan_python(path, ["Backlog"]) == set()

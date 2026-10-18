@@ -39,8 +39,10 @@ ADOPTION = WORKFLOWS / "model-adoption.yml"
 MEDIC_STUB = WORKFLOWS / "self-medic.yml"
 
 sys.path.insert(0, str(ROOT / "scripts"))
+sys.path.insert(0, str(ROOT / "tests"))
 
 import model_config_change as mcc  # noqa: E402
+import model_fixture  # noqa: E402
 import whats_new  # noqa: E402
 
 NAME = "Model config change"
@@ -317,6 +319,105 @@ def test_the_model_tests_run_and_their_result_reaches_the_pull_request():
     assert pr["env"]["TESTS"] == "${{ steps.tests.outputs.result }}"
 
 
+#: What the workflow says of the model tests (DRE-6865): no test pins a choice
+#: the console can change, so a red result is a defect, never the price of a
+#: change. Compared with backticks, comment marks and line breaks taken out.
+NO_PIN = (
+    "No model test pins a choice the console can change: a rule is tested against "
+    "the frozen fixture at tests/fixtures/model-config-frozen/ "
+    "(model_fixture.FIXTURE_DIR), and "
+    "tests/test_console_change_keeps_the_suite_green.py is written to prove every "
+    "operation leaves every model-reading test green (its per-case runs skip in "
+    "the unit parts and run in the console change keeps the suite green job of "
+    "Pipeline Tests) — so a red result on a change pull "
+    "request is a defect in the change or in a test, never the expected cost of "
+    "a change the console allows."
+)
+#: What it said before: that a legitimate change could turn the tests red, and
+#: that the critic and the fix agent owned that repair.
+OLD_PHRASES = ("legitimate change", "the fix agent own")
+
+
+def _prose(text: str) -> str:
+    lines = [re.sub(r"^\s*#\s?", "", line) for line in text.splitlines()]
+    return " ".join(" ".join(lines).replace("`", "").split())
+
+
+def _header() -> str:
+    lines = _text().splitlines()
+    return "\n".join(lines[:next(n for n, line in enumerate(lines)
+                                 if line.startswith("name:"))])
+
+
+def _comment_above(step_name: str) -> str:
+    lines = _text().splitlines()
+    at = next(n for n, line in enumerate(lines)
+              if line.strip() == f"- name: {step_name}")
+    above = []
+    for line in reversed(lines[:at]):
+        if not line.lstrip().startswith("#"):
+            break
+        above.insert(0, line)
+    return "\n".join(above)
+
+
+def _pr_body(tmp_path: Path) -> str:
+    """The body the pull request step writes, run as written."""
+    (tmp_path / "change-set.json").write_text(_change_set(VALID))
+    shutil.copy(ROOT / "config" / "models.yaml", tmp_path / "models-before.yaml")
+    proc, _, _ = _run_step(tmp_path, _steps()[_index("gh pr create")],
+                           {"BRANCH": "agent/model-config-x", "TESTS": "failed",
+                            "GH_TOKEN": "fake-token"}, open_url="")
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    return (tmp_path / "pr-body.md").read_text()
+
+
+def test_the_no_pin_sentence_names_the_fixture_and_the_harness_that_exist():
+    rel = model_fixture.FIXTURE_DIR.relative_to(ROOT).as_posix() + "/"
+    assert rel in NO_PIN
+    assert (ROOT / "tests" / "test_console_change_keeps_the_suite_green.py").is_file()
+
+
+def test_the_no_pin_sentence_says_where_the_per_case_runs_run():
+    """The per-case runs skip in the unit parts and run in DRE-6873's job, so
+    the sentence says where they run — and names the job the harness's own
+    skip reason names."""
+    import test_console_change_keeps_the_suite_green as harness
+    job = re.fullmatch(r'runs in the "(.+)" job', harness.SKIP_REASON).group(1)
+    assert f"run in the {job} job of Pipeline Tests" in NO_PIN
+    assert " proves " not in NO_PIN
+
+
+def test_the_header_says_no_model_test_pins_a_console_choice():
+    header = _prose(_header())
+    assert NO_PIN in header
+    for phrase in OLD_PHRASES:
+        assert phrase not in header, phrase
+
+
+def test_the_model_test_step_comment_says_so_too():
+    comment = _prose(_comment_above("Run the model tests (informational)"))
+    assert "INFORMATIONAL" in comment
+    assert NO_PIN in comment
+    for phrase in OLD_PHRASES:
+        assert phrase not in comment, phrase
+
+
+def test_the_pull_request_body_says_so_under_model_tests(tmp_path):
+    body = _pr_body(tmp_path)
+    section = body[body.index("## Model tests"):]
+    assert "on this branch: **failed**." in section
+    assert NO_PIN in _prose(section)
+    for phrase in OLD_PHRASES:
+        assert phrase not in body, phrase
+
+
+def test_the_old_wording_is_gone_from_the_workflow():
+    text = _prose(_text())
+    left = [phrase for phrase in OLD_PHRASES if phrase in text]
+    assert left == [], f"{WORKFLOW.name} still says {left}"
+
+
 def test_the_commit_touches_only_the_model_config():
     run = _steps()[_index("git push")]["run"]
     assert "git add -- " + " ".join(CONFIG_FILES) in run
@@ -548,10 +649,21 @@ def test_a_refused_change_set_ends_the_run_with_no_branch_and_no_pull_request(tm
     assert run.git("rev-parse", "origin/main").strip() == run.base
 
 
+def _another_builders_choice() -> str:
+    """A Builders model the console offers that is not today's default, read
+    off the committed `config/model-choices.json` — the scenario runs the
+    workflow against today's files, so it can name no literal model."""
+    choices = json.loads((ROOT / "config" / "model-choices.json").read_text())
+    group = next(g for g in choices["groups"] if g["key"] == "workhorse")
+    return next(c["model"] for c in group["choices"]
+                if c["allowed"] and c["model"] != group["default_model"])
+
+
 def test_a_valid_change_set_opens_one_pull_request_and_a_rerun_opens_none(tmp_path):
     run = _Run(tmp_path)
+    model = _another_builders_choice()
     change_set = _change_set(
-        VALID, {"op": "set_default_model", "group": "workhorse", "model": "claude-sonnet-5-5"})
+        VALID, {"op": "set_default_model", "group": "workhorse", "model": model})
     branch = mcc.branch_name(json.loads(change_set))
 
     ran, failed, log = run.dispatch(change_set)
@@ -564,8 +676,8 @@ def test_a_valid_change_set_opens_one_pull_request_and_a_rerun_opens_none(tmp_pa
                            cwd=run.work, capture_output=True, text=True)
     assert check.returncode == 0, check.stdout + check.stderr
     models = yaml.safe_load((run.work / "config/models.yaml").read_text())
-    assert models["agents"]["proof"] == "advisory"
-    assert models["ladders"]["workhorse"][0]["model"] == "claude-sonnet-5-5"
+    assert models["agents"][VALID["agent"]] == VALID["group"]
+    assert models["ladders"]["workhorse"][0]["model"] == model
     creates = [call for call in run.gh_calls() if call.startswith("pr create")]
     assert len(creates) == 1
     assert f"--head {branch}" in creates[0] and "--base main" in creates[0]

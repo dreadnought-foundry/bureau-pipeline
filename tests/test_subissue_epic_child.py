@@ -16,24 +16,29 @@ Two refusals close the door both ways, before anything is written:
     while it wears the build role the flag would have kept off it.
 
 Everything else is the ordinary child path: the parent must already be an
-epic, the child lands in Backlog, `**Blocked by:**` and `--blocked-by` become
-real relations, and the same `validate_card` gate runs.
+epic, the child lands in the queue lane (`lane_contract.QUEUE_LANE`, DRE-6744),
+`**Blocked by:**` and `--blocked-by` become real relations, and the same
+`validate_card` gate runs.
 
 The harness is `FakeLinear` from tests/test_subissue_valid_children.py.
 """
 
 from __future__ import annotations
 
+import ast
 import io
 import os
 import sys
+import tokenize
 from contextlib import redirect_stdout
+from pathlib import Path
 from unittest.mock import patch
 
 import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "scripts"))
 
+import lane_contract  # noqa: E402
 import linear_ops  # noqa: E402
 import validate_card  # noqa: E402
 
@@ -242,3 +247,98 @@ class TestTheTitleRefusals:
         _subissue(fake, tmp_path, "bureau-pipeline: a work card", BODY)
         assert _attached(fake) == [
             "repo:bureau-pipeline", "initiative:bureau", "agent:devops"]
+
+
+# --- the lane a child lands in (DRE-6744) ------------------------------------
+
+
+class _QueueBoard(FakeLinear):
+    """The same harness on a board carrying `lanes` — both queue names by
+    default, so the lane the child lands in is the one the write named."""
+
+    def __init__(self, lanes=("Backlog", "Queued"), **kw):
+        super().__init__(**kw)
+        self.lanes = lanes
+
+    def gql(self, query, variables=None, **kw):
+        if "workflowStates" in " ".join(query.split()):
+            return {"workflowStates": {"nodes": [
+                {"id": f"state-{name.lower()}", "name": name, "type": "backlog"}
+                for name in self.lanes]}}
+        return super().gql(query, variables, **kw)
+
+
+class TestTheChildLandsInTheQueueLane:
+    """`subissue` writes `lane_contract.QUEUE_LANE`, never a lane of its own:
+    the planning exit's destination today, and `Queued` the day DRE-6742 moves
+    the exit — with no edit here. The sweep reads children through
+    `QUEUE_LANES` (DRE-6743), so writer and reader agree under either exit."""
+
+    @pytest.mark.parametrize("flipped", [False, True], ids=["shipped", "flipped"])
+    @pytest.mark.parametrize("flags", [(), ("--epic",)], ids=["work", "epic"])
+    def test_the_child_lands_in_the_queue_lane(self, tmp_path, monkeypatch,
+                                               flipped, flags):
+        if flipped:
+            monkeypatch.setattr(linear_ops, "QUEUE_LANE", "Queued")
+        lane = linear_ops.QUEUE_LANE
+        assert lane == ("Queued" if flipped else lane_contract.queue_lane())
+        fake = _QueueBoard(parent_labels=PIPELINE_PARENT)
+        title = "[EPIC] bureau-pipeline: x" if flags else "bureau-pipeline: a work card"
+        _subissue(fake, tmp_path, title, BODY, *flags)
+        assert fake.created["stateId"] == f"state-{lane.lower()}"
+        assert fake.created["parentId"] == "epic-uuid"
+
+    def test_the_shipped_queue_lane_is_the_planning_exit(self):
+        assert lane_contract.QUEUE_LANE == lane_contract.planning_exit()[1]
+        assert lane_contract.QUEUE_LANE in lane_contract.QUEUE_LANES
+
+    def test_a_board_without_queued_takes_the_child_in_backlog_and_says_so(
+            self, tmp_path, monkeypatch):
+        monkeypatch.setattr(linear_ops, "QUEUE_LANE", "Queued")
+        fake = _QueueBoard(lanes=("Backlog",), parent_labels=PIPELINE_PARENT)
+        out = _subissue(fake, tmp_path, "bureau-pipeline: a work card", BODY)
+        assert fake.created["stateId"] == "state-backlog"
+        assert "'Queued' is not on the board yet" in out
+        assert "pre-rename lane 'Backlog'" in out
+
+
+class TestTheSourceShape:
+    """agent-bureau's phase prover reads this shape off the file (DRE-7053):
+    `cmd_subissue` passes `lane=QUEUE_LANE`, the name imported from
+    `lane_contract`, and a `#` comment in its body names `Queued` as the one
+    deliberate exception to the Planning default (DRE-2858)."""
+
+    SOURCE = Path(linear_ops.__file__).read_text(encoding="utf-8")
+
+    def _function(self, name):
+        tree = ast.parse(self.SOURCE)
+        return next(n for n in ast.walk(tree)
+                    if isinstance(n, ast.FunctionDef) and n.name == name)
+
+    def test_queue_lane_is_imported_from_lane_contract(self):
+        imported = {
+            alias.name
+            for node in ast.walk(ast.parse(self.SOURCE))
+            if isinstance(node, ast.ImportFrom) and node.module == "lane_contract"
+            for alias in node.names
+        }
+        assert "QUEUE_LANE" in imported
+        assert linear_ops.QUEUE_LANE is lane_contract.QUEUE_LANE
+
+    def test_cmd_subissue_passes_lane_equals_queue_lane(self):
+        lanes = [
+            kw.value for node in ast.walk(self._function("cmd_subissue"))
+            if isinstance(node, ast.Call)
+            for kw in node.keywords if kw.arg == "lane"
+        ]
+        assert len(lanes) == 1
+        assert isinstance(lanes[0], ast.Name) and lanes[0].id == "QUEUE_LANE"
+
+    def test_a_comment_in_cmd_subissue_names_queued_as_the_exception(self):
+        fn = self._function("cmd_subissue")
+        body = "\n".join(self.SOURCE.splitlines()[fn.lineno - 1:fn.end_lineno])
+        comments = [tok.string for tok in tokenize.generate_tokens(io.StringIO(body).readline)
+                    if tok.type == tokenize.COMMENT]
+        assert any("Queued" in c for c in comments), comments
+        text = " ".join(comments)
+        assert "DRE-2858" in text and "Planning" in text

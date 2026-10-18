@@ -31,7 +31,14 @@
 # token, and the verify legs fold the documents into their targets. It is
 # skipped on a drain with the other two.
 #
-# Reusable workflow: permissions live in the calling stub (contents: read).
+# A FIFTH, BESIDE IT (DRE-7242): `routing` reads, once per owner, which
+# runners each repo's jobs actually landed on, on a token holding
+# `actions: read` alone, and the verify legs fold it after the lookups. The
+# same run also takes a `replay` input that re-checks a stored proposal and
+# posts nothing.
+#
+# Reusable workflow: permissions live in the calling stub (contents: read, and
+# id-token: write for the read door since DRE-7242).
 name: Groomer (reusable)
 
 on:
@@ -120,6 +127,18 @@ on:
         description: >-
           empty = sized from the token's own bucket; 0 = spend nothing; a whole
           number = the cap on requests per owner
+        type: string
+        required: false
+        default: ""
+      replay:
+        # THE REPLAY (DRE-7242, DRE-7239's CLI). Set, it is a path relative to
+        # the pipeline checkout, handed to `groom_replay.py base --stored`: the
+        # Groom step re-checks that stored proposal instead of proposing, a
+        # `drain` refuses before any write, and the post job posts to no card
+        # and writes no receipt — it prints the page and the replay's report.
+        description: >-
+          empty = an ordinary run; a stored proposal's path inside the
+          pipeline checkout = re-check that proposal and post nothing
         type: string
         required: false
         default: ""
@@ -253,6 +272,38 @@ jobs:
           permission-contents: read
           permission-pull-requests: read
 
+      # The model home (DRE-6939) is a variable on
+      # dreadnought-foundry/bureau-pipeline, which a run's boot token in another
+      # organization cannot read. A token for the bureau App's installation
+      # there, for bureau-pipeline alone and with no permission subset — the
+      # pinned action declares no variables input (DRE-7230) — handed only to
+      # the steps below whose process reads the home
+      # (DRE-6940, held by scripts/check_model_home_scope.py). A refused mint
+      # leaves it empty and the selector on the defaults in the code — never a
+      # failed job.
+      - name: Mint the model-home read token
+        id: model_home
+        continue-on-error: true
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: ${{ secrets.BUREAU_APP_ID }}
+          private-key: ${{ secrets.BUREAU_APP_PRIVATE_KEY }}
+          owner: dreadnought-foundry
+          repositories: bureau-pipeline
+
+      # The read door's identity check (review M1), as reconcile.yml runs it.
+      # The door trusts this job's OIDC token for `groomer.yml@<the ref the
+      # stub called>`, but the scripts were checked out at `pipeline_ref`.
+      # Unequal, `targets` would present one ref's identity while executing
+      # another ref's code — so the reusable refuses to run. With BUREAU_READ
+      # off, or no token, there is no identity to protect and it passes.
+      - name: Refuse a pipeline_ref the stub did not call
+        env:
+          BUREAU_READ: ${{ vars.BUREAU_READ || 'off' }}
+          BUREAU_READ_AUDIENCE: ${{ vars.BUREAU_READ_AUDIENCE }}
+          PIPELINE_REF: ${{ inputs.pipeline_ref }}
+        run: python3 .bureau-pipeline/scripts/bureau_read.py check-ref "$PIPELINE_REF"
+
       - name: Groom
         # Identified for the death-cause receipt at the foot of this job
         # (DRE-4340): GitHub's own outcome for this step is what says whether
@@ -261,6 +312,7 @@ jobs:
         # to load.
         id: groom
         env:
+          BUREAU_MODEL_HOME_TOKEN: ${{ steps.model_home.outputs.token }}
           LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
           # The judged read's credential (DRE-3153), gated on `CLAUDE_AUTH_MODE`
           # exactly the way plan.yml's classify step gates it — one reading of
@@ -291,11 +343,30 @@ jobs:
           CARD: ${{ inputs.card }}
           INTAKE_HOLD: ${{ inputs.intake_hold }}
           JUDGEMENT: ${{ inputs.judgement }}
+          REPLAY: ${{ inputs.replay }}
+          # The read door's settings (DRE-7242), for `targets` ALONE: its
+          # problem search (`groom_lookups.cards`) asks the door before Linear.
+          # Under names no script reads, and handed to the targets command
+          # below as the door's own — so `propose`, in this same step, runs
+          # exactly as before the door was wired. A stub that grants no
+          # `id-token: write` mints no token, and the search falls back to
+          # Linear; it never fails. `DOOR_PIPELINE_REF` lets the client
+          # refuse a token that names another ref than these scripts.
+          DOOR_READ: ${{ vars.BUREAU_READ || 'off' }}
+          DOOR_READ_URL: ${{ vars.BUREAU_READ_URL }}
+          DOOR_READ_AUDIENCE: ${{ vars.BUREAU_READ_AUDIENCE }}
+          DOOR_PIPELINE_REF: ${{ inputs.pipeline_ref }}
         run: |
           set -euo pipefail
           # Every input through env, never interpolated into the shell line.
           SHAPING=(--lane "$LANE" --capacity "$CAPACITY"
                    --batch-cycles "$BATCH_CYCLES" --priority "$PRIORITY")
+          # A replay re-checks a stored proposal and writes nothing; a drain
+          # moves cards. Asked for both, refuse before either starts.
+          if [ -n "$REPLAY" ] && [ "$MODE" = "drain" ]; then
+            echo "a replay re-checks a stored proposal and never drains" >&2
+            exit 1
+          fi
           if [ "$MODE" = "drain" ]; then
             if [ -z "$CARD" ]; then
               echo "drain needs the card the approval lives on" >&2
@@ -322,16 +393,29 @@ jobs:
             # `--keep-answer` (DRE-3331): the ranked read's raw answer, kept
             # for the artifact below. Model output over card text — an
             # artifact, never a comment. Absent when no call answered.
-            python3 .bureau-pipeline/scripts/groomer.py propose \
-              "${SHAPING[@]}" "${JUDGE[@]}" "${THREAD[@]}" \
-              --keep-answer judgement-answer.txt \
-              --out proposal.json | tee proposal.txt
+            #
+            # THE REPLAY (DRE-7242): the stored proposal, stripped of what
+            # its verify leg wrote, is this run's proposal — no census, no
+            # model call. A path it refuses exits 2 with the reason.
+            if [ -n "$REPLAY" ]; then
+              python3 .bureau-pipeline/scripts/groom_replay.py base \
+                --stored "$REPLAY" --out proposal.json | tee proposal.txt
+            else
+              python3 .bureau-pipeline/scripts/groomer.py propose \
+                "${SHAPING[@]}" "${JUDGE[@]}" "${THREAD[@]}" \
+                --keep-answer judgement-answer.txt \
+                --out proposal.json | tee proposal.txt
+            fi
             # The cards the verify matrix checks (DRE-4970): the Planning
             # list and the spares behind it, each card's text read HERE —
             # this job holds the Linear key and the verify job never does —
             # and sanitized before it is written. `matrix.json` marks a card
             # whose repo is not in config/repo-map.json with `repository: ""`.
-            python3 .bureau-pipeline/scripts/groom_verify_agent.py targets \
+            # The door's settings are scoped to this one command.
+            BUREAU_READ="$DOOR_READ" BUREAU_READ_URL="$DOOR_READ_URL" \
+              BUREAU_READ_AUDIENCE="$DOOR_READ_AUDIENCE" \
+              BUREAU_PIPELINE_REF="$DOOR_PIPELINE_REF" \
+              python3 .bureau-pipeline/scripts/groom_verify_agent.py targets \
               --proposal proposal.json --out verify-targets.json \
               --matrix-out matrix.json
             # One line, because a job output is one `key=value` line.
@@ -386,7 +470,7 @@ jobs:
           CLAUDE_AUTH_MODE: ${{ vars.CLAUDE_AUTH_MODE }}
         run: |
           python3 .bureau-pipeline/scripts/death_receipt.py emit \
-            --execution-file /home/runner/work/_temp/claude-execution-output.json \
+            --execution-file "${RUNNER_TEMP:-/tmp}/claude-execution-output.json" \
             --out "${RUNNER_TEMP:-/tmp}/death-receipt.json" \
             --job-status "$JOB_STATUS" \
             --step-outcome "$MODEL_STEP_OUTCOME" \
@@ -490,6 +574,77 @@ jobs:
           overwrite: true
           retention-days: 30
 
+  # THE ROUTING READS, ONE LEG PER OWNER (DRE-7242, the reader DRE-7237).
+  # Which runners each repo's jobs actually landed on, read off its recent
+  # workflow runs, so a verify agent judging a runner card has the facts and
+  # not a guess. Beside `lookup`, never after it: that job's nine minutes are
+  # sized against `groom_lookups.MAX_SECONDS` alone, and a read appended to
+  # it could be killed before writing its document — so this is a job of its
+  # own, on the same `needs`, `if` and owner matrix, and `lookup` is
+  # untouched.
+  #
+  # WHAT THIS JOB HOLDS: a token that reads Actions on one owner's
+  # installation, and nothing else — no Linear key, no model credential. An
+  # installation that refuses `actions: read` fails the mint; the leg still
+  # runs the reader, which writes its document saying the owner is unread.
+  # That costs the routing facts and nothing else.
+  #
+  # THE CLOCK, sized from the script's own: the leg stops asking at
+  # `groom_routing.MAX_SECONDS` (120 s), one request holds it past that by at
+  # most `REQUEST_TIMEOUT` (20 s), and five minutes leave the checkout, the
+  # mint and the upload two minutes and more around that. Asserted in
+  # tests/test_groomer_verify_wiring.py against both constants.
+  routing:
+    needs: groom
+    if: ${{ inputs.mode != 'drain' && needs.groom.outputs.verify_matrix != '' && needs.groom.outputs.verify_matrix != '[]' }}
+    runs-on: ${{ fromJSON(vars.BUREAU_RUNS_ON || '["ubuntu-latest"]') }}
+    timeout-minutes: 5
+    strategy:
+      # One owner's refused installation never cancels the other owners'.
+      fail-fast: false
+      matrix:
+        owner: ${{ fromJSON(needs.groom.outputs.lookup_owners) }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: dreadnought-foundry/bureau-pipeline
+          ref: ${{ inputs.pipeline_ref || 'main' }}
+          path: .bureau-pipeline
+
+      # `actions: read` and nothing else, at the pin every mint in this file
+      # uses. `continue-on-error`: a refused mint renders an empty token.
+      - name: Mint an Actions-read token for this owner
+        id: app
+        continue-on-error: true
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: ${{ secrets.BUREAU_APP_ID }}
+          private-key: ${{ secrets.BUREAU_APP_PRIVATE_KEY }}
+          owner: ${{ matrix.owner }}
+          permission-actions: read
+
+      # No `if`: a leg with no token still writes its document. Every input
+      # through env, never interpolated into the shell line.
+      - name: Read this owner's routing
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+          OWNER: ${{ matrix.owner }}
+        run: |
+          python3 .bureau-pipeline/scripts/groom_routing.py owner \
+            --owner "$OWNER" --out "routing-$OWNER.json"
+
+      # `overwrite`: re-running one leg re-uploads its artifact, and `fold`
+      # reads whatever is in the directory.
+      - name: Keep this owner's routing
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: groom-routing-${{ matrix.owner }}
+          path: routing-${{ matrix.owner }}.json
+          if-no-files-found: warn
+          overwrite: true
+          retention-days: 30
+
   # THE VERIFY MATRIX (DRE-4972, epic of DRE-4966..4971). One read-only agent
   # per card the proposal would put in front of the CEO — the Planning list and
   # the spares behind it — reading that card's repo on its default branch and
@@ -515,12 +670,12 @@ jobs:
   # says `unverified` and names the slug. No verdict is ever formed from card
   # text alone.
   #
-  # `always()` over `needs: [groom, lookup]` (DRE-5429): a lookup leg that
-  # died never stops the matrix. Its owner has no document, `fold` names it
-  # `no lookup record for <owner>`, and the cards it held are judged with that
+  # `always()` over `needs: [groom, lookup, routing]` (DRE-5429, DRE-7242): a
+  # lookup or routing leg that died never stops the matrix. Its owner has no
+  # document, each `fold` names it, and the cards it held are judged with that
   # said. Only a groom that did not succeed stops it.
   verify:
-    needs: [groom, lookup]
+    needs: [groom, lookup, routing]
     if: ${{ always() && inputs.mode != 'drain' && needs.groom.result == 'success' && needs.groom.outputs.verify_matrix != '' && needs.groom.outputs.verify_matrix != '[]' }}
     runs-on: ${{ fromJSON(vars.BUREAU_RUNS_ON || '["ubuntu-latest"]') }}
     timeout-minutes: 15
@@ -556,6 +711,18 @@ jobs:
           path: lookups
           merge-multiple: false
 
+      # The routing documents (DRE-7242), downloaded and folded the way the
+      # lookups are: unmerged, so each owner's document sits in its own
+      # subdirectory, and `fold` reads the directory at every depth. No
+      # artifact at all is every row's routing unread, never a dead leg.
+      - name: Download every owner's routing
+        continue-on-error: true
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: groom-routing-*
+          path: routing
+          merge-multiple: false
+
       # Before `prepare`, so it fences the lookup evidence and `verdict` reads
       # the row's `lookups` field. `mkdir -p`: on a morning no leg uploaded,
       # the download above created nothing.
@@ -565,6 +732,17 @@ jobs:
           mkdir -p lookups
           python3 .bureau-pipeline/scripts/groom_lookups.py fold \
             --targets verify-targets.json --lookups-dir lookups \
+            --out verify-targets.json
+
+      # After the lookups' fold and before `prepare`, so the agent's input
+      # carries the row's `routing` block. `mkdir -p`: on a morning no leg
+      # uploaded, the routing download created nothing.
+      - name: Fold the routing into the targets
+        run: |
+          set -euo pipefail
+          mkdir -p routing
+          python3 .bureau-pipeline/scripts/groom_routing.py fold \
+            --targets verify-targets.json --dir routing \
             --out verify-targets.json
 
       # The agent's whole input, and the moment it started. No `if`: on an
@@ -621,6 +799,25 @@ jobs:
         id: install_claude
         if: ${{ matrix.repository != '' && steps.target.outcome == 'success' }}
 
+      # The model home (DRE-6939) is a variable on
+      # dreadnought-foundry/bureau-pipeline, which a run's boot token in another
+      # organization cannot read. A token for the bureau App's installation
+      # there, for bureau-pipeline alone and with no permission subset — the
+      # pinned action declares no variables input (DRE-7230) — handed only to
+      # the steps below whose process reads the home
+      # (DRE-6940, held by scripts/check_model_home_scope.py). A refused mint
+      # leaves it empty and the selector on the defaults in the code — never a
+      # failed job.
+      - name: Mint the model-home read token
+        id: model_home
+        if: ${{ matrix.repository != '' && steps.target.outcome == 'success' && steps.install_claude.outcome == 'success' }}
+        continue-on-error: true
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: ${{ secrets.BUREAU_APP_ID }}
+          private-key: ${{ secrets.BUREAU_APP_PRIVATE_KEY }}
+          owner: dreadnought-foundry
+          repositories: bureau-pipeline
       # Model selection for the verify agent, medic.yml's shape: the id and the
       # level it runs at come from config/models.yaml (agent `verifier`, the
       # ADVISORY ladder — a bounded read-only check, not build work), never a
@@ -630,6 +827,7 @@ jobs:
         id: model
         if: ${{ matrix.repository != '' && steps.target.outcome == 'success' && steps.install_claude.outcome == 'success' }}
         env:
+          BUREAU_MODEL_HOME_TOKEN: ${{ steps.model_home.outputs.token }}
           ANTHROPIC_API_KEY: ${{ vars.CLAUDE_AUTH_MODE != 'subscription' && secrets.ANTHROPIC_API_KEY || '' }}
           CLAUDE_CODE_OAUTH_TOKEN: ${{ vars.CLAUDE_AUTH_MODE == 'subscription' && secrets.CLAUDE_CODE_OAUTH_TOKEN || '' }}
           REPOSITORY: ${{ matrix.repository }}
@@ -702,7 +900,7 @@ jobs:
         env:
           CARD: ${{ matrix.card }}
           OUTCOME: ${{ steps.claude.outcome }}
-          EXECUTION_FILE: ${{ steps.claude.outputs.execution_file || '/home/runner/work/_temp/claude-execution-output.json' }}
+          EXECUTION_FILE: ${{ steps.claude.outputs.execution_file || format('{0}/claude-execution-output.json', runner.temp) }}
         run: |
           python3 .bureau-pipeline/scripts/groom_verify_agent.py verdict \
             --card "$CARD" --targets verify-targets.json \
@@ -711,12 +909,21 @@ jobs:
             --out verdict.json
 
       # `overwrite`: re-running one failed leg re-uploads its artifact.
+      #
+      # The targets AS THIS LEG HOLDS THEM, after both folds (DRE-7242): the
+      # `routing` block and the read pull requests under `matched_work` exist
+      # only in this folded copy — `groom-proposal` keeps the targets from
+      # before any fold — and the proof reads it here. `apply` reads only the
+      # files named `verdict.json` under its directory, so it reads exactly
+      # what it read before.
       - name: Keep the verdict
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: groom-verdict-${{ matrix.card }}
-          path: verdict.json
+          path: |
+            verdict.json
+            verify-targets.json
           if-no-files-found: warn
           overwrite: true
           retention-days: 30
@@ -806,19 +1013,44 @@ jobs:
             --proposal proposal.json --verdicts verdicts \
             --out proposal-verified.json
 
+      # The model home (DRE-6939) is a variable on
+      # dreadnought-foundry/bureau-pipeline, which a run's boot token in another
+      # organization cannot read. A token for the bureau App's installation
+      # there, for bureau-pipeline alone and with no permission subset — the
+      # pinned action declares no variables input (DRE-7230) — handed only to
+      # the steps below whose process reads the home
+      # (DRE-6940, held by scripts/check_model_home_scope.py). A refused mint
+      # leaves it empty and the selector on the defaults in the code — never a
+      # failed job.
+      - name: Mint the model-home read token
+        id: model_home
+        continue-on-error: true
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: ${{ secrets.BUREAU_APP_ID }}
+          private-key: ${{ secrets.BUREAU_APP_PRIVATE_KEY }}
+          owner: dreadnought-foundry
+          repositories: bureau-pipeline
       # With a card, `post` posts the verified record at most once per id —
       # a re-run of the whole workflow recomputes, and `already_proposed`
       # keeps the second post silent. The dry-run switch (DRE-3712) reads the
       # thread and posts nothing. Without a card there is nowhere to post, and
       # the page is printed for the step summary.
+      #
+      # A REPLAY POSTS TO NO CARD (DRE-7242), whatever `card` says: it re-checks
+      # a morning that was already posted, so it prints the page as a run
+      # without a card does, then the replay's own report — one
+      # `groom-replay:` line per card, which the proof reads from this log.
       - name: Post the verified proposal
         env:
+          BUREAU_MODEL_HOME_TOKEN: ${{ steps.model_home.outputs.token }}
           LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
           CARD: ${{ inputs.card }}
           DRY_RUN: ${{ inputs.dry_run }}
+          REPLAY: ${{ inputs.replay }}
         run: |
           set -euo pipefail
-          if [ -n "$CARD" ]; then
+          if [ -n "$CARD" ] && [ -z "$REPLAY" ]; then
             DRY=()
             if [ "$DRY_RUN" = "true" ]; then DRY=(--dry-run); fi
             python3 .bureau-pipeline/scripts/groomer.py post \
@@ -833,6 +1065,16 @@ jobs:
             echo
             cat proposal-verified.txt
           } >> "$GITHUB_STEP_SUMMARY"
+          if [ -n "$REPLAY" ]; then
+            python3 .bureau-pipeline/scripts/groom_replay.py report \
+              --proposal proposal-verified.json | tee replay-report.txt
+            {
+              echo
+              echo "### Groomer — the replay of $REPLAY"
+              echo
+              cat replay-report.txt
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
 
       # The receipt (DRE-3153): which model answered, and what the one call
       # cost. Same `🧠 model-attempt:` marker plan.yml posts for the planning
@@ -856,13 +1098,22 @@ jobs:
       # promise is "no marker", not "no proposal marker" — a receipt comment on
       # a card nobody proposed anything to is the same demonstration leaking
       # into the record.
+      #
+      # Nor does a replay (DRE-7242): no model was asked this run, and it posts
+      # to no card. Refused in the script rather than the `if`, which is the
+      # receipt's own condition, pinned as written.
       - name: Judgement receipt — the model that answered
         if: ${{ inputs.mode != 'drain' && inputs.card != '' && inputs.dry_run != 'true' }}
         env:
           LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
           CARD: ${{ inputs.card }}
+          REPLAY: ${{ inputs.replay }}
         run: |
           set -euo pipefail
+          if [ -n "$REPLAY" ]; then
+            echo "a replay posts no receipt: it asked no model and posts to no card"
+            exit 0
+          fi
           python3 .bureau-pipeline/scripts/groomer_receipt.py \
             --proposal proposal-verified.json --out receipt.txt
           if [ -s receipt.txt ]; then

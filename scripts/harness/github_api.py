@@ -25,6 +25,14 @@ _BACKOFF_SECONDS = 5
 # GitHub's 422 wording when a PR for the same head and base is already open.
 _PR_ALREADY_EXISTS = "A pull request already exists"
 
+# How long `create_pr` waits for the PR it opened to read back (DRE-6923).
+# GitHub answers the create before every identity can see the PR: run
+# 38149749969's reader got a 404 for #4268 two seconds after the worker
+# opened it. Five reads with a 2s-growing backoff give it 20s, and a PR
+# still unreadable after that raises its 404 rather than waiting longer.
+PR_READBACK_ATTEMPTS = 5
+_PR_READBACK_BACKOFF_SECONDS = 2
+
 # Bounds on the Actions log archive read (DRE-3076). The driver wants one
 # failing LINE out of a sandbox run; it must never pull a multi-megabyte
 # archive into memory while a scenario is already past its deadline.
@@ -482,7 +490,13 @@ class GitHub:
                     last_error = GitHubError(e.code, detail)
                 else:
                     raise GitHubError(e.code, detail) from e
-            except urllib.error.URLError as e:
+            except (urllib.error.URLError, ConnectionResetError, TimeoutError) as e:
+                # urlopen wraps only a fault raised while SENDING. One raised
+                # while reading the answer — http.client.RemoteDisconnected,
+                # a bare reset, a read timeout — arrives unwrapped, the same
+                # shapes linear_ops.is_transient retries (DRE-3087). Run
+                # 38365040174 died on one before this clause named them
+                # (DRE-7232).
                 if attempt >= _RETRIES:
                     raise GitHubError(0, str(e)) from e
                 last_error = e
@@ -812,9 +826,14 @@ class GitHub:
         on the retry). Every harness branch is named for its own run and
         scenario, so an open PR on that head is this client's own: it is
         read back and returned. Any other refusal still raises, and so does
-        this one when there is no open PR to read back."""
+        this one when there is no open PR to read back.
+
+        A PR this client opened is returned only once it reads back
+        (DRE-6923), through the reader every later read goes out as — the
+        scenario's first poll is the next request, and GitHub's create
+        answers before that identity can see the PR."""
         try:
-            return self.request(
+            pr = self.request(
                 "POST",
                 f"/repos/{repo}/pulls",
                 {"title": title, "head": head, "base": base, "body": body},
@@ -834,6 +853,20 @@ class GitHub:
                 "open — a retried create had landed; carrying on with it"
             )
             return existing[0]
+        self._await_readable(repo, pr["number"])
+        return pr
+
+    def _await_readable(self, repo, number: int) -> None:
+        """Read the PR back until it answers, sleeping between 404s; the
+        last 404 raises, and so does any other refusal, at once."""
+        for attempt in range(1, PR_READBACK_ATTEMPTS + 1):
+            try:
+                self.get_pr(repo, number)
+                return
+            except GitHubError as e:
+                if e.status != 404 or attempt == PR_READBACK_ATTEMPTS:
+                    raise
+            self._sleeper(_PR_READBACK_BACKOFF_SECONDS * attempt)
 
     def get_pr(self, repo, number: int) -> dict:
         return self.request("GET", f"/repos/{repo}/pulls/{number}")

@@ -175,6 +175,11 @@ CLI:
                                      and raised ONCE after a turn-ceiling death
                                      recorded on the card's own thread (JSON
                                      array on stdin). Never exits non-zero.
+  one-off-revision-turns [--ceiling N] [--github-output F]
+                                     `max_turns=<int>` for the planner's
+                                     revision of a one-off card, sized from the
+                                     critic's ceiling (DRE-7177). Never exits
+                                     non-zero.
   replan-turns [--children N] [--github-output F]
                                      `max_turns=<int>` for a re-plan, sized
                                      from the plan's child count (DRE-5288).
@@ -286,7 +291,7 @@ MARKER_PREFIX = "plan-critic:"
 # all — reading exactly like a normal pass.
 CYCLE_PREFIX = "plan-cycle:"
 
-# A collision found AFTER the cards reached Backlog — the D3 tripwire. Counted
+# A collision found AFTER the cards reached Queued — the D3 tripwire. Counted
 # in its own bucket, never mixed with the ones the post critic caught, because
 # the ratio between them is the signal that the check has to split back out
 # into its own pass.
@@ -552,6 +557,12 @@ ONE_OFF_TURNS_DEFAULT = 60
 ONE_OFF_RETRY_MULTIPLIER = 1.5
 ONE_OFF_TURNS_RETRY_CAP = 135
 
+#: The smallest ceiling the planner's revision of a one-off card gets
+#: (DRE-7177). Rewriting a card is more work than reading it: on 2026-10-12
+#: (run 38329761597) DRE-7066's revision ran at the critic's 36, ended
+#: `error_max_turns` at 37 turns, and parked the card for the operator.
+ONE_OFF_REVISION_TURNS_FLOOR = 72
+
 #: The card's `**Files:**` line — the standard's own spelling, and the plainer
 #: ones a card actually gets written with (`Files:`, a list item, `__Files:__`).
 _FILES_LINE = re.compile(
@@ -611,6 +622,24 @@ def one_off_retry_ceiling(ceiling) -> int:
         base = ONE_OFF_TURNS_DEFAULT
     return min(ONE_OFF_TURNS_RETRY_CAP,
                math.ceil(base * ONE_OFF_RETRY_MULTIPLIER))
+
+
+def one_off_revision_turns(ceiling) -> int:
+    """`--max-turns` for the planner's revision of a one-off card, from the
+    critic's own `ceiling` (DRE-7177): twice it, never under
+    `ONE_OFF_REVISION_TURNS_FLOOR` and never over `ONE_OFF_TURNS_RETRY_CAP`.
+
+    Never raises, for `one_off_turns`' reason, and an UNKNOWN ceiling is
+    sized from `ONE_OFF_TURNS_DEFAULT`, as `one_off_retry_ceiling` sizes one.
+    """
+    try:
+        base = int(ceiling)
+    except (TypeError, ValueError):
+        base = ONE_OFF_TURNS_DEFAULT
+    if base <= 0:
+        base = ONE_OFF_TURNS_DEFAULT
+    return min(ONE_OFF_TURNS_RETRY_CAP,
+               max(ONE_OFF_REVISION_TURNS_FLOOR, 2 * base))
 
 
 def one_off_turn_cap_deaths(bodies: list) -> list[dict]:
@@ -676,7 +705,7 @@ card is to-build at all.
     merged.
   - **In Progress or In Review: a run or a pull request is in flight.** Judge
     it on what it will LAND, not on whether its files are in the tree yet.
-  - **Anything else — Backlog, Todo, Triage — is still to build**, and every
+  - **Anything else — Queued, Todo, Triage — is still to build**, and every
     finding you would normally make stands, this one included.
 
 A card's text and the repository cannot tell you which of those it is. Read the
@@ -1328,7 +1357,7 @@ def marker(stage: str, round_n: int, result: str, reason: str = "",
 
 
 def late_collision_marker(epic: str, other: str, detail: str) -> str:
-    """The record of a collision found AFTER the cards reached Backlog.
+    """The record of a collision found AFTER the cards reached Queued.
 
     Posted by whoever finds one (`plan_critic.py late-collision`), on the epic
     the collision belongs to. It is the tripwire half of the D3 measurement:
@@ -2354,7 +2383,7 @@ def promotion_refusal(identifier: str, epic: str, green_lit_at: str | None,
             f"{when} but {waiting}: its review died before it decided — "
             f"holding: {one_line(detail)}.\n\n"
             "Nothing has been found wrong with the plan and nothing has "
-            "started building; the children stay in Backlog until the review "
+            "started building; the children stay in Queued until the review "
             "runs again and passes.\n\n"
             f"**Nothing here is yours to decide.** {DEAD_REVIEW_NEXT} This is "
             f"waiting on the re-run of run {ran}."
@@ -2364,7 +2393,7 @@ def promotion_refusal(identifier: str, epic: str, green_lit_at: str | None,
         f"🚨 {POST_SENT_BACK_TAG}: {identifier}'s epic {epic} was approved at "
         f"{when} but {waiting}: it sent the plan back — holding. The "
         f"critic's reason: {quoted}\n\n"
-        "The children stay in Backlog until the gap is settled. The plan has "
+        "The children stay in Queued until the gap is settled. The plan has "
         "been revised with the critic's finding, and the review is run again "
         "by the pipeline itself — a revision that changed no card is not a "
         "decision anyone is waiting on.\n\n"
@@ -2401,7 +2430,7 @@ def death_note(epic: str, row: dict) -> str:
         f"{_death_sentence(row)}.\n\n"
         "This was not a rejection: the critic decided nothing, nothing has "
         "been found wrong with the plan, and nothing has started building — "
-        "the children stay in Backlog until the review runs again. This round "
+        "the children stay in Queued until the review runs again. This round "
         f"does not count toward the {_count_word(MAX_ROUNDS)}-round bound.\n\n"
         f"**Nothing here is yours to decide.** {DEAD_REVIEW_NEXT}"
     )
@@ -3275,7 +3304,7 @@ def sight_block(this_epic: str, epics: list[dict],
             "",
         ]
     lines += [
-        "YOU CANNOT SEE, and must not claim anything about: epics in Backlog, "
+        "YOU CANNOT SEE, and must not claim anything about: epics in Queued, "
         "Intake or Done; work in any other Linear team; unmerged branches and "
         "open pull requests; or anything an epic's own cards do not say. If a "
         "collision would need one of those to confirm, say what you suspect "
@@ -4405,6 +4434,16 @@ def _cmd_one_off_turns(args) -> int:
     return 0
 
 
+def _cmd_one_off_revision_turns(args) -> int:
+    """The one-off revision's ceiling as a step output, sized from the
+    critic's (DRE-7177). Always 0, for `post-turns`' reason — and the workflow
+    carries a static fallback on top of this."""
+    turns = one_off_revision_turns(args.ceiling)
+    _write_outputs(args.github_output, [("max_turns", str(turns))])
+    print(f"one-off revision ceiling: {turns} turns (critic's ceiling={args.ceiling!r})")
+    return 0
+
+
 def _cmd_review_turns(args) -> int:
     """The receipt for one review by the second critic — what it SPENT
     against what it was given (DRE-3498). Reads the run's execution file
@@ -4431,7 +4470,7 @@ def _cmd_died(args) -> int:
 
     `--record-only` asks for the RECORD and nothing else (DRE-4381). The note
     is the second critic's — it names that review, the children waiting in
-    Backlog and the round bound — and on the one-off route every one of
+    Queued and the round bound — and on the one-off route every one of
     those sentences would be false. That route says what happened in the
     decision's own words, one comment earlier, so the death owes only its
     numbers here: a second telling of one death is how two comments come to
@@ -4612,6 +4651,15 @@ def main(argv: list[str]) -> int:
     o.add_argument("--description-file", default=None)
     o.add_argument("--github-output", default=None)
     o.set_defaults(fn=_cmd_one_off_turns)
+
+    v = sub.add_parser(
+        "one-off-revision-turns",
+        help="the one-off revision's turn ceiling, sized from the critic's")
+    # A string, for `post-turns --children`' reason: an empty or unreadable
+    # ceiling sizes to the default rather than failing the argument parse.
+    v.add_argument("--ceiling", default="")
+    v.add_argument("--github-output", default=None)
+    v.set_defaults(fn=_cmd_one_off_revision_turns)
 
     w = sub.add_parser("review-turns",
                        help="what one review by the second critic spent, as one line")

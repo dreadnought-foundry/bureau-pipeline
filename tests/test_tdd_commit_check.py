@@ -15,6 +15,7 @@ These tests must FAIL before scripts/check_tdd_commits.py exists / before
 tests.yml gains the job, and PASS after.
 """
 
+import json
 import os
 import subprocess
 import sys
@@ -264,7 +265,8 @@ class ClassifyPathTest(unittest.TestCase):
                 self.assertEqual(check_tdd_commits.classify_path(path), "docs")
 
     def test_a_top_level_design_directory_is_docs_too(self):
-        # project-template (what every new repo is built from) and deltasolv
+        # Foundry (the design master), every repo built from Foundry's
+        # templates/company/ (what every new repo is built from) and deltasolv
         # keep the same record at the repo root, not under console/.
         self.assertEqual(
             check_tdd_commits.classify_path("design/screens/web-dashboard.html"),
@@ -370,6 +372,61 @@ class ClassifyPathTest(unittest.TestCase):
         for path in (
             "web/src/architecture/diagram.svg",
             "console/frontend/architecture/shot.png",
+        ):
+            with self.subTest(path=path):
+                self.assertEqual(check_tdd_commits.classify_path(path), "code")
+
+    # --- plain-text evidence under architecture/ (DRE-7330) ----------------
+    #
+    # agent-bureau #3652 (DRE-5830's proof record, the Sunday edition) failed on
+    # a commit adding only `architecture/proofs/sunday-edition.md`, its `.html`
+    # and `sunday-edition-2026-10-11.txt` — the first Sunday's actual email,
+    # saved as evidence. `.txt` was not a record format, so the commit was
+    # `[code,docs]` and the gate demanded a RED test for a saved email. #3675
+    # (DRE-6123) failed the same way on a `.txt` report. A plain-text capture
+    # under `architecture/` is evidence the way a screenshot is, so `.txt` and
+    # `.log` are records there — and only there.
+
+    def test_plain_text_evidence_under_architecture_is_docs(self):
+        for path in (
+            "architecture/proofs/x-capture.txt",
+            "architecture/forensics/run.log",
+            "architecture/proofs/X-CAPTURE.TXT",
+            # The exact paths that stranded #3652 and #3675.
+            "architecture/proofs/sunday-edition-2026-10-11.txt",
+            "architecture/proofs/linear-parity-full-scope-report.txt",
+        ):
+            with self.subTest(path=path):
+                self.assertEqual(check_tdd_commits.classify_path(path), "docs")
+
+    def test_a_proof_record_with_its_text_capture_is_a_docs_commit(self):
+        self.assertEqual(
+            check_tdd_commits.commit_categories(commit(
+                ["architecture/proofs/x.md", "architecture/proofs/x-capture.txt"],
+                "docs: proof record and its capture",
+            )),
+            {"docs"},
+        )
+
+    def test_plain_text_under_the_design_folders_stays_code(self):
+        # The design folders sit beside application builds; DRE-7330 moved
+        # text under `architecture/` only.
+        for path in (
+            "design/notes.txt",
+            "console/design/build.log",
+            "console/design/specs/web-sign-up.txt",
+        ):
+            with self.subTest(path=path):
+                self.assertEqual(check_tdd_commits.classify_path(path), "code")
+
+    def test_plain_text_outside_architecture_stays_code(self):
+        # The limits of DRE-7330, pinned: the prefix and the extension both
+        # still decide, and a nested `architecture/` is part of the app.
+        for path in (
+            "scripts/notes.txt",
+            "requirements.txt",
+            "architecture/proofs/tool.py",
+            "web/src/architecture/capture.txt",
         ):
             with self.subTest(path=path):
                 self.assertEqual(check_tdd_commits.classify_path(path), "code")
@@ -511,6 +568,17 @@ class CheckCommitsTest(unittest.TestCase):
         self.assertEqual(
             reason, "exempt: no non-test code changed (docs/ops/tests only)"
         )
+
+    def test_a_proof_record_with_its_saved_email_passes(self):
+        # agent-bureau #3652's commit 9ea9082 (DRE-7330), path for path.
+        ok, reason = check_tdd_commits.check_commits([
+            commit([
+                "architecture/proofs/sunday-edition.md",
+                "architecture/proofs/sunday-edition-2026-10-11.html",
+                "architecture/proofs/sunday-edition-2026-10-11.txt",
+            ], "docs(DRE-5830): the Sunday edition proof record"),
+        ])
+        self.assertTrue(ok, reason)
 
     def test_source_under_architecture_still_needs_a_test(self):
         ok, reason = check_tdd_commits.check_commits([
@@ -983,7 +1051,11 @@ class GitCliTest(GitRepoMixin, unittest.TestCase):
         p = self.run_check(head_ref="bot/standards-sync", author="mallory")
         self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
         self.assertIn(check_tdd_commits.FAILURE_MESSAGE, p.stdout)
-        self.assertNotIn("exempt", p.stdout)
+        # Every exemption verdict opens `exempt:`. The bare word no longer
+        # works as the pin: since DRE-3009 every run names the exemption list
+        # it read, and a red run lists what a later commit could claim.
+        self.assertNotIn("exempt:", p.stdout)
+        self.assertNotIn("standards-sync PR", p.stdout)
 
     def test_sync_branch_with_a_foreign_commit_is_still_checked(self):
         # Every commit: one by somebody else and the gate is back, even when
@@ -1920,6 +1992,807 @@ class WorkflowWiringTest(unittest.TestCase):
             "${{", step["run"],
             "no event field may be interpolated into the shell line",
         )
+
+
+
+# --- the per-change rule (DRE-3009) ----------------------------------------
+#
+# The operator's decision of 2026-09-03 — "we should always be doing TDD" —
+# raises the floor from one RED commit per branch to one per code commit. The
+# rule is one sentence, written once as `RULE`; the exemptions are data, in
+# config/tdd-exemptions.json; and a branch whose merge base predates that file
+# is judged by the floor it started under.
+
+EXEMPTIONS_PATH = ROOT / "config" / "tdd-exemptions.json"
+
+# The card's sentence, verbatim. Pinned here so a rewording of the constant is
+# a reviewed change to this line too, not a silent drift.
+CARD_RULE = (
+    "Every code commit needs a test commit since the previous code commit — "
+    "for the first code commit, since the branch began. Any code commit after "
+    "the first may instead carry an exemption from "
+    "`config/tdd-exemptions.json`."
+)
+
+TRAILER_IDS = ("refactor", "config", "generated")
+
+
+def committed_exemptions():
+    return check_tdd_commits.parse_exemptions(
+        EXEMPTIONS_PATH.read_text(encoding="utf-8")
+    )
+
+
+def code(paths, subject, claims=(), added=None, sha=None):
+    """A code commit record. `added` maps a path to its added-line count the
+    way `git diff-tree --numstat` reports it (None for a binary path); a
+    record without it is never a deletion, which is the fail-closed answer."""
+    rec = commit(paths, subject)
+    rec["claims"] = list(claims)
+    if added is not None:
+        rec["added"] = dict(added)
+    if sha:
+        rec["sha"] = sha
+    return rec
+
+
+def sha_of(n):
+    return f"{n:x}".rjust(7, "0") + "0" * 33
+
+
+class RuleConstantTest(unittest.TestCase):
+    """The rule is a single constant, and it is the card's sentence."""
+
+    def test_the_constant_is_the_card_sentence(self):
+        self.assertEqual(check_tdd_commits.RULE, CARD_RULE)
+
+    def test_the_constant_names_the_data_file(self):
+        self.assertIn(check_tdd_commits.EXEMPTIONS_FILE, check_tdd_commits.RULE)
+        self.assertEqual(check_tdd_commits.EXEMPTIONS_FILE,
+                         "config/tdd-exemptions.json")
+
+
+class PerChangeRuleTest(unittest.TestCase):
+    """Every code commit needs a test commit since the previous code commit."""
+
+    def setUp(self):
+        self.ex = committed_exemptions()
+
+    def judge(self, commits):
+        return check_tdd_commits.judge_commits(commits, self.ex)
+
+    def test_a_second_code_commit_with_no_test_between_fails(self):
+        commits = [
+            commit(["tests/test_a.py"], "test: RED"),
+            code(["scripts/a.py"], "fix: green", sha=sha_of(1)),
+            code(["scripts/b.py"], "feat: more", sha=sha_of(2)),
+        ]
+        ok, reason = check_tdd_commits.check_commits(commits, self.ex)
+        self.assertFalse(ok)
+        self.assertEqual(reason, check_tdd_commits.LATER_FAILURE_MESSAGE)
+        failed = [j for j in self.judge(commits) if not j["ok"]]
+        self.assertEqual([j["commit"]["subject"] for j in failed], ["feat: more"])
+        self.assertEqual(failed[0]["previous"]["subject"], "fix: green")
+
+    def test_a_test_commit_between_two_code_commits_passes(self):
+        ok, _ = check_tdd_commits.check_commits([
+            commit(["tests/test_a.py"], "test: RED a"),
+            code(["scripts/a.py"], "fix: green a"),
+            commit(["tests/test_b.py"], "test: RED b"),
+            code(["scripts/b.py"], "fix: green b"),
+        ], self.ex)
+        self.assertTrue(ok)
+
+    def test_each_code_commit_says_which_reason_applied(self):
+        notes = [j["note"] for j in self.judge([
+            commit(["tests/test_a.py"], "test: RED a"),
+            code(["scripts/a.py"], "fix: green a"),
+            commit(["tests/test_b.py"], "test: RED b"),
+            code(["scripts/b.py"], "fix: green b"),
+            code(["scripts/c.py"], "refactor: extract", claims=["refactor"]),
+            code(["scripts/d.py"], "chore: drop d", added={"scripts/d.py": 0}),
+        ]) if j["code"]]
+        self.assertEqual(notes, [
+            "test commit since the branch began",
+            "test commit since the previous code commit",
+            "claimed: refactor",
+            "detected: deletion",
+        ])
+
+    def test_a_test_only_follow_up_commit_needs_nothing(self):
+        # A fix to a broken test is a test commit, not a code commit.
+        ok, _ = check_tdd_commits.check_commits([
+            commit(["tests/test_a.py"], "test: RED"),
+            code(["scripts/a.py"], "fix: green"),
+            commit(["tests/test_a.py"], "test: repair a flaky assertion"),
+        ], self.ex)
+        self.assertTrue(ok)
+
+    def test_docs_and_ops_commits_between_need_nothing(self):
+        ok, _ = check_tdd_commits.check_commits([
+            commit(["tests/test_a.py"], "test: RED"),
+            code(["scripts/a.py"], "fix: green"),
+            commit(["docs/a.md"], "docs: say so"),
+            commit([".github/workflows/x.yml"], "ci: wire it"),
+        ], self.ex)
+        self.assertTrue(ok)
+
+    def test_docs_or_ops_between_two_code_commits_is_not_a_test(self):
+        ok, _ = check_tdd_commits.check_commits([
+            commit(["tests/test_a.py"], "test: RED"),
+            code(["scripts/a.py"], "fix: green"),
+            commit(["docs/a.md"], "docs: say so"),
+            code(["scripts/b.py"], "feat: more"),
+        ], self.ex)
+        self.assertFalse(ok)
+
+    def test_a_mixed_test_and_code_commit_is_not_its_own_test(self):
+        ok, reason = check_tdd_commits.check_commits([
+            commit(["tests/test_a.py"], "test: RED"),
+            code(["scripts/a.py"], "fix: green"),
+            code(["tests/test_b.py", "scripts/b.py"], "feat: both at once"),
+        ], self.ex)
+        self.assertFalse(ok)
+        self.assertEqual(reason, check_tdd_commits.LATER_FAILURE_MESSAGE)
+
+    def test_a_mixed_commit_does_not_count_as_a_test_for_the_next(self):
+        ok, _ = check_tdd_commits.check_commits([
+            commit(["tests/test_a.py"], "test: RED"),
+            code(["tests/test_b.py", "scripts/b.py"], "feat: both at once"),
+        ], self.ex)
+        self.assertTrue(ok)
+        ok, _ = check_tdd_commits.check_commits([
+            commit(["tests/test_a.py"], "test: RED"),
+            code(["scripts/a.py"], "fix: green"),
+            code(["tests/test_b.py", "scripts/b.py"], "feat: both"),
+            code(["scripts/c.py"], "feat: c"),
+        ], self.ex)
+        self.assertFalse(ok)
+
+    # --- each exemption passes for its stated reason, and only for it -----
+
+    def test_each_trailer_exemption_passes_and_fails_without_its_claim(self):
+        for eid in TRAILER_IDS:
+            with self.subTest(exemption=eid):
+                base = [
+                    commit(["tests/test_a.py"], "test: RED"),
+                    code(["scripts/a.py"], "fix: green"),
+                ]
+                claimed = code(["Dockerfile"], f"chore: {eid}", claims=[eid])
+                judged = self.judge(base + [claimed])
+                self.assertTrue(all(j["ok"] for j in judged))
+                self.assertEqual(judged[-1]["note"], f"claimed: {eid}")
+                bare = code(["Dockerfile"], f"chore: {eid}")
+                judged = self.judge(base + [bare])
+                self.assertFalse(judged[-1]["ok"])
+                self.assertEqual(
+                    [j["commit"]["subject"] for j in judged if not j["ok"]],
+                    [f"chore: {eid}"],
+                )
+
+    def test_a_deletion_passes_by_detection(self):
+        base = [
+            commit(["tests/test_a.py"], "test: RED"),
+            code(["scripts/a.py"], "fix: green"),
+        ]
+        gone = code(["scripts/old.py", "scripts/older.py"], "chore: drop",
+                    added={"scripts/old.py": 0, "scripts/older.py": 0})
+        judged = self.judge(base + [gone])
+        self.assertTrue(all(j["ok"] for j in judged))
+        self.assertEqual(judged[-1]["note"], "detected: deletion")
+
+    def test_one_added_line_is_not_a_deletion(self):
+        base = [
+            commit(["tests/test_a.py"], "test: RED"),
+            code(["scripts/a.py"], "fix: green"),
+        ]
+        mixed = code(["scripts/old.py", "scripts/a.py"], "chore: drop and tweak",
+                     added={"scripts/old.py": 0, "scripts/a.py": 1})
+        judged = self.judge(base + [mixed])
+        self.assertFalse(judged[-1]["ok"])
+
+    def test_a_binary_path_is_not_a_deletion(self):
+        base = [
+            commit(["tests/test_a.py"], "test: RED"),
+            code(["scripts/a.py"], "fix: green"),
+        ]
+        binary = code(["bin/tool"], "chore: tool", added={"bin/tool": None})
+        self.assertFalse(self.judge(base + [binary])[-1]["ok"])
+
+    def test_added_lines_on_non_code_paths_do_not_spoil_a_deletion(self):
+        base = [
+            commit(["tests/test_a.py"], "test: RED"),
+            code(["scripts/a.py"], "fix: green"),
+        ]
+        gone = code(["scripts/old.py", "docs/old.md"], "chore: drop, note it",
+                    added={"scripts/old.py": 0, "docs/old.md": 3})
+        self.assertTrue(self.judge(base + [gone])[-1]["ok"])
+
+    def test_deletion_is_detected_only_while_the_list_names_it(self):
+        no_deletion = [e for e in self.ex if e["match"] != "deletion-only"]
+        ok, _ = check_tdd_commits.check_commits([
+            commit(["tests/test_a.py"], "test: RED"),
+            code(["scripts/a.py"], "fix: green"),
+            code(["scripts/old.py"], "chore: drop", added={"scripts/old.py": 0}),
+        ], no_deletion)
+        self.assertFalse(ok)
+
+    def test_deletion_cannot_be_claimed_by_trailer(self):
+        ok, _ = check_tdd_commits.check_commits([
+            commit(["tests/test_a.py"], "test: RED"),
+            code(["scripts/a.py"], "fix: green"),
+            code(["scripts/b.py"], "feat: b", claims=["deletion"],
+                 added={"scripts/b.py": 4}),
+        ], self.ex)
+        self.assertFalse(ok)
+
+    def test_an_unknown_trailer_id_fails_naming_the_valid_ids(self):
+        commits = [
+            commit(["tests/test_a.py"], "test: RED"),
+            code(["scripts/a.py"], "fix: green"),
+            code(["scripts/b.py"], "feat: b", claims=["hotfix"]),
+        ]
+        judged = self.judge(commits)
+        self.assertFalse(judged[-1]["ok"])
+        report = check_tdd_commits.failure_report(judged, self.ex)
+        self.assertIn("hotfix", report)
+        for eid in TRAILER_IDS:
+            self.assertIn(eid, judged[-1]["note"])
+
+    def test_an_unknown_id_beside_a_valid_one_still_fails(self):
+        ok, _ = check_tdd_commits.check_commits([
+            commit(["tests/test_a.py"], "test: RED"),
+            code(["scripts/a.py"], "fix: green"),
+            code(["scripts/b.py"], "feat: b", claims=["refactor", "hotfix"]),
+        ], self.ex)
+        self.assertFalse(ok)
+
+    def test_a_claim_never_covers_the_first_code_commit(self):
+        ok, reason = check_tdd_commits.check_commits([
+            code(["scripts/a.py"], "refactor: extract", claims=["refactor"]),
+        ], self.ex)
+        self.assertFalse(ok)
+        self.assertEqual(reason, check_tdd_commits.FAILURE_MESSAGE)
+
+    def test_a_deletion_never_covers_the_first_code_commit(self):
+        ok, reason = check_tdd_commits.check_commits([
+            code(["scripts/old.py"], "chore: drop", added={"scripts/old.py": 0}),
+        ], self.ex)
+        self.assertFalse(ok)
+        self.assertEqual(reason, check_tdd_commits.FAILURE_MESSAGE)
+
+    def test_adding_an_entry_needs_no_code_change(self):
+        extra = self.ex + [{
+            "id": "vendored", "match": "trailer",
+            "reason": "A vendored copy of somebody else's file.",
+            "critic_checks": "Every code path is a vendored copy.",
+        }]
+        ok, _ = check_tdd_commits.check_commits([
+            commit(["tests/test_a.py"], "test: RED"),
+            code(["scripts/a.py"], "fix: green"),
+            code(["vendor/x.js"], "chore: vendor x", claims=["vendored"]),
+        ], extra)
+        self.assertTrue(ok)
+
+    def test_every_branch_the_new_rule_passes_the_old_floor_passes(self):
+        # A claim never covers the first code commit, so the new rule only
+        # adds requirements.
+        branches = [
+            [commit(["tests/test_a.py"], "t"), code(["scripts/a.py"], "c"),
+             code(["scripts/b.py"], "r", claims=["refactor"])],
+            [commit(["docs/a.md"], "d"), commit(["tests/test_a.py"], "t"),
+             code(["scripts/a.py"], "c"),
+             code(["scripts/b.py"], "x", added={"scripts/b.py": 0})],
+        ]
+        for commits in branches:
+            ok_new, _ = check_tdd_commits.check_commits(commits, self.ex)
+            ok_old, _ = check_tdd_commits.check_floor(commits)
+            self.assertTrue(ok_new)
+            self.assertTrue(ok_old)
+
+    def test_the_floor_is_todays_rule(self):
+        commits = [
+            commit(["tests/test_a.py"], "test: RED"),
+            code(["scripts/a.py"], "fix: green"),
+            code(["scripts/b.py"], "feat: more"),
+        ]
+        self.assertEqual(check_tdd_commits.check_floor(commits)[0], True)
+        self.assertEqual(
+            check_tdd_commits.check_floor([code(["scripts/a.py"], "c",
+                                                claims=["refactor"])]),
+            (False, check_tdd_commits.FAILURE_MESSAGE),
+        )
+
+
+class FailureReportTest(unittest.TestCase):
+    """A gate that says "no" without saying "or one of these" is the thing that
+    produces disputes."""
+
+    def setUp(self):
+        self.ex = committed_exemptions()
+        self.judged = check_tdd_commits.judge_commits([
+            commit(["tests/test_a.py"], "test: RED"),
+            code(["scripts/a.py"], "fix: green a", sha="a" * 40),
+            code(["scripts/b.py"], "feat: green b", sha="b" * 40),
+        ], self.ex)
+        self.report = check_tdd_commits.failure_report(self.judged, self.ex)
+
+    def test_names_the_failing_commit_and_the_previous_code_commit(self):
+        self.assertIn("bbbbbbb", self.report)
+        self.assertIn("feat: green b", self.report)
+        self.assertIn("aaaaaaa", self.report)
+        self.assertIn("fix: green a", self.report)
+
+    def test_lists_every_trailer_exemption_as_the_exact_line(self):
+        for entry in self.ex:
+            if entry["match"] == "trailer":
+                self.assertIn(f"TDD-Exempt: {entry['id']}", self.report)
+                self.assertIn(entry["reason"], self.report)
+
+    def test_says_deletion_is_detected_not_claimed(self):
+        self.assertIn("deletion", self.report)
+        self.assertIn("detected, not claimed", self.report)
+        self.assertNotIn("TDD-Exempt: deletion", self.report)
+
+    def test_a_first_commit_failure_says_since_the_branch_began(self):
+        judged = check_tdd_commits.judge_commits([
+            code(["scripts/a.py"], "fix: no test", sha="c" * 40),
+        ], self.ex)
+        report = check_tdd_commits.failure_report(judged, self.ex)
+        self.assertIn("ccccccc", report)
+        self.assertIn("since the branch began", report)
+        self.assertIn(check_tdd_commits.FAILURE_MESSAGE, report)
+
+
+class ExemptionsFileTest(unittest.TestCase):
+    """The committed list is checked on every pull request: a branch is judged
+    by its merge base's list, so a break that slipped in would pass its own
+    check and then make every later branch exit 2."""
+
+    def test_the_committed_file_is_one_the_check_accepts(self):
+        entries = committed_exemptions()
+        self.assertEqual([e["id"] for e in entries],
+                         ["deletion", "refactor", "config", "generated"])
+
+    def test_each_entry_has_exactly_the_four_keys(self):
+        raw = json.loads(EXEMPTIONS_PATH.read_text(encoding="utf-8"))
+        for entry in raw["exemptions"]:
+            self.assertEqual(set(entry),
+                             {"id", "match", "reason", "critic_checks"})
+
+    def test_deletion_is_the_one_detector_and_the_rest_are_claims(self):
+        match = {e["id"]: e["match"] for e in committed_exemptions()}
+        self.assertEqual(match, {"deletion": "deletion-only",
+                                 "refactor": "trailer", "config": "trailer",
+                                 "generated": "trailer"})
+
+    def test_the_readme_names_the_cases_the_classifier_already_handles(self):
+        readme = json.loads(EXEMPTIONS_PATH.read_text(encoding="utf-8"))["_readme"]
+        for word in ("docs", "ops", "generated region", "test commit"):
+            self.assertIn(word, readme)
+
+    def test_shapes_the_check_refuses(self):
+        good = {"id": "x", "match": "trailer", "reason": "r",
+                "critic_checks": "c"}
+        bad = {
+            "not json": "{",
+            "a list at the top": json.dumps([good]),
+            "no exemptions key": json.dumps({"_readme": "r"}),
+            "exemptions not a list": json.dumps({"exemptions": good}),
+            "unknown match": json.dumps({"exemptions": [{**good, "match": "path"}]}),
+            "missing key": json.dumps({"exemptions": [
+                {k: v for k, v in good.items() if k != "critic_checks"}]}),
+            "extra key": json.dumps({"exemptions": [{**good, "paths": ["a"]}]}),
+            "empty reason": json.dumps({"exemptions": [{**good, "reason": " "}]}),
+            "non-string id": json.dumps({"exemptions": [{**good, "id": 3}]}),
+            "duplicate id": json.dumps({"exemptions": [good, good]}),
+            "unknown top-level key": json.dumps({"exemptions": [good], "x": 1}),
+        }
+        for label, text in bad.items():
+            with self.subTest(shape=label):
+                with self.assertRaises(check_tdd_commits.ExemptionsError):
+                    check_tdd_commits.parse_exemptions(text)
+        self.assertEqual(
+            check_tdd_commits.parse_exemptions(json.dumps({"exemptions": [good]})),
+            [good],
+        )
+
+
+class PerChangeCliTest(GitRepoMixin, unittest.TestCase):
+    """The new rule end to end, with the script run from this checkout — a
+    repository other than the one under check, so it reads the list beside
+    itself (the `.bureau-pipeline/` and shared-action case)."""
+
+    def claim_commit(self, rel, msg, eid):
+        self.write(rel, f"content for {msg}")
+        self.git("add", "-A")
+        self.git("commit", "-q", "-m", f"{msg}\n\nTDD-Exempt: {eid}")
+
+    def red_then_green(self, branch):
+        self.git("checkout", "-q", "-b", branch)
+        self.add_commit("tests/test_widget.py", "test: RED")
+        self.add_commit("scripts/widget.py", "fix: green")
+
+    def test_prints_the_rule(self):
+        self.red_then_green("agent/DRE-1-a")
+        p = self.run_check()
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        self.assertIn(check_tdd_commits.RULE, p.stdout)
+        self.assertIn("test commit since the branch began", p.stdout)
+
+    def test_a_second_code_commit_without_a_test_exits_1_naming_it(self):
+        self.red_then_green("agent/DRE-1-b")
+        self.add_commit("scripts/more.py", "feat: more behavior")
+        p = self.run_check()
+        self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
+        self.assertIn("feat: more behavior", p.stdout)
+        self.assertIn("fix: green", p.stdout)
+        for eid in TRAILER_IDS:
+            self.assertIn(f"TDD-Exempt: {eid}", p.stdout)
+        # The DRE-2694 remedy block still follows.
+        self.assertIn("cannot", p.stdout.lower())
+
+    def test_each_trailer_claim_passes_and_its_absence_fails(self):
+        for eid in TRAILER_IDS:
+            with self.subTest(exemption=eid):
+                self.git("checkout", "-q", "main")
+                self.red_then_green(f"agent/DRE-1-{eid}")
+                self.claim_commit("Dockerfile", f"chore: {eid}", eid)
+                p = self.run_check()
+                self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+                self.assertIn(f"claimed: {eid}", p.stdout)
+                self.git("checkout", "-q", "main")
+                self.red_then_green(f"agent/DRE-1-{eid}-bare")
+                self.add_commit("Dockerfile", f"chore: {eid} unclaimed")
+                p = self.run_check()
+                self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
+                self.assertIn(f"chore: {eid} unclaimed", p.stdout)
+
+    def test_a_deletion_passes_and_an_added_line_fails(self):
+        self.write("scripts/old.py", "OLD = 1\n")
+        self.git("add", "-A")
+        self.git("commit", "-q", "-m", "chore: seed old")
+        self.red_then_green("agent/DRE-1-del")
+        self.git("rm", "-q", "scripts/old.py")
+        self.git("commit", "-q", "-m", "chore: drop old")
+        p = self.run_check()
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        self.assertIn("detected: deletion", p.stdout)
+
+        self.git("checkout", "-q", "main")
+        self.red_then_green("agent/DRE-1-del-plus")
+        self.git("rm", "-q", "scripts/old.py")
+        self.write("scripts/new.py", "NEW = 1\n")
+        self.git("add", "-A")
+        self.git("commit", "-q", "-m", "chore: drop old, add new")
+        p = self.run_check()
+        self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
+        self.assertIn("chore: drop old, add new", p.stdout)
+
+    def test_an_unknown_trailer_id_exits_1_naming_the_valid_ids(self):
+        self.red_then_green("agent/DRE-1-unknown")
+        self.claim_commit("scripts/x.py", "feat: x", "hotfix")
+        p = self.run_check()
+        self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
+        self.assertIn("hotfix", p.stdout)
+        for eid in TRAILER_IDS:
+            self.assertIn(eid, p.stdout)
+
+    def test_the_only_code_commit_claiming_refactor_still_fails(self):
+        self.git("checkout", "-q", "-b", "agent/DRE-1-only")
+        self.claim_commit("scripts/x.py", "refactor: x", "refactor")
+        p = self.run_check()
+        self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
+        self.assertIn(check_tdd_commits.FAILURE_MESSAGE, p.stdout)
+
+    def test_a_test_only_follow_up_needs_nothing(self):
+        self.red_then_green("agent/DRE-1-follow")
+        self.add_commit("tests/test_widget.py", "test: repair the assertion")
+        p = self.run_check()
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+
+
+def _copy_checker(dest: Path, exemptions_text: str | None):
+    """The checker and its one import, copied into `dest/scripts/`, with the
+    given list (or none) at `dest/config/tdd-exemptions.json`."""
+    (dest / "scripts").mkdir(parents=True, exist_ok=True)
+    for name in ("check_tdd_commits.py", "unfixable_checks.py"):
+        (dest / "scripts" / name).write_text(
+            (ROOT / "scripts" / name).read_text(encoding="utf-8"),
+            encoding="utf-8",
+        )
+    if exemptions_text is not None:
+        (dest / "config").mkdir(parents=True, exist_ok=True)
+        (dest / "config" / "tdd-exemptions.json").write_text(
+            exemptions_text, encoding="utf-8")
+
+
+def _with_entry(eid: str) -> str:
+    raw = json.loads(EXEMPTIONS_PATH.read_text(encoding="utf-8"))
+    raw["exemptions"].append({
+        "id": eid, "match": "trailer", "reason": "A branch's own exemption.",
+        "critic_checks": "Nothing, which is the point of the fixture.",
+    })
+    return json.dumps(raw, indent=2)
+
+
+class WhichListTest(GitRepoMixin, unittest.TestCase):
+    """A branch cannot exempt itself. Run from inside the repository under
+    check (bureau-pipeline's own `tdd` job) the list is read at the merge
+    base; run from any other checkout it is the copy beside the script. One
+    test decides it — the two repository roots — and no flag."""
+
+    def seed(self, exemptions_text):
+        """main carries the checker, and the list when one is given."""
+        _copy_checker(self.repo, exemptions_text)
+        self.git("add", "-A")
+        self.git("commit", "-q", "-m", "chore: seed the checker")
+
+    def run_in_repo(self, base="main", head="HEAD"):
+        env = {k: v for k, v in os.environ.items()
+               if k not in ("PR_AUTHOR", "HEAD_REF", "GITHUB_HEAD_REF",
+                            "GITHUB_EVENT_PATH")}
+        return subprocess.run(
+            [sys.executable, str(self.repo / "scripts" / "check_tdd_commits.py"),
+             base, head],
+            cwd=self.repo, capture_output=True, text=True, env=env,
+        )
+
+    def merge_base_short(self):
+        return subprocess.run(
+            ["git", "merge-base", "main", "HEAD"], cwd=self.repo,
+            capture_output=True, text=True, check=True,
+        ).stdout.strip()[:7]
+
+    def claim_commit(self, rel, msg, eid):
+        self.write(rel, f"content for {msg}")
+        self.git("add", "-A")
+        self.git("commit", "-q", "-m", f"{msg}\n\nTDD-Exempt: {eid}")
+
+    def branch_adding_and_claiming(self):
+        self.git("checkout", "-q", "-b", "agent/DRE-1-self-exempt")
+        self.add_commit("tests/test_widget.py", "test: RED")
+        self.add_commit("lib/widget.py", "fix: green")
+        self.write("config/tdd-exemptions.json", _with_entry("hotfix"))
+        self.git("add", "-A")
+        self.git("commit", "-q", "-m", "chore: my own exemption")
+        self.claim_commit("lib/more.py", "feat: more", "hotfix")
+
+    def test_a_branch_that_adds_an_entry_and_claims_it_fails_in_repo(self):
+        self.seed(EXEMPTIONS_PATH.read_text(encoding="utf-8"))
+        self.branch_adding_and_claiming()
+        p = self.run_in_repo()
+        self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
+        self.assertIn("feat: more", p.stdout)
+
+    def test_a_valid_claim_passes_in_repo(self):
+        self.seed(EXEMPTIONS_PATH.read_text(encoding="utf-8"))
+        self.git("checkout", "-q", "-b", "agent/DRE-1-ok")
+        self.add_commit("tests/test_widget.py", "test: RED")
+        self.add_commit("lib/widget.py", "fix: green")
+        self.claim_commit("lib/more.py", "refactor: more", "refactor")
+        p = self.run_in_repo()
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        self.assertIn("claimed: refactor", p.stdout)
+
+    def test_a_separate_checkout_reads_its_own_copy(self):
+        # Standing in for `.bureau-pipeline/`: its own repository, whose list
+        # carries an entry the repository under check has never seen.
+        self.seed(EXEMPTIONS_PATH.read_text(encoding="utf-8"))
+        self.branch_adding_and_claiming()
+        with tempfile.TemporaryDirectory() as other:
+            other = Path(other)
+            subprocess.run(["git", "init", "-q"], cwd=other, check=True)
+            _copy_checker(other, _with_entry("hotfix"))
+            p = subprocess.run(
+                [sys.executable, str(other / "scripts" / "check_tdd_commits.py"),
+                 "main", "HEAD"],
+                cwd=self.repo, capture_output=True, text=True,
+            )
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        self.assertIn("claimed: hotfix", p.stdout)
+
+    def test_a_separate_checkout_ignores_the_branch_s_own_list(self):
+        # The same branch, the same edit, and a pipeline copy WITHOUT the
+        # entry: the branch's edit buys nothing.
+        self.seed(EXEMPTIONS_PATH.read_text(encoding="utf-8"))
+        self.branch_adding_and_claiming()
+        with tempfile.TemporaryDirectory() as other:
+            other = Path(other)
+            _copy_checker(other, EXEMPTIONS_PATH.read_text(encoding="utf-8"))
+            p = subprocess.run(
+                [sys.executable, str(other / "scripts" / "check_tdd_commits.py"),
+                 "main", "HEAD"],
+                cwd=self.repo, capture_output=True, text=True,
+            )
+        self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
+
+    def test_a_missing_copy_beside_the_script_exits_2(self):
+        self.git("checkout", "-q", "-b", "agent/DRE-1-x")
+        self.add_commit("tests/test_widget.py", "test: RED")
+        self.add_commit("lib/widget.py", "fix: green")
+        with tempfile.TemporaryDirectory() as other:
+            other = Path(other)
+            _copy_checker(other, None)
+            p = subprocess.run(
+                [sys.executable, str(other / "scripts" / "check_tdd_commits.py"),
+                 "main", "HEAD"],
+                cwd=self.repo, capture_output=True, text=True,
+            )
+        self.assertEqual(p.returncode, 2, p.stdout + p.stderr)
+
+    def test_a_broken_copy_beside_the_script_exits_2(self):
+        self.git("checkout", "-q", "-b", "agent/DRE-1-x")
+        self.add_commit("tests/test_widget.py", "test: RED")
+        self.add_commit("lib/widget.py", "fix: green")
+        with tempfile.TemporaryDirectory() as other:
+            other = Path(other)
+            _copy_checker(other, '{"exemptions": [{"id": "x", "match": "path", '
+                                 '"reason": "r", "critic_checks": "c"}]}')
+            p = subprocess.run(
+                [sys.executable, str(other / "scripts" / "check_tdd_commits.py"),
+                 "main", "HEAD"],
+                cwd=self.repo, capture_output=True, text=True,
+            )
+        self.assertEqual(p.returncode, 2, p.stdout + p.stderr)
+
+    # --- a merge base that predates the list: the once-per-branch floor ----
+
+    def test_no_list_at_the_merge_base_is_judged_by_the_old_floor(self):
+        self.seed(None)
+        self.git("checkout", "-q", "-b", "agent/DRE-1-old")
+        self.add_commit("tests/test_widget.py", "test: RED")
+        self.add_commit("lib/widget.py", "fix: green")
+        self.add_commit("lib/more.py", "feat: more, no test between")
+        p = self.run_in_repo()
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        self.assertIn(self.merge_base_short(), p.stdout)
+        self.assertIn("did not exist", p.stdout)
+        self.assertIn("once-per-branch", p.stdout)
+
+    def test_the_old_floor_honors_no_claim_on_the_first_code_commit(self):
+        self.seed(None)
+        self.git("checkout", "-q", "-b", "agent/DRE-1-old-claim")
+        self.claim_commit("lib/widget.py", "refactor: no test", "refactor")
+        p = self.run_in_repo()
+        self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
+        self.assertIn(check_tdd_commits.FAILURE_MESSAGE, p.stdout)
+
+    def test_the_branch_adding_the_list_is_still_judged_by_the_old_floor(self):
+        # This card's own pull request: the list arrives on the branch, so
+        # the merge base has none.
+        self.seed(None)
+        self.git("checkout", "-q", "-b", "agent/DRE-1-adds-list")
+        self.add_commit("tests/test_widget.py", "test: RED")
+        self.write("config/tdd-exemptions.json",
+                   EXEMPTIONS_PATH.read_text(encoding="utf-8"))
+        self.add_commit("lib/widget.py", "fix: green, with the list")
+        self.add_commit("lib/more.py", "feat: more")
+        p = self.run_in_repo()
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        self.assertIn("did not exist", p.stdout)
+
+    def test_an_unreadable_list_at_the_merge_base_exits_2(self):
+        self.seed("{not json")
+        self.git("checkout", "-q", "-b", "agent/DRE-1-x")
+        self.add_commit("tests/test_widget.py", "test: RED")
+        self.add_commit("lib/widget.py", "fix: green")
+        p = self.run_in_repo()
+        self.assertEqual(p.returncode, 2, p.stdout + p.stderr)
+
+    def test_an_unknown_match_at_the_merge_base_exits_2(self):
+        self.seed('{"exemptions": [{"id": "x", "match": "path", '
+                  '"reason": "r", "critic_checks": "c"}]}')
+        self.git("checkout", "-q", "-b", "agent/DRE-1-x")
+        self.add_commit("tests/test_widget.py", "test: RED")
+        self.add_commit("lib/widget.py", "fix: green")
+        p = self.run_in_repo()
+        self.assertEqual(p.returncode, 2, p.stdout + p.stderr)
+
+    def test_a_merge_base_git_cannot_compute_exits_2(self):
+        self.seed(EXEMPTIONS_PATH.read_text(encoding="utf-8"))
+        self.git("checkout", "-q", "-b", "agent/DRE-1-x")
+        self.add_commit("tests/test_widget.py", "test: RED")
+        p = self.run_in_repo(base="no-such-ref")
+        self.assertEqual(p.returncode, 2, p.stdout + p.stderr)
+
+    def test_merging_main_in_moves_the_branch_onto_the_new_rule(self):
+        self.seed(None)
+        self.git("checkout", "-q", "-b", "agent/DRE-1-moves")
+        self.add_commit("tests/test_widget.py", "test: RED")
+        self.add_commit("lib/widget.py", "fix: green")
+        self.add_commit("lib/more.py", "feat: more, no test between")
+        self.git("checkout", "-q", "main")
+        self.write("config/tdd-exemptions.json",
+                   EXEMPTIONS_PATH.read_text(encoding="utf-8"))
+        self.git("add", "-A")
+        self.git("commit", "-q", "-m", "chore: the list lands")
+        self.git("checkout", "-q", "agent/DRE-1-moves")
+        self.git("merge", "-q", "--no-edit", "main")
+        p = self.run_in_repo()
+        self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
+        self.assertIn("feat: more, no test between", p.stdout)
+
+
+def _norm(text: str) -> str:
+    return " ".join(text.split())
+
+
+class TheRuleIsStatedOnceEverywhereTest(unittest.TestCase):
+    """Every place that restated the once-per-branch rule now states the new
+    one — otherwise the gap between two floors comes straight back."""
+
+    def read(self, rel):
+        return (ROOT / rel).read_text(encoding="utf-8")
+
+    def test_the_standard_carries_the_rule_word_for_word(self):
+        self.assertIn(_norm(check_tdd_commits.RULE),
+                      _norm(self.read("standards/engineering.md")))
+
+    def test_the_critic_defers_to_the_check_and_reads_claims(self):
+        brief = _norm(self.read("briefs/critic.md"))
+        self.assertIn("exit code", brief)
+        self.assertIn("critic_checks", brief)
+        self.assertIn("claimed:", brief)
+        self.assertIn(check_tdd_commits.EXEMPTIONS_FILE, brief)
+
+    def test_every_build_prompt_copy_states_the_rule_and_the_trailer(self):
+        wf = yaml.safe_load(self.read(".github/workflows/agent-task.yml"))
+        prompts = [
+            (step.get("with") or {}).get("prompt", "")
+            for job in wf["jobs"].values() for step in job.get("steps") or []
+            if "anthropics/claude-code-action" in (step.get("uses") or "")
+        ]
+        prompts = [p for p in prompts if "COMMIT-ORDER SELF-CHECK" in p]
+        self.assertEqual(len(prompts), 3)
+        for prompt in prompts:
+            text = _norm(prompt)
+            self.assertIn("since the previous code commit", text)
+            self.assertIn("TDD-Exempt:", text)
+            self.assertNotIn("comes before your first code commit", text)
+
+    def test_the_unfixable_registry_states_the_new_rule(self):
+        import unfixable_checks
+        entry = unfixable_checks.match(unfixable_checks.TDD_CHECK_NAME)
+        self.assertIn("previous code commit", entry.what)
+        self.assertNotIn("before the first commit that changes", entry.what)
+
+    def test_the_action_states_the_new_rule(self):
+        text = self.read(".github/actions/tdd-commit-check/action.yml")
+        action = yaml.safe_load(text)
+        self.assertIn("previous code commit", _norm(action["description"]))
+        header = text.split("\nname:", 1)[0]
+        self.assertIn("previous code commit", _norm(header))
+
+    def test_the_readme_section_states_the_new_rule(self):
+        readme = self.read("README.md")
+        section = readme.split("### `tdd-commit-check`", 1)[1].split("\n### ", 1)[0]
+        self.assertIn("previous code commit", _norm(section))
+        self.assertIn("TDD-Exempt:", section)
+        self.assertIn(check_tdd_commits.EXEMPTIONS_FILE, section)
+
+    def test_the_config_readme_lists_the_file(self):
+        self.assertIn("tdd-exemptions.json", self.read("config/README.md"))
+
+    def test_the_fix_prompt_commits_its_test_before_its_code(self):
+        # Measured before shipping: bureau-pipeline #1064 and #1041 both
+        # newly fail the per-change rule on the fix loop's one
+        # "address review findings" commit carrying test and code together.
+        # The fix agent cannot reorder a pushed commit, so the prompt has to
+        # split them before the push or every such round strands its PR.
+        wf = yaml.safe_load(self.read(".github/workflows/agent-fix.yml"))
+        prompts = [
+            (step.get("with") or {}).get("prompt", "")
+            for job in wf["jobs"].values() for step in job.get("steps") or []
+            if "anthropics/claude-code-action" in (step.get("uses") or "")
+        ]
+        prompts = [p for p in prompts if "address review" in p]
+        self.assertTrue(prompts)
+        for prompt in prompts:
+            text = _norm(prompt)
+            self.assertIn("since the previous code commit", text)
+            self.assertRegex(text, r"test\(\$\{\{ steps\.pr\.outputs\.card \}\}\): RED")
+            self.assertIn("TDD-Exempt:", text)
 
 
 if __name__ == "__main__":

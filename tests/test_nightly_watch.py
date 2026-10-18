@@ -29,18 +29,21 @@ tests hold this watcher to the same rules:
      2-3). A repo the token cannot read and a workflow file that will not
      fetch are reported as unknown and alarm; neither is ever reported as
      "nightly ok".
-  4. **The alarm reaches a human the way the channel alarm did.** One
-     deduplicated Linear card through `linear_ops.py`. It was asserted against
-     the channel-staleness workflow until that job was retired (DRE-6053); the
-     values it read there are now literals in `AlarmMechanismTest`.
-  5. **It is a report, not an act.** One `unconverted` / `not-an-act` row in
-     `config/pipeline-acts.json`, declared the way the channel alarm's row was
-     (that row is now a literal in `ActRegistryTest`), and nothing added to
-     `acts`.
+  4. **The alarm is a console alert, its old card the fallback** (DRE-7456).
+     One key per condition per owner — `nightly_watch:<owner>:did_not_run`,
+     `nightly_watch:<owner>:cannot_read` — raised at WARN through
+     `scripts/pipeline_notice.py` and resolved by the hour that finds the
+     condition gone. The deduplicated Linear card it filed before is exactly
+     the client's fallback. The steps are run as written against a fake
+     client in `NoticeStepsTest`.
+  5. **It is a report, not an act.** Nothing is added to `acts`, and with no
+     comment of its own left to post, its `unconverted` row is gone rather
+     than left to rot.
 """
 
 import base64
 import datetime as dt
+import io
 import json
 import os
 import re
@@ -57,6 +60,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "scripts"))
 import check_act_receipts  # noqa: E402
 import check_workflow_watchers  # noqa: E402
 import cron_clock  # noqa: E402
+import gh_read_retry  # noqa: E402
 import nightly_watch  # noqa: E402
 from gh_read_retry import GhReadError  # noqa: E402
 import pipeline_act  # noqa: E402
@@ -68,6 +72,20 @@ MEDIC_STUB = ROOT / ".github" / "workflows" / "self-medic.yml"
 TESTS_WORKFLOW = ROOT / ".github" / "workflows" / "tests.yml"
 
 NOW = "2026-09-25T12:00:00Z"
+
+#: A server error is retried (DRE-7352), so every test that feeds the watcher a
+#: 5xx would otherwise wait out the real backoff. The read seam's own test hook
+#: makes those waits zero for the whole module; the one test that checks the
+#: real numbers patches the sleep instead.
+_NO_BACKOFF = mock.patch.dict(os.environ, {"BUREAU_GH_READ_BACKOFF": "0,0"})
+
+
+def setUpModule():
+    _NO_BACKOFF.start()
+
+
+def tearDownModule():
+    _NO_BACKOFF.stop()
 
 
 def _ago(hours: float) -> str:
@@ -1351,8 +1369,269 @@ class ThrottleTest(unittest.TestCase):
 
 
 # --------------------------------------------------------------------------- #
-# 4. one condition, one card — and the same mechanism as the sibling alarm     #
+# 3e. a server error is retried, briefly (DRE-7352)                            #
 # --------------------------------------------------------------------------- #
+
+
+#: Watch run 38672076834's own answer for bureau-pipeline's
+#: `smoke-setup-python-cached.yml`, word for word.
+INCIDENT_503 = ("gh: No server is currently available to service your "
+                "request. Sorry about that. Please try resubmitting your "
+                "request and contact us if the problem persists. (HTTP 503)")
+
+
+def _file_answer(text):
+    """The gh CLI's stdout for a contents read of `text`."""
+    return json.dumps({"encoding": "base64",
+                       "content": base64.b64encode(text.encode()).decode()})
+
+
+def _answers(*steps):
+    """A gh stand-in answering `steps` in order, one per attempt: a string is
+    gh's stdout, and anything else is a callable that raises. Every attempt is
+    recorded in `.calls`."""
+    queue = list(steps)
+
+    def gh():
+        gh.calls += 1
+        step = queue.pop(0) if len(queue) > 1 else queue[0]
+        return step if isinstance(step, str) else step()
+    gh.calls = 0
+    return gh
+
+
+class _GhCli:
+    """`gh_read` replaced by the gh CLI itself: `FakeGitHub`'s records come
+    back as stdout, and `failing(path, attempt)` picks the attempts GitHub
+    answers with the incident's 503 instead. Every read goes through the REAL
+    `_gh_api` — this is what `main(["watch", …])` gets — and every attempt of
+    every path is counted."""
+
+    def __init__(self, repos, failing):
+        self.github = FakeGitHub(repos)
+        self.failing = failing
+        self.calls = []
+
+    def __call__(self, args, log=None):
+        path = args[1]
+        self.calls.append(path)
+        if self.failing(path, self.calls.count(path)):
+            _gh_fails(INCIDENT_503)()
+        return json.dumps(self.github(path))
+
+    def attempts(self, needle):
+        return sum(1 for path in self.calls if needle in path)
+
+
+class ServerErrorTest(unittest.TestCase):
+    """Watch run 38672076834 (2026-10-15 02:38 UTC): GitHub answered one read
+    of a workflow file with a 503 — "No server is currently available" — and
+    the watcher filed `Nightly watcher cannot read a repo's CI` for an outage
+    on GitHub's side that was over in seconds. A server error is now retried a
+    few times before the subject is UNKNOWN, within a bound per run; every
+    other refusal behaves exactly as it did."""
+
+    PORTICO = "dreadnought-foundry/portico"
+    SUBJECT = f"{PORTICO} · CI"
+
+    def _fleet(self):
+        return {self.PORTICO: FakeRepo(
+            workflows={".github/workflows/ci.yml": ("CI", NIGHTLY_CI)},
+            runs={"ci.yml": run_record(hours_ago=2)})}
+
+    def test_the_incidents_503_then_a_good_answer_reads_ok(self):
+        gh = _answers(_gh_fails(INCIDENT_503), _file_answer(NIGHTLY_CI))
+        with mock.patch("sys.stderr"):
+            readings = _GhAnswers(contents=gh).collect(self._fleet())
+        self.assertEqual(_states(readings), {self.SUBJECT: nightly_watch.OK})
+        self.assertFalse(nightly_watch.evaluate(readings).alarm)
+        self.assertEqual(gh.calls, 2)
+
+    def test_a_5xx_on_every_attempt_still_reads_unknown_and_alarms(self):
+        gh = _answers(_gh_fails(INCIDENT_503))
+        with mock.patch("sys.stderr"):
+            readings = _GhAnswers(contents=gh).collect(self._fleet())
+        self.assertEqual(_states(readings),
+                         {self.SUBJECT: nightly_watch.UNKNOWN})
+        verdict = nightly_watch.evaluate(readings)
+        self.assertTrue(verdict.alarm)
+        self.assertEqual(verdict.state, nightly_watch.UNKNOWN)
+        self.assertEqual(gh.calls, gh_read_retry.ATTEMPTS)
+        # GitHub's last answer is what the reading says, exactly as before.
+        self.assertIn("(HTTP 503)", readings[0].detail)
+
+    def test_only_a_5xx_is_attempted_more_than_once(self):
+        """Counted at the read seam: each refusal `_gh_api` is handed, and how
+        many times it asks. Only a 5xx is asked again — and only from GitHub's
+        `(HTTP 5xx)` status, never from digits elsewhere in the message."""
+        once = {
+            "404": _gh_fails(NOT_FOUND),
+            "403": _gh_fails(REFUSALS["403"]),
+            "throttle": _gh_fails(REFUSALS["throttle"], rate_limited=True),
+            "a throttle that says 503": _gh_fails(
+                "gh: API rate limit exceeded (HTTP 503)", rate_limited=True),
+            "stray digits": _gh_fails(
+                "gh: Not Found (HTTP 404) for repos/o/r/contents/503.yml"),
+            "empty": lambda: "",
+            "not JSON": lambda: "<!DOCTYPE html><title>Unicorn</title>",
+        }
+        expected = {**{name: 1 for name in once},
+                    "502": gh_read_retry.ATTEMPTS,
+                    "503": gh_read_retry.ATTEMPTS}
+        cases = {**once, "502": _gh_fails(REFUSALS["5xx"]),
+                 "503": _gh_fails(INCIDENT_503)}
+        for name, refusal in cases.items():
+            with self.subTest(refusal=name):
+                gh = _answers(refusal)
+                with mock.patch.object(nightly_watch, "gh_read",
+                                       lambda args, log=None: gh()), \
+                        mock.patch("sys.stderr"):
+                    with self.assertRaises(nightly_watch.Unreadable):
+                        nightly_watch._gh_api("repos/o/r/contents/x.yml?ref=main")
+                self.assertEqual(gh.calls, expected[name])
+
+    def test_the_attempts_and_waits_are_the_read_seams_own(self):
+        """Imported, never copied: the same three attempts, and the waits
+        `backoff_seconds()` names — 15s then 45s by default."""
+        self.assertIs(nightly_watch.ATTEMPTS, gh_read_retry.ATTEMPTS)
+        self.assertIs(nightly_watch.backoff_seconds,
+                      gh_read_retry.backoff_seconds)
+        gh = _answers(_gh_fails(INCIDENT_503))
+        env = {k: v for k, v in os.environ.items()
+               if k != "BUREAU_GH_READ_BACKOFF"}
+        with mock.patch.dict(os.environ, env, clear=True), \
+                mock.patch.object(nightly_watch.time, "sleep") as sleep, \
+                mock.patch.object(nightly_watch, "gh_read",
+                                  lambda args, log=None: gh()), \
+                mock.patch("sys.stderr"):
+            with self.assertRaises(nightly_watch.Unreadable):
+                nightly_watch._gh_api("repos/o/r/contents/x.yml?ref=main")
+        self.assertEqual([c.args[0] for c in sleep.call_args_list],
+                         list(gh_read_retry.BACKOFF_SECONDS))
+
+    def test_each_retry_is_one_line_in_the_run_log_and_none_on_the_card(self):
+        gh = _answers(_gh_fails(INCIDENT_503))
+        log = io.StringIO()
+        with mock.patch("sys.stderr", log):
+            readings = _GhAnswers(contents=gh).collect(self._fleet())
+        path = ("repos/dreadnought-foundry/portico/contents/"
+                ".github/workflows/ci.yml?ref=main")
+        lines = [line for line in log.getvalue().splitlines() if line]
+        attempts = [f"attempt {n} of {gh_read_retry.ATTEMPTS}"
+                    for n in range(1, gh_read_retry.ATTEMPTS)]
+        self.assertEqual(len(lines), len(attempts), lines)
+        for line, attempt in zip(lines, attempts):
+            self.assertIn(path, line)
+            self.assertIn(attempt, line)
+            self.assertIn("(HTTP 503)", line)
+        detail = nightly_watch.evaluate(readings).detail
+        self.assertNotIn("attempt 1 of", detail)
+        self.assertNotIn("retrying", detail)
+
+    def _watch(self, repos, failing):
+        """One `main(["watch", …])` — the job's own path — over `repos`, with
+        gh answering through `_GhCli`. Returns the readings and the gh."""
+        gh = _GhCli(repos, failing)
+        seen = {}
+        real = nightly_watch.collect
+
+        def spy(api, **kw):
+            seen["readings"] = real(api, **kw)
+            return seen["readings"]
+
+        roster = {name.split("/")[-1]: name for name in repos}
+        with mock.patch.object(nightly_watch, "roster", lambda *a: roster), \
+                mock.patch.object(nightly_watch, "collect", spy), \
+                mock.patch.object(nightly_watch, "gh_read", gh), \
+                mock.patch.dict(os.environ, {"GITHUB_OUTPUT": ""}), \
+                mock.patch("sys.stdout"), mock.patch("sys.stderr"):
+            nightly_watch.main(["watch", "--owner", "dreadnought-foundry",
+                                "--now", NOW])
+        return _states(seen["readings"]), gh
+
+    def _two_repos(self):
+        return {
+            f"dreadnought-foundry/{name}": FakeRepo(
+                workflows={".github/workflows/ci.yml": ("CI", NIGHTLY_CI)},
+                runs={"ci.yml": run_record(hours_ago=2)})
+            for name in ("alpha", "beta")
+        }
+
+    def test_one_run_spends_at_most_two_retry_waits(self):
+        """alpha's file 5xxs on every attempt and spends the run's two waits;
+        beta's 5xx later in the SAME run is attempted once and is UNKNOWN. The
+        next run — a fresh `watch` — gets its two waits back."""
+        self.assertEqual(nightly_watch.SERVER_ERROR_RETRIES_PER_RUN, 2)
+        always = lambda path, attempt: "/contents/" in path  # noqa: E731
+        for run in ("first", "next"):
+            with self.subTest(run=run):
+                states, gh = self._watch(self._two_repos(), always)
+                self.assertEqual(states, {
+                    "dreadnought-foundry/alpha · CI": nightly_watch.UNKNOWN,
+                    "dreadnought-foundry/beta · CI": nightly_watch.UNKNOWN,
+                })
+                self.assertEqual(gh.attempts("alpha/contents/"),
+                                 gh_read_retry.ATTEMPTS)
+                self.assertEqual(gh.attempts("beta/contents/"), 1)
+
+    def test_a_partly_spent_budget_still_retries_what_is_left(self):
+        """alpha's file 5xxs once and then answers (one wait, OK); beta's
+        5xxs every time and gets the one wait that is left: two attempts,
+        then UNKNOWN."""
+        def failing(path, attempt):
+            if "alpha/contents/" in path:
+                return attempt == 1
+            return "beta/contents/" in path
+        states, gh = self._watch(self._two_repos(), failing)
+        self.assertEqual(states, {
+            "dreadnought-foundry/alpha · CI": nightly_watch.OK,
+            "dreadnought-foundry/beta · CI": nightly_watch.UNKNOWN,
+        })
+        self.assertEqual(gh.attempts("alpha/contents/"), 2)
+        self.assertEqual(gh.attempts("beta/contents/"), 2)
+
+    def test_every_watcher_read_retries_a_5xx(self):
+        """The repo, the workflow list, the workflow file, the run listing and
+        the last-changed commit all go through `_gh_api`, and a 5xx on the
+        first attempt of any of them is read again and answers."""
+        cases = {
+            "repo": (lambda p: p == f"repos/{self.PORTICO}", {}),
+            "workflow list": (lambda p: "/actions/workflows?" in p, {}),
+            "workflow file": (lambda p: "/contents/" in p, {}),
+            "run listing": (lambda p: "/runs?" in p, {}),
+            "last-changed commit": (lambda p: "/commits?" in p, {"runs": {}}),
+        }
+        for name, (where, extra) in cases.items():
+            with self.subTest(read=name):
+                repo = {"workflows": {".github/workflows/ci.yml":
+                                      ("CI", NIGHTLY_CI)},
+                        "runs": {"ci.yml": run_record(hours_ago=2)}}
+                repo.update(extra)
+                states, gh = self._watch(
+                    {self.PORTICO: FakeRepo(**repo)},
+                    lambda p, attempt, w=where: w(p) and attempt == 1)
+                self.assertNotIn(nightly_watch.UNKNOWN, states.values())
+                self.assertTrue(any(gh.calls.count(p) == 2 and where(p)
+                                    for p in gh.calls), gh.calls)
+
+    def test_the_docstring_and_the_workflow_say_a_server_error_is_retried(self):
+        self.assertIn("A SERVER ERROR IS RETRIED, BRIEFLY", nightly_watch.__doc__)
+        text = WATCH_WORKFLOW.read_text()
+        q4 = text[text.index("#   Q4"):text.index("#   Q5")]
+        self.assertNotIn("A refusal is never retried past", q4)
+        self.assertIn("server error", q4)
+
+
+# --------------------------------------------------------------------------- #
+# 4. one condition, one console alert (DRE-7456)                               #
+# --------------------------------------------------------------------------- #
+#
+# The watcher used to file one deduplicated Linear card per condition per
+# owner. It now raises one console alert per condition per owner through
+# `scripts/pipeline_notice.py` — `nightly_watch:<owner>:did_not_run` for the
+# missing nightly and `nightly_watch:<owner>:cannot_read` for the repo it could
+# not read, both at WARN — and resolves the key when an hourly run finds the
+# condition gone. The card it filed before is the client's fallback, exactly.
 
 
 def _steps(workflow: Path) -> list:
@@ -1361,52 +1640,371 @@ def _steps(workflow: Path) -> list:
             for step in (job.get("steps") or [])]
 
 
-def _alarm_step(workflow: Path) -> dict:
-    """The step that raises the alarm — the one that writes to Linear."""
-    found = [s for s in _steps(workflow) if "linear_ops.py" in (s.get("run") or "")]
-    assert len(found) == 1, f"{workflow.name}: expected one alarm step, got {len(found)}"
+def _notice_steps(workflow: Path, verb: str) -> list:
+    return [s for s in _steps(workflow)
+            if f"pipeline_notice.py {verb}" in (s.get("run") or "")]
+
+
+def _raise_step() -> dict:
+    found = _notice_steps(WATCH_WORKFLOW, "raise")
+    assert len(found) == 1, f"expected one raising step, got {len(found)}"
     return found[0]
 
 
-def _linear_commands(step: dict) -> set:
-    return set(re.findall(r"linear_ops\.py\s+([a-z-]+)", step.get("run") or ""))
+def _resolve_step() -> dict:
+    found = _notice_steps(WATCH_WORKFLOW, "resolve")
+    assert len(found) == 1, f"expected one resolving step, got {len(found)}"
+    return found[0]
 
 
-#: The channel-staleness alarm's own alarm step, read once off its workflow on
-#: `main` at f6b6813a (2026-10-07) just before DRE-6053 retired it. This test
-#: used to compare against that file; with the file gone, these are the values
-#: it compared against, so the nightly alarm still reaches a human exactly the
-#: way the channel alarm did.
-CHANNEL_ALARM_LINEAR_COMMANDS = {"find-open", "comment", "create"}
-CHANNEL_ALARM_IF = "steps.decide.outputs.alarm == 'true'"
+#: A fake `scripts/pipeline_notice.py` and `scripts/linear_ops.py`: each call
+#: is one JSON line in $FAKE_CALLS, the body file's text read at call time, and
+#: `linear_ops.py find-open` answers $FAKE_FIND_OPEN.
+FAKE_SCRIPT = r'''
+import json, os, sys
+argv = sys.argv[1:]
+call = {"script": os.path.basename(__file__), "argv": argv}
+if "--body-file" in argv:
+    with open(argv[argv.index("--body-file") + 1], encoding="utf-8") as fh:
+        call["body"] = fh.read()
+with open(os.environ["FAKE_CALLS"], "a", encoding="utf-8") as fh:
+    fh.write(json.dumps(call) + "\n")
+if argv[:1] == ["find-open"] and os.environ.get("FAKE_FIND_OPEN"):
+    print(os.environ["FAKE_FIND_OPEN"])
+'''
+
+
+def _flag(argv: list, name: str) -> list:
+    return [argv[i + 1] for i in range(len(argv) - 1) if argv[i] == name]
+
+
+class _FakeClient:
+    """A checkout holding the two fake scripts, and the steps run in it."""
+
+    def __init__(self, directory: str):
+        self.root = Path(directory)
+        (self.root / "scripts").mkdir()
+        for name in ("pipeline_notice.py", "linear_ops.py"):
+            (self.root / "scripts" / name).write_text(FAKE_SCRIPT)
+        self.temp = self.root / "runner-temp"
+        self.temp.mkdir()
+        self.log = self.root / "calls.jsonl"
+        self.log.write_text("")
+
+    def run(self, step: dict, env: dict, find_open: str = ""):
+        import subprocess  # noqa: PLC0415 — only these tests run a shell
+        script = self.root / "step.sh"
+        script.write_text("set -eo pipefail\n" + step["run"])
+        full = {k: v for k, v in os.environ.items()
+                if k not in ("GITHUB_OUTPUT", "GITHUB_STEP_SUMMARY")}
+        full.update({"RUNNER_TEMP": str(self.temp),
+                     "GITHUB_REPOSITORY": "dreadnought-foundry/bureau-pipeline",
+                     "FAKE_CALLS": str(self.log),
+                     "FAKE_FIND_OPEN": find_open})
+        full.update(env)
+        proc = subprocess.run(["bash", str(script)], cwd=self.root, env=full,
+                              capture_output=True, text=True)
+        assert proc.returncode == 0, proc.stdout + proc.stderr
+        return proc
+
+    def calls(self, script: str | None = None) -> list:
+        out = [json.loads(line) for line in self.log.read_text().splitlines()]
+        return [c for c in out if script is None or c["script"] == script]
+
+
+def _watch_outputs(readings, *, owner="EveryBite", now=NOW, temp: Path):
+    """`main(["watch", …])` over `readings` — the job's own Decide step —
+    returning its GITHUB_OUTPUT, with the title and body files in `temp`."""
+    out = temp / "github-output"
+    out.write_text("")
+    with mock.patch.object(nightly_watch, "roster", lambda *args: {}), \
+            mock.patch.object(nightly_watch, "collect",
+                              lambda api, **kw: readings), \
+            mock.patch.dict(os.environ, {"GITHUB_OUTPUT": str(out)}), \
+            mock.patch("sys.stdout"):
+        nightly_watch.main(["watch", "--owner", owner, "--now", now,
+                            "--title-file", str(temp / "alarm-title.txt"),
+                            "--body-file", str(temp / "alarm-body.md")])
+    return dict(line.split("=", 1) for line in out.read_text().splitlines())
+
+
+#: Hours that are, and are not, the daily re-confirm tick.
+SPEAKING = f"2026-10-09T{nightly_watch.RECONFIRM_HOUR_UTC:02d}:23:00Z"
+ORDINARY = f"2026-10-09T{(nightly_watch.RECONFIRM_HOUR_UTC + 11) % 24:02d}:23:00Z"
+RUN_URL = "https://github.com/dreadnought-foundry/bureau-pipeline/actions/runs/7"
+
+MISSED = [nightly_watch.Reading("EveryBite/atlas · CI", nightly_watch.LATE,
+                                "EveryBite/atlas · CI: 30h old.")]
+UNREAD = [nightly_watch.Reading("EveryBite/atlas", nightly_watch.UNKNOWN,
+                                "EveryBite/atlas: GitHub refused.")]
+RAN = [nightly_watch.Reading("EveryBite/atlas · CI", nightly_watch.OK,
+                             "EveryBite/atlas · CI: nightly ok.")]
+
+
+def _readings(*states):
+    return [nightly_watch.Reading(f"o/r{i} · CI", state, f"r{i}: {state}")
+            for i, state in enumerate(states)]
+
+
+class NoticeDecisionTest(unittest.TestCase):
+    """Which key an hour raises and which it resolves. Pure."""
+
+    def _plan(self, readings, speak_throttled=False):
+        verdict = nightly_watch.evaluate(readings, owner="EveryBite",
+                                         speak_throttled=speak_throttled)
+        return nightly_watch.notice_actions(readings, verdict)
+
+    def test_the_two_keys_are_the_contracts(self):
+        self.assertEqual(nightly_watch.DID_NOT_RUN, "did_not_run")
+        self.assertEqual(nightly_watch.CANNOT_READ, "cannot_read")
+
+    def test_a_missed_nightly_raises_did_not_run(self):
+        raised, resolved = self._plan(_readings(nightly_watch.LATE))
+        self.assertEqual(raised, nightly_watch.DID_NOT_RUN)
+        self.assertEqual(resolved, (nightly_watch.CANNOT_READ,),
+                         "everything was read, so nothing is unreadable")
+
+    def test_a_stuck_or_never_run_nightly_raises_did_not_run(self):
+        for state in (nightly_watch.STUCK, nightly_watch.NEVER):
+            with self.subTest(state=state):
+                raised, _ = self._plan(_readings(state, nightly_watch.OK))
+                self.assertEqual(raised, nightly_watch.DID_NOT_RUN)
+
+    def test_an_unreadable_repo_raises_cannot_read(self):
+        raised, resolved = self._plan(_readings(nightly_watch.UNKNOWN,
+                                                nightly_watch.OK))
+        self.assertEqual(raised, nightly_watch.CANNOT_READ)
+        self.assertEqual(resolved, (), "a missing nightly may hide in the "
+                                       "repo that could not be read")
+
+    def test_a_missed_nightly_beside_an_unreadable_repo_resolves_neither(self):
+        """The missing nightly takes the alert, as it took the card; the
+        unreadable repo is named in its body and its own key is left as it
+        stands — it still holds, so it is not resolved."""
+        raised, resolved = self._plan(_readings(nightly_watch.LATE,
+                                                nightly_watch.UNKNOWN))
+        self.assertEqual(raised, nightly_watch.DID_NOT_RUN)
+        self.assertEqual(resolved, ())
+
+    def test_everything_ran_resolves_both(self):
+        raised, resolved = self._plan(_readings(nightly_watch.OK,
+                                                nightly_watch.WAITING))
+        self.assertIsNone(raised)
+        self.assertEqual(resolved, (nightly_watch.DID_NOT_RUN,
+                                    nightly_watch.CANNOT_READ))
+
+    def test_nothing_to_watch_resolves_both(self):
+        self.assertEqual(self._plan([]), (None, (nightly_watch.DID_NOT_RUN,
+                                                 nightly_watch.CANNOT_READ)))
+
+    def test_a_throttle_alone_on_an_ordinary_hour_touches_nothing(self):
+        """Not read is not gone: neither key is resolved on a reading that
+        could not see, and a throttle alone is not said this hour."""
+        self.assertEqual(self._plan(_readings(nightly_watch.OK,
+                                              nightly_watch.THROTTLED)),
+                         (None, ()))
+
+    def test_a_throttle_alone_on_the_re_confirm_hour_raises_cannot_read(self):
+        self.assertEqual(
+            self._plan(_readings(nightly_watch.OK, nightly_watch.THROTTLED),
+                       speak_throttled=True),
+            (nightly_watch.CANNOT_READ, ()))
+
+    def test_the_raised_key_is_always_the_verdicts_title(self):
+        """The key and the fallback card's title are one condition."""
+        titles = {nightly_watch.DID_NOT_RUN: nightly_watch.MISSING_TITLE,
+                  nightly_watch.CANNOT_READ: nightly_watch.UNKNOWN_TITLE}
+        for states in ((nightly_watch.LATE,), (nightly_watch.UNKNOWN,),
+                       (nightly_watch.NEVER, nightly_watch.UNKNOWN)):
+            readings = _readings(*states)
+            verdict = nightly_watch.evaluate(readings, owner="EveryBite")
+            raised, _ = nightly_watch.notice_actions(readings, verdict)
+            self.assertEqual(verdict.title,
+                             nightly_watch.title_for(titles[raised], "EveryBite"))
+
+    def test_the_decide_step_writes_the_plan_to_its_outputs(self):
+        with tempfile.TemporaryDirectory() as directory:
+            temp = Path(directory)
+            missed = _watch_outputs(MISSED, temp=temp)
+            ran = _watch_outputs(RAN, temp=temp)
+            unread = _watch_outputs(UNREAD, temp=temp)
+        self.assertEqual((missed["raise"], missed["resolve"]),
+                         ("did_not_run", "cannot_read"))
+        self.assertEqual((ran["raise"], ran["resolve"]),
+                         ("", "did_not_run cannot_read"))
+        self.assertEqual((unread["raise"], unread["resolve"]),
+                         ("cannot_read", ""))
+
+
+class NoticeStepsTest(unittest.TestCase):
+    """The workflow's own steps, run as written against a fake client."""
+
+    def setUp(self):
+        self._dir = tempfile.TemporaryDirectory()
+        self.client = _FakeClient(self._dir.name)
+
+    def tearDown(self):
+        self._dir.cleanup()
+
+    def _hour(self, readings, *, now=ORDINARY, find_open=""):
+        """One hourly run for EveryBite: Decide, then the steps it gates."""
+        outputs = _watch_outputs(readings, now=now, temp=self.client.temp)
+        env = {"OWNER": "EveryBite", "RUN_URL": RUN_URL,
+               "RAISE": outputs["raise"], "RESOLVE": outputs["resolve"],
+               "RECONFIRM": outputs["reconfirm"]}
+        if outputs["raise"]:
+            self.client.run(_raise_step(), env, find_open=find_open)
+        if outputs["resolve"]:
+            self.client.run(_resolve_step(), env, find_open=find_open)
+        return outputs
+
+    def test_a_missed_nightly_raises_did_not_run_and_creates_no_card(self):
+        self._hour(MISSED)
+        raised = self.client.calls("pipeline_notice.py")
+        self.assertEqual(len([c for c in raised if c["argv"][0] == "raise"]), 1)
+        call = next(c for c in raised if c["argv"][0] == "raise")
+        self.assertEqual(_flag(call["argv"], "--notice"),
+                         ["nightly_watch:EveryBite:did_not_run"])
+        self.assertEqual(_flag(call["argv"], "--severity"), ["WARN"])
+        self.assertEqual(_flag(call["argv"], "--title"), [nightly_watch.title_for(
+            nightly_watch.MISSING_TITLE, "EveryBite")])
+        self.assertEqual([c["argv"][0] for c in self.client.calls("linear_ops.py")
+                          if c["argv"][0] != "find-open"], [],
+                         "no card is created, and no comment posted")
+
+    def test_the_raise_carries_todays_body(self):
+        """The decision's body and the watch run, as the card carried them."""
+        self._hour(MISSED)
+        call = next(c for c in self.client.calls("pipeline_notice.py")
+                    if c["argv"][0] == "raise")
+        body = (self.client.temp / "alarm-body.md").read_text()
+        self.assertEqual(call["body"], body + "\nWatch run: " + RUN_URL + "\n")
+
+    def test_an_unreadable_repo_raises_cannot_read(self):
+        self._hour(UNREAD)
+        call = next(c for c in self.client.calls("pipeline_notice.py")
+                    if c["argv"][0] == "raise")
+        self.assertEqual(_flag(call["argv"], "--notice"),
+                         ["nightly_watch:EveryBite:cannot_read"])
+        self.assertEqual(_flag(call["argv"], "--severity"), ["WARN"])
+        self.assertEqual(_flag(call["argv"], "--title"), [nightly_watch.title_for(
+            nightly_watch.UNKNOWN_TITLE, "EveryBite")])
+
+    def test_a_later_run_finding_it_gone_resolves_the_key(self):
+        self._hour(MISSED)
+        self._hour(UNREAD)
+        self._hour(RAN)
+        resolves = [c["argv"] for c in self.client.calls("pipeline_notice.py")
+                    if c["argv"][0] == "resolve"]
+        self.assertIn(["resolve", "--notice", "nightly_watch:EveryBite:did_not_run"],
+                      resolves)
+        self.assertIn(["resolve", "--notice", "nightly_watch:EveryBite:cannot_read"],
+                      resolves)
+        for argv in resolves:
+            self.assertNotIn("--recovery-title", argv, "a WARN carries no all-clear")
+
+    def test_a_run_finding_it_gone_raises_nothing(self):
+        self._hour(RAN)
+        self.assertEqual([c for c in self.client.calls()
+                          if c["argv"][0] != "resolve"], [])
+
+    def test_the_fallback_is_exactly_todays_card(self):
+        """Title, lane `Planning` (`linear_ops.py create`'s default) and
+        `repo:bureau-pipeline`, derived from the run's own repository as the
+        card's `--repo` was."""
+        for readings, base in ((MISSED, nightly_watch.MISSING_TITLE),
+                               (UNREAD, nightly_watch.UNKNOWN_TITLE)):
+            with self.subTest(base=base):
+                self.client.log.write_text("")
+                self._hour(readings)
+                call = next(c for c in self.client.calls("pipeline_notice.py")
+                            if c["argv"][0] == "raise")
+                title = nightly_watch.title_for(base, "EveryBite")
+                self.assertEqual(_flag(call["argv"], "--fallback-title"), [title])
+                self.assertEqual(_flag(call["argv"], "--fallback-lane"), ["Planning"])
+                self.assertEqual(_flag(call["argv"], "--fallback-label"),
+                                 ["repo:bureau-pipeline"])
+        self.assertIn('basename "$GITHUB_REPOSITORY"', _raise_step()["run"])
+
+    def test_the_re_confirm_hour_raises_the_same_key_again(self):
+        """Once a day the standing alarm is said again, as a raise of the same
+        key — the console answers `repeat` and delivers nothing — even while
+        the fallback card from an outage of the door is open."""
+        self._hour(MISSED, now=SPEAKING, find_open="DRE-41")
+        call = next(c for c in self.client.calls("pipeline_notice.py")
+                    if c["argv"][0] == "raise")
+        self.assertEqual(_flag(call["argv"], "--notice"),
+                         ["nightly_watch:EveryBite:did_not_run"])
+
+    def test_an_open_fallback_card_is_not_said_again_off_the_re_confirm_hour(self):
+        """While the door was down the client filed today's card. On any other
+        hour that card is standing and nothing is said — the card's comment
+        cadence stays once a day, as it was."""
+        self._hour(MISSED, now=ORDINARY, find_open="DRE-41")
+        self.assertEqual([c for c in self.client.calls("pipeline_notice.py")
+                          if c["argv"][0] == "raise"], [])
+        self.assertEqual([c["argv"][0] for c in self.client.calls("linear_ops.py")],
+                         ["find-open"])
+
+    def test_the_first_finding_is_raised_on_whichever_hour_it_is_found(self):
+        self._hour(MISSED, now=ORDINARY)
+        self.assertEqual(len([c for c in self.client.calls("pipeline_notice.py")
+                              if c["argv"][0] == "raise"]), 1)
+
+
+class NoticeWiringTest(unittest.TestCase):
+    """The job grants the token the door reads, and files no card itself."""
+
+    def setUp(self):
+        self.doc = yaml.safe_load(WATCH_WORKFLOW.read_text())
+
+    def test_the_watch_job_grants_id_token_write_and_keeps_its_reads(self):
+        self.assertEqual(self.doc["jobs"]["watch"].get("permissions"),
+                         {"contents": "read", "actions": "read",
+                          "id-token": "write"})
+
+    def test_every_raising_or_resolving_step_reads_the_console_url(self):
+        steps = _notice_steps(WATCH_WORKFLOW, "raise") \
+            + _notice_steps(WATCH_WORKFLOW, "resolve")
+        self.assertEqual(len(steps), 2)
+        for step in steps:
+            self.assertEqual((step.get("env") or {}).get("BUREAU_READ_URL"),
+                             "${{ vars.BUREAU_READ_URL }}", step.get("name"))
+
+    def test_the_steps_run_in_the_watch_job(self):
+        names = [s.get("name") for s in self.doc["jobs"]["watch"]["steps"]]
+        self.assertIn(_raise_step()["name"], names)
+        self.assertIn(_resolve_step()["name"], names)
+
+    def test_the_steps_are_gated_on_the_decision(self):
+        self.assertEqual(_raise_step().get("if"),
+                         "steps.decide.outputs.raise != ''")
+        self.assertEqual(_resolve_step().get("if"),
+                         "steps.decide.outputs.resolve != ''")
+        env = {**_raise_step()["env"], **_resolve_step()["env"]}
+        self.assertEqual(env["RAISE"], "${{ steps.decide.outputs.raise }}")
+        self.assertEqual(env["RESOLVE"], "${{ steps.decide.outputs.resolve }}")
+        self.assertEqual(env["OWNER"], "${{ matrix.owner }}")
+
+    def test_no_card_is_created_or_commented_on_by_the_workflow(self):
+        text = WATCH_WORKFLOW.read_text()
+        self.assertNotIn("linear_ops.py create", text)
+        self.assertNotIn("linear_ops.py comment", text)
+
+    def test_the_notice_writers_report_reads_it_as_repointed(self):
+        import subprocess  # noqa: PLC0415
+        out = subprocess.run(
+            [sys.executable, str(ROOT / "scripts" / "notice_writers.py"), "report"],
+            cwd=ROOT, capture_output=True, text=True, check=True).stdout
+        self.assertIn("notice-writers: nightly-watch repointed", out.splitlines())
 
 
 class AlarmMechanismTest(unittest.TestCase):
-    """The criterion: the channel alarm's mechanism, carried as literals."""
-
-    def test_the_alarm_uses_the_same_linear_seam_as_the_channel_alarm(self):
-        self.assertEqual(
-            _linear_commands(_alarm_step(WATCH_WORKFLOW)),
-            CHANNEL_ALARM_LINEAR_COMMANDS,
-            "the nightly alarm must reach a human through the same "
-            "linear_ops.py seam the channel alarm used — a second "
-            "notification path is a second thing to keep working",
-        )
-
-    def test_the_alarm_is_gated_on_the_decision_the_same_way(self):
-        self.assertEqual(_alarm_step(WATCH_WORKFLOW).get("if"), CHANNEL_ALARM_IF)
-
-    def test_the_card_carries_a_repo_label_the_same_way(self):
-        """A card with no `repo:<slug>` label cannot be routed out of Planning
-        (DRE-2680). Derived from the run's own repository, as the channel
-        alarm's step did (it carried both strings below)."""
-        run = _alarm_step(WATCH_WORKFLOW)["run"]
-        self.assertIn("--repo", run)
-        self.assertIn("GITHUB_REPOSITORY", run)
+    """One condition, one key — and one title for the fallback card."""
 
     def test_one_condition_one_title_so_the_card_dedups(self):
         """`find-open` matches on equality, so a title that moved with the
-        numbers would mint a fresh card every hour."""
+        numbers would mint a fresh fallback card every hour."""
         one = nightly_watch.evaluate(
             [nightly_watch.Reading("a · CI", nightly_watch.LATE, "late")],
             owner="dreadnought-foundry")
@@ -1431,26 +2029,14 @@ class AlarmMechanismTest(unittest.TestCase):
 
     def test_a_standing_alarm_is_re_confirmed_daily_not_hourly(self):
         """The watcher runs hourly so a missing nightly is FOUND within the
-        hour. Saying it again is a different cadence: 24 comments a day on one
-        standing card is the inbox this programme exists to escape, and the
-        sibling alarm — which runs daily — sets the rate that reads as
-        deliberate rather than as a stuck process."""
+        hour. Saying it again on an open fallback card is a different cadence:
+        24 comments a day on one standing card is the inbox this programme
+        exists to escape."""
         self.assertEqual(nightly_watch.RECONFIRM_AFTER_HOURS, 24.0)
         speaks = [hour for hour in range(24)
                   if nightly_watch.should_reconfirm(
                       now=f"2026-09-25T{hour:02d}:30:00Z")]
         self.assertEqual(len(speaks), 1)
-
-    def test_the_first_card_is_filed_the_hour_it_is_found(self):
-        """The re-confirm cadence must not delay the FINDING. The workflow
-        gates only the comment on an existing card; the create branch is
-        reached on whichever hour the alarm first fires."""
-        run = _alarm_step(WATCH_WORKFLOW)["run"]
-        create = run.index("linear_ops.py create")
-        guard = run.index("RECONFIRM")
-        comment = run.index("linear_ops.py comment")
-        self.assertLess(guard, comment, "the guard is on the re-confirm")
-        self.assertLess(comment, create, "…and never on the first filing")
 
     def test_the_headline_is_one_line(self):
         """It goes through GITHUB_OUTPUT, which is line-based."""
@@ -1467,7 +2053,7 @@ class AlarmMechanismTest(unittest.TestCase):
 
 
 class WiringTest(unittest.TestCase):
-    """The watcher runs on its own schedule and can do nothing but read."""
+    """The watcher runs on its own schedule and can change nothing it watches."""
 
     def setUp(self):
         self.doc = yaml.safe_load(WATCH_WORKFLOW.read_text())
@@ -1488,10 +2074,16 @@ class WiringTest(unittest.TestCase):
             nightly_watch.INTERVAL_HOURS,
         )
 
-    def test_it_holds_no_write_anywhere(self):
-        """An alarm that can change what it watches is not an alarm."""
+    def test_it_holds_no_write_on_what_it_watches(self):
+        """An alarm that can change what it watches is not an alarm. The one
+        token it may mint beyond reading is the OIDC token the console's
+        notice door reads, granted to the watch job alone."""
         self.assertEqual(self.doc["permissions"], {"contents": "read",
                                                    "actions": "read"})
+        for name, job in self.doc["jobs"].items():
+            granted = job.get("permissions") or {}
+            self.assertEqual({k: v for k, v in granted.items()
+                              if v != "read" and k != "id-token"}, {}, name)
         text = WATCH_WORKFLOW.read_text()
         for forbidden in ("git push", "--method POST", "--method PUT",
                           "--method DELETE", "gh workflow run"):
@@ -1522,54 +2114,21 @@ class WiringTest(unittest.TestCase):
 # --------------------------------------------------------------------------- #
 
 
-#: The channel-staleness alarm's `unconverted` row in `config/pipeline-acts.json`,
-#: copied verbatim off `main` at f6b6813a (2026-10-07) before DRE-6053 removed
-#: the job and the row with it. The nightly alarm's row is declared the way this
-#: one was; `file` is left out because it named the retired workflow.
-CHANNEL_ALARM_ROW = {
-    "anchor": "\U0001f514 Still true today:",
-    "step": "Raise the alarm where a human will see it",
-    "kind": "not-an-act",
-    "means": "A standing alarm is re-confirmed on its existing card rather "
-             "than filed again.",
-    "why": "A REPORT about the work, not something the pipeline did on its own. "
-           "It creates no obligation, hands the work to nobody and has nothing "
-           "to discharge \u2014 the three questions a trailer answers all read "
-           "'not applicable'. An act is a refusal, a recovery, a hold or a "
-           "progress act; this is a fact. Its subject is the world outside the "
-           "pipeline, not a piece of work the pipeline moved.",
-}
-
-
 class ActRegistryTest(unittest.TestCase):
-    """One `unconverted` row, declared the way the channel alarm's was."""
+    """The workflow posts no comment of its own any more (DRE-7456): the
+    re-confirm comment became a raise of the same key, and the one comment
+    left — the fallback card's — is the client's, declared at
+    `scripts/pipeline_notice.py`. So its `unconverted` row is gone with it,
+    rather than left to rot."""
 
     def setUp(self):
         self.doc = pipeline_act.load()
         self.rows = self.doc.get("unconverted") or []
-        self.sibling = [CHANNEL_ALARM_ROW]
-        self.mine = [r for r in self.rows
-                     if r.get("file") == ".github/workflows/nightly-watch.yml"]
 
-    def test_exactly_one_row_for_the_new_alarm(self):
-        self.assertEqual(len(self.mine), 1)
-
-    def test_it_is_declared_the_way_the_sibling_alarm_is(self):
-        self.assertEqual(len(self.sibling), 1)
-        self.assertEqual(self.mine[0]["kind"], self.sibling[0]["kind"])
-        self.assertEqual(self.mine[0]["kind"], "not-an-act")
-
-    def test_it_names_its_own_anchor_and_step(self):
-        step = self.mine[0]["step"]
-        anchor = self.mine[0]["anchor"]
-        run = _alarm_step(WATCH_WORKFLOW)["run"]
-        self.assertEqual(step, _alarm_step(WATCH_WORKFLOW)["name"])
-        self.assertIn(anchor, run)
-
-    def test_the_reason_says_it_is_a_report_about_the_world(self):
-        why = self.mine[0]["why"]
-        self.assertIn("report", why.lower())
-        self.assertTrue(len(why) > 80, "a reasonless row is just a mute button")
+    def test_no_row_is_left_for_the_comment_it_no_longer_posts(self):
+        self.assertEqual(
+            [r for r in self.rows
+             if r.get("file") == ".github/workflows/nightly-watch.yml"], [])
 
     def test_no_act_is_added_for_it(self):
         """No row in `acts`, so no console change is needed first and the

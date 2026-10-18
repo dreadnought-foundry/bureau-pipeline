@@ -28,8 +28,12 @@ So this module is the two halves of "the run still delivers":
      grammar a reader and a machine can both use, that the push failed and
      WHERE the work is, and it hands the delivery to a `deliver-rescue`
      workflow_dispatch carrying the run id. The comment is posted whatever the
-     dispatch answers: the dispatch can 404 in a repo with no stub, and the card
-     is the channel that always survives.
+     dispatch answers, and the card is the channel that always survives. In a
+     repo with no stub the dispatch answers 403 under a token with no Actions
+     permission and 404 under one holding `actions: write` — and the 403 is
+     the same answer a present stub gets under that token — so a refused
+     dispatch is followed by one read of the workflow file, and the card names
+     the cause: missing, refused or unknown (DRE-7476).
   2. `deliver()` — what that follow-up run executes. A NEW job, a NEW token:
      download the artifact, apply it on a fresh branch off the base, push, open
      the pull request, say so on the card. Nothing it spends was minted by the
@@ -62,6 +66,26 @@ Every one of those outcomes is one `rescue-delivered` receipt on the card. The
 branch travels in the artifact, never in a workflow input, so the dispatch and
 every delivery stub are the same for both shapes; `handoff --branch` only makes
 the card's wording true for a fix run and puts the branch in the marker.
+
+THE CARD'S WORK MAY ALREADY BE UP (DRE-6868). On 2026-10-11 the build run for
+DRE-6833 (run 38117134293) had its push refused and its commits saved as the
+patch, and the work still reached GitHub twice: #997 on the agent's own branch
+at 00:05 PT, and #998 on `agent/<CARD>-rescued-delivery` from this follow-up 21
+minutes later — the same twelve files, a second review and a second test run.
+The only pull request a build run's delivery looked for was one on its own
+branch. So before it pushes, it lists the card's OPEN pull requests — head
+`agent/<CARD>-…` or `repair/<CARD>-…`, any author — and compares each with the
+local replay by patch id (`git cherry`), never by sha, because the replay
+rewrites every sha:
+
+  * one carries every replayed commit — the work is already up: nothing is
+    pushed, nothing is opened, and the receipt names that pull request;
+  * none does — the commits it lacks go onto the newest one's branch, pushed
+    and never forced, as a fix run's do, and no second pull request is opened;
+  * there is none — a merged or closed one does not count — today's delivery.
+
+An unreadable listing is not "none": nothing is delivered and the job goes red.
+Nor is one cut at its limit — the card's pull request could be past the cut.
 
 The grammar is here and nowhere else. `parse_marker()` reads exactly what
 `announcement()` writes, so the reconcile sweep's re-check (reconcile.py's
@@ -128,6 +152,17 @@ OUTCOME_PR_CLOSED = "pull-request-closed"
 OUTCOME_ALREADY_THERE = "already-there"
 OUTCOME_BRANCH_MOVED = "branch-moved"
 
+#: The two a build run's delivery can reach when the card already has an open
+#: pull request (DRE-6868): it carries the patch's commits, or it does not.
+OUTCOME_ALREADY_UP = "already-up"
+OUTCOME_ONTO_OPEN_PR = "onto-open-pull-request"
+
+#: How many open pull requests the card-wide listing reads. Filtered here by
+#: head, so this bounds the repository's open pull requests, not the card's —
+#: and a listing that reaches it may have cut the card's off, so it is an
+#: error, never "none".
+_OPEN_PR_LIMIT = 200
+
 #: The sidecar's keys, exactly — the contract with push_rescue.py (DRE-6348).
 _TARGET_KEYS = ("card", "branch", "head", "remote_head")
 #: What each sidecar value must look like before it reaches git's argv. The
@@ -151,6 +186,18 @@ _TOKEN_RE = secret_shapes.SHAPES["github-token"]
 #: the receipt stays readable — the log has the rest.
 _STDERR_LIMIT = 300
 
+#: Why a dispatch was refused, as the workflow file's contents read decides it
+#: (DRE-7476): a 404 means the stub is not in the repo, a 200 means it is and
+#: the dispatch itself was turned down, and any other answer decides nothing.
+CAUSE_MISSING = "missing"
+CAUSE_REFUSED = "refused"
+CAUSE_UNKNOWN = "unknown"
+
+#: The status line `gh api --include` writes first, and the `(HTTP 404)` its
+#: error line ends with — whichever the read left behind.
+_PROBE_STATUS_RE = re.compile(r"^HTTP/[\d.]+\s+(\d{3})\b")
+_PROBE_ERROR_RE = re.compile(r"\bHTTP (\d{3})\b")
+
 
 class Marker(NamedTuple):
     """The artifact fact, as the card carries it."""
@@ -173,12 +220,23 @@ class Target(NamedTuple):
     remote_head: str
 
 
+class OpenPullRequest(NamedTuple):
+    """An open pull request for the card, by its head (DRE-6868)."""
+
+    number: str
+    branch: str
+    url: str
+
+
 class Handoff(NamedTuple):
     """What the run's last step managed. `dispatched` gates every claim."""
 
     dispatched: bool
     workflow: str
     detail: str
+    #: Why a refused dispatch was refused (DRE-7476): CAUSE_MISSING,
+    #: CAUSE_REFUSED or CAUSE_UNKNOWN; "" when the dispatch went through.
+    cause: str = ""
 
 
 class Delivery:
@@ -193,7 +251,9 @@ class Delivery:
         #: Set when the artifact carried a sidecar: a fix run's delivery,
         #: which opens no pull request and has its own exit rule.
         self.target: Target | None = None
-        #: Which of the four fix-run outcomes this was; "" when it failed.
+        #: Which of the four fix-run outcomes this was, or which of the two
+        #: open-pull-request ones a build run reached (DRE-6868); "" when it
+        #: failed and on today's fresh-branch delivery.
         self.outcome = ""
         self.pr_number = ""
 
@@ -310,6 +370,80 @@ def dispatch_env() -> dict | None:
     return {**os.environ, "GH_TOKEN": token, "GITHUB_TOKEN": token}
 
 
+def probe_argv(repo: str, workflow: str) -> list[str]:
+    """The contents read that tells a missing stub from a refused dispatch."""
+    return ["gh", "api", "--include",
+            f"repos/{repo}/contents/.github/workflows/{workflow}"]
+
+
+def probe_status(code, out, err) -> str:
+    """The HTTP status the contents read answered, or "" when it named none.
+
+    The status line `--include` writes is read first, then the `(HTTP 404)`
+    gh's error line ends with. A 200 counts only when the read also exited 0:
+    it is the one answer that claims the dispatch itself was turned down.
+    """
+    first = (str(out or "").lstrip().splitlines() or [""])[0]
+    match = _PROBE_STATUS_RE.match(first) or _PROBE_ERROR_RE.search(str(err or ""))
+    status = match.group(1) if match else ""
+    if status == "200" and code != 0:
+        return ""
+    return status
+
+
+def probe_cause(repo: str, workflow: str, *, env, run) -> tuple[str, str]:
+    """(cause, status) for a dispatch GitHub refused (DRE-7476).
+
+    The dispatch's own answer cannot say why. Under a token with no Actions
+    permission — the App token when `GH_DISPATCH_TOKEN` is absent, or a job
+    token whose calling stub does not grant `actions` — the workflow lookup
+    answers 403 whether the file is there or not (DRE-1254); under one
+    holding `actions: write` a missing file answers 404. The contents API
+    answers by the file alone, so it is asked instead.
+
+    `env` is the one `dispatch_env()` handed the dispatch, never the step's
+    ambient `GH_TOKEN`: that is the job's start token, dead at the hour, and a
+    rescue happens on exactly the runs that outlived it (DRE-3165's 401). The
+    job token's scope is the calling stub's, and the README's templates grant
+    `contents: write`. Never raises: an answer it cannot read is "unknown".
+    """
+    try:
+        code, out, err = run(probe_argv(repo, workflow), env=env)
+        status = probe_status(code, out, err)
+    except Exception as exc:  # the probe must never cost the comment
+        _log(f"rescue delivery: the contents read of {workflow} failed — {exc}")
+        return CAUSE_UNKNOWN, ""
+    if status == "404":
+        return CAUSE_MISSING, status
+    if status == "200":
+        return CAUSE_REFUSED, status
+    return CAUSE_UNKNOWN, status
+
+
+def cause_sentence(cause: str, *, repo: str, workflow: str, status: str,
+                   credential: str) -> str:
+    """The card's cause paragraph — the contract the proof card reads."""
+    read = f"a contents read as {credential} answered {status or 'no answer'}"
+    if cause == CAUSE_MISSING:
+        return (
+            f"cause: missing — `{workflow}` is not in `{repo}` ({read}). "
+            f"Install the Deliver Rescue stub, and check that the calling stub "
+            f"grants `actions: write`, or the dispatch is still refused after "
+            f"the install."
+        )
+    if cause == CAUSE_REFUSED:
+        return (
+            f"cause: refused — `{workflow}` is in `{repo}` ({read}), so the "
+            f"dispatch itself was turned down. The calling `agent-task.yml` or "
+            f"`agent-fix.yml` stub must grant `actions: write`, and "
+            f"`GH_DISPATCH_TOKEN` must reach the step."
+        )
+    return (
+        f"cause: unknown — could not tell whether `{workflow}` is missing from "
+        f"`{repo}` or the dispatch was refused ({read})."
+    )
+
+
 def _post_comment(card: str, body: str) -> None:
     """The card write, through the pipeline's one Linear client."""
     import linear_ops
@@ -333,10 +467,14 @@ def handoff(
     """Say the push failed, and hand the delivery to something that can do it.
 
     The comment goes out WHATEVER the dispatch answers. A product repo with no
-    `deliver-rescue` stub answers 404 to the dispatch, and in that repo the
-    card is the only channel left — reporting the artifact there is the
-    difference between a human who can recover the work in two minutes and a
-    card that gets rebuilt from nothing.
+    `deliver-rescue` stub refuses the dispatch — 403 under a token with no
+    Actions permission, 404 under one holding `actions: write` — and in that
+    repo the card is the only channel left: reporting the artifact there is
+    the difference between a human who can recover the work in two minutes and
+    a card that gets rebuilt from nothing. Since that 403 is also what a repo
+    WITH the stub answers under such a token, a refused dispatch is followed
+    by `probe_cause()`, and the card names the cause — missing, refused or
+    unknown — so its reader knows which fix applies (DRE-7476).
 
     Never raises: this runs in the run's last step, after something has already
     gone wrong, and a crash here would replace a recoverable loss with a red
@@ -352,9 +490,18 @@ def handoff(
                         mints=mints, branch=branch)
     workflow = delivery_workflow(repo)
     argv = dispatch_argv(repo, run_id=run_id, card=card, artifact=artifact)
-    code, _, err = run(argv, env=dispatch_env())
+    env = dispatch_env()
+    code, _, err = run(argv, env=env)
     detail = (redact(err).strip().splitlines() or [""])[-1][:_STDERR_LIMIT]
     dispatched = code == 0
+    cause, why = "", ""
+    if not dispatched:
+        cause, status = probe_cause(repo, workflow, env=env, run=run)
+        why = cause_sentence(
+            cause, repo=repo, workflow=workflow, status=status,
+            credential=("the job's own token (GH_DISPATCH_TOKEN)" if env
+                        else "the App token (no GH_DISPATCH_TOKEN)"),
+        )
 
     parts = [line, ""]
     if dispatched and branch:
@@ -391,6 +538,8 @@ def handoff(
             f"then `git am -3` it on a branch off the default branch. The "
             f"reconcile sweep re-checks this card off the artifact fact above."
         )
+    if why:
+        parts.append(why)
     if stderr.strip():
         parts += ["", f"GitHub refused the push with: `{redact(stderr).strip()[:_STDERR_LIMIT]}`"]
     body = "\n\n".join(parts)
@@ -401,8 +550,10 @@ def handoff(
     _log(
         f"rescue delivery: {'dispatched' if dispatched else 'COULD NOT dispatch'} "
         f"{workflow} for {card} (run {run_id}, artifact {artifact})"
+        f"{'' if dispatched else ' — cause: ' + cause}"
     )
-    return Handoff(dispatched=dispatched, workflow=workflow, detail=detail)
+    return Handoff(dispatched=dispatched, workflow=workflow, detail=detail,
+                   cause=cause)
 
 
 # --------------------------------------------------------------------------
@@ -582,6 +733,17 @@ def deliver(
         _log(f"rescue delivery: {out.error}")
         return out
 
+    # The card's open pull requests, whoever opened them (DRE-6868): the
+    # agent's own push may have landed after all, or a person may have
+    # delivered the work by hand, and a second pull request for one build is
+    # the duplicate this exists to prevent. Unreadable is not "none".
+    open_prs, error = open_card_pull_requests(card, repo, token, run=run,
+                                              workdir=workdir)
+    if error:
+        out.error = error
+        _log(f"rescue delivery: {out.error}")
+        return out
+
     # The fresh credential must reach GIT, not only `gh` — the same
     # multi-valued `http.extraheader` trap push_rescue documents, and the same
     # one definition of the fix.
@@ -601,6 +763,14 @@ def deliver(
         out.error = error
         _log(f"rescue delivery: {out.error}")
         return out
+
+    # The replay stays local until the open pull requests have been compared
+    # with it: it is what their commits are compared against, by patch id.
+    if open_prs:
+        return _deliver_beside_open_pull_requests(
+            out, card, open_prs, base=base, run_id=run_id, artifact=artifact,
+            workdir=workdir, run=run, post=post,
+        )
 
     code, _, err = run(["git", "-C", workdir, "push", "origin",
                         f"{out.branch}:refs/heads/{out.branch}"])
@@ -633,6 +803,176 @@ def deliver(
         )
     except Exception as exc:
         _log(f"rescue delivery: could not comment on {card} — {exc}")
+    return out
+
+
+# --------------------------------------------------------------------------
+# the follow-up run, build-run shape, when the card already has an open pull
+# request (DRE-6868)
+# --------------------------------------------------------------------------
+def open_card_pull_requests(card: str, repo: str, token: str, *, run,
+                            workdir: str) -> tuple[list[OpenPullRequest], str]:
+    """(the card's open pull requests, error), newest first as `gh` lists them.
+
+    The card's are the ones whose head is `agent/<CARD>-…` or `repair/<CARD>-…`
+    — the build route's and the repair route's — whoever authored them, so the
+    listing names no author. The state is checked here as well as asked for:
+    a merged or closed pull request is not the work being up. An unreadable
+    listing is an error, never an empty one (DRE-2034), and so is one that
+    reached `_OPEN_PR_LIMIT`: what lies past the cut is unread.
+    """
+    code, out, err = run(
+        ["gh", "pr", "list", "--repo", repo, "--state", "open",
+         "--json", "number,headRefName,state,url",
+         "--limit", str(_OPEN_PR_LIMIT)],
+        cwd=workdir, env=_gh_env(token),
+    )
+    if code != 0:
+        why = (redact(err).strip().splitlines() or ["no reason given"])[-1]
+        return [], f"could not read {card}'s open pull requests: {why[:_STDERR_LIMIT]}"
+    try:
+        rows = json.loads(out or "[]")
+    except (ValueError, TypeError):
+        rows = None
+    if not isinstance(rows, list):
+        return [], f"could not parse the open pull request listing for {card}"
+    if len(rows) >= _OPEN_PR_LIMIT:
+        return [], (f"the open pull request listing was truncated at "
+                    f"{_OPEN_PR_LIMIT}, so {card}'s may be past the cut")
+    head = re.compile(rf"(?:agent|repair)/{re.escape(card)}-")
+    found = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        branch = str(row.get("headRefName") or "")
+        if (str(row.get("state") or "").upper() != "OPEN"
+                or not head.match(branch)
+                or not _TARGET_SHAPES["branch"].fullmatch(branch)):
+            continue
+        found.append(OpenPullRequest(number=str(row.get("number") or ""),
+                                     branch=branch, url=str(row.get("url") or "")))
+    return found, ""
+
+
+def _open_pr_receipt(outcome: str, pr: OpenPullRequest, *, card: str,
+                     run_id: str, artifact: str) -> str:
+    """The one `rescue-delivered` line for a card with an open pull request.
+
+    `rescue-delivered`, because either way the work is up for review and the
+    sweep's re-check must stop dispatching this delivery.
+    """
+    lead = f"🚚 {DELIVERED_TAG}: run {run_id}'s artifact {artifact}"
+    where = f"pull request #{pr.number} on `{pr.branch}`"
+    if outcome == OUTCOME_ALREADY_UP:
+        return (
+            f"{lead} is already up as {where}{' (' + pr.url + ')' if pr.url else ''}"
+            f" — its commits carry the same patch ids, so no branch was pushed "
+            f"and no pull request was opened."
+        )
+    return (
+        f"{lead} is replayed onto `{pr.branch}`, the branch of pull request "
+        f"#{pr.number}, already open for {card}, and pushed — no second pull "
+        f"request was opened. The commits are the build agent's; only the "
+        f"replay is this job's."
+    )
+
+
+def _deliver_beside_open_pull_requests(
+    out: Delivery,
+    card: str,
+    open_prs: list[OpenPullRequest],
+    *,
+    base: str,
+    run_id: str,
+    artifact: str,
+    workdir: str,
+    run,
+    post,
+) -> Delivery:
+    """The patch is replayed locally; the card has open pull requests.
+
+    Each is compared with the replay by PATCH ID (`git cherry`), never by sha:
+    the replay rewrote every committer, so the same work on the agent's own
+    branch has other shas (DRE-6833, #997 and #998). One that carries every
+    replayed commit means the work is already up — nothing is pushed or
+    opened. Otherwise the commits it lacks are put on the newest one's branch
+    and pushed, never forced, as a fix run's are (DRE-6349): one pull request
+    per card.
+    """
+    def fail(error: str) -> Delivery:
+        out.error = error
+        _log(f"rescue delivery: {error}")
+        return out
+
+    code, replayed, err = run(["git", "-C", workdir, "rev-parse", "HEAD"])
+    replayed = (replayed or "").strip()
+    if code != 0 or not replayed:
+        return fail(f"could not read the replayed head: {redact(err).strip()}")
+
+    lacking = []
+    for pr in open_prs:
+        tracking = f"refs/remotes/origin/{pr.branch}"
+        code, _, err = run(["git", "-C", workdir, "fetch", "origin",
+                            f"+refs/heads/{pr.branch}:{tracking}"])
+        if code != 0:
+            return fail(f"could not fetch {pr.branch}: {redact(err).strip()}")
+        code, listing, err = run(["git", "-C", workdir, "cherry", tracking,
+                                  replayed, f"origin/{base}"])
+        if code != 0:
+            return fail(f"could not compare the replay with {pr.branch}: "
+                        f"{redact(err).strip()}")
+        lines = [line.split() for line in (listing or "").splitlines()
+                 if line.strip()]
+        if not lines:
+            return fail(f"replaying {artifact} added no commit to compare")
+        missing = [parts[1] for parts in lines
+                   if parts[0] == "+" and len(parts) > 1]
+        if not missing:
+            out.branch = pr.branch
+            out.pr_number = pr.number
+            out.pr_url = pr.url
+            return _open_pr_outcome(out, OUTCOME_ALREADY_UP, pr, card=card,
+                                    run_id=run_id, artifact=artifact, post=post)
+        lacking.append((pr, tracking, missing))
+
+    pr, tracking, missing = lacking[0]
+    out.branch = pr.branch
+    out.pr_number = pr.number
+    code, _, err = run(["git", "-C", workdir, "checkout", "-B", pr.branch,
+                        tracking])
+    if code != 0:
+        return fail(f"could not check out {pr.branch}: {redact(err).strip()}")
+    code, before, _ = run(["git", "-C", workdir, "rev-parse", "HEAD"])
+    code, _, err = run(["git", "-C", workdir, "cherry-pick", *missing])
+    if code != 0:
+        run(["git", "-C", workdir, "cherry-pick", "--abort"])
+        return fail(f"the replayed commits do not apply to {pr.branch}: "
+                    f"{redact(err).strip()}")
+    code, after, _ = run(["git", "-C", workdir, "rev-parse", "HEAD"])
+    if code != 0 or _same_sha(after, before):
+        return fail(f"replaying {artifact} added no commit to {pr.branch}, so "
+                    f"there is nothing to push")
+    # The SAME branch, never forced: had anything pushed since the fetch, the
+    # remote refuses the push rather than this job overwriting it.
+    code, _, err = run(["git", "-C", workdir, "push", "origin",
+                        f"{pr.branch}:refs/heads/{pr.branch}"])
+    if code != 0:
+        return fail(f"pushing {pr.branch} failed: {redact(err).strip()}")
+    out.pushed = True
+    out.pr_url = pr.url
+    return _open_pr_outcome(out, OUTCOME_ONTO_OPEN_PR, pr, card=card,
+                            run_id=run_id, artifact=artifact, post=post)
+
+
+def _open_pr_outcome(out: Delivery, outcome: str, pr: OpenPullRequest, *,
+                     card: str, run_id: str, artifact: str, post) -> Delivery:
+    out.outcome = outcome
+    try:
+        post(_open_pr_receipt(outcome, pr, card=card, run_id=run_id,
+                              artifact=artifact))
+    except Exception as exc:  # the receipt must not undo the outcome
+        _log(f"rescue delivery: could not comment on {card} — {exc}")
+    _log(f"rescue delivery: {outcome} — pull request #{pr.number} on {pr.branch}")
     return out
 
 
@@ -869,7 +1209,12 @@ def main(argv: list[str]) -> int:
     # This one DOES fail loudly: it is a job whose only purpose is the
     # delivery, so a delivery that did not happen must be red — the medic and
     # the next sweep are the retry, and a green run here would claim the work
-    # shipped.
+    # shipped. A card whose work is already up as an open pull request, or now
+    # is on one (DRE-6868), reached its answer: green.
+    if outcome.outcome:
+        print(f"rescue delivery: {outcome.outcome} — pull request "
+              f"#{outcome.pr_number} on {outcome.branch}")
+        return 0
     if not outcome.pr_opened and not outcome.pr_url:
         print(f"rescue delivery FAILED: {outcome.error or 'no pull request'}")
         return 1

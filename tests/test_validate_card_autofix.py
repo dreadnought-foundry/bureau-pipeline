@@ -17,10 +17,13 @@ Inference rules (mirrors the relay's REPO_MAP convention — see validate_card):
                substring of a display name anyone can rename). Candidate slug =
                identity except the documented alias bureau→agent-bureau; the
                candidate must be a real repo (VALID_SLUGS) or the card is
-               bounced (never a wrong-repo guess).
+               bounced (never a wrong-repo guess). An initiative that names no
+               single repo (`initiative:foundry`, DRE-7075) yields no candidate
+               at all, even once `foundry` is a repo slug (DRE-7076 onboards it).
 """
 
 import inspect
+import json
 import os
 import sys
 import unittest
@@ -94,22 +97,32 @@ class InferRepoTest(unittest.TestCase):
         self.assertEqual(validate_card.infer_repo(["initiative:"]), (None, None))
 
     def test_initiative_foundry_resolves_to_unmapped_slug(self):
-        # Rule 5 reachability: an initiative whose slug is a REAL candidate but
-        # NOT a real repo (Dreadnought Foundry spans no single product repo).
-        # infer_repo returns the concrete slug; the gate must reject it.
-        slug, _ = validate_card.infer_repo(["initiative:foundry"])
-        self.assertEqual(slug, "foundry")
+        # Rule 5 reachability: the Dreadnought Foundry initiative spans several
+        # products, so its label names no single repo. `foundry` is also the
+        # studio's build repo, which joins the map when DRE-7076 onboards it, and
+        # identity would then route every card carrying the initiative label to
+        # that one repo. infer_repo must not resolve it to anything at all.
+        slug, source = validate_card.infer_repo(["initiative:foundry"])
         self.assertNotIn(slug, validate_card.VALID_SLUGS)
+        self.assertEqual((slug, source), (None, None))
+
+    def test_non_repo_initiative_does_not_mask_a_repo_initiative(self):
+        # DRE-7075: the guard skips the initiative-wide label rather than ending
+        # the search, so a card that also names its product still routes there.
+        slug, source = validate_card.infer_repo(
+            ["initiative:foundry", "initiative:portico"])
+        self.assertEqual((slug, source), ("portico", "initiative:portico"))
 
     def test_valid_slugs_includes_agent_bureau(self):
+        # DRE-7356: the routed set is read from config/repo-map.json, never
+        # restated here — a literal list turned every onboarding's routing
+        # pull request red the moment it added a repo.
+        repo_map = os.path.join(
+            os.path.dirname(__file__), "..", "config", "repo-map.json")
+        with open(repo_map, encoding="utf-8") as fh:
+            routed = set(json.load(fh))
         self.assertIn("agent-bureau", validate_card.VALID_SLUGS)
-        self.assertEqual(
-            validate_card.VALID_SLUGS,
-            {"atlas", "deltasolv", "agent-bureau",
-             "agent-bureau-demo", "bureau-pipeline",  # DRE-1929 self-host
-             "portico"},  # DRE-2086 docs-platform → portico rename
-            # DRE-2672: vericorr retired — the fleet no longer routes to it.
-        )
+        self.assertEqual(validate_card.VALID_SLUGS, routed)
 
 
 # --- cmd_gate fix-first behavior (linear_ops stubbed) -----------------------
@@ -248,6 +261,9 @@ class GateFixFirstTest(unittest.TestCase):
         self.assertTrue(self._run(fake))
         self.assertEqual(fake.states, [("DRE-999", "Planning")])
         self.assertEqual(fake.descriptions, [])
+        # DRE-7075: once `foundry` is a repo slug the bounce must still not
+        # write the repo label identity would have guessed.
+        self.assertFalse(any(l[1].startswith("repo:") for l in fake.added_labels))
 
     def test_retired_vericorr_project_bounces(self):
         # DRE-2672: vericorr left the fleet. A card still filed under a

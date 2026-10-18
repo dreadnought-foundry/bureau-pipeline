@@ -32,6 +32,7 @@ import yaml
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
+import check_workflow_watchers  # noqa: E402
 import medic_wake  # noqa: E402
 import plan_run  # noqa: E402
 
@@ -318,7 +319,12 @@ class WatchListTest(unittest.TestCase):
             their own name; their runs surface under the calling stub's name;
           * Pipeline Medic itself — the medic must not watch (retry, diagnose)
             its own failures, or a red medic loops on itself
-            (test_medic_does_not_watch_itself pins the inverse).
+            (test_medic_does_not_watch_itself pins the inverse);
+          * the workflows `check_workflow_watchers.NOT_WATCHED` declares,
+            each with its reason — Shadow Replay (DRE-7197), whose red run is
+            read by the operator from its report, where a retry would spend
+            another batch of reviewer runs, and the notice door's smoke
+            (DRE-7451), which files no card on any path.
         """
         watched = set(self._watch("self-medic.yml"))
         for fname, doc in _all_workflows().items():
@@ -326,7 +332,8 @@ class WatchListTest(unittest.TestCase):
             if triggers <= {"workflow_call"}:
                 continue
             name = doc.get("name") or fname
-            if name == "Pipeline Medic":
+            if name == "Pipeline Medic" or name in check_workflow_watchers.NOT_WATCHED:
+                self.assertNotIn(name, watched)
                 continue
             self.assertIn(
                 name, watched,

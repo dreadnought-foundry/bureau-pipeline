@@ -1,0 +1,45 @@
+{
+  "_source": [
+    "DRE-7018's replay: the check runs on bureau-pipeline #1042 (DRE-6935) at head",
+    "c4be402a03492d6b296c785f0bcf96875fd3f451, workflow run 38178110152 on attempt",
+    "2, 2026-10-11 PT, from the table on card DRE-7018. The six checks, their job",
+    "ids, conclusions and times are the card's; the times are written in UTC (PT",
+    "is UTC minus seven hours on that date). `scripts unit tests (walks)` was",
+    "canceled at its 45-minute limit at 16:08:52 PT, after its log had already",
+    "printed three failed tests at 16:02 PT, and `scripts unit tests`, the job",
+    "that sums the others, failed at 16:09:23 because of it. The walks job's two",
+    "annotations are the card's, quoted. The walks job finished before the only",
+    "`failure` beside it, so no check here is fail-fast collateral (DRE-6780)."
+  ],
+  "repo": "dreadnought-foundry/bureau-pipeline",
+  "pr": 1042,
+  "head_sha": "c4be402a03492d6b296c785f0bcf96875fd3f451",
+  "run": {
+    "id": 38178110152,
+    "name": "tests",
+    "status": "completed",
+    "conclusion": "cancelled",
+    "run_attempt": 2,
+    "head_sha": "c4be402a03492d6b296c785f0bcf96875fd3f451"
+  },
+  "annotations": {
+    "114591044631": [
+      {
+        "annotation_level": "failure",
+        "message": "The job has exceeded the maximum execution time of 45m0s"
+      },
+      {
+        "annotation_level": "failure",
+        "message": "The operation was canceled."
+      }
+    ]
+  },
+  "check_runs": [
+    {"id": 114591044631, "name": "scripts unit tests (walks)", "status": "completed", "conclusion": "cancelled", "started_at": "2026-10-11T22:23:35Z", "completed_at": "2026-10-11T23:08:52Z", "details_url": "https://github.com/dreadnought-foundry/bureau-pipeline/actions/runs/38178110152/job/114591044631"},
+    {"id": 114599858142, "name": "scripts unit tests", "status": "completed", "conclusion": "failure", "started_at": "2026-10-11T23:08:54Z", "completed_at": "2026-10-11T23:09:23Z", "details_url": "https://github.com/dreadnought-foundry/bureau-pipeline/actions/runs/38178110152/job/114599858142"},
+    {"id": 114591045454, "name": "scripts unit tests (part 1)", "status": "completed", "conclusion": "success", "started_at": "2026-10-11T21:52:00Z", "completed_at": "2026-10-11T22:10:04Z", "details_url": "https://github.com/dreadnought-foundry/bureau-pipeline/actions/runs/38178110152/job/114591045454"},
+    {"id": 114591071207, "name": "scripts unit tests (part 2)", "status": "completed", "conclusion": "success", "started_at": "2026-10-11T21:52:00Z", "completed_at": "2026-10-11T22:09:39Z", "details_url": "https://github.com/dreadnought-foundry/bureau-pipeline/actions/runs/38178110152/job/114591071207"},
+    {"id": 114591044885, "name": "scripts unit tests (part 3)", "status": "completed", "conclusion": "success", "started_at": "2026-10-11T22:23:35Z", "completed_at": "2026-10-11T22:42:11Z", "details_url": "https://github.com/dreadnought-foundry/bureau-pipeline/actions/runs/38178110152/job/114591044885"},
+    {"id": 114591045829, "name": "scripts unit tests (part 4)", "status": "completed", "conclusion": "success", "started_at": "2026-10-11T21:52:00Z", "completed_at": "2026-10-11T22:06:42Z", "details_url": "https://github.com/dreadnought-foundry/bureau-pipeline/actions/runs/38178110152/job/114591045829"}
+  ]
+}

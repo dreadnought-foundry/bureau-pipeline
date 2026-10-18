@@ -71,7 +71,7 @@ class FakeBoard:
     def __init__(self):
         self.created = None
 
-    def gql(self, query, variables=None):
+    def gql(self, query, variables=None, **_kw):
         v = variables or {}
         q = " ".join(query.split())
         if "teams(filter:" in q:
@@ -168,7 +168,7 @@ class FakeLinear:
     def get_issue(self, identifier):
         return {"id": "x", "identifier": identifier, "state": {"name": self._state}}
 
-    def gql(self, query, variables=None):
+    def gql(self, query, variables=None, **_kw):
         return {
             "issue": {
                 "title": self._title,
@@ -276,43 +276,49 @@ class AnEpicsChildrenStayWhereTheSweepLooksForThem(unittest.TestCase):
 class TheRedMainAlertStillLandsInTriage(unittest.TestCase):
     """The one CALL SITE that must not follow `cmd_create` to Planning.
 
-    `red-main-repair.yml` mints two cards, and both are broken-build alerts
-    that its own prose routes to Triage: "budget exhausted" (the repair robot
-    gave up, main stays red, the fleet's top blocker) and "needs a decision"
-    (the repair agent paused for a human). The second already sets `Triage`
-    itself after `create`; the first rode `cmd_create`'s old unconditional
-    `Triage` and so had no step of its own. Nothing pinned that, so pointing
-    the seam at Planning demoted the loudest alert we have into the ordinary
-    classification queue with no test going red.
+    `red-main-repair.yml` raised two broken-build alerts as cards that its own
+    prose routes to Triage: "budget exhausted" (the repair robot gave up, main
+    stays red, the fleet's top blocker) and "needs a decision" (the repair
+    agent paused for a human). Since DRE-7454 both are console alerts raised
+    through `pipeline_notice.py`, and the card survives only as the client's
+    fallback for a door it cannot reach. That fallback must still land in
+    Triage: pointing it at Planning would demote the loudest alert we have
+    into the ordinary classification queue the one time the console is down.
 
-    Written over the FILE rather than one named step: a third `create` added
-    to this workflow inherits the guard instead of rediscovering the bug.
+    Written over the FILE rather than one named step: a third raise added to
+    this workflow inherits the guard instead of rediscovering the bug, and a
+    `linear_ops.py create` coming back fails it outright.
     """
 
     WORKFLOW = ROOT / ".github" / "workflows" / "red-main-repair.yml"
 
-    def _run_blocks_that_create_a_card(self):
+    def _scripts(self):
         doc = yaml.safe_load(self.WORKFLOW.read_text(encoding="utf-8"))
-        blocks = []
-        for job in doc["jobs"].values():
-            for step in job.get("steps", []):
-                script = step.get("run") or ""
-                if re.search(r"linear_ops\.py create\b", script):
-                    blocks.append((step.get("name", "<unnamed>"), script))
-        return blocks
+        return [(step.get("name", "<unnamed>"), step.get("run") or "")
+                for job in doc["jobs"].values()
+                for step in job.get("steps", [])]
+
+    def _raises(self):
+        return [(name, script) for name, script in self._scripts()
+                if "pipeline_notice.py raise" in script]
 
     def test_both_alert_steps_are_found(self):
         # Guards the guard: if the grep stops matching, the assertions below
         # pass over an empty list and prove nothing.
-        self.assertEqual(len(self._run_blocks_that_create_a_card()), 2)
+        self.assertEqual(len(self._raises()), 2)
 
-    def test_every_card_this_workflow_mints_is_pinned_to_triage(self):
-        for name, script in self._run_blocks_that_create_a_card():
+    def test_no_step_creates_a_card_itself(self):
+        for name, script in self._scripts():
+            self.assertNotRegex(script, r"linear_ops\.py create\b",
+                                f"{name!r} files a card again")
+
+    def test_every_fallback_card_is_pinned_to_triage(self):
+        for name, script in self._raises():
             self.assertRegex(
                 script,
-                r'linear_ops\.py state "\$\w+" "Triage"',
-                f"{name!r} creates a card without setting Triage — it lands "
-                f"in {PLANNING!r}, the lane cmd_create now writes",
+                r'--fallback-lane "Triage"',
+                f"{name!r} raises an alert whose fallback card lands in "
+                f"{PLANNING!r}, the lane cmd_create now writes",
             )
 
 

@@ -19,11 +19,17 @@ DRE-5979 (bureau-pipeline #759) made most of those calls answer, by asking the n
      has already left Planning.
   3. THE WORKFLOW ROUTES BY IT. plan.yml's CEO-park step no longer runs for a transport park; a separate step runs
      `park-unread` for it. And the first failure's note stops promising the CEO a question.
+
+The one test here that falls down a ladder is a rule of the classifier, so it runs against the frozen model files
+(DRE-6885): its classifier is imported from a `model_fixture.fixture_tree` built with `regenerate=False`, its selector
+on the frozen home document (`model_fixture.fixture_home()`, through `fixture_module(..., doc=...)`, DRE-6990), and the
+rung it refuses on is the top of the planner's group in that document, never a literal.
 """
 
 from __future__ import annotations
 
 import os
+import shutil
 import sys
 from pathlib import Path
 from unittest.mock import patch
@@ -33,6 +39,7 @@ import yaml
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "scripts"))
+sys.path.insert(0, str(ROOT / "tests"))
 os.environ.setdefault("LINEAR_API_KEY", "test-key")
 os.environ.setdefault("REPO", "dreadnought-foundry/bureau-pipeline")
 os.environ.setdefault("REPO_SLUG", "bureau-pipeline")
@@ -41,6 +48,7 @@ os.environ.setdefault("GH_TOKEN", "x")
 import dedupe_dispatch  # noqa: E402
 import lane_contract  # noqa: E402
 import linear_ops  # noqa: E402
+import model_fixture  # noqa: E402
 import planning_classify  # noqa: E402
 import planning_escalation  # noqa: E402
 
@@ -51,6 +59,29 @@ TRIAGE = lane_contract.lane("Triage")["name"]
 #: The envelope the failing CI runs reported (DRE-5960's run 37420973830).
 NO_ANSWER_RECORD = {"type": "result", "subtype": "error_max_turns", "is_error": True, "num_turns": 2,
                     "result": None}
+
+
+# The model files a console save rewrites; everything else the classifier reads is no save's to change.
+_MODEL_FILES = ("models.yaml", "model-prices.yaml", "model-choices.json")
+
+
+@pytest.fixture(scope="module")
+def fixture_classify(tmp_path_factory):
+    """The classifier of a tree running today's scripts on the frozen model files, its selector on the frozen
+    document, so its walk is the fixture's. What else it reads — `config/`'s lane contract and shape vocabulary, the brief and standard — rides along as
+    committed."""
+    dest = tmp_path_factory.mktemp("dre6885-unread") / "tree"
+    shutil.copytree(ROOT / "config", dest / "config", ignore=shutil.ignore_patterns(*_MODEL_FILES))
+    for name in ("briefs", "standards"):
+        shutil.copytree(ROOT / name, dest / name)
+    return model_fixture.fixture_module(model_fixture.fixture_tree(dest, regenerate=False), "planning_classify",
+                                        doc=model_fixture.fixture_home())
+
+
+def _top_rung() -> str:
+    """The planner's first rung on the frozen document, named for its place."""
+    home = model_fixture.fixture_home()
+    return model_fixture.ladder(home, home["agents"]["planner"])[0]
 
 
 def _no_answer_error() -> planning_classify.TransportError:
@@ -80,19 +111,22 @@ def test_a_call_that_never_reached_a_model_keeps_its_words(capsys):
     assert "could not reach its model" in reason and "429" in reason
 
 
-def test_a_fall_after_no_answer_logs_what_the_cli_streamed(capsys):
+def test_a_fall_after_no_answer_logs_what_the_cli_streamed(capsys, fixture_classify):
     """Since #759 the next rung answers, so the run never reaches `_transport` and the `stream:` summary DRE-5979
     put in the error never reached a log: six falls on agent-bureau on 10-06 and not one cause recorded. The fall's
     own line carries it."""
+    assert fixture_classify.model_fallback.HOME_STATUS == "read", "the selector is not on the document"
+    top = _top_rung()
+
     def call(model, prompt, **kwargs):
-        if model == "claude-fable-5-1":
-            raise planning_classify.TransportError(
+        if model == top:
+            raise fixture_classify.TransportError(
                 "the classification call reported subtype 'error_max_turns', is_error True: None"
                 " | stream: events=system/initx1,resultx1; permissionMode=auto tools=26",
                 "error_max_turns", record=dict(NO_ANSWER_RECORD))
-        return planning_classify.Answer(text="{}", model=model)
+        return fixture_classify.Answer(text="{}", model=model)
 
-    planning_classify.call_with_capacity_fallback(call, "claude-fable-5-1", "prompt")
+    fixture_classify.call_with_capacity_fallback(call, top, "prompt")
     log = capsys.readouterr().err
     assert "gave no answer" in log
     assert "stream: events=system/initx1" in log and "tools=26" in log

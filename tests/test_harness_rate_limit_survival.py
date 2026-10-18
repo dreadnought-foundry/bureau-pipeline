@@ -440,8 +440,10 @@ class WorkerWaitsForTheResetTest(unittest.TestCase):
         self.assertEqual(len(naps), 1)
         self.assertGreaterEqual(naps[0], 300)
         self.assertLessEqual(naps[0], 310)
-        self.assertEqual(api.tokens, ["Bearer ghs_worker", "Bearer ghs_worker"])
-        self.assertEqual(api.methods, ["POST", "POST"])
+        # Two sends of the refused write, then create_pr's read-back of the
+        # PR it opened (DRE-6923).
+        self.assertEqual(api.tokens, ["Bearer ghs_worker"] * 3)
+        self.assertEqual(api.methods, ["POST", "POST", "GET"])
         self.assertTrue(any("worker" in line and "reset" in line for line in log), log)
 
     def test_a_reset_past_the_cap_is_not_waited_for(self):

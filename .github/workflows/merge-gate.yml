@@ -24,7 +24,7 @@
 # together; the push-to-main run going red plus medic.yml's repair card
 # catches that in minutes.
 #
-# There are two exceptions, and neither is currency. The first is a FORK
+# There are three exceptions, and none is currency. The first is a FORK
 # (DRE-4912, DRE-5070). What DRE-2416 retired was updating any branch that
 # had fallen behind. What the gate does now is refresh a branch only where merging it would fork `main`:
 # the pull request adds a file under a path the repo declares order-sensitive
@@ -52,6 +52,24 @@
 # tip already updated onto goes red instead of looping. Only that refusal
 # triggers it: a branch that is behind but accepted still merges as it
 # stands, and every other refusal with the head unmoved is a real failure.
+#
+# The third is a NEW TEST (DRE-6871, DRE-6872), and it is not currency
+# either. Each side of a merge can pass its own CI while the pair never ran
+# together: `main` gains a test naming a file this pull request changes, or
+# the pull request adds a test naming a file `main` changed (bureau-pipeline
+# #871, agent-bureau #3604). A repo switches the rule on for itself with
+# `"recheck_new_tests": true` in the same declaration. The anchor is the
+# pull request's last test run: its newest `pull_request` run at a
+# non-review workflow path, never a `push` run and never a review run, which
+# is created later whenever a description is edited. The gate reads `main`'s
+# tip when that run was created and what `main` gained since, and on
+# `refresh` updates the branch once, pinned to the evaluated head, with one
+# `Merge gate: refreshed for new tests onto <tip>` note. It refreshes a pull
+# request once, for its whole life, and a head with no test run merges as
+# today. Measured over five days it fires on 12% of agent-bureau merges and
+# 15% of bureau-pipeline merges, each costing one more test run of a median
+# 12.7 and 15.0 minutes respectively. A failed read waits rather than
+# merging.
 #
 # The DECISION itself lives in scripts/merge_gate.py (DRE-1992) with the
 # full rules and their history (DRE-1987 authorship, DRE-1990 SHA binding,
@@ -277,6 +295,13 @@ jobs:
     # the gate waits on the Verifier's run as CI; its verdict comment posts
     # before that run ends, and an out-of-scope Verify posts none. Its
     # completion is the wake that merges.
+    #
+    # The workflow_run leg's two bot branches are LITERALS (CEO's signed
+    # answer, 2026-09-15: literal bot branch names only, never `bot/*`):
+    # `bot/standards-sync`, the nightly standards regeneration (DRE-2777), and
+    # `bot/onboard`, the onboarding process's routing pull requests (DRE-7209).
+    # scripts/evaluate_and_merge.sh's branch case and
+    # reconcile.PIPELINE_BRANCH_PREFIXES hold the same set.
     if: >
       !cancelled() &&
       ((github.event_name == 'workflow_dispatch' &&
@@ -296,7 +321,8 @@ jobs:
         (startsWith(github.event.workflow_run.head_branch, 'agent/') ||
          startsWith(github.event.workflow_run.head_branch, 'repair/') ||
          startsWith(github.event.workflow_run.head_branch, 'dependabot/') ||
-         github.event.workflow_run.head_branch == 'bot/standards-sync') &&
+         github.event.workflow_run.head_branch == 'bot/standards-sync' ||
+         github.event.workflow_run.head_branch == 'bot/onboard') &&
         ((needs.resolve.result == 'skipped' &&
           github.event.workflow_run.pull_requests[0].number) ||
          (needs.resolve.result == 'success' &&

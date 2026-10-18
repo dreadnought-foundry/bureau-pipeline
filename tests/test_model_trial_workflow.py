@@ -21,9 +21,12 @@ WHAT `model-trial.yml` IS.
     (DRE-3416) and after the shared install-and-assert step (DRE-3414). NEVER a
     raw Messages API call: a subscription OAuth token answers 429 to every one
     of those, at any load (DRE-3074).
-  * A CHECKABLE answer. The agent reads `config/models.yaml`, counts the
-    ladders it declares, and writes `ladders=<n>` to `trial-answer.txt`. The
-    job recomputes the count with PyYAML and compares.
+  * A CHECKABLE answer. The agent reads `config/model-prices.yaml`, counts
+    the entries under its top-level `prices:` mapping, and writes
+    `prices=<n>` to `trial-answer.txt`. The job recomputes the count with
+    PyYAML and compares. The catalog of prices since DRE-6971: it is a
+    code-side fact that stays in the repository and is never empty, where
+    the choices the task used to count leave config/models.yaml (DRE-6983).
   * DATA, not a verdict on the run. A failed trial must leave the job GREEN and
     say so in its outputs — the caller (`model-adoption.yml`, DRE-3898) is what
     acts on it. A trial that failed the calling workflow would be a model
@@ -84,7 +87,7 @@ ALLOWED_TOOLS = '--allowedTools "Read,Glob,Grep,Write"'
 CONTRACT_OUTPUTS = ("outcome", "run_url", "summary")
 
 ANSWER_FILE = "trial-answer.txt"
-CONFIG_FILE = "config/models.yaml"
+CONFIG_FILE = "config/model-prices.yaml"
 
 
 # --------------------------------------------------------------------------- #
@@ -326,9 +329,16 @@ def test_the_prompt_interpolates_nothing_at_all():
 def test_the_prompt_states_the_checkable_task():
     prompt = _prompt()
     assert CONFIG_FILE in prompt
-    assert "ladders" in prompt
+    assert "prices:" in prompt
     assert ANSWER_FILE in prompt
-    assert "ladders=" in prompt, "the answer's exact shape must be stated"
+    assert "prices=" in prompt, "the answer's exact shape must be stated"
+
+
+def test_the_trial_counts_nothing_that_is_a_choice():
+    # The choices leave config/models.yaml (DRE-6983); a task that counted
+    # them would fail every day after. Nothing in the workflow names them.
+    assert "ladders" not in _text()
+    assert _step_by_id(_doc(), "verify")["env"]["CONFIG_FILE"] == CONFIG_FILE
 
 
 def test_the_prompt_asks_for_nothing_that_is_pushed():
@@ -359,27 +369,28 @@ def test_the_verify_step_compares_and_classifies():
         "the death class comes from the ONE shared predicate (DRE-2312), never "
         "from a test of its own"
     )
-    assert "yaml" in run, "the true ladder count is computed with PyYAML"
+    assert "yaml" in run, "the true count of prices is computed with PyYAML"
 
 
 # --------------------------------------------------------------------------- #
 # 6. The scoring script, EXECUTED                                              #
 # --------------------------------------------------------------------------- #
 
-# Two ladders, deliberately not three: a synthetic config proves the count is
-# READ rather than remembered from config/models.yaml.
+# Two prices, deliberately not the live file's count: a synthetic catalog
+# proves the count is READ rather than remembered from config/model-prices.yaml.
+# Each entry carries several keys, so a count of every key is not the answer.
 SYNTHETIC_CONFIG = """\
-kinds:
-  workhorse: {ladder: workhorse}
-ladders:
-  workhorse:
-    - model: a-model
-    - model: b-model
-  advisory:
-    - model: c-model
-default_ladder: workhorse
+prices:
+  a-model:
+    input: 1.00
+    output: 5.00
+    source: "https://example.com/pricing"
+  b-model:
+    input: 2.00
+    output: 10.00
+    source: "https://example.com/pricing"
 """
-SYNTHETIC_LADDERS = 2
+SYNTHETIC_PRICES = 2
 
 # A clean run records the limits Claude Code ran the model at, and since
 # DRE-5121 the score reads them: a run below the Models API's numbers is
@@ -448,7 +459,7 @@ def _score(tmp_path: Path, *, answer: str | None, execution: dict | None,
 
 
 def test_a_matching_answer_on_a_clean_run_passes(tmp_path):
-    proc, out = _score(tmp_path, answer=f"ladders={SYNTHETIC_LADDERS}\n",
+    proc, out = _score(tmp_path, answer=f"prices={SYNTHETIC_PRICES}\n",
                        execution=CLEAN_RUN)
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert out["outcome"] == "passed"
@@ -458,7 +469,7 @@ def test_a_matching_answer_on_a_clean_run_passes(tmp_path):
 
 
 def test_the_run_url_is_this_run(tmp_path):
-    _, out = _score(tmp_path, answer=f"ladders={SYNTHETIC_LADDERS}\n",
+    _, out = _score(tmp_path, answer=f"prices={SYNTHETIC_PRICES}\n",
                     execution=CLEAN_RUN)
     assert out["run_url"] == (
         "https://github.com/dreadnought-foundry/bureau-pipeline/actions/runs/12345"
@@ -466,11 +477,11 @@ def test_the_run_url_is_this_run(tmp_path):
 
 
 def test_a_wrong_count_fails_and_names_the_mismatch(tmp_path):
-    proc, out = _score(tmp_path, answer="ladders=9\n", execution=CLEAN_RUN)
+    proc, out = _score(tmp_path, answer="prices=9\n", execution=CLEAN_RUN)
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert out["outcome"] == "failed"
-    assert "ladders=9" in out["summary"]
-    assert f"ladders={SYNTHETIC_LADDERS}" in out["summary"]
+    assert "prices=9" in out["summary"]
+    assert f"prices={SYNTHETIC_PRICES}" in out["summary"]
 
 
 def test_a_missing_answer_file_fails(tmp_path):
@@ -483,7 +494,7 @@ def test_a_missing_answer_file_fails(tmp_path):
 def test_an_answer_that_is_not_the_one_line_fails(tmp_path):
     # The line is the contract. Prose around the right number is not it.
     proc, out = _score(tmp_path,
-                       answer=f"There are {SYNTHETIC_LADDERS} ladders.\n",
+                       answer=f"There are {SYNTHETIC_PRICES} prices.\n",
                        execution=CLEAN_RUN)
     assert out["outcome"] == "failed"
 
@@ -491,7 +502,7 @@ def test_an_answer_that_is_not_the_one_line_fails(tmp_path):
 def test_turn_exhaustion_fails_even_with_the_right_answer(tmp_path):
     # The whole point of the card: a model that cannot finish a 10-turn loop is
     # not adoptable, whatever landed on disk before it died.
-    proc, out = _score(tmp_path, answer=f"ladders={SYNTHETIC_LADDERS}\n",
+    proc, out = _score(tmp_path, answer=f"prices={SYNTHETIC_PRICES}\n",
                        execution=TURN_CAP_RUN)
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert out["outcome"] == "failed"
@@ -499,7 +510,7 @@ def test_turn_exhaustion_fails_even_with_the_right_answer(tmp_path):
 
 
 def test_an_api_death_fails_and_is_named(tmp_path):
-    proc, out = _score(tmp_path, answer=f"ladders={SYNTHETIC_LADDERS}\n",
+    proc, out = _score(tmp_path, answer=f"prices={SYNTHETIC_PRICES}\n",
                        execution=API_DEATH_RUN)
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert out["outcome"] == "failed"
@@ -510,7 +521,7 @@ def test_no_execution_record_at_all_fails(tmp_path):
     # `classify` answers `none` both for "it did not die" and for "there is no
     # result record to say so". Absence is not health: an adoption gate must
     # not certify a candidate on evidence it never saw.
-    proc, out = _score(tmp_path, answer=f"ladders={SYNTHETIC_LADDERS}\n",
+    proc, out = _score(tmp_path, answer=f"prices={SYNTHETIC_PRICES}\n",
                        execution=None)
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert out["outcome"] == "failed"
@@ -521,7 +532,7 @@ def test_a_trial_step_github_reports_as_failed_fails(tmp_path):
     # `continue-on-error` keeps the job green, so GitHub's own `outcome` for
     # the step is the only record that it went red (DRE-2931). A right-looking
     # answer file does not overrule it.
-    proc, out = _score(tmp_path, answer=f"ladders={SYNTHETIC_LADDERS}\n",
+    proc, out = _score(tmp_path, answer=f"prices={SYNTHETIC_PRICES}\n",
                        execution=CLEAN_RUN, claude_outcome="failure")
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert out["outcome"] == "failed"
@@ -529,16 +540,24 @@ def test_a_trial_step_github_reports_as_failed_fails(tmp_path):
 
 def test_an_unreadable_config_fails_closed(tmp_path):
     # Our own tooling breaking must never read as "the candidate passed".
-    proc, out = _score(tmp_path, answer="ladders=2\n", execution=CLEAN_RUN,
-                       config="ladders: [this is not a mapping\n")
+    proc, out = _score(tmp_path, answer="prices=2\n", execution=CLEAN_RUN,
+                       config="prices: [this is not a mapping\n")
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert out["outcome"] == "failed"
+
+
+def test_a_catalog_with_no_prices_mapping_fails_closed(tmp_path):
+    # A file that parses but declares no prices has no answer to check.
+    proc, out = _score(tmp_path, answer="prices=0\n", execution=CLEAN_RUN,
+                       config="about: nothing priced here\n")
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert out["outcome"] == "failed"
 
 
 @pytest.mark.parametrize("execution,answer", [
-    (CLEAN_RUN, f"ladders={SYNTHETIC_LADDERS}\n"),
+    (CLEAN_RUN, f"prices={SYNTHETIC_PRICES}\n"),
     (TURN_CAP_RUN, None),
-    (API_DEATH_RUN, "ladders=1\n"),
+    (API_DEATH_RUN, "prices=1\n"),
     (None, None),
 ])
 def test_every_path_exits_zero_and_emits_all_three_outputs(tmp_path, execution, answer):
@@ -552,10 +571,10 @@ def test_every_path_exits_zero_and_emits_all_three_outputs(tmp_path, execution, 
 
 def test_the_live_config_count_is_what_the_agent_is_asked_for(tmp_path):
     # The task is only checkable if the real file answers it: the live
-    # config/models.yaml must declare countable top-level ladders.
+    # config/model-prices.yaml must declare a countable top-level prices map.
     live = yaml.safe_load((ROOT / CONFIG_FILE).read_text())
-    assert isinstance(live.get("ladders"), dict) and live["ladders"], live.keys()
-    proc, out = _score(tmp_path, answer=f"ladders={len(live['ladders'])}\n",
+    assert isinstance(live.get("prices"), dict) and live["prices"], live.keys()
+    proc, out = _score(tmp_path, answer=f"prices={len(live['prices'])}\n",
                        execution=CLEAN_RUN,
                        config=(ROOT / CONFIG_FILE).read_text())
     assert proc.returncode == 0, proc.stdout + proc.stderr

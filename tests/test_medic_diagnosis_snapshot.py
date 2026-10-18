@@ -8,18 +8,19 @@ fleet's Linear hour: how many requests a diagnosis spent was whatever the model
 chose, and nothing counted them. Every one printed `budget: undeclared`.
 
 What the agent actually needs from Linear is small and knowable in advance:
-which card the report goes to (the head branch's card, an open
-"Pipeline failure: <workflow>" card, or none yet), and that card's recent
-history, so a repeat failure can say whether the diagnosis changed. So:
+which card the report goes to (the head branch's card, the open red-main
+repair card, or none — a console alert since DRE-7453), and that card's
+recent history, so a repeat failure can say whether the diagnosis changed. So:
 
   * a step BEFORE the agent (`medic_retry.py diagnosis-target`) resolves the
     target and writes the card's facts to a snapshot file — one read for a
-    card on the branch, two for a failure card found by title, one when there
-    is none yet;
+    card on the branch, two for the repair card, one when there is none on
+    the default branch and none anywhere else;
   * the agent reads that file and the failed run's logs, and writes its report
     to a file. It holds no Linear key;
   * a step AFTER the agent posts the report: a comment, through the same act
-    as before (`run-failure-diagnosed`), or a new card through `create`.
+    as before (`run-failure-diagnosed`), or a console alert through
+    `pipeline_notice.py raise` (tests/test_medic_notice_delivery.py).
 
 The diagnosis itself was never read from Linear. The agent reads the failed
 run's logs; that part of the prompt is unchanged, and so is its turn ceiling
@@ -117,7 +118,7 @@ class TheStepsAroundTheAgentTest(unittest.TestCase):
         self.assertGreater(_index("deliver"), _index("claude"))
         self.assertEqual("${{ secrets.LINEAR_API_KEY }}", step["env"]["LINEAR_API_KEY"])
         self.assertIn("--act=run-failure-diagnosed", step["run"])
-        self.assertIn("linear_ops.py create", step["run"])
+        self.assertIn("pipeline_notice.py raise", step["run"])
 
     def test_agent_influenced_text_reaches_the_steps_through_env(self):
         """DRE-1996: the head branch and the run name never sit on a shell
@@ -243,31 +244,19 @@ class DiagnosisTargetTest(unittest.TestCase):
         self.assertEqual(["failed again; diagnosis unchanged"],
                          [c["body"] for c in snap["comments"]])
 
-    def test_an_open_failure_card_is_found_by_title_and_read(self):
+    def test_an_open_failure_card_is_not_searched_for(self):
+        """DRE-7453: a repeat failure is a raise of the same notice key, and
+        the console answers `repeat` — no title search, no read."""
         rc, out, calls, snap = _target("main", linear=_Linear(open_card="DRE-4000"))
-        self.assertEqual(("failure-card", "DRE-4000"), (out["kind"], out["target"]))
+        self.assertEqual(("notice", ""), (out["kind"], out["target"]))
         self.assertEqual("Pipeline failure: Reconcile", out["title"])
-        self.assertEqual(2, calls)
-        self.assertEqual("DRE-4000", snap["target"])
-
-    def test_no_failure_card_yet_means_a_new_one(self):
-        rc, out, calls, snap = _target("main")
-        self.assertEqual(("new", ""), (out["kind"], out["target"]))
-        self.assertEqual(1, calls)
-        self.assertEqual("new", snap["kind"])
+        self.assertEqual(0, calls)
+        self.assertEqual("notice", snap["kind"])
         self.assertNotIn("comments", snap)
-
-    def test_an_unanswered_search_is_unknown_never_new(self):
-        """A search that failed is not a search that found nothing. `new`
-        would mint a duplicate card; `unknown` sends the delivery step to ask
-        again."""
-        rc, out, calls, snap = _target("main", linear=_Linear(fail_find=True))
-        self.assertEqual(0, rc)
-        self.assertEqual("unknown", out["kind"])
 
     def test_the_title_is_one_line(self):
         rc, out, _, _ = _target("main", workflow="Reconcile\nkind=card")
-        self.assertEqual("new", out["kind"])
+        self.assertEqual("notice", out["kind"])
         self.assertNotIn("\n", out["title"])
 
 
@@ -287,34 +276,32 @@ class TheRepairCardIsTheTargetTest(unittest.TestCase):
         linear = _Linear(repair_cards={REPAIR_TITLE_2026_10_09: "DRE-6511"})
         rc, out, _, snap = _replay(linear)
         self.assertEqual(0, rc)
-        self.assertEqual(("card", "DRE-6511"), (out["kind"], out["target"]))
+        self.assertEqual(("repair-card", "DRE-6511"), (out["kind"], out["target"]))
         self.assertEqual("DRE-6511", snap["target"])
         self.assertIn(REPAIR_TITLE_2026_10_09, linear.searched)
         # Nothing is created: the lookup only reads.
         self.assertEqual([], [q for q in linear.queries if "mutation" in q])
 
-    def test_no_repair_card_open_is_new_as_today(self):
-        linear = _Linear()
+    def test_no_repair_card_open_is_a_notice(self):
+        linear = _Linear(open_card="DRE-4000")
         rc, out, calls, _ = _replay(linear)
-        self.assertEqual(("new", ""), (out["kind"], out["target"]))
-        self.assertIn(REPAIR_TITLE_2026_10_09, linear.searched)
-        self.assertIn("Pipeline failure: Pipeline Tests", linear.searched)
+        self.assertEqual(("notice", ""), (out["kind"], out["target"]))
+        self.assertEqual([REPAIR_TITLE_2026_10_09], linear.searched)
         self.assertEqual([], [q for q in linear.queries if "mutation" in q])
 
-    def test_an_open_failure_card_is_still_the_failure_card(self):
-        rc, out, _, _ = _replay(_Linear(open_card="DRE-4000"))
-        self.assertEqual(("failure-card", "DRE-4000"), (out["kind"], out["target"]))
-
-    def test_another_branch_makes_no_repair_card_lookup(self):
-        """The same reads as before DRE-6521: one search, for the failure card."""
-        linear = _Linear(repair_cards={REPAIR_TITLE_2026_10_09: "DRE-6511"})
+    def test_another_branch_makes_no_lookup_at_all(self):
+        """No repair card off the default branch, and since DRE-7453 no
+        failure card to search for either."""
+        linear = _Linear(repair_cards={REPAIR_TITLE_2026_10_09: "DRE-6511"},
+                         open_card="DRE-4000")
         rc, out, calls, _ = _replay(linear, branch="release-candidate")
-        self.assertEqual(("new", ""), (out["kind"], out["target"]))
-        self.assertEqual(1, calls)
-        self.assertEqual(["Pipeline failure: Pipeline Tests"], linear.searched)
+        self.assertEqual(("notice", ""), (out["kind"], out["target"]))
+        self.assertEqual(0, calls)
+        self.assertEqual([], linear.searched)
 
     def test_a_repair_lookup_that_raises_is_unknown_and_warns(self):
-        """`unknown` sends the delivery step to ask again; `new` would create."""
+        """`unknown` sends the delivery step to ask again; `notice` would raise
+        without knowing whether the repair card is open."""
         err = io.StringIO()
         rc, out, _, _ = _replay(_Linear(fail_repair=True), err=err)
         self.assertEqual(0, rc)
@@ -328,10 +315,15 @@ printf '%s\n' "$*" >> "$SHIM_LOG"
 case "$*" in
   *linear_ops.py\ find-open*) printf '%s' "${FAKE_FOUND:-}"; exit "${FAKE_FIND_RC:-0}" ;;
   *medic_retry.py\ repair-card*) printf '%s' "${FAKE_REPAIR:-}"; exit "${FAKE_REPAIR_RC:-0}" ;;
-  # The card's acceptance criteria are written by the real script.
-  *medic_retry.py\ failure-card-body*) shift; exec "$REAL_PYTHON" "$SCRIPTS/medic_retry.py" "$@" ;;
-  # Keep what `create` was handed, so the test reads the card's description.
-  *linear_ops.py\ create*) cp "$4" "$CREATED" ;;
+  # The card's acceptance criteria and the notice key are the real script's.
+  *medic_retry.py\ failure-card-body*|*medic_retry.py\ notice-workflow-file*)
+    shift; exec "$REAL_PYTHON" "$SCRIPTS/medic_retry.py" "$@" ;;
+  # Keep the body the raise was handed: it is the fallback card's description.
+  *pipeline_notice.py\ raise*)
+    while [ $# -gt 0 ]; do
+      if [ "$1" = "--body-file" ]; then cp "$2" "$CREATED"; fi
+      shift
+    done ;;
 esac
 exit 0
 """
@@ -354,11 +346,13 @@ def _deliver(kind, target="", *, report="the report", found="", find_rc=0,
     step = _step("deliver")
     values = {
         "secrets.LINEAR_API_KEY": "test-key",
+        "vars.BUREAU_READ_URL": "https://console.example.test",
         "steps.target.outputs.kind": kind,
         "steps.target.outputs.target": target,
         "steps.target.outputs.title": f"Pipeline failure: {workflow}",
         "steps.repo.outputs.slug": "agent-bureau",
         "github.event.workflow_run.name": workflow,
+        "github.event.workflow_run.path": ".github/workflows/tests.yml",
         "github.event.workflow_run.html_url": run_url,
         "github.event.workflow_run.head_branch": branch,
         "github.event.workflow_run.head_sha": head_sha,
@@ -394,6 +388,10 @@ def _creates(calls):
     return [c for c in calls if "linear_ops.py create" in c]
 
 
+def _raises(calls):
+    return [c for c in calls if "pipeline_notice.py raise" in c]
+
+
 def _comments(calls):
     return [c for c in calls if "linear_ops.py comment" in c]
 
@@ -405,33 +403,26 @@ class TheDeliveryStepTest(unittest.TestCase):
         self.assertEqual(1, len(calls), calls)
         self.assertIn("linear_ops.py comment DRE-5620 the report --act=run-failure-diagnosed", calls[0])
 
-    def test_an_open_failure_card_gets_the_report_as_a_comment(self):
-        proc, calls = _deliver("failure-card", "DRE-4000")
+    def test_an_open_repair_card_gets_the_report_as_a_comment(self):
+        proc, calls = _deliver("repair-card", "DRE-6511")
         self.assertEqual(1, len(calls), calls)
-        self.assertIn("linear_ops.py comment DRE-4000 the report", calls[0])
+        self.assertIn("linear_ops.py comment DRE-6511 the report", calls[0])
 
-    def test_no_failure_card_yet_creates_one_with_the_repo_label(self):
-        proc, calls = _deliver("new")
+    def test_no_card_raises_a_notice_whose_fallback_carries_the_repo_label(self):
+        proc, calls = _deliver("notice")
         self.assertEqual(0, proc.returncode, proc.stdout + proc.stderr)
-        creates = _creates(calls)
-        self.assertEqual(1, len(creates), calls)
-        self.assertIn("linear_ops.py create Pipeline failure: Reconcile", creates[0])
-        self.assertIn("--repo agent-bureau", creates[0])
+        raises = _raises(calls)
+        self.assertEqual(1, len(raises), calls)
+        self.assertIn("--fallback-title Pipeline failure: Reconcile", raises[0])
+        self.assertIn("--fallback-label repo:agent-bureau", raises[0])
+        self.assertEqual([], _creates(calls))
         self.assertEqual([], _comments(calls))
 
-    def test_an_unknown_target_searches_before_creating(self):
-        proc, calls = _deliver("unknown", found="DRE-4000")
-        self.assertEqual(2, len(calls), calls)
-        self.assertIn("linear_ops.py find-open Pipeline failure: Reconcile", calls[0])
-        self.assertIn("linear_ops.py comment DRE-4000", calls[1])
+    def test_an_unknown_target_asks_for_the_repair_card_then_raises(self):
         proc, calls = _deliver("unknown")
-        self.assertIn("linear_ops.py create", calls[-1])
-
-    def test_a_search_that_fails_again_creates_nothing(self):
-        proc, calls = _deliver("unknown", find_rc=1)
-        self.assertEqual(0, proc.returncode, proc.stdout + proc.stderr)
-        self.assertEqual([], [c for c in calls if "create" in c or " comment " in c])
-        self.assertIn("::warning", proc.stdout + proc.stderr)
+        self.assertIn("medic_retry.py repair-card", calls[0])
+        self.assertEqual(1, len(_raises(calls)), calls)
+        self.assertEqual([], [c for c in calls if "find-open" in c])
 
     def test_no_report_posts_nothing_and_says_so(self):
         proc, calls = _deliver("card", "DRE-5620", report=None)
@@ -452,7 +443,7 @@ class TheDeliveryStepAsksAgainTest(unittest.TestCase):
     answer it had read 39 seconds earlier."""
 
     def test_replay_of_the_16_second_gap_comments_on_the_repair_card(self):
-        proc, calls = _deliver("new", repair="DRE-6511", workflow="Pipeline Tests")
+        proc, calls = _deliver("notice", repair="DRE-6511", workflow="Pipeline Tests")
         self.assertEqual(0, proc.returncode, proc.stdout + proc.stderr)
         self.assertEqual([], _creates(calls))
         comments = _comments(calls)
@@ -461,14 +452,14 @@ class TheDeliveryStepAsksAgainTest(unittest.TestCase):
                       "--act=run-failure-diagnosed", comments[0])
 
     def test_the_lookup_is_asked_with_this_run_s_workflow_commit_and_branch(self):
-        proc, calls = _deliver("new", workflow="Pipeline Tests")
+        proc, calls = _deliver("notice", workflow="Pipeline Tests")
         asked = [c for c in calls if "medic_retry.py repair-card" in c]
         self.assertEqual(1, len(asked), calls)
         for part in ("--workflow Pipeline Tests", f"--head-sha {HEAD_SHA_2026_10_09}",
                      "--branch main", "--default-branch main"):
             self.assertIn(part, asked[0])
-        # Asked immediately before the create, never after it.
-        self.assertLess(calls.index(asked[0]), calls.index(_creates(calls)[0]))
+        # Asked immediately before the raise, never after it.
+        self.assertLess(calls.index(asked[0]), calls.index(_raises(calls)[0]))
 
     def test_an_unknown_target_asks_for_the_repair_card_before_creating(self):
         proc, calls = _deliver("unknown", repair="DRE-6511")
@@ -479,21 +470,21 @@ class TheDeliveryStepAsksAgainTest(unittest.TestCase):
         """At the target step it answers `unknown`; here, asked again, it fails
         again: no card, the warning, and the report in the run log."""
         report = "the medic's report, kept for whoever reads the log"
-        for kind in ("new", "unknown"):
+        for kind in ("notice", "unknown"):
             proc, calls = _deliver(kind, report=report, repair_rc=1)
             self.assertEqual(0, proc.returncode, proc.stdout + proc.stderr)
-            self.assertEqual([], _creates(calls), kind)
+            self.assertEqual([], _raises(calls), kind)
             self.assertEqual([], _comments(calls), kind)
             self.assertIn("::warning title=Diagnosis not delivered::", proc.stdout)
             self.assertIn(report, proc.stdout)
 
     def test_a_comment_target_never_asks(self):
-        for kind, target in (("card", "DRE-5620"), ("failure-card", "DRE-4000")):
+        for kind, target in (("card", "DRE-5620"), ("repair-card", "DRE-6511")):
             proc, calls = _deliver(kind, target)
             self.assertEqual([], [c for c in calls if "repair-card" in c], kind)
 
 
-# ── 4c. a failure card the medic creates carries acceptance criteria ─────────
+# ── 4c. the fallback card a raise carries has acceptance criteria ───────────
 REPORT_2026_10_09 = Path(ROOT, "tests", "fixtures",
                          "medic-report-DRE-6512-2026-10-09.md").read_text(encoding="utf-8")
 RUN_2026_10_09 = "https://github.com/dreadnought-foundry/bureau-pipeline/actions/runs/38001512530"
@@ -501,12 +492,16 @@ RUN_2026_10_09 = "https://github.com/dreadnought-foundry/bureau-pipeline/actions
 
 def _created_2026_10_09(report=REPORT_2026_10_09):
     created: list[str] = []
-    proc, calls = _deliver("new", report=report, workflow="Pipeline Tests",
+    proc, calls = _deliver("notice", report=report, workflow="Pipeline Tests",
                            run_url=RUN_2026_10_09, created=created)
     return proc, calls, created
 
 
 class TheFailureCardCarriesCriteriaTest(unittest.TestCase):
+    """Since DRE-7453 the composed body is the raise's body, and so the
+    description of the fallback card the client files when the door is down:
+    the card it files is today's card, criteria and all."""
+
     def test_the_created_card_ends_with_checkable_criteria(self):
         proc, calls, created = _created_2026_10_09()
         self.assertEqual(0, proc.returncode, proc.stdout + proc.stderr)
@@ -551,12 +546,12 @@ class TheFailureCardCarriesCriteriaTest(unittest.TestCase):
 
     def test_the_card_is_created_from_the_composed_body_not_the_bare_report(self):
         proc, calls, _ = _created_2026_10_09()
-        self.assertNotIn(REPORT, _creates(calls)[0])
+        self.assertNotIn(REPORT, _raises(calls)[0])
 
     def test_a_report_delivered_as_a_comment_carries_no_section(self):
         for kind, target, repair in (("card", "DRE-5620", ""),
-                                     ("failure-card", "DRE-4000", ""),
-                                     ("new", "", "DRE-6511")):
+                                     ("repair-card", "DRE-6511", ""),
+                                     ("notice", "", "DRE-6511")):
             proc, calls = _deliver(kind, target, repair=repair)
             self.assertEqual([], [c for c in calls if "failure-card-body" in c], kind)
             self.assertNotIn("Acceptance criteria", _comments(calls)[0])

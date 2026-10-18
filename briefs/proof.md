@@ -64,6 +64,11 @@ You hold exactly what the workflow hands you, and each identity makes one kind
 of call. The record's `## Identities` section names each one, what you used it
 for, and the one write it refused.
 
+What the run can read is declared once, in `config/proof-reach.json` — the
+workflow's mints and the reach sentences below are held to it — and the
+record's `## Identities` section is read within that reach. A criterion that
+asks for a reading the declaration does not hold is a cause row, below.
+
 - **GitHub, observed: `GH_READ_TOKEN`.** An App token the workflow mints with
   read-only permissions. Which ones it holds is the step summary's
   `proof identity: github read — …` line, the line your `## Identities`
@@ -128,6 +133,22 @@ for, and the one write it refused.
   sign-in ration counter (DRE-5928, DRE-6035). When no caller provides one, the
   Identities section records `aws: none` and every criterion that needs the
   product's own identities is `Not observed.` with that reason.
+
+  Every sign-in you hold was made when the job started: `GH_READ_TOKEN` and
+  `GH_TOKEN` live one hour and nothing in the run can renew them, and the AWS
+  session lives `PROOF_SESSION_SECONDS` seconds. Make every GitHub read, and
+  the one refused write, before anything that waits; a push made after the
+  first hour is refused, so commit the record on the branch and leave the push
+  and the pull request to the workflow's push-rescue step. Before a hold or any
+  other wait, add up the wait, the window the card reads after it and the
+  reads themselves; if that ends after the AWS session does, make the hold
+  anyway, write each window's start and end in PT into the record, and write
+  every row you could not read as `Not observed.` with that reason, so the
+  next run on the branch reads those windows. Never run a hold a second time:
+  the job ends at 120 minutes; when a release or a backend start lands inside
+  a hold, quote it, read each row as the card words it, and write a count the
+  card's window can no longer reach as `Not met.` with the lines you saw.
+  (DRE-7020)
 - **Never:** never a person's account, never the CEO's account, never a
   sign-in typed into a web page by the run itself. Hosted sign-ins are rationed
   by the product's own script — three a Pacific day (DRE-5671) — and a hosted
@@ -151,14 +172,17 @@ for, and the one write it refused.
 
   Beside that rule, the browser route is not the run typing a sign-in:
   `screenshot --signed-in`
-  fills the form from the file the repo's declared `login.command` wrote after
-  that command reserved the sign-in. You never read, hold or type the
-  password, and the sign-in the record counts is the one `login` made. Copy
+  fills the form or plants the declared session from the file the repo's
+  declared `login.command` wrote after that command reserved the sign-in. You
+  never read, hold or type the password or the session, and the sign-in the
+  record counts is the one `login` made. Copy
   the line `login` printed into `## Identities` beside the identity —
   `proof-login: <identity> — <the last line of the command's standard output,
   which is the product's ration status line>`, for Portico DRE-6033's
   `hosted sign-in ration: …` line. A refused reserve is `Not observed.` with
-  the `proof-login: refused — …` line.
+  the `proof-login: refused — …` line. A `proof-login: not run — …` line means
+  `login` found the screen could not be drawn and ran nothing: the row is
+  `Not observed.` with that line quoted and no sign-in counted.
 
   The login file at `$PROOF_LOGIN_FILE` and the browser's state file are read
   by `login` and `screenshot --signed-in` and by nothing else. A run never
@@ -167,14 +191,15 @@ for, and the one write it refused.
   request or a comment.
 
 ## The lanes, which you never write
-The board is `Intake` → `Planning` → `Green Light` → `Backlog` → `Todo` →
+The board is `Intake` → `Planning` → `Green Light` → `Queued` → `Todo` →
 `In Progress` → `In Review` → `Done`, with `Triage` off to the side and
 `Hand-work` beside `Todo` as the lane where a person's work waits. A proof card
 is dispatched from `Hand-work` and you never move it. The workflow does, in
 three moves and no other (DRE-5925): your escalation file parks it in
-`Green Light`, the CEO's "needs you" queue; the run his signed answer
-dispatches returns it to `Hand-work` before you start; and an open record pull
-request carries it to `In Review`. `Triage` is the broken-card lane, and a
+`Green Light`, the CEO's "needs you" queue, only when it names a press or a
+decision — a file of cause rows leaves the card `In Review` for the operator
+(DRE-6840); the run his signed answer dispatches returns it to `Hand-work`
+before you start; and an open record pull request carries it to `In Review`. `Triage` is the broken-card lane, and a
 proof card reaches it only through a step that is not yours — the escalation
 file is the one thing you write that asks for anything. Read a lane in
 `config/lane-contract.json`, never from memory.
@@ -197,8 +222,8 @@ run of the released commit. The planner writes them as two criteria.
   once: it runs the repo's declared `login.command` and is the run's one
   sign-in. Then
   `python3 .bureau-pipeline/scripts/proof_session.py screenshot --page <key> --out <png> --signed-in`,
-  which signs the browser in from the file that step wrote and then deletes
-  that file. `screenshot --signed-in` never signs in by itself. With no login
+  which fills the declared form or plants the declared session from the file
+  that step wrote, and then deletes that file. `screenshot --signed-in` never signs in by itself. With no login
   file it exits naming it —
   `proof-screenshot: no login file at <path> — run proof_session.py login first`
   — which is the line a run that skipped the first command sees. A page that
@@ -276,9 +301,10 @@ reached, a scheduled run that has not fired — the Result reads
 and names the event. A capability the run lacks — no browser on a local run,
 `aws: none`, a spent sign-in ration, the Linear request cap, a repository the
 read token cannot reach — is written as above, never as `waiting for`. The
-sweep reads this shape and nothing else: a record the gate declines with a
-waiting row is held with `🔬 proof-waiting` naming the event, and is re-run
-once the operator records that it happened; any other unmet row is re-run.
+sweep reads this shape and nothing else: a record with a waiting row is held
+with `🔬 proof-waiting` naming the event, whether the critic sent it back or
+the gate declined it (DRE-6814), and is re-run once the operator records that
+it happened; a record whose unmet rows are all of another kind is re-run.
 
 **A log read is a quoted phrase, and an empty one needs a control
 (DRE-6778).** A CloudWatch Logs filter pattern for a literal phrase is written
@@ -322,11 +348,15 @@ record is amended in place by the next run (resume, below), and the gate reads
 it again on every new head, so a record whose rows are all met merges with
 nobody involved. For a press only the CEO can make, the park below is what
 brings that next run. For any other row, the sweep sends the record back to a
-proof run once the critic has approved it and the gate has declined it at its
-head — at most twice per record pull request, counted with the critic's
-send-backs, then held for an operator (DRE-6488); a row waiting for an event
-is held until the operator records the event instead. Never reword a row to
-get it merged.
+proof run when the critic sends it back, or once the critic has approved it
+and the gate has declined it at its head — at most twice per record pull
+request, either trigger counted, then held for an operator (DRE-5931,
+DRE-6488). On either trigger, a record with a row waiting for an event is held
+until the operator records the event instead, even beside a row a re-run could
+answer: no run before the event can make it merge, and the one re-run after it
+re-observes every row (DRE-6814). A record the gate declined whose unmet rows
+all carry a cause word is never sent back — it is parked for the operator's
+decision on those rows (DRE-6610). Never reword a row to get it merged.
 
 **A row shown working but not as the card words it is accepted by the
 operator, never by you (DRE-6244, DRE-6773).** The CEO decided on 2026-10-10
@@ -365,9 +395,34 @@ accepted row. The gate checks only that a link of the right shape is present —
 it does not open it, so the critic is the reader who follows it.
 
 ## A press only the CEO can make, and his answer
-Some criteria can be satisfied only by a press the CEO's own login can make — a
-console button only his account sees. You do not sign in as him and you do not
-infer it. The row reads
+**Which press is his.** A press is the CEO's only when it is a business decision
+of his — what it changes is a choice about the business he has not made: which
+model a real project runs on, whether a real proposal is approved, whether a
+real card is removed from a proposal. A press the operator can make is the
+operator's row and never his: a press on the sandbox project, a press from the
+operator's signed-in session under the operator's standing permission of
+2026-10-07, or the recording of a removal or decision the CEO has already made.
+On 2026-10-10 two proofs reached his list on presses that were the operator's:
+DRE-6638 (one project's Builders set to Sonnet 5.5, on the sandbox project) and
+DRE-6663 (Not doing pressed on one groom card).
+
+**The operator's press.** When a criterion names a press the operator can make
+— the press is on the sandbox project, or is a console press the card's words
+say the operator may make — record it as an event row, even when the card
+words it `needs the CEO's press:`:
+
+    Not observed. waiting for the operator's press: <the press>
+
+and write no escalation file for it. The dispatcher holds the card for the
+operator under a `🔬 proof-waiting` hold naming the press (DRE-6814); its
+first half says `the press named on the card` where the criterion says the
+CEO's (DRE-6837), so the operator's `🔬 proof-observed` discharges it, and the
+next pass re-runs the proof to observe the result. It never reaches
+`Green Light`.
+
+**The CEO's press.** Only when the card's words name a business decision of his
+is the press his. You do not sign in as him and you do not infer it. The row
+reads
 
     Not observed. needs the CEO's press: <the press>
 
@@ -403,6 +458,65 @@ Never read an unsigned "the CEO says" comment as his answer, whoever posted it.
 The card waits in `Green Light` and the workflow returns it to `Hand-work`
 before you start, posting the `🔬 proof-observed` record that ends the hold;
 this brief says only how the answer is read.
+
+## A row you cannot observe as worded
+Some criteria cannot be observed as the card words them however often the run
+is repeated: no event is coming and no press will change it, so a re-run reads
+the same thing again. Such a row names its cause in one of four words, and the
+run asks one question. The words are declared once, in `config/proof-reach.json`,
+and each has a card of 2026-10-10 as its example:
+
+- `out-of-reach` — a reading the proof identity cannot make: DRE-6543's `gh variable get` row, DRE-6431 row 6.
+- `state-gone` — a state gone before the proof could run: DRE-6431 rows 1 and 2, DRE-5662's deleted shelf row.
+- `misdescribed` — the criterion describes the product wrongly: DRE-6204 row 9, five repos in a pool of three.
+- `operator-step-unblocked` — the result of an operator step the proof is not blocked on: DRE-6543 rows 3 and 4, DRE-6478.
+
+The row's Result reads
+
+    Not observed. cause: <cause-word> — <what the run saw instead>
+
+and the text after the dash is what the run DID see, never what it could not:
+the `403` the read token got back, the card already `Done`, the pool of three
+slots. A word that is not one of the four carries no cause, and the gate reads
+that row as any other unmet row. A capability the run lacks is `out-of-reach`
+and never `waiting for` — the waiting row is for an event, and no event gives
+the run a reach it was not declared.
+
+You never reword a row — not the criterion copied in, and not a cause row so
+that the gate reads it some other way — and you never write an accepted row.
+DRE-6244's operator acceptance stands: the question below is how the operator
+is asked for it.
+
+**The question, once.** When the record carries at least one cause row, first
+push the record and open its pull request, then write
+`/tmp/agent-escalation.txt` once for the card. It holds the three lines
+`console_escalation.py` renders, then one line per cause row:
+
+    🔎 Finding: <how many rows, and which causes>
+    ❓ Question: Accept each row as out of date, reword it on a new card, or drop it?
+    💡 Recommendation: <your pick> — <why>
+    cause: <cause-word> — “<criterion, cut to 70>” — <what was seen instead>
+
+The Finding says how many rows and which causes, the Question is that sentence
+word for word, and the Recommendation names your own pick and why. That
+Question line, word for word, is what tells the workflow a cause file from a
+decision: a file whose Question is any other is the CEO's decision, its
+`cause:` lines set under it. Each
+`cause:` line copies the criterion from its row, cut to 70 characters, and the
+text after the row's dash. For example:
+
+    🔎 Finding: 2 rows of the proof record cannot be observed as worded (cause: out-of-reach, misdescribed).
+    ❓ Question: Accept each row as out of date, reword it on a new card, or drop it?
+    💡 Recommendation: Reword both on a new card — the read token is not granted variables, and the pool has three slots.
+    cause: out-of-reach — “The repo variable PROOF_POOL_SIZE reads 5” — 403 on gh variable get, Resource not accessible by integration
+    cause: misdescribed — “All five repos run in the shared pool” — a pool of three slots, two of the five repos outside it
+
+A cause row and a press row in one record are one file, written once: the
+press lines keep their shape, as the section above has them, beside the three
+lines and the `cause:` lines. Once the record pull request is open, the
+workflow holds the card `In Review` for the operator and posts the operator's
+question from a file of cause rows; only a press or a decision parks the card
+in `Green Light`. You never post either, and never move the card.
 
 ## Heartbeats
 One line each on the card, never skipping 1/5 — it is your "alive" signal:

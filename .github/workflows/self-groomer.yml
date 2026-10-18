@@ -116,8 +116,15 @@ on:
           number = the cap on requests per owner
         type: string
         default: ""
+      replay:
+        description: >-
+          empty = an ordinary run; a stored proposal's path inside the
+          pipeline checkout = re-check that proposal and post nothing
+        type: string
+        default: ""
 
 permissions:
+  id-token: write # the console's read door checks this run's OIDC badge; a reusable workflow can hold no more than its stub grants, so the stub grants it first
   contents: read
 
 jobs:
@@ -148,6 +155,11 @@ jobs:
       # the switch above: the `drain` and `schedule` jobs omit it, so the
       # reusable's empty default — the leg sizes itself off its token — applies.
       lookup_budget: ${{ inputs.lookup_budget }}
+      # The replay (DRE-7242), offered here only, like the two above: it
+      # re-checks a stored proposal and posts nothing. The `drain` and
+      # `schedule` jobs omit it, so the reusable's empty default — an
+      # ordinary run — applies, and the clock never replays.
+      replay: ${{ inputs.replay }}
       # The pen's switch (DRE-3035), and NOT a dispatch input on purpose: a
       # hold the person dispatching the drain can waive is not a hold.
       #

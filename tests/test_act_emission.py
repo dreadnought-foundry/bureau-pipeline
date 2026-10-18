@@ -48,7 +48,6 @@ os.environ.setdefault("REPO_SLUG", "bureau-pipeline")
 os.environ.setdefault("GH_TOKEN", "x")
 
 import check_act_receipts  # noqa: E402
-import medic_classify  # noqa: E402 — the neutral could-not-run receipt's marker
 import pipeline_act  # noqa: E402
 import reconcile  # noqa: E402
 
@@ -423,64 +422,6 @@ def _drive_reviewer_environment_hold(mp):
     )
 
 
-@site("reviewer-outage-fleet-wide", "reviewer-outage-fleet-wide")
-def _drive_fleet_reviewer_outage(mp):
-    """The fleet-wide outage card (DRE-3433's decision, DRE-3435's wiring).
-
-    Drives the real sweep backstop: three could-not-run receipts on open pull
-    requests, no open card, so the decision is `file` and the receipt is what
-    `report_fleet_reviewer_outage` posts on the card it just created.
-
-    The CLOCK is frozen, which the other captures do not need. Every line of
-    this body is derived from the outcomes' own timestamps — the title's `since
-    15:19 PT`, the run and repo counts, the `@<first_at>` idempotency key — so
-    a wall clock would make the capture unfreezable rather than merely fragile.
-    """
-    from datetime import UTC as _UTC  # noqa: PLC0415 — the frozen clock, below
-    from datetime import datetime as _datetime  # noqa: PLC0415
-
-    frozen = _datetime(2026, 9, 8, 22, 40, tzinfo=_UTC)
-
-    class _Clock:
-        @staticmethod
-        def now(_tz=None):
-            return frozen
-
-    def _pr(number, minute):
-        return {
-            "number": number,
-            "headRefName": f"agent/DRE-{number}-widget",
-            "headRefOid": "d34db33fcafe1234d34db33fcafe1234d34db33f",
-            "baseRefName": "main",
-            "mergeStateStatus": "CLEAN",
-            "isDraft": False,
-            "comments": [{
-                "body": f"{medic_classify.CRITIC_NEUTRAL_MARKER} — the run died",
-                "createdAt": f"2026-09-08T22:{minute}:00Z",
-                "url": f"https://github.com/x/y/pull/{number}#issuecomment-{number}",
-            }],
-        }
-
-    listing = json.dumps([_pr(141, 19), _pr(142, 24), _pr(143, 31)])
-    mp.setattr(reconcile, "datetime", _Clock)
-    mp.setattr(reconcile, "REPO_SLUG", "bureau-pipeline")
-    mp.setattr(reconcile, "gh", lambda *a: (
-        listing if a[:2] == ("pr", "list")
-        else "https://github.com/x/y/actions/runs/34512000001/job/9"
-    ))
-    mp.setattr(reconcile, "gh_actions_read", lambda *a: (
-        "job\tstep\t2026-09-08T22:19:03.1234567Z ReferenceError: Claude Code "
-        "native binary not found at /home/runner/.local/bin/claude"
-    ))
-    mp.setattr(reconcile, "active_cards", lambda *_a, **_k: [])
-    mp.setattr(reconcile.linear_ops, "find_open_prefix", lambda _p: None)
-    mp.setattr(reconcile.linear_ops, "create_card",
-               lambda *_a, **_k: {"identifier": "DRE-1", "url": "u"})
-    _card_recorder(mp)
-    reconcile.reset_sweep_cards()
-    reconcile.report_fleet_reviewer_outage()
-
-
 @site("proof-observation-pending", "proof-observation-pending")
 def _drive_proof_waiting(mp):
     """The proof hold (DRE-3275). The only capture here whose wording was not
@@ -504,8 +445,11 @@ def _drive_roll_up_split(mp):
     earlier wording to read it off. Re-frozen by DRE-6591, which names each
     child as sent to Planning or waiting in Backlog: the parent reads as
     Planning and both children as Backlog, so the first is sent and the
-    second waits on it."""
+    second waits on it. Re-frozen by DRE-6742, which moved the planning exit:
+    the children read as `QUEUE_LANE`, the lane the planner now files them
+    in, so the second waits in Queued."""
     import epic_split  # noqa: PLC0415 — only this driver needs it
+    import lane_contract  # noqa: PLC0415 — the lane the planner files children in
 
     body = ("The engine ships first and ends at a watched release. More "
             "follows.\n\n## Acceptance criteria\n\n- [ ] planned on its own\n")
@@ -522,7 +466,7 @@ def _drive_roll_up_split(mp):
 
     epic_split.activate(SimpleNamespace(
         get_issue=lambda i, **_k: {
-            "state": {"name": "Planning" if i == "DRE-1" else "Backlog"}},
+            "state": {"name": "Planning" if i == "DRE-1" else lane_contract.QUEUE_LANE}},
         cmd_children_detail=lambda _i: print(json.dumps(children)),
         count_comments=lambda *_a, **_k: 0,
         cmd_comment=posted,
@@ -631,7 +575,7 @@ def _drive_switch_reason_cleared(mp):
     companion names Done, no receipt yet on the first, at a fixed clock."""
     import switch_reason  # noqa: PLC0415 — only this driver needs it
 
-    def gql(_query, variables=None):
+    def gql(_query, variables=None, **_kw):
         return {"issues": {"nodes": [
             {"identifier": f"DRE-{n}", "state": {"name": "Done"}}
             for n in (variables or {}).get("numbers") or ()]}}
@@ -671,6 +615,23 @@ def _drive_plan_bound_rewrite(mp):
     mp.setattr(plan_bound.review_rerun, "_cmd_dispatch", lambda _args: 0)
     _card_recorder(mp)
     plan_bound.run_exit("DRE-1", "post", "dreadnought-foundry/bureau-pipeline")
+
+
+@site("triage-repair", "triage-repair")
+def _drive_triage_repair(mp):
+    """The Triage repair's claim (DRE-7178): a card held at the plan critic's
+    bound with no receipt on its thread, its description fenced into the
+    `started` receipt. Frozen from its first render: there was no earlier
+    wording to read it off."""
+    import answer_into_card  # noqa: PLC0415 — only this driver needs it
+    import triage_repair  # noqa: PLC0415
+
+    mp.setattr(triage_repair.linear_ops, "comment_records",
+               lambda *_a, **_k: [])
+    mp.setattr(answer_into_card, "_read_description",
+               lambda _card: "The card as it stood.")
+    _card_recorder(mp)
+    triage_repair.claim("DRE-1")
 
 
 @site("promotion-stalled", "promotion-stalled")
@@ -901,7 +862,7 @@ class TestEveryWorkflowSiteEmitsItsTrailer:
         sent = {}
         original = linear_ops.gql
 
-        def fake_gql(query, variables=None):
+        def fake_gql(query, variables=None, **_kw):
             if "commentCreate" in query:
                 sent["body"] = variables["input"]["body"]
                 return {"commentCreate": {"success": True}}
@@ -922,7 +883,7 @@ class TestEveryWorkflowSiteEmitsItsTrailer:
 
         sent = {}
         with pytest.MonkeyPatch.context() as mp:
-            mp.setattr(linear_ops, "gql", lambda q, v=None: sent.update(
+            mp.setattr(linear_ops, "gql", lambda q, v=None, **_kw: sent.update(
                 body=v["input"]["body"]) or {"commentCreate": {"success": True}})
             mp.setattr(linear_ops, "get_issue", lambda _i: {"id": "uuid"})
             linear_ops.cmd_comment("DRE-1", "a body")

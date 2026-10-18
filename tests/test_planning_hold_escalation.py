@@ -526,15 +526,17 @@ _LABEL_WRITERS = (
 
 #: The dead-run cap site — `hand_dead_run_to_planner` since DRE-6186, which both
 #: of main()'s no-PR caps call — pairs the label (and its stamp, through
-#: `hold.apply`) with a deliberate park into Backlog. Anchored on the park flag rather than on a line
+#: `hold.apply`) with a deliberate park into the queue lane. Anchored on the park flag rather than on a line
 #: number, so the pairing is what is asserted.
 # The park may carry the read door's conditional-write keywords and be asked
 # whether it landed (Stage 2 item 33): `if linear_ops.cmd_state(ident,
-# "Backlog", "--park", **_door_guard(card)) is False …`. Still the label, then
-# the park, at the cap site — which is the pairing this pins.
+# QUEUE_LANE, "--park", **_door_guard(card)) is False …`. Still the label, then
+# the park, at the cap site — which is the pairing this pins. The park writes
+# through `QUEUE_LANE` since DRE-6743, never a hardcoded lane name, so the
+# queue's rename moves it with every other writer.
 _DEAD_RUN_PARK = (
     r'hold\.apply\(ident, "dead-run-cap", "none", "reconcile\.py"\)\s*\n(?:\s*#.*\n)*'
-    r'\s*(?:if )?linear_ops\.cmd_state\(\s*ident, "Backlog", "--park"[^)]*\)'
+    r'\s*(?:if )?linear_ops\.cmd_state\(\s*ident, QUEUE_LANE, "--park"[^)]*\)'
 )
 
 
@@ -564,7 +566,7 @@ class TestTheOtherWritersAreUnchanged:
         assert re.findall(r"cmd_advance\(ident, \"([^\"]+)\"", source) == ["Triage"]
 
     def test_the_dead_run_cap_still_pairs_the_label_with_a_park(self):
-        """The cap site writes the label AND moves the card to Backlog. Six of
+        """The cap site writes the label AND moves the card to the queue. Six of
         the seven writers pair the label with a lane a person watches — those
         six are why the label keeps meaning something, and none moves here."""
         source = (ROOT / "scripts" / "reconcile.py").read_text(encoding="utf-8")

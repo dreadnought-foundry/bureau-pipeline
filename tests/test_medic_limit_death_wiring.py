@@ -6,9 +6,10 @@ marker; until the medic calls it, no marker is written and the reconcile sweep
 (`limit_recovery.py`) has nothing to bring back. This file pins the call and
 the gate, by RUNNING the classify job's new step under a shim rather than
 reading its text: the step's `run:` block is rendered from a fake
-`workflow_run` payload exactly the way GitHub renders it, executed under the
-workflow's own shell flags (`bash -e -o pipefail`), and every `python3` it
-makes is recorded.
+`workflow_run` payload exactly the way GitHub renders it, executed under
+`bash -e -o pipefail`, and every `python3` it makes is recorded. That is
+deliberately stricter than the workflow: medic.yml sets no `shell:`, so GitHub
+runs the step as `bash -e` without pipefail, and the step must hold under both.
 
 What must hold:
 
@@ -315,6 +316,30 @@ class MarkerTest(unittest.TestCase):
         self.assertNotIn("by hand", result["text"])
 
 
+# ── 2b. no pipe a reader closes early (DRE-7025) ─────────────────────────────
+class EarlyClosedPipeTest(unittest.TestCase):
+    """The step took its first line with `… | head -1`, and this harness runs
+    it under `pipefail` — stricter than the workflow's default `bash -e`. Bash
+    writes a multi-line string one line per write, so a `head` that exits after
+    the first line kills the writer with SIGPIPE: under `pipefail` the pipeline
+    is 141 and `-e` ends the step. The live step, without `pipefail`, sees
+    `head`'s 0 and was never at risk — the harness was. On main a3042237 the
+    suite-green job, six copies of the suite on one machine, lost that race
+    twice: once as exit 141 on a classifier death, once as a marker test that
+    saw no post because the step had already ended. The step must stay correct
+    under both flag sets. A decision longer than a pipe's buffer loses the race
+    every time, so this one cannot pass by luck."""
+
+    LONG_DECISION = "limit\n\n" + MARKER + "\n" + ("x" * 99 + "\n") * 1000
+
+    def test_a_decision_longer_than_a_pipe_buffer_does_not_kill_the_step(self):
+        result = run_step(decision=self.LONG_DECISION)
+        self.assertEqual(0, result["rc"], result["text"][:500])
+        self.assertIn("limit=true", result["outputs"])
+        self.assertIn(MARKER.splitlines()[0], result["text"], "the body's first line is still said")
+        self.assertEqual(1, len(_comment_calls(result)), result["calls"][:3])
+
+
 # ── 3. anything else ─────────────────────────────────────────────────────────
 class NotALimitTest(unittest.TestCase):
     def test_an_ordinary_death_publishes_false_and_posts_nothing(self):
@@ -459,6 +484,41 @@ class TurnCapIsNotALimitDeathTest(unittest.TestCase):
                           failed_step="Plan epic")
         self.assertIn("not a limit death", result["text"])
         self.assertIn("requeue", result["text"], "the ordinary medic handling")
+
+
+STALL_LOG = (ROOT / "tests" / "fixtures"
+             / "stalled-plan-38170959772.log").read_text(encoding="utf-8")
+
+
+class StallIsNotALimitDeathTest(unittest.TestCase):
+    """DRE-6974, through the step's own shell and the REAL classifier.
+
+    On 2026-10-11 at 20:28Z this step posted `🪦 limit-death: kind=claude
+    stage=plan … assumed=yes` on epic DRE-6936 for run 38170959772. The
+    planner had gone silent and the stream watchdog stopped it; nothing hit a
+    wall. The log carried "monthly spend limit" because GitHub echoes
+    plan.yml's own comments into every planner log — and the marker skipped
+    the one retry the stall record on the same card promised.
+
+    The fixture is that run's two deciding lines, as `--log-failed` printed them.
+    """
+
+    def test_the_card_is_resolvable_so_the_absence_of_a_marker_is_the_verdict(self):
+        self.assertEqual("DRE-6936", medic_retry.card_for_run("main", STALL_LOG))
+
+    def test_the_step_publishes_false_and_posts_no_marker(self):
+        result = run_step(decision=None, log_text=STALL_LOG, payload=PLANNER,
+                          failed_step="Plan epic — finished?")
+        self.assertEqual(0, result["rc"], result["text"])
+        self.assertIn("limit=false", result["outputs"])
+        self.assertNotIn("limit=true", result["outputs"])
+        self.assertEqual([], _comment_calls(result), result["calls"])
+        self.assertNotIn("🪦 limit-death:", result["text"])
+
+    def test_the_step_says_the_death_is_not_a_limit_death(self):
+        result = run_step(decision=None, log_text=STALL_LOG, payload=PLANNER,
+                          failed_step="Plan epic — finished?")
+        self.assertIn("not a limit death", result["text"])
 
 
 class CardResolutionTest(unittest.TestCase):

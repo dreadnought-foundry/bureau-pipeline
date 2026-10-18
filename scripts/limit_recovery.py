@@ -36,8 +36,9 @@ EITHER
     where plan.yml's failure paths leave it — is bounced out through Intake,
     the lane before Planning exit that nothing polices, and straight back.
     Two writes, said out loud on the receipt, because a same-lane write fires
-    no webhook and the planner would never start. A card in Intake, Backlog or
-    Triage simply enters Planning. A card in a WORK lane is different: an epic
+    no webhook and the planner would never start. A card in Intake, Queued
+    (under either of its names, `QUEUE_LANES`) or Triage simply enters
+    Planning. A card in a WORK lane is different: an epic
     already In Progress is one the CEO has approved, through plan.yml's
     ACTIVATE route (which runs no review after DRE-5281 — the second critic
     reads the plan while the epic is still in Planning, DRE-5268), and
@@ -156,6 +157,7 @@ from datetime import datetime, timedelta
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import dead_run  # noqa: E402 — the marker's one definition
+from lane_contract import QUEUE_LANE, QUEUE_LANES  # noqa: E402 — the queue, written and read (DRE-6745)
 import hold  # noqa: E402 — DRE-6182: the one answer to "does this reader honor the hold"
 import linear_ops  # noqa: E402 — the comment window's one direction (DRE-3250)
 import medic_retry  # noqa: E402 — the park rule's one definition (Stage 2 fix #23)
@@ -174,8 +176,10 @@ PLANNING_LANE = "Planning"
 BOUNCE_LANE = "Intake"   # before Planning exit: not policed, and Planning entry re-fires the planner
 # The lanes a planning-stage card may ENTER Planning from. Anything else is a
 # card past Planning exit (Green Light, Todo, In Progress, In Review), and a
-# plan death there is re-run in place — never re-planned.
-REPLAN_FROM = ("Intake", "Backlog", "Triage")
+# plan death there is re-run in place — never re-planned. The queue is read by
+# membership in `QUEUE_LANES`, so a card parked under either name re-enters
+# (DRE-6745).
+REPLAN_FROM = ("Intake", *QUEUE_LANES, "Triage")
 BUILD_LANE = "Todo"
 # The bound on DRE-5455's assumed Claude clock (DRE-5640): this many assumed
 # deaths inside this many hours is a wall that is not the five-hour window.
@@ -417,7 +421,7 @@ def handoff_reason(card: dict, marker: dict, *, assumed_deaths: int = 0) -> str 
         return ("the marker names no reset time and no account, so nothing here "
                 "can tell when the wall comes down. The card is back on the "
                 "sweep's ordinary clock; if the account is still limited, park it "
-                "in Backlog until the account is released, then return it to Todo")
+                f"in {QUEUE_LANE} until the account is released, then return it to Todo")
     return None
 
 

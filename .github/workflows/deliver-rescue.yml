@@ -33,6 +33,15 @@
 # for one card is worse than the bug this fixes — so the delivery checks for an
 # existing PR on its own branch first and does nothing when there is one.
 #
+# ONE PULL REQUEST PER CARD (DRE-6868). The agent's own push can land after all
+# (DRE-6833: #997 on the agent's branch, then #998 from here, one build twice).
+# So a build run's delivery also lists the card's OPEN pull requests — head
+# `agent/<CARD>-…` or `repair/<CARD>-…`, any author — with the App token below:
+# one that already carries the patch's commits (by patch id; the replay
+# rewrites shas) means nothing is pushed or opened; one that lacks them gets
+# them on its own branch; none means the fresh branch and pull request as
+# before. Nothing in this file's inputs changes for it.
+#
 # Reusable workflow: permissions live in the calling stub.
 name: Deliver Rescue (reusable)
 
@@ -183,7 +192,10 @@ jobs:
       # for a PR the agent opened. `|| true`: the pull request is the delivery,
       # and a Linear write that fails must not fail a job that already
       # succeeded (the reconcile sweep re-reads the state). For a fix run's
-      # card this is a no-op: it is already past those lanes.
+      # card this is a no-op: it is already past those lanes. A build run's
+      # delivery that found the card's work already up, or put it on the
+      # card's open pull request (DRE-6868), is green too, and right to move
+      # the card: that pull request is open.
       - name: Card → In Review
         if: success()
         env:

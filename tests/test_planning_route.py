@@ -398,7 +398,7 @@ class TestTheOneOffIsActuallyPromoted:
 
         assert board.promote() == 1
         assert board.lane_of(CARD) == "Todo"
-        assert board.advanced == [(CARD, "Todo", "Backlog")]
+        assert board.advanced == [(CARD, "Todo", ",".join(lane_contract.QUEUE_LANES))]
 
     def test_the_same_card_without_that_verdict_does_not(self):
         """The pairing that makes the test above mean something: the verdict
@@ -582,7 +582,7 @@ class TestTheExitCommand:
         card.run(lambda: planning_route.main(["exit", CARD]))
 
         assert card.posted == first, "the second pass posted a comment again"
-        assert card.states == [(CARD, "Backlog"), (CARD, "Backlog")]
+        assert card.states == [(CARD, "Queued"), (CARD, "Queued")]
 
     def test_a_roll_up_is_moved_and_given_no_verdict(self):
         card = _Card([_stamp("roll-up")])
@@ -1158,14 +1158,14 @@ class TestAPersonsCardIsRoutedBeforeTheCritic:
 
 # ===========================================================================
 # DRE-6651: an epic still to be planned whose formal blocker is open waits in
-# Backlog instead of asking the CEO
+# Queued (Backlog until DRE-6750) instead of asking the CEO
 # ===========================================================================
 #
 # DRE-6589 reached Planning blocked by DRE-6587 (In Progress), the planner
 # could only ask "wait, or plan now?", and the CEO answered a question the
 # board already held the answer to. `decide` reads the relation, the children
 # and the lane history beside the shape and says `wait`; `plan.yml` posts the
-# receipt, moves the epic to Backlog and dispatches no planner.
+# receipt, moves the epic to Queued and dispatches no planner.
 REPLAY = ROOT / "tests" / "fixtures" / "green-light-2026-10-10" / "dre-6589.json"
 REPLAY_KEYS = {"card", "arrival", "for", "as_of", "lane", "labels", "comments"}
 #: The `Route — plan or activate` gate at `main` before this card.
@@ -1180,7 +1180,7 @@ DECIDE_GATE = (
     "&& steps.slot.outputs.admitted == 'true' && steps.classify.outputs.escalate != 'true' "
     "&& steps.classify.outputs.requeue != 'true'"
 )
-WAIT_STEP = "Epic waits on its blocker — Backlog, no planner"
+WAIT_STEP = "Epic waits on its blocker — Queued, no planner"
 WAIT_GATE = "steps.shape.outputs.route == 'epic' && steps.shape.outputs.wait == 'true'"
 WAIT_ACT = "epic-waits-on-blocker"
 
@@ -1245,6 +1245,14 @@ class TestABlockedEpicWaits:
         assert card.posted == [] and card.states == [], (
             "decide reads; plan.yml's wait step is the writer"
         )
+
+    def test_the_wait_line_names_the_queue_the_wait_step_parks_in(
+            self, tmp_path, capsys, monkeypatch):
+        """DRE-6747: the epic waits in `QUEUE_LANE`, read when the line is
+        printed — so flipping the planning exit moves the words with it."""
+        monkeypatch.setattr(lane_contract, "QUEUE_LANE", "Queued")
+        _, said, _ = _replayed(tmp_path, capsys)
+        assert "DRE-6589 waits in Queued — " in said
 
     def test_the_same_epic_is_planned_once_its_blocker_is_done(self, tmp_path, capsys):
         written, _, _ = _replayed(
@@ -1330,13 +1338,16 @@ class TestPlanYmlParksAWaitingEpic:
         assert _index("Planning shape") < _index(WAIT_STEP) < _index("Route — plan or activate")
         assert _gate(_step(WAIT_STEP)) == WAIT_GATE
 
-    def test_the_wait_step_posts_the_receipt_then_moves_the_epic_to_backlog(self):
+    def test_the_wait_step_posts_the_receipt_then_moves_the_epic_to_queued(self):
+        # DRE-6750: the write and the receipt name the queue by its new name.
         run = _step(WAIT_STEP)["run"]
         assert f"--act={WAIT_ACT}" in run
         assert "⏸️ epic-waits:" in run
+        assert "waits in Queued on its formal blocker(s)" in run
         assert "steps.shape.outputs.waits_on" in json.dumps(_step(WAIT_STEP))
-        assert 'linear_ops.py state "$EPIC" "Backlog"' in run
-        assert run.index(f"--act={WAIT_ACT}") < run.index('state "$EPIC" "Backlog"')
+        assert 'linear_ops.py state "$EPIC" "Queued"' in run
+        assert run.index(f"--act={WAIT_ACT}") < run.index('state "$EPIC" "Queued"')
+        assert "Backlog" not in run
         for absent in ("plan-cycle", "cycle-start", "open_attempt", "Plan heartbeat"):
             assert absent not in run
 
@@ -1412,6 +1423,14 @@ class TestTheWaitActIsDeclared:
         assert row["cadence_s"] is None and row["cadence_why"].strip()
         assert row["emits"]["file"] == ".github/workflows/plan.yml"
         assert f"--act={WAIT_ACT}" in row["emits"]["anchor"]
+
+    def test_the_act_means_names_the_queue_the_receipt_names(self):
+        # DRE-6750: `means` is what the console says for this act, so it
+        # names the lane the receipt and the write name.
+        acts = json.loads((ROOT / "config" / "pipeline-acts.json").read_text(encoding="utf-8"))
+        row = next(a for a in acts["acts"] if a["name"] == WAIT_ACT)
+        assert "waits in Queued" in row["means"]
+        assert "Backlog" not in row["means"]
 
     def test_the_registry_checks_clean(self):
         import pipeline_act

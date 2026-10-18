@@ -511,8 +511,9 @@ jobs:
       # pass — on, or off with its reason and each named card's state, or off
       # with no reason given. It prints and reads, and once a switch's
       # reason has cleared (DRE-6437) it also posts one receipt on the first
-      # named card and may file one alarm card in Planning
-      # (docs/switches.md#the-receipt-and-the-alarm). Each
+      # named card and may raise one WARN console alert, filing the old alarm
+      # card in Planning only when the console cannot take it (DRE-7455,
+      # docs/switches.md#the-receipt-and-the-alarm). Each
       # switch and its `_OFF_UNTIL` companion is plumbed from the caller's
       # variables, and a catalog row with no plumbing here fails
       # tests/test_switch_reason.py by name (docs/switches.md).
@@ -533,6 +534,8 @@ jobs:
           GREEN_LIGHT_REPLY_LIVE_OFF_UNTIL: ${{ vars.GREEN_LIGHT_REPLY_LIVE_OFF_UNTIL }}
           HYGIENE_LIVE: ${{ vars.HYGIENE_LIVE }}
           HYGIENE_LIVE_OFF_UNTIL: ${{ vars.HYGIENE_LIVE_OFF_UNTIL }}
+          TRIAGE_REPAIR_LIVE: ${{ vars.TRIAGE_REPAIR_LIVE }}
+          TRIAGE_REPAIR_LIVE_OFF_UNTIL: ${{ vars.TRIAGE_REPAIR_LIVE_OFF_UNTIL }}
         run: |
           REPO_SLUG=$(basename "$GITHUB_REPOSITORY" | tr '[:upper:]' '[:lower:]')
           export REPO_SLUG

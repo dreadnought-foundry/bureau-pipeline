@@ -43,19 +43,23 @@ moves itself (below).
 | -- | -- | -- | -- |
 | `stranded-no-run` | `run-started` | A 🧠 or ⏳ run receipt newer than the stamp proves a run started. The pipeline never starts that run itself — see below. | Nothing moves |
 | `no-route` | `repo-on-rail` | Read off the card's current `repo:` label, never the stamp, because the usual fix is a person correcting the label. | Triage → Planning |
-| `review-cap-spent` | `new-head` | The review re-triggers were spent on one head. A pushed fix is a new head, and the review runs on it again. | Green Light → In Review |
+| `review-cap-spent` | `new-head` | The review re-triggers were spent on one head. A pushed fix is a new head, and the review runs on it again. The sweep parks a code pull request's card in Green Light, and holds a proof record's In Review for the operator (DRE-6841). | Green Light → In Review, or no move when the proof record was held In Review |
 | `dead-run-cap` | `unpark-marker` | Only an operator's `unpark` resets the death budget, and its `dead-run-budget-reset` marker is the fact. | Nothing moves |
 | `turn-cap-park` | `unpark-marker` | The same budget reset. Two turn-cap deaths past green are the most a card ever gets. | Nothing moves |
 | `epic-rereview-twice` | `manual` | The park ends in Triage for an operator. The way back, `plan_critic.REAPPROVE_HOW`, is a person's act that leaves no fact a sweep can read. | Nothing moves |
-| `plan-critic-bound` | `manual` | Every bound park ends in Triage for an operator, and the way back is the same person's act. | Nothing moves |
+| `plan-critic-bound` | `manual` | Every bound park ends in Triage. It gets one automatic repair first, once per card (`scripts/triage_repair.py`, DRE-7178), which lifts it with `because=triage-repair`. After that, the way back is the same person's act. | Triage → Planning (rewritten, or an epic re-planned) or Green Light (a question), when the repair lifts it; otherwise nothing moves |
 | `fix-dispute` | `new-head` | The fix loop's budget was spent on one head. A new head runs the review, the gate and the fix loop again. | Triage → In Review |
 | `unfixable-check` | `new-head` | The red check was read on one head (its receipt is keyed `unfixable-check-hold @<sha8>`). A new head is read again. | Triage → In Review |
-| `operator-step` | `blockers-terminal` | A planner-filed operator step is a person's to do once the work before it is finished. The card's `blockedBy` relations say when, and the sweep's promotion gate reads them. | Backlog → Hand-work |
+| `operator-step` | `blockers-terminal` | A planner-filed operator step is a person's to do once the work before it is finished. The card's `blockedBy` relations say when, and the sweep's promotion gate reads them. | Queued → Hand-work |
 | `manual` | `manual` | A person chose it, or a writer created the card already held. Nothing a sweep can read says it is over. | Nothing moves |
 
 A `manual` hold — `epic-rereview-twice`, `plan-critic-bound`, `manual`, and any
 label with no stamp — is lifted only by `card-closed` or by a person. Outside
-Done or Canceled, nothing in this epic lifts it.
+Done or Canceled, nothing in this epic lifts it. The one exception is the
+Triage repair (DRE-7178): a `plan-critic-bound` hold is lifted once per card by
+`scripts/triage_repair.py`, with `because=triage-repair`, as it moves the
+repaired card to Planning or Green Light — an epic, to Planning for a fresh
+planning attempt with every finding in front of the planner (DRE-7181).
 
 A `new-head` hold that is still stuck on the new head is re-parked with a fresh
 stamp by the review, the gate or the fix loop. For a fix dispute there is a
@@ -83,14 +87,17 @@ what amends it. A record already parked under the stamp is read by that branch
 in Green Light too, and the amended record's new head lifts the stamp here as
 for any other card. Every other record — an `APPROVE` the gate has not declined
 as not proven at the head, a red check, or no verdict at its head — is nudged
-and capped as before.
+and capped as before. At the cap it is held In Review under the stamp with the
+operator's question, never parked in Green Light (DRE-6841): a record's
+refusal is `proof record not proven`, which the operator answers by accepting
+rows, recording the event with `🔬 proof-observed`, or dropping the record.
 
 ### `operator-step` is lifted by the sweep
 
 A planner files an operator step — something a person does once the cards
 before it are finished — held from birth. Without a stamp its label reads
 `manual`, and nothing a sweep can read says a `manual` hold is over, so the
-card sat in Backlog forever (DRE-6408). The stamp names the reason instead:
+card sat in the queue forever (DRE-6408). The stamp names the reason instead:
 
     🔒 hold: reason=operator-step at=none lifts=blockers-terminal by=<writer-file>
 
@@ -98,7 +105,7 @@ The lift is met when every `blockedBy` relation of the card is Done, Canceled
 or Duplicate. Those relations are read only by the sweep's promotion gate
 (DRE-6427), so the sweep lifts `operator-step` rather than standing down for
 it: it calls `hold.lift` with `blockers-terminal` and carries the card from
-Backlog to Hand-work. The one-time pass over the cards already parked (DRE-6429)
+Queued to Hand-work. The one-time pass over the cards already parked (DRE-6429)
 lifts the same way.
 
 `hold.lift_due` is not taught the lift kind and answers None for it outside
@@ -159,13 +166,21 @@ for the other seven. `hold.stamp_line` refuses any other pairing, so a wrong
 qualifier fails at the writer and never at the lift. `hold.py apply` exits 2 on
 the same input before it writes anything. A writer that lands the label itself
 posts only the stamp, through `hold.post_stamp`: `dead_run.py park --reason
-<code>` writes the label and Backlog, both or neither, and stamps
+<code>` writes the label and Queued, both or neither, and stamps
 `dead-run-cap` or `turn-cap-park` only once both have landed (DRE-6178).
 
 A writer other than the hygiene agent that lifts a hold posts the lift line
 through `hold.lift`, after the label comes off:
 
-    🔓 hold lifted: reason=<code> because=<lift-kind or card-closed or operator> by=<writer-file>
+    🔓 hold lifted: reason=<code> because=<lift-kind or card-closed or operator or triage-repair> by=<writer-file>
+
+`triage-repair` is the Triage repair's own lift (DRE-7178), and no lift kind:
+no sweep reads a fact and lifts on it. `scripts/triage_repair.py apply` lifts
+a `plan-critic-bound` hold once per card, after the outcome's own writes and
+before it moves the card out of Triage, so the plan run the move fires is not
+refused for the hold:
+
+    🔓 hold lifted: reason=plan-critic-bound because=triage-repair by=triage_repair.py
 
 The hygiene agent's own lift is its receipt instead: act `hygiene-hold-clear`,
 tag `hyg-hold-cleared`, cause `reason=<code> because=<lift-kind>`.
@@ -226,7 +241,9 @@ nothing resumes, so each also moves it (DRE-6273):
   stamped sha. The lane reads the head off the leg's own pull-request listing:
   the newest open pull request whose branch carries the card's identifier. No
   open pull request means no lift. A `review-cap-spent` card the sweep parked
-  in Green Light (DRE-6181) goes from Green Light to In Review, and a
+  in Green Light (DRE-6181) goes from Green Light to In Review — a proof
+  record the sweep held In Review for the operator instead (DRE-6841) is
+  already there, and the lift moves nothing — and a
   `fix-dispute` or `unfixable-check` card the fix loop parked in Triage
   (DRE-6179) goes from Triage to In Review — the lane its open pull request
   says it is in. The push that made the new head has already started the
@@ -239,8 +256,8 @@ nothing resumes, so each also moves it (DRE-6273):
   Triage (DRE-6177)
   goes from Triage to Planning. The Triage lane leaves such a card alone
   while the hold stands (DRE-6190), so it is still there to be found. Planning
-  and not Backlog: a card that has been through Triage since its newest
-  routing verdict is refused `stale-verdict` in Backlog (DRE-4962), and
+  and not Queued: a card that has been through Triage since its newest
+  routing verdict is refused `stale-verdict` in Queued (DRE-4962), and
   Planning's exit routes it afresh.
 
 The move is made only from the lane the hold parked the card in. A card a
@@ -264,7 +281,7 @@ from the lane the hold parked the card in adds a state write after the
 receipt: In Review, or Planning. The label is already off when that write
 fires a run, so the plan-gate does not refuse a plan run for it. Every other
 lift moves nothing. In Review and Planning are both lanes the hygiene agent
-may write (`hygiene.DESTINATIONS`); the lane proposes no other lane write and
+may write (`hygiene.destinations()`); the lane proposes no other lane write and
 no `gh` write.
 
 **An archived card is unarchived for the write and re-archived after it.** A
@@ -395,7 +412,7 @@ without a person before it holds.
 | -- | -- | -- | -- | -- | -- |
 | `scripts/reconcile.py` · `flag_stranded` | `WATCHDOG_TAG` | `stranded-no-run` | `run-started` | sweep, fix-dispatch, medic, limit-recovery | The sweep's one Todo re-send (DRE-5743) |
 | `scripts/reconcile.py` · `flag_stranded` | `WATCHDOG_TAG` | `no-route` | `repo-on-rail` | sweep, fix-dispatch, medic, limit-recovery | The move to the operator's queue (DRE-6177) |
-| `scripts/reconcile.py` · `hand_review_nudge_to_person` | `REVIEW_NUDGE_CAP_KEY` | `review-cap-spent` | `new-head` | sweep, fix-dispatch, medic, limit-recovery | Three review re-triggers on the head, then the Green Light question (DRE-6181) |
+| `scripts/reconcile.py` · `hand_review_nudge_to_person` | `REVIEW_NUDGE_CAP_KEY` | `review-cap-spent` | `new-head` | sweep, fix-dispatch, medic, limit-recovery | Three review re-triggers on the head, then the Green Light question (DRE-6181) — parked in Green Light for a code pull request, held In Review with the operator's question for a proof record (DRE-6841) |
 | `scripts/reconcile.py` · `hand_dead_run_to_planner` (In Progress or In Review, no PR) | `held-for-human` | `dead-run-cap` | `unpark-marker` | sweep, fix-dispatch, medic, limit-recovery | Two requeues, then one hand-off to the planner on a silent death (DRE-6178, DRE-6186) |
 | `scripts/dead_run.py` · `_cmd_park` | `PARK_STATE` | `dead-run-cap` | `unpark-marker` | sweep, fix-dispatch, medic, limit-recovery | Two requeues, then one hand-off to the planner on a silent death (DRE-6178, DRE-6186) |
 | `scripts/dead_run.py` · `_cmd_park` | `PARK_STATE` | `turn-cap-park` | `unpark-marker` | sweep, fix-dispatch, medic, limit-recovery | One requeue after a death past implementation green (DRE-4366) |
@@ -410,6 +427,7 @@ without a person before it holds.
 | `.github/workflows/agent-fix.yml` · Escalate checks the loop structurally cannot fix | `unfixable-check-hold` | `unfixable-check` | `new-head` | sweep, fix-dispatch, medic, limit-recovery | The fix run itself, which read the check |
 | `.github/workflows/agent-fix.yml` · Report (`park_for_human` in `scripts/report_fix_result.sh`) | `park_for_human` | `fix-dispute` | `new-head` | sweep, fix-dispatch, medic, limit-recovery | The fix loop's rounds, up to its budget |
 | `scripts/model_adoption_actions.py` · `<module>` (`QUESTION_LABELS`) | `The question card` | `manual` | `manual` | sweep, fix-dispatch, medic, limit-recovery | None — a person, or a writer creating a card already held, chose it |
+| `scripts/release_deferral.py` · `<module>` (`CARD_LABELS`) | `a person finishes it, nothing builds it` | `manual` | `manual` | sweep, fix-dispatch, medic, limit-recovery | None — a person, or a writer creating a card already held, chose it |
 | `scripts/linear_ops.py` · `_file_operator_hold` (`subissue`, `oneoff`) | `filed as an operator step` | `operator-step` | `blockers-terminal` | fix-dispatch, medic, limit-recovery | None — the card is filed held by design; the sweep lifts it when every blocker is terminal |
 | `scripts/hand_work_migration.py` · `_convert_one` (`operator-backlog`) | `one card of the operator-backlog pass` | `operator-step` | `blockers-terminal` | fix-dispatch, medic, limit-recovery | None — the card already wears the hold; the pass names the reason a person's label left unsaid |
 
@@ -427,7 +445,7 @@ records.
 | -- | -- | -- |
 | `stranded-no-run` | The sweep re-sends a card that sat in Todo with no run, once (DRE-5743). | `card sat in Todo with no run — re-dispatched` |
 | `no-route` | The card moves to the operator's queue under the `card-stranded` act. The move lands with DRE-6177. | `card-stranded` |
-| `review-cap-spent` | Three review re-triggers on the head, then the evidence-built Green Light question. The question lands with DRE-6181. | `review-nudge-cap` |
+| `review-cap-spent` | Three review re-triggers on the head, then the evidence-built Green Light question. The question lands with DRE-6181. On a proof record the question is the operator's and the card is held In Review, not parked in Green Light (DRE-6841). | `review-nudge-cap` |
 | `dead-run-cap` | Two requeues at the same budget, then — on a silent death, with no pull request and no blocker note — one hand-off to the planner. The Report step's cap has asked `dead_run.decide` since DRE-6178, and the sweep's two no-PR caps ask it through `hand_dead_run_to_planner` since DRE-6186; what the sweep sees at its cap is always the silent death. A credential refusal or an API or model death at the cap holds as today, because neither says anything about the card's size. | `✂️ dead-run-cap → Planning:` (`hold.DEAD_SPLIT_MARK`) |
 | `turn-cap-park` | One requeue at the same budget after a death past implementation green (DRE-4366). | `turn-exhaustion-requeue` |
 | `epic-rereview-twice` | The watcher's own first firing asks for the second critic's review again. | `asked for the review again` |

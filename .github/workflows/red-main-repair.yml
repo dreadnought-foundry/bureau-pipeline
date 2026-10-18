@@ -13,7 +13,8 @@
 #   2 no crash-loop — red_main_repair.py classifies BEFORE any agent (infra
 #     fingerprint → back off entirely; the medic owns retry-once) and caps
 #     attempts at 2 per failing SHA, tracked by the repair branch/PR record;
-#     budget exhausted → a deduplicated plain-English Linear triage card;
+#     budget exhausted → a plain-English CRITICAL console alert (DRE-7454),
+#     closed by the clear-notices job when main is green again;
 #   3 concurrency lock — job-level Actions concurrency serializes one repair
 #     in flight per repo; duplicate failure events debounce by SHA;
 #   4 quota isolation — the worker token is minted through the dispatch pool
@@ -186,46 +187,59 @@ jobs:
             --out /tmp/repair-history.json
 
       # The attempt record (guardrails 2+3): existing repair/* branches and
-      # repair/* PRs of ANY state ARE the state — no external store. A fetch
-      # failure writes a non-JSON marker, which the decide step reads as
-      # records-unreadable and fails CLOSED (no dispatch; the next failure
-      # event retries with fresh records).
+      # repair/* PRs of ANY state ARE the state — no external store. A read
+      # that never comes back writes a non-JSON marker, which the decide step
+      # reads as records-unreadable and fails CLOSED (no dispatch).
+      #
+      # DRE-6963: the reads wait out the call limit, say why, and a read that
+      # never comes back fails the run. On 2026-10-11 the login ran out of
+      # calls, run 38169396180 said only "unreadable" and ended green, and
+      # nothing else starts this repair while main is red — no pull request
+      # merges onto a red main, so no next failure event comes. Now
+      # `gather-records` prints one line per failed read (which read, the HTTP
+      # status, the message's first line — never the token), reads the
+      # login's own rate limit and waits until its reset plus ten seconds
+      # (two minutes when that read fails too), and reads again: at most three
+      # tries and twenty minutes, inside the job's 45. A read that never comes
+      # back exits 1 with "the repair could not read its attempt records after
+      # N tries: <reason>", so the run ends red for the medic and the alerts;
+      # the decide step still runs (`!cancelled()`) and answers
+      # records-unreadable, and every step that acts is gated on its go.
       - name: Gather repair attempt records
         env:
           GH_TOKEN: ${{ steps.app.outputs.token }}
         run: |
-          gh api "repos/${{ github.repository }}/git/matching-refs/heads/repair/" \
-            > /tmp/repair-refs.json 2>/dev/null || echo 'FETCH-FAILED' > /tmp/repair-refs.json
-          gh api "repos/${{ github.repository }}/pulls?state=all&per_page=100" \
-            > /tmp/repair-pulls.json 2>/dev/null || echo 'FETCH-FAILED' > /tmp/repair-pulls.json
+          python3 .bureau-pipeline/scripts/red_main_repair.py gather-records \
+            --repo "$GITHUB_REPOSITORY" \
+            --refs-out /tmp/repair-refs.json \
+            --pulls-out /tmp/repair-pulls.json
 
       # DRE-6526: is a record branch a fix the agent pushed and left? For each
-      # ref that IS an attempt at the failing sha — `record-refs` prints them,
-      # so the rule lives once, in the script — the comparison with the
-      # default branch, as `{"<ref>": {status, ahead_by} | null}`. A compare
-      # that fails is null for its ref and a file that will not parse is the
-      # FETCH-FAILED marker; the decide step reads either as "nothing known"
-      # and answers duplicate-event, never finish-unlanded. The ref names are
-      # `_sha_record_re` matches (`repair/`, `DRE-<n>`, hex, `-<n>`), so they
-      # need no escaping as JSON keys. Boot token, like the records step.
+      # ref that IS an attempt at the failing sha — `record_refs`, so the rule
+      # lives once, in the script — the comparison with the default branch,
+      # as `{"<ref>": {status, ahead_by} | null}`. A compare that never comes
+      # back is null for its ref; the decide step reads that as "nothing
+      # known" and answers duplicate-event, never finish-unlanded. The reads
+      # ride the same wait-and-retry as the records (DRE-6963), and the step
+      # runs after a failed records gather so the decision still answers —
+      # but with records unreadable it makes no call and no wait (the
+      # decision is records-unreadable whatever it would read), so the job
+      # waits out the limit once, not twice, inside its 45 minutes.
+      # Boot token, like the records step.
       - name: Gather repair branch comparisons (pushed and never opened?)
+        if: ${{ !cancelled() }}
         env:
           GH_TOKEN: ${{ steps.app.outputs.token }}
           HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
         run: |
-          REFS=$(python3 .bureau-pipeline/scripts/red_main_repair.py record-refs \
-            --refs-file /tmp/repair-refs.json --head-sha "$HEAD_SHA") || REFS=''
-          ENTRIES=''
-          for REF in $REFS; do
-            COMPARE=$(gh api "repos/$GITHUB_REPOSITORY/compare/$DEFAULT_BRANCH...$REF" \
-              --jq '{status: .status, ahead_by: .ahead_by}' 2>/dev/null) || COMPARE=''
-            ENTRIES="$ENTRIES${ENTRIES:+,}\"$REF\":${COMPARE:-null}"
-          done
-          printf '{%s}\n' "$ENTRIES" > /tmp/repair-compares.json
-          python3 -c 'import json, sys; json.load(open(sys.argv[1]))' /tmp/repair-compares.json \
-            2>/dev/null || echo 'FETCH-FAILED' > /tmp/repair-compares.json
-          echo "compared $(printf '%s\n' $REFS | grep -c . || true) repair branch(es) with $DEFAULT_BRANCH"
+          python3 .bureau-pipeline/scripts/red_main_repair.py gather-compares \
+            --repo "$GITHUB_REPOSITORY" \
+            --default-branch "$DEFAULT_BRANCH" \
+            --head-sha "$HEAD_SHA" \
+            --refs-file /tmp/repair-refs.json \
+            --pulls-file /tmp/repair-pulls.json \
+            --out /tmp/repair-compares.json
 
       # DRE-1996 discipline: head_branch is on the pinned-fields list (it is
       # only trusted here BECAUSE the job `if:` proved it equals the default
@@ -238,6 +252,8 @@ jobs:
       # never judged).
       - name: Decide — classify, debounce, budget (before any agent)
         id: decide
+        # DRE-6963: answers records-unreadable after a failed records gather.
+        if: ${{ !cancelled() }}
         env:
           CONCLUSION: ${{ github.event.workflow_run.conclusion }}
           HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
@@ -311,13 +327,24 @@ jobs:
           echo "Repair pull request for \`$BRANCH\` ($RESULT): $FINISHED_URL" >> "$GITHUB_STEP_SUMMARY"
 
       # Guardrail 2, budget exhausted: two attempts failed at this SHA —
-      # stop and raise a plain-English triage card for a human, never a
-      # third swing. find-open dedups: duplicate failure events for the same
-      # red main must not mint duplicate cards.
-      - name: Budget exhausted → triage card for a human
+      # stop and raise a plain-English CRITICAL console alert for a human,
+      # never a third swing (DRE-7454). It used to be a Triage card, filed in
+      # Planning and moved in a second write, in the lane DRE-2723 keeps for
+      # broken cards. The console holds one row per key, and that is the
+      # duplicate suppression while the alert is open: a duplicate failure
+      # event for the same red main is a `repeat`, refreshed in place and sent
+      # nowhere. The clear-notices job below closes the key when main is green
+      # again, so the next exhausted budget on this repo is a new alert.
+      #
+      # The client files today's card — same title, Triage, repo:<slug>,
+      # deduplicated on the exact title — only when the door cannot take the
+      # alert, so LINEAR_API_KEY stays for that fallback. An alert reaching
+      # neither is `lost` and fails the step for the medic.
+      - name: Budget exhausted → console alert for a human
         if: steps.decide.outputs.escalate == 'true'
         env:
           LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+          BUREAU_READ_URL: ${{ vars.BUREAU_READ_URL }}
           RUN_URL: ${{ github.event.workflow_run.html_url }}
           WF_NAME: ${{ github.event.workflow_run.name }}
           HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
@@ -329,44 +356,36 @@ jobs:
           TIMEOUT_LIMIT: ${{ steps.decide.outputs.timeout_limit }}
           TIMEOUT_COMMITS: ${{ steps.decide.outputs.timeout_commits }}
         run: |
-          # The repo this run is in — the repo whose main is red, and the slug
-          # its card must carry (DRE-2680). Same derivation plan.yml uses; this
-          # workflow is reusable, so a literal would file every fleet failure
-          # against one repo.
+          # The repo this run is in — the repo whose main is red, the <repo> of
+          # the notice key and the slug a fallback card must carry (DRE-2680).
+          # Same derivation plan.yml uses; this workflow is reusable, so a
+          # literal would file every fleet failure against one repo.
           REPO_SLUG=$(basename "$GITHUB_REPOSITORY" | tr '[:upper:]' '[:lower:]')
           TITLE="Red main needs a human — repair budget exhausted (${HEAD_SHA:0:7})"
-          # One sentence, composed once, for whichever of the two paths below
-          # runs — a card and a comment must not disagree about what broke.
           TIMEOUT_NOTE=""
           if [ -n "$TIMEOUT_STEP" ]; then
             TIMEOUT_NOTE="The clock, not a flake: the step \"$TIMEOUT_STEP\" of job \"$TIMEOUT_JOB\" ran past its limit (${TIMEOUT_LIMIT:-unstated}) on these commits: $TIMEOUT_COMMITS. Work that outgrew its time limit does not fix itself by waiting."
           fi
-          EXISTING=$(python3 .bureau-pipeline/scripts/linear_ops.py find-open "$TITLE" || true)
-          if [ -n "$EXISTING" ]; then
-            NOTE="🛑 Main is still red at this commit and the automated repair budget is spent. Latest failed run: $RUN_URL"
+          {
+            echo "The build on this repo's main branch is broken, and the automated repair agent could not fix it — both of its attempts failed, so it has deliberately stopped rather than keep swinging at the same wall."
+            echo ""
+            echo "What failed: $WF_NAME. Latest failed run: $RUN_URL"
             if [ -n "$TIMEOUT_NOTE" ]; then
-              NOTE=$(printf '%s\n\n%s' "$NOTE" "$TIMEOUT_NOTE")
+              echo ""
+              echo "$TIMEOUT_NOTE"
             fi
-            python3 .bureau-pipeline/scripts/linear_ops.py comment "$EXISTING" "$NOTE"
-          else
-            {
-              echo "The build on this repo's main branch is broken, and the automated repair agent could not fix it — both of its attempts failed, so it has deliberately stopped rather than keep swinging at the same wall."
-              echo ""
-              echo "What failed: $WF_NAME. Latest failed run: $RUN_URL"
-              if [ -n "$TIMEOUT_NOTE" ]; then
-                echo ""
-                echo "$TIMEOUT_NOTE"
-              fi
-              echo ""
-              echo "A human needs to look at this one. Until main is green again, the merge gate keeps holding new work, so this is the fleet's top blocker."
-            } > /tmp/repair-triage.md
-            # Triage explicitly, in this step (DRE-2858): `create` lands a card
-            # in Planning now, and this alert is not new work owing a
-            # classification — main is red, the robot is out of swings, and the
-            # card exists because something is already broken. Same shape as the
-            # repair-question escalation below, which has always said so itself.
-            CREATED=$(python3 .bureau-pipeline/scripts/linear_ops.py create "$TITLE" /tmp/repair-triage.md --repo "$REPO_SLUG" | grep -oE 'DRE-[0-9]+' | head -1 || true)
-            [ -n "$CREATED" ] && python3 .bureau-pipeline/scripts/linear_ops.py state "$CREATED" "Triage" || true
+            echo ""
+            echo "A human needs to look at this one. Until main is green again, the merge gate keeps holding new work, so this is the fleet's top blocker."
+          } > /tmp/repair-budget-notice.md
+          if ! python3 .bureau-pipeline/scripts/pipeline_notice.py raise \
+              --notice "red_main:$REPO_SLUG:budget_exhausted" --severity CRITICAL \
+              --title "Red main in $REPO_SLUG needs a human — repair budget exhausted (${HEAD_SHA:0:7})" \
+              --body-file /tmp/repair-budget-notice.md \
+              --action-url "$RUN_URL" --action-label "Open the failed run" \
+              --fallback-title "$TITLE" --fallback-lane "Triage" \
+              --fallback-label "repo:$REPO_SLUG"; then
+            echo "::error::the exhausted repair budget reached neither the console nor Linear — failing for medic visibility"
+            exit 1
           fi
 
       # ---- Dispatch-pool worker selection (guardrail 4, DRE-2013) ----
@@ -434,6 +453,30 @@ jobs:
              || steps.pool.outputs.n == '4' && secrets.BUREAU_APP_PRIVATE_KEY_4
              || secrets.BUREAU_APP_PRIVATE_KEY }}
 
+      # THE GITHUB-CALLS READING, first point (DRE-6918, epic DRE-6911). One
+      # point on each pool login's hourly meter after the job's mints, taken by
+      # `github_calls_reading.py` (DRE-6914) — two counted calls per login. Each
+      # INSTALLATION is named once: the boot bot and the selected worker (the
+      # same installation when the pool chose slot 1, which the script folds
+      # into one). The probe tokens are never named. A debounced run mints no
+      # worker, which renders '' and is no login. Tokens by NAME, never as
+      # arguments; `continue-on-error`, and the script exits 0 on every path.
+      - name: GitHub calls — the first point on each pool login
+        id: calls_before
+        continue-on-error: true
+        env:
+          CALLS_BOT_APP: ${{ steps.app.outputs.app-slug }}
+          CALLS_BOT_INSTALLATION: ${{ steps.app.outputs.installation-id }}
+          CALLS_BOT_TOKEN: ${{ steps.app.outputs.token }}
+          CALLS_WORKER_APP: ${{ steps.worker.outputs.app-slug }}
+          CALLS_WORKER_INSTALLATION: ${{ steps.worker.outputs.installation-id }}
+          CALLS_WORKER_TOKEN: ${{ steps.worker.outputs.token }}
+        run: |
+          python3 .bureau-pipeline/scripts/github_calls_reading.py before \
+            --out "${RUNNER_TEMP:-/tmp}/github-calls-before.json" \
+            --login "$CALLS_BOT_APP:$CALLS_BOT_INSTALLATION:CALLS_BOT_TOKEN" \
+            --login "$CALLS_WORKER_APP:$CALLS_WORKER_INSTALLATION:CALLS_WORKER_TOKEN"
+
       # ---- The repair's card, filed BEFORE the agent (DRE-3533) ----
       # Everything the board tracks has a card; repair PRs did not. The branch
       # this prints — repair/DRE-<n>-<sha12> — is what closes that card on
@@ -457,7 +500,7 @@ jobs:
           FALLBACK: ${{ steps.decide.outputs.branch }}
         run: |
           # The repo this run is in — the slug its card must carry (DRE-2680),
-          # same derivation as the two escalation cards above. This workflow is
+          # same derivation as the budget-exhausted alert above. This workflow is
           # reusable, so a literal would file every fleet repair against one
           # repo.
           REPO_SLUG=$(basename "$GITHUB_REPOSITORY" | tr '[:upper:]' '[:lower:]')
@@ -467,6 +510,7 @@ jobs:
             --workflow-name "$WF_NAME" \
             --run-url "$RUN_URL" \
             --attempt "$ATTEMPT" \
+            --log-file /tmp/red-main-log.txt \
             --fallback-branch "$FALLBACK" >> "$GITHUB_OUTPUT"
 
       # Product-specific environment setup (submodules, toolchains, test DB).
@@ -481,6 +525,25 @@ jobs:
             echo "no .github/bureau/setup.sh — skipping product setup"
           fi
 
+      # The model home (DRE-6939) is a variable on
+      # dreadnought-foundry/bureau-pipeline, which a run's boot token in another
+      # organization cannot read. A token for the bureau App's installation
+      # there, for bureau-pipeline alone and with no permission subset — the
+      # pinned action declares no variables input (DRE-7230) — handed only to
+      # the steps below whose process reads the home
+      # (DRE-6940, held by scripts/check_model_home_scope.py). A refused mint
+      # leaves it empty and the selector on the defaults in the code — never a
+      # failed job.
+      - name: Mint the model-home read token
+        id: model_home
+        if: steps.decide.outputs.go == 'true'
+        continue-on-error: true
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: ${{ secrets.BUREAU_APP_ID }}
+          private-key: ${{ secrets.BUREAU_APP_PRIVATE_KEY }}
+          owner: dreadnought-foundry
+          repositories: bureau-pipeline
       # The ladder with runtime availability detection (DRE-1490), resolved for
       # the `repairer` agent from config/models.yaml (DRE-2316) — it is an
       # engineer-tier fixer, so that config puts it on the workhorse ladder.
@@ -490,6 +553,7 @@ jobs:
         id: model
         if: steps.decide.outputs.go == 'true'
         env:
+          BUREAU_MODEL_HOME_TOKEN: ${{ steps.model_home.outputs.token }}
           ANTHROPIC_API_KEY: ${{ vars.CLAUDE_AUTH_MODE != 'subscription' && secrets.ANTHROPIC_API_KEY || '' }}
           CLAUDE_CODE_OAUTH_TOKEN: ${{ vars.CLAUDE_AUTH_MODE == 'subscription' && secrets.CLAUDE_CODE_OAUTH_TOKEN || '' }}
         run: |
@@ -692,15 +756,37 @@ jobs:
                question (business terms, no code/diffs/file paths) to
                /tmp/repair-escalation.txt and stop — the workflow files it
                for a human decision.
+            7. STOP instead (open NO PR, push NOTHING) when the fault is
+               already gone from the default branch: a later commit on
+               origin/${{ github.event.repository.default_branch }} is green
+               on this workflow, or the fix has already merged. Write ONE
+               line naming the fix (its PR or commit) to
+               /tmp/repair-superseded.txt and stop. The workflow checks the
+               record for a later green run before it believes you; without
+               one the run fails as if you had died, so write this only
+               when main has truly moved past the fault.
 
       # No PR and no escalation = the agent died silently. Fail loudly so
       # the run goes red and the EXISTING medic diagnoses it — repair never
       # watches itself (guardrail 2: no new retry loop anywhere).
+      #
+      # DRE-5700: the third ending. An agent that finds the fault already
+      # gone writes /tmp/repair-superseded.txt and opens nothing; a dead one
+      # writes no file. The note is not believed: the step re-gathers the run
+      # listing (the same call as "Gather repair history", on its own file)
+      # and asks the decide step's superseded rule again through
+      # `red_main_repair.py superseded`. A later green run ends the job green
+      # with no card and no comment — the repair card is `settle`'s to close.
+      # No such run, or a listing nobody could read, fails as before. On
+      # 2026-10-03 run 37092915226's agent rightly opened nothing and this
+      # step failed it 41 seconds after main went green on 44eb259.
       - name: Report
         if: always() && steps.decide.outputs.go == 'true'
         env:
           GH_TOKEN: ${{ steps.worker.outputs.token }}
           LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+          # DRE-7454: the escalation is a console alert, raised through the door.
+          BUREAU_READ_URL: ${{ vars.BUREAU_READ_URL }}
           RUN_URL: ${{ github.event.workflow_run.html_url }}
           WF_NAME: ${{ github.event.workflow_run.name }}
           # The branch the agent was SENT to — the card's, when one was filed
@@ -711,6 +797,17 @@ jobs:
           # card from the branch, or says it is owed (DRE-6525).
           CARD_URL: ${{ steps.card.outputs.card_url }}
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          # DRE-5700: the superseded exit's re-gather, with the env the
+          # "Gather repair history" step hands the same call. Its token is
+          # github.token (actions:read, which the App lacks — DRE-1346);
+          # GH_TOKEN above stays the worker's for the pull request reads.
+          HISTORY_GH_TOKEN: ${{ github.token }}
+          WORKFLOW_ID: ${{ github.event.workflow_run.workflow_id }}
+          RUN_ID: ${{ github.event.workflow_run.id }}
+          RUN_ATTEMPT: ${{ github.event.workflow_run.run_attempt }}
+          RUN_CREATED_AT: ${{ github.event.workflow_run.created_at }}
+          WORKFLOW_PATH: ${{ github.event.workflow_run.path }}
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
         run: |
           # Shared predicate (DRE-2316): `gh pr list` defaults to --state open,
           # so a repair PR that merged before this step ran read as "no PR" and
@@ -723,16 +820,17 @@ jobs:
             echo "repair PR opened: $PR_URL — the critic and the merge gate own it from here (author ≠ merger)."
           elif [ -f /tmp/repair-escalation.txt ] && [ -s /tmp/repair-escalation.txt ]; then
             # Escalate-by-exception: the agent paused rather than guess on
-            # main. File the question as a card parked in Triage (the lane for
-            # a card that went wrong — DRE-2722/2723), deduped by exact title.
-            # Triage and not Green Light, which DRE-2776 made the queue for a
-            # card waiting on a JUDGEMENT: the subject here is a broken default
-            # branch, and the card exists because something is already wrong.
-            # The repo this run is in, same derivation as the budget-exhausted
-            # card above (DRE-2680) — the slug this card must carry.
+            # main. Raised as a CRITICAL console alert (DRE-7454), never a
+            # Triage card: the card used to land in the lane DRE-2723 keeps
+            # for broken cards, and every one of these filed in the 30 days to
+            # 2026-10-16 ended Canceled. One row per key is the duplicate
+            # suppression while it is open; clear-notices closes it when main
+            # is green again. The client cuts a long escalation to fit, and
+            # files today's card — same title, Triage, repo:<slug> — only when
+            # the door cannot take it. The repo slug is the same derivation as
+            # the budget-exhausted step above (DRE-2680).
             REPO_SLUG=$(basename "$GITHUB_REPOSITORY" | tr '[:upper:]' '[:lower:]')
             TITLE="Red main needs a decision — $WF_NAME failing on the default branch"
-            EXISTING=$(python3 .bureau-pipeline/scripts/linear_ops.py find-open "$TITLE" || true)
             {
               echo "🙋 The repair agent looked at the broken main build and paused rather than guess — it judged this needs a human call."
               echo ""
@@ -740,11 +838,15 @@ jobs:
               echo ""
               echo "Failed run: $RUN_URL"
             } > /tmp/repair-question.md
-            if [ -n "$EXISTING" ]; then
-              python3 .bureau-pipeline/scripts/linear_ops.py comment "$EXISTING" "$(cat /tmp/repair-question.md)"
-            else
-              CREATED=$(python3 .bureau-pipeline/scripts/linear_ops.py create "$TITLE" /tmp/repair-question.md --repo "$REPO_SLUG" | grep -oE 'DRE-[0-9]+' | head -1 || true)
-              [ -n "$CREATED" ] && python3 .bureau-pipeline/scripts/linear_ops.py state "$CREATED" "Triage" || true
+            if ! python3 .bureau-pipeline/scripts/pipeline_notice.py raise \
+                --notice "red_main:$REPO_SLUG:needs_decision" --severity CRITICAL \
+                --title "Red main in $REPO_SLUG needs a decision — $WF_NAME failing on the default branch" \
+                --body-file /tmp/repair-question.md \
+                --action-url "$RUN_URL" --action-label "Open the failed run" \
+                --fallback-title "$TITLE" --fallback-lane "Triage" \
+                --fallback-label "repo:$REPO_SLUG"; then
+              echo "::error::the repair agent's question reached neither the console nor Linear — failing for medic visibility"
+              exit 1
             fi
           elif FINISH=$(python3 .bureau-pipeline/scripts/repair_finish.py finish \
               --repo "$GITHUB_REPOSITORY" --branch "$BRANCH" \
@@ -761,6 +863,32 @@ jobs:
             # it could not make) falls through to the medic's error below.
             FINISHED_URL=$(printf '%s\n' "$FINISH" | sed -n 's/^pr_url=//p' | head -1)
             echo "repair PR opened by the workflow from $BRANCH: $FINISHED_URL — the critic and the merge gate own it from here (author ≠ merger)."
+          elif [ -f /tmp/repair-superseded.txt ] && [ -s /tmp/repair-superseded.txt ]; then
+            # The agent says the fault is already gone (DRE-5700). Its first
+            # line only, printed after a prefix so it can never start a
+            # workflow command. The rule is the script's, never this shell's.
+            CLAIM=$(head -n 1 /tmp/repair-superseded.txt | tr -d '\r' | cut -c1-300)
+            rm -f /tmp/repair-history-report.json
+            GH_TOKEN="$HISTORY_GH_TOKEN" python3 .bureau-pipeline/scripts/repair_history.py gather \
+              --repo "$GITHUB_REPOSITORY" \
+              --workflow-id "$WORKFLOW_ID" \
+              --run-id "$RUN_ID" \
+              --run-attempt "$RUN_ATTEMPT" \
+              --run-created-at "$RUN_CREATED_AT" \
+              --branch "$DEFAULT_BRANCH" \
+              --workflow-path "$WORKFLOW_PATH" \
+              --head-sha "$HEAD_SHA" \
+              --current-log /tmp/red-main-log.txt \
+              --out /tmp/repair-history-report.json || true
+            if GREEN_RUN=$(python3 .bureau-pipeline/scripts/red_main_repair.py superseded \
+                --history-file /tmp/repair-history-report.json); then
+              GREEN_URL="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GREEN_RUN"
+              echo "superseded: run $GREEN_RUN of this workflow went green on a later commit of the default branch ($GREEN_URL) — the agent: $CLAIM — no PR, no card."
+              echo "Superseded by [run $GREEN_RUN]($GREEN_URL) while the repair agent worked — the agent: $CLAIM" >> "$GITHUB_STEP_SUMMARY"
+            else
+              echo "::error::the repair agent claimed the fault was superseded ($CLAIM), and the record shows no later green run of this workflow on the default branch — failing for medic visibility"
+              exit 1
+            fi
           else
             echo "::error::repair agent produced neither a PR nor an escalation — failing for medic visibility"
             exit 1
@@ -797,7 +925,7 @@ jobs:
           CARD: ${{ steps.card.outputs.card }}
           CLAUDE_AUTH_MODE: ${{ vars.CLAUDE_AUTH_MODE }}
         run: |
-          EXEC_FILE="${CLAUDE_EXECUTION_FILE:-/home/runner/work/_temp/claude-execution-output.json}"
+          EXEC_FILE="${CLAUDE_EXECUTION_FILE:-${RUNNER_TEMP:-/tmp}/claude-execution-output.json}"
           python3 .bureau-pipeline/scripts/death_receipt.py emit \
             --execution-file "$EXEC_FILE" \
             --out "${RUNNER_TEMP:-/tmp}/death-receipt.json" \
@@ -816,6 +944,32 @@ jobs:
           path: ${{ steps.death.outputs.path }}
           if-no-files-found: warn
           retention-days: 90
+
+      # The second point on each login, the document, and its upload — one
+      # `github-calls:` line per login (DRE-6914). Each token is its
+      # installation's only mint, and the job's 45 minutes are inside the
+      # token's hour. The worker is handed first, so where the pool chose slot
+      # 1 the one installation is read on the newer token. `always()` +
+      # `continue-on-error`: the Report's red above stays the medic's signal.
+      - name: GitHub calls — the second point and the reading
+        id: calls
+        if: always()
+        continue-on-error: true
+        env:
+          CALLS_WORKER_APP: ${{ steps.worker.outputs.app-slug }}
+          CALLS_WORKER_INSTALLATION: ${{ steps.worker.outputs.installation-id }}
+          CALLS_WORKER_TOKEN: ${{ steps.worker.outputs.token }}
+          CALLS_BOT_APP: ${{ steps.app.outputs.app-slug }}
+          CALLS_BOT_INSTALLATION: ${{ steps.app.outputs.installation-id }}
+          CALLS_BOT_TOKEN: ${{ steps.app.outputs.token }}
+        run: |
+          python3 .bureau-pipeline/scripts/github_calls_reading.py emit \
+            --before "${RUNNER_TEMP:-/tmp}/github-calls-before.json" \
+            --out "${RUNNER_TEMP:-/tmp}/github-calls-reading.json" \
+            --workflow red-main-repair.yml \
+            --login "$CALLS_WORKER_APP:$CALLS_WORKER_INSTALLATION:CALLS_WORKER_TOKEN" \
+            --login "$CALLS_BOT_APP:$CALLS_BOT_INSTALLATION:CALLS_BOT_TOKEN" \
+            --github-output "$GITHUB_OUTPUT"
 
       # THE RUN'S WORKING LOG (DRE-5353, after DRE-4269). The repair agent's
       # transcript, scrubbed and put straight into our own store over OIDC —
@@ -871,3 +1025,108 @@ jobs:
           python3 .bureau-pipeline/scripts/upload_agent_log.py \
               --secrets-env-prefix SCRUB_ \
               --log-file "$EXEC_FILE" $EFFORT_ARG || true
+
+  # THE ALL-CLEAR (DRE-7454). The repair job raises two CRITICAL console
+  # alerts, and this job is what closes them: `red_main:<repo>:budget_exhausted`
+  # and `red_main:<repo>:needs_decision`, each resolved with the all-clear copy
+  # ("Main is green again in <repo>"), which is emailed like the alert was.
+  # Closing them is what makes the next exhausted budget on this repo a new
+  # alert and a new email rather than a silent repeat.
+  #
+  # Same trigger as the repair job, the other conclusion: a watched workflow's
+  # run that concluded `success` on the default branch. About one short job per
+  # merge per watched workflow; on any other branch it is skipped. It goes on
+  # only when every run on that commit is done and none is red
+  # (`red_main_clear.py decide`), so a green run of one workflow beside a red or
+  # unfinished one sends no false all-clear — the last to finish green sends
+  # it — and only while that commit is still the default branch's tip, so a
+  # late or re-run green run on an older commit cannot clear a newer red. A
+  # key that is not open answers `not-open` and sends nothing, so a green run
+  # after a quiet main says nothing to anyone.
+  #
+  # Premortem (standards/vendor-boundaries.md). Q1 actor: whoever produced the
+  # green run; no bot gate is involved, nothing here runs a model. Q2 secrets:
+  # none. The job holds no Linear secret because a resolve never falls back to
+  # a card, and its token is an OIDC token for the door plus github.token for
+  # the listing and the tip. Q3 retry: a re-run resolves again and the door
+  # answers `not-open`, and a second green run of another workflow does the
+  # same.
+  # Q4 limits: `gh run list` reads at most 200 runs on one commit. Q5 our own
+  # crash: a listing or a tip that cannot be read is a stop, and the next
+  # green run tries again. A missed all-clear costs one run; a false one lies.
+  #
+  # Unlike the repair job this job declares `permissions:` — exactly what it
+  # uses, and less than every red-main stub grants (actions: read,
+  # id-token: write, contents: write), so a called job never asks for more
+  # than its caller gave.
+  clear-notices:
+    if: >
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.head_branch == github.event.repository.default_branch
+    runs-on: ${{ fromJSON(vars.BUREAU_RUNS_ON || '["ubuntu-latest"]') }}
+    timeout-minutes: 10
+    permissions:
+      id-token: write
+      contents: read
+      actions: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: dreadnought-foundry/bureau-pipeline
+          ref: ${{ inputs.pipeline_ref || 'main' }}
+          path: .bureau-pipeline
+
+      # Every run on the green commit, read with github.token (actions: read,
+      # which the stub grants). A listing that cannot be read is written as a
+      # marker the decision reads as a stop. This job's own run, and every run
+      # started by `workflow_run` (this rail, the medic), do not judge the
+      # commit and are not waited on — red_main_clear.py says why. The commit
+      # must still be the default branch's tip: a late or re-run green run on
+      # an older main commit says nothing about the newest one, so a moved tip
+      # is a stop, and so is a tip that cannot be read.
+      - name: Is every run on this commit green?
+        id: green
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          if ! gh run list --repo "$GITHUB_REPOSITORY" --commit "$HEAD_SHA" --limit 200 \
+              --json databaseId,workflowName,status,conclusion,event \
+              > /tmp/red-main-commit-runs.json; then
+            echo "the runs on ${HEAD_SHA:0:7} could not be listed — no all-clear this time"
+            echo "unreadable" > /tmp/red-main-commit-runs.json
+          fi
+          if ! TIP_SHA=$(gh api "repos/$GITHUB_REPOSITORY/commits/$DEFAULT_BRANCH" --jq .sha); then
+            echo "the tip of $DEFAULT_BRANCH could not be read — no all-clear this time"
+            TIP_SHA=""
+          fi
+          python3 .bureau-pipeline/scripts/red_main_clear.py decide \
+            --runs-file /tmp/red-main-commit-runs.json \
+            --self-run-id "$GITHUB_RUN_ID" \
+            --head-sha "$HEAD_SHA" --tip-sha "$TIP_SHA" >> "$GITHUB_OUTPUT"
+
+      # The contract's red-main all-clear copy: the green run's workflow name,
+      # the time it completed in PT, and its URL. A resolve the door refuses is
+      # logged as resolve-refused and the step stays green — the key stays open
+      # until the next green run, and nothing is filed in its place.
+      - name: Main is green → close the red-main alerts
+        if: steps.green.outputs.go == 'true'
+        env:
+          BUREAU_READ_URL: ${{ vars.BUREAU_READ_URL }}
+          WF_NAME: ${{ github.event.workflow_run.name }}
+          RUN_URL: ${{ github.event.workflow_run.html_url }}
+          RUN_UPDATED_AT: ${{ github.event.workflow_run.updated_at }}
+        run: |
+          REPO_SLUG=$(basename "$GITHUB_REPOSITORY" | tr '[:upper:]' '[:lower:]')
+          python3 .bureau-pipeline/scripts/red_main_clear.py recovery-body \
+            --workflow-name "$WF_NAME" --repo "$REPO_SLUG" --run-url "$RUN_URL" \
+            --at "$RUN_UPDATED_AT" --out /tmp/red-main-recovery.md
+          python3 .bureau-pipeline/scripts/pipeline_notice.py resolve \
+            --notice "red_main:$REPO_SLUG:budget_exhausted" \
+            --recovery-title "Main is green again in $REPO_SLUG" \
+            --recovery-body-file /tmp/red-main-recovery.md
+          python3 .bureau-pipeline/scripts/pipeline_notice.py resolve \
+            --notice "red_main:$REPO_SLUG:needs_decision" \
+            --recovery-title "Main is green again in $REPO_SLUG" \
+            --recovery-body-file /tmp/red-main-recovery.md
