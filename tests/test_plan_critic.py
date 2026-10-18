@@ -2371,7 +2371,7 @@ class TheOneOffCriticIsTheExistingCritic(unittest.TestCase):
         self.assertTrue(record.startswith(pc.MARKER_PREFIX))
         self.assertEqual([{"stage": pc.STAGE_ONE_OFF, "round": 1,
                            "result": pc.PASS, "collisions": 0, "open": None,
-                           "reason": ""}],
+                           "run": None, "reason": ""}],
                          pc.parse_markers([record]))
         for forbidden in ("VERDICT:", "QA Critic", "QA Verifier"):
             self.assertNotIn(forbidden, pc.charter(pc.STAGE_ONE_OFF))
@@ -2788,16 +2788,29 @@ class TheCli(unittest.TestCase):
         critic step died, so there is no result file at all. The step output
         the run branches on must say `escalate`, and the reason file the
         escalation exit reads must exist — a card that stops here with neither
-        is the silent pass this gate exists to remove."""
-        gho = os.path.join(self.tmp, "out")
-        why = os.path.join(self.tmp, "why.txt")
-        out = self._run("decide", "--stage", pc.STAGE_ONE_OFF,
-                        "--epic", "DRE-3018",
-                        "--result-file", os.path.join(self.tmp, "gone.md"),
-                        "--github-output", gho, "--escalation-file", why,
-                        stdin=json.dumps([]))
-        self.assertEqual(out.returncode, 0, out.stderr)
-        written = open(gho).read()
+        is the silent pass this gate exists to remove.
+
+        Since DRE-7491 the first such read is read again (`rerun`, no reason
+        file) and only the second in a row escalates, so the escalation is
+        asserted on the second: the newest one-off record is a no-result."""
+        def decide(thread, name):
+            gho = os.path.join(self.tmp, f"{name}.out")
+            why = os.path.join(self.tmp, f"{name}.why.txt")
+            out = self._run("decide", "--stage", pc.STAGE_ONE_OFF,
+                            "--epic", "DRE-3018",
+                            "--result-file", os.path.join(self.tmp, "gone.md"),
+                            "--github-output", gho, "--escalation-file", why,
+                            stdin=json.dumps(thread))
+            self.assertEqual(out.returncode, 0, out.stderr)
+            return open(gho).read(), why
+
+        written, why = decide([], "first")
+        self.assertIn("action=rerun", written)
+        self.assertIn("result=NO_RESULT", written)
+        self.assertFalse(os.path.exists(why) and open(why).read().strip())
+
+        written, why = decide(
+            [ours(pc.marker(pc.STAGE_ONE_OFF, 1, pc.NO_RESULT))], "second")
         self.assertIn("action=escalate", written)
         self.assertIn("result=NO_RESULT", written)
         self.assertTrue(os.path.exists(why))
