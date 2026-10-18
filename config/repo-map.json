@@ -5,6 +5,5 @@
   "agent-bureau-demo": "dreadnought-foundry/agent-bureau-demo",
   "bureau-pipeline": "dreadnought-foundry/bureau-pipeline",
   "portico": "dreadnought-foundry/portico",
-  "foundry": "dreadnought-foundry/foundry",
-  "onboard-sandbox": "dreadnought-foundry/onboard-sandbox"
+  "foundry": "dreadnought-foundry/foundry"
 }
