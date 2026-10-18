@@ -341,5 +341,57 @@ def test_report_and_result_gate_keep_always():
         assert "always()" in str(_step(name).get("if", ""))
 
 
+# --- the planner's guard hands a one-off back as a build (DRE-7110) ----------
+#
+# The CLI half — the reads, the receipt, the one fire — is driven end to end in
+# tests/test_plan_gate_hands_back_build.py. These pin the pure core.
+
+
+@pytest.mark.parametrize("title, children, shape, expected", [
+    ("Fix the widget", False, "one-off", True),
+    ("Fix the widget", False, "One-Off", True),
+    ("Fix the widget", True, "one-off", False),
+    ("Fix the widget", False, "epic", False),
+    ("Fix the widget", False, "roll-up", False),
+    ("Fix the widget", False, None, False),
+    ("[EPIC] Fix the widget", False, None, False),
+])
+def test_only_a_stamped_one_off_with_no_children_is_a_build(title, children,
+                                                            shape, expected):
+    assert dedupe_dispatch.stamped_one_off(title, children, shape) is expected
+
+
+def test_plan_decide_hands_back_a_one_off_fired_for_in_progress():
+    d = dedupe_dispatch.plan_decide("DRE-1", "in progress", "In Progress", [], one_off=True)
+    assert d.skip is True
+    assert d.hand_back is True
+    assert d.reason == (
+        "DRE-1 is a one-off, not an epic — its move into In Progress was sent "
+        "to the planner; handed back as a build")
+
+
+def test_plan_decide_without_a_one_off_is_todays_decision():
+    d = dedupe_dispatch.plan_decide("DRE-1", "in progress", "In Progress", [])
+    assert (d.skip, d.hand_back) == (False, False)
+
+
+@pytest.mark.parametrize("trigger, lane", [
+    ("planning", "Planning"), ("green light", "Green Light"),
+    ("triage", "Triage"),
+])
+def test_plan_decide_hands_back_nothing_fired_for_another_lane(trigger, lane):
+    d = dedupe_dispatch.plan_decide("DRE-1", trigger, lane, [], one_off=True)
+    assert (d.skip, d.hand_back) == (False, False)
+
+
+def test_a_planner_run_in_flight_is_still_the_duplicate_not_a_hand_back():
+    """Two dispatches for one move: the first hands back, the second is its
+    duplicate and fires nothing."""
+    d = dedupe_dispatch.plan_decide("DRE-1", "in progress", "In Progress",
+                       [{"id": "7"}], one_off=True)
+    assert d.skip is True
+    assert d.hand_back is False
+
+
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__, "-q"]))
