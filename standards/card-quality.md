@@ -321,9 +321,9 @@ this before they start doing the work so we don't have to get stuck like this."
 
 - **Where the list goes.** It goes in whatever he already says yes to before
   anything runs:
-  - an epic's plan, for an epic;
-  - the card's own question, for a card that escalates;
-  - the plan, for a proof's operator steps.
+  - an epic's plan, for an epic and for the operator steps its PROOF card
+    reads;
+  - the card's own question, for a card that escalates.
 
   Each step is named in plain words: what it does, where, and in whose name.
 - **His yes covers every step on the list.** It is recorded on the card with
