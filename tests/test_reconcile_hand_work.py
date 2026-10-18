@@ -12,8 +12,8 @@ WHAT IS UNDER TEST:
     WORKBENCH card to Hand-work, marks first, one advance, the receipt
     `🧹 Auto-promoted Backlog → Hand-work: …`, no WIP slot; OPERATOR marked
     `operator-step` and `no-code`, WORKBENCH marked nothing, and neither ever
-    `hand-built`, the CEO's own mark (DRE-6227); FLEET still to Todo,
-    spending a slot.
+    `hand-built`, the CEO's own mark (DRE-6227); FLEET to In Progress since
+    the flip (DRE-7120), spending a slot.
   * Hand-work is watched, never nudged: in `WATCHDOG_LANES` and
     `HAND_BUILT_REVIEW_LANES`, not in `SWEEP_STATES`. A hand-built card there
     with no pull request is left alone by the nudge loop and by
@@ -145,16 +145,17 @@ class TestThePromoterReadsTheDestination:
         assert board.lane_of("DRE-3385") == HAND_WORK
         assert "budget spent" not in capsys.readouterr().out
 
-    def test_fleet_still_goes_to_todo_and_spends_a_slot(self):
+    def test_fleet_goes_to_in_progress_and_spends_a_slot(self):
         with mock.patch.object(reconcile, "MAX_WIP", 1):
             board = promo._Board(
                 promo._card(identifier="DRE-1", comments=[promo.FLEET]),
                 promo._card(identifier="DRE-2", comments=[promo.FLEET]),
             )
             assert board.promote(active_count=0) == 1
-        assert board.lane_of("DRE-1") == "Todo"
+        assert board.lane_of("DRE-1") == "In Progress"
         assert board.lane_of("DRE-2") == "Backlog"
-        assert board.receipt_for("DRE-1").startswith("🧹 Auto-promoted Queued → Todo: ")
+        assert board.receipt_for("DRE-1").startswith(
+            "🧹 Auto-promoted Queued → In Progress: ")
 
     def test_the_lane_is_never_spelled_in_the_promoter(self):
         import inspect
@@ -339,7 +340,7 @@ class TestTheRegistries:
         assert pipeline_act.main(["check"]) == 0
 
     def test_reconcile_may_write_both_lanes_it_promotes_into(self):
-        for lane in ("Todo", HAND_WORK):
+        for lane in ("In Progress", HAND_WORK):
             assert "reconcile.py" in lane_contract.lane_writers(lane)
 
     def test_the_ready_lane_writer_check_passes(self):
@@ -353,4 +354,4 @@ class TestTheRegistries:
         assert problems == [], "\n".join(problems)
         promoted = {w.lane for w in ready_lane_writers.writes()
                     if w.writer == "reconcile.py" and "destination" in w.expression}
-        assert {"Todo", HAND_WORK} <= promoted, promoted
+        assert {"In Progress", HAND_WORK} <= promoted, promoted

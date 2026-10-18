@@ -318,7 +318,8 @@ class TestTheLaneContract:
         ("Hand-work", "writers", "text"),
         ("Hand-work", "evidence", "text"),
         ("Queued", "exit", "text"),
-        ("Todo", "entrance", "pending"),
+        # Todo's entrance stopped naming the marks at the flip (DRE-7120): no
+        # verdict promotes into Todo, so it no longer says where OPERATOR goes.
         ("Todo", "exit", "text"),
         ("Todo", "evidence", "text"),
     ])

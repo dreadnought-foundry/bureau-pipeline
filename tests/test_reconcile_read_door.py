@@ -186,7 +186,7 @@ def door_at(monkeypatch, *door_cards, mode="on", repository="dreadnought-foundry
 
 
 def _advanced(linear):
-    return [w[1] for w in linear.writes if w[0] == "advance" and w[2] == "Todo"]
+    return [w[1] for w in linear.writes if w[0] == "advance" and w[2] == "In Progress"]
 
 
 def _backlog_reads(linear):

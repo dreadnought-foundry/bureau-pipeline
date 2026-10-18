@@ -63,6 +63,7 @@ os.environ.setdefault("REPO_SLUG", "agent-bureau")
 os.environ.setdefault("GH_TOKEN", "x")
 
 import epic_cap  # noqa: E402
+import lane_contract  # noqa: E402
 import pipeline_notice  # noqa: E402
 import reconcile  # noqa: E402
 from test_intake_no_age_out import THIRTY_DAYS, _main_mocks  # noqa: E402
@@ -124,8 +125,13 @@ def _drain_card():
 
 
 def _limit_card():
-    """An UNLABELLED card whose newest limit-death marker's reset has passed."""
-    return limit_card(ident="DRE-3171", lane="In Progress", labels=(),
+    """An UNLABELLED card whose newest limit-death marker's reset has passed,
+    in the start lane the dispatch lane replaces — one promoted before the
+    flip. Off `lane_contract.START_LANE`, so the recovery's write is the move
+    into it, not a re-dispatch in place (DRE-7120)."""
+    replaced = next(lane for lane in lane_contract.START_LANES
+                    if lane != lane_contract.START_LANE)
+    return limit_card(ident="DRE-3171", lane=replaced, labels=(),
                       bodies=[marker(reset=datetime(2026, 1, 1, tzinfo=UTC))])
 
 
