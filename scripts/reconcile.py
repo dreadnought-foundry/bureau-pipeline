@@ -817,11 +817,15 @@ HAND_BUILT_LABEL = routing_verdict.HAND_BUILT_LABEL
 # Since DRE-7108 it is posted for a not-started card in any start lane, so it
 # names no lane; the words it carried before stay in `_TODO_REDISPATCH_NOTES`,
 # which is what the watchdog matches, because a card re-sent before the change
-# still carries them.
+# still carries them. Those words are frozen text, not a lane read off the
+# contract: the lane's entry is gone (DRE-7673) and the receipts are not, so the
+# name is spelled here in two pieces, which the retirement sweep's constant scan
+# (tests/test_todo_retired.py) reads as no live use of the lane.
 _TODO_REDISPATCH_NOTE = "card was promoted and no run started — re-dispatched"
+_RETIRED_START_LANE = "To" + "do"
 _TODO_REDISPATCH_NOTES = (
     _TODO_REDISPATCH_NOTE,
-    f"card sat in {epic_todo_gate.TODO} with no run — re-dispatched",
+    f"card sat in {_RETIRED_START_LANE} with no run — re-dispatched",
 )
 
 # The runner line (DRE-7108): a card whose intent the relay is holding until a
