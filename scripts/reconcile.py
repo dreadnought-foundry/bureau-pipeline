@@ -11097,7 +11097,15 @@ def fix_approved_but_red() -> None:
     its run's fail-fast after a sibling failed (DRE-6780): it is dropped, and
     the run is red on the failures beside it. And a canceled check whose log
     already shows a failed test (DRE-7018) is a failure, sent the fix agent
-    through the same gates as any red check."""
+    through the same gates as any red check.
+
+    DRE-7617: among the pull requests that pass every guard, the one dispatch
+    goes to the one red longest — the oldest `_red_since` time. Walking the
+    listing and taking the first, newest first, let a stream of newer red
+    pull requests take every free pass (agent-bureau #3953 waited an hour
+    behind #3955 and #3956 on 2026-10-18). A tie keeps listing order, and a
+    time that cannot be read sorts after every readable one, in listing
+    order: it cannot show it has waited, and it is never dropped for that."""
     import proof_dispatch  # noqa: PLC0415 — proof_dispatch imports this module
 
     # Unreadable answers BUSY (gh_actions_read): the App token 403s on this
@@ -11109,6 +11117,7 @@ def fix_approved_but_red() -> None:
         "pr", "list", "--repo", REPO, "--state", "open", "--limit", "30",
         "--json", "number,headRefName,headRefOid,mergeStateStatus,comments",
     ) or "[]")
+    eligible: list[tuple[dict, list, list, datetime | None]] = []
     for pr in prs:
         if not card_branch(pr["headRefName"]) or pr.get("mergeStateStatus") == "DIRTY":
             continue
@@ -11158,18 +11167,44 @@ def fix_approved_but_red() -> None:
         # A proof record red on a check is the fix agent's (DRE-6571); on
         # any other branch this is [] and nothing below changes.
         red = proof_dispatch.record_red_checks(pr, runs)
+        eligible.append((pr, failed, red, _red_since(split.red)))
+    # DRE-7617: longest red first. `sorted` is stable, so a tie and every
+    # unreadable time keep listing order. The guards below read Linear or
+    # post, so they are asked in this order and stop at the first dispatch.
+    eligible.sort(key=lambda e: (e[3] is None, e[3] or datetime.min.replace(tzinfo=UTC)))
+    for pr, failed, red, since in eligible:
         if fix_dispatch_blocked(pr, red_checks=red):
             continue  # human-parked card (DRE-2024) — the loop is over
         if fix_agent_absent_hold(pr):
             return  # no fix agent in this repo — a person is told once (DRE-4378)
         if red and not _record_red_untold(pr, red):
             continue
-        print(f"approved-but-red: PR #{pr['number']} has APPROVE + {len(failed)} failed check(s) — dispatching fix agent")
+        waited = "" if since is None else (
+            f", red for {int((datetime.now(UTC) - since).total_seconds() // 60)} min")
+        print(f"approved-but-red: PR #{pr['number']} has APPROVE + {len(failed)} "
+              f"failed check(s){waited} — dispatching fix agent")
         gh_dispatch("workflow", "run", fix_workflow(), "--repo", REPO,
                     "-f", f"pr_number={pr['number']}")
         if red:
             _tell_record_red(pr, red)
         return  # one dispatch per sweep; the busy-guard handles the rest
+
+
+def _red_since(checks) -> datetime | None:
+    """When a head went red (DRE-7617): the latest `completed_at` among its
+    failed check runs, the ones `fix_approved_but_red` already read. None when
+    there is none, or any one of them carries no time or one that will not
+    parse — the latest cannot be known then, and the caller orders it last."""
+    latest = None
+    for check in checks or ():
+        try:
+            at = datetime.fromisoformat(str(check.get("completed_at") or "").replace("Z", "+00:00"))
+        except ValueError:
+            return None
+        if at.tzinfo is None:
+            return None
+        latest = at if latest is None or at > latest else latest
+    return latest
 
 
 WORKER_BOT_LOGIN = "agent-bureau-bot"
