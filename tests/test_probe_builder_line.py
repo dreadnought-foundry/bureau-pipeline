@@ -12,9 +12,10 @@ What this file pins:
 * `probe-build-model` prints the line's model for the worker App's two login
   spellings, and nothing for any other author, any repo in
   `config/repo-map.json`, or an unreadable file — always exiting 0;
-* the critic then takes the known-builder path on the real config: an Opus
-  5.5 build is reviewed on Sonnet 5.5, a Sonnet 5.5 build is not, and two
-  builders keep both off;
+* the critic then takes the known-builder path on the defaults in the code:
+  a build on the workhorse group's first model is reviewed on another model,
+  a build on that reviewer is not reviewed on it, and two builders keep both
+  off;
 * the Select model step of `qa-review.yml`, RUN with a stubbed `gh`: the REST
   author read, a body-only fallback read, the `probe-builder:` log line and
   `--built-on`, and a pull request with a card never reading its description;
@@ -48,8 +49,6 @@ sys.path.insert(0, str(SCRIPTS))
 import model_fallback  # noqa: E402
 
 SANDBOX = "dreadnought-foundry/bureau-harness"
-OPUS = "claude-opus-5-5"
-SONNET = "claude-sonnet-5-5"
 HAIKU = "claude-haiku-5-5"
 REST_LOGIN = "agent-bureau-bot[bot]"
 GRAPHQL_LOGIN = "app/agent-bureau-bot"
@@ -57,6 +56,14 @@ NOT_THE_APP = ["agent-bureau-bot", "app/agent-bureau-qa-bot",
                "agent-bureau-qa-bot[bot]", "agent-bureau-bot-3[bot]", ""]
 HOME_NAMES = ("BUREAU_MODEL_HOME_TOKEN", "BUREAU_MODEL_HOME_FILE")
 BODY_PATH = "/tmp/cardctx-pr-body.txt"
+
+# Every run here strips the home, so the selector answers from the defaults in
+# the code; both ids are read off them, never written as a literal (DRE-6866).
+# BUILDER is the workhorse group's first model, what a real build runs on;
+# REVIEWER is the model the critic reviews a BUILDER build on.
+DEFAULTS = model_fallback.code_defaults()
+BUILDER = DEFAULTS["ladders"][DEFAULTS["kinds"][model_fallback.WORKHORSE_KIND]][0]
+REVIEWER = model_fallback.reviewers_for(DEFAULTS, BUILDER)[0]
 
 
 def contract_line(model: str) -> str:
@@ -117,24 +124,24 @@ class ProbeBuildModelTest(unittest.TestCase):
     def test_the_worker_app_in_either_spelling_names_the_builder(self):
         for author in (REST_LOGIN, GRAPHQL_LOGIN):
             with self.subTest(author=author):
-                proc = probe_cli(SANDBOX, author, description(OPUS))
+                proc = probe_cli(SANDBOX, author, description(BUILDER))
                 self.assertEqual(0, proc.returncode, proc.stderr)
-                self.assertEqual(OPUS, proc.stdout.strip())
+                self.assertEqual(BUILDER, proc.stdout.strip())
 
     def test_the_repo_is_compared_case_insensitively(self):
-        proc = probe_cli("Dreadnought-Foundry/Bureau-Harness", REST_LOGIN, description(OPUS))
-        self.assertEqual(OPUS, proc.stdout.strip())
+        proc = probe_cli("Dreadnought-Foundry/Bureau-Harness", REST_LOGIN, description(BUILDER))
+        self.assertEqual(BUILDER, proc.stdout.strip())
 
     def test_the_line_names_the_first_workhorse_rung(self):
-        """The fixture names what a real build runs on; today that is Opus 5.5."""
-        self.assertEqual(OPUS, model_fallback.ladder_for("engineer")[0])
-        self.assertEqual([OPUS], model_fallback.build_models([description(OPUS)]),
+        """The fixture names what a real build runs on: the engineer's first rung."""
+        self.assertEqual(BUILDER, model_fallback.ladder_for("engineer")[0])
+        self.assertEqual([BUILDER], model_fallback.build_models([description(BUILDER)]),
                          "`harness` is an authoring role with no change to build_models")
 
     def test_any_other_author_prints_nothing(self):
         for author in NOT_THE_APP + ["someone", "dependabot[bot]"]:
             with self.subTest(author=author):
-                proc = probe_cli(SANDBOX, author, description(OPUS))
+                proc = probe_cli(SANDBOX, author, description(BUILDER))
                 self.assertEqual(0, proc.returncode, proc.stderr)
                 self.assertEqual("", proc.stdout.strip())
 
@@ -144,14 +151,14 @@ class ProbeBuildModelTest(unittest.TestCase):
         for slug, full in repos.items():
             for repo in (slug, full):
                 with self.subTest(repo=repo):
-                    proc = probe_cli(repo, REST_LOGIN, description(OPUS))
+                    proc = probe_cli(repo, REST_LOGIN, description(BUILDER))
                     self.assertEqual(0, proc.returncode, proc.stderr)
                     self.assertEqual("", proc.stdout.strip())
 
     def test_a_real_repo_still_reviews_as_an_unknown_builder(self):
         for full in json.loads(REPO_MAP.read_text(encoding="utf-8")).values():
             with self.subTest(repo=full):
-                proc = review_from_description(description(OPUS), repo=full)
+                proc = review_from_description(description(BUILDER), repo=full)
                 self.assertEqual(0, proc.returncode, proc.stderr)
                 self.assertIn("this build's model could not be read", proc.stderr)
 
@@ -177,28 +184,29 @@ class ProbeBuildModelTest(unittest.TestCase):
 
 class CriticSeparationTest(unittest.TestCase):
     def test_an_opus_built_probe_is_reviewed_on_sonnet(self):
-        proc = select_critic("--built-on", OPUS)
+        self.assertNotEqual(BUILDER, REVIEWER)
+        proc = select_critic("--built-on", BUILDER)
         self.assertEqual(0, proc.returncode, proc.stderr)
-        self.assertEqual(SONNET, proc.stdout.strip())
-        self.assertIn(f"this build ran on {OPUS}, so the reviewer does not", proc.stderr)
+        self.assertEqual(REVIEWER, proc.stdout.strip())
+        self.assertIn(f"this build ran on {BUILDER}, so the reviewer does not", proc.stderr)
 
     def test_the_description_drives_the_same_selection(self):
-        proc = review_from_description(description(OPUS))
-        self.assertEqual(SONNET, proc.stdout.strip(), proc.stderr)
-        self.assertIn(f"this build ran on {OPUS}, so the reviewer does not", proc.stderr)
+        proc = review_from_description(description(BUILDER))
+        self.assertEqual(REVIEWER, proc.stdout.strip(), proc.stderr)
+        self.assertIn(f"this build ran on {BUILDER}, so the reviewer does not", proc.stderr)
 
     def test_a_sonnet_built_probe_is_never_reviewed_on_sonnet(self):
-        proc = review_from_description(description(SONNET))
+        proc = review_from_description(description(REVIEWER))
         self.assertEqual(0, proc.returncode, proc.stderr)
-        self.assertNotEqual(SONNET, proc.stdout.strip())
+        self.assertNotEqual(REVIEWER, proc.stdout.strip())
         self.assertTrue(proc.stdout.strip())
 
     def test_two_builders_keep_both_off(self):
-        self.assertEqual(f"{OPUS},{SONNET}",
-                         probe_cli(SANDBOX, REST_LOGIN, description(OPUS, SONNET)).stdout.strip())
-        proc = review_from_description(description(OPUS, SONNET))
+        both = probe_cli(SANDBOX, REST_LOGIN, description(BUILDER, REVIEWER))
+        self.assertEqual(f"{BUILDER},{REVIEWER}", both.stdout.strip())
+        proc = review_from_description(description(BUILDER, REVIEWER))
         self.assertEqual(0, proc.returncode, proc.stderr)
-        self.assertNotIn(proc.stdout.strip(), (OPUS, SONNET, ""))
+        self.assertNotIn(proc.stdout.strip(), (BUILDER, REVIEWER, ""))
 
 
 # --------------------------------------------------------------------------- #
@@ -343,70 +351,71 @@ class SelectModelStepRunTest(unittest.TestCase):
                     if "=" in ln)
 
     def test_a_cardless_sandbox_probe_passes_its_builder(self):
-        proc = self.run_step(body=description(OPUS))
-        self.assertIn(f"probe-builder: {OPUS} read from the pull request description",
+        proc = self.run_step(body=description(BUILDER))
+        self.assertIn(f"probe-builder: {BUILDER} read from the pull request description",
                       proc.stdout.splitlines())
         flags = self.select_flags()
         self.assertIn("--built-on", flags)
-        self.assertEqual(OPUS, flags[flags.index("--built-on") + 1])
+        self.assertEqual(BUILDER, flags[flags.index("--built-on") + 1])
         self.assertNotIn("--built-on-unknown", flags)
         self.assertIn(f"api repos/{SANDBOX}/pulls/4903 --jq .user.login", self.gh_calls())
-        self.assertEqual(SONNET, self.outputs()["model"])
+        self.assertEqual(REVIEWER, self.outputs()["model"])
         probe = [c for c in self.script_calls() if c[1:2] == ["probe-build-model"]]
         self.assertEqual([["model_fallback.py", "probe-build-model", "--repo", SANDBOX,
                            "--author", REST_LOGIN, str(self.body_file)]], probe)
 
     def test_with_no_context_file_the_body_is_read_once_and_only_the_body(self):
-        proc = self.run_step(gh_body=description(OPUS))
-        self.assertIn(f"probe-builder: {OPUS} read from the pull request description",
+        proc = self.run_step(gh_body=description(BUILDER))
+        self.assertIn(f"probe-builder: {BUILDER} read from the pull request description",
                       proc.stdout.splitlines())
         views = [c for c in self.gh_calls() if c.startswith("pr view")]
         self.assertEqual(["pr view 4903 --json body --jq .body"], views)
         flags = self.select_flags()
-        self.assertEqual(OPUS, flags[flags.index("--built-on") + 1])
+        self.assertEqual(BUILDER, flags[flags.index("--built-on") + 1])
 
     def test_a_failed_author_read_keeps_the_unknown_builder(self):
-        proc = self.run_step(author=None, body=description(OPUS))
+        proc = self.run_step(author=None, body=description(BUILDER))
         self.assertIn("--built-on-unknown", self.select_flags())
         self.assertNotIn("probe-builder:", proc.stdout)
 
     def test_another_author_keeps_the_unknown_builder(self):
-        proc = self.run_step(author="agent-bureau-qa-bot[bot]", body=description(OPUS))
+        proc = self.run_step(author="agent-bureau-qa-bot[bot]", body=description(BUILDER))
         self.assertIn("--built-on-unknown", self.select_flags())
         self.assertNotIn("probe-builder:", proc.stdout)
 
     def test_a_real_repo_keeps_the_unknown_builder(self):
-        proc = self.run_step(repo="dreadnought-foundry/portico", body=description(OPUS))
+        proc = self.run_step(repo="dreadnought-foundry/portico", body=description(BUILDER))
         self.assertIn("--built-on-unknown", self.select_flags())
         self.assertNotIn("probe-builder:", proc.stdout)
 
     def test_a_pull_request_with_a_card_reads_its_thread_and_never_its_description(self):
-        thread = [f"🧠 model-attempt: {SONNET} — engineer agent starting (turns=400)"]
+        thread = [f"🧠 model-attempt: {REVIEWER} — engineer agent starting (turns=400)"]
         for card in ("DRE-7618", "DRE-1"):
             with self.subTest(card=card):
                 for f in (self.gh_log, self.script_log, self.output):
                     f.write_text("", encoding="utf-8")
-                proc = self.run_step(card=card, body=description(OPUS),
-                                     gh_body=description(OPUS), thread=thread)
+                proc = self.run_step(card=card, body=description(BUILDER),
+                                     gh_body=description(BUILDER), thread=thread)
                 flags = self.select_flags()
-                self.assertEqual(SONNET, flags[flags.index("--built-on") + 1])
+                self.assertEqual(REVIEWER, flags[flags.index("--built-on") + 1])
                 self.assertEqual([], self.gh_calls(), "a carded pull request read GitHub")
                 self.assertFalse([c for c in self.script_calls()
                                   if c[1:2] == ["probe-build-model"]])
                 self.assertNotIn("probe-builder:", proc.stdout)
 
     def test_a_card_whose_thread_cannot_be_read_still_never_reads_the_description(self):
-        proc = self.run_step(card="DRE-7618", body=description(OPUS), gh_body=description(OPUS))
+        proc = self.run_step(card="DRE-7618", body=description(BUILDER),
+                             gh_body=description(BUILDER))
         self.assertIn("--built-on-unknown", self.select_flags())
         self.assertEqual([], self.gh_calls())
         self.assertNotIn("probe-builder:", proc.stdout)
 
     def test_the_same_block_run_with_card_empty_does_read_the_description(self):
         """The other half of the pair above: the read is gated on CARD alone."""
-        thread = [f"🧠 model-attempt: {SONNET} — engineer agent starting (turns=400)"]
-        proc = self.run_step(card="", body=description(OPUS), thread=thread)
+        thread = [f"🧠 model-attempt: {REVIEWER} — engineer agent starting (turns=400)"]
+        proc = self.run_step(card="", body=description(BUILDER), thread=thread)
         flags = self.select_flags()
-        self.assertEqual(OPUS, flags[flags.index("--built-on") + 1])
+        self.assertEqual(BUILDER, flags[flags.index("--built-on") + 1])
         self.assertIn("probe-builder:", proc.stdout)
 
 
@@ -425,7 +434,8 @@ class HaikuStaysExcludedTest(unittest.TestCase):
         for name, rungs in cfg["ladders"].items():
             with self.subTest(ladder=name):
                 self.assertNotIn(HAIKU, _ids(rungs))
-        self.assertNotIn(HAIKU, json.dumps(cfg.get("projects") or {}))
+        named_in_a_project = json.dumps(cfg.get("projects") or {})
+        self.assertNotIn(HAIKU, named_in_a_project)
 
     def test_no_role_in_any_repo_selects_it(self):
         cfg = yaml.safe_load(MODELS.read_text(encoding="utf-8"))
@@ -436,7 +446,7 @@ class HaikuStaysExcludedTest(unittest.TestCase):
                 os.environ.pop(name, None)
             for role in roles:
                 for repo in repos:
-                    for flags in ({}, {"built_on_unknown": True}, {"built_on": [OPUS]}):
+                    for flags in ({}, {"built_on_unknown": True}, {"built_on": [BUILDER]}):
                         with self.subTest(role=role, repo=repo, flags=flags):
                             try:
                                 got = model_fallback.select_with_reasons(
