@@ -425,10 +425,18 @@ jobs:
   # case per change the console can save, applies it to a copy of the tree and
   # runs every test that can read the model files inside the copy — about ten
   # minutes of pytest a case. In the unit parts and the walks' job
-  # `BUREAU_SUITE_GREEN_RUN` is unset and those cases skip; here they run, half
-  # the cases on each part (`BUREAU_SUITE_GREEN_PART` of `_OF`), side by side
-  # through the harness's own thread pool. Those three names are set in this
-  # job's pytest step and nowhere else.
+  # `BUREAU_SUITE_GREEN_RUN` is unset and those cases skip; here they run, split
+  # over the parts (`BUREAU_SUITE_GREEN_PART` of `_OF`), side by side through
+  # the harness's own thread pool. Those three names are set in this job's
+  # pytest step and nowhere else.
+  #
+  # AS MANY PARTS AS THE CASES NEED (DRE-7511). Two fixed parts ran up to 69
+  # minutes against the 90-minute limit, and a pull request that added cases
+  # was canceled at it. `tests/test_suite_green_time_budget.py` projects each
+  # part's time from the harness's case count and the seconds a case was
+  # measured at on main, and fails unless `matrix.part` is 1..N and `_OF` is
+  # N for the smallest N whose every part stays at or under 75% of this job's
+  # `timeout-minutes` — naming the N that fits when a change adds cases.
   #
   # NARROWED PER CHANGE, WHOLE EVERY NIGHT (`standards/engineering.md`). The
   # reach step asks `scripts/suite_green_reach.py` whether this run's changed
@@ -449,7 +457,7 @@ jobs:
       # failures behind somebody else's.
       fail-fast: false
       matrix:
-        part: [1, 2]
+        part: [1, 2, 3, 4]
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -501,7 +509,7 @@ jobs:
           REPO_SLUG: agent-bureau
           BUREAU_SUITE_GREEN_RUN: "1"
           BUREAU_SUITE_GREEN_PART: ${{ matrix.part }}
-          BUREAU_SUITE_GREEN_OF: "2"
+          BUREAU_SUITE_GREEN_OF: "4"
         run: python3 -m pytest tests/test_console_change_keeps_the_suite_green.py -v
 
   # The act registry's CONSUMER (DRE-3091). Its own job, because it is the one

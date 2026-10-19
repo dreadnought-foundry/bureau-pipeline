@@ -163,7 +163,7 @@ def test_run_37145213637_replays_with_no_unexplained_difference(monkeypatch, cap
         _with_comment(card("DRE-5485", "In Progress", labels=repo, parent="DRE-5483",
                            parent_lane="Intake", updated="2026-10-03T17:32:40.075Z"),
                       "2026-10-03T17:32:40.075Z"),
-        _with_comment(card("DRE-5541", "Todo", labels=repo, parent="DRE-5485",
+        _with_comment(card("DRE-5541", "In Progress", labels=repo, parent="DRE-5485",
                            updated="2026-10-03T18:42:29.585Z"),
                       "2026-10-03T18:42:29.585Z"),
     ]
@@ -171,7 +171,7 @@ def test_run_37145213637_replays_with_no_unexplained_difference(monkeypatch, cap
         _with_comment(card("DRE-5485", "In Progress", labels=repo, parent="DRE-5483",
                            parent_lane="Intake", updated="2026-10-03T17:32:07.541Z"),
                       "2026-10-03T17:32:40.075Z"),
-        _with_comment(card("DRE-5541", "Todo", labels=repo, parent="DRE-5485",
+        _with_comment(card("DRE-5541", "In Progress", labels=repo, parent="DRE-5485",
                            updated="2026-10-03T18:42:27.710Z"),
                       "2026-10-03T18:42:29.585Z"),
     ]

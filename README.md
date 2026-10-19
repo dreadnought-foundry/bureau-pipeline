@@ -70,7 +70,7 @@ a **plain-English question** as a Linear comment and parks the card in the
 `Green Light` lane — the CEO's "needs you" queue, the same lane epics wait in
 for plan approval (DRE-2776; an escalated card is waiting on a judgement, not
 broken, so it does not belong in the broken-card lane); the CEO answers and
-moves it back to `Todo` to proceed or to `Queued` to drop it.
+moves it back to `In Progress` to proceed or to `Queued` to drop it.
 The critic + tests remain the correctness backstop on every merge.
 
 There is **no propose-first hard stop**. An earlier design (a read-only
@@ -95,8 +95,8 @@ choice is not between having an escape hatch and not having one, it is between
 one we designed and one we discover later.
 
 **The marker is `break-glass`**, applied by hand, in Linear, by the operator.
-It satisfies the entrance condition for `Todo` — the Todo-entry gate lets the
-card through instead of returning it. Three properties make it a designed
+It satisfies the entrance condition for a build — the card-validation gate at
+the start of a build lets the card through instead of returning it. Three properties make it a designed
 exception rather than a hole (`scripts/break_glass.py` owns all three):
 
 1. **Recorded, not undone.** A rule that fights an emergency loses the
@@ -335,7 +335,9 @@ The one stub whose absence costs a finished build. When a run outlives its
 credential and the Push rescue step's own two fresh mints are BOTH refused, the
 work is uploaded as `rescue-<CARD>.patch` and the run's last step dispatches a
 follow-up that replays it with a credential of its own. The dispatch names a
-workflow file **in the product repo**, so that repo needs one:
+workflow file **in the product repo**, so that repo needs one. The file to
+install is agent-bureau's `scaffold/customer-repo/.github/workflows/deliver-rescue.yml`;
+the sample below shows it:
 
 ```yaml
 # .github/workflows/deliver-rescue.yml in the product repo
@@ -352,14 +354,17 @@ permissions:
   actions: read
 jobs:
   call:
-    uses: dreadnought-foundry/bureau-pipeline/.github/workflows/deliver-rescue.yml@main
+    uses: dreadnought-foundry/bureau-pipeline/.github/workflows/deliver-rescue.yml@stable
     with:
       run_id: ${{ inputs.run_id }}
       card: ${{ inputs.card }}
       artifact: ${{ inputs.artifact }}
       card_url: ${{ inputs.card_url }}
-      pipeline_ref: main
-    secrets: inherit
+      pipeline_ref: stable
+    secrets:
+      LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+      BUREAU_APP_ID: ${{ secrets.BUREAU_APP_ID }}
+      BUREAU_APP_PRIVATE_KEY: ${{ secrets.BUREAU_APP_PRIVATE_KEY }}
 ```
 
 **Two permissions carry this, and both live in a stub — neither is fixable
@@ -385,12 +390,25 @@ this is the one workflow whose failure leaves somebody's only copy of finished
 work undelivered, and it is safe to retry (it refuses to act when its branch
 already has a pull request).
 
-A repo without it **degrades, it does not break**: the dispatch 404s, the run
-says so on the card beside the `🚨 rescue-push-failed` line naming the artifact
-and the run id, and the reconcile sweep tries the dispatch once more before
-falling back to the requeue this card replaced. So the fleet loses the automatic
-delivery until its stub is updated — a human can still recover the work in two
-minutes from the card — and loses nothing else.
+A repo without it **degrades, it does not break**: the dispatch is refused, the
+run says so on the card beside the `🚨 rescue-push-failed` line naming the
+artifact and the run id, and the reconcile sweep tries the dispatch once more
+before falling back to the requeue this card replaced. So the fleet loses the
+automatic delivery until its stub is updated — a human can still recover the
+work in two minutes from the card — and loses nothing else.
+
+GitHub's answer to that dispatch depends on the token as much as on the file.
+Under a token with no Actions permission (the App token, or a job token whose
+calling stub does not grant `actions`) it is a 403 whether the stub is there or
+not; under one holding `actions: write` a missing stub is a 404. So the card now
+names the cause (DRE-7476): after any refused dispatch the run reads the
+workflow file through the contents API, with the token the dispatch itself was
+handed, and adds one `cause:` paragraph — `missing` (a 404: install the stub,
+and check the calling stub grants `actions: write`), `refused` (a 200: the stub
+is there, so the calling `agent-task.yml` or `agent-fix.yml` stub must grant
+`actions: write` and `GH_DISPATCH_TOKEN` must reach the step) or `unknown` (any
+other answer, which claims neither). That read needs `contents` on the job's
+token, which the `agent-task.yml` and `agent-fix.yml` templates above grant.
 
 What the product repo still carries:
 
@@ -1464,9 +1482,13 @@ and nobody knows.
 
 `nightly-watch.yml` runs **hourly in this repo, on a schedule of its own** — it
 must not depend on the repos it watches running anything — and raises one
-deduplicated Linear card through `linear_ops.py`, the shape
-`red-main-repair.yml` files its card in. The decision is
-`scripts/nightly_watch.py`.
+console alert per condition per owner through `scripts/pipeline_notice.py`
+(DRE-7456): `nightly_watch:<owner>:did_not_run` for a nightly that did not
+run, `nightly_watch:<owner>:cannot_read` for a repo it could not read, both at
+WARN. An hour that finds the condition gone resolves its key. When the
+console's door cannot take a raise, the client files the deduplicated Linear
+card the watcher filed before — its title, lane `Planning`, label
+`repo:bureau-pipeline`. The decision is `scripts/nightly_watch.py`.
 
 - **Who is watched is computed, never listed.** Every workflow, in every repo
   in `config/repo-map.json`, whose file on the default branch triggers on
@@ -1504,27 +1526,30 @@ deduplicated Linear card through `linear_ops.py`, the shape
 - **UNKNOWN never passes.** A repo the token cannot read, a workflow file that
   will not fetch, a run listing GitHub declines: each is reported unknown and
   alarms, never as "nightly ok" (`standards/console-honesty.md` rules 1-3). A
-  missing nightly takes the card title when both are true, because it is the
-  actionable one, but the unknown is still named in the body. A throttle is
+  missing nightly takes the alert when both are true, because it is the
+  actionable one, but the unknown is still named in the body. A key is
+  resolved only by an hour that read everything it needs to say the condition
+  is gone — a subject not read is never a condition cleared. A throttle is
   not an unknown (DRE-6461): a read GitHub refuses because the installation's
   hourly request budget is spent is listed as not read this hour, never as
   ran, and the watcher stops reading for the rest of that run. A throttle
-  alone files no card on the hour it is seen — it is said only on the daily
-  re-confirm hour, on the same card — while a missing nightly or any other
-  unreadable subject still alarms on any hour.
+  alone raises nothing on the hour it is seen — it is said only on the daily
+  re-confirm hour, as the `cannot_read` alert — while a missing nightly or any
+  other unreadable subject still alarms on any hour.
 - **One token per owner.** An App installation token is scoped to one
   installation and the roster spans three owners, so the watch job is a matrix
   over the roster's owners with a token minted per owner — the shape the
-  groomer's lookup legs use — and each owner gets its own card title, so three concurrent jobs
-  cannot race for one card.
-- **It holds no write anywhere**, and a test fails if one appears. A red run is
+  groomer's lookup legs use — and each owner gets its own keys and fallback
+  card titles, so three concurrent jobs cannot race for one alert or card.
+- **It holds no write on what it watches**, and a test fails if one appears.
+  The one thing it sends is its own alert, with the OIDC token the watch job's
+  `id-token: write` mints for the console's door. A red run is
   diagnosed by the medic (`Nightly Watch` is in its watch list). A run that
   never fires at all is not detected by anything in this repo — nothing polls
   for its absence — and that is stated here rather than papered over.
-- **Known limit.** The 2026-09-22 outside-read audit (DRE-4655..4665) found
-  production has no alert-delivery environment, so CRITICAL alarms do not
-  currently reach the CEO. This alarm reaches exactly as far as the card
-  mechanism it rides, and no further.
+- **Known limit.** A WARN alert stays on the console and is never emailed.
+  This alarm reaches exactly as far as the console's panel — or the fallback
+  card while the door is down — and no further.
 
 ## Layout
 

@@ -154,13 +154,16 @@ class BlockerParksInBacklogTest(unittest.TestCase):
         self.assertIn('blocker_class.py reason "$NOTES_DIR"/agent-blocker.txt', src)
         self.assertNotIn("blocker-class:", src)
 
-    def test_dead_run_branch_still_requeues_to_todo(self):
+    def test_dead_run_branch_still_requeues(self):
         # The dead-run path is nondeterministic (timeouts, turn limits) — a
-        # fresh agent CAN succeed there, so its capped Todo requeue stays.
+        # fresh agent CAN succeed there, so its capped requeue stays. It goes
+        # to the queue lane, where the sweep requeues a dead run and the next
+        # pass promotes it again (DRE-7111, DRE-7108).
         src = step_shell.workflow_source(WORKFLOW)
         tail = src.split("agent-blocker.txt ]; then", 1)[1]
         dead_branch = tail.split("\n          else\n", 1)[1]
-        self.assertIn('state "$CARD" "Todo"', dead_branch)
+        self.assertIn('state "$CARD" "$QUEUE_LANE" --park', dead_branch)
+        self.assertNotIn('"Todo"', dead_branch)
 
 
 class NoParkWriterNamesTheQueueLaneTest(unittest.TestCase):

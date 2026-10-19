@@ -8,9 +8,10 @@ else in the repo reaches it — and a prompt that names a lane the board no long
 has sends its agent looking somewhere real cards are not.
 
 The live example: medic.yml told its agent to search Linear for an existing
-failure card in Triage, Todo or In Progress before creating a new one. Point the
-create seam at a lane outside that list and a repeatedly-failing workflow mints a
-fresh card on every failure instead of commenting on the one that exists.
+failure card in Triage or a start lane (`lane_contract.START_LANES`) before
+creating a new one. Point the create seam at a lane outside that list and a
+repeatedly-failing workflow mints a fresh card on every failure instead of
+commenting on the one that exists.
 
 WHAT MAKES THIS SURVIVE THE *NEXT* RENAME, not just the last one: the denylist is
 fed from `config/lane-contract.json`'s own `aliases` block, which is where a lane

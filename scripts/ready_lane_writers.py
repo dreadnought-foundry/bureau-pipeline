@@ -55,11 +55,12 @@ checks — and every actor that can reach the lane is one the contract declared.
 A writer that is in neither is a path into ready work that nobody signed off,
 and that is the one that skips Planning.
 
-## An epic never enters Todo through the door (DRE-5319)
+## An epic never enters the old start lane through the door (DRE-5319)
 
 DRE-5316 put `epic_todo_gate.refusal` in every seam function that can write
-Todo; nothing held it there. `epic_gate_problems()` reads the seam functions'
-bodies and names, as `epic-can-enter-todo`, any that can write Todo and neither
+`epic_todo_gate.TODO`, the old start lane, read off the contract (DRE-7129);
+nothing held it there. `epic_gate_problems()` reads the seam functions'
+bodies and names, as `epic-can-enter-todo`, any that can write it and neither
 calls the refusal nor hands its write to a seam function that does. The set it
 holds is discovered like everything else here — a function that places a card
 (builds the `stateId` mutation or calls one that does) and takes its lane by
@@ -73,7 +74,7 @@ there is one finding, not three.
 Stated here rather than left to be discovered, because a check that implies
 otherwise is worse than none:
 
-  * **A hand write in the Linear UI.** A person dragging a card into Todo is not
+  * **A hand write in the Linear UI.** A person dragging a card into a lane is not
     preventable by anything in this repository. The contract names `operator` as
     a permitted writer of a ready-work lane precisely because that write is a
     human's to make. `unseen_writers()` reports it, so the boundary is visible
@@ -208,8 +209,23 @@ def ready_lanes(contract: dict | None = None, doc: dict | None = None) -> tuple:
     card to, read from the shape and routing vocabularies. Move a verdict's
     destination and this moves with it, which is the difference between policing
     the lanes that matter and policing the two somebody remembered.
+
+    Plus the start lane, `lane_contract.START_LANE` (DRE-7109): the lane every
+    restart writes is ready work by definition — a card in it is built — so it
+    is policed the moment the flip sets it to `In Progress`, whether or not
+    FLEET's destination has moved beside it. It passes the segment test the
+    vocabulary's lanes pass, and a contract that predates `build_start`
+    (DRE-7105) adds nothing.
     """
-    return planning_escalation.work_lanes_reachable_from_planning(contract, doc)
+    lanes = planning_escalation.work_lanes_reachable_from_planning(contract, doc)
+    if "build_start" not in (contract or lane_contract.load()):
+        return lanes
+    start = lane_contract.start_lane(contract)
+    try:
+        work = lane_contract.lane(start, contract=contract).get("segment") == "work"
+    except lane_contract.UnknownLane:
+        work = False
+    return lanes if start in lanes or not work else lanes + (start,)
 
 
 def is_ready(lane: str | None, ready: tuple, contract: dict | None = None) -> bool:
@@ -230,7 +246,7 @@ def unseen_writers(contract: dict | None = None) -> tuple:
     A writer the contract carries with no path — a human, the relay — is outside
     this repository by construction. Reported rather than skipped: a boundary
     nobody can see is one nobody defends, and the day the relay is declared a
-    writer of Todo, this is what says so.
+    writer of a ready-work lane, this is what says so.
     """
     known = lane_contract.writers(contract)
     out: list[str] = []
@@ -1000,7 +1016,7 @@ def _lane_name_parameters(funcs: dict, lane_params: dict, live: set) -> dict:
 
     `lane_parameters()` grows these UP from the two lookups. A seam function can
     also be HANDED a name it never looks up — `guarded_state_write` receives the
-    lane its caller resolved, for its messages and its Todo check — so they are
+    lane its caller resolved, for its messages and its epic check — so they are
     grown DOWN here too: a parameter a caller fills with a lane literal, or with
     one of its own lane-name parameters, carries a lane name.
     """
@@ -1033,7 +1049,7 @@ def _lane_name_parameters(funcs: dict, lane_params: dict, live: set) -> dict:
 
 
 def _seam_analysis(root: str, contract: dict | None):
-    """(parsed write layer's functions, the Todo seams, the placers), or None
+    """(parsed write layer's functions, the old start lane's seams, the placers), or None
     when the write layer cannot be read."""
     tree, _ = _parse(os.path.join(root, "scripts", SEAM_MODULE))
     if tree is None:
@@ -1077,19 +1093,21 @@ def _seam_analysis(root: str, contract: dict | None):
 
 
 def todo_seams(root: str = ROOT, contract: dict | None = None) -> tuple:
-    """Every seam function that can put a card in Todo: it places a card, and it
-    takes the lane by name — handed one by its caller, or looking one up that
-    is Todo or cannot be read. `_set_state` places a card too, but it is handed
-    a state id and never a name, so the answer to "is this Todo" is its
-    caller's to give."""
+    """Every seam function that can put a card in `epic_todo_gate.TODO`: it
+    places a card, and it takes the lane by name — handed one by its caller, or
+    looking one up that is that lane or cannot be read. `_set_state` places a
+    card too, but it is handed a state id and never a name, so the answer to
+    "is this the old start lane" is its caller's to give."""
     found = _seam_analysis(root, contract)
     return tuple(sorted(found[1])) if found else ()
 
 
 def epic_gate_problems(root: str = ROOT, contract: dict | None = None) -> list:
-    """Every Todo seam that could put an epic there (`epic-can-enter-todo`).
+    """Every seam of the old start lane that could put an epic there
+    (`epic-can-enter-todo`).
 
-    A seam function that can write Todo must call `epic_todo_gate.refusal`, or
+    A seam function that can write `epic_todo_gate.TODO` must call
+    `epic_todo_gate.refusal`, or
     hand its write to one that does. The finding lands on the function that
     owns the hole — the one that places the card itself, building the mutation
     or calling a placer that takes no lane name — so a delegator like
@@ -1100,7 +1118,8 @@ def epic_gate_problems(root: str = ROOT, contract: dict | None = None) -> list:
     if found is None:
         return [
             f"{EPIC_GATE_FINDING}: scripts/{SEAM_MODULE} could not be read, so "
-            f"nothing here can say that every seam that writes Todo calls "
+            f"nothing here can say that every seam that writes "
+            f"{epic_todo_gate.TODO!r} calls "
             f"`{call}` — unread is not a pass"
         ]
     funcs, seams, placers = found
@@ -1116,7 +1135,8 @@ def epic_gate_problems(root: str = ROOT, contract: dict | None = None) -> list:
             f"{EPIC_GATE_FINDING}: `{name}` (scripts/{SEAM_MODULE}:{fn.lineno}) "
             f"can put a card in {epic_todo_gate.TODO!r} and neither calls "
             f"`{call}` nor hands its write to a seam that does — an epic can "
-            "enter Todo through it, and nothing builds an epic (DRE-5316)"
+            f"enter {epic_todo_gate.TODO} through it, and nothing builds an epic "
+            "(DRE-5316)"
         )
     return problems
 
@@ -1140,7 +1160,7 @@ def writer_problems(root: str = ROOT, contract: dict | None = None,
                     doc: dict | None = None) -> list:
     """Every writer in this repository that can reach a ready-work lane it has
     not been declared for, every one whose destination could not be read, and
-    every Todo seam that does not refuse an epic (DRE-5319)."""
+    every seam of the old start lane that does not refuse an epic (DRE-5319)."""
     problems = list(seam_problems(root))
     problems += epic_gate_problems(root, contract)
     ready = ready_lanes(contract, doc)

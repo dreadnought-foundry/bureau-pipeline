@@ -469,20 +469,39 @@ _EPIC_CHILDREN = 12
 #: (`_extra_lane_slots`), and only those cards move. The last is the lane the
 #: queue is written to (`QUEUE_LANE`, DRE-6749), so the queue's other name is
 #: the one dealt a few cards: `Queued` until DRE-6742 flips the planning exit.
-_SYNTHETIC_DEAL = ("Todo", "In Progress", "In Review", "Planning", "Intake",
-                   lane_contract.QUEUE_LANE)
+#: The first two slots are the start lanes (`synthetic_deal`, DRE-7112).
+def synthetic_deal(contract: dict | None = None) -> tuple:
+    """The deal's six slots under `contract`. The first is the start lane
+    ahead of the dispatch lane — a card there was promoted and waits for its
+    run — and the second the dispatch lane itself. Once no start lane is ahead
+    of it the first slot is the dispatch lane too: the deal keeps its six
+    slots, so a card sits in the dispatch lane exactly where it sat in the
+    retired lane and no other card is re-dealt. A RETIRING start lane is not
+    ahead of it: the sweep drains that lane into the dispatch lane (DRE-7129),
+    so a real board holds nothing there to deal."""
+    dispatch = lane_contract.dispatch_lane(contract)
+    live = set(lane_contract.lane_names("live", contract))
+    waiting = next((lane for lane in lane_contract.start_lanes(contract)
+                    if lane != dispatch and lane in live), dispatch)
+    return (waiting, dispatch, "In Review", "Planning", "Intake",
+            lane_contract.queue_lane(contract))
+
+
+_SYNTHETIC_DEAL = synthetic_deal()
 
 #: The lane a person's work waits in, and the marks a card there carries. A
 #: synthetic Hand-work card is a WORKBENCH card, as the sweep would land it.
 _HAND_WORK = "Hand-work"
 
 
-def _extra_lane_slots(dealt: list[str], cards: int) -> dict[int, str]:
+def _extra_lane_slots(cards: int) -> dict[int, str]:
     """Card index → the lane `LANES` names that `_SYNTHETIC_DEAL` does not.
 
-    One card per epic block, taken from a plain Todo card past the block's
-    children (so no epic, no child, no blocker chain moves), the lanes handed
-    out in turn. Deterministic, like the rest of the board."""
+    One card per epic block, taken from a plain card in the deal's first slot
+    past the block's children (so no epic, no child, no blocker chain moves),
+    the lanes handed out in turn. The slot is read by position, so the cards
+    taken are the same whichever lane the slot deals. Deterministic, like the
+    rest of the board."""
     extra = [name for name in LANES if name not in _SYNTHETIC_DEAL]
     if not extra:
         return {}
@@ -490,7 +509,7 @@ def _extra_lane_slots(dealt: list[str], cards: int) -> dict[int, str]:
     turn = 0
     for start in range(0, cards, _EPIC_EVERY):
         for i in range(start + _EPIC_CHILDREN + 1, min(start + _EPIC_EVERY, cards)):
-            if dealt[i] == "Todo" and i % 5 not in (0, 1):
+            if i % len(_SYNTHETIC_DEAL) == 0 and i % 5 not in (0, 1):
                 out[i] = extra[turn % len(extra)]
                 turn += 1
                 break
@@ -511,7 +530,7 @@ def synthetic(cards: int = SYNTHETIC_CARDS) -> dict:
     """
     ident = [f"DRE-{_SYNTHETIC_BASE + i}" for i in range(cards)]
     lane = [_SYNTHETIC_DEAL[i % len(_SYNTHETIC_DEAL)] for i in range(cards)]
-    extra = _extra_lane_slots(lane, cards)
+    extra = _extra_lane_slots(cards)
     for i, name in extra.items():
         lane[i] = name
 

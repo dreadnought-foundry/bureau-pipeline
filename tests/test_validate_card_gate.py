@@ -6,8 +6,9 @@ fine-grained repair/proceed/bounce cases live in test_validate_card_autofix.py.
 These pin the surviving invariants:
   - clean card        → no bounce, bounced=false, untouched
   - missing repo, NOT inferable → comment + Planning, bounced=true
-  - already past Todo  → untouched, bounced=false (gate validates the Todo-entry
-                         transition only; never drags work backward)
+  - already past the start lanes → untouched, bounced=false (gate validates
+                         the promotion into a start lane only; never drags
+                         work backward)
 """
 
 import os
@@ -99,9 +100,11 @@ class GateBehaviorTest(unittest.TestCase):
         self.assertIn(("DRE-999", "agent:engineer"), fake.added_labels)
         self.assertEqual(fake.states, [])
 
-    def test_already_in_progress_untouched(self):
-        # A card already past Todo is NEVER bounced, even if malformed.
-        fake = FakeLinear("In Progress", "no repo, no labels", [])
+    def test_already_in_review_untouched(self):
+        # A card already past the start lanes is NEVER bounced, even if
+        # malformed. In Progress is a start lane since DRE-7110 and is gated
+        # (tests/test_validate_card_start_lanes.py).
+        fake = FakeLinear("In Review", "no repo, no labels", [])
         self.assertFalse(self._run(fake))
         self.assertEqual(fake.comments, [])
         self.assertEqual(fake.states, [])

@@ -1,0 +1,19 @@
+{
+  "card": "DRE-2498",
+  "arrival": "one-off-no-result",
+  "for": "critic",
+  "as_of": "2026-10-13T15:45:44.680Z",
+  "lane": "Planning",
+  "labels": [
+    "repo:portico"
+  ],
+  "comments": [
+    {
+      "body": "plan-critic: stage=one-off round=1 result=SEND_BACK collisions=0 — The share panel does not know which documents are linked-out, so the count and list need a server change the card never mentions, and a build agent cannot tell where the work stops.",
+      "authored_by_pipeline": true,
+      "created_at": "2026-10-13T15:39:09.601Z"
+    }
+  ],
+  "result": "",
+  "run_id": "38424453807"
+}

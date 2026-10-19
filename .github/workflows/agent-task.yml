@@ -1,8 +1,12 @@
 # Executes a Linear card autonomously: triggered (via a thin stub in the
 # product repo) by the bureau-linear-relay Lambda's repository_dispatch when
-# a card with `**Repo:** <product>` enters Todo. The agent implements the
-# card on a branch and opens a PR; CI and review gates are enforced by
-# GitHub, not by the agent.
+# a card with `**Repo:** <product>` is promoted into a start lane
+# (`lane_contract.START_LANES` — Todo before the flip, In Progress after it,
+# where the sweep has already moved the card; DRE-7110). The run starts the
+# same way from either: on a card already in In Progress the `Card → In
+# Progress` write is a same-lane no-op and the start receipt is still posted.
+# The agent implements the card on a branch and opens a PR; CI and review
+# gates are enforced by GitHub, not by the agent.
 #
 # Reusable workflow: concurrency + permissions live in the calling stub
 # (which owns the trigger context). github.event / github.repository inside
@@ -355,13 +359,14 @@ jobs:
         run: |
           python3 .bureau-pipeline/scripts/agent_task_snapshot.py take "$CARD" --out "$BUREAU_CARD_SNAPSHOT"
 
-      # Todo-entry card-validation gate (DRE-1405). The relay can't write to
-      # Linear, so a malformed card (no resolvable repo, or no agent: role
-      # label) would otherwise either silently vanish at the relay or dispatch
-      # a broken build here. Validate the LIVE card and, if malformed AND still
-      # in Todo/Triage, bounce it to Planning with a diagnostic comment — and
-      # skip every downstream step. Runs BEFORE Card → In Progress so a bounced
-      # card never flips In Progress first.
+      # Start-lane card-validation gate (DRE-1405, DRE-7110). The relay can't
+      # write to Linear, so a malformed card (no resolvable repo, or no agent:
+      # role label) would otherwise either silently vanish at the relay or
+      # dispatch a broken build here. Validate the LIVE card and, if malformed
+      # AND still in a start lane (Todo or In Progress) or Triage, bounce it to
+      # Planning with a diagnostic comment — and skip every downstream step.
+      # Runs BEFORE Card → In Progress so a bounced card never flips In
+      # Progress first, and bounces one the sweep already put there.
       - name: Card-validation gate
         id: gate
         env:
@@ -374,7 +379,7 @@ jobs:
             "${{ github.event.client_payload.identifier }}"
 
       # Duplicate-dispatch guard (DRE-2057). The relay sometimes fires TWO
-      # agent-execute dispatches for one Todo transition (~60s apart; five
+      # agent-execute dispatches for one start-lane promotion (~60s apart; five
       # twin-PR incidents: #76 #83 #90 #97 #102/#103). The stub's per-card
       # concurrency group only SERIALIZES them (cancel-in-progress stays
       # false — DRE-2032), so the dup builds the card again LATER. Skip —
@@ -614,6 +619,11 @@ jobs:
       # is tee'd to PRE_AGENT_LOG so that step can tell a quota exhaustion (a
       # WAIT — DRE-2923) from a step that genuinely broke. Neither changes what
       # the step DOES: a failure here still fails the job, exactly as before.
+      #
+      # A card the sweep already promoted into In Progress (DRE-7110) gets no
+      # write — a same-lane move is a no-op that succeeds — and the 🧠
+      # model-attempt start receipt below is posted all the same: the sweep's
+      # not-started re-fire (DRE-7108) and the console read it.
       - name: Card → In Progress
         id: inprogress
         if: steps.gate.outputs.bounced != 'true' && steps.dedupe.outputs.skip != 'true'
@@ -890,7 +900,7 @@ jobs:
                terms, NO code/diffs/file paths) to /tmp/agent-escalation.txt — the
                workflow posts it to the card and parks the card in Green Light,
                the CEO's "needs you" queue. The CEO answers and moves the card
-               back to Todo to proceed.
+               back to In Progress to proceed.
             7. BLOCKER: a blocker is for a fact the pipeline can act on, and its
                first line names which. Open no PR, and write the note to
                /tmp/agent-blocker.txt with its class stamped on the first line —
@@ -1165,7 +1175,7 @@ jobs:
                terms, NO code/diffs/file paths) to /tmp/agent-escalation.txt — the
                workflow posts it to the card and parks the card in Green Light,
                the CEO's "needs you" queue. The CEO answers and moves the card
-               back to Todo to proceed.
+               back to In Progress to proceed.
             7. BLOCKER: a blocker is for a fact the pipeline can act on, and its
                first line names which. Open no PR, and write the note to
                /tmp/agent-blocker.txt with its class stamped on the first line —
@@ -1437,7 +1447,7 @@ jobs:
                terms, NO code/diffs/file paths) to /tmp/agent-escalation.txt — the
                workflow posts it to the card and parks the card in Green Light,
                the CEO's "needs you" queue. The CEO answers and moves the card
-               back to Todo to proceed.
+               back to In Progress to proceed.
             7. BLOCKER: a blocker is for a fact the pipeline can act on, and its
                first line names which. Open no PR, and write the note to
                /tmp/agent-blocker.txt with its class stamped on the first line —

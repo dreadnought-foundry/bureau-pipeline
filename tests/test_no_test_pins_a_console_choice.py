@@ -216,6 +216,8 @@ ALLOWED: dict[str, str] = {
         _ABSENT,
     "tests/test_platform_fault_scenario.py::PlatformFaultScenario.test_the_receipt_names_no_model_as_having_failed":
         _ABSENT,
+    "tests/test_proof_task_shadow.py::ShadowPushTest.test_it_hands_proof_shadow_push_the_contracts_five_values":
+        _OWN_INPUT,
     "tests/test_qa_review_model_note.py::LinearCopyCarriesTheModelTest.test_the_linear_copy_carries_the_model_and_the_reason":
         _OWN_INPUT,
     "tests/test_qa_review_model_note.py::PrCopyIsUntouchedTest.test_the_model_line_never_reaches_the_pr_comment":

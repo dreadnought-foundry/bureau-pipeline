@@ -209,7 +209,7 @@ def test_a_demo_card_in_motion_runs_the_pass_as_before(capsys):
              "advance_urgent_intake", "repair_frozen_planning_holds", "serve_planner_line",
              "release_groom_queue", "move_hand_built_to_review", "carry_epics_out_of_todo",
              "report_break_glass", "report_epic_growth", "pr_for", "agent_run_alive",
-             "redeliver_rescued_work")
+             "redeliver_rescued_work", "build_run_refusal", "redispatch")
     with mock.patch.object(reconcile, "rereview_watch_scope",
                            return_value=(set(), lambda e: None)):
         _pass(board, stub=stubs)
@@ -276,11 +276,11 @@ def test_with_the_door_on_the_idle_check_costs_no_linear_request(monkeypatch, ca
     # the fleet to no repo while the console's PIPELINE_READ_UNROUTED is off
     # (DRE-5848) — Planning and Intake and the planner line's Green Light, and
     # the NO-ROUTE watchdog's Todo and In Progress, which the door cannot serve
-    # for cards no repo owns (the PR #687 critic's item 2) — and the outage
-    # alarm's one open-card lookup, which the door's board does not hold the
-    # lane for, made on every pass (DRE-6576).
+    # for cards no repo owns (the PR #687 critic's item 2). The outage alarm's
+    # open-card lookup (DRE-6576) is gone: the outage is a console alert since
+    # DRE-7455, so there is no card to look up.
     assert reconcile.IDLE_QUERY not in board.queries
-    assert board.requests == 4
+    assert board.requests == 3
     assert "idle: agent-bureau-demo — no card of this repo is in motion" in capsys.readouterr().out
 
 
@@ -330,7 +330,9 @@ def test_the_idle_check_is_one_small_page_that_fails_open():
     assert 1 < reconcile.IDLE_PAGE <= 100
     # Hand-work counts as in motion (DRE-5322): a person's card there is owed
     # the move to review and the idle alarm, which an idle pass skips.
-    assert reconcile.IDLE_LANES == ("Todo", "In Progress", "In Review", "Hand-work",
+    # Todo left it when it began retiring (DRE-7129): the drain and the epic
+    # carry that empty it are fleet-wide and run on an idle pass too.
+    assert reconcile.IDLE_LANES == ("In Progress", "In Review", "Hand-work",
                                    *reconcile.QUEUE_LANES)
 
 
@@ -343,7 +345,7 @@ def test_the_idle_check_is_one_small_page_that_fails_open():
 
 def test_an_owner_qualified_repo_label_is_not_idle():
     board = TeamBoard(*_busy_elsewhere(),
-                      card("DRE-94", "Todo",
+                      card("DRE-94", "In Progress",
                            labels=(f"repo:dreadnought-foundry/{DEMO}",)))
     assert _busy(board)
 
@@ -359,7 +361,7 @@ def test_a_longer_slug_that_contains_this_one_is_another_repos_work(monkeypatch)
     the demo's card, and the sweep's own repo test turns it away."""
     monkeypatch.setattr(reconcile, "REPO_SLUG", "agent-bureau")
     board = TeamBoard(*_busy_elsewhere(),
-                      card("DRE-96", "Todo", labels=(f"repo:{DEMO}",)))
+                      card("DRE-96", "In Progress", labels=(f"repo:{DEMO}",)))
     assert not _busy(board)
 
 
@@ -368,7 +370,7 @@ def test_a_full_page_of_near_misses_is_not_proof_of_idle(monkeypatch):
     more: this repo's card could be on the next page. Unknown is not idle."""
     monkeypatch.setattr(reconcile, "REPO_SLUG", "agent-bureau")
     page = getattr(reconcile, "IDLE_PAGE", 1)
-    board = TeamBoard(*[card(f"DRE-{200 + n}", "Todo", labels=(f"repo:{DEMO}",))
+    board = TeamBoard(*[card(f"DRE-{200 + n}", "In Progress", labels=(f"repo:{DEMO}",))
                         for n in range(page + 1)])
     assert _busy(board)
     assert len(board.queries) == 1  # still one request: it fails open, it does not page

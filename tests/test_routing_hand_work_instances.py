@@ -318,9 +318,9 @@ class TestTheLaneContract:
         ("Hand-work", "writers", "text"),
         ("Hand-work", "evidence", "text"),
         ("Queued", "exit", "text"),
-        ("Todo", "entrance", "pending"),
-        ("Todo", "exit", "text"),
-        ("Todo", "evidence", "text"),
+        # Todo's entrance stopped naming the marks at the flip (DRE-7120), and
+        # its exit and evidence went with its clauses when it began retiring
+        # (DRE-7129).
     ])
     def test_the_clauses_that_named_the_marks_name_operator_step(self, lane, kind, key):
         said = lane_contract.lane(lane)["clauses"][kind][key]

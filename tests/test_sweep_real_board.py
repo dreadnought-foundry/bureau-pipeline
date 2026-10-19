@@ -330,7 +330,8 @@ _ESCALATION_LANES = (
 def _decisions(advance, state, label, refusals) -> dict[str, list[str]]:
     """The four decisions the sweep made, read off the stubbed writes.
 
-      promote  — a Backlog card advanced to Todo by the dependency gate.
+      promote  — a Backlog card advanced to In Progress by the dependency
+                 gate (to Todo until the flip, DRE-7120).
       hold     — a card told why it is NOT being promoted (the refusal's own
                  tag, so a cut that changes the reason fails too), or parked
                  behind the hold label.
@@ -351,9 +352,15 @@ def _decisions(advance, state, label, refusals) -> dict[str, list[str]]:
     thing the record exists to stop.
     """
     promote, hold, escalate, close = [], [], [], []
+    # A park is the hold label and the move together. A dead run's requeue
+    # makes the same deliberate `--park` move to the queue since DRE-7108, but
+    # holds nothing — the sweep promotes it again — so it is no decision here,
+    # exactly as its requeue to Todo was not.
+    labelled = {call.args[0] for call in label.call_args_list
+                if call.args[1:2] == (reconcile.HOLD_LABEL,)}
     for call in advance.call_args_list:
         ident, to = call.args[0], call.args[1]
-        if to == "Todo":
+        if to == "In Progress":
             promote.append(ident)
         elif to in _ESCALATION_LANES:
             escalate.append(f"{ident} → {to}")
@@ -363,7 +370,8 @@ def _decisions(advance, state, label, refusals) -> dict[str, list[str]]:
             close.append(ident)
         elif to in _ESCALATION_LANES:
             escalate.append(f"{ident} → {to}")
-        elif to == reconcile.QUEUE_LANE and "--park" in call.args[2:]:
+        elif (to == reconcile.QUEUE_LANE and "--park" in call.args[2:]
+              and ident in labelled):
             hold.append(f"{ident} parked")
     for call in label.call_args_list:
         if call.args[1:2] == (reconcile.HOLD_LABEL,):

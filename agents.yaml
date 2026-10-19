@@ -107,7 +107,7 @@ agents:
     kind: workhorse
     model: claude-opus-5-5  # top of the `workhorse` ladder
     # END generated model
-    trigger: "Linear card → Todo → relay repository_dispatch (agent-execute)"
+    trigger: "Linear card → Queued → In Progress → relay repository_dispatch (agent-execute)"
     # DRE-2785 granted the web and left this budget alone, on the reasoning
     # that a card whose research makes it expensive can take a rung rather
     # than every card paying for the few. DRE-4361 answered that with 22 days
@@ -137,7 +137,7 @@ agents:
     kind: workhorse
     model: claude-opus-5-5  # top of the `workhorse` ladder
     # END generated model
-    trigger: "Linear card (label agent:frontend) → Todo → relay repository_dispatch (agent-execute)"
+    trigger: "Linear card (label agent:frontend) → Queued → In Progress → relay repository_dispatch (agent-execute)"
     # Web tools since DRE-2785; turn budget moves with the engineer's for the
     # same reason — it shares agent-task.yml's rung selection
     # (config/turn-budgets.json), whose default is 400 since DRE-4361.
@@ -188,7 +188,7 @@ agents:
     kind: workhorse
     model: claude-opus-5-5  # top of the `workhorse` ladder
     # END generated model
-    trigger: "Linear card (label agent:devops) → Todo → relay repository_dispatch (agent-execute)"
+    trigger: "Linear card (label agent:devops) → Queued → In Progress → relay repository_dispatch (agent-execute)"
     # Web tools since DRE-2785 — the role with the most to gain from them,
     # since a vendor's current behaviour is the whole subject of
     # standards/vendor-boundaries.md and the answer moves without telling us.
@@ -341,7 +341,7 @@ agents:
     kind: judgement
     model: claude-opus-5-5  # top of the `judgement` ladder
     # END generated model
-    trigger: "Linear epic (label agent:planner) → Todo → relay repository_dispatch (agent-plan)"
+    trigger: "Linear epic (label agent:planner) → In Progress → relay repository_dispatch (agent-plan)"
     # 50 → 80 with DRE-2720: the planner now writes the CEO-facing plan
     # artifact (seven sections, the ```kpis block, a token-built mockup for UI
     # work) on top of decomposing the epic. Shipping that on the old ceiling
@@ -495,10 +495,11 @@ agents:
     # never builds. Its OWN workflow, never agent-task.yml: the build roles
     # are derived from the entries running on agent-task.yml
     # (scripts/proof_and_demo.py), and a role there is one the fleet picks up
-    # for a PROOF card (DRE-3039). The workhorse ladder (config/models.yaml).
+    # for a PROOF card (DRE-3039). The Proof group's ladder since DRE-7284
+    # (config/models.yaml), led by the Builders' first model.
     # BEGIN generated model — canonical: config/models.yaml (regenerate: scripts/sync_model_config.py)
-    kind: workhorse
-    model: claude-opus-5-5  # top of the `workhorse` ladder
+    kind: proof
+    model: claude-opus-5-5  # top of the `proof` ladder
     # END generated model
     trigger: "PROOF card in Hand-work with every blocker closed and its release live → sweep repository_dispatch (proof-execute)"
     # Web tools since DRE-2785, held from its first day like every agent's —

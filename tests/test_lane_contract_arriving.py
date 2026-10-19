@@ -37,6 +37,7 @@ os.environ.setdefault("REPO", "dreadnought-foundry/bureau-pipeline")
 os.environ.setdefault("GH_TOKEN", "x")
 
 import lane_contract  # noqa: E402
+import routing_verdict  # noqa: E402
 
 HAND_WORK = "Hand-work"
 EPIC = "DRE-5240"
@@ -64,9 +65,11 @@ ARRIVING_KEYS = {
 }
 
 # The sentence DRE-5275 wrote into Backlog's exit. This card rewrites only the
-# verdict-destination sentences around it, so it must survive verbatim.
+# verdict-destination sentences around it, so it must survive verbatim — with
+# the destination the flip (DRE-7120) moved from Todo to In Progress.
 DRE_5275_SENTENCE = (
-    "It promotes a FLEET card to Todo once the dependency gate clears, the WIP "
+    "It promotes a FLEET card to In Progress — the move the relay dispatches "
+    "the build on (DRE-7120) — once the dependency gate clears, the WIP "
     "cap has room and — for a child of an epic — both critics passed the plan "
     "on its current planning attempt before the green light (DRE-3059, DRE-5268)."
 )
@@ -121,7 +124,9 @@ class TestTheHandWorkEntry:
     def test_every_live_reader_sees_it_and_it_has_no_stall_window(self):
         doc = shipped()
         flow = lane_contract.flow_lanes()
-        assert flow[flow.index("Todo") + 1] == HAND_WORK
+        # After Queued since Todo, which it once followed, began retiring
+        # (DRE-7129).
+        assert flow[flow.index("Queued") + 1] == HAND_WORK
         assert HAND_WORK not in lane_contract.stale_minutes()
         assert HAND_WORK not in lane_contract.off_flow()
         assert {c.lane for c in lane_contract.clauses(doc)} >= {HAND_WORK}
@@ -274,7 +279,7 @@ class TestTheHarnessToleratesTheGap:
     def test_a_live_lane_missing_from_the_board_still_fails(self):
         doc = arriving_doc()
         board = live_board(doc, HAND_WORK)
-        board.pop("Todo")
+        board.pop("Queued")
         report = lane_contract.check(
             contract=doc, board=board,
             console=list(lane_contract.lane_names("live", doc)), vocabulary=set(),
@@ -361,13 +366,15 @@ def test_an_unknown_status_is_still_refused():
 
 
 class TestTheRewrittenClauses:
-    def test_todo_entrance_defers_to_the_vocabulary(self):
-        clause = lane_contract.lane("Todo")["clauses"]["entrance"]
-        text = clause["text"]
-        assert "config/routing-verdicts.json" in text
-        assert "never this sentence" in text
-        assert EPIC in text and HAND_WORK in text
-        assert EPIC in clause["pending"]
+    def test_no_verdict_lands_in_todo_and_its_entry_is_retiring(self):
+        # Since the flip (DRE-7120) nothing promotes into Todo, and since
+        # DRE-7129 its entry is retiring: it carries no clauses, and its
+        # reason names where a promoted card goes instead.
+        entry = lane_contract.lane("Todo", status="retiring")
+        assert "clauses" not in entry
+        assert routing_verdict.destination("FLEET") in entry["reason"]
+        assert "Todo" not in {routing_verdict.destination(name)
+                              for name in routing_verdict.verdicts()}
 
     def test_the_queue_exit_defers_to_the_vocabulary_and_keeps_dre_5275(self):
         # Backlog's clauses moved to Queued with the lane (DRE-6740); the
@@ -395,7 +402,7 @@ class TestTheDocument:
 
     def test_the_rewritten_clauses_are_rendered(self):
         text = self.committed()
-        assert lane_contract.lane("Todo")["clauses"]["entrance"]["text"] in text
+        assert lane_contract.lane("Todo", status="retiring")["reason"] in text
         assert lane_contract.lane("Queued")["clauses"]["exit"]["text"] in text
 
     def test_an_arriving_lane_renders_its_own_section_and_stays_out_of_the_flow(self):

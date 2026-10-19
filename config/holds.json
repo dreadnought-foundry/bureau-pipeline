@@ -5,7 +5,7 @@
   "reasons": {
     "stranded-no-run": {
       "lifts": "run-started",
-      "why": "A run receipt newer than the stamp proves a run started. Nothing in the pipeline starts one on its own — the sweep skips a held card and the relay dispatches only on an entry to Todo — so the run that lifts it is the one a person's re-send starts.",
+      "why": "A run receipt newer than the stamp proves a run started. Nothing in the pipeline starts one on its own — the sweep skips a held card and the relay dispatches only on a move into In Progress from a waiting lane — so the run that lifts it is the one a person's re-send starts.",
       "lift_sends": "nothing moves"
     },
     "no-route": {
@@ -89,8 +89,8 @@
           "reason": "stranded-no-run",
           "lifts": "run-started",
           "tried_first": {
-            "step": "The sweep re-sends a card that sat in Todo with no run, once, before it stamps the strand (DRE-5743). A second unattended re-send is the move that already failed.",
-            "receipt": "card sat in Todo with no run — re-dispatched"
+            "step": "The sweep re-sends a promoted card no run started on, once, before it stamps the strand (DRE-5743, DRE-7108). A second unattended re-send is the move that already failed.",
+            "receipt": "card was promoted and no run started — re-dispatched"
           }
         },
         {

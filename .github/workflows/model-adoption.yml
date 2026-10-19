@@ -56,8 +56,8 @@
 #
 # `dry_run: true` (workflow_dispatch) produces the summary table, the trial and
 # every rendered text, previews the home write with `apply --check`, and writes
-# no card, no home, no branch and no pull request. It is what the PROOF card
-# dispatches.
+# no card, no console alert, no home, no branch and no pull request. It is
+# what the PROOF card dispatches.
 #
 # NO ${{ }} INSIDE A `run:` BLOCK (DRE-3484): every value arrives through
 # `env:`, which also lets tests/test_model_adoption_workflow.py execute the
@@ -80,9 +80,10 @@
 #      hands the trial the same store. The Anthropic credential is only ever
 #      used for the catalog and the Models API read and inside claude-code-action,
 #      never for a raw Messages API call (DRE-3074).
-#   Q3 re-run — every write is deduped: the question card and the
-#      trial-failure card on their exact titles (`find-open` ignores terminal
-#      cards), the home write on its `written_at` (a rerun finds its own write
+#   Q3 re-run — every write is deduped: the question card on its exact
+#      title (`find-open` ignores terminal cards), the trial-failure alert on
+#      its key (a raise of an open key is answered `repeat`, a resolve of a
+#      closed one `not-open`; its fallback card on its exact title), the home write on its `written_at` (a rerun finds its own write
 #      and writes nothing), the pin raise on its title prefix, and each branch
 #      by name. The record card lands in Done when the home was written and in
 #      Canceled when nothing was, and `find-open` skips both, so a rerun that
@@ -382,7 +383,8 @@ jobs:
     secrets: inherit
 
   # A failed trial — on the pinned Claude Code, or on a raised one — is no
-  # adoption and ONE card saying so, never silence and never a CEO card.
+  # adoption and ONE console alert saying so (DRE-7456), never silence and
+  # never a CEO card.
   trial-failed:
     needs: [classify, trial, pin-trial]
     if: >-
@@ -390,6 +392,12 @@ jobs:
       || (needs.pin-trial.outputs.outcome != '' && needs.pin-trial.outputs.outcome != 'passed'))
     runs-on: ${{ fromJSON(vars.BUREAU_SHORT_RUNS_ON || vars.BUREAU_RUNS_ON || '["ubuntu-latest"]') }}
     timeout-minutes: 30
+    # The workflow's two reads, and the OIDC token the console's notice door
+    # reads. A job-level block replaces the workflow's, so both are restated.
+    permissions:
+      contents: read
+      pull-requests: read
+      id-token: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -397,7 +405,7 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Write the trial-failure card
+      - name: Write the trial-failure body
         env:
           CANDIDATE: ${{ needs.classify.outputs.candidate }}
           SUMMARY: ${{ needs.pin-trial.outputs.summary || needs.trial.outputs.summary }}
@@ -438,20 +446,27 @@ jobs:
           print(body)
           PY
 
-      - name: File ONE trial-failure card (idempotent)
+      # ONE alert per candidate, `model_trial:<candidate>` at WARN: a raise
+      # of a key already open is answered `repeat` and delivers nothing. A
+      # later trial of the candidate that passes resolves it (`adopt`,
+      # `pin-pr`); one never trialled again is closed by the console's closer
+      # monitor seven days after it was raised. When the door cannot take it
+      # the client files the card this step filed before — the same title,
+      # lane `Planning`, `repo:<this repo>` and `agent:devops` — deduped on
+      # its exact title.
+      - name: Raise ONE trial-failure alert (idempotent)
         if: env.DRY_RUN != 'true'
         env:
+          BUREAU_READ_URL: ${{ vars.BUREAU_READ_URL }}
           LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
           CANDIDATE: ${{ needs.classify.outputs.candidate }}
         run: |
           TITLE="Model trial failed: $CANDIDATE"
           REPO_SLUG=$(basename "$GITHUB_REPOSITORY" | tr '[:upper:]' '[:lower:]')
-          EXISTING=$(python3 scripts/linear_ops.py find-open "$TITLE")
-          if [ -n "$EXISTING" ]; then
-            echo "already open as $EXISTING — not duplicating"
-          else
-            python3 scripts/linear_ops.py create "$TITLE" "$RUNNER_TEMP/trial-failed.md" --repo "$REPO_SLUG" --label agent:devops
-          fi
+          python3 scripts/pipeline_notice.py raise --notice "model_trial:$CANDIDATE" --severity WARN \
+            --title "$TITLE" --body-file "$RUNNER_TEMP/trial-failed.md" \
+            --fallback-title "$TITLE" --fallback-lane Planning \
+            --fallback-label "repo:$REPO_SLUG" --fallback-label agent:devops
 
   # A PASSED trial: one write of the home, then the record card saying what
   # it did (DRE-6943). No branch and no pull request. `passed` guards every
@@ -461,6 +476,13 @@ jobs:
     if: ${{ !cancelled() && needs.trial.outputs.outcome == 'passed' }}
     runs-on: ${{ fromJSON(vars.BUREAU_SHORT_RUNS_ON || vars.BUREAU_RUNS_ON || '["ubuntu-latest"]') }}
     timeout-minutes: 30
+    # The workflow's two reads, and the OIDC token the console's notice door
+    # reads to resolve the trial's alert. A job-level block replaces the
+    # workflow's, so both are restated; every write here is the App token's.
+    permissions:
+      contents: read
+      pull-requests: read
+      id-token: write
     steps:
       # Minted FIRST, the way every job here that may write starts: the
       # checkout is the App's.
@@ -509,6 +531,17 @@ jobs:
               json.dump(trial, fh)
           print(json.dumps(trial, indent=2))
           PY
+
+      # The trial passed, so an alert a failed trial of this candidate raised
+      # is resolved now (DRE-7456) — before anything below can fail and leave
+      # it standing. No all-clear copy: a WARN never leaves the console. A key
+      # that is not open answers `not-open`; a refusal is logged, never a card.
+      - name: Resolve the candidate's trial-failure alert
+        if: env.DRY_RUN != 'true'
+        env:
+          BUREAU_READ_URL: ${{ vars.BUREAU_READ_URL }}
+          CANDIDATE: ${{ needs.classify.outputs.candidate }}
+        run: python3 scripts/pipeline_notice.py resolve --notice "model_trial:$CANDIDATE"
 
       # The home the adoption reads (DRE-6943): every step here that runs
       # model_adoption.py, model_adoption_actions.py or claude_code_pin.py
@@ -751,6 +784,13 @@ jobs:
     if: ${{ !cancelled() && needs.pin-trial.outputs.outcome == 'passed' }}
     runs-on: ${{ fromJSON(vars.BUREAU_SHORT_RUNS_ON || vars.BUREAU_RUNS_ON || '["ubuntu-latest"]') }}
     timeout-minutes: 30
+    # The workflow's two reads, and the OIDC token the console's notice door
+    # reads to resolve the trial's alert. A job-level block replaces the
+    # workflow's, so both are restated; every write here is the App token's.
+    permissions:
+      contents: read
+      pull-requests: read
+      id-token: write
     steps:
       - name: Mint bot token
         id: app
@@ -797,6 +837,17 @@ jobs:
               json.dump(trial, fh)
           print(json.dumps(trial, indent=2))
           PY
+
+      # The trial passed, so an alert a failed trial of this candidate raised
+      # is resolved now (DRE-7456) — before anything below can fail and leave
+      # it standing. No all-clear copy: a WARN never leaves the console. A key
+      # that is not open answers `not-open`; a refusal is logged, never a card.
+      - name: Resolve the candidate's trial-failure alert
+        if: env.DRY_RUN != 'true'
+        env:
+          BUREAU_READ_URL: ${{ vars.BUREAU_READ_URL }}
+          CANDIDATE: ${{ needs.classify.outputs.candidate }}
+        run: python3 scripts/pipeline_notice.py resolve --notice "model_trial:$CANDIDATE"
 
       # The home the adoption reads (DRE-6943): every step here that runs
       # model_adoption.py, model_adoption_actions.py or claude_code_pin.py

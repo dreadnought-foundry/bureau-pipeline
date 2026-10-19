@@ -335,16 +335,16 @@ class TestThePairIsNotHandedToTheFleet:
 
 
 class TestTheGateStillPromotesWork:
-    def test_a_fleet_sibling_beside_the_pair_goes_to_todo_unmarked(self):
+    def test_a_fleet_sibling_beside_the_pair_goes_to_in_progress_unmarked(self):
         """One sweep, two destinations for the work: the build card is handed to
-        an agent in Todo, the pair is handed to a person in Hand-work (DRE-5322),
-        and the marks still say which is which."""
+        an agent in In Progress (DRE-7120), the pair is handed to a person in
+        Hand-work (DRE-5322), and the marks still say which is which."""
         work = {c["identifier"]: c for c in _planner_output()}[WORK[0]]
         fleet = routing_verdict.verdict_comment(
             "FLEET", "the acceptance criteria are unit-testable")
         board = _Board(_backlog_card(work, [fleet]), *_pair_in_backlog())
         assert board.promote() == 3
-        assert board.lane_of(WORK[0]) == "Todo"
+        assert board.lane_of(WORK[0]) == "In Progress"
         assert board.labels_on(WORK[0]) == []
         for identifier in (PROOF, DEMO):
             assert board.lane_of(identifier) == routing_verdict.destination("OPERATOR")
@@ -470,7 +470,7 @@ class TestAPassReleasesTheChildrenInOrder:
                 plan_critic.marker(plan_critic.STAGE_POST, 1, plan_critic.PASS)),
         )
         assert board.promote() == 1
-        assert board.lane_of(WORK[0]) == "Todo"
+        assert board.lane_of(WORK[0]) == "In Progress"
         assert board.lane_of(WORK[1]) == "Backlog"
 
     def test_once_the_blocker_is_done_the_next_child_follows(self):
@@ -480,8 +480,8 @@ class TestAPassReleasesTheChildrenInOrder:
                 plan_critic.marker(plan_critic.STAGE_POST, 1, plan_critic.PASS)),
         )
         assert board.promote() == 2
-        assert board.lane_of(WORK[0]) == "Todo"
-        assert board.lane_of(WORK[1]) == "Todo"
+        assert board.lane_of(WORK[0]) == "In Progress"
+        assert board.lane_of(WORK[1]) == "In Progress"
 
 
 class TestAFailHoldsWithTheCriticsReason:
@@ -561,7 +561,8 @@ class TestTheFleetDoesNotFreezeOnTheDayThisMerges:
 
 
 class TestThereIsExactlyOnePromoter:
-    """AC4 — the lane contract's Todo writers clause names ONE promoter.
+    """AC4 — the lane contract names ONE promoter into FLEET's lane (Todo until
+    the flip, In Progress since DRE-7120).
 
     Two promoters for one event is the DRE-3038/DRE-3044 shape: two readers of
     one rule, only one of them gated. `plan.yml`'s activate route does not
@@ -572,19 +573,34 @@ class TestThereIsExactlyOnePromoter:
 
     WORKFLOWS = Path(__file__).resolve().parent.parent / ".github" / "workflows"
 
-    def test_the_todo_writers_clause_names_the_sweep_as_the_promoter(self):
-        text = lane_contract.lane("Todo")["clauses"]["writers"]["text"]
-        assert "promote_ready" in text, text
-        assert "DRE-3059" in text, text
+    def test_the_fleet_lanes_writers_clause_names_the_sweep_as_the_promoter(self):
+        lane = routing_verdict.destination("FLEET")
+        text = lane_contract.lane(lane)["clauses"]["writers"]["text"]
+        assert "The sweep, which promotes a FLEET card here" in text, text
+        # The gate that promotion passes is the queue's exit clause's to state.
+        queue = lane_contract.lane(lane_contract.QUEUE_LANE)
+        exit_text = queue["clauses"]["exit"]["text"]
+        assert f"promotes a FLEET card to {lane}" in exit_text, exit_text
+        assert "DRE-3059" in exit_text, exit_text
+        # The old start lane is retiring (DRE-7129): it permits no writer, and
+        # the sweep only drains it.
+        old = lane_contract.lane("To" + "do", status="retiring")
+        assert old["replaced_by"] == lane
+        assert "clauses" not in old
 
-    def test_the_route_is_not_a_second_writer_of_todo(self):
-        who = lane_contract.lane_writers("Todo")
-        assert "reconcile.py" in who
-        assert "plan.yml" not in who, who
+    def test_the_route_is_not_a_second_promoter(self):
+        lane = routing_verdict.destination("FLEET")
+        assert "reconcile.py" in lane_contract.lane_writers(lane)
+        # plan.yml writes In Progress for one card only — the roll-up parent it
+        # places there (DRE-4717) — and never promotes a FLEET card into it.
+        text = lane_contract.lane(lane)["clauses"]["writers"]["text"]
+        naming = [s for s in text.split(". ") if "plan.yml" in s]
+        assert naming, text
+        assert all("roll-up" in s and "FLEET" not in s for s in naming), naming
 
     def test_every_workflow_step_that_promotes_runs_the_one_promoter(self):
         """The mechanical half: a second promoter would have to appear here as
-        a step that advances a card into Todo by some other means."""
+        a step that advances a card into FLEET's lane by some other means."""
         promoting = [
             (path.name, line.strip())
             for path in sorted(self.WORKFLOWS.glob("*.yml"))
@@ -775,8 +791,8 @@ class _QueueBoard:
 
 
 class TestTheSweepReadsBothQueueNames:
-    def test_a_fleet_card_in_either_queue_name_is_promoted_to_todo(self):
-        """One FLEET card in `Queued`, one in `Backlog`: both reach Todo. The
+    def test_a_fleet_card_in_either_queue_name_is_promoted_to_in_progress(self):
+        """One FLEET card in `Queued`, one in `Backlog`: both reach In Progress. The
         read that asks for `Backlog` alone never sees the first, and a move
         guarded on `Backlog` alone refuses it."""
         board = _QueueBoard(_one_off("DRE-6801", QUEUED), _one_off("DRE-6802", "Backlog"))
@@ -785,7 +801,7 @@ class TestTheSweepReadsBothQueueNames:
             assert board.promote() == 2
         finally:
             reconcile._write_failures.clear()
-        assert board.lanes == {"DRE-6801": "Todo", "DRE-6802": "Todo"}
+        assert board.lanes == {"DRE-6801": "In Progress", "DRE-6802": "In Progress"}
 
     def test_the_queue_names_come_from_the_contract(self):
         """`reconcile.QUEUE_LANE` and `QUEUE_LANES` are `lane_contract`'s own
@@ -910,18 +926,20 @@ class TestTheSweepWritesThroughQueueLane:
         assert f"parked in {QUEUED} with the 'needs-human' label" in posted[0]
         assert "Backlog" not in posted[0]
         assert self._promote() == [
-            f"🧹 Auto-promoted {QUEUED} → Todo: no parent epic, a FLEET verdict, "
+            f"🧹 Auto-promoted {QUEUED} → In Progress: no parent epic, a FLEET verdict, "
             "and all blockers Done."]
         assert self._advance_epic().startswith(
             f"🧹 Auto-advanced {QUEUED} → Planning: blocker DRE-6813 is Done")
 
-        # The exit put back: the receipts before DRE-6742, byte for byte.
+        # The exit put back: the receipts name the old queue name again, as
+        # they did before DRE-6742 (the promotion's destination is In Progress
+        # since the flip, DRE-7120).
         monkeypatch.setattr(reconcile, "QUEUE_LANE", "Backlog")
         states, posted = self._park()
         assert states == [("Backlog", "--park")]
         assert "parked in Backlog with the 'needs-human' label" in posted[0]
         assert self._promote() == [
-            "🧹 Auto-promoted Backlog → Todo: no parent epic, a FLEET verdict, "
+            "🧹 Auto-promoted Backlog → In Progress: no parent epic, a FLEET verdict, "
             "and all blockers Done."]
         assert self._advance_epic().startswith(
             "🧹 Auto-advanced Backlog → Planning: blocker DRE-6813 is Done")

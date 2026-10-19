@@ -322,8 +322,10 @@ class TestAgainstTheShippedContract:
         # team's only backlog-type status cannot be archived — so the entry
         # stays, and the rule passes while the state is on the board.
         contract = lane_contract.load()
+        # Todo joined it as the second (DRE-7129), on the board until the
+        # operator deletes the state.
         assert lane_contract.lane_names(status="retiring", contract=contract) == (
-            "Backlog",
+            "Backlog", "Todo",
         )
         board = {
             name: 0

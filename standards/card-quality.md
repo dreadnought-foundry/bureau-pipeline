@@ -2,7 +2,7 @@
 
 The human-readable contract for how a Linear card must be structured to flow
 through the pipeline. **The live enforcer is `scripts/validate_card.py`** (the
-Todo-entry gate) and its tests — that code is the real single source of truth;
+card-validation gate at the start of a build) and its tests — that code is the real single source of truth;
 this is the standard it implements. Create cards with the Linear MCP
 (`save_issue`) or `scripts/linear_ops.py`. **Search before you create** to avoid
 duplicates.
@@ -34,23 +34,21 @@ duplicates.
 2. An **`agent:*` label** (`agent:engineer`, `agent:frontend`, `agent:devops`,
    `agent:planner`, …).
 
-The Todo gate is **fix-first**: it auto-repairs a missing piece when it can infer
-it (from an `initiative:<x>` label — the one route, since DRE-2874 deleted the
-Linear project-name-prefix fallback) and **bounces** in exactly two cases. The
-first is a repo it can't infer deterministically, which goes to Planning. The
-second is an **epic in Todo** (DRE-5319) — a card with children, an `[EPIC]`
-title or an `epic`/`roll-up` stamp, read off the card and never off its labels.
-Nothing builds an epic, so the gate repairs no label, stops the build and
-carries it out under a `🚫 epic-not-todo` refusal: back to `In Progress` when
-that is where it came to Todo from (the CEO had approved it), to `Planning`
-otherwise. The relay already dispatches nothing for an epic wearing
-`agent:planner`; this stops the one it does dispatch — an epic nobody labelled.
-The pipeline's own writers cannot put an epic in Todo at all (DRE-5316), and
-`python3 scripts/ready_lane_writers.py check` names any Todo seam that lost that
-refusal as `epic-can-enter-todo`. Nothing in this repository can stop a person
-dragging an epic into Todo in Linear or the console; one that wears
-`agent:planner` is never dispatched, so the gate never meets it, and moving it
-out is the sweep's carry (DRE-5347). Get it right and the gate is a no-op.
+The card-validation gate at the start of a build is **fix-first**: it
+auto-repairs a missing piece when it can infer it (from an `initiative:<x>`
+label — the one route, since DRE-2874 deleted the Linear project-name-prefix
+fallback) and **bounces** a repo it can't infer deterministically, which goes
+to Planning. It never builds an **epic** — a card with children, an
+`[EPIC]` title or an `epic`/`roll-up` stamp, read off the card and never off
+its labels (DRE-5319). An epic in `In Progress` is one the CEO approved, so the
+gate repairs no label on it and leaves it to the plan run that move dispatches
+(DRE-7110). Before the flip (DRE-7120, 2026-10-18) a build started in `Todo`,
+and an epic still found in that lane is carried out under the
+`🚫 epic-not-todo` refusal — back to `In Progress` when it came from there, to
+`Planning` otherwise — while `python3 scripts/ready_lane_writers.py check`
+names any seam that could put an epic in `Todo` as `epic-can-enter-todo`
+(DRE-5316, DRE-5347; history as of 2026-10-18). Get it right and the gate is a
+no-op.
 
 ## Optional — only when applicable
 - **`**Design:** <png path>`** — UI cards ONLY (e.g.
@@ -79,7 +77,7 @@ out is the sweep's carry (DRE-5347). Get it right and the gate is a no-op.
   `Triage`** (DRE-2676). The sweep refuses to promote it, says so once on the
   card naming both fixes — set the relation, or reword the line so it does not
   open with a declaring phrase — and moves it to the broken-card lane; the card
-  returns to `Queued`, where the gate re-evaluates it, never to `Todo`. The
+  returns to `Queued`, where the gate re-evaluates it, never to `In Progress`. The
   refusal is named `prose-blocker-no-relation` in the sweep log and on the card.
   On an EPIC the same defect refuses and comments but moves nothing, and the
   sweep run goes red once it has stood two hours. Nothing rewrites a
@@ -92,7 +90,7 @@ out is the sweep's carry (DRE-5347). Get it right and the gate is a no-op.
   with it (`needs-human` requires `no-code`; the create seam refuses the lone
   label, DRE-3512), because a card a person finishes by hand may not also
   describe a diff.
-- **`break-glass`** — the ONE sanctioned way past the Todo-entry gate at 2am
+- **`break-glass`** — the ONE sanctioned way past the card-validation gate at 2am
   (DRE-2737). **Operator-only**: applied by hand, in Linear, by a person; the
   pipeline's own label writes refuse it, so **no agent may apply it**. The
   bypass is recorded on the card and counted rather than undone, and the card
@@ -101,7 +99,7 @@ out is the sweep's carry (DRE-5347). Get it right and the gate is a no-op.
   afterwards changes neither the record nor the debt.
 
 ## Lifecycle — build by default; escalate by exception (DRE-1655)
-A card flows `Todo → In Progress → In Review → Done`, **unattended** — one
+A card flows `Queued → In Progress → In Review → Done`, **unattended** — one
 review lane since DRE-2726, because the two that preceded it both meant "a pull
 request is open and being checked". The lane contract is data
 (`config/lane-contract.json`) and `docs/lane-contract.md` is rendered from it.
@@ -120,8 +118,8 @@ the same lane epics wait in for plan approval. Since epic DRE-3893 that
 question carries the three declared lines — Finding, Question and
 Recommendation, rendered by `scripts/console_escalation.py` — with
 `none given — …` on the Recommendation line where the agent stated none. The
-CEO answers and moves the card back to `Todo` to proceed (a fresh run picks up
-the guidance) or to `Queued` to drop it.
+CEO answers and moves the card back to `In Progress` to proceed (a fresh run
+picks up the guidance) or to `Queued` to drop it.
 
 **NOT `Triage`, and the distinction is the point.** Triage is the *broken-card*
 lane: an unroutable `repo:` label, an archived repo, a card the readiness guard
@@ -200,7 +198,7 @@ planner's question, would now be named. A destination the discovery cannot read
 is a problem here, never a pass, because it could be `Green Light`.
 
 `break-glass` is unchanged by this and is not an exception to it. It is a
-bypass of the **Todo-entry gate**, applied by hand by the operator, recorded and
+bypass of the **card-validation gate** at the start of a build, applied by hand by the operator, recorded and
 counted — and the card comes back to `Planning` for the classification it
 skipped once its work merges. It defers Planning; it does not skip it.
 
@@ -225,7 +223,7 @@ own, and stays. Two live verdicts on one card are still refused.
 
 | Verdict | Means | Where it goes / who picks it up |
 | -- | -- | -- |
-| **FLEET** | Buildable unattended in one PR | `Todo` — the sweep promotes it, an agent run builds it. The ONLY verdict that is dispatched. |
+| **FLEET** | Buildable unattended in one PR | `In Progress` — the sweep promotes it, and that move dispatches the run that builds it (DRE-7120). The ONLY verdict that is dispatched. |
 | **WORKBENCH** | A person works it at an interactive session, against live system state | `Hand-work`, with no mark — kept for historical demo cards and the pipeline's own record cards (`repair_card`, `model_adoption_actions`); the acceptance criteria never produce it (DRE-6227). Nothing is dispatched. |
 | **OPERATOR** | Not code — a deploy, a migration run, a secret | `Hand-work`, marked `operator-step` + `no-code` — the sweep promotes it and stamps the marks; the operator does the step there, and no code is produced. Nothing is dispatched. |
 | **PARKED** | Well-formed and deliberately not to be built | `Queued` — landed there by the planning-exit writer, and nobody picks it up. Never promoted, and **never reported as stalled** by any sweep. |
@@ -283,9 +281,10 @@ filed and who builds it, in every repo.
 **Anything else he files follows the normal rule, which is Intake first.**
 
 **Why a hand-filed card is safe from the fleet.** Nothing dispatches a card
-from Intake: the relay dispatches only from `Todo`, and the one promoter into
-`Todo` is the sweep acting on a FLEET verdict, which a card left in Intake never
-gets. If the groomer's batch lists a `hand-built` card, verification drops it
+from Intake: the relay dispatches only a move into `In Progress` from a waiting
+lane, it refuses a card wearing `hand-built`, and the one promoter into
+`In Progress` is the sweep acting on a FLEET verdict, which a card left in
+Intake never gets (DRE-7107, DRE-7120). If the groomer's batch lists a `hand-built` card, verification drops it
 from the batch and leaves it where it is (`groom_verify_agent.exclusion`,
 DRE-5306). The sweep's stranded watchdog and its nudge loop skip a `hand-built`
 card with no pull request (DRE-2524) — only the alarm for hand-built work idle
@@ -309,6 +308,45 @@ worktree-isolated helper, and shipping it through the normal pull request path
 is guidance to the session. Nothing in the pipeline checks it. What the pipeline
 does check begins at the pull request: the TDD commit order, the critic's
 verdict and the merge gate, the same as for any card.
+
+## Every step that needs the CEO is agreed before the work starts (DRE-7521)
+
+Some work has a step only the CEO can unblock: a sign-in of his, a press from
+his own session, a production apply he has to OK, or a name only he can give.
+**Every such step is listed in the one question he answers before the work
+starts. It is never found partway through.** The CEO, 2026-10-18: "We need to
+make sure everybody, every agent in our system, knows that they need to ask for
+this before they start doing the work so we don't have to get stuck like this."
+
+- **Where the list goes.** It goes in whatever he already says yes to before
+  anything runs:
+  - an epic's plan, for an epic and for the operator steps its PROOF card
+    reads;
+  - the card's own question, for a card that escalates.
+
+  Each step is named in plain words: what it does, where, and in whose name.
+- **His yes covers every step on the list.** It is recorded on the card with
+  its time in PT, and no one asks him again when the step comes up.
+- **Anything an agent can look up is looked up, never asked.** That includes a
+  person's role in a product, which account a thing lives in, and whether an
+  identity holds a permission. Those facts come from the product's own read,
+  not from him.
+- **A step that needs him and was not on the list is a defect in the plan.**
+  Whoever finds it says so on the card in those words, then asks him once. A
+  step the run cannot finish without him is never parked silently.
+
+**Why.** On 2026-10-17 at 10:33 PM PT, Portico's portals release was held on one
+document that had to be republished by hand (DRE-7494). The republish names a
+Portico moderator as its publisher and runs against production. The session
+running the proof (DRE-7235) found that out at 6:16 AM PT, after two laps of
+work. Only then did it ask which sign-in to use, although Portico's own
+`whoami` answered it and the CEO had already agreed to the plan. The release
+stood stuck on the console for more than ten hours over a question he could
+have answered the night before.
+
+**What is guidance and what is checked.** Today this is guidance; nothing in
+the pipeline checks it. A plan-critic check that refuses a plan whose hand steps
+are missing from its question is follow-up work, filed as its own card.
 
 ## Epics
 Expressed by Linear **native parent/child** (not a label, not frontmatter).

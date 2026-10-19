@@ -159,6 +159,11 @@ import os
 print("OPEN\\t" + os.environ["CARD_PR_STUB_URL"])
 '''
 
+#: The from-list every `advance` out of a building card names: the start
+#: lanes, `lane_contract.START_LANES`, read by the script through the seam
+#: (DRE-7111) — `In Progress,Todo` while Todo stands in for the dispatch lane.
+START_FROM = ",".join(lane_contract.START_LANES)
+
 FINISHED = {"type": "result", "subtype": "success", "is_error": False,
             "num_turns": 120, "total_cost_usd": 9.40, "result": "PR opened"}
 
@@ -169,18 +174,32 @@ def _executable(path: str, body: str) -> None:
     os.chmod(path, 0o755)
 
 
-def _checkout(td: str, queue_lane: str | None = None) -> None:
+def retire_todo(doc: dict) -> None:
+    """The contract once the flip has set `build_start.lane` and Todo no
+    longer stands in for the dispatch lane: `lane_contract.START_LANES` is
+    `("In Progress",)` and `START_LANE` is `In Progress` (DRE-7111)."""
+    doc["build_start"]["lane"] = "In Progress"
+    for entry in doc["lanes"]:
+        if entry["name"] == "Todo":
+            entry.pop("replaced_by", None)
+
+
+def _checkout(td: str, queue_lane: str | None = None, contract_edit=None) -> None:
     base = os.path.join(td, ".bureau-pipeline")
     shutil.copytree(os.path.join(ROOT, "scripts"), os.path.join(base, "scripts"),
                     ignore=shutil.ignore_patterns("__pycache__"))
     shutil.copytree(os.path.join(ROOT, "config"), os.path.join(base, "config"))
-    if queue_lane is not None:
+    if queue_lane is not None or contract_edit is not None:
         # The checkout's own contract with the planning exit moved, which is
         # all DRE-6742 changes: `lane_contract.QUEUE_LANE` reads it (DRE-6745).
+        # `contract_edit` turns any other fact the shell reads (DRE-7111).
         contract = os.path.join(base, "config", "lane-contract.json")
         with open(contract, encoding="utf-8") as fh:
             doc = json.load(fh)
-        doc["planning_exit"]["to"] = queue_lane
+        if queue_lane is not None:
+            doc["planning_exit"]["to"] = queue_lane
+        if contract_edit is not None:
+            contract_edit(doc)
         with open(contract, "w", encoding="utf-8") as fh:
             json.dump(doc, fh)
     _executable(os.path.join(base, "scripts", "linear_ops.py"), LINEAR_STUB)
@@ -188,15 +207,16 @@ def _checkout(td: str, queue_lane: str | None = None) -> None:
 
 
 def run_pr_opened(tc, command: list[str], *, card_pr: str = CARD_PR_STUB,
-                  env_extra=None, queue_lane: str | None = None):
+                  env_extra=None, queue_lane: str | None = None, contract_edit=None):
     """Run `command` from a runner-shaped directory; return `(proc, journal)`.
 
     `env_extra` is the Push rescue step's outputs, as the step's `env:` hands
     them over (tests/test_push_rescue_branch_without_pr.py, DRE-6719).
-    `queue_lane` moves the checkout's planning exit there (DRE-6745)."""
+    `queue_lane` moves the checkout's planning exit there (DRE-6745), and
+    `contract_edit(doc)` edits the checkout's contract in place (DRE-7111)."""
     td = tempfile.mkdtemp()
     tc.addCleanup(shutil.rmtree, td, ignore_errors=True)
-    _checkout(td, queue_lane)
+    _checkout(td, queue_lane, contract_edit)
     _executable(os.path.join(td, ".bureau-pipeline", "scripts", "card_pr.py"), card_pr)
     binary = os.path.join(td, "bin")
     os.makedirs(binary)
@@ -251,7 +271,7 @@ class PrOpenedRunsAsAFile(unittest.TestCase):
              f"Run: https://github.com/{REPO}/actions/runs/{RUN_ID}"],
             posted)
         moved = [e["args"] for e in journal if e["op"] in ("advance", "state")]
-        self.assertEqual([[CARD, "In Review", "In Progress,Todo"]], moved)
+        self.assertEqual([[CARD, "In Review", START_FROM]], moved)
 
     def test_the_script_runs_by_its_path(self):
         self._assert_pr_opened(*run_pr_opened(self, ["bash", SCRIPT]))
@@ -380,7 +400,7 @@ class ABlockerIsClassifiedBeforeItParks(unittest.TestCase):
             self.assertIn(line, posted[0])
         self.assertNotIn("🛑 Agent blocked", posted[0])
         self.assertNotIn("blocker-class:", posted[0])
-        self.assertIn([CARD, "Green Light", "In Progress,Todo"], moved)
+        self.assertIn([CARD, "Green Light", START_FROM], moved)
         self.assertFalse(set(lane_contract.QUEUE_LANES) & {m[1] for m in moved}, moved)
 
     def test_an_unclassed_note_is_asked_in_green_light(self):
@@ -463,7 +483,94 @@ class TheBlockerParksInTheQueueLane(unittest.TestCase):
         posted, moved = self._run({ESCALATION: "Which of A or B first?"}, "Queued")
         self.assertIn("or to **Queued** to drop it.", posted[0])
         self.assertNotIn("Backlog", posted[0])
-        self.assertIn([CARD, "Green Light", "In Progress,Todo"], moved)
+        self.assertIn([CARD, "Green Light", START_FROM], moved)
+
+
+
+# --------------------------------------------------------------------------- #
+# a dead run is requeued to the queue; a restart names the start lanes        #
+# --------------------------------------------------------------------------- #
+
+class ADeadRunIsRequeuedToTheQueue(unittest.TestCase):
+    """DRE-7111: the death requeue writes `lane_contract.QUEUE_LANE`, the lane
+    the sweep requeues a dead run to (DRE-7108), and `dead_run.decide`'s
+    receipt names it. Driven through the file: no PR, no note, the agent ran
+    and died, and the card has no prior death — `decide` answers requeue."""
+
+    def _run(self, **kwargs):
+        proc, journal = run_pr_opened(
+            self, ["bash", SCRIPT], card_pr=CARD_PR_NO_PR_STUB,
+            env_extra={"AGENT_NOTES_DIR": notes_with(self, {})}, **kwargs)
+        self.assertEqual(0, proc.returncode, proc.stderr + proc.stdout)
+        posted = [e["args"][1] for e in journal if e["op"] == "comment"]
+        moved = [e["args"] for e in journal if e["op"] in ("advance", "state")]
+        return posted, moved
+
+    def test_a_silent_death_lands_in_queued_with_a_receipt_naming_it(self):
+        self.assertEqual("Queued", QUEUE_LANE)
+        posted, moved = self._run()
+        # --park, as the sweep's requeue passes it: without it the DRE-1885
+        # building-card reroute turns an In Progress → queue move into a
+        # start-lane one.
+        self.assertEqual([[CARD, "Queued", "--park"]], moved)
+        self.assertEqual(1, len(posted), posted)
+        self.assertTrue(posted[0].startswith("🪦 dead-run-requeue: "), posted[0])
+        self.assertIn("requeued to Queued for a fresh attempt (dead run 1/", posted[0])
+        self.assertNotIn("Todo", posted[0])
+
+    def test_the_requeue_follows_the_queue_lane_not_a_name(self):
+        posted, moved = self._run(queue_lane="Backlog")
+        self.assertEqual([[CARD, "Backlog", "--park"]], moved)
+        self.assertIn("requeued to Backlog for a fresh attempt", posted[0])
+
+
+class TheStartLanesComeFromTheContract(unittest.TestCase):
+    """DRE-7111: every `advance` out of a building card reads its from-list
+    from `lane_contract.START_LANES`, and the escalation's "proceed" names
+    `In Progress`, the dispatch lane, as the build run's own text does — each
+    read through the seam, never a literal."""
+
+    def test_the_pr_opened_advance_reads_the_start_lanes(self):
+        proc, journal = run_pr_opened(self, ["bash", SCRIPT], contract_edit=retire_todo)
+        self.assertEqual(0, proc.returncode, proc.stderr + proc.stdout)
+        moved = [e["args"] for e in journal if e["op"] in ("advance", "state")]
+        self.assertEqual([[CARD, "In Review", "In Progress"]], moved)
+
+    def test_the_escalation_advance_reads_the_start_lanes(self):
+        proc, journal = run_pr_opened(
+            self, ["bash", SCRIPT], card_pr=CARD_PR_NO_PR_STUB,
+            env_extra={"AGENT_NOTES_DIR": notes_with(self, {ESCALATION: "A or B?"})},
+            contract_edit=retire_todo)
+        self.assertEqual(0, proc.returncode, proc.stderr + proc.stdout)
+        moved = [e["args"] for e in journal if e["op"] in ("advance", "state")]
+        self.assertEqual([[CARD, "Green Light", "In Progress"]], moved)
+
+    def test_the_escalation_tells_the_ceo_to_proceed_in_in_progress(self):
+        proc, journal = run_pr_opened(
+            self, ["bash", SCRIPT], card_pr=CARD_PR_NO_PR_STUB,
+            env_extra={"AGENT_NOTES_DIR": notes_with(self, {ESCALATION: "A or B?"})})
+        self.assertEqual(0, proc.returncode, proc.stderr + proc.stdout)
+        posted = [e["args"][1] for e in journal if e["op"] == "comment"]
+        self.assertEqual(1, len(posted), posted)
+        self.assertIn("Answer here, then move this card to **In Progress** to proceed",
+                      posted[0])
+        self.assertNotIn("Todo", posted[0])
+
+    def test_no_code_line_in_either_shell_names_todo(self):
+        """A `#` comment recording an incident keeps its words."""
+        for name in ("report_agent_result.sh", "report_fix_result.sh"):
+            with self.subTest(script=name):
+                self.assertEqual(set(), lane_contract._scan_yaml(
+                    os.path.join(ROOT, "scripts", name), ["Todo"]))
+
+    def test_the_scan_is_not_vacuous(self):
+        """The scan reads code lines: a line naming the word is found."""
+        td = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, td, ignore_errors=True)
+        path = os.path.join(td, "probe.sh")
+        with open(path, "w", encoding="utf-8") as fh:
+            fh.write('# Todo, in a comment\necho "Todo"\n')
+        self.assertEqual({"Todo"}, lane_contract._scan_yaml(path, ["Todo"]))
 
 
 if __name__ == "__main__":

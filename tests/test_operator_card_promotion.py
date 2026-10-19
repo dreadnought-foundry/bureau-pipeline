@@ -227,8 +227,8 @@ class TestTheSweepPerformsTheMove:
         assert board.lane_of("DRE-3385") == routing_verdict.destination("OPERATOR")
 
     def test_nothing_is_dispatched_for_it(self):
-        """The promoter never dispatches — the relay does, off the Todo
-        transition — and the marks are what stop it there (DRE-3341). Asserted
+        """The promoter never dispatches — the relay does, off the move into
+        In Progress — and the marks are what stop it there (DRE-3341). Asserted
         rather than assumed, because "promoted" and "dispatched" became one word
         in this gate once before."""
         with patch.object(reconcile, "redispatch") as dispatch:
@@ -241,7 +241,7 @@ class TestTheSweepPerformsTheMove:
         declares no marks — stamping one would stop the fleet dispatching."""
         board = _Board(_card(comments=[FLEET]))
         assert board.promote() == 1
-        assert board.lane_of("DRE-3385") == "Todo"
+        assert board.lane_of("DRE-3385") == "In Progress"
         assert board.labels_on("DRE-3385") == []
 
 
@@ -299,7 +299,7 @@ class TestWhatStaysRefused:
 
     def test_a_needs_work_child_is_not_promoted(self):
         """NEEDS WORK routes back to Planning, which is the planner's move —
-        the sweep promotes to Todo and nowhere else."""
+        the sweep promotes to In Progress or Hand-work and nowhere else."""
         board = _Board(_card(comments=[NEEDS_WORK]))
         assert board.promote() == 0
         assert board.lane_of("DRE-3385") == "Backlog"
@@ -458,7 +458,7 @@ class TestTheWipCount:
         with patch.object(reconcile, "MAX_WIP", 1):
             board = _Board(*cards)
             assert board.promote(active_count=0) == 6
-        assert board.lane_of("DRE-3399") == "Todo"
+        assert board.lane_of("DRE-3399") == "In Progress"
 
     def test_the_fleet_budget_is_still_a_budget(self):
         """Control for the line above: FLEET cards still stop at the cap."""
@@ -547,7 +547,7 @@ class TestAFullFleetDoesNotHoldAPersonsCard:
             board = _Board(*cards)
             assert board.promote(active_count=0) == 3
         assert board.lane_of("DRE-3399") == routing_verdict.destination("OPERATOR")
-        assert board.lane_of("DRE-3391") == "Todo"
+        assert board.lane_of("DRE-3391") == "In Progress"
         assert board.lane_of("DRE-3392") == "Backlog"
 
     def test_a_repo_held_at_zero_still_hands_a_person_their_card(self):
@@ -616,10 +616,11 @@ class TestTheContractSaysSo:
                 assert routing_verdict.sweep_promotes(name)
 
     def test_every_sweep_lane_is_a_live_lane_the_promoter_may_write(self):
-        # DRE-5321: the sweep carries cards to more than one lane (Todo for
-        # FLEET, Hand-work for WORKBENCH and OPERATOR), read off the vocabulary.
+        # DRE-5321: the sweep carries cards to more than one lane (In Progress
+        # for FLEET since the flip, DRE-7120; Hand-work for WORKBENCH and
+        # OPERATOR), read off the vocabulary.
         lanes = routing_verdict.sweep_lanes()
-        assert lanes == ("Todo", "Hand-work")
+        assert lanes == ("In Progress", "Hand-work")
         for lane in lanes:
             assert lane in lane_contract.lane_names(status="live")
             assert routing_verdict.PROMOTER in lane_contract.lane_writers(lane)
@@ -639,13 +640,19 @@ class TestTheContractSaysSo:
 
     def test_the_hand_work_writers_clause_names_what_the_promoter_stamps(self):
         # Since DRE-5322 the marks are stamped on the way into Hand-work, so
-        # that is the lane whose writers clause says so; Todo's says FLEET
-        # arrives unmarked and the person's card goes to Hand-work instead.
+        # that is the lane whose writers clause says so. FLEET's lane (In
+        # Progress since the flip, DRE-7120) names the sweep's promotion and no
+        # mark, and the old start lane, retiring since DRE-7129, says nothing.
         writers = lane_contract.lane("Hand-work")["clauses"]["writers"]["text"]
         assert routing_verdict.OPERATOR_STEP_LABEL in writers
         assert linear_ops.NO_CODE_LABEL in writers
-        todo = lane_contract.lane("Todo")["clauses"]["writers"]["text"]
-        assert "Hand-work" in todo and "unmarked" in todo
+        fleet = lane_contract.lane(routing_verdict.destination("FLEET"))
+        fleet_writers = fleet["clauses"]["writers"]["text"]
+        assert "promotes a FLEET card here" in fleet_writers
+        assert routing_verdict.OPERATOR_STEP_LABEL not in fleet_writers
+        assert linear_ops.NO_CODE_LABEL not in fleet_writers
+        # The old start lane is retiring (DRE-7129) and permits no writer.
+        assert "clauses" not in lane_contract.lane("To" + "do", status="retiring")
 
     def test_the_rendered_document_matches_the_contract(self):
         """`docs/lane-contract.md` is rendered from the file — a clause edited

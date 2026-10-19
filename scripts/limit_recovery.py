@@ -56,9 +56,13 @@ naming no run to re-run, gets ONE `⚠️ limit-recovery:` receipt saying what a
 person does. That receipt opens with a glyph, so it CLOSES the marker: the card
 is back on the sweep's ordinary clock rather than hidden from it, and the sweep
 is not red on every pass for a card nobody was told about.
-  * `build` — In Progress → Todo, the sweep's own requeue move, which the relay
-    dispatches. A card already in Todo (DRE-3062 died at `Card → In Progress`
-    and never left it) gets the sweep's own re-dispatch instead.
+  * `build` — the card moves to the start lane, `lane_contract.START_LANE`
+    (DRE-7111), whose entry dispatches its build. A card already there gets
+    the sweep's own re-dispatch instead, because a same-lane write fires no
+    webhook — the rule the write layer's restart follows (DRE-7109). Under the
+    shipped contract that is a card in the lane the start lane names (DRE-3062
+    died at `Card → In Progress` and never left it); once the flip sets
+    `build_start.lane` to In Progress, it is every card that died building.
   * `fix` / `review` / `sync` — the ORIGINAL GitHub run the marker names is
     re-run, failed jobs only. Never a workflow_dispatch: the rerun keeps the
     run's own event, PR and head, which is what the fix loop, the critic and
@@ -116,8 +120,8 @@ yet given the watcher its turn. The marker's own paragraph names the clock.
 
 The lane contract (DRE-2859, `ready_lane_writers.py`) attributes a lane write
 to the ACTOR that runs the module, and the actor here is the sweep:
-`reconcile.py` is a declared writer of Todo, this module is not and should not
-be. So `move`, `dispatch` and `rerun` arrive from the caller — the sweep passes
+`reconcile.py` is a declared writer of the start lane, this module is not and
+should not be. So `move`, `dispatch` and `rerun` arrive from the caller — the sweep passes
 `linear_ops.cmd_state`, its own `redispatch` and `gh run rerun` — and the only
 seam this module touches itself is the comment writer, for the receipt. The
 same shape makes the whole decision testable without Linear or GitHub.
@@ -158,6 +162,7 @@ from datetime import datetime, timedelta
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import dead_run  # noqa: E402 — the marker's one definition
 from lane_contract import QUEUE_LANE, QUEUE_LANES  # noqa: E402 — the queue, written and read (DRE-6745)
+from lane_contract import START_LANE  # noqa: E402 — the lane a build re-enters through (DRE-7111)
 import hold  # noqa: E402 — DRE-6182: the one answer to "does this reader honor the hold"
 import linear_ops  # noqa: E402 — the comment window's one direction (DRE-3250)
 import medic_retry  # noqa: E402 — the park rule's one definition (Stage 2 fix #23)
@@ -175,12 +180,14 @@ RERUN_STAGES = ("fix", "review", "sync")
 PLANNING_LANE = "Planning"
 BOUNCE_LANE = "Intake"   # before Planning exit: not policed, and Planning entry re-fires the planner
 # The lanes a planning-stage card may ENTER Planning from. Anything else is a
-# card past Planning exit (Green Light, Todo, In Progress, In Review), and a
+# card past Planning exit (Green Light, the start lanes, In Review), and a
 # plan death there is re-run in place — never re-planned. The queue is read by
 # membership in `QUEUE_LANES`, so a card parked under either name re-enters
 # (DRE-6745).
 REPLAN_FROM = ("Intake", *QUEUE_LANES, "Triage")
-BUILD_LANE = "Todo"
+# A build re-enters through the start lane, the contract's and never a name
+# here (DRE-7111): a card already in it is re-dispatched in place.
+BUILD_LANE = START_LANE
 # The bound on DRE-5455's assumed Claude clock (DRE-5640): this many assumed
 # deaths inside this many hours is a wall that is not the five-hour window.
 CLAUDE_ASSUMED_DEATHS_MAX = 3
@@ -369,7 +376,7 @@ def _way_back(card: dict, stage: str) -> str:
                 f"epic. Not Re-run failed jobs: a re-run keeps the dead "
                 f"run's id, and a second death on it is never marked")
     return ("a person re-enters the card by hand: Intake then "
-            "Planning for a classify or plan stage, Todo for a build, "
+            f"Planning for a classify or plan stage, {BUILD_LANE} for a build, "
             "and Re-run failed jobs for a fix, review or sync run")
 
 
@@ -421,7 +428,8 @@ def handoff_reason(card: dict, marker: dict, *, assumed_deaths: int = 0) -> str 
         return ("the marker names no reset time and no account, so nothing here "
                 "can tell when the wall comes down. The card is back on the "
                 "sweep's ordinary clock; if the account is still limited, park it "
-                f"in {QUEUE_LANE} until the account is released, then return it to Todo")
+                f"in {QUEUE_LANE} until the account is released, then return it to "
+                f"{BUILD_LANE}")
     return None
 
 

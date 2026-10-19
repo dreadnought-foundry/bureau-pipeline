@@ -63,6 +63,8 @@ os.environ.setdefault("REPO_SLUG", "agent-bureau")
 os.environ.setdefault("GH_TOKEN", "x")
 
 import epic_cap  # noqa: E402
+import lane_contract  # noqa: E402
+import pipeline_notice  # noqa: E402
 import reconcile  # noqa: E402
 from test_intake_no_age_out import THIRTY_DAYS, _main_mocks  # noqa: E402
 from test_intake_no_age_out import _card as intake_card  # noqa: E402
@@ -77,11 +79,8 @@ from test_reconcile_epic_carry import _board  # noqa: E402
 from test_reconcile_epic_carry import _card as epic_card  # noqa: E402
 from test_reconcile_reviewer_down import (  # noqa: E402
     ATLAS_RUN_URL,
-    _alarm_card,
     _environment_note,
     _iso,
-    _ledger_for,
-    _open_card_payload,
 )
 from test_reconcile_reviewer_down import _card as outage_witness  # noqa: E402
 
@@ -108,8 +107,12 @@ TEN = (
 WRITE_SEAMS = (
     "cmd_advance", "cmd_state", "cmd_comment", "add_label", "remove_label",
     "set_title", "find_open_prefix", "post_released", "fire",
-    "post_refusal",
+    "post_refusal", "raise_notice",
 )
+
+#: A run in a third repository, so the outage witness meets the spread rule
+#: on its own: the listing is empty, and there is no card ledger to add to it.
+PORTICO_RUN_URL = "https://github.com/dreadnought-foundry/portico/actions/runs/34512000888"
 
 
 # --------------------------------------------------------------------------
@@ -122,31 +125,23 @@ def _drain_card():
 
 
 def _limit_card():
-    """An UNLABELLED card whose newest limit-death marker's reset has passed."""
-    return limit_card(ident="DRE-3171", lane="In Progress", labels=(),
+    """An UNLABELLED card whose newest limit-death marker's reset has passed,
+    off `lane_contract.START_LANE`, so the recovery's write is the move into
+    it, not a re-dispatch in place (DRE-7120). It sat in the start lane the
+    dispatch lane replaces until that lane began retiring (DRE-7129): the
+    drain empties that lane before the recovery reads it, so the card sits in
+    Intake instead."""
+    return limit_card(ident="DRE-3171", lane="Intake", labels=(),
                       bodies=[marker(reset=datetime(2026, 1, 1, tzinfo=UTC))])
 
 
 def _outage_witness():
-    """A could-not-run witness inside the window: another repository's run,
-    named in the medic's evidence note on an atlas card."""
+    """Two could-not-run witnesses inside the window, each another
+    repository's run named in the medic's evidence note on an atlas card —
+    two repositories, so the outage is raised (DRE-7455)."""
     return outage_witness(identifier="DRE-3435", repo="atlas",
-                          bodies=[(_environment_note(ATLAS_RUN_URL), _iso(6))])
-
-
-def _open_outage_card():
-    """The fleet's one open outage card, with a ledger the witness is not on —
-    so the decision is to APPEND to it."""
-    return _open_card_payload([
-        _ledger_for(ON_RAIL, 141, _iso(14), "u1"),
-        _ledger_for(ON_RAIL, 142, _iso(12), "u2"),
-    ], filed_minutes_ago=13)
-
-
-def _open_outage_row():
-    """The same card as the board read returns it: the sweep finds its open
-    card in the snapshot, in Triage (DRE-6576)."""
-    return _alarm_card(_open_outage_card())
+                          bodies=[(_environment_note(ATLAS_RUN_URL), _iso(6)),
+                                  (_environment_note(PORTICO_RUN_URL), _iso(5))])
 
 
 def _stalled_planning_card():
@@ -212,8 +207,9 @@ def _waiting_epic():
 TRIGGERS = {
     "drain_retiring_lanes": ((_drain_card,), "cmd_advance", "DRE-9999"),
     "recover_limit_deaths": ((_limit_card,), "cmd_state", "DRE-3171"),
-    "report_fleet_reviewer_outage": ((_outage_witness, _open_outage_row),
-                                     "set_title", "DRE-9500"),
+    # A console alert, raised through the notice client (DRE-7455).
+    "report_fleet_reviewer_outage": ((_outage_witness,),
+                                     "raise_notice", "reviewer_outage:fleet"),
     # The stall exit parks in Triage through cmd_state itself (DRE-5286).
     "flag_stranded": ((_stalled_planning_card,), "cmd_state", "DRE-2736"),
     "advance_urgent_intake": ((_urgent_card,), "cmd_advance", "DRE-4150"),
@@ -232,7 +228,6 @@ TRIGGERS = {
 def _pin(monkeypatch):
     monkeypatch.setattr(reconcile, "REPO", THIS)
     monkeypatch.setattr(reconcile, "REPO_SLUG", ON_RAIL)
-    monkeypatch.setattr(reconcile, "FLEET_OUTAGE_SWEEP_CAP", 1, raising=False)
     monkeypatch.setattr(reconcile.planner_queue, "cap", lambda cfg=None, environ=None: 4)
     monkeypatch.setenv(reconcile.GROOM_CARD_ENV, STANDING)
     for name in ("INTAKE_HOLD", "MERGED_CARD", "SWEEP_REASON", "SWEEP_CARD",
@@ -282,7 +277,6 @@ def _world(cards, slug, closed=None):
 
     def get_issue(identifier, *, fresh=False):
         return by_ident.get(identifier) or {"state": {"name": "Planning"}}
-    open_card = _open_outage_card()
     writes = {
         "cmd_advance": mock.MagicMock(),
         "cmd_state": mock.MagicMock(),
@@ -290,10 +284,11 @@ def _world(cards, slug, closed=None):
         "add_label": mock.MagicMock(),
         "remove_label": mock.MagicMock(),
         "set_title": mock.MagicMock(),
-        "find_open_prefix": mock.MagicMock(return_value=open_card),
+        "find_open_prefix": mock.MagicMock(return_value=None),
         "post_released": mock.MagicMock(),
         "fire": mock.MagicMock(return_value=(True, "")),
         "post_refusal": mock.MagicMock(return_value=True),
+        "raise_notice": mock.MagicMock(return_value="raised"),
     }
     epic_cap_reads = {
         "labeled_elsewhere": mock.MagicMock(return_value=labeled),
@@ -356,6 +351,12 @@ def _world(cards, slug, closed=None):
         enter(mock.patch.object(reconcile.plan_run, "fire", writes["fire"]))
         enter(mock.patch.object(reconcile.epic_todo_gate, "post_refusal",
                                 writes["post_refusal"]))
+        # The notice client (DRE-7455): a raise is the outage's write, and a
+        # resolve clears nothing a person sees, so it is answered quietly.
+        enter(mock.patch.object(reconcile, "pipeline_notice", SimpleNamespace(
+            raise_notice=writes["raise_notice"],
+            resolve_notice=mock.MagicMock(return_value="not-open"),
+            Fallback=pipeline_notice.Fallback)))
         yield writes, result
 
 
@@ -384,10 +385,12 @@ def _called(writes):
 
 def _targets(mock_):
     """The card identifiers a write mock was called on, wherever the
-    identifier sits in the call (first argument, or second after `ops`)."""
+    identifier sits in the call (first argument, or second after `ops`) — or
+    the notice key, for the notice client's raise (DRE-7455)."""
     return {
         arg for call in mock_.call_args_list for arg in call.args[:2]
-        if isinstance(arg, str) and arg.startswith("DRE-")
+        if isinstance(arg, str)
+        and (arg.startswith("DRE-") or pipeline_notice.KEY_PATTERN.match(arg))
     }
 
 

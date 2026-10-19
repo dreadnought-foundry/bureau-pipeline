@@ -183,7 +183,14 @@ MARKER = deliver_rescue.announcement(
 )
 
 
+# The build run's start receipt (DRE-7108): a card whose build never started
+# is re-fired, never read as a dead run, so every card here carries one —
+# newer than its entry into the lane (`_sweep`'s lane history).
+START_RECEIPT = "🧠 model-attempt: claude-opus-5-5 — engineer agent starting"
+
+
 def _card(bodies=(), state="In Progress", identifier=CARD):
+    bodies = (START_RECEIPT, *bodies)
     return {
         "id": f"uuid-{identifier}",
         "identifier": identifier,
@@ -245,7 +252,10 @@ def _sweep(cards, dispatch_ok=True, prior=0):
         reconcile.linear_ops, "cmd_advance"
     ), mock.patch.object(
         reconcile.linear_ops, "count_comments", return_value=prior
-    ), mock.patch.object(reconcile.linear_ops, "open_pass"):
+    ), mock.patch.object(reconcile.linear_ops, "open_pass"), mock.patch.object(
+        reconcile.linear_ops, "lane_history",
+        return_value=[{"createdAt": _iso(20), "toState": {"name": "In Progress"}}],
+    ):
         # A refused dispatch is a WRITE FAILURE and the sweep exits nonzero for
         # the medic (DRE-1254) — the exit is the point of that test, not a
         # reason it cannot assert what the sweep did on its way out.
@@ -281,7 +291,7 @@ def test_a_card_with_no_marker_is_requeued_exactly_as_before():
     DRE-2023's whole point is that a genuinely lost run gets another go."""
     s = _sweep([_card(bodies=["⏳ 1/5 plan formed"])])
     s.cmd_state.assert_called_once()
-    assert s.cmd_state.call_args.args[1] == "Todo"
+    assert s.cmd_state.call_args.args[1] == reconcile.QUEUE_LANE
     s.dispatch.assert_not_called()
 
 
@@ -301,7 +311,7 @@ def test_a_delivery_that_already_failed_once_falls_back_to_the_requeue():
     s = _sweep([_card(bodies=[MARKER])], prior=1)
     s.dispatch.assert_not_called()
     s.cmd_state.assert_called_once()
-    assert s.cmd_state.call_args.args[1] == "Todo"
+    assert s.cmd_state.call_args.args[1] == reconcile.QUEUE_LANE
 
 
 def test_a_refused_dispatch_falls_back_to_the_requeue():
@@ -309,4 +319,4 @@ def test_a_refused_dispatch_falls_back_to_the_requeue():
     class — the sweep must fall through to the behaviour it had."""
     s = _sweep([_card(bodies=[MARKER])], dispatch_ok=False)
     s.cmd_state.assert_called_once()
-    assert s.cmd_state.call_args.args[1] == "Todo"
+    assert s.cmd_state.call_args.args[1] == reconcile.QUEUE_LANE

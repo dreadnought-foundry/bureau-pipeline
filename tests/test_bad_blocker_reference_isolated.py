@@ -161,7 +161,7 @@ def test_bad_reference_does_not_stop_other_cards_from_promoting():
         patch.object(reconcile.linear_ops, "cmd_comment"):
         promoted = reconcile.promote_ready(active_count=0)
     assert promoted == 1
-    assert ("DRE-200", "Todo", reconcile.QUEUE_FROM) in [c.args for c in advance.mock_calls]
+    assert ("DRE-200", "In Progress", reconcile.QUEUE_FROM) in [c.args for c in advance.mock_calls]
 
 
 def test_bad_card_gets_exactly_one_comment_across_sweeps():
@@ -202,7 +202,7 @@ def test_skipped_card_is_never_promoted():
         patch.object(reconcile.linear_ops, "cmd_comment"):
         promoted = reconcile.promote_ready(active_count=0)
     assert promoted == 0
-    assert ("DRE-100", "Todo", reconcile.QUEUE_FROM) not in [c.args for c in advance.mock_calls]
+    assert ("DRE-100", "In Progress", reconcile.QUEUE_FROM) not in [c.args for c in advance.mock_calls]
 
 
 def test_the_unevaluable_card_path_still_isolates_one_card(capsys):
@@ -230,7 +230,7 @@ def test_the_unevaluable_card_path_still_isolates_one_card(capsys):
         patch.object(reconcile.linear_ops, "cmd_comment"):
         promoted = reconcile.promote_ready(active_count=0)
     assert promoted == 1
-    assert ("DRE-200", "Todo", reconcile.QUEUE_FROM) in [c.args for c in advance.mock_calls]
+    assert ("DRE-200", "In Progress", reconcile.QUEUE_FROM) in [c.args for c in advance.mock_calls]
     captured = capsys.readouterr()
     assert "ERROR" in captured.err and "DRE-100" in captured.err
     assert "1 card(s) SKIPPED" in captured.out + captured.err
@@ -253,7 +253,7 @@ def test_comment_failure_does_not_kill_the_sweep():
         patch.object(reconcile.linear_ops, "cmd_comment", side_effect=_comment):
         promoted = reconcile.promote_ready(active_count=0)
     assert promoted == 1
-    assert ("DRE-200", "Todo", reconcile.QUEUE_FROM) in [c.args for c in advance.mock_calls]
+    assert ("DRE-200", "In Progress", reconcile.QUEUE_FROM) in [c.args for c in advance.mock_calls]
 
 
 # ---------------------------------------------------------------------------
@@ -304,7 +304,7 @@ def test_comment_write_failure_after_advance_is_not_a_bad_reference():
         patch.object(reconcile.linear_ops, "cmd_advance") as advance, \
         patch.object(reconcile.linear_ops, "cmd_comment", side_effect=_comment):
         promoted = reconcile.promote_ready(active_count=0)
-    advance.assert_called_once_with("DRE-200", "Todo", reconcile.QUEUE_FROM)
+    advance.assert_called_once_with("DRE-200", "In Progress", reconcile.QUEUE_FROM)
     assert promoted == 0  # comment failed, so the card is not counted promoted
     skip.assert_not_called()
     assert any("DRE-200" in f for f in reconcile._write_failures)

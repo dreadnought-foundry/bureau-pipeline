@@ -90,10 +90,9 @@ def test_section_sits_directly_after_routing_verdicts_and_before_epics():
         f"{HEADING!r} must come directly after {BEFORE!r}, which explains the "
         f"`hand-built` mark; it follows {headings[at - 1]!r}"
     )
-    assert headings[at + 1] == AFTER, (
-        f"{HEADING!r} must come directly before {AFTER!r}; it precedes "
-        f"{headings[at + 1]!r}"
-    )
+    # Before `## Epics`, not directly: the CEO's later rules (DRE-7521) sit
+    # between the two.
+    assert AFTER in headings[at + 1 :], f"{HEADING!r} must come before {AFTER!r}"
 
 
 def test_table_has_two_rows_one_per_phrase():

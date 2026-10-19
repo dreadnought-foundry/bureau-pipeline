@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
-"""The hygiene agent's Todo-and-proofs lane (DRE-5411): close what the
+"""The hygiene agent's build-lanes-and-proofs lane (DRE-5411): close what the
 evidence says is done.
 
 Discovered by the core's glob (`scripts/hygiene.py`), registered nowhere. It
-reads the cards in `Todo`, `In Progress`, `In Review` and `Hand-work` once and
+reads the cards in the start lanes (`lane_contract.START_LANES`, DRE-7105 —
+the dispatch lane, and each lane still waiting to retire into it), `In Review`
+and `Hand-work` once and
 returns four kinds of action, each closing receipt quoting the CEO's standing
 rule — "if the cards are proven with evidence then just approve them". The
 `hyg-…` names below are the receipts' tags; the code returns the acts they map
@@ -38,10 +40,14 @@ from through `hygiene.TAGS` (`hygiene-card-close` → `hyg-card-closed`):
 3. **A superseded proof.** A `PROOF:` card whose parent epic is `Canceled` or
    `Duplicate`: Canceled, under a `hyg-card-canceled` receipt. Cause:
    `parent <DRE-N> is <state>`.
-4. **A Todo build card with no run.** No person mark (`hand-built`, or any
-   `routing_verdict.hand_marks`, DRE-6226), no `⏳`/`🧠` heartbeat in
-   the comment window, at least two sweep re-dispatch receipts, the newest
-   older than the Todo stale window. A run of the repo's build stub created
+4. **A start-lane build card that has not started** (DRE-7112). A card in
+   one of `lane_contract.START_LANES` with no person mark (`hand-built`, or
+   any `routing_verdict.hand_marks`, DRE-6226) that has NOT STARTED — the
+   sweep's test (`reconcile.build_started`, DRE-7108): no `🧠 model-attempt`
+   comment newer than the card's newest entry into its lane, read off the
+   board's history, or its creation when the history holds no entry. At
+   least two sweep re-dispatch receipts newer than that entry, the newest
+   older than `lane_contract.START_MINUTES`. A run of the repo's build stub created
    within ten minutes after that receipt is the card's — a minute before it
    counts too, because the sweep writes its receipt only after the dispatch
    returns. A run in flight is a build about to start and yields nothing; a
@@ -98,11 +104,13 @@ from proof_record import (  # noqa: F401 — the names this lane's callers and t
     unmet_row,
 )
 
-LANE = "Todo and proofs"
+LANE = "Build lanes and proofs"
 
-#: The lanes read, once each. `Hand-work` is absent until the contract
-#: declares it, and an absent lane is skipped.
-READ_LANES = ("Todo", "In Progress", "In Review", hygiene.HAND_WORK)
+#: The lanes read, once each: the start lanes (`lane_contract.START_LANES`), so
+#: deleting a retiring lane's entry narrows the read with no edit here, then
+#: review and person work. `Hand-work` is absent until the contract declares
+#: it, and an absent lane is skipped.
+READ_LANES = (*lane_contract.START_LANES, "In Review", hygiene.HAND_WORK)
 
 #: This agent's own epic's proof card: the CEO closes it.
 OWN_PROOF = "DRE-5412"
@@ -300,21 +308,45 @@ def _named_today(nodes: list, ctx: hygiene.Context) -> bool:
     return False
 
 
-def no_run(card: dict, repo: str, labels: list, ctx: hygiene.Context, cache: dict) -> list:
-    """(4) a Todo build card re-dispatched with nothing to show for it."""
+def entered(card: dict, lane: str) -> datetime | None:
+    """The card's newest entry into `lane` on the board's history read, else
+    its creation — a card whose history holds no entry was created there, as
+    `reconcile.build_started` reads it. None when neither is read."""
+    moves = [_when(n.get("createdAt"))
+             for n in ((card.get("history") or {}).get("nodes") or [])
+             if ((n or {}).get("toState") or {}).get("name") == lane]
+    moves = [at for at in moves if at is not None]
+    return max(moves) if moves else _when(card.get("createdAt"))
+
+
+def _newer(nodes: list, since: datetime) -> list:
+    return [n for n in nodes if (at := _when(n.get("createdAt"))) is not None and at > since]
+
+
+def no_run(card: dict, repo: str, labels: list, lane: str, ctx: hygiene.Context,
+           cache: dict) -> list:
+    """(4) a start-lane build card that has not started, re-dispatched with
+    nothing to show for it."""
     # A person's card is the vocabulary's hand marks (DRE-6226): `hand-built`,
     # and `operator-step` once OPERATOR is marked with it. `no-code` alone is
     # not one — the sweep still re-dispatches it (`reconcile.hand_built`).
     if {name.lower() for name in labels} & {m.lower() for m in routing_verdict.hand_marks()}:
         return []
-    nodes = linear_ops.window_nodes(card.get("comments"))  # oldest → newest
-    if any((n.get("body") or "").lstrip().startswith(reconcile._LIFE_PREFIXES) for n in nodes):
+    since = entered(card, lane)
+    if since is None:
+        return []  # no entry read: whether it started is unknown, so no row
+    # NOT STARTED is the sweep's test (DRE-7108): no start receipt newer than
+    # the entry. A receipt or a re-dispatch from an earlier trip through the
+    # lane says nothing about this one.
+    nodes = _newer(linear_ops.window_nodes(card.get("comments")), since)  # oldest → newest
+    if any((n.get("body") or "").lstrip().startswith(reconcile.RUN_MARKER) for n in nodes):
         return []
-    receipts = [n for n in nodes if reconcile._TODO_REDISPATCH_NOTE in (n.get("body") or "")]
+    receipts = [n for n in nodes
+                if any(note in (n.get("body") or "") for note in reconcile._TODO_REDISPATCH_NOTES)]
     if len(receipts) < MIN_REDISPATCHES:
         return []
     at = _when(receipts[-1].get("createdAt"))
-    if at is None or ctx.now - at < timedelta(minutes=lane_contract.stale_minutes()["Todo"]):
+    if at is None or ctx.now - at < timedelta(minutes=lane_contract.START_MINUTES):
         return []
     tied = sorted((r for r in _runs(repo, ctx, cache)
                    if (created := _when(r.get("createdAt"))) is not None
@@ -331,8 +363,9 @@ def no_run(card: dict, repo: str, labels: list, ctx: hygiene.Context, cache: dic
         step = failing_step(ctx.gh(["gh", "run", "view", str(run_id), "--repo", repo,
                                     "--log-failed"]))
         if step is None:
-            return [_left(ident, f"in Todo, re-dispatched {count} times — run {run_id} "
-                                 f"{failed.get('conclusion')} and its log names no failing step",
+            return [_left(ident, f"in {lane}, not started, re-dispatched {count} times — "
+                                 f"run {run_id} {failed.get('conclusion')} and its log names "
+                                 "no failing step",
                           f"a person reads run {run_id} in {repo}")]
         cause = f"run {run_id} failed at step {step}"
         evidence.append(f"run {run_id}")
@@ -340,14 +373,15 @@ def no_run(card: dict, repo: str, labels: list, ctx: hygiene.Context, cache: dic
                           "it — every re-dispatch fails there until then")
     elif tied:
         run_id = tied[0]["databaseId"]
-        return [_left(ident, f"in Todo, re-dispatched {count} times — run {run_id} "
-                             f"{tied[0].get('conclusion')} and posted no heartbeat",
+        return [_left(ident, f"in {lane}, not started, re-dispatched {count} times — "
+                             f"run {run_id} {tied[0].get('conclusion')} and posted no "
+                             "heartbeat",
                       f"a person reads run {run_id} in {repo}")]
     else:
         cause = f"no run after the re-dispatch at {_moment(at)}"
         recommendation = (f"a person checks why a dispatch starts no {stub} run in {repo} "
                           "— the relay's delivery, the repo's Actions budget or the stub")
-    why = f"in Todo, re-dispatched {count} times with no heartbeat — {cause}"
+    why = f"in {lane}, not started, re-dispatched {count} times — {cause}"
     row = _left(ident, why, recommendation)
     if _named_today(nodes, ctx):
         return [_left(ident, f"{why}; hyg-cause-named already said on this card today, "
@@ -383,8 +417,8 @@ def _plan_card(card: dict, lane: str, ctx: hygiene.Context, cache: dict) -> list
     pr = _merged_pr(ident, repo, ctx)
     if pr is not None:
         return merged(card, repo, pr, labels, has_children, ctx)
-    if lane == "Todo":
-        return no_run(card, repo, labels, ctx, cache)
+    if lane in lane_contract.START_LANES:
+        return no_run(card, repo, labels, lane, ctx, cache)
     return []
 
 

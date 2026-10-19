@@ -87,10 +87,13 @@ would undo.
    DRE-6525) — same author, same critic, same gate.
 4. **Escalate when unsure.** If the agent cannot confidently produce a fix
    (ambiguous cause, a product-behavior choice, a destructive-looking
-   remedy), it opens no PR and posts a plain-English question to Linear —
-   the card parks in **Triage**, the lane for a card that went wrong
-   (renamed/split by DRE-2722 — the queue it used to share with epic plan
-   approval is now `Green Light` and holds only that). A
+   remedy), it opens no PR and writes a plain-English question, which the
+   workflow raises as the CRITICAL console alert
+   `red_main:<repo>:needs_decision` (DRE-7454). It used to file the
+   question as a card parked in **Triage**, the lane for a card that went
+   wrong (DRE-2722); every one of those filed in the 30 days to 2026-10-16
+   ended Canceled. The card is now only the notice client's fallback, filed
+   when the console door cannot be reached. A
    confused repair agent asking beats a confident one guessing on `main`.
 
 ## Guardrail 1 — no test-gutting
@@ -157,7 +160,7 @@ the bot's GitHub quota burned twice). Repair must not rebuild it:
     fails writes a marker the decision reads as "no history", never as
     "repeated". A repeat dispatches, and the decision carries the job, the
     step, the limit and the commits it timed out on into the agent's prompt
-    and into the budget-exhausted card. Portico's `main` failed
+    and into the budget-exhausted alert. Portico's `main` failed
     `infra — typecheck & test` on four commits in a row from 2026-09-22 19:40
     PT, each retried once, every time on *The action 'Test' has timed out
     after 12 minutes*; the loop read all eight runs as infrastructure, started
@@ -210,8 +213,16 @@ the bot's GitHub quota burned twice). Repair must not rebuild it:
 - **Bounded attempts, keyed by the failing SHA.** At most **2** repair
   attempts per distinct failing head SHA on `main`, tracked mechanically
   (the repair branch and its PR are the attempt record — no external state;
-  both branch shapes count as the same repair). Budget exhausted → stop and raise a plain-English Linear
-  triage card for a human; never a third swing at the same wall.
+  both branch shapes count as the same repair). Budget exhausted → stop and raise the plain-English
+  CRITICAL console alert `red_main:<repo>:budget_exhausted` for a human
+  (DRE-7454; a Triage card before, and still the fallback when the console
+  door cannot be reached); never a third swing at the same wall. The
+  console's one row per key is the duplicate suppression while the alert is
+  open. The workflow's `clear-notices` job closes both red-main alerts, with
+  the all-clear copy, when a watched workflow's run on the default branch
+  concludes `success` on the commit that is still its tip and no other run
+  on that commit is red or unfinished (`scripts/red_main_clear.py`). A late
+  or re-run green run on an older commit closes nothing.
 - **Repair never watches itself.** The trigger is the product repo's CI on
   the default branch only — a repair run's own failure routes through the
   existing medic, and a repair PR's review rejections route through the

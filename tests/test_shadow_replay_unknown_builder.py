@@ -20,6 +20,14 @@ What this file pins:
 * `pick --reviewer verifier --unknown-builder`: the verifier stub's runs,
   each kept only on a `Select model` note naming the model with the clause,
   paired with its verdict comment, every skipped run named;
+* the verifier pick (DRE-7507) stops at its time budget naming how many runs
+  it read, prints its progress every 50 runs and once when it stops, and
+  reads its logs on several readers while applying them in listing order —
+  the same pick and the same lines on one reader as on eight;
+* only an unreadable log past the 90 days a log is kept counts toward the
+  twenty in a row that stop the listing (DRE-7590): one inside retention is
+  read once more and, still unreadable, skipped, and every progress line
+  counts the logs skipped unreadable — each test pins the date it starts on;
 * `pick --from-pick <file> --acted-on-only`: exactly the acted-on records of
   an earlier pick, byte for byte;
 * `compare`'s two new lines, word for word, after today's lines, which stay
@@ -33,15 +41,20 @@ Run: python3 -m pytest tests/test_shadow_replay_unknown_builder.py -v
 
 from __future__ import annotations
 
+import collections
+import concurrent.futures
 import io
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
 import textwrap
+import threading
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
+from datetime import datetime, timezone
 from pathlib import Path
 from unittest import mock
 
@@ -144,7 +157,9 @@ FAKE_GH = textwrap.dedent("""\
     argv = sys.argv[1:]
     if argv[:2] == ["run", "view"]:
         run_id = argv[2]
-        if run_id not in fx["logs"]:
+        with open(os.environ["FAKE_GH_LOG"]) as log:
+            reads = sum(ln.split()[:3] == ["run", "view", run_id] for ln in log)
+        if run_id not in fx["logs"] or (run_id in fx["flaky"] and reads == 1):
             sys.stderr.write("log not found: the log has expired (HTTP 410)\\n")
             sys.exit(1)
         sys.stdout.write(fx["logs"][run_id])
@@ -185,9 +200,10 @@ FAKE_GH = textwrap.dedent("""\
 
 
 class FakeGh:
-    """A `gh` on PATH that answers from a fixture and logs every call."""
+    """A `gh` on PATH that answers from a fixture and logs every call. A run
+    in `flaky` fails its first `gh run view` and reads on the second."""
 
-    def __init__(self, *, commits=None, comments=None, runs=None, logs=None):
+    def __init__(self, *, commits=None, comments=None, runs=None, logs=None, flaky=()):
         self.tmp = tempfile.TemporaryDirectory()
         d = Path(self.tmp.name)
         gh = d / "gh"
@@ -196,7 +212,8 @@ class FakeGh:
         fixture = d / "fixture.json"
         fixture.write_text(json.dumps({
             "commits": commits or {}, "comments": comments or {},
-            "runs": runs or {}, "logs": {str(k): v for k, v in (logs or {}).items()}}),
+            "runs": runs or {}, "logs": {str(k): v for k, v in (logs or {}).items()},
+            "flaky": [str(k) for k in flaky]}),
             encoding="utf-8")
         self.log = d / "calls.log"
         self.log.write_text("", encoding="utf-8")
@@ -539,12 +556,73 @@ class VerifierUnknownBuilderPickTest(unittest.TestCase):
         self.assertIn("verify_workflow", out + err)
 
 
+def _readers(test: unittest.TestCase, n: int) -> None:
+    """Run `test` with the verifier pick's log reads on `n` readers."""
+    patch = mock.patch.object(_sr(), "VERIFIER_LOG_READERS", n)
+    patch.start()
+    test.addCleanup(patch.stop)
+
+
+class VerifierUnknownBuilderPickOneReaderTest(VerifierUnknownBuilderPickTest):
+    """The same pick, word for word, on one reader — today's sequence (DRE-7507)."""
+
+    def setUp(self):
+        super().setUp()
+        _readers(self, 1)
+
+
+# The dates the pick is pinned to start on (DRE-7590). The fixtures' runs are
+# dated 2026-10-01 and 2026-10-02: three weeks old on the first, past the 90
+# days a run's log is kept on the second.
+INSIDE_RETENTION = "2026-10-18T19:50:00+00:00"
+PAST_RETENTION = "2027-01-15T19:50:00+00:00"
+
+
+def _today(test: unittest.TestCase, iso: str) -> None:
+    """Run `test` with the verifier pick started at `iso`."""
+    patch = mock.patch.object(_sr(), "now", lambda: datetime.fromisoformat(iso))
+    patch.start()
+    test.addCleanup(patch.stop)
+
+
+class LogRetentionTest(unittest.TestCase):
+    def test_ninety_days_as_the_workflow_keeps_its_own_artifacts(self):
+        self.assertEqual(90, _sr().LOG_RETENTION_DAYS)
+        days = {int(n) for n in re.findall(r"retention-days:\s*(\d+)",
+                                           WORKFLOW.read_text(encoding="utf-8"))}
+        self.assertEqual({_sr().LOG_RETENTION_DAYS}, days)
+
+    def test_the_date_is_read_off_its_own_function_never_the_budget_clock(self):
+        got = _sr().now()
+        self.assertIsNotNone(got.tzinfo)
+        self.assertLess(abs((datetime.now(timezone.utc) - got).total_seconds()), 60)
+        self.assertIsNot(_sr().now, _sr().clock)
+
+    def test_past_retention_is_more_than_ninety_days_before_the_start(self):
+        started = datetime.fromisoformat("2026-12-31T00:00:00+00:00")
+        past = _sr().past_retention
+        self.assertFalse(past({"created_at": "2026-10-02T00:00:00Z"}, started),
+                         "exactly 90 days is inside retention")
+        self.assertTrue(past({"created_at": "2026-10-01T23:59:59Z"}, started))
+        self.assertFalse(past({"created_at": "2026-12-30T00:00:00Z"}, started))
+
+
 class UnreadableLogsInARowTest(unittest.TestCase):
     """Runs 1001 onward, newest first, each on its own pull request (700 +
-    the run's place). A run whose id has no log in `logs` fails `gh run
-    view`; the last run is on the model with the clause, with its verdict."""
+    the run's place), dated 2026-10-02. A run whose id has no log in `logs`
+    fails `gh run view`, and one in `flaky` fails its first; the last run,
+    dated 2026-10-01, is on the model with the clause, with its verdict.
 
-    def _pick(self, logs: dict, total: int):
+    Each test pins the date the pick starts on (DRE-7590): only an
+    unreadable log past retention counts toward the twenty in a row.
+
+    Pinned to one reader (DRE-7507), where the logs are read in exactly
+    today's order, so the ordered list of reads holds word for word."""
+
+    def setUp(self):
+        _readers(self, 1)
+
+    def _pick(self, logs: dict, total: int, *, flaky=()):
         good = 1000 + total
         runs = {VERIFY_WF: [run(1000 + i, 700 + i, _at(2), _at(2, 1), _sha(700 + i))
                             for i in range(1, total)]
@@ -553,7 +631,8 @@ class UnreadableLogsInARowTest(unittest.TestCase):
         comments = {str(700 + total): [
             verifier_verdict("FAIL", _sha(700 + total), "2026-10-01T00:30:00Z")]}
         err = io.StringIO()
-        with FakeGh(runs=runs, logs=logs, comments=comments) as gh, redirect_stderr(err):
+        with FakeGh(runs=runs, logs=logs, comments=comments, flaky=flaky) as gh, \
+                redirect_stderr(err):
             try:
                 got = _sr().pick_unknown_builder_verifier(
                     recorded_model=_opus(), count=1, repo=REPO, workflow=VERIFY_WF)
@@ -566,17 +645,46 @@ class UnreadableLogsInARowTest(unittest.TestCase):
     def _log_reads(self) -> list:
         return [int(c.split()[2]) for c in self.calls if c.startswith("run view ")]
 
-    def test_twenty_unreadable_logs_in_a_row_stop_the_listing(self):
+    def test_twenty_unreadable_logs_past_retention_in_a_row_stop_the_listing(self):
+        _today(self, PAST_RETENTION)
         self.assertEqual(20, _sr().UNREADABLE_LOGS_IN_A_ROW)
         got, err = self._pick({}, 21)
         self.assertIsInstance(got, _sr().PickError)
         self.assertIn("found 0", str(got))
-        self.assertIn("pick: 20 run logs in a row could not be read", err)
-        self.assertIn("the listing stops here", err)
+        self.assertIn("pick: 20 run logs in a row could not be read — the older runs' logs "
+                      "have expired too, so the listing stops here", err.splitlines())
         self.assertEqual(list(range(1001, 1021)), self._log_reads(),
-                         "the run past the twentieth unreadable log is never read")
+                         "each log past retention is read once, and the run past the "
+                         "twentieth is never read")
+
+    def test_twenty_unreadable_logs_inside_retention_do_not_stop_the_listing(self):
+        """A burst of failed reads on logs days old — throttling, a timeout —
+        is not expiry: each is read twice, skipped, and the pick reads on."""
+        _today(self, INSIDE_RETENTION)
+        got, err = self._pick({}, 21)
+        self.assertNotIsInstance(got, _sr().PickError, err)
+        self.assertEqual([721], [r["pr"] for r in got])
+        self.assertNotIn("the listing stops here", err)
+        for run_id in range(1001, 1021):
+            self.assertIn(f"pick: run {run_id} skipped — its log could not be read",
+                          err.splitlines())
+        self.assertEqual([n for n in range(1001, 1021) for _ in (1, 2)] + [1021],
+                         self._log_reads())
+        self.assertEqual("pick: read 21 run(s), picked 1 of 1, 20 log(s) unreadable",
+                         _read_lines(err)[-1])
+
+    def test_a_log_read_on_its_second_try_is_picked_and_not_counted(self):
+        _today(self, INSIDE_RETENTION)
+        got, err = self._pick({}, 2, flaky=(1002,))
+        self.assertNotIsInstance(got, _sr().PickError, err)
+        self.assertEqual([702], [r["pr"] for r in got])
+        self.assertNotIn("pick: run 1002 skipped", err)
+        self.assertEqual([1001, 1001, 1002, 1002], self._log_reads())
+        self.assertEqual("pick: read 2 run(s), picked 1 of 1, 1 log(s) unreadable",
+                         _read_lines(err)[-1])
 
     def test_a_readable_log_between_resets_the_count(self):
+        _today(self, PAST_RETENTION)
         got, err = self._pick({1020: job_log(_opus(), unknown=False)}, 40)
         self.assertNotIsInstance(got, _sr().PickError, err)
         self.assertEqual([740], [r["pr"] for r in got])
@@ -586,9 +694,498 @@ class UnreadableLogsInARowTest(unittest.TestCase):
     def test_an_unreadable_log_is_not_claimed_expired(self):
         """Any failing `gh run view` lands here — a rate limit as much as an
         expired log — so the skip names the failure without guessing why."""
+        _today(self, INSIDE_RETENTION)
         _, err = self._pick({}, 2)
         skipped = [ln for ln in err.splitlines() if ln.startswith("pick: run 1001 skipped")]
         self.assertEqual(["pick: run 1001 skipped — its log could not be read"], skipped, err)
+
+
+class UnreadableLogsInARowEightReadersTest(UnreadableLogsInARowTest):
+    """The same fixtures on eight readers (DRE-7507): the same result and
+    every line the same, in the same order, as on one reader. The logs read
+    are compared as a set — every log one reader needed, plus at most seven
+    runs listed after the last one applied, none of them named in a skip
+    line or picked."""
+
+    def setUp(self):
+        _readers(self, 8)
+
+    def _same_as_one_reader(self, logs: dict, total: int, *, flaky=()):
+        with mock.patch.object(_sr(), "VERIFIER_LOG_READERS", 1):
+            want, want_err = self._pick(logs, total, flaky=flaky)
+        needed = self._log_reads()
+        got, err = self._pick(logs, total, flaky=flaky)
+        if isinstance(want, Exception):
+            self.assertIsInstance(got, _sr().PickError)
+            self.assertEqual(str(want), str(got))
+        else:
+            self.assertEqual(want, got)
+        self.assertEqual(want_err.splitlines(), err.splitlines())
+        reads = set(self._log_reads())
+        self.assertLessEqual(set(needed), reads, "a log one reader needed was not read")
+        last = 1000 + len([ln for ln in err.splitlines() if ln.startswith("pick: run ")]) + (
+            0 if isinstance(got, Exception) else len(got))
+        ahead = reads - set(needed)
+        self.assertTrue(ahead <= set(range(last + 1, last + 8)),
+                        f"read past the last run applied ({last}): {sorted(ahead)}")
+        for run_id in ahead:
+            self.assertNotIn(f"run {run_id} ", err)
+            if not isinstance(got, Exception):
+                self.assertNotIn(run_id - 300, [r["pr"] for r in got])
+        return got, err
+
+    def _times_read(self, run_ids) -> dict:
+        reads = collections.Counter(self._log_reads())
+        return {run_id: reads[run_id] for run_id in run_ids}
+
+    def test_twenty_unreadable_logs_past_retention_in_a_row_stop_the_listing(self):
+        _today(self, PAST_RETENTION)
+        got, err = self._same_as_one_reader({}, 21)
+        self.assertIsInstance(got, _sr().PickError)
+        self.assertIn("found 0", str(got))
+        self.assertIn("pick: 20 run logs in a row could not be read — the older runs' logs "
+                      "have expired too, so the listing stops here", err.splitlines())
+        self.assertIn("pick: run 1020 skipped — its log could not be read", err)
+        self.assertNotIn("run 1021 ", err)
+        self.assertEqual({n: 1 for n in range(1001, 1021)}, self._times_read(range(1001, 1021)))
+
+    def test_twenty_unreadable_logs_inside_retention_do_not_stop_the_listing(self):
+        _today(self, INSIDE_RETENTION)
+        got, err = self._same_as_one_reader({}, 21)
+        self.assertNotIsInstance(got, _sr().PickError, err)
+        self.assertEqual([721], [r["pr"] for r in got])
+        self.assertNotIn("the listing stops here", err)
+        self.assertEqual({n: 2 for n in range(1001, 1021)}, self._times_read(range(1001, 1021)))
+
+    def test_a_log_read_on_its_second_try_is_picked_and_not_counted(self):
+        _today(self, INSIDE_RETENTION)
+        got, err = self._same_as_one_reader({}, 2, flaky=(1002,))
+        self.assertEqual([702], [r["pr"] for r in got])
+        self.assertNotIn("pick: run 1002 skipped", err)
+
+    def test_a_readable_log_between_resets_the_count(self):
+        _today(self, PAST_RETENTION)
+        got, err = self._same_as_one_reader({1020: job_log(_opus(), unknown=False)}, 40)
+        self.assertNotIsInstance(got, _sr().PickError, err)
+        self.assertEqual([740], [r["pr"] for r in got])
+        self.assertNotIn("the listing stops here", err)
+        self.assertEqual(set(range(1001, 1041)), set(self._log_reads()))
+
+    def test_an_unreadable_log_is_not_claimed_expired(self):
+        _today(self, INSIDE_RETENTION)
+        _, err = self._same_as_one_reader({}, 2)
+        skipped = [ln for ln in err.splitlines() if ln.startswith("pick: run 1001 skipped")]
+        self.assertEqual(["pick: run 1001 skipped — its log could not be read"], skipped, err)
+
+
+# --------------------------------------------------------------------------- #
+# 4b. The verifier pick's budget, progress and parallel reads (DRE-7507)       #
+# --------------------------------------------------------------------------- #
+
+def no_pr_run(run_id: int) -> dict:
+    """A run that names no pull request, and no head to find one from."""
+    return {"id": run_id, "created_at": _at(2), "updated_at": _at(2, 1), "head_sha": "",
+            "status": "completed", "pull_requests": []}
+
+
+class ReverseReaders:
+    """Stands in for the verifier pick's reader pool: it holds every read it
+    is handed, and when the pick waits on one it finishes every held read in
+    the reverse of the order they were handed over — the reverse of listing
+    order. `handed` is the order the reads were handed over in, `finished`
+    the order they finished in."""
+
+    def __init__(self, max_workers: int):
+        self.max_workers = max_workers
+        self.held, self.handed, self.finished = [], [], []
+        ReverseReaders.last = self
+
+    def submit(self, fn, *args):
+        future = _HeldRead(self)
+        self.held.append((future, fn, args))
+        self.handed.append(args[-1])
+        return future
+
+    def finish_held(self):
+        held, self.held = self.held, []
+        for future, fn, args in reversed(held):
+            if not future.set_running_or_notify_cancel():
+                continue
+            self.finished.append(args[-1])
+            try:
+                future.set_result(fn(*args))
+            except Exception as exc:  # noqa: BLE001 — handed to the pick, as a pool does
+                future.set_exception(exc)
+
+    def shutdown(self, wait=True, *, cancel_futures=False):
+        for future, _fn, _args in self.held:
+            future.cancel()
+        self.held = []
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        self.shutdown()
+
+
+class _HeldRead(concurrent.futures.Future):
+    def __init__(self, readers: ReverseReaders):
+        super().__init__()
+        self._readers = readers
+
+    def result(self, timeout=None):
+        self._readers.finish_held()
+        return super().result(timeout)
+
+
+class StandIn:
+    """The verifier pick with its listing, its log reads and its pull request
+    comments answered from a fixture rather than `gh`. `reads` is every log
+    read, in the order the reads started."""
+
+    def __init__(self, runs, logs, comments):
+        self.runs, self.logs, self.comments = runs, logs, comments
+        self.reads = []
+
+    def run_log(self, repo, run_id):
+        self.reads.append(run_id)
+        return self.logs.get(run_id)
+
+    def pick(self, count: int, *, pool=None):
+        err = io.StringIO()
+        sr = _sr()
+        patches = [
+            mock.patch.object(sr, "verifier_runs", lambda repo, workflow: iter(self.runs)),
+            mock.patch.object(sr, "run_log", self.run_log),
+            mock.patch.object(sr, "_pr_comments",
+                              lambda repo, pr: self.comments.get(pr, [])),
+        ]
+        if pool is not None:
+            patches.append(mock.patch.object(sr, "ThreadPoolExecutor", pool))
+        for patch in patches:
+            patch.start()
+        try:
+            with redirect_stderr(err):
+                try:
+                    got = sr.pick_unknown_builder_verifier(
+                        recorded_model=_opus(), count=count, repo=REPO, workflow=VERIFY_WF)
+                except sr.PickError as exc:
+                    got = exc
+        finally:
+            for patch in reversed(patches):
+                patch.stop()
+        return got, err.getvalue()
+
+
+def _read_lines(err: str) -> list:
+    return [ln for ln in err.splitlines() if ln.startswith("pick: read ")]
+
+
+class VerifierPickConstantsTest(unittest.TestCase):
+    def test_ten_minutes_and_eight_readers(self):
+        self.assertEqual(600, _sr().VERIFIER_PICK_BUDGET_SECONDS)
+        self.assertEqual(8, _sr().VERIFIER_LOG_READERS)
+
+    def test_the_budget_leaves_five_minutes_of_the_pick_jobs_limit(self):
+        """The job's checkout, Python setup and upload run inside its limit too."""
+        job = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))["jobs"]["pick"]
+        self.assertGreaterEqual(
+            int(job["timeout-minutes"]) * 60 - _sr().VERIFIER_PICK_BUDGET_SECONDS, 300)
+
+
+class SpendingClock:
+    """Reads a fixed time until `fresh` reads have gone by, then the budget
+    spent. At its first spent read it notes how many runs had been applied,
+    and it notes the thread of every read. `events` gets a `clock` for each
+    read, with the runs applied at that moment."""
+
+    def __init__(self, fresh: int, applied, events: list):
+        self.fresh, self.applied, self.events = fresh, applied, events
+        self.reads, self.applied_when_spent, self.threads = 0, None, set()
+
+    def __call__(self) -> float:
+        self.reads += 1
+        self.threads.add(threading.current_thread())
+        self.events.append(("clock", self.applied()))
+        if self.reads <= self.fresh:
+            return 1000.0
+        if self.applied_when_spent is None:
+            self.applied_when_spent = self.applied()
+        return 1000.0 + _sr().VERIFIER_PICK_BUDGET_SECONDS + 1
+
+
+class VerifierPickBudgetTest(unittest.TestCase):
+    """Sixty runs on their own pull requests, 1200 + the run's place, newest
+    first, by place: on the model with the clause and its verdict, on another
+    model, an unreadable log, no pull request, a known builder — over and
+    over. The clock reads the budget spent partway through; `count` is 40, so
+    the pick is short."""
+
+    READERS = 1
+    TOTAL = 60
+
+    def setUp(self):
+        _readers(self, self.READERS)
+        self.runs, logs, comments = [], {}, {}
+        for place in range(1, self.TOTAL + 1):
+            run_id, pr, kind = 2000 + place, 1200 + place, place % 5
+            if kind == 3:
+                self.runs.append(no_pr_run(run_id))
+                continue
+            self.runs.append(run(run_id, pr, _at(2), _at(2, 1), _sha(pr)))
+            if kind == 1:
+                logs[run_id] = job_log(_opus())
+                comments[str(pr)] = [verifier_verdict("FAIL", _sha(pr), "2026-10-02T00:30:00Z")]
+            elif kind == 2:
+                logs[run_id] = job_log(OTHER_MODEL)
+            elif kind == 4:
+                logs[run_id] = job_log(_opus(), unknown=False)
+        self.logs, self.comments = logs, comments
+
+    def test_a_spent_budget_stops_the_pick_and_names_how_many_it_read(self):
+        err = io.StringIO()
+        with FakeGh(runs={VERIFY_WF: self.runs}, logs=self.logs,
+                    comments=self.comments) as gh, redirect_stderr(err):
+
+            def applied() -> int:
+                skips = [ln for ln in err.getvalue().splitlines() if ln.startswith("pick: run ")]
+                picks = [c for c in gh.calls() if "/comments" in c]
+                return len(skips) + len(picks)
+
+            events = []
+
+            class Readers(concurrent.futures.ThreadPoolExecutor):
+                def submit(self, fn, *args):
+                    events.append(("read", None))
+                    return super().submit(fn, *args)
+
+            clock = SpendingClock(25, applied, events)
+            with mock.patch.object(_sr(), "clock", clock), \
+                    mock.patch.object(_sr(), "ThreadPoolExecutor", Readers), \
+                    self.assertRaises(_sr().PickError) as caught:
+                _sr().pick_unknown_builder_verifier(
+                    recorded_model=_opus(), count=40, repo=REPO, workflow=VERIFY_WF)
+            calls = gh.calls()
+        message, lines = str(caught.exception), err.getvalue().splitlines()
+
+        found = int(re.search(r"found (\d+) eligible", message).group(1))
+        skips = [ln for ln in lines if ln.startswith("pick: run ")]
+        read = len(skips) + found
+        self.assertIn("nothing is replayed short", message)
+        self.assertIn("600-second time budget", message)
+        self.assertIn(f"after reading {read} run(s)", message)
+        self.assertTrue(0 < read < self.TOTAL, message)
+        self.assertEqual(read, clock.applied_when_spent,
+                         "a run was applied after the clock read the budget spent")
+        self.assertEqual({threading.current_thread()}, clock.threads,
+                         "the clock is read on the pick's own thread only")
+        self.assertLessEqual(set(range(read + 1)),
+                             {n for kind, n in events if kind == "clock"},
+                             "a run was applied with no clock read before it")
+        for at, (kind, _) in enumerate(events):
+            if kind == "read":
+                self.assertEqual("clock", events[at - 1][0],
+                                 "a read was dispatched with no clock read just before it")
+
+        applied = {r["id"] for r in self.runs[:read]}
+        self.assertEqual({int(ln.split()[2]) for ln in skips},
+                         applied - {2000 + p for p in range(1, read + 1) if p % 5 == 1})
+        reads = {int(c.split()[2]) for c in calls if c.startswith("run view ")}
+        outstanding = reads - applied
+        self.assertLessEqual(len(outstanding), self.READERS, sorted(outstanding))
+        self.assertTrue(outstanding <= {r["id"] for r in self.runs[read:]})
+        for run_id in outstanding:
+            self.assertNotIn(f"run {run_id} ", err.getvalue())
+
+        unreadable = len([ln for ln in skips if ln.endswith("its log could not be read")])
+        self.assertGreater(unreadable, 0)
+        final = f"pick: read {read} run(s), picked {found} of 40, {unreadable} log(s) unreadable"
+        self.assertEqual(final, _read_lines(err.getvalue())[-1])
+        skipped_line = next(i for i, ln in enumerate(lines) if ln.startswith("pick: skipped "))
+        self.assertLess(lines.index(final), skipped_line)
+
+
+class VerifierPickBudgetEightReadersTest(VerifierPickBudgetTest):
+    READERS = 8
+
+
+class VerifierPickProgressTest(unittest.TestCase):
+    """120 runs on their own pull requests (1300 + the run's place), each a
+    known builder but for three that name no pull request among the first
+    50, and the runs `eligible` names, on the model with the clause and with
+    their verdict."""
+
+    def _stand_in(self, total: int = 120, eligible=(110, 115), no_pr=(3, 7, 11),
+                  readable: bool = True) -> StandIn:
+        runs, logs, comments = [], {}, {}
+        for place in range(1, total + 1):
+            run_id, pr = 3000 + place, 1300 + place
+            if place in no_pr:
+                runs.append(no_pr_run(run_id))
+                continue
+            runs.append(run(run_id, pr, _at(2), _at(2, 1), _sha(pr)))
+            if place in eligible:
+                logs[run_id] = job_log(_opus())
+                comments[pr] = [verifier_verdict("PASS", _sha(pr), "2026-10-02T00:30:00Z")]
+            elif readable:
+                logs[run_id] = job_log(_opus(), unknown=False)
+        return StandIn(runs, logs, comments)
+
+    def test_every_fiftieth_run_then_once_when_the_count_is_reached(self):
+        stand_in = self._stand_in()
+        got, err = stand_in.pick(2)
+        self.assertNotIsInstance(got, _sr().PickError, err)
+        self.assertEqual(["pick: read 50 run(s), picked 0 of 2, 0 log(s) unreadable",
+                          "pick: read 100 run(s), picked 0 of 2, 0 log(s) unreadable",
+                          "pick: read 115 run(s), picked 2 of 2, 0 log(s) unreadable"],
+                         _read_lines(err))
+        lines = err.splitlines()
+        self.assertLess(lines.index("pick: read 115 run(s), picked 2 of 2, 0 log(s) unreadable"),
+                        next(i for i, ln in enumerate(lines) if ln.startswith("pick: skipped ")))
+
+    def test_a_short_batch_prints_the_final_line_too(self):
+        got, err = self._stand_in().pick(3)
+        self.assertIsInstance(got, _sr().PickError)
+        self.assertEqual(["pick: read 50 run(s), picked 0 of 3, 0 log(s) unreadable",
+                          "pick: read 100 run(s), picked 0 of 3, 0 log(s) unreadable",
+                          "pick: read 120 run(s), picked 2 of 3, 0 log(s) unreadable"],
+                         _read_lines(err))
+        self.assertNotIn("time budget", str(got))
+
+    def test_runs_skipped_without_a_download_are_read(self):
+        stand_in = self._stand_in()
+        _, err = stand_in.pick(2)
+        lines = err.splitlines()
+        at = lines.index("pick: read 50 run(s), picked 0 of 2, 0 log(s) unreadable")
+        self.assertTrue(lines[at - 1].startswith("pick: run 3050 skipped — "), lines[at - 1])
+        for place in (3, 7, 11):
+            self.assertIn(f"pick: run {3000 + place} skipped — it names no pull request", lines)
+            self.assertNotIn(3000 + place, stand_in.reads)
+
+    def test_a_stop_on_the_fiftieth_run_prints_its_line_twice(self):
+        _, err = self._stand_in(eligible=(50,)).pick(1)
+        self.assertEqual(["pick: read 50 run(s), picked 1 of 1, 0 log(s) unreadable"] * 2,
+                         _read_lines(err))
+
+    def test_an_empty_listing(self):
+        got, err = StandIn([], {}, {}).pick(3)
+        self.assertIsInstance(got, _sr().PickError)
+        self.assertEqual(["pick: read 0 run(s), picked 0 of 3, 0 log(s) unreadable"],
+                         _read_lines(err))
+
+    def test_after_the_unreadable_logs_line_and_before_the_other_model_count(self):
+        _today(self, PAST_RETENTION)
+        _, err = self._stand_in(total=21, eligible=(), no_pr=(), readable=False).pick(1)
+        lines = err.splitlines()
+        stop = next(i for i, ln in enumerate(lines) if "run logs in a row" in ln)
+        self.assertEqual("pick: read 20 run(s), picked 0 of 1, 20 log(s) unreadable",
+                         lines[stop + 1])
+        self.assertTrue(lines[stop + 2].startswith("pick: skipped 0 "), lines[stop + 2])
+
+
+class VerifierPickEquivalenceTest(unittest.TestCase):
+    """The same listing on one reader and on eight, its logs finishing in the
+    reverse of listing order, gives the same pick and the same lines.
+
+    * 950 (PR 901) on the model with the clause — kept;
+    * 949 (PR 902) on another model;
+    * 948 (PR 901) eligible too, read ahead — already picked at 950;
+    * 947 (PR 903) an unreadable log;
+    * 946 (PR 904) on the model with the clause, no verdict comment;
+    * 945 names no pull request;
+    * 944 (PR 905) a known builder;
+    * 943 (PR 906) no Select model note;
+    * 942 (PR 907) on the model with the clause — kept;
+    * 941 (PR 901) already picked before its log could be read;
+    * 940 (PR 908) on the model with the clause — kept.
+    """
+
+    def _stand_in(self) -> StandIn:
+        runs = [run(950, 901, _at(9), _at(9, 1), _sha(950)),
+                run(949, 902, _at(9), _at(9, 1), _sha(949)),
+                run(948, 901, _at(8), _at(8, 1), _sha(948)),
+                run(947, 903, _at(8), _at(8, 1), _sha(947)),
+                run(946, 904, _at(7), _at(7, 1), _sha(946)),
+                no_pr_run(945),
+                run(944, 905, _at(6), _at(6, 1), _sha(944)),
+                run(943, 906, _at(6), _at(6, 1), _sha(943)),
+                run(942, 907, _at(5), _at(5, 1), _sha(942)),
+                run(941, 901, _at(4), _at(4, 1), _sha(941)),
+                run(940, 908, _at(3), _at(3, 1), _sha(940))]
+        logs = {950: job_log(_opus()), 949: job_log(OTHER_MODEL), 948: job_log(_opus()),
+                946: job_log(_opus()), 944: job_log(_opus(), unknown=False),
+                943: "verify\tRun verifier\t2026-10-10T00:05:00.0000000Z the verifier ran\n",
+                942: job_log(_opus()), 941: job_log(_opus()), 940: job_log(_opus())}
+        comments = {
+            901: [verifier_verdict("FAIL", _sha(948), "2026-10-08T00:30:00Z"),
+                  verifier_verdict("PASS", _sha(950), "2026-10-09T00:30:00Z")],
+            904: [verifier_verdict("FAIL", _sha(946), "2026-10-01T00:30:00Z")],
+            907: [verifier_verdict("FAIL", _sha(942), "2026-10-05T00:30:00Z")],
+            908: [verifier_verdict("PASS", _sha(940), "2026-10-03T00:30:00Z")],
+        }
+        return StandIn(runs, logs, comments)
+
+    def _both(self, count: int):
+        picks = []
+        for readers in (1, 8):
+            with mock.patch.object(_sr(), "VERIFIER_LOG_READERS", readers):
+                stand_in = self._stand_in()
+                got, err = stand_in.pick(count, pool=ReverseReaders)
+                readers_used = ReverseReaders.last
+                picks.append((got, err, readers_used.handed, readers_used.finished))
+        return picks
+
+    def _same(self, one, eight):
+        (_, one_err, *_), (_, eight_err, *_) = one, eight
+        self.assertEqual(one_err.splitlines(), eight_err.splitlines())
+        skips = [ln for ln in eight_err.splitlines() if ln.startswith("pick: run ")]
+        for run_id, why in ((949, "chosen on"), (948, "already picked"), (947, "log"),
+                            (946, "verdict"), (945, "no pull request"),
+                            (944, "builder's model was read"), (943, "Select model note"),
+                            (941, "already picked")):
+            self.assertTrue(any(ln.startswith(f"pick: run {run_id} skipped") and why in ln
+                                for ln in skips), f"{run_id}: {skips}")
+        self.assertIn("pick: skipped 1 unknown-builder", eight_err)
+
+    def test_the_same_pick_whatever_order_the_logs_finish_in(self):
+        one, eight = self._both(3)
+        self.assertEqual([901, 907, 908], [r["pr"] for r in eight[0]])
+        self.assertEqual(one[0], eight[0])
+        self.assertEqual(_sha(950), eight[0][0]["sha"])
+        self._same(one, eight)
+        handed, finished = eight[2], eight[3]
+        self.assertEqual(950, handed[0])
+        first = finished.index(950) + 1
+        self.assertGreater(first, 1, "the logs did not finish out of listing order")
+        self.assertEqual(list(reversed(handed[:first])), finished[:first],
+                         "the logs read ahead of 950 finished in the reverse of listing order")
+        self.assertIn(948, handed, "948's log was read ahead, then set aside")
+        self.assertEqual(one[2], one[3])
+        for _got, _err, handed, _finished in (one, eight):
+            self.assertNotIn(945, handed)
+            self.assertNotIn(941, handed)
+
+    def test_the_same_short_batch(self):
+        one, eight = self._both(4)
+        self.assertIsInstance(one[0], _sr().PickError)
+        self.assertIsInstance(eight[0], _sr().PickError)
+        self.assertEqual(str(one[0]), str(eight[0]))
+        self._same(one, eight)
+
+    def test_a_run_naming_no_pull_request_is_never_read_on_eight_readers(self):
+        err = io.StringIO()
+        with mock.patch.object(_sr(), "VERIFIER_LOG_READERS", 8), \
+                FakeGh(runs={VERIFY_WF: [no_pr_run(961), run(960, 909, _at(9), _at(9, 1),
+                                                                _sha(960))]},
+                       logs={960: job_log(_opus())}) as gh, redirect_stderr(err):
+            with self.assertRaises(_sr().PickError):
+                _sr().pick_unknown_builder_verifier(
+                    recorded_model=_opus(), count=1, repo=REPO, workflow=VERIFY_WF)
+            calls = gh.calls()
+        self.assertIn("pick: run 961 skipped — it names no pull request", err.getvalue())
+        self.assertEqual([f"run view 960 --repo {REPO} --log"],
+                         [c for c in calls if c.startswith("run view ")])
 
 
 # --------------------------------------------------------------------------- #

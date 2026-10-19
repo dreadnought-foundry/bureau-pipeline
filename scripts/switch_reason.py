@@ -7,8 +7,8 @@ switch that was off carried no reason, so nothing could say when the reason
 was over. `config/switches.json` is the list of switches as data, and this
 module reads a switch's declared off-reason and composes the one line every
 reader prints. The sweep's `Read the switches` step runs it (DRE-6436), and
-when a reason clears it posts the receipt and files the alarm (DRE-6437). It
-never sets a variable: turning a switch on is a person's act.
+when a reason clears it posts the receipt and raises the alarm (DRE-6437,
+DRE-7455). It never sets a variable: turning a switch on is a person's act.
 
 ## The contract (identical in every sibling card)
 
@@ -52,20 +52,25 @@ receipt there it posts one, composed by `pipeline_act.receipt`:
 The once-key is a comment whose FIRST line opens `🔀 switch-cleared: <SWITCH>
 in <repo-slug>`, so each repository posts its own and none repeats. A receipt
 already standing is when the reason cleared: once it is `alarm_after_hours`
-old (`config/switches.json`) and the switch is still off, the pass files one
-card titled `Switch <SWITCH> in <repo-slug> is still off after its reason
-cleared`, after `find_open` finds none open under that title. The alarm is an
-operator step (DRE-6652): it carries `agent:devops` and `no-code` beside its
-repo label (`alarm_labels`), and its body ends with the step's two-item
-`## Acceptance criteria`. The receipt is
-written first and the alarm reads only the receipt, so a pass that dies
-between the two loses nothing: the next one finds the receipt and times the
-alarm from it.
+old (`config/switches.json`) and the switch is still off, the pass raises the
+console alert `switch_off:<repo-slug>:<SWITCH>` (`notice_key`) at WARN through
+`scripts/pipeline_notice.py` (DRE-7455), titled `Switch <SWITCH> in
+<repo-slug> is still off after its reason cleared`. Every such pass raises it
+again: the alert's one row per key is its dedupe, and a raise while it is open
+is a repeat. The alarm is an operator step (DRE-6652): its body ends with the
+step's two-item `## Acceptance criteria`, and when the door cannot take it
+the client files the card this pass filed before (`alarm_fallback`) — in
+Planning, carrying `agent:devops` and `no-code` beside its repo label
+(`alarm_labels`). The receipt is written first and the alarm reads only the
+receipt, so a pass that dies between the two loses nothing: the next one
+finds the receipt and times the alarm from it. A switch that reads on
+resolves its key, with no all-clear copy — a WARN never leaves the console.
 
 No thread is read when the reason has not cleared, when `REPO` is unset, or
-when the switch is on. A read, a post or a filing that fails is printed and the
-pass still exits 0. The phase is dry — `would: post …` and `would: alarm …`,
-nothing written — when `GITHUB_ACTIONS` is not `true` or `--dry-run` is passed.
+when the switch is on. A read, a post or a raise that fails is printed and the
+pass still exits 0. The phase is dry — `would: post …`, `would: alarm …` and
+`would: resolve …`, nothing written — when `GITHUB_ACTIONS` is not `true` or
+`--dry-run` is passed.
 
 ## The check
 
@@ -80,7 +85,7 @@ are DISCOVERED, never listed: every `vars.<NAME>_LIVE` under
 Import-safe and pure: no I/O at import, and every function but `load`,
 `discover`, `problems` and `main` reads only its arguments; `read_states`
 reaches Linear only through the `gql` it is handed, and the receipt phase only
-through the `linear` it is handed.
+through the `linear` and the `notices` it is handed.
 """
 
 from __future__ import annotations
@@ -96,6 +101,7 @@ from typing import Mapping, NamedTuple
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import pipeline_act  # noqa: E402 — import-safe: no I/O at import
+import pipeline_notice  # noqa: E402 — import-safe: no I/O at import (DRE-7455)
 import prose_blockers  # noqa: E402 — import-safe: no I/O at import
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
@@ -358,16 +364,19 @@ def _one_line(text: str) -> str:
 
 
 def read_switches(env: Mapping, *, gql, now, catalog: dict | None = None,
-                  linear=None, live: bool = False) -> list:
+                  linear=None, live: bool = False, notices=None) -> list:
     """The `switches:` line of every catalog switch, in the catalog's order.
 
     Handed a `linear`, a switch whose reason cleared also gets the receipt
-    phase's lines, right after its own (`receipt_phase`).
+    phase's lines, right after its own (`receipt_phase`). Handed `notices`, a
+    switch that reads on resolves its alarm (`resolve_phase`).
     """
     doc = catalog if catalog is not None else load()
     lines = []
     for row in doc.get("switches") or []:
         name = row["name"]
+        if notices is not None and is_on(name, env):
+            lines += resolve_phase(name, env, notices=notices, live=live)
         reason = parse_reason(env.get(companion(name)))
         states, error = {}, None
         if not is_on(name, env) and reason and reason.cards:
@@ -382,7 +391,8 @@ def read_switches(env: Mapping, *, gql, now, catalog: dict | None = None,
         lines.append(f"{PREFIX} {line}")
         if linear is not None and read.cleared:
             lines += receipt_phase(name, read, states, env, linear=linear, now=now,
-                                   hours=doc.get("alarm_after_hours"), live=live)
+                                   hours=doc.get("alarm_after_hours"), live=live,
+                                   notices=notices)
     return lines
 
 
@@ -420,6 +430,18 @@ def receipt_line(name: str, slug: str, repo: str, states: Mapping, cards, now) -
 
 def alarm_title(name: str, slug: str) -> str:
     return f"Switch {name} in {slug} is still off after its reason cleared"
+
+
+def notice_key(slug: str, name: str) -> str:
+    """The alarm's console alert (DRE-7455): `switch_off:<repo>:<SWITCH>`,
+    `<repo>` the repository's slug — its name, lowercased, without its owner."""
+    return f"switch_off:{slug}:{name}"
+
+
+def _slug(env: Mapping) -> str:
+    """This run's repository slug: `REPO_SLUG`, or `REPO` without its owner."""
+    repo = (env.get("REPO") or "").strip()
+    return (env.get("REPO_SLUG") or "").strip() or repo.rsplit("/", 1)[-1].lower()
 
 
 def standing_receipt(thread, name: str, slug: str) -> dict | None:
@@ -469,6 +491,17 @@ def alarm_labels() -> tuple:
     return (ALARM_ROLE, linear_ops.NO_CODE_LABEL)
 
 
+def alarm_fallback(name: str, slug: str) -> pipeline_notice.Fallback:
+    """The card the alarm was filed as before the console door (DRE-7455),
+    handed to the notice client to file when the door cannot take the alert:
+    the same title, in Planning — `linear_ops.py create`'s default, where
+    `no-code` routes it to the operator — with `repo:<slug>` and the two
+    `alarm_labels`."""
+    return pipeline_notice.Fallback(
+        title=alarm_title(name, slug), lane="Planning",
+        labels=(f"repo:{slug}", *alarm_labels()))
+
+
 def alarm_body(name: str, slug: str, repo: str, states: Mapping, cards,
                first: str, posted: datetime, now) -> str:
     """The alarm card's body: the facts, the operator's step, and its checklist.
@@ -516,8 +549,25 @@ def alarm_body(name: str, slug: str, repo: str, states: Mapping, cards,
     ])
 
 
+def resolve_phase(name: str, env: Mapping, *, notices, live: bool) -> list:
+    """Resolve the alarm of a switch that reads on (DRE-7455): the writer
+    closes its own alert, with no all-clear copy. The door answers `not-open`
+    for a switch that never alarmed, and the client prints its own line."""
+    if not (env.get("REPO") or "").strip():
+        return []
+    key = notice_key(_slug(env), name)
+    if not live:
+        return [f"{WOULD} resolve {key}"]
+    try:
+        notices.resolve_notice(key)
+    except Exception as exc:  # noqa: BLE001 — reported, never fatal
+        return [f"{PREFIX} {name} — the alarm {key} was not resolved: "
+                f"{_one_line(exc) or type(exc).__name__}"]
+    return []
+
+
 def receipt_phase(name: str, read: Reading, states: Mapping, env: Mapping, *,
-                  linear, now, hours, live: bool) -> list:
+                  linear, now, hours, live: bool, notices=None) -> list:
     """The receipt, or the alarm, for one switch whose reason cleared.
 
     Every write is preceded by its read, and every failure is a line rather
@@ -528,7 +578,7 @@ def receipt_phase(name: str, read: Reading, states: Mapping, env: Mapping, *,
     repo = (env.get("REPO") or "").strip()
     if not repo:
         return [f"{PREFIX} {name} — no receipt read: REPO names no repository"]
-    slug = (env.get("REPO_SLUG") or "").strip() or repo.rsplit("/", 1)[-1].lower()
+    slug = _slug(env)
     first = read.cards[0]
     try:
         thread = linear.thread(first)
@@ -562,32 +612,27 @@ def receipt_phase(name: str, read: Reading, states: Mapping, env: Mapping, *,
         return [f"{PREFIX} {name} — the receipt already stands on {first}, "
                 f"posted {_pt(posted)}"]
     title = alarm_title(name, slug)
-    try:
-        open_card = linear.find_open(title)
-    except Exception as exc:  # noqa: BLE001 — an unread dedupe files nothing
-        return [f"{PREFIX} {name} — still off {_hours(age)} after its reason "
-                "cleared, and the open alarms could not be read, so none was "
-                f"filed: {_one_line(exc) or type(exc).__name__}"]
-    if open_card:
-        return [f"{PREFIX} {name} — still off {_hours(age)} after its reason "
-                f"cleared; the alarm {open_card} is already open"]
     body = alarm_body(name, slug, repo, states, read.cards, first, posted, now)
     if not live:
         return [f"{WOULD} alarm — {title}"]
+    key = notice_key(slug, name)
     try:
-        issue = linear.create_card(title, body, repo_slug=slug,
-                                   labels=alarm_labels())
+        # Every pass past the bound raises again: the alert's one row per key
+        # is the dedupe, and a raise while it is open is a repeat.
+        outcome = (notices or pipeline_notice).raise_notice(
+            key, severity="WARN", title=title, body=body,
+            fallback=alarm_fallback(name, slug))
     except Exception as exc:  # noqa: BLE001 — reported, never fatal
         return [f"{PREFIX} {name} — still off {_hours(age)} after its reason "
-                f"cleared, and the alarm was not filed: "
+                f"cleared, and the alarm {key} was not raised: "
                 f"{_one_line(exc) or type(exc).__name__}"]
     return [f"{PREFIX} {name} — still off {_hours(age)} after its reason "
-            f"cleared; filed the alarm {issue.get('identifier')} "
-            f"{issue.get('url') or ''}".rstrip()]
+            f"cleared; the alarm {key}: {outcome}"]
 
 
 class LinearWrites:
-    """The receipt phase's one read and three writes, through `linear_ops`."""
+    """The receipt phase's one read and one write, through `linear_ops`. The
+    alarm is a console alert raised through `pipeline_notice` (DRE-7455)."""
 
     def __init__(self, linear_ops):
         self._ops = linear_ops
@@ -601,15 +646,9 @@ class LinearWrites:
     def cmd_comment(self, identifier: str, body: str):
         return self._ops.cmd_comment(identifier, body)
 
-    def find_open(self, title: str):
-        return self._ops.find_open(title)
 
-    def create_card(self, title: str, body: str, *, repo_slug: str, labels=()):
-        return self._ops.create_card(title, body, repo_slug=repo_slug,
-                                     labels=labels)
-
-
-def _read_pass(env: Mapping | None, gql, now, linear=None, dry: bool = False) -> int:
+def _read_pass(env: Mapping | None, gql, now, linear=None, dry: bool = False,
+               notices=None) -> int:
     import linear_ops  # noqa: PLC0415 — the import stays off the pure path
 
     env = os.environ if env is None else env
@@ -618,7 +657,7 @@ def _read_pass(env: Mapping | None, gql, now, linear=None, dry: bool = False) ->
         for line in read_switches(env, gql=gql or linear_ops.gql,
                                   now=now or datetime.now(timezone.utc),
                                   linear=linear or LinearWrites(linear_ops),
-                                  live=live):
+                                  live=live, notices=notices or pipeline_notice):
             print(line, flush=True)
         return 0
     finally:
@@ -631,7 +670,7 @@ def _read_pass(env: Mapping | None, gql, now, linear=None, dry: bool = False) ->
 
 
 def main(argv=None, *, env: Mapping | None = None, gql=None, now=None,
-         linear=None) -> int:
+         linear=None, notices=None) -> int:
     """No command: the sweep's read, and its receipt phase (`--dry-run` writes
     nothing). `check`: the catalog against the tree."""
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
@@ -641,7 +680,8 @@ def main(argv=None, *, env: Mapping | None = None, gql=None, now=None,
     p_check.add_argument("--root", default=ROOT)
     args = parser.parse_args(argv)
     if args.command is None:
-        return _read_pass(env, gql, now, linear=linear, dry=args.dry_run)
+        return _read_pass(env, gql, now, linear=linear, dry=args.dry_run,
+                          notices=notices)
 
     doc = load(os.path.join(args.root, CATALOG))
     found = problems(doc, root=args.root)

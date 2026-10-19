@@ -48,6 +48,9 @@ import validate_card  # noqa: E402
 
 CARD = "DRE-5595"
 RESEND = "🧹 Reconcile: card sat in Todo with no run — re-dispatched."
+# The same receipt since DRE-7108, which names no lane: a card re-sent before
+# the change carries the words above, one re-sent after it these.
+RESEND_NOW = "🧹 Reconcile: card was promoted and no run started — re-dispatched."
 FAILED_RESEND = (
     "🚨 Reconcile: re-dispatch FAILED — the dispatch call did not go through, "
     "so no run was started. The sweep run is red; medic will pick it up, and "
@@ -76,7 +79,7 @@ def _iso(minutes_ago: float, now: datetime | None = None) -> str:
     return at.strftime("%Y-%m-%dT%H:%M:%S.000Z")
 
 
-def _card(updated: str, comments=(), identifier=CARD, state="Todo"):
+def _card(updated: str, comments=(), identifier=CARD, state="In Progress"):
     """A Todo build card the way the board read returns it. `comments` are
     (body, createdAt) pairs, oldest first, as a person reads the thread."""
     return {
@@ -150,11 +153,39 @@ def _held_nothing(flagged, comment, add_label):
 # --------------------------------------------------------------------------
 # 1. a re-send buys a full start window
 # --------------------------------------------------------------------------
-def test_the_start_window_is_the_todo_lanes_own_stall_window():
-    """One number, read off the lane contract: the sweep re-sends a Todo card
-    on this window, so the watchdog waiting this long after a re-send can
-    never fall out of step with the re-send it is judging."""
-    assert reconcile.START_WINDOW_MINUTES == reconcile.STALE_MINUTES["Todo"]
+def test_the_start_window_is_the_contracts_start_window():
+    """One number, read off the lane contract (`build_start.start_minutes`,
+    DRE-7108): the sweep re-sends a not-started card on this window, so the
+    watchdog waiting this long after a re-send can never fall out of step with
+    the re-send it is judging."""
+    import lane_contract
+
+    assert reconcile.START_WINDOW_MINUTES == lane_contract.START_MINUTES
+
+
+def test_the_receipt_the_sweep_posts_is_the_one_read_here():
+    assert RESEND_NOW == f"🧹 Reconcile: {reconcile._TODO_REDISPATCH_NOTE}."
+    assert {RESEND, RESEND_NOW} == {
+        f"🧹 Reconcile: {note}." for note in reconcile._TODO_REDISPATCH_NOTES}
+
+
+@pytest.mark.parametrize("resend", [RESEND, RESEND_NOW])
+def test_either_wording_buys_the_window(resend):
+    card = _card(_iso(1), [(resend, _iso(1))])
+    _held_nothing(*_watch([card]))
+
+
+@pytest.mark.parametrize("resend", [RESEND, RESEND_NOW])
+def test_either_wording_stamps_a_window_later(resend):
+    sent = _iso(reconcile.START_WINDOW_MINUTES + 1)
+    flagged, _comment, _add_label = _watch([_card(sent, [(resend, sent)])])
+    assert flagged == {CARD}
+
+
+def test_the_newest_resend_counts_across_the_two_wordings():
+    old, new = _iso(reconcile.START_WINDOW_MINUTES + 20), _iso(1)
+    card = _card(new, [(RESEND, old), (RESEND_NOW, new)])
+    _held_nothing(*_watch([card]))
 
 
 def test_a_resend_one_minute_ago_is_not_stamped():

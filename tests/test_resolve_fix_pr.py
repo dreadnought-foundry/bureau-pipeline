@@ -35,7 +35,12 @@ sys.path.insert(0, str(ROOT / "scripts"))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import step_shell  # noqa: E402
-from test_hand_dispatch_no_work import ATTEMPT, GH_STUB, WORKER, rest  # noqa: E402
+from test_hand_dispatch_no_work import (  # noqa: E402
+    ATTEMPT, GH_STUB, HUMAN, ROUND, WORKER, rest,
+)
+
+import fix_context  # noqa: E402
+import linear_ops  # noqa: E402
 
 #: The step's inputs: the five it had on `main` before the move, then the
 #: two the move adds in place of its seven expressions.
@@ -166,8 +171,18 @@ class TheFileRunsAsAFileTest(unittest.TestCase):
         self.assertEqual(posted, "")
 
 
+HEAD = "735e4c75" + "0" * 32
+
+
 def _resolve(thread):
     """Run the file by path against `thread`; (step outputs, posted bodies)."""
+    run = _run(thread)
+    return run["outputs"], run["posted"]
+
+
+def _run(thread, merge_state="CLEAN", head=HEAD):
+    """Run the file by path against `thread` at `head`; the step outputs, the
+    posted bodies, the log and the run-record note, as a dict."""
     with tempfile.TemporaryDirectory() as raw:
         td = Path(raw)
         (td / "bin").mkdir()
@@ -178,7 +193,7 @@ def _resolve(thread):
         info = td / "pr-info.json"
         info.write_text(json.dumps({
             "state": "OPEN", "headRefName": "agent/DRE-6487-x",
-            "headRefOid": "735e4c75" + "0" * 32, "mergeStateStatus": "CLEAN",
+            "headRefOid": head, "mergeStateStatus": merge_state,
         }))
         comments = td / "comments.json"
         comments.write_text(json.dumps(thread))
@@ -207,7 +222,11 @@ def _resolve(thread):
         )
         posted = ([json.loads(line) for line in log.read_text().splitlines()]
                   if log.exists() else [])
-    return outputs, posted
+        no_work = td / "fix-no-work.txt"
+        return {
+            "outputs": outputs, "posted": posted, "log": proc.stdout,
+            "no_work": no_work.read_text() if no_work.exists() else "",
+        }
 
 
 def _hold(thread, whole=False):
@@ -288,6 +307,151 @@ class TheHoldNamesWhichStopItWasTest(unittest.TestCase):
             "attempts. That is the runaway backstop, not a judgement that the "
             "loop stopped making progress — it kept finding new work and "
             "never finished. Holding for a human decision.")
+
+
+CONFLICT_HOLD = "🛑 Conflict-resolution budget exhausted"
+FIX_HOLD = "🛑 Fix budget exhausted"
+#: The pool bot that authored most of PR #1134's 58 conflict holds.
+POOL = "agent-bureau-bot-4[bot]"
+EARLIER = "80d8d5d5" + "0" * 32
+
+
+def _conflict_spent():
+    """Five conflict rounds, every one the worker bot's: the budget is spent."""
+    return [rest(WORKER, ROUND.format(n=n)) for n in range(1, 6)]
+
+
+def _fix_spent():
+    """Two review rounds that re-found the same ground: the fix budget is spent."""
+    return _thread(None, REPEAT, REPEAT)
+
+
+#: Each hold kind: the thread that spends its budget, and the merge state that
+#: puts the run in its mode.
+KINDS = {
+    CONFLICT_HOLD: (_conflict_spent, "DIRTY"),
+    FIX_HOLD: (_fix_spent, "CLEAN"),
+}
+
+
+def _posted_hold(prefix, head=HEAD):
+    """The hold the file itself posts for `prefix` at `head` — never re-typed
+    here, so the standing hold the next run reads is the one GitHub would hold."""
+    spent, merge_state = KINDS[prefix]
+    run = _run(spent(), merge_state=merge_state, head=head)
+    holds = [body for body in run["posted"] if body.startswith(prefix)]
+    if len(holds) != 1:
+        raise AssertionError(f"expected one {prefix!r} hold, got {run['posted']!r}")
+    return holds[0]
+
+
+class AHeldPullRequestGetsOneHoldNoticeTest(unittest.TestCase):
+    """(DRE-7506) PR #1134 got 58 identical conflict holds in ten hours, one
+    per fix run. A hold already standing at this head, with no newer operator
+    decision, is not posted again — whichever pool bot posted it."""
+
+    def again(self, prefix, standing, extra=()):
+        spent, merge_state = KINDS[prefix]
+        return _run(spent() + [standing] + list(extra), merge_state=merge_state)
+
+    def assert_suppressed(self, run):
+        self.assertEqual(run["posted"], [])
+        self.assertEqual(run["outputs"]["go"], "false")
+        self.assertEqual(run["outputs"]["no_work"], "true")
+        # The job's "Notify hold on Linear" steps post once per held=true.
+        self.assertNotIn("held", run["outputs"])
+        self.assertIn("already standing", run["log"])
+        self.assertIn("already standing", run["no_work"])
+
+    def assert_one_hold(self, run, prefix):
+        self.assertEqual(len(run["posted"]), 1, run["posted"])
+        self.assertTrue(run["posted"][0].startswith(prefix), run["posted"][0])
+        self.assertEqual(run["outputs"]["held"], "true")
+        self.assertNotIn("already standing", run["log"])
+
+    def test_a_second_run_under_a_standing_hold_posts_nothing(self):
+        for prefix in KINDS:
+            with self.subTest(prefix=prefix):
+                standing = rest(WORKER, _posted_hold(prefix))
+                self.assert_suppressed(self.again(prefix, standing))
+
+    def test_a_hold_posted_by_another_pool_bot_still_stands(self):
+        # The PR #1134 case: the hold goes out on GH_TOKEN, the pool reader,
+        # so its author is not WORKER_LOGIN. The DRE-4848 failure, again.
+        self.assertNotEqual(POOL, WORKER)
+        for prefix in KINDS:
+            with self.subTest(prefix=prefix):
+                standing = rest(POOL, _posted_hold(prefix))
+                self.assertEqual(standing["user"]["type"], "Bot")
+                self.assert_suppressed(self.again(prefix, standing))
+
+    def test_a_new_commit_releases_the_hold(self):
+        # The release on PR #1134 was a hand-pushed merge commit, which posts
+        # no push marker: the hold's own commit is what is compared.
+        for prefix in KINDS:
+            with self.subTest(prefix=prefix):
+                standing = rest(POOL, _posted_hold(prefix, head=EARLIER))
+                self.assert_one_hold(self.again(prefix, standing), prefix)
+
+    def test_a_newer_operator_decision_releases_the_hold(self):
+        marker = {CONFLICT_HOLD: ROUND.format(n=6), FIX_HOLD: ATTEMPT.format(n=3)}
+        for prefix in KINDS:
+            with self.subTest(prefix=prefix):
+                standing = rest(WORKER, _posted_hold(prefix))
+                decision = rest(HUMAN, "**Operator decision** — try once more.")
+                # The decision already bought its attempt, so the budget
+                # answers hold again.
+                extra = [decision, rest(WORKER, marker[prefix])]
+                spent, _ = KINDS[prefix]
+                thread = spent() + [standing] + extra
+                self.assertIs(fix_context.operator_decision(thread, WORKER), decision)
+                self.assert_one_hold(self.again(prefix, standing, extra), prefix)
+
+    def test_a_person_quoting_the_hold_is_not_a_standing_hold(self):
+        quoted = rest(HUMAN, _posted_hold(CONFLICT_HOLD))
+        self.assertEqual(quoted["user"]["type"], "User")
+        self.assert_one_hold(self.again(CONFLICT_HOLD, quoted), CONFLICT_HOLD)
+
+    def test_one_kind_of_hold_does_not_silence_the_other(self):
+        # PR #1134 carried both on the same afternoon.
+        conflict = rest(POOL, _posted_hold(CONFLICT_HOLD))
+        self.assert_one_hold(self.again(FIX_HOLD, conflict), FIX_HOLD)
+        fix = rest(POOL, _posted_hold(FIX_HOLD))
+        self.assert_one_hold(self.again(CONFLICT_HOLD, fix), CONFLICT_HOLD)
+
+    def test_a_hold_from_before_this_change_reads_as_released(self):
+        # It carries no commit: a pull request already held when this ships
+        # gets one more notice and then stops.
+        old = rest(POOL, CONFLICT_HOLD_BEFORE)
+        self.assert_one_hold(self.again(CONFLICT_HOLD, old), CONFLICT_HOLD)
+
+    def test_the_hold_carries_its_commit_after_the_pinned_sentences(self):
+        for prefix in KINDS:
+            with self.subTest(prefix=prefix):
+                body = _posted_hold(prefix)
+                rest_of_it, last = body.rsplit("\n\n", 1)
+                self.assertEqual(last, f"Held at commit {HEAD}.")
+                self.assertTrue(rest_of_it.endswith(fix_context.HAND_DISPATCH_NOTICE))
+                self.assertTrue(any(
+                    marker in body.lower() for marker in linear_ops.CONSOLE_HOLD_MARKERS))
+
+
+#: A conflict hold as PR #1134 carried it before DRE-7506: no commit line.
+CONFLICT_HOLD_BEFORE = (
+    f"{CONFLICT_HOLD} (6 rounds) — main keeps moving under this branch; "
+    "holding for a human decision.\n\nTo release this PR, comment here with a "
+    "first line that starts with the words Operator decision."
+)
+
+
+class TheIncidentIsInTheHeaderTest(unittest.TestCase):
+    def test_the_header_carries_a_dated_dre_7506_note(self):
+        text = SCRIPT.read_text()
+        header = text[:text.find(step_shell.code_lines(text)[0])]
+        history = header[header.find("# Incident history"):]
+        self.assertRegex(history, r"# 2026-10-\d\d · DRE-7506\.")
+        note = history[history.find("DRE-7506."):]
+        self.assertIn("#1134", note)
 
 
 if __name__ == "__main__":

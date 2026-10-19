@@ -44,6 +44,7 @@ import merge_sweep_gate  # noqa: E402
 import mid_epic  # noqa: E402
 import plan_critic  # noqa: E402
 import reconcile  # noqa: E402
+import build_started  # noqa: E402 — a card whose build started (DRE-7108)
 import routing_verdict  # noqa: E402
 from bureau_read_fakes import FakeDoor, FakeIssuer, card, door_env  # noqa: E402
 
@@ -185,7 +186,7 @@ def door_at(monkeypatch, *door_cards, mode="on", repository="dreadnought-foundry
 
 
 def _advanced(linear):
-    return [w[1] for w in linear.writes if w[0] == "advance" and w[2] == "Todo"]
+    return [w[1] for w in linear.writes if w[0] == "advance" and w[2] == "In Progress"]
 
 
 def _backlog_reads(linear):
@@ -227,8 +228,8 @@ def test_R1_relation_added_after_the_poll_blocks_promotion_via_live_recheck(monk
 
 def test_R2_a_reopened_blocker_reads_its_current_lane(monkeypatch):
     door_a = _c("DRE-101", "Backlog", blockers=(("DRE-102", "Done"),))
-    live_a = _c("DRE-101", "Backlog", blockers=(("DRE-102", "Todo"),))  # rebuilt
-    linear = Linear(live_a, _c("DRE-102", "Todo"))
+    live_a = _c("DRE-101", "Backlog", blockers=(("DRE-102", "In Progress"),))  # rebuilt
+    linear = Linear(live_a, _c("DRE-102", "In Progress"))
     with door_at(monkeypatch, door_a), wired(linear):
         assert reconcile.promote_ready(active_count=0) == 0
     assert _advanced(linear) == []
@@ -267,7 +268,7 @@ def test_R4_an_epic_sent_back_after_the_snapshot_holds_its_children(monkeypatch)
 
 def test_a_card_that_left_backlog_since_the_snapshot_is_not_promoted(monkeypatch):
     door_a = _c("DRE-101", "Backlog")
-    linear = Linear(_c("DRE-101", "Todo"))
+    linear = Linear(_c("DRE-101", "In Progress"))
     with door_at(monkeypatch, door_a), wired(linear):
         assert reconcile.promote_ready(active_count=0) == 0
     assert _advanced(linear) == []
@@ -304,7 +305,7 @@ def test_an_unstored_blocker_is_read_to_its_end_live(monkeypatch):
 def test_R5_a_lane_the_door_does_not_hold_falls_back_never_an_empty_lane(monkeypatch, capsys):
     busy = [_c(f"DRE-{n}", "In Review") for n in (11, 12, 13, 14, 15)]
     linear = Linear(*busy, *(_c(f"DRE-{n}", "Backlog") for n in (21, 22)))
-    with door_at(monkeypatch, *busy, held_lanes={"Todo", "In Progress", "Backlog"}), \
+    with door_at(monkeypatch, *busy, held_lanes={"In Progress", "In Progress", "Backlog"}), \
             wired(linear):
         base = reconcile.wip_count(reconcile.wip_base(reconcile.active_cards()))
         assert base == 5
@@ -319,8 +320,8 @@ def test_R7_R8_intake_and_planning_fall_back_to_linear_when_the_fleet_is_decline
     door that declines that scope to this repo gets exactly the one Linear
     read of the two lanes the sweep made before, and the work lanes still
     come from the door in the same pass."""
-    linear = Linear(_c("DRE-1", "Intake"), _c("DRE-2", "Planning"), _c("DRE-3", "Todo"))
-    with door_at(monkeypatch, _c("DRE-3", "Todo")) as door, wired(linear):
+    linear = Linear(_c("DRE-1", "Intake"), _c("DRE-2", "Planning"), _c("DRE-3", "In Progress"))
+    with door_at(monkeypatch, _c("DRE-3", "In Progress")) as door, wired(linear):
         door.decline_fleet("lane-not-held")
         intake = reconcile.active_cards(reconcile.INTAKE_LANE)
         planning = reconcile.active_cards(reconcile.PLANNING_LANE)
@@ -382,9 +383,13 @@ def _nudge_stubs(stack, *, dead=0):
     stack.enter_context(mock.patch.object(reconcile, "redeliver_rescued_work",
                                           return_value=False))
     stack.enter_context(mock.patch.object(linear_ops, "count_comments", return_value=dead))
+    stack.enter_context(build_started.entered())
 
 
 def _stale(ident, lane, **kw):
+    # A build that started and died (DRE-7108): the start receipt, newer than
+    # the lane entry `_nudge_stubs` answers, puts it on the dead-run path.
+    kw.setdefault("comments", (FLEET, build_started.START_RECEIPT))
     return _c(ident, lane, updated="2026-01-01T00:00:00.000Z", **kw)
 
 
@@ -397,7 +402,8 @@ def test_R6_a_dead_run_requeue_on_door_data_is_from_lane_conditional(monkeypatch
     # Every hand mark the vocabulary declares is a door the requeue refuses
     # (DRE-6225) — `operator-step` and `hand-built` since DRE-6227 flipped
     # OPERATOR's marks, never `no-code`.
-    assert linear.writes == [("state", "DRE-301", "Todo", (), ("In Progress",),
+    # To the queue since DRE-7108, deliberately: `promote_ready` brings it back.
+    assert linear.writes == [("state", "DRE-301", "Queued", ("--park",), ("In Progress",),
                               ("needs-human", *reconcile.routing_verdict.hand_marks()))]
     assert reconcile.routing_verdict.hand_marks() == ("operator-step", "hand-built")
     assert any(reconcile.DEAD_TAG in body for _i, body in linear.comments)
@@ -453,7 +459,7 @@ def test_off_mode_writes_exactly_as_before(monkeypatch):
         _nudge_stubs(stack)
         reconcile.main()
     # The unconditional call it always was: no expectation keywords at all.
-    assert linear.writes == [("state", "DRE-301", "Todo", (), None, ())]
+    assert linear.writes == [("state", "DRE-301", "Queued", ("--park",), None, ())]
 
 
 def test_R16_carrying_an_epic_out_of_todo_is_conditional(monkeypatch):
@@ -515,7 +521,7 @@ def test_a_dependabot_cancel_on_door_data_is_conditional(monkeypatch):
 
 
 def test_R9_shadow_decides_on_linear_and_classes_a_lane_move_door_older(monkeypatch, capsys):
-    door_copy = _c("DRE-701", "Todo", updated="2026-10-02T19:00:00.000Z")
+    door_copy = _c("DRE-701", "In Review", updated="2026-10-02T19:00:00.000Z")
     live = _c("DRE-701", "In Progress", updated="2026-10-02T20:01:00.000Z")
     linear = Linear(live)
     with door_at(monkeypatch, door_copy, mode="shadow") as door, wired(linear):
@@ -529,8 +535,8 @@ def test_R9_shadow_decides_on_linear_and_classes_a_lane_move_door_older(monkeypa
 
 
 def test_shadow_counts_a_same_stamp_difference_as_unexplained(monkeypatch, capsys):
-    door_copy = _c("DRE-701", "Todo")
-    live = _c("DRE-701", "Todo", labels=(REPO_LABEL, "needs-human"))
+    door_copy = _c("DRE-701", "In Progress")
+    live = _c("DRE-701", "In Progress", labels=(REPO_LABEL, "needs-human"))
     linear = Linear(live)
     with door_at(monkeypatch, door_copy, mode="shadow"), wired(linear):
         reconcile.active_cards()
@@ -550,7 +556,7 @@ def test_shadow_compares_the_backlog_and_promotes_on_linear_without_a_recheck(mo
 
 
 def test_R11_the_mode_is_read_once_per_run(monkeypatch):
-    a = _c("DRE-701", "Todo")
+    a = _c("DRE-701", "In Progress")
     linear = Linear(a)
     with door_at(monkeypatch, a, mode="shadow"), wired(linear):
         reconcile.active_cards()
@@ -582,7 +588,7 @@ def test_R12_door_dies_mid_sweep_and_the_promotion_rechecks_live(monkeypatch):
 
 
 def test_R13_a_throttled_door_falls_back_when_the_key_is_free(monkeypatch):
-    a = _c("DRE-201", "Todo")
+    a = _c("DRE-201", "In Progress")
     linear = Linear(a)
     with door_at(monkeypatch, a) as door, wired(linear):
         door.routes["/board"] = (429, {"error": {"code": "THROTTLED"}})
@@ -592,7 +598,7 @@ def test_R13_a_throttled_door_falls_back_when_the_key_is_free(monkeypatch):
 
 
 def test_R13_a_throttled_door_with_the_key_held_skips(monkeypatch):
-    a = _c("DRE-201", "Todo")
+    a = _c("DRE-201", "In Progress")
     linear = Linear(a)
     monkeypatch.setitem(linear_ops._budget, "refused_after", 2)
     with door_at(monkeypatch, a) as door, wired(linear):
@@ -663,8 +669,8 @@ def test_R15_the_merge_path_reads_dependents_from_the_door_and_rechecks_live(mon
 def test_R15_a_dependent_blocked_live_is_held_on_the_merge_path(monkeypatch):
     merged = _c("DRE-801", "Done")
     dep_door = _c("DRE-802", "Backlog", blockers=(("DRE-801", "Done"),))
-    dep_live = _c("DRE-802", "Backlog", blockers=(("DRE-801", "Done"), ("DRE-803", "Todo")))
-    linear = Linear(merged, dep_live, _c("DRE-803", "Todo"))
+    dep_live = _c("DRE-802", "Backlog", blockers=(("DRE-801", "Done"), ("DRE-803", "In Progress")))
+    linear = Linear(merged, dep_live, _c("DRE-803", "In Progress"))
     with door_at(monkeypatch, merged, dep_door), wired(linear):
         monkeypatch.setenv("MERGED_CARD", "DRE-801")
         reconcile.main(promote_only=True)
@@ -756,26 +762,26 @@ def test_a_repo_declined_the_fleet_reads_those_lanes_from_linear_as_before(monke
                                            (404, "not-found")])
 def test_a_refused_fleet_scope_is_unknown_for_that_read_and_the_door_stays_in_use(
         monkeypatch, status, reason):
-    with door_at(monkeypatch, _c("DRE-3", "Todo")) as door:
+    with door_at(monkeypatch, _c("DRE-3", "In Progress")) as door:
         door.decline_fleet(status=status)
         with pytest.raises(bureau_read.ReadUnknown) as caught:
             bureau_read.board(["Intake"], scope="fleet", max_age=bureau_read.BOARD_MAX_AGE)
         assert caught.value.reason == reason
         assert not caught.value.unavailable and not caught.value.skip
         assert bureau_read.enabled()
-        served = bureau_read.board(["Todo"], max_age=bureau_read.BOARD_MAX_AGE)
+        served = bureau_read.board(["In Progress"], max_age=bureau_read.BOARD_MAX_AGE)
         assert [n["identifier"] for n in served.nodes] == ["DRE-3"]
         # A token the door refuses on this repo's own scope still stops it.
         door.routes["/board"] = (status, {"error": {"code": "X"}})
         with pytest.raises(bureau_read.ReadUnknown) as stopped:
-            bureau_read.board(["Todo"], max_age=bureau_read.BOARD_MAX_AGE)
+            bureau_read.board(["In Progress"], max_age=bureau_read.BOARD_MAX_AGE)
         assert stopped.value.unavailable
         assert not bureau_read.enabled()
 
 
 def test_a_fleet_read_that_fails_stops_the_door_and_says_it_once(monkeypatch, capsys):
-    linear = Linear(_c("DRE-1", "Intake"), _c("DRE-3", "Todo"))
-    with door_at(monkeypatch, _c("DRE-3", "Todo")) as door, wired(linear):
+    linear = Linear(_c("DRE-1", "Intake"), _c("DRE-3", "In Progress"))
+    with door_at(monkeypatch, _c("DRE-3", "In Progress")) as door, wired(linear):
         door.fleet = (503, {"error": {"code": "CLOSED"}})
         intake = reconcile.active_cards(reconcile.INTAKE_LANE)
         work = reconcile.active_cards()
@@ -788,8 +794,8 @@ def test_a_fleet_read_that_fails_stops_the_door_and_says_it_once(monkeypatch, ca
 
 
 def test_a_fleet_read_told_linear_is_held_skips_with_no_linear_call(monkeypatch):
-    linear = Linear(_c("DRE-1", "Intake"), _c("DRE-3", "Todo"))
-    with door_at(monkeypatch, _c("DRE-1", "Intake"), _c("DRE-3", "Todo")) as door, \
+    linear = Linear(_c("DRE-1", "Intake"), _c("DRE-3", "In Progress"))
+    with door_at(monkeypatch, _c("DRE-1", "Intake"), _c("DRE-3", "In Progress")) as door, \
             wired(linear):
         door.fleet = door.unknown("linear-hold")
         for _ in range(2):
@@ -999,7 +1005,7 @@ _OLD = "2026-09-01T00:00:00.000Z"
 
 def test_with_the_door_on_an_unlabeled_card_in_todo_is_still_flagged(monkeypatch):
     ours = _c("DRE-310", "In Progress", updated=_OLD)
-    orphan = card("DRE-311", "Todo", labels=(), comments=(FLEET,), updated=_OLD)
+    orphan = card("DRE-311", "In Progress", labels=(), comments=(FLEET,), updated=_OLD)
     linear = Linear(ours, orphan)
     with door_at(monkeypatch, ours), wired(linear):
         flagged = reconcile.flag_stranded()
@@ -1025,7 +1031,7 @@ def test_with_the_door_on_another_routable_repos_card_is_not_this_sweeps(monkeyp
     """The Linear read is for the off-map class only: a card another repo can
     pick up is that repo's sweep's to check."""
     ours = _c("DRE-314", "In Progress", updated=_OLD)
-    theirs = card("DRE-315", "Todo", labels=("repo:atlas",), comments=(), updated=_OLD)
+    theirs = card("DRE-315", "In Progress", labels=("repo:atlas",), comments=(), updated=_OLD)
     linear = Linear(ours, theirs)
     monkeypatch.setattr(reconcile.validate_card, "VALID_SLUGS", {"portico", "atlas"})
     with door_at(monkeypatch, ours), wired(linear):
@@ -1324,14 +1330,15 @@ _OLD_QUEUE = "Back" + "log"
 
 
 def test_the_retiring_lane_rides_the_one_board_read():
-    assert reconcile.RETIRING_LANES == (_OLD_QUEUE,)
+    # Todo joined it when it began retiring too (DRE-7129).
+    assert reconcile.RETIRING_LANES == (_OLD_QUEUE, "Todo")
     assert set(reconcile.RETIRING_LANES) <= set(reconcile.BOARD_READ_LANES)
 
 
 @pytest.mark.parametrize("mode", ["off", "shadow"])
 def test_off_and_shadow_drain_off_the_board_read_already_paid_for(monkeypatch, mode):
     stranded = _c("DRE-31", _OLD_QUEUE, labels=())
-    linear = Linear(stranded, _c("DRE-32", "Todo"))
+    linear = Linear(stranded, _c("DRE-32", "In Progress"))
     with door_at(monkeypatch, mode=mode), wired(linear):
         reconcile.active_cards()  # the sweep's one board read
         before = len(linear.queries)
@@ -1346,7 +1353,7 @@ def test_on_the_drain_is_served_by_the_doors_fleet_read(monkeypatch):
     linear = Linear(stranded)
     with door_at(monkeypatch, stranded) as door, wired(linear):
         reconcile.drain_retiring_lanes()
-        assert _fleet_asks(door) == [_OLD_QUEUE]
+        assert _fleet_asks(door) == [f"{_OLD_QUEUE},Todo"]
     assert linear.queries == []
     assert ("advance", "DRE-33", "Queued", _OLD_QUEUE) in linear.writes
     assert "DRE-33" in reconcile._door_sourced
@@ -1360,7 +1367,7 @@ def test_on_a_declined_fleet_drains_this_repos_cards_off_the_repo_read(monkeypat
         reconcile.drain_retiring_lanes()
         repo_asks = [r["query"]["lanes"] for r in door.asked("/board")
                      if r["query"]["scope"] == "repo"]
-    assert repo_asks == [_OLD_QUEUE]
+    assert repo_asks == [f"{_OLD_QUEUE},Todo"]
     assert linear.queries == []
     assert ("advance", "DRE-34", "Queued", _OLD_QUEUE) in linear.writes
     assert ("read-door: the retiring lanes read at scope=repo this pass — the door "

@@ -181,9 +181,11 @@ The rule that separates build and review is unchanged either way.
 **DRE-7187.** This row has the same lever and the same note as DRE-7185, on the probe pull requests the harness opens in its sandbox.
 The harness drives the sandbox's stubs at `@main`, so the next harness run after the merge is on Opus again.
 
-**DRE-7188.** Rolled back, today's note reads:
-`DEGRADED model-policy: claude-opus-5-5 chosen for proof (workhorse kind) — top of the ladder, nothing above it was skipped — project none: fleet ladder · model-home: unreadable (…), running on the defaults in the code`.
+**DRE-7188.** Proof runs have had their own Proof group since DRE-7284, whose ladder lists the Builders' models in the same order. Today's note reads:
+`DEGRADED model-policy: claude-opus-5-5 chosen for proof (proof kind) — top of the ladder, nothing above it was skipped — project none: fleet ladder · model-home: unreadable (…), running on the defaults in the code`.
+That is `chosen for proof (proof kind)` on `claude-opus-5-5`, the Builders' first model.
 While switched, it reads `chosen for proof (proof kind)` on `claude-sonnet-5-5`.
+The one step back is still `agents.proof` moving from `proof` to `workhorse`. Rolled back, the note reads `chosen for proof (workhorse kind)`.
 The Proof group can stay in the file. Only `agents.proof` moves.
 
 **DRE-7189.** The console's jobs are not in the selector today: they are pinned to Opus in agent-bureau's console.

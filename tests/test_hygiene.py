@@ -814,6 +814,24 @@ class TestIdempotency:
 # --------------------------------------------------------------------------- #
 
 
+class TestTheStartLanes:
+    """DRE-7112. The board read and the guard's refusal name the start lanes
+    through `lane_contract.START_LANES` (DRE-7105), so the read covers a card
+    in In Progress exactly as one in Todo, and deleting Todo's entry narrows
+    both with no edit here."""
+
+    def test_the_board_read_covers_every_start_lane(self):
+        assert hygiene.LANES == ("Green Light", *lane_contract.START_LANES, "Triage",
+                                 "In Review")
+        assert sorted(hygiene.LANES) == sorted(FIVE)
+
+    def test_the_guard_names_every_start_lane_it_refuses(self):
+        assert hygiene.REFUSED_LANES == (*lane_contract.START_LANES, "Green Light",
+                                         "Triage", "Intake")
+        for lane in lane_contract.START_LANES:
+            assert lane not in hygiene.destinations()
+
+
 class TestGuard:
     @pytest.mark.parametrize("lane", ["In Progress", "Todo", "Green Light", "Triage", "Intake"])
     def test_a_state_write_into_a_lane_the_agent_may_not_write_is_refused(self, lane):
@@ -1605,7 +1623,8 @@ AMENDED = (
     ("Done", "entrance"), ("Done", "writers"), ("Canceled", "entrance"),
     ("Canceled", "writers"), ("Planning", "writers"), ("Queued", "writers"),
     ("In Review", "writers"), ("Green Light", "exit"), ("Triage", "exit"),
-    ("Todo", "exit"), ("In Progress", "exit"), ("In Review", "exit"),
+    # Todo's exit went with its clauses when it began retiring (DRE-7129).
+    ("In Progress", "exit"), ("In Review", "exit"),
     # The card's one contract point with DRE-5240: whichever of the two lands
     # second gives the Hand-work exit the sentence the Todo exit carries, or
     # the agent could never close a proof that sits there. DRE-5315 landed
@@ -1625,7 +1644,6 @@ class TestTheLaneContract:
     def test_the_hand_work_exit_carries_the_todo_exits_sentence(self):
         sentence = ("Or the hygiene agent closes a card whose pull request merged "
                     "while it sat here (DRE-5365).")
-        assert self._lane("Todo")["clauses"]["exit"]["text"].endswith(sentence)
         assert self._lane("Hand-work")["clauses"]["exit"]["text"].endswith(sentence)
 
     def test_the_writer_glossary_carries_the_agent(self):

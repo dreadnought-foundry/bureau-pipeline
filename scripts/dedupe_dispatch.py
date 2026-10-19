@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Duplicate-dispatch guard for agent-task (DRE-2057).
 
-A single card's Todo transition sometimes produces TWO agent-execute
+A single card's promotion into a start lane (`lane_contract.START_LANES` —
+the old start lane before the flip, In Progress after it) sometimes produces TWO agent-execute
 dispatches ~60s apart (webhook double-fire around create/state-set, or a
 relay retry). The stub's per-card concurrency group serializes them —
 cancel-in-progress stays false on purpose (DRE-2032) — so the dup doesn't
@@ -35,9 +36,9 @@ The decision (any condition skips; all unreadable → proceed):
 
 ## WHY (b) GREW A SECOND HALF (DRE-4830, portico, 2026-09-24)
 
-Seven portico cards were promoted to Todo at 14:59 PT and dispatched. The
+Seven portico cards were promoted to the old start lane at 14:59 PT and dispatched. The
 mini was saturated — 78 jobs waiting at 17:00 — so every run sat `queued`,
-posted no heartbeat, and the reconcile sweep's Todo branch read "no run
+posted no heartbeat, and the reconcile sweep's start-lane branch read "no run
 receipt" as "no run" and re-dispatched six of them sixteen minutes later.
 That writer is fixed at its own end (`reconcile.build_run_refusal`); this
 is the consumer's half, and it is what catches whatever produces the next
@@ -114,6 +115,23 @@ THREE CONDITIONS, any of which refuses (all unreadable → proceed):
     dispatch, so no other plan dispatch costs an extra read. A person moving
     the card on to Planning is a `planning` dispatch and never meets this.
 
+ONE MORE, WHICH HANDS THE CARD BACK RATHER THAN DROPPING IT:
+
+(f) A ONE-OFF SENT TO THE PLANNER (DRE-7110) — the dispatch was fired for the
+    card ENTERING In Progress, the card is still there, and it has no children
+    and a `one-off` stamp. Until the relay carrying DRE-7107 is live, the relay
+    reads `agent:planner` alone as an epic approval, and every classified
+    one-off wears it — so once the flip promotes into In Progress, the sweep's
+    `Queued → In Progress` move on a one-off is answered with this dispatch.
+    The plan run is skipped with the one receipt below, and the guard fires at
+    most one `agent-execute` for the card: none when its build is already
+    running (a build run in flight, or a start receipt newer than its entry
+    into In Progress) or when that cannot be read, where the sweep's
+    not-started re-fire (DRE-7108) is the backstop. Either read of the card
+    failing, an epic by `mid_epic.is_epic`, or a stamp other than `one-off`
+    (none included) leaves the decision as it was. The children and the stamp
+    are read only for an In Progress dispatch.
+
 Contract with agent-task.yml / plan.yml (the validate_card.py gate
 convention):
   gate <DRE-N>        exit 0 always; prints `skip=true|false` and
@@ -123,7 +141,7 @@ convention):
                       reconcile's blocker gate reads any non-machine comment
                       as a human reply); reporting failures never flip the
                       decision.
-  plan-gate <DRE-N>   the same, for a planner dispatch, on (c)/(d)/(e) above.
+  plan-gate <DRE-N>   the same, for a planner dispatch, on (c)–(f) above.
                       Reads the trigger lane from $TRIGGER_STATE, and from
                       $SENT_BY_RUN the planner run that asked for this one,
                       which is never its duplicate (DRE-4573).
@@ -147,6 +165,11 @@ import dead_run
 import lane_contract
 import lane_scope
 import linear_ops
+import mid_epic  # ONE answer to "is this an epic" (DRE-3038)
+import plan_run  # ONE build dispatch, for the hand-back (DRE-7110)
+import planning_route  # the one-off shape's name
+import routing_verdict  # ONE tolerant read of the shape stamp
+import stranded_fix  # the run statuses that are in flight
 
 # The heartbeat contract, shared with reconcile.py (RUN_MARKER / _RUN_ID) —
 # tests/test_dedupe_dispatch.py pins byte-parity so drift can't blind either
@@ -167,6 +190,10 @@ SHIPPED_LANES = lane_scope.LANE_FLOW[
 class Decision:
     skip: bool
     reason: str
+    #: The planner's guard skipped this run because the card is a one-off that
+    #: belongs to the build path (DRE-7110): `cmd_plan_gate` fires at most one
+    #: build for it after the receipt.
+    hand_back: bool = False
 
 
 def heartbeat_run_id(comment_bodies: list) -> Optional[str]:
@@ -200,7 +227,7 @@ def shipped_lane(card_lane: str) -> str:
     """The contract's name for `card_lane` when the card is past being built —
     the review lane or Done — else ''. An unreadable lane is '' (fail-open), and
     the name is resolved through the contract's rename aliases so a board
-    mid-rename does not read as a card still in Todo."""
+    mid-rename does not read as a card still in its start lane."""
     name = _canonical_lane(card_lane)
     return name if name in SHIPPED_LANES else ""
 
@@ -455,10 +482,36 @@ def parked_for_a_person(labels: list | None, newest_comment: str) -> bool:
             or STALL_PARK_TAG in (newest_comment or ""))
 
 
+#: The lane a dispatch fired for its entry may be a one-off sent to the
+#: planner (DRE-7110): the build path's dispatch lane, from the contract.
+HAND_BACK_LANE = lane_contract.DISPATCH_LANE
+
+
+def fired_for_hand_back_lane(trigger_state: str, current_lane: str) -> bool:
+    """Whether this dispatch was fired for the card ENTERING the dispatch lane
+    and the card is still there — the only dispatch condition (f) reads the
+    card's children and shape stamp for."""
+    want = HAND_BACK_LANE.casefold()
+    return (_canonical_lane(trigger_state).casefold() == want
+            and _canonical_lane(current_lane).casefold() == want)
+
+
+def stamped_one_off(title: str, has_children: bool, shape: Optional[str]) -> bool:
+    """A card the planner has nothing to do with on entering In Progress: no
+    children, a `one-off` stamp, and not an epic by `mid_epic.is_epic`. A card
+    nothing classified is not one — that is the planner's fallback for an epic
+    approved before it was planned."""
+    if mid_epic.is_epic(title, has_children, shape):
+        return False
+    return (not has_children
+            and (shape or "").strip().lower() == planning_route.ONE_OFF_SHAPE)
+
+
 def plan_decide(identifier: str, trigger_state: str, current_lane: str,
                 in_flight: list, sent_by_run: str = "",
                 labels: list | None = None,
-                newest_comment: str = "") -> Decision:
+                newest_comment: str = "",
+                one_off: bool = False) -> Decision:
     """The planner's skip decision. `in_flight` is what
     `in_flight_when_dispatched` returned for this card; the lane pair is the
     dispatch's trigger lane against the card's lane as it is NOW.
@@ -473,7 +526,13 @@ def plan_decide(identifier: str, trigger_state: str, current_lane: str,
 
     `labels` and `newest_comment` are read for condition (e) only, and only of
     a dispatch fired for the park lane (DRE-5277): a card a person must look at
-    is not re-planned because it arrived where it was parked."""
+    is not re-planned because it arrived where it was parked.
+
+    `one_off` is condition (f)'s answer (`stamped_one_off`), read only of a
+    dispatch fired for the dispatch lane on a card still in it (DRE-7110): a
+    one-off whose move into In Progress was sent to the planner is handed back
+    as a build. It is decided last, so a second dispatch for the same move is
+    the first's duplicate (c) and never a second hand-back."""
     if sent_by_run:
         in_flight = [r for r in in_flight
                      if str(r.get("id")) != str(sent_by_run)]
@@ -496,6 +555,13 @@ def plan_decide(identifier: str, trigger_state: str, current_lane: str,
             True,
             f"{identifier} is parked in {PARK_LANE} for a person — it "
             "re-enters planning when a person moves it to Planning",
+        )
+    if one_off and fired_for_hand_back_lane(trigger_state, current_lane):
+        return Decision(
+            True,
+            f"{identifier} is a one-off, not an epic — its move into "
+            f"{HAND_BACK_LANE} was sent to the planner; handed back as a build",
+            hand_back=True,
         )
     return Decision(
         False,
@@ -666,6 +732,113 @@ def _plan_siblings(identifier: str, own_run_id: str) -> list:
     return sibling_on_this_card(candidates, identifier, _run_job_names)
 
 
+# --- condition (f): the hand-back's reads and its one fire (DRE-7110) ---------
+
+#: The card as the hand-back reads it: the fields `plan_run.fire` builds its
+#: payload from, its children, when it was created, and its newest comments —
+#: the window `reconcile.build_started` reads the start receipt off.
+_HAND_BACK_QUERY = """query($id: String!) { issue(id: $id) {
+     id identifier title description createdAt state { name }
+     labels { nodes { name } }
+     children(first: 1) { nodes { identifier } }
+     %s } }""" % linear_ops.COMMENT_WINDOW_GQL
+
+
+def _one_off_card(identifier: str) -> Optional[dict]:
+    """The card, when it is a stamped one-off with no children
+    (`stamped_one_off`); None otherwise, and None when either read fails —
+    an unreadable card is decided exactly as it was before the hand-back.
+
+    The shape stamp is read off the WHOLE thread (DRE-5644): it is written
+    once, when the card enters Planning, and a busy card buries it."""
+    try:
+        issue = linear_ops.gql(_HAND_BACK_QUERY, {"id": identifier})["issue"]
+        bodies = linear_ops.comment_bodies(identifier, whole_thread=True)
+    except Exception as e:  # noqa: BLE001 — an unreadable card is today's decision
+        print(f"hand-back read failed ({e}) — deciding as before",
+              file=sys.stderr)
+        return None
+    has_children = bool(((issue.get("children") or {}).get("nodes")) or [])
+    shape = routing_verdict.shape_of(bodies)
+    return issue if stamped_one_off(issue.get("title") or "", has_children,
+                                    shape) else None
+
+
+def _build_workflow() -> str:
+    """The BUILD stub's filename in this repo — `reconcile.build_workflow`'s
+    rule, read off `REPO` because a planner run carries no `REPO_SLUG`: in
+    bureau-pipeline `agent-task.yml` is the reusable definition and its runs
+    exist under `self-agent-task.yml`."""
+    name = _repo().rsplit("/", 1)[-1].lower()
+    return "self-agent-task.yml" if name == "bureau-pipeline" else "agent-task.yml"
+
+
+def _build_job_names(run_id: str) -> list:
+    """One build run's job names. Raises when they cannot be read: a run the
+    hand-back cannot attribute might be this card's build."""
+    data = _gh_json("api", f"repos/{_repo()}/actions/runs/{run_id}/jobs")
+    jobs = data.get("jobs") if isinstance(data, dict) else None
+    if jobs is None:
+        raise RuntimeError(f"the jobs of build run {run_id} could not be read")
+    return [j.get("name") or "" for j in jobs if isinstance(j, dict)]
+
+
+def _build_in_flight(identifier: str) -> bool:
+    """Is a build run for this card queued or running? The question
+    `reconcile.build_run_refusal` answers, asked with this guard's own reads:
+    reconcile's Actions read is silent without the sweep's dispatch token, and
+    a planner run has none, so an unreadable listing would read as an empty
+    one. Here it raises, and the caller fires nothing."""
+    data = _gh_json(
+        "api",
+        f"repos/{_repo()}/actions/workflows/{_build_workflow()}/runs"
+        f"?per_page={_RUNS_PAGE}",
+    )
+    runs = data.get("workflow_runs") if isinstance(data, dict) else None
+    if runs is None:
+        raise RuntimeError(f"the {_build_workflow()} run listing could not be read")
+    live = [{"id": str(r.get("id") or ""), "status": r.get("status") or ""}
+            for r in runs
+            if isinstance(r, dict) and r.get("status") in stranded_fix.IN_FLIGHT_STATUSES]
+    return bool(sibling_on_this_card(live, identifier, _build_job_names))
+
+
+def _build_started(card: dict) -> bool:
+    """A start receipt newer than the card's newest entry into its lane —
+    DRE-7108's definition of started, `reconcile.build_started`, which raises
+    when the lane history cannot be read."""
+    import reconcile  # noqa: PLC0415 — the sweep's module; it imports this one
+
+    return reconcile.build_started(card)
+
+
+def _hand_back(identifier: str, card: dict) -> None:
+    """Fire at most one build for a one-off the planner was sent (DRE-7110).
+
+    Nothing is fired when the build is already running — a build run in
+    flight, or a start receipt newer than the card's entry into In Progress
+    (today: the build run's own start-lane → In Progress move on a labeled one-off)
+    — or when either cannot be read. The sweep's not-started re-fire (DRE-7108)
+    starts the card as `agent-execute` within `START_MINUTES` then, and is the
+    backstop for a failed fire too."""
+    try:
+        running = _build_in_flight(identifier) or _build_started(card)
+    except Exception as e:  # noqa: BLE001 — unreadable liveness fires nothing
+        print(f"plan-gate: whether {identifier}'s build is running could not be "
+              f"read ({e}) — nothing fired; the sweep's not-started re-fire "
+              f"starts it within {lane_contract.START_MINUTES} minutes",
+              file=sys.stderr)
+        return
+    if running:
+        print(f"plan-gate: {identifier}'s build is already running — nothing fired")
+        return
+    ok, err = plan_run.fire(card, _repo(), event=plan_run.EXECUTE_EVENT)
+    if ok:
+        print(f"plan-gate: {identifier} handed back as {plan_run.EXECUTE_EVENT}")
+    else:
+        print(f"plan-gate: {identifier} hand-back failed — {err}", file=sys.stderr)
+
+
 def _emit(skip: bool, reason: str) -> None:
     lines = [f"skip={'true' if skip else 'false'}", f"reason={reason}"]
     out = os.environ.get("GITHUB_OUTPUT")
@@ -739,7 +912,9 @@ def cmd_gate(identifier: str) -> None:
 def cmd_plan_gate(identifier: str) -> None:
     """The planner's gate (DRE-3409). Every read fails open on its own, so a
     GitHub blip costs the run-overlap half and a Linear blip costs the lane
-    half or the park half, and none of them costs the epic its plan."""
+    half or the park half, and none of them costs the epic its plan. The
+    hand-back (f) is the one fire this guard makes, and an unreadable answer
+    there fires nothing (DRE-7110)."""
     own_run_id = os.environ.get("GITHUB_RUN_ID", "")
     if _is_rerun():
         # A re-run is somebody ASKING for this run again — a person in the
@@ -778,14 +953,20 @@ def cmd_plan_gate(identifier: str) -> None:
         except Exception as e:  # noqa: BLE001 — an unreadable card proceeds
             print(f"comment read failed ({e}) — proceeding on fail-open",
                   file=sys.stderr)
+    card = None
+    if fired_for_hand_back_lane(trigger_state, lane):
+        # Condition (f)'s reads, made for an In Progress dispatch only.
+        card = _one_off_card(identifier)
     decision = plan_decide(
         identifier, trigger_state, lane, in_flight,
         sent_by_run=os.environ.get("SENT_BY_RUN", ""),
-        labels=labels, newest_comment=newest,
+        labels=labels, newest_comment=newest, one_off=card is not None,
     )
     if decision.skip:
         _receipt(identifier, decision,
                  "This run planned nothing and moved no lane.")
+    if decision.hand_back and card is not None:
+        _hand_back(identifier, card)
     _emit(decision.skip, decision.reason)
 
 

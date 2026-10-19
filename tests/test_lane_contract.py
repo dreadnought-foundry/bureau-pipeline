@@ -48,12 +48,12 @@ CONTRACT = os.path.join(
 # DRE-5320 made it twelve: `Hand-work`, the person-work lane after Todo.
 # DRE-6740 made it thirteen: `Queued`, the queue that replaces Backlog.
 # DRE-6753 made it twelve again: Backlog is retiring, no longer live.
+# DRE-7129 made it eleven: Todo is retiring, replaced by In Progress.
 LIVE_LANES = (
     "Intake",
     "Planning",
     "Green Light",
     "Queued",
-    "Todo",
     "Hand-work",
     "In Progress",
     "In Review",
@@ -172,12 +172,13 @@ class TestLaneCleanup:
         # DRE-2818. The board half (agent-bureau's config/linear-workspace.json)
         # is done — Linear no longer has either state — so the entries were the
         # last copy of two lanes that do not exist. Keeping them is drift, and
-        # the harness said so by rule id on every trunk commit. The one
-        # retiring entry left is the queue's old name (DRE-6753).
+        # the harness said so by rule id on every trunk commit. The retiring
+        # entries left are the queue's old name (DRE-6753) and the old start
+        # lane (DRE-7129).
         retiring = lane_contract.lane_names(status="retiring")
         for name in RETIRED_LANES:
             assert name not in retiring
-        assert retiring == ("Backlog",)
+        assert retiring == ("Backlog", "Todo")
 
     def test_the_contract_file_spells_neither_name_anywhere(self):
         # Not just the entries. The rationale prose named them too, and a grep
@@ -189,7 +190,7 @@ class TestLaneCleanup:
                 "no longer has"
             )
 
-    def test_the_twelve_live_lanes_are_exactly_the_board(self):
+    def test_the_eleven_live_lanes_are_exactly_the_board(self):
         assert set(lane_contract.lane_names(status="live")) == set(LIVE_LANES)
 
     def test_the_merged_lane_keeps_the_longer_stall_window(self):
@@ -332,6 +333,13 @@ class TestTheQueueLanes:
         assert lane_contract.QUEUE_LANE in lane_contract.QUEUE_LANES
         doc = self.fixture(to="Queued")
         assert lane_contract.queue_lane(doc) in lane_contract.queue_lanes(doc)
+
+    def test_todo_retires_into_the_dispatch_lane_and_stays_a_start_lane(self):
+        # DRE-7105 declared what replaces it; DRE-7129 set it retiring. It is
+        # a start lane until its entry is deleted.
+        todo = lane_contract.lane("Todo", status="retiring")
+        assert todo["replaced_by"] == lane_contract.DISPATCH_LANE
+        assert "Todo" in lane_contract.START_LANES
 
     def test_the_offline_check_passes(self):
         report = lane_contract.check(vocabulary=lane_contract.pipeline_vocabulary())
