@@ -5226,10 +5226,16 @@ def report_intake_blockers() -> list[tuple[str, str]]:
 # card-less. Broad tuple only — no card to work, no fix agent — and a literal
 # name, as that answer allows. The onboarding routing step reads this file at
 # `stable` for the literal before it opens one.
+#
+# `bot/test-durations` joined on the same terms (DRE-7577): the nightly
+# Pipeline Tests run re-measures config/unit-test-durations.json on it before
+# the record falls under its 90% floor, and the merge gate merges it
+# card-less. Broad tuple only, and a literal name.
 CARD_BRANCH_PREFIXES = ("agent/",)
 FIX_BRANCH_PREFIXES = ("agent/", "repair/")
 PIPELINE_BRANCH_PREFIXES = (
     "agent/", "repair/", "dependabot/", "bot/standards-sync", "bot/onboard",
+    "bot/test-durations",
 )
 
 
