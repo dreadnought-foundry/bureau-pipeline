@@ -28,6 +28,7 @@
     "tests/test_plan_critic_one_off_no_result_rerun.py": "tests/test_plan_critic_one_off_no_result_rerun.py, new for DRE-7491, at 6.36 s, read off its pytest -v result lines in CI run 39149333071, job 117739565002 (part 2, 2026-10-18, head fe86e9a), because it took the record under its 90% coverage",
     "tests/test_plan_gate_hands_back_build.py": "tests/test_plan_gate_hands_back_build.py and tests/test_validate_card_start_lanes.py, new for DRE-7110, at 4.05 s and 0.82 s, read off their pytest -v result lines in CI run 39106291672, jobs 117612731707 (part 1) and 117612731629 (part 2) (PR #1158, 2026-10-18, head c9f4abc), because the two of them took the record under its 90% coverage",
     "tests/test_promoted_not_started.py": "tests/test_promoted_not_started.py, new for DRE-7108, at 41.81 s, measured locally (2026-10-17, its 44 tests in one pytest run), because no CI run had timed that file yet",
+    "tests/test_proof_dispatch_shadow.py": "tests/test_proof_dispatch_shadow.py, new for DRE-7287, at 0.45 s, read off its pytest -v result lines in CI run 39178315836, job 117825512230 (part 3) (PR #1177, 2026-10-19, head 715b0ad), because it took the record under its 90% coverage",
     "tests/test_proof_group.py": "tests/test_proof_group.py, new for DRE-7284, at 1.74 s, read off its pytest -v result lines in CI run 38789772518, job 116611009306 (part 4, 2026-10-15, head 26d37ad)",
     "tests/test_proof_shadow.py": "tests/test_proof_shadow.py, new for DRE-7288, at 0.78 s, measured locally (2026-10-15, 4 cores, its 35 tests in one pytest run), because no CI run had timed that file yet",
     "tests/test_proof_task_shadow.py": "tests/test_proof_task_shadow.py, new for DRE-7286, at 26.01 s, read off its pytest --junit-xml suite time measured locally (2026-10-18, 4 cores, its 44 tests in one pytest run), because it took the record under its 90% coverage in CI run 39161696331, job 117776150821 (part 2)",
@@ -748,6 +749,7 @@
     "tests/test_workflow_expression_budget.py": 6.72,
     "tests/test_workflow_prompt_lanes.py": 0.37,
     "tests/test_writers_point_at_planning.py": 1.32,
-    "tests/test_medic_resume.py": 2.55
+    "tests/test_medic_resume.py": 2.55,
+    "tests/test_proof_dispatch_shadow.py": 0.45
   }
 }

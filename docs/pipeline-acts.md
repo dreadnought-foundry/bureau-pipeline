@@ -429,6 +429,15 @@ each proof a person is already working with `linear_ops.py proof-waiting
 <card> "being observed by hand" "the operator's record pull request"`, and the
 phase leaves it alone by name.
 
+**A proof shadow posts no receipt** (DRE-7287). While the repository variable
+`PROOF_SHADOW_MODEL` names a model, each confirmed dispatch on a live pass is
+followed by a `proof-shadow` dispatch for the same card, answered by `Proof
+Shadow` (`self-proof-shadow.yml`). It writes nothing to Linear, so it never
+spends the first-run budget these receipts count; it prints one
+`proof-shadow: dispatched <card> on <model>` or `proof-shadow: not dispatched
+<card> — <error>` line, and a dry pass prints `would: shadow <card> on
+<model>`.
+
 ## The row that says a switch may come on — `🔀 switch-cleared` (DRE-6437)
 
 | Field | Value |

@@ -237,8 +237,27 @@ with no reason given, or off for a reason that names no card. It is composed
 from the environment alone and costs no read; each named card's state is the
 `Read the switches` step's job (DRE-6436). A live pass prints nothing of it.
 
+## The shadow (DRE-7287)
+
+While the repository variable `PROOF_SHADOW_MODEL` is set (unset or empty is
+off), each confirmed real dispatch on a live pass is followed by one more:
+`plan_run.PROOF_SHADOW_EVENT` for the same card and reason, carrying the
+variable's value as `shadow_model` and the pass's time as `dispatched_at`.
+`Proof Shadow` (`self-proof-shadow.yml`) answers it, running the same proof on
+that model with `proof-task.yml`'s `shadow: true` (DRE-7286), under a name the
+medic does not watch (`check_workflow_watchers.NOT_WATCHED`).
+
+The shadow is a measurement, so it touches nothing the real run is counted
+by: no receipt, no comment, no hold, no tally bucket and no spend of the
+first-run budget, which is counted off the receipts. It prints one line,
+`proof-shadow: dispatched <CARD> on <model>` or `proof-shadow: not dispatched
+<CARD> — <error>`, and a shadow that fails or raises fails nothing — not the
+real dispatch, not the pass, not the step. A real dispatch that was not
+confirmed starts no shadow. A dry pass prints `would: shadow <CARD> on
+<model>` after its `would: dispatch` line.
+
 CLI (the step's own call; reads `REPO`, `REPO_SLUG`, `PROOF_DISPATCH_LIVE`,
-`PROOF_DISPATCH_LIVE_OFF_UNTIL`):
+`PROOF_DISPATCH_LIVE_OFF_UNTIL`, `PROOF_SHADOW_MODEL`):
 
     proof_dispatch.py
 """
@@ -300,6 +319,14 @@ PASS_MINUTES = 15
 
 #: The repository variable that turns the dry run off — `true` and nothing else.
 LIVE_VARIABLE = "PROOF_DISPATCH_LIVE"
+
+#: The repository variable naming the model a proof shadow runs on (DRE-7287).
+#: Unset or empty: no shadow.
+SHADOW_VARIABLE = "PROOF_SHADOW_MODEL"
+
+#: Opens the shadow's one line — its own prefix, so the shadow is never read
+#: as the phase's dispatch or tallied with it.
+SHADOW_PREFIX = "proof-shadow:"
 
 #: The proof-run stubs the step tests for before it runs this file, in
 #: `reconcile.fix_workflow()`'s naming family: bureau-pipeline's own stub is
@@ -415,6 +442,16 @@ def _when(stamp) -> datetime | None:
 
 def is_live() -> bool:
     return os.environ.get(LIVE_VARIABLE) == "true"
+
+
+def shadow_model_set() -> str:
+    """The model a proof shadow runs on, or "" for no shadow."""
+    return (os.environ.get(SHADOW_VARIABLE) or "").strip()
+
+
+def _utc(when: datetime) -> str:
+    """The shadow payload's `dispatched_at`: UTC, `YYYY-MM-DDTHH:MM:SSZ`."""
+    return when.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 # --------------------------------------------------------------------------- #
@@ -779,8 +816,10 @@ def park_caused(one: "_Pass", ident: str, text: str, voices: list, lane: str) ->
 
 class _Pass:
     def __init__(self, repo, slug, *, live, linear, read, find_pr, run_state,
-                 release, fire, voices, now, find_record, read_record):
+                 release, fire, voices, now, find_record, read_record,
+                 shadow_model=""):
         self.repo, self.slug, self.live = repo, slug, live
+        self.shadow_model = shadow_model
         self.linear, self.read, self.find_pr = linear, read, find_pr
         self.find_record, self.read_record = find_record, read_record
         self.run_state, self.release, self.fire = run_state, release, fire
@@ -1303,6 +1342,8 @@ class _Pass:
         self.tally.eligible += 1
         if not self.live:
             print(f"would: dispatch {ident} — {reason}")
+            if self.shadow_model:
+                print(f"would: shadow {ident} on {self.shadow_model}")
             self.tally.dispatched += 1
             return
         ok, error = self.fire(card, self.repo, reason=reason,
@@ -1322,6 +1363,25 @@ class _Pass:
             self.tally.failures.append(f"{ident}: receipt not posted: {error}")
             _say(ident, f"ERROR: dispatched, and the receipt could not be "
                         f"posted: {error}")
+        if self.shadow_model:
+            self.shadow(card, reason)
+
+    def shadow(self, card: dict, reason: str) -> None:
+        """The proof shadow beside a confirmed real dispatch (DRE-7287): one
+        fire and one line. It writes nothing to Linear and touches no tally,
+        and nothing it can raise reaches the pass."""
+        ident, model = card["identifier"], self.shadow_model
+        try:
+            ok, error = self.fire(card, self.repo, reason=reason,
+                                  event=plan_run.PROOF_SHADOW_EVENT,
+                                  shadow_model=model,
+                                  dispatched_at=_utc(self.now))
+        except Exception as raised:  # noqa: BLE001 — a shadow fails nothing
+            ok, error = False, f"{type(raised).__name__}: {raised}"
+        if ok:
+            print(f"{SHADOW_PREFIX} dispatched {ident} on {model}")
+        else:
+            print(f"{SHADOW_PREFIX} not dispatched {ident} — {error}")
 
 
 def sweep(repo: str, slug: str, *, live: bool, linear=None,
@@ -1330,11 +1390,13 @@ def sweep(repo: str, slug: str, *, live: bool, linear=None,
           fire: Callable | None = None, voices: Callable | None = None,
           now: datetime | None = None,
           find_record: Callable | None = None,
-          read_record: Callable | None = None) -> Tally:
+          read_record: Callable | None = None,
+          shadow_model: str | None = None) -> Tally:
     """One pass: the return first, then first runs oldest first and re-runs,
     begun at this pass's turn; at most `PROOF_CANDIDATES_PER_PASS` candidates
     read and one dispatch. A first run held on the lane read is named every
-    pass and read by none."""
+    pass and read by none. `shadow_model` is the proof shadow's model, read
+    from `PROOF_SHADOW_MODEL` when not given; empty is no shadow."""
     one = _Pass(repo, slug, live=live, linear=linear or LinearReads(),
                 read=read or github_read,
                 find_pr=find_pr or (lambda ident: merged_pr(ident, repo)),
@@ -1344,7 +1406,9 @@ def sweep(repo: str, slug: str, *, live: bool, linear=None,
                 voices=voices or spoken_thread.voices,
                 now=now or datetime.now(timezone.utc),
                 find_record=find_record or (lambda ident: record_pr(ident, repo)),
-                read_record=read_record or (lambda pr, head: record_at(repo, pr, head)))
+                read_record=read_record or (lambda pr, head: record_at(repo, pr, head)),
+                shadow_model=(shadow_model_set() if shadow_model is None
+                              else shadow_model.strip()))
     tally = one.tally
 
     # One Green Light read serves both branches; a card the return takes is
