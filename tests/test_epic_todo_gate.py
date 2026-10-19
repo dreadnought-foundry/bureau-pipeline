@@ -49,6 +49,15 @@ import routing_verdict  # noqa: E402
 MODULE = ROOT / "scripts" / "epic_todo_gate.py"
 
 
+@pytest.fixture(autouse=True)
+def _the_lane_still_retiring(monkeypatch):
+    """The gate as it ran while Todo was a retiring start lane. The entry went
+    once Linear deleted the state (DRE-7673), so the shipped name is None and
+    the gate is inert; these tests prove the gate itself, so they hand it the
+    name the contract carried (tests/test_todo_retired.py pins the None)."""
+    monkeypatch.setattr(gate, "TODO", "Todo")
+
+
 def _stamp(shape: str) -> str:
     return planning_shape.shape_comment(shape, "classified at Planning's front door")
 
@@ -575,7 +584,9 @@ class TestExplain:
     def test_an_epic_in_todo_reads_refused(self, capsys):
         ops = _ReadLayer(title=EPIC_TITLE, lane="Todo", children=True,
                          history=[_entry("Green Light", "Todo")])
-        gate.explain(ops, "DRE-3621")
+        # Named: the default lane was read off the contract at import, and the
+        # entry is gone (DRE-7673).
+        gate.explain(ops, "DRE-3621", "Todo")
         out = capsys.readouterr().out
         assert out.splitlines()[0].startswith("refused")
         assert "🚫 epic-not-todo: DRE-3621 → Green Light" in out
