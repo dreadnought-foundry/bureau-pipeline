@@ -542,14 +542,6 @@
       }
     },
     {
-      "name": "Todo",
-      "status": "retiring",
-      "retired_by": "DRE-7072",
-      "replaced_by": "In Progress",
-      "reason": "The lane a promoted card waited in between Queued and In Progress until the flip (DRE-7120). A promoted card now goes from Queued straight to In Progress, and that move is the dispatch, so a lane between them only made the board show two waiting lanes. Nothing writes Todo since the flip, and the sweep drains every card still here into In Progress (reconcile.drain_retiring_lanes), on every repo's sweep, for as long as this entry stands, a card dropped here later included — except an epic: the drain leaves an epic where it is, and reconcile.carry_epics_out_of_todo, later in the same sweep, carries it by its own rule (to In Progress only when it came here from there, to Planning otherwise), so a drag can never approve an epic. A drained card is not started, so the sweep's start window (DRE-7108) re-fires its dispatch unless its run is already in flight.",
-      "board_action": "Once the lane is empty — board.retiring_lane_is_empty holds — delete the Todo state in Linear's team workflow settings. Linear offers Delete on a status that is not its category's last, and Todo is not: Queued, Intake, Triage and Hand-work are also `unstarted`. Then delete this entry, which board.retired_entry_is_deleted asks for by name once the state is gone."
-    },
-    {
       "name": "Hand-work",
       "status": "live",
       "segment": "work",

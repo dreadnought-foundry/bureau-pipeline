@@ -37,7 +37,7 @@ Planning exit is the transition **Green Light → Queued** — where the second 
 | Start lane — a writer puts a card here to start its build | In Progress |
 | Dispatch lane — entering it is the build dispatch | In Progress |
 | Dispatched from | Intake, Planning, Green Light, Queued, Triage, Backlog |
-| Start lanes — a started card sits in one | In Progress, Todo |
+| Start lanes — a started card sits in one | In Progress |
 | Start window | 15 min |
 
 How a build starts (DRE-7105). Until the flip (DRE-7120) the sweep promoted a card to the lane In Progress replaces, the relay dispatched its build run when it entered that lane, and the run moved it to In Progress. Since the flip the sweep promotes straight to In Progress, and that move is the dispatch. This block names the facts that changed, so every reader learned them first and one card, the flip, turned them — the shape the queue's cutover took (DRE-6741). It moves no card by itself.
@@ -203,12 +203,6 @@ Lanes the pipeline no longer writes to, still on the board until the workspace a
 The queue lane a card waited in between the planning exit and its verdict's destination, replaced by Queued. Its `backlog` type made Linear draw it first on the board whatever its position, and Linear cannot change a state's type after creation, so the queue moved to Queued, a lane of type `unstarted` (DRE-6740). The pipeline's writers write Queued since DRE-6742, and the sweep drains every card still here into Queued (reconcile.drain_retiring_lanes), on every repo's sweep, for as long as this entry stands.
 
 **Board step:** There is nothing to archive: Linear keeps at least one backlog-type status per team, and this is the DRE team's only one. So the state stays on the board, empty, and the operator hides it with the board's "Show empty groups" option. This entry STAYS, so the drain keeps the lane empty and board.retiring_lane_is_empty keeps asserting it; delete it only if Linear ever archives the state, which board.retired_entry_is_deleted then requires.
-
-### Todo — retired by DRE-7072
-
-The lane a promoted card waited in between Queued and In Progress until the flip (DRE-7120). A promoted card now goes from Queued straight to In Progress, and that move is the dispatch, so a lane between them only made the board show two waiting lanes. Nothing writes Todo since the flip, and the sweep drains every card still here into In Progress (reconcile.drain_retiring_lanes), on every repo's sweep, for as long as this entry stands, a card dropped here later included — except an epic: the drain leaves an epic where it is, and reconcile.carry_epics_out_of_todo, later in the same sweep, carries it by its own rule (to In Progress only when it came here from there, to Planning otherwise), so a drag can never approve an epic. A drained card is not started, so the sweep's start window (DRE-7108) re-fires its dispatch unless its run is already in flight.
-
-**Board step:** Once the lane is empty — board.retiring_lane_is_empty holds — delete the Todo state in Linear's team workflow settings. Linear offers Delete on a status that is not its category's last, and Todo is not: Queued, Intake, Triage and Hand-work are also `unstarted`. Then delete this entry, which board.retired_entry_is_deleted asks for by name once the state is gone.
 
 ## The rules the harness asserts
 
