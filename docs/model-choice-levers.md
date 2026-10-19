@@ -167,7 +167,7 @@ A row naming a lever the test does not pull fails it.
 | Epic | What it switches | Lever | Role | Switched → back | One step back | In force | Rolled back, the note shows |
 | -- | -- | -- | -- | -- | -- | -- | -- |
 | `DRE-7185` | Records the builder, so an unknown-builder review lands on Sonnet 5.5 | `model-attempt line` | `critic`, `verifier` | `posted` → `not posted` | Revert the pull request that makes the fix agent and red-main repair post the `🧠 model-attempt:` line (`agent-fix.yml`, `red-main-repair.yml` and their `self-` stubs) | `@main` callers on the revert's merge; `stable` callers when `stable` moves past it; `vN` callers at the next cut | `this build's model could not be read` |
-| `DRE-7187` | Moves the harness reviewer to Sonnet 5.5 | `model-attempt line` | `critic` | `posted` → `not posted` | Revert the pull request that makes the harness's probe fixtures post the `🧠 model-attempt:` line | On the revert's merge — the harness sandbox's stubs ride `@main` | `this build's model could not be read` |
+| `DRE-7187` | Moves the harness reviewer to Sonnet 5.5 | `model-attempt line` | `critic` | `posted` → `not posted` | Set the bureau-pipeline repository variable `HARNESS_BUILDER_LINE` to `off`. Reverting the pull request that adds the probe fixtures' builder line is the permanent step back | From the next harness run that starts, which reads the variable when its job starts. A run already going keeps the value it started with | `this build's model could not be read` |
 | `DRE-7188` | Moves proof runs to their own group, on Sonnet 5.5 | `defaults in the code` | `proof` | `proof` → `workhorse` | A pull request setting `agents.proof` back to `workhorse` in `config/models.yaml`, with `python3 scripts/sync_model_config.py` regenerating its mirrors (`scripts/model_fallback.py`, `agents.yaml`, `config/model-choices.json`) — the revert of the change that moved it | bureau-pipeline's proof runs (`self-proof-task.yml@main`) on the merge; a product repo's proof runs when `stable` moves past it; `vN` callers at the next cut | `chosen for proof (workhorse kind)` |
 | `DRE-7189` | Routes the console's jobs through the selector, on Sonnet 5.5 | `defaults in the code` | `console-weekly-report` | `advisory` → `workhorse` | A pull request putting the console's roles back in `workhorse` in `config/models.yaml`, with its mirrors regenerated — the revert of the change that put them in the Reviewers | When agent-bureau's console runs the reverted literal — see the row's note below | `chosen for console-weekly-report (workhorse kind)` |
 
@@ -179,7 +179,9 @@ The hand-built launcher's half lives in agent-bureau and is reverted there on it
 The rule that separates build and review is unchanged either way.
 
 **DRE-7187.** This row has the same lever and the same note as DRE-7185, on the probe pull requests the harness opens in its sandbox.
-The harness drives the sandbox's stubs at `@main`, so the next harness run after the merge is on Opus again.
+The probe fixtures post the line only while their switch is `on` (DRE-7619), so the one step back is setting the bureau-pipeline repository variable `HARNESS_BUILDER_LINE` to `off`: no pull request and no review wait.
+Each harness run reads the variable when its job starts, so a run already going keeps the value it started with.
+Reverting the pull request that adds the probe fixtures' builder line is the permanent step back.
 
 **DRE-7188.** Proof runs have had their own Proof group since DRE-7284, whose ladder lists the Builders' models in the same order. Today's note reads:
 `DEGRADED model-policy: claude-opus-5-5 chosen for proof (proof kind) — top of the ladder, nothing above it was skipped — project none: fleet ladder · model-home: unreadable (…), running on the defaults in the code`.

@@ -105,6 +105,17 @@ on:
           off.
         required: false
         default: "10"
+      builder_line:
+        description: >-
+          `on` or `off` — whether the probe fixtures end each pull request
+          description with the builder's `🧠 model-attempt:` line, so the
+          sandbox critic reviews the probe as an Opus-built change (DRE-7619).
+          Empty means "use the repository variable HARNESS_BUILDER_LINE",
+          which is `off` when unset. Run the measurement runs on a throwaway
+          branch, never on main.
+        required: false
+        type: string
+        default: ""
   # DRE-2551: automatic promotion needs a PROVEN commit on the trunk. The
   # fleet merges with merge commits, so a stamp on any other commit never
   # transfers to main's tip — the proof has to be made HERE, on the push.
@@ -656,6 +667,13 @@ jobs:
           # them together. Those are exactly the runs that stalled the channel,
           # so the deadline must NOT be dispatch-only.
           HARNESS_WAIT_DEADLINE_MINUTES: ${{ inputs.wait_deadline_minutes }}
+          # The builder's model line on the probe pull requests (DRE-7619).
+          # The dispatch input wins, then the repository variable, then off.
+          # On a push the input is empty, so push runs follow the variable,
+          # and setting the variable to `off` is the one-step rollback: it
+          # is read when the next run's job starts.
+          HARNESS_BUILDER_LINE_INPUT: ${{ inputs.builder_line }}
+          HARNESS_BUILDER_LINE_VAR: ${{ vars.HARNESS_BUILDER_LINE }}
           PYTHONPATH: scripts
         run: |
           # The clock the duration receipt reads (DRE-3070). Recorded here, in
