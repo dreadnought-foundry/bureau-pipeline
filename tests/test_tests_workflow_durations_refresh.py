@@ -232,7 +232,7 @@ def test_the_push_carries_the_record_and_no_other_path(tmp_path):
     assert files == [RECORD], files
     # Run again the next night: the branch is replaced, not stacked on.
     (work / RECORD).write_text('{"seconds": {"a": 1}}\n')
-    _git(work, "reset", "-q", "--soft", "main")
+    _git(work, "reset", "-q", "--soft", "origin/main")
     proc = _bash(_step("git push"), work, {"RUN_ID": "39145109283"})
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert _git(origin, "rev-list", "--count", f"main..{BRANCH}").strip() == "1"
