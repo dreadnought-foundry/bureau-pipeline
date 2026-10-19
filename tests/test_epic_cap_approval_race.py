@@ -256,8 +256,10 @@ class TestTheTenOhFiveOrderAtTheCap:
 
     def test_the_rule_one_the_race_produced_is_what_the_hold_prevents(self, capsys):
         """Non-vacuity: the same decision over a board where the children did
-        get out of Backlog is exactly the 10-05 answer."""
-        board = _Approval(lanes={WORK[0]: "Todo", WORK[1]: "Todo", WORK[2]: "Backlog"})
+        get out of Backlog is exactly the 10-05 answer.  DRE-7673: the start
+        lane they reach is In Progress now the Todo entry is deleted."""
+        board = _Approval(lanes={WORK[0]: "In Progress", WORK[1]: "In Progress",
+                                 WORK[2]: "Backlog"})
         answer, err = board.decide(_fleet(15, waiting=5), capsys)
         assert (answer, _rule(err)) == ("start", 1)
 

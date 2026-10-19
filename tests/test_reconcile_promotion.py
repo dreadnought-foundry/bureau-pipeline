@@ -582,11 +582,11 @@ class TestThereIsExactlyOnePromoter:
         exit_text = queue["clauses"]["exit"]["text"]
         assert f"promotes a FLEET card to {lane}" in exit_text, exit_text
         assert "DRE-3059" in exit_text, exit_text
-        # The old start lane is retiring (DRE-7129): it permits no writer, and
-        # the sweep only drains it.
-        old = lane_contract.lane("To" + "do", status="retiring")
-        assert old["replaced_by"] == lane
-        assert "clauses" not in old
+        # The old start lane retired (DRE-7129) and its entry was deleted once
+        # Linear deleted the state (DRE-7673): no entry names it, so it
+        # permits no writer, and the start lanes are the promoter's alone.
+        assert "To" + "do" not in [e["name"] for e in lane_contract.load()["lanes"]]
+        assert lane_contract.start_lanes() == (lane,)
 
     def test_the_route_is_not_a_second_promoter(self):
         lane = routing_verdict.destination("FLEET")

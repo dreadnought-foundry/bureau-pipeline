@@ -131,9 +131,12 @@ class TestTheHandWorkEntry:
         assert HAND_WORK not in lane_contract.off_flow()
         assert {c.lane for c in lane_contract.clauses(doc)} >= {HAND_WORK}
 
-    def test_it_sits_immediately_after_todo_in_the_work_segment(self):
+    def test_it_sits_immediately_after_queued_in_the_work_segment(self):
+        # Todo, which it once followed, was deleted once Linear deleted the
+        # state (DRE-7673).
         names = [entry["name"] for entry in shipped()["lanes"]]
-        assert names[names.index("Todo") + 1] == HAND_WORK
+        assert "Todo" not in names
+        assert names[names.index("Queued") + 1] == HAND_WORK
         entry = raw_lane(shipped(), HAND_WORK)
         assert entry["segment"] == "work"
         assert "stale_minutes" not in entry
@@ -366,13 +369,12 @@ def test_an_unknown_status_is_still_refused():
 
 
 class TestTheRewrittenClauses:
-    def test_no_verdict_lands_in_todo_and_its_entry_is_retiring(self):
-        # Since the flip (DRE-7120) nothing promotes into Todo, and since
-        # DRE-7129 its entry is retiring: it carries no clauses, and its
-        # reason names where a promoted card goes instead.
-        entry = lane_contract.lane("Todo", status="retiring")
-        assert "clauses" not in entry
-        assert routing_verdict.destination("FLEET") in entry["reason"]
+    def test_no_verdict_lands_in_todo_and_its_entry_is_deleted(self):
+        # Since the flip (DRE-7120) nothing promotes into Todo; DRE-7129 set
+        # its entry retiring, and DRE-7673 deleted it once Linear deleted the
+        # state. A promoted card goes to In Progress instead.
+        assert "Todo" not in [entry["name"] for entry in shipped()["lanes"]]
+        assert routing_verdict.destination("FLEET") == "In Progress"
         assert "Todo" not in {routing_verdict.destination(name)
                               for name in routing_verdict.verdicts()}
 
@@ -402,7 +404,16 @@ class TestTheDocument:
 
     def test_the_rewritten_clauses_are_rendered(self):
         text = self.committed()
-        assert lane_contract.lane("Todo", status="retiring")["reason"] in text
+        # Todo's entry went once Linear deleted the state (DRE-7673), and its
+        # section with it; a contract that still carries the entry renders it.
+        assert "### Todo" not in text
+        doc = copy.deepcopy(shipped())
+        doc["lanes"].append({
+            "name": "Todo", "status": "retiring", "retired_by": "DRE-7072",
+            "replaced_by": "In Progress", "reason": "The lane a promoted card waited in.",
+            "board_action": "Delete the state, then this entry.",
+        })
+        assert "The lane a promoted card waited in." in lane_contract.render_markdown(doc)
         assert lane_contract.lane("Queued")["clauses"]["exit"]["text"] in text
 
     def test_an_arriving_lane_renders_its_own_section_and_stays_out_of_the_flow(self):

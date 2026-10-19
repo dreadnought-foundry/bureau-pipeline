@@ -975,14 +975,16 @@ class TheLanes(unittest.TestCase):
 
     def test_an_epic_in_a_waiting_start_lane_reads_the_general_line(self):
         """DRE-7112: an epic in a start lane other than the dispatch lane —
-        Todo until it retires — is in a lane its plan does not explain, and
-        says so in the one line every such lane gets."""
+        Todo until it retired — is in a lane its plan does not explain, and
+        says so in the one line every such lane gets. The contract carries no
+        such lane since DRE-7673 deleted Todo's entry; the line still holds
+        for the retired name."""
         import lane_contract
 
         waiting = [lane for lane in lane_contract.START_LANES
                    if lane != lane_contract.DISPATCH_LANE]
-        self.assertEqual(waiting, ["Todo"])
-        for lane in waiting + ["Done"]:
+        self.assertEqual(waiting, [])
+        for lane in ["Todo", "Done"]:
             with self.subTest(lane=lane):
                 self.assertEqual(rw._lane_refusal(lane), (
                     f"the epic is in {lane}, not {pc.REVIEW_LANE} or "
@@ -1514,8 +1516,9 @@ class EpicsInFlight(unittest.TestCase):
         self.assertEqual([r["identifier"] for r in rows], [EPIC])
 
     def test_in_flight_itself_is_unchanged(self):
+        # Todo left with its contract entry (DRE-7673).
         self.assertEqual(pc.IN_FLIGHT_EPIC_STATES,
-                         ("Green Light", "In Progress", "Todo"))
+                         ("Green Light", "In Progress"))
 
     def test_the_docstring_names_the_second_critic(self):
         doc = self.linear_ops.cmd_epics_in_flight.__doc__ or ""

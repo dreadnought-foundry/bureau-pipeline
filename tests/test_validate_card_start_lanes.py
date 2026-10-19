@@ -39,6 +39,7 @@ SCRIPTS = os.path.join(ROOT, "scripts")
 sys.path.insert(0, SCRIPTS)
 
 import agent_task_snapshot  # noqa: E402
+import epic_todo_gate  # noqa: E402
 import lane_contract  # noqa: E402
 import planning_shape  # noqa: E402
 
@@ -103,6 +104,14 @@ class FakeLinear:
         return (self.states, self.comments, self.added_labels)
 
 
+def _still_retiring(monkeypatch):
+    """Run the gate on the contract as it stood while Todo was a retiring start
+    lane. The entry went once Linear deleted the state (DRE-7673); the gate
+    reads both names at import, so both are handed the lane it carried."""
+    monkeypatch.setattr(lane_contract, "START_LANES", ("In Progress", "Todo"))
+    monkeypatch.setattr(epic_todo_gate, "TODO", "Todo")
+
+
 def _gate(monkeypatch, tmp_path, fake):
     """Run `validate_card.py gate CARD` as plan.yml's step does; answer
     (bounced, role, stdout)."""
@@ -123,11 +132,22 @@ def _gate(monkeypatch, tmp_path, fake):
 
 
 def test_the_start_lanes_are_read_off_the_contract():
-    assert {"In Progress", "Todo"} <= set(lane_contract.START_LANES)
+    # Todo's entry went once Linear deleted the state (DRE-7673).
+    assert lane_contract.START_LANES == lane_contract.start_lanes() == ("In Progress",)
+
+
+def test_a_card_in_todo_is_no_longer_gated(monkeypatch, tmp_path):
+    fake = FakeLinear("Todo", title="Fix the widget", description="no repo here")
+    bounced, _, out = _gate(monkeypatch, tmp_path, fake)
+    assert bounced == "false"
+    assert fake.writes == ([], [], [])
+    assert f"{CARD} is in 'todo', not a start lane — gate skipped" in out
 
 
 @pytest.mark.parametrize("lane", ["Todo", "In Progress"])
 def test_a_malformed_card_with_no_pr_is_bounced_to_planning(monkeypatch, tmp_path, lane):
+    if lane == "Todo":
+        _still_retiring(monkeypatch)
     fake = FakeLinear(lane, title="Fix the widget", description="no repo here")
     bounced, _, _ = _gate(monkeypatch, tmp_path, fake)
     assert bounced == "true"
@@ -139,6 +159,8 @@ def test_a_malformed_card_with_no_pr_is_bounced_to_planning(monkeypatch, tmp_pat
 
 @pytest.mark.parametrize("lane", ["Todo", "In Progress"])
 def test_a_well_formed_card_passes(monkeypatch, tmp_path, lane):
+    if lane == "Todo":
+        _still_retiring(monkeypatch)
     fake = FakeLinear(lane, title="Fix the widget",
                       labels=["repo:atlas", "agent:engineer"],
                       comments=[_stamp("one-off")])
@@ -249,6 +271,7 @@ def test_a_card_without_agent_planner_that_is_no_epic_is_gated(monkeypatch, tmp_
 def test_the_todo_epic_carry_still_reads_todo(monkeypatch, tmp_path):
     """The `epic-not-todo` carry is Todo's alone: an epic in Todo is carried
     out and the build stopped, never skipped as an approved epic."""
+    _still_retiring(monkeypatch)
     fake = FakeLinear("Todo", title="Rebuild the widget", children=2,
                       labels=["repo:atlas"])
     bounced, _, out = _gate(monkeypatch, tmp_path, fake)

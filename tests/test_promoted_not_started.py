@@ -226,13 +226,21 @@ class _Sweep:
 # --------------------------------------------------------------------------
 class TestNotStarted:
     def test_the_start_lanes_are_the_contracts(self):
-        assert set(lane_contract.START_LANES) == {"Todo", "In Progress"}
+        # Todo left with its retiring entry (DRE-7673).
+        assert set(lane_contract.START_LANES) == {"In Progress"}
 
     def test_the_retiring_start_lane_is_drained_not_watched(self):
         # Todo is retiring (DRE-7129): the sweep drains a card there into In
         # Progress, where the start window below reads it on the next pass.
+        # The drain reads the retiring entry the contract carried before
+        # DRE-7673.
         assert LIVE_START_LANES == ("In Progress",)
-        sweep = _Sweep(_card("Todo", idle=START + 15)).run()
+        retiring = lane_contract.lanes(status="retiring") + (
+            {"name": "Todo", "status": "retiring", "retired_by": "DRE-7072",
+             "replaced_by": "In Progress"},)
+        with patch.object(reconcile.lane_contract, "lanes",
+                          MagicMock(return_value=retiring)):
+            sweep = _Sweep(_card("Todo", idle=START + 15)).run()
         assert sweep.fires == []
         assert sweep.moves == [("advance", CARD, "In Progress", "Todo")]
 

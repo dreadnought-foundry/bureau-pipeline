@@ -462,8 +462,17 @@ def test_off_mode_writes_exactly_as_before(monkeypatch):
     assert linear.writes == [("state", "DRE-301", "Queued", ("--park",), None, ())]
 
 
+def _todo_still_retiring(monkeypatch):
+    """The Todo entry as it was before DRE-7673 deleted it: the gate's lane,
+    and a retiring lane the one board read carries — frozen at import, so
+    every copy is patched, or the read of it bypasses the door."""
+    monkeypatch.setattr(epic_todo_gate, "TODO", "Todo")
+    monkeypatch.setattr(reconcile, "RETIRING_LANES", (*reconcile.RETIRING_LANES, "Todo"))
+    monkeypatch.setattr(reconcile, "BOARD_READ_LANES", (*reconcile.BOARD_READ_LANES, "Todo"))
+
+
 def test_R16_carrying_an_epic_out_of_todo_is_conditional(monkeypatch):
-    monkeypatch.setattr(epic_todo_gate, "TODO", "Todo")  # retired by DRE-7673
+    _todo_still_retiring(monkeypatch)
     epic = _c("DRE-400", "Todo", title="[EPIC] a thing", children=True)
     linear = Linear(_c("DRE-400", "In Progress", title="[EPIC] a thing", children=True))
     monkeypatch.setattr(epic_todo_gate, "lane_before_todo", lambda lops, ident: "In Progress")
@@ -477,7 +486,7 @@ def test_R16_carrying_an_epic_out_of_todo_is_conditional(monkeypatch):
 
 
 def test_R16_an_epic_still_in_todo_is_carried(monkeypatch):
-    monkeypatch.setattr(epic_todo_gate, "TODO", "Todo")  # retired by DRE-7673
+    _todo_still_retiring(monkeypatch)
     epic = _c("DRE-400", "Todo", title="[EPIC] a thing", children=True)
     linear = Linear(epic)
     monkeypatch.setattr(epic_todo_gate, "lane_before_todo", lambda lops, ident: "In Progress")

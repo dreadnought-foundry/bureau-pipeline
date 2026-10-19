@@ -71,6 +71,16 @@ def _findings(problems, function):
     return [p for p in problems if TAG in p and f"`{function}`" in p]
 
 
+def _todo_still_named(case):
+    """The gate's lane as it was before DRE-7673 deleted the Todo entry, for a
+    test that proves the check finds a seam writing it."""
+    from unittest import mock
+
+    patcher = mock.patch.object(rlw.epic_todo_gate, "TODO", "Todo")
+    patcher.start()
+    case.addCleanup(patcher.stop)
+
+
 class TheRealWriteLayer(unittest.TestCase):
     def test_the_real_checkout_produces_no_finding(self):
         self.assertEqual(rlw.epic_gate_problems(), [])
@@ -115,6 +125,7 @@ class TheRefusalStaysOnTodoThroughTheFlip(unittest.TestCase):
         self.assertEqual(lane_contract.start_lane(), "In Progress")
 
     def test_the_finding_still_names_todo(self):
+        _todo_still_named(self)  # retired by DRE-7673
         self.assertEqual(rlw.epic_todo_gate.TODO, "Todo")
         with _Copy(_without_refusal(_source(), "guarded_state_write")) as root:
             self._flipped()
@@ -156,6 +167,7 @@ class AGuardedSeamWithoutItsCallIsNamed(unittest.TestCase):
 
 class ASeamNobodyRememberedIsNamed(unittest.TestCase):
     def test_a_new_seam_that_writes_todo_without_the_refusal_is_named(self):
+        _todo_still_named(self)  # retired by DRE-7673
         extra = (
             "\n\ndef requeue_fast(identifier: str) -> None:\n"
             "    issue = get_issue(identifier)\n"

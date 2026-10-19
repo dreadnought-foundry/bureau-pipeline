@@ -386,7 +386,8 @@ def test_a_child_under_either_queue_name_has_not_run(queue):
 def test_the_activated_states_are_the_contract():
     # DRE-7112: the start lanes are the contract's (`lane_contract.START_LANES`),
     # so a child in In Progress counts exactly where one in Todo did.
-    assert epic_cap.ACTIVATED_STATES == ("In Progress", "Todo", "In Review", "Done")
+    # DRE-7673: the Todo entry is deleted, so In Progress is the one start lane.
+    assert epic_cap.ACTIVATED_STATES == ("In Progress", "In Review", "Done")
     assert epic_cap.ACTIVATED_STATES == (*lane_contract.START_LANES, "In Review", "Done")
 
 

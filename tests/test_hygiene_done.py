@@ -1,7 +1,7 @@
 """RED-first: the hygiene agent's build-lanes-and-proofs lane (DRE-5411).
 
 `scripts/hygiene_done.py` reads the cards in the start lanes
-(`lane_contract.START_LANES` — `In Progress` and `Todo` today, DRE-7112),
+(`lane_contract.START_LANES` — `In Progress` alone since DRE-7673, DRE-7112),
 `In Review` and `Hand-work` once and closes what the evidence says is done, under four
 rules, each with the cause line the core's (tag, cause) key reads:
 
@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import ast
 import base64
+import contextlib
 import copy
 import importlib.util
 import json
@@ -38,6 +39,7 @@ import re
 import sys
 from datetime import UTC, datetime
 from pathlib import Path
+from unittest import mock
 
 import pytest
 
@@ -59,6 +61,11 @@ HOME = "dreadnought-foundry"
 BP = "dreadnought-foundry/bureau-pipeline"
 AB = "dreadnought-foundry/agent-bureau"
 FIELDS = "number,url,headRefName,state,mergedAt,files"
+#: The start lanes of the board the fixture recorded on 2026-09-30, when the
+#: contract still carried Todo's entry. DRE-7673 deleted it, but a snapshot
+#: keeps its states: the reader is handed that day's start lanes rather than
+#: the board rewritten into a lane its cards were never in.
+SNAPSHOT_START_LANES = ("In Progress", "Todo")
 REDISPATCH = "🧹 Reconcile: card sat in Todo with no run — re-dispatched."
 CEO_RULE = "if the cards are proven with evidence then just approve them"
 
@@ -117,11 +124,28 @@ def context(doc, *, now=NOW, dry_run=False):
     return ctx, gh
 
 
+def snapshot_contract():
+    """The lane, reading the start lanes the fixture's day carried (DRE-7673):
+    `READ_LANES` is frozen at import off the contract, so both names are
+    patched."""
+    mod = need_lane()
+    patches = (
+        mock.patch.object(lane_contract, "START_LANES", SNAPSHOT_START_LANES),
+        mock.patch.object(mod, "READ_LANES",
+                          (*SNAPSHOT_START_LANES, "In Review", hygiene.HAND_WORK)),
+    )
+    stack = contextlib.ExitStack()
+    for patch in patches:
+        stack.enter_context(patch)
+    return stack
+
+
 def plan(doc=None, *, now=NOW):
     doc = doc if doc is not None else fixture()
     ctx, gh = context(doc, now=now)
     board = hygiene.Board(lanes=doc["lanes"], prs=doc["prs"])
-    return need_lane().plan(board, ctx), ctx, gh
+    with snapshot_contract():
+        return need_lane().plan(board, ctx), ctx, gh
 
 
 def actions(items, target=None):
@@ -827,7 +851,7 @@ class TestAStartLaneCardThatHasNotStarted:
         items, _ctx, _gh = plan(doc)
         assert [a.target for a in actions(items, "DRE-9107")] == ["DRE-9107"]
 
-    @pytest.mark.parametrize("start", lane_contract.START_LANES)
+    @pytest.mark.parametrize("start", SNAPSHOT_START_LANES)
     def test_a_card_in_each_start_lane_that_has_not_started_is_named(self, start):
         # DRE-7112: In Progress is reported exactly as Todo is, and the row
         # names the lane the card is really in.
@@ -844,7 +868,7 @@ class TestAStartLaneCardThatHasNotStarted:
         (row,) = lefts(items, "DRE-9107")
         assert row.why.startswith(f"in {start}, not started, re-dispatched 2 times — ")
 
-    @pytest.mark.parametrize("start", lane_contract.START_LANES)
+    @pytest.mark.parametrize("start", SNAPSHOT_START_LANES)
     def test_a_card_in_each_start_lane_that_has_started_is_left_alone(self, start):
         doc = fixture()
         move(doc, "DRE-9107", start)
@@ -961,7 +985,8 @@ def run(doc, monkeypatch):
     monkeypatch.setattr(hygiene, "discover", lambda lane_dir=None: [need_lane()])
     ctx, _gh = context(doc)
     board_doc = {"taken_at": "2026-10-01T01:40:00Z", "lanes": doc["lanes"]}
-    return sent, hygiene.run_leg(board_doc, ctx)
+    with snapshot_contract():
+        return sent, hygiene.run_leg(board_doc, ctx)
 
 
 def add_receipts(doc, sent):

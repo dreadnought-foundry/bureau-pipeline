@@ -313,11 +313,14 @@ def test_a_branch_whose_card_is_terminal_is_not_reported():
         assert sweep(states={CARD: state})[0] == [], state
 
 
-def test_a_branch_whose_card_waits_in_todo_is_not_reported():
+def test_a_branch_whose_card_waits_in_todo_is_not_reported(monkeypatch):
     """DRE-4368: a dead run's card is requeued to Todo, and the resume run it
     is waiting for continues this very branch — so "open a pull request from
     it" names the wrong action and invites a duplicate PR. A Todo card that
     was never dispatched is flag_stranded's no-run case, not this alarm's."""
+    # No promoted lane on the shipped contract since the Todo entry went
+    # (DRE-7673); this proves the skip, so it gets the retired lane.
+    monkeypatch.setattr(reconcile, "PROMOTED_LANES", ("Todo",))
     stale = reconcile.UNLANDED_MINUTES + 1
     assert sweep(compare={BRANCH: (3, stale)}, states={CARD: "Todo"})[0] == []
 

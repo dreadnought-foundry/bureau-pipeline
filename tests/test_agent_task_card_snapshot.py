@@ -45,6 +45,7 @@ sys.path.insert(0, str(ROOT / "tests"))
 import bureau_read  # noqa: E402
 import agent_task_snapshot  # noqa: E402
 import dedupe_dispatch  # noqa: E402
+import epic_todo_gate  # noqa: E402
 import linear_ops  # noqa: E402
 import spoken_thread  # noqa: E402
 import step_shell  # noqa: E402
@@ -167,6 +168,18 @@ def _clean(monkeypatch, tmp_path):
     monkeypatch.setenv("LINEAR_API_KEY", "test-key")
     linear_ops._card_memo.clear()
     yield
+
+
+@pytest.fixture(autouse=True)
+def _todo_still_a_start_lane(monkeypatch):
+    """The card sits in Todo, the start lane it arrived in before the flip.
+    Todo's entry went once Linear deleted the state (DRE-7673), so the gate
+    would skip it; these tests count the gate's reads, so the gate runs with
+    the start lanes the contract carried, read at import."""
+    monkeypatch.setattr(epic_todo_gate, "TODO", "Todo")
+    monkeypatch.setattr(validate_card, "_TODO", "todo")
+    monkeypatch.setattr(validate_card, "_START_LANES", validate_card._START_LANES | {"todo"})
+    monkeypatch.setattr(validate_card, "_GATEABLE", validate_card._GATEABLE | {"todo"})
 
 
 @contextlib.contextmanager

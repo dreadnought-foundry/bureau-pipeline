@@ -25,7 +25,8 @@ WHAT IS UNDER TEST:
      one-off wearing the label is sent to the planner, whose guard hands it
      back as one build. Neither goes to Planning; each gets one
      `agent-execute`.
-  4. THE CONFIG NAMES NO `Todo` outside Todo's own lane entry.
+  4. THE CONFIG NAMES NO `Todo` outside Todo's own lane entry — and since
+     DRE-7673 deleted that entry, nowhere.
 
 Run: cd bureau-pipeline && python3 -m pytest tests/test_build_starts_in_progress.py -v
 """
@@ -98,7 +99,8 @@ _Board = promo._Board
 class TestTheShippedRoute:
     def test_the_contract_and_vocabulary_ship_the_flip(self):
         assert lane_contract.START_LANE == "In Progress"
-        assert lane_contract.START_LANES == ("In Progress", "Todo")
+        # Todo's entry went once Linear deleted the state (DRE-7673).
+        assert lane_contract.START_LANES == ("In Progress",)
         assert routing_verdict.destination("FLEET") == "In Progress"
         assert routing_verdict.BUILD_LANE == lane_contract.DISPATCH_LANE
         assert routing_verdict.sweep_lanes() == ("In Progress", "Hand-work")
@@ -329,29 +331,47 @@ def _quotes_its_file(doc, path, text) -> bool:
     return source.is_file() and text in source.read_text(encoding="utf-8")
 
 
-@pytest.mark.parametrize("name", CONFIGS)
-def test_no_string_names_the_lane_outside_its_own_entry(name):
-    doc = json.loads((ROOT / "config" / name).read_text(encoding="utf-8"))
+def _stray(name, doc):
+    """Every path in `doc` that names the lane, outside its own lane entry (if
+    the contract still carries one) and outside an anchor quoting its file."""
     own = None
     if name == "lane-contract.json":
-        own = next(i for i, e in enumerate(doc["lanes"]) if e["name"] == LANE)
-    found = [
+        own = next((i for i, e in enumerate(doc["lanes"]) if e["name"] == LANE), None)
+    return [
         "/".join(map(str, path)) for path, text in _strings(doc)
         if WORD.search(text)
         and not (own is not None and path[:2] == ("lanes", own))
         and not _quotes_its_file(doc, path, text)
     ]
+
+
+@pytest.mark.parametrize("name", CONFIGS)
+def test_no_string_names_the_lane_outside_its_own_entry(name):
+    doc = json.loads((ROOT / "config" / name).read_text(encoding="utf-8"))
+    found = _stray(name, doc)
     assert found == [], f"{name} names {LANE} at {found}"
 
 
 def test_the_scan_sees_the_lane_entry_it_exempts():
-    """Guard the guard: Todo's own entry still names it, so the exemption is
-    what lets that entry through — not a scan that reads nothing."""
+    """Guard the guard: the entry went once Linear deleted the state
+    (DRE-7673), so the shipped contract carries none and nothing is exempt. On
+    a copy that still carries it, as DRE-7129 shipped it, the entry names the
+    lane and the exemption is what lets it through — not a scan that reads
+    nothing: the same name anywhere else is found."""
     doc = lane_contract.load()
-    own = next(e for e in doc["lanes"] if e["name"] == LANE)
+    assert LANE not in [e["name"] for e in doc["lanes"]]
+    doc = json.loads(json.dumps(doc))
+    own = {
+        "name": LANE, "status": "retiring", "retired_by": "DRE-7129",
+        "replaced_by": "In Progress",
+        "reason": f"{LANE} was the lane a promoted card waited in.",
+        "board_action": f"Delete {LANE}, then this entry.",
+    }
+    doc["lanes"].append(own)
     assert any(WORD.search(text) for _, text in _strings(own))
-    assert own["replaced_by"] == "In Progress"
-    assert own["status"] == "retiring"  # DRE-7129
+    assert _stray("lane-contract.json", doc) == []
+    doc["lanes"][0]["reason"] = f"Comes after {LANE}."
+    assert _stray("lane-contract.json", doc) == ["lanes/0/reason"]
 
 
 if __name__ == "__main__":

@@ -557,7 +557,8 @@ def test_the_deal_reads_the_start_lanes_and_keeps_its_six_slots():
     dispatch lane, and the dispatch lane once none is — so a card sits in In
     Progress exactly where it sat in Todo and none is re-dealt. Since Todo
     began retiring (DRE-7129) the sweep drains it, so no live start lane is
-    ahead of In Progress on the shipped contract either."""
+    ahead of In Progress on the shipped contract either. DRE-7673 deleted
+    its entry; the contracts below carry it to prove both halves."""
     shipped = board_snapshot.synthetic_deal()
     assert shipped == board_snapshot._SYNTHETIC_DEAL
     assert shipped == ("In Progress", "In Progress", "In Review", "Planning",
@@ -565,10 +566,14 @@ def test_the_deal_reads_the_start_lanes_and_keeps_its_six_slots():
     assert shipped[1] == lane_contract.DISPATCH_LANE
     flipped = board_snapshot.synthetic_deal(_contract_without_todo())
     assert flipped == shipped
+    retiring_todo = json.loads(json.dumps(lane_contract.load()))
+    retiring_todo["lanes"].append({"name": "Todo", "status": "retiring",
+                                   "replaced_by": lane_contract.DISPATCH_LANE})
+    assert "Todo" in lane_contract.start_lanes(retiring_todo)
+    assert board_snapshot.synthetic_deal(retiring_todo) == shipped
     live_todo = json.loads(json.dumps(lane_contract.load()))
-    for entry in live_todo["lanes"]:
-        if entry["name"] == "Todo":
-            entry["status"] = "live"
+    live_todo["lanes"].append({"name": "Todo", "status": "live",
+                               "replaced_by": lane_contract.DISPATCH_LANE})
     assert board_snapshot.synthetic_deal(live_todo)[0] == "Todo"
 
 
