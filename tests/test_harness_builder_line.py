@@ -127,17 +127,22 @@ class ContractLineTest(unittest.TestCase):
         )
 
     def test_the_model_is_read_from_the_workhorse_ladder_never_typed(self):
-        ladder = ["claude-sonnet-5", "claude-opus-5-5"]
+        # A planted rung in no group: the test's own input, so no console
+        # save can make the ladder lead with it.
+        ladder = ["claude-planted-rung", _workhorse_first_rung()]
         with mock.patch.dict(model_fallback.LADDERS, {"workhorse": ladder}):
-            self.assertEqual(builder_line.line(), CONTRACT.format(model="claude-sonnet-5"))
+            self.assertEqual(
+                builder_line.line(), CONTRACT.format(model="claude-planted-rung")
+            )
 
-    def test_the_reviewer_card_reads_it_as_opus_today(self):
-        self.assertEqual(_workhorse_first_rung(), "claude-opus-5-5")
-        self.assertEqual(model_fallback.build_models([builder_line.line()]), ["claude-opus-5-5"])
+    def test_the_reviewer_card_reads_it_as_the_workhorse_first_rung(self):
+        self.assertEqual(
+            model_fallback.build_models([builder_line.line()]), [_workhorse_first_rung()]
+        )
 
     def test_the_line_read_inside_a_whole_probe_description(self):
         body = bot_pr_flow.pr_body("main-gha-1-1", "on")
-        self.assertEqual(model_fallback.build_models([body]), ["claude-opus-5-5"])
+        self.assertEqual(model_fallback.build_models([body]), [_workhorse_first_rung()])
         self.assertEqual(model_fallback.build_models([bot_pr_flow.pr_body("main-gha-1-1")]), [])
 
 
