@@ -12,6 +12,13 @@ an epic, which the sweep's epic carry takes out by its own rule, so a drag can
 never approve one. The board step is the third (the operator card after this
 one): delete the state in Linear, then delete the entry.
 
+The operator deleted the state, the harness's `board.retired_entry_is_deleted`
+failed on `main` naming the entry, and DRE-7673 deleted it — the shape
+DRE-2818 took for the two review lanes. These tests now pin that end state:
+no entry, no start lane but the dispatch lane, a gate name of None and a drain
+that no longer asks for the lane. The mechanisms stay, as DRE-2818 kept the
+drain: each behavior test hands them a contract that still carries the entry.
+
 `epic_todo_gate.TODO` stops being a literal: it is the retiring lane whose
 `replaced_by` is the dispatch lane, read off the contract, and every caller
 reads that name. These tests pin the entry, the drain and that name, and then
@@ -115,51 +122,43 @@ def sweep(root: str = ROOT, needle: str = OLD_LANE, files=None) -> list:
 # --------------------------------------------------------------------------- #
 
 
-def raw_entry():
-    return next(e for e in lane_contract.load()["lanes"] if e["name"] == OLD_LANE)
+#: The entry as DRE-7129 shipped it, for the tests that prove a mechanism
+#: still works on a contract carrying a retiring start lane.
+ENTRY = {
+    "name": OLD_LANE,
+    "status": "retiring",
+    "retired_by": EPIC,
+    "replaced_by": NEW_LANE,
+    "reason": "The lane a promoted card waited in.",
+    "board_action": "Delete the state, then this entry.",
+}
 
 
-class TestTheContractMarksItRetiring:
-    def test_the_retiring_set_holds_it_beside_the_queues_old_name(self):
+def with_entry(contract=None) -> dict:
+    """A copy of the shipped contract that still carries the retiring entry."""
+    doc = json.loads(json.dumps(contract or lane_contract.load()))
+    doc["lanes"].append(dict(ENTRY))
+    return doc
+
+
+class TestTheEntryIsDeleted:
+    def test_the_retiring_set_holds_only_the_queues_old_name(self):
         retiring = [entry["name"] for entry in lane_contract.lanes("retiring")]
-        assert OLD_LANE in retiring
-        assert "Back" + "log" in retiring
+        assert retiring == ["Back" + "log"]
 
-    def test_it_is_replaced_by_in_progress_and_retired_by_the_epic(self):
-        entry = lane_contract.lane(OLD_LANE, status="retiring")
-        assert entry["replaced_by"] == NEW_LANE == lane_contract.DISPATCH_LANE
-        assert entry["retired_by"] == EPIC
+    def test_no_lane_of_any_status_carries_it(self):
+        assert OLD_LANE not in [e["name"] for e in lane_contract.load()["lanes"]]
+        with pytest.raises(lane_contract.UnknownLane):
+            lane_contract.lane(OLD_LANE, status="retiring")
 
-    def test_it_carries_a_reason_and_a_board_action_and_nothing_else(self):
-        entry = raw_entry()
-        assert set(entry) == {
-            "name", "status", "retired_by", "replaced_by", "reason", "board_action",
-        }
-        reason = entry["reason"]
-        assert "Queued" in reason and NEW_LANE in reason
-        assert "is the dispatch" in reason
-        assert "two waiting lanes" in reason
-        assert "reconcile.drain_retiring_lanes" in reason
-        assert "epic" in reason
-
-    def test_the_board_action_deletes_the_state_and_then_the_entry(self):
-        step = raw_entry()["board_action"]
-        assert "Delete" in step
-        assert "team workflow settings" in step
-        for sibling in ("Queued", "Intake", "Triage", "Hand-work"):
-            assert sibling in step
-        assert "unstarted" in step
-        assert "board.retiring_lane_is_empty" in step
-        assert "board.retired_entry_is_deleted" in step
-
-    def test_the_live_lanes_no_longer_include_it(self):
+    def test_the_live_lanes_do_not_include_it(self):
         assert OLD_LANE not in lane_contract.lane_names()
         assert OLD_LANE not in lane_contract.flow_lanes()
         assert NEW_LANE in lane_contract.lane_names()
 
-    def test_it_is_still_a_start_lane_until_the_entry_goes(self):
-        assert lane_contract.START_LANES == (NEW_LANE, OLD_LANE)
-        assert lane_contract.start_lanes() == (NEW_LANE, OLD_LANE)
+    def test_the_start_lanes_narrowed_to_the_dispatch_lane(self):
+        assert lane_contract.START_LANES == (NEW_LANE,)
+        assert lane_contract.start_lanes() == (NEW_LANE,)
 
     def test_it_takes_no_alias(self):
         # In Progress is a live lane; the old name is not another spelling of
@@ -167,14 +166,9 @@ class TestTheContractMarksItRetiring:
         # whose build started.
         assert OLD_LANE not in lane_contract.aliases()
 
-    def test_the_drain_reads_it(self):
-        draining = {
-            e["name"]: e["replaced_by"]
-            for e in lane_contract.lanes("retiring") if e.get("replaced_by")
-        }
-        assert draining[OLD_LANE] == NEW_LANE
-        assert OLD_LANE in reconcile.RETIRING_LANES
-        assert OLD_LANE in reconcile.BOARD_READ_LANES
+    def test_the_drain_no_longer_reads_it(self):
+        assert OLD_LANE not in reconcile.RETIRING_LANES
+        assert OLD_LANE not in reconcile.BOARD_READ_LANES
 
 
 class TestTheHarness:
@@ -204,18 +198,30 @@ class TestTheHarness:
         failed = {f.clause_id for f in report.failures()}
         assert "pipeline.vocabulary_is_contract_lanes" not in failed
 
+    def test_the_board_without_the_state_passes_the_rule_that_failed(self):
+        # The red main this card repairs (DRE-7673): Linear dropped the state
+        # and the rule named the entry. Against the shipped contract and a
+        # board without the state it is silent.
+        board = self.board()
+        assert OLD_LANE not in board
+        report = lane_contract.check(board=board, vocabulary=())
+        assert "board.retired_entry_is_deleted" not in {
+            f.clause_id for f in report.failures()
+        }
+
     def test_a_card_left_there_is_named(self):
         inputs = lane_contract._Inputs(
-            contract=lane_contract.load(), board=self.board(**{OLD_LANE: 3}),
+            contract=with_entry(), board=self.board(**{OLD_LANE: 3}),
             console=None, vocabulary=None, root=ROOT,
         )
         problems = lane_contract.ASSERTIONS["board.retiring_lane_is_empty"](inputs)
         assert len(problems) == 1 and repr(OLD_LANE) in problems[0]
 
-    def test_once_linear_drops_the_state_the_entry_must_go(self):
-        board = self.board()
-        board.pop(OLD_LANE)
-        report = lane_contract.check(board=board, vocabulary=())
+    def test_an_entry_left_behind_the_board_must_go(self):
+        # The rule this repair answered, still live: had the entry stayed, the
+        # same board fails it by name.
+        report = lane_contract.check(contract=with_entry(), board=self.board(),
+                                     vocabulary=())
         failures = [
             f for f in report.failures()
             if f.clause_id == "board.retired_entry_is_deleted"
@@ -224,13 +230,12 @@ class TestTheHarness:
 
 
 class TestTheDocument:
-    def test_the_rendered_document_carries_the_retiring_section(self):
+    def test_the_rendered_document_no_longer_carries_it(self):
         with open(lane_contract.DOC_PATH, encoding="utf-8") as fh:
             text = fh.read()
         assert text == lane_contract.render_markdown()
-        assert f"### {OLD_LANE} — retired by {EPIC}" in text
-        live = text.split("\n## The lanes\n", 1)[1].split("\n## ", 1)[0]
-        assert f"\n### {OLD_LANE}\n" not in live
+        assert f"### {OLD_LANE} — retired by {EPIC}" not in text
+        assert f"\n### {OLD_LANE}\n" not in text
 
 
 # --------------------------------------------------------------------------- #
@@ -239,12 +244,15 @@ class TestTheDocument:
 
 
 class TestTheGateReadsTheName:
+    def test_the_name_is_none_once_the_entry_is_gone(self):
+        assert epic_todo_gate.TODO is None
+        assert epic_todo_gate.retiring_start_lane() is None
+
     def test_the_name_is_the_retiring_lane_the_dispatch_lane_replaces(self):
-        assert epic_todo_gate.TODO == OLD_LANE
-        assert epic_todo_gate.retiring_start_lane() == OLD_LANE
+        assert epic_todo_gate.retiring_start_lane(with_entry()) == OLD_LANE
 
     def test_it_follows_the_contract_not_a_literal(self):
-        doc = json.loads(json.dumps(lane_contract.load()))
+        doc = with_entry()
         for entry in doc["lanes"]:
             if entry["name"] == OLD_LANE:
                 entry["name"] = "Waiting Room"
@@ -288,7 +296,10 @@ def _drain(cards):
     def active_cards(states=()):
         return [c for c in cards if c["state"]["name"] in states]
 
+    retiring = lane_contract.lanes("retiring", with_entry())
     with patch.object(reconcile, "active_cards", side_effect=active_cards), \
+            patch.object(reconcile.lane_contract, "lanes",
+                         MagicMock(return_value=retiring)), \
             patch.object(reconcile.linear_ops, "cmd_advance") as advance, \
             patch.object(reconcile.linear_ops, "cmd_comment") as comment:
         reconcile.drain_retiring_lanes()
@@ -325,11 +336,11 @@ class TestTheDrain:
         advance.assert_not_called()
         comment.assert_not_called()
 
-    def test_the_drain_reads_both_retiring_lanes(self):
+    def test_the_drain_reads_only_the_queues_old_name_now(self):
         with patch.object(reconcile, "active_cards",
                           MagicMock(return_value=[])) as cards:
             reconcile.drain_retiring_lanes()
-        assert set(cards.call_args.args[0]) == {"Back" + "log", OLD_LANE}
+        assert set(cards.call_args.args[0]) == {"Back" + "log"}
 
 
 # --------------------------------------------------------------------------- #
@@ -349,15 +360,14 @@ class TestTheSweep:
             "its own retiring entry."
         )
 
-    def test_the_only_config_survivor_is_the_entry(self):
+    def test_no_config_file_names_it_now_the_entry_is_gone(self):
         text = _read(os.path.join(ROOT, CONTRACT))
-        first, last = entry_span(text, OLD_LANE)
-        assert first > 0, "the retiring entry was not found"
-        others = [
+        assert entry_span(text, OLD_LANE) == (0, -1)
+        survivors = [
             f for f in tracked_files(CONFIG)
-            if f != CONTRACT and OLD_LANE in (_read(os.path.join(ROOT, f)) or "")
+            if OLD_LANE in (_read(os.path.join(ROOT, f)) or "")
         ]
-        assert others == [], others
+        assert survivors == [], survivors
 
 
 class TestTheSweepCatchesWhatItMust:
@@ -423,8 +433,8 @@ class TestTheSweepCatchesWhatItMust:
         hits = self.plant(tmp_path, "config/probe.json", json.dumps(live, indent=2))
         assert len(hits) == 2, hits
 
-    def test_the_entry_span_is_read_off_the_shipped_file(self):
-        text = _read(os.path.join(ROOT, CONTRACT))
+    def test_the_entry_span_finds_an_entry_in_a_contract_file(self):
+        text = json.dumps(with_entry(), indent=2)
         first, last = entry_span(text, OLD_LANE)
         block = "\n".join(text.splitlines()[first - 1:last])
-        assert json.loads(block.rstrip().rstrip(",")) == raw_entry()
+        assert json.loads(block.rstrip().rstrip(",")) == ENTRY

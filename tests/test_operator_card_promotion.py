@@ -642,7 +642,7 @@ class TestTheContractSaysSo:
         # Since DRE-5322 the marks are stamped on the way into Hand-work, so
         # that is the lane whose writers clause says so. FLEET's lane (In
         # Progress since the flip, DRE-7120) names the sweep's promotion and no
-        # mark, and the old start lane, retiring since DRE-7129, says nothing.
+        # mark, and the old start lane, retired since DRE-7129, says nothing.
         writers = lane_contract.lane("Hand-work")["clauses"]["writers"]["text"]
         assert routing_verdict.OPERATOR_STEP_LABEL in writers
         assert linear_ops.NO_CODE_LABEL in writers
@@ -651,8 +651,9 @@ class TestTheContractSaysSo:
         assert "promotes a FLEET card here" in fleet_writers
         assert routing_verdict.OPERATOR_STEP_LABEL not in fleet_writers
         assert linear_ops.NO_CODE_LABEL not in fleet_writers
-        # The old start lane is retiring (DRE-7129) and permits no writer.
-        assert "clauses" not in lane_contract.lane("To" + "do", status="retiring")
+        # The old start lane retired (DRE-7129) and its entry is gone (DRE-7673),
+        # so no clause anywhere can permit a writer into it.
+        assert "To" + "do" not in [e["name"] for e in lane_contract.load()["lanes"]]
 
     def test_the_rendered_document_matches_the_contract(self):
         """`docs/lane-contract.md` is rendered from the file — a clause edited

@@ -67,9 +67,11 @@ class TestTheShippedContract:
         assert lane_contract.dispatch_lane() == "In Progress"
         assert lane_contract.DISPATCH_LANE == "In Progress"
 
-    def test_start_lanes_are_the_dispatch_lane_then_the_lane_it_replaces(self):
-        assert lane_contract.start_lanes() == ("In Progress", "Todo")
-        assert lane_contract.START_LANES == ("In Progress", "Todo")
+    def test_start_lanes_are_the_dispatch_lane_alone(self):
+        # The lane it replaced retired (DRE-7129) and its entry went once
+        # Linear deleted the state (DRE-7673).
+        assert lane_contract.start_lanes() == ("In Progress",)
+        assert lane_contract.START_LANES == ("In Progress",)
 
     def test_start_minutes_is_fifteen_the_old_start_lanes_stall_window(self):
         # It equaled Todo's stall window, which went with Todo's live entry
@@ -85,10 +87,9 @@ class TestTheShippedContract:
         assert len(lane_contract.DISPATCH_FROM) == 6
         assert lane_contract.dispatch_from() == lane_contract.DISPATCH_FROM
 
-    def test_todo_is_retiring_and_declares_what_replaces_it(self):
-        # DRE-7129: the second step of its retirement.
-        todo = lane_contract.lane("Todo", status="retiring")
-        assert todo["replaced_by"] == "In Progress"
+    def test_todo_is_gone_from_the_contract(self):
+        # DRE-7129 set it retiring; DRE-7673 deleted the entry, the last step.
+        assert "Todo" not in [entry["name"] for entry in shipped()["lanes"]]
         assert "Todo" not in lane_contract.lane_names()
 
     def test_the_offline_check_raises_nothing_against_build_start(self):
@@ -146,9 +147,10 @@ class TestDerivedNotListed:
 
     def test_start_lanes_read_a_retiring_lane_that_names_the_dispatch_lane(self):
         doc = shipped()
-        raw_lane(doc, "Todo").update(
-            {"status": "retiring", "retired_by": "DRE-1", "reason": "r", "board_action": "b"}
-        )
+        doc["lanes"].append({
+            "name": "Todo", "status": "retiring", "retired_by": "DRE-1",
+            "replaced_by": "In Progress", "reason": "r", "board_action": "b",
+        })
         assert lane_contract.start_lanes(doc) == ("In Progress", "Todo")
 
     def test_dispatch_from_drops_the_old_name_with_its_alias(self):
@@ -248,7 +250,7 @@ class TestTheDocument:
         text = lane_contract.render_markdown()
         assert "## How a build starts" in text
         section = text.split("## How a build starts", 1)[1].split("\n## ", 1)[0]
-        for name in ("Todo", "In Progress", "Intake", "Triage", "15 min"):
+        for name in ("In Progress", "Intake", "Triage", "15 min"):
             assert name in section
         for line in shipped()["build_start"]["why"]:
             assert line in section

@@ -170,9 +170,10 @@ def raw_entry():
 
 class TestTheContractMarksItRetiring:
     def test_the_retiring_set_holds_the_backlog_entry(self):
-        # Beside the start lane the flip emptied (DRE-7129).
+        # Alone again: the start lane the flip emptied retired beside it
+        # (DRE-7129), and its entry went once Linear deleted the state (DRE-7673).
         retiring = lane_contract.lanes("retiring")
-        assert [entry["name"] for entry in retiring] == [OLD_LANE, "To" + "do"]
+        assert [entry["name"] for entry in retiring] == [OLD_LANE]
 
     def test_it_is_replaced_by_queued_and_retired_by_the_epic(self):
         entry = lane_contract.lane(OLD_LANE, status="retiring")

@@ -256,15 +256,16 @@ class TestTheRetiringLaneDrainsItself:
     one pins the inert case with the retiring set emptied.
     """
 
-    def test_the_shipped_contract_carries_two_retiring_lanes(self):
-        # The queue's old name, and the start lane the flip emptied (DRE-7129).
+    def test_the_shipped_contract_carries_one_retiring_lane(self):
+        # The queue's old name. The start lane the flip emptied retired beside
+        # it (DRE-7129), and its entry went once Linear deleted the state
+        # (DRE-7673).
         retiring = lane_contract.lanes(status="retiring")
-        assert [entry["name"] for entry in retiring] == [OLD_QUEUE, OLD_START]
+        assert [entry["name"] for entry in retiring] == [OLD_QUEUE]
         entry = retiring[0]
         assert entry["replaced_by"] == QUEUE
         assert entry["retired_by"] == EPIC
-        assert retiring[1]["replaced_by"] == "In Progress"
-        assert retiring[1]["retired_by"] == "DRE-7072"
+        assert OLD_START not in lane_contract.lane_names(status="retiring")
 
     def test_the_drain_is_inert_when_nothing_is_retiring(self):
         # The explicit decision, as a test: with an empty retiring set the drain
@@ -283,7 +284,7 @@ class TestTheRetiringLaneDrainsItself:
             reconcile, "active_cards", MagicMock(return_value=[])
         ) as cards, patch.object(reconcile.linear_ops, "cmd_advance"):
             reconcile.drain_retiring_lanes()
-        cards.assert_called_once_with((OLD_QUEUE, OLD_START))
+        cards.assert_called_once_with((OLD_QUEUE,))
 
     def test_the_drain_moves_a_card_in_backlog_to_queued(self):
         with patch.object(
