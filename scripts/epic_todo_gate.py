@@ -12,12 +12,15 @@ answer nothing is written.
 
 ## The lane's name, read off the contract
 
-The lane is retiring (DRE-7129, epic DRE-7072): `TODO` is the retiring lane
+The lane retired (DRE-7129, epic DRE-7072): `TODO` is the retiring lane
 whose `replaced_by` is `lane_contract.DISPATCH_LANE`, read off
 `config/lane-contract.json` and never written here as a literal, and every
 caller — `reconcile`, `validate_card`, `linear_ops`, `ready_lane_writers` —
-reads that name. It is None once the entry is deleted, and then no lane is
-refused and no card is found in it.
+reads that name. Linear deleted the state on 2026-10-19 and its entry left
+the contract with it (DRE-7660), so `TODO` is None: no lane is refused, no
+card is found in it, and every caller does nothing. The rule stays, a no-op,
+because it reads the contract and not the board's past: a retiring lane the
+dispatch lane replaces is refused again the day the contract names one.
 
 ## What an epic is
 

@@ -817,11 +817,12 @@ HAND_BUILT_LABEL = routing_verdict.HAND_BUILT_LABEL
 # Since DRE-7108 it is posted for a not-started card in any start lane, so it
 # names no lane; the words it carried before stay in `_TODO_REDISPATCH_NOTES`,
 # which is what the watchdog matches, because a card re-sent before the change
-# still carries them.
+# still carries them. Those words named the old start lane, and the contract
+# no longer carries it (DRE-7660), so the tail after the lane is what is matched.
 _TODO_REDISPATCH_NOTE = "card was promoted and no run started — re-dispatched"
 _TODO_REDISPATCH_NOTES = (
     _TODO_REDISPATCH_NOTE,
-    f"card sat in {epic_todo_gate.TODO} with no run — re-dispatched",
+    "with no run — re-dispatched",
 )
 
 # The runner line (DRE-7108): a card whose intent the relay is holding until a

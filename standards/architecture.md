@@ -68,8 +68,9 @@ Intake → Planning → Green Light → Queued → Hand-work → In Progress →
   lanes that preceded it were retired by DRE-2726 and deleted from the board and
   the contract by DRE-2818; no document may still name them. Until the flip
   (DRE-7120, 2026-10-18) the sweep promoted a FLEET card into `Todo` and the
-  build started there; nothing promotes into that lane now, and it stays on the
-  board until its retirement (DRE-7129).
+  build started there. Nothing promotes into that lane now: the sweep drained
+  it (DRE-7129), the state was deleted from the board on 2026-10-19, and its
+  entry left the contract (DRE-7660).
 - **`Triage`** — the BROKEN-CARD lane, and only that: an unroutable `repo:`
   label, an archived repo, a card the readiness guard returned three times. A
   card waiting on a judgement is not broken — that is `Green Light`.

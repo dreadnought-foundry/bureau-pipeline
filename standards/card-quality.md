@@ -43,12 +43,11 @@ to Planning. It never builds an **epic** — a card with children, an
 its labels (DRE-5319). An epic in `In Progress` is one the CEO approved, so the
 gate repairs no label on it and leaves it to the plan run that move dispatches
 (DRE-7110). Before the flip (DRE-7120, 2026-10-18) a build started in `Todo`,
-and an epic still found in that lane is carried out under the
+and an epic found in that lane was carried out under the
 `🚫 epic-not-todo` refusal — back to `In Progress` when it came from there, to
-`Planning` otherwise — while `python3 scripts/ready_lane_writers.py check`
-names any seam that could put an epic in `Todo` as `epic-can-enter-todo`
-(DRE-5316, DRE-5347; history as of 2026-10-18). Get it right and the gate is a
-no-op.
+`Planning` otherwise (DRE-5316, DRE-5347). The state was deleted from the board
+on 2026-10-19 and its entry from the contract (DRE-7660), so no card can be in
+it and that refusal never fires now. Get it right and the gate is a no-op.
 
 ## Optional — only when applicable
 - **`**Design:** <png path>`** — UI cards ONLY (e.g.
