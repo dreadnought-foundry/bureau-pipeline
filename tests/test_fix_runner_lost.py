@@ -578,7 +578,7 @@ class TonightsReplayTest(unittest.TestCase):
         self.assertIn("Escalating to a human", bodies[0])
         self.assertNotIn(fix_dead_run.RUNNER_LOST_TAG, bodies[0])
         self.assertTrue(parks(linear), linear)
-        self.assertIn(["advance", CARD, "Triage", "In Review,In Progress,Todo"],
+        self.assertIn(["advance", CARD, "Triage", "In Review,In Progress"],
                       linear)
 
     def test_an_annotation_read_that_errors_escalates_as_today(self):

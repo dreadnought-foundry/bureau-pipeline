@@ -192,7 +192,7 @@ def test_a_no_route_card_is_held_stamped_and_moved_to_triage(state):
         ("comment", "DRE-7001", receipt),
         ("label", "DRE-7001", reconcile.HOLD_LABEL),
         ("comment", "DRE-7001", stamp),
-        ("advance", "DRE-7001", "Triage", "In Progress,Todo"),
+        ("advance", "DRE-7001", "Triage", "In Progress"),
     ]
 
 
@@ -221,7 +221,7 @@ def test_a_card_with_no_repo_label_is_stamped_repo_none():
     flagged, writes, _ = _sweep([_card(labels=())])
     assert flagged == {"DRE-7001"}
     assert ("comment", "DRE-7001", no_route_stamp("none")) in writes
-    assert ("advance", "DRE-7001", "Triage", "In Progress,Todo") in writes
+    assert ("advance", "DRE-7001", "Triage", "In Progress") in writes
 
 
 def test_a_slug_the_stamp_cannot_carry_is_stamped_repo_none():
@@ -230,7 +230,7 @@ def test_a_slug_the_stamp_cannot_carry_is_stamped_repo_none():
     flagged, writes, _ = _sweep([_card(labels=("repo:Ghost Product",))])
     assert flagged == {"DRE-7001"}
     assert ("comment", "DRE-7001", no_route_stamp("none")) in writes
-    assert writes[-1] == ("advance", "DRE-7001", "Triage", "In Progress,Todo")
+    assert writes[-1] == ("advance", "DRE-7001", "Triage", "In Progress")
 
 
 def test_the_no_route_stamp_reads_back_as_its_reason():
@@ -308,7 +308,7 @@ def test_a_door_read_no_route_card_still_in_its_lane_is_held_and_moved(door_read
     assert flagged == {"DRE-7001"}
     assert ("label", "DRE-7001", reconcile.HOLD_LABEL) in writes
     assert ("comment", "DRE-7001", no_route_stamp("ghost-product")) in writes
-    assert writes[-1] == ("advance", "DRE-7001", "Triage", "In Progress,Todo")
+    assert writes[-1] == ("advance", "DRE-7001", "Triage", "In Progress")
 
 
 def test_a_linear_read_no_route_card_costs_no_live_read():
@@ -316,7 +316,7 @@ def test_a_linear_read_no_route_card_costs_no_live_read():
     alone, with no request before it."""
     _, writes, reads = _sweep([_card(labels=("repo:ghost-product",))])
     assert reads == []
-    assert writes[-1] == ("advance", "DRE-7001", "Triage", "In Progress,Todo")
+    assert writes[-1] == ("advance", "DRE-7001", "Triage", "In Progress")
 
 
 # --------------------------------------------------------------------------

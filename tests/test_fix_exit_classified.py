@@ -425,7 +425,7 @@ class ARealDisagreementStillEscalatesTest(unittest.TestCase):
         self.assertTrue(said[0][2].startswith(
             "🙋 The fix agent disagrees with the reviewer's blocking finding"))
         self.assertTrue(held(calls), calls)
-        self.assertIn(["advance", CARD, "Triage", "In Review,In Progress,Todo"], calls)
+        self.assertIn(["advance", CARD, "Triage", "In Review,In Progress"], calls)
 
     def test_nothing_to_fix_against_the_open_finding_still_escalates(self):
         proc, writes, calls, _ = report([rest(QA, self.RC)], blocker=NOTHING,
