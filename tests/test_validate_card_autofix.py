@@ -197,7 +197,7 @@ class GateFixFirstTest(unittest.TestCase):
         self.assertTrue(any("Auto-fixed" in c[1] for c in fake.comments))
 
     def test_normal_card_missing_agent_label_gets_engineer_and_proceeds(self):
-        fake = FakeLinear("Todo", "**Repo:** atlas", [], title="Fix a bug")
+        fake = FakeLinear("In Progress", "**Repo:** atlas", [], title="Fix a bug")
         self.assertFalse(self._run(fake))
         self.assertIn(("DRE-999", "agent:engineer"), fake.added_labels)
         self.assertEqual(fake.states, [])
@@ -205,7 +205,7 @@ class GateFixFirstTest(unittest.TestCase):
     # --- repo inference ---
 
     def test_missing_repo_initiative_bureau_infers_agent_bureau(self):
-        fake = FakeLinear("Todo", "Do the thing.", ["agent:engineer", "initiative:bureau"])
+        fake = FakeLinear("In Progress", "Do the thing.", ["agent:engineer", "initiative:bureau"])
         self.assertFalse(self._run(fake))
         self.assertIn(("DRE-999", "repo:agent-bureau"), fake.added_labels)
         # DRE-1699: only the repo:<slug> LABEL is written — the deprecated
@@ -219,7 +219,7 @@ class GateFixFirstTest(unittest.TestCase):
         # substring of a name anyone can rename, so the card is bounced instead
         # and no repo label is written.
         fake = FakeLinear(
-            "Todo", "Do the thing.", ["agent:engineer"], project="Bureau: Console"
+            "In Progress", "Do the thing.", ["agent:engineer"], project="Bureau: Console"
         )
         self.assertTrue(self._run(fake))
         self.assertEqual(fake.states, [("DRE-999", "Planning")])
@@ -230,7 +230,7 @@ class GateFixFirstTest(unittest.TestCase):
         # The bounce has to be actionable: it names the label to add, in the
         # words the CEO sees on the card.
         fake = FakeLinear(
-            "Todo", "Do the thing.", ["agent:engineer"], project="Bureau: Console"
+            "In Progress", "Do the thing.", ["agent:engineer"], project="Bureau: Console"
         )
         self.assertTrue(self._run(fake))
         body = "\n".join(b for _, b in fake.comments)
@@ -239,7 +239,7 @@ class GateFixFirstTest(unittest.TestCase):
 
     def test_missing_repo_no_initiative_unknown_project_bounces(self):
         fake = FakeLinear(
-            "Todo", "Do the thing.", ["agent:engineer"], project="Dev Sandbox"
+            "In Progress", "Do the thing.", ["agent:engineer"], project="Dev Sandbox"
         )
         self.assertTrue(self._run(fake))
         self.assertEqual(fake.states, [("DRE-999", "Planning")])
@@ -248,7 +248,7 @@ class GateFixFirstTest(unittest.TestCase):
         self.assertFalse(any(l[1].startswith("repo:") for l in fake.added_labels))
 
     def test_missing_repo_no_project_bounces(self):
-        fake = FakeLinear("Todo", "Do the thing.", ["agent:engineer"], project=None)
+        fake = FakeLinear("In Progress", "Do the thing.", ["agent:engineer"], project=None)
         self.assertTrue(self._run(fake))
         self.assertEqual(fake.states, [("DRE-999", "Planning")])
 
@@ -256,7 +256,7 @@ class GateFixFirstTest(unittest.TestCase):
         # initiative:foundry → "foundry" → real candidate, NOT a real repo.
         # Must bounce, never guess a repo that isn't in VALID_SLUGS.
         fake = FakeLinear(
-            "Todo", "Do the thing.", ["agent:engineer", "initiative:foundry"]
+            "In Progress", "Do the thing.", ["agent:engineer", "initiative:foundry"]
         )
         self.assertTrue(self._run(fake))
         self.assertEqual(fake.states, [("DRE-999", "Planning")])
@@ -272,7 +272,7 @@ class GateFixFirstTest(unittest.TestCase):
         # bounces it to Planning and writes no repo label. Fails if vericorr
         # ever returns to VALID_SLUGS.
         fake = FakeLinear(
-            "Todo", "Do the thing.", ["agent:engineer"], project="VeriCorr: Forms"
+            "In Progress", "Do the thing.", ["agent:engineer"], project="VeriCorr: Forms"
         )
         self.assertTrue(self._run(fake))
         self.assertEqual(fake.states, [("DRE-999", "Planning")])
@@ -281,7 +281,7 @@ class GateFixFirstTest(unittest.TestCase):
     # --- no-op paths ---
 
     def test_clean_card_untouched_no_autofix_comment(self):
-        fake = FakeLinear("Todo", "**Repo:** atlas", ["agent:engineer"])
+        fake = FakeLinear("In Progress", "**Repo:** atlas", ["agent:engineer"])
         self.assertFalse(self._run(fake))
         self.assertEqual(fake.added_labels, [])
         self.assertEqual(fake.descriptions, [])
@@ -320,7 +320,7 @@ class GateFixFirstTest(unittest.TestCase):
         # repo inferable from the initiative label, agent label inferred from a
         # normal title.
         fake = FakeLinear(
-            "Todo", "Do it.", ["initiative:deltasolv"], title="Plain card"
+            "In Progress", "Do it.", ["initiative:deltasolv"], title="Plain card"
         )
         self.assertFalse(self._run(fake))
         self.assertIn(("DRE-999", "agent:engineer"), fake.added_labels)
@@ -332,7 +332,7 @@ class GateFixFirstTest(unittest.TestCase):
         # inferable gap is the role label must be bounced CLEAN, never left
         # half-repaired. The project name used to supply the missing half.
         fake = FakeLinear(
-            "Todo", "Do it.", [], title="Plain card", project="DeltaSolv: Forms"
+            "In Progress", "Do it.", [], title="Plain card", project="DeltaSolv: Forms"
         )
         self.assertTrue(self._run(fake))
         self.assertEqual(fake.states, [("DRE-999", "Planning")])

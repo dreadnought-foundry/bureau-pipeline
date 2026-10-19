@@ -77,7 +77,7 @@ class GateBehaviorTest(unittest.TestCase):
         return emitted["bounced"]
 
     def test_clean_card_proceeds(self):
-        fake = FakeLinear("Todo", "**Repo:** atlas", ["agent:engineer"])
+        fake = FakeLinear("In Progress", "**Repo:** atlas", ["agent:engineer"])
         self.assertFalse(self._run(fake))
         self.assertEqual(fake.comments, [])
         self.assertEqual(fake.states, [])
@@ -85,7 +85,7 @@ class GateBehaviorTest(unittest.TestCase):
     def test_missing_repo_not_inferable_bounces(self):
         # No **Repo:** line, no repo:/initiative: label, no project → the one
         # case the fix-first gate still bounces (can't guess a repo).
-        fake = FakeLinear("Todo", "no repo line", ["agent:engineer"], project=None)
+        fake = FakeLinear("In Progress", "no repo line", ["agent:engineer"], project=None)
         self.assertTrue(self._run(fake))
         self.assertEqual(fake.states, [("DRE-999", "Planning")])
         self.assertIn("Repo:", fake.comments[0][1])
@@ -95,7 +95,7 @@ class GateBehaviorTest(unittest.TestCase):
     def test_missing_agent_label_is_auto_fixed_not_bounced(self):
         # Behavior change (fix-first): a card with a resolvable repo but no agent
         # label is REPAIRED (engineer inferred) and proceeds — no longer bounced.
-        fake = FakeLinear("Todo", "**Repo:** atlas", [], title="Fix it")
+        fake = FakeLinear("In Progress", "**Repo:** atlas", [], title="Fix it")
         self.assertFalse(self._run(fake))
         self.assertIn(("DRE-999", "agent:engineer"), fake.added_labels)
         self.assertEqual(fake.states, [])

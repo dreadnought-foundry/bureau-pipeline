@@ -208,7 +208,7 @@ class TheTodoGateRefusesToPlanning(unittest.TestCase):
         # No repo line, no repo:/initiative: label, no project — the ONE case
         # the fix-first gate still refuses, because a repair would be a
         # wrong-repo guess.
-        return FakeLinear("Todo", "no repo line", ["agent:engineer"], project=None)
+        return FakeLinear("In Progress", "no repo line", ["agent:engineer"], project=None)
 
     def test_validate_card_bounce_puts_a_card_in_planning(self):
         fake = self._uninferable()
@@ -241,13 +241,13 @@ class TheTodoGateStillRepairsWhatItCanInfer(unittest.TestCase):
     what a lookup could fix trains people to route around the gate."""
 
     def test_a_missing_role_label_is_repaired_and_the_card_does_not_move(self):
-        fake = FakeLinear("Todo", "**Repo:** atlas", [], title="Fix it")
+        fake = FakeLinear("In Progress", "**Repo:** atlas", [], title="Fix it")
         self.assertFalse(_gate(fake))
         self.assertIn(("DRE-999", "agent:engineer"), fake.added_labels)
         self.assertEqual(fake.states, [])
 
     def test_a_repo_inferred_from_the_initiative_label_is_repaired_not_refused(self):
-        fake = FakeLinear("Todo", "no repo line", ["agent:engineer", "initiative:bureau"])
+        fake = FakeLinear("In Progress", "no repo line", ["agent:engineer", "initiative:bureau"])
         self.assertFalse(_gate(fake))
         self.assertEqual(fake.states, [])
         self.assertTrue(
