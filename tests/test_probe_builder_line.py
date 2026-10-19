@@ -12,10 +12,10 @@ What this file pins:
 * `probe-build-model` prints the line's model for the worker App's two login
   spellings, and nothing for any other author, any repo in
   `config/repo-map.json`, or an unreadable file — always exiting 0;
-* the critic then takes the known-builder path on the defaults in the code:
-  a build on the workhorse group's first model is reviewed on another model,
-  a build on that reviewer is not reviewed on it, and two builders keep both
-  off;
+* the critic then takes the known-builder path on the frozen model home
+  (`tests/model_fixture.py`): a build on the workhorse group's first model is
+  reviewed on another model, a build on that reviewer is not reviewed on it,
+  and two builders keep both off;
 * the Select model step of `qa-review.yml`, RUN with a stubbed `gh`: the REST
   author read, a body-only fallback read, the `probe-builder:` log line and
   `--built-on`, and a pull request with a card never reading its description;
@@ -48,6 +48,10 @@ sys.path.insert(0, str(SCRIPTS))
 
 import model_fallback  # noqa: E402
 
+sys.path.insert(0, str(ROOT / "tests"))
+
+import model_fixture  # noqa: E402
+
 SANDBOX = "dreadnought-foundry/bureau-harness"
 HAIKU = "claude-haiku-5-5"
 REST_LOGIN = "agent-bureau-bot[bot]"
@@ -57,13 +61,36 @@ NOT_THE_APP = ["agent-bureau-bot", "app/agent-bureau-qa-bot",
 HOME_NAMES = ("BUREAU_MODEL_HOME_TOKEN", "BUREAU_MODEL_HOME_FILE")
 BODY_PATH = "/tmp/cardctx-pr-body.txt"
 
-# Every run here strips the home, so the selector answers from the defaults in
-# the code; both ids are read off them, never written as a literal (DRE-6866).
+# Every selector here runs today's scripts on the frozen home, so a console
+# save to `config/models.yaml` cannot move what these tests expect; both ids
+# are read off that home, never written as a literal (DRE-6866).
 # BUILDER is the workhorse group's first model, what a real build runs on;
-# REVIEWER is the model the critic reviews a BUILDER build on.
-DEFAULTS = model_fallback.code_defaults()
-BUILDER = DEFAULTS["ladders"][DEFAULTS["kinds"][model_fallback.WORKHORSE_KIND]][0]
-REVIEWER = model_fallback.reviewers_for(DEFAULTS, BUILDER)[0]
+# REVIEWER — set in `setUpModule` — is the model the critic reviews a BUILDER
+# build on.
+HOME = model_fixture.fixture_home()
+BUILDER = model_fixture.ladder(HOME, model_fallback.WORKHORSE_KIND)[0]
+REVIEWER: str | None = None
+
+_TREE_DIR: tempfile.TemporaryDirectory | None = None
+TREE: Path | None = None
+fmf = None
+
+
+def setUpModule():
+    global _TREE_DIR, TREE, fmf, REVIEWER
+    _TREE_DIR = tempfile.TemporaryDirectory()
+    TREE = model_fixture.fixture_tree(Path(_TREE_DIR.name) / "tree", regenerate=False)
+    fmf = model_fixture.fixture_module(TREE, doc=HOME)
+    REVIEWER = fmf.reviewers_for(fmf.CONFIG, BUILDER)[0]
+
+
+def tearDownModule():
+    _TREE_DIR.cleanup()
+
+
+def tree_script(name: str) -> str:
+    """`scripts/<name>` of the fixture tree: today's code, the frozen home."""
+    return str(TREE / "scripts" / name)
 
 
 def contract_line(model: str) -> str:
@@ -79,8 +106,9 @@ def description(*models: str) -> str:
 
 
 def _env(**extra) -> dict:
-    env = {k: v for k, v in os.environ.items() if k not in HOME_NAMES}
-    env.update(BUREAU_FAKE_AVAILABLE="{}", **extra)
+    """This process's environment with the frozen home as the only home."""
+    env = model_fixture.home_env(TREE, HOME, BUREAU_FAKE_AVAILABLE="{}", **extra)
+    env.pop("BUREAU_MODEL_HOME_TOKEN", None)
     return env
 
 
@@ -91,14 +119,14 @@ def probe_cli(repo: str, author: str, body: str | None) -> subprocess.CompletedP
         if body is not None:
             path.write_text(body, encoding="utf-8")
         return subprocess.run(
-            [sys.executable, str(SCRIPTS / "model_fallback.py"), "probe-build-model",
+            [sys.executable, tree_script("model_fallback.py"), "probe-build-model",
              "--repo", repo, "--author", author, str(path)],
             capture_output=True, text=True, env=_env(), timeout=120)
 
 
 def select_critic(*flags: str, repo: str = SANDBOX) -> subprocess.CompletedProcess:
     return subprocess.run(
-        [sys.executable, str(SCRIPTS / "model_fallback.py"), "select", "critic",
+        [sys.executable, tree_script("model_fallback.py"), "select", "critic",
          "--repo", repo, *flags],
         capture_output=True, text=True, env=_env(), timeout=120)
 
@@ -118,8 +146,8 @@ def review_from_description(body: str, author: str = REST_LOGIN,
 
 class ProbeBuildModelTest(unittest.TestCase):
     def test_the_constants(self):
-        self.assertEqual(SANDBOX, model_fallback.SANDBOX_REPO)
-        self.assertEqual((REST_LOGIN, GRAPHQL_LOGIN), model_fallback.PROBE_AUTHOR_LOGINS)
+        self.assertEqual(SANDBOX, fmf.SANDBOX_REPO)
+        self.assertEqual((REST_LOGIN, GRAPHQL_LOGIN), fmf.PROBE_AUTHOR_LOGINS)
 
     def test_the_worker_app_in_either_spelling_names_the_builder(self):
         for author in (REST_LOGIN, GRAPHQL_LOGIN):
@@ -134,8 +162,8 @@ class ProbeBuildModelTest(unittest.TestCase):
 
     def test_the_line_names_the_first_workhorse_rung(self):
         """The fixture names what a real build runs on: the engineer's first rung."""
-        self.assertEqual(BUILDER, model_fallback.ladder_for("engineer")[0])
-        self.assertEqual([BUILDER], model_fallback.build_models([description(BUILDER)]),
+        self.assertEqual(BUILDER, fmf.ladder_for("engineer")[0])
+        self.assertEqual([BUILDER], fmf.build_models([description(BUILDER)]),
                          "`harness` is an authoring role with no change to build_models")
 
     def test_any_other_author_prints_nothing(self):
@@ -173,7 +201,7 @@ class ProbeBuildModelTest(unittest.TestCase):
 
     def test_missing_arguments_print_nothing_and_exit_zero(self):
         proc = subprocess.run(
-            [sys.executable, str(SCRIPTS / "model_fallback.py"), "probe-build-model"],
+            [sys.executable, tree_script("model_fallback.py"), "probe-build-model"],
             capture_output=True, text=True, env=_env(), timeout=120)
         self.assertEqual(("", 0), (proc.stdout.strip(), proc.returncode))
 
@@ -290,7 +318,7 @@ class SelectModelStepRunTest(unittest.TestCase):
         scripts = self.dir / "pipeline" / "scripts"
         scripts.mkdir(parents=True)
         for name in ("model_fallback.py", "card_snapshot.py"):
-            (scripts / name).write_text(WRAPPER.format(real=str(SCRIPTS / name)),
+            (scripts / name).write_text(WRAPPER.format(real=tree_script(name)),
                                         encoding="utf-8")
         self.runner_temp = self.dir / "runner"
         self.runner_temp.mkdir()
