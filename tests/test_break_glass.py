@@ -203,7 +203,7 @@ def test_a_break_glass_card_is_not_returned_by_the_gate():
     MUTATION CHECK: remove the break_glass consult in validate_card.cmd_gate
     and this card bounces to Planning — red here.
     """
-    fake = FakeLinear("Todo", "no repo line", ["agent:engineer", "break-glass"])
+    fake = FakeLinear("In Progress", "no repo line", ["agent:engineer", "break-glass"])
     assert _run_gate(fake) is False
     assert fake.states == []                      # never returned
 
@@ -211,14 +211,14 @@ def test_a_break_glass_card_is_not_returned_by_the_gate():
 def test_the_same_card_without_the_marker_still_bounces():
     """The gate is not weakened for everyone else — the marker is the whole
     difference between these two tests."""
-    fake = FakeLinear("Todo", "no repo line", ["agent:engineer"])
+    fake = FakeLinear("In Progress", "no repo line", ["agent:engineer"])
     assert _run_gate(fake) is True
     assert fake.states == [("DRE-999", "Planning")]
 
 
 def test_the_bypass_posts_the_notice_and_stamps_the_receipt():
     """AC 2 + the counter's source of truth."""
-    fake = FakeLinear("Todo", "no repo line", ["agent:engineer", "break-glass"])
+    fake = FakeLinear("In Progress", "no repo line", ["agent:engineer", "break-glass"])
     _run_gate(fake)
     body = "\n".join(b for _, b in fake.comments)
     assert break_glass.BYPASS_TAG in body
@@ -231,7 +231,7 @@ def test_the_bypass_posts_the_notice_and_stamps_the_receipt():
 def test_a_clean_break_glass_card_records_nothing():
     """The marker is not an event: a card that satisfies the gate on its own
     owes nothing, so no notice, no receipt, nothing to repay."""
-    fake = FakeLinear("Todo", "", ["agent:engineer", "repo:atlas", "break-glass"])
+    fake = FakeLinear("In Progress", "", ["agent:engineer", "repo:atlas", "break-glass"])
     assert _run_gate(fake) is False
     assert fake.comments == []
     assert fake.added_labels == []
@@ -245,7 +245,7 @@ def test_the_gate_refuses_a_marker_a_bot_applied():
     automation app) shows up as a botActor, and its bypass is not honored —
     the card bounces exactly as if the marker were absent."""
     fake = FakeLinear(
-        "Todo", "no repo line", ["agent:engineer", "break-glass"],
+        "In Progress", "no repo line", ["agent:engineer", "break-glass"],
         actor=None, bot="Some Automation",
     )
     assert _run_gate(fake) is True
@@ -260,7 +260,7 @@ def test_an_unreadable_history_does_not_fail_the_emergency_path():
     """The control is that it is loud and counted, not that it is hard to use:
     a provenance read that fails must not become an approval step."""
     fake = FakeLinear(
-        "Todo", "no repo line", ["agent:engineer", "break-glass"],
+        "In Progress", "no repo line", ["agent:engineer", "break-glass"],
         history_readable=False,
     )
     assert _run_gate(fake) is False

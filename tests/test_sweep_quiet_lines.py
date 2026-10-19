@@ -187,7 +187,23 @@ class TestPlanningRepair:
 # ===========================================================================
 # carry_epics_out_of_todo
 # ===========================================================================
+def test_no_retiring_start_lane_prints_one_quiet_line(capsys):
+    """The shipped contract (DRE-7660): no lane to read, so no read at all."""
+    with patch.object(reconcile, "active_cards") as cards:
+        reconcile.carry_epics_out_of_todo()
+    cards.assert_not_called()
+    assert _lines(capsys.readouterr().out, "epic-not-todo") == [
+        "epic-not-todo: nothing to carry — the contract names no retiring start lane"
+    ]
+
+
 class TestEpicCarry:
+    @pytest.fixture(autouse=True)
+    def _a_retiring_start_lane(self, monkeypatch):
+        # The contract names no retiring start lane since DRE-7660, so the
+        # carry is exercised against a stand-in.
+        monkeypatch.setattr(reconcile.epic_todo_gate, "TODO", "Todo")
+
     def test_an_empty_board_prints_one_quiet_line(self, capsys):
         with patch.object(reconcile, "active_cards", _board([])):
             reconcile.carry_epics_out_of_todo()

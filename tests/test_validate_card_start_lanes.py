@@ -20,6 +20,9 @@ they were when the lane was not gateable at all:
 A stamped one-off with no children is a build card and is gated, whatever its
 labels.
 
+Since DRE-7660 `Todo` is gone from the contract and `In Progress` is the one
+start lane; the old lane's epic carry is exercised against a stand-in.
+
 Every case here runs the gate the way `plan.yml`'s step runs it: the CLI
 command, no agent-task snapshot in the environment, `$GITHUB_OUTPUT` set.
 Linear is faked at the `linear_ops` module surface the gate imports, and every
@@ -123,10 +126,10 @@ def _gate(monkeypatch, tmp_path, fake):
 
 
 def test_the_start_lanes_are_read_off_the_contract():
-    assert {"In Progress", "Todo"} <= set(lane_contract.START_LANES)
+    assert lane_contract.START_LANES == ("In Progress",)
 
 
-@pytest.mark.parametrize("lane", ["Todo", "In Progress"])
+@pytest.mark.parametrize("lane", lane_contract.START_LANES)
 def test_a_malformed_card_with_no_pr_is_bounced_to_planning(monkeypatch, tmp_path, lane):
     fake = FakeLinear(lane, title="Fix the widget", description="no repo here")
     bounced, _, _ = _gate(monkeypatch, tmp_path, fake)
@@ -137,7 +140,7 @@ def test_a_malformed_card_with_no_pr_is_bounced_to_planning(monkeypatch, tmp_pat
     assert fake.added_labels == []
 
 
-@pytest.mark.parametrize("lane", ["Todo", "In Progress"])
+@pytest.mark.parametrize("lane", lane_contract.START_LANES)
 def test_a_well_formed_card_passes(monkeypatch, tmp_path, lane):
     fake = FakeLinear(lane, title="Fix the widget",
                       labels=["repo:atlas", "agent:engineer"],
@@ -249,6 +252,13 @@ def test_a_card_without_agent_planner_that_is_no_epic_is_gated(monkeypatch, tmp_
 def test_the_todo_epic_carry_still_reads_todo(monkeypatch, tmp_path):
     """The `epic-not-todo` carry is Todo's alone: an epic in Todo is carried
     out and the build stopped, never skipped as an approved epic."""
+    # The contract names no retiring start lane since DRE-7660, so the carry is
+    # exercised against a stand-in; the gate reads both names as it loads.
+    import epic_todo_gate
+
+    monkeypatch.setattr(epic_todo_gate, "TODO", "Todo")
+    monkeypatch.setattr(lane_contract, "START_LANES",
+                        lane_contract.START_LANES + ("Todo",))
     fake = FakeLinear("Todo", title="Rebuild the widget", children=2,
                       labels=["repo:atlas"])
     bounced, _, out = _gate(monkeypatch, tmp_path, fake)

@@ -112,7 +112,7 @@ class UnknownSlugCoreTest(unittest.TestCase):
 
 
 class FakeLinear:
-    def __init__(self, labels, state="Todo", description="Do the thing."):
+    def __init__(self, labels, state="In Progress", description="Do the thing."):
         self._labels = list(labels)
         self._state = state
         self._description = description

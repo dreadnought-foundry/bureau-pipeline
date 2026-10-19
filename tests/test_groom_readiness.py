@@ -462,7 +462,7 @@ def test_an_epic_the_refusal_kept_off_the_cancel_list_is_evaluated():
 def test_rule_one_returns_the_card_once_the_named_card_is_done():
     c = card("DRE-1")
     verdicts = {"DRE-1": _waits("DRE-60")}
-    held = _board([c], verdicts, named={"DRE-60": _light("DRE-60", "Todo")})
+    held = _board([c], verdicts, named={"DRE-60": _light("DRE-60", "In Progress")})
     assert _rules(c, held) == ["read-waits-on-open-card"]
     assert _row(c, held, "read-waits-on-open-card")["condition"] == \
         "DRE-60 is Done"
@@ -871,7 +871,8 @@ def test_a_closed_parent_is_not_this_rule(state):
 # the start lanes (DRE-7112) — read off the contract, never spelled here
 # --------------------------------------------------------------------------
 def _waiting_start_lanes() -> tuple:
-    """The start lanes ahead of the dispatch lane: Todo until it retires."""
+    """The start lanes ahead of the dispatch lane: none since Todo's entry was
+    deleted (DRE-7660)."""
     import lane_contract
 
     return tuple(lane for lane in lane_contract.START_LANES
@@ -893,7 +894,7 @@ def test_a_parent_waiting_in_a_start_lane_has_not_started_and_one_dispatched_has
     # the start lanes ahead of it hold a child.
     import lane_contract
 
-    assert _waiting_start_lanes() == ("Todo",)
+    assert _waiting_start_lanes() == ()
     assert groom_readiness.PARENT_NOT_STARTED == (
         "Intake", "Planning", "Green Light", *lane_contract.QUEUE_LANES,
         *_waiting_start_lanes(), "Triage")
@@ -990,7 +991,7 @@ def test_a_file_cited_past_the_threshold_is_reference_not_ownership():
         ["file-named-by-in-flight-card"]
 
 
-@pytest.mark.parametrize("lane", ["Planning", "Todo", "In Progress", "In Review"])
+@pytest.mark.parametrize("lane", ["Planning", "In Progress", "In Review"])
 def test_every_in_flight_lane_is_read(lane):
     c = card("DRE-1", description="Edits `shared.py`.")
     other = _lane_card("DRE-80", ["shared.py"], state=lane)
@@ -1272,7 +1273,7 @@ def test_the_population_read_carries_child_titles_for_the_roll_up_rule():
 def test_build_reads_each_in_flight_lane_once_and_the_named_cards():
     class Board(Reads):
         def __init__(self):
-            super().__init__({"DRE-60": _light("DRE-60", "Todo")})
+            super().__init__({"DRE-60": _light("DRE-60", "In Progress")})
             self.lanes = []
 
         def gql_paged(self, query, variables=None, **_):

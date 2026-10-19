@@ -3780,11 +3780,11 @@ class TheSecondCriticReadsBeforeGreenLight(unittest.TestCase):
         flight for neither; the SIGHT is wider, because two plans read at the
         same moment both sit in Planning and must see each other."""
         self.assertEqual(pc.IN_FLIGHT_EPIC_STATES,
-                         ("Green Light", "In Progress", "Todo"))
+                         ("Green Light", "In Progress"))
         self.assertEqual(pc.SIGHT_STATES,
                          pc.IN_FLIGHT_EPIC_STATES + (pc.REVIEW_LANE,))
         self.assertEqual(pc.SIGHT_STATES,
-                         ("Green Light", "In Progress", "Todo", "Planning"))
+                         ("Green Light", "In Progress", "Planning"))
 
     SIGHT_EPICS = [
         {"identifier": "DRE-2700", "title": "The intake gate", "state": "In Progress"},
@@ -3794,9 +3794,9 @@ class TheSecondCriticReadsBeforeGreenLight(unittest.TestCase):
     def test_the_default_sight_names_only_the_lanes_it_was_read_from(self):
         """The sentence describes the query, never more (PR #602 review). The
         caller that reads IN_FLIGHT_EPIC_STATES — `epics-in-flight` today —
-        gets a block naming those three lanes and no Planning paragraph."""
+        gets a block naming those two lanes and no Planning paragraph."""
         block = pc.sight_block(self.EPIC, self.SIGHT_EPICS[:1])
-        self.assertIn("That list is every epic in Green Light, In Progress, Todo "
+        self.assertIn("That list is every epic in Green Light, In Progress "
                       "on the DRE board at the moment this run started.", block)
         self.assertNotIn("Planning", block)
         self.assertNotIn("a plan under review", block)
@@ -3856,7 +3856,7 @@ class TheSecondCriticReadsBeforeGreenLight(unittest.TestCase):
             out = self._run("charter", stage)
             self.assertEqual(out.returncode, 0, out.stderr)
             text = " ".join(out.stdout.split())
-            self.assertIn("Anything else — Queued, Todo, Triage — is still to build", text)
+            self.assertIn("Anything else — Queued, Triage — is still to build", text)
             self.assertNotIn("Backlog", text)
 
     def test_the_post_charter_is_the_last_reader_before_green_light(self):
@@ -4633,13 +4633,13 @@ def _contract_without_todo():
 class TheInFlightLanesAreTheStartLanes(unittest.TestCase):
     """DRE-7113. An epic in flight is in Green Light or a start lane, and the
     start lanes are the lane contract's (`lane_contract.START_LANES`, DRE-7105)
-    — so deleting Todo's entry narrows both with no edit here."""
+    — so deleting Todo's entry (DRE-7660) narrowed both with no edit here."""
 
     def test_the_shipped_contract_keeps_todays_set(self):
         import lane_contract
 
         self.assertEqual(pc.IN_FLIGHT_EPIC_STATES,
-                         ("Green Light", "In Progress", "Todo"))
+                         ("Green Light", "In Progress"))
         self.assertEqual(pc.IN_FLIGHT_EPIC_STATES,
                          ("Green Light",) + lane_contract.START_LANES)
         self.assertEqual(pc.in_flight_epic_states(), pc.IN_FLIGHT_EPIC_STATES)
@@ -4650,7 +4650,7 @@ class TheInFlightLanesAreTheStartLanes(unittest.TestCase):
 
     def test_the_charter_names_the_queue_and_the_waiting_start_lanes(self):
         shipped = " ".join(pc.child_state_block().split())
-        self.assertIn("Anything else — Queued, Todo, Triage — is still to build",
+        self.assertIn("Anything else — Queued, Triage — is still to build",
                       shipped)
         flipped = " ".join(pc.child_state_block(_contract_without_todo()).split())
         self.assertIn("Anything else — Queued, Triage — is still to build", flipped)

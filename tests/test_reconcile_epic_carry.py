@@ -14,6 +14,10 @@ the refusal through `epic_todo_gate.post_refusal` with `carried_to` set to the
 lane it just wrote. It runs before `promote_ready` fetches its candidates, so a
 child's parent lane is read after the carry, never before it.
 
+Since DRE-7660 the contract names no retiring start lane, so the carry does
+nothing; these tests exercise it against a stand-in "Todo", and one pins the
+no-op on the shipped contract.
+
 Run: cd bureau-pipeline && python3 -m pytest tests/test_reconcile_epic_carry.py -v
 """
 
@@ -46,6 +50,34 @@ def _pin_repo_slug(monkeypatch):
     """reconcile.REPO_SLUG is bound at import; pin it so the carry recognises
     this suite's agent-bureau cards whatever the collection order."""
     monkeypatch.setattr(reconcile, "REPO_SLUG", "agent-bureau")
+
+
+#: The lane the shipped contract gives the carry, read before any stand-in.
+SHIPPED_TODO = gate.TODO
+
+#: The retiring entry DRE-7660 deleted, as the drain reads it.
+_TODO_ENTRY = {"name": "Todo", "status": "retiring", "retired_by": "DRE-7072",
+               "replaced_by": "In Progress"}
+
+
+@pytest.fixture(autouse=True)
+def _a_retiring_start_lane(monkeypatch):
+    # The contract names no retiring start lane since DRE-7660, so the carry is
+    # exercised against a stand-in.
+    monkeypatch.setattr(gate, "TODO", "Todo")
+
+
+@pytest.fixture
+def _todo_is_drained(monkeypatch):
+    """The drain reads the retiring entries off the contract, so the stand-in
+    lane is given one there too."""
+    lanes = reconcile.lane_contract.lanes
+
+    def with_todo(status="live", contract=None):
+        found = lanes(status, contract)
+        return found + (_TODO_ENTRY,) if status == "retiring" else found
+
+    monkeypatch.setattr(reconcile.lane_contract, "lanes", with_todo)
 
 
 def _card(identifier=EPIC, *, title="bureau-pipeline: the medic wakes on a conclusion",
@@ -248,6 +280,18 @@ def test_a_write_that_fails_posts_no_refusal_and_the_sweep_goes_on():
     assert [ident for ident, _ in lin.comments] == ["DRE-3700"]
 
 
+def test_on_the_shipped_contract_the_carry_does_nothing(monkeypatch, capsys):
+    """DRE-7660 deleted the lane's entry: the carry names no lane, reads no
+    card and writes nothing, even for an epic a stale read still shows there."""
+    monkeypatch.setattr(gate, "TODO", SHIPPED_TODO)
+    assert SHIPPED_TODO is None
+    lin = _Linear({EPIC: "In Progress"})
+    assert _sweep([_card()], lin) == []
+    assert lin.states == []
+    assert lin.comments == []
+    assert "names no retiring start lane" in capsys.readouterr().out
+
+
 # --------------------------------------------------------------------------
 # The retirement (DRE-7129): the drain leaves an epic for the carry
 # --------------------------------------------------------------------------
@@ -301,7 +345,8 @@ def _drain_then_carry(board: _Board):
     return failures
 
 
-def test_the_sweep_drains_a_one_off_and_carries_an_unapproved_epic_to_planning():
+def test_the_sweep_drains_a_one_off_and_carries_an_unapproved_epic_to_planning(
+        _todo_is_drained):
     """A drag can never approve an epic: the drain, whose destination is the
     dispatch lane, leaves the epic where it is, and the carry that runs later in
     the same sweep sends it to Planning because it did not come from In
@@ -321,7 +366,7 @@ def test_the_sweep_drains_a_one_off_and_carries_an_unapproved_epic_to_planning()
     assert refused[0].splitlines()[0] == gate.opener(EPIC, "Green Light")
 
 
-def test_the_sweep_carries_an_approved_epic_back_to_in_progress():
+def test_the_sweep_carries_an_approved_epic_back_to_in_progress(_todo_is_drained):
     board = _Board([_card()], {EPIC: "In Progress"})
     assert _drain_then_carry(board) == []
     assert board.advances == []

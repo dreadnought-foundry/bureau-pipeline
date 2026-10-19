@@ -541,35 +541,31 @@ def test_the_synthetic_board_is_deterministic():
         board_snapshot.synthetic())
 
 
-def _contract_without_todo():
-    """The shipped lane contract with Todo's entry deleted — the board the
-    Todo retirement leaves (DRE-7105's own fixture, `tests/test_build_start.py`)."""
-    import copy
-
-    doc = copy.deepcopy(lane_contract.load())
-    doc["build_start"]["lane"] = "In Progress"
-    doc["lanes"] = [entry for entry in doc["lanes"] if entry["name"] != "Todo"]
+def _contract_with_a_waiting_lane(status):
+    """The shipped lane contract plus a start lane ahead of the dispatch lane
+    in `status` — the Todo entry the board lost (DRE-7660), as a stand-in."""
+    doc = json.loads(json.dumps(lane_contract.load()))
+    doc["lanes"].append({"name": "Todo", "status": status,
+                         "replaced_by": lane_contract.DISPATCH_LANE})
     return doc
 
 
 def test_the_deal_reads_the_start_lanes_and_keeps_its_six_slots():
     """DRE-7112: the deal's first slot is the live start lane ahead of the
     dispatch lane, and the dispatch lane once none is — so a card sits in In
-    Progress exactly where it sat in Todo and none is re-dealt. Since Todo
-    began retiring (DRE-7129) the sweep drains it, so no live start lane is
-    ahead of In Progress on the shipped contract either."""
+    Progress exactly where it sat in Todo and none is re-dealt. A retiring
+    start lane is not ahead of it (DRE-7129), and since Todo left the contract
+    (DRE-7660) no start lane is ahead of In Progress on the shipped contract."""
     shipped = board_snapshot.synthetic_deal()
     assert shipped == board_snapshot._SYNTHETIC_DEAL
     assert shipped == ("In Progress", "In Progress", "In Review", "Planning",
                        "Intake", lane_contract.QUEUE_LANE)
     assert shipped[1] == lane_contract.DISPATCH_LANE
-    flipped = board_snapshot.synthetic_deal(_contract_without_todo())
-    assert flipped == shipped
-    live_todo = json.loads(json.dumps(lane_contract.load()))
-    for entry in live_todo["lanes"]:
-        if entry["name"] == "Todo":
-            entry["status"] = "live"
-    assert board_snapshot.synthetic_deal(live_todo)[0] == "Todo"
+    retiring = board_snapshot.synthetic_deal(_contract_with_a_waiting_lane("retiring"))
+    assert retiring == shipped
+    live = board_snapshot.synthetic_deal(_contract_with_a_waiting_lane("live"))
+    assert live[0] == "Todo"
+    assert live[1:] == shipped[1:]
 
 
 def test_the_extra_lanes_take_cards_from_the_deals_first_slot():

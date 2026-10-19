@@ -410,7 +410,7 @@ class ADeliveredNoteIsAnOrdinaryBuildResult(unittest.TestCase):
         self.assertEqual(
             [f"🤖 PR opened: {PR_URL} — CI + critic review running. Run: {run}"],
             posted)
-        self.assertEqual([[report_file.CARD, "In Review", "In Progress,Todo"]],
+        self.assertEqual([[report_file.CARD, "In Review", "In Progress"]],
                          moved)
         for comment in posted:
             self.assertNotIn("Agent blocked", comment)
@@ -551,7 +551,7 @@ class Run38041502892Replayed(unittest.TestCase):
         self.assertTrue(posted[0].startswith(f"🤖 PR opened: {out['pr_url']} "),
                         posted)
         moved = [e["args"] for e in journal if e["op"] in ("advance", "state")]
-        self.assertEqual([[report_file.CARD, "In Review", "In Progress,Todo"]],
+        self.assertEqual([[report_file.CARD, "In Review", "In Progress"]],
                          moved)
 
 

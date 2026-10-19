@@ -173,12 +173,12 @@ class TestLaneCleanup:
         # is done — Linear no longer has either state — so the entries were the
         # last copy of two lanes that do not exist. Keeping them is drift, and
         # the harness said so by rule id on every trunk commit. The retiring
-        # entries left are the queue's old name (DRE-6753) and the old start
-        # lane (DRE-7129).
+        # entry left is the queue's old name (DRE-6753); the old start lane's
+        # (DRE-7129) went with its board state (DRE-7660).
         retiring = lane_contract.lane_names(status="retiring")
         for name in RETIRED_LANES:
             assert name not in retiring
-        assert retiring == ("Backlog", "Todo")
+        assert retiring == ("Backlog",)
 
     def test_the_contract_file_spells_neither_name_anywhere(self):
         # Not just the entries. The rationale prose named them too, and a grep
@@ -334,12 +334,12 @@ class TestTheQueueLanes:
         doc = self.fixture(to="Queued")
         assert lane_contract.queue_lane(doc) in lane_contract.queue_lanes(doc)
 
-    def test_todo_retires_into_the_dispatch_lane_and_stays_a_start_lane(self):
-        # DRE-7105 declared what replaces it; DRE-7129 set it retiring. It is
-        # a start lane until its entry is deleted.
-        todo = lane_contract.lane("Todo", status="retiring")
-        assert todo["replaced_by"] == lane_contract.DISPATCH_LANE
-        assert "Todo" in lane_contract.START_LANES
+    def test_todo_left_the_contract_and_the_start_lanes_with_it(self):
+        # DRE-7105 declared what replaces it; DRE-7129 set it retiring. It was
+        # a start lane until its entry was deleted (DRE-7660).
+        with pytest.raises(lane_contract.UnknownLane):
+            lane_contract.lane("Todo", status="retiring")
+        assert lane_contract.START_LANES == (lane_contract.DISPATCH_LANE,)
 
     def test_the_offline_check_passes(self):
         report = lane_contract.check(vocabulary=lane_contract.pipeline_vocabulary())

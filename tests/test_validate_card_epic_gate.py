@@ -12,6 +12,10 @@ epic (title, children and comment bodies — never its labels), carries it to
 otherwise), posts the refusal through `post_refusal`, emits `bounced=true` and
 repairs no label. Every other card takes the fix-first path unchanged.
 
+Since DRE-7660 the contract names no retiring start lane, so `_carried_epic` is
+never reached; the module's tests exercise it against a stand-in "Todo"
+(`setUpModule`), and `OnTheShippedContract` pins the no-op.
+
 `linear_ops` is stubbed so no network is touched.
 """
 
@@ -27,6 +31,29 @@ import planning_shape  # noqa: E402
 import validate_card  # noqa: E402
 
 CARD = "DRE-999"
+
+#: The names the gate reads at import, as the shipped contract gives them.
+SHIPPED = {name: getattr(validate_card, name)
+           for name in ("_TODO", "_START_LANES", "_GATEABLE")}
+_stand_in = []
+
+
+def setUpModule():
+    # The contract names no retiring start lane since DRE-7660, so the carry is
+    # exercised against a stand-in.
+    _stand_in.extend([
+        mock.patch.object(epic_todo_gate, "TODO", "Todo"),
+        mock.patch.multiple(validate_card, _TODO="todo",
+                            _START_LANES=SHIPPED["_START_LANES"] | {"todo"},
+                            _GATEABLE=SHIPPED["_GATEABLE"] | {"todo"}),
+    ])
+    for patcher in _stand_in:
+        patcher.start()
+
+
+def tearDownModule():
+    while _stand_in:
+        _stand_in.pop().stop()
 
 
 def _stamp(shape: str) -> str:
@@ -240,6 +267,21 @@ class EveryOtherCardIsHandledAsBefore(unittest.TestCase):
     def test_an_epic_outside_the_gateable_lanes_is_untouched(self):
         fake = FakeLinear("In Progress", title="[EPIC] the new widget", children=2)
         bounced, _, posted = _run(fake)
+        self.assertFalse(bounced)
+        self.assertEqual((fake.states, fake.comments, posted), ([], [], []))
+        self.assertEqual(fake.added_labels, [])
+
+
+class OnTheShippedContract(unittest.TestCase):
+    """No lane is the old start lane: an epic a stale read shows in Todo is
+    not gated, so it is neither carried nor built."""
+
+    def test_an_epic_in_the_deleted_lane_is_not_carried(self):
+        with mock.patch.object(epic_todo_gate, "TODO", None), \
+                mock.patch.multiple(validate_card, **SHIPPED):
+            self.assertIsNone(SHIPPED["_TODO"])
+            fake = _epic([("In Progress", "Todo")])
+            bounced, _, posted = _run(fake)
         self.assertFalse(bounced)
         self.assertEqual((fake.states, fake.comments, posted), ([], [], []))
         self.assertEqual(fake.added_labels, [])
