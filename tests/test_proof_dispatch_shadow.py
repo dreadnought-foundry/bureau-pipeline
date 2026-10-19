@@ -52,7 +52,9 @@ from test_proof_dispatch import (  # noqa: E402
     state,
 )
 
-MODEL = "claude-sonnet-5-5"
+#: The dispatcher passes the variable through unread, so the test's own id is
+#: one in no group: a console save can never make it a pin (DRE-6866).
+MODEL = "claude-shadow-candidate"
 #: `NOW` in the contract's form: UTC, `YYYY-MM-DDTHH:MM:SSZ`.
 DISPATCHED_AT = "2026-10-06T17:30:00Z"
 
