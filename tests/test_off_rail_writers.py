@@ -227,6 +227,10 @@ TRIGGERS = {
 @pytest.fixture(autouse=True)
 def _pin(monkeypatch):
     monkeypatch.setattr(reconcile, "REPO", THIS)
+    # The epic carry is inert on the shipped contract since the Todo entry
+    # went (DRE-7673); it still has to stay on the rail when it acts, so it
+    # gets the name the contract carried.
+    monkeypatch.setattr(reconcile.epic_todo_gate, "TODO", "Todo")
     monkeypatch.setattr(reconcile, "REPO_SLUG", ON_RAIL)
     monkeypatch.setattr(reconcile.planner_queue, "cap", lambda cfg=None, environ=None: 4)
     monkeypatch.setenv(reconcile.GROOM_CARD_ENV, STANDING)

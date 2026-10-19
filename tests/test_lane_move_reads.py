@@ -296,7 +296,10 @@ def test_the_cli_held_flag_is_a_held_card(monkeypatch):
 def test_a_conditional_write_is_a_held_card(monkeypatch):
     """`expect=` is the lane the caller READ (Stage 2 item 33): it holds the
     card, so the first read is waste. The condition is checked on the
-    pre-write re-read."""
+    pre-write re-read. The write targets the epic gate's lane, so the gate's
+    comment read is in the sequence too: the gate gets the name the contract
+    carried before the entry went (DRE-7673)."""
+    monkeypatch.setattr(linear_ops.epic_todo_gate, "TODO", "Todo")
     with linear(monkeypatch, **{"DRE-1": {"lane": "In Progress"}}) as lin:
         moved, _ = _quiet(linear_ops.cmd_state, "DRE-1", "Todo",
                           expect=("In Progress",), labels_absent=("needs-human",))
