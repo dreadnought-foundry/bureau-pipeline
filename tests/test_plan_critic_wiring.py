@@ -1998,8 +1998,11 @@ class TheReviewReplanCarriesThePlanArtifact(unittest.TestCase):
             ({"needs.plan.outputs.mode": "activate", "needs.plan.outputs.replanned": "true"}, False),
         ]
         for known, expected in rows:
+            # `escalated` (DRE-7624) is empty unless the planner wrote a
+            # reason; tests/test_plan_escalation_reason_file.py reads `true`.
             facts = {"needs.plan.outputs.mode": "", "needs.plan.outputs.kids": "",
-                     "needs.plan.outputs.replanned": "", **known}
+                     "needs.plan.outputs.replanned": "",
+                     "needs.plan.outputs.escalated": "", **known}
             walk, truth = _Facts.walk(facts)
             with self.subTest(**known):
                 self.assertIs(truth(walk.evaluate(gate)), expected)
