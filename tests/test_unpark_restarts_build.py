@@ -185,7 +185,9 @@ def _write(board, lane):
     return linear_ops.guarded_state_write("DRE-2308", issue, sid, stype, lane)
 
 
-def test_an_epic_written_to_todo_is_still_refused():
+def test_an_epic_written_to_todo_is_still_refused(monkeypatch):
+    # The gate is inert on the shipped contract since the entry went (DRE-7673).
+    monkeypatch.setattr(epic_todo_gate, "TODO", "Todo")
     board = _Board("Queued", title=EPIC)
     wrote, out = _run(board, _write, board, "Todo")
     assert wrote is False

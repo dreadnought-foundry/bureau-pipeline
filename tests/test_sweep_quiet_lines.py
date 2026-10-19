@@ -188,6 +188,12 @@ class TestPlanningRepair:
 # carry_epics_out_of_todo
 # ===========================================================================
 class TestEpicCarry:
+    @pytest.fixture(autouse=True)
+    def _the_lane_still_retiring(self, monkeypatch):
+        # Inert on the shipped contract since the Todo entry went (DRE-7673);
+        # these lines are the carry's, so it gets the retired name.
+        monkeypatch.setattr(reconcile.epic_todo_gate, "TODO", "Todo")
+
     def test_an_empty_board_prints_one_quiet_line(self, capsys):
         with patch.object(reconcile, "active_cards", _board([])):
             reconcile.carry_epics_out_of_todo()
