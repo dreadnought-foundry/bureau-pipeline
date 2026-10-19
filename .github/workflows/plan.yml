@@ -2656,7 +2656,7 @@ jobs:
       # below is skipped on `escalated == 'true'`, and the escalation step runs
       # on it whatever the count. A reason AND a plan artifact is a
       # contradiction, and the run fails naming both rather than picking one.
-      - name: Planner escalation — did the planner write a reason?
+      - name: Did the planner escalate? — its reason file
         id: escalated
         if: steps.route.outputs.mode == 'plan'
         run: |
