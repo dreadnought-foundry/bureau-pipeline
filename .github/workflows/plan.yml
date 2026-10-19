@@ -229,6 +229,9 @@ jobs:
     outputs:
       mode: ${{ steps.route.outputs.mode }}
       kids: ${{ steps.kids.outputs.count }}
+      # DRE-7624: `true` when the planner wrote a reason file — it escalated,
+      # wrote no artifact, and `publish` has nothing to publish.
+      escalated: ${{ steps.escalated.outputs.escalated }}
       # DRE-5299: `true` when a review-mode re-plan's revision passed the
       # plan's own gates and its artifact was uploaded for `publish`; read by
       # that job's `if:` and by nothing else.
@@ -2645,6 +2648,31 @@ jobs:
           fi
           exit "$RC"
 
+      # Did the planner escalate? (DRE-7624) Read off the file it writes when
+      # it does, never off the epic's child count: an epic re-planned or sent
+      # back arrives in Planning WITH children and can still need to ask.
+      # DRE-7318 had six, so the run took the plan path, died on the missing
+      # artifact, and its question never reached the CEO. Every plan-only step
+      # below is skipped on `escalated == 'true'`, and the escalation step runs
+      # on it whatever the count. A reason AND a plan artifact is a
+      # contradiction, and the run fails naming both rather than picking one.
+      - name: Planner escalation — did the planner write a reason?
+        id: escalated
+        if: steps.route.outputs.mode == 'plan'
+        run: |
+          REASON="$RUNNER_TEMP/planner-escalation.txt"
+          ARTIFACT="$RUNNER_TEMP/plan-artifact.md"
+          if [ -s "$REASON" ] && [ -e "$ARTIFACT" ]; then
+            echo "::error::the planner wrote both an escalation reason ($REASON) and a plan artifact ($ARTIFACT) — it either asks the CEO or hands in a plan, never both, so this run decides neither"
+            exit 1
+          fi
+          if [ -s "$REASON" ]; then
+            echo "escalated=true" >> "$GITHUB_OUTPUT"
+            echo "the planner escalated — $REASON is its reason"
+          else
+            echo "escalated=false" >> "$GITHUB_OUTPUT"
+          fi
+
       # Record an is_error PLANNER death so the fallback engages on retry
       # (DRE-1354). Unlike agent-task, a plan death has no PR/requeue path — the
       # medic re-runs the SAME workflow_run on attempt 2. That rerun re-evaluates
@@ -2694,21 +2722,27 @@ jobs:
       # (linear_ops.py subissue) already rejects these at creation; this is the
       # belt-and-braces sweep that closes any path that skipped the seam.
       # Skipped when the planner created zero children — that run escalated
-      # (DRE-2848) and there is nothing to validate.
+      # (DRE-2848) and there is nothing to validate — and when the planner
+      # wrote a reason (DRE-7624): an epic that escalates with children from an
+      # earlier planning wrote no cards this run, and its question must reach
+      # the escalation step below rather than die on cards it did not make.
       - name: Validate created children
         id: kids
         if: steps.route.outputs.mode == 'plan'
         env:
           LINEAR_API_KEY: ${{ secrets.LINEAR_PLANNER_KEY || secrets.LINEAR_API_KEY }}
           LINEAR_API_KEY_FALLBACK: ${{ secrets.LINEAR_API_KEY }}
+          ESCALATED: ${{ steps.escalated.outputs.escalated }}
         run: |
           EPIC="${{ github.event.client_payload.identifier }}"
           KIDS=$(python3 .bureau-pipeline/scripts/linear_ops.py children "$EPIC")
-          # The artifact steps below key off this: a planner that asked
-          # questions created no children and wrote no artifact, and must not
-          # be failed for the absence of one.
+          # The artifact steps below key off this AND `steps.escalated`: a
+          # planner that asked questions wrote no artifact, and must not be
+          # failed for the absence of one.
           echo "count=$KIDS" >> "$GITHUB_OUTPUT"
-          if [ "$KIDS" -gt 0 ]; then
+          if [ "$ESCALATED" = "true" ]; then
+            echo "the planner escalated — $KIDS existing children are left as they are, and the plan that follows validates its own"
+          elif [ "$KIDS" -gt 0 ]; then
             if ! python3 .bureau-pipeline/scripts/validate_card.py check-children "$EPIC"; then
               python3 .bureau-pipeline/scripts/linear_ops.py comment "$EPIC" \
                 "🚧 The plan produced one or more INVALID child cards (placeholder/path body, missing repo, or no role label). See the failed run; the planner must re-emit them before this epic can build."
@@ -2740,7 +2774,7 @@ jobs:
       # must never bounce a plan (standards/console-honesty.md rule 1), so the
       # reason is only posted when the checker actually wrote one.
       - name: Proof card — the epic's last child
-        if: steps.route.outputs.mode == 'plan' && steps.kids.outputs.count != '0'
+        if: steps.route.outputs.mode == 'plan' && steps.kids.outputs.count != '0' && steps.escalated.outputs.escalated != 'true'
         env:
           LINEAR_API_KEY: ${{ secrets.LINEAR_PLANNER_KEY || secrets.LINEAR_API_KEY }}
           LINEAR_API_KEY_FALLBACK: ${{ secrets.LINEAR_API_KEY }}
@@ -2792,8 +2826,14 @@ jobs:
       # A planner that wrote no reason file at all is quoted in its own words
       # (DRE-5564): the escalation reads its closing message off the run's
       # execution file, so the note says what it said instead of "no reason".
+      #
+      # It runs when the planner wrote a reason, WHATEVER the child count
+      # (DRE-7624): an epic re-planned or sent back has children already, and
+      # gating this on a count of zero sent DRE-7318's question down the plan
+      # path to die. A count of zero with no reason still lands here, as
+      # above.
       - name: Planner escalation — hand-planning parks for the CEO
-        if: steps.route.outputs.mode == 'plan' && steps.kids.outputs.count == '0'
+        if: steps.route.outputs.mode == 'plan' && (steps.escalated.outputs.escalated == 'true' || steps.kids.outputs.count == '0')
         env:
           LINEAR_API_KEY: ${{ secrets.LINEAR_PLANNER_KEY || secrets.LINEAR_API_KEY }}
           LINEAR_API_KEY_FALLBACK: ${{ secrets.LINEAR_API_KEY }}
@@ -2835,16 +2875,17 @@ jobs:
       # The contract is standards/plan-artifact.md; the checker is
       # scripts/plan_artifact.py.
       #
-      # Plan-route only (the activate route runs no agent) AND
-      # children-bearing only: a planner that escalated created no cards and
-      # wrote no artifact, and must not be failed for the absence of one.
+      # Plan-route only (the activate route runs no agent), children-bearing
+      # only, AND skipped when the planner wrote a reason (DRE-7624): a
+      # planner that escalated wrote no artifact, whatever children the epic
+      # already had, and must not be failed for the absence of one.
 
       # Is this UI work? Read it off the CARDS the planner just created — a
       # child carrying a **Design:** ref is evidence — never off the plan's
       # own say-so, which is the thing being checked.
       - name: Plan artifact — UI epic?
         id: uiepic
-        if: steps.route.outputs.mode == 'plan' && steps.kids.outputs.count != '0'
+        if: steps.route.outputs.mode == 'plan' && steps.kids.outputs.count != '0' && steps.escalated.outputs.escalated != 'true'
         env:
           LINEAR_API_KEY: ${{ secrets.LINEAR_PLANNER_KEY || secrets.LINEAR_API_KEY }}
           LINEAR_API_KEY_FALLBACK: ${{ secrets.LINEAR_API_KEY }}
@@ -2859,7 +2900,7 @@ jobs:
       # Planning rather than reaching the CEO with a section missing, a KPI
       # written as prose, or a screenshot where a mockup belongs.
       - name: Plan artifact — check
-        if: steps.route.outputs.mode == 'plan' && steps.kids.outputs.count != '0'
+        if: steps.route.outputs.mode == 'plan' && steps.kids.outputs.count != '0' && steps.escalated.outputs.escalated != 'true'
         run: |
           python3 .bureau-pipeline/scripts/plan_artifact.py check \
             "${{ runner.temp }}/plan-artifact.md" \
@@ -2870,7 +2911,7 @@ jobs:
       # below reads a mint of its own — the first mint's inputs, its gate.
       - name: Re-mint the model-home read token — premodel
         id: model_home_premodel
-        if: steps.route.outputs.mode == 'plan' && steps.kids.outputs.count != '0'
+        if: steps.route.outputs.mode == 'plan' && steps.kids.outputs.count != '0' && steps.escalated.outputs.escalated != 'true'
         continue-on-error: true
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
         with:
@@ -2906,7 +2947,7 @@ jobs:
       # (DRE-2848).
       - name: Select model — first critic
         id: premodel
-        if: steps.route.outputs.mode == 'plan' && steps.kids.outputs.count != '0'
+        if: steps.route.outputs.mode == 'plan' && steps.kids.outputs.count != '0' && steps.escalated.outputs.escalated != 'true'
         env:
           BUREAU_MODEL_HOME_TOKEN: ${{ steps.model_home_premodel.outputs.token }}
           ANTHROPIC_API_KEY: ${{ vars.CLAUDE_AUTH_MODE != 'subscription' && secrets.ANTHROPIC_API_KEY || '' }}
@@ -2927,7 +2968,7 @@ jobs:
           case "$(cat "$WHY_FILE")" in DEGRADED*) echo "::warning::$(cat "$WHY_FILE")" ;; esac
 
       - name: First critic — context
-        if: steps.route.outputs.mode == 'plan' && steps.kids.outputs.count != '0'
+        if: steps.route.outputs.mode == 'plan' && steps.kids.outputs.count != '0' && steps.escalated.outputs.escalated != 'true'
         run: |
           python3 .bureau-pipeline/scripts/assemble_context.py assemble plan-critic-pre \
             > .bureau-pipeline/agent-context.md
@@ -2942,7 +2983,7 @@ jobs:
       # step of its own and lands on the epic BEFORE the model reads it, so a
       # pass with unread findings is visible afterwards.
       - name: Mechanical findings — posted before the critic reads them
-        if: steps.route.outputs.mode == 'plan' && steps.kids.outputs.count != '0'
+        if: steps.route.outputs.mode == 'plan' && steps.kids.outputs.count != '0' && steps.escalated.outputs.escalated != 'true'
         env:
           LINEAR_API_KEY: ${{ secrets.LINEAR_PLANNER_KEY || secrets.LINEAR_API_KEY }}
           LINEAR_API_KEY_FALLBACK: ${{ secrets.LINEAR_API_KEY }}
@@ -2989,7 +3030,7 @@ jobs:
       # reasons are on `Re-mint bot token — planner`.
       - name: Re-mint bot token — first critic
         id: app_prea
-        if: steps.route.outputs.mode == 'plan' && steps.kids.outputs.count != '0'
+        if: steps.route.outputs.mode == 'plan' && steps.kids.outputs.count != '0' && steps.escalated.outputs.escalated != 'true'
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
         with:
           app-id: >-
@@ -3005,7 +3046,7 @@ jobs:
 
       - name: First critic — round 1 (before the CEO reads it)
         id: prea
-        if: steps.route.outputs.mode == 'plan' && steps.kids.outputs.count != '0'
+        if: steps.route.outputs.mode == 'plan' && steps.kids.outputs.count != '0' && steps.escalated.outputs.escalated != 'true'
         uses: anthropics/claude-code-action@8ce9314fa9a404564fa7e954cd84f25bcba2b829 # v1.0.236
         env:
           LINEAR_API_KEY: ${{ secrets.LINEAR_PLANNER_KEY || secrets.LINEAR_API_KEY }}
@@ -3096,7 +3137,7 @@ jobs:
 
       - name: First critic — round 1 decision
         id: pre1
-        if: steps.route.outputs.mode == 'plan' && steps.kids.outputs.count != '0'
+        if: steps.route.outputs.mode == 'plan' && steps.kids.outputs.count != '0' && steps.escalated.outputs.escalated != 'true'
         env:
           LINEAR_API_KEY: ${{ secrets.LINEAR_PLANNER_KEY || secrets.LINEAR_API_KEY }}
           LINEAR_API_KEY_FALLBACK: ${{ secrets.LINEAR_API_KEY }}
@@ -3605,7 +3646,7 @@ jobs:
       # route reads the published source out of a portal checkout below,
       # DRE-5299, and removes it before the re-plan runs.)
       - name: Plan artifact — upload source
-        if: steps.route.outputs.mode == 'plan' && steps.kids.outputs.count != '0'
+        if: steps.route.outputs.mode == 'plan' && steps.kids.outputs.count != '0' && steps.escalated.outputs.escalated != 'true'
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: plan-source-${{ github.event.client_payload.identifier }}
@@ -3701,7 +3742,7 @@ jobs:
       # Progress and every blocker is Done — and a card in Intake with no
       # parent epic is not in this set at all.
       - name: Routing verdicts — the epic's children
-        if: steps.route.outputs.mode == 'plan' && steps.kids.outputs.count != '0'
+        if: steps.route.outputs.mode == 'plan' && steps.kids.outputs.count != '0' && steps.escalated.outputs.escalated != 'true'
         env:
           LINEAR_API_KEY: ${{ secrets.LINEAR_PLANNER_KEY || secrets.LINEAR_API_KEY }}
           LINEAR_API_KEY_FALLBACK: ${{ secrets.LINEAR_API_KEY }}
@@ -6322,9 +6363,11 @@ jobs:
   # is unchanged, and the version record diffs the revision against the
   # PUBLISHED source exactly as for a plan run. A review run with no re-plan,
   # or one whose re-check refused the revision, publishes nothing.
+  # A plan run whose planner escalated (`escalated`, DRE-7624) wrote no
+  # artifact, whatever children the epic already had, and publishes nothing.
   publish:
     needs: plan
-    if: (needs.plan.outputs.mode == 'plan' && needs.plan.outputs.kids != '0') || (needs.plan.outputs.mode == 'review' && needs.plan.outputs.replanned == 'true')
+    if: (needs.plan.outputs.mode == 'plan' && needs.plan.outputs.kids != '0' && needs.plan.outputs.escalated != 'true') || (needs.plan.outputs.mode == 'review' && needs.plan.outputs.replanned == 'true')
     runs-on: ${{ fromJSON(vars.BUREAU_RUNS_ON || '["ubuntu-latest"]') }}
     timeout-minutes: 10
     # Same declaration, same reason (DRE-3321): this job reads the fleet key too
