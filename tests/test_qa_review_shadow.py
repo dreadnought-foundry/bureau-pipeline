@@ -164,7 +164,8 @@ if [ -z "$CARD" ]; then
     gh pr view "$PR" --json body --jq .body > "$BODY_FILE" 2>/dev/null || : > "$BODY_FILE"
   fi
   BUILT_ON=$(python3 "$PIPELINE_DIR"/scripts/model_fallback.py probe-build-model \\
-    --repo "$GITHUB_REPOSITORY" --author "$AUTHOR" "$BODY_FILE") || BUILT_ON=""
+    --repo "$GITHUB_REPOSITORY" \\
+    --author "$AUTHOR" "$BODY_FILE") || BUILT_ON=""
   if [ -n "$BUILT_ON" ]; then
     echo "probe-builder: $BUILT_ON read from the pull request description"
   fi
