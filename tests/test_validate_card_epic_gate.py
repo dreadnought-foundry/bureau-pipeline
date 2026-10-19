@@ -26,6 +26,26 @@ import epic_todo_gate  # noqa: E402
 import planning_shape  # noqa: E402
 import validate_card  # noqa: E402
 
+# The gate's epic carry is inert on the shipped contract since the Todo entry
+# went (DRE-7673). These tests prove the carry, so the module runs with the
+# lane the contract carried: the gate's name, and a start lane it gates.
+_STILL_RETIRING = (
+    mock.patch.object(epic_todo_gate, "TODO", "Todo"),
+    mock.patch.object(validate_card, "_TODO", "todo"),
+    mock.patch.object(validate_card, "_START_LANES", validate_card._START_LANES | {"todo"}),
+    mock.patch.object(validate_card, "_GATEABLE", validate_card._GATEABLE | {"todo"}),
+)
+
+
+def setUpModule():
+    for patcher in _STILL_RETIRING:
+        patcher.start()
+
+
+def tearDownModule():
+    for patcher in _STILL_RETIRING:
+        patcher.stop()
+
 CARD = "DRE-999"
 
 

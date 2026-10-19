@@ -46,6 +46,9 @@ def _pin_repo_slug(monkeypatch):
     """reconcile.REPO_SLUG is bound at import; pin it so the carry recognises
     this suite's agent-bureau cards whatever the collection order."""
     monkeypatch.setattr(reconcile, "REPO_SLUG", "agent-bureau")
+    # The carry is inert on the shipped contract since the Todo entry went
+    # (DRE-7673); these tests prove the carry, so it gets the retired name.
+    monkeypatch.setattr(gate, "TODO", "Todo")
 
 
 def _card(identifier=EPIC, *, title="bureau-pipeline: the medic wakes on a conclusion",
@@ -308,7 +311,12 @@ def test_the_sweep_drains_a_one_off_and_carries_an_unapproved_epic_to_planning()
     Progress."""
     one_off = _card("DRE-5400", title="bureau-pipeline: a small fix", children=())
     board = _Board([_card(), one_off], {EPIC: "Green Light", "DRE-5400": "Queued"})
-    assert _drain_then_carry(board) == []
+    # The drain reads the retiring entry the contract carried before DRE-7673.
+    retiring = ({"name": gate.TODO, "status": "retiring", "retired_by": "DRE-7072",
+                 "replaced_by": "In Progress"},)
+    with mock.patch.object(reconcile.lane_contract, "lanes",
+                           mock.MagicMock(return_value=retiring)):
+        assert _drain_then_carry(board) == []
     assert board.advances == [("DRE-5400", "In Progress", gate.TODO)]
     assert board.states == [(EPIC, "Planning")]
     assert [c["state"]["name"] for c in board.cards] == ["Planning", "In Progress"]
