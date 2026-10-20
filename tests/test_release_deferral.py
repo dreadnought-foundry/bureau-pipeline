@@ -641,7 +641,9 @@ def test_changed_status_words_still_comment_on_an_escaped_description(
     ("psycopg[binary] missing", "psycopg\\[binary\\] missing"),
     ("a lone ` in the name", "a lone \\` in the name"),
     ("C:\\docs is not a path", "C:\\\\docs is not a path"),
-], ids=["underscore", "asterisk", "tilde", "brackets", "backtick", "backslash"])
+    ("see a\\_b path", "see a\\\\\\_b path"),
+], ids=["underscore", "asterisk", "tilde", "brackets", "backtick", "backslash",
+        "backslash-before-punctuation"])
 def test_each_character_linear_escapes_is_the_same_reason(raw, stored, fake,
                                                          summary):
     ident = fake.add(f"{PREFIX} — x",
@@ -660,6 +662,29 @@ def test_a_comment_carrying_the_reason_as_written_is_still_the_same_reason(
                                f"{DRE_7494_CHANGED}"])
     lines = tagged(report(deferred(DRE_7494_CHANGED.replace("2bc36122",
                                                             "5e4d3c2b"))))
+    assert fake.writes() == []
+    assert lines[-1] == f"release-deferred: card {ident} already open — same reason"
+
+
+#: A reason with literal backslashes before punctuation and before a letter.
+_BACKSLASHED = "deferred: at {sha} see C:\\a\\_b\\[x] path"
+#: That reason at 96f691d7 as Linear stores a description: every `\`, `_`,
+#: `[` and `]` escaped.
+_BACKSLASHED_STORED = "deferred: at 96f691d7 see C:\\\\a\\\\\\_b\\\\\\[x\\] path"
+
+
+@pytest.mark.parametrize("where", ["description", "comment"])
+def test_a_backslash_before_punctuation_is_the_same_reason(where, fake,
+                                                           summary):
+    # The description comes back escaped, a comment as written: the next
+    # lap matches whichever the card recorded last.
+    comments = [] if where == "description" else [
+        "The reason changed.\n\nDeferred line: "
+        + _BACKSLASHED.format(sha="96f691d7")]
+    ident = fake.add(f"{PREFIX} — x",
+                     description=f"Deferred line: {_BACKSLASHED_STORED}",
+                     comments=comments)
+    lines = tagged(report(deferred(_BACKSLASHED.format(sha="2bc36122"))))
     assert fake.writes() == []
     assert lines[-1] == f"release-deferred: card {ident} already open — same reason"
 
