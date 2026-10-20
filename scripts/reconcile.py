@@ -2777,14 +2777,19 @@ def _held_for_operator(card: dict) -> tuple[dict | None, str, str]:
     """`(clock, kind, why_not)` for one proof card In Review, off its window.
 
     `clock` is the comment that makes the card held for the operator and
-    `kind` names it — `cause hold`, `operator's-press hold` or
-    `review-cap-spent stamp`; with no such comment `clock` is None and
-    `why_not` says why ("" when the card carries no hold of any kind).
+    `kind` names it — `cause hold`, `operator's-press hold`,
+    `operator's-reading hold` or `review-cap-spent stamp`; with no such
+    comment `clock` is None and `why_not` says why ("" when the card carries
+    no hold of any kind).
 
     A `🔬 proof-waiting` hold is the operator's when its needs half — the text
     after ` — needs ` — OPENS `proof_cause_park.CAUSE_HOLD_OPENING` (DRE-6837's
-    park) or `proof_dispatch.OPERATOR_PRESS` (the dispatcher's `_waiting` over
-    a `waiting for the operator's press` row). Only the opening is read: the
+    park), `proof_dispatch.OPERATOR_PRESS` (the dispatcher's `_waiting` over
+    a `waiting for the operator's press` row), or any other of
+    `proof_dispatch.OPERATOR_NEEDS` — the dispatcher's holds for an
+    operator's reading once a dispatch or re-run budget is spent or a re-run
+    answered nothing (DRE-7739). That tuple is the dispatcher's own
+    vocabulary, read here and never copied. Only the opening is read: the
     dispatcher joins several events with `; ` in the record's row order, so a
     hold naming the operator's press first is the operator's and one naming a
     dated event first is the event's. A needs half naming
@@ -2817,6 +2822,8 @@ def _held_for_operator(card: dict) -> tuple[dict | None, str, str]:
                 operator, spent = (node, "cause hold"), ""
             elif needs.startswith(proof_dispatch.OPERATOR_PRESS):
                 operator, spent = (node, "operator's-press hold"), ""
+            elif needs.startswith(proof_dispatch.OPERATOR_NEEDS):
+                operator, spent = (node, "operator's-reading hold"), ""
         elif operator and line.startswith(proof_record.OBSERVED_MARK):
             spent = "a 🔬 proof-observed followed it"
         elif operator and proof_run_state.receipt(line) is not None:
