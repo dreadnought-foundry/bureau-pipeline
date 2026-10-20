@@ -255,6 +255,13 @@ path = next(a for a in args if a.startswith("repos/"))
 with open(os.environ["GH_CALLS"], "a") as fh:
     fh.write(path + "\\n")
 if path.endswith("/logs"):
+    # gh refuses a body holding terminal escape sequences unless told to
+    # allow them, and every Actions log holds them in its step headers
+    # (scripts/reconcile.py's `_read_job_log` says the same).
+    if "--allow-escape-sequences" not in args:
+        sys.stderr.write("the response contains terminal escape sequences; "
+                         "pass --allow-escape-sequences to output it anyway\\n")
+        sys.exit(1)
     job = path.split("/")[-2]
     with open(os.path.join(os.environ["FAKE_LOGS"], job + ".log")) as fh:
         sys.stdout.write(fh.read())
