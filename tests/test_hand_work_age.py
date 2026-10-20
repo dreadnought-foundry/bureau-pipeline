@@ -961,8 +961,8 @@ class TestEveryWordingIsClassified:
             "are in neither OPERATOR_NEEDS nor EVENT_NEEDS — say who each waits on")
 
     def test_the_read_finds_the_wordings_it_must(self):
-        """Not vacuous: the six operator's readings and the press are found."""
-        assert len(_defined_needs()) >= 7
+        """Not vacuous: the seven operator's readings and the press are found."""
+        assert len(_defined_needs()) >= 8
 
     def test_no_wording_is_both(self):
         both = set(proof_dispatch.OPERATOR_NEEDS) & set(proof_dispatch.EVENT_NEEDS)
