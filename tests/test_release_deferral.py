@@ -572,6 +572,99 @@ def test_a_count_that_changed_adds_no_comment(fake, summary):
 
 
 # --------------------------------------------------------------------------
+# 6b. Linear's markdown escapes aside (DRE-7744).
+#
+# Linear stores a card's description as markdown and escapes it: DRE-7494's
+# description, read back, says `/home/runner/\_work/…` where the train wrote
+# `/home/runner/_work/…`. Its comments come back as written. On 2026-10-18
+# the lap at 2bc36122 (portico run 39106743803) compared the escaped line
+# with its own and commented "The reason changed" on a reason that differed
+# only by its commit id.
+# --------------------------------------------------------------------------
+
+#: The reason both of DRE-7494's laps share, around its commit and status words.
+_DRE_7494 = (
+    "deferred: portals at {sha} — the document half is unproven for at least "
+    "one account (engine: {engine}); dreadnought next: bash "
+    "/home/runner/{work}/portico/portico/infra/scripts/republish-app-doc.sh "
+    "portico. A document refused by name is republished once by hand from its "
+    "stored original (DRE-5296); one held because its rows did not survive is "
+    "cleared by a person, after looking, with the re-ingest tool's "
+    "`--clear-hold <docId>` (DRE-5297). No tag.")
+_COMPLETE = "everybite=complete dreadnought=complete-reingest-blocked"
+_CURRENT = "everybite=documents-current dreadnought=documents-unproven"
+#: DRE-7494's description as Linear returns it: the line at 96f691d7, escaped.
+DRE_7494_DESCRIPTION = (
+    "Deferred line: "
+    + _DRE_7494.format(sha="96f691d7", engine=_COMPLETE, work="\\_work")
+    + "\nCommit: 96f691d709bcedb3be1cec1c28438af56f925f22\n"
+    "Run: [https://github.com/dreadnought-foundry/portico/actions/runs/"
+    "39100946445](<https://github.com/dreadnought-foundry/portico/actions/"
+    "runs/39100946445>)\n\n"
+    "Read the reason, run the tool it names, and the next lap releases.\n\n"
+    "The release train closes this card itself on the next verified tag.")
+#: The lap at 2bc36122 (run 39106743803): the same reason, unescaped.
+DRE_7494_SAME = _DRE_7494.format(sha="2bc36122", engine=_COMPLETE, work="_work")
+#: The lap at 2bc36122 (run 39117685490): the status words changed.
+DRE_7494_CHANGED = _DRE_7494.format(sha="2bc36122", engine=_CURRENT, work="_work")
+
+
+def test_an_escaped_description_is_the_same_reason(fake, summary):
+    ident = fake.add(f"{PREFIX} — the document half is unproven",
+                     description=DRE_7494_DESCRIPTION)
+    lines = tagged(report(deferred(DRE_7494_SAME)))
+    assert fake.writes() == []
+    assert lines[-1] == f"release-deferred: card {ident} already open — same reason"
+
+
+def test_changed_status_words_still_comment_on_an_escaped_description(
+        fake, summary):
+    ident = fake.add(f"{PREFIX} — the document half is unproven",
+                     description=DRE_7494_DESCRIPTION)
+    lines = tagged(report(deferred(DRE_7494_CHANGED)))
+    assert fake.comments and fake.comments[0][0] == ident
+    assert DRE_7494_CHANGED in fake.comments[0][1]
+    assert lines[-1] == f"release-deferred: card {ident} commented — the reason changed"
+
+
+# Linear escapes a description the way prosemirror-markdown does: `\`, `` ` ``,
+# `*`, `_`, `~`, `[` and `]` wherever they stand (an `_` between two word
+# characters is left alone), and `#`, `+`, `-`, `>` and a numbered list's `.`
+# only at the start of a line or a table cell. A survey of 1,000 descriptions
+# on 2026-10-20 found `~`, `*`, `[`, `]`, `_`, `#` and `.` escaped and nothing
+# else. The line-start escapes never reach a reason: the row it is read off
+# opens with `Deferred line: `. The seven a reason can carry are below.
+@pytest.mark.parametrize("raw,stored", [
+    ("bash /home/runner/_work/portico/x.sh", "bash /home/runner/\\_work/portico/x.sh"),
+    ("refused *.pdf uploads", "refused \\*.pdf uploads"),
+    ("the arm waited ~100 s", "the arm waited \\~100 s"),
+    ("psycopg[binary] missing", "psycopg\\[binary\\] missing"),
+    ("a lone ` in the name", "a lone \\` in the name"),
+    ("C:\\docs is not a path", "C:\\\\docs is not a path"),
+], ids=["underscore", "asterisk", "tilde", "brackets", "backtick", "backslash"])
+def test_each_character_linear_escapes_is_the_same_reason(raw, stored, fake,
+                                                         summary):
+    ident = fake.add(f"{PREFIX} — x",
+                     description=f"Deferred line: deferred: {stored}")
+    lines = tagged(report(deferred(f"deferred: {raw}")))
+    assert fake.writes() == []
+    assert lines[-1] == f"release-deferred: card {ident} already open — same reason"
+
+
+def test_a_comment_carrying_the_reason_as_written_is_still_the_same_reason(
+        fake, summary):
+    # A comment is stored as written: the lap after a comment matches it.
+    ident = fake.add(f"{PREFIX} — the document half is unproven",
+                     description=DRE_7494_DESCRIPTION,
+                     comments=[f"The reason changed.\n\nDeferred line: "
+                               f"{DRE_7494_CHANGED}"])
+    lines = tagged(report(deferred(DRE_7494_CHANGED.replace("2bc36122",
+                                                            "5e4d3c2b"))))
+    assert fake.writes() == []
+    assert lines[-1] == f"release-deferred: card {ident} already open — same reason"
+
+
+# --------------------------------------------------------------------------
 # 7. The next verified tag closes the card, wherever it sits.
 # --------------------------------------------------------------------------
 
