@@ -504,6 +504,9 @@ markdown, and refuses to create that broken card. It also:
     and since DRE-2874 the create seam does not refuse a child without one
     either. It is inherited because repo inference uses it as its one route to a
     repo for a card carrying no `repo:` label (DRE-2681);
+  - files the child in this epic's Linear project, so the console's Initiatives
+    page counts it there (DRE-7675). An epic in no project gives children in
+    none — nothing guesses a project;
   - turns any `**Blocked by:** DRE-N, DRE-M` body line into real Linear
     `blockedBy` relations;
   - validates the child through the same `validate_card` gate the build uses,
