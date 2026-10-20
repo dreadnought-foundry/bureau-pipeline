@@ -2778,14 +2778,15 @@ PRESS_HOLD_KIND = "CEO's-press hold"
 
 
 def _held_for_operator(card: dict, *, press_only: bool = False) -> tuple[dict | None, str, str]:
-    """`(clock, kind, why_not)` for one proof card outside Green Light, off
+    """`(clock, kind, note)` for one proof card outside Green Light, off
     its window.
 
     `clock` is the comment that makes the card held for the operator and
     `kind` names it — `cause hold`, `operator's-press hold`,
     `review-cap-spent stamp` or `CEO's-press hold`; with no such comment
-    `clock` is None and `why_not` says why ("" when the card carries no hold
-    of any kind). `press_only` reads the CEO's-press hold alone, for a card
+    `clock` is None and `note` says why ("" when the card carries no hold
+    of any kind). With a clock, `note` is "" or, on a CEO's-press hold,
+    `proof_dispatch.UNCHECKED_NOTE`. `press_only` reads the CEO's-press hold alone, for a card
     in a lane other than In Review.
 
     A `🔬 proof-waiting` hold is the operator's when its needs half — the text
@@ -2813,7 +2814,10 @@ def _held_for_operator(card: dict, *, press_only: bool = False) -> tuple[dict | 
     spends it is a comment after it that `spoken_thread.voices` reads as his
     signed answer — not a `🔬 proof-observed`, not a re-run, and not a
     thread that could not be read. When more than one stands, the newest is
-    the clock.
+    the clock. A console answer after it that the check could not RUN on
+    (`spoken_thread.UNCHECKED`, DRE-4153) spends nothing either, and is the
+    note, so the alarm says an answer came that could not be checked rather
+    than that none came.
     """
     import proof_cause_park  # noqa: PLC0415 — the hold grammar, spelled once
     import proof_dispatch  # noqa: PLC0415 — proof_dispatch imports this module
@@ -2839,7 +2843,7 @@ def _held_for_operator(card: dict, *, press_only: bool = False) -> tuple[dict | 
             spent = "a 🔬 proof-observed followed it"
         elif operator and proof_run_state.receipt(line) is not None:
             spent = "re-run dispatched after it"
-    answered = ""
+    answered, unchecked = "", False
     if press is not None:
         try:
             voices = spoken_thread.voices(nodes, None, card=card["identifier"])
@@ -2847,8 +2851,10 @@ def _held_for_operator(card: dict, *, press_only: bool = False) -> tuple[dict | 
             print(f"held-proof: {card['identifier']}'s thread could not be read for "
                   f"his answer ({e}) — its CEO's-press hold stands", file=sys.stderr)
             voices = []
-        if any(v.kind == spoken_thread.CEO_VIA_CONSOLE for v in voices[press_at + 1:]):
+        after = [v.kind for v in voices[press_at + 1:]]
+        if spoken_thread.CEO_VIA_CONSOLE in after:
             answered = "his signed answer followed it"
+        unchecked = spoken_thread.UNCHECKED in after
     standing = [operator] if operator and not spent and not press_only else []
     if press is not None and not answered:
         standing.append((press, PRESS_HOLD_KIND))
@@ -2861,7 +2867,8 @@ def _held_for_operator(card: dict, *, press_only: bool = False) -> tuple[dict | 
             standing.append((stamped, "review-cap-spent stamp"))
     if standing:
         node, kind = max(standing, key=lambda held: held[0].get("createdAt") or "")
-        return node, kind, ""
+        return node, kind, (proof_dispatch.UNCHECKED_NOTE
+                            if unchecked and kind == PRESS_HOLD_KIND else "")
     if operator and not press_only:
         return None, "", f"its {operator[1]} of {_pt(operator[0]['createdAt'])} is spent: {spent}"
     if press is not None:
@@ -2922,10 +2929,10 @@ def alarm_held_proofs(cards: list[dict]) -> None:
                 or not proof_and_demo.is_proof(card.get("title"))):
             continue
         ident = card["identifier"]
-        clock, kind, why_not = _held_for_operator(card, press_only=lane != REVIEW_LANE)
+        clock, kind, note = _held_for_operator(card, press_only=lane != REVIEW_LANE)
         if clock is None:
-            if why_not:
-                print(f"held-proof: {ident} not held for the operator — {why_not}")
+            if note:
+                print(f"held-proof: {ident} not held for the operator — {note}")
             continue
         any_held = True
         held_at = clock["createdAt"]
@@ -2939,7 +2946,7 @@ def alarm_held_proofs(cards: list[dict]) -> None:
             print(f"held-proof: {ident} held {lane} for the operator {hours}h — "
                   f"never alarms ({exempt})")
             continue
-        said = f"(clock: its {kind} of {_pt(held_at)})"
+        said = f"(clock: its {kind} of {_pt(held_at)}{f'; {note}' if note else ''})"
         if age_minutes(held_at) < limit * 60:
             due = dead_run.pacific(at(held_at) + timedelta(hours=limit))
             print(f"held-proof: {ident} held {lane} for the operator {hours}h of "
@@ -2959,6 +2966,7 @@ def alarm_held_proofs(cards: list[dict]) -> None:
                    f"{proof_dispatch.RETURN_LANE} — only his signed console answer "
                    f"lifts it, and the return branch reads {proof_dispatch.RETURN_LANE} "
                    f"only: get his answer, or re-sort the hold — {quoted}"
+                   f"{f'; {note}' if note else ''}"
                    if kind == PRESS_HOLD_KIND
                    else f"a PROOF: card held for the operator — {quoted}")
         try:
