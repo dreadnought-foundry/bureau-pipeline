@@ -32,6 +32,11 @@ by both: the return is taken first. A card in `In Review` has an open record
 pull request and is read only by the re-run branch. The re-run branch moves
 nothing: the card stays in the lane it is in while its record is amended.
 
+A hold naming the CEO's press on a card outside `Green Light` still holds it,
+and the re-run's line says whose it is (`PRESS_OUTSIDE`, DRE-7741): the return
+branch never reads it there, so the sweep's `reconcile.alarm_held_proofs`
+alarms it for the operator, who gets his answer or re-sorts the hold.
+
 ## A first run — every condition read, in order; the first that fails is named
 
   1. A `PROOF:` title, a `repo:` label naming this repo, in `Hand-work`.
@@ -773,6 +778,13 @@ UNCHECKED_NOTE = ("a console answer after it COULD NOT BE CHECKED (the "
                   "console's key could not be read) — it counts for nothing "
                   "until a pass that can check it")
 
+#: What the re-run's held line adds for an open hold naming the CEO's press on
+#: a card outside Green Light (DRE-7741): the sweep's `alarm_held_proofs`
+#: alarms it, because the return branch reads Green Light only.
+PRESS_OUTSIDE = (f"it names {CEO_PRESS} on a card in {{lane}}, not {RETURN_LANE} "
+                 f"— the return branch reads {RETURN_LANE} only, so the sweep "
+                 "alarms it for the operator")
+
 #: Who lifted a time-only hold (DRE-7228), and why that was all it needed.
 LIFTED_BY = "lifted by the proof dispatcher"
 LIFTED_ONE = "the hold waited for that time and nothing else"
@@ -1167,8 +1179,13 @@ class _Pass:
             if text is not None:
                 holds = _past_cause_hold(holds)
         if holds:
+            # A hold on his press outside Green Light is the operator's: the
+            # return branch never reads it there (DRE-7741), and the line names it.
+            pressed = [h for h in holds if CEO_PRESS in h] if lane != RETURN_LANE else []
+            said = (f"{pressed[-1]}; {PRESS_OUTSIDE.format(lane=lane)}" if pressed
+                    else holds[-1])
             note = f"; {UNCHECKED_NOTE}" if _unchecked_after_hold(voices) else ""
-            raise _Refused(f"re-run: held by {holds[-1]}{note}", "held")
+            raise _Refused(f"re-run: held by {said}{note}", "held")
         got = self.run_state(self.repo, ident, comments, viewer,
                              read=self.read, now=self.now)
         why = "; ".join(got.lines)
