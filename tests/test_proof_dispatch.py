@@ -3621,7 +3621,7 @@ def test_timed_one_prose_waiting_row_writes_the_hold_as_today(monkeypatch, capsy
 def test_timed_dre_6673_replayed_held_before_its_time_and_re_run_after(
         monkeypatch, capsys, trigger):
     pr = _declined() if trigger == "gate" else record(verdict("REQUEST_CHANGES", 100))
-    reason = (TIMED_RERUN if trigger == "gate" else TIMED_RERUN)
+    reason = TIMED_RERUN  # one reason under either trigger
 
     # 12:00 PT: the record is read, the hold is posted, the line says when.
     h, tally = _timed_pass(monkeypatch, thread=_sent_back(), now=NOON_PT, pr=pr)
