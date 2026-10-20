@@ -614,8 +614,9 @@ to ten cards behind it, in proposal order:
 — stands only if X is **Done**, is a **merged PR**, or is **approved and in
 flight** — in a live lane of the lane contract's `work` segment other than
 Done, read off `config/lane-contract.json`: Queued, Hand-work (live since
-DRE-5320), In Progress or In Review (DRE-5348) — and Todo, the start lane
-before the flip (DRE-7120), for as long as the contract keeps it live.
+DRE-5320), In Progress or In Review (DRE-5348). Todo, the start lane before
+the flip (DRE-7120), stopped counting when its entry left the contract
+(DRE-7660).
 Otherwise the Cancel is
 rejected, and the card stays on the Planning list with the reason as its Why.
 A replacement the check could not read does not stand either: Cancel is the

@@ -17,6 +17,10 @@ the children — the composition `reconcile.card_is_epic` calls, and never the
 `agent:planner` label (DRE-3038/DRE-3044). Approval is read off the board: the
 lane the epic was in before Todo, In Progress meaning approved.
 
+Since DRE-7660 the contract names no retiring start lane, so `gate.TODO` is
+None and the rule refuses nothing; these tests exercise it against a stand-in
+"Todo" (the autouse fixture below), and one class pins the no-op.
+
 Run: cd bureau-pipeline && python3 -m pytest tests/test_epic_todo_gate.py -v
 """
 
@@ -47,6 +51,16 @@ import reconcile  # noqa: E402
 import routing_verdict  # noqa: E402
 
 MODULE = ROOT / "scripts" / "epic_todo_gate.py"
+
+#: The lane the shipped contract gives the rule, read before any stand-in.
+SHIPPED_TODO = gate.TODO
+
+
+@pytest.fixture(autouse=True)
+def _a_retiring_start_lane(monkeypatch):
+    # The contract names no retiring start lane since DRE-7660, so the rule is
+    # exercised against a stand-in.
+    monkeypatch.setattr(gate, "TODO", "Todo")
 
 
 def _stamp(shape: str) -> str:
@@ -575,7 +589,8 @@ class TestExplain:
     def test_an_epic_in_todo_reads_refused(self, capsys):
         ops = _ReadLayer(title=EPIC_TITLE, lane="Todo", children=True,
                          history=[_entry("Green Light", "Todo")])
-        gate.explain(ops, "DRE-3621")
+        # The lane is named: the default is bound to the shipped contract's None.
+        gate.explain(ops, "DRE-3621", "Todo")
         out = capsys.readouterr().out
         assert out.splitlines()[0].startswith("refused")
         assert "🚫 epic-not-todo: DRE-3621 → Green Light" in out
@@ -601,6 +616,32 @@ class TestExplain:
         ops = _ReadLayer(title=EPIC_TITLE, lane="Green Light", children=True)
         gate.explain(ops, "DRE-3621", "In Progress")
         assert capsys.readouterr().out.startswith("allowed")
+
+
+class TestTheShippedContract:
+    """On the contract as shipped (DRE-7660) the rule names no lane and
+    refuses nothing — nor does the write seam."""
+
+    @pytest.fixture(autouse=True)
+    def _shipped(self, monkeypatch):
+        monkeypatch.setattr(gate, "TODO", SHIPPED_TODO)
+
+    def test_the_contract_names_no_retiring_start_lane(self):
+        assert SHIPPED_TODO is None
+        assert gate.retiring_start_lane() is None
+
+    def test_an_epic_written_to_the_old_lane_is_not_refused(self):
+        assert gate.refusal("DRE-3621", "Todo", EPIC_TITLE, True, [],
+                            "In Progress") is None
+        assert gate.lane_before_todo(
+            _History([_entry("In Progress", "Todo")]), "DRE-3621") is None
+
+    def test_the_seam_writes_an_epic_where_it_is_sent(self):
+        board = _Board("In Progress", children=True)
+        ok, _ = _write(board, "Todo")
+        assert ok is True
+        assert board.updates == [TODO]
+        assert board.posted == []
 
 
 # ===========================================================================

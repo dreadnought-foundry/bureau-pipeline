@@ -476,7 +476,7 @@ class TheCapTest(unittest.TestCase):
         self.assertIn("refused both pushes", r.card_notes[0][2])
         self.assertIn(ARTIFACT, r.card_notes[0][2])
         self.assertTrue([c for c in r.calls if c[:2] == ["hold.py", "apply"]], r.calls)
-        self.assertIn(["advance", CARD, "Triage", "In Review,In Progress,Todo"], r.calls)
+        self.assertIn(["advance", CARD, "Triage", "In Review,In Progress"], r.calls)
 
     def test_a_marker_for_another_head_does_not_count(self):
         r = report(thread=[marker(OTHER)])

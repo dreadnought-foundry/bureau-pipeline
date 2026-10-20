@@ -1,5 +1,5 @@
 """RED-first: the sweep reads a promoted card that has not started in In
-Progress as well as Todo, re-fires its dispatch as a build, and requeues a
+Progress (as well as Todo, until DRE-7660 deleted it), re-fires its dispatch as a build, and requeues a
 dead run to Queued (DRE-7108, epic: the Todo retirement).
 
 Until this card the `state == "Todo" and not is_open` branch of `main()`'s
@@ -11,7 +11,7 @@ So the loop asks one question first, of every card in
 `🧠 model-attempt` comment) newer than its newest entry into its lane?
 
 WHAT IS UNDER TEST:
-  1. NOT STARTED — a card in Todo or In Progress with no start receipt is left
+  1. NOT STARTED — a card in a start lane with no start receipt is left
      alone before `START_MINUTES`, then re-dispatched once when no run is in
      flight and none is held on the runner line, and never gains a `🪦`
      dead-run comment. A card that HAS started keeps today's In Progress path
@@ -64,8 +64,8 @@ import test_operator_card_promotion as promo  # noqa: E402
 CARD = "DRE-7108"
 NOW = datetime(2026, 10, 17, 20, 0, tzinfo=UTC)
 START = lane_contract.START_MINUTES
-#: The start lanes the sweep reads a card in: the live ones. The retiring one
-#: (Todo, DRE-7129) is drained into In Progress instead.
+#: The start lanes the sweep reads a card in: the live ones. Todo, the
+#: retiring one (DRE-7129), was drained instead until DRE-7660 deleted it.
 LIVE_START_LANES = tuple(
     lane for lane in lane_contract.START_LANES if lane in lane_contract.lane_names()
 )
@@ -226,15 +226,17 @@ class _Sweep:
 # --------------------------------------------------------------------------
 class TestNotStarted:
     def test_the_start_lanes_are_the_contracts(self):
-        assert set(lane_contract.START_LANES) == {"Todo", "In Progress"}
+        assert set(lane_contract.START_LANES) == {"In Progress"}
 
-    def test_the_retiring_start_lane_is_drained_not_watched(self):
-        # Todo is retiring (DRE-7129): the sweep drains a card there into In
-        # Progress, where the start window below reads it on the next pass.
-        assert LIVE_START_LANES == ("In Progress",)
+    def test_no_start_lane_is_left_to_drain(self):
+        # Todo was the retiring start lane (DRE-7129) and its entry is gone
+        # (DRE-7660): every start lane is live, none is drained, and a card
+        # in the deleted lane is neither watched nor moved.
+        assert LIVE_START_LANES == lane_contract.START_LANES == ("In Progress",)
+        assert not set(reconcile.RETIRING_LANES) & set(lane_contract.START_LANES)
         sweep = _Sweep(_card("Todo", idle=START + 15)).run()
         assert sweep.fires == []
-        assert sweep.moves == [("advance", CARD, "In Progress", "Todo")]
+        assert sweep.moves == []
 
     @pytest.mark.parametrize("lane", LIVE_START_LANES)
     def test_left_alone_before_the_start_window(self, lane):
@@ -579,7 +581,7 @@ class TestNoTodoLiteral:
         for lane in LIVE_START_LANES:
             assert lane in reconcile.WATCHDOG_LANES
             assert lane in reconcile.INTAKE_BLOCKED_LANES
-        # The retiring one is drained, never watched (DRE-7129).
+        # The deleted one is never watched (DRE-7129, DRE-7660).
         assert "Todo" not in reconcile.WATCHDOG_LANES
 
     def test_the_redispatch_note_names_no_lane(self):

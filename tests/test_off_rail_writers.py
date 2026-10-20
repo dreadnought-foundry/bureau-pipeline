@@ -225,6 +225,13 @@ TRIGGERS = {
 # the world a full pass runs in
 # --------------------------------------------------------------------------
 @pytest.fixture(autouse=True)
+def _a_retiring_start_lane(monkeypatch):
+    # The contract names no retiring start lane since DRE-7660, so the carry's
+    # fence is exercised against a stand-in.
+    monkeypatch.setattr(reconcile.epic_todo_gate, "TODO", "Todo")
+
+
+@pytest.fixture(autouse=True)
 def _pin(monkeypatch):
     monkeypatch.setattr(reconcile, "REPO", THIS)
     monkeypatch.setattr(reconcile, "REPO_SLUG", ON_RAIL)

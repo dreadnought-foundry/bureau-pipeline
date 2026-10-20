@@ -12,7 +12,7 @@ re-sending, so all four would have sat in Todo for good; the operator removed
 the marks by hand on 10-03.
 
 FIX UNDER TEST — reconcile.flag_stranded(), the no-run class:
-  1. A re-send buys a full start window (START_WINDOW_MINUTES, the Todo lane's
+  1. A re-send buys a full start window (START_WINDOW_MINUTES, the start lanes'
      own stall window — the one the sweep re-sends on). The dispatch time is
      the re-send receipt's, or the newest run GitHub lists for the card when
      the receipt never reached Linear.
@@ -165,8 +165,10 @@ def test_the_start_window_is_the_contracts_start_window():
 
 def test_the_receipt_the_sweep_posts_is_the_one_read_here():
     assert RESEND_NOW == f"🧹 Reconcile: {reconcile._TODO_REDISPATCH_NOTE}."
-    assert {RESEND, RESEND_NOW} == {
-        f"🧹 Reconcile: {note}." for note in reconcile._TODO_REDISPATCH_NOTES}
+    # The old wording named the retired lane; it is matched through its
+    # lane-free tail (DRE-7660).
+    for resend in (RESEND, RESEND_NOW):
+        assert any(note in resend for note in reconcile._TODO_REDISPATCH_NOTES)
 
 
 @pytest.mark.parametrize("resend", [RESEND, RESEND_NOW])

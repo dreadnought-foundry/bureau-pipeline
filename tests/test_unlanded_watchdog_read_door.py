@@ -139,9 +139,9 @@ def test_one_door_cards_read_for_every_branch_and_no_linear_lane_read(monkeypatc
 
 def test_the_door_lane_is_the_one_the_watchdog_decides_on(monkeypatch):
     """Linear (the stub) says every card is In Progress; the door says one is
-    Done and one waits in Todo. Only the door's In Progress card is reported."""
+    Done and one Canceled. Only the door's In Progress card is reported."""
     branches = {A[0]: "a" * 40, B[0]: "b" * 40, C[0]: "c" * 40}
-    with door_at(monkeypatch, card(A[1], "Done"), card(B[1], "Todo"),
+    with door_at(monkeypatch, card(A[1], "Done"), card(B[1], "Canceled"),
                  card(C[1], "In Progress")):
         comments, live = sweep(branches)
     live.assert_not_called()

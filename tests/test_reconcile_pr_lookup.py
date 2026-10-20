@@ -3,7 +3,7 @@
 THE BUG (live twice, 2026-06-28): reconcile's gh() helper discards exit code
 and stderr, and pr_for parses `json.loads(out or "[]")` — so a 403/rate-limit/
 network failure on the PR lookup is byte-identical to "this card has no PR".
-Downstream that fabricated emptiness drives the Todo redispatch, the In
+Downstream that fabricated emptiness drives the start-lane redispatch, the In
 Progress dead-run requeue, and the In QA→Todo requeue: healthy cards get
 yanked around because GitHub blinked.
 
@@ -222,7 +222,7 @@ def _card(state, identifier="DRE-2034"):
 def test_sweep_403_requeues_nothing_and_goes_red():
     """ACCEPTANCE: simulated 403 on the PR lookup → the sweep reports the
     error and exits red, requeues nothing, posts no receipt. On the unfixed
-    code this FAILS: the 403 reads as \"no PR\", the stale Todo card is
+    code this FAILS: the 403 reads as \"no PR\", the stale start-lane card is
     re-dispatched, a 🧹 receipt posts, and the sweep exits green."""
 
     def fake_run(argv, **kwargs):
@@ -233,7 +233,7 @@ def test_sweep_403_requeues_nothing_and_goes_red():
         raise AssertionError(f"unexpected gh call: {argv}")
 
     mocks = _sweep_mocks({
-        "active_cards": MagicMock(return_value=[_card("Todo")]),
+        "active_cards": MagicMock(return_value=[_card("In Progress")]),
     })
     with patch.multiple(reconcile, **mocks), patch.object(
         reconcile.subprocess, "run", side_effect=fake_run
@@ -259,11 +259,12 @@ def test_sweep_403_on_one_card_still_sweeps_the_others():
         calls["n"] += 1
         if identifier == "DRE-2034":
             raise reconcile.ReconcileReadError("gh pr list failed rc=1: HTTP 403")
-        return None  # a genuinely PR-less Todo card
+        return None  # a genuinely PR-less card in the start lane
 
     mocks = _sweep_mocks({
         "active_cards": MagicMock(
-            return_value=[_card("Todo"), _card("Todo", identifier="DRE-2040")]
+            return_value=[_card("In Progress"),
+                          _card("In Progress", identifier="DRE-2040")]
         ),
         "pr_for": MagicMock(side_effect=flaky_pr_for),
     })

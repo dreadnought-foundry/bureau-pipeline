@@ -462,7 +462,16 @@ def test_off_mode_writes_exactly_as_before(monkeypatch):
     assert linear.writes == [("state", "DRE-301", "Queued", ("--park",), None, ())]
 
 
+def _a_retiring_start_lane(monkeypatch):
+    # The contract names no retiring start lane since DRE-7660, so the carry
+    # is exercised against a stand-in, read where the retiring lanes are.
+    monkeypatch.setattr(epic_todo_gate, "TODO", "Todo")
+    for name in ("RETIRING_LANES", "BOARD_READ_LANES"):
+        monkeypatch.setattr(reconcile, name, getattr(reconcile, name) + ("Todo",))
+
+
 def test_R16_carrying_an_epic_out_of_todo_is_conditional(monkeypatch):
+    _a_retiring_start_lane(monkeypatch)
     epic = _c("DRE-400", "Todo", title="[EPIC] a thing", children=True)
     linear = Linear(_c("DRE-400", "In Progress", title="[EPIC] a thing", children=True))
     monkeypatch.setattr(epic_todo_gate, "lane_before_todo", lambda lops, ident: "In Progress")
@@ -476,6 +485,7 @@ def test_R16_carrying_an_epic_out_of_todo_is_conditional(monkeypatch):
 
 
 def test_R16_an_epic_still_in_todo_is_carried(monkeypatch):
+    _a_retiring_start_lane(monkeypatch)
     epic = _c("DRE-400", "Todo", title="[EPIC] a thing", children=True)
     linear = Linear(epic)
     monkeypatch.setattr(epic_todo_gate, "lane_before_todo", lambda lops, ident: "In Progress")
@@ -993,12 +1003,12 @@ def test_off_never_asks_the_door_and_spends_what_it_always_spent(monkeypatch):
 
 
 # ── The NO-ROUTE watchdog keeps its input with the door on (PR #687, item 2) ──
-# `flag_stranded` is fleet-wide: every repo's sweep looks for a card in Todo or
-# In Progress that NO repo can pick up — no `repo:` label, or a slug off the
+# `flag_stranded` is fleet-wide: every repo's sweep looks for a card in a start
+# lane (In Progress alone since DRE-7660) that NO repo can pick up — no `repo:` label, or a slug off the
 # routing map. The door serves only this repo's tenant and stores no card
 # without a `repo:` label (design D1), so with every repo `on` such a card would
 # be flagged by no sweep, and the shadow comparison (this repo's cards only)
-# could never show it. The off-map class reads Todo and In Progress from Linear.
+# could never show it. The off-map class reads the start lanes from Linear.
 
 _OLD = "2026-09-01T00:00:00.000Z"
 
@@ -1330,8 +1340,9 @@ _OLD_QUEUE = "Back" + "log"
 
 
 def test_the_retiring_lane_rides_the_one_board_read():
-    # Todo joined it when it began retiring too (DRE-7129).
-    assert reconcile.RETIRING_LANES == (_OLD_QUEUE, "Todo")
+    # Todo joined it when it began retiring (DRE-7129) and left with its
+    # entry (DRE-7660).
+    assert reconcile.RETIRING_LANES == (_OLD_QUEUE,)
     assert set(reconcile.RETIRING_LANES) <= set(reconcile.BOARD_READ_LANES)
 
 
@@ -1353,7 +1364,7 @@ def test_on_the_drain_is_served_by_the_doors_fleet_read(monkeypatch):
     linear = Linear(stranded)
     with door_at(monkeypatch, stranded) as door, wired(linear):
         reconcile.drain_retiring_lanes()
-        assert _fleet_asks(door) == [f"{_OLD_QUEUE},Todo"]
+        assert _fleet_asks(door) == [_OLD_QUEUE]
     assert linear.queries == []
     assert ("advance", "DRE-33", "Queued", _OLD_QUEUE) in linear.writes
     assert "DRE-33" in reconcile._door_sourced
@@ -1367,7 +1378,7 @@ def test_on_a_declined_fleet_drains_this_repos_cards_off_the_repo_read(monkeypat
         reconcile.drain_retiring_lanes()
         repo_asks = [r["query"]["lanes"] for r in door.asked("/board")
                      if r["query"]["scope"] == "repo"]
-    assert repo_asks == [f"{_OLD_QUEUE},Todo"]
+    assert repo_asks == [_OLD_QUEUE]
     assert linear.queries == []
     assert ("advance", "DRE-34", "Queued", _OLD_QUEUE) in linear.writes
     assert ("read-door: the retiring lanes read at scope=repo this pass — the door "

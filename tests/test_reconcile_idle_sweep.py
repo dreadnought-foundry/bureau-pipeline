@@ -6,9 +6,10 @@ so a pass with nothing to do must cost next to nothing. ONE cheap check
 decides, before the board is read:
 
   * the WIP cap is 0 → idle, no request at all;
-  * no card of this repo is in motion (Todo / In Progress / In Review) and none
-    waits in Backlog → idle, decided by ONE request (`reconcile.IDLE_QUERY`,
-    `first: 1`, ids only) — or none, when the read door answers it;
+  * no card of this repo is in motion (In Progress / In Review / Hand-work)
+    and none waits in Backlog → idle, decided by ONE request
+    (`reconcile.IDLE_QUERY`, `first: 1`, ids only) — or none, when the read
+    door answers it;
   * otherwise → the pass runs exactly as before.
 
 Idle skips promotion and this repo's work-lane phases and says so in ONE
@@ -275,7 +276,7 @@ def test_with_the_door_on_the_idle_check_costs_no_linear_request(monkeypatch, ca
     # phases' reads: the lanes this door declines at `scope=fleet` — it serves
     # the fleet to no repo while the console's PIPELINE_READ_UNROUTED is off
     # (DRE-5848) — Planning and Intake and the planner line's Green Light, and
-    # the NO-ROUTE watchdog's Todo and In Progress, which the door cannot serve
+    # the NO-ROUTE watchdog's start lanes, which the door cannot serve
     # for cards no repo owns (the PR #687 critic's item 2). The outage alarm's
     # open-card lookup (DRE-6576) is gone: the outage is a console alert since
     # DRE-7455, so there is no card to look up.
