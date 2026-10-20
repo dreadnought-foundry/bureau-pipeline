@@ -355,7 +355,9 @@ def _rerun(monkeypatch, doc: dict) -> str:
     DRE-6042 the proof run had already spent its two re-runs on 2026-10-09
     and posted its own `🔬 proof-waiting` hold, so there the answer is that
     hold, returned as it stands — still the proof run's, still not the
-    CEO's; it names an operator as the one to read it next."""
+    CEO's; it names an operator as the one to read it next. Since DRE-7740
+    the budget check, not that hold, refuses the re-run, and nothing re-arms
+    it: no fix is named and no `🔬 proof-observed` follows the receipts."""
     pr = _gate_note_timed(copy.deepcopy(doc["pr"]), doc["as_of"])
     head = pr["headRefOid"]
     repo = "/".join(pr["url"].split("/")[3:5])
@@ -404,8 +406,14 @@ def _rerun(monkeypatch, doc: dict) -> str:
         assert standing, (
             f"{doc['card']}: the proof dispatch refused the re-run — {refused}")
         assert refused.bucket == "held"
-        assert standing[-1] in str(refused)
         assert standing[-1].startswith("🔬 proof-waiting:")
+        # The standing hold is the budget's own, so the budget check decides
+        # instead (DRE-7740): no re-arm event, so it refuses and holds nothing
+        # new — the hold still stands for the operator.
+        assert proof_dispatch._past_budget_hold(standing[-1:]) == []
+        assert str(refused).startswith("re-run: budget — "), refused
+        assert proof_dispatch.NEVER_ANOTHER in str(refused)
+        assert fired == []
         written = standing[-1]
     else:
         assert not standing
