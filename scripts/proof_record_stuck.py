@@ -28,8 +28,12 @@ a day: a note for the same pull request in the card's comment window less than
 `DAY_HOURS` old is the once. A pull request open past `ALERT_HOURS` also raises
 a WARN console alert, `proof_record_stuck:<repo>:<card>`, every pass it stands
 — the console keeps one alert per key, so a raise while it is open delivers
-nothing again — and the alert is resolved once a record named before reads as
-none of the four. Nothing here moves a lane, writes a label or touches the pull
+nothing again — and the alert is resolved once a record that old reads as none
+of the four, or once its pull request closes or merges: every proof record
+closed within `DAY_HOURS` resolves its card's key, unless the card has a record
+still open. A card whose comment window is partial is read whole, as the
+dispatcher reads it, so a hold or review-cap stamp older than the window still
+counts. Nothing here moves a lane, writes a label or touches the pull
 request. A card that cannot be read names nothing, said in the log; a note that
 does not land, and an alert the door lost, are failures that turn the sweep red.
 """
@@ -58,6 +62,7 @@ DISPATCHER_LANES = (proof_dispatch.FIRST_RUN_LANE, proof_dispatch.RETURN_LANE,
                     proof_dispatch.RERUN_LANE)
 LIST_FIELDS = "number,url,headRefName,isDraft,createdAt,files"
 LIST_LIMIT = 100
+CLOSED_FIELDS = "number,headRefName,closedAt"
 
 CARD_QUERY = """query($id: String!) { issue(id: $id) {
              identifier state { name } labels { nodes { name } } %s } }""" % (
@@ -139,9 +144,18 @@ def _told_today(card: dict, number, now: datetime) -> bool:
     return False
 
 
-def _named_before(card: dict, number) -> bool:
-    return any((n.get("body") or "").lstrip().startswith(_marker(number))
-               for n in linear_ops.window_nodes(card.get("comments")))
+def _whole(card: dict) -> dict:
+    """The card with its whole thread when its comment window is partial: the
+    dispatcher decides a hold and the review-cap park off the whole thread
+    (`proof_dispatch.is_rerun`, `_parked_on`), and a hold older than the window
+    read here would name a draft that is held."""
+    if not linear_ops.window_is_partial(card.get("comments")):
+        return card
+    nodes, _ = linear_ops._thread_and_viewer(card.get("identifier") or "", "body",
+                                             "user", "createdAt", whole=True)
+    # Back to Linear's newest-first order, the order the inline window carries.
+    return dict(card, comments={"pageInfo": {"hasNextPage": False},
+                                "nodes": list(reversed(nodes))})
 
 
 def note(pr: dict, lines: list, hours: int) -> str:
@@ -179,6 +193,7 @@ def _one(pr: dict, now: datetime) -> str | None:
         card = (linear_ops.gql(CARD_QUERY, {"id": ident}) or {}).get("issue")
         if not card:
             raise LookupError(f"Linear answered no card for {ident}")
+        card = _whole(card)
     except Exception as error:  # noqa: BLE001 — unread names nothing
         print(f"{PREFIX} #{number}: {ident} could not be read ({error}) — "
               "nothing named this sweep")
@@ -189,7 +204,12 @@ def _one(pr: dict, now: datetime) -> str | None:
     if not lines:
         print(f"{PREFIX} #{number}: {ident} in {(card.get('state') or {}).get('name')} "
               "— the pipeline moves it")
-        if hours >= ALERT_HOURS and _named_before(card, number):
+        # Every record this old that moves resolves its key, named before or
+        # not: the note may lie beyond the window, or never have landed. A
+        # resolve with nothing open is the door's `not-open`, so this is one
+        # harmless call a pass for an old record until it closes — chosen over
+        # an alert that a busy card's thread could leave standing.
+        if hours >= ALERT_HOURS:
             pipeline_notice.resolve_notice(notice_key(ident))
         return None
     failure = None
@@ -215,10 +235,16 @@ def sweep(now: datetime | None = None) -> list:
     out = reconcile.gh("pr", "list", "--repo", reconcile.REPO, "--state", "open",
                        "--limit", str(LIST_LIMIT), "--json", LIST_FIELDS)
     try:
-        prs = json.loads(out or "[]")
+        prs = json.loads(out) if out else None
     except ValueError:
+        prs = None
+    if not isinstance(prs, list):
         print(f"{PREFIX} the open pull requests could not be read — nothing named")
         return []
+    if len(prs) >= LIST_LIMIT:
+        # Newest first: the records cut are the oldest, the most stuck.
+        print(f"{PREFIX} the open list reached its limit of {LIST_LIMIT} — "
+              "older proof records may not have been read")
     records = [pr for pr in prs if isinstance(pr, dict)
                and proof_record.proof_record_branch(pr.get("headRefName"))]
     if not records:
@@ -228,4 +254,32 @@ def sweep(now: datetime | None = None) -> list:
         failure = _one(pr, now)
         if failure:
             failures.append(failure)
+    resolve_closed({reconcile.branch_card(pr.get("headRefName") or "") for pr in records},
+                   now)
     return failures
+
+
+def resolve_closed(open_cards: set, now: datetime) -> None:
+    """Resolve the alert of every proof record closed or merged within
+    `DAY_HOURS` — it has left the open list, so `_one` never reads it again.
+    A card in `open_cards` keeps its alert: a record of it still stands, and
+    resolving would let the next raise deliver the alert anew. A record never
+    alerted resolves too; the door answers `not-open`, which is no failure."""
+    out = reconcile.gh("pr", "list", "--repo", reconcile.REPO, "--state", "closed",
+                       "--limit", str(LIST_LIMIT), "--search", "sort:updated-desc",
+                       "--json", CLOSED_FIELDS)
+    try:
+        prs = json.loads(out or "[]")
+    except ValueError:
+        print(f"{PREFIX} the closed pull requests could not be read — nothing resolved")
+        return
+    since = now - timedelta(hours=DAY_HOURS)
+    cards = set()
+    for pr in prs if isinstance(prs, list) else []:
+        closed = _when(pr.get("closedAt")) if isinstance(pr, dict) else None
+        if (closed and closed > since
+                and proof_record.proof_record_branch(pr.get("headRefName"))):
+            cards.add(reconcile.branch_card(pr.get("headRefName") or ""))
+    for ident in sorted(cards - open_cards):
+        pipeline_notice.resolve_notice(notice_key(ident))
+        print(f"{PREFIX} {ident}'s proof record closed — its alert resolved")
