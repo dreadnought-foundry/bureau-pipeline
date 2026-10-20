@@ -453,6 +453,217 @@ class ComparesRideTheSameRetryTest(unittest.TestCase):
         self.assertEqual(doc, {RECORD: None})
 
 
+PIPELINE_TESTS = 294736769
+HARNESS = 317082204
+IN_FLIGHT_REF = "repair/DRE-7673-e46fd777ef31"
+IN_FLIGHT_HEAD = "05bb0a9" + "0" * 33
+FAILED_RUN = 39302814695
+PR_RUN = 39321679250
+RUN_PATH = f"repos/{REPO}/actions/runs/{FAILED_RUN}"
+RUNS_AT_HEAD = (f"repos/{REPO}/actions/runs?head_sha={IN_FLIGHT_HEAD}"
+                f"&event=pull_request&per_page=100")
+JOBS_PATH = f"repos/{REPO}/actions/runs/{PR_RUN}/jobs?filter=latest&per_page=100"
+
+# #1184's body as repair_finish.py and the repair agent's prompt write it.
+IN_FLIGHT_BODY = (
+    "Forward-fix for the red Integration Harness on main.\n\n"
+    f"Failed run: https://github.com/{REPO}/actions/runs/{FAILED_RUN}\n"
+    "Failing head commit: e46fd777ef31\n")
+
+
+def _pr(number, ref, body, state="open", sha=IN_FLIGHT_HEAD):
+    return {"number": number, "state": state, "merged_at": None,
+            "body": body, "head": {"ref": ref, "sha": sha}}
+
+
+IN_FLIGHT_PULLS = [
+    _pr(1184, IN_FLIGHT_REF, IN_FLIGHT_BODY),
+    # Not open repairs: never read.
+    _pr(1183, "repair/DRE-7600-aaaaaaaaaaaa", IN_FLIGHT_BODY, state="closed",
+        sha="c" * 40),
+    _pr(1185, "agent/DRE-7660-lane-contract", IN_FLIGHT_BODY, sha="d" * 40),
+]
+
+RUN_BODY = json.dumps({"id": FAILED_RUN, "workflow_id": HARNESS,
+                       "name": "Integration Harness"})
+RUNS_BODY = json.dumps({"total_count": 3, "workflow_runs": [
+    # Another workflow's run at the head, and an older Pipeline Tests run.
+    {"id": PR_RUN + 7, "workflow_id": 1, "created_at": "2026-10-19T21:00:00Z"},
+    {"id": PR_RUN, "workflow_id": PIPELINE_TESTS,
+     "created_at": "2026-10-19T20:40:00Z"},
+    {"id": PR_RUN - 9, "workflow_id": PIPELINE_TESTS,
+     "created_at": "2026-10-19T20:10:00Z"},
+]})
+JOBS_BODY = json.dumps({"total_count": 3, "jobs": [
+    {"id": 1, "name": "scripts unit tests (part 3)", "status": "completed",
+     "conclusion": "success", "steps": []},
+    {"id": 2, "name": "scripts unit tests (part 4)", "status": "completed",
+     "conclusion": "failure", "steps": []},
+    {"id": 3, "name": "scripts unit tests", "status": "queued",
+     "conclusion": None, "steps": []},
+]})
+
+
+class GatherInFlightTest(unittest.TestCase):
+    """DRE-7726: each open repair pull request's target workflow, and the
+    jobs of this workflow's newest run at its head."""
+
+    def _run(self, answers, pulls=IN_FLIGHT_PULLS, rate_limit=None):
+        clock = Clock()
+        reader = FakeReader(answers,
+                            rate_limit=rate_limit or (lambda: LIMITED))
+        said = []
+        with tempfile.TemporaryDirectory() as td:
+            pulls_file = os.path.join(td, "pulls.json")
+            out = os.path.join(td, "in-flight.json")
+            with open(pulls_file, "w") as fh:
+                fh.write(pulls if isinstance(pulls, str) else json.dumps(pulls))
+            rc = red_main_repair.gather_in_flight(
+                REPO, PIPELINE_TESTS, pulls_file, out, reader=reader,
+                sleep=clock.sleep, now=clock.now, say=said.append)
+            with open(out) as fh:
+                doc = json.load(fh)
+        return rc, doc, reader, clock, said
+
+    def test_it_writes_the_target_and_the_jobs_at_the_head(self):
+        rc, doc, reader, _, _ = self._run({
+            RUN_PATH: [(0, RUN_BODY, "")],
+            RUNS_AT_HEAD: [(0, RUNS_BODY, "")],
+            JOBS_PATH: [(0, JOBS_BODY, "")],
+        })
+        self.assertEqual(rc, 0)
+        self.assertEqual(doc, {IN_FLIGHT_REF: {
+            "number": 1184, "head_sha": IN_FLIGHT_HEAD,
+            "target_workflow_id": HARNESS,
+            "jobs": [
+                {"name": "scripts unit tests (part 3)", "conclusion": "success"},
+                {"name": "scripts unit tests (part 4)", "conclusion": "failure"},
+                {"name": "scripts unit tests", "conclusion": None},
+            ]}})
+        # The three reads, each once, and nothing for the closed repair or
+        # the agent's pull request.
+        self.assertEqual(sorted(reader.calls),
+                         sorted([RUN_PATH, RUNS_AT_HEAD, JOBS_PATH]))
+
+    def test_the_document_is_what_decide_reads(self):
+        _, doc, _, _, _ = self._run({
+            RUN_PATH: [(0, RUN_BODY, "")],
+            RUNS_AT_HEAD: [(0, RUNS_BODY, "")],
+            JOBS_PATH: [(0, JOBS_BODY, "")],
+        })
+        d = red_main_repair.decide(
+            conclusion="failure", head_branch="main", default_branch="main",
+            head_sha="cc78ed494e02ed7f307b2c82fb4e8fea3fa55d51",
+            log_text="E   assert 690 >= 705.6\n", refs=[IN_FLIGHT_REF],
+            pulls=[{"head_ref": IN_FLIGHT_REF, "state": "open",
+                    "merged": False}],
+            workflow_id=PIPELINE_TESTS, in_flight=doc)
+        self.assertEqual((d["reason"], d["beside_in_flight"]),
+                         ("dispatch", "1184"))
+
+    def test_no_run_of_this_workflow_at_the_head_is_no_jobs(self):
+        runs = json.dumps({"total_count": 1, "workflow_runs": [
+            {"id": PR_RUN + 7, "workflow_id": 1,
+             "created_at": "2026-10-19T21:00:00Z"}]})
+        rc, doc, reader, _, _ = self._run({
+            RUN_PATH: [(0, RUN_BODY, "")],
+            RUNS_AT_HEAD: [(0, runs, "")],
+        })
+        self.assertEqual(rc, 0)
+        self.assertEqual(doc[IN_FLIGHT_REF]["jobs"], [])
+        self.assertNotIn(JOBS_PATH, reader.calls)
+
+    def test_reads_that_never_come_back_are_null(self):
+        for broken in (RUN_PATH, RUNS_AT_HEAD, JOBS_PATH):
+            with self.subTest(broken=broken):
+                answers = {RUN_PATH: [(0, RUN_BODY, "")],
+                           RUNS_AT_HEAD: [(0, RUNS_BODY, "")],
+                           JOBS_PATH: [(0, JOBS_BODY, "")]}
+                answers[broken] = [LIMITED]
+                rc, doc, reader, clock, said = self._run(answers)
+                self.assertEqual(rc, 0)
+                self.assertEqual(doc, {IN_FLIGHT_REF: None})
+                # It rode the wait-and-retry: three tries of the broken read.
+                self.assertEqual(reader.reads_of(broken), 3)
+                self.assertTrue([s for s in said
+                                 if s.startswith("repair gather: read ")])
+
+    def test_unreadable_payloads_are_null(self):
+        for answers in (
+                {RUN_PATH: [(0, "not json", "")],
+                 RUNS_AT_HEAD: [(0, RUNS_BODY, "")]},
+                {RUN_PATH: [(0, json.dumps({"workflow_id": "317082204"}), "")],
+                 RUNS_AT_HEAD: [(0, RUNS_BODY, "")]},
+                {RUN_PATH: [(0, RUN_BODY, "")],
+                 RUNS_AT_HEAD: [(0, json.dumps({"message": "x"}), "")]},
+                {RUN_PATH: [(0, RUN_BODY, "")],
+                 RUNS_AT_HEAD: [(0, RUNS_BODY, "")],
+                 JOBS_PATH: [(0, json.dumps({"jobs": "x"}), "")]}):
+            with self.subTest(answers=answers):
+                _, doc, _, _, _ = self._run(answers)
+                self.assertEqual(doc, {IN_FLIGHT_REF: None})
+
+    def test_a_body_with_no_failed_run_line_is_null_and_reads_nothing(self):
+        for body in (None, "", "Fixes the harness.\nFailing head commit: x\n",
+                     "Failed run: see the card\n"):
+            with self.subTest(body=body):
+                pulls = [_pr(1184, IN_FLIGHT_REF, body)]
+                rc, doc, reader, _, _ = self._run({}, pulls=pulls)
+                self.assertEqual(rc, 0)
+                self.assertEqual(doc, {IN_FLIGHT_REF: None})
+                self.assertEqual(reader.calls, [])
+
+    def test_unreadable_records_make_no_call(self):
+        for payload in ("FETCH-FAILED\n", json.dumps({"message": "x"}),
+                        "{not json"):
+            with self.subTest(payload=payload):
+                rc, doc, reader, clock, said = self._run({}, pulls=payload)
+                self.assertEqual((rc, doc, reader.calls, clock.sleeps),
+                                 (0, {}, [], []))
+                self.assertTrue([s for s in said
+                                 if "records are unreadable" in s], said)
+
+    def test_no_open_repair_makes_no_call(self):
+        rc, doc, reader, _, _ = self._run({}, pulls=IN_FLIGHT_PULLS[1:])
+        self.assertEqual((rc, doc, reader.calls), (0, {}, []))
+
+    def test_the_wait_stays_inside_one_budget(self):
+        # Both stages fail on every try; the waits across them add up to no
+        # more than one gather's twenty minutes.
+        clock = Clock()
+        reader = FakeReader({RUN_PATH: [LIMITED], RUNS_AT_HEAD: [LIMITED]},
+                            rate_limit=lambda: rate_limit_answer(
+                                clock.now() + 3600))
+        with tempfile.TemporaryDirectory() as td:
+            pulls_file = os.path.join(td, "pulls.json")
+            out = os.path.join(td, "in-flight.json")
+            with open(pulls_file, "w") as fh:
+                json.dump(IN_FLIGHT_PULLS, fh)
+            red_main_repair.gather_in_flight(
+                REPO, PIPELINE_TESTS, pulls_file, out, reader=reader,
+                sleep=clock.sleep, now=clock.now, say=lambda _l: None)
+        self.assertLessEqual(sum(clock.sleeps), 20 * 60)
+
+    def test_the_command_takes_the_workflow_id_and_the_pulls_file(self):
+        # End to end, as the workflow calls it: with the records unreadable
+        # no `gh` is ever run, so the command needs no token and no PATH.
+        with tempfile.TemporaryDirectory() as td:
+            pulls = os.path.join(td, "pulls.json")
+            out = os.path.join(td, "in-flight.json")
+            with open(pulls, "w") as fh:
+                fh.write("FETCH-FAILED\n")
+            done = subprocess.run(
+                [sys.executable, os.path.join(SCRIPTS, "red_main_repair.py"),
+                 "gather-in-flight", "--repo", REPO, "--workflow-id",
+                 str(PIPELINE_TESTS), "--pulls-file", pulls, "--out", out],
+                capture_output=True, text=True, timeout=60,
+                env={**os.environ, "PATH": td})
+            with open(out) as fh:
+                doc = json.load(fh)
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertEqual(doc, {})
+
+
 class DecideSaysTheRunFailedTest(unittest.TestCase):
     """The decide step's line no longer promises a retry nothing will make."""
 
