@@ -139,6 +139,16 @@ leave the next reader finding a fresh hold exactly where the observation is; it
 is declared `not-an-act` in the registry's `unconverted` block instead, with
 that reason, where the debt is countable.
 
+**The colon is part of the mark** (DRE-7743). A comment opening
+`🔬 proof-observed` with anything else after it — DRE-5407's opened
+`🔬 proof-observed —` on 2026-10-18 and its card was named held for two days —
+discharges nothing, and the proof dispatcher answers it once on the card:
+`🔬 proof-note-unread: the note of <PT> “<its first line>” discharged nothing —`
+and why (`proof_record.unread_reply`). The mark is never loosened to read the
+dash; the reply is found again by its whole first line, so no pass posts it
+twice. It is declared `not-an-act` in the `unconverted` block, for the same
+reason as the discharge record.
+
 Both commands refuse an empty half, and refuse a text containing `budget
 exhausted` or `holding for a human` — the console's `enrich.HOLD_MARKERS` reads
 either phrase as a fix-budget hold, and the card would render as the wrong kind
@@ -165,6 +175,24 @@ goes on to its first run on the same pass. A clause beside other words, a hold
 naming the CEO's press, and a date in prose are held exactly as before — nothing
 reads a date out of prose — and a time hold beside any other open hold is never
 lifted by time, because one `🔬 proof-observed` would lift that hold too.
+
+**The dispatcher writes and lifts the same hold on the re-run branch too**
+(DRE-7316). A record row waiting for an event that happens at or by a known
+time carries the clause in square brackets right after the event — `Not
+observed. waiting for <the event> [not-before=<ISO time with offset>]: <what
+it would show>` (`proof_record.row_not_before`). When every waiting row of a
+record the critic sent back, or the gate declined, is stamped, the hold the
+dispatcher posts for it reads `— needs not-before=<the latest row time>` and
+nothing else, so it is time-only; one prose waiting row among them and the hold
+is written as before, for a person. On the re-run branch the same rule as the
+first run's is read over every open hold, before the cause park's holds are
+dropped: every one time-only and every time passed, and the dispatcher posts
+the one `🔬 proof-observed` and dispatches a **timed re-run** on that pass;
+before its time the refusal adds `— lifts at <PT>`; beside any other open hold
+nothing is lifted and the line names the hold that still holds. A timed re-run's
+count is `timed re-run <n> of 2`, so it never spends the two re-runs counted off
+`re-run`. It has its own two per record pull request; after them, one hold for
+the operator and never a third.
 
 ## The row whose NUMBERS are data — `🚨 fleet-reviewer-outage` (DRE-3433)
 
@@ -405,7 +433,9 @@ event>` — and nothing else — is waiting on something no one on the card has 
 cause: on either trigger, beside any other unmet row, the card is held with
 `🔬 proof-waiting: <the waiting criteria> — needs <their events>` instead of a
 re-run, and is re-run once the operator posts `proof-observed` (DRE-6488, and
-for the critic's trigger DRE-6814). A record the gate declined, or the critic
+for the critic's trigger DRE-6814) — or, when every waiting row is stamped with
+a `[not-before=<T>]`, the hold is `— needs not-before=<T>` and the dispatcher
+lifts it itself once `<T>` passes, with a timed re-run (DRE-7316). A record the gate declined, or the critic
 sent back, whose unmet rows all carry a cause word (DRE-6607) is never re-run
 at that head, since a re-run would read the same thing: the dispatcher puts it
 to the operator once through `proof_cause_park.park` (DRE-6612) — its hold and
@@ -422,9 +452,11 @@ The receipt is posted only after `plan_run.fire` confirms the dispatch:
 The reasons open `first proof run`, `second dispatch — no run started after`,
 `second dispatch — run`, `re-run after the CEO's answer at`, `re-run after
 the critic's findings at`, `re-run after the gate's decline at`, `re-run after
-DRE-<n> shipped` and `re-run after the 🔬 proof-observed of`; the counts are
-`dispatch <n> of 2`, `re-run <n> of 2` (DRE-5931, through the same composer),
-`after the CEO's answer` and `re-armed` (DRE-7740) — one more run on a spent
+DRE-<n> shipped`, `re-run after the 🔬 proof-observed of` and `timed
+re-run after not-before <PT> at`; the counts are `dispatch <n> of 2`, `re-run
+<n> of 2` (DRE-5931, through the same composer), `timed re-run <n> of 2`
+(DRE-7316 — its own budget, never counted with `re-run`), `after the CEO's
+answer` and `re-armed` (DRE-7740) — one more run on a spent
 re-run budget, which does not open `re-run` and so spends none of it. **The tag is a live key**: `proof_run_state.reading`
 (DRE-5922) anchors on the newest receipt to read what became of the run, and
 counts the first-run budget off the receipts whose reason opens `first proof

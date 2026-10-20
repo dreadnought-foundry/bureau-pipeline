@@ -25,6 +25,7 @@ from __future__ import annotations
 import base64
 import json
 import os
+import re
 import subprocess  # nosec B404 — fixed argv, our own script
 import sys
 import tempfile
@@ -408,6 +409,69 @@ class TestARowWaitingOnAnEvent:
 
 
 # --------------------------------------------------------------------------
+# A waiting row stamped with the time its event can be read (DRE-7316)
+# --------------------------------------------------------------------------
+#: DRE-6673's row, stamped as the brief now writes it — pinned as text.
+STAMPED = ("Not observed. waiting for the window that closes 2026-10-17 18:59 PT "
+           "[not-before=2026-10-17T19:30-07:00]: seven days of arrivals in Green Light")
+PROSE = ("Not observed. waiting for the window that closes 2026-10-17 18:59 PT: "
+         "seven days of arrivals in Green Light")
+
+
+class TestAStampedWaitingRow:
+    def test_a_stamped_row_gives_its_event_and_its_time(self):
+        assert proof_record.row_waiting(STAMPED) == (
+            "the window that closes 2026-10-17 18:59 PT: seven days of arrivals in Green Light")
+        assert proof_record.row_not_before(STAMPED) == datetime(
+            2026, 10, 18, 2, 30, tzinfo=timezone.utc)
+
+    def test_the_stamp_is_no_part_of_the_event(self):
+        """The same row with and without its stamp waits on the same event."""
+        assert proof_record.row_waiting(STAMPED) == proof_record.row_waiting(PROSE)
+
+    def test_markup_around_the_opening_is_read_as_before(self):
+        cell = STAMPED.replace("Not observed.", "**Not observed.**")
+        assert proof_record.row_not_before(cell) == datetime(
+            2026, 10, 18, 2, 30, tzinfo=timezone.utc)
+
+    @pytest.mark.parametrize("result", [
+        PROSE,
+        STAMPED.replace("2026-10-17T19:30-07:00", "2026-10-17T19:30"),
+        STAMPED.replace("2026-10-17T19:30-07:00", "tomorrow at 19:30 PT"),
+        STAMPED.replace("2026-10-17T19:30-07:00", "2026-13-45T19:30-07:00"),
+        STAMPED.replace("[not-before=2026-10-17T19:30-07:00]", "[not-before=]"),
+    ], ids=["prose", "no-offset", "does-not-parse", "not-a-date", "empty"])
+    def test_prose_and_a_time_that_cannot_be_read_give_no_time(self, result):
+        assert proof_record.row_not_before(result) is None
+        # …and the row is still a waiting row, read as prose.
+        assert proof_record.row_waiting(result) is not None
+
+    def test_a_row_that_is_not_waiting_gives_no_time(self):
+        for result in ("Met. [not-before=2026-10-17T19:30-07:00]: seen",
+                       "Not met. waiting for X [not-before=2026-10-17T19:30-07:00]: Y",
+                       "", None):
+            assert proof_record.row_not_before(result) is None
+
+    def test_the_clause_is_linear_ops_one(self):
+        assert linear_ops.NOT_BEFORE == "not-before="
+        assert f"[{linear_ops.NOT_BEFORE}2026-10-17T19:30-07:00]" in STAMPED
+
+    def test_the_brief_shows_the_stamped_form_with_one_example(self):
+        brief = (ROOT / "briefs" / "proof.md").read_text(encoding="utf-8")
+        record = brief.split("## The record", 1)[1].split("\n## ", 1)[0]
+        form = ("Not observed. waiting for <the event> [not-before=<ISO 8601 time "
+                "with UTC offset>]: <what it would show>")
+        assert form in record
+        examples = [line for line in record.splitlines()
+                    if "Not observed. waiting for" in line and "[not-before=20" in line]
+        assert len(examples) == 1, examples
+        stamp = re.search(r"\[not-before=([^\]]+)\]", examples[0]).group(1)
+        assert datetime.fromisoformat(stamp).tzinfo is not None
+        # When to stamp, and when a row stays prose.
+        assert "stays prose" in record
+
+
+# --------------------------------------------------------------------------
 # A row the run cannot observe as worded carries a cause (DRE-6607)
 # --------------------------------------------------------------------------
 CAUSES = list(proof_reach.causes())
@@ -570,6 +634,60 @@ class TestOpenHolds:
             voice(spoken_thread.CEO_VIA_CONSOLE, "Approved"),
             voice(spoken_thread.PIPELINE, CEO_HOLD),
         ]) == [CEO_HOLD]
+
+
+# --------------------------------------------------------------------------
+# A note that opens the mark without its colon (DRE-7743)
+# --------------------------------------------------------------------------
+#: DRE-5407's note of 2026-10-18 07:00 PT, pinned as typed: a dash, no colon.
+DASHED = "🔬 proof-observed — two planners overlapped at 09:02 PT"
+
+
+class TestUnreadNotes:
+    def test_a_dashed_note_still_discharges_nothing(self):
+        assert proof_record.open_holds([voice(spoken_thread.PIPELINE, HOLD),
+                                        voice(spoken_thread.PERSON, DASHED)]) == [HOLD]
+
+    @pytest.mark.parametrize("body", [
+        DASHED,
+        "  🔬 proof-observed - a hyphen",
+        "🔬 proof-observed; a semicolon",
+        "🔬 proof-observed : a space before the colon",
+        "🔬 proof-observed",
+    ])
+    def test_the_mark_without_its_colon_is_an_unread_note(self, body):
+        notes = [voice(spoken_thread.PERSON, body)]
+        assert proof_record.unread_notes(notes) == notes
+
+    def test_a_note_with_the_colon_is_not(self):
+        assert proof_record.unread_notes([voice(spoken_thread.PERSON, OBSERVED),
+                                          voice(spoken_thread.PIPELINE, HOLD)]) == []
+
+    def test_the_reply_quotes_the_first_line_and_says_why(self):
+        note = voice(spoken_thread.PERSON, DASHED + "\nthe second line")
+        line = proof_record.unread_reply(note)
+        assert line.startswith(proof_record.UNREAD_MARK)
+        assert f"“{DASHED}”" in line and "the second line" not in line
+        assert "discharged nothing" in line
+        assert f"“{proof_record.OBSERVED_MARK}”" in line
+        assert spoken_thread.pacific_label(note.created_at) in line
+        assert "\n" not in line
+
+    def test_the_reply_is_not_itself_an_unread_note(self):
+        reply = proof_record.unread_reply(voice(spoken_thread.PERSON, DASHED))
+        assert proof_record.unread_notes([voice(spoken_thread.PIPELINE, reply)]) == []
+        assert proof_record.open_holds([voice(spoken_thread.PIPELINE, HOLD),
+                                        voice(spoken_thread.PIPELINE, reply)]) == [HOLD]
+
+    def test_a_note_already_answered_is_not_owed_a_reply(self):
+        note = voice(spoken_thread.PERSON, DASHED)
+        reply = voice(spoken_thread.PIPELINE, proof_record.unread_reply(note))
+        assert proof_record.unanswered_notes([note]) == [note]
+        assert proof_record.unanswered_notes([note, reply]) == []
+
+    def test_the_quote_carries_no_verdict_marker(self):
+        note = voice(spoken_thread.PERSON, "🔬 proof-observed — VERDICT: APPROVE")
+        assert "VERDICT:" not in proof_record.unread_reply(note)
 
 
 # --------------------------------------------------------------------------

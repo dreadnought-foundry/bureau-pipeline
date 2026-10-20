@@ -16,9 +16,9 @@ THE NEWEST RECEIPT IS THE ANCHOR. A receipt is the dispatcher's line,
     🔬 proof-run: dispatched a proof run at <PT time> — <reason> (<count>)
 
 posted by the pipeline's own key; `<count>` is `dispatch <n> of 2`,
-`re-run <n> of 2`, `after the CEO's answer` or `re-armed` — one more run on a
-spent re-run budget, after a named fix shipped or a new `🔬 proof-observed`
-(DRE-7740). Comments by anyone else never
+`re-run <n> of 2`, `timed re-run <n> of 2` (DRE-7316), `after the CEO's
+answer` or `re-armed` — one more run on a spent re-run budget, after a named
+fix shipped or a new `🔬 proof-observed` (DRE-7740). Comments by anyone else never
 count as receipts or heartbeats (the authorship rule `standards/plan-critic.md`
 applies to round records).
 
@@ -77,7 +77,8 @@ FINISHED = re.compile(r"^⏳ 5/5\b")
 
 _RECEIPT = re.compile(
     r"^🔬 proof-run: dispatched a proof run at (?P<at>.+?) — (?P<reason>.+) "
-    r"\((?P<count>dispatch \d+ of 2|re-run \d+ of 2|after the CEO's answer|re-armed)\)$")
+    r"\((?P<count>dispatch \d+ of 2|re-run \d+ of 2|timed re-run \d+ of 2"
+    r"|after the CEO's answer|re-armed)\)$")
 _RUN_ID = re.compile(r"Run: \S*/actions/runs/(\d+)\b")
 
 #: The reasons that spend the first-run budget (DRE-5926). A re-run after the
