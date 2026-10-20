@@ -188,6 +188,157 @@ jobs:
           overwrite: true
           retention-days: 7
 
+  # THE NIGHTLY RE-MEASURES THE DURATIONS RECORD BEFORE ITS FLOOR (DRE-7577).
+  # `tests/test_unit_test_parts.py` fails when the record carries seconds for
+  # fewer than 90% of the test files, and every pull request that adds a test
+  # file moves the tree toward that floor; on 2026-10-18 main sat exactly at
+  # it (693 of 770) and #1168, a docs-only change, failed on files other pull
+  # requests had added. The four parts above run every non-walk test file
+  # with `pytest -v`, so a green nightly's logs are a whole measurement.
+  #
+  # Schedule runs only, and only once every part succeeded: the `if:` names
+  # no status function, so GitHub adds `success()` and skips this job when
+  # any entry of `unit` did not succeed. `unit_test_parts.py due` decides —
+  # under 95%, re-measure (`REMEASURE_MARGIN`, about four days of new test
+  # files above the floor) — and every later step waits on its answer. On
+  # `hold` nothing is opened and the coverage read goes to the job summary.
+  # On `refresh` the record is rebuilt from this run's own four part logs,
+  # keeping every walk's seconds and provenance, and the record and no other
+  # path is pushed to the one literal branch `bot/test-durations`, whose pull
+  # request is opened once and updated after, never a second.
+  #
+  # The App token pushes and opens, never `GITHUB_TOKEN`: a pull request
+  # pushed with the workflow's own token starts no workflow, so its checks
+  # would never run and the merge gate would never wake for it. The gate
+  # admits the branch as a literal in its three places (merge-gate.yml,
+  # evaluate_and_merge.sh, reconcile.PIPELINE_BRANCH_PREFIXES), and a pull
+  # request that changes only `config/` is ops-only to the TDD check.
+  # `tests/test_tests_workflow_durations_refresh.py` holds all of it.
+  durations-refresh:
+    name: unit test durations refresh
+    needs: unit
+    if: github.event_name == 'schedule'
+    runs-on: ${{ fromJSON(vars.BUREAU_CI_RUNS_ON || vars.BUREAU_RUNS_ON || '["ubuntu-latest"]') }}
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      # This run's own part logs, read with the job's token — the App
+      # deliberately lacks actions:read (DRE-1346).
+      actions: read
+    env:
+      BRANCH: bot/test-durations
+    steps:
+      # Minted FIRST, as model-config-change.yml does: the checkout's push
+      # credential and the pull request both need it.
+      - name: Mint bot token
+        id: app
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: ${{ secrets.BUREAU_APP_ID }}
+          private-key: ${{ secrets.BUREAU_APP_PRIVATE_KEY }}
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          token: ${{ steps.app.outputs.token }}
+      # The script reads only the standard library, so the runner's python3.
+      - name: Is the durations record due a re-measure?
+        id: due
+        run: |
+          python3 scripts/unit_test_parts.py due > "$RUNNER_TEMP/durations-due.txt"
+          cat "$RUNNER_TEMP/durations-due.txt"
+          decision=$(sed -n 1p "$RUNNER_TEMP/durations-due.txt")
+          coverage=$(sed -n 2p "$RUNNER_TEMP/durations-due.txt")
+          echo "decision=$decision" >> "$GITHUB_OUTPUT"
+          echo "coverage=$coverage" >> "$GITHUB_OUTPUT"
+          if [ "$decision" = refresh ]; then
+            printf '### Unit test durations: re-measuring\n\n%s.\n' "$coverage" >> "$GITHUB_STEP_SUMMARY"
+          else
+            printf '### Unit test durations: nothing to do\n\n%s, so no pull request is opened.\n' "$coverage" >> "$GITHUB_STEP_SUMMARY"
+          fi
+      # This attempt's four part jobs, each green, and each one's log as the
+      # jobs API serves it: one runner timestamp per line, which is what
+      # `measure` reads. PARTS is `unit`'s matrix size; fewer green parts
+      # than that is not a whole measurement, and the job stops here.
+      - name: Fetch the four parts' logs
+        id: logs
+        if: steps.due.outputs.decision == 'refresh'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_ID: ${{ github.run_id }}
+          PARTS: 4
+        run: |
+          mkdir -p "$RUNNER_TEMP/part-logs"
+          gh api --paginate "repos/$GITHUB_REPOSITORY/actions/runs/$RUN_ID/jobs?filter=latest&per_page=100" \
+            --jq '.jobs[] | select(.name | startswith("scripts unit tests (part ")) | select(.conclusion == "success") | .id' \
+            > "$RUNNER_TEMP/part-jobs.txt"
+          found=$(grep -c . "$RUNNER_TEMP/part-jobs.txt" || true)
+          if [ "$found" != "$PARTS" ]; then
+            echo "::error::found $found green unit test part job(s) in run $RUN_ID, not $PARTS — not a whole measurement"
+            exit 1
+          fi
+          while read -r job; do
+            gh api "repos/$GITHUB_REPOSITORY/actions/jobs/$job/logs" > "$RUNNER_TEMP/part-logs/job-$job.log"
+          done < "$RUNNER_TEMP/part-jobs.txt"
+          echo "jobs=$(paste -sd' ' "$RUNNER_TEMP/part-jobs.txt")" >> "$GITHUB_OUTPUT"
+      # `refresh` writes nothing that would still be due, so logs that
+      # measured too little fail here rather than open a thinner record.
+      - name: Re-measure the record from those logs
+        if: steps.due.outputs.decision == 'refresh'
+        env:
+          RUN_ID: ${{ github.run_id }}
+          JOBS: ${{ steps.logs.outputs.jobs }}
+          HEAD_SHA: ${{ github.sha }}
+        run: |
+          args=()
+          for job in $JOBS; do
+            args+=("$RUNNER_TEMP/part-logs/job-$job.log" --job "$job")
+          done
+          python3 scripts/unit_test_parts.py refresh "${args[@]}" --run "$RUN_ID" --head "$HEAD_SHA"
+          git diff --stat
+      # The record and no other path, proved before the commit, onto this
+      # run's commit of main. Forced, so the branch is always one commit on
+      # the main this run measured, never a stack of nights.
+      - name: Push the record to bot/test-durations
+        if: steps.due.outputs.decision == 'refresh'
+        env:
+          RUN_ID: ${{ github.run_id }}
+        run: |
+          git add -- config/unit-test-durations.json
+          STAGED=$(git diff --cached --name-only)
+          if [ "$STAGED" != "config/unit-test-durations.json" ]; then
+            echo "::error::refusing to commit '$STAGED' — the durations refresh pushes config/unit-test-durations.json and nothing else"
+            exit 1
+          fi
+          git -c user.name="agent-bureau-bot[bot]" \
+            -c user.email="agent-bureau-bot[bot]@users.noreply.github.com" \
+            commit --quiet -m "chore: re-measure the unit test durations from nightly run $RUN_ID (DRE-7577)"
+          git push --force origin "HEAD:refs/heads/$BRANCH"
+      # One pull request from the branch: opened when none is open, otherwise
+      # the open one is updated — the push above already moved its head.
+      - name: Open or update the pull request
+        if: steps.due.outputs.decision == 'refresh'
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+          RUN_ID: ${{ github.run_id }}
+          COVERAGE: ${{ steps.due.outputs.coverage }}
+        run: |
+          {
+            echo "The nightly Pipeline Tests run re-measured \`config/unit-test-durations.json\` from its own four part logs (run $RUN_ID), because $COVERAGE."
+            echo
+            echo "Under 90% every pull request that adds a test file fails \`test_the_durations_record_covers_the_live_tree\`, so this is re-measured about four days before that floor. Every walk keeps its seconds and its \`provenance\` line; every other file carries this run's seconds (DRE-7577)."
+            echo
+            echo "This pull request changes \`config/unit-test-durations.json\` and nothing else."
+          } > "$RUNNER_TEMP/durations-pr.md"
+          EXISTING=$(gh pr list --repo "$GITHUB_REPOSITORY" --head "$BRANCH" --base main --state open \
+            --json number --jq '.[0].number // ""')
+          if [ -n "$EXISTING" ]; then
+            gh pr edit "$EXISTING" --repo "$GITHUB_REPOSITORY" --body-file "$RUNNER_TEMP/durations-pr.md"
+            echo "updated the open pull request #$EXISTING — not opening a second"
+          else
+            gh pr create --repo "$GITHUB_REPOSITORY" --base main --head "$BRANCH" \
+              --title "chore: re-measure the unit test durations (nightly run $RUN_ID)" \
+              --body-file "$RUNNER_TEMP/durations-pr.md"
+          fi
+
   # THE WALKS RUN HERE, ON THEIR OWN CLOCK (DRE-6909). A walk copies the tree,
   # applies a console save and runs the model tests inside the copy, once per
   # case (`tests/console_change_walk.py`). On 2026-10-11 part 1 was canceled

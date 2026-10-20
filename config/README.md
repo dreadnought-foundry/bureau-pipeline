@@ -737,6 +737,20 @@ but a Sonnet is reviewed on Sonnet 5.5 as usual.
 `tests/test_review_separation.py::test_an_unknown_build_model_still_never_reviews_on_an_overlap_model`
 is what holds it.
 
+**One exception: a harness probe (DRE-7618).** In the test harness's sandbox,
+`dreadnought-foundry/bureau-harness` (`model_fallback.SANDBOX_REPO`) and nowhere
+else, the critic's Select model step reads a cardless pull request's build line
+out of its own description — `model_fallback.py probe-build-model`, the same
+`build_models` reading, and only when the author is the worker App
+(`agent-bureau-bot[bot]` or `app/agent-bureau-bot`). The harness writes nothing
+to Linear, so the description is where a probe says what built it; an
+Opus-built probe is then reviewed on Sonnet 5.5 and the step logs
+`probe-builder: <models> read from the pull request description`. Every other
+repo, author or unreadable description still runs `--built-on-unknown`, and a
+pull request with a card never reads its description for this.
+`tests/test_probe_builder_line.py` holds it. The verifier's step is unchanged:
+no verifier runs on a probe.
+
 The overlap is not new in principle — the advisory ladder's own fallback is
 `claude-opus-5-5`, the workhorse **primary**, so reviewer and worker could
 coincide whenever the critic fell back. What is new is that the guarantee is
