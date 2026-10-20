@@ -862,3 +862,154 @@ def test_the_config_readme_names_the_in_review_kind():
     assert "In Review" in readme
     assert "`PROOF:` card held `In Review` for the operator" in readme
     assert "alarm_held_proofs" in readme
+
+
+# --------------------------------------------------------------------------- #
+# DRE-7739: a proof whose re-runs are spent is held for the operator           #
+# --------------------------------------------------------------------------- #
+#
+# On 2026-10-20, 8 of the fleet's 26 open proof-record pull requests had spent
+# both re-runs, and the dispatcher's hold for each reads `— needs an operator
+# reading …`. The held-for-operator read knew only `the operator's decision
+# on` and `the operator's press`, so it filed seven of the eight as waiting on
+# an event and none alarmed — agent-bureau sweep run 39475210381 logged
+# `held-proof: DRE-7251 not held for the operator — its hold waits on an event
+# (an operator reading the critic's findings…)`.
+
+#: Every hold the dispatcher writes when a budget is spent: the first run's
+#: two dispatches, and each trigger's two re-runs.
+BUDGET_SPENT = [
+    (proof_dispatch.EXHAUSTED_OBSERVED, proof_dispatch.EXHAUSTED_NEEDS),
+    (proof_dispatch.RERUN_EXHAUSTED_OBSERVED, proof_dispatch.RERUN_EXHAUSTED_NEEDS),
+    (proof_dispatch.GATE_EXHAUSTED_OBSERVED, proof_dispatch.GATE_EXHAUSTED_NEEDS),
+]
+#: ...and the two it writes when a re-run finished and read nothing new.
+UNANSWERED = [
+    (proof_dispatch.RERUN_UNANSWERED_OBSERVED, proof_dispatch.RERUN_UNANSWERED_NEEDS),
+    (proof_dispatch.GATE_UNANSWERED_OBSERVED, proof_dispatch.GATE_UNANSWERED_NEEDS),
+]
+RERUN_2 = ("🔬 proof-run: dispatched a proof run at 10:00 PT — re-run after the "
+           "critic's findings at abcdef0 (re-run 2 of 2)")
+
+
+def _defined_needs() -> dict:
+    """Every hold-need wording the dispatcher defines, by its name: each
+    module string named `*_NEEDS`, and the press a waiting row names."""
+    found = {name: value for name, value in vars(proof_dispatch).items()
+             if name.endswith("_NEEDS") and isinstance(value, str)}
+    found["OPERATOR_PRESS"] = proof_dispatch.OPERATOR_PRESS
+    return found
+
+
+class TestABudgetSpentHold:
+    def test_both_triggers_hold_on_the_budget_spent_wordings(self):
+        """The critic's trigger names its own pair; the gate's is the same
+        tuple shape, read off the constants `_declined` hands `_Trigger`."""
+        trigger = proof_dispatch._Pass._sent_back(
+            None, [{"createdAt": "2026-10-20T17:00:00Z"}], 985)
+        assert trigger.exhausted == BUDGET_SPENT[1]
+        assert trigger.unanswered == UNANSWERED[0]
+
+    @pytest.mark.parametrize("observed,needs", BUDGET_SPENT + UNANSWERED)
+    def test_each_hold_is_held_for_the_operator(self, observed, needs):
+        node = _hold(needs, 3.0, observed=observed)
+        clock, kind, why_not = reconcile._held_for_operator(
+            _review_card(nodes=[_node(RERUN, 30.0), _node(RERUN_2, 10.0), node]))
+        assert clock is node, why_not
+        assert kind == "operator's-reading hold"
+        assert why_not == ""
+
+    @pytest.mark.parametrize("observed,needs", BUDGET_SPENT)
+    def test_past_24_hours_it_alarms_once(self, observed, needs, capsys):
+        """DRE-7251's shape: two re-run receipts, then the budget hold. The
+        receipts came before the hold, so they spend nothing."""
+        held = _hold(needs, 25.5, observed=observed)
+        card = _review_card(nodes=[_node(RERUN, 60.0), _node(RERUN_2, 40.0), held])
+        got = _held_sweep([card], capsys)
+        _alarmed_once(got, held)
+        assert _held_line(got).endswith(
+            f"(clock: its operator's-reading hold of {reconcile._pt(held['createdAt'])})")
+
+    def test_the_sweeps_dre_7251_line_is_gone(self, capsys):
+        held = _hold(proof_dispatch.RERUN_EXHAUSTED_NEEDS, 25.5,
+                     observed=proof_dispatch.RERUN_EXHAUSTED_OBSERVED)
+        got = _held_sweep([_review_card(nodes=[held])], capsys)
+        assert "waits on an event" not in _held_line(got)
+        assert "held-proof: nothing held" not in got.out
+
+    def test_a_re_run_after_it_still_spends_it(self, capsys):
+        held = _hold(proof_dispatch.GATE_EXHAUSTED_NEEDS, 30.0,
+                     observed=proof_dispatch.GATE_EXHAUSTED_OBSERVED)
+        got = _held_sweep([_review_card(nodes=[held, _node(RERUN, 20.0)])], capsys)
+        _wrote_nothing(got)
+        assert _held_line(got) == (
+            "held-proof: DRE-7001 not held for the operator — its operator's-reading "
+            f"hold of {reconcile._pt(held['createdAt'])} is spent: re-run "
+            "dispatched after it")
+
+
+class TestEveryWordingIsClassified:
+    def test_every_wording_the_dispatcher_defines_is_operator_or_event(self):
+        defined = _defined_needs()
+        classified = set(proof_dispatch.OPERATOR_NEEDS) | set(proof_dispatch.EVENT_NEEDS)
+        unclassified = sorted(name for name, value in defined.items()
+                              if value not in classified)
+        assert not unclassified, (
+            f"hold-need wording(s) {', '.join(unclassified)} in proof_dispatch.py "
+            "are in neither OPERATOR_NEEDS nor EVENT_NEEDS — say who each waits on")
+
+    def test_the_read_finds_the_wordings_it_must(self):
+        """Not vacuous: the five operator's readings and the press are found."""
+        assert len(_defined_needs()) >= 6
+
+    def test_no_wording_is_both(self):
+        both = set(proof_dispatch.OPERATOR_NEEDS) & set(proof_dispatch.EVENT_NEEDS)
+        assert not both
+
+    def test_the_sweep_reads_the_dispatchers_vocabulary_not_a_copy(self):
+        """A wording added to `OPERATOR_NEEDS` is held the day it is written."""
+        with patch.object(proof_dispatch, "OPERATOR_NEEDS",
+                          proof_dispatch.OPERATOR_NEEDS + ("a wording added today",)):
+            clock, _, _ = reconcile._held_for_operator(
+                _review_card(nodes=[_hold("a wording added today: read row 2", 3.0)]))
+        assert clock is not None
+
+    @pytest.mark.parametrize("needs", sorted(set(_defined_needs().values())))
+    def test_each_wording_reads_as_its_class(self, needs):
+        clock, _, why_not = reconcile._held_for_operator(
+            _review_card(nodes=[_hold(needs, 3.0)]))
+        if needs in proof_dispatch.OPERATOR_NEEDS:
+            assert clock is not None, why_not
+        else:
+            assert clock is None and "waits on an event" in why_not
+
+
+class TestAnEventHoldStaysAnEvent:
+    @pytest.mark.parametrize("needs", [
+        "the weekly report of 2026-10-18",
+        "the window's close at 2026-10-17 18:59:16 PT",
+        "the next nightly full run on main",
+        "a pull request in each repo whose base gained a new test",
+        f"{linear_ops.NOT_BEFORE}2026-10-21T09:00:00-07:00",
+    ])
+    def test_a_date_or_a_future_run_is_an_event(self, needs, capsys):
+        got = _held_sweep([_review_card(nodes=[_hold(needs, 25.5)])], capsys)
+        _wrote_nothing(got)
+        assert _held_line(got) == (
+            "held-proof: DRE-7001 not held for the operator — its hold waits on "
+            f"an event ({needs}), not the operator")
+
+    def test_every_event_wording_the_dispatcher_defines_reads_as_one(self):
+        for opening in proof_dispatch.EVENT_NEEDS:
+            needs = f"{opening}2026-10-21T09:00:00-07:00"
+            clock, _, why_not = reconcile._held_for_operator(
+                _review_card(nodes=[_hold(needs, 3.0)]))
+            assert clock is None
+            assert why_not == f"its hold waits on an event ({needs}), not the operator"
+
+    def test_an_event_hold_after_a_budget_hold_spends_nothing(self, capsys):
+        held = _hold(proof_dispatch.RERUN_EXHAUSTED_NEEDS, 25.5,
+                     observed=proof_dispatch.RERUN_EXHAUSTED_OBSERVED)
+        event = _hold(EVENT_NEEDS, 24.5)
+        got = _held_sweep([_review_card(nodes=[held, event])], capsys)
+        _alarmed_once(got, held)

@@ -794,6 +794,23 @@ def _past_cause_hold(holds: list) -> list:
 #: A waiting row's event that names the operator's press (DRE-6837).
 OPERATOR_PRESS = "the operator's press"
 
+#: Every `needs` wording this dispatcher defines for a hold, by who it waits
+#: on (DRE-7739). The operator's: the press a waiting row names, and the five
+#: holds that stop a proof for an operator's reading — the first run's two
+#: dispatches spent, and under either trigger the two re-runs spent or a
+#: re-run that finished and answered nothing. An event's: the time-only
+#: clause this phase lifts itself (DRE-7228). A waiting row's own event — a
+#: date, a run to come — is the record's wording, not one defined here, and
+#: is an event's unless it opens `OPERATOR_PRESS`. The sweep's held-for-
+#: operator read (`reconcile._held_for_operator`) reads `OPERATOR_NEEDS`
+#: itself, never a copy: before this, seven of eight budget-spent holds were
+#: filed as event waits and never alarmed. A `*_NEEDS` wording in neither
+#: tuple fails `tests/test_hand_work_age.py`, which names it.
+OPERATOR_NEEDS = (OPERATOR_PRESS, EXHAUSTED_NEEDS,
+                  RERUN_EXHAUSTED_NEEDS, RERUN_UNANSWERED_NEEDS,
+                  GATE_EXHAUSTED_NEEDS, GATE_UNANSWERED_NEEDS)
+EVENT_NEEDS = (linear_ops.NOT_BEFORE,)
+
 
 def _waiting_criterion(criterion: str, event: str) -> str:
     """The criterion as a waiting hold names it: one waiting on the
