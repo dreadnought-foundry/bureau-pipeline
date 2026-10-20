@@ -74,6 +74,8 @@ class World:
         return json.dumps(self.prs)
 
     def gql(self, query, variables=None):
+        if "viewer" in query and not variables:
+            return {"viewer": {"id": "pipeline"}}
         card = self.cards.get((variables or {}).get("id"))
         if card is None:
             raise linear_ops.LinearError("no such card")

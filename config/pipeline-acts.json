@@ -1402,6 +1402,13 @@
       "why": "Act-shaped — it reports a recovery — and the registry has no row for it. Giving it a row is a REGISTRY change that would have to ship console-first (docs/pipeline-acts.md), not an emission change. The `🔧 proof-record-red #<n> @<sha8>` mark it opens with is the idempotency key the next sweep reads back before it would dispatch the fix agent at that head again, so a trailer is a change to that key; the card that declares the act owns both."
     },
     {
+      "file": "scripts/proof_record_stuck.py",
+      "anchor": "linear_ops.cmd_comment(ident, note(pr, lines, hours))",
+      "kind": "undeclared-act",
+      "means": "An open proof record nothing in the pipeline will move — its card in a lane the proof dispatcher does not read, carrying needs-human, a draft with no hold, or no record the gate can read — is named on its card with what moves it, at most once a day (DRE-7742).",
+      "why": "Act-shaped — it reports a hold no writer will clear — and the registry has no row for it. Giving it a row is a REGISTRY change that would have to ship console-first (docs/pipeline-acts.md), not an emission change. The `🧱 proof-record-stuck #<n>:` mark it opens with is the once-a-day key the next sweep reads back before it names the record again, so a trailer is a change to that key; the card that declares the act owns both."
+    },
+    {
       "file": "scripts/reconcile.py",
       "anchor": "head_desync.unresolved_notice(number, head, tip, \"after\")",
       "kind": "undeclared-act",

@@ -10020,6 +10020,17 @@ def _unowned_notice(pr: dict) -> str:
     )
 
 
+def name_unmovable_proof_records() -> None:
+    """DRE-7742: name, on its card, an open proof record no part of the
+    pipeline will move — its card in a lane the proof dispatcher does not
+    read, carrying needs-human, a draft with no hold, or no record the gate
+    can read. The rule is `proof_record_stuck`'s; its failures are the
+    sweep's. Imported here: it imports this module."""
+    import proof_record_stuck  # noqa: PLC0415 — the import cycle above
+
+    _write_failures.extend(proof_record_stuck.sweep())
+
+
 def flag_unowned_prs(now: str | None = None) -> None:
     """DRE-2426 watchdog: report open PRs no automation will ever touch.
 
@@ -14999,6 +15010,9 @@ def main(
             resync_desynced_heads,
             flag_no_checks_prs,
             flag_unowned_prs,
+            # DRE-7742, beside the unowned-PR watchdog because it is the same
+            # question asked of a proof record: open, and nothing will move it.
+            name_unmovable_proof_records,
             flag_unlanded_work,
             # DRE-4486, beside the unlanded-work watchdog because they are the
             # two halves of "work that no gate can see": that one is a branch
