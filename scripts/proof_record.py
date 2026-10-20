@@ -33,7 +33,10 @@ or read the hold. Both now do, through this module:
    close (DRE-6489). `time_only` (DRE-7228) reads one of those holds as
    waiting only for a time — the `not-before=<T>` clause
    `linear_ops.py proof-waiting-until` writes, and nothing else — which the
-   proof dispatcher lifts once the time passes.
+   proof dispatcher lifts once the time passes. `unread_notes` (DRE-7743)
+   finds a note opening `🔬 proof-observed` without its colon, which
+   discharges nothing, and `unread_reply` is the one line the dispatcher
+   answers it with.
 4. **The record finder**, new: the ONE `.md` file the pull request ADDS under
    `docs/` or `architecture/` (`find_record`, over `gh pr view --json files`),
    read at a given sha through the contents API (`fetch`). No match, or two, is
@@ -349,6 +352,51 @@ def open_holds_at(voices: list) -> list:
               and voice.kind in (spoken_thread.PIPELINE, spoken_thread.PERSON)):
             held = [h for h in held if CEO_PRESS in h[0]]
     return held
+
+
+#: The mark with nothing after it: what a note opens that was meant to be a
+#: `🔬 proof-observed` line, colon or not (DRE-7743).
+OBSERVED_STEM = f"{linear_ops.PROOF_MARK} {linear_ops.PROOF_OBSERVED_MARK}"
+#: Opens the sweep's reply to a note that opens `OBSERVED_STEM` without the
+#: colon. Never `OBSERVED_STEM` itself, or the reply would be answered too.
+UNREAD_MARK = f"{linear_ops.PROOF_MARK} proof-note-unread:"
+
+
+def unread_notes(voices: list) -> list:
+    """The voices opening `OBSERVED_STEM` followed by anything but the colon
+    (DRE-7743). The mark stays exact — `open_holds` reads none of them as a
+    discharge — so each is a note that discharged nothing and said nothing.
+    On 2026-10-18 DRE-5407's opened `🔬 proof-observed —`, and the card was
+    named held for two days with nothing on it saying why."""
+    out = []
+    for voice in voices:
+        body = (voice.body or "").lstrip()
+        if body.startswith(OBSERVED_STEM) and not body.startswith(OBSERVED_MARK):
+            out.append(voice)
+    return out
+
+
+def unread_reply(voice) -> str:
+    """The one line the sweep answers an unread note with: its time, its
+    first line quoted, that it discharged nothing, and why. The quote is the
+    note's own text posted under the pipeline's key, so it carries no verdict
+    marker."""
+    import merge_gate  # noqa: PLC0415 — lazy: it imports this module lazily too
+
+    quoted = merge_gate.without_verdict_markers(_cut(_first_line(voice.body), 200))
+    return (f"{UNREAD_MARK} the note of "
+            f"{spoken_thread.pacific_label(voice.created_at)} “{quoted}” "
+            f"discharged nothing — a note is read only when it opens "
+            f"“{OBSERVED_MARK}” with the colon, and a dash or anything else in "
+            f"its place is not read as one. Post it again opening "
+            f"“{OBSERVED_MARK}” to discharge the hold.")
+
+
+def unanswered_notes(voices: list) -> list:
+    """`unread_notes` the thread carries no `unread_reply` for yet — the
+    reply is posted once, and found again by its whole line."""
+    said = {_first_line(v.body) for v in voices}
+    return [v for v in unread_notes(voices) if unread_reply(v) not in said]
 
 
 #: What opens a hold's `needs` half; the half is the text after the last one.

@@ -51,6 +51,12 @@ nothing: the card stays in the lane it is in while its record is amended.
      held on that pass. Before its time the line adds `— lifts at <PT>`. A
      time hold beside any other open hold lifts nothing — one note would
      lift that hold too — and the line names the hold that still holds.
+
+     The colon is part of the mark (DRE-7743). A comment opening
+     `🔬 proof-observed` with anything else after it discharges nothing,
+     and whichever read sees it first — the lane read's window or the
+     thread read — answers it once with `proof_record.unread_reply`,
+     quoting its first line. Not live, `would: answer` and nothing written.
   5. Nobody else is on it and its run is not alive: only `none`,
      `never-started` and `dead` go on.
   6. The first-run budget: two dispatches. The second names why the first
@@ -825,6 +831,9 @@ class _Pass:
         self.run_state, self.release, self.fire = run_state, release, fire
         self.voices, self.now = voices, now
         self.tally = Tally()
+        #: The unread-note replies this pass posted or would post (DRE-7743),
+        #: so a note the lane read and the thread read both see is answered once.
+        self.answered: set = set()
 
     # -- the reads every candidate shares (conditions 2 and 3) ------------- #
 
@@ -860,7 +869,32 @@ class _Pass:
         except Exception as error:  # noqa: BLE001
             raise _condition(4, "hold", f"the thread could not be read, so no "
                                         f"hold can be ruled out: {error}")
+        self._answer_unread(ident, voices)
         return comments, viewer, voices
+
+    def _answer_unread(self, ident: str, voices: list) -> None:
+        """Answer each note opening `🔬 proof-observed` without its colon
+        that the thread has not answered yet, once (DRE-7743): one
+        `proof_record.unread_reply` line under the pipeline's key. The note
+        still discharges nothing; the reply says so on the card, where the
+        person who wrote it reads. Not live, `would:` and nothing written; a
+        reply not posted is a failure of the pass, and the card is read on."""
+        for voice in proof_record.unanswered_notes(voices):
+            reply = proof_record.unread_reply(voice)
+            if (ident, reply) in self.answered:
+                continue
+            self.answered.add((ident, reply))
+            if not self.live:
+                print(f"would: answer {ident} — {reply}")
+                continue
+            try:
+                linear_ops.cmd_comment(ident, reply)
+            except Exception as error:  # noqa: BLE001
+                self.tally.failures.append(f"{ident}: the unread-note reply "
+                                           f"could not be posted: {error}")
+                _say(ident, f"ERROR: the unread-note reply could not be posted: {error}")
+                continue
+            _say(ident, f"answered: {reply}")
 
     # -- a first run -------------------------------------------------------- #
 
@@ -878,6 +912,7 @@ class _Pass:
             voices = self.voices(window, None, card=card["identifier"])
         except Exception:  # noqa: BLE001 — unread rules nothing out
             return None
+        self._answer_unread(card["identifier"], voices)
         marks = [i for i, v in enumerate(voices)
                  if (v.body or "").lstrip().startswith(HOLD_MARK)]
         if not marks:

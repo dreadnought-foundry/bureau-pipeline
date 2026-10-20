@@ -139,6 +139,16 @@ leave the next reader finding a fresh hold exactly where the observation is; it
 is declared `not-an-act` in the registry's `unconverted` block instead, with
 that reason, where the debt is countable.
 
+**The colon is part of the mark** (DRE-7743). A comment opening
+`🔬 proof-observed` with anything else after it — DRE-5407's opened
+`🔬 proof-observed —` on 2026-10-18 and its card was named held for two days —
+discharges nothing, and the proof dispatcher answers it once on the card:
+`🔬 proof-note-unread: the note of <PT> “<its first line>” discharged nothing —`
+and why (`proof_record.unread_reply`). The mark is never loosened to read the
+dash; the reply is found again by its whole first line, so no pass posts it
+twice. It is declared `not-an-act` in the `unconverted` block, for the same
+reason as the discharge record.
+
 Both commands refuse an empty half, and refuse a text containing `budget
 exhausted` or `holding for a human` — the console's `enrich.HOLD_MARKERS` reads
 either phrase as a fix-budget hold, and the card would render as the wrong kind
