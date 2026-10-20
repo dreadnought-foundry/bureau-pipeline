@@ -4,7 +4,8 @@
     "tests/test_console_agent_move_keeps_the_suite_green.py": "tests/test_console_agent_move_keeps_the_suite_green.py alone, measured locally for DRE-6889 (2026-10-11, 4 cores, 633.36 s for its 46 tests: 20 agent-move cases, each the whole model, session and console suite in a copy of the tree)",
     "tests/test_console_change_keeps_the_suite_green.py": "tests/test_console_change_keeps_the_suite_green.py, which has no desk measurement because its slow cases skip in the walks job, at 29 s, the longest the walks job has taken for it (0m29s in job 114573848564, run 38174492643, 2026-10-11)",
     "tests/test_console_every_default_keeps_the_suite_green.py": "tests/test_console_every_default_keeps_the_suite_green.py alone, measured locally for DRE-6935 (2026-10-11, 4 cores, 583 s for its 42 tests)",
-    "tests/test_console_project_model_keeps_the_suite_green.py": "tests/test_console_project_model_keeps_the_suite_green.py alone, measured locally for DRE-6883 (2026-10-11, 4 cores, 442.62 s for its 46 tests once it walks every project and every group), because no CI run had timed that file yet"
+    "tests/test_console_project_model_keeps_the_suite_green.py": "tests/test_console_project_model_keeps_the_suite_green.py alone, measured locally for DRE-6883 (2026-10-11, 4 cores, 442.62 s for its 46 tests once it walks every project and every group), because no CI run had timed that file yet",
+    "tests/test_probe_builder_line.py": "tests/test_probe_builder_line.py, new for DRE-7618, at 7.13 s, read off its pytest -v result lines in CI run 39314127114, job 118304197436 (part 3) (PR #1181, 2026-10-19, head c01786e), because it took the record under its 90% coverage"
   },
   "seconds": {
     "tests/fixtures/mirror-check/agent-bureau/console/backend/tests/test_unrelated.py": 0.01,
@@ -526,6 +527,7 @@
     "tests/test_pr_snapshot_wiring.py": 4.92,
     "tests/test_presubmit_commit_order.py": 1.24,
     "tests/test_presubmit_gate_prompt.py": 3.13,
+    "tests/test_probe_builder_line.py": 7.13,
     "tests/test_progress_acts.py": 1.19,
     "tests/test_project_model_exceptions.py": 6.89,
     "tests/test_project_reaches_planner_pickers.py": 2.03,
