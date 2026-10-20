@@ -27,7 +27,11 @@ or read the hold. Both now do, through this module:
    `row_cause` (DRE-6607) names the cause a `Not observed. cause: …` row
    carries — one of `proof_reach.causes()` — and `all_unmet_caused` says
    every unmet row carries one, which the dispatcher reads; the row stays
-   unmet, and `shortfall` still holds the record on it.
+   unmet, and `shortfall` still holds the record on it. Two markers only the
+   proof dispatcher reads (DRE-7740): `row_history` reads a `Not met.
+   history: …` row — observed, failed, and on a window or run that cannot
+   change, so it is not a cause — and `row_fixes` the `fix: DRE-<n>` that
+   closes an unmet row's cell. Nothing reads a fix out of free prose.
 3. **The hold-discharge reader** — `open_holds`, moved from `proof_dispatch`;
    `open_holds_at` is the same reading with each hold's time, for the PROOF
    close (DRE-6489). `time_only` (DRE-7228) reads one of those holds as
@@ -112,6 +116,11 @@ WAITING_OPENING = "Not observed. waiting for"
 #: ` — ` and what the run saw instead, is a row the run cannot observe as the
 #: card words it (DRE-6607): a re-run would read the same thing again.
 CAUSE_OPENING = "Not observed. cause:"
+#: A result cell opening with this, then the closed window or the finished run
+#: with its PT time, ` — ` and what it recorded, is a row that was observed and
+#: failed on something that cannot change (DRE-7740): every re-run reads the
+#: same result. It is not a cause — the run did observe the row as worded.
+HISTORY_OPENING = "Not met. history:"
 
 _FENCE = re.compile(r"^\s*(```|~~~)")
 _SEPARATOR_CELL = re.compile(r":?-+:?")
@@ -123,6 +132,12 @@ _WAITING = re.compile(r"not observed\.\s+waiting for\s+(\S.*)", re.IGNORECASE | 
 #: The word after `cause:`, known or not, and whether ` — <what it saw>` follows.
 _CAUSE = re.compile(r"not observed\.\s+cause:\s*([^\s—]+)(\s*—\s*\S)?",
                     re.IGNORECASE | re.DOTALL)
+_HISTORY = re.compile(r"not met\.\s+history:\s*(\S.*)", re.IGNORECASE | re.DOTALL)
+#: `fix: DRE-<n>[, DRE-<m>…]` closing the cell, `fix:` a word of its own — so
+#: `prefix:` and `hotfix:` are not it — and nothing after the ids but a stop.
+_FIXES = re.compile(r"(?<![\w-])fix:\s*(DRE-\d+(?:\s*,\s*DRE-\d+)*)\s*\.?\s*\Z",
+                    re.IGNORECASE)
+_FIX_ID = re.compile(r"DRE-\d+", re.IGNORECASE)
 #: The written decision, bare or inside a markdown link: a Linear comment on a
 #: card or a GitHub comment on a pull request. Its SHAPE is all that is read —
 #: nothing fetches it, so nothing here says the comment exists, who wrote it,
@@ -248,6 +263,34 @@ def row_cause(result: str) -> str | None:
         return None
     word = found.group(1)
     return word if word in proof_reach.causes() else None
+
+
+def row_history(result: str) -> str | None:
+    """What a `Not met. history:` row read, or None (DRE-7740).
+
+    Only a cell that opens `HISTORY_OPENING` (any case, markup and backticks
+    stripped as `row_cause` strips them) with text after it is a history row:
+    a criterion that reads a window that had closed, or a run that had
+    finished, before the run — so every re-run reads the same result. The
+    text after the opening is returned. Only the cell's opening is read."""
+    found = _HISTORY.match(_plain(result).replace("`", ""))
+    return " ".join(found.group(1).split()) if found else None
+
+
+def row_fixes(result: str) -> list:
+    """The cards a row names as its fix, in order and once each — or [] (DRE-7740).
+
+    Only `fix: DRE-<n>` or `fix: DRE-<n>, DRE-<m>` at the very end of the cell
+    (markup and backticks stripped) names a fix: the cards whose shipping
+    would make the row read differently. A DRE id anywhere else in the cell
+    is evidence citing a card, never a fix, and a history row's `fix:` is not
+    read — its window stays closed whatever ships."""
+    if row_history(result) is not None:
+        return []
+    found = _FIXES.search(_plain(result).replace("`", ""))
+    if found is None:
+        return []
+    return list(dict.fromkeys(i.upper() for i in _FIX_ID.findall(found.group(1))))
 
 
 def _unknown_cause(result: str) -> str | None:

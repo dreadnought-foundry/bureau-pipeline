@@ -357,9 +357,25 @@ RETURN_COUNT = "after the CEO's answer"
 RERUN_REASON = "re-run after the critic's findings at {sha7}"
 GATE_RERUN_REASON = "re-run after the gate's decline at {sha7}"
 RERUN_COUNT = "re-run {n} of 2"
+#: One more run on a spent re-run budget (DRE-7740). It does not open
+#: `re-run`, so the budget count is unchanged.
+REARM_COUNT = "re-armed"
+REARM_FIX_REASON = "re-run after {cards} shipped"
+REARM_NOTE_REASON = "re-run after the 🔬 proof-observed of {at}"
 
 #: The re-run budget: per record pull request, apart from the first run's.
 RERUN_BUDGET = 2
+#: How a spent budget's refusal ends: no re-arm event, no run (DRE-7740).
+NEVER_ANOTHER = "never another without a shipped fix or a new 🔬 proof-observed"
+#: The most fix cards one spent budget reads; with more, the line names them,
+#: nothing is read, and the operator's note is the route.
+REARM_FIX_CARDS = 3
+#: The state a fix card is shipped in. Canceled is not shipped.
+SHIPPED_STATE = "Done"
+#: How the proof-task return step's `🔬 proof-observed` of the CEO's answer
+#: opens (`proof-task.yml`) — a note the pipeline writes, which re-arms nothing.
+CEO_ANSWERED = "the CEO answered via the console at"
+_REARMED_FIX = re.compile(r"re-run after (DRE-\d+(?:, DRE-\d+)*) shipped")
 #: What the critic's newest verdict at the head must say for a re-run.
 SENT_BACK = "REQUEST_CHANGES"
 #: ...and for the gate's trigger (DRE-6488): the critic approved the record,
@@ -392,6 +408,12 @@ RERUN_UNANSWERED_NEEDS = ("an operator reading the critic's findings and the "
                           "re-run's thread")
 #: How the cause park's refusal line ends (DRE-6610).
 NEVER_AGAIN = "never re-run to read the same thing"
+#: What a history row read (DRE-7740), and the operator's-decision hold it
+#: gets — its `needs` half opens `proof_cause_park.CAUSE_HOLD_OPENING`, so the
+#: hold is read as the cause park's own is: past it once the record is read.
+HISTORY_READ = "read a closed window or a finished run"
+HISTORY_NEEDS = (f"{proof_cause_park.CAUSE_HOLD_OPENING} {{n}} row(s) that "
+                 f"{HISTORY_READ}: reword each on a new card, or drop the record")
 #: The same two holds when the gate's decline is what stands (DRE-6488).
 GATE_EXHAUSTED_OBSERVED = "the gate declined the record twice after re-observation"
 GATE_EXHAUSTED_NEEDS = ("an operator reading the gate's declined note and the two "
@@ -426,6 +448,10 @@ CARD_QUERY = """query($id: String!) { issue(id: $id) {
                children(first: 100) { nodes {
                  identifier title state { name } labels { nodes { name } } } } }
            } }""" % reconcile.INVERSE_RELATIONS_GQL
+
+#: A fix card, read for a re-arm (DRE-7740): only what shipping is read off.
+FIX_CARD_QUERY = """query($id: String!) { issue(id: $id) {
+                 identifier state { name } labels { nodes { name } } } }"""
 
 _DEAD = re.compile(r"^dead — (run \S+ ended .+? with no record)")
 #: The gate's hold note's first line (`evaluate_and_merge.sh`):
@@ -481,6 +507,13 @@ class LinearReads:
     def thread(self, identifier: str):
         return linear_ops._thread_and_viewer(identifier, "body", "user",
                                              "createdAt", whole=True)
+
+    def fix_card(self, identifier: str) -> dict:
+        """A card a record row names as its fix (DRE-7740): its state and labels."""
+        issue = (linear_ops.gql(FIX_CARD_QUERY, {"id": identifier}) or {}).get("issue")
+        if not issue:
+            raise LookupError(f"Linear answered no card for {identifier}")
+        return issue
 
 
 def github_read(path: str):
@@ -791,6 +824,32 @@ def _past_cause_hold(holds: list) -> list:
     return [h for h in holds if not proof_cause_park.is_cause_hold(h)]
 
 
+def _past_budget_hold(holds: list) -> list:
+    """`holds` without the re-run budget's own hold — the `🔬 proof-waiting`
+    whose observed half is `RERUN_EXHAUSTED_OBSERVED` or
+    `GATE_EXHAUSTED_OBSERVED` (DRE-7740). Read beside `_past_cause_hold`,
+    once the record at the head is read: the budget check decides instead,
+    and a re-arm event lets it run once more."""
+    budget = tuple(f"{HOLD_MARK} {observed} — needs "
+                   for observed in (RERUN_EXHAUSTED_OBSERVED, GATE_EXHAUSTED_OBSERVED))
+    return [h for h in holds if not h.startswith(budget)]
+
+
+def _is_history_hold(line: str) -> bool:
+    """Is `line` the history rows' hold (DRE-7740)? It is a cause hold by its
+    opening; the cause park reads past it, so its own stays its newest."""
+    return (proof_cause_park.is_cause_hold(line)
+            and f" row(s) that {HISTORY_READ}: " in line)
+
+
+def _pipeline_note(body: str) -> bool:
+    """Is this `🔬 proof-observed` one the pipeline writes itself — the time
+    lift (`LIFTED_BY`) or the return step's record of the CEO's answer
+    (`CEO_ANSWERED`)? Read off the wording, never the author (DRE-7740)."""
+    text = _first_line(body)[len(OBSERVED_MARK):].strip()
+    return LIFTED_BY in (body or "") or text.startswith(CEO_ANSWERED)
+
+
 #: A waiting row's event that names the operator's press (DRE-6837).
 OPERATOR_PRESS = "the operator's press"
 
@@ -810,6 +869,9 @@ def park_caused(one: "_Pass", ident: str, text: str, voices: list, lane: str) ->
     card was read in, and what it did. It makes no lane write (DRE-6837). Not
     live, it prints `would:` lines and writes nothing."""
     rows = proof_cause_park.rows_of(text)
+    # The history rows' hold opens as a cause hold does (DRE-7740); the park
+    # reads its own newest, so it never mistakes that one for a changed park.
+    voices = [v for v in voices if not _is_history_hold(_first_line(v.body))]
     return proof_cause_park.park(ident, rows, voices=voices, lane=lane,
                                  live=one.live)
 
@@ -986,10 +1048,14 @@ class _Pass:
             _say(ident, f"ERROR: the hold could not be posted: {error}")
 
     def _hold_once(self, ident: str, voices: list, observed: str,
-                   needs: str) -> None:
-        """`_hold`, unless the thread already carries this exact hold line."""
+                   needs: str, *, open_only: bool = False) -> None:
+        """`_hold`, unless the thread already carries this exact hold line —
+        with `open_only`, unless an open copy of it stands (DRE-7740: the
+        re-run budget's hold comes back once a re-armed run is spent)."""
         line = linear_ops.proof_waiting_line(observed, needs)
-        if not any(_first_line(v.body).startswith(line) for v in voices):
+        posted = (_open_holds(voices) if open_only
+                  else [_first_line(v.body) for v in voices])
+        if not any(held.startswith(line) for held in posted):
             self._hold(ident, observed, needs)
 
     def _released(self, issue: dict, ident: str) -> None:
@@ -1165,7 +1231,9 @@ class _Pass:
             # every hold stands (DRE-6814).
             text = self._record_at_head(ident, pr, number, head, trigger)
             if text is not None:
-                holds = _past_cause_hold(holds)
+                # ...and so is the re-run budget's own hold (DRE-7740): the
+                # budget check below decides, and a re-arm event lets it run.
+                holds = _past_budget_hold(_past_cause_hold(holds))
         if holds:
             note = f"; {UNCHECKED_NOTE}" if _unchecked_after_hold(voices) else ""
             raise _Refused(f"re-run: held by {holds[-1]}{note}", "held")
@@ -1182,9 +1250,12 @@ class _Pass:
             text = self._record_at_head(ident, pr, number, head, trigger)
         read = proof_record.reading(text) if text is not None else None
         self._waiting(ident, voices, trigger, read.unmet if read else [], head)
-        # Under either trigger (DRE-6837): a re-run would read the same thing.
-        if read is not None and proof_record.all_unmet_caused(read):
-            self._caused(ident, text, read, voices, head, lane)
+        if read is not None:
+            # History rows, alone or beside cause rows (DRE-7740), and cause
+            # rows alone (DRE-6837): a re-run would read the same thing.
+            self._history(ident, text, read, voices, head, lane)
+            if proof_record.all_unmet_caused(read):
+                self._caused(ident, text, read, voices, head, lane)
 
         # A receipt with no readable time is read as the newer, and counted:
         # unread never answers "nothing has been sent" or "budget left".
@@ -1192,29 +1263,134 @@ class _Pass:
                     if v.kind == spoken_thread.PIPELINE
                     and (r := proof_run_state.receipt(v.body or "")) is not None]
         newer = [r for when, r in receipts if when is None or when > trigger.at]
+        # One budget, whichever reader held the record: every `re-run`
+        # receipt since the pull request opened counts (DRE-6488).
+        opened = _when(pr.get("createdAt"))
+        since = [(when, r) for when, r in receipts
+                 if opened is None or when is None or when > opened]
+        spent = sum(1 for _, r in since if r.count.startswith("re-run"))
+        # A spent budget looks for a re-arm event before either refusal that
+        # ends it (DRE-7740): with one, neither refuses and one run goes.
+        rearm, unarmed = (self._rearm(ident, read, receipts, voices)
+                          if spent >= RERUN_BUDGET else (None, ""))
+        if rearm is not None:
+            return rearm, REARM_COUNT
         if newer and got.state == "finished":
             self._hold_once(ident, voices, *trigger.unanswered)
             raise _Refused(f"re-run: the run after the proof-run receipt of "
                            f"{newer[-1].at} reads finished, and "
                            f"{trigger.stands} still stands at {head[:7]} — held "
-                           f"for an operator: {why}", "held")
+                           f"for an operator: {why}{unarmed}", "held")
         if newer and got.state not in RERUN_AGAIN:
             raise _Refused(f"re-run: {trigger.answer[0]} at {head[:7]} is "
                            f"answered — the proof-run receipt of {newer[-1].at} "
                            f"is newer than {trigger.answer[1]} and its run reads "
                            f"{got.state}: {why}")
-        # One budget, whichever reader held the record: every `re-run`
-        # receipt since the pull request opened counts (DRE-6488).
-        opened = _when(pr.get("createdAt"))
-        spent = sum(1 for when, r in receipts
-                    if r.count.startswith("re-run")
-                    and (opened is None or when is None or when > opened))
         if spent >= RERUN_BUDGET:
-            self._hold_once(ident, voices, *trigger.exhausted)
+            observed, needs = trigger.exhausted
+            rearmed = [r for _, r in since if r.count == REARM_COUNT]
+            if rearmed:
+                needs = (f"{needs} — the re-armed run of {rearmed[-1].at} was "
+                         "its event's one run")
+            self._hold_once(ident, voices, observed, needs, open_only=True)
             raise _Refused(f"re-run: budget — {spent} re-runs on #{number} since "
-                           f"it opened and {trigger.again}; never a third", "held")
+                           f"it opened and {trigger.again}; {NEVER_ANOTHER}"
+                           f"{unarmed}", "held")
         return (trigger.reason.format(sha7=head[:7]),
                 RERUN_COUNT.format(n=spent + 1))
+
+    # -- the re-arm, once the budget is spent (DRE-7740) --------------------- #
+
+    def _rearm(self, ident: str, read, receipts: list, voices: list) -> tuple:
+        """`(reason, "")` for the re-arm event on a spent budget — a named fix
+        shipped, else a new `🔬 proof-observed` — or `(None, " — <why not>")`
+        for the refusal's line."""
+        reason, fix_why = self._fix_shipped(ident, read, receipts)
+        if reason is not None:
+            return reason, ""
+        note = self._new_note(voices, receipts)
+        if note is not None:
+            return REARM_NOTE_REASON.format(
+                at=spoken_thread.pacific_label(note.created_at)), ""
+        return None, (f" — {fix_why}; no 🔬 proof-observed of the operator's "
+                      "follows the newest proof-run receipt")
+
+    def _fix_shipped(self, ident: str, read, receipts: list) -> tuple:
+        """Event (a): every card the unmet rows name by `fix:` is Done, this
+        repo's, merged, and live — `(reason, "")`, else `(None, why)`. At most
+        `REARM_FIX_CARDS` cards are read, each once, and one release reading
+        is made for all their merges; the set re-arms once."""
+        if read is None:
+            return None, "the record was not read at the head, so it names no fix"
+        named = list(dict.fromkeys(card for _, result in read.unmet
+                                   for card in proof_record.row_fixes(result)))
+        if not named:
+            return None, "no unmet row of the record names a fix"
+        cards = ", ".join(named)
+        if len(named) > REARM_FIX_CARDS:
+            return None, (f"the record names {len(named)} fix cards ({cards}) — "
+                          f"more than three are not read; the operator's "
+                          "🔬 proof-observed is the route")
+        for _, earlier in receipts:
+            found = (_REARMED_FIX.fullmatch(earlier.reason)
+                     if earlier.count == REARM_COUNT else None)
+            if found and set(named) <= set(found.group(1).split(", ")):
+                return None, (f"{cards} already re-armed the run of {earlier.at} "
+                              "— a set re-arms once")
+        merges = []
+        for card in named:
+            try:
+                issue = self.linear.fix_card(card)
+            except Exception as error:  # noqa: BLE001 — unread is never shipped
+                return None, f"the fix {card} could not be read: {error}"
+            state_name = (issue.get("state") or {}).get("name")
+            if state_name != SHIPPED_STATE:
+                return None, (f"the fix {card} is {state_name or 'in no state'}, "
+                              f"not {SHIPPED_STATE}")
+            slug = reconcile.card_repo(issue)
+            if slug != self.slug:
+                return None, (f"the fix {card}'s repo: label names "
+                              f"{slug or 'no repo'}, not {self.slug} — its release "
+                              "is not this repo's to read; the operator's "
+                              "🔬 proof-observed is the route")
+            try:
+                pr = self.find_pr(card)
+            except Exception as error:  # noqa: BLE001
+                return None, f"the fix {card}'s pull request could not be read: {error}"
+            if card_pr.pr_state(pr) != card_pr.MERGED:
+                return None, f"the fix {card}'s pull request is not merged"
+            sha = (pr.get("mergeCommit") or {}).get("oid")
+            if not sha:
+                return None, (f"the fix {card}'s #{pr.get('number')} names no "
+                              "merge commit")
+            merges.append(proof_release.Merge(card, pr["number"], sha, []))
+        try:
+            got = self.release(self.repo, merges, read=self.read)
+        except Exception as error:  # noqa: BLE001
+            return None, f"the release carrying {cards} could not be read: {error}"
+        if got.state != "ready":
+            return None, (f"the release carrying {cards} is {got.state}: "
+                          + "; ".join(got.lines))
+        for line in got.lines:
+            print(f"{proof_release.TAG}: {ident} — {line}")
+        return REARM_FIX_REASON.format(cards=cards), ""
+
+    def _new_note(self, voices: list, receipts: list):
+        """Event (b): the newest `🔬 proof-observed` posted after the card's
+        newest `🔬 proof-run` receipt of any count — after the run that spent
+        the budget and after any earlier re-arm's run — or None. Notes the
+        pipeline writes itself never count (`_pipeline_note`), and a receipt
+        with no readable time leaves no note newer than it."""
+        stamps = [when for when, _ in receipts]
+        if not stamps or any(when is None for when in stamps):
+            return None
+        newest = max(stamps)
+        notes = [v for v in voices
+                 if (v.body or "").lstrip().startswith(OBSERVED_MARK)
+                 and v.kind in (spoken_thread.PIPELINE, spoken_thread.PERSON)
+                 and (when := _when(v.created_at)) is not None and when > newest
+                 and not _pipeline_note(v.body)]
+        return notes[-1] if notes else None
 
     def _sent_back(self, verdicts: list, number) -> _Trigger:
         """The critic's trigger: its `REQUEST_CHANGES` at the head."""
@@ -1300,15 +1476,44 @@ class _Pass:
         re-run would read the same thing. The card is held and asked through
         `park_caused`, left in `lane`, and never re-run at this head; a park
         that failed is a failure of the pass, and still never a re-run."""
+        said = self._cause_parked(ident, text, read, voices, head, lane)
+        raise _Refused(f"re-run: {said}, {NEVER_AGAIN}", "held")
+
+    def _cause_parked(self, ident: str, text: str, read, voices: list, head: str,
+                      lane: str) -> str:
+        """The cause rows through `park_caused`, and what it did — a park that
+        failed is a failure of the pass, said on the line."""
         words = ", ".join(dict.fromkeys(word for _, word in read.caused))
-        said = (f"re-run: {len(read.caused)} row(s) of the record at {head[:7]} "
+        said = (f"{len(read.caused)} row(s) of the record at {head[:7]} "
                 f"cannot be observed as worded (cause: {words}) — ")
         try:
-            said += park_caused(self, ident, text, voices, lane)
+            return said + park_caused(self, ident, text, voices, lane)
         except Exception as error:  # noqa: BLE001
             self.tally.failures.append(f"{ident}: the cause park was not "
                                        f"completed: {error}")
-            said += f"ERROR: the park was not completed: {error}"
+            return said + f"ERROR: the park was not completed: {error}"
+
+    def _history(self, ident: str, text: str, read, voices: list, head: str,
+                 lane: str) -> None:
+        """DRE-7740: a record whose unmet rows are all history rows or cause
+        rows, at least one a history row, is never re-run at this head — every
+        re-run reads the same closed window or finished run. Cause rows go to
+        `park_caused` as today; the history rows get one `🔬 proof-waiting`
+        through `_hold_once`, the operator's-decision hold, so it is read past
+        once the record at the head is read and the operator's amendment of
+        the record discharges it. No question is asked and nothing moves.
+        Beside any other unmet row the record is re-run as before."""
+        history = [c for c, result in read.unmet
+                   if proof_record.row_history(result) is not None]
+        if not history or len(history) + len(read.caused) != len(read.unmet):
+            return
+        said = (f"re-run: {len(history)} row(s) of the record at {head[:7]} "
+                f"{HISTORY_READ} — held for the operator")
+        if read.caused:
+            said += "; " + self._cause_parked(ident, text, read, voices, head, lane)
+        self._hold_once(ident, voices,
+                        "; ".join(proof_record._cut(c, 70) for c in history),
+                        HISTORY_NEEDS.format(n=len(history)))
         raise _Refused(f"{said}, {NEVER_AGAIN}", "held")
 
     def _waiting(self, ident: str, voices: list, trigger: _Trigger,
