@@ -44,10 +44,10 @@ comment added. The card is found by its title and its `repo:` label, never by
 the deferred line's wording, which is not readable from this repository.
 
 THE FINGERPRINT. `deferral_fingerprint` decides whether a reason changed, with
-times, commit ids and every other free-standing number replaced. The cost is
-named on the card: two reasons that differ only in a number are one reason —
-a count that grew included — and each lap's `release-deferred:` line still
-carries the live reason verbatim.
+times, commit ids and every other free-standing number replaced, and Linear's
+markdown escapes undone (DRE-7744). The cost is named on the card: two reasons
+that differ only in a number are one reason — a count that grew included —
+and each lap's `release-deferred:` line still carries the live reason verbatim.
 
 NO IMPORT OF `release_train`. The train imports this module; importing it
 back would be a cycle. The three strings shared with the train are written
@@ -111,6 +111,7 @@ RELEASE_ACT = "release"
 
 REPO_MAP = Path(__file__).resolve().parent.parent / "config" / "repo-map.json"
 
+_ESCAPE = re.compile(r"\\([!-/:-@\[-`{-~])")
 _TIME = re.compile(r"\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}"
                    r"(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?")
 _SHA = re.compile(r"(?<![A-Za-z0-9])[0-9a-fA-F]{7,40}(?![A-Za-z0-9])")
@@ -119,14 +120,22 @@ _NUMBER = re.compile(r"(?<![A-Za-z0-9_-])\d+(?:\.\d+)?(?:ms|s|m|h|d)?"
 
 
 def deferral_fingerprint(reason: str) -> str:
-    """The reason with what changes lap to lap replaced, in this order: an
-    ISO-8601 timestamp is `<time>`, a run of 7 to 40 hex characters with no
-    letter or digit on either side is `<sha>`, and every other free-standing
-    number — digits, an optional decimal part, an optional unit `ms`, `s`,
-    `m`, `h` or `d`, with no letter, digit, `_` or `-` on either side — is
-    `<n>`. A number joined to a word by a hyphen stays: `d-2024-plan` and
-    `d-2025-plan` are two documents."""
-    text = _TIME.sub("<time>", reason)
+    """The reason with what changes lap to lap replaced, in this order: a
+    markdown backslash escape — a `\\` before an ASCII punctuation character
+    — is undone, an ISO-8601 timestamp is `<time>`, a run of 7 to 40 hex
+    characters with no letter or digit on either side is `<sha>`, and every
+    other free-standing number — digits, an optional decimal part, an
+    optional unit `ms`, `s`, `m`, `h` or `d`, with no letter, digit, `_` or
+    `-` on either side — is `<n>`. A number joined to a word by a hyphen
+    stays: `d-2024-plan` and `d-2025-plan` are two documents.
+
+    The escapes are Linear's (DRE-7744): it stores a description as markdown,
+    so the line written as `/home/runner/_work/…` reads back as
+    `/home/runner/\\_work/…`, while a comment reads back as written. Both
+    sides of the comparison pass through here, so a reason read off either
+    matches the lap's."""
+    text = _ESCAPE.sub(r"\1", reason)
+    text = _TIME.sub("<time>", text)
     text = _SHA.sub("<sha>", text)
     return _NUMBER.sub("<n>", text)
 
