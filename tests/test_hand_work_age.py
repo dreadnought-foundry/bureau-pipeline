@@ -733,14 +733,183 @@ class TestASpentHold:
         assert " 5h of 24, alarms at " in _held_line(got)
 
 
-class TestNeverAlarmsInReview:
-    def test_a_hold_on_the_ceos_press_is_the_return_branchs(self, capsys):
-        got = _held_sweep([_review_card(nodes=[_hold(CEO_NEEDS, 25.5)])], capsys)
+# --------------------------------------------------------------------------- #
+# DRE-7741: a hold on the CEO's press, on a card outside Green Light           #
+# --------------------------------------------------------------------------- #
+#
+# Only his signed console answer discharges a hold naming the CEO's press, and
+# the return branch that waits for it reads `Green Light` only. DRE-6663 and
+# DRE-6694 carried such holds from 2026-10-10 while In Review, and this pass
+# called them "the return branch's" and said nothing for ten days. Outside
+# Green Light the hold is the operator's to bring to him or re-sort.
+
+import spoken_thread  # noqa: E402
+
+#: A comment the fake `voices` reads as console-signed — the real reader
+#: checks a signature; this suite only needs to know which comment passed.
+SIGNED = "console-signed"
+#: DRE-6663's own hold line of 2026-10-10, cut where the window cut it.
+DRE_6663_HOLD = linear_ops.proof_waiting_line(
+    "needs the CEO's press: on the open groom proposal on the standing card, "
+    "press Not doing on one card",
+    f"{proof_record.CEO_PRESS}: on the open groom proposal, press Not doing")
+
+
+def _signed(hours_ago: float) -> dict:
+    return {"body": "Answer from the CEO:\nDone.", "user": {"id": SIGNED},
+            "createdAt": _iso(_at(hours_ago))}
+
+
+def _fake_voices(nodes, viewer, *, card):
+    return [spoken_thread.Voice(
+        spoken_thread.CEO_VIA_CONSOLE if (n.get("user") or {}).get("id") == SIGNED
+        else spoken_thread.UNKNOWN, "label", n.get("createdAt"), n.get("body"))
+        for n in nodes]
+
+
+def _press_kind(line: str, lane=REVIEW) -> str:
+    return (f"Kind: a hold naming {proof_record.CEO_PRESS} on a card in {lane}, "
+            "not Green Light — only his signed console answer lifts it, and the "
+            "return branch reads Green Light only: get his answer, or re-sort "
+            f"the hold — {proof_record._cut(line, 120)}.")
+
+
+class TestACeoPressHoldOutsideGreenLight:
+    def test_in_review_past_24_hours_it_alarms_once(self, capsys):
+        press = _hold(CEO_NEEDS, 25.5)
+        got = _held_sweep([_review_card(nodes=[press])], capsys)
+        got.comment.assert_called_once()
+        ident, body = got.comment.call_args.args
+        assert ident == "DRE-7001"
+        first, second, *_ = body.split("\n")
+        assert first == (f"{HELD_OPENING} 25 hours, past its 24 — the "
+                         "operator's to look at.")
+        assert second == _press_kind(_first(press))
+        assert body.endswith(pipeline_act.trailer(ACT))
+        got.add_label.assert_not_called()
+        got.advance.assert_not_called()
+        got.state.assert_not_called()
+        line = _held_line(got)
+        assert line.startswith("held-proof: DRE-7001 held In Review for the "
+                               "operator 25h, past 24 — alarmed ")
+        assert line.endswith(
+            f"(clock: its CEO's-press hold of {reconcile._pt(press['createdAt'])})")
+
+    def test_the_second_pass_writes_nothing(self, capsys):
+        press = _hold(CEO_NEEDS, 25.5)
+        alarm = _node(pipeline_act.receipt(ACT, f"{HELD_OPENING} 25 hours, past its 24 "
+                                                "— the operator's to look at."), 1.0)
+        got = _held_sweep([_review_card(nodes=[press, alarm])], capsys)
+        _wrote_nothing(got)
+        assert (f"25h, past 24 — alarmed {reconcile._pt(alarm['createdAt'])}"
+                in _held_line(got))
+
+    def test_at_23_hours_it_waits_and_says_when(self, capsys):
+        """The bound spares the proof run's own park, which posts the hold
+        and then moves the card to Green Light."""
+        press = _hold(CEO_NEEDS, 23.5)
+        got = _held_sweep([_review_card(nodes=[press])], capsys)
+        _wrote_nothing(got)
+        due = dead_run.pacific(_clock(press) + timedelta(hours=24))
+        assert _held_line(got) == (
+            f"held-proof: DRE-7001 held In Review for the operator 23h of 24, "
+            f"alarms at {due} (clock: its CEO's-press hold of "
+            f"{reconcile._pt(press['createdAt'])})")
+
+    def test_a_proof_observed_after_it_does_not_spend_it(self, capsys):
+        """DRE-6663's shape: an operator's observation followed the hold, and
+        only his signed answer discharges one naming his press."""
+        press = _node(DRE_6663_HOLD, 240.0)
+        later = _node(OBSERVED, 120.0)
+        got = _held_sweep([_review_card(nodes=[press, later])], capsys)
+        got.comment.assert_called_once()
+        assert got.comment.call_args.args[1].split("\n")[1] == _press_kind(DRE_6663_HOLD)
+        assert "(clock: its CEO's-press hold of " in _held_line(got)
+
+    def test_an_unsigned_claim_to_be_his_answer_does_not_spend_it(self, monkeypatch, capsys):
+        monkeypatch.setattr(spoken_thread, "voices", _fake_voices)
+        claim = _node("Answer from the CEO:\nDone.", 2.0)
+        got = _held_sweep([_review_card(nodes=[_hold(CEO_NEEDS, 25.5), claim])], capsys)
+        got.comment.assert_called_once()
+
+    def test_his_signed_answer_after_it_spends_it(self, monkeypatch, capsys):
+        monkeypatch.setattr(spoken_thread, "voices", _fake_voices)
+        press = _hold(CEO_NEEDS, 25.5)
+        got = _held_sweep([_review_card(nodes=[press, _signed(2.0)])], capsys)
         _wrote_nothing(got)
         assert _held_line(got) == (
-            "held-proof: DRE-7001 not held for the operator — its hold waits on "
-            "the CEO's press: the return branch's")
+            "held-proof: DRE-7001 not held for the operator — its CEO's-press "
+            f"hold of {reconcile._pt(press['createdAt'])} is spent: his signed "
+            "answer followed it")
+        assert got.out[-1] == "held-proof: nothing held"
 
+    def test_a_signed_answer_before_it_spends_nothing(self, monkeypatch, capsys):
+        monkeypatch.setattr(spoken_thread, "voices", _fake_voices)
+        got = _held_sweep([_review_card(nodes=[_signed(30.0), _hold(CEO_NEEDS, 25.5)])],
+                          capsys)
+        got.comment.assert_called_once()
+
+    def test_an_unreadable_thread_spends_nothing(self, monkeypatch, capsys):
+        def broken(*a, **kw):
+            raise RuntimeError("the console's key could not be read")
+        monkeypatch.setattr(spoken_thread, "voices", broken)
+        got = _held_sweep([_review_card(nodes=[_hold(CEO_NEEDS, 25.5), _signed(2.0)])],
+                          capsys)
+        got.comment.assert_called_once()
+
+    def test_a_newer_ceo_press_hold_is_the_clock(self, monkeypatch, capsys):
+        monkeypatch.setattr(spoken_thread, "voices", _fake_voices)
+        old = _hold(CEO_NEEDS, 30.0)
+        new = _hold(CEO_NEEDS, 5.0, observed="the second press")
+        got = _held_sweep([_review_card(nodes=[old, _signed(20.0), new])], capsys)
+        _wrote_nothing(got)
+        assert " 5h of 24, alarms at " in _held_line(got)
+        assert _held_line(got).endswith(
+            f"(clock: its CEO's-press hold of {reconcile._pt(new['createdAt'])})")
+
+    def test_an_older_press_hold_still_stands_when_an_operators_hold_is_spent(
+            self, capsys):
+        """The operator's observation spends the cause hold after it, never
+        the press hold before it — that one is still open."""
+        press = _hold(CEO_NEEDS, 30.0)
+        cause = _hold(CAUSE_NEEDS, 28.0)
+        got = _held_sweep([_review_card(nodes=[press, cause, _node(OBSERVED, 3.0)])],
+                          capsys)
+        got.comment.assert_called_once()
+        assert got.comment.call_args.args[1].split("\n")[1] == _press_kind(_first(press))
+
+    def test_in_progress_it_alarms_too(self, capsys):
+        press = _hold(CEO_NEEDS, 25.5)
+        got = _held_sweep([_review_card(nodes=[press], state="In Progress")], capsys)
+        got.comment.assert_called_once()
+        body = got.comment.call_args.args[1]
+        assert body.startswith("🚨 hand-work-overdue: DRE-7001 has waited In Progress "
+                               "for the operator 25 hours, past its 24")
+        assert body.split("\n")[1] == _press_kind(_first(press), "In Progress")
+        assert _held_line(got).startswith(
+            "held-proof: DRE-7001 held In Progress for the operator 25h, past 24")
+
+
+class TestACeoPressHoldInGreenLight:
+    """Today's behavior: in Green Light the hold is the return branch's, the
+    sweep's pass reads nothing of it, and the dispatcher returns the card on
+    his signed answer (`test_proof_dispatch`'s return tests)."""
+
+    def test_it_never_alarms(self, capsys):
+        card = _review_card(nodes=[_hold(CEO_NEEDS, 240.0)], state="Green Light")
+        got = _held_sweep([card], capsys)
+        _wrote_nothing(got)
+        assert got.out == ["held-proof: nothing held"]
+
+    def test_the_operators_holds_there_are_not_this_pass_either(self, capsys):
+        card = _review_card(nodes=[_hold(CEO_NEEDS, 240.0), _hold(CAUSE_NEEDS, 30.0)],
+                            state="Green Light")
+        got = _held_sweep([card], capsys)
+        _wrote_nothing(got)
+        assert got.out == ["held-proof: nothing held"]
+
+
+class TestNeverAlarmsInReview:
     @pytest.mark.parametrize("ident,labels,why", [
         ("DRE-4541", ("repo:portico", NO_CODE), "a standing card"),
         ("DRE-7001", ("repo:portico", HAND_BUILT), "the CEO's own hand-built card"),

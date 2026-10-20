@@ -1854,6 +1854,45 @@ def test_rerun_dispatches_nothing_and_says_why(monkeypatch, capsys, case):
     assert any("re-run" in line and why in line for line in lines), lines
 
 
+#: What the re-run's held line adds for a hold on the CEO's press outside
+#: Green Light (DRE-7741).
+PRESS_OUTSIDE = ("it names the CEO's press on a card in In Review, not Green "
+                 "Light — the return branch reads Green Light only, so the "
+                 "sweep alarms it for the operator")
+
+
+def test_rerun_a_ceo_press_hold_in_review_is_named_the_operators(monkeypatch, capsys):
+    """DRE-7741: DRE-6663 and DRE-6694 sat In Review under a hold naming the
+    CEO's press, which the return branch never reads there. The dispatcher
+    still holds the card, and its line says whose the hold now is."""
+    press = ceo_press_hold(600)
+    h, tally = _rerun_pass(monkeypatch, thread=_sent_back(press),
+                           pr=record(verdict("REQUEST_CHANGES", 100)))
+    lines = _about(_lines(capsys), "DRE-5930")
+    assert h.fired == [] and h.posted == [] and h.holds == []
+    assert tally.held == 1
+    first = press["body"].split("\n", 1)[0]
+    assert any(line.endswith(f"re-run: held by {first}; {PRESS_OUTSIDE}")
+               for line in lines), lines
+
+
+def test_rerun_a_ceo_press_hold_he_answered_holds_nothing(monkeypatch, capsys):
+    h, _ = _rerun_pass(monkeypatch, thread=_sent_back(ceo_press_hold(600), answer(300)),
+                       pr=record(verdict("REQUEST_CHANGES", 100)))
+    assert h.fired == [("DRE-5930", REPO, RERUN, "proof-execute")]
+    assert not any(PRESS_OUTSIDE in line for line in _lines(capsys))
+
+
+def test_rerun_an_operators_hold_in_review_says_nothing_of_the_press(monkeypatch, capsys):
+    thread = _sent_back(hold("being observed by hand",
+                             "the operator's record pull request", 60))
+    _rerun_pass(monkeypatch, thread=thread, pr=record(verdict("REQUEST_CHANGES", 100)))
+    lines = _about(_lines(capsys), "DRE-5930")
+    assert any("re-run: held by 🔬 proof-waiting: being observed by hand" in line
+               for line in lines), lines
+    assert not any(PRESS_OUTSIDE in line for line in lines), lines
+
+
 def test_rerun_budget_is_counted_from_rerun_receipts_only(monkeypatch, capsys):
     # Two first-run receipts and no re-run: the first re-run is still owed.
     thread = sorted([receipt(3000), receipt(2800, reason="second dispatch — run 1 "
