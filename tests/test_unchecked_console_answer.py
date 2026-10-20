@@ -424,6 +424,8 @@ def test_the_new_kind_is_distinct_from_every_other():
 #: check could not run — never that he did not answer (DRE-6358).
 #: `answer_into_card.py` copies the CEO's answers into the card, and an
 #: unchecked one is never copied and writes nothing (DRE-6357).
+#: `reconcile.py` alarms a CEO's-press hold outside Green Light, and an
+#: unchecked answer after it spends nothing and the alarm says so (DRE-7741).
 OTHER_READERS = {
     "answer_into_card.py": "tests/test_answer_into_card.py::"
     "test_an_unchecked_receipt_is_never_transcribed_and_says_could_not_check",
@@ -441,6 +443,8 @@ OTHER_READERS = {
     "test_an_unchecked_console_answer_neither_returns_nor_discharges_and_says_why",
     "proof_record.py": "tests/test_proof_record.py::"
     "test_an_answer_that_could_not_be_checked_discharges_nothing",
+    "reconcile.py": "tests/test_hand_work_age.py::"
+    "test_an_unchecked_answer_after_it_spends_nothing_and_says_why",
 }
 
 

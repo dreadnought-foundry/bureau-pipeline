@@ -748,6 +748,9 @@ import spoken_thread  # noqa: E402
 #: A comment the fake `voices` reads as console-signed — the real reader
 #: checks a signature; this suite only needs to know which comment passed.
 SIGNED = "console-signed"
+#: A comment the fake `voices` reads as a console answer whose check could not
+#: run (`spoken_thread.UNCHECKED`, DRE-4153).
+UNCHECKED = "console-unchecked"
 #: DRE-6663's own hold line of 2026-10-10, cut where the window cut it.
 DRE_6663_HOLD = linear_ops.proof_waiting_line(
     "needs the CEO's press: on the open groom proposal on the standing card, "
@@ -760,10 +763,15 @@ def _signed(hours_ago: float) -> dict:
             "createdAt": _iso(_at(hours_ago))}
 
 
+def _unchecked(hours_ago: float) -> dict:
+    return {**_signed(hours_ago), "user": {"id": UNCHECKED}}
+
+
 def _fake_voices(nodes, viewer, *, card):
+    kinds = {SIGNED: spoken_thread.CEO_VIA_CONSOLE, UNCHECKED: spoken_thread.UNCHECKED}
     return [spoken_thread.Voice(
-        spoken_thread.CEO_VIA_CONSOLE if (n.get("user") or {}).get("id") == SIGNED
-        else spoken_thread.UNKNOWN, "label", n.get("createdAt"), n.get("body"))
+        kinds.get((n.get("user") or {}).get("id"), spoken_thread.UNKNOWN), "label",
+        n.get("createdAt"), n.get("body"))
         for n in nodes]
 
 
@@ -848,6 +856,28 @@ class TestACeoPressHoldOutsideGreenLight:
         got = _held_sweep([_review_card(nodes=[_signed(30.0), _hold(CEO_NEEDS, 25.5)])],
                           capsys)
         got.comment.assert_called_once()
+
+    def test_an_unchecked_answer_after_it_spends_nothing_and_says_why(
+            self, monkeypatch, capsys):
+        """A console answer the check could not RUN on is neither his answer
+        nor a refused one: the hold stands, and the alarm and the line say the
+        answer after it could not be checked rather than that none came."""
+        import proof_dispatch
+        monkeypatch.setattr(spoken_thread, "voices", _fake_voices)
+        press = _hold(CEO_NEEDS, 25.5)
+        got = _held_sweep([_review_card(nodes=[press, _unchecked(2.0)])], capsys)
+        got.comment.assert_called_once()
+        assert got.comment.call_args.args[1].split("\n")[1] == (
+            f"{_press_kind(_first(press))[:-1]}; {proof_dispatch.UNCHECKED_NOTE}.")
+        assert _held_line(got).endswith(
+            f"(clock: its CEO's-press hold of {reconcile._pt(press['createdAt'])}; "
+            f"{proof_dispatch.UNCHECKED_NOTE})")
+
+    def test_an_unchecked_answer_before_it_says_nothing(self, monkeypatch, capsys):
+        monkeypatch.setattr(spoken_thread, "voices", _fake_voices)
+        press = _hold(CEO_NEEDS, 25.5)
+        got = _held_sweep([_review_card(nodes=[_unchecked(30.0), press])], capsys)
+        assert got.comment.call_args.args[1].split("\n")[1] == _press_kind(_first(press))
 
     def test_an_unreadable_thread_spends_nothing(self, monkeypatch, capsys):
         def broken(*a, **kw):
