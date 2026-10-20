@@ -2981,6 +2981,13 @@
       "why": "A question is not an act: it asks the operator to decide rather than announcing something the pipeline did, the same reason the sweep's blocker ask and review-cap question ask rather than announce. The hold posted before it is the `proof-observation-pending` act's receipt and carries its trailer, and names the operator as the next actor; this question is found again by its 🙋 first line after the newest such hold, so a second park over the same thread never posts it twice. It is the operator's because the operator, never the CEO, writes an accepted row (DRE-6244)."
     },
     {
+      "file": "scripts/proof_dispatch.py",
+      "anchor": "linear_ops.cmd_comment(ident, reply)",
+      "kind": "not-an-act",
+      "means": "A comment that opens 🔬 proof-observed with anything but the colon after the mark — DRE-5407's opened with a dash on 2026-10-18 — is answered once on the card by the proof dispatcher (DRE-7743): `proof_record.unread_reply` quotes its first line and says it discharged nothing, and why.",
+      "why": "A notice, not an act: it changes nothing — the note still discharges nothing, the hold still holds, and no lane or label is written — and hands the work to nobody new; it tells the person who wrote the note, on the card where they wrote it, that it was not read. It must NOT compose: the only trailer that would fit is the hold's, and `proof-waiting` is a live key the console reads, so stamping it here would show a fresh hold where a reply is. It is found again by its whole first line, so a later pass never posts it twice."
+    },
+    {
       "file": "scripts/release_deferral.py",
       "anchor": "The reason changed.",
       "kind": "not-an-act",

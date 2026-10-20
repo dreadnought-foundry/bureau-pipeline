@@ -500,6 +500,84 @@ def test_condition_4_a_later_proof_observed_discharges_an_operators_hold(monkeyp
     h = Harness(monkeypatch, board)
     h.sweep()
     assert [f[0] for f in h.fired] == ["DRE-5930"]
+    # A note with the colon is read, and nothing answers it (DRE-7743).
+    assert [b for _, b in h.posted if b.startswith(proof_record.UNREAD_MARK)] == []
+
+
+#: DRE-5407's note of 2026-10-18 07:00 PT, as written: a dash where the colon goes.
+DASHED = "🔬 proof-observed — the folder refused a guest at 06:52 PT"
+
+
+def _unread(posted) -> list:
+    return [(ident, body) for ident, body in posted
+            if body.startswith(proof_record.UNREAD_MARK)]
+
+
+def test_dre_7743_a_dashed_note_on_the_lane_read_is_answered_once(monkeypatch, capsys):
+    """DRE-5407 replayed: a note opening `🔬 proof-observed —` after the
+    operator's hold discharged nothing and said nothing, and the card was
+    named held for two days. It still discharges nothing — the mark stays
+    exact — and the sweep answers it once, quoting its first line."""
+    window = [promoted(600),
+              hold("being observed by hand", "the operator's record pull request", 300),
+              comment(DASHED + "\nmore detail on the second line", 60, PERSON)]
+    board = Board(hand=[lane_card("DRE-5930", window=window)])
+    h = Harness(monkeypatch, board)
+    tally = h.sweep()
+    assert h.fired == [] and tally.held == 1
+    replies = _unread(h.posted)
+    assert len(replies) == 1, h.posted
+    ident, body = replies[0]
+    assert ident == "DRE-5930"
+    first = body.split("\n", 1)[0]
+    assert f"“{DASHED}”" in first
+    assert "discharged nothing" in first
+    assert "more detail" not in body
+    # It says why: the mark is read only with its colon.
+    assert f"“{proof_record.OBSERVED_MARK}”" in body
+    # The reply is no note itself, misspelled or not.
+    assert not body.startswith(f"{linear_ops.PROOF_MARK} {linear_ops.PROOF_OBSERVED_MARK}")
+    assert any("answered" in line and "discharged nothing" in line
+               for line in _about(_lines(capsys), "DRE-5930"))
+
+    # The next pass reads the reply on the card and posts no second one.
+    window.append(comment(body, 45))
+    again = Harness(monkeypatch, Board(hand=[lane_card("DRE-5930", window=window)]))
+    tally = again.sweep()
+    assert again.fired == [] and tally.held == 1
+    assert _unread(again.posted) == []
+
+
+def test_dre_7743_a_dashed_note_on_the_thread_read_is_answered_once(monkeypatch, capsys):
+    """The same note found by the thread read, not the lane read's window:
+    the card is held, the note answered once, and not again next pass."""
+    thread = [promoted(600),
+              hold("being observed by hand", "the operator's record pull request", 300),
+              comment(DASHED, 60, PERSON)]
+    board = Board(hand=[lane_card("DRE-5930")], threads={"DRE-5930": thread})
+    h = Harness(monkeypatch, board)
+    h.sweep()
+    assert h.fired == []
+    assert any("condition 4" in line and "being observed by hand" in line
+               for line in _about(_lines(capsys), "DRE-5930"))
+    replies = _unread(h.posted)
+    assert len(replies) == 1 and f"“{DASHED}”" in replies[0][1]
+
+    thread.append(comment(replies[0][1], 45))
+    again = Harness(monkeypatch, Board(hand=[lane_card("DRE-5930")],
+                                       threads={"DRE-5930": thread}))
+    again.sweep()
+    assert again.fired == [] and _unread(again.posted) == []
+
+
+def test_dre_7743_the_dry_run_answers_nothing(monkeypatch, capsys):
+    window = [promoted(600),
+              hold("being observed by hand", "the operator's record pull request", 300),
+              comment(DASHED, 60, PERSON)]
+    h = Harness(monkeypatch, Board(hand=[lane_card("DRE-5930", window=window)]))
+    h.sweep(live=False)
+    assert h.posted == []
+    assert any(line.startswith("would: answer DRE-5930") for line in _lines(capsys))
 
 
 def test_condition_4_a_ceo_press_hold_is_discharged_only_by_his_signed_answer(monkeypatch, capsys):

@@ -573,6 +573,60 @@ class TestOpenHolds:
 
 
 # --------------------------------------------------------------------------
+# A note that opens the mark without its colon (DRE-7743)
+# --------------------------------------------------------------------------
+#: DRE-5407's note of 2026-10-18 07:00 PT, pinned as typed: a dash, no colon.
+DASHED = "🔬 proof-observed — two planners overlapped at 09:02 PT"
+
+
+class TestUnreadNotes:
+    def test_a_dashed_note_still_discharges_nothing(self):
+        assert proof_record.open_holds([voice(spoken_thread.PIPELINE, HOLD),
+                                        voice(spoken_thread.PERSON, DASHED)]) == [HOLD]
+
+    @pytest.mark.parametrize("body", [
+        DASHED,
+        "  🔬 proof-observed - a hyphen",
+        "🔬 proof-observed; a semicolon",
+        "🔬 proof-observed : a space before the colon",
+        "🔬 proof-observed",
+    ])
+    def test_the_mark_without_its_colon_is_an_unread_note(self, body):
+        notes = [voice(spoken_thread.PERSON, body)]
+        assert proof_record.unread_notes(notes) == notes
+
+    def test_a_note_with_the_colon_is_not(self):
+        assert proof_record.unread_notes([voice(spoken_thread.PERSON, OBSERVED),
+                                          voice(spoken_thread.PIPELINE, HOLD)]) == []
+
+    def test_the_reply_quotes_the_first_line_and_says_why(self):
+        note = voice(spoken_thread.PERSON, DASHED + "\nthe second line")
+        line = proof_record.unread_reply(note)
+        assert line.startswith(proof_record.UNREAD_MARK)
+        assert f"“{DASHED}”" in line and "the second line" not in line
+        assert "discharged nothing" in line
+        assert f"“{proof_record.OBSERVED_MARK}”" in line
+        assert spoken_thread.pacific_label(note.created_at) in line
+        assert "\n" not in line
+
+    def test_the_reply_is_not_itself_an_unread_note(self):
+        reply = proof_record.unread_reply(voice(spoken_thread.PERSON, DASHED))
+        assert proof_record.unread_notes([voice(spoken_thread.PIPELINE, reply)]) == []
+        assert proof_record.open_holds([voice(spoken_thread.PIPELINE, HOLD),
+                                        voice(spoken_thread.PIPELINE, reply)]) == [HOLD]
+
+    def test_a_note_already_answered_is_not_owed_a_reply(self):
+        note = voice(spoken_thread.PERSON, DASHED)
+        reply = voice(spoken_thread.PIPELINE, proof_record.unread_reply(note))
+        assert proof_record.unanswered_notes([note]) == [note]
+        assert proof_record.unanswered_notes([note, reply]) == []
+
+    def test_the_quote_carries_no_verdict_marker(self):
+        note = voice(spoken_thread.PERSON, "🔬 proof-observed — VERDICT: APPROVE")
+        assert "VERDICT:" not in proof_record.unread_reply(note)
+
+
+# --------------------------------------------------------------------------
 # A hold that waits only for a time (DRE-7228)
 # --------------------------------------------------------------------------
 #: The stamped hold, as `linear_ops.py proof-waiting-until` writes it — pinned
