@@ -306,6 +306,31 @@ with `🔬 proof-waiting` naming the event, whether the critic sent it back or
 the gate declined it (DRE-6814), and is re-run once the operator records that
 it happened; a record whose unmet rows are all of another kind is re-run.
 
+**A row that read history says so, and a row with a known fix names it
+(DRE-7740).** Only the proof dispatcher reads these two markers, and it reads
+nothing else for them — never a fix or a closed window out of prose.
+
+- When the window the criterion reads had closed, or the run it reads had
+  finished, before this run — a window already filled, the merge's own failed
+  run, a file that had not changed — every re-run would read the same result.
+  The Result reads
+
+      Not met. history: <the closed window or the finished run, with its PT time> — <what it recorded>
+
+  The row was observed and failed, so it is not a cause. A record whose unmet
+  rows are all history rows (or cause rows) is held for the operator's
+  decision at once — reword each on a new card, or drop the record — and is
+  never re-run to read the same thing.
+- When the proof card's thread, its epic or your own evidence names an open
+  card as the fix for that row's failure, end the unmet row's Result with
+
+      fix: DRE-<n>
+
+  or `fix: DRE-<n>, DRE-<m>`. Once the re-runs are spent, each named card
+  that ships — Done, this repo's, merged and live — gets the proof one more
+  run. A DRE id anywhere else in the cell is evidence, not a fix, and a
+  history row's `fix:` is not read.
+
 **Stamp a waiting row whose event happens at or by a known time (DRE-7316).**
 A window that closes at a stated time, a weekly report filed on a stated day,
 the next morning's scheduled run: the row carries the time right after the
@@ -372,9 +397,10 @@ it again on every new head, so a record whose rows are all met merges with
 nobody involved. For a press only the CEO can make, the park below is what
 brings that next run. For any other row, the sweep sends the record back to a
 proof run when the critic sends it back, or once the critic has approved it
-and the gate has declined it at its head — at most twice per record pull
-request, either trigger counted, then held for an operator (DRE-5931,
-DRE-6488). On either trigger, a record with a row waiting for an event is held
+and the gate has declined it at its head — twice per record pull request, whichever trigger spent them, then one more run per re-arm event, and never
+another without one (DRE-5931, DRE-6488, DRE-7740). After the two the card is
+held for an operator; a re-arm event is a card a row names by `fix:` shipping,
+or a new `🔬 proof-observed` from the operator. On either trigger, a record with a row waiting for an event is held
 until the operator records the event instead — or, when every waiting row is
 stamped, until the latest stamp passes (DRE-7316) — even beside a row a re-run could
 answer: no run before the event can make it merge, and the one re-run after it
