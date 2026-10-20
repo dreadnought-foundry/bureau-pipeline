@@ -166,6 +166,24 @@ naming the CEO's press, and a date in prose are held exactly as before — nothi
 reads a date out of prose — and a time hold beside any other open hold is never
 lifted by time, because one `🔬 proof-observed` would lift that hold too.
 
+**The dispatcher writes and lifts the same hold on the re-run branch too**
+(DRE-7316). A record row waiting for an event that happens at or by a known
+time carries the clause in square brackets right after the event — `Not
+observed. waiting for <the event> [not-before=<ISO time with offset>]: <what
+it would show>` (`proof_record.row_not_before`). When every waiting row of a
+record the critic sent back, or the gate declined, is stamped, the hold the
+dispatcher posts for it reads `— needs not-before=<the latest row time>` and
+nothing else, so it is time-only; one prose waiting row among them and the hold
+is written as before, for a person. On the re-run branch the same rule as the
+first run's is read over every open hold, before the cause park's holds are
+dropped: every one time-only and every time passed, and the dispatcher posts
+the one `🔬 proof-observed` and dispatches a **timed re-run** on that pass;
+before its time the refusal adds `— lifts at <PT>`; beside any other open hold
+nothing is lifted and the line names the hold that still holds. A timed re-run's
+count is `timed re-run <n> of 2`, so it never spends the two re-runs counted off
+`re-run`. It has its own two per record pull request; after them, one hold for
+the operator and never a third.
+
 ## The row whose NUMBERS are data — `🚨 fleet-reviewer-outage` (DRE-3433)
 
 | Field | Value |
@@ -399,7 +417,9 @@ event>` — and nothing else — is waiting on something no one on the card has 
 cause: on either trigger, beside any other unmet row, the card is held with
 `🔬 proof-waiting: <the waiting criteria> — needs <their events>` instead of a
 re-run, and is re-run once the operator posts `proof-observed` (DRE-6488, and
-for the critic's trigger DRE-6814). A record the gate declined, or the critic
+for the critic's trigger DRE-6814) — or, when every waiting row is stamped with
+a `[not-before=<T>]`, the hold is `— needs not-before=<T>` and the dispatcher
+lifts it itself once `<T>` passes, with a timed re-run (DRE-7316). A record the gate declined, or the critic
 sent back, whose unmet rows all carry a cause word (DRE-6607) is never re-run
 at that head, since a re-run would read the same thing: the dispatcher puts it
 to the operator once through `proof_cause_park.park` (DRE-6612) — its hold and
@@ -415,9 +435,11 @@ The receipt is posted only after `plan_run.fire` confirms the dispatch:
 
 The reasons open `first proof run`, `second dispatch — no run started after`,
 `second dispatch — run`, `re-run after the CEO's answer at`, `re-run after
-the critic's findings at` and `re-run after the gate's decline at`; the counts are
-`dispatch <n> of 2`, `re-run <n> of 2` (DRE-5931, through the same composer) and
-`after the CEO's answer`. **The tag is a live key**: `proof_run_state.reading`
+the critic's findings at`, `re-run after the gate's decline at` and `timed
+re-run after not-before <PT> at`; the counts are `dispatch <n> of 2`, `re-run
+<n> of 2` (DRE-5931, through the same composer), `timed re-run <n> of 2`
+(DRE-7316 — its own budget, never counted with `re-run`) and `after the CEO's
+answer`. **The tag is a live key**: `proof_run_state.reading`
 (DRE-5922) anchors on the newest receipt to read what became of the run, and
 counts the first-run budget off the receipts whose reason opens `first proof
 run` or `second dispatch`.
