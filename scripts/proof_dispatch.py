@@ -93,8 +93,9 @@ operator, never a guess at another run. Three things stop it, each
 named: a `🔬 proof-waiting` hold nothing discharged, a run `running` or
 `unknown`, and the budget — two re-runs per pull request, counted off the
 receipts whose count opens `re-run` posted after it opened, apart from the
-first-run budget, so a re-run that never began still spends one. After two,
-one hold, and the card is left for an operator.
+first-run budget, so a re-run that never began still spends one. Once both
+are spent, one hold, and the card is left for an operator until a re-arm
+event gives it one more run (below, DRE-7740) — never another without one.
 Conditions 2, 3 and 7 are not read for it: the record is open on the release
 its first run read.
 
@@ -167,6 +168,26 @@ the note; a record not read there is refused. Then, after the stops:
      beside a waiting row is held for the event by step 1 and asked nothing
      here — the proof run's own park asks it (DRE-6840).
 
+     History rows are held the same way (DRE-7740). A row reading `Not met.
+     history: <the closed window or the finished run, with its PT time> —
+     <what it recorded>` (`proof_record.row_history`) was observed and failed
+     on something no re-run can change: a window already filled, the merge's
+     own failed run, a file that had not changed. A record whose unmet rows
+     are all history rows or cause rows, at least one a history row, is never
+     re-run at that head: the cause rows go to `park_caused` as above, and the
+     history rows get one `🔬 proof-waiting` through `_hold_once` whose needs
+     half opens `CAUSE_HOLD_OPENING` — `the operator's decision on <n> row(s)
+     that read a closed window or a finished run: reword each on a new card,
+     or drop the record`. It is the operator's-decision hold, not a new kind:
+     `_past_cause_hold` reads past it once the record at the head is read,
+     the operator's amendment discharges it, no question is posted and
+     nothing moves. The line reads `re-run: <n> row(s) of the record at <sha7>
+     read a closed window or a finished run — held for the operator, never
+     re-run to read the same thing`, counted held, and no budget is spent. A
+     history row beside any other unmet row — a plain `Not met.` or one
+     naming a fix — is re-run as before, and a `🔬 proof-observed` re-arms
+     nothing on a record held here.
+
      A cause hold never holds the card off this reading of the record at its
      head (DRE-6837): for a card in `In Review` whose record was read at the
      head, every hold whose `needs` half opens
@@ -181,8 +202,51 @@ the note; a record not read there is refused. Then, after the stops:
   3. Otherwise the run is dispatched, `re-run after the gate's decline at
      <sha7>`, under the same rule for a newer receipt as the critic's.
   4. The one budget: two re-runs per record pull request, whichever trigger
-     spent them. After two, one hold; a re-run that finished with the decline
-     still at the head, one hold. Never a third guess.
+     spent them, then one more per re-arm event, and never another without
+     one. After two with no event, one hold; a re-run that finished with the
+     decline still at the head, one hold.
+
+## The re-arm, once the budget is spent (DRE-7740)
+
+With the re-run budget spent (`spent >= RERUN_BUDGET`), the branch looks for
+a re-arm event before either refusal that ends a spent budget: the `finished`
+refusal and the budget refusal. With an event neither refuses and one run is
+dispatched; without one both refuse as before, the line ending
+`never another without a shipped fix or a new 🔬 proof-observed` and why.
+There are two events, and only these two:
+
+  a. **A named fix shipped.** Each distinct card an unmet row at the head
+     names by `fix: DRE-<n>` (`proof_record.row_fixes`, never a DRE id
+     anywhere else in the cell, and never a history row's) is read once — at
+     most `REARM_FIX_CARDS`; with more the line names them and nothing is
+     read. Every card must be `Done`, labelled for this repo, merged
+     (`find_pr`, `card_pr.MERGED`), and live: one `proof_release` reading of
+     their merges reads `ready`, as `_released` reads a sibling's. Anything
+     else is no re-arm, and the line names the card and why; a card labelled
+     for another repo is not this repo's release to read, so the operator's
+     note is its route. The set re-arms once: an earlier `re-armed` receipt
+     naming every card in it re-arms nothing. A record the critic sent back
+     that could not be read at the head names no fix.
+  b. **A new `🔬 proof-observed`**, posted after the card's newest
+     `🔬 proof-run` receipt of any count — after the run that spent the
+     budget and after any earlier re-arm's run, so two notes with no run
+     between them are one event. A note the pipeline writes never counts, by
+     its wording and not its author: the time lift (`LIFTED_BY`) and the
+     return step's record of the CEO's answer (`CEO_ANSWERED`). The re-arm
+     itself posts no note, so no run re-arms the next.
+
+The budget's own hold — the one whose observed half is
+`RERUN_EXHAUSTED_OBSERVED` or `GATE_EXHAUSTED_OBSERVED` — no longer holds the
+card off a re-arm: once the record at the head is read it is dropped from the
+holds read beside the cause holds (`_past_budget_hold`), and the budget check
+decides. With no event it is posted again whenever no open copy of it stands
+(`_hold_once`'s `open_only`, for this hold only), so it comes back after a
+re-armed run is spent; a note discharges it anyway. The receipt records each
+re-arm's reason, `re-run after DRE-<n>[, DRE-<m>] shipped (re-armed)` or
+`re-run after the 🔬 proof-observed of <PT> (re-armed)`: `re-armed` is a
+fourth count phrase `proof_run_state` reads, and it does not open `re-run`, so
+the budget count is unchanged. A re-armed run that dies or never starts has
+spent its event and is not sent again; the hold names it.
 
 A `Green Light` PROOF card is read the same way when its live hold is the
 sweep's review-cap park — `needs-human` with a `🔒 hold: reason=review-cap-spent`
@@ -206,8 +270,11 @@ return and the re-run), then at most two per candidate (the
 card's epic and relations, and its thread; a re-run reads only its thread).
 Three candidates is 2 + 2 × 3 = 8 requests however many proofs wait — plus,
 for a card whose first relation page is full, up to
-`reconcile.INVERSE_TOPUP_PAGES` more to read the rest of it (DRE-6416). Its
-`linear-budget:` trailer is its own, lifted into the step summary.
+`reconcile.INVERSE_TOPUP_PAGES` more to read the rest of it (DRE-6416). The
+re-arm's fix reads (DRE-7740) happen only on a spent budget whose record
+names fix cards, and only for a set not already re-armed: at most
+`REARM_FIX_CARDS` Linear card reads, each card's pull request, and one release
+reading. Its `linear-budget:` trailer is its own, lifted into the step summary.
 
 THE TURN (DRE-6464). The bound once read the same three every pass: oldest
 first, a card held, blocked or unreadable kept its slot, and on 2026-10-09

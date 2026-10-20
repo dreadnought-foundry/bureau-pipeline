@@ -392,9 +392,15 @@ approved and the merge gate then declined at the same head (`⏸️ Merge gate:
 declined @<head> — proof record not proven: …`) is dispatched again the same
 way, `re-run after the gate's decline at <sha7>`, reading the unmet rows off the
 record at the head and never off the note (DRE-6488). The two triggers share
-one budget of two re-runs per record pull request; after it, or after a re-run
-that finished with the decline still at the head, one `🔬 proof-waiting` hold
-for an operator. A row whose Result reads `Not observed. waiting for <the
+two re-runs per record pull request, then one more per re-arm event, and never
+another without one; after the two with no event, or after a re-run that
+finished with the decline still at the head, one `🔬 proof-waiting` hold for
+an operator. The re-arm events are two, and only two (DRE-7740): every card an
+unmet row names by `fix: DRE-<n>` is Done, labelled for this repo, merged and
+live — the set re-arms once — or the operator posts a new `🔬 proof-observed`
+after the card's newest receipt, never one the pipeline wrote itself. A record
+whose unmet rows are all `Not met. history: …` rows (or cause rows) is held for
+the operator's decision at once and never re-run. A row whose Result reads `Not observed. waiting for <the
 event>` — and nothing else — is waiting on something no one on the card has to
 cause: on either trigger, beside any other unmet row, the card is held with
 `🔬 proof-waiting: <the waiting criteria> — needs <their events>` instead of a
@@ -415,9 +421,11 @@ The receipt is posted only after `plan_run.fire` confirms the dispatch:
 
 The reasons open `first proof run`, `second dispatch — no run started after`,
 `second dispatch — run`, `re-run after the CEO's answer at`, `re-run after
-the critic's findings at` and `re-run after the gate's decline at`; the counts are
-`dispatch <n> of 2`, `re-run <n> of 2` (DRE-5931, through the same composer) and
-`after the CEO's answer`. **The tag is a live key**: `proof_run_state.reading`
+the critic's findings at`, `re-run after the gate's decline at`, `re-run after
+DRE-<n> shipped` and `re-run after the 🔬 proof-observed of`; the counts are
+`dispatch <n> of 2`, `re-run <n> of 2` (DRE-5931, through the same composer),
+`after the CEO's answer` and `re-armed` (DRE-7740) — one more run on a spent
+re-run budget, which does not open `re-run` and so spends none of it. **The tag is a live key**: `proof_run_state.reading`
 (DRE-5922) anchors on the newest receipt to read what became of the run, and
 counts the first-run budget off the receipts whose reason opens `first proof
 run` or `second dispatch`.
