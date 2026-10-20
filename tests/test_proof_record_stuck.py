@@ -51,27 +51,45 @@ def _comment(body, hours_ago=1.0):
             "user": {"id": "pipeline"}}
 
 
-def _card(ident="DRE-5357", lane="In Review", labels=(), comments=()):
+def _card(ident="DRE-5357", lane="In Review", labels=(), comments=(), partial=False):
     return {"identifier": ident, "state": {"name": lane},
             "labels": {"nodes": [{"name": n} for n in labels]},
-            "comments": {"pageInfo": {"hasNextPage": False},
+            "comments": {"pageInfo": {"hasNextPage": partial},
                          # Linear answers newest first; window_nodes reverses it.
                          "nodes": list(reversed(list(comments)))}}
 
 
-class World:
-    """GitHub's open pull requests and Linear's cards, every write recorded."""
+def _closed(number=3876, card="DRE-5357", hours_ago=1.0):
+    return {"number": number, "headRefName": f"agent/{card}-proof-record",
+            "closedAt": _iso(NOW - timedelta(hours=hours_ago))}
 
-    def __init__(self, prs, cards):
+
+class World:
+    """GitHub's open and closed pull requests and Linear's cards, every write
+    recorded. `threads` holds a card's whole thread, oldest first, for a card
+    whose inline window is partial."""
+
+    def __init__(self, prs, cards, closed=(), threads=None):
         self.prs = prs
+        self.closed = list(closed)
         self.cards = {c["identifier"]: c for c in cards}
+        self.threads = threads or {}
         self.comment = mock.MagicMock()
         self.raised = mock.MagicMock(return_value="raised")
         self.resolved = mock.MagicMock(return_value="not-open")
+        self.listings = []
 
     def gh(self, *args):
         assert args[:2] == ("pr", "list"), args
-        return json.dumps(self.prs)
+        self.listings.append(args)
+        state = args[args.index("--state") + 1]
+        if state == "closed":
+            return json.dumps(self.closed)
+        return self.prs if isinstance(self.prs, str) else json.dumps(self.prs)
+
+    def thread(self, ident, *needs, whole=False):
+        assert whole, "a partial window is read whole"
+        return self.threads[ident], "pipeline"
 
     def gql(self, query, variables=None):
         if "viewer" in query and not variables:
@@ -84,6 +102,7 @@ class World:
     def run(self):
         with mock.patch.object(reconcile, "gh", side_effect=self.gh), \
                 mock.patch.object(linear_ops, "gql", side_effect=self.gql), \
+                mock.patch.object(linear_ops, "_thread_and_viewer", side_effect=self.thread), \
                 mock.patch.object(linear_ops, "cmd_comment", self.comment), \
                 mock.patch.object(pipeline_notice, "raise_notice", self.raised), \
                 mock.patch.object(pipeline_notice, "resolve_notice", self.resolved):
@@ -222,6 +241,79 @@ def test_a_record_once_named_and_now_moving_resolves_its_alert():
     assert world.raised.call_count == 0
     assert world.resolved.call_count == 1
     assert world.resolved.call_args.args[0].endswith(":DRE-5357")
+
+
+def test_an_old_record_now_moving_resolves_its_alert_with_no_note_in_the_window():
+    # The note fell out of the comment window, or never landed: the alert is
+    # resolved all the same — a resolve with nothing open is the door's no-op.
+    world = World([_pr(hours=100)], [_card(lane="In Review")])
+    assert world.run() == []
+    assert world.resolved.call_count == 1
+    assert world.resolved.call_args.args[0].endswith(":DRE-5357")
+
+
+def test_a_record_closed_after_its_alert_resolves_it():
+    world = World([], [], closed=[_closed()])
+    world.resolved.return_value = "resolved"
+    assert world.run() == []
+    assert world.resolved.call_count == 1
+    assert world.resolved.call_args.args[0] == proof_record_stuck.notice_key("DRE-5357")
+    closed = [a for a in world.listings if "closed" in a]
+    assert closed and "--limit" in closed[0]
+
+
+def test_a_closed_record_never_alerted_resolves_harmlessly():
+    world = World([], [], closed=[_closed(card="DRE-6008")])
+    assert world.resolved.return_value == "not-open"
+    assert world.run() == []
+    assert world.resolved.call_count == 1
+    assert world.resolved.call_args.args[0].endswith(":DRE-6008")
+
+
+def test_a_closed_record_whose_card_has_an_open_one_leaves_its_alert():
+    # The open record still stands: resolving would let the next raise deliver
+    # the same alert again.
+    world = World([_pr(number=3900, hours=80)], [_card(lane="Queued")],
+                  closed=[_closed()])
+    assert world.run() == []
+    assert world.raised.call_count == 1
+    assert world.resolved.call_count == 0
+
+
+def test_a_record_closed_more_than_a_day_ago_is_not_read_again():
+    world = World([], [], closed=[_closed(hours_ago=proof_record_stuck.DAY_HOURS + 1)])
+    world.run()
+    assert world.resolved.call_count == 0
+
+
+def test_an_unread_open_listing_resolves_nothing():
+    world = World("", [], closed=[_closed()])
+    assert world.run() == []
+    assert world.resolved.call_count == 0
+
+
+def test_a_full_open_listing_says_it_may_be_cut(capsys):
+    with mock.patch.object(proof_record_stuck, "LIST_LIMIT", 1):
+        World([_pr()], [_card()]).run()
+    assert "limit" in capsys.readouterr().out
+
+
+def test_a_hold_beyond_a_partial_window_is_still_a_hold():
+    world = World([_pr(draft=True)],
+                  [_card(lane="Hand-work", comments=[_comment("later", 1)], partial=True)],
+                  threads={"DRE-5357": [_comment(HOLD, 40), _comment("later", 1)]})
+    world.run()
+    assert world.comment.call_count == 0
+
+
+def test_a_review_cap_stamp_beyond_a_partial_window_is_the_dispatchers():
+    stamp = hold.stamp_line("review-cap-spent", "a" * 40, "scripts/reconcile.py")
+    world = World([_pr()],
+                  [_card(lane="Green Light", labels=("needs-human",),
+                         comments=[_comment("later", 1)], partial=True)],
+                  threads={"DRE-5357": [_comment(stamp, 40), _comment("later", 1)]})
+    world.run()
+    assert world.comment.call_count == 0
 
 
 def test_an_alert_the_door_lost_is_a_failure():
