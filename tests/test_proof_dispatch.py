@@ -3543,3 +3543,224 @@ def test_no_string_constant_in_the_proof_dispatcher_names_the_old_lane():
 
     path = str(Path(__file__).resolve().parent.parent / "scripts" / "proof_dispatch.py")
     assert lane_contract._scan_python(path, ["Backlog"]) == set()
+
+
+# --------------------------------------------------------------------------- #
+# DRE-7316: a waiting row stamped with a time is re-run once the time passes   #
+# --------------------------------------------------------------------------- #
+
+#: DRE-6673 (#985): its rows wait for the window that closes 2026-10-17
+#: 18:59 PT, stamped with margin as the brief now writes them.
+STAMP = "2026-10-17T19:30-07:00"
+EARLIER_STAMP = "2026-10-17T19:00-07:00"
+WINDOW = "the window that closes 2026-10-17 18:59 PT"
+DRE_6673_ROW = ("Seven days of arrivals show only the CEO's decisions in Green Light",
+                f"Not observed. waiting for {WINDOW} [not-before={STAMP}]: the seven "
+                "days' arrivals, counted")
+DRE_6673_ROW_2 = ("No escalation lands in Green Light without a question in it",
+                  f"Not observed. waiting for {WINDOW} [not-before={EARLIER_STAMP}]: "
+                  "every escalation read")
+DRE_6673 = record_md(MET_ROW, DRE_6673_ROW, DRE_6673_ROW_2)
+NOON_PT = datetime(2026, 10, 17, 19, 0, tzinfo=timezone.utc)     # 12:00 PT
+NOON_15_PT = NOON_PT + PASS                                       # 12:15 PT
+AFTER_PT = datetime(2026, 10, 18, 2, 45, tzinfo=timezone.utc)    # 19:45 PT
+#: The hold `_waiting` writes for it: the rows named, the latest time needed.
+TIMED = (f"{proof_record._cut(DRE_6673_ROW[0], 70)}; "
+         f"{proof_record._cut(DRE_6673_ROW_2[0], 70)}",
+         f"not-before={STAMP}")
+TIMED_LINE = linear_ops.proof_waiting_line(*TIMED)
+TIMED_RERUN = f"timed re-run after not-before 2026-10-17 19:30 PT at {SHA7}"
+TIMED_HELD = ("the record still waited after two timed re-runs",
+              "an operator reading the record's waiting rows and the two timed "
+              "re-run receipts")
+
+
+def timed_receipt(minutes_ago: float, n: int) -> dict:
+    return receipt(minutes_ago, reason="timed re-run after not-before 2026-10-16 "
+                                       f"19:30 PT at {OLD_HEAD[:7]}",
+                   count=f"timed re-run {n} of 2")
+
+
+def _timed_pass(monkeypatch, *, thread, now, text=DRE_6673, pr=None,
+                run="finished", live=True, fire_ok=True):
+    board = Board(review=[_review()], threads={"DRE-5930": thread})
+    h = Harness(monkeypatch, board, records={"DRE-5930": pr or _declined()},
+                texts={900: text}, fire_ok=fire_ok,
+                states={"DRE-5930": state(run, dispatches=1,
+                                          record={"number": 900, "state": "open"})})
+    tally = h.sweep(live=live, now=now)
+    return h, tally
+
+
+def test_timed_every_waiting_row_stamped_holds_on_the_latest_time(monkeypatch, capsys):
+    h, tally = _timed_pass(monkeypatch, thread=_sent_back(), now=NOON_PT)
+    lines = _about(_lines(capsys), "DRE-5930")
+    assert h.fired == [] and h.posted == []
+    assert h.holds == [("DRE-5930", *TIMED)]
+    # The needs half is exactly the one clause, so the hold reads time-only.
+    assert proof_record.time_only(TIMED_LINE) == datetime(2026, 10, 18, 2, 30,
+                                                          tzinfo=timezone.utc)
+    assert tally.held == 1
+    assert any("lifts at 2026-10-17 19:30 PT" in line for line in lines), lines
+
+
+def test_timed_one_prose_waiting_row_writes_the_hold_as_today(monkeypatch, capsys):
+    text = record_md(MET_ROW, DRE_6673_ROW, WAITING_ROW)
+    h, _ = _timed_pass(monkeypatch, thread=_sent_back(), now=NOON_PT, text=text)
+    lines = _about(_lines(capsys), "DRE-5930")
+    observed = (f"{proof_record._cut(DRE_6673_ROW[0], 70)}; "
+                f"{proof_record._cut(WAITING_ROW[0], 70)}")
+    needs = (f"{WINDOW}: the seven days' arrivals, counted; "
+             "the 2026-10-14 release: the tag moves")
+    assert h.holds == [("DRE-5930", observed, needs)]
+    assert proof_record.time_only(linear_ops.proof_waiting_line(observed, needs)) is None
+    assert not any("lifts at" in line for line in lines), lines
+
+
+@pytest.mark.parametrize("trigger", ["gate", "critic"])
+def test_timed_dre_6673_replayed_held_before_its_time_and_re_run_after(
+        monkeypatch, capsys, trigger):
+    pr = _declined() if trigger == "gate" else record(verdict("REQUEST_CHANGES", 100))
+    reason = (TIMED_RERUN if trigger == "gate" else TIMED_RERUN)
+
+    # 12:00 PT: the record is read, the hold is posted, the line says when.
+    h, tally = _timed_pass(monkeypatch, thread=_sent_back(), now=NOON_PT, pr=pr)
+    lines = _about(_lines(capsys), "DRE-5930")
+    assert h.fired == [] and h.holds == [("DRE-5930", *TIMED)] and tally.held == 1
+    assert any(line.endswith("— lifts at 2026-10-17 19:30 PT") for line in lines), lines
+
+    # 12:15 PT: the hold stands, nothing is posted, the line still says when.
+    held = _sent_back(hold(*TIMED, 60))
+    h, tally = _timed_pass(monkeypatch, thread=held, now=NOON_15_PT, pr=pr)
+    lines = _about(_lines(capsys), "DRE-5930")
+    assert h.fired == [] and h.holds == [] and h.posted == [] and tally.held == 1
+    assert any(f"re-run: held by {TIMED_LINE} — lifts at 2026-10-17 19:30 PT" in line
+               for line in lines), lines
+
+    # 19:45 PT: one `🔬 proof-observed` naming the time, and the timed re-run.
+    h, tally = _timed_pass(monkeypatch, thread=held, now=AFTER_PT, pr=pr)
+    (note,) = _lifts(h)
+    assert f"not-before={STAMP} has passed" in note
+    assert "read at 2026-10-17 19:45 PT" in note
+    assert proof_dispatch.LIFTED_BY in note
+    assert h.fired == [("DRE-5930", REPO, reason, "proof-execute")]
+    assert h.holds == [] and tally.dispatched == 1
+    assert h.order == [("comment", "DRE-5930"), ("fire", "DRE-5930"),
+                       ("comment", "DRE-5930")]
+    first = h.posted[-1][1].split("\n", 1)[0]
+    assert first.endswith(f" — {reason} (timed re-run 1 of 2)")
+    parsed = proof_run_state.receipt(h.posted[-1][1])
+    assert parsed.reason == reason and parsed.count == "timed re-run 1 of 2"
+    # …the note is a discharge the one hold reader reads.
+    after = held + [comment(note, 0)]
+    assert proof_record.open_holds(fake_voices(after, VIEWER, card="DRE-5930")) == []
+
+
+def test_timed_a_timed_re_run_does_not_spend_the_re_run_budget(monkeypatch, capsys):
+    """Both critic-or-gate re-runs are spent: the timed re-run still goes."""
+    spent = (gate_rerun_receipt(1500, 1), comment("⏳ 5/5 amended", 1400),
+             rerun_receipt(800, 2), comment("⏳ 5/5 amended", 700))
+    h, tally = _timed_pass(monkeypatch, thread=_sent_back(*spent, hold(*TIMED, 60)),
+                           now=AFTER_PT)
+    assert proof_dispatch.RERUN_BUDGET == 2
+    assert [f[2] for f in h.fired] == [TIMED_RERUN]
+    assert h.posted[-1][1].split("\n", 1)[0].endswith("(timed re-run 1 of 2)")
+    assert h.holds == [] and tally.dispatched == 1
+
+
+def test_timed_receipts_are_not_counted_in_the_re_run_budget(monkeypatch, capsys):
+    spent = (timed_receipt(1500, 1), comment("⏳ 5/5 amended", 1400),
+             timed_receipt(800, 2), comment("⏳ 5/5 amended", 700))
+    assert proof_run_state.receipt(spent[0]["body"]).count == "timed re-run 1 of 2"
+    h, _ = _timed_pass(monkeypatch, thread=_sent_back(*spent), now=AFTER_PT,
+                       text=record_md(MET_ROW, NOT_MET_ROW))
+    assert [f[2] for f in h.fired] == [GATE_RERUN]
+    assert h.posted[-1][1].split("\n", 1)[0].endswith(f" — {GATE_RERUN} (re-run 1 of 2)")
+
+
+def test_timed_after_two_timed_re_runs_one_hold_and_never_a_third(monkeypatch, capsys):
+    spent = (timed_receipt(1500, 1), comment("⏳ 5/5 amended", 1400),
+             timed_receipt(800, 2), comment("⏳ 5/5 amended", 700))
+    thread = _sent_back(*spent, hold(*TIMED, 60))
+    h, tally = _timed_pass(monkeypatch, thread=thread, now=AFTER_PT)
+    out = capsys.readouterr().out
+    assert h.fired == []
+    assert h.holds == [("DRE-5930", *TIMED_HELD)]
+    assert tally.held == 1 and "3 of 2" not in out
+    assert "never a third" in out
+
+    # The next pass names the operator's hold and posts nothing.
+    notes = [comment(body, 30) for _, body in h.posted]
+    thread = sorted(thread + notes + [hold(*TIMED_HELD, 29)],
+                    key=lambda c: c["createdAt"])
+    h, tally = _timed_pass(monkeypatch, thread=thread, now=AFTER_PT + PASS)
+    lines = _about(_lines(capsys), "DRE-5930")
+    assert h.fired == [] and h.holds == [] and h.posted == [] and tally.held == 1
+    assert any(f"held by {linear_ops.proof_waiting_line(*TIMED_HELD)}" in line
+               for line in lines), lines
+
+
+#: The holds beside which a passed time hold is never lifted, each with the
+#: text the refusal must name.
+RERUN_BESIDE = {
+    "operators-press": lambda: hold("the console shows the new order",
+                                    "the operator's press on Approve", 70),
+    "cause": lambda: hold(*CAUSE_HOLD, 70),
+    "ceo-press": lambda: ceo_press_hold(70),
+    "prose-event": lambda: hold("the nightly on main", "the nightly to fire", 70),
+    "time-to-come": lambda: time_hold("2026-10-18T09:00-07:00", 70),
+}
+
+
+@pytest.mark.parametrize("case", sorted(RERUN_BESIDE))
+def test_timed_a_time_hold_beside_any_other_open_hold_is_never_lifted_on_the_re_run(
+        monkeypatch, capsys, case):
+    other = RERUN_BESIDE[case]()
+    # The time hold is the newest, so a line naming the newest hold would name it.
+    h, tally = _timed_pass(monkeypatch, thread=_sent_back(other, hold(*TIMED, 60)),
+                           now=AFTER_PT)
+    lines = _about(_lines(capsys), "DRE-5930")
+    assert _lifts(h) == [] and h.fired == [] and h.posted == [], h.posted
+    assert tally.held == 1
+    named = f"re-run: held by {other['body']}"
+    if case == "time-to-come":
+        named += " — lifts at 2026-10-18 09:00 PT"
+    assert any(named in line for line in lines), lines
+
+
+def test_timed_a_prose_waiting_hold_is_never_lifted_on_the_re_run(monkeypatch, capsys):
+    text = record_md(MET_ROW, WAITING_ROW)
+    h, tally = _timed_pass(monkeypatch, thread=_sent_back(hold(*WAITING, 60)),
+                           now=AFTER_PT, text=text)
+    lines = _about(_lines(capsys), "DRE-5930")
+    assert _lifts(h) == [] and h.fired == [] and h.posted == [] and tally.held == 1
+    line = linear_ops.proof_waiting_line(*WAITING)
+    assert any(l.endswith(f"re-run: held by {line}") for l in lines), lines
+
+
+def test_timed_a_lift_whose_dispatch_was_not_confirmed_is_timed_on_the_next_pass(
+        monkeypatch, capsys):
+    held = _sent_back(hold(*TIMED, 60))
+    h, _ = _timed_pass(monkeypatch, thread=held, now=AFTER_PT, fire_ok=False)
+    (note,) = _lifts(h)
+    assert len(h.fired) == 1 and len(h.posted) == 1
+    h, _ = _timed_pass(monkeypatch, thread=held + [comment(note, 30)],
+                       now=AFTER_PT + PASS)
+    assert _lifts(h) == []
+    assert [f[2] for f in h.fired] == [TIMED_RERUN]
+    assert h.posted[-1][1].split("\n", 1)[0].endswith("(timed re-run 1 of 2)")
+
+
+def test_timed_the_dry_run_says_would_lift_and_would_dispatch(monkeypatch, capsys):
+    h, _ = _timed_pass(monkeypatch, thread=_sent_back(hold(*TIMED, 60)), now=AFTER_PT,
+                       live=False)
+    lines = _lines(capsys)
+    assert h.fired == [] and h.posted == [] and h.holds == []
+    assert any(l.startswith("would: lift DRE-5930 — ") for l in lines), lines
+    assert f"would: dispatch DRE-5930 — {TIMED_RERUN}" in lines
+
+
+def test_timed_the_pipeline_acts_page_says_the_re_run_branch_writes_and_lifts_it():
+    page = (ROOT / "docs" / "pipeline-acts.md").read_text(encoding="utf-8")
+    assert "DRE-7316" in page
+    assert "timed re-run <n> of 2" in page
