@@ -772,3 +772,78 @@ def test_it_imports_and_judges_without_repo_in_the_environment():
     )
     assert proc.returncode == 0, proc.stderr
     assert "leaf ok" in proc.stdout
+
+
+# --------------------------------------------------------------------------
+# A row that reads history, and a row naming its fix (DRE-7740)
+# --------------------------------------------------------------------------
+class TestARowThatReadsHistory:
+    def test_the_opening_is_spelled_once(self):
+        assert proof_record.HISTORY_OPENING == "Not met. history:"
+
+    @pytest.mark.parametrize("result, said", [
+        ("Not met. history: the 09:00–10:00 PT window of 2026-10-12 — it filled at 09:52",
+         "the 09:00–10:00 PT window of 2026-10-12 — it filled at 09:52"),
+        ("NOT MET. History: the merge's run 38104845223 at 14:02 PT — it failed",
+         "the merge's run 38104845223 at 14:02 PT — it failed"),
+        ("**Not met.** history: `docs/x.md` at 08:10 PT — unchanged",
+         "docs/x.md at 08:10 PT — unchanged"),
+        ("Not met.  history:\tthe run of 07:00 PT — red", "the run of 07:00 PT — red"),
+    ])
+    def test_the_closed_window_or_finished_run_is_read(self, result, said):
+        assert proof_record.row_history(result) == said
+
+    @pytest.mark.parametrize("result", [
+        "Not met. history:",
+        "Not met. history:   ",
+        "Not met. the window filled — history: the 09:00 PT window",
+        "Not observed. history: the 09:00 PT window — it filled",
+        "Not met.",
+        "Not met. the tag still names v41",
+        "Met. history: the run of 07:00 PT — green",
+        "history: the run of 07:00 PT — red",
+        "",
+    ])
+    def test_nothing_else_is_a_history_row(self, result):
+        assert proof_record.row_history(result) is None
+
+    def test_a_history_row_is_unmet_and_carries_no_cause(self):
+        result = "Not met. history: the run of 07:00 PT — it failed"
+        assert proof_record.row_met(result) is False
+        assert proof_record.row_cause(result) is None
+        assert proof_record.row_waiting(result) is None
+        text = with_row(CAUSED, "The merge's run is green", result)
+        read = proof_record.reading(text)
+        assert ("The merge's run is green", result) in read.unmet
+        assert not proof_record.all_unmet_caused(read)
+
+
+class TestARowNamingItsFix:
+    @pytest.mark.parametrize("result, fixes", [
+        ("Not met. the Desk took 9 s to load. fix: DRE-7639", ["DRE-7639"]),
+        ("Not met. 9 s. fix: DRE-7639, DRE-7640", ["DRE-7639", "DRE-7640"]),
+        ("Not met. 9 s. fix: DRE-7639,DRE-7640.", ["DRE-7639", "DRE-7640"]),
+        ("Not met. 9 s — FIX: dre-7639", ["DRE-7639"]),
+        ("Not met. 9 s. fix: `DRE-7639`", ["DRE-7639"]),
+        ("Not met. 9 s. **fix: DRE-7639**", ["DRE-7639"]),
+        ("Not met. 9 s. fix: DRE-7639, DRE-7639", ["DRE-7639"]),
+        ("Not observed. the page timed out. fix: DRE-7639 ", ["DRE-7639"]),
+    ])
+    def test_the_named_cards_are_read_off_the_cells_end(self, result, fixes):
+        assert proof_record.row_fixes(result) == fixes
+
+    @pytest.mark.parametrize("result", [
+        "Not met. the Desk took 9 s, as DRE-7639 describes",
+        "Not met. DRE-7639 ships the fix",
+        "Not met. fix: DRE-7639 is the card that ships it",
+        "Not met. fix: DRE-7639 and DRE-7640",
+        "Not met. the prefix: DRE-7639",
+        "Not met. hotfix: DRE-7639",
+        "Not met. fix:",
+        "Not met. fix: the Desk speed card",
+        "Not met. history: the run of 07:00 PT — red. fix: DRE-7639",
+        "Not met.",
+        "",
+    ])
+    def test_nothing_else_names_a_fix(self, result):
+        assert proof_record.row_fixes(result) == []
