@@ -56,10 +56,10 @@ OTHER_SHA = "b" * 40
 REASONS = (
     "stranded-no-run", "no-route", "review-cap-spent", "dead-run-cap",
     "turn-cap-park", "epic-rereview-twice", "plan-critic-bound", "fix-dispute",
-    "unfixable-check", "operator-step", "manual",
+    "unfixable-check", "operator-step", "wip-cap-held", "manual",
 )
 LIFT_KINDS = ("run-started", "repo-on-rail", "new-head", "unpark-marker",
-              "blockers-terminal", "manual")
+              "blockers-terminal", "cap-restored", "manual")
 READERS = ("sweep", "fix-dispatch", "medic", "limit-recovery")
 CONTRACT = {
     "stranded-no-run": "run-started",
@@ -72,6 +72,7 @@ CONTRACT = {
     "epic-rereview-twice": "manual",
     "plan-critic-bound": "manual",
     "operator-step": "blockers-terminal",
+    "wip-cap-held": "cap-restored",
     "manual": "manual",
 }
 NEW_HEAD = ("review-cap-spent", "fix-dispute", "unfixable-check")
@@ -108,16 +109,17 @@ class TestTheRealTree:
         )
         assert out.returncode == 0, out.stdout + out.stderr
 
-    def test_eighteen_writer_sites_each_match_exactly_one_row(self):
+    def test_nineteen_writer_sites_each_match_exactly_one_row(self):
         # Fifteen until DRE-6186 folded main()'s two dead-run caps into
         # `hand_dead_run_to_planner`, whose one `hold.apply` serves both;
         # fifteen again since the create seam files an operator step held
         # (DRE-6428); sixteen with the operator-backlog pass (DRE-6429);
         # seventeen with the one-off critic's bound park (DRE-6456);
-        # eighteen with the deferred-release card filed held (DRE-5235).
+        # eighteen with the deferred-release card filed held (DRE-5235);
+        # nineteen with the held repo's waiting children (DRE-7754).
         doc = _real_doc()
         sites = hold.discover()
-        assert len(sites) == 18, [s.where for s in sites]
+        assert len(sites) == 19, [s.where for s in sites]
         for site in sites:
             hits = [r for r in doc["sites"] if hold.row_matches(r, site)]
             assert len(hits) == 1, f"{site.where} ({site.scope}) matches {len(hits)} rows"
@@ -125,10 +127,11 @@ class TestTheRealTree:
             hits = [s for s in sites if hold.row_matches(row, s)]
             assert len(hits) == 1, f"row {row['anchor']!r} matches {len(hits)} sites"
 
-    def test_the_nine_files_the_cards_name_are_the_files_discovered(self):
+    def test_the_ten_files_the_cards_name_are_the_files_discovered(self):
         # Six from DRE-6173; `scripts/linear_ops.py` since DRE-6428;
         # `scripts/hand_work_migration.py` since DRE-6429;
-        # `scripts/release_deferral.py` since DRE-5235.
+        # `scripts/release_deferral.py` since DRE-5235;
+        # `scripts/repo_held_epics.py` since DRE-7754.
         files = {s.file for s in hold.discover()}
         assert files == {
             "scripts/reconcile.py", "scripts/dead_run.py",
@@ -136,6 +139,7 @@ class TestTheRealTree:
             ".github/workflows/agent-fix.yml",
             "scripts/model_adoption_actions.py", "scripts/linear_ops.py",
             "scripts/hand_work_migration.py", "scripts/release_deferral.py",
+            "scripts/repo_held_epics.py",
         }
 
     def test_every_row_carries_reasons_lifts_readers_and_tried_first(self):
