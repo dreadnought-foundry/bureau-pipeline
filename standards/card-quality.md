@@ -343,9 +343,17 @@ work. Only then did it ask which sign-in to use, although Portico's own
 stood stuck on the console for more than ten hours over a question he could
 have answered the night before.
 
-**What is guidance and what is checked.** Today this is guidance; nothing in
-the pipeline checks it. A plan-critic check that refuses a plan whose hand steps
-are missing from its question is follow-up work, filed as its own card.
+**What is guidance and what is checked.** One step is checked: a held repo's
+hold is checked (DRE-7752). When the plan's own repo is held — its reconcile
+stub's `max_wip` is `0`, or `INTAKE_HOLD` is set — the plan carries a paragraph
+opening `Step that needs the CEO:` that names lifting it: `max_wip` with the
+stub's own hold comment quoted (or `max_wip` and `0` when the stub has no
+comment), and `INTAKE_HOLD` for an Intake hold. A plan without it is sent back
+at the first critic, whatever the critic wrote. Only the plan's own repo is
+read — the repo the plan run has checked out — so a card the plan files in
+another held repo is not caught, and the epic's note says so on every reading.
+Every other step that needs the CEO is still guidance; a check for those is
+DRE-7523.
 
 ## Epics
 Expressed by Linear **native parent/child** (not a label, not frontmatter).
