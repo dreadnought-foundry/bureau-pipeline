@@ -210,10 +210,12 @@ def _cap_line(workspace, ignore) -> tuple[_CapLine | None, str]:
             # anybody's hold. Strictly lower, so a tie keeps the first.
             if lowest is None or cap < lowest.cap:
                 rest = text[match.end(1):match.end()].strip()
+                # split("\n"), not splitlines(): the index counts "\n" alone,
+                # and splitlines() also breaks on \x0c, \x85,   and more.
                 lowest = _CapLine(
                     cap,
                     path,
-                    text.splitlines(),
+                    text.split("\n"),
                     text.count("\n", 0, match.start()),
                     rest[1:].strip() if rest.startswith("#") else "",
                 )
