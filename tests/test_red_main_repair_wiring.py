@@ -535,6 +535,63 @@ class GatherRecordsRetryWiringTest(unittest.TestCase):
         self.assertNotIn("the next failure event retries", comment)
 
 
+class InFlightWiringTest(unittest.TestCase):
+    """DRE-7726: the open repairs' checks are gathered before the decision,
+    on the job's token, and the decision is told which workflow went red."""
+
+    NAME = "Gather in-flight repairs' checks"
+
+    @staticmethod
+    def _steps():
+        return doc(REUSABLE)["jobs"]["repair"]["steps"]
+
+    @classmethod
+    def _gather(cls):
+        found = [s for s in cls._steps() if s.get("name") == cls.NAME]
+        assert len(found) == 1, f"exactly one step named {cls.NAME!r}"
+        return found[0]
+
+    @classmethod
+    def _decide(cls):
+        return [s for s in cls._steps() if s.get("id") == "decide"][0]
+
+    def test_it_runs_after_the_comparisons_and_before_the_decision(self):
+        steps = self._steps()
+        names = [s.get("name") for s in steps]
+        gather = names.index(self.NAME)
+        compares = names.index(
+            "Gather repair branch comparisons (pushed and never opened?)")
+        self.assertEqual(gather, compares + 1)
+        self.assertLess(gather, steps.index(self._decide()))
+
+    def test_it_runs_the_command_on_the_jobs_token(self):
+        step = self._gather()
+        self.assertEqual(step.get("if"), "${{ !cancelled() }}")
+        env = step.get("env") or {}
+        # Actions reads: the App deliberately lacks actions:read (DRE-1346).
+        self.assertEqual(env.get("GH_TOKEN"), "${{ github.token }}")
+        self.assertEqual(env.get("WORKFLOW_ID"),
+                         "${{ github.event.workflow_run.workflow_id }}")
+        run = step["run"]
+        self.assertIn("red_main_repair.py gather-in-flight", run)
+        self.assertIn('--repo "$GITHUB_REPOSITORY"', run)
+        self.assertIn('--workflow-id "$WORKFLOW_ID"', run)
+        self.assertIn("--pulls-file /tmp/repair-pulls.json", run)
+        self.assertIn("--out /tmp/repair-in-flight.json", run)
+        self.assertNotIn("${{", run)
+        self.assertNotIn("gh api", run)
+
+    def test_the_decision_is_handed_the_workflow_and_the_in_flight_file(self):
+        step = self._decide()
+        env = step.get("env") or {}
+        self.assertEqual(env.get("WORKFLOW_ID"),
+                         "${{ github.event.workflow_run.workflow_id }}")
+        run = step["run"]
+        self.assertIn('--workflow-id "$WORKFLOW_ID"', run)
+        self.assertIn("--in-flight-file /tmp/repair-in-flight.json", run)
+        self.assertNotIn("${{", run)
+
+
 _FINISH_STUB = """\
 import os, sys
 open(os.environ["CALLS"], "a").write("repair_finish " + " ".join(sys.argv[1:]) + "\\n")

@@ -1415,6 +1415,10 @@ def get_issue(identifier: str, *, fresh: bool = False) -> dict:
     an epic that walks straight past the guard written to stop it (DRE-3119).
     One child answers the question; the count is not needed.
 
+    `project { id }` is selected for `cmd_subissue` (DRE-7675): a child lands
+    in its parent epic's project, and this read of the parent carries it, so
+    the child costs no second read. `null` when the card is in no project.
+
     `fresh=True` bypasses `_card_read_once`'s memo: the caller needs the card
     as it is NOW, not as it was when the command began.
     """
@@ -1425,6 +1429,7 @@ def get_issue(identifier: str, *, fresh: bool = False) -> dict:
              id identifier title team { id } state { id name type }
              labels { nodes { name } }
              children(first: 1) { nodes { id } }
+             project { id }
            } }""",
         {"id": identifier},
     )
@@ -3504,10 +3509,11 @@ def _card_look(title: str, began: datetime, parent_id: str | None = None):
 
 def _create_card(team_id: str, title: str, description: str, labels: list[str],
                  blockers: list[str], *, parent_id: str | None = None,
-                 lane: str = "Planning") -> None:
+                 project_id: str | None = None, lane: str = "Planning") -> None:
     """Create a validated card in `lane` with its labels and blockedBy
     relations, and print the receipt. `parent_id=None` creates a PARENTLESS card
-    — the one-off route has no epic to hang under (DRE-2754).
+    — the one-off route has no epic to hang under (DRE-2754). `project_id=None`
+    sends no `projectId`, and the card lands in no project.
 
     `lane` defaults to Planning, the lane Planning owns (DRE-2858): a card this
     seam mints has not been classified, has no shape stamp and carries no
@@ -3535,6 +3541,8 @@ def _create_card(team_id: str, title: str, description: str, labels: list[str],
     }
     if parent_id is not None:
         card_input["parentId"] = parent_id
+    if project_id is not None:
+        card_input["projectId"] = project_id
     # The card a lost answer made is adopted, not made twice (DRE-6839): the
     # blockers, the operator hold and the receipt below all name it.
     began = datetime.now(UTC)
@@ -3680,8 +3688,15 @@ def cmd_subissue(parent_identifier: str, title: str, description_file: str, *fla
     # just created so it can record the growth on the epic in the same motion
     # (DRE-2739, consumed at mid_epic.py:483). The CLI path ignores the value,
     # so behaviour there is unchanged.
+    #
+    # IN THE PARENT'S PROJECT (DRE-7675): the Initiatives page counts a
+    # project's work by the cards in it, so a child in no project is work that
+    # page never shows. A child epic inherits it too, and its own children in
+    # turn. A parent in no project gives a child in none — nothing guesses one.
+    project = parent.get("project") or {}
     issue = _create_card(parent["team"]["id"], title, description, child_labels,
-                         blockers, parent_id=parent["id"], lane=QUEUE_LANE)
+                         blockers, parent_id=parent["id"],
+                         project_id=project.get("id"), lane=QUEUE_LANE)
     # 6 — AN OPERATOR STEP IS FILED HELD, under a reason the sweep lifts
     # (DRE-6428).
     _file_operator_hold(issue, child_labels)

@@ -16,7 +16,9 @@
 #     budget exhausted → a plain-English CRITICAL console alert (DRE-7454),
 #     closed by the clear-notices job when main is green again;
 #   3 concurrency lock — job-level Actions concurrency serializes one repair
-#     in flight per repo; duplicate failure events debounce by SHA;
+#     in flight per repo; duplicate failure events debounce by SHA; an open
+#     repair held up by this workflow's own failure is repaired beside,
+#     never waited on (DRE-7726);
 #   4 quota isolation — the worker token is minted through the dispatch pool
 #     (dispatch_pool.py, DRE-2013) keyed repair:<failing-sha>, steering
 #     repair onto the bucket with the most headroom, away from whichever
@@ -241,6 +243,31 @@ jobs:
             --pulls-file /tmp/repair-pulls.json \
             --out /tmp/repair-compares.json
 
+      # DRE-7726: is an open repair held up by THIS workflow's failure? On
+      # 2026-10-19 #1184 (repairing Integration Harness) failed its own
+      # Pipeline Tests on the same floor that had turned main's Pipeline Tests
+      # red, and the decision answered repair-in-flight at 2:03 and 2:27 PM PT
+      # while the repair it was waiting on could never merge. For each open
+      # repair/* pull request, `gather-in-flight` reads the run its body's
+      # `Failed run:` line names (the workflow it targets), this workflow's
+      # pull_request runs at its head, and the newest one's jobs — jobs, not
+      # the run's conclusion, which a run still going does not have yet. It
+      # rides the records' wait-and-retry and writes null for anything it
+      # could not read, which keeps the lock. Actions reads, so the job's
+      # token: the App deliberately lacks actions:read (DRE-1346), and the
+      # calling stub grants it.
+      - name: Gather in-flight repairs' checks
+        if: ${{ !cancelled() }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          WORKFLOW_ID: ${{ github.event.workflow_run.workflow_id }}
+        run: |
+          python3 .bureau-pipeline/scripts/red_main_repair.py gather-in-flight \
+            --repo "$GITHUB_REPOSITORY" \
+            --workflow-id "$WORKFLOW_ID" \
+            --pulls-file /tmp/repair-pulls.json \
+            --out /tmp/repair-in-flight.json
+
       # DRE-1996 discipline: head_branch is on the pinned-fields list (it is
       # only trusted here BECAUSE the job `if:` proved it equals the default
       # branch) — it travels via env, never interpolated into the script.
@@ -260,6 +287,7 @@ jobs:
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
           HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
           WF_NAME: ${{ github.event.workflow_run.name }}
+          WORKFLOW_ID: ${{ github.event.workflow_run.workflow_id }}
         run: |
           python3 .bureau-pipeline/scripts/red_main_repair.py decide \
             --conclusion "$CONCLUSION" \
@@ -267,11 +295,13 @@ jobs:
             --default-branch "$DEFAULT_BRANCH" \
             --head-sha "$HEAD_SHA" \
             --workflow-name "$WF_NAME" \
+            --workflow-id "$WORKFLOW_ID" \
             --log-file /tmp/red-main-log.txt \
             --refs-file /tmp/repair-refs.json \
             --pulls-file /tmp/repair-pulls.json \
             --history-file /tmp/repair-history.json \
-            --compares-file /tmp/repair-compares.json >> "$GITHUB_OUTPUT"
+            --compares-file /tmp/repair-compares.json \
+            --in-flight-file /tmp/repair-in-flight.json >> "$GITHUB_OUTPUT"
 
       # DRE-5069: the skip's receipt. A superseded failure files no card and
       # dispatches no agent (every step that would is gated on go), so this

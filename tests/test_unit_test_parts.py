@@ -1009,3 +1009,165 @@ def test_a_refreshed_live_record_passes_the_records_own_checks(tmp_path):
     text = json.dumps(new, indent=2) + "\n"
     assert max(len(line) for line in text.splitlines()) <= LONGEST_LINE
     _assert_the_new_files_land_apart(new["provenance"])
+
+
+# --- A red part the refresh may still measure (DRE-7726) -------------------
+#
+# Once the record is under its 90% floor, the part that runs this file fails
+# on that floor, and the nightly refresh that would lift the record above it
+# never ran again: it needed every part green. Part 4's pytest summary in run
+# 39315663679 listed exactly the five failures below (`5 failed, 6725
+# passed`), and planting a record at 690 of 784 files reproduced the same
+# five and nothing else. `coverage-only` lets a part red on those and on
+# nothing else be measured.
+
+COVERAGE_FAILURES = [
+    "tests/test_unit_test_parts.py::test_the_durations_record_covers_the_live_tree",
+    "tests/test_unit_test_parts.py::test_the_coverage_check_fails_under_ninety_percent",
+    "tests/test_unit_test_parts.py::test_the_coverage_check_fails_without_the_shared_method[None]",
+    "tests/test_unit_test_parts.py::test_the_coverage_check_fails_without_the_shared_method[]",
+    "tests/test_unit_test_parts.py::test_the_coverage_check_fails_without_the_shared_method[   ]",
+]
+
+STAMP = "2026-10-19T20:07:{:02d}.0000000Z"
+
+SUMMARY = "=========== 5 failed, 6725 passed in 1201.13s (0:20:01) ==========="
+
+
+def _part_log(path: Path, *, extra: list[str] = (), summary: str | None = SUMMARY
+              ) -> Path:
+    """A red part's log as `GET /actions/jobs/{id}/logs` serves it: the -v
+    result lines, the short summary, and pytest's closing line."""
+    lines = ["tests/test_alpha.py::test_a PASSED [  0%]"]
+    lines += [f"{node} FAILED [ 50%]" for node in COVERAGE_FAILURES]
+    lines += ["=========================== short test summary info "
+              "============================"]
+    lines += [f"FAILED {node} - AssertionError: 690 of 784 test files carry "
+              f"recorded seconds, under 90%." for node in COVERAGE_FAILURES]
+    lines += list(extra)
+    if summary is not None:
+        lines.append(summary)
+    path.write_text("".join(f"{STAMP.format(i % 60)} {line}\n"
+                            for i, line in enumerate(lines)))
+    return path
+
+
+def _coverage_only(capsys, *logs: Path) -> tuple[int, str]:
+    code = parts.main(["coverage-only", *map(str, logs)])
+    out = capsys.readouterr()
+    return code, out.out + out.err
+
+
+def test_the_coverage_tests_are_the_three_named_in_the_card():
+    assert parts.COVERAGE_TESTS == (
+        "tests/test_unit_test_parts.py::test_the_durations_record_covers_the_live_tree",
+        "tests/test_unit_test_parts.py::test_the_coverage_check_fails_under_ninety_percent",
+        "tests/test_unit_test_parts.py::test_the_coverage_check_fails_without_the_shared_method",
+    )
+
+
+def test_every_coverage_test_is_a_test_function_in_this_file():
+    # A rename here would otherwise close the refresh again, silently.
+    import ast
+    here = Path(__file__).resolve()
+    defined = {node.name for node in ast.parse(here.read_text()).body
+               if isinstance(node, ast.FunctionDef)
+               and node.name.startswith("test_")}
+    for node in parts.COVERAGE_TESTS:
+        path, name = node.split("::")
+        assert (ROOT / path).resolve() == here, node
+        assert name in defined, f"{name} is not a test function in {path}"
+
+
+def test_coverage_only_passes_the_2026_10_19_part_4_log(tmp_path, capsys):
+    code, said = _coverage_only(capsys, _part_log(tmp_path / "job-701.log"))
+    assert code == 0, said
+
+
+def test_coverage_only_passes_a_green_log_too(tmp_path, capsys):
+    log = tmp_path / "green.log"
+    log.write_text(f"{STAMP.format(0)} tests/test_alpha.py::test_a PASSED\n"
+                   f"{STAMP.format(1)} ===== 1 passed in 0.10s =====\n")
+    assert _coverage_only(capsys, log)[0] == 0
+
+
+def test_coverage_only_fails_on_one_other_failed_test(tmp_path, capsys):
+    other = "tests/test_merge_gate.py::test_the_gate_holds[red]"
+    code, said = _coverage_only(capsys, _part_log(
+        tmp_path / "job-701.log",
+        extra=[f"FAILED {other} - AssertionError: held"],
+        summary="===== 6 failed, 6724 passed in 1201.13s (0:20:01) ====="))
+    assert code == 1
+    assert other in said, said
+    assert len(said.strip().splitlines()) == 1, said
+
+
+def test_coverage_only_fails_on_an_error_line(tmp_path, capsys):
+    errored = "tests/test_unit_test_parts.py::test_the_durations_record_covers_the_live_tree"
+    code, said = _coverage_only(capsys, _part_log(
+        tmp_path / "job-701.log",
+        extra=[f"ERROR {errored} - RuntimeError: fixture"],
+        summary="===== 5 failed, 6725 passed, 1 error in 1201.13s (0:20:01) ====="))
+    # Even one of the coverage tests erroring is not the coverage failure.
+    assert code == 1, said
+    assert errored in said, said
+
+
+def test_coverage_only_fails_on_a_collection_error(tmp_path, capsys):
+    code, said = _coverage_only(capsys, _part_log(
+        tmp_path / "job-701.log",
+        extra=["ERROR tests/test_broken.py - ImportError: no module"],
+        summary="===== 5 failed, 6725 passed, 1 error in 1201.13s ====="))
+    assert code == 1
+    assert "tests/test_broken.py" in said, said
+
+
+def test_coverage_only_fails_on_a_log_with_no_summary_line(tmp_path, capsys):
+    # A part canceled at its clock: pytest never printed its closing line.
+    log = _part_log(tmp_path / "job-702.log", summary=None)
+    code, said = _coverage_only(capsys, log)
+    assert code == 1
+    assert "job-702.log" in said and "summary" in said, said
+
+
+def test_coverage_only_reads_every_log(tmp_path, capsys):
+    good = _part_log(tmp_path / "job-701.log")
+    bad = _part_log(tmp_path / "job-702.log", summary=None)
+    assert _coverage_only(capsys, good, bad)[0] == 1
+    assert _coverage_only(capsys, bad, good)[0] == 1
+    assert _coverage_only(capsys, good, good)[0] == 0
+
+
+def test_the_refresh_names_a_part_red_only_on_the_coverage_tests(tmp_path,
+                                                                 monkeypatch):
+    root = _tree(tmp_path / "repo", ["tests/test_alpha.py", "tests/test_beta.py",
+                                     "tests/test_gamma.py", WALK_A, WALK_B])
+    out = tmp_path / "unit-test-durations.json"
+    out.write_text(json.dumps(_old_record(), indent=2) + "\n")
+    monkeypatch.setattr(parts, "DURATIONS", out)
+    logs = _write_logs(tmp_path / "logs")
+    argv = ["refresh", *map(str, logs), "--root", str(root), "--run", "77",
+            "--job", "701", "--job", "702"]
+    assert parts.main(argv + ["--coverage-failed-job", "701"]) == 0
+    method = json.loads(out.read_text())["method"]
+    assert "every part green" not in method, method
+    assert "job 701 red only on the durations-coverage tests" in method, method
+    assert "701 and 702" in method
+    # Without the flag, the sentence is the one it always was.
+    out.write_text(json.dumps(_old_record(), indent=2) + "\n")
+    assert parts.main(argv) == 0
+    method = json.loads(out.read_text())["method"]
+    assert "every part green" in method and "durations-coverage" not in method
+
+
+def test_the_refresh_refuses_a_coverage_failed_job_it_did_not_read(tmp_path,
+                                                                  monkeypatch):
+    out = tmp_path / "unit-test-durations.json"
+    out.write_text(json.dumps(_old_record(), indent=2) + "\n")
+    before = out.read_text()
+    monkeypatch.setattr(parts, "DURATIONS", out)
+    logs = _write_logs(tmp_path / "logs")
+    assert parts.main(["refresh", *map(str, logs), "--run", "77",
+                       "--job", "701", "--job", "702",
+                       "--coverage-failed-job", "703"]) == 2
+    assert out.read_text() == before

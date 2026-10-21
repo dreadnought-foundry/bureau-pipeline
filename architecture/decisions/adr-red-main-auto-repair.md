@@ -245,6 +245,35 @@ two agents converging on the same target destroy each other's work):
   failure event is a **no-op** — the in-flight repair's merge will re-run
   CI on `main` and either clear the newer failure or produce a fresh event
   to handle next.
+- **Repair beside a repair this failure holds up (DRE-7726):** the one
+  exception to the liveness check. Its reason fails exactly when the
+  in-flight repair cannot merge *because of* the newer failure. On
+  2026-10-19 Integration Harness went red at `e46fd777ef31` (run
+  39302814695) at 11:28 AM PT and DRE-7673's repair opened #1184; Pipeline
+  Tests went red at `cc78ed494e02` (run 39315663679) at 1:00 PM PT. Red-Main
+  Repair runs 39324487919 (2:03 PM PT) and 39327650023 (2:27 PM PT) both
+  answered `repair-in-flight`, while #1184's own Pipeline Tests run at its
+  head (39321679250) concluded its part 4 job `failure` at 2:07 PM PT on the
+  same durations floor — the run itself went on until 2:46 PM PT. The open
+  repair waited on the red check whose repair it held back, and the channel
+  stalled until a person stepped in (DRE-7725). So the lock gives way when
+  **every** open `repair/*` pull request targets another workflow (the run
+  its body's `Failed run:` line names) and has at least one job of this
+  workflow's newest `pull_request` run at its head concluded `failure` —
+  jobs, not the run's conclusion, which at 2:27 PM did not exist yet. The
+  match is by workflow id, never by check name: a part's name moves with
+  the partition. The repair dispatched is an ordinary one, on its own branch
+  and its own pull request, beside the in-flight one — never folded into it,
+  which would be a second agent on a branch someone else owns (the DRE-1803
+  clobber this lock exists to prevent). The harness does not run on pull
+  requests (DRE-4149), so the beside-repair goes green and merges on its
+  own, and the stale-merge-ref refresh (DRE-3138) brings the in-flight one
+  up to date with the fixed `main`. The concurrency group still runs one
+  repair job at a time, the two-attempt budget per failing commit is
+  unchanged, every rule after the lock still applies, and no workflow ever
+  has two open repairs aimed at it. Anything unreadable — a body with no
+  `Failed run:` line, a read that never comes back, a missing or malformed
+  file — keeps the lock.
 - **Debounce by SHA:** multiple failing `workflow_run` events off the same
   failing head SHA (matrix jobs, re-runs) collapse into one repair — a
   repair branch for that SHA already existing makes the duplicate event

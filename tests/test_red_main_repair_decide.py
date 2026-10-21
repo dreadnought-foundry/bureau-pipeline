@@ -796,6 +796,242 @@ class RecordRefsCliTest(unittest.TestCase):
         self.assertEqual(res.stdout, "")
 
 
+# --------------------------------------------------------------------------- #
+# Repair beside an in-flight repair that this failure holds up (DRE-7726)      #
+# --------------------------------------------------------------------------- #
+
+# 2026-10-19, from the run records. Integration Harness went red at
+# e46fd777ef31 (run 39302814695) and DRE-7673's repair opened #1184 on
+# repair/DRE-7673-e46fd777ef31. Pipeline Tests then went red at cc78ed494e02
+# (run 39315663679), and Red-Main Repair's runs at 2:03 PM PT (39324487919)
+# and 2:27 PM PT (39327650023) both answered repair-in-flight. #1184's own
+# Pipeline Tests run at its head 05bb0a9 (39321679250) concluded its part 4
+# job `failure` at 2:07 PM PT, while the run went on until 2:46 PM PT.
+PIPELINE_TESTS = 294736769
+HARNESS = 317082204
+RED_SHA = "cc78ed494e02ed7f307b2c82fb4e8fea3fa55d51"
+IN_FLIGHT_REF = "repair/DRE-7673-e46fd777ef31"
+# Only the short head is in the record; the full one here is padded.
+IN_FLIGHT_HEAD = "05bb0a9" + "0" * 33
+RED_LOG = """
+FAILED tests/test_unit_test_parts.py::test_the_durations_record_covers_the_live_tree
+=== 5 failed, 6725 passed in 1201.13s (0:20:01) ===
+"""
+
+
+def _jobs_at(part_4):
+    """#1184's Pipeline Tests jobs at its head: parts 1 to 3 green, part 4 as
+    given, the walks and the required check not concluded yet."""
+    jobs = [{"name": f"scripts unit tests (part {n})", "conclusion": "success"}
+            for n in (1, 2, 3)]
+    jobs.append({"name": "scripts unit tests (part 4)", "conclusion": part_4})
+    jobs += [{"name": "scripts unit tests (walk tests/test_console_agent_move_"
+                      "keeps_the_suite_green.py)", "conclusion": None},
+             {"name": "scripts unit tests (walk tests/test_console_change_"
+                      "keeps_the_suite_green.py)", "conclusion": None},
+             {"name": "scripts unit tests", "conclusion": None}]
+    return jobs
+
+
+def _entry(*, number=1184, target=HARNESS, part_4="failure", jobs=None):
+    return {"number": number, "head_sha": IN_FLIGHT_HEAD,
+            "target_workflow_id": target,
+            "jobs": _jobs_at(part_4) if jobs is None else jobs}
+
+
+def _beside(**overrides):
+    kwargs = dict(
+        head_sha=RED_SHA,
+        log_text=RED_LOG,
+        workflow_name="Pipeline Tests",
+        refs=[IN_FLIGHT_REF],
+        pulls=[_pull(IN_FLIGHT_REF)],
+        workflow_id=PIPELINE_TESTS,
+        in_flight={IN_FLIGHT_REF: _entry()},
+    )
+    kwargs.update(overrides)
+    return _decide(**kwargs)
+
+
+class BesideInFlightTest(unittest.TestCase):
+    """The lock gives way only to a repair this workflow's failure holds up."""
+
+    def test_the_2_27_pm_replay_dispatches_beside_1184(self):
+        d = _beside()
+        self.assertTrue(d["go"])
+        self.assertEqual(d["reason"], "dispatch")
+        self.assertEqual(d["branch"], f"repair/{RED_SHA}")
+        self.assertEqual(d["attempt"], 1)
+        self.assertFalse(d["escalate"])
+        self.assertEqual(d["beside_in_flight"], "1184")
+
+    def test_the_2_03_pm_replay_is_still_in_flight(self):
+        # Part 4 is still running: nothing on #1184 has failed yet.
+        d = _beside(in_flight={IN_FLIGHT_REF: _entry(part_4=None)})
+        self.assertFalse(d["go"])
+        self.assertEqual(d["reason"], "repair-in-flight")
+        self.assertEqual(d["beside_in_flight"], "")
+
+    def test_an_open_repair_of_this_same_workflow_keeps_the_lock(self):
+        d = _beside(in_flight={IN_FLIGHT_REF: _entry(target=PIPELINE_TESTS)})
+        self.assertEqual(d["reason"], "repair-in-flight")
+        self.assertFalse(d["go"])
+
+    def test_no_failed_job_at_the_head_keeps_the_lock(self):
+        for jobs in ([], [{"name": "scripts unit tests (part 4)",
+                           "conclusion": "success"}],
+                     [{"name": "scripts unit tests (part 4)",
+                       "conclusion": "cancelled"}]):
+            with self.subTest(jobs=jobs):
+                d = _beside(in_flight={IN_FLIGHT_REF: _entry(jobs=jobs)})
+                self.assertEqual(d["reason"], "repair-in-flight")
+
+    def test_a_null_entry_keeps_the_lock(self):
+        d = _beside(in_flight={IN_FLIGHT_REF: None})
+        self.assertEqual(d["reason"], "repair-in-flight")
+
+    def test_a_missing_entry_keeps_the_lock(self):
+        d = _beside(in_flight={})
+        self.assertEqual(d["reason"], "repair-in-flight")
+
+    def test_malformed_entries_keep_the_lock(self):
+        for entry in ("1184", [], {"number": 1184, "jobs": _jobs_at("failure")},
+                      _entry(target="317082204"), _entry(target=True),
+                      _entry(number="1184"), _entry(jobs="failure"),
+                      _entry(jobs=["failure"])):
+            with self.subTest(entry=entry):
+                d = _beside(in_flight={IN_FLIGHT_REF: entry})
+                self.assertEqual(d["reason"], "repair-in-flight")
+
+    def test_no_in_flight_document_keeps_the_lock(self):
+        for in_flight in (None, [], "FETCH-FAILED"):
+            with self.subTest(in_flight=in_flight):
+                d = _beside(in_flight=in_flight)
+                self.assertEqual(d["reason"], "repair-in-flight")
+
+    def test_no_workflow_id_keeps_the_lock(self):
+        for workflow_id in (None, "", "294736769", True):
+            with self.subTest(workflow_id=workflow_id):
+                d = _beside(workflow_id=workflow_id)
+                self.assertEqual(d["reason"], "repair-in-flight")
+
+    def test_two_open_repairs_and_only_one_qualifies_keeps_the_lock(self):
+        other = "repair/DRE-7700-0123456789ab"
+        d = _beside(
+            pulls=[_pull(IN_FLIGHT_REF), _pull(other)],
+            in_flight={IN_FLIGHT_REF: _entry(),
+                       other: _entry(number=1190, target=PIPELINE_TESTS)})
+        self.assertEqual(d["reason"], "repair-in-flight")
+        d = _beside(
+            pulls=[_pull(IN_FLIGHT_REF), _pull(other)],
+            in_flight={IN_FLIGHT_REF: _entry(), other: None})
+        self.assertEqual(d["reason"], "repair-in-flight")
+
+    def test_two_open_repairs_that_both_qualify_are_both_named(self):
+        other = "repair/DRE-7700-0123456789ab"
+        d = _beside(
+            pulls=[_pull(IN_FLIGHT_REF), _pull(other)],
+            in_flight={IN_FLIGHT_REF: _entry(), other: _entry(number=1190)})
+        self.assertEqual(d["reason"], "dispatch")
+        self.assertEqual(d["beside_in_flight"], "1184 1190")
+
+    def test_every_rule_after_the_lock_still_applies(self):
+        # Budget: two attempts at this sha already.
+        d = _beside(refs=[IN_FLIGHT_REF, f"repair/{RED_SHA}",
+                          f"repair/{RED_SHA}-2"])
+        self.assertEqual(d["reason"], "budget-exhausted")
+        self.assertTrue(d["escalate"])
+        # Debounce: a branch at this sha, no pull request on it.
+        d = _beside(refs=[IN_FLIGHT_REF, f"repair/{RED_SHA}"])
+        self.assertEqual(d["reason"], "duplicate-event")
+        self.assertFalse(d["go"])
+        # Already repaired: a merged repair at this sha.
+        d = _beside(pulls=[_pull(IN_FLIGHT_REF),
+                           _pull(f"repair/{RED_SHA}", state="closed",
+                                 merged=True)])
+        self.assertEqual(d["reason"], "already-repaired")
+        # Infra backoff and superseded come before the lock, as they did.
+        d = _beside(log_text=RATE_LIMIT_LOG)
+        self.assertEqual(d["reason"], "infra-backoff")
+        self.assertEqual(d["beside_in_flight"], "")
+
+    def test_without_the_new_inputs_the_decision_is_todays(self):
+        d = _decide(head_sha=RED_SHA, pulls=[_pull(IN_FLIGHT_REF)])
+        self.assertEqual(d["reason"], "repair-in-flight")
+        self.assertEqual(d["beside_in_flight"], "")
+
+    def test_every_decision_answers_beside_in_flight(self):
+        for d in (_decide(conclusion="success"), _decide(),
+                  _decide(log_text=RATE_LIMIT_LOG), _beside()):
+            self.assertIsInstance(d["beside_in_flight"], str)
+
+    def test_the_docstring_and_the_adr_state_the_exception(self):
+        doc = red_main_repair.__doc__
+        adr_path = os.path.join(os.path.dirname(__file__), "..", "architecture",
+                                "decisions", "adr-red-main-auto-repair.md")
+        with open(adr_path, encoding="utf-8") as fh:
+            adr = fh.read()
+        guardrail_3 = adr[adr.index("## Guardrail 3"):adr.index("## Guardrail 4")]
+        self.assertIn("one repair in flight", guardrail_3.lower())
+        for text in (doc, guardrail_3):
+            for fact in ("DRE-7726", "2026-10-19", "#1184", "39327650023"):
+                self.assertIn(fact, text)
+
+
+class BesideInFlightCliTest(unittest.TestCase):
+    """`--workflow-id` and `--in-flight-file`, through the CLI."""
+
+    def _cli(self, in_flight_payload, workflow_id=str(PIPELINE_TESTS)):
+        with tempfile.TemporaryDirectory() as td:
+            paths = {name: os.path.join(td, name)
+                     for name in ("log", "refs", "pulls", "in-flight")}
+            open(paths["log"], "w").write(RED_LOG)
+            open(paths["refs"], "w").write(json.dumps(
+                [{"ref": f"refs/heads/{IN_FLIGHT_REF}"}]))
+            open(paths["pulls"], "w").write(json.dumps(
+                [{"number": 1184, "head": {"ref": IN_FLIGHT_REF},
+                  "state": "open", "merged_at": None}]))
+            argv = [sys.executable, os.path.join(SCRIPTS, "red_main_repair.py"),
+                    "decide", "--conclusion", "failure",
+                    "--head-branch", "main", "--default-branch", "main",
+                    "--head-sha", RED_SHA, "--log-file", paths["log"],
+                    "--refs-file", paths["refs"], "--pulls-file", paths["pulls"],
+                    "--workflow-name", "Pipeline Tests"]
+            if workflow_id is not None:
+                argv += ["--workflow-id", workflow_id]
+            if in_flight_payload is not None:
+                open(paths["in-flight"], "w").write(in_flight_payload)
+                argv += ["--in-flight-file", paths["in-flight"]]
+            return subprocess.run(argv, capture_output=True, text=True)
+
+    def test_the_2_27_pm_replay_through_the_cli(self):
+        res = self._cli(json.dumps({IN_FLIGHT_REF: _entry()}))
+        self.assertEqual(res.returncode, 0, res.stderr)
+        out = CliTest._outputs(res.stdout)
+        self.assertEqual(out["go"], "true")
+        self.assertEqual(out["reason"], "dispatch")
+        self.assertEqual(out["branch"], f"repair/{RED_SHA}")
+        self.assertEqual(out["beside_in_flight"], "1184")
+        self.assertIn("#1184", res.stderr)
+
+    def test_an_absent_or_malformed_file_keeps_the_lock(self):
+        for payload in (None, "FETCH-FAILED\n", "[]", "{not json"):
+            with self.subTest(payload=payload):
+                res = self._cli(payload)
+                self.assertEqual(res.returncode, 0, res.stderr)
+                out = CliTest._outputs(res.stdout)
+                self.assertEqual(out["reason"], "repair-in-flight")
+                self.assertEqual(out["beside_in_flight"], "")
+
+    def test_no_workflow_id_keeps_the_lock(self):
+        for workflow_id in (None, "", "not-a-number"):
+            with self.subTest(workflow_id=workflow_id):
+                res = self._cli(json.dumps({IN_FLIGHT_REF: _entry()}),
+                                workflow_id=workflow_id)
+                self.assertEqual(CliTest._outputs(res.stdout)["reason"],
+                                 "repair-in-flight")
+
+
 class CliTest(unittest.TestCase):
     """The workflow contract: stdout carries only key=value lines appended
     verbatim to $GITHUB_OUTPUT."""

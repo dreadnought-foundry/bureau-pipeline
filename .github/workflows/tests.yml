@@ -196,10 +196,19 @@ jobs:
   # requests had added. The four parts above run every non-walk test file
   # with `pytest -v`, so a green nightly's logs are a whole measurement.
   #
-  # Schedule runs only, and only once every part succeeded: the `if:` names
-  # no status function, so GitHub adds `success()` and skips this job when
-  # any entry of `unit` did not succeed. `unit_test_parts.py due` decides —
-  # under 95%, re-measure (`REMEASURE_MARGIN`, about four days of new test
+  # Schedule runs only, once every part FINISHED (DRE-7726): `always()` lets
+  # the job run past a failed part, and the `unit` result keeps out a
+  # canceled or skipped one. It used to need every part green, and that
+  # locked it shut: under the floor, the part that runs
+  # `tests/test_unit_test_parts.py` fails on the floor itself (part 4 of run
+  # 39315663679 on 2026-10-19, `5 failed, 6725 passed`), so the refresh that
+  # would lift the record could never run again. Now the fetch step keeps
+  # each part that succeeded or failed, still needs all four, and measures a
+  # failed one only when `unit_test_parts.py coverage-only` says it finished
+  # and failed on the durations-coverage tests and nothing else; any other
+  # answer ends the job there, with an error naming the test, before
+  # anything is measured, pushed or opened. `unit_test_parts.py due` decides
+  # — under 95%, re-measure (`REMEASURE_MARGIN`, about four days of new test
   # files above the floor) — and every later step waits on its answer. On
   # `hold` nothing is opened and the coverage read goes to the job summary.
   # On `refresh` the record is rebuilt from this run's own four part logs,
@@ -217,7 +226,9 @@ jobs:
   durations-refresh:
     name: unit test durations refresh
     needs: unit
-    if: github.event_name == 'schedule'
+    if: >-
+      always() && github.event_name == 'schedule' &&
+      (needs.unit.result == 'success' || needs.unit.result == 'failure')
     runs-on: ${{ fromJSON(vars.BUREAU_CI_RUNS_ON || vars.BUREAU_RUNS_ON || '["ubuntu-latest"]') }}
     timeout-minutes: 10
     permissions:
@@ -254,10 +265,15 @@ jobs:
           else
             printf '### Unit test durations: nothing to do\n\n%s, so no pull request is opened.\n' "$coverage" >> "$GITHUB_STEP_SUMMARY"
           fi
-      # This attempt's four part jobs, each green, and each one's log as the
-      # jobs API serves it: one runner timestamp per line, which is what
-      # `measure` reads. PARTS is `unit`'s matrix size; fewer green parts
-      # than that is not a whole measurement, and the job stops here.
+      # This attempt's four part jobs, each one that succeeded or failed, and
+      # each one's log as the jobs API serves it: one runner timestamp per
+      # line, which is what `measure` reads. PARTS is `unit`'s matrix size;
+      # fewer finished parts than that is not a whole measurement, and the
+      # job stops here. A failed part is measured only when `coverage-only`
+      # says it finished and failed on the durations-coverage tests alone
+      # (DRE-7726) — otherwise the job stops here too, naming the test.
+      # `gh api` refuses a body holding terminal escape sequences unless told
+      # to allow them, and every Actions log holds them in its step headers.
       - name: Fetch the four parts' logs
         id: logs
         if: steps.due.outputs.decision == 'refresh'
@@ -268,17 +284,33 @@ jobs:
         run: |
           mkdir -p "$RUNNER_TEMP/part-logs"
           gh api --paginate "repos/$GITHUB_REPOSITORY/actions/runs/$RUN_ID/jobs?filter=latest&per_page=100" \
-            --jq '.jobs[] | select(.name | startswith("scripts unit tests (part ")) | select(.conclusion == "success") | .id' \
+            --jq '.jobs[] | select(.name | startswith("scripts unit tests (part ")) | select(.conclusion == "success" or .conclusion == "failure") | "\(.id) \(.conclusion)"' \
             > "$RUNNER_TEMP/part-jobs.txt"
           found=$(grep -c . "$RUNNER_TEMP/part-jobs.txt" || true)
           if [ "$found" != "$PARTS" ]; then
-            echo "::error::found $found green unit test part job(s) in run $RUN_ID, not $PARTS — not a whole measurement"
+            echo "::error::found $found finished unit test part job(s) in run $RUN_ID (each succeeded or failed), not $PARTS — not a whole measurement"
             exit 1
           fi
-          while read -r job; do
-            gh api "repos/$GITHUB_REPOSITORY/actions/jobs/$job/logs" > "$RUNNER_TEMP/part-logs/job-$job.log"
+          jobs=()
+          failed=()
+          failed_logs=()
+          while read -r job conclusion; do
+            gh api --allow-escape-sequences "repos/$GITHUB_REPOSITORY/actions/jobs/$job/logs" > "$RUNNER_TEMP/part-logs/job-$job.log"
+            jobs+=("$job")
+            if [ "$conclusion" = failure ]; then
+              failed+=("$job")
+              failed_logs+=("$RUNNER_TEMP/part-logs/job-$job.log")
+            fi
           done < "$RUNNER_TEMP/part-jobs.txt"
-          echo "jobs=$(paste -sd' ' "$RUNNER_TEMP/part-jobs.txt")" >> "$GITHUB_OUTPUT"
+          if [ "${#failed[@]}" -gt 0 ]; then
+            if ! why=$(python3 scripts/unit_test_parts.py coverage-only "${failed_logs[@]}"); then
+              echo "::error::unit test part job(s) ${failed[*]} failed on more than the durations-coverage tests, so nothing is measured: $why"
+              exit 1
+            fi
+            echo "part job(s) ${failed[*]}: $why"
+          fi
+          echo "jobs=${jobs[*]}" >> "$GITHUB_OUTPUT"
+          echo "failed=${failed[*]}" >> "$GITHUB_OUTPUT"
       # `refresh` writes nothing that would still be due, so logs that
       # measured too little fail here rather than open a thinner record.
       - name: Re-measure the record from those logs
@@ -286,11 +318,17 @@ jobs:
         env:
           RUN_ID: ${{ github.run_id }}
           JOBS: ${{ steps.logs.outputs.jobs }}
+          FAILED: ${{ steps.logs.outputs.failed }}
           HEAD_SHA: ${{ github.sha }}
         run: |
           args=()
           for job in $JOBS; do
             args+=("$RUNNER_TEMP/part-logs/job-$job.log" --job "$job")
+          done
+          # The parts `coverage-only` let through red: the record's `method`
+          # names them instead of saying every part was green (DRE-7726).
+          for job in $FAILED; do
+            args+=(--coverage-failed-job "$job")
           done
           python3 scripts/unit_test_parts.py refresh "${args[@]}" --run "$RUN_ID" --head "$HEAD_SHA"
           git diff --stat

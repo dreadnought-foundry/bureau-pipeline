@@ -274,6 +274,8 @@ class PlainValueTest(unittest.TestCase):
             "timeout_limit=",
             "timeout_commits=",
             "superseded_by=",
+            # DRE-7726: the in-flight repairs a go went past, empty otherwise.
+            "beside_in_flight=",
         ])
 
     def test_render_leaves_a_single_line_value_alone(self):
