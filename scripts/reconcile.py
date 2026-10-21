@@ -338,6 +338,11 @@ from sweep_holds import (  # noqa: E402,F401 — re-exported, the moved names
     _whole_number,
     cap_and_source,
 )
+import sweep_holds  # noqa: E402 — DRE-7755: the hold record the held repo's pass quotes
+# DRE-7754: an approved epic in a repo held at max_wip 0 is told once, and its
+# Queued children are held until the cap is restored. The two passes live
+# there; the full sweep calls them right after its idle check (DRE-7755).
+import repo_held_epics  # noqa: E402
 
 
 def resolve_max_wip(raw):
@@ -14709,9 +14714,11 @@ def sweep_idle() -> str | None:
 
     From the read door when it is `on` (no Linear request): this repo's cards
     in the work lanes, and its Queued cards not held for a human — a held
-    card is never promoted. Otherwise from Linear with `IDLE_QUERY`, one
-    request, where any of this repo's Queued cards counts as promotable (the
-    query cannot ask "not held" safely).
+    card is never promoted — or held `wip-cap-held`, which the lift pass
+    releases on this pass (DRE-7755). Otherwise from Linear with
+    `IDLE_QUERY`, one request, where any of this repo's Queued cards counts
+    as promotable (the query cannot ask "not held" safely). So an idle pass
+    holds no card for the lift pass to lift, and skips it.
 
     An answer nobody could get is NOT idle: the pass runs in full, exactly as
     it did before this check existed. A card known only by the retired
@@ -14733,8 +14740,10 @@ def sweep_idle() -> str | None:
         else:
             mine = [c for c in read.nodes if card_repo(c) == REPO_SLUG]
             moving = [c for c in mine if c["state"]["name"] in IN_MOTION_LANES]
+            # A card held for the cap waits too: the cap is above 0 here, so
+            # the lift pass releases it on this very pass (DRE-7755).
             waiting = [c for c in mine if c["state"]["name"] in QUEUE_LANES
-                       and not held(c)]
+                       and (not held(c) or _wip_cap_held(c))]
             if moving or waiting:
                 return None
             return ("no card of this repo is in motion or waiting to be promoted "
@@ -14761,6 +14770,80 @@ def sweep_idle() -> str | None:
         return None
     return (f"no card of repo:{REPO_SLUG} (any spelling routing accepts) is in "
             f"{', '.join(IDLE_LANES)}")
+
+
+def _wip_cap_held(card: dict) -> bool:
+    """Is the card's live hold the cap's (`wip-cap-held`)? Read off the
+    comments the board read already carries, at no request."""
+    labels = (card.get("labels") or {}).get("nodes", [])
+    return (hold.reason_of(labels, card_comment_bodies(card))
+            == repo_held_epics.HOLD_REASON)
+
+
+# ── A repo held at max_wip 0 says so on the board (DRE-7755) ───────────────
+# The two passes are DRE-7754's (`repo_held_epics`); these wrappers are where
+# the full sweep calls them, right after its idle check. A held pass tells its
+# approved epics once and holds their waiting children. A pass at a cap above
+# 0 that is not idle lifts the cap's holds before the backstops and the board
+# read, so the cards it lifts are promotable on this same pass. Neither runs on
+# the scoped `--promote-only` or `--close-only` passes.
+#
+# Unknown is not held: a read that fails prints one line and fails nothing.
+# The module sends every read through the `gql` it is handed and writes only
+# through `hold` and `linear_ops`, so a read is told from a write by the seam
+# it failed in, and a failed write lands on `_write_failures`.
+
+
+class _RepoHeldUnread(Exception):
+    """A read of the held repo's pass that did not answer."""
+
+
+def _repo_held_read(query: str, variables: dict | None = None) -> dict:
+    try:
+        return linear_ops.gql(query, variables)
+    except linear_ops.LinearError as e:
+        raise _RepoHeldUnread(str(e)) from e
+
+
+def _run_repo_held(what: str, act: str, run) -> None:
+    """Run one of the two passes and print its lines; say a failed read in
+    one line, and record a failed write under `act`."""
+    try:
+        lines = run()
+    except _RepoHeldUnread as e:
+        print(f"{repo_held_epics.LOG_PREFIX} the board could not be read ({e}) — "
+              f"nothing {what} this pass")
+        return
+    except linear_ops.LinearError as e:
+        _write_failures.append(f"{act}: {e}")
+        print(f"ERROR: {act}: {e}", file=sys.stderr)
+        return
+    for line in lines:
+        print(line)
+
+
+def post_repo_held_notice() -> None:
+    """A pass held at max_wip 0: hold the waiting children of this repo's
+    approved epics and tell each epic once (`repo_held_epics.hold_pass`).
+
+    The hold record is read from the same inputs as the module's cap: on the
+    live sweep `MAX_WIP` is the stub's own literal, and `read` still quotes
+    the stub's cap line and its hold comment because they name the same cap.
+    No Intake hold is passed — the `max_wip` hold is the one that stops
+    building; the Intake hold pauses only the groomer's drain (DRE-4141)."""
+    holds = sweep_holds.read(os.environ.get("GITHUB_WORKSPACE"),
+                             os.environ.get("MAX_WIP"),
+                             os.environ.get("BUREAU_MAX_WIP"))
+    _run_repo_held("held", "repo-held notice", lambda: repo_held_epics.hold_pass(
+        REPO_SLUG, holds, gql=_repo_held_read))
+
+
+def lift_wip_cap_holds() -> None:
+    """A pass at a cap above 0 that is not idle: lift every `wip-cap-held`
+    hold on this repo's Queued cards (`repo_held_epics.lift_pass`)."""
+    _run_repo_held("lifted", f"{repo_held_epics.HOLD_REASON} lift",
+                   lambda: repo_held_epics.lift_pass(
+        REPO_SLUG, MAX_WIP, gql=_repo_held_read))
 
 
 def off_rail_notice(phase: str, would: str) -> str:
@@ -14926,6 +15009,16 @@ def main(
                 print(f"idle: {REPO_SLUG} — {why}; skipped promotion and this repo's "
                       "work-lane phases this pass (the fleet-wide Planning and "
                       "Intake phases still run)")
+        # A repo held at 0 says so on its approved epics, once; a restored
+        # cap lifts the cap's holds before anything reads the board, so the
+        # lifted cards are promotable on this pass (DRE-7755). An idle pass
+        # at a cap above 0 has no card held for the cap, and pays nothing.
+        if MAX_WIP <= 0 and why is not None:
+            with _phase("post_repo_held_notice"):
+                post_repo_held_notice()
+        elif MAX_WIP > 0 and why is None:
+            with _phase("lift_wip_cap_holds"):
+                lift_wip_cap_holds()
     if not promote_only:
         # Backstops run independently: one failing must not silence the
         # others, but every write failure is recorded and fails the run.
