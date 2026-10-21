@@ -562,8 +562,9 @@ jobs:
 
 A stub may also pass nothing at all, and that is how the console sets a
 project's cap with no code push (DRE-6631). `cap_and_source` in
-`scripts/reconcile.py` is the one place the number is resolved, for all three
-paths, from four sources in order:
+`scripts/sweep_holds.py` (which `scripts/reconcile.py` imports, DRE-7750) is
+the one place the number is resolved, for all three paths, from four sources
+in order:
 
 1. **The run's `max_wip` input**, when the stub passes a number.
 2. **The `max_wip:` line of the caller's own reconcile stub**, read off the
