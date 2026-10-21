@@ -117,9 +117,14 @@ def test_names_the_incident_as_the_reason():
     assert "DRE-7494" in section and "DRE-7235" in section
 
 
-def test_states_it_is_guidance_nothing_checks():
+def test_states_the_held_repo_is_checked_and_every_other_step_is_guidance():
+    """DRE-7752 checks one hand step — lifting a held repo's hold — and every
+    other one is still guidance, left to DRE-7523."""
     section = _section()
-    assert _loose("Today this is guidance; nothing in the pipeline checks it").search(
+    assert not _loose("nothing in the pipeline checks it").search(section)
+    assert _loose("a held repo's hold is checked").search(section)
+    assert _loose("every other step that needs the CEO is still guidance").search(
         section
     )
-    assert _loose("follow-up work, filed as its own card").search(section)
+    assert "DRE-7523" in section
+    assert _loose("only the plan's own repo is read").search(section)
