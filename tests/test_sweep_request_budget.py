@@ -448,7 +448,12 @@ def test_the_board_is_read_once_per_sweep():
     reads this repo's work-lane cards — and Backlog under a running epic — WITH
     their relations, which the board read does not carry. One paged read,
     filtered by the repo label, asked only when Intake and a work lane both
-    hold a card on the board read."""
+    hold a card on the board read.
+
+    And the lift pass (DRE-7755): on a full pass that is not idle,
+    `repo_held_epics.lift_pass` reads this repo's Queued cards wearing the
+    hold, once, straight after the idle check — so the cards it lifts reach
+    promotion unheld on the same pass."""
     active, backlog = _fixed_board()
     fake = _run_sweep(FakeLinear(active=active, backlog=backlog))
     lanes = [tuple(v["states"]) for v in fake.board_variables]
@@ -458,10 +463,11 @@ def test_the_board_is_read_once_per_sweep():
         f"{len(swept)} reads of BOARD_READ_LANES in one sweep — active_cards() "
         "must be read once and shared"
     )
-    assert others == [tuple(reconcile.IDLE_LANES),
+    assert others == [tuple(reconcile.IDLE_LANES), tuple(reconcile.QUEUE_LANES),
                       tuple(reconcile.INTAKE_BLOCKED_LANES), ("Green Light",)], (
         f"the only lane reads outside SWEPT_LANES are the idle check's, the "
-        f"Intake blocker notice's and the planner line's Green Light: {others}"
+        f"lift pass's held Queued cards (DRE-7755), the Intake blocker "
+        f"notice's and the planner line's Green Light: {others}"
     )
     assert reconcile.IDLE_QUERY in fake.queries
 
@@ -517,7 +523,16 @@ def test_a_lane_outside_the_swept_union_still_gets_its_own_read():
 # with their relations inline: one paged read, filtered by the repo label, and
 # asked only when the board read already holds a card in Intake and one in a
 # work lane. A function of the lanes, never of the cards in them.
-SWEEP_REQUEST_BUDGET = 5
+#
+# 5 -> 6 (DRE-7755): the lift pass. A repo whose cap was 0 holds its approved
+# epics' Queued children `wip-cap-held` (DRE-7754); once the cap is above 0,
+# every full pass that is not idle reads this repo's Queued cards wearing the
+# hold — one paged read, filtered by the repo label — and lifts the cap's
+# holds before promotion. An idle pass skips it: it has no Queued card of this
+# repo waiting, so none held for the cap. The read is not served from the door,
+# which is off by default fleet-wide, and a whole-thread read is added only
+# for a held card whose comment window is partial — none on this board.
+SWEEP_REQUEST_BUDGET = 6
 
 
 def test_one_sweep_stays_within_the_request_budget():
@@ -670,3 +685,54 @@ def test_another_repos_backlog_epic_costs_nothing():
                                         kids={"DRE-8850": ("Done",)}))
     assert fake.epic_record_reads == 0
     assert fake.requests == none
+
+
+# --------------------------------------------------------------------------
+# 8: a held repo's pass (DRE-7755)
+# --------------------------------------------------------------------------
+# A repo held at max_wip 0 is idle, so the board read and promotion are
+# skipped, and the held repo's pass runs after the idle check: ONE read when no
+# epic of this repo is In Progress, TWO when one is (its Queued children), each
+# plus a whole-thread read per partial window. The cost is stated and accepted
+# on DRE-7754. A cap above 0 that is idle pays nothing for either pass.
+def _run_held_sweep(fake, monkeypatch, *, hold_pass=None) -> FakeLinear:
+    """A full pass as the live sweep runs it at a cap of 0: the stub's "0"
+    handed in as `MAX_WIP`. `hold_pass` stands in for the module's pass."""
+    monkeypatch.setenv("MAX_WIP", "0")
+    monkeypatch.delenv("GITHUB_WORKSPACE", raising=False)
+    monkeypatch.delenv("BUREAU_MAX_WIP", raising=False)
+    with contextlib.ExitStack() as stack:
+        for m in _sweep_mocks():
+            stack.enter_context(m)
+        stack.enter_context(mock.patch.object(reconcile, "MAX_WIP", 0))
+        if hold_pass is not None:
+            stack.enter_context(mock.patch.object(
+                reconcile.repo_held_epics, "hold_pass", hold_pass))
+        stack.enter_context(_linear(fake))
+        reconcile.main()
+    return fake
+
+
+def _held_epic_board(with_epic: bool) -> FakeLinear:
+    active, backlog = _fixed_board()
+    if with_epic:
+        epic = _epic("DRE-8900", state="In Progress")
+        epic["history"] = {"nodes": [{"createdAt": _iso(6000.0),
+                                      "toState": {"name": "In Progress"}}]}
+        kid = _card("DRE-8901", state="Queued")
+        kid["parent"] = {"id": epic["id"], "identifier": epic["identifier"]}
+        active += [epic, kid]
+    return FakeLinear(active=active, backlog=backlog)
+
+
+@pytest.mark.parametrize("with_epic, gained", [(False, 1), (True, 2)],
+                         ids=["no-epic-in-progress", "one-epic-in-progress"])
+def test_a_held_pass_gains_one_read_or_two(monkeypatch, with_epic, gained):
+    before = _run_held_sweep(_held_epic_board(with_epic), monkeypatch,
+                             hold_pass=lambda *a, **k: []).requests
+    held = _run_held_sweep(_held_epic_board(with_epic), monkeypatch)
+    module = [q for q in held.queries
+              if q in (reconcile.repo_held_epics.EPICS_QUERY,
+                       reconcile.repo_held_epics.CHILDREN_QUERY)]
+    assert len(module) == gained, held.queries
+    assert held.requests == before + gained, (before, held.requests)
