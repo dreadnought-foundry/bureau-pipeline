@@ -49,7 +49,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import hold  # noqa: E402 — the one writer of the hold
 import lane_contract  # noqa: E402 — the Queued lane and its alias
 import linear_ops  # noqa: E402 — import-safe: no key read at import
-import mid_epic  # noqa: E402 — the green light and what an epic is
+import mid_epic  # noqa: E402 — the green light
 import pipeline_act  # noqa: E402 — the one receipt writer
 import routing_verdict  # noqa: E402 — PARKED
 
@@ -83,7 +83,7 @@ EPICS_QUERY = """query($needle: String!, $states: [String!]!, $after: String) {
     labels: {name: {containsIgnoreCase: $needle}},
     state: {name: {in: $states}}
   }) { nodes {
-    id identifier title state { name } labels { nodes { name } }
+    id identifier state { name } labels { nodes { name } }
     children(first: 1) { nodes { id } }
     history(first: 50) { nodes { createdAt toState { name } } }
     %s
@@ -251,10 +251,7 @@ def _post_receipt(epic: str, detail: str) -> None:
 def _plan_epic(epic: dict, children: list) -> dict:
     """What to write for one epic, read off threads already in hand or read
     whole now. Raises `_Unreadable`."""
-    queued = []
-    for child in children:
-        thread = _thread(child)
-        queued.append({"card": child, "thread": thread})
+    queued = [{"card": child, "thread": _thread(child)} for child in children]
     waiting = []
     for entry in queued:
         bodies = _bodies(entry["thread"])
@@ -271,9 +268,11 @@ def _plan_epic(epic: dict, children: list) -> dict:
         waiting.append({"identifier": entry["card"]["identifier"], "hold": state})
     if not waiting:
         return {"waiting": []}
+    # The receipt stands when it is newer than the green light and than every
+    # `cap-restored` lift on a Queued child: a re-approval, or children lifted
+    # and held again, is a hold the earlier receipt no longer describes.
     green = _ts(mid_epic.green_light_from((epic.get("history") or {}).get("nodes")))
-    lifted = [_newest(e["thread"], _LIFTED) for e in queued]
-    lifted = [t for t in lifted if t is not None]
+    lifted = [t for t in (_newest(e["thread"], _LIFTED) for e in queued) if t is not None]
     receipt = _newest(_thread(epic), RECEIPT_PREFIX)
     stands = (receipt is not None and green is not None and receipt > green
               and all(receipt > t for t in lifted))
@@ -292,11 +291,11 @@ def hold_pass(slug: str, holds, *, gql=linear_ops.gql) -> list[str]:
     if not holds.max_wip_held:
         return []
     found = _paged(gql, EPICS_QUERY, {"needle": slug, "states": _EPIC_LANES})
-    epics = [
-        e for e in found
-        if _repo_of(e) == slug and mid_epic.is_epic(
-            e.get("title"), bool(((e.get("children") or {}).get("nodes"))))
-    ]
+    # An epic is a card with children here, never its title: an approved
+    # epic with no child has nothing waiting on the cap, and an In Progress
+    # one-off is a build, not an approval.
+    epics = [e for e in found
+             if _repo_of(e) == slug and (e.get("children") or {}).get("nodes")]
     if not epics:
         return [f"{LOG_PREFIX} no approved epic of {slug} is In Progress; nothing written"]
     epics.sort(key=lambda e: _number(e.get("identifier")))
