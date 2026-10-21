@@ -819,7 +819,7 @@ class TestTheRegistries:
     def test_the_hold_reason_and_its_site(self):
         doc = json.loads((ROOT / "config" / "holds.json").read_text(encoding="utf-8"))
         assert doc["reasons"]["wip-cap-held"]["lifts"] == "cap-restored"
-        assert doc["reasons"]["wip-cap-held"]["lift_sends"] == "Nothing moves"
+        assert doc["reasons"]["wip-cap-held"]["lift_sends"] == "nothing moves"
         assert "cap-restored" in doc["lift_kinds"]
         (row,) = [r for r in doc["sites"] if r["file"] == WRITER]
         assert row["readers"] == ["sweep"]

@@ -201,8 +201,8 @@ class TestSwappingTheWriteKeepsTheRow:
         }
         calls = [s for s in real if s.file.endswith(".py") and s.kind == "call"]
         # 6 before DRE-6186, 5 after it, 6 again with DRE-6428's create seam,
-        # 7 with DRE-6429's operator-backlog pass.
-        assert len(calls) == 7, [s.where for s in calls]
+        # 7 with DRE-6429's operator-backlog pass, 8 with DRE-7754's held repo.
+        assert len(calls) == 8, [s.where for s in calls]
         by_file: dict = {}
         for site in calls:
             by_file.setdefault(site.file, []).append(site)
@@ -219,7 +219,7 @@ class TestSwappingTheWriteKeepsTheRow:
             (tmp_path / path).write_bytes(raw)
         assert hold.problems(doc, root=str(tmp_path)) == []
         swapped = hold.discover(root=str(tmp_path))
-        assert sum(1 for s in swapped if "hold.apply(" in s.source) == 7
+        assert sum(1 for s in swapped if "hold.apply(" in s.source) == 8
         for row in doc["sites"]:
             hits = [s for s in swapped if hold.row_matches(row, s)]
             assert len(hits) == 1
@@ -533,8 +533,8 @@ class TestStampLine:
         assert "at=repo:none" in hold.stamp_line("no-route", "repo:none", "scripts/r.py")
 
     @pytest.mark.parametrize("reason", NONE_QUALIFIED)
-    def test_the_other_seven_refuse_anything_but_none(self, reason):
-        assert len(NONE_QUALIFIED) == 7
+    def test_the_other_eight_refuse_anything_but_none(self, reason):
+        assert len(NONE_QUALIFIED) == 8
         for at in (SHA, "repo:portico"):
             with pytest.raises(ValueError):
                 hold.stamp_line(reason, at, "scripts/reconcile.py")
@@ -654,8 +654,14 @@ class TestReasonOfAndRespects:
 
     def test_today_every_row_names_every_reader(self):
         # Every reader but a reason's lifter: the sweep lifts `operator-step`
-        # rather than standing down for it (`hold.LIFTERS`, DRE-6428).
+        # rather than standing down for it (`hold.LIFTERS`, DRE-6428). A
+        # `wip-cap-held` child is a Queued card with no pull request or run
+        # for the fix dispatch, the medic or limit recovery to stand down
+        # from, so its row names the sweep alone (DRE-7754).
         for row in _real_doc()["sites"]:
+            if [e["reason"] for e in row["reasons"]] == ["wip-cap-held"]:
+                assert row["readers"] == ["sweep"], row
+                continue
             lifters = {hold.LIFTERS[e["reason"]] for e in row["reasons"]
                        if e["reason"] in hold.LIFTERS}
             assert sorted(row["readers"]) == sorted(set(READERS) - lifters), row
