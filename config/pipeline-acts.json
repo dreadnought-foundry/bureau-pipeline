@@ -1197,7 +1197,7 @@
       "tag": "hand-work-overdue",
       "adopted": true,
       "kind": "hold",
-      "means": "A person's card has waited in Hand-work past the hours config/hand-work-age.json declares — an operator-step card, a WORKBENCH card with no mark, or a PROOF: card whose proof run is not in flight — and the sweep says so once, for the operator. A fourth kind shares those hours: a PROOF: card held In Review for the operator under the operator's newest 🔬 proof-waiting hold (DRE-6837), alarmed by the sweep's `alarm_held_proofs` (DRE-6852) — a second site under this same tag and the same once-only read, whose body says it has waited In Review for the operator; `emits` pins one site, as work-never-landed's does, and scripts/check_act_receipts.py holds the second to composing through pipeline_act.receipt().",
+      "means": "A person's card has waited in Hand-work past the hours config/hand-work-age.json declares — an operator-step card, a WORKBENCH card with no mark, or a PROOF: card whose proof run is not in flight — and the sweep says so once, for the operator. A fourth kind shares those hours: a PROOF: card held In Review for the operator under the operator's newest 🔬 proof-waiting hold (DRE-6837), alarmed by the sweep's `alarm_held_proofs` (DRE-6852) — a second site under this same tag and the same once-only read, whose body says it has waited In Review for the operator; and since DRE-7741 a PROOF: card outside Green Light under a hold naming the CEO's press, whose body names its lane and that hold; `emits` pins one site, as work-never-landed's does, and scripts/check_act_receipts.py holds the second to composing through pipeline_act.receipt().",
       "state": "unchanged",
       "next_actor": "operator",
       "discharges": null,
