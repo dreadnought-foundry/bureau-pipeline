@@ -1228,16 +1228,17 @@ jobs:
           grep -E '^(LEDGER|MULCH) STATUS:' .bureau-pipeline/agent-context.md || echo "no LEDGER STATUS: or MULCH STATUS: line in the assembled context"
           python3 .bureau-pipeline/scripts/spoken_thread.py people "$CARD" >> .bureau-pipeline/agent-context.md
           grep -E '^SPOKEN STATUS:' .bureau-pipeline/agent-context.md || echo "no SPOKEN STATUS: line in the assembled context"
-          python3 .bureau-pipeline/scripts/plan_bound.py context "$CARD" >> .bureau-pipeline/agent-context.md \
-            || echo "BOUND STATUS: UNKNOWN — plan_bound.py context exited non-zero, so the bound findings were not appended" >> .bureau-pipeline/agent-context.md
-          grep -E '^BOUND STATUS:' .bureau-pipeline/agent-context.md || echo "no BOUND STATUS: line in the assembled context"
           # This plan's own repo's holds (DRE-7753), read from the caller's
           # checkout at $GITHUB_WORKSPACE through `sweep_holds.read` — the
           # same reading the first critic's held-repo check makes, so the
-          # paragraph it asks for is the one the planner was handed.
+          # paragraph it asks for is the one the planner was handed. Before
+          # the bound block, which the planner reads last.
           python3 .bureau-pipeline/scripts/plan_held_repo.py context >> .bureau-pipeline/agent-context.md \
             || echo "REPO HOLDS: UNKNOWN — plan_held_repo.py context exited non-zero, so the repo's holds were not appended" >> .bureau-pipeline/agent-context.md
           grep -E '^REPO HOLDS:' .bureau-pipeline/agent-context.md || echo "no REPO HOLDS: line in the assembled context"
+          python3 .bureau-pipeline/scripts/plan_bound.py context "$CARD" >> .bureau-pipeline/agent-context.md \
+            || echo "BOUND STATUS: UNKNOWN — plan_bound.py context exited non-zero, so the bound findings were not appended" >> .bureau-pipeline/agent-context.md
+          grep -E '^BOUND STATUS:' .bureau-pipeline/agent-context.md || echo "no BOUND STATUS: line in the assembled context"
           echo "assembled $(wc -l < .bureau-pipeline/agent-context.md) lines of planner context"
 
       # DRE-1996: make the DRE-1989 sentinel fence mechanical. Epic title and
