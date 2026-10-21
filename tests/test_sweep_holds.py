@@ -205,6 +205,33 @@ def test_the_hold_comment_is_found_in_each_layout(tmp_path, layout):
     assert holds.stub_comment == HOLD
 
 
+_SPLITLINES_ONLY = [" ", "\x0c", "\x85", "\x1c"]
+
+
+@pytest.mark.parametrize("ch", _SPLITLINES_ONLY, ids=["u2028", "x0c", "x85", "x1c"])
+@pytest.mark.parametrize("where", ["header", "inside-the-job"])
+def test_a_character_only_splitlines_breaks_on_does_not_shift_the_cap_line(
+    tmp_path, ch, where
+):
+    """A line break to str.splitlines() but not to the regex's `\\n` must not
+    move the line the hold comment is walked up from."""
+    note = f"pinned{ch}by the fleet\n"
+    stub = (
+        _stub(_job(above_cap=f"      # {HOLD}\n"), header=f"# {note}")
+        if where == "header"
+        else _stub(_job(above_uses=f"    # {note}", above_cap=f"      # {HOLD}\n"))
+    )
+    ws = _workspace(tmp_path, {"reconcile.yml": stub})
+    assert sweep_holds.read(ws).stub_comment == HOLD
+
+
+@pytest.mark.parametrize("ch", _SPLITLINES_ONLY, ids=["u2028", "x0c", "x85", "x1c"])
+def test_a_character_only_splitlines_breaks_on_stays_inside_the_hold(tmp_path, ch):
+    hold = f"HELD at 0 by CEO decision{ch}restore it to resume"
+    ws = _workspace(tmp_path, {"reconcile.yml": _stub(_job(above_cap=f"      # {hold}\n"))})
+    assert sweep_holds.read(ws).stub_comment == hold
+
+
 def test_a_trailing_comment_on_the_cap_line_is_kept(tmp_path):
     ws = _workspace(tmp_path, {"reconcile.yml": _stub(_job(trailing="the sandbox's cap"))})
     assert sweep_holds.read(ws).stub_comment == "the sandbox's cap"
