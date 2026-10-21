@@ -326,16 +326,18 @@ STALE_MINUTES = lane_contract.stale_minutes()
 # carrying it, so a rename fails at import instead of leaving a dead literal
 # that writes into a state Linear no longer has.
 REVIEW_LANE = lane_contract.lane("In Review")["name"]
-# The ONE work-in-progress fallback (DRE-2529). It applies only when none of
-# the run's `max_wip` input, the caller's reconcile.yml stub and the caller's
-# BUREAU_MAX_WIP variable names a cap (`cap_and_source` below).
-# scripts/check_wip_cap.py reads this constant, and since DRE-3994 fails the
-# build if any reusable workflow re-declares it as an input default: a declared
-# default renders "8" whenever a stub is silent, and the script could then
-# never fall through to the repo's own cap.
-# It was 4 while the workflows all said 8 — a fifth cap hiding behind an unset
-# env var, which is the same defect DRE-2529 removed from the workflows.
-DEFAULT_MAX_WIP = 8
+# DRE-7750: the WIP cap reading — the ONE fallback (DRE-2529), the caller's
+# reconcile stub and `cap_and_source` (DRE-3994, DRE-6631) — lives in
+# sweep_holds, which imports without REPO or LINEAR_API_KEY so planning can
+# ask the same question. These names are its objects, not copies.
+from sweep_holds import (  # noqa: E402,F401 — re-exported, the moved names
+    DEFAULT_MAX_WIP,
+    _RECONCILE_STUB_USES,
+    _STUB_MAX_WIP,
+    _stub_cap,
+    _whole_number,
+    cap_and_source,
+)
 
 
 def resolve_max_wip(raw):
@@ -349,136 +351,6 @@ def resolve_max_wip(raw):
     """
     cap = _whole_number(raw)
     return DEFAULT_MAX_WIP if cap is None else cap
-
-
-def _whole_number(raw):
-    """`raw` as a whole number of 0 or more, or None. "-1", "12.0", "lots" and
-    an unresolved `${{ … }}` are all None; so is unset and empty."""
-    text = "" if raw is None else str(raw).strip()
-    return int(text) if re.fullmatch(r"[0-9]+", text) else None
-
-
-# The reusable a caller's reconcile stub calls. Matched on a `uses:` line that
-# is not a comment, so the stub that owns the repo's cap is found by what it
-# DOES, whatever the file is named (bureau-pipeline's own is self-reconcile.yml).
-_RECONCILE_STUB_USES = re.compile(
-    r"^[ \t]*uses:[ \t]*['\"]?[^\s#'\"]*bureau-pipeline/\.github/workflows/reconcile\.yml@",
-    re.MULTILINE,
-)
-# A `max_wip:` key, never a comment line that mentions one (portico's stub
-# carries "# No max_wip: ..." — read as a cap, that is a hold nobody set).
-_STUB_MAX_WIP = re.compile(r"^[ \t]*max_wip:[ \t]*(.*?)[ \t]*(?:#.*)?$", re.MULTILINE)
-
-
-def cap_and_source(raw, workspace, variable=None, ignored=None) -> tuple[int, str]:
-    """The WIP cap this run promotes at, and where it was read (DRE-3994).
-
-    The order, and why:
-
-      1. The run's `max_wip` input, when it names a number. A stub that passes
-         a cap on this path (agent-bureau passes "12" on all three) keeps it.
-      2. The caller's reconcile.yml stub, when the input is empty. That file is
-         the one place a product repo writes its cap — it is what the sweep
-         runs at — and every job that promotes has the caller checked out at
-         $GITHUB_WORKSPACE. Before this, plan.yml's activate route and
-         linear-sync.yml's merge handler took an empty input as the reusable's
-         default of 8: on 2026-09-15 approving DRE-3777 promoted three cards in
-         portico, held at "0" for a week, and atlas and agent-bureau-demo
-         (also "0") and deltasolv ("4") would have leaked the same way.
-      3. The caller's BUREAU_MAX_WIP Actions variable (DRE-6631), when neither
-         names a number. It is what the console writes, and GitHub resolves it
-         repo-level first, then org-level, so one read gives each project its
-         own setting and each org a default. It sits BELOW the stub on
-         purpose: the sweep receives the stub's literal as its input, so the
-         two fast paths, whose stubs pass nothing, must prefer that literal
-         too, or a repo with both set promotes at two caps (DRE-2529).
-         Setting a variable therefore changes nothing while a literal stands.
-      4. DEFAULT_MAX_WIP, saying why.
-
-    A non-empty value that is not a whole number of 0 or more ("lots", "-1",
-    "12.0", an unresolved `${{ … }}`) is skipped to the next source, and one
-    `promotion: ignored <source> = <value>: …` line is appended to `ignored`
-    for the run log. An empty value is the normal "not set" and says nothing.
-
-    Read with the standard library on purpose: the promotion steps install
-    nothing, and reconcile.py imports no YAML parser. Never raises — a cap
-    question must not turn a promotion step red.
-    """
-    notes = ignored if ignored is not None else []
-
-    def _ignore(source, value):
-        shown = " ".join(str(value).split())
-        notes.append(
-            f"promotion: ignored {source} = {shown}: not a whole number of 0 or more"
-        )
-
-    def _read(source, value):
-        cap = _whole_number(value)
-        if cap is None and value is not None and str(value).strip():
-            _ignore(source, str(value).strip())
-        return cap
-
-    cap = _read("this run's max_wip input", raw)
-    if cap is not None:
-        return cap, "this run's max_wip input"
-
-    stub_cap, why_not_stub = _stub_cap(workspace, _ignore)
-    if stub_cap is not None:
-        return stub_cap, why_not_stub
-
-    variable_source = "the caller's BUREAU_MAX_WIP variable"
-    cap = _read(variable_source, variable)
-    if cap is not None:
-        return cap, variable_source
-    return DEFAULT_MAX_WIP, (
-        f"the default {DEFAULT_MAX_WIP} — {why_not_stub}, and no BUREAU_MAX_WIP "
-        "variable names a number"
-    )
-
-
-def _stub_cap(workspace, ignore) -> tuple[int | None, str]:
-    """(cap, source) from the caller's reconcile stub, or (None, why not).
-
-    A `max_wip:` value that is not a whole number of 0 or more is handed to
-    `ignore` and skipped; an empty one is skipped in silence."""
-    if not workspace:
-        return None, "no caller checkout to read a reconcile stub from"
-    workflows = os.path.join(str(workspace), ".github", "workflows")
-    try:
-        names = sorted(
-            n for n in os.listdir(workflows) if n.endswith((".yml", ".yaml"))
-        )
-    except OSError:
-        names = []
-    stubs: list[tuple[str, str]] = []
-    for name in names:
-        try:
-            with open(os.path.join(workflows, name), encoding="utf-8") as fh:
-                text = fh.read()
-        except (OSError, UnicodeDecodeError):
-            continue
-        if _RECONCILE_STUB_USES.search(text):
-            stubs.append((f".github/workflows/{name}", text))
-    if not stubs:
-        return None, "no reconcile stub in the caller's .github/workflows"
-    caps: list[tuple[int, str]] = []
-    for path, text in stubs:
-        for match in _STUB_MAX_WIP.finditer(text):
-            value = match.group(1).strip().strip("'\"").strip()
-            cap = _whole_number(value)
-            if cap is not None:
-                caps.append((cap, path))
-            elif value:
-                ignore(f"the caller's reconcile stub {path}", value)
-    if caps:
-        # More than one stub or line is not a fleet shape; if it ever happens,
-        # the LOWER cap is the one that cannot build past anybody's hold.
-        cap, path = min(caps)
-        return cap, f"the caller's reconcile stub {path}"
-    return None, (
-        f"the caller's reconcile stub {', '.join(p for p, _ in stubs)} "
-        "names no max_wip number"
-    )
 
 
 # The `promotion: ignored …` lines cap_and_source wrote, printed just before
