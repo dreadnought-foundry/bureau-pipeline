@@ -132,8 +132,9 @@ class TestEveryActDeclaresItsCadence:
         fifty-seven since DRE-6651 added the hold an epic still to be planned
         waits under while a formal blocker of it is open; fifty-eight since
         DRE-7178 added the receipt of the one repair a plan-critic park in
-        Triage gets."""
-        assert len(pipeline_act.acts()) == 58
+        Triage gets; fifty-nine since DRE-7754 added the notice an approved
+        epic in a repo held at max_wip 0 is told once."""
+        assert len(pipeline_act.acts()) == 59
 
     def test_every_act_carries_a_cadence_and_a_reason(self):
         for name in pipeline_act.acts():

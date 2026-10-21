@@ -644,6 +644,53 @@ The console must learn this act before this row merges. The `act registry
 consumers` job refuses a row the console does not carry, and it knows an act
 by its tag or its name.
 
+## The row that tells an epic its repo is held — `⏸️ repo-held` (DRE-7754)
+
+| Field | Value |
+| -- | -- |
+| tag | `repo-held` |
+| act name | `repo-held-notice` |
+| kind · state · next actor | `hold` · `held` · `operator` |
+| discharges | nothing |
+| cadence | `null` — the hold ends only when someone restores `max_wip` in the repo's reconcile stub, and nothing bounds when that happens |
+| emitted by | `scripts/repo_held_epics.py`, at the `pipeline_act.receipt("repo-held-notice", …)` call in `_post_receipt` |
+
+A repo whose WIP cap is 0 builds and promotes nothing, and its sweep used to
+go idle in one log line that never reached the board. On 2026-10-19 DRE-7600
+sat approved in agent-bureau-demo that way, its children in Queued looking
+like cards waiting their turn (epic DRE-7671). On every full pass of a repo
+held at max_wip 0, `hold_pass` now holds each Queued child of the repo's
+approved epics that waits on the cap, and tells each epic once:
+
+    ⏸️ repo-held: <EPIC> is approved, and <repo> builds nothing — its WIP cap is 0.
+
+The body quotes the reconcile stub's path and its own comment about the cap
+(`sweep_holds.read`, DRE-7750), lists every Queued child that waits on the cap
+with how it is held — `held (wip-cap-held)`, `held (<its own reason>)`, or
+`held (manual — needs-human with no hold stamp; a person lifts it)` — and
+closes with what lifts it: restoring `max_wip` in that stub. A child carrying
+a live PARKED routing verdict does not wait on the cap and is not listed, and
+an epic with no child that waits gets no receipt.
+
+**The receipt key is live.** An epic's receipt stands when a comment whose
+first line opens `⏸️ repo-held:` was created after both its newest green light
+(`mid_epic.green_light_from` over `history(first: 50)`) and the newest
+`🔓 hold lifted: reason=wip-cap-held because=cap-restored` line on any of its
+Queued children. So a re-approved epic is told again, and so is one whose
+children were lifted when the cap was restored and held again when it went
+back to 0. A thread past the fifty-comment window is read whole before it is
+judged, so a receipt that scrolled out of the window still counts. An epic
+whose green light or thread cannot be read gets no receipt and no hold that
+pass.
+
+The tag is `repo-held` and the hold it reports is `wip-cap-held`, lifted on
+`cap-restored` (`docs/holds.md`). They are two words on purpose: no hold line
+may carry a registry tag, so a reason spelled `repo-held` would make every
+stamp read as a receipt.
+
+The console learned the tag first (DRE-7751). The `act registry consumers` job
+refuses a row the console does not carry.
+
 ## Why this exists
 
 The console has always checked this. Its
