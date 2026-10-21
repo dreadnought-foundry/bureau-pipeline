@@ -589,6 +589,18 @@ class TestScope:
         assert lines == [f"repo-held: no approved epic of {SLUG} is In Progress; "
                          "nothing written"]
 
+    def test_an_epic_title_with_no_children_is_not_read_as_approved_work(self, board):
+        # Epic-ness is read off the children, never the title: an epic with
+        # no child has nothing waiting on the cap, and asking `is_epic`
+        # would make this module a reader `tests/test_mid_epic.py` must walk.
+        board.add("DRE-7660", lane="In Progress", labels=[f"repo:{SLUG}"],
+                  title="[EPIC] not yet planned")
+        lines = _hold_pass(board)
+        assert board.reads == [rhe.EPICS_QUERY]
+        assert lines == [f"repo-held: no approved epic of {SLUG} is In Progress; "
+                         "nothing written"]
+        assert "is_epic" not in (ROOT / WRITER).read_text(encoding="utf-8")
+
     def test_a_child_of_another_repo_is_not_held(self, board):
         board.epic()
         board.child("DRE-7601")
