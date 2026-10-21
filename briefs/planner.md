@@ -760,6 +760,37 @@ Plain English: what gets built, in what order, what could go wrong, rough
 size (hours-of-agent-work scale). No jargon, no file paths. End with the
 approval instruction the workflow prompt gives you.
 
+## A held repo: lifting the hold is a step that needs the CEO (DRE-7752)
+On 2026-10-19 the CEO approved DRE-7600, a plan for a repo whose reconcile stub
+had held `max_wip` at `0` since 2026-09-08. The plan named one hand step and
+not the hold, so it sat with nothing built and nobody told. Lifting a hold is a
+step only he takes, so it goes in the question he answers before the work
+starts (`standards/card-quality.md`, DRE-7521).
+
+Your assembled context carries a `REPO HOLDS:` block, written by
+`python3 .bureau-pipeline/scripts/plan_held_repo.py context`. When it says
+`none`, there is nothing to write. When the repo is held, it quotes each hold
+and gives you the paragraph to write. Put that paragraph under
+`## Risk assessment` in the plan artifact, and repeat it in the plan comment:
+
+    Step that needs the CEO: lifting this repo's hold — …
+
+The opener may follow a list marker or sit in bold. The paragraph runs to the
+next blank line, and it must say:
+- for a `max_wip` hold, `max_wip` and the stub's own hold comment, quoted as
+  the block gives it — or `max_wip` and `0` when the stub has no comment;
+- for an Intake hold, `INTAKE_HOLD`;
+- whether the CEO lifts it for this plan's cards only or in general.
+
+**What is checked.** A plan for a held repo without that paragraph is sent
+back at the first critic, whatever the critic wrote — the check appends a
+`held-repo:` line to the structural file the seam gate reads. **What is still
+guidance.** Every other step that needs the CEO: you list it in the same
+question, and nothing checks it yet (DRE-7523). **Only the plan's own repo is
+read** — the repo this plan run has checked out. A card you file in another
+repo that you know is held is not caught, so name its hold the same way. The epic's note says `— read for this plan's own repo only` on
+every reading, so nobody reads a pass as covering every repo.
+
 ## Your plan is read twice before anyone builds it (DRE-2721, DRE-5268)
 Both readings happen **before the CEO reads it**. The first critic asks one
 question: is this fit to take the CEO's time? When it passes the plan, the
