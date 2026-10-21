@@ -130,10 +130,13 @@ class ThePlannerContextCarriesTheHolds(unittest.TestCase):
         self.assertEqual(AGENT_CONTEXT, words[words.index(">>") + 1], line)
 
     def test_after_the_assembly_and_beside_the_other_blocks(self):
+        """Before the bound block, which the planner reads last
+        (`tests/test_plan_bound_wiring.py`)."""
         lines = self.lines()
         here = index_of(lines, HELD_CONTEXT)
         self.assertLess(index_of(lines, "assemble_context.py assemble planner"), here)
-        self.assertLess(index_of(lines, "plan_bound.py context"), here)
+        self.assertLess(index_of(lines, "spoken_thread.py people"), here)
+        self.assertLess(here, index_of(lines, "plan_bound.py context"))
 
     def test_a_presence_line_follows_it(self):
         lines = self.lines()
