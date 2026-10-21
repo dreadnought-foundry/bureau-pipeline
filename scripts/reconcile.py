@@ -15002,6 +15002,7 @@ def main(
         # skipped (they raise BoardIdle, silently) while the fleet-wide ones
         # run, and this is the pass's one line about it. Full passes only:
         # the merge path's scoped passes are about a card that just moved.
+        why: str | None = None
         with _phase("sweep_idle"):
             why = sweep_idle()
             if why is not None:
@@ -15013,10 +15014,12 @@ def main(
         # cap lifts the cap's holds before anything reads the board, so the
         # lifted cards are promotable on this pass (DRE-7755). An idle pass
         # at a cap above 0 has no card held for the cap, and pays nothing.
+        # Nor does a pass the door held (`BoardHeld`, skipped above, `why`
+        # never set): Linear's bucket is spent, and the next pass lifts.
         if MAX_WIP <= 0 and why is not None:
             with _phase("post_repo_held_notice"):
                 post_repo_held_notice()
-        elif MAX_WIP > 0 and why is None:
+        elif MAX_WIP > 0 and why is None and not _door_hold:
             with _phase("lift_wip_cap_holds"):
                 lift_wip_cap_holds()
     if not promote_only:
