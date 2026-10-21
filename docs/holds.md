@@ -145,10 +145,23 @@ it is never re-stamped: the receipt lists it as
 `held (manual — needs-human with no hold stamp; a person lifts it)`, and the
 pass prints a line naming it on every held pass while it stands that way.
 
-On a pass at a cap above 0, `lift_pass` reads the repo's Queued cards wearing
-the hold and lifts each one whose live stamp is `wip-cap-held`, with
-`because=cap-restored`. Nothing moves: the child waits on the dependency gate
-as it always did. Every other hold is left alone. `hold.lift_due` answers None
+On a full pass at a cap above 0 that the idle check does not report idle,
+`lift_pass` reads the repo's Queued cards wearing the hold and lifts each one
+whose live stamp is `wip-cap-held`, with `because=cap-restored`. Nothing
+moves: the child waits on the dependency gate as it always did. Every other
+hold is left alone.
+
+The sweep calls both passes straight after its idle check, each in its own
+`sweep-spend:` phase (`post_repo_held_notice`, `lift_wip_cap_holds`,
+DRE-7755), and never on a `--promote-only` or `--close-only` pass. The lift
+comes before the backstops and the board read, so a lifted child is
+promotable on that same pass. An idle pass skips it: both idle checks count a
+Queued card held `wip-cap-held` as waiting — Linear's counts every Queued card
+of the repo, and the read door's skips a held card unless its live reason is
+`wip-cap-held` — so an idle pass has none to lift. A pass the read door holds
+(`linear-hold`) skips it too, and the next pass lifts. A read either pass
+cannot make prints one `repo-held:` line and fails nothing; a write that
+fails goes red with the sweep's other write failures. `hold.lift_due` answers None
 for `cap-restored` outside Done or Canceled, as it does for
 `blockers-terminal` — no caller passes it the repo's cap — so the sweep is its
 only lifter. Its row names `sweep` as its reader, because the sweep's
