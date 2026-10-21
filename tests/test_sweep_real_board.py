@@ -182,6 +182,14 @@ REAL_WAITING_LINE = epic_cap.waiting_line
 #: re-reads its card live before it moves: six more requests in
 #: `promote_ready`. 48 + 6 = 54.
 #:
+#: It stays 54 under DRE-7755 (measured 2026-10-21: 52 before, 53 after). The
+#: lift pass reads this repo's Queued cards that wear the hold, once, on a
+#: full pass that is not idle, charged to `lift_wip_cap_holds`. The board
+#: holds none whose window is partial, so no whole-thread read: 52 + 1 = 53.
+#: The replay answers that read with Linear's own filter (the repo label and
+#: `needs-human`); a lane read in its place paid 22 whole-thread reads for
+#: Queued cards no hold was ever on.
+#:
 #: It is the ONLY place the real-board ceiling lives. Each cut sibling lowers
 #: it to what IT measures, ending at 30.
 REAL_BOARD_SWEEP_BUDGET = 54
@@ -306,6 +314,22 @@ class ReplayLinear(FakeLinear):
                 if lane in v.get("states", ()) or (
                         lane in reconcile.QUEUE_LANES
                         and parent_lane in v.get("epicStates", ())):
+                    nodes.append(card)
+            return self._page(nodes, v.get("after"))
+        if query == reconcile.repo_held_epics.HELD_QUERY:
+            # The lift pass's read (DRE-7755): this repo's Queued cards that
+            # wear the hold, with the filter Linear applies — the repo label
+            # AND `needs-human` — so the replay pays a whole-thread read only
+            # for a held card whose window is partial, as a live board does.
+            self.queries.append((query, v))
+            needle = (v.get("needle") or "").lower()
+            nodes = []
+            for card in self.cards.values():
+                labels = [l["name"].lower()
+                          for l in (card.get("labels") or {}).get("nodes") or []]
+                if (card["state"]["name"] in v.get("states", ())
+                        and any(needle in name for name in labels)
+                        and reconcile.HOLD_LABEL in labels):
                     nodes.append(card)
             return self._page(nodes, v.get("after"))
         return super().gql(query, variables)
