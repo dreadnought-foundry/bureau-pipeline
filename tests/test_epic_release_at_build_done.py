@@ -189,7 +189,8 @@ def _w_record(*blocked_by):
 
 
 def _sweep(fake, children=None):
-    """One promotion pass over W's children; returns the cards moved to Todo."""
+    """One promotion pass over W's children; returns the cards moved to FLEET's
+    lane, In Progress since the flip (DRE-7120)."""
     children = children if children is not None else [
         _child(FREE), _child(TIED, blocked_by=((TIE, "In Review"),)),
     ]
@@ -204,7 +205,8 @@ def _sweep(fake, children=None):
             patch.object(linear_ops, "cmd_comment"), \
             patch.object(routing_verdict, "lane_moves", return_value=[]):
         reconcile.promote_ready(active_count=0)
-    return [c.args[0] for c in advance.call_args_list if c.args[1] == "Todo"]
+    return [c.args[0] for c in advance.call_args_list
+            if c.args[1] == routing_verdict.destination("FLEET")]
 
 
 def _gate_lines(out: str) -> list[str]:

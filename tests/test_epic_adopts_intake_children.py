@@ -434,7 +434,7 @@ class AnUnapprovedEpicBuildsNothingTest(unittest.TestCase):
         makes the epic's green light the approval for its children."""
         promoted, moved = self._promote("In Progress")
         self.assertEqual(promoted, 1)
-        self.assertEqual([a[:2] for a in moved], [("DRE-901", "Todo")])
+        self.assertEqual([a[:2] for a in moved], [("DRE-901", "In Progress")])
 
 
 # ===========================================================================

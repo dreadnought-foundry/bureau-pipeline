@@ -146,7 +146,7 @@ comment fails to post, keep working — progress reporting must never block.
 
 ## The lanes you work in (DRE-2727)
 
-The board is `Intake` → `Planning` → `Green Light` → `Queued` → `Todo` →
+The board is `Intake` → `Planning` → `Green Light` → `Queued` →
 `In Progress` → `In Review` → `Done`, with `Triage` off to the side. What
 changed under you, and must not be guessed at:
 

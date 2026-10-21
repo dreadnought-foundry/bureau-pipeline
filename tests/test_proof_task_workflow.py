@@ -144,7 +144,10 @@ class ProofTaskContractTest(unittest.TestCase):
 
     def test_inputs(self):
         inputs = _on(_doc())["workflow_call"].get("inputs") or {}
-        self.assertEqual({"pipeline_ref", "linear_identity", "aws_region"}, set(inputs))
+        # `shadow` and `model` are the shadow mode's (DRE-7286), pinned by
+        # tests/test_proof_task_shadow.py.
+        self.assertEqual({"pipeline_ref", "linear_identity", "aws_region",
+                          "shadow", "model"}, set(inputs))
         self.assertIs(inputs["pipeline_ref"].get("required"), True)
         self.assertEqual("fleet", inputs["linear_identity"].get("default"))
         self.assertEqual("us-west-2", inputs["aws_region"].get("default"))
@@ -190,8 +193,11 @@ class ProofRoleTest(unittest.TestCase):
         src = _source()
         self.assertRegex(_runs(), r"model_fallback\.py select proof\b")
         self.assertNotRegex(src, r"--model\s+claude-")
+        # The selected model, or — in a shadow run only — the model its
+        # caller named, handed on by the step that checked it (DRE-7286).
         for _i, step in _agent_steps():
-            self.assertIn("--model ${{ steps.model.outputs.model }}",
+            self.assertIn("--model ${{ inputs.shadow && steps.shadow_model.outputs.model"
+                          " || steps.model.outputs.model }}",
                           step["with"]["claude_args"])
 
     def test_the_agent_step_and_its_rate_limit_retries(self):

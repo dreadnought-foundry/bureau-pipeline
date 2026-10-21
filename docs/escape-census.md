@@ -76,11 +76,12 @@ Branch lists and PR lists are one API call each and the sweep already runs
 every fifteen minutes, so none of these is expensive.
 
 1. **Branch with commits, no PR** (A) — *built, DRE-2682*:
-   `reconcile.flag_unlanded_work`. It skips a card in Todo (DRE-4368): a
+   `reconcile.flag_unlanded_work`. It skips a card promoted into a start lane
+   ahead of In Progress (`reconcile.PROMOTED_LANES`, DRE-4368, DRE-7108): a
    dead run's card waits there for the resume run that continues the same
    branch, so "open a pull request" would name the wrong action. A dispatched
-   Todo card that never ran is still reported by `flag_stranded`'s no-run
-   class. A hand-built Todo card with a PR-less branch is reported by
+   card there that never ran is still reported by `flag_stranded`'s no-run
+   class. A hand-built card there with a PR-less branch is reported by
    neither — a known gap.
 2. **Card working, nothing to point at** (C) — *built for hand-built cards,
    DRE-2682*; dispatched cards were already covered by `flag_stranded`. It
@@ -113,6 +114,6 @@ to notice.
 The refusal half of the same wave lives elsewhere. The promoter reads a card's
 verdict in `scripts/reconcile.py` (DRE-2735); the relay reads it in
 `cloud/relay/lambda_function.py` in **agent-bureau**, which is not this
-repository and is deployed by the operator. A card created directly in Todo,
-or dragged there by a human, dispatches on that path without the promoter ever
-seeing it — so a gate on the promoter alone guards the minority of the traffic.
+repository and is deployed by the operator. A card a human drags into In
+Progress from a waiting lane dispatches on that path without the promoter ever
+seeing it (DRE-7107) — so a gate on the promoter alone guards the minority of the traffic.

@@ -198,7 +198,7 @@ def test_promote_ready_promotes_children_of_unblocked_epic():
     ) as advance, patch.object(reconcile.linear_ops, "cmd_comment"):
         promoted = reconcile.promote_ready(active_count=0)
     assert promoted == 1
-    advance.assert_called_once_with("DRE-900", "Todo", QUEUE_FROM)
+    advance.assert_called_once_with("DRE-900", "In Progress", QUEUE_FROM)
 
 
 def test_promote_ready_evaluates_each_epic_once_per_sweep():

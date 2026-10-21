@@ -25,6 +25,7 @@ import os
 import sys
 import unittest
 from contextlib import redirect_stdout
+from datetime import UTC, datetime, timedelta
 from unittest import mock
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "scripts"))
@@ -113,7 +114,8 @@ class _Pass:
     """One `fix_approved_but_red` pass over a `gh pr list` payload, with
     every gh call, dispatch, pull request note and Linear write recorded."""
 
-    def __init__(self, prs: list[dict]):
+    def __init__(self, prs: list[dict], check_runs=None):
+        check_runs = check_runs or _check_runs
         self.gh_calls: list[tuple] = []
         self.dispatches: list[tuple] = []
         self.notes: list[tuple] = []
@@ -129,7 +131,7 @@ class _Pass:
                 return json.dumps(prs)
             if args[0] == "api" and any("/check-runs" in a for a in args[1:]):
                 sha = next(a for a in args if "/check-runs" in a).split("/")[-2]
-                return _check_runs(sha)
+                return check_runs(sha)
             if args[0] == "api" and "/git/commits/" in args[1]:
                 # Both heads comfortably past the 20-minute age.
                 return json.dumps({"committer": {"date": "2026-10-10T06:00:00Z"}})
@@ -256,6 +258,183 @@ class SkipIsLoggedNotPostedTest(unittest.TestCase):
             "dispatching fix agent",
             self.run.log,
         )
+
+
+
+# ---------------------------------------------------------------------------
+# DRE-7617: the pass serves the pull request that has been red longest.
+#
+# Observed in agent-bureau on 2026-10-18 (PT). #3953 (DRE-7544, head
+# 53c59ac7) was approved at 4:55 PM and went red on `Console sideways audit
+# (browser)` in CI run 39178340468. #3955 and #3956 are newer and also
+# approved-but-red. `gh pr list` lists newest first, so the 5:34 PM pass
+# dispatched #3955 and the 5:50 PM pass #3956, and #3953 got no fix run in the
+# hour after its failure. The rule: among the pull requests that pass every
+# guard, the pass's one dispatch goes to the oldest red-since time — the
+# latest `completed_at` among its failed check runs at the current head. A tie
+# or an unreadable time falls back to listing order.
+# ---------------------------------------------------------------------------
+
+#: The heads. #3953's first eight are read off GitHub; the rest of each sha is
+#: fixture, since only the first eight were recorded.
+SHA_3953 = "53c59ac7" + "1" * 32
+SHA_3955 = "3955" + "a" * 36
+SHA_3956 = "3956" + "b" * 36
+
+#: When each head's failed check completed, in UTC. #3953's completed first
+#: (5:12 PM PT), before the two newer pull requests went red.
+RED_AT = {
+    SHA_3953: "2026-10-19T00:12:00Z",
+    SHA_3955: "2026-10-19T00:20:00Z",
+    SHA_3956: "2026-10-19T00:28:00Z",
+}
+
+#: The failed check at each head, by name.
+FAILED_7617 = {
+    SHA_3953: "Console sideways audit (browser)",
+    SHA_3955: "Console backend",
+    SHA_3956: "Console frontend",
+}
+
+
+def _desk_pr(number: int, sha: str, branch: str) -> dict:
+    return {
+        "number": number,
+        "headRefName": branch,
+        "headRefOid": sha,
+        "mergeStateStatus": "BLOCKED",
+        "comments": [_critic(sha)],
+    }
+
+
+def _incident_listing() -> list[dict]:
+    """The `gh pr list` payload, newest first: #3956, #3955, #3953."""
+    return [
+        _desk_pr(3956, SHA_3956, "agent/DRE-7566-desk-permission-requests"),
+        _desk_pr(3955, SHA_3955, "agent/DRE-7567-desk-specialist-pr-only"),
+        _desk_pr(3953, SHA_3953, "agent/DRE-7544-desk-thread-cards"),
+    ]
+
+
+def _timed_check_runs(red_at: dict):
+    """A check-runs reader whose failed runs carry `completed_at` from
+    `red_at`; a head missing from it carries a failed run with none."""
+    def read(sha: str) -> str:
+        failed = {"name": FAILED_7617.get(sha, "Console backend"),
+                  "status": "completed", "conclusion": "failure"}
+        if sha in red_at:
+            failed["completed_at"] = red_at[sha]
+        runs = [failed, {"name": "lint", "status": "completed",
+                         "conclusion": "success",
+                         "completed_at": "2026-10-19T00:01:00Z"}]
+        return json.dumps([{"total_count": len(runs), "check_runs": runs}])
+    return read
+
+
+class LongestRedFirstReplayTest(unittest.TestCase):
+    """The 5:34 PM PT listing: #3956 and #3955 newer, #3953 red longest."""
+
+    def test_the_pass_dispatches_3953(self):
+        run = _Pass(_incident_listing(), _timed_check_runs(RED_AT))
+        self.assertEqual(run.dispatched_prs(), ["pr_number=3953"], run.log)
+
+    def test_one_pass_dispatches_exactly_one_fix_run(self):
+        run = _Pass(_incident_listing(), _timed_check_runs(RED_AT))
+        self.assertEqual(len(run.dispatches), 1)
+
+    def test_the_red_since_time_decides_not_the_number(self):
+        # Turn the times round: #3956 now went red first, and it is served.
+        flipped = {SHA_3956: RED_AT[SHA_3953], SHA_3955: RED_AT[SHA_3955],
+                   SHA_3953: RED_AT[SHA_3956]}
+        run = _Pass(_incident_listing(), _timed_check_runs(flipped))
+        self.assertEqual(run.dispatched_prs(), ["pr_number=3956"])
+
+    def test_the_latest_failed_check_is_the_red_since_time(self):
+        # #3953 holds two failed checks; its later one completed after #3955
+        # went red, so #3955 has waited longest.
+        def read(sha: str) -> str:
+            runs = json.loads(_timed_check_runs(RED_AT)(sha))
+            if sha == SHA_3953:
+                runs[0]["check_runs"].append({
+                    "name": "Console e2e", "status": "completed",
+                    "conclusion": "failure",
+                    "completed_at": "2026-10-19T00:24:00Z"})
+            return json.dumps(runs)
+        run = _Pass(_incident_listing(), read)
+        self.assertEqual(run.dispatched_prs(), ["pr_number=3955"])
+
+    def test_a_tie_falls_back_to_listing_order(self):
+        same = dict.fromkeys(RED_AT, "2026-10-19T00:12:00Z")
+        run = _Pass(_incident_listing(), _timed_check_runs(same))
+        self.assertEqual(run.dispatched_prs(), ["pr_number=3956"])
+
+    def test_the_oldest_still_passes_every_guard(self):
+        # Red longest but passed over by DRE-6583: the next-longest is served.
+        listing = _incident_listing()
+        listing[2]["comments"].append(_worker(
+            "🔕 Fix attempt 1 pushed no new commit (head `53c59ac7`) and none "
+            "is needed."))
+        run = _Pass(listing, _timed_check_runs(RED_AT))
+        self.assertEqual(run.dispatched_prs(), ["pr_number=3955"])
+
+    def test_a_parked_oldest_is_passed_over_for_the_next(self):
+        listing = _incident_listing()
+        with mock.patch.object(
+                reconcile, "fix_dispatch_blocked",
+                side_effect=lambda pr, **k: pr["number"] == 3953):
+            run = _Pass(listing, _timed_check_runs(RED_AT))
+        self.assertEqual(run.dispatched_prs(), ["pr_number=3955"])
+
+
+class UnreadableRedTimeTest(unittest.TestCase):
+    """A failed check whose time cannot be read never costs the pull request
+    its eligibility; the order falls back to the listing."""
+
+    def test_a_lone_pull_request_with_no_time_is_still_dispatched(self):
+        listing = _incident_listing()[2:]
+        run = _Pass(listing, _timed_check_runs({}))
+        self.assertEqual(run.dispatched_prs(), ["pr_number=3953"])
+
+    def test_no_readable_time_anywhere_is_listing_order(self):
+        run = _Pass(_incident_listing(), _timed_check_runs({}))
+        self.assertEqual(run.dispatched_prs(), ["pr_number=3956"])
+
+    def test_a_malformed_time_is_unreadable_not_an_error(self):
+        bad = dict.fromkeys(RED_AT, "not a time")
+        run = _Pass(_incident_listing(), _timed_check_runs(bad))
+        self.assertEqual(run.dispatched_prs(), ["pr_number=3956"])
+
+    def test_an_unreadable_time_yields_to_a_readable_one(self):
+        # #3956 carries no time, so it cannot show it has waited; #3953 can.
+        partial = {SHA_3955: RED_AT[SHA_3955], SHA_3953: RED_AT[SHA_3953]}
+        run = _Pass(_incident_listing(), _timed_check_runs(partial))
+        self.assertEqual(run.dispatched_prs(), ["pr_number=3953"])
+
+    def test_the_dispatch_line_without_a_time_names_no_minutes(self):
+        run = _Pass(_incident_listing()[2:], _timed_check_runs({}))
+        self.assertIn(
+            "approved-but-red: PR #3953 has APPROVE + 1 failed check(s) — "
+            "dispatching fix agent", run.log)
+        self.assertNotIn("red for", run.log)
+
+
+class RedForLineTest(unittest.TestCase):
+    """The dispatch line says how long the chosen pull request has been red."""
+
+    def test_the_dispatch_line_carries_red_for_minutes(self):
+        since = datetime.now(UTC) - timedelta(minutes=45, seconds=10)
+        when = since.strftime("%Y-%m-%dT%H:%M:%SZ")
+        run = _Pass(_incident_listing()[2:], _timed_check_runs({SHA_3953: when}))
+        self.assertIn(
+            "approved-but-red: PR #3953 has APPROVE + 1 failed check(s), red "
+            "for 45 min — dispatching fix agent", run.log)
+
+    def test_the_incident_line_names_3953(self):
+        run = _Pass(_incident_listing(), _timed_check_runs(RED_AT))
+        self.assertRegex(
+            run.log,
+            r"approved-but-red: PR #3953 has APPROVE \+ 1 failed check\(s\), "
+            r"red for \d+ min — dispatching fix agent")
 
 
 if __name__ == "__main__":

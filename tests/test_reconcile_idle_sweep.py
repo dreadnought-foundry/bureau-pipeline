@@ -6,9 +6,10 @@ so a pass with nothing to do must cost next to nothing. ONE cheap check
 decides, before the board is read:
 
   * the WIP cap is 0 → idle, no request at all;
-  * no card of this repo is in motion (Todo / In Progress / In Review) and none
-    waits in Backlog → idle, decided by ONE request (`reconcile.IDLE_QUERY`,
-    `first: 1`, ids only) — or none, when the read door answers it;
+  * no card of this repo is in motion (In Progress / In Review / Hand-work)
+    and none waits in Backlog → idle, decided by ONE request
+    (`reconcile.IDLE_QUERY`, `first: 1`, ids only) — or none, when the read
+    door answers it;
   * otherwise → the pass runs exactly as before.
 
 Idle skips promotion and this repo's work-lane phases and says so in ONE
@@ -275,7 +276,7 @@ def test_with_the_door_on_the_idle_check_costs_no_linear_request(monkeypatch, ca
     # phases' reads: the lanes this door declines at `scope=fleet` — it serves
     # the fleet to no repo while the console's PIPELINE_READ_UNROUTED is off
     # (DRE-5848) — Planning and Intake and the planner line's Green Light, and
-    # the NO-ROUTE watchdog's Todo and In Progress, which the door cannot serve
+    # the NO-ROUTE watchdog's start lanes, which the door cannot serve
     # for cards no repo owns (the PR #687 critic's item 2). The outage alarm's
     # open-card lookup (DRE-6576) is gone: the outage is a console alert since
     # DRE-7455, so there is no card to look up.
@@ -330,7 +331,9 @@ def test_the_idle_check_is_one_small_page_that_fails_open():
     assert 1 < reconcile.IDLE_PAGE <= 100
     # Hand-work counts as in motion (DRE-5322): a person's card there is owed
     # the move to review and the idle alarm, which an idle pass skips.
-    assert reconcile.IDLE_LANES == ("Todo", "In Progress", "In Review", "Hand-work",
+    # Todo left it when it began retiring (DRE-7129): the drain and the epic
+    # carry that empty it are fleet-wide and run on an idle pass too.
+    assert reconcile.IDLE_LANES == ("In Progress", "In Review", "Hand-work",
                                    *reconcile.QUEUE_LANES)
 
 
@@ -343,7 +346,7 @@ def test_the_idle_check_is_one_small_page_that_fails_open():
 
 def test_an_owner_qualified_repo_label_is_not_idle():
     board = TeamBoard(*_busy_elsewhere(),
-                      card("DRE-94", "Todo",
+                      card("DRE-94", "In Progress",
                            labels=(f"repo:dreadnought-foundry/{DEMO}",)))
     assert _busy(board)
 
@@ -359,7 +362,7 @@ def test_a_longer_slug_that_contains_this_one_is_another_repos_work(monkeypatch)
     the demo's card, and the sweep's own repo test turns it away."""
     monkeypatch.setattr(reconcile, "REPO_SLUG", "agent-bureau")
     board = TeamBoard(*_busy_elsewhere(),
-                      card("DRE-96", "Todo", labels=(f"repo:{DEMO}",)))
+                      card("DRE-96", "In Progress", labels=(f"repo:{DEMO}",)))
     assert not _busy(board)
 
 
@@ -368,7 +371,7 @@ def test_a_full_page_of_near_misses_is_not_proof_of_idle(monkeypatch):
     more: this repo's card could be on the next page. Unknown is not idle."""
     monkeypatch.setattr(reconcile, "REPO_SLUG", "agent-bureau")
     page = getattr(reconcile, "IDLE_PAGE", 1)
-    board = TeamBoard(*[card(f"DRE-{200 + n}", "Todo", labels=(f"repo:{DEMO}",))
+    board = TeamBoard(*[card(f"DRE-{200 + n}", "In Progress", labels=(f"repo:{DEMO}",))
                         for n in range(page + 1)])
     assert _busy(board)
     assert len(board.queries) == 1  # still one request: it fails open, it does not page

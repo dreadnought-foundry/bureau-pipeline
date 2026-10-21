@@ -476,10 +476,13 @@ def synthetic_deal(contract: dict | None = None) -> tuple:
     run — and the second the dispatch lane itself. Once no start lane is ahead
     of it the first slot is the dispatch lane too: the deal keeps its six
     slots, so a card sits in the dispatch lane exactly where it sat in the
-    retired lane and no other card is re-dealt."""
+    retired lane and no other card is re-dealt. A RETIRING start lane is not
+    ahead of it: the sweep drains that lane into the dispatch lane (DRE-7129),
+    so a real board holds nothing there to deal."""
     dispatch = lane_contract.dispatch_lane(contract)
+    live = set(lane_contract.lane_names("live", contract))
     waiting = next((lane for lane in lane_contract.start_lanes(contract)
-                    if lane != dispatch), dispatch)
+                    if lane != dispatch and lane in live), dispatch)
     return (waiting, dispatch, "In Review", "Planning", "Intake",
             lane_contract.queue_lane(contract))
 

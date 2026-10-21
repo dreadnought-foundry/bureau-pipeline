@@ -17,7 +17,10 @@ Seven of them remain:
     Those two pass `event=PLAN_EVENT`: a card waiting in the planner line is
     waiting to be planned, whatever its labels (DRE-5366);
   * `proof_dispatch.sweep` — the proof run at an epic's PROOF card, passing
-    `event=PROOF_EVENT` and a `reason` (DRE-5926);
+    `event=PROOF_EVENT` and a `reason` (DRE-5926), and, while
+    `PROOF_SHADOW_MODEL` is set, its shadow beside each confirmed one:
+    `event=PROOF_SHADOW_EVENT`, the same `reason`, and the `shadow_model` and
+    `dispatched_at` the shadow needs (DRE-7287);
   * `green_light_reply.sweep` — the review re-run for a Green Light epic the
     CEO commented on, passing `review_rerun`'s `re-run` reason, `PLAN_EVENT`
     and the lane the card is in, `green light`, as `trigger_state` (DRE-6138).
@@ -53,10 +56,17 @@ import tempfile
 # picks off the labels: `agent:planner` plans, anything else builds.
 # PROOF_EVENT is never picked by the label rule — only a caller that names it
 # sends it, and the proof runner's stub listens for it byte for byte (DRE-5921).
+# PROOF_SHADOW_EVENT is the same: only the proof dispatcher's shadow sends it,
+# and only `Proof Shadow` (self-proof-shadow.yml) listens for it (DRE-7287).
 PLAN_EVENT = "agent-plan"
 EXECUTE_EVENT = "agent-execute"
 PROOF_EVENT = "proof-execute"
-EVENTS = (PLAN_EVENT, EXECUTE_EVENT, PROOF_EVENT)
+PROOF_SHADOW_EVENT = "proof-shadow"
+EVENTS = (PLAN_EVENT, EXECUTE_EVENT, PROOF_EVENT, PROOF_SHADOW_EVENT)
+
+#: GitHub's cap on `client_payload`'s top-level keys. A payload over it is
+#: refused by `payload` before anything is sent, never by GitHub after.
+PAYLOAD_KEY_CAP = 10
 
 # The epic a dispatch is about, read fresh: the payload is built from it.
 # `review_rerun.py dispatch` reads the card with this query before it fires.
@@ -68,7 +78,9 @@ CARD_QUERY = """query($id: String!) { issue(id: $id) {
 
 def payload(card: dict, *, trigger_state: str | None = None,
             reason: str | None = None,
-            sent_by_run: str | int | None = None) -> dict:
+            sent_by_run: str | int | None = None,
+            shadow_model: str | None = None,
+            dispatched_at: str | None = None) -> dict:
     """The `client_payload` `fire` sends for `card`.
 
     Its own function since DRE-3286, because a second caller now needs the
@@ -90,8 +102,15 @@ def payload(card: dict, *, trigger_state: str | None = None,
     to the guard as `SENT_BY_RUN`, and the guard excuses that one run. It too
     is added only when given, never as a null.
 
-    GitHub caps `client_payload` at 10 top-level keys. The six base fields
-    plus these three optional ones make at most 9, so the new key fits.
+    `shadow_model` and `dispatched_at` (DRE-7287) are the proof shadow's:
+    the model id it runs on, and when the real proof run beside it was
+    dispatched (UTC, `YYYY-MM-DDTHH:MM:SSZ`). Added only when given, like the
+    rest.
+
+    GitHub caps `client_payload` at 10 top-level keys (`PAYLOAD_KEY_CAP`).
+    The shadow sends the six base fields, `reason` and its two: nine. No
+    caller sends all five optional keys, and a payload that would pass the
+    cap raises here rather than being refused by GitHub.
     """
     body = {
         "card_id": card["id"],
@@ -107,13 +126,22 @@ def payload(card: dict, *, trigger_state: str | None = None,
         body["reason"] = reason
     if sent_by_run is not None:
         body["sent_by_run"] = str(sent_by_run)
+    if shadow_model is not None:
+        body["shadow_model"] = shadow_model
+    if dispatched_at is not None:
+        body["dispatched_at"] = dispatched_at
+    if len(body) > PAYLOAD_KEY_CAP:
+        raise ValueError(f"plan run {card['identifier']}: {len(body)} payload keys "
+                         f"— GitHub takes at most {PAYLOAD_KEY_CAP}")
     return body
 
 
 def fire(card: dict, repo: str, *, trigger_state: str | None = None,
          reason: str | None = None,
          sent_by_run: str | int | None = None,
-         event: str | None = None) -> tuple[bool, str]:
+         event: str | None = None,
+         shadow_model: str | None = None,
+         dispatched_at: str | None = None) -> tuple[bool, str]:
     """Fire the card's repository_dispatch at `repo`.
 
     Returns `(True, "")` ONLY on a confirmed rc=0 dispatch, else `(False,
@@ -138,6 +166,9 @@ def fire(card: dict, repo: str, *, trigger_state: str | None = None,
     event outside `EVENTS` raises before anything is sent. (DRE-5376) A one-off
     card the planner has just revised carries no `agent:planner`, so
     `review_rerun.py dispatch --route plan` names `agent-plan` the same way.
+
+    `shadow_model` / `dispatched_at` (DRE-7287) are the proof shadow's two
+    keys, sent with `event=PROOF_SHADOW_EVENT`. See `payload`.
     """
     if event is not None and event not in EVENTS:
         raise ValueError(f"plan run {card['identifier']}: unknown event {event!r} "
@@ -146,7 +177,8 @@ def fire(card: dict, repo: str, *, trigger_state: str | None = None,
         return False, (f"plan run {card['identifier']}: no REPO to dispatch at "
                        "— the step that runs this must pass one")
     body = payload(card, trigger_state=trigger_state, reason=reason,
-                   sent_by_run=sent_by_run)
+                   sent_by_run=sent_by_run, shadow_model=shadow_model,
+                   dispatched_at=dispatched_at)
     if event is None:
         event = PLAN_EVENT if "agent:planner" in body["labels"] else EXECUTE_EVENT
     with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as f:

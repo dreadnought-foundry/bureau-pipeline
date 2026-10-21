@@ -330,7 +330,8 @@ _ESCALATION_LANES = (
 def _decisions(advance, state, label, refusals) -> dict[str, list[str]]:
     """The four decisions the sweep made, read off the stubbed writes.
 
-      promote  — a Backlog card advanced to Todo by the dependency gate.
+      promote  — a Backlog card advanced to In Progress by the dependency
+                 gate (to Todo until the flip, DRE-7120).
       hold     — a card told why it is NOT being promoted (the refusal's own
                  tag, so a cut that changes the reason fails too), or parked
                  behind the hold label.
@@ -359,7 +360,7 @@ def _decisions(advance, state, label, refusals) -> dict[str, list[str]]:
                 if call.args[1:2] == (reconcile.HOLD_LABEL,)}
     for call in advance.call_args_list:
         ident, to = call.args[0], call.args[1]
-        if to == "Todo":
+        if to == "In Progress":
             promote.append(ident)
         elif to in _ESCALATION_LANES:
             escalate.append(f"{ident} → {to}")

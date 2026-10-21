@@ -29,6 +29,8 @@ import contextlib
 import io
 import json
 import os
+import re
+import subprocess
 import sys
 import urllib.request
 from contextlib import redirect_stderr, redirect_stdout
@@ -381,26 +383,31 @@ def _snapshot(monkeypatch, tmp_path, lin_kw=None):
     return path
 
 
+# The gate runs on a card in a start lane: In Progress, the only one since
+# DRE-7660. The fake's default lane, Todo, is a lane the gate now skips.
+
+
 def test_the_gate_decides_a_clean_card_on_the_snapshot(monkeypatch, tmp_path):
-    _snapshot(monkeypatch, tmp_path)
+    _snapshot(monkeypatch, tmp_path, lin_kw={"lane": "In Progress"})
     _new_process()
-    with linear(monkeypatch) as lin:
+    with linear(monkeypatch, lane="In Progress") as lin:
         _, out = _quiet(validate_card.cmd_gate, CARD)
     assert lin.kinds == []
     assert "bounced=false" in out and "role=engineer" in out
 
 
 def test_the_gate_without_a_snapshot_reads_as_it_always_did(monkeypatch):
-    with linear(monkeypatch) as lin:
+    with linear(monkeypatch, lane="In Progress") as lin:
         _, out = _quiet(validate_card.cmd_gate, CARD)
     assert lin.kinds == ["issue", "card", "thread"]
     assert "bounced=false" in out
 
 
 def test_the_gate_on_the_snapshot_still_bounces_a_broken_card(monkeypatch, tmp_path):
-    _snapshot(monkeypatch, tmp_path, lin_kw={"labels": ["agent:engineer"]})
+    _snapshot(monkeypatch, tmp_path,
+              lin_kw={"lane": "In Progress", "labels": ["agent:engineer"]})
     _new_process()
-    with linear(monkeypatch, labels=["agent:engineer"]) as lin:
+    with linear(monkeypatch, lane="In Progress", labels=["agent:engineer"]) as lin:
         _, out = _quiet(validate_card.cmd_gate, CARD)
     assert "bounced=true" in out
     assert lin.writes == ["Planning"]
@@ -488,11 +495,14 @@ def _pre_agent(monkeypatch, *, snapshot_path=None) -> list[int]:
     return counts
 
 
-def test_before_the_pre_agent_steps_read_the_card_eleven_times(monkeypatch):
-    with linear(monkeypatch) as lin:
+def test_before_the_pre_agent_steps_read_the_card_ten_times(monkeypatch):
+    """Eleven when the card arrived in Todo; since DRE-7660 it arrives in In
+    Progress, the only start lane, so the move is a same-lane no-op: it keeps
+    its reads (the card, the states, the re-read) and writes nothing."""
+    with linear(monkeypatch, lane="In Progress") as lin:
         _pre_agent(monkeypatch)
-    assert len(lin.reads) == 11
-    assert lin.writes == ["In Progress"]
+    assert len(lin.reads) == 10
+    assert lin.writes == []
 
 
 def test_off_the_pre_agent_steps_read_linear_four_times(monkeypatch, tmp_path):
@@ -570,3 +580,143 @@ def test_no_step_after_the_move_is_handed_the_snapshot():
     after = _steps()[_index("Card → In Progress") + 1:]
     for step in after:
         assert agent_task_snapshot.ENV not in (step.get("env") or {}), step.get("name")
+
+
+# ── the In Progress move runs whether or not the card is there (DRE-7110) ──
+#
+# After the flip a build card arrives already in `In Progress`. The step's
+# write is then a same-lane no-op, and the step must still succeed and still
+# post the `🧠 model-attempt` start receipt the sweep and the console read.
+# The step's own shell is run here — `set -o pipefail` and all — against a
+# Linear faked at the HTTP layer through a `sitecustomize` on PYTHONPATH.
+
+_STEP_SITECUSTOMIZE = '''
+import json, os, urllib.request
+
+STATES = [
+    {"id": "st-todo", "name": "Todo", "type": "unstarted"},
+    {"id": "st-progress", "name": "In Progress", "type": "started"},
+    {"id": "st-review", "name": "In Review", "type": "started"},
+    {"id": "st-planning", "name": "Planning", "type": "unstarted"},
+    {"id": "st-done", "name": "Done", "type": "completed"},
+]
+BY_ID = {s["id"]: s for s in STATES}
+BY_NAME = {s["name"]: s for s in STATES}
+
+class _Resp:
+    headers = {}
+    def __init__(self, body):
+        self._body = body
+    def read(self):
+        return self._body
+    def __enter__(self):
+        return self
+    def __exit__(self, *exc):
+        return False
+
+def _lane():
+    with open(os.environ["STUB_STATE"]) as f:
+        return json.load(f)["lane"]
+
+def urlopen(req, timeout=None, **kw):
+    payload = json.loads(req.data)
+    q = payload["query"]
+    v = payload.get("variables") or {}
+    with open(os.environ["STUB_LOG"], "a") as f:
+        f.write(json.dumps(payload) + "\\n")
+    if q.lstrip().startswith("mutation"):
+        if "issueUpdate" in q:
+            lane = BY_ID[v["input"]["stateId"]]["name"]
+            with open(os.environ["STUB_STATE"], "w") as f:
+                json.dump({"lane": lane}, f)
+        data = {"commentCreate": {"success": True}, "issueUpdate": {"success": True}}
+    elif "history(" in q:
+        data = {"issue": {"history": {"nodes": []}}}
+    elif "workflowStates" in q and "issue(" not in q:
+        data = {"workflowStates": {"nodes": STATES}}
+    else:
+        data = {"issue": {
+            "id": "uuid-DRE-77", "identifier": "DRE-77", "title": "Build it",
+            "team": {"id": "team-uuid-dre", "key": "DRE"},
+            "state": dict(BY_NAME[_lane()]),
+            "labels": {"nodes": [{"name": "repo:portico"}, {"name": "agent:engineer"}]},
+            "children": {"nodes": []},
+        }, "viewer": {"id": "fleet-user"},
+            "workflowStates": {"nodes": STATES}}
+    return _Resp(json.dumps({"data": data}).encode())
+
+urllib.request.urlopen = urlopen
+'''
+
+_STEP_VALUES = {
+    "github.event.client_payload.identifier": CARD,
+    "steps.gate.outputs.role": "engineer",
+    "steps.model.outputs.model": "claude-opus-5-5",
+    "steps.model.outputs.turns": "400",
+    "steps.model.outputs.why": "workhorse ladder.",
+    "steps.model.outputs.turns_why": "size M.",
+    "github.server_url": "https://github.com",
+    "github.repository": "dreadnought-foundry/portico",
+    "github.run_id": "40000000123",
+}
+
+
+def _run_in_progress_step(tmp_path, lane):
+    """Run the `Card → In Progress` step's shell, as Actions runs it (`bash -e`),
+    on a card sitting in `lane`; answer (process, lane after, requests)."""
+    step = _step("Card → In Progress")
+    script = re.sub(
+        r"\$\{\{\s*([^}]+?)\s*\}\}",
+        lambda m: _STEP_VALUES[m.group(1)],
+        step_shell.step_shell(step),
+    )
+    work = tmp_path / "work"
+    work.mkdir()
+    (work / ".bureau-pipeline").symlink_to(ROOT)
+    stub = tmp_path / "stub"
+    stub.mkdir()
+    (stub / "sitecustomize.py").write_text(_STEP_SITECUSTOMIZE)
+    bindir = tmp_path / "bin"
+    bindir.mkdir()
+    (bindir / "python3").symlink_to(sys.executable)
+    state = tmp_path / "state.json"
+    state.write_text(json.dumps({"lane": lane}))
+    log = tmp_path / "requests.jsonl"
+    env = {
+        "PATH": f"{bindir}{os.pathsep}{os.environ.get('PATH', '')}",
+        "HOME": str(tmp_path),
+        "PYTHONPATH": str(stub),
+        "LINEAR_API_KEY": "lin_api_test",
+        "PRE_AGENT_LOG": str(tmp_path / "preagent.log"),
+        "RESUME_CLAUSE": "resume=none (no resume decision)",
+        "BUREAU_READ": "off",
+        "STUB_STATE": str(state),
+        "STUB_LOG": str(log),
+    }
+    proc = subprocess.run(  # nosec B603 B607 — this repo's own step, fixed argv
+        ["bash", "-e", "-c", script], cwd=work, env=env,
+        capture_output=True, text=True, timeout=120, check=False,
+    )
+    sent = [json.loads(l) for l in log.read_text().splitlines()] if log.exists() else []
+    return proc, json.loads(state.read_text())["lane"], sent
+
+
+@pytest.mark.parametrize("lane", ["Todo", "In Progress"])
+def test_the_in_progress_step_succeeds_and_posts_the_start_receipt(tmp_path, lane):
+    proc, after, sent = _run_in_progress_step(tmp_path, lane)
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert after == "In Progress"
+    comments = [p["variables"]["input"]["body"] for p in sent
+                if "commentCreate" in p["query"]]
+    assert len(comments) == 1
+    model = _STEP_VALUES["steps.model.outputs.model"]
+    assert comments[0].startswith(f"🧠 model-attempt: {model} — engineer agent starting")
+    assert "actions/runs/40000000123" in comments[0]
+    writes = [p for p in sent if "issueUpdate" in p["query"]]
+    assert len(writes) == (1 if lane == "Todo" else 0)
+
+
+def test_the_escalation_tells_the_agent_the_ceo_moves_it_back_to_in_progress():
+    text = WORKFLOW.read_text()
+    assert text.count("back to Todo to proceed") == 0
+    assert text.count("back to In Progress to proceed") == 3

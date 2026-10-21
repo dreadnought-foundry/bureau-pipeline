@@ -571,7 +571,7 @@ class TestCase3UnknownAgeNeverAges:
 def test_case_4_a_sweep_that_dispatched_is_not_idle(capsys):
     board = _Sweeps(card_a(), card_f())
     assert board.sweep(0, capsys) == 1
-    assert (F, "Todo") in board.advanced
+    assert (F, "In Progress") in board.advanced
     assert f"(WIP 0+1/{reconcile.MAX_WIP})" in board.out[0]
     assert board.idle_line(0) is None
     assert promotion_stall.IDLE_LINE_OPENER not in board.out[0]

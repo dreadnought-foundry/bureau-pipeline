@@ -49,6 +49,7 @@ from unittest.mock import patch
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "scripts"))
 
+import lane_contract  # noqa: E402
 import linear_ops  # noqa: E402
 
 
@@ -164,6 +165,10 @@ def _run(fn, fake, *args):
 
 DONE = _RacingLinear.STATES["Done"][0]
 TODO = _RacingLinear.STATES["Todo"][0]
+#: The lane the building-card reroute writes: `lane_contract.START_LANE`, In
+#: Progress since the flip (DRE-7120). The reroute tests below start the card
+#: in another started lane, so the reroute is a real write the race can meet.
+START = _RacingLinear.STATES[lane_contract.START_LANE][0]
 BACKLOG = _RacingLinear.STATES["Backlog"][0]
 
 
@@ -228,12 +233,12 @@ def test_terminal_state_clobbered_inside_the_residual_window_is_restored():
 
 
 def test_restore_also_covers_the_building_card_reroute_write():
-    """DRE-1885 re-routes a building card's Backlog park to Todo — a SECOND
-    write seam in the same function. It must carry the same repair, or the
-    reroute becomes the way to clobber a Done card."""
-    fake = _RacingLinear("In Progress", flip_to="Done", flip_after_reads=2)
+    """DRE-1885 re-routes a building card's Backlog park to the start lane —
+    a SECOND write seam in the same function. It must carry the same repair,
+    or the reroute becomes the way to clobber a Done card."""
+    fake = _RacingLinear("In QA", flip_to="Done", flip_after_reads=2)
     _run(linear_ops.cmd_state, fake, "DRE-2316", "Backlog")
-    assert fake.updates == [TODO, DONE]
+    assert fake.updates == [START, DONE]
     assert fake.current == "Done"
 
 
@@ -252,13 +257,13 @@ def test_uncontended_park_writes_exactly_once():
     assert fake.updates == [BACKLOG]
 
 
-def test_uncontended_reroute_still_lands_in_todo():
-    """DRE-1885 unchanged when nothing races: In Progress -> Backlog becomes
-    Todo, once."""
-    fake = _RacingLinear("In Progress")
+def test_uncontended_reroute_still_lands_in_the_start_lane():
+    """DRE-1885 unchanged when nothing races: a building card's Backlog park
+    becomes the start lane, once."""
+    fake = _RacingLinear("In QA")
     out = _run(linear_ops.cmd_state, fake, "DRE-2316", "Backlog")
-    assert fake.updates == [TODO]
-    assert "todo" in out.lower()
+    assert fake.updates == [START]
+    assert lane_contract.START_LANE.lower() in out.lower()
 
 
 def test_forward_close_is_never_repaired_away():

@@ -28,7 +28,12 @@ import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "scripts"))
 
+import lane_contract  # noqa: E402
 import linear_ops  # noqa: E402
+
+#: The lane the reroute writes: `lane_contract.START_LANE`, In Progress since
+#: the flip (DRE-7120) — Todo before it.
+START = lane_contract.START_LANE
 
 
 class _FakeLinear:
@@ -93,9 +98,10 @@ def _run_state(fake, target, *flags):
 
 # --- the load-bearing assertion (mutation check) ---------------------------
 
-def test_building_card_park_to_backlog_is_rerouted_to_todo():
+def test_building_card_park_to_backlog_is_rerouted_to_the_start_lane():
     """The exact DRE-1822 failure: a hold/park aiming an In Progress card at
-    Backlog must NOT land it in Backlog. It is re-routed to Todo (re-dispatch).
+    Backlog must NOT land it in Backlog. It is re-routed to the start lane
+    (re-dispatch) — Todo when this was written, In Progress since the flip.
 
     MUTATION CHECK: delete the building-card guard in cmd_state and `fake.updates`
     becomes [st-backlog] — the card WAS stranded — and this fails. So the test
@@ -103,11 +109,11 @@ def test_building_card_park_to_backlog_is_rerouted_to_todo():
     """
     fake = _FakeLinear("In Progress")
     out = _run_state(fake, "Backlog")
-    assert fake.updates == [_FakeLinear.STATES["Todo"][0]], (
-        f"a building card must be re-queued to Todo, not parked in Backlog; "
+    assert fake.updates == [_FakeLinear.STATES[START][0]], (
+        f"a building card must be re-queued to {START}, not parked in Backlog; "
         f"got {fake.updates}"
     )
-    assert "todo" in out.lower()
+    assert START.lower() in out.lower()
     assert _FakeLinear.STATES["Backlog"][0] not in fake.updates
 
 
@@ -183,21 +189,21 @@ class _QueuedBoard(_FakeLinear):
     STATES = {**_FakeLinear.STATES, "Queued": ("st-queued", "unstarted")}
 
 
-def test_building_card_aimed_at_queued_is_rerouted_to_todo():
+def test_building_card_aimed_at_queued_is_rerouted_to_the_start_lane():
     """The reroute reads the queue lane by NAME, through `QUEUE_LANES`: a
     building card parked in `Queued` strands exactly as one parked in the lane
     it replaces."""
     fake = _QueuedBoard("In Progress")
     out = _run_state(fake, "Queued")
-    assert fake.updates == [_QueuedBoard.STATES["Todo"][0]], fake.updates
+    assert fake.updates == [_QueuedBoard.STATES[START][0]], fake.updates
     assert "instead of 'Queued'" in out
 
 
-def test_held_building_card_aimed_at_queued_is_rerouted_to_todo():
+def test_held_building_card_aimed_at_queued_is_rerouted_to_the_start_lane():
     """The held move (one read) decides the same reroute on the live card."""
     fake = _QueuedBoard("In Progress")
     _run_state(fake, "Queued", "--held")
-    assert fake.updates == [_QueuedBoard.STATES["Todo"][0]], fake.updates
+    assert fake.updates == [_QueuedBoard.STATES[START][0]], fake.updates
 
 
 def test_explicit_park_flag_keeps_a_building_card_in_queued():
@@ -226,7 +232,7 @@ def test_state_queued_on_a_board_without_it_falls_back_to_backlog_and_says_so():
 def test_building_card_aimed_at_queued_on_a_board_without_it_is_rerouted():
     fake = _FakeLinear("In Progress")
     _run_state(fake, "Queued")
-    assert fake.updates == [_FakeLinear.STATES["Todo"][0]]
+    assert fake.updates == [_FakeLinear.STATES[START][0]]
 
 
 # --- the reroute writes the start lane (DRE-7109) ----------------------------
@@ -278,16 +284,55 @@ def _run_restart(fake, target, *flags):
     return moved, buf.getvalue(), fire
 
 
-def test_the_reroute_writes_todo_under_the_shipped_contract():
-    import lane_contract
-
-    assert lane_contract.START_LANE == "Todo"
+def test_the_shipped_contract_is_the_flip_and_the_reroute_fires_in_place():
+    """The flip shipped (DRE-7120): with no fixture contract a building card
+    is already in the start lane, so the reroute dispatches it in place."""
+    assert lane_contract.START_LANE == "In Progress"
     fake = _StartLaneBoard("In Progress")
     moved, out, fire = _run_restart(fake, "Queued")
     assert moved is True
-    assert fake.updates == [_StartLaneBoard.STATES["Todo"][0]]
-    assert "re-queued to 'Todo'" in out
+    assert fake.updates == []
+    assert fire.call_count == 1
+    assert IN_PLACE in out
+
+
+def test_a_building_card_off_the_start_lane_is_moved_into_it():
+    """A started card in another started lane is moved, not fired in place."""
+    fake = _StartLaneBoard("In QA")
+    moved, out, fire = _run_restart(fake, "Queued")
+    assert moved is True
+    assert fake.updates == [_StartLaneBoard.STATES["In Progress"][0]]
+    assert "re-queued to 'In Progress'" in out
     fire.assert_not_called()
+
+
+class _EpicBoard(_StartLaneBoard):
+    """The start-lane board, the card an epic by its title."""
+
+    def __init__(self, current_state_name):
+        super().__init__(current_state_name, labels=("agent:planner",))
+        self._issue["title"] = "[EPIC] portico: the whole thing"
+
+    def gql(self, query, variables=None):
+        q = " ".join(query.split())
+        if "comments" in q:
+            return {"issue": {**self._issue, "comments": {"nodes": []}}}
+        return super().gql(query, variables)
+
+
+@pytest.mark.parametrize("flags", [(), ("--held",)])
+@pytest.mark.parametrize("lane", ["In Progress", "In QA"])
+def test_an_epic_is_never_rerouted(lane, flags):
+    """Since the flip the reroute would fire a build at an epic already in
+    the start lane, or move one into the lane that approves it. It refuses
+    both and writes nothing — before the flip the epic gate refused the same
+    write into Todo (DRE-5316)."""
+    fake = _EpicBoard(lane)
+    moved, out, fire = _run_restart(fake, "Queued", *flags)
+    assert moved is False
+    assert fake.updates == []
+    fire.assert_not_called()
+    assert "is an epic" in out
 
 
 @pytest.mark.parametrize("flags", [(), ("--held",)])

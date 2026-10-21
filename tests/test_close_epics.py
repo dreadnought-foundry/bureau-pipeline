@@ -406,7 +406,7 @@ def test_a_backlog_epic_whose_children_are_all_canceled_stays_open(board_pins):
     advance.assert_not_called()
 
 
-@pytest.mark.parametrize("lane", ["Todo", "In Progress", "In Review"])
+@pytest.mark.parametrize("lane", ["In Progress", "In Review"])
 def test_a_finished_epic_in_a_sweep_lane_still_closes(board_pins, lane):
     """Guard the guard: the same fixture, in the lanes the sweep has always
     closed from, closes — so the refusals below are the lane's and not a
@@ -497,8 +497,9 @@ def test_the_merge_path_closes_nothing_whose_parent_is_in_planning(board_pins, m
 
 def test_epic_close_lanes_are_the_sweep_lanes_and_backlog():
     assert reconcile.EPIC_CLOSE_LANES == reconcile.SWEEP_STATES + reconcile.QUEUE_LANES
+    # Less Todo, retiring since DRE-7129: an epic there is carried out of it.
     assert set(reconcile.EPIC_CLOSE_LANES) == {
-        "Todo", "In Progress", "In Review", *lane_contract.QUEUE_LANES}
+        "In Progress", "In Review", *lane_contract.QUEUE_LANES}
 
 
 def test_both_sites_read_epic_close_lanes(board_pins, monkeypatch):
@@ -530,7 +531,7 @@ def test_the_docstrings_name_the_lanes_an_epic_closes_from():
     for fn in (reconcile.close_finished_epics, reconcile._close_epic_if_finished):
         doc = fn.__doc__ or ""
         assert "EPIC_CLOSE_LANES" in doc, fn.__name__
-        for lane in ("Todo", "In Progress", "In Review", "Queued"):
+        for lane in ("In Progress", "In Review", "Queued"):
             assert lane in doc, (fn.__name__, lane)
 
 

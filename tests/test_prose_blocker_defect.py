@@ -212,7 +212,7 @@ def test_a_card_whose_only_unmet_blocker_is_prose_declared_now_promotes():
         patch.object(reconcile.linear_ops, "cmd_comment"):
         promoted = reconcile.promote_ready(active_count=0)
     assert promoted == 1
-    advance.assert_called_once_with("DRE-900", "Todo", reconcile.QUEUE_FROM)
+    advance.assert_called_once_with("DRE-900", "In Progress", reconcile.QUEUE_FROM)
 
 
 def test_a_live_relation_still_holds_the_card():
@@ -261,7 +261,8 @@ def test_an_undeclared_prose_claim_refuses_promotion(capsys):
         patch.object(reconcile.linear_ops, "cmd_comment"):
         promoted = reconcile.promote_ready(active_count=0)
     assert promoted == 0
-    assert ("DRE-900", "Todo", reconcile.QUEUE_FROM) not in [c.args for c in advance.mock_calls]
+    assert ("DRE-900", "In Progress", reconcile.QUEUE_FROM) not in [
+        c.args for c in advance.mock_calls]
     out = capsys.readouterr().out
     assert prose_blockers.CARD_TAG in out       # the named line
     assert "DRE-900" in out and "DRE-700" in out
@@ -360,7 +361,8 @@ def test_one_defective_card_does_not_stop_its_siblings():
         patch.object(reconcile.linear_ops, "cmd_comment"):
         promoted = reconcile.promote_ready(active_count=0)
     assert promoted == 1
-    assert ("DRE-901", "Todo", reconcile.QUEUE_FROM) in [c.args for c in advance.mock_calls]
+    assert ("DRE-901", "In Progress", reconcile.QUEUE_FROM) in [
+        c.args for c in advance.mock_calls]
 
 
 def test_a_failed_triage_move_goes_in_the_ledger_and_the_sweep_continues():

@@ -403,14 +403,15 @@ the plan afterwards needs to know.
 
 ## The lanes, and the verdict you owe every card (DRE-2724 / DRE-2824)
 
-The board is `Intake` → `Planning` → `Green Light` → `Queued` → `Todo` →
+The board is `Intake` → `Planning` → `Green Light` → `Queued` →
 `In Progress` → `In Review` → `Done`, with `Triage` off to the side. Three
 things you must not get from memory:
 
 - **`Green Light`** is the CEO's "needs you" queue — a plan waiting for
   approval, and an agent's escalation waiting for a decision, sit in the same
   lane. Your plan reaches the CEO there, and only after both critics have
-  passed it.
+  passed it. On an escalated card the CEO answers and moves the card back to
+  `In Progress` to proceed, or to `Queued` to drop it.
 - **`Triage`** is the BROKEN-CARD lane and only that: an unroutable `repo:`
   label, an archived repo, a card the readiness guard returned three times. It
   also holds a plan that would not converge (parked at either critic's bound)
@@ -421,7 +422,7 @@ things you must not get from memory:
   (`config/lane-contract.json`, rendered to `docs/lane-contract.md`) — read a
   lane there rather than describing one from memory.
 
-**An epic activates at `In Progress`, not `Todo`.** The CEO moves ONLY the epic
+**An epic activates at `In Progress`.** The CEO moves ONLY the epic
 to `In Progress` and stops; the dependency gate promotes the unblocked children
 in order. Never tell them to move a child by hand — that double-dispatches and
 reverts in-progress work. Your plan comment must end with that instruction.
@@ -438,7 +439,7 @@ it. Read the file, not this table, when the two ever disagree.
 
 | Verdict | Means | Destination | Who acts there |
 | -- | -- | -- | -- |
-| **FLEET** | Buildable unattended in one PR | `Todo` | the build run — the ONLY verdict that is dispatched |
+| **FLEET** | Buildable unattended in one PR | `In Progress` | the build run, dispatched by the sweep's promotion — the ONLY verdict that is dispatched |
 | **WORKBENCH** | A person works it against live system state — never produced by the acceptance criteria (DRE-6227) | `Hand-work`, no mark | the operator, at an interactive session — kept for historical demo cards and the pipeline's own record cards; you never route a card here |
 | **OPERATOR** | Not code — a deploy, a migration run, a secret | `Hand-work`, marked `operator-step` + `no-code` | the operator |
 | **PARKED** | Well-formed and deliberately not to be built | `Queued` | the planning-exit writer lands it; nobody picks it up |
@@ -503,6 +504,9 @@ markdown, and refuses to create that broken card. It also:
     and since DRE-2874 the create seam does not refuse a child without one
     either. It is inherited because repo inference uses it as its one route to a
     repo for a card carrying no `repo:` label (DRE-2681);
+  - files the child in this epic's Linear project, so the console's Initiatives
+    page counts it there (DRE-7675). An epic in no project gives children in
+    none — nothing guesses a project;
   - turns any `**Blocked by:** DRE-N, DRE-M` body line into real Linear
     `blockedBy` relations;
   - validates the child through the same `validate_card` gate the build uses,

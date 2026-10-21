@@ -200,7 +200,7 @@
       "tag": "stranded-watchdog",
       "adopted": true,
       "kind": "hold",
-      "means": "A Todo or In Progress card sits in an active lane with no evidence any run ever started — no route, or no run receipt.",
+      "means": "A card in a start lane (lane_contract.START_LANES) sits there with no evidence any run ever started — no route, or no run receipt.",
       "state": "held",
       "next_actor": "operator",
       "discharges": null,
@@ -903,14 +903,14 @@
       "tag": "hyg-triage-returned",
       "adopted": true,
       "kind": "recovery",
-      "means": "A Triage card whose mechanical defect the agent fixed — a prose blocker made true by the relation it added, a dependency loop a Done card already broke, a retired-repo card marked operator-step and parked — is returned to Queued, never Todo.",
+      "means": "A Triage card whose mechanical defect the agent fixed — a prose blocker made true by the relation it added, a dependency loop a Done card already broke, a retired-repo card marked operator-step and parked — is returned to Queued, never a start lane.",
       "state": "unchanged",
       "next_actor": "reconcile.py",
       "discharges": null,
       "subscriber": "hygiene.yml",
       "cadence_s": null,
       "cadence_why": "Null: the card is the sweep's again, and scripts/reconcile.py re-reads it at its own gate on the next ~15-minute pass; nothing speaks on this receipt's behalf.",
-      "why": "DRE-5368, the hygiene agent's core; the lane that decides it is a sibling card under DRE-5365, and the core holds the one table of tags so every lane's receipt reads the same. Its idempotency key is (tag, cause): scripts/hygiene.py's write seam suppresses the act when the target already carries a receipt with this tag and the same cause line, so a repeat is never sent and a new cause always is. Its state is `unchanged` because the registry's states name an obligation an act leaves open — a run expected back, a person's hold, a human queue — and this act leaves none of its own: the move it makes is one the lane contract admits `hygiene.py` to make, and the receipt is the record of it. It discharges nothing. Queued and never Todo, because the promotion gate is what decides a card is ready, and the agent fixed a defect rather than deciding that.",
+      "why": "DRE-5368, the hygiene agent's core; the lane that decides it is a sibling card under DRE-5365, and the core holds the one table of tags so every lane's receipt reads the same. Its idempotency key is (tag, cause): scripts/hygiene.py's write seam suppresses the act when the target already carries a receipt with this tag and the same cause line, so a repeat is never sent and a new cause always is. Its state is `unchanged` because the registry's states name an obligation an act leaves open — a run expected back, a person's hold, a human queue — and this act leaves none of its own: the move it makes is one the lane contract admits `hygiene.py` to make, and the receipt is the record of it. It discharges nothing. Queued and never a start lane, because the promotion gate is what decides a card is ready, and the agent fixed a defect rather than deciding that.",
       "emits": {
         "file": "scripts/hygiene.py",
         "anchor": "\"hyg-triage-returned\""
@@ -1126,7 +1126,7 @@
       "subscriber": "reconcile.yml",
       "cadence_s": 7200,
       "cadence_why": "The dispatched proof run's own bound: .github/workflows/proof-task.yml gives its proof job timeout-minutes: 120.",
-      "why": "DRE-5926. A PROOF card routes OPERATOR and waits in Hand-work, which the sweep's nudge loop never reads, so on 2026-10-05 thirteen of the seventeen epics counted against the epic cap were waiting on a person to start a proof. The sweep's `Dispatch proof runs` step (scripts/proof_dispatch.py, its own process after the Sweep step, full passes only, and only in a repo carrying a proof-run stub) fires `plan_run.PROOF_EVENT` and posts this receipt ONLY on a confirmed dispatch: `🔬 proof-run: dispatched a proof run at <PT time> — <reason> (<count>)`. The tag is a live key: `proof_run_state.reading` (DRE-5922) anchors on the newest receipt to say whether the run is running, never started, dead or finished, and counts the first-run budget off the receipts whose reason opens `first proof run` or `second dispatch` — two at most. The count phrases are `dispatch <n> of 2`, `re-run <n> of 2` (DRE-5931, through this same composer) and `after the CEO's answer`. Nothing is discharged: the run it starts reports through its own heartbeats and the record's pull request. Until the repository variable PROOF_DISPATCH_LIVE is exactly `true` the phase prints `would:` lines and posts none of these.",
+      "why": "DRE-5926. A PROOF card routes OPERATOR and waits in Hand-work, which the sweep's nudge loop never reads, so on 2026-10-05 thirteen of the seventeen epics counted against the epic cap were waiting on a person to start a proof. The sweep's `Dispatch proof runs` step (scripts/proof_dispatch.py, its own process after the Sweep step, full passes only, and only in a repo carrying a proof-run stub) fires `plan_run.PROOF_EVENT` and posts this receipt ONLY on a confirmed dispatch: `🔬 proof-run: dispatched a proof run at <PT time> — <reason> (<count>)`. The tag is a live key: `proof_run_state.reading` (DRE-5922) anchors on the newest receipt to say whether the run is running, never started, dead or finished, and counts the first-run budget off the receipts whose reason opens `first proof run` or `second dispatch` — two at most. The count phrases are `dispatch <n> of 2`, `re-run <n> of 2` (DRE-5931, through this same composer), `timed re-run <n> of 2` (DRE-7316: a re-run the dispatcher's own lift of a time-only hold started, on a budget of its own), `after the CEO's answer` and `re-armed` (DRE-7740): two re-runs per record pull request, then one more per re-arm event — a card the record names by `fix:` shipped, or a new `🔬 proof-observed` — and never another without one. `re-armed` does not open `re-run`, so it spends none of that budget. Nothing is discharged: the run it starts reports through its own heartbeats and the record's pull request. Until the repository variable PROOF_DISPATCH_LIVE is exactly `true` the phase prints `would:` lines and posts none of these.",
       "emits": {
         "file": "scripts/proof_dispatch.py",
         "anchor": "pipeline_act.receipt(\"proof-run-dispatched\""
@@ -1748,7 +1748,7 @@
       "file": "scripts/reconcile.py",
       "anchor": "🧹 Auto-promoted {QUEUE_LANE} → {destination}",
       "kind": "undeclared-act",
-      "means": "A Queued card whose blockers are all Done is promoted on its own, to the lane its routing verdict names: Todo for FLEET, Hand-work for WORKBENCH and OPERATOR (DRE-5322).",
+      "means": "A Queued card whose blockers are all Done is promoted on its own, to the lane its routing verdict names: In Progress for FLEET, where the move is the dispatch (DRE-7120), Hand-work for WORKBENCH and OPERATOR (DRE-5322).",
       "why": "Act-shaped, and the registry has no row for it. DRE-2825 declared thirteen acts by reading reconcile.py's ten tag constants, the fix loop's three notices and the medic; this receipt was not among them. Giving it a row is a REGISTRY change — a tag, a kind, a state, a next actor, a subscriber, and the reasoning that fixes each — not an emission change, and this card converts what the registry declares. Named here so the debt is countable rather than invisible."
     },
     {
@@ -1818,7 +1818,7 @@
       "file": "scripts/reconcile.py",
       "anchor": "f\"🧹 Reconcile: {_TODO_REDISPATCH_NOTE}.\"",
       "kind": "undeclared-act",
-      "means": "A promoted card with no start receipt newer than its entry into its start lane — Todo or In Progress — is re-dispatched as a build once its start window has passed and nothing says it is alive (no run in flight, no standing runner-line hold), and the receipt follows the dispatch's real outcome (DRE-7108).",
+      "means": "A promoted card with no start receipt newer than its entry into its start lane — one of lane_contract.START_LANES — is re-dispatched as a build once its start window has passed and nothing says it is alive (no run in flight, no standing runner-line hold), and the receipt follows the dispatch's real outcome (DRE-7108).",
       "why": "Act-shaped, and the registry has no row for it. DRE-2825 declared thirteen acts by reading reconcile.py's ten tag constants, the fix loop's three notices and the medic; this receipt was not among them. Giving it a row is a REGISTRY change — a tag, a kind, a state, a next actor, a subscriber, and the reasoning that fixes each — not an emission change, and this card converts what the registry declares. Named here so the debt is countable rather than invisible. Its wording is `_TODO_REDISPATCH_NOTE` because the stranded-card watchdog matches on it, so it already carries a key another act reads."
     },
     {
@@ -1921,16 +1921,16 @@
     },
     {
       "file": "scripts/validate_card.py",
-      "anchor": "🔧 Auto-fixed by the Todo gate",
+      "anchor": "🔧 Auto-fixed by the start gate",
       "kind": "undeclared-act",
-      "means": "The Todo gate repairs what it can on a card and lets the build start.",
+      "means": "The start gate repairs what it can on a card and lets the build start.",
       "why": "Act-shaped, and the registry has no row for it. DRE-2825 declared thirteen acts by reading reconcile.py's ten tag constants, the fix loop's three notices and the medic; this receipt was not among them. Giving it a row is a REGISTRY change — a tag, a kind, a state, a next actor, a subscriber, and the reasoning that fixes each — not an emission change, and this card converts what the registry declares. Named here so the debt is countable rather than invisible."
     },
     {
       "file": "scripts/validate_card.py",
       "anchor": "linear_ops.cmd_comment(identifier, body)",
       "kind": "undeclared-act",
-      "means": "The Todo gate refuses a card it cannot repair and returns it to Planning.",
+      "means": "The start gate refuses a card it cannot repair and returns it to Planning.",
       "why": "Act-shaped, and the registry has no row for it. DRE-2825 declared thirteen acts by reading reconcile.py's ten tag constants, the fix loop's three notices and the medic; this receipt was not among them. Giving it a row is a REGISTRY change — a tag, a kind, a state, a next actor, a subscriber, and the reasoning that fixes each — not an emission change, and this card converts what the registry declares. Named here so the debt is countable rather than invisible. Its wording is asserted byte for byte by `tests/test_writers_point_at_planning.py`, so a trailer here has to be additive in the way this epic means it — which is an argument for a row, not against one."
     },
     {
@@ -2516,6 +2516,14 @@
     },
     {
       "file": ".github/workflows/plan.yml",
+      "anchor": "🚨 The critic's second read of this card could NOT be started",
+      "step": "One-off critic — read it again after no result",
+      "kind": "undeclared-act",
+      "means": "The second read of a one-off card whose critic decided nothing could not be dispatched, so nothing is running — said plainly rather than claimed as started (`plan_run.fire`'s rc rule, DRE-2034), and the step goes red for the medic (DRE-7491).",
+      "why": "Act-shaped, and the registry has no row for it — the same debt as the revised card's re-read failure note beside it. Giving it a row is a REGISTRY change, not an emission change."
+    },
+    {
+      "file": ".github/workflows/plan.yml",
       "anchor": "\"$(cat \"$PARK_NOTE\")\"",
       "step": "One-off critic — park in Triage",
       "kind": "undeclared-act",
@@ -2934,8 +2942,8 @@
       "file": "scripts/epic_todo_gate.py",
       "anchor": "ops.cmd_comment(identifier, body)",
       "kind": "undeclared-act",
-      "means": "A write that would have put an epic in Todo was refused and nothing was written; the card is told the right move — In Progress for an approved epic, where its children promote, or Green Light for the CEO's approval (DRE-5316).",
-      "why": "Act-shaped — the pipeline refused a lane write by itself and says so on the card — and the registry has no row for it. Giving it a row is a REGISTRY change (a tag, a kind, a state, a next actor, a subscriber), and since DRE-3081/DRE-3090 a new act must reach the console's receipts.py:ACTS BEFORE the pipeline declares it (DRE-3091), which is a change in another repository this card does not own. So the refusal ships first as an undeclared act, exactly as DRE-4150's urgent fast path did. This is the ONE posting site: the write seam (linear_ops.guarded_state_write) and the two siblings that carry an epic out of Todo (DRE-5319, DRE-5347) all post through epic_todo_gate.post_refusal and add no second row. Its opener `🚫 epic-not-todo: <identifier> → <move>` is a live key: post_refusal posts only when no comment on the card already carries it, so a writer retrying every sweep says it once per card and move. A trailer after the body would not touch the opener."
+      "means": "A write that would have put an epic in the lane In Progress replaces was refused and nothing was written; the card is told the right move — In Progress for an approved epic, where its children promote, or Green Light for the CEO's approval (DRE-5316).",
+      "why": "Act-shaped — the pipeline refused a lane write by itself and says so on the card — and the registry has no row for it. Giving it a row is a REGISTRY change (a tag, a kind, a state, a next actor, a subscriber), and since DRE-3081/DRE-3090 a new act must reach the console's receipts.py:ACTS BEFORE the pipeline declares it (DRE-3091), which is a change in another repository this card does not own. So the refusal ships first as an undeclared act, exactly as DRE-4150's urgent fast path did. This is the ONE posting site: the write seam (linear_ops.guarded_state_write) and the two siblings that carry an epic out of that lane (DRE-5319, DRE-5347) all post through epic_todo_gate.post_refusal and add no second row. Its opener `🚫 epic-not-todo: <identifier> → <move>` is a live key: post_refusal posts only when no comment on the card already carries it, so a writer retrying every sweep says it once per card and move. A trailer after the body would not touch the opener."
     },
     {
       "file": "scripts/hygiene.py",
@@ -2971,6 +2979,13 @@
       "kind": "not-an-act",
       "means": "A proof card whose record's unmet rows carry cause words (DRE-6607) is asked once, `proof_cause_park.question`: the 🙋 For the operator — the proof run cannot observe first line, the Finding, Question and Recommendation lines `console_escalation.render` writes, what the operator does next, one `cause:` line per row and the run, posted after the 🔬 proof-waiting hold (DRE-6612). The card is left In Review for the operator — no lane is written (DRE-6837).",
       "why": "A question is not an act: it asks the operator to decide rather than announcing something the pipeline did, the same reason the sweep's blocker ask and review-cap question ask rather than announce. The hold posted before it is the `proof-observation-pending` act's receipt and carries its trailer, and names the operator as the next actor; this question is found again by its 🙋 first line after the newest such hold, so a second park over the same thread never posts it twice. It is the operator's because the operator, never the CEO, writes an accepted row (DRE-6244)."
+    },
+    {
+      "file": "scripts/proof_dispatch.py",
+      "anchor": "linear_ops.cmd_comment(ident, reply)",
+      "kind": "not-an-act",
+      "means": "A comment that opens 🔬 proof-observed with anything but the colon after the mark — DRE-5407's opened with a dash on 2026-10-18 — is answered once on the card by the proof dispatcher (DRE-7743): `proof_record.unread_reply` quotes its first line and says it discharged nothing, and why.",
+      "why": "A notice, not an act: it changes nothing — the note still discharges nothing, the hold still holds, and no lane or label is written — and hands the work to nobody new; it tells the person who wrote the note, on the card where they wrote it, that it was not read. It must NOT compose: the only trailer that would fit is the hold's, and `proof-waiting` is a live key the console reads, so stamping it here would show a fresh hold where a reply is. It is found again by its whole first line, so a later pass never posts it twice."
     },
     {
       "file": "scripts/release_deferral.py",

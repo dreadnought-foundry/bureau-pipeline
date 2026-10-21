@@ -23,17 +23,26 @@ or read the hold. Both now do, through this module:
    here fetches it. An accepted row with no link is not met, and `unmet_row`
    says so. `summary` renders the reading as both PROOF closes post it.
    `row_waiting` (DRE-6488) names the event a `Not observed. waiting for …`
-   row waits on, which the proof dispatch holds on instead of a re-run.
+   row waits on, which the proof dispatch holds on instead of a re-run, and
+   `row_not_before` (DRE-7316) the time such a row is stamped with, which
+   lets that hold be one a time lifts.
    `row_cause` (DRE-6607) names the cause a `Not observed. cause: …` row
    carries — one of `proof_reach.causes()` — and `all_unmet_caused` says
    every unmet row carries one, which the dispatcher reads; the row stays
-   unmet, and `shortfall` still holds the record on it.
+   unmet, and `shortfall` still holds the record on it. Two markers only the
+   proof dispatcher reads (DRE-7740): `row_history` reads a `Not met.
+   history: …` row — observed, failed, and on a window or run that cannot
+   change, so it is not a cause — and `row_fixes` the `fix: DRE-<n>` that
+   closes an unmet row's cell. Nothing reads a fix out of free prose.
 3. **The hold-discharge reader** — `open_holds`, moved from `proof_dispatch`;
    `open_holds_at` is the same reading with each hold's time, for the PROOF
    close (DRE-6489). `time_only` (DRE-7228) reads one of those holds as
    waiting only for a time — the `not-before=<T>` clause
    `linear_ops.py proof-waiting-until` writes, and nothing else — which the
-   proof dispatcher lifts once the time passes.
+   proof dispatcher lifts once the time passes. `unread_notes` (DRE-7743)
+   finds a note opening `🔬 proof-observed` without its colon, which
+   discharges nothing, and `unread_reply` is the one line the dispatcher
+   answers it with.
 4. **The record finder**, new: the ONE `.md` file the pull request ADDS under
    `docs/` or `architecture/` (`find_record`, over `gh pr view --json files`),
    read at a given sha through the contents API (`fetch`). No match, or two, is
@@ -112,6 +121,11 @@ WAITING_OPENING = "Not observed. waiting for"
 #: ` — ` and what the run saw instead, is a row the run cannot observe as the
 #: card words it (DRE-6607): a re-run would read the same thing again.
 CAUSE_OPENING = "Not observed. cause:"
+#: A result cell opening with this, then the closed window or the finished run
+#: with its PT time, ` — ` and what it recorded, is a row that was observed and
+#: failed on something that cannot change (DRE-7740): every re-run reads the
+#: same result. It is not a cause — the run did observe the row as worded.
+HISTORY_OPENING = "Not met. history:"
 
 _FENCE = re.compile(r"^\s*(```|~~~)")
 _SEPARATOR_CELL = re.compile(r":?-+:?")
@@ -120,9 +134,19 @@ _MET = re.compile(rf"(?:{'|'.join(MET_WORDS)})\b")
 _HEDGED = re.compile(rf"(?:{'|'.join(MET_WORDS)})\b[\s,;:—–-]*(?:{'|'.join(HEDGES)})\b")
 _ACCEPTED = re.compile(rf"{ACCEPTED_OPENING}\b")
 _WAITING = re.compile(r"not observed\.\s+waiting for\s+(\S.*)", re.IGNORECASE | re.DOTALL)
+#: A waiting row's stamp (DRE-7316): the one clause, bracketed, right after
+#: the event — followed by the `:` that opens what it would show, or nothing.
+_STAMP = re.compile(rf"\s*\[{re.escape(linear_ops.NOT_BEFORE)}(?P<when>[^\]\s]*)\]"
+                    r"(?=\s*(?::|$))")
 #: The word after `cause:`, known or not, and whether ` — <what it saw>` follows.
 _CAUSE = re.compile(r"not observed\.\s+cause:\s*([^\s—]+)(\s*—\s*\S)?",
                     re.IGNORECASE | re.DOTALL)
+_HISTORY = re.compile(r"not met\.\s+history:\s*(\S.*)", re.IGNORECASE | re.DOTALL)
+#: `fix: DRE-<n>[, DRE-<m>…]` closing the cell, `fix:` a word of its own — so
+#: `prefix:` and `hotfix:` are not it — and nothing after the ids but a stop.
+_FIXES = re.compile(r"(?<![\w-])fix:\s*(DRE-\d+(?:\s*,\s*DRE-\d+)*)\s*\.?\s*\Z",
+                    re.IGNORECASE)
+_FIX_ID = re.compile(r"DRE-\d+", re.IGNORECASE)
 #: The written decision, bare or inside a markdown link: a Linear comment on a
 #: card or a GitHub comment on a pull request. Its SHAPE is all that is read —
 #: nothing fetches it, so nothing here says the comment exists, who wrote it,
@@ -226,9 +250,41 @@ def row_waiting(result: str) -> str | None:
     words `waiting for` (any case, markup stripped as `_plain` strips it) is
     a waiting row, and the text after them names the event. Every other
     reason after `Not observed.`, and every `Not met.`, is a row a re-run may
-    re-observe. Only the cell's opening is read."""
+    re-observe. Only the cell's opening is read. A stamp the row carries
+    (`row_not_before`, DRE-7316) is no part of the event: a stamped row and
+    the same row unstamped wait on the same one."""
     found = _WAITING.match(_plain(result))
-    return " ".join(found.group(1).split()) if found else None
+    if not found:
+        return None
+    event = found.group(1)
+    stamp = _STAMP.search(event)
+    if stamp and _stamped_time(stamp) is not None:
+        event = event[:stamp.start()] + event[stamp.end():]
+    return " ".join(event.split())
+
+
+def _stamped_time(stamp) -> datetime | None:
+    """The `_STAMP` match's time, or None when it has no UTC offset or does
+    not parse — `linear_ops.cmd_proof_waiting_until`'s rule, read back."""
+    try:
+        moment = datetime.fromisoformat(stamp.group("when"))
+    except ValueError:
+        return None
+    return moment if moment.tzinfo is not None else None
+
+
+def row_not_before(result: str) -> datetime | None:
+    """The time a waiting row is stamped with, or None (DRE-7316).
+
+    A waiting row (`row_waiting`) whose event happens at or by a known time
+    carries `[not-before=<ISO 8601 time with UTC offset>]` right after the
+    event, before the `:` that opens what it would show — the clause
+    `linear_ops.NOT_BEFORE` spells, in square brackets. A row with no stamp
+    is prose and has no time, and so does a stamp with no offset or one
+    that does not parse: nothing reads a date out of prose."""
+    found = _WAITING.match(_plain(result))
+    stamp = _STAMP.search(found.group(1)) if found else None
+    return _stamped_time(stamp) if stamp else None
 
 
 def _cause_said(result: str):
@@ -248,6 +304,34 @@ def row_cause(result: str) -> str | None:
         return None
     word = found.group(1)
     return word if word in proof_reach.causes() else None
+
+
+def row_history(result: str) -> str | None:
+    """What a `Not met. history:` row read, or None (DRE-7740).
+
+    Only a cell that opens `HISTORY_OPENING` (any case, markup and backticks
+    stripped as `row_cause` strips them) with text after it is a history row:
+    a criterion that reads a window that had closed, or a run that had
+    finished, before the run — so every re-run reads the same result. The
+    text after the opening is returned. Only the cell's opening is read."""
+    found = _HISTORY.match(_plain(result).replace("`", ""))
+    return " ".join(found.group(1).split()) if found else None
+
+
+def row_fixes(result: str) -> list:
+    """The cards a row names as its fix, in order and once each — or [] (DRE-7740).
+
+    Only `fix: DRE-<n>` or `fix: DRE-<n>, DRE-<m>` at the very end of the cell
+    (markup and backticks stripped) names a fix: the cards whose shipping
+    would make the row read differently. A DRE id anywhere else in the cell
+    is evidence citing a card, never a fix, and a history row's `fix:` is not
+    read — its window stays closed whatever ships."""
+    if row_history(result) is not None:
+        return []
+    found = _FIXES.search(_plain(result).replace("`", ""))
+    if found is None:
+        return []
+    return list(dict.fromkeys(i.upper() for i in _FIX_ID.findall(found.group(1))))
 
 
 def _unknown_cause(result: str) -> str | None:
@@ -349,6 +433,51 @@ def open_holds_at(voices: list) -> list:
               and voice.kind in (spoken_thread.PIPELINE, spoken_thread.PERSON)):
             held = [h for h in held if CEO_PRESS in h[0]]
     return held
+
+
+#: The mark with nothing after it: what a note opens that was meant to be a
+#: `🔬 proof-observed` line, colon or not (DRE-7743).
+OBSERVED_STEM = f"{linear_ops.PROOF_MARK} {linear_ops.PROOF_OBSERVED_MARK}"
+#: Opens the sweep's reply to a note that opens `OBSERVED_STEM` without the
+#: colon. Never `OBSERVED_STEM` itself, or the reply would be answered too.
+UNREAD_MARK = f"{linear_ops.PROOF_MARK} proof-note-unread:"
+
+
+def unread_notes(voices: list) -> list:
+    """The voices opening `OBSERVED_STEM` followed by anything but the colon
+    (DRE-7743). The mark stays exact — `open_holds` reads none of them as a
+    discharge — so each is a note that discharged nothing and said nothing.
+    On 2026-10-18 DRE-5407's opened `🔬 proof-observed —`, and the card was
+    named held for two days with nothing on it saying why."""
+    out = []
+    for voice in voices:
+        body = (voice.body or "").lstrip()
+        if body.startswith(OBSERVED_STEM) and not body.startswith(OBSERVED_MARK):
+            out.append(voice)
+    return out
+
+
+def unread_reply(voice) -> str:
+    """The one line the sweep answers an unread note with: its time, its
+    first line quoted, that it discharged nothing, and why. The quote is the
+    note's own text posted under the pipeline's key, so it carries no verdict
+    marker."""
+    import merge_gate  # noqa: PLC0415 — lazy: it imports this module lazily too
+
+    quoted = merge_gate.without_verdict_markers(_cut(_first_line(voice.body), 200))
+    return (f"{UNREAD_MARK} the note of "
+            f"{spoken_thread.pacific_label(voice.created_at)} “{quoted}” "
+            f"discharged nothing — a note is read only when it opens "
+            f"“{OBSERVED_MARK}” with the colon, and a dash or anything else in "
+            f"its place is not read as one. Post it again opening "
+            f"“{OBSERVED_MARK}” to discharge the hold.")
+
+
+def unanswered_notes(voices: list) -> list:
+    """`unread_notes` the thread carries no `unread_reply` for yet — the
+    reply is posted once, and found again by its whole line."""
+    said = {_first_line(v.body) for v in voices}
+    return [v for v in unread_notes(voices) if unread_reply(v) not in said]
 
 
 #: What opens a hold's `needs` half; the half is the text after the last one.

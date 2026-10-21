@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Todo-entry card-validation gate (DRE-1405) — FIX-FIRST.
+"""Card-validation gate at the start lanes (DRE-1405, DRE-7110) — FIX-FIRST.
 
-A card is clean to enter Todo only if it has BOTH:
+A card is clean to start its build only if it has BOTH:
   1. a resolvable repo — the `repo:<slug>` LABEL is the canonical source of
      truth (DRE-1699); a legacy `**Repo:** <slug>` frontmatter line is still
      ACCEPTED as a deprecated fallback so pre-label cards keep routing, but new
@@ -9,8 +9,11 @@ A card is clean to enter Todo only if it has BOTH:
   2. an agent-role label — any `agent:*` label (engineer, planner, qa-reviewer,
      devops, … — checked by prefix, not an enumerated list).
 
-When a card enters Todo malformed, the gate REPAIRS it in place rather than
-bouncing (the original behavior). It:
+When a card reaches a start lane malformed, the gate REPAIRS it in place
+rather than bouncing (the original behavior). The start lanes are
+`lane_contract.START_LANES` (DRE-7105): the old start lane before the flip, In
+Progress after it, where the sweep has already moved a promoted card — so nothing the gate
+does depends on which lane promoted the card. It:
   1. infers the agent role label (title `[EPIC]` or has children → agent:planner,
      else agent:engineer) and adds it;
   2. infers the repo deterministically — from an `initiative:<x>` label,
@@ -23,11 +26,18 @@ label that names a repo) or the inference yields a slug that isn't a real repo �
 the one case where a fix would be a wrong-repo guess. See infer_repo / VALID_SLUGS for the
 mapping (mirrors the relay's REPO_MAP, single source).
 
-One other card is stopped, and before any repair: an EPIC in Todo (DRE-5319).
+One other card is stopped, and before any repair: an EPIC in the old start
+lane, `epic_todo_gate.TODO` (DRE-5319).
 Nothing builds an epic, so the gate carries it to `epic_todo_gate`'s lane — In
 Progress when it came from there, Planning otherwise — posts the
 `epic-not-todo` refusal, emits bounced=true and repairs no label. See
 `_carried_epic`.
+
+And one is skipped in a start lane other than that one (DRE-7110): an epic on the
+evidence, or an `agent:planner` card whose shape stamp is not `one-off`.
+`plan.yml` runs this gate on every planner dispatch, the CEO's approval of an
+epic into In Progress among them, and that run must not treat the epic as a
+build card. See `_approved_epic`.
 
 The initiative label is the ONE route, and there is deliberately nothing behind
 it (DRE-2874). A second route used to read the prefix of the card's Linear
@@ -45,8 +55,8 @@ The relay (cloud/relay/lambda_function.py in agent-bureau) has only a GitHub App
 token and cannot write to Linear, so the repair lives here, in the workflows
 that carry LINEAR_API_KEY. `missing()` / `infer_agent_label()` / `infer_repo()`
 are the no-I/O core (unit-tested directly); `cmd_gate()` re-reads the card's LIVE
-Linear state and only ever acts while the card is still in Todo/Triage — a card
-already past Todo (In Progress/QA/…) is never touched.
+Linear state and only ever acts while the card is still in a start lane or
+Triage — a card already past them (In Review/Done/…) is never touched.
 
 CLI:
   gate <DRE-N>   exit 0 always; prints `bounced=true` / `bounced=false` to
@@ -77,6 +87,9 @@ from pathlib import Path
 import break_glass
 import dead_run  # the hold label has ONE definition (dead_run.HOLD_LABEL)
 import epic_todo_gate  # ONE rule: an epic is never put in Todo (DRE-5316)
+import lane_contract  # the start lanes the gate reads (DRE-7105, DRE-7110)
+import planning_route  # the one-off shape's name
+import routing_verdict  # ONE tolerant read of the shape stamp
 
 # IMPORTANT: this regex MUST stay in lockstep with the relay's _card_repo_slug
 # (cloud/relay/lambda_function.py in agent-bureau) so routing and validation
@@ -226,7 +239,7 @@ def needs_human_without_no_code(labels: list[str]) -> str | None:
     watchdog, the turn-cap park and the fix loop stamp `dead_run.HOLD_LABEL` on
     cards that describe a diff by design (which is exactly how those two cards
     came to wear it). Refusing that would bounce a held build card to Planning
-    at the Todo gate, or fail a re-plan over a child the turn cap parked.
+    at the start gate, or fail a re-plan over a child the turn cap parked.
     `plan_seam._OBSERVATION_LABELS` reads the pair for the same reason.
     """
     low = {str(l).strip().lower() for l in labels or []}
@@ -284,7 +297,7 @@ def missing(
 
 # --- Fix-first inference (DRE-1405 extension) --------------------------------
 #
-# When a card enters Todo malformed, the gate REPAIRS it in place rather than
+# When a card reaches a start lane malformed, the gate REPAIRS it in place rather than
 # bouncing — bouncing only when the repo cannot be inferred deterministically
 # (the one case a fix would be a wrong-repo guess). The inference below is the
 # pure, no-I/O core; cmd_gate applies it and writes the labels/description.
@@ -478,10 +491,15 @@ def infer_repo(labels: list[str]) -> tuple[str | None, str | None]:
 
 # --- Linear-touching CLI (thin wrapper; the logic above is pure) -------------
 
-# Only these states are a "Todo-entry" the gate may bounce. A card the human (or
-# a workflow) has already moved past Todo is left alone — the gate validates the
-# Todo-entry transition only, never drags work backward.
-_GATEABLE = {"todo", "triage"}
+# The lanes a build is started from (DRE-7110): `lane_contract.START_LANES` —
+# Todo before the flip, In Progress after it, where the sweep has already put a
+# promoted card — plus Triage. Only a card in one of these is gated. A card the
+# human (or a workflow) has moved past them is left alone — the gate validates
+# the promotion into a start lane only, never drags work backward.
+_START_LANES = {lane.lower() for lane in lane_contract.START_LANES}
+_GATEABLE = _START_LANES | {"triage"}
+# None once the old start lane's entry is deleted: then no card is in it.
+_TODO = (epic_todo_gate.TODO or "").lower() or None
 
 
 def _emit(bounced: bool) -> None:
@@ -531,7 +549,7 @@ def cmd_gate(identifier: str) -> None:
     issue = snap["issue"] if snap else linear_ops.get_issue(identifier)
     current = (issue.get("state") or {}).get("name", "").lower()
     if current not in _GATEABLE:
-        print(f"{identifier} is in {current!r}, not a Todo-entry — gate skipped")
+        print(f"{identifier} is in {current!r}, not a start lane — gate skipped")
         _emit(False)
         _emit_role("engineer")
         return
@@ -540,8 +558,17 @@ def cmd_gate(identifier: str) -> None:
     description, labels = card["description"], card["labels"]
 
     bodies = agent_task_snapshot.comment_bodies(snap) if snap else None
-    if current == "todo" and _carried_epic(linear_ops, identifier, card, bodies):
+    if current == _TODO and _carried_epic(linear_ops, identifier, card, bodies):
         return  # an epic is never built — carried to its lane, build stopped
+    if current in _START_LANES and current != _TODO and _approved_epic(
+            linear_ops, identifier, card, bodies):
+        # plan.yml runs this gate on every planner dispatch, the CEO's approval
+        # of an epic into In Progress among them: the epic is skipped exactly
+        # as it was before In Progress was a start lane (DRE-7110).
+        print(f"{identifier} is an approved epic in {current!r} — gate skipped")
+        _emit(False)
+        _emit_role("engineer")
+        return
 
     gaps = missing(description, labels)
     if WANT_KNOWN_REPO in gaps:
@@ -609,7 +636,7 @@ def cmd_gate(identifier: str) -> None:
     src = f" (inferred from {', '.join(sorted(sources))})" if sources else ""
     linear_ops.cmd_comment(
         identifier,
-        f"🔧 Auto-fixed by the Todo gate: added {', '.join(fixed)}{src}. Building now.",
+        f"🔧 Auto-fixed by the start gate: added {', '.join(fixed)}{src}. Building now.",
     )
     print(f"{identifier} auto-fixed ({', '.join(fixed)}) — proceeding to build")
     _emit(False)
@@ -624,7 +651,7 @@ def _carried_epic(linear_ops, identifier: str, card: dict,
     """Stop a build dispatched at an epic, and carry the epic to its lane
     (DRE-5319). True when the card was an epic and the build is stopped.
 
-    The relay dispatches nothing for an epic in Todo that wears
+    The relay dispatches nothing for an epic in the old start lane that wears
     `agent:planner`, so the epic this meets is one that does not: a hand-made
     card with children, or an `[EPIC]` title nobody labelled. The fix-first
     path below would find it clean or add its missing role, and an engineer
@@ -633,18 +660,12 @@ def _carried_epic(linear_ops, identifier: str, card: dict,
     Epic-ness is `epic_todo_gate.is_epic_card` over the title, the children and
     the comment bodies — never the labels, because every planner-owned one-off
     wears `agent:planner` too. Where it goes is `epic_todo_gate`'s answer: In
-    Progress when it came to Todo from there (approved), Planning otherwise —
+    Progress when it came to that lane from there (approved), Planning otherwise —
     never straight to Green Light, whose only road in is through both critics
     (DRE-5268). Each branch writes its lane as a literal so the lane-writer
     check reads both. No label is repaired: the card is not going to be built.
     """
-    # `bodies` already in hand are agent-task's card snapshot (Stage 2 #10).
-    if bodies is None:
-        try:
-            bodies = linear_ops.comment_bodies(identifier)
-        except Exception as exc:  # noqa: BLE001 — an unreadable stamp is no stamp
-            print(f"{identifier}: could not read its comments ({exc})", file=sys.stderr)
-            bodies = []
+    bodies = _comment_bodies(linear_ops, identifier, bodies)
     if not epic_todo_gate.is_epic_card(card["title"], card["has_children"], bodies):
         return False
     before = epic_todo_gate.lane_before_todo(linear_ops, identifier)
@@ -659,10 +680,52 @@ def _carried_epic(linear_ops, identifier: str, card: dict,
         bodies, before, carried_to=carried_to,
     )
     epic_todo_gate.post_refusal(linear_ops, identifier, body)
-    print(f"{identifier} is an epic in Todo — carried to {carried_to}, not built")
+    print(f"{identifier} is an epic in {epic_todo_gate.TODO} — carried to "
+          f"{carried_to}, not built")
     _emit(True)
     _emit_role("engineer")
     return True
+
+
+def _comment_bodies(linear_ops, identifier: str,
+                    bodies: list[str] | None) -> list[str]:
+    """The card's comment bodies — the ones already in hand (agent-task's card
+    snapshot, Stage 2 #10), else one read. Unreadable is no comments: an
+    unreadable stamp is no stamp."""
+    if bodies is not None:
+        return bodies
+    try:
+        return linear_ops.comment_bodies(identifier)
+    except Exception as exc:  # noqa: BLE001 — an unreadable stamp is no stamp
+        print(f"{identifier}: could not read its comments ({exc})", file=sys.stderr)
+        return []
+
+
+def _approved_epic(linear_ops, identifier: str, card: dict,
+                   bodies: list[str] | None = None) -> bool:
+    """Is this card in a start lane other than the old one an epic the gate must leave
+    alone? (DRE-7110)
+
+    `plan.yml` runs this gate before its duplicate guard on every planner
+    dispatch — the CEO approving an epic into In Progress, and the re-run
+    review's dispatch for an epic already there. In Progress was not gateable,
+    so both were skipped; now that it is a start lane, the fix-first path below
+    would add a role label with a "Building now" comment, or bounce the epic to
+    Planning. `_carried_epic` does not cover it: it reads `epic_todo_gate.TODO`
+    alone.
+
+    Skipped, exactly as before, when the card is an epic on the evidence
+    (`epic_todo_gate.is_epic_card` — title, children, comment bodies), or when
+    it wears `agent:planner` and its shape stamp is not `one-off` — no stamp
+    included, the planner's fallback for an epic approved before it was
+    planned. A stamped one-off with no children is a build card and is gated,
+    whatever it wears.
+    """
+    bodies = _comment_bodies(linear_ops, identifier, bodies)
+    if epic_todo_gate.is_epic_card(card["title"], card["has_children"], bodies):
+        return True
+    return ("agent:planner" in card["labels"]
+            and routing_verdict.shape_of(bodies) != planning_route.ONE_OFF_SHAPE)
 
 
 def _resolve_unknown_slug(linear_ops, identifier: str, card: dict,
@@ -726,9 +789,9 @@ def _bounce(linear_ops, identifier: str, gaps: list[str], why: str,
     classification it is missing, and Planning is the lane that owes one.
 
     The comment body moves with the lane. It used to send the card back to the
-    queue to be fixed and moved to Todo again, which after this change was
-    wrong twice: the card is not in the queue, and moving it straight to Todo
-    skips the very classification the bounce is asking for — the shortcut this
+    queue to be fixed and moved to the start lane again, which after this
+    change was wrong twice: the card is not in the queue, and moving it
+    straight to a start lane skips the very classification the bounce is asking for — the shortcut this
     card closes. A refused card still carries its plain-English reason, and
     `tests/test_writers_point_at_planning.py` asserts the text byte for byte
     rather than assuming it."""
@@ -736,7 +799,7 @@ def _bounce(linear_ops, identifier: str, gaps: list[str], why: str,
         "🚧 Not ready for build — missing: "
         + ", ".join(gaps)
         + ". Returned to Planning; fix what is missing and Planning routes it "
-          "on from there — do not move it straight to Todo."
+          "on from there — do not move it straight to In Progress."
         + (f"\n\n{detail}" if detail else "")
     )
     linear_ops.cmd_comment(identifier, body)
@@ -779,7 +842,7 @@ def _card_from(issue: dict) -> dict:
 # complete and valid before the plan is allowed to finish — reusing this gate's
 # `missing()` (single source of truth, no parallel checker) plus the shared
 # body-placeholder guard. The gate's own cmd_gate intentionally only acts on
-# Todo/Triage cards, so it can't be the sweep; this read-only command can.
+# start-lane and Triage cards, so it can't be the sweep; this read-only command can.
 
 
 def child_problems(title: str, description: str, labels: list[str]) -> list[str]:

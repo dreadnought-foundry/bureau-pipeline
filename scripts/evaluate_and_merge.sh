@@ -44,8 +44,8 @@ set -e
 #  1. Stops at a pull request that is not open, or whose branch is not one of
 #     the pipeline's own: agent/* (card work), repair/* (red-main repair),
 #     dependabot/* (dependency bumps), the scheduled branch
-#     bot/standards-sync and the onboarding branch bot/onboard, each matched
-#     as a literal. The dependabot and bot branches carry no card. The set is
+#     bot/standards-sync, the onboarding branch bot/onboard and the nightly's
+#     durations branch bot/test-durations, each matched as a literal. The dependabot and bot branches carry no card. The set is
 #     the one reconcile.PIPELINE_BRANCH_PREFIXES holds. It echoes the
 #     `bureau-card` line when the branch names a card.
 #  2. Gathers the records the decision reads, each from GitHub's own answer.
@@ -409,6 +409,9 @@ set -e
 # DRE-7209 (2026-10-13). bot/onboard, the onboarding process's routing pull
 #   requests here and in agent-bureau, merges here card-less on the same
 #   terms, as a second literal — never `bot/*`.
+# DRE-7577 (2026-10-19). bot/test-durations, the nightly Pipeline Tests run's
+#   re-measured config/unit-test-durations.json, merges here card-less on the
+#   same terms, as a third literal — never `bot/*`.
 # DRE-7165 (2026-10-13). On agent-bureau #3741 the Verifier passed 4a26218,
 #   the pull request moved to 6b0dbca, and the Verifier's run there declined
 #   it as single-system with no UI signal and posted nothing. The gate called
@@ -440,7 +443,7 @@ BRANCH=$(pr_field headRefName)
 STATE=$(pr_field state)
 [ "$STATE" != "OPEN" ] && { echo "PR #$PR is $STATE — nothing to do"; exit 0; }
 # The pipeline's own branches, as literals (DRE-2426 keeps this set and reconcile's one).
-case "$BRANCH" in agent/*|repair/*|dependabot/*|bot/standards-sync|bot/onboard) ;; *) echo "not an agent branch — skip"; exit 0;; esac
+case "$BRANCH" in agent/*|repair/*|dependabot/*|bot/standards-sync|bot/onboard|bot/test-durations) ;; *) echo "not an agent branch — skip"; exit 0;; esac
 CARD=$(printf '%s' "$BRANCH" | grep -oiE 'DRE-[0-9]+' | head -1 | tr '[:lower:]' '[:upper:]' || true)
 # The ECHOED line only: this job's name is a check-run name (DRE-4407).
 if [ -n "$CARD" ]; then echo "bureau-card: $CARD"; fi

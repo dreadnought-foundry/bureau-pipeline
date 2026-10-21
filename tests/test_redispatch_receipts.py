@@ -55,7 +55,7 @@ def _todo_card():
         "identifier": "DRE-2034",
         "title": "reconcile: gh read failures abort loudly",
         "description": "**Repo:** agent-bureau\nwork",
-        "state": {"name": "Todo"},
+        "state": {"name": "In Progress"},
         "labels": {"nodes": [{"name": "agent:engineer"}]},
         "updatedAt": "2026-06-28T00:00:00Z",
     }

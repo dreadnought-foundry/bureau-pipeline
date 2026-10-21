@@ -312,8 +312,9 @@ def start_lane(contract: dict | None = None) -> str:
     """The lane a writer puts a card in to START its build.
 
     The WRITER's half of the cutover: every writer that starts a build writes
-    this and no literal. `Todo` until the flip card sets `build_start.lane` to
-    the dispatch lane, and then every converted writer moves at once.
+    this and no literal. The old start lane until the flip card set
+    `build_start.lane` to the dispatch lane (DRE-7120), and then every
+    converted writer moved at once.
     """
     return _build_start(contract)["lane"]
 
@@ -368,10 +369,11 @@ def start_lanes(contract: dict | None = None) -> tuple:
     lane, then each lane — live or retiring — whose `replaced_by` is the
     dispatch lane, in the file's order.
 
-    The READER's half of the cutover. A reader that meant "Todo — promoted,
+    The READER's half of the cutover. A reader that meant "the old start lane — promoted,
     waiting for its run" tests membership in this, and reads the start
     receipt to tell a started card from one that has not started. Deleting
-    Todo's entry narrows it to the dispatch lane alone with no edit here.
+    the old start lane's retiring entry (DRE-7129) narrows it to the dispatch
+    lane alone with no edit here.
     """
     doc = contract or load()
     target = dispatch_lane(doc)
@@ -386,7 +388,8 @@ def start_lanes(contract: dict | None = None) -> tuple:
 def start_minutes(contract: dict | None = None) -> int:
     """How long a card may sit in `start_lanes()` with no start receipt (the
     build run's 🧠 model-attempt comment) newer than its entry before the
-    sweep re-fires its dispatch. Equal to Todo's stall window on purpose."""
+    sweep re-fires its dispatch. Equal to the old start lane's stall window
+    on purpose, until that lane began retiring (DRE-7129)."""
     return _build_start(contract)["start_minutes"]
 
 

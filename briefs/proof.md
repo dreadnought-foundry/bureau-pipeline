@@ -191,9 +191,9 @@ asks for a reading the declaration does not hold is a cause row, below.
   request or a comment.
 
 ## The lanes, which you never write
-The board is `Intake` → `Planning` → `Green Light` → `Queued` → `Todo` →
+The board is `Intake` → `Planning` → `Green Light` → `Queued` →
 `In Progress` → `In Review` → `Done`, with `Triage` off to the side and
-`Hand-work` beside `Todo` as the lane where a person's work waits. A proof card
+`Hand-work` beside `In Progress` as the lane where a person's work waits. A proof card
 is dispatched from `Hand-work` and you never move it. The workflow does, in
 three moves and no other (DRE-5925): your escalation file parks it in
 `Green Light`, the CEO's "needs you" queue, only when it names a press or a
@@ -306,6 +306,54 @@ with `🔬 proof-waiting` naming the event, whether the critic sent it back or
 the gate declined it (DRE-6814), and is re-run once the operator records that
 it happened; a record whose unmet rows are all of another kind is re-run.
 
+**A row that read history says so, and a row with a known fix names it
+(DRE-7740).** Only the proof dispatcher reads these two markers, and it reads
+nothing else for them — never a fix or a closed window out of prose.
+
+- When the window the criterion reads had closed, or the run it reads had
+  finished, before this run — a window already filled, the merge's own failed
+  run, a file that had not changed — every re-run would read the same result.
+  The Result reads
+
+      Not met. history: <the closed window or the finished run, with its PT time> — <what it recorded>
+
+  The row was observed and failed, so it is not a cause. A record whose unmet
+  rows are all history rows (or cause rows) is held for the operator's
+  decision at once — reword each on a new card, or drop the record — and is
+  never re-run to read the same thing.
+- When the proof card's thread, its epic or your own evidence names an open
+  card as the fix for that row's failure, end the unmet row's Result with
+
+      fix: DRE-<n>
+
+  or `fix: DRE-<n>, DRE-<m>`. Once the re-runs are spent, each named card
+  that ships — Done, this repo's, merged and live — gets the proof one more
+  run. A DRE id anywhere else in the cell is evidence, not a fix, and a
+  history row's `fix:` is not read.
+
+**Stamp a waiting row whose event happens at or by a known time (DRE-7316).**
+A window that closes at a stated time, a weekly report filed on a stated day,
+the next morning's scheduled run: the row carries the time right after the
+event, in square brackets,
+
+    Not observed. waiting for <the event> [not-before=<ISO 8601 time with UTC offset>]: <what it would show>
+
+for example
+
+    Not observed. waiting for the weekly report for the week ending 2026-10-17 [not-before=2026-10-18T09:00-07:00]: the report names every stop
+
+Stamp the earliest time the event can be read, not the time it is due: add
+margin for a scheduled run's normal lateness. Write the offset, always — a
+time with none, or one that does not parse, is read as no stamp. When every
+waiting row in the record is stamped, the sweep's hold waits for the latest of
+their times and nothing else, and once that time passes the sweep re-runs the
+record itself, with no one posting anything. The re-run reads every row again;
+a row whose event still has not happened gets a later stamp. At most two such
+timed re-runs per record pull request, then the record is held for the
+operator. A row whose event has no knowable time — a person's press, a release
+nobody has scheduled — stays prose, exactly as above, and the operator's
+`🔬 proof-observed` is what lets that record re-run.
+
 **A log read is a quoted phrase, and an empty one needs a control
 (DRE-6778).** A CloudWatch Logs filter pattern for a literal phrase is written
 as a quoted phrase, `'"system-alert"'`, never bare. A pattern containing a
@@ -349,10 +397,12 @@ it again on every new head, so a record whose rows are all met merges with
 nobody involved. For a press only the CEO can make, the park below is what
 brings that next run. For any other row, the sweep sends the record back to a
 proof run when the critic sends it back, or once the critic has approved it
-and the gate has declined it at its head — at most twice per record pull
-request, either trigger counted, then held for an operator (DRE-5931,
-DRE-6488). On either trigger, a record with a row waiting for an event is held
-until the operator records the event instead, even beside a row a re-run could
+and the gate has declined it at its head — twice per record pull request, whichever trigger spent them, then one more run per re-arm event, and never
+another without one (DRE-5931, DRE-6488, DRE-7740). After the two the card is
+held for an operator; a re-arm event is a card a row names by `fix:` shipping,
+or a new `🔬 proof-observed` from the operator. On either trigger, a record with a row waiting for an event is held
+until the operator records the event instead — or, when every waiting row is
+stamped, until the latest stamp passes (DRE-7316) — even beside a row a re-run could
 answer: no run before the event can make it merge, and the one re-run after it
 re-observes every row (DRE-6814). A record the gate declined whose unmet rows
 all carry a cause word is never sent back — it is parked for the operator's

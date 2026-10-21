@@ -70,7 +70,7 @@ a **plain-English question** as a Linear comment and parks the card in the
 `Green Light` lane — the CEO's "needs you" queue, the same lane epics wait in
 for plan approval (DRE-2776; an escalated card is waiting on a judgement, not
 broken, so it does not belong in the broken-card lane); the CEO answers and
-moves it back to `Todo` to proceed or to `Queued` to drop it.
+moves it back to `In Progress` to proceed or to `Queued` to drop it.
 The critic + tests remain the correctness backstop on every merge.
 
 There is **no propose-first hard stop**. An earlier design (a read-only
@@ -95,8 +95,8 @@ choice is not between having an escape hatch and not having one, it is between
 one we designed and one we discover later.
 
 **The marker is `break-glass`**, applied by hand, in Linear, by the operator.
-It satisfies the entrance condition for `Todo` — the Todo-entry gate lets the
-card through instead of returning it. Three properties make it a designed
+It satisfies the entrance condition for a build — the card-validation gate at
+the start of a build lets the card through instead of returning it. Three properties make it a designed
 exception rather than a hole (`scripts/break_glass.py` owns all three):
 
 1. **Recorded, not undone.** A rule that fights an emergency loses the
@@ -457,7 +457,9 @@ Shadow Replay (DRE-7197), whose red run the operator reads from its report,
 where an automatic retry would spend another batch of reviewer runs, and the
 notice door's smoke (DRE-7451), which the operator dispatches and reads, and
 which files no card on any path — a medic watching it would retry it and file
-one.
+one — and Proof Shadow (DRE-7287), a proof run repeated on another model as a
+measurement, whose red run the operator reads, where a retry would spend
+another model run on a card nobody owns.
 Adding any other workflow with no watcher fails CI instead of adding a silent
 failure surface.
 

@@ -6,14 +6,18 @@ pipeline when it doesn't. Self-limiting: every nudge comments on the card,
 which bumps updatedAt past the staleness threshold for the next sweep.
 
 Checks (card must carry **Repo:** atlas, any owner-prefix form):
-  Todo        stale >15m, no open PR, no fresh dispatch -> re-fire dispatch
-  In Progress stale >1h: PR open -> advance to the review lane + trigger
-              qa-review; no PR -> back to Todo (relay re-dispatches on the
-              transition)
+  In Progress not started past its start window -> re-fire dispatch
+              (DRE-7108); stale >1h: PR open -> advance to the review lane +
+              trigger qa-review; no PR -> requeued (the next promotion
+              re-dispatches it)
   In Review   stale >2h: PR merged -> Done; verdict bound to the current
               head (DRE-1990) -> merge-gate; verdict missing OR stale/
-              unbound -> re-trigger qa-review; no PR -> back to Todo,
+              unbound -> re-trigger qa-review; no PR -> requeued,
               capped by the shared dead-run cap (DRE-2034)
+
+The old start lane retires (DRE-7129): `drain_retiring_lanes` moves every
+card still in it to In Progress, except an epic, which
+`carry_epics_out_of_todo` carries by its own rule.
 
 The review lane is ONE lane since DRE-2726 — the two that preceded it both
 meant "a pull request is open and being checked", and the split made the
@@ -53,7 +57,7 @@ the fix agent, receipted on the PR, and its card released from the human queue
 on top of the answer. A human comment that mentions an operator decision but
 does not parse as one is reported on the PR instead of held in silence.
 
-Stranded-card watchdog (DRE-1993): every card/epic in Todo / Hand-work / In Progress whose
+Stranded-card watchdog (DRE-1993): every card/epic in a start lane / Hand-work whose
 repo has no route in the routing snapshot, or (this repo's cards) with no run
 receipt, gets — after 30 minutes either way — ONE plain-English comment naming
 the reason plus the needs-human label, so the board never says work is
@@ -63,7 +67,7 @@ only after PLANNING_MINUTES with nothing happening to it (DRE-1978 sat in
 Planning 7 days unseen).
 
 Also runs the dependency gate: Queued children whose parent epic is ACTIVATED
-(= plan approved) are auto-promoted to Todo once every blocker is Done — blockers
+(= plan approved) are auto-promoted to In Progress once every blocker is Done — blockers
 read from Linear's native "blocks" relations AND from "Blocked by: DRE-N" /
 "serialize after DRE-N" lines in the description. A WIP cap (MAX_WIP, default
 DEFAULT_MAX_WIP active cards) throttles promotion so the pipeline never floods.
@@ -92,8 +96,9 @@ moving with it (scripts/mid_epic.py owns the whole mechanism).
 An epic counts as ACTIVATED in In Progress and nowhere else (DRE-5347). The
 CEO's approval is the move of an epic to **In Progress**, and only that — what
 standards/card-quality.md and the planner brief tell them, and what the plan
-comment asks for (DRE-2727). DRE-1893 once let Todo activate an epic too; that
-convention is retired. An epic found in Todo is carried out of it on every full
+comment asks for (DRE-2727). DRE-1893 once let the old start lane activate an
+epic too; that convention is retired. An epic found in that lane
+(`epic_todo_gate.TODO`) is carried out of it on every full
 sweep (`carry_epics_out_of_todo`) — back to In Progress when it was approved, to
 Planning when it was not — and while it sits there it activates nothing: an
 approved epic's children wait at most one sweep, and an unapproved epic's
@@ -812,11 +817,12 @@ HAND_BUILT_LABEL = routing_verdict.HAND_BUILT_LABEL
 # Since DRE-7108 it is posted for a not-started card in any start lane, so it
 # names no lane; the words it carried before stay in `_TODO_REDISPATCH_NOTES`,
 # which is what the watchdog matches, because a card re-sent before the change
-# still carries them.
+# still carries them. Those words named the old start lane, and the contract
+# no longer carries it (DRE-7660), so the tail after the lane is what is matched.
 _TODO_REDISPATCH_NOTE = "card was promoted and no run started — re-dispatched"
 _TODO_REDISPATCH_NOTES = (
     _TODO_REDISPATCH_NOTE,
-    "card sat in Todo with no run — re-dispatched",
+    "with no run — re-dispatched",
 )
 
 # The runner line (DRE-7108): a card whose intent the relay is holding until a
@@ -874,8 +880,8 @@ def hand_built(card: dict) -> bool:
     board read already carries, at no request. WORKBENCH declares no marks
     since DRE-6227, so the label alone would leave a WORKBENCH card in
     Hand-work unmarked, and the watchdog would hold it as a build that never
-    started. Only in that lane: a card a person moved on to Todo has been
-    handed to the fleet, and its old verdict must not hold the dispatch back.
+    started. Only in that lane: a card a person moved on to a start lane has
+    been handed to the fleet, and its old verdict must not hold the dispatch back.
 
     The work is done by a human or a local agent rather than a dispatched
     pipeline agent, so "no run receipt", "no dispatch route" and "no PR yet"
@@ -949,7 +955,7 @@ def counts_against_wip(card: dict) -> bool:
     was dispatched for it and nothing will be — so counting it budgets the
     fleet's capacity against work a person is doing by hand.
 
-    Measured on 2026-09-08: 19 such cards sat in Todo / In Progress / In Review
+    Measured on 2026-09-08: 19 such cards sat in the start lanes / In Review
     against agent-bureau's cap of 12, so the sweep printed "WIP at cap — none
     promoted" and no engineer card could ever promote again. The two labels are
     exactly the marks the OPERATOR and WORKBENCH verdicts stamp
@@ -983,7 +989,7 @@ def automation_card(card: dict) -> bool:
     limit-recovery both count (DRE-4934), and `main()`'s board read that
     hands it `mine` — with two effects: the card is out of the WIP base (a dependabot batch of 27 would
     otherwise saturate MAX_WIP and stop promotion fleet-wide), and out of the
-    nudge loop, whose In Review no-PR branch would requeue it into Todo after
+    nudge loop, whose In Review no-PR branch would requeue it for a build after
     STALE_MINUTES and dispatch an agent onto a dependency bump (`pr_for`
     searches `head:agent/DRE-n`, which a dependabot head never matches).
     Distinct from `hand_built` on purpose: that label means a PERSON does the
@@ -1245,7 +1251,8 @@ def gh_read(*args: str) -> str:
     this seam goes out as that App — `pr_for` once per card, the unlanded
     watchdog's branch listing, the reads that emptied installation 123249480
     on 2026-09-17 (DRE-4132). The WRITES do not move: the receipts
-    `_worker_receipt_count` counts are counted by `WORKER_BOT_LOGIN`, so the
+    `_worker_receipt_count` counts are counted by `WORKER_BOT_LOGIN` (only
+    the crashed-review re-dispatch receipt counts every pool slot, DRE-7510), so the
     App that writes them must be the App that login names, and they stay on
     `GH_TOKEN`. Unset — a stub without the pool pairs, linear-sync.yml's and
     plan.yml's reconcile steps, a local run — the read goes out as GH_TOKEN,
@@ -1866,6 +1873,16 @@ def drain_retiring_lanes() -> None:
     tests/test_lane_fold_in_review.py pins both that inertness and the drain
     against the real retiring entry.
 
+    DRE-7129 is the third use: the old start lane retires into In Progress,
+    the dispatch lane, so a card drained there is dispatched by the move, and
+    one that is not started is re-fired by the start window (DRE-7108) unless
+    its run is already in flight. EXCEPT AN EPIC: a move into the dispatch lane
+    is the CEO's approval of an epic, and a drag must never stand in for it, so
+    the drain leaves an epic where it is (`epic_todo_gate.is_epic_card`, over
+    the title, the children and the comment bodies the board read carries) and
+    `carry_epics_out_of_todo`, later in the same sweep, carries it by its own
+    rule. A retirement into any other lane drains an epic like any card.
+
     Idempotent by construction — `cmd_advance` moves a card only while it is
     still in the lane named, so a second sweep finds nothing and a race between
     two repos' sweeps costs one no-op.
@@ -1886,6 +1903,7 @@ def drain_retiring_lanes() -> None:
         raise  # skipped by its phase (Stage 2 item 34; an idle pass)
     except Exception as e:  # a read failure here must not kill the sweep
         raise ReconcileWriteError(f"drain: could not list retiring lanes: {e}") from e
+    left: list[str] = []
     for card in stranded:
         ident = card["identifier"]
         was = card["state"]["name"]
@@ -1893,6 +1911,13 @@ def drain_retiring_lanes() -> None:
         if lane is None:
             continue  # not a retiring lane: the state filter is the query's job
         to = lane["replaced_by"]
+        if to == lane_contract.DISPATCH_LANE and epic_todo_gate.is_epic_card(
+            card.get("title") or "",
+            bool(((card.get("children") or {}).get("nodes")) or []),
+            card_comment_bodies(card),
+        ):
+            left.append(ident)
+            continue
         try:
             linear_ops.cmd_advance(ident, to, was)
             linear_ops.cmd_comment(
@@ -1903,9 +1928,12 @@ def drain_retiring_lanes() -> None:
             )
         except Exception as e:
             raise ReconcileWriteError(f"{ident} drain {was}->{to}: {e}") from e
-    if stranded:
-        print(f"drain: moved {len(stranded)} card(s) out of retiring lane(s)")
-    else:
+    if left:
+        print(f"drain: left {len(left)} epic(s) for the epic carry, which moves "
+              f"them by approval: {', '.join(left)}")
+    if len(stranded) > len(left):
+        print(f"drain: moved {len(stranded) - len(left)} card(s) out of retiring lane(s)")
+    elif not stranded:
         print("drain: nothing to move — 0 card(s) in the retiring lane(s) "
               f"{', '.join(draining)}")
 
@@ -2113,15 +2141,16 @@ def card_is_epic(card: dict, bodies: list[str] | None = None) -> bool:
 
 
 def carry_epics_out_of_todo() -> None:
-    """Carry every epic found in Todo to its right lane (DRE-5347).
+    """Carry every epic found in the old start lane to its right lane (DRE-5347).
 
-    The write layer refuses to put an epic in Todo (DRE-5316), but a person can
-    still drag one there — in Linear, or from the console's epic move menu — and
-    nothing comes for it: the relay dispatches nothing for an epic in Todo, and
-    the promoter and the nudge loop skip epics. DRE-3621 sat there seventeen
-    days. So every full sweep reads the Todo cards it has already fetched and,
-    for each one `epic_todo_gate` calls an epic (never the planner-ownership
-    label), writes In Progress when the lane before Todo says it was approved
+    The write layer refuses to put an epic in `epic_todo_gate.TODO` (DRE-5316),
+    but a person can still drag one there — in Linear, or from the console's
+    epic move menu — and nothing comes for it: the relay dispatches nothing for
+    an epic there, and the promoter and the nudge loop skip epics. DRE-3621 sat
+    there seventeen days. So every full sweep reads that lane's cards it has
+    already fetched and, for each one `epic_todo_gate` calls an epic (never the
+    planner-ownership label), writes In Progress when the lane before it says
+    it was approved
     and Planning when it does not. A move to In Progress re-fires `plan.yml`'s
     activate route, the intended re-activation; a move to Planning starts the
     planner, the cost DRE-5316 accepts. Each lane is a literal, so the
@@ -2136,6 +2165,10 @@ def carry_epics_out_of_todo() -> None:
 
     A pass that finds no epic says so in one line (DRE-5519).
     """
+    if epic_todo_gate.TODO is None:
+        # The entry is deleted, and with it the lane: nothing can be in it.
+        print("epic-not-todo: nothing to carry — the contract names no retiring start lane")
+        return
     in_todo = 0
     epics = 0
     for card in active_cards((epic_todo_gate.TODO,)):
@@ -2166,21 +2199,25 @@ def carry_epics_out_of_todo() -> None:
                 moved = linear_ops.cmd_state(ident, "Planning", **_door_guard(card))
                 carried = "Planning"
         except Exception as e:  # noqa: BLE001 — one epic must not stop the rest
-            _write_failures.append(f"epic-not-todo: carrying {ident} out of Todo: {e}")
+            _write_failures.append(
+                f"epic-not-todo: carrying {ident} out of {epic_todo_gate.TODO}: {e}")
             print(f"ERROR: carry_epics_out_of_todo: {ident}: {e}", file=sys.stderr)
             continue
         if moved is False and _door_guard(card):
-            print(f"epic-not-todo: {ident} is no longer in Todo as the door read it — "
+            print(f"epic-not-todo: {ident} is no longer in {epic_todo_gate.TODO} "
+                  "as the door read it — "
                   "not carried, no refusal posted")
             continue
-        print(f"epic-not-todo: {ident} found in Todo (before: {before}) — carried to {carried}")
+        print(f"epic-not-todo: {ident} found in {epic_todo_gate.TODO} "
+              f"(before: {before}) — carried to {carried}")
         body = epic_todo_gate.refusal(
             ident, epic_todo_gate.TODO, title, kids, bodies, before, carried_to=carried
         )
         if body is not None:
             epic_todo_gate.post_refusal(linear_ops, ident, body)
     if not epics:
-        print(f"epic-not-todo: nothing to carry — no epic among the {in_todo} card(s) in Todo")
+        print("epic-not-todo: nothing to carry — no epic among the "
+              f"{in_todo} card(s) in {epic_todo_gate.TODO}")
 
 
 def _fetch_active_cards(states: tuple[str, ...]) -> list[dict]:
@@ -2512,7 +2549,7 @@ def live_rail_slugs() -> frozenset[str] | None:
 
 
 def _watchdog_cards() -> list[dict]:
-    """The cards `flag_stranded` walks: Todo, Hand-work and In Progress, EVERY repo's.
+    """The cards `flag_stranded` walks: the start lanes and Hand-work, EVERY repo's.
 
     Off and shadow read those lanes from Linear, the whole team's, so this is
     `active_cards(WATCHDOG_LANES)` unchanged. With the door ON and serving, the
@@ -2564,7 +2601,7 @@ def _no_run_reading(ident: str, nodes: list[dict], sent: str | None) -> tuple[st
     A build's FIRST act is a Linear write (agent-task's `Card → In Progress`
     posts the run receipt), so a Linear outage is exactly what makes a started
     build look like one that never started. On 2026-10-02 that is how four
-    Todo cards were stamped needs-human — DRE-5595 a minute after its re-send.
+    promoted cards were stamped needs-human — DRE-5595 a minute after its re-send.
     The questions are asked cheapest first: what this sweep's own Linear
     requests met, what the card's own thread records inside the lookback, and
     only then the one GitHub listing the nudge loop already shares.
@@ -2740,14 +2777,19 @@ def _held_for_operator(card: dict) -> tuple[dict | None, str, str]:
     """`(clock, kind, why_not)` for one proof card In Review, off its window.
 
     `clock` is the comment that makes the card held for the operator and
-    `kind` names it — `cause hold`, `operator's-press hold` or
-    `review-cap-spent stamp`; with no such comment `clock` is None and
-    `why_not` says why ("" when the card carries no hold of any kind).
+    `kind` names it — `cause hold`, `operator's-press hold`,
+    `operator's-reading hold` or `review-cap-spent stamp`; with no such
+    comment `clock` is None and `why_not` says why ("" when the card carries
+    no hold of any kind).
 
     A `🔬 proof-waiting` hold is the operator's when its needs half — the text
     after ` — needs ` — OPENS `proof_cause_park.CAUSE_HOLD_OPENING` (DRE-6837's
-    park) or `proof_dispatch.OPERATOR_PRESS` (the dispatcher's `_waiting` over
-    a `waiting for the operator's press` row). Only the opening is read: the
+    park), `proof_dispatch.OPERATOR_PRESS` (the dispatcher's `_waiting` over
+    a `waiting for the operator's press` row), or any other of
+    `proof_dispatch.OPERATOR_NEEDS` — the dispatcher's holds for an
+    operator's reading once a dispatch or re-run budget is spent or a re-run
+    answered nothing (DRE-7739). That tuple is the dispatcher's own
+    vocabulary, read here and never copied. Only the opening is read: the
     dispatcher joins several events with `; ` in the record's row order, so a
     hold naming the operator's press first is the operator's and one naming a
     dated event first is the event's. A needs half naming
@@ -2780,6 +2822,8 @@ def _held_for_operator(card: dict) -> tuple[dict | None, str, str]:
                 operator, spent = (node, "cause hold"), ""
             elif needs.startswith(proof_dispatch.OPERATOR_PRESS):
                 operator, spent = (node, "operator's-press hold"), ""
+            elif needs.startswith(proof_dispatch.OPERATOR_NEEDS):
+                operator, spent = (node, "operator's-reading hold"), ""
         elif operator and line.startswith(proof_record.OBSERVED_MARK):
             spent = "a 🔬 proof-observed followed it"
         elif operator and proof_run_state.receipt(line) is not None:
@@ -2901,7 +2945,7 @@ def flag_stranded() -> set[str]:
           (validate_card.VALID_SLUGS, mirroring the relay's map), so no
           dispatch can EVER start a run. Flagged after WATCHDOG_MINUTES,
           the same grace class (b) always had: a card is genuinely
-          unroutable for a real interval between creation and the Todo
+          unroutable for a real interval between creation and the start
           gate's repair pass (validate_card infers a missing repo label and
           repairs it), and flagging on the first sweep RACES that repair —
           for a permanent consequence, since promote_ready() skips a held
@@ -2955,8 +2999,8 @@ def flag_stranded() -> set[str]:
     run itself is untouched, and once the hygiene agent's holds lane lands
     (DRE-6180) the stamp lifts on the first run receipt newer than it. A NO ROUTE card is a mechanical fix — a person corrects
     its `repo:` label, or the repo joins the rail — and not a decision, so
-    after the stamp it is moved to Triage, the operator's queue, out of Todo
-    or In Progress only (`cmd_advance`). A card the read door's board put in
+    after the stamp it is moved to Triage, the operator's queue, out of a
+    start lane only (`cmd_advance`). A card the read door's board put in
     its lane is read live once before the first write (`_door_lane_still`):
     one that left the lane since gets no receipt, no label and no stamp.
     Fail loud beats fail silent (DRE-1979).
@@ -3087,7 +3131,7 @@ def flag_stranded() -> set[str]:
                 # holds lane lands (DRE-6180), so today's re-send clears it.
                 f"To re-send it, run `linear_ops.py unpark {ident}`, which "
                 f"clears the hold for you, or remove the '{HOLD_LABEL}' label "
-                "and move the card out of Todo and back. Once the hygiene "
+                f"and move the card out of {state} and back. Once the hygiene "
                 "agent's holds lane is live (DRE-6172), a re-send needs no "
                 "clearing: the hold lifts itself on the first run receipt "
                 "newer than its stamp."
@@ -3150,7 +3194,7 @@ def flag_stranded() -> set[str]:
             # Planning has its own rule. The hygiene agent's Triage lane
             # leaves a stamped no-route card where this puts it (DRE-6190).
             try:
-                linear_ops.cmd_advance(ident, "Triage", "Todo,In Progress")
+                linear_ops.cmd_advance(ident, "Triage", ",".join(lane_contract.START_LANES))
             except linear_ops.LinearError as e:
                 _write_failures.append(f"{ident} no-route move to Triage: {e}")
                 print(f"ERROR: watchdog: {ident} was not moved to Triage: {e}",
@@ -5190,10 +5234,16 @@ def report_intake_blockers() -> list[tuple[str, str]]:
 # card-less. Broad tuple only — no card to work, no fix agent — and a literal
 # name, as that answer allows. The onboarding routing step reads this file at
 # `stable` for the literal before it opens one.
+#
+# `bot/test-durations` joined on the same terms (DRE-7577): the nightly
+# Pipeline Tests run re-measures config/unit-test-durations.json on it before
+# the record falls under its 90% floor, and the merge gate merges it
+# card-less. Broad tuple only, and a literal name.
 CARD_BRANCH_PREFIXES = ("agent/",)
 FIX_BRANCH_PREFIXES = ("agent/", "repair/")
 PIPELINE_BRANCH_PREFIXES = (
     "agent/", "repair/", "dependabot/", "bot/standards-sync", "bot/onboard",
+    "bot/test-durations",
 )
 
 
@@ -5349,7 +5399,7 @@ def agent_run_alive(identifier: str) -> bool:
 
     Origin (2026-07-10 20:07–22:22Z, DRE-2023 on agent-bureau): three builds
     each ran ~45 minutes with real progress receipts on the card; the
-    In-Progress-no-PR branch read the staleness as death, requeued to Todo,
+    In-Progress-no-PR branch read the staleness as death, requeued the card,
     and the fresh dispatch CANCELLED the still-running build via the per-card
     concurrency group (run 29125285930 concluded cancelled at "Gate on agent
     result"). The dead-run cap then parked the card needs-human — the watchdog
@@ -7890,8 +7940,8 @@ def promote_ready(
 
     THREE verdicts leave this lane, not one (DRE-3385). FLEET is promoted and
     dispatched; WORKBENCH and OPERATOR are promoted and NOT dispatched — the
-    marks their verdict declares go on first, so the card never sits in Todo
-    unmarked, and the receipt says whose turn it is. Only a verdict routed
+    marks their verdict declares go on first, so the card never sits in
+    Hand-work unmarked, and the receipt says whose turn it is. Only a verdict routed
     somewhere else (PARKED, NEEDS WORK) or no verdict at all is refused. The
     hand-built promotions do not spend the WIP budget either: nothing is
     dispatched for them, so they take no slot, and a Queued holding 33
@@ -7899,7 +7949,7 @@ def promote_ready(
 
     And they do not WAIT on it. The cap is asked per card, never once for the
     sweep: a fleet at — or over — its cap holds every card a run would be
-    dispatched for, and still carries a WORKBENCH or OPERATOR card to Todo,
+    dispatched for, and still carries a WORKBENCH or OPERATOR card to Hand-work,
     because "a hand-built card needs no room" (the lane contract's words). An
     early return at the cap starved a person's card on every ordinary busy day
     (PR #430's review); so did breaking out of the loop once the budget was
@@ -8608,7 +8658,7 @@ def promote_ready(
 
 
 def close_finished_epics(epic_identifiers: set[str]) -> set[str]:
-    """An epic whose children are all terminal closes itself — from Todo,
+    """An epic whose children are all terminal closes itself — from
     In Progress, In Review or Queued, the lanes `EPIC_CLOSE_LANES` declares,
     and from no other (DRE-6410). The callers choose the epics by lane: the
     full sweep hands over the work lanes' epics off its board read and
@@ -8654,7 +8704,7 @@ def _close_epic_if_finished(epic: str) -> bool:
     lane.
 
     The test is the same whichever lane the epic sits in, and the lanes it is
-    asked about are `EPIC_CLOSE_LANES` — Todo, In Progress, In Review and
+    asked about are `EPIC_CLOSE_LANES` — In Progress, In Review and
     Queued — chosen by the callers of `close_finished_epics` (DRE-6410)."""
     record = epic_records([epic]).get(epic)
     if record is None:
@@ -10404,7 +10454,7 @@ def _flag_one_unlanded_branch(branch: dict, pr_refs: set[str],
 def _flag_hand_built_idle(branches: list[dict], pr_refs: set[str]) -> None:
     """The alarm that replaces what HAND_BUILT_LABEL suppresses (DRE-2682).
 
-    A hand-built card in Todo / Hand-work / In Progress with NO card branch and NO pull
+    A hand-built card in a start lane / Hand-work with NO card branch and NO pull
     request has nothing to point at: the board says work is happening and
     there is no artifact anywhere that agrees. flag_stranded cannot say so —
     it is silenced on this label by design and correctly, because the thing it
@@ -10678,7 +10728,7 @@ def move_hand_built_to_review() -> None:
 
     Neither existing path reaches it. `main()`'s nudge loop already carries
     "open PR → In Review" and is label-blind, but it walks only the lanes it
-    sweeps and has no open-PR branch for Todo at all; the stranded watchdog is
+    sweeps and had no open-PR branch for the old start lane at all; the stranded watchdog is
     silenced on this label by design. So this starts from the OTHER end: the
     open-pull-request listing the sweep already keeps (`_open_pr_listing`),
     and the card is looked up in the board snapshot it already read. Widening
@@ -11061,7 +11111,15 @@ def fix_approved_but_red() -> None:
     its run's fail-fast after a sibling failed (DRE-6780): it is dropped, and
     the run is red on the failures beside it. And a canceled check whose log
     already shows a failed test (DRE-7018) is a failure, sent the fix agent
-    through the same gates as any red check."""
+    through the same gates as any red check.
+
+    DRE-7617: among the pull requests that pass every guard, the one dispatch
+    goes to the one red longest — the oldest `_red_since` time. Walking the
+    listing and taking the first, newest first, let a stream of newer red
+    pull requests take every free pass (agent-bureau #3953 waited an hour
+    behind #3955 and #3956 on 2026-10-18). A tie keeps listing order, and a
+    time that cannot be read sorts after every readable one, in listing
+    order: it cannot show it has waited, and it is never dropped for that."""
     import proof_dispatch  # noqa: PLC0415 — proof_dispatch imports this module
 
     # Unreadable answers BUSY (gh_actions_read): the App token 403s on this
@@ -11073,6 +11131,7 @@ def fix_approved_but_red() -> None:
         "pr", "list", "--repo", REPO, "--state", "open", "--limit", "30",
         "--json", "number,headRefName,headRefOid,mergeStateStatus,comments",
     ) or "[]")
+    eligible: list[tuple[dict, list, list, datetime | None]] = []
     for pr in prs:
         if not card_branch(pr["headRefName"]) or pr.get("mergeStateStatus") == "DIRTY":
             continue
@@ -11122,18 +11181,44 @@ def fix_approved_but_red() -> None:
         # A proof record red on a check is the fix agent's (DRE-6571); on
         # any other branch this is [] and nothing below changes.
         red = proof_dispatch.record_red_checks(pr, runs)
+        eligible.append((pr, failed, red, _red_since(split.red)))
+    # DRE-7617: longest red first. `sorted` is stable, so a tie and every
+    # unreadable time keep listing order. The guards below read Linear or
+    # post, so they are asked in this order and stop at the first dispatch.
+    eligible.sort(key=lambda e: (e[3] is None, e[3] or datetime.min.replace(tzinfo=UTC)))
+    for pr, failed, red, since in eligible:
         if fix_dispatch_blocked(pr, red_checks=red):
             continue  # human-parked card (DRE-2024) — the loop is over
         if fix_agent_absent_hold(pr):
             return  # no fix agent in this repo — a person is told once (DRE-4378)
         if red and not _record_red_untold(pr, red):
             continue
-        print(f"approved-but-red: PR #{pr['number']} has APPROVE + {len(failed)} failed check(s) — dispatching fix agent")
+        waited = "" if since is None else (
+            f", red for {int((datetime.now(UTC) - since).total_seconds() // 60)} min")
+        print(f"approved-but-red: PR #{pr['number']} has APPROVE + {len(failed)} "
+              f"failed check(s){waited} — dispatching fix agent")
         gh_dispatch("workflow", "run", fix_workflow(), "--repo", REPO,
                     "-f", f"pr_number={pr['number']}")
         if red:
             _tell_record_red(pr, red)
         return  # one dispatch per sweep; the busy-guard handles the rest
+
+
+def _red_since(checks) -> datetime | None:
+    """When a head went red (DRE-7617): the latest `completed_at` among its
+    failed check runs, the ones `fix_approved_but_red` already read. None when
+    there is none, or any one of them carries no time or one that will not
+    parse — the latest cannot be known then, and the caller orders it last."""
+    latest = None
+    for check in checks or ():
+        try:
+            at = datetime.fromisoformat(str(check.get("completed_at") or "").replace("Z", "+00:00"))
+        except ValueError:
+            return None
+        if at.tzinfo is None:
+            return None
+        latest = at if latest is None or at > latest else latest
+    return latest
 
 
 WORKER_BOT_LOGIN = "agent-bureau-bot"
@@ -11148,6 +11233,32 @@ def is_worker_bot_comment(comment: dict) -> bool:
     token just to learn its own slug; a rename fails CLOSED — no dispatch)."""
     login = (comment.get("author") or {}).get("login") or ""
     return login.removesuffix("[bot]") == WORKER_BOT_LOGIN
+
+
+#: The fleet's own worker bots: the four slots of the dispatch pool
+#: (`dispatch_pool.py`, DRE-2013). An explicit list, never a pattern: the
+#: GraphQL comment shape carries no `[bot]` suffix, so `agent-bureau-bot-<n>`
+#: would also admit a person's account named that way. A fifth slot is added
+#: here (DRE-7510).
+WORKER_BOT_POOL_LOGINS = (
+    WORKER_BOT_LOGIN,
+    f"{WORKER_BOT_LOGIN}-2",
+    f"{WORKER_BOT_LOGIN}-3",
+    f"{WORKER_BOT_LOGIN}-4",
+)
+
+
+def is_worker_pool_comment(comment: dict) -> bool:
+    """True iff the PR comment was authored by ANY slot of the worker pool.
+
+    DRE-7510. `is_worker_bot_comment` matches slot 1 alone, so a
+    `crashed-review-redispatch` receipt written by `agent-bureau-bot-2/3/4`
+    never counted toward its head's cap: PR #981 carried seven at one head.
+    Read only for that receipt — every other tag still counts slot 1 alone.
+    Anyone outside the four (a person, the qa-bot, a look-alike) stays
+    invisible, the DRE-1998 rule."""
+    login = (comment.get("author") or {}).get("login") or ""
+    return login.removesuffix("[bot]") in WORKER_BOT_POOL_LOGINS
 
 
 def retry_dead_fix_runs() -> None:
@@ -11779,21 +11890,22 @@ def is_dependabot_pr(pr: dict) -> bool:
     return login.removeprefix("app/").removesuffix("[bot]") == "dependabot"
 
 
-def _worker_receipt_count(pr: dict, tag: str) -> int:
+def _worker_receipt_count(pr: dict, tag: str, by=is_worker_bot_comment) -> int:
     """How many WORKER-BOT receipts carrying `tag` cover the PR's current
     head — the per-sha dispatch count the receipt caps bound (DRE-2071,
     generalised for DRE-2282). Forged receipts by other authors are
     invisible (DRE-1998 discipline): a forger can neither suppress a review
     nor exhaust the retry budget — the worst achieved is one extra review.
     Receipts bound to a superseded sha don't count either: a new head
-    re-arms a fresh budget."""
+    re-arms a fresh budget. `by` is who counts as the worker — slot 1 unless
+    the caller passes `is_worker_pool_comment` (DRE-7510)."""
     sha = pr.get("headRefOid") or ""
     if not sha:
         return 0
     return sum(
         1
         for c in pr.get("comments", [])
-        if is_worker_bot_comment(c)
+        if by(c)
         and tag in (c.get("body") or "")
         and sha in (c.get("body") or "")
     )
@@ -12226,6 +12338,52 @@ STALE_VERDICT_TAG = "stale-verdict-watchdog"
 #: review always posts its verdict before its job completes (DRE-1994), so
 #: any of these with no bound verdict is the crash case.
 _REVIEW_CRASH_CONCLUSIONS = ("failure", "timed_out", "cancelled")
+#: How many comments `gh pr list --json comments` answers per pull request:
+#: its FIRST page, and no more. A listing carrying this many may be cut short.
+GH_LIST_COMMENT_PAGE = 100
+#: Set on a listed pull request whose thread is at least a page long and whose
+#: full read failed (DRE-7510): its comments may be missing a verdict or a
+#: receipt, so the crashed-review sweep acts on nothing there.
+THREAD_UNREADABLE = "_threadUnreadable"
+
+
+def _read_whole_threads(prs: list[dict]) -> None:
+    """Replace each cut-short thread in the listing with the whole of it.
+
+    DRE-7510, PR #1134 on 2026-10-18: `gh pr list --json comments` answered
+    100 of its 115 comments, and every one from #101 on — three critic
+    verdicts at the head and the sweep's own re-dispatch receipts — was
+    invisible. The sweep read "no verdict, no receipt" and re-dispatched the
+    critic again. `gh pr view <n> --json comments` pages through the whole
+    thread in the same `author.login` / `body` / `createdAt` shape, so no
+    reader changes. A thread shorter than the page is already whole and costs
+    no read.
+
+    A read that fails marks the pull request `THREAD_UNREADABLE` and is
+    recorded on the fail-loudly rail naming it — never acted on as though the
+    page were the thread (DRE-2034).
+    """
+    for pr in prs:
+        if len(pr.get("comments") or []) < GH_LIST_COMMENT_PAGE:
+            continue
+        try:
+            thread = json.loads(gh_read(
+                "pr", "view", str(pr["number"]), "--repo", REPO,
+                "--json", "comments",
+            ))["comments"]
+            if not isinstance(thread, list):
+                raise ValueError(f"comments is {type(thread).__name__}, not a list")
+        except Exception as e:  # noqa: BLE001 — record loudly, never kill the sweep
+            pr[THREAD_UNREADABLE] = True
+            err = (
+                f"crashed-review recovery: PR #{pr.get('number')} has "
+                f"{GH_LIST_COMMENT_PAGE}+ comments and its full thread could "
+                f"not be read: {e}"
+            )
+            _write_failures.append(err)
+            print(f"ERROR: {err}", file=sys.stderr)
+            continue
+        pr["comments"] = thread
 
 
 def _open_pr_listing() -> list[dict] | None:
@@ -12250,6 +12408,11 @@ def _open_pr_listing() -> list[dict] | None:
     silent skip for every later reader in the sweep, and the rail already
     records each failure loudly; the honest cost of an unreadable listing is
     that the next caller tries again.
+
+    Every thread the listing cut short at gh's page is read whole before the
+    memo is filled (`_read_whole_threads`, DRE-7510), so each reader sees a
+    pull request's complete thread; one whose full read failed carries
+    `THREAD_UNREADABLE` and its first page.
     """
     global _pr_listing
     if _pr_listing is not None:
@@ -12264,6 +12427,7 @@ def _open_pr_listing() -> list[dict] | None:
         _write_failures.append(f"crashed-review recovery: PR listing failed: {e}")
         print(f"ERROR: crashed-review recovery: PR listing failed: {e}", file=sys.stderr)
         return None
+    _read_whole_threads(prs)
     _pr_listing = prs
     return prs
 
@@ -12472,7 +12636,7 @@ def _report_reviewer_down(pr: dict, receipts: int, bodies=None) -> None:
 # timestamps, decides, and posts through that module's one writer.
 
 
-def _newest_worker_receipt_at(pr: dict, tag: str) -> str:
+def _newest_worker_receipt_at(pr: dict, tag: str, by=is_worker_bot_comment) -> str:
     """When the NEWEST worker-bot receipt carrying `tag` and bound to this
     head was posted, or "" when there is none.
 
@@ -12481,10 +12645,12 @@ def _newest_worker_receipt_at(pr: dict, tag: str) -> str:
     bot's authorship (DRE-1998 — a forged receipt can neither manufacture a
     hold nor release one), the tag, and the FULL head sha (a receipt on a
     superseded commit is history and a new commit re-arms everything).
+    `by` is the same authorship seam as there (DRE-7510).
 
     ISO-8601 UTC strings sort as text, which is how `_hold_state` below
     compares two comment times; every timestamp here comes from the same
-    `gh pr list --json comments` payload, so they are one clock.
+    GraphQL comment payload (`gh pr list --json comments`, or `gh pr view`'s
+    for a thread longer than the listing's page), so they are one clock.
     """
     sha = pr.get("headRefOid") or ""
     if not sha:
@@ -12492,7 +12658,7 @@ def _newest_worker_receipt_at(pr: dict, tag: str) -> str:
     times = [
         (c.get("createdAt") or "")
         for c in pr.get("comments", [])
-        if is_worker_bot_comment(c)
+        if by(c)
         and tag in (c.get("body") or "")
         and sha in (c.get("body") or "")
     ]
@@ -12568,7 +12734,11 @@ def _hold_state(pr: dict, verdict: tuple | None) -> _HoldState:
     held_at = _newest_worker_receipt_at(pr, reviewer_environment.HOLD_TAG)
     if not held_at:
         return _HoldState("", "")
-    if _newest_worker_receipt_at(pr, CRASHED_REVIEW_DISPATCH_TAG) > held_at:
+    # Any pool slot may have posted that re-dispatch receipt (DRE-7510).
+    redispatched_at = _newest_worker_receipt_at(
+        pr, CRASHED_REVIEW_DISPATCH_TAG, by=is_worker_pool_comment
+    )
+    if redispatched_at > held_at:
         return _HoldState("", "")  # released once already, and re-dispatched
     if _newest_release_act(pr) > held_at:
         return _HoldState(held_at, f"the re-run act on PR #{pr['number']}")
@@ -12764,6 +12934,14 @@ def recover_crashed_reviews() -> None:
         try:
             if not card_branch(pr.get("headRefName")) or pr.get("isDraft"):
                 continue
+            if pr.get(THREAD_UNREADABLE):
+                # DRE-7510: the verdict or the receipt may sit past the page
+                # we hold — recorded by the listing, never acted on here.
+                print(
+                    f"crashed-review: PR #{pr['number']} — its full comment "
+                    "thread could not be read; nothing dispatched, nothing posted"
+                )
+                continue
             if pr.get("mergeStateStatus") == "DIRTY":
                 continue  # unstick_conflicts owns conflicted PRs; the fix re-arms
             sha = pr.get("headRefOid") or ""
@@ -12816,7 +12994,12 @@ def recover_crashed_reviews() -> None:
                 if hold.held_at:
                     released.append((pr, hold.release))
                     continue
-                receipts = _worker_receipt_count(pr, CRASHED_REVIEW_DISPATCH_TAG)
+                # DRE-7510: a receipt by any slot of the worker pool spends
+                # the head's one re-dispatch — #981 carried seven at one head,
+                # six of them by slots 2-4 that slot 1 alone never counted.
+                receipts = _worker_receipt_count(
+                    pr, CRASHED_REVIEW_DISPATCH_TAG, by=is_worker_pool_comment
+                )
                 if receipts >= CRASHED_REVIEW_RETRY_CAP:
                     _report_crashed_review_cap(pr, receipts)
                     continue
@@ -13759,7 +13942,7 @@ def wip_base(active: list[dict]) -> list[dict]:
 
     limit-recovery used to count the WIDER set — every active card of the
     repo, epics and automation cards included — so the two disagreed about the
-    same number. DRE-4811 died on Linear's hourly quota and sat in Todo for
+    same number. DRE-4811 died on Linear's hourly quota and sat promoted for
     about twenty hours, every sweep printing "the WIP room is spent" beside a
     promotion step reading `WIP 3+0/12`, with seven cards blocked behind it.
     Both now read this helper, so a card promotion would dispatch is
@@ -13916,7 +14099,7 @@ def recover_limit_deaths() -> None:
     The board is every lane the sweep reads, `SWEPT_LANES`, not the default
     `SWEEP_STATES` (DRE-4211). A classify or plan death leaves its card in
     Planning, and the recovery re-enters it from there by bouncing it through
-    Intake. Handed only Todo, In Progress and In Review, the pass never saw
+    Intake. Handed only the start lanes and In Review, the pass never saw
     those cards, and every planner run a limit killed had to be re-sent by
     hand. `SWEPT_LANES` is exactly what the sweep's one board read covers, so
     the wider list costs no Linear request.
@@ -14531,7 +14714,7 @@ OFF_RAIL_SKIPPED: dict[str, str] = {
     "start_queued_epics":
         "started the next waiting epic of any repo, Green Light to In Progress",
     "carry_epics_out_of_todo":
-        "carried unlabeled epics out of Todo",
+        "carried unlabeled epics out of the old start lane",
 }
 
 
@@ -14704,7 +14887,7 @@ def main(
       - plan.yml, the moment an epic activates (In Progress, the one lane the
         gate counts an epic as active in — DRE-5347)
       - linear-sync.yml, the moment a merge flips a card to Done
-    Promotion is pure Linear (the Queued→Todo transition rides the Linear
+    Promotion is pure Linear (the Queued→In Progress transition rides the Linear
     webhook → relay → repository_dispatch for the actual agent start), so
     the event hooks need only LINEAR_API_KEY. (Origin: DRE-1260 activated
     9s after a sweep checked and faced an ~80-minute wait, 2026-06-12.)

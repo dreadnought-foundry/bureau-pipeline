@@ -111,6 +111,11 @@ EXPECTED_STUBS = {
     # so the proof runner is never a build role (DRE-3039). The trigger shape
     # is asserted below.
     "self-proof-task.yml": ("proof-task.yml", "Proof Task"),
+    # DRE-7287. The proof run's shadow: a `proof-shadow` dispatch from the
+    # sweep, beside a real proof run, calling proof-task.yml with `shadow:
+    # true`. Its own name so the medic, which watches `Proof Task`, never
+    # retries a shadow (check_workflow_watchers.NOT_WATCHED). Asserted below.
+    "self-proof-shadow.yml": ("proof-task.yml", "Proof Shadow"),
     # verify.yml deliberately has NO stub: its scope gate targets UI cards
     # (**Design:** lines) / multi-system app diffs, and bureau-pipeline has no
     # runnable app surface to verify behaviorally.
@@ -204,6 +209,47 @@ class TriggerShapeTest(unittest.TestCase):
             doc.get("permissions"))
         (job,) = _call_jobs(doc, "self-proof-task.yml")
         self.assertEqual({"pipeline_ref": "main"}, job.get("with"))
+
+    def test_proof_task_listens_for_proof_execute_only_never_the_shadow(self):
+        """DRE-7287: a shadow event never wakes `Proof Task` — the medic
+        watches that name, and a shadow is not a pipeline run to retry."""
+        types = _on(_load("self-proof-task.yml"))["repository_dispatch"]["types"]
+        self.assertEqual(["proof-execute"], types)
+        self.assertNotIn(plan_run.PROOF_SHADOW_EVENT, types)
+
+    def test_proof_shadow_listens_for_proof_shadow_and_nothing_else(self):
+        on = _on(_load("self-proof-shadow.yml"))
+        self.assertEqual({"repository_dispatch": {"types": [plan_run.PROOF_SHADOW_EVENT]}}, on)
+        self.assertEqual("proof-shadow", plan_run.PROOF_SHADOW_EVENT)
+
+    def test_proof_shadow_has_its_own_group_and_never_cancels(self):
+        """Its own group, never `proof-<CARD>`: a shadow neither queues behind
+        nor cancels the real run beside it."""
+        doc = _load("self-proof-shadow.yml")
+        self.assertEqual(
+            {"group": "proof-shadow-${{ github.event.client_payload.identifier }}",
+             "cancel-in-progress": False},
+            doc.get("concurrency"))
+        self.assertNotEqual(_load("self-proof-task.yml")["concurrency"]["group"],
+                            doc["concurrency"]["group"])
+
+    def test_proof_shadow_grants_proof_tasks_permissions_and_runs_as_a_shadow(self):
+        doc = _load("self-proof-shadow.yml")
+        self.assertEqual(_load("self-proof-task.yml").get("permissions"),
+                         doc.get("permissions"))
+        (job,) = _call_jobs(doc, "self-proof-shadow.yml")
+        self.assertEqual(
+            {"pipeline_ref": "main", "shadow": True,
+             "model": "${{ github.event.client_payload.shadow_model }}"},
+            job.get("with"))
+
+    def test_proof_shadow_is_declared_unwatched_with_its_reason(self):
+        reason = check_workflow_watchers.NOT_WATCHED.get("Proof Shadow")
+        self.assertTrue(reason, "Proof Shadow must be declared in NOT_WATCHED")
+        self.assertIn("measurement", reason)
+        self.assertIn("DRE-7287", reason)
+        violations, _ = check_workflow_watchers.check_dir()
+        self.assertEqual([], violations)
 
     def test_reconcile_runs_on_schedule(self):
         on = _on(_load("self-reconcile.yml"))

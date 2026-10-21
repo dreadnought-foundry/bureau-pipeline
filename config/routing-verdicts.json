@@ -19,7 +19,7 @@
     "and it skips a non-FLEET verdict too).",
     "",
     "THE TURN COMES NOW (DRE-3385). The sweep promotes every verdict whose",
-    "destination is a work lane past Queued — FLEET to Todo, WORKBENCH and",
+    "destination is a work lane past Queued — FLEET to In Progress, WORKBENCH and",
     "OPERATOR to Hand-work since DRE-5321 — and stamps the verdict's own",
     "`marks` before it moves the card, so a card lands carrying every mark its",
     "verdict declares. So DESTINATION and PROMOTABLE answer two",
@@ -65,11 +65,11 @@
     {
       "name": "FLEET",
       "means": "Buildable unattended in one pull request.",
-      "destination": "Todo",
+      "destination": "In Progress",
       "actor": "agent-task.yml",
       "promotable": true,
       "marks": [],
-      "why": "The sweep promotes it out of Queued and the relay dispatches a build run. This is the only verdict that may be dispatched."
+      "why": "The sweep promotes it out of Queued into In Progress, and that move is the dispatch: the relay dispatches a build run on a move into In Progress from a waiting lane (DRE-7107, DRE-7120). This is the only verdict that may be dispatched."
     },
     {
       "name": "WORKBENCH",
@@ -78,7 +78,7 @@
       "actor": "operator",
       "promotable": false,
       "marks": [],
-      "why": "It stays in the vocabulary for the historical `DEMO:` title convention and for the pipeline's own record stampers, `repair_card` and `model_adoption_actions`, which write it onto cards they file. The acceptance criteria no longer produce it: a criterion that can only be met by watching the change run after it ships is a proof observation or a follow-up card, never a reason to hold the build, and reading one off a phrase sent six code cards in a week to a lane where nobody builds them (DRE-6227). It carries no mark: the person's mark it used to put on is the CEO's own, applied only when he asks for it. The queue was the old answer, and for a card nothing carried out of it the queue was a dead end. The sweep performs this move itself (DRE-3385), on the same gates a FLEET card passes, because the destination written here was true for a year and nothing ever carried a card to it. It lands in Hand-work, the person-work lane, not Todo (DRE-5240): Todo is the build button, and a person's card waiting there for days read as a stuck build queue."
+      "why": "It stays in the vocabulary for the historical `DEMO:` title convention and for the pipeline's own record stampers, `repair_card` and `model_adoption_actions`, which write it onto cards they file. The acceptance criteria no longer produce it: a criterion that can only be met by watching the change run after it ships is a proof observation or a follow-up card, never a reason to hold the build, and reading one off a phrase sent six code cards in a week to a lane where nobody builds them (DRE-6227). It carries no mark: the person's mark it used to put on is the CEO's own, applied only when he asks for it. The queue was the old answer, and for a card nothing carried out of it the queue was a dead end. The sweep performs this move itself (DRE-3385), on the same gates a FLEET card passes, because the destination written here was true for a year and nothing ever carried a card to it. It lands in Hand-work, the person-work lane, never the start lane (DRE-5240): the start lane is the build button, and a person's card waiting there for days read as a stuck build queue."
     },
     {
       "name": "OPERATOR",

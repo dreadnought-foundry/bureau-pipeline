@@ -156,11 +156,13 @@ def detail(*, epic_state="In Progress", blockers=None, siblings=None,
 class Board:
     """The injected Linear reads, counted."""
 
-    def __init__(self, hand=(), green=(), details=None, threads=None, review=()):
+    def __init__(self, hand=(), green=(), details=None, threads=None, review=(),
+                 fixes=None):
         self.lanes = {"Hand-work": list(hand), "Green Light": list(green),
                       "In Review": list(review)}
         self.details = details or {}
         self.threads = threads or {}
+        self.fixes = fixes or {}
         self.reads: list = []
 
     def lane(self, state):
@@ -174,6 +176,16 @@ class Board:
     def thread(self, ident):
         self.reads.append(("thread", ident))
         return list(self.threads.get(ident, [])), VIEWER
+
+    def fix_card(self, ident):
+        """A card a record row names as its fix (DRE-7740)."""
+        self.reads.append(("fix_card", ident))
+        got = self.fixes.get(ident)
+        if isinstance(got, Exception):
+            raise got
+        if got is None:
+            raise LookupError(f"Linear answered no card for {ident}")
+        return got
 
 
 def state(name, *, dispatches=0, receipts=(), run_id=None, lines=None,
@@ -500,6 +512,84 @@ def test_condition_4_a_later_proof_observed_discharges_an_operators_hold(monkeyp
     h = Harness(monkeypatch, board)
     h.sweep()
     assert [f[0] for f in h.fired] == ["DRE-5930"]
+    # A note with the colon is read, and nothing answers it (DRE-7743).
+    assert [b for _, b in h.posted if b.startswith(proof_record.UNREAD_MARK)] == []
+
+
+#: DRE-5407's note of 2026-10-18 07:00 PT, as written: a dash where the colon goes.
+DASHED = "🔬 proof-observed — the folder refused a guest at 06:52 PT"
+
+
+def _unread(posted) -> list:
+    return [(ident, body) for ident, body in posted
+            if body.startswith(proof_record.UNREAD_MARK)]
+
+
+def test_dre_7743_a_dashed_note_on_the_lane_read_is_answered_once(monkeypatch, capsys):
+    """DRE-5407 replayed: a note opening `🔬 proof-observed —` after the
+    operator's hold discharged nothing and said nothing, and the card was
+    named held for two days. It still discharges nothing — the mark stays
+    exact — and the sweep answers it once, quoting its first line."""
+    window = [promoted(600),
+              hold("being observed by hand", "the operator's record pull request", 300),
+              comment(DASHED + "\nmore detail on the second line", 60, PERSON)]
+    board = Board(hand=[lane_card("DRE-5930", window=window)])
+    h = Harness(monkeypatch, board)
+    tally = h.sweep()
+    assert h.fired == [] and tally.held == 1
+    replies = _unread(h.posted)
+    assert len(replies) == 1, h.posted
+    ident, body = replies[0]
+    assert ident == "DRE-5930"
+    first = body.split("\n", 1)[0]
+    assert f"“{DASHED}”" in first
+    assert "discharged nothing" in first
+    assert "more detail" not in body
+    # It says why: the mark is read only with its colon.
+    assert f"“{proof_record.OBSERVED_MARK}”" in body
+    # The reply is no note itself, misspelled or not.
+    assert not body.startswith(f"{linear_ops.PROOF_MARK} {linear_ops.PROOF_OBSERVED_MARK}")
+    assert any("answered" in line and "discharged nothing" in line
+               for line in _about(_lines(capsys), "DRE-5930"))
+
+    # The next pass reads the reply on the card and posts no second one.
+    window.append(comment(body, 45))
+    again = Harness(monkeypatch, Board(hand=[lane_card("DRE-5930", window=window)]))
+    tally = again.sweep()
+    assert again.fired == [] and tally.held == 1
+    assert _unread(again.posted) == []
+
+
+def test_dre_7743_a_dashed_note_on_the_thread_read_is_answered_once(monkeypatch, capsys):
+    """The same note found by the thread read, not the lane read's window:
+    the card is held, the note answered once, and not again next pass."""
+    thread = [promoted(600),
+              hold("being observed by hand", "the operator's record pull request", 300),
+              comment(DASHED, 60, PERSON)]
+    board = Board(hand=[lane_card("DRE-5930")], threads={"DRE-5930": thread})
+    h = Harness(monkeypatch, board)
+    h.sweep()
+    assert h.fired == []
+    assert any("condition 4" in line and "being observed by hand" in line
+               for line in _about(_lines(capsys), "DRE-5930"))
+    replies = _unread(h.posted)
+    assert len(replies) == 1 and f"“{DASHED}”" in replies[0][1]
+
+    thread.append(comment(replies[0][1], 45))
+    again = Harness(monkeypatch, Board(hand=[lane_card("DRE-5930")],
+                                       threads={"DRE-5930": thread}))
+    again.sweep()
+    assert again.fired == [] and _unread(again.posted) == []
+
+
+def test_dre_7743_the_dry_run_answers_nothing(monkeypatch, capsys):
+    window = [promoted(600),
+              hold("being observed by hand", "the operator's record pull request", 300),
+              comment(DASHED, 60, PERSON)]
+    h = Harness(monkeypatch, Board(hand=[lane_card("DRE-5930", window=window)]))
+    h.sweep(live=False)
+    assert h.posted == []
+    assert any(line.startswith("would: answer DRE-5930") for line in _lines(capsys))
 
 
 def test_condition_4_a_ceo_press_hold_is_discharged_only_by_his_signed_answer(monkeypatch, capsys):
@@ -1825,7 +1915,9 @@ def _nothing_cases():
                                         comment("⏳ 5/5 record amended", 1400),
                                         rerun_receipt(800, 2),
                                         comment("⏳ 5/5 record amended", 700)),
-                             record(rc), "finished", "never a third"),
+                             record(rc), "finished",
+                             "never another without a shipped fix or a new "
+                             "🔬 proof-observed"),
         "forged-verdict": (_sent_back(),
                            record(verdict("REQUEST_CHANGES", 100, login="mallory")),
                            "finished", "none"),
@@ -2328,7 +2420,8 @@ def test_gate_a_review_cap_park_on_an_older_head_is_the_holds_lanes(monkeypatch,
 def test_gate_after_the_shared_budget_one_hold_and_never_a_loop(
         monkeypatch, capsys, first, second):
     """One critic re-run and one gate re-run, in either order, spend the one
-    budget of two: the gate's next decline holds once and never a third."""
+    budget of two: the gate's next decline holds once, and never re-runs
+    again without a re-arm event (DRE-7740)."""
     spent = (first(1500, 1), comment("⏳ 5/5 amended", 1400),
              second(800, 2), comment("⏳ 5/5 amended", 700))
     h, tally, _ = _gate_pass(monkeypatch, thread=_sent_back(*spent), pr=_declined())
@@ -2337,13 +2430,15 @@ def test_gate_after_the_shared_budget_one_hold_and_never_a_loop(
     assert h.holds == [("DRE-5930", *GATE_HELD)]
     assert tally.held == 1 and "3 of 2" not in out
 
-    # The next pass names the hold it posted and posts nothing.
+    # The next pass reads past the budget's own hold to the record at the
+    # head (DRE-7740), finds no re-arm event, and posts nothing: an open copy
+    # of the hold stands.
     h, tally, _ = _gate_pass(monkeypatch, pr=_declined(),
                              thread=_sent_back(*spent, hold(*GATE_HELD, 50)))
     lines = _about(_lines(capsys), "DRE-5930")
     assert h.fired == [] and h.holds == [] and h.posted == []
-    assert any("held by 🔬 proof-waiting: the gate declined the record twice after "
-               "re-observation" in line for line in lines), lines
+    assert any("re-run: budget — 2 re-runs" in line and "never another without a "
+               "shipped fix or a new 🔬 proof-observed" in line for line in lines), lines
     assert tally.held == 1
 
 
@@ -3543,3 +3638,539 @@ def test_no_string_constant_in_the_proof_dispatcher_names_the_old_lane():
 
     path = str(Path(__file__).resolve().parent.parent / "scripts" / "proof_dispatch.py")
     assert lane_contract._scan_python(path, ["Backlog"]) == set()
+
+
+# --------------------------------------------------------------------------- #
+# DRE-7740: a spent budget re-armed by a shipped fix or a new proof-observed,  #
+# and history rows held at once                                                #
+# --------------------------------------------------------------------------- #
+
+FIX = "DRE-7639"
+FIX_ROW = ("The Desk loads in under two seconds",
+           f"Not met. the Desk took 9 s at 02:31 PT. fix: {FIX}")
+HISTORY_ROW = ("The nightly's window holds the 09:00 PT slot",
+               "Not met. history: the 09:00–10:00 PT window of 2026-10-12 — it "
+               "filled at 09:52 PT")
+HISTORY_NEEDS = ("the operator's decision on 1 row(s) that read a closed window or "
+                 "a finished run: reword each on a new card, or drop the record")
+HISTORY_HOLD = (proof_record._cut(HISTORY_ROW[0], 70), HISTORY_NEEDS)
+HISTORY_REFUSAL = (f"re-run: 1 row(s) of the record at {SHA7} read a closed window or "
+                   "a finished run — held for the operator, never re-run to read the "
+                   "same thing")
+NEVER_ANOTHER = "never another without a shipped fix or a new 🔬 proof-observed"
+#: Two re-runs spent on this pull request, each answered by a new head.
+SPENT = (gate_rerun_receipt(1500, 1), comment("⏳ 5/5 amended", 1400),
+         gate_rerun_receipt(800, 2), comment("⏳ 5/5 amended", 700))
+
+
+def fix_card(ident: str = FIX, *, state_name: str = "Done", repo: str = SLUG) -> dict:
+    return {"identifier": ident, "state": {"name": state_name},
+            "labels": {"nodes": [{"name": f"repo:{repo}"}, {"name": "agent:frontend"}]}}
+
+
+def rearmed_receipt(minutes_ago: float, reason: str = f"re-run after {FIX} shipped") -> dict:
+    return receipt(minutes_ago, reason=reason, count="re-armed")
+
+
+def observed_note(minutes_ago: float, text: str = "the Desk loads in 1.2 s at 10:40 PT",
+                  user=PERSON) -> dict:
+    return comment(linear_ops.proof_observed_line(text), minutes_ago, user)
+
+
+def _rearm_pass(monkeypatch, *, thread, text=None, fixes=None, prs=None,
+                release="ready", run="finished", pr=None, live=True):
+    board = Board(review=[_review()], threads={"DRE-5930": thread},
+                  fixes={FIX: fix_card()} if fixes is None else fixes)
+    h = Harness(monkeypatch, board, records={"DRE-5930": pr or _declined()},
+                texts={900: record_md(MET_ROW, FIX_ROW) if text is None else text},
+                release=release, prs=prs,
+                states={"DRE-5930": state(run, dispatches=1,
+                                          record={"number": 900, "state": "open"})})
+    tally = h.sweep(live=live)
+    return h, tally
+
+
+def test_rearm_a_shipped_fix_dispatches_one_re_run_and_the_next_pass_holds(
+        monkeypatch, capsys):
+    """The budget is spent and its hold stands; the record's unmet row names
+    DRE-7639, which is Done, this repo's, merged, and live. One run, whose
+    receipt names the card and reads `(re-armed)`."""
+    thread = _sent_back(*SPENT, hold(*GATE_HELD, 650))
+    h, tally = _rearm_pass(monkeypatch, thread=thread)
+    reason = f"re-run after {FIX} shipped"
+    assert h.fired == [("DRE-5930", REPO, reason, "proof-execute")]
+    assert tally.dispatched == 1 and h.holds == []
+    first = h.posted[0][1].split("\n", 1)[0]
+    assert first.endswith(f" — {reason} (re-armed)")
+    parsed = proof_run_state.receipt(h.posted[0][1])
+    assert (parsed.reason, parsed.count) == (reason, "re-armed")
+    # The fix's release was read once, off its merge.
+    assert [[m.card for m in merges] for _, merges in h.release_calls] == [[FIX]]
+    assert ("fix_card", FIX) in h.board.reads
+    capsys.readouterr()
+
+    # The re-armed run amended the record and the gate declined the new head:
+    # no new event, so the budget's hold — and nothing is read for the fix.
+    after = _sent_back(*SPENT, hold(*GATE_HELD, 650), rearmed_receipt(200),
+                       comment("⏳ 5/5 amended", 150))
+    h, tally = _rearm_pass(monkeypatch, thread=after)
+    lines = _about(_lines(capsys), "DRE-5930")
+    assert h.fired == [] and h.posted == []
+    [(ident, observed, needs)] = h.holds
+    assert (ident, observed) == ("DRE-5930", GATE_HELD[0])
+    assert needs.startswith(GATE_HELD[1]) and "re-armed" in needs
+    assert tally.held == 1
+    assert ("fix_card", FIX) not in h.board.reads and h.release_calls == []
+    assert any(NEVER_ANOTHER in line and FIX in line for line in lines), lines
+
+
+def test_rearm_a_shipped_fix_passes_the_finished_refusal_too(monkeypatch, capsys):
+    """The second re-run finished with the decline still at the head: today
+    the unanswered hold. With the named fix shipped, one re-armed run."""
+    thread = _sent_back(gate_rerun_receipt(1500, 1), comment("⏳ 5/5 amended", 1400),
+                        gate_rerun_receipt(60, 2), comment("⏳ 5/5 amended", 30))
+    h, _ = _rearm_pass(monkeypatch, thread=thread)
+    assert [f[2] for f in h.fired] == [f"re-run after {FIX} shipped"]
+    assert h.holds == []
+
+
+def test_rearm_a_dead_re_armed_run_is_not_sent_again(monkeypatch, capsys):
+    thread = _sent_back(*SPENT, rearmed_receipt(60))
+    h, tally = _rearm_pass(monkeypatch, thread=thread, run="dead")
+    assert h.fired == [] and h.posted == []
+    [(_, observed, needs)] = h.holds
+    assert observed == GATE_HELD[0] and "re-armed" in needs
+    assert tally.held == 1
+
+
+@pytest.mark.parametrize("case, why", [
+    ("not-done", "In Progress"),
+    ("canceled", "Canceled"),
+    ("another-repo", "agent-bureau"),
+    ("unmerged", "not merged"),
+    ("unreadable", "could not be read"),
+    ("release-waiting", "waiting"),
+])
+def test_rearm_a_fix_not_shipped_dispatches_nothing_and_names_the_card(
+        monkeypatch, capsys, case, why):
+    fixes = {FIX: {"not-done": fix_card(state_name="In Progress"),
+                   "canceled": fix_card(state_name="Canceled"),
+                   "another-repo": fix_card(repo="agent-bureau"),
+                   "unreadable": RuntimeError("Linear: 503")}.get(case, fix_card())}
+    prs = ({FIX: {"number": 3999, "state": "OPEN", "headRefName": f"agent/{FIX}-x"}}
+           if case == "unmerged" else None)
+    release = "waiting" if case == "release-waiting" else "ready"
+    h, tally = _rearm_pass(monkeypatch, thread=_sent_back(*SPENT), fixes=fixes,
+                           prs=prs, release=release)
+    lines = _about(_lines(capsys), "DRE-5930")
+    assert h.fired == [] and h.posted == []
+    assert h.holds == [("DRE-5930", *GATE_HELD)]
+    assert tally.held == 1
+    assert any(NEVER_ANOTHER in line and FIX in line and why in line
+               for line in lines), lines
+    if case in ("another-repo", "not-done", "canceled", "unreadable"):
+        assert h.release_calls == []
+
+
+def test_rearm_more_than_three_fix_cards_reads_none_and_names_them(monkeypatch, capsys):
+    named = ["DRE-7001", "DRE-7002", "DRE-7003", "DRE-7004"]
+    row = ("The Desk loads in under two seconds",
+           f"Not met. 9 s. fix: {', '.join(named)}")
+    h, _ = _rearm_pass(monkeypatch, thread=_sent_back(*SPENT),
+                       text=record_md(MET_ROW, row),
+                       fixes={n: fix_card(n) for n in named})
+    lines = _about(_lines(capsys), "DRE-5930")
+    assert h.fired == []
+    assert not any(read[0] == "fix_card" for read in h.board.reads)
+    assert h.release_calls == []
+    assert any(all(n in line for n in named) and "more than three" in line
+               for line in lines), lines
+
+
+def test_rearm_two_rows_naming_the_same_card_read_it_once(monkeypatch, capsys):
+    other = ("The Desk's list loads in under two seconds",
+             f"Not met. 7 s. fix: {FIX}")
+    h, _ = _rearm_pass(monkeypatch, thread=_sent_back(*SPENT),
+                       text=record_md(MET_ROW, FIX_ROW, other))
+    assert [f[2] for f in h.fired] == [f"re-run after {FIX} shipped"]
+    assert h.board.reads.count(("fix_card", FIX)) == 1
+
+
+def test_rearm_a_dre_id_elsewhere_in_the_cell_is_not_a_fix(monkeypatch, capsys):
+    row = ("The Desk loads in under two seconds",
+           f"Not met. 9 s, the slowness {FIX} describes")
+    h, _ = _rearm_pass(monkeypatch, thread=_sent_back(*SPENT),
+                       text=record_md(MET_ROW, row))
+    assert h.fired == [] and h.holds == [("DRE-5930", *GATE_HELD)]
+    assert not any(read[0] == "fix_card" for read in h.board.reads)
+
+
+def test_rearm_a_new_proof_observed_dispatches_once_and_a_second_without_a_run_does_not(
+        monkeypatch, capsys):
+    text = record_md(MET_ROW, NOT_MET_ROW)
+    notes = (observed_note(300), observed_note(250, "the Desk loads in 1.1 s"))
+    thread = _sent_back(*SPENT, hold(*GATE_HELD, 650), *notes)
+    h, _ = _rearm_pass(monkeypatch, thread=thread, text=text)
+    at = spoken_thread.pacific_label(notes[-1]["createdAt"])
+    reason = f"re-run after the 🔬 proof-observed of {at}"
+    assert h.fired == [("DRE-5930", REPO, reason, "proof-execute")]
+    assert h.posted[0][1].split("\n", 1)[0].endswith(f" — {reason} (re-armed)")
+    assert h.holds == []
+
+    # Both notes came before the re-armed run's receipt: one event, spent.
+    thread = _sent_back(*SPENT, hold(*GATE_HELD, 650), *notes, rearmed_receipt(
+        200, reason), comment("⏳ 5/5 amended", 150))
+    h, tally = _rearm_pass(monkeypatch, thread=thread, text=text)
+    assert h.fired == [] and h.posted == []
+    # The notes discharged the first hold, so the budget's hold comes back.
+    assert [(x[0], x[1]) for x in h.holds] == [("DRE-5930", GATE_HELD[0])]
+    assert tally.held == 1
+
+    # A note after that run is a new event.
+    thread = _sent_back(*SPENT, *notes, rearmed_receipt(200, reason),
+                        comment("⏳ 5/5 amended", 150), observed_note(95))
+    h, _ = _rearm_pass(monkeypatch, thread=thread, text=text)
+    assert len(h.fired) == 1 and h.fired[0][2].startswith(
+        "re-run after the 🔬 proof-observed of ")
+
+
+@pytest.mark.parametrize("user", [VIEWER, PERSON])
+def test_rearm_the_pipelines_own_notes_re_arm_nothing(monkeypatch, capsys, user):
+    lifted = observed_note(
+        300, f"not-before=2026-10-06T08:00-07:00 has passed (read at 2026-10-06 08:15 PT)"
+             f" — {proof_dispatch.LIFTED_BY}; the hold waited for that time and "
+             "nothing else", user=VIEWER)
+    answered = observed_note(
+        250, "the CEO answered via the console at 2026-10-06 09:12 PT: yes, drop it",
+        user=user)
+    h, tally = _rearm_pass(monkeypatch, thread=_sent_back(*SPENT, lifted, answered),
+                           text=record_md(MET_ROW, NOT_MET_ROW))
+    lines = _about(_lines(capsys), "DRE-5930")
+    assert h.fired == [] and h.posted == []
+    assert h.holds == [("DRE-5930", *GATE_HELD)]
+    assert any(NEVER_ANOTHER in line for line in lines), lines
+
+
+def test_rearm_an_unread_record_the_critic_sent_back_is_re_armed_only_by_a_note(
+        monkeypatch, capsys):
+    critic = _declined(approve=verdict("REQUEST_CHANGES", 100))
+    spent = (rerun_receipt(1500, 1), comment("⏳ 5/5 amended", 1400),
+             rerun_receipt(800, 2), comment("⏳ 5/5 amended", 700))
+    h, _ = _rearm_pass(monkeypatch, thread=_sent_back(*spent), pr=critic,
+                       text=RuntimeError("HTTP 502"))
+    assert h.fired == [] and h.holds == [("DRE-5930", *RERUN_HELD)]
+    assert not any(read[0] == "fix_card" for read in h.board.reads)
+
+    h, _ = _rearm_pass(monkeypatch, pr=critic, text=RuntimeError("HTTP 502"),
+                       thread=_sent_back(*spent, hold(*RERUN_HELD, 650),
+                                         observed_note(300)))
+    assert len(h.fired) == 1 and h.fired[0][2].startswith(
+        "re-run after the 🔬 proof-observed of ")
+
+
+def test_rearm_the_dry_run_prints_would_and_writes_nothing(monkeypatch, capsys):
+    h, _ = _rearm_pass(monkeypatch, thread=_sent_back(*SPENT), live=False)
+    assert h.fired == [] and h.posted == [] and h.holds == []
+    assert f"would: dispatch DRE-5930 — re-run after {FIX} shipped" in _lines(capsys)
+
+
+def test_history_a_record_whose_only_unmet_rows_read_history_is_held_at_once(
+        monkeypatch, capsys):
+    h, tally, moves = _cause_pass(monkeypatch, thread=_sent_back(),
+                                  text=record_md(MET_ROW, HISTORY_ROW))
+    lines = _about(_lines(capsys), "DRE-5930")
+    assert h.fired == [] and h.posted == [] and moves.log == []
+    assert h.holds == [("DRE-5930", *HISTORY_HOLD)]
+    assert HISTORY_HOLD[1].startswith(proof_cause_park.CAUSE_HOLD_OPENING)
+    line = linear_ops.proof_waiting_line(*HISTORY_HOLD)
+    assert proof_cause_park.is_cause_hold(line)
+    for half in HISTORY_HOLD:
+        assert linear_ops.proof_text_refusal(half, "half") is None
+    assert tally.held == 1 and tally.dispatched == 0
+    assert any(HISTORY_REFUSAL in line for line in lines), lines
+    capsys.readouterr()
+
+    # The next pass reads past its own hold to the same record and posts
+    # nothing; a 🔬 proof-observed re-arms nothing here either.
+    for extra in ((), (observed_note(30),)):
+        h, tally, moves = _cause_pass(monkeypatch, text=record_md(MET_ROW, HISTORY_ROW),
+                                      thread=_sent_back(hold(*HISTORY_HOLD, 60), *extra))
+        lines = _about(_lines(capsys), "DRE-5930")
+        assert h.fired == [] and h.posted == [] and h.holds == []
+        assert tally.held == 1
+        assert any(HISTORY_REFUSAL in line for line in lines), lines
+
+
+def test_history_spends_no_budget_and_holds_under_the_critics_trigger(monkeypatch, capsys):
+    h, tally, _ = _cause_pass(monkeypatch, thread=_sent_back(),
+                              text=record_md(MET_ROW, HISTORY_ROW),
+                              pr=_declined(approve=verdict("REQUEST_CHANGES", 100)))
+    assert h.fired == [] and h.holds == [("DRE-5930", *HISTORY_HOLD)]
+    assert not any(proof_run_state.receipt(b) for _, b in h.posted)
+
+
+@pytest.mark.parametrize("beside", [NOT_MET_ROW, FIX_ROW], ids=["not-met", "fix"])
+def test_history_beside_another_unmet_row_is_re_run(monkeypatch, capsys, beside):
+    h, _, _ = _cause_pass(monkeypatch, thread=_sent_back(),
+                          text=record_md(MET_ROW, HISTORY_ROW, beside))
+    assert h.fired == [("DRE-5930", REPO, GATE_RERUN, "proof-execute")]
+    assert h.posted[0][1].split("\n", 1)[0].endswith(f" — {GATE_RERUN} (re-run 1 of 2)")
+    assert h.holds == []
+
+
+def test_history_beside_cause_rows_holds_both_for_the_operator(monkeypatch, capsys):
+    text = record_md(MET_ROW, HISTORY_ROW, CAUSE_ROW)
+    h, tally, moves = _cause_pass(monkeypatch, thread=_sent_back(), text=text)
+    lines = _about(_lines(capsys), "DRE-5930")
+    cause_rows = proof_cause_park.rows_of(text)
+    assert h.fired == [] and moves.log == []
+    assert h.holds == [("DRE-5930", *proof_cause_park.hold(cause_rows)),
+                       ("DRE-5930", *HISTORY_HOLD)]
+    assert [b for _, b in h.posted] == [proof_cause_park.question(cause_rows)]
+    assert tally.held == 1
+    assert any(HISTORY_REFUSAL.split(" — held")[0] in line and "cause: out-of-reach"
+               in line for line in lines), lines
+    capsys.readouterr()
+
+    # The next pass posts neither again.
+    parked = _sent_back(hold(*proof_cause_park.hold(cause_rows), 80),
+                        comment(proof_cause_park.question(cause_rows), 79),
+                        hold(*HISTORY_HOLD, 78))
+    h, tally, _ = _cause_pass(monkeypatch, thread=parked, text=text)
+    assert h.fired == [] and h.holds == [] and h.posted == []
+    assert tally.held == 1
+
+
+def test_the_wording_says_one_more_per_re_arm_event():
+    source = (ROOT / "scripts" / "proof_dispatch.py").read_text(encoding="utf-8")
+    assert "never a third" not in source.lower()
+    assert "After two, one hold, and the card is left for an operator" not in source
+    assert NEVER_ANOTHER in source
+    brief = (ROOT / "briefs" / "proof.md").read_text(encoding="utf-8")
+    assert "either trigger counted, then held for an operator" not in brief
+    assert "Not met. history:" in brief and "fix: DRE-" in brief
+    doc = (ROOT / "docs" / "pipeline-acts.md").read_text(encoding="utf-8")
+    assert "one budget of two re-runs per record pull request;" not in doc
+    assert "`re-armed`" in doc
+    assert "`re-armed`" in pipeline_act.record("proof-run-dispatched")["why"]
+
+
+# --------------------------------------------------------------------------- #
+# DRE-7316: a waiting row stamped with a time is re-run once the time passes   #
+# --------------------------------------------------------------------------- #
+
+#: DRE-6673 (#985): its rows wait for the window that closes 2026-10-17
+#: 18:59 PT, stamped with margin as the brief now writes them.
+STAMP = "2026-10-17T19:30-07:00"
+EARLIER_STAMP = "2026-10-17T19:00-07:00"
+WINDOW = "the window that closes 2026-10-17 18:59 PT"
+DRE_6673_ROW = ("Seven days of arrivals show only the CEO's decisions in Green Light",
+                f"Not observed. waiting for {WINDOW} [not-before={STAMP}]: the seven "
+                "days' arrivals, counted")
+DRE_6673_ROW_2 = ("No escalation lands in Green Light without a question in it",
+                  f"Not observed. waiting for {WINDOW} [not-before={EARLIER_STAMP}]: "
+                  "every escalation read")
+DRE_6673 = record_md(MET_ROW, DRE_6673_ROW, DRE_6673_ROW_2)
+NOON_PT = datetime(2026, 10, 17, 19, 0, tzinfo=timezone.utc)     # 12:00 PT
+NOON_15_PT = NOON_PT + PASS                                       # 12:15 PT
+AFTER_PT = datetime(2026, 10, 18, 2, 45, tzinfo=timezone.utc)    # 19:45 PT
+#: The hold `_waiting` writes for it: the rows named, the latest time needed.
+TIMED = (f"{proof_record._cut(DRE_6673_ROW[0], 70)}; "
+         f"{proof_record._cut(DRE_6673_ROW_2[0], 70)}",
+         f"not-before={STAMP}")
+TIMED_LINE = linear_ops.proof_waiting_line(*TIMED)
+TIMED_RERUN = f"timed re-run after not-before 2026-10-17 19:30 PT at {SHA7}"
+TIMED_HELD = ("the record still waited after two timed re-runs",
+              "an operator reading the record's waiting rows and the two timed "
+              "re-run receipts")
+
+
+def timed_receipt(minutes_ago: float, n: int) -> dict:
+    return receipt(minutes_ago, reason="timed re-run after not-before 2026-10-16 "
+                                       f"19:30 PT at {OLD_HEAD[:7]}",
+                   count=f"timed re-run {n} of 2")
+
+
+def _timed_pass(monkeypatch, *, thread, now, text=DRE_6673, pr=None,
+                run="finished", live=True, fire_ok=True):
+    board = Board(review=[_review()], threads={"DRE-5930": thread})
+    h = Harness(monkeypatch, board, records={"DRE-5930": pr or _declined()},
+                texts={900: text}, fire_ok=fire_ok,
+                states={"DRE-5930": state(run, dispatches=1,
+                                          record={"number": 900, "state": "open"})})
+    tally = h.sweep(live=live, now=now)
+    return h, tally
+
+
+def test_timed_every_waiting_row_stamped_holds_on_the_latest_time(monkeypatch, capsys):
+    h, tally = _timed_pass(monkeypatch, thread=_sent_back(), now=NOON_PT)
+    lines = _about(_lines(capsys), "DRE-5930")
+    assert h.fired == [] and h.posted == []
+    assert h.holds == [("DRE-5930", *TIMED)]
+    # The needs half is exactly the one clause, so the hold reads time-only.
+    assert proof_record.time_only(TIMED_LINE) == datetime(2026, 10, 18, 2, 30,
+                                                          tzinfo=timezone.utc)
+    assert tally.held == 1
+    assert any("lifts at 2026-10-17 19:30 PT" in line for line in lines), lines
+
+
+def test_timed_one_prose_waiting_row_writes_the_hold_as_today(monkeypatch, capsys):
+    text = record_md(MET_ROW, DRE_6673_ROW, WAITING_ROW)
+    h, _ = _timed_pass(monkeypatch, thread=_sent_back(), now=NOON_PT, text=text)
+    lines = _about(_lines(capsys), "DRE-5930")
+    observed = (f"{proof_record._cut(DRE_6673_ROW[0], 70)}; "
+                f"{proof_record._cut(WAITING_ROW[0], 70)}")
+    needs = (f"{WINDOW}: the seven days' arrivals, counted; "
+             "the 2026-10-14 release: the tag moves")
+    assert h.holds == [("DRE-5930", observed, needs)]
+    assert proof_record.time_only(linear_ops.proof_waiting_line(observed, needs)) is None
+    assert not any("lifts at" in line for line in lines), lines
+
+
+@pytest.mark.parametrize("trigger", ["gate", "critic"])
+def test_timed_dre_6673_replayed_held_before_its_time_and_re_run_after(
+        monkeypatch, capsys, trigger):
+    pr = _declined() if trigger == "gate" else record(verdict("REQUEST_CHANGES", 100))
+    reason = TIMED_RERUN  # one reason under either trigger
+
+    # 12:00 PT: the record is read, the hold is posted, the line says when.
+    h, tally = _timed_pass(monkeypatch, thread=_sent_back(), now=NOON_PT, pr=pr)
+    lines = _about(_lines(capsys), "DRE-5930")
+    assert h.fired == [] and h.holds == [("DRE-5930", *TIMED)] and tally.held == 1
+    assert any(line.endswith("— lifts at 2026-10-17 19:30 PT") for line in lines), lines
+
+    # 12:15 PT: the hold stands, nothing is posted, the line still says when.
+    held = _sent_back(hold(*TIMED, 60))
+    h, tally = _timed_pass(monkeypatch, thread=held, now=NOON_15_PT, pr=pr)
+    lines = _about(_lines(capsys), "DRE-5930")
+    assert h.fired == [] and h.holds == [] and h.posted == [] and tally.held == 1
+    assert any(f"re-run: held by {TIMED_LINE} — lifts at 2026-10-17 19:30 PT" in line
+               for line in lines), lines
+
+    # 19:45 PT: one `🔬 proof-observed` naming the time, and the timed re-run.
+    h, tally = _timed_pass(monkeypatch, thread=held, now=AFTER_PT, pr=pr)
+    (note,) = _lifts(h)
+    assert f"not-before={STAMP} has passed" in note
+    assert "read at 2026-10-17 19:45 PT" in note
+    assert proof_dispatch.LIFTED_BY in note
+    assert h.fired == [("DRE-5930", REPO, reason, "proof-execute")]
+    assert h.holds == [] and tally.dispatched == 1
+    assert h.order == [("comment", "DRE-5930"), ("fire", "DRE-5930"),
+                       ("comment", "DRE-5930")]
+    first = h.posted[-1][1].split("\n", 1)[0]
+    assert first.endswith(f" — {reason} (timed re-run 1 of 2)")
+    parsed = proof_run_state.receipt(h.posted[-1][1])
+    assert parsed.reason == reason and parsed.count == "timed re-run 1 of 2"
+    # …the note is a discharge the one hold reader reads.
+    after = held + [comment(note, 0)]
+    assert proof_record.open_holds(fake_voices(after, VIEWER, card="DRE-5930")) == []
+
+
+def test_timed_a_timed_re_run_does_not_spend_the_re_run_budget(monkeypatch, capsys):
+    """Both critic-or-gate re-runs are spent: the timed re-run still goes."""
+    spent = (gate_rerun_receipt(1500, 1), comment("⏳ 5/5 amended", 1400),
+             rerun_receipt(800, 2), comment("⏳ 5/5 amended", 700))
+    h, tally = _timed_pass(monkeypatch, thread=_sent_back(*spent, hold(*TIMED, 60)),
+                           now=AFTER_PT)
+    assert proof_dispatch.RERUN_BUDGET == 2
+    assert [f[2] for f in h.fired] == [TIMED_RERUN]
+    assert h.posted[-1][1].split("\n", 1)[0].endswith("(timed re-run 1 of 2)")
+    assert h.holds == [] and tally.dispatched == 1
+
+
+def test_timed_receipts_are_not_counted_in_the_re_run_budget(monkeypatch, capsys):
+    spent = (timed_receipt(1500, 1), comment("⏳ 5/5 amended", 1400),
+             timed_receipt(800, 2), comment("⏳ 5/5 amended", 700))
+    assert proof_run_state.receipt(spent[0]["body"]).count == "timed re-run 1 of 2"
+    h, _ = _timed_pass(monkeypatch, thread=_sent_back(*spent), now=AFTER_PT,
+                       text=record_md(MET_ROW, NOT_MET_ROW))
+    assert [f[2] for f in h.fired] == [GATE_RERUN]
+    assert h.posted[-1][1].split("\n", 1)[0].endswith(f" — {GATE_RERUN} (re-run 1 of 2)")
+
+
+def test_timed_after_two_timed_re_runs_one_hold_and_never_a_third(monkeypatch, capsys):
+    spent = (timed_receipt(1500, 1), comment("⏳ 5/5 amended", 1400),
+             timed_receipt(800, 2), comment("⏳ 5/5 amended", 700))
+    thread = _sent_back(*spent, hold(*TIMED, 60))
+    h, tally = _timed_pass(monkeypatch, thread=thread, now=AFTER_PT)
+    out = capsys.readouterr().out
+    assert h.fired == []
+    assert h.holds == [("DRE-5930", *TIMED_HELD)]
+    assert tally.held == 1 and "3 of 2" not in out
+    assert "no further timed re-run" in out
+
+    # The next pass names the operator's hold and posts nothing.
+    notes = [comment(body, 30) for _, body in h.posted]
+    thread = sorted(thread + notes + [hold(*TIMED_HELD, 29)],
+                    key=lambda c: c["createdAt"])
+    h, tally = _timed_pass(monkeypatch, thread=thread, now=AFTER_PT + PASS)
+    lines = _about(_lines(capsys), "DRE-5930")
+    assert h.fired == [] and h.holds == [] and h.posted == [] and tally.held == 1
+    assert any(f"held by {linear_ops.proof_waiting_line(*TIMED_HELD)}" in line
+               for line in lines), lines
+
+
+#: The holds beside which a passed time hold is never lifted, each with the
+#: text the refusal must name.
+RERUN_BESIDE = {
+    "operators-press": lambda: hold("the console shows the new order",
+                                    "the operator's press on Approve", 70),
+    "cause": lambda: hold(*CAUSE_HOLD, 70),
+    "ceo-press": lambda: ceo_press_hold(70),
+    "prose-event": lambda: hold("the nightly on main", "the nightly to fire", 70),
+    "time-to-come": lambda: time_hold("2026-10-18T09:00-07:00", 70),
+}
+
+
+@pytest.mark.parametrize("case", sorted(RERUN_BESIDE))
+def test_timed_a_time_hold_beside_any_other_open_hold_is_never_lifted_on_the_re_run(
+        monkeypatch, capsys, case):
+    other = RERUN_BESIDE[case]()
+    # The time hold is the newest, so a line naming the newest hold would name it.
+    h, tally = _timed_pass(monkeypatch, thread=_sent_back(other, hold(*TIMED, 60)),
+                           now=AFTER_PT)
+    lines = _about(_lines(capsys), "DRE-5930")
+    assert _lifts(h) == [] and h.fired == [] and h.posted == [], h.posted
+    assert tally.held == 1
+    named = f"re-run: held by {other['body']}"
+    if case == "time-to-come":
+        named += " — lifts at 2026-10-18 09:00 PT"
+    assert any(named in line for line in lines), lines
+
+
+def test_timed_a_prose_waiting_hold_is_never_lifted_on_the_re_run(monkeypatch, capsys):
+    text = record_md(MET_ROW, WAITING_ROW)
+    h, tally = _timed_pass(monkeypatch, thread=_sent_back(hold(*WAITING, 60)),
+                           now=AFTER_PT, text=text)
+    lines = _about(_lines(capsys), "DRE-5930")
+    assert _lifts(h) == [] and h.fired == [] and h.posted == [] and tally.held == 1
+    line = linear_ops.proof_waiting_line(*WAITING)
+    assert any(l.endswith(f"re-run: held by {line}") for l in lines), lines
+
+
+def test_timed_a_lift_whose_dispatch_was_not_confirmed_is_timed_on_the_next_pass(
+        monkeypatch, capsys):
+    held = _sent_back(hold(*TIMED, 60))
+    h, _ = _timed_pass(monkeypatch, thread=held, now=AFTER_PT, fire_ok=False)
+    (note,) = _lifts(h)
+    assert len(h.fired) == 1 and len(h.posted) == 1
+    h, _ = _timed_pass(monkeypatch, thread=held + [comment(note, 30)],
+                       now=AFTER_PT + PASS)
+    assert _lifts(h) == []
+    assert [f[2] for f in h.fired] == [TIMED_RERUN]
+    assert h.posted[-1][1].split("\n", 1)[0].endswith("(timed re-run 1 of 2)")
+
+
+def test_timed_the_dry_run_says_would_lift_and_would_dispatch(monkeypatch, capsys):
+    h, _ = _timed_pass(monkeypatch, thread=_sent_back(hold(*TIMED, 60)), now=AFTER_PT,
+                       live=False)
+    lines = _lines(capsys)
+    assert h.fired == [] and h.posted == [] and h.holds == []
+    assert any(l.startswith("would: lift DRE-5930 — ") for l in lines), lines
+    assert f"would: dispatch DRE-5930 — {TIMED_RERUN}" in lines
+
+
+def test_timed_the_pipeline_acts_page_says_the_re_run_branch_writes_and_lifts_it():
+    page = (ROOT / "docs" / "pipeline-acts.md").read_text(encoding="utf-8")
+    assert "DRE-7316" in page
+    assert "timed re-run <n> of 2" in page

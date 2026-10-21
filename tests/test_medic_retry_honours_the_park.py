@@ -442,15 +442,23 @@ class TransientFailureIsStillRetriedTest(unittest.TestCase):
     def test_the_workflow_still_reruns_at_most_once(self):
         """ONCE, still keyed off GitHub's own `run_attempt` — the vendor's
         counter, not a marker we could double-post. This card narrows WHEN the
-        one retry fires; it must not change how many there are."""
+        one retry fires; it must not change how many there are.
+
+        DRE-7526 added the diagnosis's one resume, keyed off the same counter:
+        `diagnose` reruns only from its resume step and only on attempt 2, so
+        attempt 3 is the last there can ever be."""
         jobs = _medic()["jobs"]
         rerunners = [
             name for name, job in jobs.items()
             if "gh run rerun" in yaml.safe_dump(job)
         ]
-        self.assertEqual(["retry"], rerunners)
+        self.assertEqual(["retry", "diagnose"], rerunners)
         self.assertIn("run_attempt == 1", jobs["retry"]["if"])
         self.assertIn("run_attempt >= 2", jobs["diagnose"]["if"])
+        resumers = [s for s in jobs["diagnose"]["steps"]
+                    if "gh run rerun" in yaml.safe_dump(s)]
+        self.assertEqual(["resume"], [s.get("id") for s in resumers])
+        self.assertIn("run_attempt == 2", resumers[0]["if"])
 
     def test_no_card_at_all_still_retries(self):
         """Most watched workflows carry no card — the scheduled sweep, the test
@@ -636,13 +644,17 @@ class MedicWiringTest(unittest.TestCase):
         self.assertIn("::warning::", step["run"])
 
     def test_no_job_reruns_without_honouring_the_decision(self):
+        """The gate may sit on the job or on the step that reruns — the
+        diagnosis's resume (DRE-7526) is one step of a job that also delivers
+        a hold, so its gate is on the step."""
         for name, job in self.jobs.items():
-            if "gh run rerun" in yaml.safe_dump(job):
-                self.assertIn(
-                    "needs.classify.outputs.retry != 'false'",
-                    job.get("if", ""),
-                    f"{name} reruns without asking whether the card is parked",
-                )
+            for step in job.get("steps", []):
+                if "gh run rerun" in yaml.safe_dump(step):
+                    self.assertIn(
+                        "needs.classify.outputs.retry != 'false'",
+                        job.get("if", "") + " " + step.get("if", ""),
+                        f"{name} reruns without asking whether the card is parked",
+                    )
 
     def test_the_declined_job_posts_one_receipt_and_stops(self):
         job = self.jobs["retry_declined"]

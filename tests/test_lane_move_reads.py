@@ -215,14 +215,26 @@ def test_off_a_second_move_in_one_process_reads_the_states_once(monkeypatch):
 
 
 def test_off_the_building_card_reroute_looks_the_states_up_once(monkeypatch):
-    """In Progress → Backlog without `--park` is re-routed to Todo (DRE-1885).
-    The reroute used to look Todo up with a second `workflowStates` request."""
+    """In Progress → Backlog without `--park` is re-routed to the start lane
+    (DRE-1885) — In Progress since the flip (DRE-7120), so the card is already
+    there and its build is re-dispatched in place (DRE-7109). The reroute used
+    to look its lane up with a second `workflowStates` request."""
+    fired = _fire(monkeypatch)
     with linear(monkeypatch, **{"DRE-1": {"lane": "In Progress"}}) as lin:
         moved, out = _quiet(linear_ops.cmd_state, "DRE-1", "Backlog")
     assert moved is True
-    assert lin.writes == [("DRE-1", "Todo")]
-    assert "re-queued to 'Todo'" in out
-    assert lin.kinds == ["issue", "states", "issue", "comments", "write", "history"]
+    assert lin.writes == []
+    assert fired == ["DRE-1"]
+    assert "re-dispatched in place" in out
+    assert lin.kinds == ["issue", "states", "comments", "issue", "issue"]
+
+
+def _fire(monkeypatch):
+    """`plan_run.fire`, recorded: the in-place re-dispatch's one GitHub call."""
+    fired: list[str] = []
+    monkeypatch.setattr(linear_ops.plan_run, "fire",
+                        lambda card, repo, **kw: fired.append(card["identifier"]) or (True, ""))
+    return fired
 
 
 def test_off_never_asks_the_door(monkeypatch):
@@ -284,18 +296,19 @@ def test_the_cli_held_flag_is_a_held_card(monkeypatch):
 def test_a_conditional_write_is_a_held_card(monkeypatch):
     """`expect=` is the lane the caller READ (Stage 2 item 33): it holds the
     card, so the first read is waste. The condition is checked on the
-    pre-write re-read."""
+    pre-write re-read. (Its target was Todo, whose epic gate read the comments
+    too, until Todo left the contract, DRE-7660.)"""
     with linear(monkeypatch, **{"DRE-1": {"lane": "In Progress"}}) as lin:
-        moved, _ = _quiet(linear_ops.cmd_state, "DRE-1", "Todo",
+        moved, _ = _quiet(linear_ops.cmd_state, "DRE-1", "Planning",
                           expect=("In Progress",), labels_absent=("needs-human",))
     assert moved is True
-    assert lin.kinds == ["states:key", "issue", "comments", "write", "history"]
-    assert lin.writes == [("DRE-1", "Todo")]
+    assert lin.kinds == ["states:key", "issue", "write", "history"]
+    assert lin.writes == [("DRE-1", "Planning")]
 
 
 def test_a_conditional_write_is_refused_on_the_live_lane(monkeypatch):
     with linear(monkeypatch, **{"DRE-1": {"lane": "In Review"}}) as lin:
-        moved, out = _quiet(linear_ops.cmd_state, "DRE-1", "Todo",
+        moved, out = _quiet(linear_ops.cmd_state, "DRE-1", "Planning",
                             expect=("In Progress",))
     assert moved is False
     assert lin.writes == []
@@ -306,7 +319,7 @@ def test_a_conditional_write_is_refused_on_the_live_lane(monkeypatch):
 def test_a_conditional_write_is_refused_on_a_live_label(monkeypatch):
     with linear(monkeypatch, **{"DRE-1": {"lane": "In Progress",
                                           "labels": ["needs-human"]}}) as lin:
-        moved, _ = _quiet(linear_ops.cmd_state, "DRE-1", "Todo",
+        moved, _ = _quiet(linear_ops.cmd_state, "DRE-1", "Planning",
                           expect=("In Progress",), labels_absent=("needs-human",))
     assert moved is False
     assert lin.writes == []
@@ -322,15 +335,19 @@ def test_a_held_card_that_finished_since_is_never_reopened(monkeypatch):
     assert lin.kinds == ["states:key", "issue"]
 
 
-def test_a_held_building_card_is_rerouted_to_todo_on_the_live_read(monkeypatch):
+def test_a_held_building_card_is_rerouted_to_the_start_lane_on_the_live_read(monkeypatch):
     """DRE-1885 decided on the re-read: the caller's card was in Todo when it
-    decided on Backlog, the live card is building — it goes to Todo."""
+    decided on Backlog, the live card is building — it goes to the start lane,
+    where it already is since the flip (DRE-7120), so its build is
+    re-dispatched in place."""
+    fired = _fire(monkeypatch)
     with linear(monkeypatch, **{"DRE-1": {"lane": "In Progress"}}) as lin:
         moved, out = _quiet(linear_ops.cmd_state, "DRE-1", "Backlog", held=True)
     assert moved is True
-    assert lin.writes == [("DRE-1", "Todo")]
-    assert "re-queued to 'Todo'" in out
-    assert lin.kinds == ["states:key", "issue", "comments", "write", "history"]
+    assert lin.writes == []
+    assert fired == ["DRE-1"]
+    assert "re-dispatched in place" in out
+    assert lin.kinds == ["states:key", "issue", "comments", "issue"]
 
 
 @pytest.mark.parametrize("lane,labels,flags", [

@@ -76,7 +76,9 @@ set -e
 #      no_work=true, and then: noop (an answer is standing and the sweep
 #      owns the restart) posts at most one tagged notice and never a hold;
 #      hold posts the 🛑 hold that asks for an Operator decision and
-#      writes held=true.
+#      writes held=true — unless that hold is already standing at this
+#      head with no newer decision, when it posts nothing, writes no
+#      held and says so in the log and fix-no-work.txt (DRE-7506).
 #
 # Outputs, to $GITHUB_OUTPUT, for the steps that read `steps.pr.outputs.*`:
 # head_sha, go, mode, number, branch, card, attempt, rearmed, stopped_by,
@@ -283,6 +285,22 @@ set -e
 #   #3481: three reviews, three different findings, stopped as circling).
 #   The non-convergence and ceiling wordings are unchanged.
 #
+# 2026-10-18 · DRE-7506. One hold notice per hold. Bureau-pipeline PR
+#   #1134 (DRE-7284) got 58 identical conflict holds between 23:15Z on
+#   10-17 and 09:05Z on 10-18, one per fix run, until the operator merged
+#   main by hand (ddfef792); it later got the fix-budget hold three times
+#   at one head. The hold is posted on GH_TOKEN, so its author is
+#   whichever pool bot was selected (agent-bureau-bot-4[bot] and -3 there)
+#   and a check filtered to WORKER_LOGIN would find none of them — the
+#   DRE-4848 failure in a new place. A hold now ends with the commit it
+#   was posted at, after its pinned sentences. Before posting, the newest
+#   Bot-typed comment that opens with this hold's own words is read: at
+#   this head, with no person's Operator decision newer, it is standing
+#   and this run posts nothing and writes no held=true, so the card gets
+#   no repeat either. A new commit, including a hand-pushed merge that
+#   leaves no push marker, or a newer decision releases it. A hold from
+#   before this change carries no commit and reads as released, once.
+#
 PR=${PR_NUMBER}
 INFO=$(gh pr view "$PR" --repo ${REPO} --json state,headRefName,headRefOid,mergeStateStatus,baseRefName,isDraft,files)
 STATE=$(echo "$INFO" | python3 -c "import json,sys; print(json.load(sys.stdin)['state'])")
@@ -462,13 +480,38 @@ if [ "$ACTION" = "noop" ]; then
   exit 0
 fi
 
-# ACTION=hold. Its sentences are pinned to fix_context (DRE-2409,
-# DRE-2548, DRE-3451, DRE-2813).
+# ACTION=hold, posted once per hold (DRE-7506). The newest hold of this
+# kind is standing when GitHub types its author a Bot, whichever pool bot
+# GH_TOKEN selected, its commit line names this head, and no person's
+# Operator decision is newer. A hold that carries no commit reads as
+# released. Each kind is matched by its own words, never by the other's.
+if [ "$MODE" = "conflict" ]; then
+  HOLD_WORDS="Conflict-resolution budget exhausted"
+else
+  HOLD_WORDS="Fix budget exhausted"
+fi
+STANDING=$(python3 -c 'import json, re, sys; sys.path.insert(0, ".bureau-pipeline/scripts"); import fix_context as fc
+comments = fc.flatten_pages(json.load(open(sys.argv[1], encoding="utf-8")))
+prefix = fc.BLOCKER_PREFIX + " " + sys.argv[2]
+holds = [i for i, c in enumerate(comments) if (c.get("user") or {}).get("type") == "Bot" and fc.first_line(c.get("body")).startswith(prefix)]
+at = re.search(r"^Held at commit ([0-9a-f]{40})\.", comments[holds[-1]].get("body") or "", re.M) if holds else None
+newer = comments[holds[-1] + 1:] if holds else []
+print(str(bool(at) and at.group(1) == sys.argv[3] and not any(fc._is_human(c) and fc.is_decision_body(c.get("body")) for c in newer)).lower())' \
+  "$TMPD/thread.json" "$HOLD_WORDS" "$HEAD_SHA")
+if [ "$STANDING" = "true" ]; then
+  echo "hold already standing: the $HOLD_WORDS hold on #$PR was posted at $SHA8 and no Operator decision is newer — this run posts nothing (DRE-7506)" \
+    | tee -a "$TMPD/fix-no-work.txt"
+  exit 0
+fi
+# Its sentences are pinned to fix_context (DRE-2409, DRE-2548, DRE-3451,
+# DRE-2813); the commit line after them is what the check above reads.
 if [ "$MODE" = "conflict" ]; then
   gh pr comment "$PR" --repo ${REPO} \
     --body "🛑 Conflict-resolution budget exhausted ($ATTEMPTS rounds) — main keeps moving under this branch; holding for a human decision.
 
-To release this PR, comment here with a first line that starts with the words Operator decision, for example: **Operator decision** — <your answer here>. Any casing works and your answer can continue on that line. What happens next: your comment starts the fix loop on its own, normally within a minute. If that run never arrives, the pipeline sweep picks your answer up on its next pass, normally within about 15 minutes. You do not need to run anything by hand. If your wording is not recognised as a decision the run skips instead of starting the loop, and the pipeline posts a note here telling you how to re-post it. A skip means the wording was not recognised, never that your answer was rejected. Dispatching the fix workflow by hand is not a second way out: with the budget spent it cannot add an attempt, and while your answer is standing it deliberately does nothing rather than post over it."
+To release this PR, comment here with a first line that starts with the words Operator decision, for example: **Operator decision** — <your answer here>. Any casing works and your answer can continue on that line. What happens next: your comment starts the fix loop on its own, normally within a minute. If that run never arrives, the pipeline sweep picks your answer up on its next pass, normally within about 15 minutes. You do not need to run anything by hand. If your wording is not recognised as a decision the run skips instead of starting the loop, and the pipeline posts a note here telling you how to re-post it. A skip means the wording was not recognised, never that your answer was rejected. Dispatching the fix workflow by hand is not a second way out: with the budget spent it cannot add an attempt, and while your answer is standing it deliberately does nothing rather than post over it.
+
+Held at commit $HEAD_SHA."
 else
   # Which stop this was (DRE-2817); WHY and CLASSIFICATION are
   # quote-safe (DRE-1996).
@@ -484,6 +527,8 @@ else
 
 $CLASSIFICATION
 
-To release this PR, comment here with a first line that starts with the words Operator decision, for example: **Operator decision** — <your answer here>. Any casing works and your answer can continue on that line. What happens next: your comment starts the fix loop on its own, normally within a minute. If that run never arrives, the pipeline sweep picks your answer up on its next pass, normally within about 15 minutes. You do not need to run anything by hand. If your wording is not recognised as a decision the run skips instead of starting the loop, and the pipeline posts a note here telling you how to re-post it. A skip means the wording was not recognised, never that your answer was rejected. Dispatching the fix workflow by hand is not a second way out: with the budget spent it cannot add an attempt, and while your answer is standing it deliberately does nothing rather than post over it."
+To release this PR, comment here with a first line that starts with the words Operator decision, for example: **Operator decision** — <your answer here>. Any casing works and your answer can continue on that line. What happens next: your comment starts the fix loop on its own, normally within a minute. If that run never arrives, the pipeline sweep picks your answer up on its next pass, normally within about 15 minutes. You do not need to run anything by hand. If your wording is not recognised as a decision the run skips instead of starting the loop, and the pipeline posts a note here telling you how to re-post it. A skip means the wording was not recognised, never that your answer was rejected. Dispatching the fix workflow by hand is not a second way out: with the budget spent it cannot add an attempt, and while your answer is standing it deliberately does nothing rather than post over it.
+
+Held at commit $HEAD_SHA."
 fi
 echo "held=true" >> "$GITHUB_OUTPUT"

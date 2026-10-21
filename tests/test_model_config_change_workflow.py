@@ -132,7 +132,18 @@ def _change_set(*changes: dict) -> str:
     return json.dumps({"requested_by": "ceo@example.com", "changes": list(changes)})
 
 
-VALID = {"op": "move_agent", "agent": "proof", "group": "advisory"}
+def _a_proof_move() -> dict:
+    """A move of `proof` the console allows today, read off the committed
+    `config/model-choices.json` — so a save that moves `proof` into the
+    Reviewers (DRE-7284 gave it a group of its own) moves this choice with
+    it."""
+    choices = json.loads((ROOT / "config" / "model-choices.json").read_text())
+    agent = next(a for a in choices["agents"] if a["name"] == "proof")
+    group = next(m["group"] for m in agent["moves"] if m["allowed"])
+    return {"op": "move_agent", "agent": "proof", "group": group}
+
+
+VALID = _a_proof_move()
 REFUSED = {"op": "move_agent", "agent": "engineer", "group": "judgement"}
 
 

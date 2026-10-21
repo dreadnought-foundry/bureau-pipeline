@@ -116,6 +116,14 @@
 # the gate step), and every `pull_request`, `schedule` or `workflow_dispatch`
 # run keep the retry.
 #
+# ONE RESUME AFTER A DIAGNOSIS (DRE-7526). The diagnosis agent also writes a
+# one-word verdict. `resume` — an outside service failure a fresh attempt can
+# clear — on the failed run's second attempt, with the retry gate not having
+# said `false`, re-runs the failed jobs once more instead of delivering the
+# report, which goes into this run's summary. Attempt 3's medic delivers
+# whatever the verdict says, so it happens once per run. `hold`, or anything
+# else, delivers the diagnosis as before.
+#
 # Reusable workflow: the workflow_run trigger list (which workflows to watch)
 # lives in the calling stub — it can include product-specific CI workflows.
 name: Pipeline Medic (reusable)
@@ -1176,8 +1184,10 @@ jobs:
             standard (your report goes to the non-technical CEO).
 
             You are the pipeline medic for this repo. The workflow
-            "${{ github.event.workflow_run.name }}" failed twice (original run
-            + one automatic retry), so this is NOT a transient flake.
+            "${{ github.event.workflow_run.name }}" failed on its original
+            attempt and again on the medic's automatic retry. An outside
+            service failure can still be one a fresh attempt clears — that
+            is what the `resume` verdict in step 6 is for.
 
             Failed run: ${{ github.event.workflow_run.html_url }}
             Head branch: ${{ steps.safe.outputs.head_branch }}
@@ -1214,7 +1224,71 @@ jobs:
             5. Write the report, and nothing else, to
                .bureau-pipeline/medic-report.md. Do not post it anywhere:
                the next step delivers it where the snapshot says.
+            6. Write your verdict, one word and nothing else, to
+               .bureau-pipeline/medic-verdict.txt:
+               - resume: category (c), an outside service failure that a
+                 fresh attempt can clear. The medic re-runs the failed jobs
+                 once more instead of delivering your report, and your
+                 report goes into the medic run's own summary.
+               - hold: categories (a), (b) and (d), or any doubt. Your
+                 report is delivered where the snapshot says, for a person.
+               No file, or anything but the single word resume, reads as
+               hold. The medic resumes a run at most once.
             Do NOT attempt to fix anything — diagnose and report only.
+
+      # THE VERDICT, AND ONE RESUME (DRE-7526, weekly report DRE-7512 fix-3).
+      # Every diagnosis used to be delivered as `run-failure-diagnosed`, a hold
+      # whose next actor is the operator — 201 stops in one week, even where
+      # the diagnosis itself said a fresh attempt would clear the fault. The
+      # agent now writes a one-word verdict; `medic_resume.py verdict` reads
+      # anything but exactly `resume` (trimmed) as `hold`.
+      #
+      # On `resume` the next step re-runs the failed jobs of the same run — the
+      # `retry` job's command — and the delivery step is skipped: no card
+      # comment, no console alert, the same as the medic's first retry. The
+      # report goes into this run's step summary, naming attempt 3. Only on
+      # attempt 2, so attempt 3 is as far as it goes: attempt 3's medic
+      # delivers whatever the verdict says, and the medic cannot loop. Only
+      # when the retry gate did not say `false`, so its refusals (a parked
+      # card, turn exhaustion, an out-of-memory kill on a machine that cannot
+      # grow, a repeat stall) still hold; this job's own `if:` keeps every
+      # class and rule it skipped before. A rerun that will not start says so
+      # and leaves `resumed=false`, and the diagnosis is delivered as before.
+      # No `always()` on either: a failed agent's verdict is not read, so it
+      # is a hold. Pinned by tests/test_medic_resume.py.
+      - name: Read the diagnosis verdict
+        id: verdict
+        run: |
+          VERDICT=$(python3 .bureau-pipeline/scripts/medic_resume.py verdict \
+            --file .bureau-pipeline/medic-verdict.txt)
+          echo "verdict=$VERDICT" >> "$GITHUB_OUTPUT"
+          echo "diagnosis verdict: $VERDICT"
+
+      - name: Resume the failed run once
+        id: resume
+        if: >
+          github.event.workflow_run.run_attempt == 2 &&
+          needs.classify.outputs.retry != 'false' &&
+          steps.verdict.outputs.verdict == 'resume'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_ID: ${{ github.event.workflow_run.id }}
+          RUN_ATTEMPT: ${{ github.event.workflow_run.run_attempt }}
+          # env, not inline (DRE-1996): the run name is agent-influenced text.
+          RUN_URL: ${{ github.event.workflow_run.html_url }}
+          FAILED_WORKFLOW: ${{ github.event.workflow_run.name }}
+          REPO: ${{ github.repository }}
+        run: |
+          if ! gh run rerun "$RUN_ID" --failed --repo "$REPO"; then
+            echo "::warning title=Resume not started::The diagnosis said a fresh attempt would clear the fault, but the failed jobs of ${FAILED_WORKFLOW} could not be re-run, so the diagnosis is delivered instead. Failed run: ${RUN_URL}"
+            echo "resumed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "resumed=true" >> "$GITHUB_OUTPUT"
+          python3 .bureau-pipeline/scripts/medic_resume.py summary \
+            --report .bureau-pipeline/medic-report.md --attempt "$RUN_ATTEMPT" \
+            --run-url "$RUN_URL" --workflow "$FAILED_WORKFLOW" >> "$GITHUB_STEP_SUMMARY" \
+            || echo "::warning title=Resume not summarized::${FAILED_WORKFLOW} was re-run, but the report could not be written to this run's summary. Failed run: ${RUN_URL}"
 
       # THE REPORT, DELIVERED (Stage 2 fix #23). What the agent used to do with
       # the fleet's Linear key, done here with it, by a script: a comment on
@@ -1255,10 +1329,11 @@ jobs:
       # `always()`: a report written before the agent died is still a report.
       # The file decides, not the agent's outcome. Every write warns rather
       # than fails, like the medic's other notes: a red medic run is an
-      # operator email about a failure already being reported.
+      # operator email about a failure already being reported. Skipped only
+      # when the step above resumed the run (DRE-7526).
       - name: Deliver the diagnosis
         id: deliver
-        if: always()
+        if: always() && steps.resume.outputs.resumed != 'true'
         env:
           LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
           KIND: ${{ steps.target.outputs.kind }}
