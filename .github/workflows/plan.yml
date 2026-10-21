@@ -1213,6 +1213,14 @@ jobs:
           CARD: ${{ github.event.client_payload.identifier }}
           LINEAR_API_KEY: ${{ secrets.LINEAR_PLANNER_KEY || secrets.LINEAR_API_KEY }}
           LINEAR_API_KEY_FALLBACK: ${{ secrets.LINEAR_API_KEY }}
+          # The three readings `plan_held_repo.py` hands `sweep_holds.read`
+          # (DRE-7753), each the caller's own value threaded verbatim: its
+          # max_wip input (DRE-2529), its BUREAU_MAX_WIP variable (DRE-6631)
+          # and its INTAKE_HOLD variable, the one its groomer stub passes
+          # (DRE-3285). `vars` is the caller's in a reusable.
+          MAX_WIP: ${{ inputs.max_wip }}
+          BUREAU_MAX_WIP: ${{ vars.BUREAU_MAX_WIP }}
+          INTAKE_HOLD: ${{ vars.INTAKE_HOLD }}
         run: |
           python3 .bureau-pipeline/scripts/assemble_context.py assemble planner \
             > .bureau-pipeline/agent-context.md
@@ -1223,6 +1231,13 @@ jobs:
           python3 .bureau-pipeline/scripts/plan_bound.py context "$CARD" >> .bureau-pipeline/agent-context.md \
             || echo "BOUND STATUS: UNKNOWN — plan_bound.py context exited non-zero, so the bound findings were not appended" >> .bureau-pipeline/agent-context.md
           grep -E '^BOUND STATUS:' .bureau-pipeline/agent-context.md || echo "no BOUND STATUS: line in the assembled context"
+          # This plan's own repo's holds (DRE-7753), read from the caller's
+          # checkout at $GITHUB_WORKSPACE through `sweep_holds.read` — the
+          # same reading the first critic's held-repo check makes, so the
+          # paragraph it asks for is the one the planner was handed.
+          python3 .bureau-pipeline/scripts/plan_held_repo.py context >> .bureau-pipeline/agent-context.md \
+            || echo "REPO HOLDS: UNKNOWN — plan_held_repo.py context exited non-zero, so the repo's holds were not appended" >> .bureau-pipeline/agent-context.md
+          grep -E '^REPO HOLDS:' .bureau-pipeline/agent-context.md || echo "no REPO HOLDS: line in the assembled context"
           echo "assembled $(wc -l < .bureau-pipeline/agent-context.md) lines of planner context"
 
       # DRE-1996: make the DRE-1989 sentinel fence mechanical. Epic title and
@@ -2988,6 +3003,14 @@ jobs:
           LINEAR_API_KEY: ${{ secrets.LINEAR_PLANNER_KEY || secrets.LINEAR_API_KEY }}
           LINEAR_API_KEY_FALLBACK: ${{ secrets.LINEAR_API_KEY }}
           REPO_SLUG: ${{ steps.repo.outputs.slug }}
+          # The three readings `plan_held_repo.py` hands `sweep_holds.read`
+          # (DRE-7753), each the caller's own value threaded verbatim: its
+          # max_wip input (DRE-2529), its BUREAU_MAX_WIP variable (DRE-6631)
+          # and its INTAKE_HOLD variable, the one its groomer stub passes
+          # (DRE-3285). `vars` is the caller's in a reusable.
+          MAX_WIP: ${{ inputs.max_wip }}
+          BUREAU_MAX_WIP: ${{ vars.BUREAU_MAX_WIP }}
+          INTAKE_HOLD: ${{ vars.INTAKE_HOLD }}
         run: |
           EPIC="${{ github.event.client_payload.identifier }}"
           NOTE="${{ runner.temp }}/plan-mechanical.md"
@@ -3020,6 +3043,13 @@ jobs:
               --caller "$REPO_SLUG" \
               --structural-file "${{ runner.temp }}/plan-structural.txt" \
               --note-file "$NOTE" < "$CHILDREN"
+          # A plan for a held repo that does not name lifting the hold as a
+          # step that needs the CEO (DRE-7752), APPENDED to the same
+          # structural file. Its `Repo holds:` line lands in the note either way.
+          python3 .bureau-pipeline/scripts/plan_held_repo.py findings \
+              --artifact "${{ runner.temp }}/plan-artifact.md" \
+              --structural-file "${{ runner.temp }}/plan-structural.txt" \
+              --note-file "$NOTE"
           # The same file the critic is handed, so the list on the epic is
           # byte-for-byte the list the model read.
           python3 .bureau-pipeline/scripts/linear_ops.py comment "$EPIC" \
@@ -3472,6 +3502,14 @@ jobs:
           LINEAR_API_KEY: ${{ secrets.LINEAR_PLANNER_KEY || secrets.LINEAR_API_KEY }}
           LINEAR_API_KEY_FALLBACK: ${{ secrets.LINEAR_API_KEY }}
           REPO_SLUG: ${{ steps.repo.outputs.slug }}
+          # The three readings `plan_held_repo.py` hands `sweep_holds.read`
+          # (DRE-7753), each the caller's own value threaded verbatim: its
+          # max_wip input (DRE-2529), its BUREAU_MAX_WIP variable (DRE-6631)
+          # and its INTAKE_HOLD variable, the one its groomer stub passes
+          # (DRE-3285). `vars` is the caller's in a reusable.
+          MAX_WIP: ${{ inputs.max_wip }}
+          BUREAU_MAX_WIP: ${{ vars.BUREAU_MAX_WIP }}
+          INTAKE_HOLD: ${{ vars.INTAKE_HOLD }}
         run: |
           EPIC="${{ github.event.client_payload.identifier }}"
           NOTE="${{ runner.temp }}/plan-mechanical.md"
@@ -3499,6 +3537,12 @@ jobs:
               --caller "$REPO_SLUG" \
               --structural-file "${{ runner.temp }}/plan-structural.txt" \
               --note-file "$NOTE" < "$CHILDREN"
+          # The held-repo check against the revision (DRE-7752), appended after
+          # the proof reach, so a revised plan is judged on its revision.
+          python3 .bureau-pipeline/scripts/plan_held_repo.py findings \
+              --artifact "${{ runner.temp }}/plan-artifact.md" \
+              --structural-file "${{ runner.temp }}/plan-structural.txt" \
+              --note-file "$NOTE"
           python3 .bureau-pipeline/scripts/linear_ops.py comment "$EPIC" \
             "$(cat "$NOTE")"
 
@@ -5205,6 +5249,14 @@ jobs:
           LINEAR_API_KEY: ${{ secrets.LINEAR_PLANNER_KEY || secrets.LINEAR_API_KEY }}
           LINEAR_API_KEY_FALLBACK: ${{ secrets.LINEAR_API_KEY }}
           REPO_SLUG: ${{ steps.repo.outputs.slug }}
+          # The three readings `plan_held_repo.py` hands `sweep_holds.read`
+          # (DRE-7753), each the caller's own value threaded verbatim: its
+          # max_wip input (DRE-2529), its BUREAU_MAX_WIP variable (DRE-6631)
+          # and its INTAKE_HOLD variable, the one its groomer stub passes
+          # (DRE-3285). `vars` is the caller's in a reusable.
+          MAX_WIP: ${{ inputs.max_wip }}
+          BUREAU_MAX_WIP: ${{ vars.BUREAU_MAX_WIP }}
+          INTAKE_HOLD: ${{ vars.INTAKE_HOLD }}
         run: |
           EPIC="${{ github.event.client_payload.identifier }}"
           NOTE="${{ runner.temp }}/plan-mechanical.md"
@@ -5227,6 +5279,14 @@ jobs:
           else
             echo "::warning::the children's detail could not be read, so the proof-reach check did not run"
           fi
+          # The held-repo check (DRE-7752), on the note only, for the same
+          # reason, and on the artifact `Plan artifact — upload source
+          # (review)` uploads — so a revision that dropped its "Step that
+          # needs the CEO:" paragraph is a `held-repo:` line the next round's
+          # critic reads.
+          python3 .bureau-pipeline/scripts/plan_held_repo.py findings \
+              --artifact "${{ runner.temp }}/plan-artifact.md" \
+              --note-file "$NOTE"
           python3 .bureau-pipeline/scripts/linear_ops.py comment "$EPIC" \
             "$(cat "$NOTE")"
 
