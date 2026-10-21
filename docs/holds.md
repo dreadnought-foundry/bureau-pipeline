@@ -18,13 +18,13 @@ one to `hold.apply`.
 
 ## The vocabulary
 
-Eleven reasons, six lift kinds and four readers, as exact strings:
+Twelve reasons, seven lift kinds and four readers, as exact strings:
 
 - **Reasons:** `stranded-no-run`, `no-route`, `review-cap-spent`,
   `dead-run-cap`, `turn-cap-park`, `epic-rereview-twice`, `plan-critic-bound`,
-  `fix-dispute`, `unfixable-check`, `operator-step`, `manual`.
+  `fix-dispute`, `unfixable-check`, `operator-step`, `wip-cap-held`, `manual`.
 - **Lift kinds:** `run-started`, `repo-on-rail`, `new-head`, `unpark-marker`,
-  `blockers-terminal`, `manual`. One more lift applies to every reason: `card-closed`, whenever the
+  `blockers-terminal`, `cap-restored`, `manual`. One more lift applies to every reason: `card-closed`, whenever the
   card is Done or Canceled. It is a rule, not a row.
 - **Readers:** `sweep` (`reconcile.held`, `reconcile.live_promotion_refusal`),
   `fix-dispatch` (`reconcile.card_parked_for_human`, asked by
@@ -51,6 +51,7 @@ moves itself (below).
 | `fix-dispute` | `new-head` | The fix loop's budget was spent on one head. A new head runs the review, the gate and the fix loop again. | Triage → In Review |
 | `unfixable-check` | `new-head` | The red check was read on one head (its receipt is keyed `unfixable-check-hold @<sha8>`). A new head is read again. | Triage → In Review |
 | `operator-step` | `blockers-terminal` | A planner-filed operator step is a person's to do once the work before it is finished. The card's `blockedBy` relations say when, and the sweep's promotion gate reads them. | Queued → Hand-work |
+| `wip-cap-held` | `cap-restored` | A Queued child of an approved epic whose repo's WIP cap is 0. Nothing in that repo is built or promoted, so the child waits on the cap, and the sweep lifts the hold once the cap is above 0 again. | Nothing moves |
 | `manual` | `manual` | A person chose it, or a writer created the card already held. Nothing a sweep can read says it is over. | Nothing moves |
 
 A `manual` hold — `epic-rereview-twice`, `plan-critic-bound`, `manual`, and any
@@ -120,6 +121,42 @@ The one-time pass over the cards filed before that,
 `hand_work_migration.py operator-backlog`, is its second writer: it stamps a `manual`
 operator hold `by=hand_work_migration.py`, and lifts and moves the ones with
 nothing left to wait on (DRE-6429).
+
+### `wip-cap-held` is lifted by the sweep when the cap is restored
+
+A repo whose WIP cap is 0 builds and promotes nothing, and its sweep used to
+say so in one log line that never reached the board. An approved epic there
+sat silent, its children in Queued looking like cards waiting their turn
+(DRE-7600, 2026-10-19). `scripts/repo_held_epics.py` ends that (DRE-7754).
+
+On every full pass of a repo held at max_wip 0, `hold_pass` holds each Queued
+child of the repo's approved epics that waits on the cap, and tells the epic
+once with a `⏸️ repo-held:` receipt (the `repo-held-notice` act,
+`docs/pipeline-acts.md`). The stamp is
+
+    🔒 hold: reason=wip-cap-held at=none lifts=cap-restored by=scripts/repo_held_epics.py
+
+A child carrying a live PARKED routing verdict does not wait on the cap and is
+neither held nor listed. A child already held for another reason keeps that
+hold, and the receipt lists it by its own reason. A child wearing the label
+with no live stamp reads `manual` — a person's hold, or a stamp write that
+failed after the label landed, and nothing on the card tells the two apart — so
+it is never re-stamped: the receipt lists it as
+`held (manual — needs-human with no hold stamp; a person lifts it)`, and the
+pass prints a line naming it on every held pass while it stands that way.
+
+On a pass at a cap above 0, `lift_pass` reads the repo's Queued cards wearing
+the hold and lifts each one whose live stamp is `wip-cap-held`, with
+`because=cap-restored`. Nothing moves: the child waits on the dependency gate
+as it always did. Every other hold is left alone. `hold.lift_due` answers None
+for `cap-restored` outside Done or Canceled, as it does for
+`blockers-terminal` — no caller passes it the repo's cap — so the sweep is its
+only lifter. Its row names `sweep` as its reader, because the sweep's
+promotion stands down for a held child until the lift pass releases it.
+
+The act tag `repo-held` and the reason `wip-cap-held` are two different words
+on purpose. No hold line may carry an act tag (below), and a reason spelled
+`repo-held` would put the tag into every stamp.
 
 ### `stranded-no-run` waits on a person's re-send
 
@@ -430,6 +467,7 @@ without a person before it holds.
 | `scripts/release_deferral.py` · `<module>` (`CARD_LABELS`) | `a person finishes it, nothing builds it` | `manual` | `manual` | sweep, fix-dispatch, medic, limit-recovery | None — a person, or a writer creating a card already held, chose it |
 | `scripts/linear_ops.py` · `_file_operator_hold` (`subissue`, `oneoff`) | `filed as an operator step` | `operator-step` | `blockers-terminal` | fix-dispatch, medic, limit-recovery | None — the card is filed held by design; the sweep lifts it when every blocker is terminal |
 | `scripts/hand_work_migration.py` · `_convert_one` (`operator-backlog`) | `one card of the operator-backlog pass` | `operator-step` | `blockers-terminal` | fix-dispatch, medic, limit-recovery | None — the card already wears the hold; the pass names the reason a person's label left unsaid |
+| `scripts/repo_held_epics.py` · `_hold` (`hold_pass`) | `Hold one Queued child for the cap` | `wip-cap-held` | `cap-restored` | sweep | None — a cap of 0 is the repo's own hold, and nothing in it is built or promoted until a person restores the cap |
 
 `scripts/dead_run.py`'s site is `dead_run.py park`, which the build run's Report
 step (`scripts/report_agent_result.sh`) calls when either budget is spent.
@@ -453,6 +491,7 @@ records.
 | `fix-dispute` | The fix loop's rounds on the pull request, up to its budget. | `Fix budget exhausted` |
 | `unfixable-check` | The fix run itself, which read the red check and found nothing to fix. | `unfixable-check-hold @` |
 | `operator-step` | None — the step is a person's by design, and it waits only on its blockers. | — |
+| `wip-cap-held` | None — a cap of 0 is the repo's own hold, set in its reconcile stub, and nothing in the repo is built or promoted until a person restores it. | — |
 | `manual` | None — a person, or a writer creating a card already held, chose it. | — |
 
 ## The merge gate does not read the hold

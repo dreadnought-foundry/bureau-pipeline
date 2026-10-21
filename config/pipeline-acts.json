@@ -1151,6 +1151,24 @@
       }
     },
     {
+      "name": "repo-held-notice",
+      "tag": "repo-held",
+      "adopted": true,
+      "kind": "hold",
+      "means": "An approved epic whose repo is held at WIP cap 0 is told so once, quoting the reconcile stub's own words about the cap, and every Queued child of it that waits on the cap is held `wip-cap-held` until the cap is restored.",
+      "state": "held",
+      "next_actor": "operator",
+      "discharges": null,
+      "subscriber": "reconcile.yml",
+      "cadence_s": null,
+      "cadence_why": "Null: the hold ends only when someone restores max_wip in the repo's reconcile stub, which scripts/sweep_holds.py reads the cap from, and nothing bounds when that happens.",
+      "why": "A repo at WIP cap 0 went idle in one sweep line that never reached the board. On 2026-10-19 DRE-7600 sat approved in agent-bureau-demo that way, its three children in Queued looking like cards waiting their turn, with no notice to anyone (epic DRE-7671). The tag is `repo-held` and the hold reason is `wip-cap-held`, two different words, so no hold line is ever read as this receipt. The console learned the tag first (DRE-7751).",
+      "emits": {
+        "file": "scripts/repo_held_epics.py",
+        "anchor": "builds nothing — its WIP cap is 0."
+      }
+    },
+    {
       "name": "agent-blocker-resolved",
       "tag": "agent-blocker-resolved",
       "adopted": true,
