@@ -570,3 +570,20 @@ def test_with_the_door_a_manual_hold_leaves_the_pass_idle_and_unlifted(monkeypat
     assert len(_out_lines(capsys, "idle:")) == 1
     assert spied["lift_pass"].call_count == 0
     assert board.writes == []
+
+
+def test_a_pass_the_door_holds_spends_nothing_on_the_lift(monkeypatch, tmp_path, capsys):
+    """The door says Linear is held (`linear-hold`): the idle check is
+    skipped with the board, and the lift waits for the next pass rather than
+    spend the exhausted bucket."""
+    _as_the_live_sweep(monkeypatch, _checkout(tmp_path, '"8"'), "8")
+    board = Board()
+    _held_kids(board)
+    with _door(monkeypatch, _door_world(WIP_CAP_STAMP)) as door:
+        door.routes["/board"] = door.unknown("linear-hold")
+        spied = _pass(board, spies=("lift_pass", "hold_pass"))
+    assert spied["lift_pass"].call_count == 0
+    assert spied["hold_pass"].call_count == 0
+    assert board.writes == []
+    assert reconcile._write_failures == []
+    assert "read-door: skipped" in capsys.readouterr().err
