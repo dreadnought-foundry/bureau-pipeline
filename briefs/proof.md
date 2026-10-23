@@ -155,6 +155,7 @@ asks for a reading the declaration does not hold is a cause row, below.
   sign-in ration counter (DRE-5928, DRE-6035). When no caller provides one, the
   Identities section records `aws: none` and every criterion that needs the
   product's own identities is `Not observed.` with that reason.
+
   Every sign-in you hold was made when the job started: `GH_READ_TOKEN` and
   `GH_TOKEN` live one hour and nothing in the run can renew them, and the AWS
   session lives `PROOF_SESSION_SECONDS` seconds. Make every GitHub read, and
@@ -518,12 +519,14 @@ next pass re-runs the proof to observe the result. It never reaches
 `Green Light`. DRE-6638's press (one project's Builders set to Sonnet 5.5, on
 the sandbox project) stays the operator's: a model setting is not on the list.
 
-**When the console is not ready.** This rule reached every proof run when it
-merged into bureau-pipeline's `main`, because briefs are read at `main`. The
-console release carrying DRE-7776, which lets the proof-reader press, ships on
-the console's own release train. Between the two, the press command reaches a
-console that still refuses the proof-reader. A press on the list that the live
-console refuses is written as the operator's row with the console's reason:
+**When the console is not ready.** Two things lag this rule. The proof run's
+own prompt gives a press on the sandbox project to the operator until DRE-7781
+rewrites it to this rule, and where the two disagree the prompt wins: the
+press is the operator's row, as it was before. The console release carrying
+DRE-7776, which lets the proof-reader press, ships on the console's own release
+train, and until it ships the press command reaches a console that still
+refuses the proof-reader. A press on the list that the live console refuses is
+written as the operator's row with the console's reason:
 
     Not observed. waiting for the operator's press: <the press> — the console refused the proof-reader: <reason>
 

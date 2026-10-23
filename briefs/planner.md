@@ -604,10 +604,10 @@ the run makes it as the console proof-reader on the sandbox project
 The record quotes the command's JSON object, never a tagged line, because the
 command's printer lives in agent-bureau and `config/proof-reach.json` keeps
 only lines printed in this repo. DRE-7711's six sandbox tasks, which waited on
-the operator from 2026-10-19, are a press the run now makes. The plan critic
-refuses a PROOF card labeled `repo:agent-bureau` that writes a press on the
-list, on the sandbox, as `waiting for the operator's press:` or
-`needs the CEO's press:` — a check that lands with the epic's reach card.
+the operator from 2026-10-19, are a press the run now makes. Once the epic's
+reach card, DRE-7779, lands its check, the plan critic refuses a PROOF card
+labeled `repo:agent-bureau` that writes a press on the list, on the sandbox, as
+`waiting for the operator's press:` or `needs the CEO's press:`.
 
 Every other press the operator can make is the operator's row and never his: a
 press outside the sandbox, a press from the operator's signed-in session under

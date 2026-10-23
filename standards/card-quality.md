@@ -524,7 +524,8 @@ decision of his.
 cards: an agent-bureau card that adds the press to `SANDBOX_PRESS_MUTATIONS`
 (with the script's `SANDBOX_PRESSES`, which copies it), and a bureau-pipeline
 card that adds it to this list and to `scripts/plan_proof_reach.py`'s
-`SANDBOX_PRESSES`. The PROOF is blocked by both. Until then the press is the
+`SANDBOX_PRESSES`, the constant the epic's reach card, DRE-7779, adds. The
+PROOF is blocked by both. Until then the press is the
 operator's row.
 
 Five conditions. The first four are checked on the planner's OUTPUT rather than
