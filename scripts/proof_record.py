@@ -163,22 +163,30 @@ _DECISION_LINK = re.compile(
 _OWN_MERGE = re.compile(r"(?:merged to main|(?:the |this )?record (?:is )?(?:merged to|on) main"
                         r"|\S+\.md (?:is )?(?:merged to|on) main)\b")
 #: The record merged, wherever it merged (DRE-7773), in one of two shapes the
-#: criterion leads with. "The record is merged on `agent/DRE-<n>-proof-record`,
-#: with …" says nothing after the merge but a `with` tail, to its end. "The
-#: record exists at the path above, merged on `main` from the branch …, …"
-#: names only a place before the merge — no `and`, `which`, `that` or `shows`
-#: — and the merge ends its clause; what follows that clause is not read,
-#: because agent-bureau #3381 row 1 goes on to say what the record holds. Any
-#: other claim after the merge ("The record merged on `main` shows the gate
-#: held…"), or a record that only REPORTS a merge ("The record shows the pull
-#: request merged…"), is judged.
+#: criterion leads with: "The record is merged on `agent/DRE-<n>-proof-record`"
+#: or "The record exists at the path above, merged on `main` from the branch
+#: …", whose place before the merge has no `and`, `which`, `that` or `shows`.
+#: After the merge only the clauses below may follow, to the criterion's end:
+#: who opened it, and what the record itself holds, worded as the older cards
+#: word it — bureau-pipeline #1149 row 10 and agent-bureau #3381 row 1. Any
+#: other text after the merge ("…, with the gate holding a stale PR", "…, and
+#: the sweep closes the card"), or a record that only REPORTS a merge ("The
+#: record shows the pull request merged…"), is judged: a wording missed here
+#: holds the record for a person, which is the safe way to miss.
 _MERGED_AT = (r"merged(?: (?:on|to|into) [\w/<>.-]*[\w/<>-])?"
               r"(?: from (?:the branch )?[\w/<>.-]*[\w/<>-])?")
+_OPENED_BY = r", opened by (?:the )?(?:operator|ceo)(?: by hand)?"
+_ROWS_READ = (r",? with (?:every|each|all)(?: of the)?(?: [\w-]+)? (?:rows?|observations?)"
+              r" (?:read|recorded|judged)(?: by the critic)?")
+_OBSERVATIONS_RECORDED = (
+    r",? and (?:every|each)(?: of the)?(?: [\w-]+)? observations? (?:is|are) recorded"
+    r" against the live system with its command, its pt time and the quoted output"
+    r"(?:,? or an explicit not observed\. statement naming why"
+    r"(?: and the offline test that pins the same behaviou?r)?)?")
 _RECORD_MERGED = re.compile(
-    rf"(?:the |this )?(?:proof )?record (?:(?:is |was |has been )?{_MERGED_AT}"
-    r"(?:,? with\b[^.;:]*)?\.?$"
+    rf"(?:the |this )?(?:proof )?record (?:(?:is |was |has been )?{_MERGED_AT}(?:{_ROWS_READ})?"
     r"|exists (?:at|in) (?:(?!\b(?:and|which|that|shows?)\b)(?:[^.;:,]|\.(?=\w)))+, "
-    rf"{_MERGED_AT}(?=,|\.?$))")
+    rf"{_MERGED_AT}(?:{_OPENED_BY})?(?:{_OBSERVATIONS_RECORDED})?)\.?$")
 #: The closing step: the CEO or the operator closes the card, or reads the record.
 _CLOSING_STEP = re.compile(r"\bthe (?:ceo|operator)\b[^.;:]*?\b(?:clos(?:es|ed|e) (?:this card"
                            r"|the card|it)|reads? (?:the|this) (?:merged )?record)\b")

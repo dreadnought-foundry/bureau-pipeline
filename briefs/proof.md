@@ -290,6 +290,8 @@ shape is the one `scripts/hygiene_done.py` reads, in this order:
    the record's own merge or a person reading the record or closing the card —
    gets no row: the card closes on its approved, all-met record (DRE-7773), so
    the record has no closing row and no row is ever left open for a person.
+   Only a criterion `is_closing_row` reads as closing is exempt. One you judge
+   to be about closing, but that it reads as judged, gets its row like any other.
 
 A row you could not observe says `Not observed.` and why. It is never dropped,
 and never hedged into `Met` — "met, as far as I could tell" is `Not observed.`
