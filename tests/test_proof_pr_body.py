@@ -138,12 +138,13 @@ class FakeGh:
     """`gh`, as `proof_pr_body.refresh` calls it: a list of argv in, stdout
     out, RuntimeError for a refused call."""
 
-    def __init__(self, *, prs=None, record=FIRST, files=None, refuse=()):
+    def __init__(self, *, prs=None, record=FIRST, files=None, refuse=(), view=None):
         self.prs = [{"number": 3589, "headRefOid": "abc123"}] if prs is None else prs
         self.record = record
         self.files = ([{"path": RECORD_PATH, "changeType": "ADDED"}]
                       if files is None else files)
         self.refuse = refuse
+        self.view = view
         self.calls = []
         self.bodies = []
 
@@ -155,7 +156,7 @@ class FakeGh:
         if verb == "pr list":
             return json.dumps(self.prs)
         if verb == "pr view":
-            return json.dumps({"files": self.files})
+            return json.dumps({"files": self.files} if self.view is None else self.view)
         if args[0] == "api":
             content = base64.b64encode(self.record.encode()).decode()
             return json.dumps({"encoding": "base64", "content": content})
@@ -214,6 +215,11 @@ class RefreshTest(unittest.TestCase):
 
     def test_a_record_that_cannot_be_found_fails(self):
         gh = FakeGh(files=[{"path": "scripts/x.py", "changeType": "ADDED"}])
+        self.assertEqual(1, self._refresh(gh))
+        self.assertEqual([], gh.bodies)
+
+    def test_a_pull_request_view_that_is_not_an_object_fails(self):
+        gh = FakeGh(view=["not", "a", "view"])
         self.assertEqual(1, self._refresh(gh))
         self.assertEqual([], gh.bodies)
 
