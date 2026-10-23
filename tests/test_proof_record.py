@@ -303,6 +303,18 @@ class TestTheClosingRow:
         "The record is merged and the sweep closes the card within 15 minutes of "
         "the merge",
         "The record merged on `main` shows the gate held a stale PR",
+        "The record exists at docs/x.md, merged on `main`, and the gate refuses "
+        "unapproved merges",
+        "The record exists at docs/x.md, merged on `main`, showing the gate held a stale PR",
+        "The record is merged on `main`, with the gate holding a stale PR",
+        "The record is merged on `main`, with the sweep closing the card within 15 minutes",
+        "The record is merged on `main`, with every judged row read by the critic and "
+        "the gate refusing unapproved merges",
+        "The record exists at docs/x.md, merged on `main`; the sweep closes the card "
+        "within 15 minutes",
+        "The record exists at docs/x.md, merged on `main`, opened by the gate, which "
+        "refuses unapproved merges",
+        AB_3381_ROW_1.removesuffix(".") + ", and the gate refuses unapproved merges",
     ])
     def test_a_claim_after_the_records_merge_is_still_judged(self, criterion):
         assert proof_record.is_closing_row(criterion) is False
