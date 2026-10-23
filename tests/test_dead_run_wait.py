@@ -30,10 +30,10 @@ os.environ.setdefault("REPO", "dreadnought-foundry/agent-bureau")
 os.environ.setdefault("REPO_SLUG", "agent-bureau")
 os.environ.setdefault("GH_TOKEN", "x")
 
-import dead_run  # noqa: E402
-import lane_contract  # noqa: E402
-import limit_recovery  # noqa: E402
-import vendor_wait  # noqa: E402
+import dead_run  # noqa: E402, RUF100
+import lane_contract  # noqa: E402, RUF100
+import limit_recovery  # noqa: E402, RUF100
+import vendor_wait  # noqa: E402, RUF100
 
 RUN = "34990000001"
 NOW = "2026-10-23T18:00:00Z"
