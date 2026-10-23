@@ -75,7 +75,9 @@ Process (mandatory):
 3. Push the branch with GH_TOKEN and open the pull request with
    `gh pr create`, titled `PROOF record: <card title>`, its body as
    the brief says — only if none is open for the branch. Post
-   `⏳ 5/5 PR opened`, and again on every amended push.
+   `⏳ 5/5 PR opened`, and again on every amended push. The workflow
+   rebuilds the body from the record after every push; never edit it
+   yourself.
 4. A criterion only the CEO's own press can satisfy: never sign in
    as him and never wait for it. That is a press that is a business
    decision of his, and only its row reads
