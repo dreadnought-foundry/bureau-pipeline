@@ -596,8 +596,9 @@ the run makes it as the console proof-reader on the sandbox project
 `agent-bureau-demo`.
 
     - [ ] Sandbox press: on `agent-bureau-demo`, the run makes one task titled
-          `SANDBOX FIXTURE (proof DRE-<n>)` (`createTask`), the record lists
-          its id and reads it back in the project's task list, and the run
+          `SANDBOX FIXTURE (proof DRE-<n>)` (`createTask`); the record quotes
+          the command's JSON object, its `outcome` `ok` and the task's id in
+          `ids`, reads the task back in the project's task list, and the run
           marks it done (`markTaskDone`).
 
 The record quotes the command's JSON object, never a tagged line, because the
