@@ -169,7 +169,7 @@ class PlannerBriefTest(unittest.TestCase):
 
     def test_the_card_closes_on_the_approved_merge_of_the_record(self):
         self.assertSays("closes on the approved merge of the record")
-        self.assertSays("the closing line the check reads stays verbatim")
+        self.assertSays("carries no criterion about merging, reading or closing the record")
 
 
 if __name__ == "__main__":

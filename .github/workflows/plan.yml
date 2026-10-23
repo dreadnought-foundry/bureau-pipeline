@@ -2274,21 +2274,18 @@ jobs:
                card never promotes with the epic.
             3c. EVERY epic's LAST child is a `PROOF: <…>` card — always, not
                when it feels warranted, and it is the ONLY closing card (the
-               CEO decided on 2026-09-12 that he reads the proof record and
-               closes the card himself, so there is no sitting to arrange and
-               no second closing card to file). Proof answers "did it work"
-               and is NOT a green test suite: it is the mechanism observed
-               running against real state, with the observation recorded in
-               the repo. Create it last, give it a `**Blocked by:**` line
-               naming EVERY other child (so the relations, not the ordering,
-               hold it), and make sure it is not fleet-buildable — write
-               acceptance criteria naming the live observation, or add
-               `--label no-code` for work an operator runs. Its body carries
-               this line VERBATIM, on its own line above the acceptance
-               criteria, and the check refuses the card without it:
-                 The CEO reads this record and closes this card; there is no demo sitting.
-               Its criteria say the CEO closes it after reading the record,
-               never that he has said so at a sitting.
+               CEO decided on 2026-09-12 that there is no demo sitting, so
+               there is no second closing card to file). Proof answers "did
+               it work" and is NOT a green test suite: it is the mechanism
+               observed running against real state, with the observation
+               recorded in the repo. Create it last, give it a `**Blocked by:**`
+               line naming EVERY other child (so the relations, not the
+               ordering, hold it), and make sure it is not fleet-buildable —
+               write acceptance criteria naming the live observation, or add
+               `--label no-code` for work an operator runs. The card closes on
+               its approved all-met record (DRE-5919) and names no person to
+               close it, so it carries no criterion about merging, reading or
+               closing the record (DRE-7773) — and none about a sitting.
                IT WEARS NO BUILD ROLE (DRE-3039): create it with
                `--label agent:ops` and drop the role `subissue` inherits
                (`linear_ops.py remove-label <CARD> agent:engineer`), because a
@@ -2537,21 +2534,18 @@ jobs:
                card never promotes with the epic.
             3c. EVERY epic's LAST child is a `PROOF: <…>` card — always, not
                when it feels warranted, and it is the ONLY closing card (the
-               CEO decided on 2026-09-12 that he reads the proof record and
-               closes the card himself, so there is no sitting to arrange and
-               no second closing card to file). Proof answers "did it work"
-               and is NOT a green test suite: it is the mechanism observed
-               running against real state, with the observation recorded in
-               the repo. Create it last, give it a `**Blocked by:**` line
-               naming EVERY other child (so the relations, not the ordering,
-               hold it), and make sure it is not fleet-buildable — write
-               acceptance criteria naming the live observation, or add
-               `--label no-code` for work an operator runs. Its body carries
-               this line VERBATIM, on its own line above the acceptance
-               criteria, and the check refuses the card without it:
-                 The CEO reads this record and closes this card; there is no demo sitting.
-               Its criteria say the CEO closes it after reading the record,
-               never that he has said so at a sitting.
+               CEO decided on 2026-09-12 that there is no demo sitting, so
+               there is no second closing card to file). Proof answers "did
+               it work" and is NOT a green test suite: it is the mechanism
+               observed running against real state, with the observation
+               recorded in the repo. Create it last, give it a `**Blocked by:**`
+               line naming EVERY other child (so the relations, not the
+               ordering, hold it), and make sure it is not fleet-buildable —
+               write acceptance criteria naming the live observation, or add
+               `--label no-code` for work an operator runs. The card closes on
+               its approved all-met record (DRE-5919) and names no person to
+               close it, so it carries no criterion about merging, reading or
+               closing the record (DRE-7773) — and none about a sitting.
                IT WEARS NO BUILD ROLE (DRE-3039): create it with
                `--label agent:ops` and drop the role `subissue` inherits
                (`linear_ops.py remove-label <CARD> agent:engineer`), because a
@@ -2779,10 +2773,12 @@ jobs:
       # one step up.
       #
       # Proof is not a green test suite: it is the mechanism observed running
-      # against real state, recorded in the repo. That record is what the CEO
-      # reads — he closes the card himself and there is no demo sitting, his
-      # decision of 2026-09-12 — so there is ONE closing child. An epic planned
-      # before then carries a second one and is read past, never bounced for it.
+      # against real state, recorded in the repo. The card closes on its
+      # approved all-met record (DRE-5919) — no person closes it, and it
+      # carries no criterion about merging, reading or closing the record
+      # (DRE-7773) — and there is no demo sitting, the CEO's decision of
+      # 2026-09-12, so there is ONE closing child. An epic planned before then
+      # carries a second one and is read past, never bounced for it.
       # The card may not be fleet-buildable: a proof the fleet can close by
       # merging its own code is not a proof.
       #

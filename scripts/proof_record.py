@@ -12,10 +12,13 @@ or read the hold. Both now do, through this module:
    (`proof_record_branch`), moved from `proof_dispatch`.
 2. **The criterion-table reader** — `criterion_rows`, `is_closing_row`,
    `row_met`, `reading` and `_row`, moved from `hygiene_done`: the one shape a
-   machine can read without judgment. Every row but the record's own merge and
-   the CEO's closing step (`is_closing_row`: one of `CLOSING_ROW_WORDS`, in the
-   shape of a merge to main the criterion leads with, or of the CEO or the
-   operator closing the card or reading the record) must open with one of
+   machine can read without judgment. Every row but a closing or merge
+   criterion an older card still carries (`is_closing_row`: one of
+   `CLOSING_ROW_WORDS`, in the shape of a merge the criterion leads with — to
+   main, or the record merged or existing merged — or of the CEO or the
+   operator closing the card or reading the record; since DRE-7773 the card
+   closes on its approved, all-met record and a new record has no such row)
+   must open with one of
    `MET_WORDS`, no hedge straight after it (`HEDGES`) — or be **accepted**
    (DRE-6244): open with `ACCEPTED by operator decision` and link, in the same
    cell, the operator's written decision as a Linear comment or a GitHub pull
@@ -159,6 +162,31 @@ _DECISION_LINK = re.compile(
 #: "The record is on main", "docs/<record>.md merged to main".
 _OWN_MERGE = re.compile(r"(?:merged to main|(?:the |this )?record (?:is )?(?:merged to|on) main"
                         r"|\S+\.md (?:is )?(?:merged to|on) main)\b")
+#: The record merged, wherever it merged (DRE-7773), in one of two shapes the
+#: criterion leads with: "The record is merged on `agent/DRE-<n>-proof-record`"
+#: or "The record exists at the path above, merged on `main` from the branch
+#: …", whose place before the merge has no `and`, `which`, `that` or `shows`.
+#: After the merge only the clauses below may follow, to the criterion's end:
+#: who opened it, and what the record itself holds, worded as the older cards
+#: word it — bureau-pipeline #1149 row 10 and agent-bureau #3381 row 1. Any
+#: other text after the merge ("…, with the gate holding a stale PR", "…, and
+#: the sweep closes the card"), or a record that only REPORTS a merge ("The
+#: record shows the pull request merged…"), is judged: a wording missed here
+#: holds the record for a person, which is the safe way to miss.
+_MERGED_AT = (r"merged(?: (?:on|to|into) [\w/<>.-]*[\w/<>-])?"
+              r"(?: from (?:the branch )?[\w/<>.-]*[\w/<>-])?")
+_OPENED_BY = r", opened by (?:the )?(?:operator|ceo)(?: by hand)?"
+_ROWS_READ = (r",? with (?:every|each|all)(?: of the)?(?: [\w-]+)? (?:rows?|observations?)"
+              r" (?:read|recorded|judged)(?: by the critic)?")
+_OBSERVATIONS_RECORDED = (
+    r",? and (?:every|each)(?: of the)?(?: [\w-]+)? observations? (?:is|are) recorded"
+    r" against the live system with its command, its pt time and the quoted output"
+    r"(?:,? or an explicit not observed\. statement naming why"
+    r"(?: and the offline test that pins the same behaviou?r)?)?")
+_RECORD_MERGED = re.compile(
+    rf"(?:the |this )?(?:proof )?record (?:(?:is |was |has been )?{_MERGED_AT}(?:{_ROWS_READ})?"
+    r"|exists (?:at|in) (?:(?!\b(?:and|which|that|shows?)\b)(?:[^.;:,]|\.(?=\w)))+, "
+    rf"{_MERGED_AT}(?:{_OPENED_BY})?(?:{_OBSERVATIONS_RECORDED})?)\.?$")
 #: The closing step: the CEO or the operator closes the card, or reads the record.
 _CLOSING_STEP = re.compile(r"\bthe (?:ceo|operator)\b[^.;:]*?\b(?:clos(?:es|ed|e) (?:this card"
                            r"|the card|it)|reads? (?:the|this) (?:merged )?record)\b")
@@ -221,7 +249,8 @@ def is_closing_row(criterion: str) -> bool:
     text = " ".join((criterion or "").replace("`", "").lower().split())
     if not any(word in text for word in CLOSING_ROW_WORDS):
         return False
-    return _OWN_MERGE.match(text) is not None or _CLOSING_STEP.search(text) is not None
+    return (_OWN_MERGE.match(text) is not None or _RECORD_MERGED.match(text) is not None
+            or _CLOSING_STEP.search(text) is not None)
 
 
 def _plain(cell: str) -> str:

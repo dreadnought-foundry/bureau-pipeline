@@ -31,8 +31,9 @@ section, not a substitute.
 This section says how the epic will be proven and how the CEO reads that proof;
 the epic's last child — a `PROOF: …` card, blocked by every sibling and never
 `FLEET` — is where it actually happens. There is no second closing card: the
-CEO decided on 2026-09-12 that he reads the proof record and closes the card
-himself, so the record is how he is shown. The section is prose the planner
+CEO decided on 2026-09-12 that there are no demo sittings, and the proof card
+closes on its approved all-met record (DRE-5919, DRE-7773), so no person is
+named to close it. The section is prose the planner
 writes; the card is checked on the planner's output, and an epic missing it is
 bounced back to `Planning`. `standards/card-quality.md` carries the full rule.
 

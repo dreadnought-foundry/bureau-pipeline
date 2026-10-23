@@ -474,11 +474,12 @@ class ProofBriefTest(unittest.TestCase):
                        "Dropped by the CEO at <PT>",
                        "Not observed. needs a browser on a local run of the "
                        "released commit",
-                       "The CEO closes this card after reading the record | "
-                       "Open: the CEO's step",
                        "**Status: PASS | PARTIAL | FAIL.**",
                        "| Criterion | Result |"):
             self.assertIn(needle, self.text, needle)
+        # DRE-7773: the card closes on its approved, all-met record, so the
+        # run writes no closing row for the CEO.
+        self.assertNotIn("Open: the CEO's step", self.flat)
 
     def test_the_escalation_resume_and_answer(self):
         for needle in ("/tmp/agent-escalation.txt", "spoken_thread.py",
