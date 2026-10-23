@@ -6,8 +6,11 @@ authorize:
 * the read door's search, from `groom_verify_agent.py targets` — which needs
   the door's four settings and an OIDC token, behind the read door's
   identity check (`bureau_read.py check-ref`). `groomer.py propose` shares the
-  Groom step with it and must run exactly as before, so the settings are
-  scoped to the `targets` command alone, and the stub grants `id-token: write`;
+  Groom step with it, so the settings are scoped to each command, and the
+  stub grants `id-token: write`. Since DRE-7821 `propose` is handed the
+  door's address, audience and ref — enough to read the console's record of
+  groom decisions, which is asked whatever the mode says — and never
+  `BUREAU_READ`, so every board read it makes still goes to Linear;
 * the routing reader, `groom_routing.py`, in its own per-owner job beside the
   lookups, on a token holding `actions: read` and nothing else, folded into the
   targets after the lookups' fold;
@@ -55,6 +58,11 @@ DOOR = {
     "BUREAU_READ_AUDIENCE": "vars.BUREAU_READ_AUDIENCE",
     "BUREAU_PIPELINE_REF": "inputs.pipeline_ref",
 }
+
+#: The three of them `groomer.py propose` is handed (DRE-7821): the door's
+#: address, audience and ref, for the record of groom decisions. Never the
+#: mode, so every board read `propose` makes still goes to Linear.
+PROPOSE_DOOR = ("BUREAU_READ_URL", "BUREAU_READ_AUDIENCE", "BUREAU_PIPELINE_REF")
 
 #: sha256 of the `lookup` job's text on main before this card, from its
 #: `  lookup:` line to the next line at job indent. Its nine minutes are sized
@@ -131,6 +139,21 @@ def _uses(job: dict, action: str) -> list:
 def _flag(run: str, flag: str) -> str:
     words = shlex.split(_one_line(run))
     return words[words.index(flag) + 1]
+
+
+def _prefix(run: str, script: str, command: str) -> dict:
+    """The `NAME=value` words in front of `python3 <script> <command>`."""
+    words = shlex.split(_one_line(run))
+    at = next(i for i, w in enumerate(words)
+              if w.endswith(script) and words[i + 1] == command)
+    assert words[at - 1] == "python3", words[at - 1]
+    prefix = {}
+    i = at - 2
+    while i >= 0 and re.match(r"^[A-Z_]+=", words[i]):
+        key, _, value = words[i].partition("=")
+        prefix[key] = value
+        i -= 1
+    return prefix
 
 
 def _job_text(text: str, name: str) -> str:
@@ -240,34 +263,35 @@ def _groom_env(**overrides) -> dict:
 # --------------------------------------------------------------------------- #
 
 class TheDoorReachesTheTargetsReadOnlyTest(_RunsSteps):
-    """`targets` reads through the door; `propose` runs exactly as today. The
-    two share the Groom step — tests/test_groomer_wiring.py pins both there,
-    and the job's `verify_matrix` output off that step's id — so the door's
-    settings ride in the step's `env:` under names nothing reads, and are
-    handed to the `targets` command alone, as the door's own names."""
+    """`targets` reads through the door; `propose` reads only the console's
+    record of groom decisions there (DRE-7821). The two share the Groom step —
+    tests/test_groomer_wiring.py pins both there, and the job's
+    `verify_matrix` output off that step's id — so the door's settings ride
+    in the step's `env:` under names nothing reads, and are handed to each
+    command as the door's own names: all four to `targets`, and to `propose`
+    every one but the mode, so its board reads stay on Linear."""
 
     def setUp(self):
         super().setUp()
         self.groom = _named(self.doc["jobs"]["groom"], GROOM_STEP)
         self.env = self.groom.get("env") or {}
 
-    def test_the_targets_command_carries_the_doors_four_settings(self):
-        words = shlex.split(_one_line(self.groom["run"]))
-        at = next(i for i, w in enumerate(words)
-                  if w.endswith("groom_verify_agent.py") and words[i + 1] == "targets")
-        assert words[at - 1] == "python3", words[at - 1]
-        prefix = {}
-        i = at - 2
-        while i >= 0 and re.match(r"^[A-Z_]+=", words[i]):
-            key, _, value = words[i].partition("=")
-            prefix[key] = value
-            i -= 1
-        self.assertEqual(sorted(prefix), sorted(DOOR),
-                         "the targets command is not handed the door's settings")
+    def _assert_handed(self, prefix: dict, names) -> None:
+        self.assertEqual(sorted(prefix), sorted(names))
         for key, value in prefix.items():
             self.assertTrue(value.startswith("$"), f"{key} is not read from env")
             self.assertEqual(_expression(self.env.get(value.lstrip("$"))),
                              DOOR[key], f"{key} reads the wrong variable")
+
+    def test_the_targets_command_carries_the_doors_four_settings(self):
+        self._assert_handed(
+            _prefix(self.groom["run"], "groom_verify_agent.py", "targets"), DOOR)
+
+    def test_the_propose_command_carries_the_doors_address_and_not_its_mode(self):
+        prefix = _prefix(self.groom["run"], "groomer.py", "propose")
+        self.assertNotIn("BUREAU_READ", prefix,
+                         "propose is handed the mode, so its board reads leave Linear")
+        self._assert_handed(prefix, PROPOSE_DOOR)
 
     def test_no_step_running_propose_holds_the_doors_settings(self):
         found = 0
@@ -280,16 +304,31 @@ class TheDoorReachesTheTargetsReadOnlyTest(_RunsSteps):
                                  f"{step.get('name')!r} hands propose {key}")
         self.assertEqual(found, 1, "propose runs in exactly one step")
 
-    def test_propose_runs_without_the_door_and_targets_with_it(self):
+    def test_propose_runs_with_the_doors_address_and_targets_with_all_four(self):
         proc = self.run_step(self.groom, _groom_env())
         self.assertEqual(proc.returncode, 0, proc.stderr)
         calls = {(c["script"], c["argv"][0]): c["door"] for c in self.recorded()}
-        self.assertEqual(calls[("groomer.py", "propose")], {},
-                         "propose sees the door's settings")
+        self.assertEqual(calls[("groomer.py", "propose")], {
+            "BUREAU_READ_URL": "https://door.example",
+            "BUREAU_READ_AUDIENCE": "door-audience",
+            "BUREAU_PIPELINE_REF": "main"},
+            "propose is not handed exactly the door's address, audience and ref")
         self.assertEqual(calls[("groom_verify_agent.py", "targets")], {
             "BUREAU_READ": "on", "BUREAU_READ_URL": "https://door.example",
             "BUREAU_READ_AUDIENCE": "door-audience",
             "BUREAU_PIPELINE_REF": "main"})
+
+    def test_the_replay_and_the_drain_see_none_of_the_doors_settings(self):
+        proc = self.run_step(self.groom, _groom_env(REPLAY="stored.json"))
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        calls = {(c["script"], c["argv"][0]): c["door"] for c in self.recorded()}
+        self.assertEqual(calls[("groom_replay.py", "base")], {})
+        self.assertNotIn(("groomer.py", "propose"), calls)
+        self.calls.unlink()
+        proc = self.run_step(self.groom, _groom_env(MODE="drain"))
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        calls = {(c["script"], c["argv"][0]): c["door"] for c in self.recorded()}
+        self.assertEqual(calls, {("groomer.py", "drain"): {}})
 
     def test_the_groom_job_refuses_a_pipeline_ref_it_was_not_called_at(self):
         # The read door's identity check (review M1), as reconcile.yml runs
