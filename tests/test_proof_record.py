@@ -244,6 +244,59 @@ class TestShortfall:
 
 
 # --------------------------------------------------------------------------
+# An older card's closing or merge criterion is not judged (DRE-7773)
+# --------------------------------------------------------------------------
+#: bureau-pipeline #1149 row 10 (DRE-7243), read 2026-10-22 at about 10:00 PM PT.
+BP_1149_ROW_10 = ("The record is merged on `agent/DRE-<n>-proof-record`, with every "
+                  "judged row read by the critic.")
+#: agent-bureau #3381 row 1, the first acceptance criterion of DRE-6008.
+AB_3381_ROW_1 = (
+    "The record exists at the path above, merged on `main` from the branch "
+    "`agent/DRE-6008-proof-record`, opened by the operator by hand, and each of "
+    "the six observations is recorded against the live system with its command, "
+    "its PT time and the quoted output, or an explicit `Not observed.` statement "
+    "naming why and the offline test that pins the same behavior.")
+
+
+class TestTheClosingRow:
+    """A proof card closes on its approved, all-met record (DRE-5919), so a
+    criterion an older card carries about merging, reading or closing the
+    record is not a criterion the record can meet — and a row worded any way
+    but `_OWN_MERGE` or `_CLOSING_STEP` held the record open."""
+
+    @pytest.mark.parametrize("criterion", [BP_1149_ROW_10, AB_3381_ROW_1])
+    def test_the_two_wordings_it_missed_are_closing_rows(self, criterion):
+        assert proof_record.is_closing_row(criterion) is True
+
+    @pytest.mark.parametrize("criterion", [
+        "Merged to `main` through an operator-opened PR",
+        "The record is on `main`",
+        "The CEO closes this card after reading the record",
+        "The CEO has read the merged record",
+        "the operator closes the card",
+    ])
+    def test_the_existing_shapes_still_are(self, criterion):
+        assert proof_record.is_closing_row(criterion) is True
+
+    @pytest.mark.parametrize("criterion", [BP_1149_ROW_10, AB_3381_ROW_1])
+    def test_such_a_row_does_not_hold_the_record_open(self, criterion):
+        text = ("| Criterion | Result |\n|---|---|\n| it ran | Met. |\n"
+                f"| {criterion} | Not observed. the record is this pull request |\n")
+        reading = proof_record.reading(text)
+        assert reading.unmet == [] and len(reading.met) == 1
+        assert proof_record.shortfall(proof_record.Record(RECORD_PATH, text, None)) is None
+
+    @pytest.mark.parametrize("criterion", [
+        "The record shows the pull request merged on `main`",
+        "The record shows the nightly runs on `main`",
+        "The record ends with `What the CEO sees`",
+        "A card whose pull request merged is closed by the agent",
+    ])
+    def test_a_record_that_only_reports_a_merge_is_still_judged(self, criterion):
+        assert proof_record.is_closing_row(criterion) is False
+
+
+# --------------------------------------------------------------------------
 # A criterion the operator accepted as overtaken (DRE-6244)
 # --------------------------------------------------------------------------
 LINEAR_DECISION = "https://linear.app/dreadnoughtfoundry/issue/DRE-1/x#comment-abc"
