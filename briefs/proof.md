@@ -40,8 +40,9 @@ next planner reads them here rather than assuming them closed.
   in the record, the pull request or any Linear comment.
 
 ## What you may touch
-**Read-only on every live system.** You change nothing a person or a product
-relies on.
+**Read-only on every live system**, but for the three exceptions below — the
+third is the sandbox presses. You change nothing a person or a product relies
+on.
 
 The first exception is **scratch state a criterion needs**, made only in the
 scratch space the card names (Portico's `PROOF scratch` folder, for example —
@@ -58,7 +59,27 @@ written only through the product's own scripts — the API sign-in's, or the
 declared `login.command`'s, run by `proof_session.py login` — as the
 reservation made before a sign-in (the `Never:` rule under Identities, below). Never by hand,
 never reset, never read or deleted directly — its rows expire on their own. It
-is the one live write a proof run may make, and the record names it as such.
+is the one live write a proof run may make outside the sandbox presses below,
+and the record names it as such.
+
+The third exception is **sandbox presses**: only through the press command
+(the console proof-reader, under Identities, below), only on the sandbox
+project `agent-bureau-demo`, and only for a press a criterion names, opening
+`Sandbox press:` (the rule and its one list live in `standards/card-quality.md`,
+under `The sandbox presses, the one list (DRE-7772):`). List every id you make
+in the record as you make it. At the end, close what the console lets you
+close: a task you made is marked done with `markTaskDone`, and the record says
+so beside the task's id. The console has no delete for a task, a Desk message
+or a card filed from a task, so the record lists those ids as left on the
+sandbox, and you make each one with a title or text opening
+`SANDBOX FIXTURE (proof DRE-<n>)`. A card you file this way stays in the
+sandbox's Intake and is listed as left: the console files it at no priority and
+refuses one without the fixture title, and the groomer leaves a
+`SANDBOX FIXTURE (proof DRE-` card labeled `repo:agent-bureau-demo` where it is
+(DRE-7776 and DRE-7783), so nothing routes it. Never tidy the project, and
+never touch an id you did not make in this run. A shadow run makes no sandbox
+press: its `Sandbox press:` rows read
+`Not observed. cause: out-of-reach — a shadow run makes no sandbox press`.
 
 ## Identities — each named for what it is used for
 You hold exactly what the workflow hands you, and each identity makes one kind
@@ -150,6 +171,22 @@ asks for a reading the declaration does not hold is a cause row, below.
   a hold, quote it, read each row as the card words it, and write a count the
   card's window can no longer reach as `Not met.` with the lines you saw.
   (DRE-7020)
+- **The console proof-reader: the sandbox presses.** On the sandbox project
+  `agent-bureau-demo`, and only there, the run presses as the console
+  proof-reader, through agent-bureau's `scripts/console_proof_reader.py press`.
+  The command prints one JSON object for each press, and the record quotes it
+  for every press you make, with its `outcome` and its `ids`. A criterion that
+  asks to see the live console refuse a press off the sandbox is read through
+  `scripts/console_proof_reader.py refusal-probe`, whose JSON object the record
+  quotes the same way, and an `outcome` of `leak` is `Not met.` with the leaked
+  id listed. A run whose caller holds no proof-reader (any repo but
+  agent-bureau today), or a press the command refuses (`outcome` `refused`), is
+  `Not observed. cause: out-of-reach — <the command's reason>`. A press on the
+  list that the command sends and the live console refuses (`outcome` `failed`
+  with the console's `FORBIDDEN`) is written
+  `Not observed. waiting for the operator's press: <the press> — the console refused the proof-reader: <reason>`,
+  so the dispatcher holds the card for the operator exactly as it does today
+  (see "When the console is not ready", below).
 - **Never:** never a person's account, never the CEO's account, never a
   sign-in typed into a web page by the run itself. Hosted sign-ins are rationed
   by the product's own script — three a Pacific day (DRE-5671) — and a hosted
@@ -454,18 +491,23 @@ it does not open it, so the critic is the reader who follows it.
 **Which press is his.** A press is the CEO's only when it is a business decision
 of his — what it changes is a choice about the business he has not made: which
 model a real project runs on, whether a real proposal is approved, whether a
-real card is removed from a proposal. A press the operator can make is the
-operator's row and never his: a press on the sandbox project, a press from the
-operator's signed-in session under the operator's standing permission of
-2026-10-07, or the recording of a removal or decision the CEO has already made.
-On 2026-10-10 two proofs reached his list on presses that were the operator's:
-DRE-6638 (one project's Builders set to Sonnet 5.5, on the sandbox project) and
-DRE-6663 (Not doing pressed on one groom card).
+real card is removed from a proposal. A press the run or the operator can make
+is never his. On 2026-10-10 two proofs reached his list on presses that were
+the operator's: DRE-6638 (one project's Builders set to Sonnet 5.5, on the
+sandbox project) and DRE-6663 (Not doing pressed on one groom card).
 
-**The operator's press.** When a criterion names a press the operator can make
-— the press is on the sandbox project, or is a console press the card's words
-say the operator may make — record it as an event row, even when the card
-words it `needs the CEO's press:`:
+**The operator's press.** A `Sandbox press:` row is pressed by the run, as the
+console proof-reader (Identities, above), and reads `Met.` with the ids made
+and what was closed or left on the sandbox — never as the operator's row.
+DRE-7711's six sandbox tasks (`createTask`), which waited on the operator from
+2026-10-19, are a press the run now makes. The operator's row stays for the
+presses `standards/card-quality.md` leaves the operator's, and its list, under
+`The sandbox presses, the one list (DRE-7772):`, is read there and never
+restated here. When a criterion names one — a press outside the sandbox, a
+console press the card's words say the operator may make under the operator's
+standing permission of 2026-10-07, a press on the sandbox that is not on the
+list, or the recording of a removal or decision the CEO has already made —
+record it as an event row, even when the card words it `needs the CEO's press:`:
 
     Not observed. waiting for the operator's press: <the press>
 
@@ -474,7 +516,25 @@ operator under a `🔬 proof-waiting` hold naming the press (DRE-6814); its
 first half says `the press named on the card` where the criterion says the
 CEO's (DRE-6837), so the operator's `🔬 proof-observed` discharges it, and the
 next pass re-runs the proof to observe the result. It never reaches
-`Green Light`.
+`Green Light`. DRE-6638's press (one project's Builders set to Sonnet 5.5, on
+the sandbox project) stays the operator's: a model setting is not on the list.
+
+**When the console is not ready.** Two things lag this rule. The proof run's
+own prompt gives a press on the sandbox project to the operator until DRE-7781
+rewrites it to this rule, and where the two disagree the prompt wins: the
+press is the operator's row, as it was before. The console release carrying
+DRE-7776, which lets the proof-reader press, ships on the console's own release
+train, and until it ships the press command reaches a console that still
+refuses the proof-reader. A press on the list that the live console refuses is
+written as the operator's row with the console's reason:
+
+    Not observed. waiting for the operator's press: <the press> — the console refused the proof-reader: <reason>
+
+so a proof in that window waits for the operator exactly as it does today, and
+is never left with a cause row nobody holds. A press the command itself
+refuses — a press not on the list, or another project — is a criterion written
+wrong, and stays the cause row,
+`Not observed. cause: out-of-reach — <the command's reason>`.
 
 **The CEO's press.** Only when the card's words name a business decision of his
 is the press his. You do not sign in as him and you do not infer it. The row

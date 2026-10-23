@@ -472,16 +472,61 @@ request on `agent/DRE-<n>-proof-record`. The card closes on the approved merge
 of that record, by `card-done` under DRE-5919's PROOF rule or by the hygiene
 agent's `hyg-proof-closed` receipt (DRE-5365), and nothing waits on him. The
 card still routes `OPERATOR`, by its `agent:ops` label, and the five conditions
-do not change: the run does the operator's observing. A press is the CEO's only when it is a business
+do not change: the run does the operator's observing. Its scripted read-only
+identities have one exception, the sandbox press below. A press is the CEO's only when it is a business
 decision of his — which model a real project runs on, whether a real proposal
 is approved, whether a real card is removed from a proposal — and it is written
 on the card in the words `needs the CEO's press: <the press>`; a run that meets
 one records everything else, parks the card once in Green Light naming the
-press, and nobody chases it. A press the operator can make — on the sandbox
-project, or under the operator's standing permission of 2026-10-07 — is the
-operator's event row and never his:
+press, and nobody chases it. A press the operator can make — which ones, the
+rows below say — is the operator's event row and never his:
 `waiting for the operator's press: <the press>`, held for the operator and
 never parked in Green Light (`briefs/planner.md`).
+
+The third kind is a **sandbox press**: a press on the sandbox project
+`agent-bureau-demo`, inside the Demo tenant, that is on the list below. The
+proof run makes it itself, as the console proof-reader, through agent-bureau's
+`scripts/console_proof_reader.py press`, and lists the ids it made in the
+record. A PROOF criterion writes it opening `Sandbox press:`, as a step the run
+does. The CEO decided this on 2026-10-22, in the operator session, restoring
+his intent of 2026-10-04 for DRE-5809 — "make sure you never need me" — when 10
+of the 15 open agent-bureau proof records were waiting on such a press, the
+oldest since 2026-10-08 (DRE-7772). This is the one full statement of the rule.
+The proof brief and the planner's brief point to it and never restate it.
+
+The sandbox presses, the one list (DRE-7772):
+- `createTask` — make a task
+- `snoozeTask` — snooze a task
+- `markTaskDone` — mark a task done
+- `makeTaskCard` — file a task's card into Intake
+- `sendProjectAgentMessage` — send a Desk message, or open a conversation
+- `answerDeskPermission` — answer a Desk Allow or Deny
+
+The list is the copy of agent-bureau's `SANDBOX_PRESS_MUTATIONS`
+(`console/backend/proof_reader_presses.py`), which bureau-pipeline cannot read,
+and the epic's PROOF holds the copies equal. The epic asked for a seventh,
+answering a draft's question (`answerInitiativeDraftQuestion`), and DRE-7776
+dropped it: the console's owner gate refuses it to the proof-reader on the
+sandbox too.
+
+**Which row a press gets.** A `Sandbox press:` step is for a press on the
+list, on a PROOF card labeled `repo:agent-bureau`, the one repo whose proof run
+holds the console proof-reader. `waiting for the operator's press:` stays for
+every other press the operator can make: a press outside the sandbox
+(production, a real customer's project, a fleet-wide setting, or a console
+press under the operator's standing permission of 2026-10-07 on a real
+project), a press on the sandbox that is not on the list, such as setting a
+project's Builders to a model (DRE-6638), and a press on the sandbox on a PROOF
+labeled for any other repo. `needs the CEO's press:` stays only for a business
+decision of his.
+
+**A sandbox press a plan wants that is not on the list.** The plan adds two
+cards: an agent-bureau card that adds the press to `SANDBOX_PRESS_MUTATIONS`
+(with the script's `SANDBOX_PRESSES`, which copies it), and a bureau-pipeline
+card that adds it to this list and to `scripts/plan_proof_reach.py`'s
+`SANDBOX_PRESSES`, the constant the epic's reach card, DRE-7779, adds. The
+PROOF is blocked by both. Until then the press is the
+operator's row.
 
 Five conditions. The first four are checked on the planner's OUTPUT rather than
 on any document that states the convention — a convention nothing checks is a
