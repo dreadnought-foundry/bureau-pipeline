@@ -45,10 +45,10 @@ ROOT = Path(__file__).resolve().parent.parent
 SCRIPTS = ROOT / "scripts"
 sys.path.insert(0, str(SCRIPTS))
 
-import check_agent_result  # noqa: E402 — the turn-cap reader
-import credential_rotation  # noqa: E402 — the renewal 401 reader
-import model_fallback  # noqa: E402 — the capacity-wall reader
-import vendor_wait  # noqa: E402
+import check_agent_result  # noqa: E402, RUF100 — the turn-cap reader
+import credential_rotation  # noqa: E402, RUF100 — the renewal 401 reader
+import model_fallback  # noqa: E402, RUF100 — the capacity-wall reader
+import vendor_wait  # noqa: E402, RUF100
 
 MODULE = SCRIPTS / "vendor_wait.py"
 
