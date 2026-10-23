@@ -277,7 +277,9 @@ link to work in flight still precedes a High card that has one.
   page names the pair under its collisions, with the epic the held-back card
   serves (`unhonoured_constraints` in the JSON).
 - **The page says so.** A rules-only row placed by this step reads
-  `in flight — serves DRE-N (In Progress)` in its `Why` cell, and the batch
+  `in flight — serves DRE-N (In Progress)` in its `Why` cell, a judged row
+  reads the same mark followed by ` — ` and the model's reason (DRE-7397),
+  and the batch
   paragraph gains one sentence naming the rule — only on a batch the step
   placed a card in, so `--no-judgement` renders byte for byte as before on a
   population with nothing in flight.
