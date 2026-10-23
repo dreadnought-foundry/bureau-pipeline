@@ -69,6 +69,18 @@
       "queries_declared_by": {
         "portico": "infra/scripts/proof-reader.ts"
       }
+    },
+    {
+      "id": "console-sandbox-press",
+      "held": "optional",
+      "held_for": ["agent-bureau"],
+      "what": "a console write made as the console proof-reader through agent-bureau's `scripts/console_proof_reader.py press`, on the sandbox project `agent-bureau-demo` only",
+      "names": ["sandbox press:", "console_proof_reader\\.py (?:press|refusal-probe)"],
+      "why": "DRE-7772, the CEO's decision of 2026-10-22: the proof-reader presses on the sandbox, and only an agent-bureau proof run holds it",
+      "brief": "On the sandbox project `agent-bureau-demo`, and only there, the run presses as the console proof-reader, through agent-bureau's `scripts/console_proof_reader.py press`.",
+      "queries_declared_by": {
+        "agent-bureau": "scripts/console_proof_reader.py"
+      }
     }
   ],
   "log_lines": [

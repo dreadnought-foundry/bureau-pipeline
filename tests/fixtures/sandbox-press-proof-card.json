@@ -1,0 +1,8 @@
+{
+  "identifier": "DRE-7900",
+  "title": "PROOF: the console proof-reader presses on the sandbox",
+  "body": "What the proof run observes on the sandbox project.\n\n## Acceptance criteria\n\n- [ ] Sandbox press: on `agent-bureau-demo`, the run sends `createTask` through `scripts/console_proof_reader.py press` for one task titled `SANDBOX FIXTURE (proof DRE-7900)`; the record quotes the command's JSON object, its `outcome` `ok` and the task's id in `ids`.\n- [ ] waiting for the operator's press: signed in to the live console, in the project agent-bureau-demo, send createTask for a fixture task\n- [ ] waiting for the operator's press: on Agent Bureau Sandbox, answer the Desk Allow the agent raises\n- [ ] waiting for the operator's press: on the sandbox, mark the fixture task done\n- [ ] needs the CEO's press: in the sandbox project, file the task's card into Intake\n- [ ] waiting for the operator's press: set the sandbox project's Builders to Sonnet 5.5\n- [ ] waiting for the operator's press: on the production console, turn the fleet's nightly digest on\n\n**Blocked by:** DRE-7778",
+  "labels": ["repo:agent-bureau", "agent:ops"],
+  "blocked_by": ["DRE-7778"],
+  "state": "Todo"
+}
