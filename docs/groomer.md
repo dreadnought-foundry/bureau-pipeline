@@ -845,6 +845,17 @@ every row that carries them. A search that fails, or that cannot run (no
 Linear key, an excluded card), writes `searched: false` and the reason. It
 never changes the card's `lookups` block or its lookup state.
 
+Linear can refuse a search with "You're trying to search issues too fast"
+(DRE-7613). On 2026-10-17 that refusal came on the fourth of twenty cards and
+was read as the spent hour, so every later card went unsearched. Now
+`linear_ops` raises it as `LinearSearchTooFast` and does not stop the
+process. The problem search and the newer-cards lookup both wait
+`SEARCH_WAIT_SECONDS` = 60 and ask once more, and the waits in one run total
+at most `SEARCH_WAIT_BUDGET_SECONDS` = 600. A second refusal, or one past
+that budget, leaves that search unanswered with the refusal named in its
+`why`, and the next card is still asked. The Groom job's clock covers the
+600 seconds.
+
 ### Rewrite first (DRE-6666)
 
 On 2026-10-10 the verify step left DRE-4072, DRE-3919, DRE-4204 and DRE-4206

@@ -184,7 +184,10 @@ jobs:
     # turns the build red instead of leaving the job killed mid-call.
     # 35 since DRE-3331: the ceiling doubled once the budget learned that the
     # model's thinking is billed against it — the widest call is now 1,660s.
-    timeout-minutes: 35
+    # 45 since DRE-7613: the `targets` step can also wait out Linear's
+    # search-speed refusal, up to `groom_lookups.SEARCH_WAIT_BUDGET_SECONDS`
+    # (600 s) — 1,660 + 300 + 600 = 2,560 s, and the test reads all three.
+    timeout-minutes: 45
     concurrency:
       group: groomer
       cancel-in-progress: false

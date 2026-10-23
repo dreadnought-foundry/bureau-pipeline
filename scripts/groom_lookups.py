@@ -99,6 +99,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import bureau_read  # noqa: E402 — the read door's search, before Linear's
 import dispatch_pool  # noqa: E402 — the one case-insensitive header reader
 import groomer  # noqa: E402 — `_FILE_REF`, the one reader of a card's paths
+import linear_ops  # noqa: E402 — `LinearSearchTooFast`, the refusal waited out
 import sanitize_untrusted  # noqa: E402 — Linear text is fenced data
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -209,6 +210,19 @@ DOOR_HELD = ("the read door says {reason}: Linear was not asked, so its held "
              "bucket is not spent")
 NOT_LOOKED_UP = "not looked up"
 PR_NOT_IN_MAP = "{repo} is not in the repo map"
+# --- Linear's search-speed refusal (DRE-7613) ------------------------------ #
+#: The wait before a search Linear refused as too fast is asked once more.
+#: On 2026-10-17 the refusal came on the fourth card of twenty, with 2,475 of
+#: the hour left; nothing said how long Linear wanted, so a minute.
+SEARCH_WAIT_SECONDS = 60
+#: The most one `cards` call waits in all. groomer.yml's Groom job clock
+#: covers it (`tests/test_groomer_wiring.py` reads it).
+SEARCH_WAIT_BUDGET_SECONDS = 600
+# The `why` of a search the refusal left unanswered, exact.
+SEARCH_REFUSED_AGAIN = ("{condition}; asked again after a {n} s wait and "
+                        "refused again")
+SEARCH_WAIT_SPENT = ("{condition}; not asked again: this run's {n} s of "
+                     "waits on it are spent")
 #: The `fold` command's input files, found at any depth under --lookups-dir.
 LOOKUPS_GLOB = "lookups-*.json"
 
@@ -789,9 +803,50 @@ def _door_search(terms: list[str]) -> dict | None:
     return found
 
 
-def _linear_search(lops, terms: list[str]) -> dict:
-    found = lops.gql(_search_query(len(terms), prefix="t"),
-                     {f"t{i}": t for i, t in enumerate(terms)}) or {}
+def _wait(seconds: float) -> None:
+    """The one wait on Linear's search-speed refusal; tests replace it."""
+    time.sleep(seconds)
+
+
+class _Waits:
+    """The seconds one `cards` call has waited on the search-speed refusal."""
+
+    def __init__(self):
+        self.spent = 0
+
+
+class _Unanswered(Exception):
+    """Linear refused a search as too fast and it was not answered: the
+    message is the search's `why`."""
+
+
+def _search(lops, waits: _Waits, query: str, variables: dict) -> dict:
+    """One Linear search — the problem search or the newer-cards lookup —
+    through the search-speed refusal (DRE-7613). Refused, it waits
+    `SEARCH_WAIT_SECONDS` and asks once more, while the call's waits stay
+    within `SEARCH_WAIT_BUDGET_SECONDS`. A second refusal, or one the budget
+    cannot wait for, raises `_Unanswered` naming it; any other failure is
+    raised as it came."""
+    try:
+        return lops.gql(query, variables) or {}
+    except linear_ops.LinearSearchTooFast as refused:
+        if waits.spent + SEARCH_WAIT_SECONDS > SEARCH_WAIT_BUDGET_SECONDS:
+            raise _Unanswered(SEARCH_WAIT_SPENT.format(
+                condition=linear_ops.SEARCH_TOO_FAST_CONDITION,
+                n=SEARCH_WAIT_BUDGET_SECONDS)) from refused
+    waits.spent += SEARCH_WAIT_SECONDS
+    _wait(SEARCH_WAIT_SECONDS)
+    try:
+        return lops.gql(query, variables) or {}
+    except linear_ops.LinearSearchTooFast as refused:
+        raise _Unanswered(SEARCH_REFUSED_AGAIN.format(
+            condition=linear_ops.SEARCH_TOO_FAST_CONDITION,
+            n=SEARCH_WAIT_SECONDS)) from refused
+
+
+def _linear_search(lops, terms: list[str], waits: _Waits) -> dict:
+    found = _search(lops, waits, _search_query(len(terms), prefix="t"),
+                    {f"t{i}": t for i, t in enumerate(terms)})
     return {t: (found.get(f"t{i}") or {}).get("nodes") or []
             for i, t in enumerate(terms)}
 
@@ -911,7 +966,7 @@ def _unsearched(why: str, terms=()) -> dict:
             "terms": list(terms), "cards": []}
 
 
-def _matched_work(row: dict, lops, holds_key: bool) -> dict:
+def _matched_work(row: dict, lops, holds_key: bool, waits: _Waits) -> dict:
     """The row's `matched_work` (the contract in `cards`). Whatever goes
     wrong is `searched: false` with the reason, never a failed lookup."""
     if row.get("excluded"):
@@ -929,7 +984,7 @@ def _matched_work(row: dict, lops, holds_key: bool) -> dict:
         except _Held as held:
             return _unsearched(DOOR_HELD.format(reason=held.reason), terms)
         if hits is None:
-            hits, source = _linear_search(lops, terms), "linear"
+            hits, source = _linear_search(lops, terms, waits), "linear"
         work = {"searched": True, "source": source, "why": None,
                 "terms": terms, "cards": []}
         ranked = _candidates(row, hits)
@@ -984,15 +1039,27 @@ def cards(rows, *, lops, now) -> list[dict]:
     the door included), no creation date, a door saying Linear's bucket is
     held (`linear-hold`: the phase is skipped, never sent to Linear), or the
     request's own error. Linear's cost: at most two more requests per
-    non-excluded row."""
+    non-excluded row.
+
+    Linear's search-speed refusal (DRE-7613). Both searches — the problem
+    search and the newer-cards lookup — go through `_search`. Linear can
+    refuse one with "You're trying to search issues too fast", which
+    `linear_ops` raises as `LinearSearchTooFast` and which does not stop the
+    process. The search then waits `SEARCH_WAIT_SECONDS` and is asked once
+    more; the waits in one call total at most `SEARCH_WAIT_BUDGET_SECONDS`. A
+    second refusal, or a refusal once that budget is spent, leaves that search
+    unanswered — `searched: false`, or `newer_cards_why`, naming the refusal
+    (`SEARCH_REFUSED_AGAIN`, `SEARCH_WAIT_SPENT`) — and the next card is still
+    asked. A refused-then-answered search costs one request more."""
     limit = _moment(now)
     holds_key = None
+    waits = _Waits()
     for row in rows or []:
         if not isinstance(row, dict):
             continue
         if not row.get("excluded") and holds_key is None:
             holds_key = _holds_key(lops)
-        row["matched_work"] = _matched_work(row, lops, bool(holds_key))
+        row["matched_work"] = _matched_work(row, lops, bool(holds_key), waits)
         if row.get("excluded"):
             row["lookups"] = None
             continue
@@ -1010,8 +1077,8 @@ def cards(rows, *, lops, now) -> list[dict]:
             look["newer_cards_why"] = NO_CREATED_AT
             continue
         try:
-            found = lops.gql(_search_query(len(paths)),
-                             {f"p{i}": p for i, p in enumerate(paths)}) or {}
+            found = _search(lops, waits, _search_query(len(paths)),
+                            {f"p{i}": p for i, p in enumerate(paths)})
         except Exception as e:  # noqa: BLE001 — a refused read is named, not fatal
             look["newer_cards_why"] = _clean(_one_line(e)) or type(e).__name__
             continue
