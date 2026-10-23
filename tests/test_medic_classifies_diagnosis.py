@@ -36,7 +36,7 @@ import yaml
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 sys.path.insert(0, os.path.join(ROOT, "scripts"))
 
-import medic_next_step  # noqa: E402
+import medic_next_step
 
 MEDIC = os.path.join(ROOT, ".github", "workflows", "medic.yml")
 VERDICT = ".bureau-pipeline/medic-verdict.txt"
@@ -82,7 +82,7 @@ def _runs(condition: str, ctx: dict) -> bool:
         else f"ctx.get({m.group(0)!r})", condition)
     py = py.replace("||", " or ").replace("&&", " and ")
     py = " ".join(py.split())  # a folded `if:` keeps its indented newlines
-    return bool(eval(py, {"ctx": ctx, "always": lambda: True}))  # noqa: S307
+    return bool(eval(py, {"ctx": ctx, "always": lambda: True}))
 
 
 # ── 1. the prompt ───────────────────────────────────────────────────────────
@@ -339,7 +339,7 @@ class TheOpenPullRequestTest(unittest.TestCase):
         self.assertNotIn("::warning", proc.stdout)
 
     def test_the_state_is_the_first_field_exactly(self):
-        proc, outputs, calls = _run_verdict(find_out=f"OPENED\t{PR_URL}")
+        proc, _, calls = _run_verdict(find_out=f"OPENED\t{PR_URL}")
         self.assertEqual(0, proc.returncode, proc.stderr)
         self.assertNotIn("--has-open-pr", _decide_call(calls))
 
