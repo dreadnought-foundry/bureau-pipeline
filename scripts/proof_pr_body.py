@@ -85,10 +85,11 @@ def refresh(repo: str, card: str, card_url: str, gh=None) -> int:
             return 0
         number, head = str(prs[0]["number"]), prs[0]["headRefOid"]
         view = json.loads(gh(["pr", "view", number, "--repo", repo, "--json", "files"])
-                          or "null") or {}
+                          or "null")
     except (RuntimeError, ValueError, TypeError, KeyError, IndexError) as exc:
         return _fail(f"the record pull request of {branch} could not be read: {exc}")
-    record = proof_record.fetch(repo, view.get("files"), head, gh)
+    files = view.get("files") if isinstance(view, dict) else None
+    record = proof_record.fetch(repo, files, head, gh)
     if record.text is None:
         return _fail(f"#{number}: {record.detail}")
     try:
