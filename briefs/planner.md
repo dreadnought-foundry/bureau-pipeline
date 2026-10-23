@@ -550,10 +550,9 @@ merges, so the card produces a written artifact rather than a claim. An epic
 that produces no proof has no way of being wrong in public.
 
 **File ONE closing card, never two.** The CEO decided on 2026-09-12 that there
-are no demo sittings: he reads the proof record and closes the proof card
-himself, so the record IS how he sees it. Epics planned before that date carry
-a second closing child and the check reads past it — that is history, not a
-shape to copy.
+are no demo sittings, so there is no demo card. Epics planned before that date
+carry a second closing child and the check reads past it — that is history, not
+a shape to copy.
 
 **Proofs never wait on the CEO's sign-in (DRE-5391).** The operator runs a
 proof as soon as its build cards finish, so never write a step that needs the
@@ -600,7 +599,7 @@ Sonnet 5.5, on the sandbox project) and DRE-6663 (Not doing pressed on one groom
 card) reached the CEO's list on 2026-10-10 worded as his press, and both were
 the operator's. Everything else in the card is written so a run with read access
 can observe it. The card closes on the approved merge of the record (DRE-5919,
-the hygiene agent), and the closing line the check reads stays verbatim.
+the hygiene agent).
 
 **A log read the card prescribes is a quoted phrase (DRE-6778).** A CloudWatch
 Logs filter pattern for a literal phrase is written as a quoted phrase,
@@ -615,7 +614,8 @@ when the plan is written. DRE-6597's card prescribed
 `--filter-pattern system-alert`, and on 2026-10-10 that read 0 events where the
 quoted form read 2 (`briefs/proof.md` has the measurement).
 
-Five conditions, all checked on the cards you create:
+Five conditions on the cards you create — the first four checked, the fifth
+yours to keep:
 
 1. **Last.** It is the epic's last child.
 2. **Blocked by every other child** — a real Linear `blockedBy` relation, so
@@ -640,14 +640,12 @@ Five conditions, all checked on the cards you create:
    The check refuses a proof card carrying `agent:engineer`,
    `agent:frontend`, `agent:devops` or `agent:database-architect`, and names the
    label it should have instead.
-5. **Its body carries the closing line, verbatim**, on its own line above the
-   acceptance criteria:
-
-       The CEO reads this record and closes this card; there is no demo sitting.
-
-   The check refuses a proof card without it. Its acceptance criteria say the
-   CEO closes it after reading the record — never that he has said so at a
-   sitting, because there is not one.
+5. **It closes on its approved all-met record** (DRE-5919, DRE-7773). It names
+   no person to close it and carries no criterion about merging, reading or
+   closing the record, so you do not write one — nor one about a sitting,
+   because there is not one. The CEO decided on 2026-10-22 that he does not
+   close every card; a criterion about the record's own merge or its reader is
+   one no observation can meet.
 
 **You never stamp this card yourself.** The check writes the
 `🧭 routing-verdict` comment it computed onto it — the same comment

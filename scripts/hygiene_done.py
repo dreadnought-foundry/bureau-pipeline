@@ -23,11 +23,12 @@ from through `hygiene.TAGS` (`hygiene-card-close` → `hyg-card-closed`):
    default branch and judged on the one shape a machine can read without
    judgment, a criterion table (`criterion_rows`, read through `proof_record`,
    the one reader the merge gate and the PROOF close share, DRE-6141):
-   every row but the record's
-   own merge and the CEO's closing step (`is_closing_row`: one of
-   `CLOSING_ROW_WORDS`, in the shape of a merge to main the criterion leads
-   with, or of the CEO or the operator closing the card or reading the
-   record) must open with one of `MET_WORDS`, no hedge straight after it
+   every row but a closing or
+   merge criterion an older card still carries (`is_closing_row`: one of
+   `CLOSING_ROW_WORDS`, in the shape of a merge the criterion leads with — to
+   main, or the record merged or existing merged — or of the CEO or the
+   operator closing the card or reading the record; a record written since
+   DRE-7773 has no such row) must open with one of `MET_WORDS`, no hedge straight after it
    (`HEDGES`), or be accepted by operator decision with the decision linked in
    the same cell (`row_accepted`, DRE-6244). Then a `hyg-proof-closed` receipt
    and Done. Cause: `record <path> at #<n>, <k> rows met` — k is the record's,

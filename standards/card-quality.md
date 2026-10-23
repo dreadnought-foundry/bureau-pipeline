@@ -378,9 +378,8 @@ state, with the observation recorded in the repo so the record merges. An epic
 that produces no proof has no way of being wrong in public.
 
 **There is no second closing card.** The CEO decided on 2026-09-12 that there
-are no demo sittings: he reads the proof record and closes the proof card
-himself, so the record IS how he sees it. Every epic planned before that date
-still carries a second closing child; the gate reads past one rather than
+are no demo sittings, so there is no demo card. Every epic planned before that
+date still carries a second closing child; the gate reads past one rather than
 bouncing the plan, and no plan adds one back.
 
 **A proof card closes itself on its approved record (DRE-5919).** The CEO
@@ -471,12 +470,9 @@ card: a dedicated run on its own workflow (`proof-task.yml`, role `proof`,
 person's account, which observes the criteria and opens the record as a pull
 request on `agent/DRE-<n>-proof-record`. The card closes on the approved merge
 of that record, by `card-done` under DRE-5919's PROOF rule or by the hygiene
-agent's `hyg-proof-closed` receipt (DRE-5365), so the CEO reads the merged
-record and nothing waits on him. The closing line on the card (condition 5)
-names who reads the record, not who moves the card, and stays verbatim. The
+agent's `hyg-proof-closed` receipt (DRE-5365), and nothing waits on him. The
 card still routes `OPERATOR`, by its `agent:ops` label, and the five conditions
-do not change: the run does the operator's observing, and the operator and the CEO
-stay the accountable readers. A press is the CEO's only when it is a business
+do not change: the run does the operator's observing. A press is the CEO's only when it is a business
 decision of his — which model a real project runs on, whether a real proposal
 is approved, whether a real card is removed from a proposal — and it is written
 on the card in the words `needs the CEO's press: <the press>`; a run that meets
@@ -487,9 +483,10 @@ operator's event row and never his:
 `waiting for the operator's press: <the press>`, held for the operator and
 never parked in Green Light (`briefs/planner.md`).
 
-Five conditions, and each is checked on the planner's OUTPUT rather than on
-any document that states the convention — a convention nothing checks is a
-convention that drifts:
+Five conditions. The first four are checked on the planner's OUTPUT rather than
+on any document that states the convention — a convention nothing checks is a
+convention that drifts — and the fifth is not checked, because it asks the card
+to carry nothing:
 
 1. It is the epic's **last child**.
 2. It is **blocked by every other child**, as real Linear `blockedBy`
@@ -507,11 +504,11 @@ convention that drifts:
    Both lists are derived, never restated: the build roles off `agents.yaml`
    (the roster entries running on `agent-task.yml`), the role the card may wear
    off the routing vocabulary's own label map.
-5. **Its body carries the closing line, verbatim**, above the acceptance
-   criteria: `The CEO reads this record and closes this card; there is no demo
-   sitting.` The decision only holds where the person closing the card reads
-   it, and its acceptance criteria say he closes it after reading the record —
-   never that he has said so at a sitting.
+5. **It closes on its approved all-met record** (DRE-5919, DRE-6141). It names
+   no person to close it and carries no criterion about merging, reading or
+   closing the record — nor one about a sitting. The CEO decided on 2026-10-22
+   that he does not close every card (DRE-7773); a card filed before then may
+   still carry the old closing sentence, and it passes like any other.
 
 **And the check writes the verdict it computes onto the card** — the same
 `🧭 routing-verdict` comment every other verdict uses, so
