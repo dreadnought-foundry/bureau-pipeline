@@ -259,6 +259,32 @@ fourth count phrase `proof_run_state` reads, and it does not open `re-run`, so
 the budget count is unchanged. A re-armed run that dies or never starts has
 spent its event and is not sent again; the hold names it.
 
+## A spent budget with nothing new costs no read (DRE-7787)
+
+A spent budget refuses every pass with the same line until an event comes,
+and before this each refusal spent one of the pass's candidate reads. On
+2026-10-23 agent-bureau's 10:03 PT sweep read DRE-7227, DRE-7251 and DRE-7430,
+each refusing on its budget, and deferred sixteen others — DRE-7015 and
+DRE-7767, ready, among them — on the cap; with about three sweeps an hour a
+ready proof waited two to three hours for a slot.
+
+So the budget's hold carries what the refusal was read off. When the record
+was read at the head and no unmet row names a fix (`_named_fixes`), its needs
+half ends `SPENT_AT` — ` — the record at <sha7> names no fix` — and a new
+head with no fix named posts it again, through the same `_hold_once`. A
+record that names a fix is never marked: a fix ships with nothing on the
+proof card, so only the reads can say it has. Then, off the lane read, a
+re-run candidate is spent with nothing new (`spent_on_the_lane`) when the
+newest `🔬 proof-waiting` its window shows is that marked hold and nothing
+after it is a `🔬 proof-observed`, a `🔬 proof-run` receipt or a console
+answer — so no re-arm event, no lift and no run has come since — and the one
+heads read (`open_record_heads`) shows its record still open at that head.
+Same head, same record, same refusal: the card is named on its line every
+pass, `re-run: budget spent and nothing new — held by <the hold>`, counted
+held, and keeps no slot, as a lane hold does (DRE-6464). A note, a receipt,
+a new head, a record no longer open, or heads that could not be read, and it
+is a candidate again on the next pass.
+
 A waiting row may be stamped (DRE-7316): `Not observed. waiting for <the
 event> [not-before=<T>]: …` (`proof_record.row_not_before`). When every
 waiting row is, the hold step 1 posts reads `— needs not-before=<the latest
@@ -299,7 +325,11 @@ for a card whose first relation page is full, up to
 re-arm's fix reads (DRE-7740) happen only on a spent budget whose record
 names fix cards, and only for a set not already re-armed: at most
 `REARM_FIX_CARDS` Linear card reads, each card's pull request, and one release
-reading. Its `linear-budget:` trailer is its own, lifted into the step summary.
+reading. A re-run spent with nothing new (DRE-7787) is not a candidate: it
+costs no Linear read, and however many there are they cost together one
+GitHub read of the open pull requests' heads, made only on a pass whose lane
+read shows a marked budget hold. Its `linear-budget:` trailer is its own,
+lifted into the step summary.
 
 THE TURN (DRE-6464). The bound once read the same three every pass: oldest
 first, a card held, blocked or unreadable kept its slot, and on 2026-10-09
@@ -520,6 +550,20 @@ GATE_UNANSWERED_OBSERVED = ("the re-run finished and the gate's decline still "
                             "stands at the record's head")
 GATE_UNANSWERED_NEEDS = ("an operator reading the gate's declined note and the "
                          "re-run's thread")
+#: How the re-run budget's hold opens, under either trigger (DRE-7740).
+BUDGET_HOLDS = tuple(f"{HOLD_MARK} {observed} — needs "
+                     for observed in (RERUN_EXHAUSTED_OBSERVED, GATE_EXHAUSTED_OBSERVED))
+#: What the budget's hold adds to its needs half when the record read at the
+#: head names no fix (DRE-7787): with no fix to ship, only a new note or a
+#: new head can change the refusal, and the lane read sees the first and one
+#: read of the open heads the second.
+SPENT_AT = " — the record at {sha7} names no fix"
+_SPENT_AT = re.compile(r" — the record at ([0-9a-f]{7}) names no fix$")
+#: How a spent re-run with nothing new is named, every pass, at no read.
+SPENT_NAMED = "re-run: budget spent and nothing new"
+#: The most open pull requests the one heads read lists — one page. A record
+#: beyond it is not found, and its card is read as a candidate.
+OPEN_HEADS_LIMIT = 100
 #: The hold after two timed re-runs whose rows still waited (DRE-7316).
 TIMED_EXHAUSTED_OBSERVED = "the record still waited after two timed re-runs"
 TIMED_EXHAUSTED_NEEDS = ("an operator reading the record's waiting rows and the "
@@ -638,6 +682,18 @@ def record_at(repo: str, pr: dict, head: str) -> proof_record.Record:
     raises: a record not found or not read has no text and says why."""
     return proof_record.fetch(repo, pr.get("files"), head,
                               gh=lambda args: reconcile.gh_read(*args))
+
+
+def open_record_heads(repo: str) -> dict:
+    """Every open proof-record pull request's head, by branch, in ONE read —
+    the read a spent re-run's mark is checked against (DRE-7787). Raises on
+    failure, and the pass then reads every spent card as a candidate."""
+    text = reconcile.gh_read("pr", "list", "--repo", repo, "--state", "open",
+                             "--limit", str(OPEN_HEADS_LIMIT),
+                             "--json", "headRefName,headRefOid")
+    return {pr["headRefName"]: pr.get("headRefOid") or ""
+            for pr in json.loads(text or "[]")
+            if proof_record_branch(pr.get("headRefName"))}
 
 
 def record_pr(identifier: str, repo: str) -> dict | None:
@@ -972,9 +1028,7 @@ def _past_budget_hold(holds: list) -> list:
     `GATE_EXHAUSTED_OBSERVED` (DRE-7740). Read beside `_past_cause_hold`,
     once the record at the head is read: the budget check decides instead,
     and a re-arm event lets it run once more."""
-    budget = tuple(f"{HOLD_MARK} {observed} — needs "
-                   for observed in (RERUN_EXHAUSTED_OBSERVED, GATE_EXHAUSTED_OBSERVED))
-    return [h for h in holds if not h.startswith(budget)]
+    return [h for h in holds if not h.startswith(BUDGET_HOLDS)]
 
 
 def _is_history_hold(line: str) -> bool:
@@ -982,6 +1036,12 @@ def _is_history_hold(line: str) -> bool:
     opening; the cause park reads past it, so its own stays its newest."""
     return (proof_cause_park.is_cause_hold(line)
             and f" row(s) that {HISTORY_READ}: " in line)
+
+
+def _named_fixes(read) -> list:
+    """The distinct cards the record's unmet rows name by `fix:` (DRE-7740)."""
+    return list(dict.fromkeys(card for _, result in read.unmet
+                              for card in proof_record.row_fixes(result)))
 
 
 def _pipeline_note(body: str) -> bool:
@@ -1361,6 +1421,40 @@ class _Pass:
         return reason == REVIEW_CAP or (
             reason == "manual" and linear_ops.window_is_partial(card.get("comments")))
 
+    def spent_on_the_lane(self, card: dict) -> tuple | None:
+        """`(sha7, hold line)` for a re-run candidate whose budget is spent
+        with nothing new, off the lane read at no request (DRE-7787) — else
+        None, and the card is read as before.
+
+        The newest `🔬 proof-waiting` the window shows is the budget's own
+        hold, marked with the head its record was read at and naming no fix
+        (`SPENT_AT`), and nothing after it could change the refusal: no
+        `🔬 proof-observed` (a re-arm event, or a lift), no `🔬 proof-run`
+        receipt (a run since, which may have amended the record), and no
+        console answer. With no fix named, no fix can ship for it; the head
+        is the sweep's to compare against the one heads read. The window is
+        the newest comments, so anything after a hold it shows is in it."""
+        window = linear_ops.window_nodes(card.get("comments"))
+        try:
+            voices = self.voices(window, None, card=card["identifier"])
+        except Exception:  # noqa: BLE001 — unread rules nothing out
+            return None
+        self._answer_unread(card["identifier"], voices)
+        marks = [i for i, v in enumerate(voices)
+                 if (v.body or "").lstrip().startswith(HOLD_MARK)]
+        if not marks:
+            return None
+        line = _first_line(voices[marks[-1]].body)
+        found = _SPENT_AT.search(line)
+        if found is None or not line.startswith(BUDGET_HOLDS):
+            return None
+        for voice in voices[marks[-1] + 1:]:
+            body = voice.body or ""
+            if (voice.kind not in _INERT or body.lstrip().startswith(OBSERVED_MARK)
+                    or proof_run_state.receipt(body) is not None):
+                return None
+        return found.group(1), line
+
     def _parked_on(self, card: dict, comments: list, number, head: str) -> None:
         """For a `Green Light` card, the one refusal an `In Review` card does
         not have: the sweep's review-cap stamp, read off the whole thread,
@@ -1516,6 +1610,10 @@ class _Pass:
             if rearmed:
                 needs = (f"{needs} — the re-armed run of {rearmed[-1].at} was "
                          "its event's one run")
+            if read is not None and not _named_fixes(read):
+                # No fix can ship for it (DRE-7787): the head it was read at
+                # lets a later pass's lane read spare the read.
+                needs += SPENT_AT.format(sha7=head[:7])
             self._hold_once(ident, voices, observed, needs, open_only=True)
             raise _Refused(f"re-run: budget — {spent} re-runs on #{number} since "
                            f"it opened and {trigger.again}; {NEVER_ANOTHER}"
@@ -1546,8 +1644,7 @@ class _Pass:
         is made for all their merges; the set re-arms once."""
         if read is None:
             return None, "the record was not read at the head, so it names no fix"
-        named = list(dict.fromkeys(card for _, result in read.unmet
-                                   for card in proof_record.row_fixes(result)))
+        named = _named_fixes(read)
         if not named:
             return None, "no unmet row of the record names a fix"
         cards = ", ".join(named)
@@ -1834,12 +1931,15 @@ def sweep(repo: str, slug: str, *, live: bool, linear=None,
           now: datetime | None = None,
           find_record: Callable | None = None,
           read_record: Callable | None = None,
-          shadow_model: str | None = None) -> Tally:
+          shadow_model: str | None = None,
+          open_heads: Callable | None = None) -> Tally:
     """One pass: the return first, then first runs oldest first and re-runs,
     begun at this pass's turn; at most `PROOF_CANDIDATES_PER_PASS` candidates
-    read and one dispatch. A first run held on the lane read is named every
-    pass and read by none. `shadow_model` is the proof shadow's model, read
-    from `PROOF_SHADOW_MODEL` when not given; empty is no shadow."""
+    read and one dispatch. A first run held on the lane read, and a re-run
+    whose budget is spent with nothing new, is named every pass and read by
+    none. `shadow_model` is the proof shadow's model, read from
+    `PROOF_SHADOW_MODEL` when not given; empty is no shadow. `open_heads` is
+    the one heads read (`open_record_heads`), injected in the tests."""
     one = _Pass(repo, slug, live=live, linear=linear or LinearReads(),
                 read=read or github_read,
                 find_pr=find_pr or (lambda ident: merged_pr(ident, repo)),
@@ -1886,6 +1986,28 @@ def sweep(repo: str, slug: str, *, live: bool, linear=None,
     for card, why in held:
         _say(card["identifier"], f"condition 4 (hold): {why}")
         tally.held += 1
+
+    # So is a re-run whose budget is spent with nothing new (DRE-7787), once
+    # one read of the open heads shows its record still at the marked head.
+    shown = {c["identifier"]: got for c in reruns if (got := one.spent_on_the_lane(c))}
+    heads: dict = {}
+    if shown:
+        try:
+            heads = (open_heads or (lambda: open_record_heads(repo)))()
+        except Exception as error:  # noqa: BLE001 — unread spares no read
+            print(f"{PREFIX} the open record pull requests' heads could not be "
+                  f"read — every spent re-run is read as a candidate: {error}")
+    spent = []
+    for card in reruns:
+        ident = card["identifier"]
+        sha7, line = shown.get(ident) or ("", "")
+        if sha7 and (heads.get(f"agent/{ident}-proof-record") or "").startswith(sha7):
+            spent.append(ident)
+            _say(ident, f"{SPENT_NAMED} — held by {line}; nothing follows it "
+                        f"and the record is still at {sha7} — read again once a "
+                        "🔬 proof-observed, a proof-run receipt or a new head arrives")
+            tally.held += 1
+    reruns = [c for c in reruns if c["identifier"] not in spent]
 
     # The candidates that need a read share one ring, begun at this pass's
     # turn; the return, one per signed answer, keeps the front.

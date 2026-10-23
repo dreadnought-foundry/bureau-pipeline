@@ -426,7 +426,11 @@ finished with the decline still at the head, one `🔬 proof-waiting` hold for
 an operator. The re-arm events are two, and only two (DRE-7740): every card an
 unmet row names by `fix: DRE-<n>` is Done, labelled for this repo, merged and
 live — the set re-arms once — or the operator posts a new `🔬 proof-observed`
-after the card's newest receipt, never one the pipeline wrote itself. A record
+after the card's newest receipt, never one the pipeline wrote itself. When the
+record read at the head names no fix, the budget's hold ends `— the record at
+<sha7> names no fix`, and while nothing follows that hold and the record stays
+at that head the card is named on its line every pass and never read, so it
+spends none of the pass's candidate reads (DRE-7787). A record
 whose unmet rows are all `Not met. history: …` rows (or cause rows) is held for
 the operator's decision at once and never re-run. A row whose Result reads `Not observed. waiting for <the
 event>` — and nothing else — is waiting on something no one on the card has to

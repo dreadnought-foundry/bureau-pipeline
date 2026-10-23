@@ -408,12 +408,18 @@ def _rerun(monkeypatch, doc: dict) -> str:
         assert refused.bucket == "held"
         assert standing[-1].startswith("🔬 proof-waiting:")
         # The standing hold is the budget's own, so the budget check decides
-        # instead (DRE-7740): no re-arm event, so it refuses and holds nothing
-        # new — the hold still stands for the operator.
+        # instead (DRE-7740): no re-arm event, so it refuses — the hold still
+        # stands for the operator. It was posted before the mark existed, so
+        # the one hold written is its marked copy (DRE-7787): no fix is named.
         assert proof_dispatch._past_budget_hold(standing[-1:]) == []
         assert str(refused).startswith("re-run: budget — "), refused
         assert proof_dispatch.NEVER_ANOTHER in str(refused)
         assert fired == []
+        [(ident, observed, needs)] = holds
+        marked = proof_dispatch.SPENT_AT.format(sha7=head[:7])
+        assert ident == doc["card"] and needs.endswith(marked)
+        assert linear_ops.proof_waiting_line(observed, needs) == standing[-1] + marked
+        holds.clear()
         written = standing[-1]
     else:
         assert not standing
