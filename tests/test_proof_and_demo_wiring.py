@@ -45,6 +45,9 @@ import assemble_context as ac  # noqa: E402
 import linear_ops  # noqa: E402
 
 GATE = "Proof card"
+#: The two steps whose prompt plans an epic, named exactly: `step_named` reads
+#: a fragment, and "Plan epic" alone is the first of four.
+PLAN_STEPS = ("Plan epic", "Plan epic — on the next rung")
 
 
 def wf_src() -> str:
@@ -64,6 +67,12 @@ def proof_card_section() -> str:
                         text, re.S | re.M)
     assert section, "the standard must still carry the proof-card section"
     return section.group(0)
+
+
+def plan_prompt(name: str) -> str:
+    """The prompt of the plan.yml step named exactly `name`."""
+    (step,) = [s for s in wf_steps() if (s.get("name") or "") == name]
+    return step["with"]["prompt"]
 
 
 def step_named(fragment: str) -> dict:
@@ -281,11 +290,73 @@ class ThePlannerIsToldInTheRunTest(unittest.TestCase):
         proof card. The planner files one closing child now."""
         self.assertNotIn("DEMO:", step_named("Plan epic")["with"]["prompt"])
 
-    def test_the_plan_prompt_gives_the_closing_line_verbatim(self):
-        """The gate refuses a proof card whose body does not carry it, so the
-        run that has to satisfy the gate is told the exact words."""
+    def test_neither_plan_prompt_asks_for_the_closing_line(self):
+        """INVERTED (DRE-7773): the prompt used to give `CLOSING_LINE` verbatim
+        because the gate refused a proof card without it. The card closes on
+        its approved, all-met record now, so neither planning prompt asks for
+        the line or for a criterion saying the CEO closes the card."""
         sys.path.insert(0, SCRIPTS)
         import proof_and_demo  # noqa: E402
 
-        self.assertIn(proof_and_demo.CLOSING_LINE,
-                      step_named("Plan epic")["with"]["prompt"])
+        for name in PLAN_STEPS:
+            prompt = plan_prompt(name)
+            self.assertNotIn(proof_and_demo.CLOSING_LINE, prompt, name)
+            self.assertNotIn("closes it after reading the record", prompt, name)
+
+    def test_both_plan_prompts_say_the_card_closes_on_its_record(self):
+        for name in PLAN_STEPS:
+            prompt = " ".join(plan_prompt(name).split())
+            self.assertIn("no criterion about merging, reading or closing the record",
+                          prompt, name)
+            self.assertIn("closes on its approved all-met record", prompt, name)
+
+
+class NoDocumentAsksAPersonToCloseTheProofTest(unittest.TestCase):
+    """DRE-7773. The CEO decided on 2026-10-22 that he does not close every
+    card: a proof card closes on its approved, all-met record (DRE-5919), and
+    nothing in a PROOF card or its record asks him to read or close it. So no
+    document that tells a planner how to write the card, or a proof run how to
+    write the record, still asks for the closing line, a criterion saying a
+    person closes the card, or a closing row."""
+
+    PHRASES = (
+        "The CEO reads this record and closes this card",
+        "closes the proof card himself",
+        "closes the card himself",
+        "the CEO reads the merged record",
+        "the CEO reads it and closes the card",
+        "the CEO closes this card after reading",
+        "the CEO closes it after reading",
+        "the closing line",
+        "accountable readers",
+        "Open: the CEO's step",
+    )
+    DOCUMENTS = (
+        PLANNER_BRIEF,
+        os.path.join(REPO, "briefs", "proof.md"),
+        STANDARD,
+        os.path.join(REPO, "README.md"),
+        os.path.join(REPO, "standards", "plan-artifact.md"),
+    )
+
+    def assertSaysNone(self, text: str, where: str):
+        flat = " ".join(text.split()).lower()
+        for phrase in self.PHRASES:
+            self.assertNotIn(" ".join(phrase.split()).lower(), flat,
+                             f"{where} still says {phrase!r}")
+
+    def test_no_document_says_it(self):
+        for path in self.DOCUMENTS:
+            self.assertSaysNone(open(path, encoding="utf-8").read(),
+                                os.path.relpath(path, REPO))
+
+    def test_neither_plan_prompt_says_it(self):
+        for name in PLAN_STEPS:
+            self.assertSaysNone(plan_prompt(name), f"the {name!r} prompt")
+
+    def test_the_comment_above_the_proof_gate_says_it_closes_on_its_record(self):
+        text = wf_src()
+        above = text[:text.index("- name: Proof card — the epic's last child")]
+        block = re.sub(r"(?m)^\s*#", " ", above[above.rindex("\n\n"):])
+        self.assertSaysNone(block, "the comment above the proof gate")
+        self.assertIn("closes on its approved all-met record", " ".join(block.split()))

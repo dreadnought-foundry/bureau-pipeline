@@ -23,8 +23,9 @@ DRE-6022's seven children as they stood at 2026-10-06 21:57 PT
   replay    the Green Light step stamps DRE-6048 OPERATOR with `no-code`,
             writes nothing on its six siblings but the child stamp's own
             adoption move, and moves the epic to Green Light.
-  refused   the same walk with the proof card's closing line removed: the
-            bounce note on the epic, no verdict, no lane, a red step.
+  refused   the same walk with the proof card wearing `agent:engineer`, the
+            role its `subissue` inherits (condition 4): the bounce note on
+            the epic, no verdict, no lane, a red step.
   activate  the activation step runs the same check over the same children
             file before the child stamp, and a refusal writes neither
             `In Progress` nor the activation comment and promotes nothing.
@@ -75,13 +76,20 @@ VERDICTS = {
 }
 
 
-def children(*, closing_line=True):
+#: The words of the condition-4 finding: the proof card wears a build role.
+BUILD_ROLE_FINDING = "a role a build run is dispatched for"
+
+
+def children(*, build_role=False):
+    """DRE-6022's children; with `build_role`, the proof card still wears the
+    `agent:engineer` its `subissue` inherited, which the check refuses
+    (DRE-3039). Since DRE-7773 a body without the closing line passes, so the
+    refusal walks break the card this way instead."""
     cards = json.load(open(FIXTURE))
-    if not closing_line:
+    if build_role:
         for card in cards:
             if card["identifier"] == PROOF_ID:
-                card["body"] = card["body"].replace(
-                    proof_and_demo.CLOSING_LINE + "\n", "")
+                card["labels"] = card["labels"] + ["agent:engineer"]
     return cards
 
 
@@ -322,13 +330,13 @@ class TheGreenLightStepStampsTheProofCardTest(_Walk):
 
 
 # ===========================================================================
-# The refusal: the same walk, the proof card's closing line removed
+# The refusal: the same walk, the proof card wearing a build role
 # ===========================================================================
 class ARefusedProofCheckStopsTheGreenLightStepTest(_Walk):
 
     def setUp(self):
         super().setUp()
-        self.r = self._walk(GREEN_LIGHT, children(closing_line=False))
+        self.r = self._walk(GREEN_LIGHT, children(build_role=True))
 
     def test_the_step_exits_non_zero(self):
         self.assertNotEqual(self.r.returncode, 0, self.r.stdout + self.r.stderr)
@@ -337,7 +345,8 @@ class ARefusedProofCheckStopsTheGreenLightStepTest(_Walk):
         notes = [w[2] for w in self._on(EPIC) if w[0] == "comment"]
         self.assertEqual(len(notes), 1, notes)
         self.assertIn(f"🧾 {proof_and_demo.BOUNCE_TAG}", notes[0])
-        self.assertIn("closing line", notes[0])
+        self.assertIn(BUILD_ROLE_FINDING, notes[0])
+        self.assertIn("`agent:engineer`", notes[0])
 
     def test_no_verdict_is_written_on_dre_6048(self):
         self.assertEqual(self._on(PROOF_ID), [])
@@ -388,7 +397,7 @@ class TheActivationStepRunsTheProofCheckTest(_Walk):
         self.assertEqual(writes[-1][0], "promote")
 
     def test_a_refused_check_writes_neither_in_progress_nor_the_activation_comment(self):
-        r = self._walk(ACTIVATE, children(closing_line=False))
+        r = self._walk(ACTIVATE, children(build_role=True))
         self.assertNotEqual(r.returncode, 0, r.stdout + r.stderr)
         writes = self._writes()
         self.assertNotIn(["state", EPIC, "In Progress"], writes)
@@ -399,6 +408,7 @@ class TheActivationStepRunsTheProofCheckTest(_Walk):
         # ...and the note says why, without claiming a lane it did not write.
         self.assertEqual(len(notes), 1, notes)
         self.assertIn(f"🧾 {proof_and_demo.BOUNCE_TAG}", notes[0])
+        self.assertIn(BUILD_ROLE_FINDING, notes[0])
         self.assertIn("has not moved", notes[0])
 
 
