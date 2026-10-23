@@ -162,13 +162,23 @@ _DECISION_LINK = re.compile(
 #: "The record is on main", "docs/<record>.md merged to main".
 _OWN_MERGE = re.compile(r"(?:merged to main|(?:the |this )?record (?:is )?(?:merged to|on) main"
                         r"|\S+\.md (?:is )?(?:merged to|on) main)\b")
-#: The record merged, wherever and however it is worded (DRE-7773): the
-#: criterion leads with the record and says, in its first clause, that it is
-#: merged — "The record is merged on `agent/DRE-<n>-proof-record`, …" or "The
-#: record exists at the path above, merged on `main` …". A record that only
-#: REPORTS a merge ("The record shows the pull request merged…") is judged.
-_RECORD_MERGED = re.compile(r"(?:the |this )?(?:proof )?record (?:(?:is |was |has been )?merged"
-                            r"|exists\b[^.;:]*?\bmerged)\b")
+#: The record merged, wherever it merged (DRE-7773), in one of two shapes the
+#: criterion leads with. "The record is merged on `agent/DRE-<n>-proof-record`,
+#: with …" says nothing after the merge but a `with` tail, to its end. "The
+#: record exists at the path above, merged on `main` from the branch …, …"
+#: names only a place before the merge — no `and`, `which`, `that` or `shows`
+#: — and the merge ends its clause; what follows that clause is not read,
+#: because agent-bureau #3381 row 1 goes on to say what the record holds. Any
+#: other claim after the merge ("The record merged on `main` shows the gate
+#: held…"), or a record that only REPORTS a merge ("The record shows the pull
+#: request merged…"), is judged.
+_MERGED_AT = (r"merged(?: (?:on|to|into) [\w/<>.-]*[\w/<>-])?"
+              r"(?: from (?:the branch )?[\w/<>.-]*[\w/<>-])?")
+_RECORD_MERGED = re.compile(
+    rf"(?:the |this )?(?:proof )?record (?:(?:is |was |has been )?{_MERGED_AT}"
+    r"(?:,? with\b[^.;:]*)?\.?$"
+    r"|exists (?:at|in) (?:(?!\b(?:and|which|that|shows?)\b)(?:[^.;:,]|\.(?=\w)))+, "
+    rf"{_MERGED_AT}(?=,|\.?$))")
 #: The closing step: the CEO or the operator closes the card, or reads the record.
 _CLOSING_STEP = re.compile(r"\bthe (?:ceo|operator)\b[^.;:]*?\b(?:clos(?:es|ed|e) (?:this card"
                            r"|the card|it)|reads? (?:the|this) (?:merged )?record)\b")

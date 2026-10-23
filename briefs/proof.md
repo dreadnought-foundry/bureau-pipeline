@@ -586,7 +586,8 @@ never blocks the record.
 
 `4/5 local checks` is the record checked against its own shape: one row per
 criterion but a closing one — the record has no closing row — every Result
-opening with one of the three words, and the table read the way the hygiene sweep reads it —
+opening with one of the three words, and the table read the way the hygiene
+sweep reads it —
 
     python3 -c "import sys; sys.path.insert(0, '.bureau-pipeline/scripts'); \
       import hygiene_done as h; r = h.reading(open('<record path>').read()); \
