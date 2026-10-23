@@ -63,10 +63,14 @@ fast path shipped, which the sweep moves straight to Planning (DRE-4150, point
      computes the proposal, reads the card's thread and posts nothing, then
      `groom_verify_agent.py targets`, which reads each Planning and spare
      card's text — this job holds the Linear key — and writes the matrix.
-     `targets` alone is handed the read door's settings (DRE-7242), so its
-     problem search asks the door before Linear; `propose` is not, and runs
-     as before. A stub that grants no `id-token: write` mints no token for
-     the door, and the search falls back to Linear. The step before it runs
+     `targets` is handed the read door's four settings (DRE-7242), so its
+     problem search asks the door before Linear. `propose` is handed the
+     door's address, audience and ref but never `BUREAU_READ` (DRE-7821):
+     enough to read the console's record of groom decisions
+     (`bureau_read.groom_removals()`, asked whatever the mode says), while
+     every board read it makes still goes to Linear. A stub that grants no
+     `id-token: write` mints no token for the door: the search falls back to
+     Linear, and the groom-decisions read is `ReadUnknown` `no-token`. The step before it runs
      the door's identity check (`bureau_read.py check-ref`), as
      `reconcile.yml` does: a `pipeline_ref` other than the ref the stub
      called refuses the run.
