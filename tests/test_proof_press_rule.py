@@ -93,7 +93,10 @@ PLAIN_WORDS = {
     "answerDeskPermission": "answer a Desk Allow",
 }
 
-#: The reach declaration quotes this sentence as its `brief` (the contract).
+#: The reach declaration will quote this sentence as its `brief` (the contract).
+#: No declaration in `config/` carries it yet: DRE-7779, the epic's reach card,
+#: adds the reading, and from then `proof_reach.py check` holds the two equal.
+#: Until it lands, this literal is the only copy the brief is held to.
 REACH_SENTENCE = (
     "On the sandbox project `agent-bureau-demo`, and only there, the run "
     "presses as the console proof-reader, through agent-bureau's "
@@ -486,6 +489,47 @@ class TheWorkflowPromptTest(unittest.TestCase):
         text = _flat(_item_4())
         for phrase in (SANDBOX, CEO_ROW, BUSINESS, OPERATOR_GRAMMAR, "briefs/proof.md"):
             self.assertIn(phrase, text, f"{self.NAME}: item 4 no longer says {phrase!r}")
+
+
+class WhatHasNotLandedIsSaidToBePendingTest(unittest.TestCase):
+    """Two sibling cards finish this rule after it merges: DRE-7781 rewrites
+    the proof run's own prompt, and DRE-7779 adds the plan critic's check and
+    `scripts/plan_proof_reach.py`'s `SANDBOX_PRESSES`. Until each lands, the
+    documents name it as pending, never as present."""
+
+    PROMPT_CARD = "DRE-7781"
+    REACH_CARD = "DRE-7779"
+
+    def test_the_prompt_lags_the_brief_and_wins_until_it_is_rewritten(self):
+        press = _section(PROOF, PRESS_HEADING)
+        self.assertTrue(_says_together(press, self.PROMPT_CARD, "prompt wins"),
+                        "briefs/proof.md does not say the prompt wins until "
+                        f"{self.PROMPT_CARD} rewrites it")
+        self.assertNotIn("reached every proof run", _flat(press),
+                         "briefs/proof.md still says the rule reached every proof run "
+                         "at the merge")
+
+    def test_the_standard_names_the_card_that_adds_the_constant(self):
+        reach = (ROOT / "scripts" / "plan_proof_reach.py").read_text(encoding="utf-8")
+        if "SANDBOX_PRESSES" in reach:
+            self.skipTest(f"{self.REACH_CARD} has landed the constant")
+        self.assertTrue(_says_together(_section(STANDARD, PROOF_CARD_HEADING),
+                                       "`scripts/plan_proof_reach.py`", self.REACH_CARD),
+                        "standards/card-quality.md names `scripts/plan_proof_reach.py`'s "
+                        f"`SANDBOX_PRESSES` without the card that adds it, {self.REACH_CARD}")
+
+    def test_the_planner_names_the_card_that_adds_the_check(self):
+        self.assertTrue(_says_together(_section(PLANNER, PROOF_CARD_HEADING),
+                                       "plan critic refuses", self.REACH_CARD),
+                        "briefs/planner.md says the plan critic refuses a listed press "
+                        f"without the card that adds the check, {self.REACH_CARD}")
+
+
+class TheIdentitiesBulletKeepsItsParagraphsTest(unittest.TestCase):
+    def test_the_sign_in_paragraph_is_its_own_paragraph(self):
+        ids = _section(PROOF, IDENTITIES_HEADING)
+        self.assertTrue("with that reason.\n\n  Every sign-in you hold was made" in ids,
+                        "briefs/proof.md joined the sign-in paragraph to the one above it")
 
 
 class ThePressSectionKeepsTheAnswerTest(unittest.TestCase):
