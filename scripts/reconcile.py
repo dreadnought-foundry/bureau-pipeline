@@ -113,7 +113,12 @@ relation and own read both say In Progress, with at least one child, its
 children read to the end, no child `epic_cap.buildable()` and no open child
 epic — a proof card or a hand-built card left open does not hold.
 `_not_built_out` says which of those held it. The code dependencies ride
-card-level relations, which the card gate honors as before.
+card-level relations, which the card gate honors as before — with the same
+rule for a card whose blocker is an approved epic (DRE-7774): an In Progress
+epic blocker that is built out is `released at build-done`, its proof still
+open, and one with work left holds as `not built out`
+(`card_relation_blockers`, read by the gate and by its live re-check alike).
+A blocker that is not an epic, or an epic in any other state, holds as before.
 
 The auto-advance is stricter: when a blocker epic reaches Done, every epic
 blocked-by it whose blockers are now ALL Done — built out is not enough, the
@@ -6766,11 +6771,14 @@ def live_promotion_refusal(card: dict, bodies: list[str]) -> tuple[dict | None, 
         return live, "its relations could not be read to the end"
     if prose_blockers.undeclared_claims(live):
         return live, "its description now claims a blocker the board does not hold"
-    unmet = sorted(prose_blockers.relation_blockers(live))
+    # The gate's own reading (DRE-7774): an epic blocker built out is released
+    # here as it was there, off the same pass's read.
+    unmet, _ = card_relation_blockers(live)
     if unmet:
         states = prose_blockers.blocker_states(live)
         return live, "it is blocked by " + ", ".join(
-            f"{b} ({states.get(b)})" for b in unmet)
+            f"{b} ({states.get(b)})" + (f" — not built out: {why}" if why else "")
+            for b, why in unmet.items())
     if has_unresolved_blocker(live):
         return live, "it carries an unresolved agent-blocker now"
     try:
@@ -7076,6 +7084,47 @@ def _open_children(blocker: str) -> str:
             sorted(labels.intersection(epic_cap.unbuilt_labels()))
         named.append(" ".join([child.get("identifier") or "?", *why]))
     return ", ".join(named) or "none"
+
+
+def card_relation_blockers(card: dict) -> tuple[dict[str, str | None], dict[str, str]]:
+    """The card gate's reading of `card`'s unmet `blockedBy` relations
+    (DRE-7774): `(held, released)`.
+
+    `held` maps each blocker that still holds to `None` — an ordinary hold,
+    today's line — or to why an epic blocker is `_not_built_out`. `released`
+    maps each In Progress EPIC blocker that is built out to its open children
+    (`_open_children`): its proof may still be open, and an open proof never
+    holds back the next work once the build it proves is done — the rule
+    DRE-6407 gave an epic blocked by an epic, and the card-level `blockedBy`
+    relations are the one reading that never had it (the Tasks screens sat
+    three days behind DRE-7685's open proof, 2026-10-22).
+
+    Only an In Progress blocker is read, once per pass (`_blocker_epic`), so a
+    blocker in any other state costs nothing, as before. One that cannot be
+    read holds, with the reason. Both card-gate reads — `promote_ready`'s and
+    `live_promotion_refusal`'s — ask this, so the second cannot hold a card the
+    first released.
+    """
+    states = prose_blockers.blocker_states(card)
+    held: dict[str, str | None] = {}
+    released: dict[str, str] = {}
+    for blocker in sorted(prose_blockers.relation_blockers(card)):  # sorted: deterministic
+        state = states[blocker]
+        if state != epic_cap.IN_PROGRESS:
+            held[blocker] = None
+            continue
+        record = _blocker_epic(blocker)
+        if record is not None and not mid_epic.is_epic(
+            record.get("title") or "", has_children=bool(epic_cap._children(record))
+        ):
+            held[blocker] = None
+            continue
+        why = _not_built_out(blocker, state)
+        if why is None:
+            released[blocker] = _open_children(blocker)
+        else:
+            held[blocker] = why
+    return held, released
 
 
 def epic_blockers_unmet(epic_identifier: str, *, release_at_build_done: bool = True) -> bool:
@@ -8245,8 +8294,18 @@ def promote_ready(
             # from — a relation carries its blocker's state, so a blocker it
             # returns is unmet by construction and the gate never spends a
             # read per blocker per card per sweep to learn what it was handed.
+            # The one exception is an In Progress blocker (DRE-7774): an epic
+            # there is released at build-done, as an epic's blocker epic is
+            # (DRE-6407), and learning that it is an epic costs one read per
+            # blocker per pass — `card_relation_blockers`.
             states = prose_blockers.blocker_states(card)
-            unmet = sorted(prose_blockers.relation_blockers(card))
+            unmet, released = card_relation_blockers(card)
+            for b, still_open in released.items():
+                print(
+                    f"promotion: {card['identifier']}'s blocker {b} ({states[b]}) is "
+                    "released at build-done: it has no buildable child left — "
+                    f"open: {still_open}"
+                )
             if unmet:
                 # This is the exit that froze DRE-2826 for a sweep while saying
                 # nothing at all (DRE-2918): the card was held by a formal
@@ -8257,7 +8316,8 @@ def promote_ready(
                 # description line" is now a defect and never a hold.
                 held = "; ".join(
                     f"{b} ({states[b]}), declared by a formal blockedBy relation"
-                    for b in unmet
+                    + (f" — not built out: {why}" if why else "")
+                    for b, why in unmet.items()
                 )
                 print(f"promotion: {card['identifier']} is held by {held} — skipping")
                 continue

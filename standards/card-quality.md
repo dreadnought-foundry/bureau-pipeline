@@ -915,7 +915,14 @@ buildable card left (`epic_cap.buildable()` — open, not an epic, not a proof,
 not marked for a person) and no open child epic, even with the blocker's proof
 still open. Card-level `blockedBy` relations are still read, so a card that
 really needs an earlier card waits for it; a blocker with work left is `not
-built out` and holds. The sweep's `epic-gate:` line names the rule.
+built out` and holds. The sweep's `epic-gate:` line names the rule. A card
+blocked by an approved epic is released at build-done the same way (DRE-7774):
+an In Progress epic on a card's own `blockedBy` relation counts as met once it
+is built out, its proof still open, and the sweep's `promotion:` line says
+`released at build-done` — or `not built out` with the reason when it holds. A
+blocker that is not an epic, or an epic not yet In Progress, holds the card
+as before. An open proof never holds back the next work once the build it
+proves is done.
 
 **The pre-approval critic treats a seam inside one epic as a mechanical
 send-back**, in exactly these words:
