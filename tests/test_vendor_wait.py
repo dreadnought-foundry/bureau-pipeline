@@ -24,10 +24,11 @@ What this file pins:
   4. **None for the rest.** A 403, a 429 `rate_limit_error`, an unreadable
      record, a run that did not die.
   5. **One reader of each fact.** `credential_rotation.in_execution`,
-     `check_agent_result._turn_cap_evidence` and
-     `model_fallback.capacity_refusal` are each monkeypatched in turn and the
-     answer follows the patched reader, so none of them is re-implemented
-     inside the module.
+     `check_agent_result._turn_cap_evidence`,
+     `model_fallback.capacity_refusal` and `execution_result._DIAGNOSTIC_FIELDS`
+     are each monkeypatched in turn and the answer follows the patched reader,
+     so none of them is re-implemented inside the module — and a vendor
+     signature in a result-record field off the whitelist reads None.
 
 Run: cd bureau-pipeline && python3 -m pytest tests/test_vendor_wait.py -v
 """
@@ -47,6 +48,7 @@ sys.path.insert(0, str(SCRIPTS))
 
 import check_agent_result  # noqa: E402, RUF100 — the turn-cap reader
 import credential_rotation  # noqa: E402, RUF100 — the renewal 401 reader
+import execution_result  # noqa: E402, RUF100 — the result-record whitelist
 import model_fallback  # noqa: E402, RUF100 — the capacity-wall reader
 import vendor_wait  # noqa: E402, RUF100
 
@@ -279,6 +281,35 @@ def test_the_capacity_wall_is_read_through_model_fallback(monkeypatch):
     monkeypatch.setattr(model_fallback, "capacity_refusal",
                         lambda text, record=None: "overloaded_error")
     assert vendor_wait.kind([_overloaded()]) == "vendor-transient"
+
+
+#: A 400 death whose vendor signature sits only in result-record fields off
+#: the whitelist — `error`, `error_status`, `message` — where the action also
+#: writes things that are not the vendor's answer.
+OFF_WHITELIST_529 = _result(
+    api_error_status=400,
+    result="API Error: 400 bad request",
+    error="overloaded_error",
+    error_status=529,
+    message='{"type":"error","error":{"type":"overloaded_error"}}',
+)
+
+
+def test_a_vendor_signature_off_the_whitelist_is_no_wait():
+    """The record is read only through the whitelist: a 529 or an
+    `overloaded_error` in any other field of it is not the run dying on one."""
+    assert vendor_wait.kind([OFF_WHITELIST_529]) is None
+
+
+def test_the_result_record_is_read_through_execution_result(monkeypatch):
+    monkeypatch.setattr(execution_result, "_DIAGNOSTIC_FIELDS",
+                        ("subtype", "stop_reason", "terminal_reason", "errors"))
+    assert vendor_wait.kind([_overloaded()]) is None
+    monkeypatch.setattr(execution_result, "_DIAGNOSTIC_FIELDS",
+                        ("api_error_status", "result"))
+    assert vendor_wait.kind([_overloaded()]) == "vendor-transient"
+    monkeypatch.setattr(execution_result, "_DIAGNOSTIC_FIELDS", ("message",))
+    assert vendor_wait.kind([OFF_WHITELIST_529]) == "vendor-transient"
 
 
 # --------------------------------------------------------------------------
