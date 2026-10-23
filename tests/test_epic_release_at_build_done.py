@@ -31,6 +31,7 @@ Run: cd bureau-pipeline && python3 -m pytest tests/test_epic_release_at_build_do
 """
 from __future__ import annotations
 
+import copy
 import os
 import sys
 from pathlib import Path
@@ -440,3 +441,198 @@ def test_the_strict_rule_is_asked_for_by_name():
             patch.object(linear_ops, "cmd_advance"):
         reconcile.advance_unblocked_epics(B)
     gate.assert_called_once_with(W, release_at_build_done=False)
+
+
+# --------------------------------------------------------------------------
+# DRE-7774: the CARD gate gets the same rule — a card blocked by an approved
+# epic is released once that epic is built out, its proof still open
+# --------------------------------------------------------------------------
+#: The card under the gate (DRE-7666's shape), the epic it is blocked by
+#: (DRE-7685's), that epic's proof (DRE-7711's), and an ordinary card blocker.
+CARD, EPIC_BLOCKER, ITS_PROOF, PLAIN = "DRE-1666", "DRE-1685", "DRE-1711", "DRE-1700"
+
+#: Tonight's shape (2026-10-22): eight build cards Done, the PROOF In Review.
+TONIGHT = _blocker(
+    EPIC_BLOCKER,
+    [_kid(f"DRE-16{n:02d}", "Done") for n in range(86, 94)]
+    + [_proof(ITS_PROOF, "In Review")],
+)
+
+
+def _queued(identifier=CARD, *, blocked_by=((EPIC_BLOCKER, "In Progress"),), parent=True):
+    """A Queued card the promotion gate considers: a child of the approved
+    epic W, or a parentless card."""
+    card = _child(identifier, blocked_by=blocked_by)
+    if not parent:
+        card["parent"] = None
+    return card
+
+
+def _card_sweep(fake, cards, *, door=True):
+    """One promotion pass over `cards`, the live re-read included when `door`
+    (every card door-sourced, so `live_promotion_refusal` reads each again)."""
+    live = {c["identifier"]: copy.deepcopy(c) for c in cards}
+    activated = [{"body": f"{epic_cap.ACTIVATED_NOTE} (1 children)",
+                  "authored_by_pipeline": True, "created_at": None}]
+    with patch.object(linear_ops, "gql", side_effect=fake.gql), \
+            patch.object(reconcile, "backlog_children", return_value=cards), \
+            patch.object(reconcile, "_door_sourced",
+                         {c["identifier"] for c in cards} if door else set()), \
+            patch.object(reconcile, "_fetch_backlog_linear",
+                         side_effect=lambda ids, **kw: [live[i] for i in ids if i in live]), \
+            patch.object(reconcile, "epic_thread", return_value=activated), \
+            patch.object(linear_ops, "cmd_advance") as advance, \
+            patch.object(linear_ops, "cmd_comment"), \
+            patch.object(routing_verdict, "lane_moves", return_value=[]):
+        reconcile.promote_ready(active_count=0)
+    return [c.args[0] for c in advance.call_args_list
+            if c.args[1] == routing_verdict.destination("FLEET")]
+
+
+def _promotion_lines(out: str, card: str = CARD) -> list[str]:
+    return [line for line in out.splitlines()
+            if line.startswith("promotion:") and card in line]
+
+
+def _w_free():
+    return _epic_record(W, kids=((CARD, "Queued"),))
+
+
+@pytest.mark.parametrize("parent", [True, False], ids=["epic-child", "parentless"])
+def test_tonights_shape_is_released_at_build_done_through_the_live_reread(capsys, parent):
+    """The replay: a Queued card blocked by an In Progress epic whose eight
+    build cards are Done and whose PROOF is In Review is promoted, the live
+    re-read agrees, and the line names the rule. Today it is held."""
+    fake = FakeLinear([_w_free()], [TONIGHT])
+    moved = _card_sweep(fake, [_queued(parent=parent)])
+    out = capsys.readouterr().out
+    assert moved == [CARD], out
+    released = [line for line in _promotion_lines(out) if "released at build-done" in line]
+    assert released, out
+    assert released[0].startswith(
+        f"promotion: {CARD}'s blocker {EPIC_BLOCKER} (In Progress) is released at build-done:"
+    ), released
+    assert "open: " in released[0] and ITS_PROOF in released[0] and "PROOF" in released[0]
+    assert "live re-check refused" not in out, out
+    assert "is held by" not in out, out
+    # One read of the blocker per pass: the live re-read asks the cache.
+    assert fake.blocker_reads == [EPIC_BLOCKER]
+
+
+def test_an_epic_blocker_with_a_build_card_open_holds_and_names_it(capsys):
+    """The same card, the blocker with one build card still open: held, and
+    the line says not built out and names that card."""
+    kids = [_kid(f"DRE-16{n:02d}", "Done") for n in range(86, 93)]
+    kids += [_kid("DRE-1693", "In Progress"), _proof(ITS_PROOF, "Backlog")]
+    fake = FakeLinear([_w_free()], [_blocker(EPIC_BLOCKER, kids)])
+    moved = _card_sweep(fake, [_queued()])
+    out = capsys.readouterr().out
+    assert moved == [], out
+    held = [line for line in _promotion_lines(out) if "is held by" in line]
+    assert held, out
+    assert (
+        f"promotion: {CARD} is held by {EPIC_BLOCKER} (In Progress), declared by a "
+        "formal blockedBy relation — not built out: a buildable child is open: DRE-1693"
+        " — skipping"
+    ) == held[0], held
+    assert "released at build-done" not in out
+
+
+def test_an_unreadable_epic_blocker_holds_with_the_reason(capsys):
+    fake = FakeLinear([_w_free()], [TONIGHT],
+                      blocker_error=linear_ops.LinearError("Linear timed out"))
+    moved = _card_sweep(fake, [_queued()])
+    out = capsys.readouterr().out
+    assert moved == [], out
+    held = [line for line in _promotion_lines(out) if "is held by" in line]
+    assert held and "Linear timed out" in held[0], out
+    assert held[0].endswith(" — skipping"), held
+
+
+def test_an_ordinary_in_progress_blocker_holds_with_todays_line(capsys):
+    """A card blocked by a card waits for that card exactly as today."""
+    plain = {"identifier": PLAIN, "title": "a build card", "priority": 3,
+             "createdAt": AT, "state": {"name": "In Progress"},
+             "children": {"nodes": [], "pageInfo": {"hasNextPage": False}}}
+    fake = FakeLinear([_w_free()], [plain])
+    moved = _card_sweep(fake, [_queued(blocked_by=((PLAIN, "In Progress"),))])
+    out = capsys.readouterr().out
+    assert moved == [], out
+    assert (
+        f"promotion: {CARD} is held by {PLAIN} (In Progress), declared by a formal "
+        "blockedBy relation — skipping"
+    ) in out.splitlines(), out
+    assert "not built out" not in out and "released at build-done" not in out
+
+
+@pytest.mark.parametrize("lane", ["Queued", "Planning", "Green Light"])
+def test_an_epic_blocker_not_in_progress_holds_with_todays_line_and_no_read(capsys, lane):
+    fake = FakeLinear([_w_free()], [TONIGHT])
+    moved = _card_sweep(fake, [_queued(blocked_by=((EPIC_BLOCKER, lane),))])
+    out = capsys.readouterr().out
+    assert moved == [], out
+    assert (
+        f"promotion: {CARD} is held by {EPIC_BLOCKER} ({lane}), declared by a formal "
+        "blockedBy relation — skipping"
+    ) in out.splitlines(), out
+    assert fake.blocker_reads == []
+
+
+def test_a_released_epic_does_not_free_a_card_another_blocker_still_holds(capsys):
+    """Every blocker is asked: the built-out epic releases, the ordinary card
+    In Review still holds, and the held line names only that one."""
+    fake = FakeLinear([_w_free()], [TONIGHT])
+    card = _queued(blocked_by=((EPIC_BLOCKER, "In Progress"), (TIE, "In Review")))
+    moved = _card_sweep(fake, [card])
+    out = capsys.readouterr().out
+    assert moved == [], out
+    held = [line for line in _promotion_lines(out) if "is held by" in line]
+    assert held == [
+        f"promotion: {CARD} is held by {TIE} (In Review), declared by a formal "
+        "blockedBy relation — skipping"
+    ], out
+
+
+def test_the_live_reread_asks_the_same_helper(capsys):
+    """`live_promotion_refusal` releases what the gate releases, and holds an
+    epic blocker with work left with the same reason."""
+    fake = FakeLinear([], [TONIGHT])
+    card = _queued()
+    with patch.object(linear_ops, "gql", side_effect=fake.gql), \
+            patch.object(reconcile, "_fetch_backlog_linear",
+                         side_effect=lambda ids, **kw: [copy.deepcopy(card)]):
+        _, why = reconcile.live_promotion_refusal(card, [FLEET_VERDICT])
+    assert why is None, why
+
+    reconcile.reset_sweep_cards()
+    open_kid = _blocker(EPIC_BLOCKER, [_kid("DRE-1686", "Backlog"), _proof(ITS_PROOF)])
+    fake = FakeLinear([], [open_kid])
+    with patch.object(linear_ops, "gql", side_effect=fake.gql), \
+            patch.object(reconcile, "_fetch_backlog_linear",
+                         side_effect=lambda ids, **kw: [copy.deepcopy(card)]):
+        _, why = reconcile.live_promotion_refusal(card, [FLEET_VERDICT])
+    assert why is not None and "not built out" in why and "DRE-1686" in why, why
+    assert EPIC_BLOCKER in why
+
+
+def test_the_card_gate_writes_no_second_definition_of_built_out():
+    """One reading of an epic blocker, shared by both card-gate reads, built on
+    `_not_built_out` and `_open_children`."""
+    source = Path(reconcile.__file__).read_text(encoding="utf-8")
+    assert source.count("def _not_built_out") == 1
+    helper = reconcile.card_relation_blockers
+    import inspect
+    body = inspect.getsource(helper)
+    assert "_not_built_out(" in body and "_open_children(" in body
+    assert "counts_against_cap" not in body and "buildable(" not in body
+    for caller in (reconcile.promote_ready, reconcile.live_promotion_refusal):
+        assert "card_relation_blockers(" in inspect.getsource(caller), caller.__name__
+
+
+def test_the_standard_says_a_card_blocked_by_an_epic_is_released_at_build_done():
+    text = (Path(__file__).resolve().parent.parent / "standards" / "card-quality.md"
+            ).read_text(encoding="utf-8")
+    start = text.index("**When the epic behind a blocker moves (DRE-6407).**")
+    paragraph = " ".join(text[start:text.index("\n\n", start)].split())
+    assert "A card blocked by an approved epic" in paragraph, paragraph
+    assert "DRE-7774" in paragraph
