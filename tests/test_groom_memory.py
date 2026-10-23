@@ -189,6 +189,16 @@ def test_an_impossible_date_is_words_not_a_condition():
     assert got["reason_label"] == "until 2026-13-45"
 
 
+def test_the_held_card_is_read_in_capitals():
+    got = one([marker(kind="held", tail="until dre-7")])["DRE-100"]
+    assert got["hold_until_card"] == "DRE-7"
+
+
+def test_move_to_cancel_is_read_in_any_case():
+    got = one([marker(tail="MOVE TO CANCEL")], door_problem="unavailable")
+    assert got["DRE-100"]["decision"] == "cancel"
+
+
 @pytest.mark.parametrize("kind", ["added", "rewrite-accepted"])
 def test_added_and_rewrite_accepted_are_put_backs_with_their_words(kind):
     got = one([marker(kind=kind, tail="It is ready now")])["DRE-100"]
@@ -215,6 +225,16 @@ def test_a_row_with_no_keyed_reason_falls_back_to_its_comment():
 def test_a_row_hold_carries_its_condition():
     got = one([], [row(decision="hold", until_card="DRE-7", until_date=None)])
     assert got["DRE-100"]["hold_until_card"] == "DRE-7"
+
+
+@pytest.mark.parametrize("until", ["2026-10-10T00:00:00Z", "next week", "2026-13-45"])
+def test_a_row_hold_date_that_is_not_a_date_is_no_condition(until):
+    """A marker's impossible date is words, not a condition; a row's is the
+    same, so one bad row cannot take down the whole morning's answer."""
+    got = one([], [row(decision="hold", until_date=until)])
+    assert got["DRE-100"]["hold_until_date"] is None
+    morning = gm.standing(got, today="2026-10-23", states={})
+    assert _lists_holding(morning, "DRE-100") == ["held_last"]
 
 
 def test_a_marker_older_than_the_oldest_row_counts_as_history():
@@ -294,6 +314,15 @@ def test_when_the_door_could_not_be_read_every_marker_is_fallback():
     got = one(markers, [], reasons=None, door_problem="unavailable")
     assert {d["source"] for d in got.values()} == {"fallback"}
     assert set(got) == {"DRE-1", "DRE-2"}
+
+
+def test_when_the_door_answered_with_no_rows_every_marker_is_history():
+    """No row has begun, so no marker can be mirrored or typed after one."""
+    markers = [marker("DRE-1", at="2026-09-22T02:00:00Z"),
+               marker("DRE-2", kind="held", at="2026-10-22T02:00:00Z")]
+    got = one(markers, [], door_problem=None)
+    assert set(got) == {"DRE-1", "DRE-2"}
+    assert {d["source"] for d in got.values()} == {"history"}
 
 
 # --- the real threads -----------------------------------------------------
@@ -401,6 +430,32 @@ def test_a_hold_until_a_date_is_met_on_that_date_and_not_before():
     assert _lists_holding(on, "DRE-100") == ["back"]
     after = _morning(held, today="2026-12-01")
     assert _lists_holding(after, "DRE-100") == ["back"]
+
+
+def _both(today, state):
+    """A row hold on DRE-7 being Done and on 2026-11-02 having come."""
+    remembered = one([], [row(decision="hold", until_card="DRE-7",
+                              until_date="2026-11-02")])
+    return gm.standing(remembered, today=today, states={"DRE-7": state})
+
+
+def test_a_hold_on_a_card_and_a_date_waits_for_the_date_once_the_card_is_done():
+    morning = _both("2026-11-01", "Done")
+    assert _lists_holding(morning, "DRE-100") == ["held"]
+    assert morning["held"][0]["why"] == "held until 2026-11-02"
+
+
+def test_a_hold_on_a_card_and_a_date_waits_for_the_card_once_the_date_has_come():
+    morning = _both("2026-12-01", "In Review")
+    assert _lists_holding(morning, "DRE-100") == ["held"]
+    assert "DRE-7" in morning["held"][0]["why"]
+
+
+def test_a_hold_on_a_card_and_a_date_is_back_when_both_are_met():
+    morning = _both("2026-11-02", "Done")
+    assert _lists_holding(morning, "DRE-100") == ["back"]
+    why = morning["back"][0]["why"]
+    assert "DRE-7 is Done" in why and "which has come" in why
 
 
 def test_a_hold_with_no_condition_is_ranked_last():
