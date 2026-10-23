@@ -30,6 +30,7 @@ sys.path.insert(0, str(ROOT / "scripts"))
 os.environ.setdefault("LINEAR_API_KEY", "test-key")
 os.environ.setdefault("REPO", "dreadnought-foundry/bureau-pipeline")
 
+import groom_judgement  # noqa: E402
 import groomer  # noqa: E402
 
 from test_groomer_population import CYCLES, card  # noqa: E402
@@ -216,6 +217,55 @@ def test_a_rules_only_row_placed_by_the_key_says_so_in_its_why_cell():
     text = groomer.render_proposal(proposal)
     line = next(ln for ln in text.splitlines() if "| DRE-100 |" in ln)
     assert "in flight — serves DRE-50 (In Progress)" in line
+
+
+MODEL_REASON = "unblocks the reader's proof this week"
+
+
+def _judged_band_of_four() -> dict:
+    """The band of four with every card ranked `now` by the model (DRE-7397)."""
+    cards = _band_of_four("In Progress")
+    verdicts = {c["identifier"]: groom_judgement.Verdict(
+        "now", f"{MODEL_REASON} ({c['identifier']})") for c in cards}
+    return groomer.propose(cards, cycles=CYCLES, judgement=verdicts)
+
+
+def _why_cell(text: str, identifier: str) -> str:
+    line = next(ln for ln in text.splitlines()
+                if f"| {identifier} |" in ln)
+    return line.rstrip(" |").rsplit(" | ", 1)[1]
+
+
+def test_a_judged_row_placed_by_the_key_carries_the_mark_before_its_reason():
+    proposal = _judged_band_of_four()
+    row = next(r for r in proposal["outcomes"]["now"]
+               if r["identifier"] == "DRE-100")
+    assert row["judged"] is True
+    assert row["reason"] == (f"in flight — serves DRE-50 (In Progress) — "
+                             f"{MODEL_REASON} (DRE-100)")
+    cell = _why_cell(groomer.render_proposal(proposal), "DRE-100")
+    assert cell.startswith(f"in flight — serves DRE-50 (In Progress) — "
+                           f"{MODEL_REASON}")
+
+
+def test_a_judged_row_without_serves_keeps_the_models_reason_unchanged():
+    proposal = _judged_band_of_four()
+    text = groomer.render_proposal(proposal)
+    for identifier in ("DRE-101", "DRE-102", "DRE-103"):
+        row = next(r for r in proposal["outcomes"]["now"]
+                   if r["identifier"] == identifier)
+        assert row["judged"] is True and "serves" not in row
+        assert row["reason"] == f"{MODEL_REASON} ({identifier})"
+        assert _why_cell(text, identifier) == f"{MODEL_REASON} ({identifier})"
+
+
+def test_an_unjudged_row_with_serves_still_reads_the_rules_mark():
+    proposal = groomer.propose(_band_of_four("In Progress"), cycles=CYCLES)
+    row = next(r for r in proposal["outcomes"]["now"]
+               if r["identifier"] == "DRE-100")
+    assert row["judged"] is False
+    assert row["reason"] == ("in flight — serves DRE-50 (In Progress), "
+                             "position 1")
 
 
 def test_the_batch_paragraph_names_the_rule_when_it_placed_a_card():
