@@ -582,6 +582,20 @@ section not at all: the rules place a card by priority and age and have nothing
 labelled to say about it, and that page still renders byte for byte as it did
 before this card.
 
+**A judged Cancel row gets a block too (DRE-7823).** The console finds a
+card's verify verdict in this section and nowhere else, and draws the verdict
+chip on the Planning list and the Cancel list alike. So after every batch
+card's block comes one block per Cancel row the verify agent judged, in Cancel
+list order: `- **Why:** <its Cancel reason>`, then the same `Verified against
+main:` line a batch card gets. A Cancel row nobody judged — one from a
+`Superseded by:` line, the ranked read or the check — gets no block: an
+absence, never an invented verdict. The section renders when the ranked read
+ran or a row on either list was judged, and there is a block to write, so a
+morning with an empty Planning list and a judged Cancel row renders that row's
+block alone. On 2026-10-13 (proposal 3381b8d562a8) DRE-7060 and DRE-4054 were
+judged done-elsewhere on the Cancel list, and the page said so nowhere the
+console reads.
+
 A card on the Cancel list always says what it came from, in its reason:
 `superseded by DRE-N` is a declaration a person wrote on the card, and anything
 else is the evidence the ranked read named — and the reason ends with the
@@ -710,8 +724,9 @@ card excluded without judgement by id with its reason, one line `Verify step: <N
 <S> s wall clock`, and each unverified card by id with its reason, under
 `Not verified — not in the batch, each stays in Intake:`. A Cancel
 row the verify step wrote (`source: verify-agent`) carries its `file:line`
-proof whole in the Reason cell, and a batch card's verdict is under its entry
-in `## Why each card is in the batch`.
+proof whole in the Reason cell, and a batch card's verdict — or a judged
+Cancel row's (DRE-7823) — is under its entry in `## Why each card is in the
+batch`.
 
 **The proof line (DRE-5746).** That verdict is one plain line —
 `Verified against main: **<verdict>** — <summary>; <proof>; <proof>` — and
