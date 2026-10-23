@@ -396,9 +396,14 @@ class ThePlannerBriefTest(unittest.TestCase):
         self.text = _flat(self.raw)
 
     def test_one_example_criterion_in_the_block_style(self):
-        examples = re.findall(rf"(?m)^    - \[ \] {re.escape(SANDBOX_OPENER)}", self.raw)
+        examples = re.findall(
+            rf"(?m)^    - \[ \] {re.escape(SANDBOX_OPENER)}.*\n(?:      .*\n)*", self.raw)
         self.assertEqual(1, len(examples),
                          f"{self.NAME} has no one `- [ ] {SANDBOX_OPENER}` example criterion")
+        example = _flat(examples[0])
+        for needle in ("JSON object", "`outcome`", "`ids`", "`createTask`"):
+            self.assertIn(needle, example,
+                          f"{self.NAME}'s `{SANDBOX_OPENER}` example does not quote {needle}")
 
     def test_the_record_quotes_the_json_object_never_a_tagged_line(self):
         self.assertTrue(_says_together(self.raw, "JSON object", "never a tagged line"),
