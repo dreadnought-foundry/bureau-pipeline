@@ -13,18 +13,40 @@ not print until DRE-6516; and DRE-6543 rows 3 and 4 read agent-bureau's
 DRE-6478, with no `blockedBy` between the two. Every one was readable off the
 plan before the CEO approved it.
 
-So both readings are STRUCTURAL, in the seam's shape (`plan_seam.py`,
+So every reading is STRUCTURAL, in the seam's shape (`plan_seam.py`,
 `plan_seam_gate.py`, DRE-3395/DRE-3398): computed before the critic reads,
 appended to the structural file the gate forwards into the result, so the round
 is a `SEND_BACK` naming the criterion whatever the model wrote.
 
-## The two rules, each a fixed sentence
+## The three rules, each a fixed sentence
 
 1. **Reach.** `proof_reach.out_of_reach` names a reading the run cannot make —
    `FINDING_REACH`, once per reading named.
 2. **Operator step.** A criterion that names an operator card's id, or shares a
    backticked token with that card's TITLE, where the PROOF card is not
    `blocked_by` it — `FINDING_OPERATOR`.
+3. **Sandbox press sent to a person** (DRE-7779). A criterion on a person's row
+   (`waiting for the operator's press:` or `needs the CEO's press:`) that names
+   a `SANDBOX_NAMES` project and a press on `SANDBOX_PRESSES`, on a PROOF whose
+   reach caller the `console-sandbox-press` reading is held for —
+   `FINDING_SANDBOX_PRESS`. Since DRE-7772 that press is the proof run's own
+   `Sandbox press:` step, made as the console proof-reader, and a proof left
+   waiting on a person for it waits for nothing (DRE-7711 waited from
+   2026-10-19). A sandbox press not on the list (a project's Builders, DRE-6638)
+   and one on a PROOF for a repo that holds no proof-reader stay the person's
+   row. `SANDBOX_PRESSES` copies `standards/card-quality.md`'s list, in order,
+   and lives here because the declaration refuses a reading field it does not
+   know.
+
+## Whose reach a PROOF is read for
+
+A proof run runs in the repo its card is labeled for, so a PROOF card is read
+for the reach of its own `repo:` label's slug when it carries exactly one that
+the repo map holds — a pipeline epic's agent-bureau PROOF is read for
+agent-bureau's reach (DRE-7772, DRE-7779). Every PROOF in every plan is read
+this way. A card with no `repo:` label, with one the map does not hold, or with
+two, is read for the `--caller` / `GITHUB_REPOSITORY` caller, as before. The
+`Local screen:` reading still reads the plan checkout's own `proof-local.json`.
 
 ## What an operator card is
 
@@ -90,6 +112,43 @@ FINDING_REACH = ("{proof}: criterion “{criterion}” asks for a reading the pr
 FINDING_OPERATOR = ("{proof}: criterion “{criterion}” reads the result of "
                     "operator step {operator} (“{title}”) and is not blocked by "
                     "it — add the blockedBy relation, or reword the criterion.")
+
+#: The sandbox-press finding, one per criterion that sends a listed sandbox
+#: press to a person (DRE-7779).
+FINDING_SANDBOX_PRESS = ("{proof}: criterion “{criterion}” sends a press on the "
+                         "sandbox project to a person — write it as a `Sandbox "
+                         "press:` step the proof run makes as the console "
+                         "proof-reader, or drop it.")
+
+#: The reading whose `held_for` names the repos whose proof run holds the
+#: console proof-reader.
+SANDBOX_READING = "console-sandbox-press"
+
+#: The sandbox project, by every name a criterion writes it with. `Agent Bureau
+#: Sandbox` is its display name (DRE-7439).
+SANDBOX_NAMES = ("agent-bureau-demo", "Agent Bureau Sandbox", "the sandbox project",
+                 "the sandbox")
+
+#: The sandbox presses, the copy of `standards/card-quality.md`'s one list
+#: (DRE-7772), in its order: each console operation, and the press in plain
+#: words. The epic's PROOF holds both equal to agent-bureau's
+#: `SANDBOX_PRESS_MUTATIONS`.
+_A = r"(?:a|an|one|the)\s+(?:[\w-]+\s+)?"
+SANDBOX_PRESSES = (
+    ("createTask", rf"\b(?:make|makes|made|making|create|creates|created|creating)"
+                   rf"\s+{_A}task\b(?!['’]s|\s+card)"),
+    ("snoozeTask", rf"\bsnooz(?:e|es|ed|ing)\s+{_A}task\b"),
+    ("markTaskDone", rf"\bmark(?:s|ed|ing)?\s+{_A}task\s+(?:as\s+)?done\b"),
+    ("makeTaskCard", rf"\b(?:file|files|filed|filing|make|makes|made|making)"
+                     rf"\s+{_A}task(?:['’]s)?\s+card\b"),
+    ("sendProjectAgentMessage", rf"\b(?:send|sends|sent|sending)\s+{_A}desk\s+message\b"
+                                rf"|\bopen(?:s|ed|ing)?\s+{_A}conversation\b"),
+    ("answerDeskPermission", rf"\banswer(?:s|ed|ing)?\s+{_A}desk\s+"
+                             rf"(?:allow|deny|permission)\b"),
+)
+
+#: The rows that send a press to a person.
+PERSON_ROWS = ("waiting for the operator's press:", "needs the CEO's press:")
 
 #: The heading the block opens with when it is appended to the mechanical note.
 NOTE_HEADING = ("Proof reach (structural — a send-back at the first critic, "
@@ -202,19 +261,82 @@ def _operator_lines(proof: dict, criterion: str, operators: list[dict]) -> list[
             if op["identifier"] not in blocked and reads_operator_step(criterion, op)]
 
 
+def _sandbox_name(criterion: str) -> bool:
+    return any(re.search(rf"(?<![\w-]){re.escape(name)}(?![\w-])", criterion,
+                         re.IGNORECASE) for name in SANDBOX_NAMES)
+
+
+def sandbox_presses(criterion: str) -> list[str]:
+    """The `SANDBOX_PRESSES` operations `criterion` names, by the operation
+    itself or by the press in plain words, in the list's order."""
+    return [op for op, pattern in SANDBOX_PRESSES
+            if re.search(rf"(?<!\w){re.escape(op)}(?!\w)", criterion, re.IGNORECASE)
+            or re.search(pattern, criterion, re.IGNORECASE)]
+
+
+def _person_row(criterion: str) -> bool:
+    text = criterion.replace("’", "'").casefold()
+    return any(row.casefold() in text for row in PERSON_ROWS)
+
+
+def sends_sandbox_press_to_a_person(criterion: str) -> bool:
+    """A person's row, a sandbox name and a listed press, all in `criterion`."""
+    return (_person_row(criterion) and _sandbox_name(criterion)
+            and bool(sandbox_presses(criterion)))
+
+
+def _sandbox_held_for(doc) -> list:
+    """The repos whose proof run holds the console proof-reader, off the reading."""
+    for r in proof_reach.readings(doc):
+        if r.get("id") == SANDBOX_READING:
+            return list(r.get("held_for") or [])
+    return []
+
+
+def reach_caller(proof: dict, caller_slug, repo_map: dict):
+    """The PROOF's own `repo:` label slug when it carries exactly one the repo
+    map holds, else `caller_slug` as it was given."""
+    slugs = [l[len(plan_critic._REPO_LABEL):].strip() for l in _labels(proof)
+             if l.startswith(plan_critic._REPO_LABEL)]
+    if len(slugs) == 1 and slugs[0] in repo_map:
+        return slugs[0]
+    return caller_slug
+
+
+def _holds_proof_reader(caller, held_for: list, repo_map: dict) -> bool:
+    if caller is False:
+        return False
+    try:
+        slug, _ = proof_reach._caller(caller, repo_map)
+    except ValueError:
+        return False
+    return slug in held_for
+
+
+def _sandbox_lines(proof: dict, criterion: str) -> list[str]:
+    if not sends_sandbox_press_to_a_person(criterion):
+        return []
+    return [_one_line(FINDING_SANDBOX_PRESS.format(
+        proof=proof["identifier"], criterion=proof_record._cut(criterion, CUT)))]
+
+
 def findings(cards, details, operator_cards=(), *, doc=None, repo_map=None,
              caller_slug=None, local=None, acts=None, routing=None) -> Reading:
     """Every finding over the epic's PROOF children, in record order.
 
     `cards` and `details` are the two board reads `plan_seam.join` merges;
-    `operator_cards` are `operator-cards --out` records. The reach keywords go
-    to `proof_reach.out_of_reach` as they are. A caller the repo map does not
-    carry cannot be read for reach, so the reach rule is skipped and the
-    operator rule still runs — the CLI says so on stderr.
+    `operator_cards` are `operator-cards --out` records. Each PROOF is read for
+    `reach_caller`'s reach: its own `repo:` label, else `caller_slug`. The
+    reach keywords go to `proof_reach.out_of_reach` as they are. A caller the
+    repo map does not carry cannot be read for reach, so the reach and sandbox
+    rules are skipped for a PROOF read for it and the operator rule still runs
+    — the CLI says so on stderr.
     """
     records = plan_seam.join(cards, details)
-    reach = {"doc": doc, "repo_map": repo_map, "caller_slug": caller_slug,
-             "local": local, "acts": acts}
+    doc = proof_reach.load() if doc is None else doc
+    if repo_map is None:
+        repo_map = proof_reach._json(proof_reach.ROOT, proof_reach.REPO_MAP)
+    held_for = _sandbox_held_for(doc)
     candidates, seen = [], set()
     for rec in list(records) + [r for r in operator_cards or [] if isinstance(r, dict)]:
         ident = rec.get("identifier")
@@ -223,12 +345,18 @@ def findings(cards, details, operator_cards=(), *, doc=None, repo_map=None,
             candidates.append(rec)
     lines, read, proofs = [], 0, proof_cards(records)
     for proof in proofs:
+        caller = reach_caller(proof, caller_slug, repo_map)
+        reach = {"doc": doc, "repo_map": repo_map, "caller_slug": caller,
+                 "local": local, "acts": acts}
+        sandbox = _holds_proof_reader(caller, held_for, repo_map)
         operators = [c for c in candidates
                      if is_operator_card(c, proof["identifier"], routing)]
         for criterion in criteria(proof.get("body") or ""):
             read += 1
-            if caller_slug is not False:
+            if caller is not False:
                 lines += _reach_lines(proof, criterion, reach)
+            if sandbox:
+                lines += _sandbox_lines(proof, criterion)
             lines += _operator_lines(proof, criterion, operators)
     return Reading(lines, read, len(proofs))
 
@@ -394,8 +522,9 @@ def main(argv: list[str]) -> int:
     f.add_argument("--note-file", default=None,
                    help="an existing mechanical note to append the findings to")
     f.add_argument("--caller", default=None,
-                   help="the epic's repo: label slug (default: $GITHUB_REPOSITORY, "
-                        f"then {proof_reach.SELF})")
+                   help="the epic's repo: label slug, read for a PROOF that carries "
+                        "no one repo: label the map holds (default: "
+                        f"$GITHUB_REPOSITORY, then {proof_reach.SELF})")
     f.add_argument("--proof-local", default=PROOF_LOCAL,
                    help="the repo's proof-local declaration, read when present")
     f.set_defaults(fn=_cmd_findings)

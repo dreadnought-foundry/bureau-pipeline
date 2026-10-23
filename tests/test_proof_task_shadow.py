@@ -176,6 +176,8 @@ PRE_CHANGE_STEPS = [
     ('Mint rescue retry token', 'always()'),
     ('Push rescue', 'always()'),
     ('Upload rescued work', "always() && steps.rescue.outputs.patch != ''"),
+    # DRE-7813: the record pull request's body rebuilt from the record.
+    ("Refresh the record pull request's body", 'always()'),
     ('Report proof result to Linear', 'always()'),
     ('Stop the local run', 'always()'),
     ('Fail if the agent step failed', "always() && steps.claude_result.outputs.outcome == 'failure'"),

@@ -674,7 +674,12 @@ sweep reads it —
   a conflict — the fix agent is kept off a record (DRE-5927), so nobody else
   will resolve one. Then amend the record in a new commit rather than starting
   over, push, and post `⏳ 5/5 PR opened` again. Open the pull request only if
-  none is open for the branch.
+  none is open for the branch. The workflow rebuilds the pull request's body
+  from the record after every push, on a first run and a resumed one alike
+  (DRE-7813): its first three lines as above, then the record's status line
+  and its criterion table, read at the pushed head. So never edit the body
+  yourself — a resumed run's amended rows reach it without you, and a body
+  that could not be rebuilt turns the run red.
 - **The record is docs.** The TDD gate does not apply, and you run no product
   test suite — the suite is the builders' evidence, not yours.
 
