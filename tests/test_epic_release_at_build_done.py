@@ -32,6 +32,7 @@ Run: cd bureau-pipeline && python3 -m pytest tests/test_epic_release_at_build_do
 from __future__ import annotations
 
 import copy
+import inspect
 import os
 import sys
 from pathlib import Path
@@ -621,7 +622,6 @@ def test_the_card_gate_writes_no_second_definition_of_built_out():
     source = Path(reconcile.__file__).read_text(encoding="utf-8")
     assert source.count("def _not_built_out") == 1
     helper = reconcile.card_relation_blockers
-    import inspect
     body = inspect.getsource(helper)
     assert "_not_built_out(" in body and "_open_children(" in body
     assert "counts_against_cap" not in body and "buildable(" not in body
