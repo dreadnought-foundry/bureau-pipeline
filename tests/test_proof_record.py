@@ -295,6 +295,18 @@ class TestTheClosingRow:
     def test_a_record_that_only_reports_a_merge_is_still_judged(self, criterion):
         assert proof_record.is_closing_row(criterion) is False
 
+    @pytest.mark.parametrize("criterion", [
+        "The record exists in the repo and the nightly job merged the duplicate "
+        "rows on `main`, which the log shows",
+        "The record exists, and the fleet's merge gate refuses a pull request "
+        "merged without APPROVE in production",
+        "The record is merged and the sweep closes the card within 15 minutes of "
+        "the merge",
+        "The record merged on `main` shows the gate held a stale PR",
+    ])
+    def test_a_claim_after_the_records_merge_is_still_judged(self, criterion):
+        assert proof_record.is_closing_row(criterion) is False
+
 
 # --------------------------------------------------------------------------
 # A criterion the operator accepted as overtaken (DRE-6244)

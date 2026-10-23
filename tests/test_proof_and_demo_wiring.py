@@ -336,6 +336,7 @@ class NoDocumentAsksAPersonToCloseTheProofTest(unittest.TestCase):
         os.path.join(REPO, "briefs", "proof.md"),
         STANDARD,
         os.path.join(REPO, "README.md"),
+        os.path.join(REPO, "standards", "plan-artifact.md"),
     )
 
     def assertSaysNone(self, text: str, where: str):
