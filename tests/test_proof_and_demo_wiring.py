@@ -356,6 +356,6 @@ class NoDocumentAsksAPersonToCloseTheProofTest(unittest.TestCase):
     def test_the_comment_above_the_proof_gate_says_it_closes_on_its_record(self):
         text = wf_src()
         above = text[:text.index("- name: Proof card — the epic's last child")]
-        block = above[above.rindex("\n\n"):]
+        block = re.sub(r"(?m)^\s*#", " ", above[above.rindex("\n\n"):])
         self.assertSaysNone(block, "the comment above the proof gate")
         self.assertIn("closes on its approved all-met record", " ".join(block.split()))
