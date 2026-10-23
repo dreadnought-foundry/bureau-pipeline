@@ -739,10 +739,15 @@ at every limit — 200 long comments, 50 relations each way, 50 children and
 50 labels of 40 characters — adds 64,013 characters, under the 65,000 target
 and roughly 16,000 tokens. A label name is the one field not held to a
 length, so that figure assumes labels of that size. It also
-excludes five kinds before any agent runs, never by the
+excludes six kinds before any agent runs, never by the
 model: `parent epic with <n> open child(ren)` (a child not Done, Canceled or
 Duplicate — an epic with no open child is judged like any card),
-`hand-built` or `operator-step` (whichever hand mark the card carries, read
+`sandbox fixture filed by a proof run` (DRE-7783: a card whose title opens
+`SANDBOX FIXTURE (proof DRE-` and which carries the label
+`repo:agent-bureau-demo` — the card a proof run files on the sandbox and
+leaves in its Intake as the proof record's residue, DRE-7772; a card with only
+one of the two is judged like any card, and the open-children reason is read
+before it), `hand-built` or `operator-step` (whichever hand mark the card carries, read
 off `routing_verdict.hand_marks` — a person builds it), `moved into Intake on YYYY-MM-DD` (a move from another lane in
 the last seven days; it reads the move, not its author, since a move carries
 no signature and the console's move for the CEO looks like any workflow's),
@@ -764,7 +769,10 @@ renumbered from 1 (DRE-5858) — so the spare follows every card the rules
 placed — it goes on no Cancel list and nothing moves it, and the page
 names it under `## Verified against main` with its reason, and it waits in
 `not-now` with the reason `excluded without judgement: <reason>`. It is judged
-again on a morning none of the five holds.
+again on a morning none of the six holds. `groom_verify_agent.py exclusion
+--card <ID>` reads one card the same way and prints `exclusion: <ID> <reason>`
+or `exclusion: <ID> none`, writing nothing — a proof quotes that line for its
+fixture.
 
 **The lookups before the agent runs (DRE-5308, DRE-5458).** On 2026-09-29 the
 merged pull request search failed for every card and every card was judged on
