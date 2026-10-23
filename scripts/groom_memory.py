@@ -39,7 +39,8 @@ same pull request append it here.
   * added or rewrite-accepted — `put-back`, the tail kept as its words.
 
 A tail may arrive with the console's ` — ` separator still on it, and reads
-the same either way.
+the same either way. A door row's hold date that is not a date is no
+condition either, so one bad row cannot take down the morning's answer.
 
 ## Which source counts
 
@@ -217,14 +218,16 @@ def _decision(**fields) -> dict:
 
 def _from_row(row: dict, labels: dict[str, str]) -> dict | None:
     """A door row as a decision, or None for one naming no card or a word
-    that is not one of `DECISIONS`."""
+    that is not one of `DECISIONS`. A hold date that is not a `YYYY-MM-DD`
+    date is no condition, as on a marker."""
     if not row.get("card") or row.get("decision") not in DECISIONS:
         return None
     reason = row.get("reason") or None
+    until = row.get("hold_until_date") or None
     return _decision(card=row["card"], decision=row["decision"], reason=reason,
                      reason_label=labels.get(reason) or row.get("comment") or None,
                      hold_until_card=row.get("hold_until_card") or None,
-                     hold_until_date=row.get("hold_until_date") or None,
+                     hold_until_date=until if until and _is_date(until) else None,
                      actor_name=row.get("actor_name") or None,
                      recorded_at=row["recorded_at"],
                      standing_card=row.get("standing_card"),
