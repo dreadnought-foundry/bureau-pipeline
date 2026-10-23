@@ -212,8 +212,10 @@ class Harness:
 
     def __init__(self, monkeypatch, board, *, states=None, release="ready",
                  release_lines=None, fire_ok=True, prs=None, records=None,
-                 texts=None):
+                 texts=None, heads=None):
         self.board = board
+        self.heads = heads
+        self.head_reads = 0
         self.states = states or {}
         self.release_state = release
         self.release_lines = release_lines or [f"{release} — fixture"]
@@ -273,6 +275,18 @@ class Harness:
             return proof_record.Record(RECORD_PATH, None, why)
         return proof_record.Record(RECORD_PATH, got, None)
 
+    def open_heads(self):
+        """The open record pull requests' heads, by branch (DRE-7787): what
+        `heads` says, else every open record fixture's own head."""
+        self.head_reads += 1
+        if isinstance(self.heads, Exception):
+            raise self.heads
+        if self.heads is not None:
+            return dict(self.heads)
+        return {pr["headRefName"]: pr.get("headRefOid") or ""
+                for pr in self.records.values()
+                if isinstance(pr, dict) and pr.get("state") == "OPEN"}
+
     def fire(self, card, repo, *, reason=None, event=None):
         self.order.append(("fire", card["identifier"]))
         self.fired.append((card["identifier"], repo, reason, event))
@@ -283,7 +297,8 @@ class Harness:
             REPO, SLUG, live=live, linear=self.board, read=lambda path: None,
             find_pr=self.find_pr, run_state=self.run_state,
             release=self.release, fire=self.fire, voices=fake_voices, now=now,
-            find_record=self.find_record, read_record=self.read_record)
+            find_record=self.find_record, read_record=self.read_record,
+            open_heads=self.open_heads)
 
 
 def _lines(capsys) -> list:
@@ -2312,6 +2327,10 @@ GATE_RERUN = f"re-run after the gate's decline at {SHA7}"
 GATE_HELD = ("the gate declined the record twice after re-observation",
              "an operator reading the gate's declined note and the two re-run "
              "receipts")
+#: The same hold when the record read at the head names no fix (DRE-7787):
+#: the head it was read at rides on the needs half, so a later pass knows
+#: off the lane read that nothing could re-arm it.
+GATE_SPENT = (GATE_HELD[0], f"{GATE_HELD[1]} — the record at {SHA7} names no fix")
 GATE_UNANSWERED = ("the re-run finished and the gate's decline still stands at "
                    "the record's head",
                    "an operator reading the gate's declined note and the "
@@ -2466,14 +2485,14 @@ def test_gate_after_the_shared_budget_one_hold_and_never_a_loop(
     h, tally, _ = _gate_pass(monkeypatch, thread=_sent_back(*spent), pr=_declined())
     out = capsys.readouterr().out
     assert h.fired == [] and h.posted == []
-    assert h.holds == [("DRE-5930", *GATE_HELD)]
+    assert h.holds == [("DRE-5930", *GATE_SPENT)]
     assert tally.held == 1 and "3 of 2" not in out
 
     # The next pass reads past the budget's own hold to the record at the
     # head (DRE-7740), finds no re-arm event, and posts nothing: an open copy
     # of the hold stands.
     h, tally, _ = _gate_pass(monkeypatch, pr=_declined(),
-                             thread=_sent_back(*spent, hold(*GATE_HELD, 50)))
+                             thread=_sent_back(*spent, hold(*GATE_SPENT, 50)))
     lines = _about(_lines(capsys), "DRE-5930")
     assert h.fired == [] and h.holds == [] and h.posted == []
     assert any("re-run: budget — 2 re-runs" in line and "never another without a "
@@ -3840,7 +3859,7 @@ def test_rearm_a_dre_id_elsewhere_in_the_cell_is_not_a_fix(monkeypatch, capsys):
            f"Not met. 9 s, the slowness {FIX} describes")
     h, _ = _rearm_pass(monkeypatch, thread=_sent_back(*SPENT),
                        text=record_md(MET_ROW, row))
-    assert h.fired == [] and h.holds == [("DRE-5930", *GATE_HELD)]
+    assert h.fired == [] and h.holds == [("DRE-5930", *GATE_SPENT)]
     assert not any(read[0] == "fix_card" for read in h.board.reads)
 
 
@@ -3886,7 +3905,7 @@ def test_rearm_the_pipelines_own_notes_re_arm_nothing(monkeypatch, capsys, user)
                            text=record_md(MET_ROW, NOT_MET_ROW))
     lines = _about(_lines(capsys), "DRE-5930")
     assert h.fired == [] and h.posted == []
-    assert h.holds == [("DRE-5930", *GATE_HELD)]
+    assert h.holds == [("DRE-5930", *GATE_SPENT)]
     assert any(NEVER_ANOTHER in line for line in lines), lines
 
 
@@ -4213,3 +4232,209 @@ def test_timed_the_pipeline_acts_page_says_the_re_run_branch_writes_and_lifts_it
     page = (ROOT / "docs" / "pipeline-acts.md").read_text(encoding="utf-8")
     assert "DRE-7316" in page
     assert "timed re-run <n> of 2" in page
+
+
+# --------------------------------------------------------------------------- #
+# DRE-7787: a re-run whose budget is spent with nothing new costs no slot      #
+# --------------------------------------------------------------------------- #
+
+#: Five spent re-runs, numbered ahead of the two that can run, so the ring
+#: begun at `NOW`'s turn reads the spent ones first — as agent-bureau's sweep
+#: of 2026-10-23 10:03 PT read DRE-7227, DRE-7251 and DRE-7430.
+SPENT_IDS = [f"DRE-72{20 + i}" for i in range(5)]
+READY_IDS = ["DRE-7767", "DRE-7768"]
+#: The line a spent card is named on, every pass.
+SPENT_NAMED = "re-run: budget spent and nothing new"
+
+
+def _spent_thread(*extra) -> list:
+    """Two re-runs spent, the gate's decline at the head, and the budget's
+    hold marked with the head its record was read at — then `extra`."""
+    return _sent_back(*SPENT, hold(*GATE_SPENT, 650), *extra)
+
+
+def _spent_board(spent=SPENT_IDS, ready=READY_IDS, extra=None) -> Board:
+    """In Review: each card's lane window is its whole thread."""
+    threads = {i: _spent_thread(*(extra or {}).get(i, ())) for i in spent}
+    threads.update({i: _sent_back() for i in ready})
+    return Board(review=[_review(i, window=threads[i]) for i in [*spent, *ready]],
+                 threads=threads)
+
+
+def _spent_harness(monkeypatch, board: Board, ids, **kw) -> Harness:
+    return Harness(monkeypatch, board, records={i: _declined(ident=i) for i in ids},
+                   texts={900: record_md(MET_ROW, NOT_MET_ROW)},
+                   states={i: state("finished", dispatches=1,
+                                    record={"number": 900, "state": "open"})
+                           for i in ids}, **kw)
+
+
+@pytest.mark.parametrize("turn", range(4))
+def test_spent_five_cost_no_slot_and_one_of_the_ready_two_is_dispatched(
+        monkeypatch, capsys, turn):
+    """Five re-runs whose budget is spent with nothing new since their last
+    receipt, and two that can run: one pass dispatches one of the two. The
+    five are named on their lines and none is read, so none counts against
+    `PROOF_CANDIDATES_PER_PASS`."""
+    board = _spent_board()
+    h = _spent_harness(monkeypatch, board, SPENT_IDS + READY_IDS)
+    tally = h.sweep(now=NOW + turn * PASS)
+    lines = _lines(capsys)
+    assert [(f[0] in READY_IDS, f[2]) for f in h.fired] == [(True, GATE_RERUN)], lines
+    for ident in SPENT_IDS:
+        named = _about(lines, ident)
+        assert any(SPENT_NAMED in line and GATE_HELD[0] in line and SHA7 in line
+                   for line in named), (ident, lines)
+        assert not any("deferred" in line for line in named), (ident, lines)
+    assert not _candidates_read(board) & set(SPENT_IDS)
+    assert not set(h.record_reads) & set(SPENT_IDS)
+    assert h.holds == [] and len(h.posted) == 1
+    assert tally.held == 5 and tally.dispatched == 1
+    assert len(_candidates_read(board)) <= proof_dispatch.PROOF_CANDIDATES_PER_PASS
+
+
+def test_spent_a_new_proof_observed_makes_it_a_candidate_on_the_next_pass(
+        monkeypatch, capsys):
+    """Spent and skipped; the operator's `🔬 proof-observed` arrives after the
+    newest proof-run receipt; the next pass reads the card and re-arms it."""
+    ident = "DRE-7227"
+    board = _spent_board(spent=[ident], ready=[])
+    h = _spent_harness(monkeypatch, board, [ident])
+    h.sweep()
+    assert h.fired == [] and not _candidates_read(board)
+    assert any(SPENT_NAMED in line for line in _about(_lines(capsys), ident))
+
+    note = observed_note(5)
+    board = _spent_board(spent=[ident], ready=[], extra={ident: (note,)})
+    h = _spent_harness(monkeypatch, board, [ident])
+    h.sweep(now=NOW + PASS)
+    lines = _about(_lines(capsys), ident)
+    assert ("thread", ident) in board.reads and h.record_reads == [ident]
+    at = spoken_thread.pacific_label(note["createdAt"])
+    assert [f[2] for f in h.fired] == [f"re-run after the 🔬 proof-observed of {at}"]
+    assert not any(SPENT_NAMED in line for line in lines), lines
+
+
+@pytest.mark.parametrize("case", ["receipt-after", "head-moved", "not-open",
+                                  "heads-unread", "hold-unmarked", "newer-hold"])
+def test_spent_anything_new_or_unknown_leaves_it_a_candidate(monkeypatch, capsys, case):
+    """Only the marked hold, the newest on the window with nothing after it
+    but inert lines, at the head the open record still has, spends no read.
+    A receipt after it, a head that moved, a record not open, heads that
+    could not be read, a hold with no head on it or a newer hold: read."""
+    ident = "DRE-7227"
+    extra = {"receipt-after": (rearmed_receipt(200),),
+             "newer-hold": (hold("the nightly on main", "the nightly to fire", 100),)
+             }.get(case, ())
+    board = _spent_board(spent=[ident], ready=[], extra={ident: extra})
+    if case == "hold-unmarked":
+        nodes = _sent_back(*SPENT, hold(*GATE_HELD, 650))
+        board = Board(review=[_review(ident, window=nodes)], threads={ident: nodes})
+    heads = {"head-moved": {f"agent/{ident}-proof-record": OLD_HEAD},
+             "not-open": {},
+             "heads-unread": RuntimeError("gh: HTTP 502")}.get(case)
+    h = _spent_harness(monkeypatch, board, [ident], heads=heads)
+    h.sweep()
+    lines = _about(_lines(capsys), ident)
+    assert ("thread", ident) in board.reads, lines
+    assert not any(SPENT_NAMED in line for line in lines), lines
+
+
+def test_spent_heads_unread_says_so_and_reads_every_one(monkeypatch, capsys):
+    board = _spent_board(ready=[])
+    h = _spent_harness(monkeypatch, board, SPENT_IDS, heads=RuntimeError("gh: HTTP 502"))
+    tally = h.sweep()
+    out = capsys.readouterr().out
+    assert "HTTP 502" in out and SPENT_NAMED not in out
+    assert h.head_reads == 1
+    assert len(_candidates_read(board)) == proof_dispatch.PROOF_CANDIDATES_PER_PASS
+    assert tally.deferred == 2
+
+
+def test_spent_a_record_naming_a_fix_is_never_marked_and_always_read(monkeypatch, capsys):
+    """A fix can ship with nothing on the proof card, so a record that names
+    one is never marked: its budget hold reads as before, every pass reads it."""
+    h, _ = _rearm_pass(monkeypatch, thread=_sent_back(*SPENT),
+                       fixes={FIX: fix_card(state_name="In Progress")})
+    assert h.holds == [("DRE-5930", *GATE_HELD)]
+    nodes = _sent_back(*SPENT, hold(*GATE_HELD, 650))
+    board = Board(review=[_review(window=nodes)], threads={"DRE-5930": nodes},
+                  fixes={FIX: fix_card(state_name="In Progress")})
+    h = Harness(monkeypatch, board, records={"DRE-5930": _declined()},
+                texts={900: record_md(MET_ROW, FIX_ROW)},
+                states={"DRE-5930": state("finished", dispatches=1)})
+    h.sweep()
+    assert ("thread", "DRE-5930") in board.reads and h.holds == []
+    assert h.head_reads == 0
+
+
+def test_spent_an_unmarked_open_hold_gets_the_marked_one_once(monkeypatch, capsys):
+    """A budget hold posted before the mark existed is answered once with the
+    marked hold — the next pass's lane read can then spare the read."""
+    thread = _sent_back(*SPENT, hold(*GATE_HELD, 650))
+    h, tally, _ = _gate_pass(monkeypatch, thread=thread, pr=_declined())
+    assert h.holds == [("DRE-5930", *GATE_SPENT)] and tally.held == 1
+    h, _, _ = _gate_pass(monkeypatch, pr=_declined(),
+                         thread=thread + [hold(*GATE_SPENT, 10)])
+    assert h.holds == []
+
+
+def test_spent_the_mark_rides_after_the_re_armed_note(monkeypatch, capsys):
+    """After a re-armed run is spent, the hold names that run and then the
+    head; the lane read still finds the mark at the end."""
+    text = record_md(MET_ROW, NOT_MET_ROW)
+    thread = _sent_back(*SPENT, observed_note(300),
+                        rearmed_receipt(200, "re-run after the 🔬 proof-observed of x"),
+                        comment("⏳ 5/5 amended", 150))
+    h, _ = _rearm_pass(monkeypatch, thread=thread, text=text)
+    [(_, observed, needs)] = h.holds
+    assert observed == GATE_HELD[0] and "re-armed" in needs
+    assert needs.endswith(f" — the record at {SHA7} names no fix")
+
+
+def test_spent_the_bound_one_github_read_for_all_and_no_linear_read(monkeypatch, capsys):
+    """The read bound (DRE-7787): spent cards cost no Linear read and,
+    together, one GitHub read of the open pull requests' heads — made only on
+    a pass whose lane read shows a marked hold."""
+    board = _spent_board()
+    h = _spent_harness(monkeypatch, board, SPENT_IDS + READY_IDS)
+    h.sweep()
+    assert h.head_reads == 1
+    reads = [r for r in board.reads if r[0] != "lane"]
+    assert len(reads) <= 2 * proof_dispatch.PROOF_CANDIDATES_PER_PASS
+    assert not {ident for _, ident in reads} & set(SPENT_IDS)
+
+    board = _spent_board(spent=[])
+    h = _spent_harness(monkeypatch, board, READY_IDS)
+    h.sweep()
+    assert h.head_reads == 0
+    doc = " ".join(proof_dispatch.__doc__.split())
+    assert "one GitHub read of the open pull requests' heads" in doc
+
+
+@pytest.mark.parametrize("live", [True, False])
+@pytest.mark.parametrize("turn", range(4))
+def test_spent_the_tally_counts_every_proof_card_in_exactly_one_bucket(
+        monkeypatch, capsys, live, turn):
+    """Held on the lane, another repo's, spent, running, deferred by the cap
+    or by the one dispatch, dispatched: the tally line's buckets add up to
+    the proof cards read off the lanes. `dispatched` is counted within
+    `eligible`, so it is not added again."""
+    held = [_shown_held("DRE-5830", 3000)]
+    other = [lane_card("DRE-5831", repo="agent-bureau", entered=2900)]
+    running = [lane_card(f"DRE-59{50 + i}", entered=1000 - i) for i in range(4)]
+    board = _spent_board()
+    board.lanes["Hand-work"] = [*held, *other, *running]
+    board.threads.update(_threads(held))
+    states = {c["identifier"]: state("running") for c in running}
+    h = _spent_harness(monkeypatch, board, SPENT_IDS + READY_IDS)
+    h.states.update(states)
+    tally = h.sweep(live=live, now=NOW + turn * PASS)
+    cards = len(held) + len(other) + len(running) + len(SPENT_IDS) + len(READY_IDS)
+    counted = (tally.eligible + tally.waiting + tally.held + tally.someone_else
+               + tally.running + tally.deferred + tally.refused)
+    assert counted == cards, tally
+    assert tally.dispatched <= tally.eligible
+    line = [l for l in _lines(capsys) if l.startswith("proof-dispatch: eligible")][0]
+    numbers = [int(n) for n in re.findall(r"(\d+)", line)]
+    assert sum(numbers) - tally.dispatched == cards, line
