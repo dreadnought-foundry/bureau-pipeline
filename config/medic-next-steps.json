@@ -1,0 +1,32 @@
+{
+  "transient-infrastructure": {
+    "step": "requeue-once",
+    "means": "An outside service or runner failed for a moment, and a fresh attempt of the same run can clear it.",
+    "fallback": "ask-person",
+    "fallback_when": "resume-spent"
+  },
+  "bad-card": {
+    "step": "send-to-planning",
+    "means": "The card asks for something that cannot be built as written, so it needs planning again rather than another build.",
+    "fallback": "ask-person",
+    "fallback_when": "planning-spent"
+  },
+  "bad-code": {
+    "step": "fix-path",
+    "means": "The change on the branch is wrong, and the fix loop can correct it on the card's open pull request.",
+    "fallback": "ask-person",
+    "fallback_when": "no-open-pr"
+  },
+  "platform-fault": {
+    "step": "ask-person",
+    "means": "The pipeline itself is broken — a workflow, its configuration, a secret or a permission — and only the operator can mend it.",
+    "fallback": null,
+    "fallback_when": null
+  },
+  "unreadable": {
+    "step": "ask-person",
+    "means": "The diagnosis named no class the medic knows, so a person reads it and decides.",
+    "fallback": null,
+    "fallback_when": null
+  }
+}

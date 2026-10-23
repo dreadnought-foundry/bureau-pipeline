@@ -10,7 +10,8 @@ or read the hold. Both now do, through this module:
 
 1. **The proof-record branch rule** — `agent/DRE-<n>-proof-record`
    (`proof_record_branch`), moved from `proof_dispatch`.
-2. **The criterion-table reader** — `criterion_rows`, `is_closing_row`,
+2. **The criterion-table reader** — `criterion_table` (the table's own lines,
+   which the record pull request's body copies, DRE-7813), `criterion_rows`, `is_closing_row`,
    `row_met`, `reading` and `_row`, moved from `hygiene_done`: the one shape a
    machine can read without judgment. Every row but a closing or merge
    criterion an older card still carries (`is_closing_row`: one of
@@ -218,10 +219,11 @@ def _cell(row: list, at: int) -> str:
     return row[at] if at < len(row) else ""
 
 
-def criterion_rows(text: str) -> list | None:
+def criterion_table(text: str) -> list | None:
     """The first markdown table whose header row has a cell containing
-    `criteri`, as (criterion cell, the cell after it) pairs — or None when the
-    record holds no such table. Tables inside fenced code are not tables."""
+    `criteri`, as its own lines — header, separator and rows, as written — or
+    None when the record holds no such table. Tables inside fenced code are not
+    tables. The record pull request's body copies these lines (DRE-7813)."""
     lines = (text or "").splitlines()
     fenced = False
     i = 0
@@ -234,15 +236,22 @@ def criterion_rows(text: str) -> list | None:
         if fenced or not _is_row(line) or i + 1 >= len(lines) or not _is_separator(lines[i + 1]):
             i += 1
             continue
-        header = _cells(line)
-        body, i = [], i + 2
+        start, i = i, i + 2
         while i < len(lines) and _is_row(lines[i]):
-            body.append(_cells(lines[i]))
             i += 1
-        at = next((k for k, c in enumerate(header) if "criteri" in c.lower()), None)
-        if at is not None:
-            return [(_cell(r, at), _cell(r, at + 1)) for r in body]
+        if any("criteri" in c.lower() for c in _cells(line)):
+            return lines[start:i]
     return None
+
+
+def criterion_rows(text: str) -> list | None:
+    """`criterion_table`'s rows as (criterion cell, the cell after it) pairs —
+    or None when the record holds no such table."""
+    table = criterion_table(text)
+    if table is None:
+        return None
+    at = next(k for k, c in enumerate(_cells(table[0])) if "criteri" in c.lower())
+    return [(_cell(r, at), _cell(r, at + 1)) for r in map(_cells, table[2:])]
 
 
 def is_closing_row(criterion: str) -> bool:

@@ -346,7 +346,16 @@ evaluators disagree on the ids. The six rules:
    cell prints each path as the card wrote it. A path cited by more than
    `BOILERPLATE_THRESHOLD` cards across Intake and the four lanes is
    reference, not ownership — `collision_report`'s rule, counted by path.
-   Ready when that card is Done.
+   Ready when that card is Done. Three in-flight cards never hold it
+   (DRE-7814), because each would wait on the card that waits on it: a
+   PROOF card (`proof_and_demo.is_proof` on its title), which writes only its
+   record and names files to read them; an In Progress epic that is built
+   out, read as rule 1 reads one (`built_out` on its `IN_MOTION_NODE`
+   record); and a card formally blocked by the candidate — a `blocks`
+   relation, never a prose `Blocked by:` line. From 2026-10-15 DRE-7397 waited on
+   epic DRE-6644 and DRE-7745 on PROOF card DRE-7251, each of which waited on
+   them, until a person moved both by hand on 10-23. An epic in any other lane, or one whose record is missing
+   or unread, still holds. A skipped card is shown nowhere on the page.
 3. `child-of-epic-not-in-progress` — the card's parent epic is in Intake,
    Planning, Green Light, Queued, a start lane ahead of In Progress (DRE-7112)
    or Triage. Ready when the epic is In
@@ -381,7 +390,11 @@ no `[EPIC]` title is decided on that read alone. Then the epic read: one
 `issue(id:)` request carrying `epic_cap.IN_MOTION_NODE` per named card the
 light read shows In Progress and an epic, however many cards name it — never
 aliased over a list, because Linear prices that node at up to 1,200. An epic
-in any other open state is not built out and costs no second read. A named
+in any other open state is not built out and costs no second read. Every
+card the in-flight lanes hold that is an epic and In Progress gets the same
+request, for rule 2 (DRE-7814) — one a `depends on` line already names is
+read once, not twice, and the count is bounded by the epic cap's In Progress
+epics. A named
 card that could not be read holds the card: when a request raises or Linear
 returns no issue, every card naming it is Not ready with the Reason `its
 ranked read waits on DRE-N, which could not be read this morning (<why>)` and
