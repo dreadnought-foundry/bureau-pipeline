@@ -388,6 +388,9 @@ jobs:
             request. A row that needs the CEO's or the operator's press, and a
             cause row, is written in the record as the brief says and never
             asked.
+          - Make no sandbox press: the real run beside you makes them, and a
+            second run would file a second Intake card. Your \`Sandbox press:\`
+            rows read \`Not observed. cause: out-of-reach — a shadow run makes no sandbox press\`.
           - Read Linear only through \`python3 .bureau-pipeline/scripts/linear_ops.py\`
             and \`python3 .bureau-pipeline/scripts/spoken_thread.py\`, within
             PROOF_LINEAR_REQUESTS. Never send a request to Linear any other way:
@@ -1093,8 +1096,10 @@ jobs:
                check it out, merge origin/${{ github.event.repository.default_branch || 'main' }}
                into it, and amend the record in a new commit — never restart
                it. Otherwise create it off ${{ github.event.repository.default_branch || 'main' }}.
-            2. Observe every acceptance criterion as the read-only identities
-               (`⏳ 2/5 observing`). Write the record at the path the card's
+            2. Observe every acceptance criterion as the read-only identities —
+               the one exception is the sandbox presses briefs/proof.md names,
+               which you make yourself as item 4 says (`⏳ 2/5 observing`).
+               Write the record at the path the card's
                `**Files:**` line names, in the shape briefs/proof.md gives:
                one row per criterion, each opening `Met.`, `Not met.` or
                `Not observed.` with the evidence (`⏳ 3/5 record written`).
@@ -1106,10 +1111,21 @@ jobs:
             4. A criterion only the CEO's own press can satisfy: never sign in
                as him and never wait for it. That is a press that is a business
                decision of his, and only its row reads
-               `Not observed. needs the CEO's press: <the press>`. A press on
-               the sandbox project, or one the card's words say the operator may
-               make under the operator's standing permission of 2026-10-07, is
-               the operator's row instead, with no escalation file:
+               `Not observed. needs the CEO's press: <the press>`. A criterion
+               the card writes opening `Sandbox press:` is your own step, on the
+               sandbox project `agent-bureau-demo`: make it through agent-bureau's
+               `scripts/console_proof_reader.py press`, list the ids you made in
+               the record, and close or list them as briefs/proof.md says. A run
+               whose checkout holds no `scripts/console_proof_reader.py` (any repo
+               but agent-bureau today) makes no press and writes the row as the
+               console proof-reader bullet under Identities in briefs/proof.md
+               says, `Not observed. cause: out-of-reach — …`. A press the live
+               console refuses is written as the operator's row with the console's
+               reason, as briefs/proof.md's "When the console is not ready" says.
+               Every other press the card's words give the operator — one under
+               the operator's standing permission of 2026-10-07, or a sandbox
+               press not on the standard's list — is the operator's row, with no
+               escalation file:
                `Not observed. waiting for the operator's press: <the press>`.
                briefs/proof.md says which press is whose. For the CEO's press,
                AFTER the pull request is open, write one plain sentence naming
@@ -1327,8 +1343,10 @@ jobs:
                check it out, merge origin/${{ github.event.repository.default_branch || 'main' }}
                into it, and amend the record in a new commit — never restart
                it. Otherwise create it off ${{ github.event.repository.default_branch || 'main' }}.
-            2. Observe every acceptance criterion as the read-only identities
-               (`⏳ 2/5 observing`). Write the record at the path the card's
+            2. Observe every acceptance criterion as the read-only identities —
+               the one exception is the sandbox presses briefs/proof.md names,
+               which you make yourself as item 4 says (`⏳ 2/5 observing`).
+               Write the record at the path the card's
                `**Files:**` line names, in the shape briefs/proof.md gives:
                one row per criterion, each opening `Met.`, `Not met.` or
                `Not observed.` with the evidence (`⏳ 3/5 record written`).
@@ -1340,10 +1358,21 @@ jobs:
             4. A criterion only the CEO's own press can satisfy: never sign in
                as him and never wait for it. That is a press that is a business
                decision of his, and only its row reads
-               `Not observed. needs the CEO's press: <the press>`. A press on
-               the sandbox project, or one the card's words say the operator may
-               make under the operator's standing permission of 2026-10-07, is
-               the operator's row instead, with no escalation file:
+               `Not observed. needs the CEO's press: <the press>`. A criterion
+               the card writes opening `Sandbox press:` is your own step, on the
+               sandbox project `agent-bureau-demo`: make it through agent-bureau's
+               `scripts/console_proof_reader.py press`, list the ids you made in
+               the record, and close or list them as briefs/proof.md says. A run
+               whose checkout holds no `scripts/console_proof_reader.py` (any repo
+               but agent-bureau today) makes no press and writes the row as the
+               console proof-reader bullet under Identities in briefs/proof.md
+               says, `Not observed. cause: out-of-reach — …`. A press the live
+               console refuses is written as the operator's row with the console's
+               reason, as briefs/proof.md's "When the console is not ready" says.
+               Every other press the card's words give the operator — one under
+               the operator's standing permission of 2026-10-07, or a sandbox
+               press not on the standard's list — is the operator's row, with no
+               escalation file:
                `Not observed. waiting for the operator's press: <the press>`.
                briefs/proof.md says which press is whose. For the CEO's press,
                AFTER the pull request is open, write one plain sentence naming
@@ -1559,8 +1588,10 @@ jobs:
                check it out, merge origin/${{ github.event.repository.default_branch || 'main' }}
                into it, and amend the record in a new commit — never restart
                it. Otherwise create it off ${{ github.event.repository.default_branch || 'main' }}.
-            2. Observe every acceptance criterion as the read-only identities
-               (`⏳ 2/5 observing`). Write the record at the path the card's
+            2. Observe every acceptance criterion as the read-only identities —
+               the one exception is the sandbox presses briefs/proof.md names,
+               which you make yourself as item 4 says (`⏳ 2/5 observing`).
+               Write the record at the path the card's
                `**Files:**` line names, in the shape briefs/proof.md gives:
                one row per criterion, each opening `Met.`, `Not met.` or
                `Not observed.` with the evidence (`⏳ 3/5 record written`).
@@ -1572,10 +1603,21 @@ jobs:
             4. A criterion only the CEO's own press can satisfy: never sign in
                as him and never wait for it. That is a press that is a business
                decision of his, and only its row reads
-               `Not observed. needs the CEO's press: <the press>`. A press on
-               the sandbox project, or one the card's words say the operator may
-               make under the operator's standing permission of 2026-10-07, is
-               the operator's row instead, with no escalation file:
+               `Not observed. needs the CEO's press: <the press>`. A criterion
+               the card writes opening `Sandbox press:` is your own step, on the
+               sandbox project `agent-bureau-demo`: make it through agent-bureau's
+               `scripts/console_proof_reader.py press`, list the ids you made in
+               the record, and close or list them as briefs/proof.md says. A run
+               whose checkout holds no `scripts/console_proof_reader.py` (any repo
+               but agent-bureau today) makes no press and writes the row as the
+               console proof-reader bullet under Identities in briefs/proof.md
+               says, `Not observed. cause: out-of-reach — …`. A press the live
+               console refuses is written as the operator's row with the console's
+               reason, as briefs/proof.md's "When the console is not ready" says.
+               Every other press the card's words give the operator — one under
+               the operator's standing permission of 2026-10-07, or a sandbox
+               press not on the standard's list — is the operator's row, with no
+               escalation file:
                `Not observed. waiting for the operator's press: <the press>`.
                briefs/proof.md says which press is whose. For the CEO's press,
                AFTER the pull request is open, write one plain sentence naming
