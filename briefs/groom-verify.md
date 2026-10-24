@@ -117,7 +117,9 @@ card's problem` holds the Done cards, completed after this card was created,
 that a search matched to the card's words, identifiers and file paths — best
 match first, at most eight, each with up to three pull requests linked to
 it. A card is one line, `DRE-N (Done <date>, under <parent>) — <title>`,
-with the terms it matched below it. Each pull request is one line,
+with the terms it matched below it; when the card carries the `no-code`
+label, the card's line ends `no-code` inside its parentheses —
+`DRE-N (Done <date>, under <parent>, no-code) — <title>`. Each pull request is one line,
 `DRE-N → <owner>/<repo>#<n>, merged <date> — <title>`, then its changed
 files and its body. A pull request the runner could not read says
 `not read: <why>`, and a row nobody searched says `Not searched: <why>`.
@@ -262,6 +264,19 @@ the work belongs to the card's own children, not to somebody else. And
 code exists, not who landed it. Code still counts toward `still-needed` and
 `partly-solved`. A Cancel with no anchored item left is recorded as
 `unverified` with the reason `proof belongs to a child`.
+
+**The no-code rule:** for a card labeled `no-code`, a Cancel needs a Done
+card that is itself `no-code` — its line in the matched Done work says so —
+with its merged pull request. This holds for `done-elsewhere`, `obsolete`
+and `not-worth-it` whenever the board context's labels carry `no-code`, and
+it is read after the child rule. A `no-code` card's outcome is a live
+action — a deploy, an onboarding run, a secret — so a merged pull request
+from any other card, a routing fact and a `file:line` quote are not counted
+toward it, because they show the code landed, not that the operator work
+was done. They are still shown beside the `no-code` card when you give them,
+and a partial pull request from a card that is not `no-code` does not make
+the answer `partly-solved`. A Cancel with no such card is recorded as
+`unverified` with the reason `a no-code card needs a Done no-code card`.
 
 **A pull request that did part of the card is `partly-solved`, not a
 Cancel.** A Cancel counting a done-work item whose `covers` is `"part"`,

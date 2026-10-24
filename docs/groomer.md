@@ -105,7 +105,13 @@ fast path shipped, which the sweep moves straight to Planning (DRE-4150, point
      proof. A Cancel of a card with children, in any state,
      counts only a Done card not under it or a routing fact, never a
      `file:line` quote, else it is `unverified` with `proof belongs to a
-     child`; a Cancel counting a pull request that did part of the card,
+     child`; after that, a Cancel of a card labeled `no-code` counts only a
+     Done `no-code` card with its merged pull request — a merged pull
+     request from any other card, a routing fact and a `file:line` quote
+     show the code landed, not that the operator work was done — else it is
+     `unverified` with `a no-code card needs a Done no-code card`
+     (DRE-7485), and the matched card's line in the agent's input ends
+     `no-code` when it carries the label; a Cancel counting a pull request that did part of the card,
      even beside other proof, is recorded `partly-solved` with `adjusted:
      partial pull request`; and
      each verdict carries `rested_on`, what it rested on.
@@ -747,7 +753,8 @@ drain parse both, and they render byte for byte as before. A Planning card
 with no proof is one whose verdict is `unverified`, and its line carries the
 reason instead, one of exactly `agent step failed`, `agent step skipped`,
 `no verdict file`, `no proof`, `unreadable answer`, `no verdict artifact`,
-`proof belongs to a child` or `lookup failed: <why>` (`groom_verify_agent.UNVERIFIED_REASONS`); a verdict
+`proof belongs to a child`, `a no-code card needs a Done no-code card` or
+`lookup failed: <why>` (`groom_verify_agent.UNVERIFIED_REASONS`); a verdict
 document naming any other reason is read as `unreadable answer`. An
 `excluded` card is never on the Planning list. A cost or clock the step could not read
 says `unknown`, never zero. A record with no `verify` block renders byte for
