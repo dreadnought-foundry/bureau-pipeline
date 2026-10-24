@@ -55,10 +55,11 @@ a finding), reads each child's lane, and then, in this order:
      names (`lane_contract.QUEUE_LANES`, DRE-6746). Arriving in Planning is what starts a
      child's planner run — the relay dispatches one per lane entry (DRE-1913,
      DRE-3030); nothing here dispatches. A child an open sibling blocks stays
-     in the queue: the seam rule plans it only on what that sibling observed
+     in the queue: the seam rule plans it only on what that sibling built
      (`standards/card-quality.md`), and the sweep returns it to Planning,
-     where the planner is dispatched, once every blocker is Done — the
-     auto-advance (`reconcile.advance_unblocked_epics`, DRE-6407) when the
+     where the planner is dispatched, once no blocker still holds it (each
+     is Done, a built-out epic with only its proof left open, or a proof of
+     one, DRE-7831): the auto-advance (`reconcile.advance_unblocked_epics`, DRE-6407) when the
      sweep closes the blocker, and the full sweep's return pass
      (`reconcile.return_waiting_epics`, DRE-6653) however it closed. A sibling that is Done, Canceled or Duplicate
      (`prose_blockers.TERMINAL`) holds nothing; one whose lane could not be
@@ -370,7 +371,9 @@ def placements(children: list, where: dict | None = None) -> dict:
     unknown holds its dependent — sending a child to be planned early costs a
     planner run nobody needed, and waiting costs nothing the auto-advance
     does not repair. Blockers outside the roll-up are not read here, as
-    before.
+    before. This send at activation is stricter than the auto-advance that
+    carries a waiting child on later, which also releases a sibling built
+    out with only its proof left open (DRE-7831).
     """
     named = lanes()
     where = where or {}
@@ -580,8 +583,8 @@ def receipt_detail(parent: str, children: list, where: dict | None = None) -> st
             "Each child waiting in "
             + " or ".join(f"`{lane}`" for lane in waiting_in)
             + " stays there until "
-            "every sibling it waits on is Done, Canceled or Duplicate, so it "
-            "is planned on what they observed and never ahead of it. The "
+            "no sibling it waits on still holds it — each is Done, Canceled "
+            "or Duplicate, or is built out with only its proof left open. The "
             "sweep's auto-advance carries it on then, and nothing here starts "
             "that run.",
         ]
