@@ -1742,7 +1742,8 @@ def seam_decision(decision: Decision, body: str, *,
     An `epic` cut at an observation-gated seam is a `roll-up`: it is split into
     child epics under the card, the first ending at the observation, the second
     filed at the same gate, blocked on the first, and planned only when the
-    first is Done. The planner the roll-up is handed to files that split, so
+    first is Done, or built out with only its proof left open (DRE-7831).
+    The planner the roll-up is handed to files that split, so
     all this owes is the shape and the reason.
 
     Three rules, and the third is the one that matters:
