@@ -1757,7 +1757,7 @@ def main(argv: list[str]) -> int:
     # reader's contract is refused out loud and the death decides as without it.
     # DRE-7801: a card that has already waited WAIT_REPEAT_CAP times in a row
     # decides as without the flag too — a strike, with the reason added to its
-    # receipt. No thread, or one that cannot be read, is zero waits: an
+    # receipt when that receipt spends one. No thread, or one that cannot be read, is zero waits: an
     # unreadable thread never spends a strike on its own.
     wait_kind = _flag_value(rest, "--wait-kind")
     waited_out = ""
@@ -1857,10 +1857,11 @@ def main(argv: list[str]) -> int:
         deaths=deaths,
     )
     body = d.comments[0]
-    if waited_out:
+    if waited_out and DEAD_TAG in body:
         # Its own paragraph under the receipt's first line, so `death_lines`
         # quotes the strike as it always has and the `model-error:` marker
-        # stays on its own line.
+        # stays on its own line. Only on a receipt that spends a strike: a
+        # cancelled run, a pre-agent fault or a turn-cap death counts nothing.
         first, _, more = body.partition("\n")
         body = f"{first}\n\n{waited_out}" + (f"\n{more}" if more else "")
     if d.action == "replan" and turn_exhaustion:
