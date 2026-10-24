@@ -51,7 +51,9 @@ CARD = "DRE-7802"
 REPO = "dreadnought-foundry/bureau-pipeline"
 RUN_ID = "34000000002"
 RUN_URL = f"https://github.com/{REPO}/actions/runs/{RUN_ID}"
-MODEL = "claude-opus-5"
+#: An id on no ladder: the script only echoes it into `--error-model` and the
+#: `model-error:` marker, so a rung id here would pin a console choice (DRE-6866).
+MODEL = "claude-opus-7"
 
 #: The step's `env:` keys, scrubbed from the inherited environment.
 ENV_KEYS = (
