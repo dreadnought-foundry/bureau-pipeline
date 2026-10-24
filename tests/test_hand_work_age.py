@@ -733,14 +733,213 @@ class TestASpentHold:
         assert " 5h of 24, alarms at " in _held_line(got)
 
 
-class TestNeverAlarmsInReview:
-    def test_a_hold_on_the_ceos_press_is_the_return_branchs(self, capsys):
-        got = _held_sweep([_review_card(nodes=[_hold(CEO_NEEDS, 25.5)])], capsys)
+# --------------------------------------------------------------------------- #
+# DRE-7741: a hold on the CEO's press, on a card outside Green Light           #
+# --------------------------------------------------------------------------- #
+#
+# Only his signed console answer discharges a hold naming the CEO's press, and
+# the return branch that waits for it reads `Green Light` only. DRE-6663 and
+# DRE-6694 carried such holds from 2026-10-10 while In Review, and this pass
+# called them "the return branch's" and said nothing for ten days. Outside
+# Green Light the hold is the operator's to bring to him or re-sort.
+
+import spoken_thread  # noqa: E402
+
+#: A comment the fake `voices` reads as console-signed — the real reader
+#: checks a signature; this suite only needs to know which comment passed.
+SIGNED = "console-signed"
+#: A comment the fake `voices` reads as a console answer whose check could not
+#: run (`spoken_thread.UNCHECKED`, DRE-4153).
+UNCHECKED = "console-unchecked"
+#: DRE-6663's own hold line of 2026-10-10, cut where the window cut it.
+DRE_6663_HOLD = linear_ops.proof_waiting_line(
+    "needs the CEO's press: on the open groom proposal on the standing card, "
+    "press Not doing on one card",
+    f"{proof_record.CEO_PRESS}: on the open groom proposal, press Not doing")
+
+
+def _signed(hours_ago: float) -> dict:
+    return {"body": "Answer from the CEO:\nDone.", "user": {"id": SIGNED},
+            "createdAt": _iso(_at(hours_ago))}
+
+
+def _unchecked(hours_ago: float) -> dict:
+    return {**_signed(hours_ago), "user": {"id": UNCHECKED}}
+
+
+def _fake_voices(nodes, viewer, *, card):
+    kinds = {SIGNED: spoken_thread.CEO_VIA_CONSOLE, UNCHECKED: spoken_thread.UNCHECKED}
+    return [spoken_thread.Voice(
+        kinds.get((n.get("user") or {}).get("id"), spoken_thread.UNKNOWN), "label",
+        n.get("createdAt"), n.get("body"))
+        for n in nodes]
+
+
+def _press_kind(line: str, lane=REVIEW) -> str:
+    return (f"Kind: a hold naming {proof_record.CEO_PRESS} on a card in {lane}, "
+            "not Green Light — only his signed console answer lifts it, and the "
+            "return branch reads Green Light only: get his answer, or re-sort "
+            f"the hold — {proof_record._cut(line, 120)}.")
+
+
+class TestACeoPressHoldOutsideGreenLight:
+    def test_in_review_past_24_hours_it_alarms_once(self, capsys):
+        press = _hold(CEO_NEEDS, 25.5)
+        got = _held_sweep([_review_card(nodes=[press])], capsys)
+        got.comment.assert_called_once()
+        ident, body = got.comment.call_args.args
+        assert ident == "DRE-7001"
+        first, second, *_ = body.split("\n")
+        assert first == (f"{HELD_OPENING} 25 hours, past its 24 — the "
+                         "operator's to look at.")
+        assert second == _press_kind(_first(press))
+        assert body.endswith(pipeline_act.trailer(ACT))
+        got.add_label.assert_not_called()
+        got.advance.assert_not_called()
+        got.state.assert_not_called()
+        line = _held_line(got)
+        assert line.startswith("held-proof: DRE-7001 held In Review for the "
+                               "operator 25h, past 24 — alarmed ")
+        assert line.endswith(
+            f"(clock: its CEO's-press hold of {reconcile._pt(press['createdAt'])})")
+
+    def test_the_second_pass_writes_nothing(self, capsys):
+        press = _hold(CEO_NEEDS, 25.5)
+        alarm = _node(pipeline_act.receipt(ACT, f"{HELD_OPENING} 25 hours, past its 24 "
+                                                "— the operator's to look at."), 1.0)
+        got = _held_sweep([_review_card(nodes=[press, alarm])], capsys)
+        _wrote_nothing(got)
+        assert (f"25h, past 24 — alarmed {reconcile._pt(alarm['createdAt'])}"
+                in _held_line(got))
+
+    def test_at_23_hours_it_waits_and_says_when(self, capsys):
+        """The bound spares the proof run's own park, which posts the hold
+        and then moves the card to Green Light."""
+        press = _hold(CEO_NEEDS, 23.5)
+        got = _held_sweep([_review_card(nodes=[press])], capsys)
+        _wrote_nothing(got)
+        due = dead_run.pacific(_clock(press) + timedelta(hours=24))
+        assert _held_line(got) == (
+            f"held-proof: DRE-7001 held In Review for the operator 23h of 24, "
+            f"alarms at {due} (clock: its CEO's-press hold of "
+            f"{reconcile._pt(press['createdAt'])})")
+
+    def test_a_proof_observed_after_it_does_not_spend_it(self, capsys):
+        """DRE-6663's shape: an operator's observation followed the hold, and
+        only his signed answer discharges one naming his press."""
+        press = _node(DRE_6663_HOLD, 240.0)
+        later = _node(OBSERVED, 120.0)
+        got = _held_sweep([_review_card(nodes=[press, later])], capsys)
+        got.comment.assert_called_once()
+        assert got.comment.call_args.args[1].split("\n")[1] == _press_kind(DRE_6663_HOLD)
+        assert "(clock: its CEO's-press hold of " in _held_line(got)
+
+    def test_an_unsigned_claim_to_be_his_answer_does_not_spend_it(self, monkeypatch, capsys):
+        monkeypatch.setattr(spoken_thread, "voices", _fake_voices)
+        claim = _node("Answer from the CEO:\nDone.", 2.0)
+        got = _held_sweep([_review_card(nodes=[_hold(CEO_NEEDS, 25.5), claim])], capsys)
+        got.comment.assert_called_once()
+
+    def test_his_signed_answer_after_it_spends_it(self, monkeypatch, capsys):
+        monkeypatch.setattr(spoken_thread, "voices", _fake_voices)
+        press = _hold(CEO_NEEDS, 25.5)
+        got = _held_sweep([_review_card(nodes=[press, _signed(2.0)])], capsys)
         _wrote_nothing(got)
         assert _held_line(got) == (
-            "held-proof: DRE-7001 not held for the operator — its hold waits on "
-            "the CEO's press: the return branch's")
+            "held-proof: DRE-7001 not held for the operator — its CEO's-press "
+            f"hold of {reconcile._pt(press['createdAt'])} is spent: his signed "
+            "answer followed it")
+        assert got.out[-1] == "held-proof: nothing held"
 
+    def test_a_signed_answer_before_it_spends_nothing(self, monkeypatch, capsys):
+        monkeypatch.setattr(spoken_thread, "voices", _fake_voices)
+        got = _held_sweep([_review_card(nodes=[_signed(30.0), _hold(CEO_NEEDS, 25.5)])],
+                          capsys)
+        got.comment.assert_called_once()
+
+    def test_an_unchecked_answer_after_it_spends_nothing_and_says_why(
+            self, monkeypatch, capsys):
+        """A console answer the check could not RUN on is neither his answer
+        nor a refused one: the hold stands, and the alarm and the line say the
+        answer after it could not be checked rather than that none came."""
+        import proof_dispatch
+        monkeypatch.setattr(spoken_thread, "voices", _fake_voices)
+        press = _hold(CEO_NEEDS, 25.5)
+        got = _held_sweep([_review_card(nodes=[press, _unchecked(2.0)])], capsys)
+        got.comment.assert_called_once()
+        assert got.comment.call_args.args[1].split("\n")[1] == (
+            f"{_press_kind(_first(press))[:-1]}; {proof_dispatch.UNCHECKED_NOTE}.")
+        assert _held_line(got).endswith(
+            f"(clock: its CEO's-press hold of {reconcile._pt(press['createdAt'])}; "
+            f"{proof_dispatch.UNCHECKED_NOTE})")
+
+    def test_an_unchecked_answer_before_it_says_nothing(self, monkeypatch, capsys):
+        monkeypatch.setattr(spoken_thread, "voices", _fake_voices)
+        press = _hold(CEO_NEEDS, 25.5)
+        got = _held_sweep([_review_card(nodes=[_unchecked(30.0), press])], capsys)
+        assert got.comment.call_args.args[1].split("\n")[1] == _press_kind(_first(press))
+
+    def test_an_unreadable_thread_spends_nothing(self, monkeypatch, capsys):
+        def broken(*a, **kw):
+            raise RuntimeError("the console's key could not be read")
+        monkeypatch.setattr(spoken_thread, "voices", broken)
+        got = _held_sweep([_review_card(nodes=[_hold(CEO_NEEDS, 25.5), _signed(2.0)])],
+                          capsys)
+        got.comment.assert_called_once()
+
+    def test_a_newer_ceo_press_hold_is_the_clock(self, monkeypatch, capsys):
+        monkeypatch.setattr(spoken_thread, "voices", _fake_voices)
+        old = _hold(CEO_NEEDS, 30.0)
+        new = _hold(CEO_NEEDS, 5.0, observed="the second press")
+        got = _held_sweep([_review_card(nodes=[old, _signed(20.0), new])], capsys)
+        _wrote_nothing(got)
+        assert " 5h of 24, alarms at " in _held_line(got)
+        assert _held_line(got).endswith(
+            f"(clock: its CEO's-press hold of {reconcile._pt(new['createdAt'])})")
+
+    def test_an_older_press_hold_still_stands_when_an_operators_hold_is_spent(
+            self, capsys):
+        """The operator's observation spends the cause hold after it, never
+        the press hold before it — that one is still open."""
+        press = _hold(CEO_NEEDS, 30.0)
+        cause = _hold(CAUSE_NEEDS, 28.0)
+        got = _held_sweep([_review_card(nodes=[press, cause, _node(OBSERVED, 3.0)])],
+                          capsys)
+        got.comment.assert_called_once()
+        assert got.comment.call_args.args[1].split("\n")[1] == _press_kind(_first(press))
+
+    def test_in_progress_it_alarms_too(self, capsys):
+        press = _hold(CEO_NEEDS, 25.5)
+        got = _held_sweep([_review_card(nodes=[press], state="In Progress")], capsys)
+        got.comment.assert_called_once()
+        body = got.comment.call_args.args[1]
+        assert body.startswith("🚨 hand-work-overdue: DRE-7001 has waited In Progress "
+                               "for the operator 25 hours, past its 24")
+        assert body.split("\n")[1] == _press_kind(_first(press), "In Progress")
+        assert _held_line(got).startswith(
+            "held-proof: DRE-7001 held In Progress for the operator 25h, past 24")
+
+
+class TestACeoPressHoldInGreenLight:
+    """Today's behavior: in Green Light the hold is the return branch's, the
+    sweep's pass reads nothing of it, and the dispatcher returns the card on
+    his signed answer (`test_proof_dispatch`'s return tests)."""
+
+    def test_it_never_alarms(self, capsys):
+        card = _review_card(nodes=[_hold(CEO_NEEDS, 240.0)], state="Green Light")
+        got = _held_sweep([card], capsys)
+        _wrote_nothing(got)
+        assert got.out == ["held-proof: nothing held"]
+
+    def test_the_operators_holds_there_are_not_this_pass_either(self, capsys):
+        card = _review_card(nodes=[_hold(CEO_NEEDS, 240.0), _hold(CAUSE_NEEDS, 30.0)],
+                            state="Green Light")
+        got = _held_sweep([card], capsys)
+        _wrote_nothing(got)
+        assert got.out == ["held-proof: nothing held"]
+
+
+class TestNeverAlarmsInReview:
     @pytest.mark.parametrize("ident,labels,why", [
         ("DRE-4541", ("repo:portico", NO_CODE), "a standing card"),
         ("DRE-7001", ("repo:portico", HAND_BUILT), "the CEO's own hand-built card"),
@@ -862,3 +1061,156 @@ def test_the_config_readme_names_the_in_review_kind():
     assert "In Review" in readme
     assert "`PROOF:` card held `In Review` for the operator" in readme
     assert "alarm_held_proofs" in readme
+
+
+# --------------------------------------------------------------------------- #
+# DRE-7739: a proof whose re-runs are spent is held for the operator           #
+# --------------------------------------------------------------------------- #
+#
+# On 2026-10-20, 8 of the fleet's 26 open proof-record pull requests had spent
+# both re-runs, and the dispatcher's hold for each reads `— needs an operator
+# reading …`. The held-for-operator read knew only `the operator's decision
+# on` and `the operator's press`, so it filed seven of the eight as waiting on
+# an event and none alarmed — agent-bureau sweep run 39475210381 logged
+# `held-proof: DRE-7251 not held for the operator — its hold waits on an event
+# (an operator reading the critic's findings…)`.
+
+#: Every hold the dispatcher writes when a budget is spent: the first run's
+#: two dispatches, each trigger's two re-runs, and the two timed re-runs
+#: (DRE-7316).
+BUDGET_SPENT = [
+    (proof_dispatch.EXHAUSTED_OBSERVED, proof_dispatch.EXHAUSTED_NEEDS),
+    (proof_dispatch.RERUN_EXHAUSTED_OBSERVED, proof_dispatch.RERUN_EXHAUSTED_NEEDS),
+    (proof_dispatch.GATE_EXHAUSTED_OBSERVED, proof_dispatch.GATE_EXHAUSTED_NEEDS),
+    (proof_dispatch.TIMED_EXHAUSTED_OBSERVED, proof_dispatch.TIMED_EXHAUSTED_NEEDS),
+]
+#: ...and the two it writes when a re-run finished and read nothing new.
+UNANSWERED = [
+    (proof_dispatch.RERUN_UNANSWERED_OBSERVED, proof_dispatch.RERUN_UNANSWERED_NEEDS),
+    (proof_dispatch.GATE_UNANSWERED_OBSERVED, proof_dispatch.GATE_UNANSWERED_NEEDS),
+]
+RERUN_2 = ("🔬 proof-run: dispatched a proof run at 10:00 PT — re-run after the "
+           "critic's findings at abcdef0 (re-run 2 of 2)")
+
+
+def _defined_needs() -> dict:
+    """Every hold-need wording the dispatcher defines, by its name: each
+    module string named `*_NEEDS`, and the press a waiting row names."""
+    found = {name: value for name, value in vars(proof_dispatch).items()
+             if name.endswith("_NEEDS") and isinstance(value, str)}
+    found["OPERATOR_PRESS"] = proof_dispatch.OPERATOR_PRESS
+    return found
+
+
+class TestABudgetSpentHold:
+    def test_both_triggers_hold_on_the_budget_spent_wordings(self):
+        """The critic's trigger names its own pair; the gate's is the same
+        tuple shape, read off the constants `_declined` hands `_Trigger`."""
+        trigger = proof_dispatch._Pass._sent_back(
+            None, [{"createdAt": "2026-10-20T17:00:00Z"}], 985)
+        assert trigger.exhausted == BUDGET_SPENT[1]
+        assert trigger.unanswered == UNANSWERED[0]
+
+    @pytest.mark.parametrize("observed,needs", BUDGET_SPENT + UNANSWERED)
+    def test_each_hold_is_held_for_the_operator(self, observed, needs):
+        node = _hold(needs, 3.0, observed=observed)
+        clock, kind, why_not = reconcile._held_for_operator(
+            _review_card(nodes=[_node(RERUN, 30.0), _node(RERUN_2, 10.0), node]))
+        assert clock is node, why_not
+        assert kind == "operator's-reading hold"
+        assert why_not == ""
+
+    @pytest.mark.parametrize("observed,needs", BUDGET_SPENT)
+    def test_past_24_hours_it_alarms_once(self, observed, needs, capsys):
+        """DRE-7251's shape: two re-run receipts, then the budget hold. The
+        receipts came before the hold, so they spend nothing."""
+        held = _hold(needs, 25.5, observed=observed)
+        card = _review_card(nodes=[_node(RERUN, 60.0), _node(RERUN_2, 40.0), held])
+        got = _held_sweep([card], capsys)
+        _alarmed_once(got, held)
+        assert _held_line(got).endswith(
+            f"(clock: its operator's-reading hold of {reconcile._pt(held['createdAt'])})")
+
+    def test_the_sweeps_dre_7251_line_is_gone(self, capsys):
+        held = _hold(proof_dispatch.RERUN_EXHAUSTED_NEEDS, 25.5,
+                     observed=proof_dispatch.RERUN_EXHAUSTED_OBSERVED)
+        got = _held_sweep([_review_card(nodes=[held])], capsys)
+        assert "waits on an event" not in _held_line(got)
+        assert "held-proof: nothing held" not in got.out
+
+    def test_a_re_run_after_it_still_spends_it(self, capsys):
+        held = _hold(proof_dispatch.GATE_EXHAUSTED_NEEDS, 30.0,
+                     observed=proof_dispatch.GATE_EXHAUSTED_OBSERVED)
+        got = _held_sweep([_review_card(nodes=[held, _node(RERUN, 20.0)])], capsys)
+        _wrote_nothing(got)
+        assert _held_line(got) == (
+            "held-proof: DRE-7001 not held for the operator — its operator's-reading "
+            f"hold of {reconcile._pt(held['createdAt'])} is spent: re-run "
+            "dispatched after it")
+
+
+class TestEveryWordingIsClassified:
+    def test_every_wording_the_dispatcher_defines_is_operator_or_event(self):
+        defined = _defined_needs()
+        classified = set(proof_dispatch.OPERATOR_NEEDS) | set(proof_dispatch.EVENT_NEEDS)
+        unclassified = sorted(name for name, value in defined.items()
+                              if value not in classified)
+        assert not unclassified, (
+            f"hold-need wording(s) {', '.join(unclassified)} in proof_dispatch.py "
+            "are in neither OPERATOR_NEEDS nor EVENT_NEEDS — say who each waits on")
+
+    def test_the_read_finds_the_wordings_it_must(self):
+        """Not vacuous: the seven operator's readings and the press are found."""
+        assert len(_defined_needs()) >= 8
+
+    def test_no_wording_is_both(self):
+        both = set(proof_dispatch.OPERATOR_NEEDS) & set(proof_dispatch.EVENT_NEEDS)
+        assert not both
+
+    def test_the_sweep_reads_the_dispatchers_vocabulary_not_a_copy(self):
+        """A wording added to `OPERATOR_NEEDS` is held the day it is written."""
+        with patch.object(proof_dispatch, "OPERATOR_NEEDS",
+                          proof_dispatch.OPERATOR_NEEDS + ("a wording added today",)):
+            clock, _, _ = reconcile._held_for_operator(
+                _review_card(nodes=[_hold("a wording added today: read row 2", 3.0)]))
+        assert clock is not None
+
+    @pytest.mark.parametrize("needs", sorted(set(_defined_needs().values())))
+    def test_each_wording_reads_as_its_class(self, needs):
+        clock, _, why_not = reconcile._held_for_operator(
+            _review_card(nodes=[_hold(needs, 3.0)]))
+        if needs in proof_dispatch.OPERATOR_NEEDS:
+            assert clock is not None, why_not
+        else:
+            assert clock is None and "waits on an event" in why_not
+
+
+class TestAnEventHoldStaysAnEvent:
+    @pytest.mark.parametrize("needs", [
+        "the weekly report of 2026-10-18",
+        "the window's close at 2026-10-17 18:59:16 PT",
+        "the next nightly full run on main",
+        "a pull request in each repo whose base gained a new test",
+        f"{linear_ops.NOT_BEFORE}2026-10-21T09:00:00-07:00",
+    ])
+    def test_a_date_or_a_future_run_is_an_event(self, needs, capsys):
+        got = _held_sweep([_review_card(nodes=[_hold(needs, 25.5)])], capsys)
+        _wrote_nothing(got)
+        assert _held_line(got) == (
+            "held-proof: DRE-7001 not held for the operator — its hold waits on "
+            f"an event ({needs}), not the operator")
+
+    def test_every_event_wording_the_dispatcher_defines_reads_as_one(self):
+        for opening in proof_dispatch.EVENT_NEEDS:
+            needs = f"{opening}2026-10-21T09:00:00-07:00"
+            clock, _, why_not = reconcile._held_for_operator(
+                _review_card(nodes=[_hold(needs, 3.0)]))
+            assert clock is None
+            assert why_not == f"its hold waits on an event ({needs}), not the operator"
+
+    def test_an_event_hold_after_a_budget_hold_spends_nothing(self, capsys):
+        held = _hold(proof_dispatch.RERUN_EXHAUSTED_NEEDS, 25.5,
+                     observed=proof_dispatch.RERUN_EXHAUSTED_OBSERVED)
+        event = _hold(EVENT_NEEDS, 24.5)
+        got = _held_sweep([_review_card(nodes=[held, event])], capsys)
+        _alarmed_once(got, held)

@@ -11,9 +11,10 @@ actually created, read out of Linear, never the brief's text.
 
 DRE-2746 made it a PAIR: a `PROOF:` card and a `DEMO:` card, the epic's last
 two children. DRE-3669 halves it. The CEO decided on 2026-09-12 that there are
-no demo sittings — he reads the proof record and closes the proof card himself
-— so the record IS how he sees it, and a second card asking for a sitting is
-work nobody does.
+no demo sittings — the proof record is how he sees the work — and a second card
+asking for a sitting is work nobody does. Nor does he close the proof card: it
+closes on its approved, all-met record (DRE-5919), his decision of 2026-10-22
+(DRE-7773), so nothing on it asks him to read or close it.
 
   * **Proof** answers *did it work* — and it is not a green test suite. It is
     the mechanism observed running against real state, and the observation is
@@ -44,9 +45,12 @@ child out of the shape this checks.
      is a card the relay dispatches to a build agent the moment anything
      promotes it, and the thing that agent would build is the proof of its own
      siblings' work.
-  5. Its body carries `CLOSING_LINE` verbatim (DRE-3669), so the card itself
-     says who closes it and that nobody is owed a sitting. The decision only
-     holds if it is written where the person closing the card reads it.
+
+No fifth check. DRE-3669 refused a proof card whose body did not carry
+`CLOSING_LINE`, the sentence saying the CEO reads the record and closes the
+card. Since DRE-7773 the card closes on its approved, all-met record and names
+no person to close it, so the line is not required — and an older card still
+carrying it passes like any other.
 
 ## And the check WRITES the verdict it computed (DRE-3039)
 
@@ -139,10 +143,10 @@ DEMO_PREFIX = "DEMO:"
 _PROOF_TITLE = re.compile(r"^\s*proof:", re.IGNORECASE)
 _DEMO_TITLE = re.compile(r"^\s*demo:", re.IGNORECASE)
 
-# The sentence every proof card's body carries, verbatim (DRE-3669). The
-# decision that there is no demo sitting only holds if it is written where the
-# person closing the card reads it — a rule living in a brief is a rule the
-# next planner re-derives from a card it saw last month.
+# The sentence DRE-3669 required in every proof card's body, verbatim. Cards
+# filed before DRE-7773 still carry it; no check reads it now, because the card
+# closes on its approved, all-met record (DRE-5919) and names no person to
+# close it. Kept so the tests can still build an older card's body.
 CLOSING_LINE = (
     "The CEO reads this record and closes this card; there is no demo sitting."
 )
@@ -423,16 +427,6 @@ def findings(children: list, doc: dict | None = None) -> list:
     if problem:
         found.append(problem)
 
-    # 5 — the body says who closes it (DRE-3669).
-    if CLOSING_LINE not in (proof.get("body") or ""):
-        found.append(
-            f"{_ident(proof)}: the proof card's body does not carry the "
-            "closing line. Paste it verbatim, on its own line above the "
-            f"acceptance criteria: {CLOSING_LINE} The card has to say who "
-            "closes it, because the CEO reads the record instead of being "
-            "walked through it (his decision of 2026-09-12)."
-        )
-
     return found
 
 
@@ -525,9 +519,9 @@ def bounce_comment(epic: str, found: list) -> str:
         "",
         "**Proof** answers *did it work*, and it is not a green test suite: it "
         "is the mechanism observed running against real state, with the "
-        "observation recorded in the repo. That record is how the CEO sees "
-        "it — he reads it and closes the card himself, so there is no sitting "
-        "to arrange and **no second closing card to add** (his decision of "
+        "observation recorded in the repo. The card closes when that record "
+        "merges approved and all-met, so there is no sitting to arrange and "
+        "**no second closing card to add** (the CEO's decision of "
         "2026-09-12).",
         "",
         "It is the epic's **last child**, it is **blocked by every other "
@@ -535,9 +529,7 @@ def bounce_comment(epic: str, found: list) -> str:
         "fleet-buildable — "
         + " or ".join(confirming_verdicts())
         + " only, because the whole value is that something other than the "
-        "builder confirms it — and its body carries this line verbatim:",
-        "",
-        f"> {CLOSING_LINE}",
+        "builder confirms it — and it wears no build role.",
         "",
         "**What is missing:**",
         "",

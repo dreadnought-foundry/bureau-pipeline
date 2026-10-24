@@ -60,9 +60,37 @@ own, so two pull requests that each add a test merge without a conflict here,
 as `seconds` always did. `measure` replaces all three: every second it writes
 is from its own reports, so it starts `provenance` empty.
 
+THE NIGHTLY RE-MEASURES BEFORE THE FLOOR (DRE-7577). The record must carry
+seconds for 90% of the test files (`tests/test_unit_test_parts.py`), and every
+pull request that adds one moves the tree toward that floor; on 2026-10-18 a
+docs-only pull request failed on files others had added. `due` answers whether
+the record is under `REMEASURE_MARGIN`, a margin above the floor, and
+`refresh` rebuilds it from the nightly's own four part logs through `measure`.
+The walks run in no part, so `refresh` keeps each walk's seconds and
+`provenance` line as they were — `tests/test_walks_time_budget.py` reads both
+— and its `method` names the run and the jobs it measured. `tests.yml`'s
+schedule-only `durations-refresh` job asks `due`, and when it answers
+`refresh`, pushes the record alone to `bot/test-durations` and opens or
+updates that one pull request.
+
+A PART RED ONLY ON THE FLOOR IS STILL A MEASUREMENT (DRE-7726). The refresh
+needed every part green, and under the floor the part that runs
+`tests/test_unit_test_parts.py` fails on the floor itself — so once crossed,
+the refresh could never run again (part 4 of run 39315663679 on 2026-10-19:
+`5 failed, 6725 passed`, all five the tests below). `coverage-only` reads a
+red part's log and answers whether pytest finished and every test it failed
+is one of `COVERAGE_TESTS`. The job keeps a part that succeeded or failed,
+still needs all four, and measures a failed one only on that answer; its
+`method` then names the job as red only on the durations-coverage tests. A
+red part's log measures like a green one: a `FAILED` result line is timed
+like a `PASSED` one, and pytest's closing `FAILED <id>` lines do not match.
+
 Run: python3 scripts/unit_test_parts.py list --part 1 --of 4
      python3 scripts/unit_test_parts.py check <dir of part-*.txt manifests>
      python3 scripts/unit_test_parts.py run-walks
+     python3 scripts/unit_test_parts.py due
+     python3 scripts/unit_test_parts.py refresh part-*.log --run <run> --job <job>...
+     python3 scripts/unit_test_parts.py coverage-only part-*.log
 """
 from __future__ import annotations
 
@@ -77,6 +105,7 @@ import sys
 import time
 import xml.etree.ElementTree as ET
 from datetime import datetime
+from fractions import Fraction
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -323,6 +352,144 @@ def measure(reports: list[Path]) -> dict[str, float]:
     return {f: round(s, 2) for f, s in sorted(seconds.items())}
 
 
+#: Re-measure once fewer than this share of the test files carry recorded
+#: seconds — a margin above the 90% floor `tests/test_unit_test_parts.py`
+#: holds the record to (DRE-7577). The tree gains about 9 test files a day
+#: (770 on 2026-10-18, 779 on 2026-10-19), and 5% of 779 is about 39 files, so
+#: the margin trips about 39 files, roughly four days, before the floor: a
+#: nightly that is red or missed for a night or two still re-measures in time.
+REMEASURE_MARGIN = 0.95
+
+#: The start of the shared `method` sentence that says what a walk's seconds
+#: are. A refresh keeps the walks' seconds, so it keeps that sentence too.
+WALKS_SENTENCE = "every walk (tests/*_keeps_the_suite_green.py)"
+
+
+#: The durations-coverage tests (DRE-7726): the three test functions that
+#: fail, in every parametrization, when the record is under its 90% floor —
+#: and, measured on 2026-10-19, the only ones that do. A part red on these and
+#: nothing else ran every test it was handed, so its log is still a
+#: measurement. `tests/test_unit_test_parts.py` holds each name to a test
+#: function it defines, so a rename fails there rather than closing the
+#: refresh again.
+COVERAGE_TESTS = (
+    "tests/test_unit_test_parts.py::test_the_durations_record_covers_the_live_tree",
+    "tests/test_unit_test_parts.py::test_the_coverage_check_fails_under_ninety_percent",
+    "tests/test_unit_test_parts.py::test_the_coverage_check_fails_without_the_shared_method",
+)
+
+#: The runner's timestamp at the head of each line of a job log.
+_STAMP = re.compile(r"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d+)?Z ?")
+
+#: pytest's closing line: `==== 5 failed, 6725 passed in 1201.13s (0:20:01) ====`.
+_SUMMARY = re.compile(r"^=+ .+ in \d+(?:\.\d+)?s\b.*=+\s*$")
+
+#: A failed or errored node id: the short summary's `FAILED <id> - <why>`,
+#: or a `pytest -v` result line `<id> FAILED [ 50%]`. A parametrized id may
+#: hold spaces inside its brackets.
+_NODE = r"(?P<id>[^\s\[]+(?:\[[^\]]*\])?)"
+_OUTCOME_FIRST = re.compile(rf"^(?P<what>FAILED|ERROR) {_NODE}")
+_OUTCOME_LAST = re.compile(rf"^{_NODE} (?P<what>FAILED|ERROR)\b")
+
+
+def coverage_only(logs: list[Path]) -> str:
+    """Why these red part logs are NOT red only on the durations-coverage
+    tests, or "" when they are (DRE-7726).
+
+    Each log must carry pytest's closing summary line — a part canceled at
+    its clock never printed one, and did not run everything — and every test
+    it names `FAILED` must be one of `COVERAGE_TESTS`, its `[...]`
+    parametrization stripped. An `ERROR` (a fixture, a collection) is never
+    the floor, so any one refuses. The first problem is the answer."""
+    for log in logs:
+        text = log.read_text(encoding="utf-8", errors="replace")
+        lines = [_STAMP.sub("", line, count=1) for line in text.splitlines()]
+        for line in lines:
+            seen = _OUTCOME_FIRST.match(line) or _OUTCOME_LAST.match(line)
+            if not seen:
+                continue
+            node, what = seen.group("id"), seen.group("what")
+            if what == "ERROR":
+                return (f"{node} is ERROR in {log.name} — an error is never "
+                        f"the durations-coverage failure")
+            if node.split("[", 1)[0] not in COVERAGE_TESTS:
+                return (f"{node} FAILED in {log.name}, and it is not one of "
+                        f"the durations-coverage tests")
+        if not any(_SUMMARY.match(line) for line in lines):
+            return (f"{log.name} has no pytest summary line — the part did "
+                    f"not finish, so it ran less than its share")
+    return ""
+
+
+def coverage(record: dict, files: list[str]) -> tuple[int, int]:
+    """How many of `files` carry recorded seconds in `record`, and how many
+    files there are. Seconds for files the tree no longer has count for
+    nothing."""
+    seconds = record.get("seconds") or {}
+    return sum(1 for f in files if f in seconds), len(files)
+
+
+def remeasure_due(record: dict, files: list[str]) -> bool:
+    """THE decision: re-measure when fewer than `REMEASURE_MARGIN` of the
+    test files carry recorded seconds; at the margin or above, nothing to do.
+    Exact arithmetic, so a record at exactly 95% is never due by a rounding."""
+    measured, total = coverage(record, files)
+    return measured < Fraction(str(REMEASURE_MARGIN)) * total
+
+
+def coverage_line(record: dict, files: list[str]) -> str:
+    """The coverage `due` read, for a person: measured, total, percent."""
+    measured, total = coverage(record, files)
+    percent = 100.0 * measured / total if total else 100.0
+    where = ("under" if remeasure_due(record, files) else "at or above")
+    return (f"{measured} of {total} test files carry recorded seconds "
+            f"({percent:.1f}%), {where} the {REMEASURE_MARGIN:.0%} margin")
+
+
+def _and(names: list[str]) -> str:
+    return names[0] if len(names) == 1 else (
+        ", ".join(names[:-1]) + " and " + names[-1])
+
+
+def refresh(record: dict, logs: list[Path], run: str, jobs: list[str],
+            head: str | None = None,
+            coverage_failed: list[str] | None = None) -> dict:
+    """`record` re-measured from one CI run's part logs, through `measure`.
+
+    Every file the logs time takes their seconds, and its `provenance` line
+    goes: its seconds come from `method`'s run now. The walks run in no part,
+    so each walk keeps its `seconds` entry and its `provenance` line exactly
+    as they were, and `method` keeps the sentence saying what those seconds
+    are. `method` names the run and each job it read, and says every part
+    was green unless `coverage_failed` names jobs red only on the
+    durations-coverage tests (DRE-7726), which it then names."""
+    old_seconds = record.get("seconds") or {}
+    seconds = {f: s for f, s in measure(logs).items() if not is_walk(f)}
+    seconds.update({f: s for f, s in old_seconds.items() if is_walk(f)})
+    provenance = {f: line for f, line in (record.get("provenance") or {}).items()
+                  if is_walk(f)}
+    at_head = f", head {head[:7]}" if head else ""
+    if coverage_failed:
+        red = (f"{'job' if len(coverage_failed) == 1 else 'jobs'} "
+               f"{_and(list(coverage_failed))} red only on the "
+               f"durations-coverage tests (DRE-7726), every other part green")
+    else:
+        red = "every part green"
+    method = (
+        f"CI run {run} (the nightly on main{at_head}), "
+        f"{'job' if len(jobs) == 1 else 'jobs'} {_and(jobs)}: the suite in "
+        f"{len(jobs)} parts, {red}, re-measured by tests.yml's "
+        f"durations refresh (DRE-7577); seconds per file from the runner's "
+        f"timestamps on each pytest -v result line; the walks run in no part, "
+        f"so each keeps its seconds and its `provenance` line from the record "
+        f"before")
+    old_method = str(record.get("method") or "")
+    if WALKS_SENTENCE in old_method:
+        method += "; " + old_method[old_method.index(WALKS_SENTENCE):]
+    return {"method": method, "provenance": dict(sorted(provenance.items())),
+            "seconds": dict(sorted(seconds.items()))}
+
+
 def _took(seconds: float) -> str:
     minutes, secs = divmod(round(seconds), 60)
     return f"{minutes}m{secs:02d}s"
@@ -399,6 +566,33 @@ def main(argv: list[str] | None = None) -> int:
                                 "written as the record's `method` entry, and "
                                 "the `provenance` map starts empty")
 
+    p_due = sub.add_parser(
+        "due", help="is the durations record due a re-measure? first line "
+                    "`refresh` or `hold`, second line the coverage read")
+    p_due.add_argument("--root", type=Path, default=ROOT)
+    p_due.add_argument("--record", type=Path,
+                       help="the durations record (default: this tree's)")
+
+    p_refresh = sub.add_parser(
+        "refresh", help="re-measure the durations record from one CI run's "
+                        "part logs, keeping every walk's seconds and "
+                        "provenance; writes nothing that would still be due")
+    p_refresh.add_argument("logs", type=Path, nargs="+")
+    p_refresh.add_argument("--root", type=Path, default=ROOT)
+    p_refresh.add_argument("--run", required=True, help="the CI run id")
+    p_refresh.add_argument("--job", action="append", required=True,
+                           help="a part's job id, once per log")
+    p_refresh.add_argument("--head", help="the commit the run tested")
+    p_refresh.add_argument(
+        "--coverage-failed-job", action="append", default=[],
+        help="a part's job id that failed only on the durations-coverage "
+             "tests (`coverage-only` said so); once per such job")
+
+    p_only = sub.add_parser(
+        "coverage-only", help="exit 0 when every red part log finished and "
+                              "failed only on the durations-coverage tests")
+    p_only.add_argument("logs", type=Path, nargs="+")
+
     args = parser.parse_args(argv)
 
     if args.cmd == "list":
@@ -441,6 +635,51 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.cmd == "run-walks":
         return run_walks(args.root, args.only)
+
+    if args.cmd == "due":
+        path = args.record or DURATIONS
+        try:
+            record = json.loads(path.read_text(encoding="utf-8"))
+        except FileNotFoundError:
+            record = {}
+        files = discover(args.root)
+        print("refresh" if remeasure_due(record, files) else "hold")
+        print(coverage_line(record, files))
+        return 0
+
+    if args.cmd == "refresh":
+        if len(args.job) != len(args.logs):
+            print(f"unit_test_parts: {len(args.logs)} log(s) but "
+                  f"{len(args.job)} --job — name each part's job once",
+                  file=sys.stderr)
+            return 2
+        stray = [j for j in args.coverage_failed_job if j not in args.job]
+        if stray:
+            print(f"unit_test_parts: --coverage-failed-job {_and(stray)} is "
+                  f"not a --job this refresh reads", file=sys.stderr)
+            return 2
+        old = json.loads(DURATIONS.read_text(encoding="utf-8"))
+        new = refresh(old, args.logs, args.run, args.job, args.head,
+                      args.coverage_failed_job)
+        files = discover(args.root)
+        if remeasure_due(new, files):
+            print(f"unit_test_parts: the re-measured record would still be "
+                  f"due — {coverage_line(new, files)}; the logs measured too "
+                  f"little, so the record is left as it was", file=sys.stderr)
+            return 1
+        DURATIONS.write_text(json.dumps(new, indent=2) + "\n", encoding="utf-8")
+        print(f"wrote {len(new['seconds'])} file durations to {DURATIONS}: "
+              f"{coverage_line(new, files)}")
+        return 0
+
+    if args.cmd == "coverage-only":
+        why = coverage_only(args.logs)
+        if why:
+            print(why)
+            return 1
+        print(f"{len(args.logs)} red part log(s): red only on the "
+              f"durations-coverage tests")
+        return 0
 
     seconds = measure(args.reports)
     DURATIONS.write_text(json.dumps(

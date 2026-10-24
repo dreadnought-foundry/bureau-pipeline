@@ -116,6 +116,16 @@
 # the gate step), and every `pull_request`, `schedule` or `workflow_dispatch`
 # run keep the retry.
 #
+# ONE RESUME AFTER A DIAGNOSIS (DRE-7526, DRE-7793). The diagnosis agent also
+# writes the failure's class, one of the five in `medic_next_step.py`, and
+# the `diagnose` job decides the one step the class owes. `requeue-once` —
+# `transient-infrastructure`, an outside fault a fresh attempt would clear —
+# on the failed run's second attempt, with the retry gate not having said
+# `false`, re-runs the failed jobs once more instead of delivering the
+# report, which goes into this run's summary. Attempt 3's medic finds the
+# re-run spent, so it happens once per run. Every other step delivers the
+# diagnosis as before.
+#
 # Reusable workflow: the workflow_run trigger list (which workflows to watch)
 # lives in the calling stub — it can include product-specific CI workflows.
 name: Pipeline Medic (reusable)
@@ -209,7 +219,9 @@ jobs:
       # DRE-3171: was this a WALL rather than a death — the Claude account's
       # usage limit or Linear's request budget? `true` blocks the retry AND
       # the diagnosis: a rerun walks into the same wall, and the marker the
-      # step wrote already says what a diagnosis would.
+      # step wrote already says what a diagnosis would. Since DRE-7805 it is
+      # also `true` when the build marked its own wait, and it blocks every
+      # job whose card comment would close that marker.
       limit: ${{ steps.limit.outputs.limit }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -346,6 +358,18 @@ jobs:
       # Fail-open to `false`, out loud: every job here `needs: classify`, so
       # this step must never take the whole medic down — a classifier that
       # cannot run leaves the medic exactly as it was before this card.
+      #
+      # THE BUILD'S OWN WAIT IS ASKED FIRST (DRE-7805). A build killed by our
+      # own token renewal or a brief 529/5xx posts its `🪦 limit-death:`
+      # marker itself (DRE-7800) and still ends red, and its log shows neither
+      # a usage limit nor Linear's quota, so the classifier alone would read
+      # an ordinary death: a rerun now, then a diagnosis whose receipt closes
+      # the marker, and limit recovery would never bring the card back. So
+      # the card's thread is read once, before the classifier, and
+      # `medic_next_step.py waiting --run-id` (DRE-7792) asks whether a marker
+      # naming THIS run still stands. `waiting=true` is a limit death, the
+      # marker already written. Anything else — no card, an unreadable thread,
+      # a `waiting` that fails — goes on to the classifier as before.
       - name: Is this a limit death?
         id: limit
         env:
@@ -361,6 +385,40 @@ jobs:
         run: |
           ACCOUNT_FLAGS=()
           if [ -n "${CLAUDE_ACCOUNT:-}" ]; then ACCOUNT_FLAGS=(--account "$CLAUDE_ACCOUNT"); fi
+          # The card's thread, read ONCE for both questions this step asks of
+          # it — the build's own wait marker here, and the marker
+          # de-duplication below — against the card read the retry gate above
+          # already made (Stage 2 fix #23): it leaves that read in
+          # $RUNNER_TEMP, so this costs no second Linear request. The file is
+          # missing only when the gate's read failed open, and then this asks
+          # Linear itself, as it always did.
+          SNAPSHOT="$RUNNER_TEMP/medic-card.json"
+          COMMENTS=""
+          if [ -n "${CARD:-}" ]; then
+            if [ -s "$SNAPSHOT" ]; then
+              COMMENTS=$(cat "$SNAPSHOT")
+              THREAD="$SNAPSHOT"
+            else
+              COMMENTS=$(python3 .bureau-pipeline/scripts/linear_ops.py dump-comments "$CARD" 2>/dev/null) || COMMENTS=""
+              THREAD="$RUNNER_TEMP/medic-thread.json"
+              printf '%s' "$COMMENTS" > "$THREAD" || THREAD=""
+            fi
+            # `waiting` reads either shape off the file itself — the gate's
+            # snapshot object or the bodies array — so the path is handed over
+            # as it is, never reshaped here.
+            if [ -n "$COMMENTS" ] && [ -n "$THREAD" ]; then
+              if WAITING=$(python3 .bureau-pipeline/scripts/medic_next_step.py waiting \
+                   --comments-file "$THREAD" --run-id "$RUN_ID"); then
+                if [ "$WAITING" = "waiting=true" ]; then
+                  echo "limit=true" >> "$GITHUB_OUTPUT"
+                  echo "$CARD already carries this run's own wait marker (run $RUN_ID) — a wait, not a death: no retry, no diagnosis, nothing more written. Limit recovery brings the card back once the wait is over."
+                  exit 0
+                fi
+              else
+                echo "::warning::The medic could not ask whether $CARD already carries run $RUN_ID's own wait marker, so the failed log decides, as it did before DRE-7805."
+              fi
+            fi
+          fi
           FAILED_STEP=$(gh run view "$RUN_ID" --repo "$GITHUB_REPOSITORY" --json jobs \
             --jq '[.jobs[] | select(.conclusion=="failure") | .steps[] | select(.conclusion=="failure") | .name] | first // ""' \
             2>/dev/null) || FAILED_STEP=""
@@ -386,19 +444,8 @@ jobs:
             exit 0
           fi
           # EXACTLY ONE marker per run: a re-run attempt reuses the run id,
-          # and the classify job runs on every failed attempt.
-          #
-          # Against the card read the retry gate above already made (Stage 2
-          # fix #23): it leaves that read in $RUNNER_TEMP, so this check costs
-          # no second Linear request. The file is missing only when the gate's
-          # read failed open, and then this asks Linear itself, as it always
-          # did.
-          SNAPSHOT="$RUNNER_TEMP/medic-card.json"
-          if [ -s "$SNAPSHOT" ]; then
-            COMMENTS=$(cat "$SNAPSHOT")
-          else
-            COMMENTS=$(python3 .bureau-pipeline/scripts/linear_ops.py dump-comments "$CARD" 2>/dev/null) || COMMENTS=""
-          fi
+          # and the classify job runs on every failed attempt. Against the
+          # thread read above, before the classifier.
           if printf '%s' "$COMMENTS" | grep -qE "limit-death:.* run=${RUN_ID}([^0-9]|$)"; then
             echo "$CARD already carries the marker for run $RUN_ID — not posting a second"
             exit 0
@@ -512,6 +559,16 @@ jobs:
   # which is the complaint this card opens with: killed later, with nothing
   # recorded. The rule fires only when the card already carries an earlier
   # stall record, so it still says it once.
+  #
+  # …and NOT while the card waits out a limit (DRE-7805, `limit == 'true'`).
+  # The refusal carries the act trailer, and `limit_recovery.is_receipt`
+  # reads any comment that does as the pipeline superseding the
+  # `🪦 limit-death:` marker, so limit recovery would never bring the card
+  # back. The marker is the only thing a wait leaves on the card;
+  # `backoff` (a `🔌` note) and `environment_hold` (a trailered receipt)
+  # carry the same gate for the same reason, and
+  # tests/test_medic_reads_build_wait.py walks every card writer in this
+  # file to keep it so.
   retry_declined:
     needs: classify
     if: >
@@ -522,7 +579,8 @@ jobs:
       needs.classify.outputs.retry == 'false' &&
       needs.classify.outputs.rule != 'refused-by-design' &&
       needs.classify.outputs.rule != 'superseded-on-default' &&
-      needs.classify.outputs.card != ''
+      needs.classify.outputs.card != '' &&
+      needs.classify.outputs.limit != 'true'
     # The short lane, same as `classify` above (DRE-4276).
     runs-on: ${{ fromJSON(vars.BUREAU_SHORT_RUNS_ON || vars.BUREAU_RUNS_ON || '["ubuntu-latest"]') }}
     timeout-minutes: 5
@@ -663,12 +721,16 @@ jobs:
   # `reviewer_environment.CRITIC_UNAVAILABLE_MARKER` as one could-not-run
   # outcome, and that count is how a second repository's crash is seen at all.
   # The evidence note's first words are that same phrase, byte-identical.
+  #
+  # Not while the card waits out a limit: a `🔌` note closes the marker
+  # (DRE-7805 — see `retry_declined`).
   backoff:
     needs: classify
     if: >
       (github.event.workflow_run.conclusion == 'failure' || github.event.workflow_run.conclusion == 'timed_out') &&
       github.event.workflow_run.run_attempt == 1 &&
-      needs.classify.outputs.infra_crash == 'true'
+      needs.classify.outputs.infra_crash == 'true' &&
+      needs.classify.outputs.limit != 'true'
     # The short lane, same as `classify` above (DRE-4276).
     runs-on: ${{ fromJSON(vars.BUREAU_SHORT_RUNS_ON || vars.BUREAU_RUNS_ON || '["ubuntu-latest"]') }}
     timeout-minutes: 5
@@ -884,12 +946,16 @@ jobs:
   # because all six kinds of Claude-running job die of this and a receipt that
   # always said "reviewer" would misname five of them. No `--repo`/`--pr`: the
   # sha-bound PR counter is the sweep's, and the medic mirrors to the card.
+  #
+  # Not while the card waits out a limit: the hold's trailer closes the
+  # marker (DRE-7805 — see `retry_declined`).
   environment_hold:
     needs: classify
     if: >
       (github.event.workflow_run.conclusion == 'failure' || github.event.workflow_run.conclusion == 'timed_out') &&
       github.event.workflow_run.run_attempt >= 2 &&
-      needs.classify.outputs.class == 'environment_crash'
+      needs.classify.outputs.class == 'environment_crash' &&
+      needs.classify.outputs.limit != 'true'
     # The short lane, same as `classify` above (DRE-4276).
     runs-on: ${{ fromJSON(vars.BUREAU_SHORT_RUNS_ON || vars.BUREAU_RUNS_ON || '["ubuntu-latest"]') }}
     timeout-minutes: 5
@@ -1067,6 +1133,44 @@ jobs:
           echo "$OUT" >> "$GITHUB_OUTPUT"
           echo "$OUT"
 
+      # A WAITING CARD IS THE WAIT'S (DRE-7799). A card whose newest
+      # `🪦 limit-death:` marker still stands is waiting out a limit or a
+      # vendor refusal, and limit recovery re-enters the stage that died once
+      # the wait is over. Every comment the medic could write on it carries the
+      # act trailer or opens with `🩺`, and `limit_recovery.is_receipt` reads
+      # either as superseding the marker — so one diagnosis, one receipt, would
+      # leave the card never brought back. On `waiting == 'true'` the steps
+      # below post nothing to the card and move nothing: no diagnosis, no
+      # receipt, no move, and no re-run. The report goes to this run's step
+      # summary instead (`held`), and the next run's result is the one that
+      # counts.
+      #
+      # Only for a `card` target: a repair card and a console alert carry no
+      # limit marker. The whole thread, read once (`dump-comments`), through
+      # `medic_next_step.waiting`, which is `limit_recovery`'s own walk. A read
+      # that fails is `waiting=false`, so the medic acts as it would without
+      # this step. This gates the `diagnose` job only; the other jobs that
+      # write on a card are DRE-7805's, on the classify job's `limit` output.
+      - name: Is the card waiting?
+        id: waiting
+        if: steps.target.outputs.kind == 'card'
+        env:
+          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+          TARGET: ${{ steps.target.outputs.target }}
+        run: |
+          S=.bureau-pipeline/scripts
+          THREAD="${RUNNER_TEMP:-/tmp}/medic-waiting-thread.json"
+          WAITING=waiting=false
+          if [ -n "$TARGET" ] && python3 "$S/linear_ops.py" dump-comments "$TARGET" > "$THREAD"; then
+            WAITING=$(python3 "$S/medic_next_step.py" waiting --comments-file "$THREAD") \
+              || WAITING=waiting=false
+          else
+            echo "::warning title=Card thread not read::The thread of ${TARGET:-the card} could not be read, so the medic acts as if the card is not waiting."
+          fi
+          if [ "$WAITING" != waiting=true ]; then WAITING=waiting=false; fi
+          echo "$WAITING" >> "$GITHUB_OUTPUT"
+          echo "card thread read: ${WAITING}"
+
       # The model home (DRE-6939) is a variable on
       # dreadnought-foundry/bureau-pipeline, which a run's boot token in another
       # organization cannot read. A token for the bureau App's installation
@@ -1176,8 +1280,10 @@ jobs:
             standard (your report goes to the non-technical CEO).
 
             You are the pipeline medic for this repo. The workflow
-            "${{ github.event.workflow_run.name }}" failed twice (original run
-            + one automatic retry), so this is NOT a transient flake.
+            "${{ github.event.workflow_run.name }}" failed on its original
+            attempt and again on the medic's automatic retry. An outside
+            service failure can still be one a fresh attempt clears — that
+            is what the `transient-infrastructure` class in step 6 is for.
 
             Failed run: ${{ github.event.workflow_run.html_url }}
             Head branch: ${{ steps.safe.outputs.head_branch }}
@@ -1187,7 +1293,8 @@ jobs:
                (GH_TOKEN is in your env.)
             2. Diagnose the root cause. Distinguish: (a) bad code on the
                branch, (b) broken workflow/config, (c) external service
-               failure, (d) missing secret/permission.
+               failure, (d) missing secret/permission. Step 6 maps these
+               to the class you write.
             3. Report in PLAIN ENGLISH for a non-technical reader: what
                failed, why, and what kind of fix it needs (2-5 sentences).
                Include one line of precise technical detail at the end for
@@ -1200,7 +1307,7 @@ jobs:
                  `labels`, `title`, `description` and newest `comments` are
                  there for context.
                - "repair-card": the red-main repair card already open for
-                 this failure. Its `comments` may hold earlier diagnoses; if
+                 this failure. Its `comments` may carry earlier diagnoses; if
                  they do, open your report with "Failed again at <failed run
                  url>; diagnosis unchanged" or "...; diagnosis changed:" and
                  say what changed.
@@ -1214,7 +1321,196 @@ jobs:
             5. Write the report, and nothing else, to
                .bureau-pipeline/medic-report.md. Do not post it anywhere:
                the next step delivers it where the snapshot says.
+            6. Write the class of this failure, one word and nothing else,
+               to .bureau-pipeline/medic-verdict.txt:
+               - transient-infrastructure: category (c), an outside
+                 service, runner or network fault that a fresh attempt
+                 would clear.
+               - bad-card: the card as written cannot be built — what it
+                 asks for is contradictory, impossible or missing.
+               - bad-code: category (a), a defect on the branch that a
+                 change to the code would fix.
+               - platform-fault: categories (b) and (d), the pipeline's own
+                 workflow, config, secret or permission.
+               - unreadable: any doubt.
+               No file, or anything but one of those five words, reads as
+               unreadable. The medic re-runs a failed run at most once.
+            7. Write the question a person would be asked about this failure
+               to .bureau-pipeline/medic-question.json, on every diagnosis:
+               one JSON object with four keys, `finding`, `question`,
+               `recommendation` and `why`, each one plain-English line a
+               non-technical reader can answer — no code, no file paths, no
+               commands. `finding` is what failed and why; `question` is the
+               one decision it needs, naming who settles it: for a
+               platform-fault, the operator who fixes the pipeline; otherwise
+               whoever decides the card's next step. `recommendation` is your
+               answer to it, and `why` the reason. It is read only when the
+               diagnosis needs a person, and a line that is not plain is
+               replaced with fixed wording before anyone sees it.
             Do NOT attempt to fix anything — diagnose and report only.
+
+      # THE CLASS, THE STEP, AND ONE RESUME (DRE-7526, DRE-7793; weekly report
+      # DRE-7512 fix-3). Every diagnosis used to be delivered as
+      # `run-failure-diagnosed`, a hold whose next actor is the operator — 201
+      # stops in one week, even where the diagnosis itself said a fresh
+      # attempt would clear the fault. The agent writes one of the five
+      # classes (DRE-7792, `scripts/medic_next_step.py`), and this step reads
+      # it and decides the one step the class owes. Its outputs are `class`
+      # and `step`; DRE-7799 and DRE-7794 gate their steps on `step`.
+      #
+      # `decide` takes four facts. `--kind` is the target's kind: only a
+      # `card` has a step, and any other kind leaves `step` empty.
+      # `--resume-spent` unless this is attempt 2 and the retry gate did not
+      # say `false` — the resume step's own condition. `--has-open-pr` only
+      # when `card_pr.py find` exits 0 and its state is exactly OPEN: `find`
+      # counts MERGED too, and a merged pull request leaves the fix loop
+      # nothing to work on. A lookup that fails warns with its exit code and
+      # passes no flag. `--planning-spent` only for `bad-card`, read off the
+      # card's whole thread in Linear (`dump-comments`, then `planning-spent`)
+      # — not the snapshot, which sat in the agent's workspace. `true`,
+      # `unknown` or a read that fails all pass it, so an unread thread asks a
+      # person rather than sending the card round Planning again.
+      #
+      # `always()`, like the delivery: this step runs on every path the
+      # delivery runs on. An agent that did not succeed — the 60-turn cap,
+      # the job's timeout, any failure — or that left no report is
+      # `unreadable`, whatever its verdict file says, and the file is not
+      # read. A `read` or `decide` that fails on a `card` target is
+      # `unreadable` and `ask-person` too, so a `card` always leaves here
+      # with a step, and the step never fails the job.
+      #
+      # On `requeue-once` the next step re-runs the failed jobs of the same
+      # run — the `retry` job's command. The report goes into this run's step
+      # summary, naming attempt 3, and on a `card` target the diagnosis is
+      # also delivered on the card with the medic's receipt after it
+      # (DRE-7799); any other target is not delivered, as before. Only
+      # on attempt 2, so attempt 3 is as far as it goes: attempt 3's medic
+      # finds the re-run spent, and the medic cannot loop. Only when the retry
+      # gate did not say `false`, so its refusals (a parked card, turn
+      # exhaustion, an out-of-memory kill on a machine that cannot grow, a
+      # repeat stall) still hold; this job's own `if:` keeps every class and
+      # rule it skipped before. A rerun that will not start says so and
+      # leaves `resumed=false`, and the diagnosis is delivered as before.
+      # Every other step, and an empty one, is delivered as before. The resume
+      # step needs no `always()`: a dead agent's class is `unreadable`, so
+      # `requeue-once` never follows one. Nor does it start on a waiting card
+      # (DRE-7799, step `waiting`). Pinned by
+      # tests/test_medic_classifies_diagnosis.py, tests/test_medic_resume.py
+      # and tests/test_medic_acts_on_diagnosis.py.
+      - name: Read the diagnosis verdict
+        id: verdict
+        if: always()
+        env:
+          AGENT_OUTCOME: ${{ steps.claude.outcome }}
+          KIND: ${{ steps.target.outputs.kind }}
+          TARGET: ${{ steps.target.outputs.target }}
+          RUN_ATTEMPT: ${{ github.event.workflow_run.run_attempt }}
+          RETRY: ${{ needs.classify.outputs.retry }}
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+        run: |
+          S=.bureau-pipeline/scripts
+          CLASS=unreadable
+          if [ "$AGENT_OUTCOME" = success ] && [ -s .bureau-pipeline/medic-report.md ]; then
+            CLASS=$(python3 "$S/medic_next_step.py" read --file .bureau-pipeline/medic-verdict.txt) \
+              || CLASS=unreadable
+            if [ -z "$CLASS" ]; then CLASS=unreadable; fi
+          else
+            echo "the diagnosis agent's outcome is '${AGENT_OUTCOME}' or it left no report, so its class is unreadable"
+          fi
+
+          FLAGS=()
+          if [ "$RUN_ATTEMPT" != 2 ] || [ "$RETRY" = false ]; then
+            FLAGS+=(--resume-spent)
+          fi
+          if [ "$KIND" = card ] && [ -n "$TARGET" ]; then
+            RC=0
+            FOUND=$(python3 "$S/card_pr.py" find "$TARGET" --repo "$REPO") || RC=$?
+            FIRST=${FOUND%%$'\n'*}
+            if [ "$RC" -ne 0 ]; then
+              echo "::warning title=Pull request not read::card_pr.py find exited ${RC} for ${TARGET}, so the medic decides as if the card has no open pull request."
+            elif [ "${FIRST%%$'\t'*}" = OPEN ]; then
+              FLAGS+=(--has-open-pr)
+            fi
+            if [ "$CLASS" = bad-card ]; then
+              THREAD="${RUNNER_TEMP:-/tmp}/medic-card-thread.json"
+              SPENT=planning_spent=unknown
+              if python3 "$S/linear_ops.py" dump-comments "$TARGET" > "$THREAD"; then
+                SPENT=$(python3 "$S/medic_next_step.py" planning-spent --comments-file "$THREAD") \
+                  || SPENT=planning_spent=unknown
+              fi
+              echo "card thread read: ${SPENT}"
+              if [ "$SPENT" != planning_spent=false ]; then
+                FLAGS+=(--planning-spent)
+              fi
+            fi
+          fi
+
+          STEP=""
+          if DECIDED=$(python3 "$S/medic_next_step.py" decide --class "$CLASS" --kind "$KIND" "${FLAGS[@]}"); then
+            STEP=$(printf '%s\n' "$DECIDED" | sed -n 's/^step=//p')
+            if [ "$STEP" = none ]; then STEP=""; fi
+            printf '%s\n' "$DECIDED"
+          else
+            echo "::warning title=Next step not decided::medic_next_step.py decide failed for class ${CLASS}, so the diagnosis is read as unreadable."
+          fi
+          if [ "$KIND" = card ] && [ -z "$STEP" ]; then
+            CLASS=unreadable
+            STEP=ask-person
+          fi
+          echo "class=$CLASS" >> "$GITHUB_OUTPUT"
+          echo "step=$STEP" >> "$GITHUB_OUTPUT"
+          echo "diagnosis class: $CLASS, step: ${STEP:-none}"
+
+      - name: Resume the failed run once
+        id: resume
+        if: >
+          github.event.workflow_run.run_attempt == 2 &&
+          needs.classify.outputs.retry != 'false' &&
+          steps.verdict.outputs.step == 'requeue-once' &&
+          steps.waiting.outputs.waiting != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_ID: ${{ github.event.workflow_run.id }}
+          RUN_ATTEMPT: ${{ github.event.workflow_run.run_attempt }}
+          # env, not inline (DRE-1996): the run name is agent-influenced text.
+          RUN_URL: ${{ github.event.workflow_run.html_url }}
+          FAILED_WORKFLOW: ${{ github.event.workflow_run.name }}
+          REPO: ${{ github.repository }}
+        run: |
+          if ! gh run rerun "$RUN_ID" --failed --repo "$REPO"; then
+            echo "::warning title=Resume not started::The diagnosis said a fresh attempt would clear the fault, but the failed jobs of ${FAILED_WORKFLOW} could not be re-run, so the diagnosis is delivered instead. Failed run: ${RUN_URL}"
+            echo "resumed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "resumed=true" >> "$GITHUB_OUTPUT"
+          python3 .bureau-pipeline/scripts/medic_resume.py summary \
+            --report .bureau-pipeline/medic-report.md --attempt "$RUN_ATTEMPT" \
+            --run-url "$RUN_URL" --workflow "$FAILED_WORKFLOW" >> "$GITHUB_STEP_SUMMARY" \
+            || echo "::warning title=Resume not summarized::${FAILED_WORKFLOW} was re-run, but the report could not be written to this run's summary. Failed run: ${RUN_URL}"
+
+      # THE REPORT, KEPT OFF A WAITING CARD (DRE-7799). Step `waiting` read
+      # the card's newest limit-death marker as standing, so nothing below
+      # writes on it. The report goes to this run's step summary through
+      # `medic_resume.py summary --waiting`, under one notice naming the card
+      # and its wait. `always()`: a report written before the agent died is
+      # still a report, as for the delivery.
+      - name: Keep the diagnosis off a waiting card
+        id: held
+        if: always() && steps.waiting.outputs.waiting == 'true'
+        env:
+          TARGET: ${{ steps.target.outputs.target }}
+          RUN_ATTEMPT: ${{ github.event.workflow_run.run_attempt }}
+          # env, not inline (DRE-1996): the run name is agent-influenced text.
+          RUN_URL: ${{ github.event.workflow_run.html_url }}
+          FAILED_WORKFLOW: ${{ github.event.workflow_run.name }}
+        run: |
+          echo "::notice title=Card is waiting::${TARGET}'s newest limit-death marker still stands, so the medic posted nothing on it, moved nothing and started no re-run. Limit recovery brings the card back once the wait is over. Failed run: ${RUN_URL}"
+          python3 .bureau-pipeline/scripts/medic_resume.py summary \
+            --report .bureau-pipeline/medic-report.md --attempt "$RUN_ATTEMPT" \
+            --run-url "$RUN_URL" --workflow "$FAILED_WORKFLOW" --waiting "$TARGET" >> "$GITHUB_STEP_SUMMARY" \
+            || echo "::warning title=Diagnosis not summarized::The report could not be written to this run's summary. Failed run: ${RUN_URL}"
 
       # THE REPORT, DELIVERED (Stage 2 fix #23). What the agent used to do with
       # the fleet's Linear key, done here with it, by a script: a comment on
@@ -1255,10 +1551,18 @@ jobs:
       # `always()`: a report written before the agent died is still a report.
       # The file decides, not the agent's outcome. Every write warns rather
       # than fails, like the medic's other notes: a red medic run is an
-      # operator email about a failure already being reported.
+      # operator email about a failure already being reported. Skipped when
+      # the step above resumed the run of a target that is not a `card`
+      # (DRE-7526): a resumed `card` is delivered too, with the medic's
+      # receipt after it, through this one call rather than a copy of it
+      # (DRE-7799) — `pipeline_act.py check` fails an anchor found any other
+      # number of times. Never on a waiting card (step `waiting`).
       - name: Deliver the diagnosis
         id: deliver
-        if: always()
+        if: >
+          always() &&
+          steps.waiting.outputs.waiting != 'true' &&
+          (steps.resume.outputs.resumed != 'true' || steps.target.outputs.kind == 'card')
         env:
           LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
           KIND: ${{ steps.target.outputs.kind }}
@@ -1315,6 +1619,198 @@ jobs:
             python3 .bureau-pipeline/scripts/linear_ops.py comment "$TARGET" "$(cat "$REPORT")" --act=run-failure-diagnosed \
               || echo "::warning title=Diagnosis not posted::The diagnosis could not be posted on ${TARGET}. Failed run: ${RUN_URL}"
           fi
+
+      # SEND-TO-PLANNING (DRE-7799): the card as written cannot be built, so
+      # once the diagnosis is delivered the card goes back to Planning to be
+      # planned again. The from-lanes are `medic_next_step.py from-lanes`
+      # (DRE-7792) — the start lanes, the queue lane and In Review, the lanes a
+      # card with a failed pipeline run sits in — never computed here and
+      # never an output of this step: DRE-7794's Green Light move calls the
+      # same command. `advance` exits 0 whether or not it writes and prints
+      # `<card> → Planning` only when it does, so that line is `moved=yes`;
+      # anything else — a card in a lane the medic does not move from, or a
+      # call that failed — is `moved=no`, and the receipt says the card was
+      # not moved. At most once per card: the receipt of a landed move is what
+      # `medic_next_step.planning_spent` counts, and the verdict step asks a
+      # person on the next `bad-card` instead (DRE-7793).
+      #
+      # `always()`: a step with no status function is skipped once an earlier
+      # step failed, and the diagnosis agent is the step most likely to.
+      - name: Send the card back to Planning
+        id: planning
+        if: >
+          always() &&
+          steps.target.outputs.kind == 'card' &&
+          steps.verdict.outputs.step == 'send-to-planning' &&
+          steps.waiting.outputs.waiting != 'true'
+        env:
+          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+          TARGET: ${{ steps.target.outputs.target }}
+          RUN_URL: ${{ github.event.workflow_run.html_url }}
+        run: |
+          MOVED=no
+          FROM_LANES=$(python3 .bureau-pipeline/scripts/medic_next_step.py from-lanes) || true
+          if [ -z "$FROM_LANES" ]; then
+            echo "::warning title=Card not sent to Planning::The lanes the medic moves a card out of could not be read, so ${TARGET} was not moved. Failed run: ${RUN_URL}"
+          elif OUT=$(python3 .bureau-pipeline/scripts/linear_ops.py advance "$TARGET" "Planning" "$FROM_LANES"); then
+            printf '%s\n' "$OUT"
+            if printf '%s\n' "$OUT" | grep -qxF "$TARGET → Planning"; then MOVED=yes; fi
+          else
+            echo "::warning title=Card not sent to Planning::The move of ${TARGET} to Planning failed. Failed run: ${RUN_URL}"
+          fi
+          echo "moved=$MOVED" >> "$GITHUB_OUTPUT"
+
+      # ASK-PERSON (DRE-7794): a diagnosis only a person can settle — a
+      # `platform-fault`, an `unreadable` one (a diagnosis agent that died or
+      # wrote no report reads `unreadable`), or a step whose fallback applies —
+      # parks the card in Green Light with a stated question, never a bare
+      # comment. The question is the `🙋` receipt line, then the three lines
+      # `medic_next_step.py question` prints (DRE-7792), then the failed run.
+      # The step composes no line of its own: `question` reads the agent's
+      # `.bureau-pipeline/medic-question.json` through
+      # `planning_escalation.refusal`, line by line, and puts the fixed wording
+      # in place of a line it refuses, of a blank one, or of a file that is
+      # missing or unparseable — the agent read untrusted logs and card text,
+      # so its words are never posted unguarded. With no report the Finding
+      # says no diagnosis was written, and the question, which then carries
+      # the failed run, is the card's whole record of the failure.
+      #
+      # The question is posted before the move, and through no act: it asks
+      # rather than announces (`config/pipeline-acts.json`'s `unconverted`
+      # block). The move is `advance` from `medic_next_step.py from-lanes`,
+      # the command the Planning move above calls. A question that could not
+      # be rendered posts nothing, and one that could not be posted moves
+      # nothing — a Green Light row with no question is the failure, and a
+      # `🙋` line with no three lines under it is no question. `moved` is
+      # `true` only when `advance` printed `<card> → Green Light`; the
+      # `receipt` step below reads it and writes ` moved=no` otherwise. `green_light_rows.py check` reads this shell,
+      # where it runs, for the receipt line and the post before the write.
+      #
+      # `always()`: a diagnosis agent that died is the card most in need of
+      # asking about, and a step with no status function is skipped once an
+      # earlier step failed. Never on a waiting card (step `waiting`).
+      - name: Ask a person about the diagnosis
+        id: ask
+        if: >
+          always() &&
+          steps.target.outputs.kind == 'card' &&
+          steps.verdict.outputs.step == 'ask-person' &&
+          steps.waiting.outputs.waiting != 'true'
+        env:
+          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+          TARGET: ${{ steps.target.outputs.target }}
+          RUN_URL: ${{ github.event.workflow_run.html_url }}
+        run: |
+          MOVED=false
+          RENDERED=true
+          {
+            echo "🙋 The medic diagnosed a failure only a person can settle, and asks:"
+            echo ""
+            python3 .bureau-pipeline/scripts/medic_next_step.py question --file .bureau-pipeline/medic-question.json --report .bureau-pipeline/medic-report.md \
+              || RENDERED=false
+            echo ""
+            echo "The failed run: $RUN_URL"
+          } > "$RUNNER_TEMP/medic-ask-comment.md"
+          FROM_LANES=$(python3 .bureau-pipeline/scripts/medic_next_step.py from-lanes) || true
+          if [ "$RENDERED" != true ]; then
+            echo "::warning title=Medic question not rendered::The three lines for ${TARGET} could not be rendered, so no question was posted and the card was not moved to Green Light. Failed run: ${RUN_URL}"
+          elif ! python3 .bureau-pipeline/scripts/linear_ops.py comment "$TARGET" "$(cat "$RUNNER_TEMP/medic-ask-comment.md")"; then
+            echo "::warning title=Medic question not posted::The medic's question could not be posted on ${TARGET}, so the card was not moved to Green Light. Failed run: ${RUN_URL}"
+          elif [ -z "$FROM_LANES" ]; then
+            echo "::warning title=Card not moved to Green Light::The lanes the medic moves a card out of could not be read, so ${TARGET} was not moved. Failed run: ${RUN_URL}"
+          elif OUT=$(python3 .bureau-pipeline/scripts/linear_ops.py advance "$TARGET" "Green Light" "$FROM_LANES"); then
+            printf '%s\n' "$OUT"
+            if printf '%s\n' "$OUT" | grep -qxF "$TARGET → Green Light"; then MOVED=true; fi
+          else
+            echo "::warning title=Card not moved to Green Light::The move of ${TARGET} to Green Light failed. Failed run: ${RUN_URL}"
+          fi
+          echo "moved=$MOVED" >> "$GITHUB_OUTPUT"
+
+      # THE MEDIC'S RECEIPT (DRE-7799): one comment, once per diagnose run,
+      # beside the diagnosis, saying which step the medic took. It is
+      # `medic_next_step.receipt` (DRE-7792), posted under the
+      # `medic-next-step` act from this one call. Its first line is
+      # `🩺 medic-next-step: class=<class> step=<step> run=<run id>`, ending
+      # ` moved=no` when the step's move did not land: a re-run that would not
+      # start (`resumed` is not `true`), or a move to Planning that did not
+      # write (`moved` is not `yes`). agent-bureau's weekly report reads that
+      # line, and a ` moved=no` credits the medic with no step.
+      #
+      # A ` moved=no` receipt names the lane the card was left in, read here
+      # with one `state-of` — a fresh read that writes nothing — whatever the
+      # step; a read that fails or prints nothing is `unknown`, and the receipt
+      # still posts. A plain receipt makes no read. The finding is
+      # `medic_next_step.py finding` over the report. `fix-path` moves nothing
+      # by design: its receipt names the open pull request and the two routes
+      # by which the fix loop already reaches a red agent pull request.
+      #
+      # Only for a `card` target that is not waiting, and for every step: the
+      # three whose move DRE-7799 made, and `ask-person`, whose park in Green
+      # Light is the `ask` step above (DRE-7794) — a move to Green Light that
+      # did not land (`moved` is not `true`) is ` moved=no`. This is the one
+      # receipt for the park too, never a second write: `pipeline_act.py
+      # check` fails the act's anchor found any other number of times.
+      # `always()`, for the reason the move above gives. A write that fails
+      # warns, as the medic's other notes do.
+      - name: Write the medic's receipt
+        id: receipt
+        if: >
+          always() &&
+          steps.target.outputs.kind == 'card' &&
+          (steps.verdict.outputs.step == 'requeue-once' ||
+           steps.verdict.outputs.step == 'send-to-planning' ||
+           steps.verdict.outputs.step == 'fix-path' ||
+           steps.verdict.outputs.step == 'ask-person') &&
+          steps.waiting.outputs.waiting != 'true'
+        env:
+          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          TARGET: ${{ steps.target.outputs.target }}
+          CLASS: ${{ steps.verdict.outputs.class }}
+          STEP: ${{ steps.verdict.outputs.step }}
+          RESUMED: ${{ steps.resume.outputs.resumed }}
+          PLANNING_MOVED: ${{ steps.planning.outputs.moved }}
+          ASK_MOVED: ${{ steps.ask.outputs.moved }}
+          RUN_URL: ${{ github.event.workflow_run.html_url }}
+        run: |
+          S=.bureau-pipeline/scripts
+          REPORT=.bureau-pipeline/medic-report.md
+          MOVED=yes
+          REASON=""
+          case "$STEP" in
+            requeue-once)
+              if [ "$RESUMED" != true ]; then MOVED=no; fi ;;
+            send-to-planning)
+              if [ "$PLANNING_MOVED" != yes ]; then MOVED=no; fi
+              REASON="the planner reads the finding below to see why the card cannot be built as written." ;;
+            fix-path)
+              PR_URL=""
+              if FOUND=$(python3 "$S/card_pr.py" find "$TARGET" --repo "$REPO"); then
+                FIRST=${FOUND%%$'\n'*}
+                PR_URL=${FIRST#*$'\t'}
+              fi
+              REASON="the card has an open pull request, ${PR_URL:-which the medic could not read back}, and the fix loop already reaches a red agent pull request two ways: the fix agent (agent-fix.yml) is dispatched when the critic asks for changes or the verifier fails the pull request, and the sweep dispatches a fix for a pull request the critic approved whose checks are red (reconcile.fix_approved_but_red)." ;;
+            ask-person)
+              if [ "$ASK_MOVED" != true ]; then MOVED=no; fi
+              REASON="the question posted just before this receipt asks a person to settle it." ;;
+          esac
+          NOT_MOVED=()
+          if [ "$MOVED" = no ]; then
+            LANE=$(python3 "$S/linear_ops.py" state-of "$TARGET") || LANE=""
+            LANE=${LANE%%$'\n'*}
+            if [ -z "$LANE" ]; then LANE=unknown; fi
+            NOT_MOVED=(--moved-no --lane "$LANE")
+          fi
+          FINDING=$(python3 "$S/medic_next_step.py" finding --report "$REPORT") || FINDING=""
+          if ! RECEIPT=$(python3 "$S/medic_next_step.py" receipt --class "$CLASS" --step "$STEP" \
+              --run-url "$RUN_URL" --report "$REPORT" --finding "$FINDING" --reason "$REASON" \
+              "${NOT_MOVED[@]}"); then
+            echo "::warning title=Medic receipt not written::The medic's receipt for ${STEP} could not be rendered, so none was posted on ${TARGET}. Failed run: ${RUN_URL}"
+            exit 0
+          fi
+          python3 .bureau-pipeline/scripts/linear_ops.py comment "$TARGET" "$RECEIPT" --act=medic-next-step \
+            || echo "::warning title=Medic receipt not posted::The medic's receipt for ${STEP} could not be posted on ${TARGET}. Failed run: ${RUN_URL}"
 
       # THE RUN'S OWN DEATH-CAUSE RECEIPT (DRE-4340). 69 of the fleet's 1,310
       # failures over 22 days — $97 of model work — could not be attributed to

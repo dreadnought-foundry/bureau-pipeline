@@ -229,6 +229,9 @@ jobs:
     outputs:
       mode: ${{ steps.route.outputs.mode }}
       kids: ${{ steps.kids.outputs.count }}
+      # DRE-7624: `true` when the planner wrote a reason file — it escalated,
+      # wrote no artifact, and `publish` has nothing to publish.
+      escalated: ${{ steps.escalated.outputs.escalated }}
       # DRE-5299: `true` when a review-mode re-plan's revision passed the
       # plan's own gates and its artifact was uploaded for `publish`; read by
       # that job's `if:` and by nothing else.
@@ -1210,6 +1213,14 @@ jobs:
           CARD: ${{ github.event.client_payload.identifier }}
           LINEAR_API_KEY: ${{ secrets.LINEAR_PLANNER_KEY || secrets.LINEAR_API_KEY }}
           LINEAR_API_KEY_FALLBACK: ${{ secrets.LINEAR_API_KEY }}
+          # The three readings `plan_held_repo.py` hands `sweep_holds.read`
+          # (DRE-7753), each the caller's own value threaded verbatim: its
+          # max_wip input (DRE-2529), its BUREAU_MAX_WIP variable (DRE-6631)
+          # and its INTAKE_HOLD variable, the one its groomer stub passes
+          # (DRE-3285). `vars` is the caller's in a reusable.
+          MAX_WIP: ${{ inputs.max_wip }}
+          BUREAU_MAX_WIP: ${{ vars.BUREAU_MAX_WIP }}
+          INTAKE_HOLD: ${{ vars.INTAKE_HOLD }}
         run: |
           python3 .bureau-pipeline/scripts/assemble_context.py assemble planner \
             > .bureau-pipeline/agent-context.md
@@ -1217,6 +1228,14 @@ jobs:
           grep -E '^(LEDGER|MULCH) STATUS:' .bureau-pipeline/agent-context.md || echo "no LEDGER STATUS: or MULCH STATUS: line in the assembled context"
           python3 .bureau-pipeline/scripts/spoken_thread.py people "$CARD" >> .bureau-pipeline/agent-context.md
           grep -E '^SPOKEN STATUS:' .bureau-pipeline/agent-context.md || echo "no SPOKEN STATUS: line in the assembled context"
+          # This plan's own repo's holds (DRE-7753), read from the caller's
+          # checkout at $GITHUB_WORKSPACE through `sweep_holds.read` — the
+          # same reading the first critic's held-repo check makes, so the
+          # paragraph it asks for is the one the planner was handed. Before
+          # the bound block, which the planner reads last.
+          python3 .bureau-pipeline/scripts/plan_held_repo.py context >> .bureau-pipeline/agent-context.md \
+            || echo "REPO HOLDS: UNKNOWN — plan_held_repo.py context exited non-zero, so the repo's holds were not appended" >> .bureau-pipeline/agent-context.md
+          grep -E '^REPO HOLDS:' .bureau-pipeline/agent-context.md || echo "no REPO HOLDS: line in the assembled context"
           python3 .bureau-pipeline/scripts/plan_bound.py context "$CARD" >> .bureau-pipeline/agent-context.md \
             || echo "BOUND STATUS: UNKNOWN — plan_bound.py context exited non-zero, so the bound findings were not appended" >> .bureau-pipeline/agent-context.md
           grep -E '^BOUND STATUS:' .bureau-pipeline/agent-context.md || echo "no BOUND STATUS: line in the assembled context"
@@ -1593,6 +1612,7 @@ jobs:
             --escalation-file "${{ runner.temp }}/one-off-escalation.txt" \
             --execution-file "$EXEC_FILE" \
             --ceiling "${{ steps.ooturns.outputs.max_turns }}" \
+            --run-id "${{ github.run_id }}" \
             < "${{ runner.temp }}/one-off-thread.json"
           # The note the person reads, then the round record ALONE in its own
           # comment — the record is only a credential while nothing else can be
@@ -1643,6 +1663,60 @@ jobs:
           # (`plan_critic._sole_record`).
           python3 .bureau-pipeline/scripts/linear_ops.py comment "$CARD" \
             "$(cat "${{ runner.temp }}/one-off-ran-out-record.txt")"
+
+      # --- A critic that decided nothing is read ONCE more (DRE-7491) --------
+      #
+      # DRE-2498, 2026-10-13: round 2's result file was empty (run
+      # 38424453807), the card went to the CEO asking "Re-run the review, or
+      # settle the card yourself?", and the next read passed it. A re-run
+      # would have reached that pass without him. So a FIRST no-result —
+      # never reached, or out of turns — is `rerun`: the card stays in
+      # Planning and a fresh planning run reads it again, as it stands. The
+      # decision reads "first" off the card's own round records, so the
+      # second in a row is `escalate` and names both runs, and the loop
+      # limit is the escalation itself: Green Light is a lane only a person
+      # leaves. Posted AFTER the tombstone above, because the re-run's
+      # ceiling is sized from it (DRE-4381) and must be on the card before
+      # the next run reads it.
+      #
+      # Q1/Q2/Q3/Q5 (standards/vendor-boundaries.md): the same answers as the
+      # revision's re-read below, for the same dispatch — a re-minted pool
+      # token (DRE-3940),
+      # `agent-plan` by name, fired for the lane the card stays in, and the
+      # receipt hangs off the dispatch's exit status, red when it fails.
+      - name: Re-mint bot token — one-off no-result re-read
+        id: app_oorerun
+        if: steps.oneoff.outputs.action == 'rerun'
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: >-
+            ${{ steps.pool.outputs.n == '2' && secrets.BUREAU_APP_ID_2
+             || steps.pool.outputs.n == '3' && secrets.BUREAU_APP_ID_3
+             || steps.pool.outputs.n == '4' && secrets.BUREAU_APP_ID_4
+             || secrets.BUREAU_APP_ID }}
+          private-key: >-
+            ${{ steps.pool.outputs.n == '2' && secrets.BUREAU_APP_PRIVATE_KEY_2
+             || steps.pool.outputs.n == '3' && secrets.BUREAU_APP_PRIVATE_KEY_3
+             || steps.pool.outputs.n == '4' && secrets.BUREAU_APP_PRIVATE_KEY_4
+             || secrets.BUREAU_APP_PRIVATE_KEY }}
+
+      - name: One-off critic — read it again after no result
+        if: steps.oneoff.outputs.action == 'rerun'
+        env:
+          LINEAR_API_KEY: ${{ secrets.LINEAR_PLANNER_KEY || secrets.LINEAR_API_KEY }}
+          LINEAR_API_KEY_FALLBACK: ${{ secrets.LINEAR_API_KEY }}
+          GH_TOKEN: ${{ steps.app_oorerun.outputs.token }}
+        run: |
+          CARD="${{ github.event.client_payload.identifier }}"
+          if ! python3 .bureau-pipeline/scripts/review_rerun.py dispatch \
+               --epic "$CARD" \
+               --repo "$GITHUB_REPOSITORY" \
+               --reason one-off-rerun \
+               --route plan; then
+            python3 .bureau-pipeline/scripts/linear_ops.py comment "$CARD" \
+              "🚨 The critic's second read of this card could NOT be started — the dispatch did not go through, so nothing is running and the card is still in Planning. This run is red, so the medic picks it up."
+            exit 1
+          fi
 
       # --- A send-back goes back to the PLANNER (DRE-5376) ------------------
       #
@@ -1925,7 +1999,8 @@ jobs:
       #
       # Since DRE-5376 it is the ONLY way a one-off reaches Green Light, and it
       # carries a question: the critic's (`escalate`, which also covers a
-      # critic that decided nothing — still never a pass), or the planner's own
+      # critic that decided nothing twice in a row, DRE-7491 — still never a
+      # pass; the first is `rerun` above), or the planner's own
       # while revising (`asked`). Both wrote the same reason file. A send-back
       # is the planner's and the bound is the operator's, so neither is here —
       # tests/test_plan_critic_one_off_revise.py derives these gates from the
@@ -2199,21 +2274,18 @@ jobs:
                card never promotes with the epic.
             3c. EVERY epic's LAST child is a `PROOF: <…>` card — always, not
                when it feels warranted, and it is the ONLY closing card (the
-               CEO decided on 2026-09-12 that he reads the proof record and
-               closes the card himself, so there is no sitting to arrange and
-               no second closing card to file). Proof answers "did it work"
-               and is NOT a green test suite: it is the mechanism observed
-               running against real state, with the observation recorded in
-               the repo. Create it last, give it a `**Blocked by:**` line
-               naming EVERY other child (so the relations, not the ordering,
-               hold it), and make sure it is not fleet-buildable — write
-               acceptance criteria naming the live observation, or add
-               `--label no-code` for work an operator runs. Its body carries
-               this line VERBATIM, on its own line above the acceptance
-               criteria, and the check refuses the card without it:
-                 The CEO reads this record and closes this card; there is no demo sitting.
-               Its criteria say the CEO closes it after reading the record,
-               never that he has said so at a sitting.
+               CEO decided on 2026-09-12 that there is no demo sitting, so
+               there is no second closing card to file). Proof answers "did
+               it work" and is NOT a green test suite: it is the mechanism
+               observed running against real state, with the observation
+               recorded in the repo. Create it last, give it a `**Blocked by:**`
+               line naming EVERY other child (so the relations, not the
+               ordering, hold it), and make sure it is not fleet-buildable —
+               write acceptance criteria naming the live observation, or add
+               `--label no-code` for work an operator runs. The card closes on
+               its approved all-met record (DRE-5919) and names no person to
+               close it, so it carries no criterion about merging, reading or
+               closing the record (DRE-7773) — and none about a sitting.
                IT WEARS NO BUILD ROLE (DRE-3039): create it with
                `--label agent:ops` and drop the role `subissue` inherits
                (`linear_ops.py remove-label <CARD> agent:engineer`), because a
@@ -2462,21 +2534,18 @@ jobs:
                card never promotes with the epic.
             3c. EVERY epic's LAST child is a `PROOF: <…>` card — always, not
                when it feels warranted, and it is the ONLY closing card (the
-               CEO decided on 2026-09-12 that he reads the proof record and
-               closes the card himself, so there is no sitting to arrange and
-               no second closing card to file). Proof answers "did it work"
-               and is NOT a green test suite: it is the mechanism observed
-               running against real state, with the observation recorded in
-               the repo. Create it last, give it a `**Blocked by:**` line
-               naming EVERY other child (so the relations, not the ordering,
-               hold it), and make sure it is not fleet-buildable — write
-               acceptance criteria naming the live observation, or add
-               `--label no-code` for work an operator runs. Its body carries
-               this line VERBATIM, on its own line above the acceptance
-               criteria, and the check refuses the card without it:
-                 The CEO reads this record and closes this card; there is no demo sitting.
-               Its criteria say the CEO closes it after reading the record,
-               never that he has said so at a sitting.
+               CEO decided on 2026-09-12 that there is no demo sitting, so
+               there is no second closing card to file). Proof answers "did
+               it work" and is NOT a green test suite: it is the mechanism
+               observed running against real state, with the observation
+               recorded in the repo. Create it last, give it a `**Blocked by:**`
+               line naming EVERY other child (so the relations, not the
+               ordering, hold it), and make sure it is not fleet-buildable —
+               write acceptance criteria naming the live observation, or add
+               `--label no-code` for work an operator runs. The card closes on
+               its approved all-met record (DRE-5919) and names no person to
+               close it, so it carries no criterion about merging, reading or
+               closing the record (DRE-7773) — and none about a sitting.
                IT WEARS NO BUILD ROLE (DRE-3039): create it with
                `--label agent:ops` and drop the role `subissue` inherits
                (`linear_ops.py remove-label <CARD> agent:engineer`), because a
@@ -2589,6 +2658,31 @@ jobs:
           fi
           exit "$RC"
 
+      # Did the planner escalate? (DRE-7624) Read off the file it writes when
+      # it does, never off the epic's child count: an epic re-planned or sent
+      # back arrives in Planning WITH children and can still need to ask.
+      # DRE-7318 had six, so the run took the plan path, died on the missing
+      # artifact, and its question never reached the CEO. Every plan-only step
+      # below is skipped on `escalated == 'true'`, and the escalation step runs
+      # on it whatever the count. A reason AND a plan artifact is a
+      # contradiction, and the run fails naming both rather than picking one.
+      - name: Did the planner escalate? — its reason file
+        id: escalated
+        if: steps.route.outputs.mode == 'plan'
+        run: |
+          REASON="$RUNNER_TEMP/planner-escalation.txt"
+          ARTIFACT="$RUNNER_TEMP/plan-artifact.md"
+          if [ -s "$REASON" ] && [ -e "$ARTIFACT" ]; then
+            echo "::error::the planner wrote both an escalation reason ($REASON) and a plan artifact ($ARTIFACT) — it either asks the CEO or hands in a plan, never both, so this run decides neither"
+            exit 1
+          fi
+          if [ -s "$REASON" ]; then
+            echo "escalated=true" >> "$GITHUB_OUTPUT"
+            echo "the planner escalated — $REASON is its reason"
+          else
+            echo "escalated=false" >> "$GITHUB_OUTPUT"
+          fi
+
       # Record an is_error PLANNER death so the fallback engages on retry
       # (DRE-1354). Unlike agent-task, a plan death has no PR/requeue path — the
       # medic re-runs the SAME workflow_run on attempt 2. That rerun re-evaluates
@@ -2638,21 +2732,27 @@ jobs:
       # (linear_ops.py subissue) already rejects these at creation; this is the
       # belt-and-braces sweep that closes any path that skipped the seam.
       # Skipped when the planner created zero children — that run escalated
-      # (DRE-2848) and there is nothing to validate.
+      # (DRE-2848) and there is nothing to validate — and when the planner
+      # wrote a reason (DRE-7624): an epic that escalates with children from an
+      # earlier planning wrote no cards this run, and its question must reach
+      # the escalation step below rather than die on cards it did not make.
       - name: Validate created children
         id: kids
         if: steps.route.outputs.mode == 'plan'
         env:
           LINEAR_API_KEY: ${{ secrets.LINEAR_PLANNER_KEY || secrets.LINEAR_API_KEY }}
           LINEAR_API_KEY_FALLBACK: ${{ secrets.LINEAR_API_KEY }}
+          ESCALATED: ${{ steps.escalated.outputs.escalated }}
         run: |
           EPIC="${{ github.event.client_payload.identifier }}"
           KIDS=$(python3 .bureau-pipeline/scripts/linear_ops.py children "$EPIC")
-          # The artifact steps below key off this: a planner that asked
-          # questions created no children and wrote no artifact, and must not
-          # be failed for the absence of one.
+          # The artifact steps below key off this AND `steps.escalated`: a
+          # planner that asked questions wrote no artifact, and must not be
+          # failed for the absence of one.
           echo "count=$KIDS" >> "$GITHUB_OUTPUT"
-          if [ "$KIDS" -gt 0 ]; then
+          if [ "$ESCALATED" = "true" ]; then
+            echo "the planner escalated — $KIDS existing children are left as they are, and the plan that follows validates its own"
+          elif [ "$KIDS" -gt 0 ]; then
             if ! python3 .bureau-pipeline/scripts/validate_card.py check-children "$EPIC"; then
               python3 .bureau-pipeline/scripts/linear_ops.py comment "$EPIC" \
                 "🚧 The plan produced one or more INVALID child cards (placeholder/path body, missing repo, or no role label). See the failed run; the planner must re-emit them before this epic can build."
@@ -2673,10 +2773,12 @@ jobs:
       # one step up.
       #
       # Proof is not a green test suite: it is the mechanism observed running
-      # against real state, recorded in the repo. That record is what the CEO
-      # reads — he closes the card himself and there is no demo sitting, his
-      # decision of 2026-09-12 — so there is ONE closing child. An epic planned
-      # before then carries a second one and is read past, never bounced for it.
+      # against real state, recorded in the repo. The card closes on its
+      # approved all-met record (DRE-5919) — no person closes it, and it
+      # carries no criterion about merging, reading or closing the record
+      # (DRE-7773) — and there is no demo sitting, the CEO's decision of
+      # 2026-09-12, so there is ONE closing child. An epic planned before then
+      # carries a second one and is read past, never bounced for it.
       # The card may not be fleet-buildable: a proof the fleet can close by
       # merging its own code is not a proof.
       #
@@ -2684,7 +2786,7 @@ jobs:
       # must never bounce a plan (standards/console-honesty.md rule 1), so the
       # reason is only posted when the checker actually wrote one.
       - name: Proof card — the epic's last child
-        if: steps.route.outputs.mode == 'plan' && steps.kids.outputs.count != '0'
+        if: steps.route.outputs.mode == 'plan' && steps.kids.outputs.count != '0' && steps.escalated.outputs.escalated != 'true'
         env:
           LINEAR_API_KEY: ${{ secrets.LINEAR_PLANNER_KEY || secrets.LINEAR_API_KEY }}
           LINEAR_API_KEY_FALLBACK: ${{ secrets.LINEAR_API_KEY }}
@@ -2736,8 +2838,14 @@ jobs:
       # A planner that wrote no reason file at all is quoted in its own words
       # (DRE-5564): the escalation reads its closing message off the run's
       # execution file, so the note says what it said instead of "no reason".
+      #
+      # It runs when the planner wrote a reason, WHATEVER the child count
+      # (DRE-7624): an epic re-planned or sent back has children already, and
+      # gating this on a count of zero sent DRE-7318's question down the plan
+      # path to die. A count of zero with no reason still lands here, as
+      # above.
       - name: Planner escalation — hand-planning parks for the CEO
-        if: steps.route.outputs.mode == 'plan' && steps.kids.outputs.count == '0'
+        if: steps.route.outputs.mode == 'plan' && (steps.escalated.outputs.escalated == 'true' || steps.kids.outputs.count == '0')
         env:
           LINEAR_API_KEY: ${{ secrets.LINEAR_PLANNER_KEY || secrets.LINEAR_API_KEY }}
           LINEAR_API_KEY_FALLBACK: ${{ secrets.LINEAR_API_KEY }}
@@ -2779,16 +2887,17 @@ jobs:
       # The contract is standards/plan-artifact.md; the checker is
       # scripts/plan_artifact.py.
       #
-      # Plan-route only (the activate route runs no agent) AND
-      # children-bearing only: a planner that escalated created no cards and
-      # wrote no artifact, and must not be failed for the absence of one.
+      # Plan-route only (the activate route runs no agent), children-bearing
+      # only, AND skipped when the planner wrote a reason (DRE-7624): a
+      # planner that escalated wrote no artifact, whatever children the epic
+      # already had, and must not be failed for the absence of one.
 
       # Is this UI work? Read it off the CARDS the planner just created — a
       # child carrying a **Design:** ref is evidence — never off the plan's
       # own say-so, which is the thing being checked.
       - name: Plan artifact — UI epic?
         id: uiepic
-        if: steps.route.outputs.mode == 'plan' && steps.kids.outputs.count != '0'
+        if: steps.route.outputs.mode == 'plan' && steps.kids.outputs.count != '0' && steps.escalated.outputs.escalated != 'true'
         env:
           LINEAR_API_KEY: ${{ secrets.LINEAR_PLANNER_KEY || secrets.LINEAR_API_KEY }}
           LINEAR_API_KEY_FALLBACK: ${{ secrets.LINEAR_API_KEY }}
@@ -2803,7 +2912,7 @@ jobs:
       # Planning rather than reaching the CEO with a section missing, a KPI
       # written as prose, or a screenshot where a mockup belongs.
       - name: Plan artifact — check
-        if: steps.route.outputs.mode == 'plan' && steps.kids.outputs.count != '0'
+        if: steps.route.outputs.mode == 'plan' && steps.kids.outputs.count != '0' && steps.escalated.outputs.escalated != 'true'
         run: |
           python3 .bureau-pipeline/scripts/plan_artifact.py check \
             "${{ runner.temp }}/plan-artifact.md" \
@@ -2814,7 +2923,7 @@ jobs:
       # below reads a mint of its own — the first mint's inputs, its gate.
       - name: Re-mint the model-home read token — premodel
         id: model_home_premodel
-        if: steps.route.outputs.mode == 'plan' && steps.kids.outputs.count != '0'
+        if: steps.route.outputs.mode == 'plan' && steps.kids.outputs.count != '0' && steps.escalated.outputs.escalated != 'true'
         continue-on-error: true
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
         with:
@@ -2850,7 +2959,7 @@ jobs:
       # (DRE-2848).
       - name: Select model — first critic
         id: premodel
-        if: steps.route.outputs.mode == 'plan' && steps.kids.outputs.count != '0'
+        if: steps.route.outputs.mode == 'plan' && steps.kids.outputs.count != '0' && steps.escalated.outputs.escalated != 'true'
         env:
           BUREAU_MODEL_HOME_TOKEN: ${{ steps.model_home_premodel.outputs.token }}
           ANTHROPIC_API_KEY: ${{ vars.CLAUDE_AUTH_MODE != 'subscription' && secrets.ANTHROPIC_API_KEY || '' }}
@@ -2871,7 +2980,7 @@ jobs:
           case "$(cat "$WHY_FILE")" in DEGRADED*) echo "::warning::$(cat "$WHY_FILE")" ;; esac
 
       - name: First critic — context
-        if: steps.route.outputs.mode == 'plan' && steps.kids.outputs.count != '0'
+        if: steps.route.outputs.mode == 'plan' && steps.kids.outputs.count != '0' && steps.escalated.outputs.escalated != 'true'
         run: |
           python3 .bureau-pipeline/scripts/assemble_context.py assemble plan-critic-pre \
             > .bureau-pipeline/agent-context.md
@@ -2886,11 +2995,19 @@ jobs:
       # step of its own and lands on the epic BEFORE the model reads it, so a
       # pass with unread findings is visible afterwards.
       - name: Mechanical findings — posted before the critic reads them
-        if: steps.route.outputs.mode == 'plan' && steps.kids.outputs.count != '0'
+        if: steps.route.outputs.mode == 'plan' && steps.kids.outputs.count != '0' && steps.escalated.outputs.escalated != 'true'
         env:
           LINEAR_API_KEY: ${{ secrets.LINEAR_PLANNER_KEY || secrets.LINEAR_API_KEY }}
           LINEAR_API_KEY_FALLBACK: ${{ secrets.LINEAR_API_KEY }}
           REPO_SLUG: ${{ steps.repo.outputs.slug }}
+          # The three readings `plan_held_repo.py` hands `sweep_holds.read`
+          # (DRE-7753), each the caller's own value threaded verbatim: its
+          # max_wip input (DRE-2529), its BUREAU_MAX_WIP variable (DRE-6631)
+          # and its INTAKE_HOLD variable, the one its groomer stub passes
+          # (DRE-3285). `vars` is the caller's in a reusable.
+          MAX_WIP: ${{ inputs.max_wip }}
+          BUREAU_MAX_WIP: ${{ vars.BUREAU_MAX_WIP }}
+          INTAKE_HOLD: ${{ vars.INTAKE_HOLD }}
         run: |
           EPIC="${{ github.event.client_payload.identifier }}"
           NOTE="${{ runner.temp }}/plan-mechanical.md"
@@ -2923,6 +3040,22 @@ jobs:
               --caller "$REPO_SLUG" \
               --structural-file "${{ runner.temp }}/plan-structural.txt" \
               --note-file "$NOTE" < "$CHILDREN"
+          # A plan for a held repo that does not name lifting the hold as a
+          # step that needs the CEO (DRE-7752), APPENDED to the same
+          # structural file. Its `Repo holds:` line lands in the note either way.
+          python3 .bureau-pipeline/scripts/plan_held_repo.py findings \
+              --artifact "${{ runner.temp }}/plan-artifact.md" \
+              --structural-file "${{ runner.temp }}/plan-structural.txt" \
+              --note-file "$NOTE"
+          # A child that needs the CEO — an operator card, or a criterion on a
+          # person's row — not named in a "Step that needs the CEO:" paragraph
+          # (DRE-7523), APPENDED to the same structural file. Its `CEO steps:`
+          # line lands in the note either way.
+          python3 .bureau-pipeline/scripts/plan_ceo_steps.py findings \
+              --artifact "${{ runner.temp }}/plan-artifact.md" \
+              --detail-file "$DETAIL" \
+              --structural-file "${{ runner.temp }}/plan-structural.txt" \
+              --note-file "$NOTE" < "$CHILDREN"
           # The same file the critic is handed, so the list on the epic is
           # byte-for-byte the list the model read.
           python3 .bureau-pipeline/scripts/linear_ops.py comment "$EPIC" \
@@ -2933,7 +3066,7 @@ jobs:
       # reasons are on `Re-mint bot token — planner`.
       - name: Re-mint bot token — first critic
         id: app_prea
-        if: steps.route.outputs.mode == 'plan' && steps.kids.outputs.count != '0'
+        if: steps.route.outputs.mode == 'plan' && steps.kids.outputs.count != '0' && steps.escalated.outputs.escalated != 'true'
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
         with:
           app-id: >-
@@ -2949,7 +3082,7 @@ jobs:
 
       - name: First critic — round 1 (before the CEO reads it)
         id: prea
-        if: steps.route.outputs.mode == 'plan' && steps.kids.outputs.count != '0'
+        if: steps.route.outputs.mode == 'plan' && steps.kids.outputs.count != '0' && steps.escalated.outputs.escalated != 'true'
         uses: anthropics/claude-code-action@8ce9314fa9a404564fa7e954cd84f25bcba2b829 # v1.0.236
         env:
           LINEAR_API_KEY: ${{ secrets.LINEAR_PLANNER_KEY || secrets.LINEAR_API_KEY }}
@@ -3040,7 +3173,7 @@ jobs:
 
       - name: First critic — round 1 decision
         id: pre1
-        if: steps.route.outputs.mode == 'plan' && steps.kids.outputs.count != '0'
+        if: steps.route.outputs.mode == 'plan' && steps.kids.outputs.count != '0' && steps.escalated.outputs.escalated != 'true'
         env:
           LINEAR_API_KEY: ${{ secrets.LINEAR_PLANNER_KEY || secrets.LINEAR_API_KEY }}
           LINEAR_API_KEY_FALLBACK: ${{ secrets.LINEAR_API_KEY }}
@@ -3375,6 +3508,14 @@ jobs:
           LINEAR_API_KEY: ${{ secrets.LINEAR_PLANNER_KEY || secrets.LINEAR_API_KEY }}
           LINEAR_API_KEY_FALLBACK: ${{ secrets.LINEAR_API_KEY }}
           REPO_SLUG: ${{ steps.repo.outputs.slug }}
+          # The three readings `plan_held_repo.py` hands `sweep_holds.read`
+          # (DRE-7753), each the caller's own value threaded verbatim: its
+          # max_wip input (DRE-2529), its BUREAU_MAX_WIP variable (DRE-6631)
+          # and its INTAKE_HOLD variable, the one its groomer stub passes
+          # (DRE-3285). `vars` is the caller's in a reusable.
+          MAX_WIP: ${{ inputs.max_wip }}
+          BUREAU_MAX_WIP: ${{ vars.BUREAU_MAX_WIP }}
+          INTAKE_HOLD: ${{ vars.INTAKE_HOLD }}
         run: |
           EPIC="${{ github.event.client_payload.identifier }}"
           NOTE="${{ runner.temp }}/plan-mechanical.md"
@@ -3400,6 +3541,19 @@ jobs:
               --detail-file "$DETAIL" \
               --operator-cards-file "${{ runner.temp }}/plan-operator-cards.json" \
               --caller "$REPO_SLUG" \
+              --structural-file "${{ runner.temp }}/plan-structural.txt" \
+              --note-file "$NOTE" < "$CHILDREN"
+          # The held-repo check against the revision (DRE-7752), appended after
+          # the proof reach, so a revised plan is judged on its revision.
+          python3 .bureau-pipeline/scripts/plan_held_repo.py findings \
+              --artifact "${{ runner.temp }}/plan-artifact.md" \
+              --structural-file "${{ runner.temp }}/plan-structural.txt" \
+              --note-file "$NOTE"
+          # The CEO-step check against the revision (DRE-7523), appended after
+          # the held-repo check, on the same two board reads.
+          python3 .bureau-pipeline/scripts/plan_ceo_steps.py findings \
+              --artifact "${{ runner.temp }}/plan-artifact.md" \
+              --detail-file "$DETAIL" \
               --structural-file "${{ runner.temp }}/plan-structural.txt" \
               --note-file "$NOTE" < "$CHILDREN"
           python3 .bureau-pipeline/scripts/linear_ops.py comment "$EPIC" \
@@ -3549,7 +3703,7 @@ jobs:
       # route reads the published source out of a portal checkout below,
       # DRE-5299, and removes it before the re-plan runs.)
       - name: Plan artifact — upload source
-        if: steps.route.outputs.mode == 'plan' && steps.kids.outputs.count != '0'
+        if: steps.route.outputs.mode == 'plan' && steps.kids.outputs.count != '0' && steps.escalated.outputs.escalated != 'true'
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: plan-source-${{ github.event.client_payload.identifier }}
@@ -3645,7 +3799,7 @@ jobs:
       # Progress and every blocker is Done — and a card in Intake with no
       # parent epic is not in this set at all.
       - name: Routing verdicts — the epic's children
-        if: steps.route.outputs.mode == 'plan' && steps.kids.outputs.count != '0'
+        if: steps.route.outputs.mode == 'plan' && steps.kids.outputs.count != '0' && steps.escalated.outputs.escalated != 'true'
         env:
           LINEAR_API_KEY: ${{ secrets.LINEAR_PLANNER_KEY || secrets.LINEAR_API_KEY }}
           LINEAR_API_KEY_FALLBACK: ${{ secrets.LINEAR_API_KEY }}
@@ -5108,6 +5262,14 @@ jobs:
           LINEAR_API_KEY: ${{ secrets.LINEAR_PLANNER_KEY || secrets.LINEAR_API_KEY }}
           LINEAR_API_KEY_FALLBACK: ${{ secrets.LINEAR_API_KEY }}
           REPO_SLUG: ${{ steps.repo.outputs.slug }}
+          # The three readings `plan_held_repo.py` hands `sweep_holds.read`
+          # (DRE-7753), each the caller's own value threaded verbatim: its
+          # max_wip input (DRE-2529), its BUREAU_MAX_WIP variable (DRE-6631)
+          # and its INTAKE_HOLD variable, the one its groomer stub passes
+          # (DRE-3285). `vars` is the caller's in a reusable.
+          MAX_WIP: ${{ inputs.max_wip }}
+          BUREAU_MAX_WIP: ${{ vars.BUREAU_MAX_WIP }}
+          INTAKE_HOLD: ${{ vars.INTAKE_HOLD }}
         run: |
           EPIC="${{ github.event.client_payload.identifier }}"
           NOTE="${{ runner.temp }}/plan-mechanical.md"
@@ -5130,6 +5292,22 @@ jobs:
           else
             echo "::warning::the children's detail could not be read, so the proof-reach check did not run"
           fi
+          # The held-repo check (DRE-7752), on the note only, for the same
+          # reason, and on the artifact `Plan artifact — upload source
+          # (review)` uploads — so a revision that dropped its "Step that
+          # needs the CEO:" paragraph is a `held-repo:` line the next round's
+          # critic reads.
+          python3 .bureau-pipeline/scripts/plan_held_repo.py findings \
+              --artifact "${{ runner.temp }}/plan-artifact.md" \
+              --note-file "$NOTE"
+          # The CEO-step check (DRE-7523), on the note only, for the same
+          # reason and on the same artifact. A children's detail that could
+          # not be read is read as none: the bodies and labels still come from
+          # the children on stdin.
+          python3 .bureau-pipeline/scripts/plan_ceo_steps.py findings \
+              --artifact "${{ runner.temp }}/plan-artifact.md" \
+              --detail-file "$DETAIL" \
+              --note-file "$NOTE" < "$CHILDREN"
           python3 .bureau-pipeline/scripts/linear_ops.py comment "$EPIC" \
             "$(cat "$NOTE")"
 
@@ -6266,9 +6444,11 @@ jobs:
   # is unchanged, and the version record diffs the revision against the
   # PUBLISHED source exactly as for a plan run. A review run with no re-plan,
   # or one whose re-check refused the revision, publishes nothing.
+  # A plan run whose planner escalated (`escalated`, DRE-7624) wrote no
+  # artifact, whatever children the epic already had, and publishes nothing.
   publish:
     needs: plan
-    if: (needs.plan.outputs.mode == 'plan' && needs.plan.outputs.kids != '0') || (needs.plan.outputs.mode == 'review' && needs.plan.outputs.replanned == 'true')
+    if: (needs.plan.outputs.mode == 'plan' && needs.plan.outputs.kids != '0' && needs.plan.outputs.escalated != 'true') || (needs.plan.outputs.mode == 'review' && needs.plan.outputs.replanned == 'true')
     runs-on: ${{ fromJSON(vars.BUREAU_RUNS_ON || '["ubuntu-latest"]') }}
     timeout-minutes: 10
     # Same declaration, same reason (DRE-3321): this job reads the fleet key too

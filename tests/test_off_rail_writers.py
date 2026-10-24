@@ -126,12 +126,12 @@ def _drain_card():
 
 def _limit_card():
     """An UNLABELLED card whose newest limit-death marker's reset has passed,
-    in the start lane the dispatch lane replaces — one promoted before the
-    flip. Off `lane_contract.START_LANE`, so the recovery's write is the move
-    into it, not a re-dispatch in place (DRE-7120)."""
-    replaced = next(lane for lane in lane_contract.START_LANES
-                    if lane != lane_contract.START_LANE)
-    return limit_card(ident="DRE-3171", lane=replaced, labels=(),
+    off `lane_contract.START_LANE`, so the recovery's write is the move into
+    it, not a re-dispatch in place (DRE-7120). It sat in the start lane the
+    dispatch lane replaces until that lane began retiring (DRE-7129): the
+    drain empties that lane before the recovery reads it, so the card sits in
+    Intake instead."""
+    return limit_card(ident="DRE-3171", lane="Intake", labels=(),
                       bodies=[marker(reset=datetime(2026, 1, 1, tzinfo=UTC))])
 
 
@@ -224,6 +224,13 @@ TRIGGERS = {
 # --------------------------------------------------------------------------
 # the world a full pass runs in
 # --------------------------------------------------------------------------
+@pytest.fixture(autouse=True)
+def _a_retiring_start_lane(monkeypatch):
+    # The contract names no retiring start lane since DRE-7660, so the carry's
+    # fence is exercised against a stand-in.
+    monkeypatch.setattr(reconcile.epic_todo_gate, "TODO", "Todo")
+
+
 @pytest.fixture(autouse=True)
 def _pin(monkeypatch):
     monkeypatch.setattr(reconcile, "REPO", THIS)

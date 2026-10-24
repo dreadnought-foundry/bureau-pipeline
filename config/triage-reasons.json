@@ -1,0 +1,97 @@
+{
+  "_readme": "Every code path that moves a card into Triage, and the reason it writes on the card (DRE-7525). Read through scripts/triage_reasons.py; `python3 scripts/triage_reasons.py check` holds this file to the tree, and docs/triage-reasons.md is the page a person reads. The writes are discovered (ready_lane_writers.writes, located by green_light_rows.unit_of), never listed here: a `reasons` row names a discovered unit, the unit whose text carries its reason (`reason_at` — the unit itself or a discovered caller of it), an `anchor` that is a literal phrase of that reason or a constant the reasoning unit names and never the lane-write line, and a `note` saying what the reason tells a reader. A reason is a card comment, a `🔒 hold:` stamp, or the description of a card created directly in Triage. An `unreasoned` row names a unit that posts no reason today and says `why`; it is the gap list a follow-up card converts.",
+  "version": 1,
+  "reasons": [
+    {
+      "unit": "pipeline_notice.py#_file_card_quietly",
+      "reason_at": "pipeline_notice.py#_file_card",
+      "anchor": "_description(body, missed)",
+      "note": "The card is created in Triage carrying the notice's own text, plus a line saying the console door was not reached and why."
+    },
+    {
+      "unit": "planning_escalation.py#park_unread",
+      "reason_at": "planning_escalation.py#park_unread",
+      "anchor": "unread_park_note(identifier, reason)",
+      "note": "A park note says nothing has read the card, why its classification could not be read, and that the way back is a move to Planning."
+    },
+    {
+      "unit": "reconcile.py#escalate_out_of_planning",
+      "reason_at": "reconcile.py#escalate_out_of_planning",
+      "anchor": "stall_park_note(ident, reason)",
+      "note": "A park note says why Planning produced nothing — a stall, the planner line's bound or a hold nobody was asked about — and the way back."
+    },
+    {
+      "unit": "reconcile.py#_route_to_defect_lane",
+      "reason_at": "reconcile.py#promote_ready",
+      "anchor": "prose_blockers.card_refusal(",
+      "note": "The refusal names the description line that claims a dependency the board does not hold, and both fixes: set the relation or reword the line."
+    },
+    {
+      "unit": "reconcile.py#flag_stranded",
+      "reason_at": "reconcile.py#flag_stranded",
+      "anchor": "isn't on the dispatch",
+      "note": "The watchdog's receipt says the card's repo is not on the dispatch rail and how to fix it, beside a no-route hold stamp naming the slug."
+    },
+    {
+      "unit": "rereview_watch.py#_fire",
+      "reason_at": "rereview_watch.py#_fire",
+      "anchor": "epic-rereview-twice",
+      "note": "A hold stamp says the epic was sent back for a second re-review, and the hold's reason names the way back."
+    },
+    {
+      "unit": "agent-fix.yml#Escalate checks the loop structurally cannot fix",
+      "reason_at": "agent-fix.yml#Escalate checks the loop structurally cannot fix",
+      "anchor": "--reason unfixable-check",
+      "note": "A card note names the red checks the fix loop cannot clear, beside an unfixable-check hold stamp at the head it read."
+    },
+    {
+      "unit": "agent-fix.yml#Report",
+      "reason_at": "agent-fix.yml#Report",
+      "anchor": "--reason fix-dispute",
+      "note": "A fix-dispute hold stamp at the head says the fix loop's budget was spent on it and a pushed fix is the way back."
+    },
+    {
+      "unit": "plan.yml#One-off critic — park in Triage",
+      "reason_at": "plan.yml#One-off critic — park in Triage",
+      "anchor": "--reason plan-critic-bound",
+      "note": "A plan-critic-bound hold stamp says the one-off critic's bound was reached, beside the critic's park note when it wrote one."
+    },
+    {
+      "unit": "plan.yml#First critic — the bound parks in Triage",
+      "reason_at": "plan.yml#First critic — the bound parks in Triage",
+      "anchor": "the plan goes on to neither the second critic nor Green Light",
+      "note": "A park comment gives the first critic's finding this round and how to re-approve the plan once a person settles it."
+    },
+    {
+      "unit": "plan.yml#Review — the review died",
+      "reason_at": "plan.yml#Review — the review died",
+      "anchor": "plan-critic-death-note.md",
+      "note": "The death note and record say the second critic's run died and how, and the park note after the move says what is owed."
+    },
+    {
+      "unit": "plan.yml#Review — the second critic passed a plan the first critic held",
+      "reason_at": "plan.yml#Review — the second critic passed a plan the first critic held",
+      "anchor": "plan_critic.py held-park",
+      "note": "A note read off the thread says the second critic passed a plan the first critic still held, so the two disagree."
+    },
+    {
+      "unit": "plan.yml#Review — the second critic produced no result",
+      "reason_at": "plan.yml#Review — the second critic produced no result",
+      "anchor": "The second critic could not decide on this plan",
+      "note": "A park comment says the second critic could not decide on the plan as many times as the bound allows, so nobody has finished reading it."
+    },
+    {
+      "unit": "plan.yml#Re-check the revised plan — review mode",
+      "reason_at": "plan.yml#Re-check the revised plan — review mode",
+      "anchor": "but the revision did not pass the plan's own gates",
+      "note": "A park comment says the planner's revision failed the plan's own gates, and which gate refused it."
+    },
+    {
+      "unit": "plan.yml#Review — the bound parks the plan in Triage",
+      "reason_at": "plan.yml#Review — the bound parks the plan in Triage",
+      "anchor": "nothing reaches Green Light until a person settles it",
+      "note": "A park comment gives the second critic's finding, what the re-plan changed, and how to re-approve the plan once settled."
+    }
+  ],
+  "unreasoned": []
+}

@@ -257,6 +257,18 @@ class RateLimitedSweepNamesTheUserTest(unittest.TestCase):
     RATELIMITED exits with one plain-English line naming the user whose budget
     is spent and when the window rolls."""
 
+    def setUp(self):
+        # The refused drain read lands on the sweep's module-level ledgers,
+        # and nothing in `reconcile.run` empties them. Left standing, they
+        # turn the next full sweep in this process red on a failure it never
+        # had — the red main at d24ad3ed, where the unit-test parts reshuffled
+        # this file in ahead of tests/test_operator_decision_restart.py.
+        ledgers = (reconcile._write_failures, reconcile._read_failures,
+                   reconcile._stale_defects)
+        for ledger in ledgers:
+            ledger.clear()
+        self.addCleanup(lambda: [ledger.clear() for ledger in ledgers])
+
     def _sweep(self, identity: str | None):
         def _boom(*_a, **_k):
             raise urllib.error.HTTPError(

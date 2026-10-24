@@ -1086,15 +1086,16 @@ class TestTheRouteIsWrittenDown:
     def test_the_lane_contract_carries_the_vocabulary_it_used_to_wait_for(self):
         contract = lane_contract.load()
         backlog = lane_contract.lane("Queued", contract=contract)
-        todo = lane_contract.lane("Todo", contract=contract)
         assert "routing verdict" in backlog["clauses"]["entrance"]["text"]
-        # Todo names all three routes the sweep carries, and says where each
-        # goes: FLEET here, WORKBENCH and OPERATOR to Hand-work (DRE-5322),
-        # whose entrance is the clause that names the person's mark —
-        # `operator-step` since DRE-6227, never `hand-built`.
+        # The queue's exit names all three routes the sweep carries, and says
+        # where each goes: FLEET to In Progress, WORKBENCH and OPERATOR to
+        # Hand-work (DRE-5322) — the old start lane said so too until it began
+        # retiring (DRE-7129) — and Hand-work's entrance is the clause that
+        # names the person's mark: `operator-step` since DRE-6227, never
+        # `hand-built`.
         for name in ("FLEET", "WORKBENCH", "OPERATOR"):
-            assert name in todo["clauses"]["entrance"]["text"]
-        assert "Hand-work" in todo["clauses"]["entrance"]["text"]
+            assert name in backlog["clauses"]["exit"]["text"]
+        assert "Hand-work" in backlog["clauses"]["exit"]["text"]
         hand_work = lane_contract.lane("Hand-work", contract=contract)
         assert (f"`{routing_verdict.OPERATOR_STEP_LABEL}`"
                 in hand_work["clauses"]["entrance"]["text"])

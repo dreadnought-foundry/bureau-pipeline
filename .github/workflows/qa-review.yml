@@ -1568,6 +1568,16 @@ jobs:
       # blip. The substitute is DATA (config/models.yaml `review_separation`),
       # never a literal here — a pinned id in a workflow is drift by
       # construction.
+      #
+      # A CARDLESS PROBE IN THE HARNESS SANDBOX (DRE-7618). A probe pull
+      # request has no card, so there is no thread to read. In
+      # `model_fallback.SANDBOX_REPO` alone, and only from the worker App, the
+      # harness driver writes the build line into the pull request's own
+      # description instead; `probe-build-model` reads it there and prints
+      # nothing for every other repo, author or unreadable file. The author
+      # is the REST spelling, `agent-bureau-bot[bot]`, the one the refutation
+      # read above compares to (DRE-1995). A pull request with a card never
+      # reads its description for this, whether its thread read or not.
       - name: Select model
         id: model
         if: steps.decide.outputs.review == 'true'
@@ -1581,6 +1591,10 @@ jobs:
           # key here any more: the snapshot step made the read. The critic
           # itself is still denied Linear on purpose (DRE-2052/2696).
           CARD: ${{ steps.pr.outputs.card }}
+          # DRE-7618: a cardless pull request's author and description — the
+          # two the card review context step above carries.
+          GH_TOKEN: ${{ steps.reader.outputs.token }}
+          PR: ${{ steps.pr.outputs.number }}
         run: |
           WHY_FILE="$RUNNER_TEMP/model-why.txt"
           BUILT_ON=""
@@ -1589,6 +1603,23 @@ jobs:
             BUILT_ON=$(python3 \
               "$PIPELINE_DIR"/scripts/model_fallback.py build-model \
               "$RUNNER_TEMP/card-thread.json")
+          fi
+          # DRE-7618: no card — a harness probe's builder line, from its own
+          # description. A failed read leaves AUTHOR or the body empty, and the
+          # command then prints nothing: still `--built-on-unknown`.
+          if [ -z "$CARD" ]; then
+            AUTHOR=$(gh api "repos/$GITHUB_REPOSITORY/pulls/$PR" --jq .user.login 2>/dev/null) || AUTHOR=""
+            BODY_FILE=/tmp/cardctx-pr-body.txt
+            if [ ! -f "$BODY_FILE" ]; then
+              BODY_FILE="$RUNNER_TEMP/probe-pr-body.txt"
+              gh pr view "$PR" --json body --jq .body > "$BODY_FILE" 2>/dev/null || : > "$BODY_FILE"
+            fi
+            BUILT_ON=$(python3 "$PIPELINE_DIR"/scripts/model_fallback.py probe-build-model \
+              --repo "$GITHUB_REPOSITORY" \
+              --author "$AUTHOR" "$BODY_FILE") || BUILT_ON=""
+            if [ -n "$BUILT_ON" ]; then
+              echo "probe-builder: $BUILT_ON read from the pull request description"
+            fi
           fi
           if [ -n "$BUILT_ON" ]; then
             SEPARATION_ARG="--built-on $BUILT_ON"

@@ -51,6 +51,10 @@ RETIRED_LANES = ("In QA", "In Design Review")
 OLD_QUEUE = "Back" + "log"
 QUEUE = "Queued"
 EPIC = "DRE-4125"
+# The start lane the flip emptied (DRE-7120, DRE-7129) retired too, and its
+# entry was deleted once Linear dropped the state (DRE-7660,
+# test_todo_retired.py).
+OLD_START = "To" + "do"
 
 
 def _real_entry():
@@ -254,8 +258,11 @@ class TestTheRetiringLaneDrainsItself:
     """
 
     def test_the_shipped_contract_carries_one_retiring_lane(self):
+        # The queue's old name. The start lane the flip emptied left the
+        # contract once its state was deleted (DRE-7660).
         retiring = lane_contract.lanes(status="retiring")
         assert [entry["name"] for entry in retiring] == [OLD_QUEUE]
+        assert OLD_START not in [entry["name"] for entry in retiring]
         entry = retiring[0]
         assert entry["replaced_by"] == QUEUE
         assert entry["retired_by"] == EPIC

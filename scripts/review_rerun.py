@@ -98,6 +98,7 @@ REASON_REVIEW_RETRY = "review-retry"   # the review died; try again with headroo
 REASON_RE_REVIEW = "re-review"         # the plan changed; read it again
 REASON_RERUN_ACT = "re-run"            # a person asked, with the act below
 REASON_ONE_OFF_REVISE = "one-off-revise"  # the planner revised a one-off card
+REASON_ONE_OFF_RERUN = "one-off-rerun"  # a one-off critic decided nothing; read it again
 
 #: The reasons the PIPELINE sends when it asks for the second critic's review of
 #: a plan already written (DRE-5644). A run carrying one, from any lane, is
@@ -105,8 +106,9 @@ REASON_ONE_OFF_REVISE = "one-off-revise"  # the planner revised a one-off card
 #: classifier for it: the classifier is a front-door step, and on 2026-10-02 it
 #: ran on DRE-3698's automatic re-review (run 37054561328) instead of the second
 #: critic, and its failed self-check parked the epic in Green Light at 12:33 PT
-#: as a CEO decision. A person's `re-run` and the one-off re-read are not here:
-#: both keep the path they had.
+#: as a CEO decision. A person's `re-run` and the one-off re-reads (after a
+#: revision, and after a no-result, DRE-7491) are not here: each keeps the path
+#: it had.
 REVIEW_ASKS = (REASON_REVIEW, REASON_RE_REVIEW, REASON_REVIEW_RETRY)
 
 

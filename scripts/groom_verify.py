@@ -41,7 +41,9 @@ The Cancel list's own rows are read the other way round: **a Cancel that says
 "superseded by X" stands only if X is Done, a merged PR, or approved and in
 flight.** Otherwise it is rejected, and the card stays on the Planning list
 with the reason named. A replacement the check could not read does not stand
-either — Cancel is the direction that is hard to undo.
+either — Cancel is the direction that is hard to undo. A row a person's
+recorded Move to Cancel wrote (`RECORDED_CANCEL_SOURCE`, DRE-7826) names no
+replacement and needs none: the check writes no row for it and never keeps it.
 
 ## What it does with what it finds
 
@@ -98,6 +100,12 @@ VERDICTS = ("cancel", "clean", "unread", "cancel-stands", "cancel-rejected",
 #: lanes of its `work` segment other than `DONE`, in flow order, so a lane
 #: the contract makes live joins it with no edit here (DRE-5348).
 DONE = ("Done",)
+
+#: A Cancel row a person's recorded Move to Cancel wrote (DRE-7826) —
+#: `groomer.DEAD_FROM_RECORD`, written out because this module cannot import
+#: `groomer` (the import runs the other way). Its reason is a decision, not a
+#: replacement to read, so `check` writes no row for it and never keeps it.
+RECORDED_CANCEL_SOURCE = "console-record"
 
 
 def in_flight(contract: dict | None = None) -> tuple:
@@ -626,6 +634,10 @@ def check(proposal: dict, *, lops, run=None, owners=None,
     keep: dict[str, str] = {}
     for dead in sorted(proposal["outcomes"]["dead"],
                        key=lambda r: r.get("position") or 0):
+        if dead.get("source") == RECORDED_CANCEL_SOURCE:
+            # A person decided it; there is nothing here for the check to
+            # stand or reject, whatever card its title or reason names.
+            continue
         identifier = dead["identifier"]
         target = _cancel_target(dead)
         if target is None:

@@ -163,6 +163,14 @@ The rule (engineering standard: "commit the failing test FIRST"):
     the step writes, and nothing else: a changed existing entry, a second
     entry, a comment or an edited function beside it is code. The opener and
     branch conditions are the mirror rule's, unchanged.
+  • The same facts REMOVED are not code either (DRE-7866). Since DRE-7537
+    retirement's `50_retire_route.py` opens its own routing PR on that branch
+    and takes out the one `REPO_IDS` entry, the one `PROJECT_IDENTITIES`
+    entry (with that mirror's region) and the one repo under `repos` that
+    onboarding wrote. `is_routing_entry_removal` relieves exactly that one
+    entry, as `is_routing_entry_change` read backwards — the same exactness
+    and the same opener and branch conditions. It matters most for the first
+    of those commits, which deletion detection never covers.
   • Merge commits are skipped: merging an advanced main into the branch
     brings mainline commits that are not the PR's own work.
 
@@ -520,8 +528,8 @@ def is_onboard_routing_pr(head_ref: str | None,
 def mark_routing_paths(commits) -> list[dict]:
     """Each commit record with a `routing` list: its paths in
     `ONBOARD_ROUTING_PATHS`, which `commit_categories` reads as not code when
-    `is_routing_mirror_change` or `is_routing_entry_change` holds for them.
-    Call it only for a PR
+    `is_routing_mirror_change`, `is_routing_entry_change` or
+    `is_routing_entry_removal` holds for them. Call it only for a PR
     `is_onboard_routing_pr` admits."""
     return [
         {**c, "routing": [p for p in c["paths"] if p in ONBOARD_ROUTING_PATHS]}
@@ -927,6 +935,21 @@ def is_routing_entry_change(
     return _adds_one_dict_entry(before.splitlines(), after_lines, *literal)
 
 
+def is_routing_entry_removal(
+    path: str, before: str | None, after: str | None
+) -> bool:
+    """True iff `path`'s two versions differ ONLY by one per-repo console
+    fact REMOVED — the entry retirement's `50_retire_route.py` takes out
+    (DRE-7537) — the mirror image of `is_routing_entry_change` (DRE-7866).
+
+    A removal from `before` to `after` is an addition from `after` to
+    `before`, so this is that rule read backwards, with all of its exactness:
+    one entry, in the shape the step writes, from exactly that literal, and
+    no other line changed. In `sources.py` the repo-mirror regions are
+    likewise left for `is_routing_mirror_change` to prove."""
+    return is_routing_entry_change(path, after, before)
+
+
 def is_test_path(path: str) -> bool:
     """True iff `path` is a test by its DIRECTORY or by its FILENAME.
 
@@ -1002,7 +1025,8 @@ def _classify_in_commit(commit, path: str) -> str:
     the rules call `code`, changed only inside its repo-mirror region, is
     regenerated and proved elsewhere, so it is docs, the way a generated
     region is (DRE-3896, DRE-7209). So is one changed only by the one
-    console-fact entry the routing step writes (DRE-7431)."""
+    console-fact entry the routing step writes (DRE-7431), or the one the
+    retire step removes (DRE-7866)."""
     sources = commit.get("sources") or {}
     before, after = sources.get(path, (None, None))
     category = classify_path(path, before, after)
@@ -1010,7 +1034,8 @@ def _classify_in_commit(commit, path: str) -> str:
         category == "code"
         and path in (commit.get("routing") or ())
         and (is_routing_mirror_change(path, before, after)
-             or is_routing_entry_change(path, before, after))
+             or is_routing_entry_change(path, before, after)
+             or is_routing_entry_removal(path, before, after))
     ):
         return "docs"
     return category

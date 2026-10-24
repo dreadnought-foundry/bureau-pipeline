@@ -296,18 +296,19 @@ def test_the_cli_held_flag_is_a_held_card(monkeypatch):
 def test_a_conditional_write_is_a_held_card(monkeypatch):
     """`expect=` is the lane the caller READ (Stage 2 item 33): it holds the
     card, so the first read is waste. The condition is checked on the
-    pre-write re-read."""
+    pre-write re-read. (Its target was Todo, whose epic gate read the comments
+    too, until Todo left the contract, DRE-7660.)"""
     with linear(monkeypatch, **{"DRE-1": {"lane": "In Progress"}}) as lin:
-        moved, _ = _quiet(linear_ops.cmd_state, "DRE-1", "Todo",
+        moved, _ = _quiet(linear_ops.cmd_state, "DRE-1", "Planning",
                           expect=("In Progress",), labels_absent=("needs-human",))
     assert moved is True
-    assert lin.kinds == ["states:key", "issue", "comments", "write", "history"]
-    assert lin.writes == [("DRE-1", "Todo")]
+    assert lin.kinds == ["states:key", "issue", "write", "history"]
+    assert lin.writes == [("DRE-1", "Planning")]
 
 
 def test_a_conditional_write_is_refused_on_the_live_lane(monkeypatch):
     with linear(monkeypatch, **{"DRE-1": {"lane": "In Review"}}) as lin:
-        moved, out = _quiet(linear_ops.cmd_state, "DRE-1", "Todo",
+        moved, out = _quiet(linear_ops.cmd_state, "DRE-1", "Planning",
                             expect=("In Progress",))
     assert moved is False
     assert lin.writes == []
@@ -318,7 +319,7 @@ def test_a_conditional_write_is_refused_on_the_live_lane(monkeypatch):
 def test_a_conditional_write_is_refused_on_a_live_label(monkeypatch):
     with linear(monkeypatch, **{"DRE-1": {"lane": "In Progress",
                                           "labels": ["needs-human"]}}) as lin:
-        moved, _ = _quiet(linear_ops.cmd_state, "DRE-1", "Todo",
+        moved, _ = _quiet(linear_ops.cmd_state, "DRE-1", "Planning",
                           expect=("In Progress",), labels_absent=("needs-human",))
     assert moved is False
     assert lin.writes == []

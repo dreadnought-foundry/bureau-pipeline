@@ -256,9 +256,10 @@ def test_ready_lane_writers_read_the_seam_variable_with_the_exit_moved(trees, mo
     name, which is retiring (DRE-6753), it prints a destination no live lane
     names — unread, never a pass."""
     inline, moved = trees
-    monkeypatch.setattr(lane_contract, "queue_lane", lambda contract=None: "Todo")
+    # Hand-work, since the old start lane began retiring too (DRE-7129).
+    monkeypatch.setattr(lane_contract, "queue_lane", lambda contract=None: "Hand-work")
     for root in (inline, moved):
-        assert [w.lane for w in _seam_writes(root)] == ["Todo"]
+        assert [w.lane for w in _seam_writes(root)] == ["Hand-work"]
     monkeypatch.setattr(lane_contract, "queue_lane", lambda contract=None: "Backlog")
     for root in (inline, moved):
         assert [w.lane for w in _seam_writes(root)] == [None]

@@ -136,7 +136,7 @@ def _pr(number=141, comments=(), sha=SHA):
     }
 
 
-def _card(identifier="DRE-9001", repo="atlas", bodies=(), state="Todo"):
+def _card(identifier="DRE-9001", repo="atlas", bodies=(), state="In Progress"):
     """A card in the shape `active_cards` returns it — comments NEWEST FIRST,
     which is what Linear answers and what `window_nodes` reverses."""
     return {
@@ -1046,8 +1046,9 @@ def test_a_repo_the_pipeline_does_not_serve_reports_the_outage_and_raises_nothin
 # not change
 # --------------------------------------------------------------------------
 def test_swept_lanes_is_unchanged():
+    # Less Todo, retiring since DRE-7129 and read only by the drain.
     assert reconcile.SWEPT_LANES == (
-        "Todo", "In Progress", "In Review", "Hand-work", "Planning", "Intake")
+        "In Progress", "In Review", "Hand-work", "Planning", "Intake")
 
 
 def test_the_board_read_lanes_are_swept_lanes_plus_the_alarm_lane():
@@ -1084,7 +1085,7 @@ def test_active_cards_of_swept_lanes_returns_no_triage_card():
     triage_card = {**_card(identifier="DRE-9500", state="Triage"),
                    "title": reviewer_down.TITLE_PREFIX + "15:19 PT — 1 runs, 1 repos"}
     reconcile.reset_sweep_cards()
-    reconcile._swept_cards = [_card(state="Todo"), triage_card]
+    reconcile._swept_cards = [_card(state="In Progress"), triage_card]
     with patch.object(reconcile.bureau_read, "mode", return_value="off"), \
         patch.object(linear_ops, "gql", side_effect=AssertionError("cached")):
         swept = reconcile.active_cards(reconcile.SWEPT_LANES)

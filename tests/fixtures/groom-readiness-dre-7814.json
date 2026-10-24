@@ -1,0 +1,428 @@
+{
+  "_source": "Hand-written from the facts DRE-7814 states, not trimmed from a run artifact: the 2026-10-21 proposal's artifact (a465a4f5bac3) was not downloaded. DRE-7397 (repo:bureau-pipeline, in Intake) names `scripts/groomer.py`, which DRE-6644 (In Progress) also names; DRE-6644's children as read on 2026-10-23 are DRE-6664 to DRE-6667 Done, DRE-6668, DRE-6669 and DRE-6674 to DRE-6677 Canceled, and DRE-6678, its PROOF, In Review — built out. DRE-7745 (repo:agent-bureau, in Intake) names `CLAUDE.md`, which DRE-7251, a PROOF card In Review, also names. Titles are read off the cards' URLs, and a child title the card does not state is marked as not recorded. Each lane carries only the cards the two Not ready rows named; descriptions carry only the paths the rows quoted. `epics` is the IN_MOTION_NODE record of DRE-6644 a stub Linear answers the epic read with.",
+  "generated_at": "2026-10-21T13:00:00.000Z",
+  "capacity": 20,
+  "cycles": [
+    {
+      "number": 16,
+      "id": "cyc-16",
+      "startsAt": "2026-10-26T07:00:00.000Z",
+      "endsAt": "2026-11-09T07:00:00.000Z"
+    },
+    {
+      "number": 17,
+      "id": "cyc-17",
+      "startsAt": "2026-11-09T07:00:00.000Z",
+      "endsAt": "2026-11-23T07:00:00.000Z"
+    }
+  ],
+  "cards": [
+    {
+      "identifier": "DRE-7397",
+      "title": "bureau-pipeline: the groom page marks a judged in-flight unit in flight",
+      "description": "**Files:** `scripts/groomer.py`",
+      "createdAt": "2026-10-14T18:00:00.000Z",
+      "priority": 0,
+      "state": {
+        "name": "Intake"
+      },
+      "labels": {
+        "nodes": [
+          {
+            "name": "repo:bureau-pipeline"
+          },
+          {
+            "name": "agent:engineer"
+          }
+        ]
+      },
+      "parent": null,
+      "project": null,
+      "cycle": null,
+      "relations": {
+        "nodes": []
+      },
+      "inverseRelations": {
+        "nodes": []
+      },
+      "children": {
+        "nodes": []
+      }
+    },
+    {
+      "identifier": "DRE-7745",
+      "title": "agent-bureau: the CLAUDE.md size check reads a repo's declared limit",
+      "description": "**Files:** `CLAUDE.md`",
+      "createdAt": "2026-10-20T18:00:00.000Z",
+      "priority": 0,
+      "state": {
+        "name": "Intake"
+      },
+      "labels": {
+        "nodes": [
+          {
+            "name": "repo:agent-bureau"
+          },
+          {
+            "name": "agent:engineer"
+          }
+        ]
+      },
+      "parent": null,
+      "project": null,
+      "cycle": null,
+      "relations": {
+        "nodes": []
+      },
+      "inverseRelations": {
+        "nodes": []
+      },
+      "children": {
+        "nodes": []
+      }
+    }
+  ],
+  "lanes": {
+    "Planning": [],
+    "In Progress": [
+      {
+        "identifier": "DRE-6644",
+        "title": "[EPIC] bureau-pipeline: readiness rules keep a card that is not ready off the Planning list",
+        "description": "**Files:** `scripts/groomer.py`",
+        "createdAt": "2026-10-09T18:00:00.000Z",
+        "priority": 0,
+        "state": {
+          "name": "In Progress"
+        },
+        "labels": {
+          "nodes": [
+            {
+              "name": "repo:bureau-pipeline"
+            },
+            {
+              "name": "agent:engineer"
+            }
+          ]
+        },
+        "parent": null,
+        "project": null,
+        "cycle": null,
+        "relations": {
+          "nodes": []
+        },
+        "inverseRelations": {
+          "nodes": []
+        },
+        "children": {
+          "nodes": [
+            {
+              "identifier": "DRE-6664",
+              "title": "DRE-6664 — a child of DRE-6644 (title not recorded)",
+              "state": {
+                "name": "Done"
+              }
+            },
+            {
+              "identifier": "DRE-6665",
+              "title": "DRE-6665 — a child of DRE-6644 (title not recorded)",
+              "state": {
+                "name": "Done"
+              }
+            },
+            {
+              "identifier": "DRE-6666",
+              "title": "DRE-6666 — a child of DRE-6644 (title not recorded)",
+              "state": {
+                "name": "Done"
+              }
+            },
+            {
+              "identifier": "DRE-6667",
+              "title": "DRE-6667 — a child of DRE-6644 (title not recorded)",
+              "state": {
+                "name": "Done"
+              }
+            },
+            {
+              "identifier": "DRE-6668",
+              "title": "DRE-6668 — a child of DRE-6644 (title not recorded)",
+              "state": {
+                "name": "Canceled"
+              }
+            },
+            {
+              "identifier": "DRE-6669",
+              "title": "DRE-6669 — a child of DRE-6644 (title not recorded)",
+              "state": {
+                "name": "Canceled"
+              }
+            },
+            {
+              "identifier": "DRE-6674",
+              "title": "DRE-6674 — a child of DRE-6644 (title not recorded)",
+              "state": {
+                "name": "Canceled"
+              }
+            },
+            {
+              "identifier": "DRE-6675",
+              "title": "DRE-6675 — a child of DRE-6644 (title not recorded)",
+              "state": {
+                "name": "Canceled"
+              }
+            },
+            {
+              "identifier": "DRE-6676",
+              "title": "DRE-6676 — a child of DRE-6644 (title not recorded)",
+              "state": {
+                "name": "Canceled"
+              }
+            },
+            {
+              "identifier": "DRE-6677",
+              "title": "DRE-6677 — a child of DRE-6644 (title not recorded)",
+              "state": {
+                "name": "Canceled"
+              }
+            },
+            {
+              "identifier": "DRE-6678",
+              "title": "PROOF: one morning's groom proposal keeps not-ready cards off the list",
+              "state": {
+                "name": "In Review"
+              }
+            }
+          ]
+        }
+      }
+    ],
+    "In Review": [
+      {
+        "identifier": "DRE-7251",
+        "title": "PROOF: both CLAUDE.md files sit under the ceiling on main",
+        "description": "**Files:** `CLAUDE.md`",
+        "createdAt": "2026-10-12T18:00:00.000Z",
+        "priority": 0,
+        "state": {
+          "name": "In Review"
+        },
+        "labels": {
+          "nodes": [
+            {
+              "name": "repo:agent-bureau"
+            },
+            {
+              "name": "agent:engineer"
+            }
+          ]
+        },
+        "parent": null,
+        "project": null,
+        "cycle": null,
+        "relations": {
+          "nodes": []
+        },
+        "inverseRelations": {
+          "nodes": []
+        },
+        "children": {
+          "nodes": []
+        }
+      }
+    ]
+  },
+  "epics": {
+    "DRE-6644": {
+      "identifier": "DRE-6644",
+      "title": "[EPIC] bureau-pipeline: readiness rules keep a card that is not ready off the Planning list",
+      "priority": 0,
+      "createdAt": "2026-10-09T18:00:00.000Z",
+      "state": {
+        "name": "In Progress"
+      },
+      "children": {
+        "nodes": [
+          {
+            "identifier": "DRE-6664",
+            "title": "DRE-6664 — a child of DRE-6644 (title not recorded)",
+            "state": {
+              "name": "Done"
+            },
+            "labels": {
+              "nodes": [],
+              "pageInfo": {
+                "hasNextPage": false
+              }
+            },
+            "children": {
+              "nodes": []
+            }
+          },
+          {
+            "identifier": "DRE-6665",
+            "title": "DRE-6665 — a child of DRE-6644 (title not recorded)",
+            "state": {
+              "name": "Done"
+            },
+            "labels": {
+              "nodes": [],
+              "pageInfo": {
+                "hasNextPage": false
+              }
+            },
+            "children": {
+              "nodes": []
+            }
+          },
+          {
+            "identifier": "DRE-6666",
+            "title": "DRE-6666 — a child of DRE-6644 (title not recorded)",
+            "state": {
+              "name": "Done"
+            },
+            "labels": {
+              "nodes": [],
+              "pageInfo": {
+                "hasNextPage": false
+              }
+            },
+            "children": {
+              "nodes": []
+            }
+          },
+          {
+            "identifier": "DRE-6667",
+            "title": "DRE-6667 — a child of DRE-6644 (title not recorded)",
+            "state": {
+              "name": "Done"
+            },
+            "labels": {
+              "nodes": [],
+              "pageInfo": {
+                "hasNextPage": false
+              }
+            },
+            "children": {
+              "nodes": []
+            }
+          },
+          {
+            "identifier": "DRE-6668",
+            "title": "DRE-6668 — a child of DRE-6644 (title not recorded)",
+            "state": {
+              "name": "Canceled"
+            },
+            "labels": {
+              "nodes": [],
+              "pageInfo": {
+                "hasNextPage": false
+              }
+            },
+            "children": {
+              "nodes": []
+            }
+          },
+          {
+            "identifier": "DRE-6669",
+            "title": "DRE-6669 — a child of DRE-6644 (title not recorded)",
+            "state": {
+              "name": "Canceled"
+            },
+            "labels": {
+              "nodes": [],
+              "pageInfo": {
+                "hasNextPage": false
+              }
+            },
+            "children": {
+              "nodes": []
+            }
+          },
+          {
+            "identifier": "DRE-6674",
+            "title": "DRE-6674 — a child of DRE-6644 (title not recorded)",
+            "state": {
+              "name": "Canceled"
+            },
+            "labels": {
+              "nodes": [],
+              "pageInfo": {
+                "hasNextPage": false
+              }
+            },
+            "children": {
+              "nodes": []
+            }
+          },
+          {
+            "identifier": "DRE-6675",
+            "title": "DRE-6675 — a child of DRE-6644 (title not recorded)",
+            "state": {
+              "name": "Canceled"
+            },
+            "labels": {
+              "nodes": [],
+              "pageInfo": {
+                "hasNextPage": false
+              }
+            },
+            "children": {
+              "nodes": []
+            }
+          },
+          {
+            "identifier": "DRE-6676",
+            "title": "DRE-6676 — a child of DRE-6644 (title not recorded)",
+            "state": {
+              "name": "Canceled"
+            },
+            "labels": {
+              "nodes": [],
+              "pageInfo": {
+                "hasNextPage": false
+              }
+            },
+            "children": {
+              "nodes": []
+            }
+          },
+          {
+            "identifier": "DRE-6677",
+            "title": "DRE-6677 — a child of DRE-6644 (title not recorded)",
+            "state": {
+              "name": "Canceled"
+            },
+            "labels": {
+              "nodes": [],
+              "pageInfo": {
+                "hasNextPage": false
+              }
+            },
+            "children": {
+              "nodes": []
+            }
+          },
+          {
+            "identifier": "DRE-6678",
+            "title": "PROOF: one morning's groom proposal keeps not-ready cards off the list",
+            "state": {
+              "name": "In Review"
+            },
+            "labels": {
+              "nodes": [],
+              "pageInfo": {
+                "hasNextPage": false
+              }
+            },
+            "children": {
+              "nodes": []
+            }
+          }
+        ],
+        "pageInfo": {
+          "hasNextPage": false
+        }
+      }
+    }
+  }
+}

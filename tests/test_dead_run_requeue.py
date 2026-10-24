@@ -64,7 +64,8 @@ class StalenessBackstopTest(unittest.TestCase):
 
     def test_other_thresholds_unchanged(self):
         import reconcile
-        self.assertEqual(reconcile.STALE_MINUTES["Todo"], 15)
+        # Todo's 15 went with its live entry when it began retiring (DRE-7129).
+        self.assertNotIn("Todo", reconcile.STALE_MINUTES)
         # One review lane since DRE-2726, keeping the longer of the two
         # windows the fold merged (120, not 60).
         self.assertEqual(reconcile.STALE_MINUTES["In Review"], 120)

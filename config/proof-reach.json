@@ -69,6 +69,18 @@
       "queries_declared_by": {
         "portico": "infra/scripts/proof-reader.ts"
       }
+    },
+    {
+      "id": "console-sandbox-press",
+      "held": "optional",
+      "held_for": ["agent-bureau"],
+      "what": "a console write made as the console proof-reader through agent-bureau's `scripts/console_proof_reader.py press`, on the sandbox project `agent-bureau-demo` only",
+      "names": ["sandbox press:", "console_proof_reader\\.py (?:press|refusal-probe)"],
+      "why": "DRE-7772, the CEO's decision of 2026-10-22: the proof-reader presses on the sandbox, and only an agent-bureau proof run holds it",
+      "brief": "On the sandbox project `agent-bureau-demo`, and only there, the run presses as the console proof-reader, through agent-bureau's `scripts/console_proof_reader.py press`.",
+      "queries_declared_by": {
+        "agent-bureau": "scripts/console_proof_reader.py"
+      }
     }
   ],
   "log_lines": [
@@ -149,6 +161,18 @@
       "printed_by": "scripts/pipeline_notice.py",
       "constant": "TAG",
       "when": "every raise or resolve through the notice door's client since DRE-7451, one line on stdout per call: the door's outcome, the fallback card it filed, a refused resolve, or `lost`; `pipeline-notice-smoke.yml` prints four, in its `Resolve, raise, raise, resolve` step's log"
+    },
+    {
+      "tag": "repo-held:",
+      "printed_by": "scripts/repo_held_epics.py",
+      "constant": "LOG_PREFIX",
+      "when": "every full sweep pass of a repo held at max_wip 0, and every full pass that is not idle at a cap above 0, since the reconcile wiring card (DRE-7755): one line per approved epic — the notice posted, the notice already standing, nothing waiting on the cap, or a green light or thread unreadable — one per child wearing needs-human with no hold stamp, the one line `no approved epic of <repo> is In Progress` when there is none, and one `lifted <ID>` line per hold the restored cap lifts"
+    },
+    {
+      "tag": "groom-memory:",
+      "printed_by": "scripts/groomer.py",
+      "constant": "MEMORY_TAG",
+      "when": "every groomer propose run since DRE-7824, one line in the Groom step's log"
     }
   ],
   "causes": [

@@ -196,7 +196,8 @@ class TestTheLaneSets:
         assert HAND_WORK not in reconcile.SWEEP_STATES
 
     def test_the_watchdog_lanes(self):
-        assert reconcile.WATCHDOG_LANES == ("Todo", HAND_WORK, "In Progress")
+        # Todo left it when it began retiring (DRE-7129): the drain empties it.
+        assert reconcile.WATCHDOG_LANES == (HAND_WORK, "In Progress")
 
     def test_the_review_move_reads_hand_work(self):
         assert HAND_WORK in reconcile.HAND_BUILT_REVIEW_LANES
@@ -265,11 +266,11 @@ class TestAnUnmarkedPersonsCard:
             [_unmarked_workbench_card(verdict=promo.FLEET)], bodies=[])
         assert flagged == {"DRE-2499"}
 
-    def test_a_workbench_card_moved_to_todo_is_still_dispatched(self):
-        """Narrow on the lane too: a person who moved the card to Todo has
+    def test_a_workbench_card_moved_to_in_progress_is_still_dispatched(self):
+        """Narrow on the lane too: a person who moved the card to a start lane has
         handed it to the fleet, so the old verdict does not hold it back
         (DRE-6143 and DRE-5952 were moved, not reworded)."""
-        card = _unmarked_workbench_card(state="Todo")
+        card = _unmarked_workbench_card(state="In Progress")
         assert not reconcile.hand_built(card)
         s = stranded._run_sweep([card])
         s.redispatch.assert_called_once()

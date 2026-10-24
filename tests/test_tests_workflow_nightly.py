@@ -122,6 +122,12 @@ SCHEDULE_CONTEXT = {
     "github.ref": "refs/heads/main",
     "github.ref_name": "main",
     "github.repository": "dreadnought-foundry/bureau-pipeline",
+    # How the whole suite finished, which the durations refresh's gate reads
+    # (DRE-7726): it runs when `unit` succeeded or failed. Like a status
+    # function it reads the job's `needs`, never the event, so a schedule run
+    # satisfies it as any run does; read here as a healthy night. Only `unit`:
+    # any other job's result stays unreadable.
+    "needs.unit.result": "success",
 }
 
 
@@ -448,6 +454,12 @@ def test_an_unreadable_gate_is_reported_not_assumed_green():
         # The aggregate job's gate (DRE-5838): runs whatever its parts did.
         ("always()", True),
         ("${{ always() }}", True),
+        # The durations refresh's gate (DRE-7726): runs once the parts finished.
+        (
+            "always() && github.event_name == 'schedule' && "
+            "(needs.unit.result == 'success' || needs.unit.result == 'failure')",
+            True,
+        ),
         # The shapes a later narrowing would reach for.
         ("github.event_name == 'schedule'", True),
         ("github.event_name != 'schedule'", False),
