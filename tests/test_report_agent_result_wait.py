@@ -44,8 +44,8 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SCRIPT = os.path.join(ROOT, "scripts", "report_agent_result.sh")
 sys.path.insert(0, os.path.join(ROOT, "scripts"))
 
-import dead_run  # noqa: E402
-import lane_contract  # noqa: E402
+import dead_run  # noqa: E402, RUF100
+import lane_contract  # noqa: E402, RUF100
 
 CARD = "DRE-7802"
 REPO = "dreadnought-foundry/bureau-pipeline"
@@ -195,7 +195,7 @@ class Run:
             STUB_THREAD=json.dumps(THREAD),
         )
         env.update(env_extra)
-        self.proc = subprocess.run(["bash", SCRIPT], cwd=self.td, env=env,
+        self.proc = subprocess.run(["bash", SCRIPT], check=False, cwd=self.td, env=env,
                                    capture_output=True, text=True)
         tc.assertEqual(0, self.proc.returncode, self.proc.stderr + self.proc.stdout)
         self.journal = []
