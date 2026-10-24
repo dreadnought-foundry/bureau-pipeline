@@ -8,22 +8,21 @@ operator, so every diagnosis stopped the work until a person read it, even
 when the diagnosis itself said the cause was a passing outside fault. That
 hold was 201 stops in one week, the biggest single pile of waiting time.
 
-So the diagnosis agent now also writes a one-word verdict:
+So on the failed run's SECOND attempt, with the medic's own retry gate not
+having said `false`, a diagnosis whose step is `requeue-once` re-runs the
+failed jobs of the same run once more (`gh run rerun <id> --failed`) and
+posts nothing: the report goes into the medic run's own step summary, naming
+attempt 3. Every other step is delivered exactly as before.
 
-  * `resume` — the diagnosis's category (c), an outside service failure a
-    fresh attempt can clear. On the failed run's SECOND attempt, with the
-    medic's own retry gate not having said `false`, the medic re-runs the
-    failed jobs of the same run once more (`gh run rerun <id> --failed`) and
-    posts nothing: the report goes into the medic run's own step summary,
-    naming attempt 3;
-  * `hold` — categories (a), (b) and (d), or any doubt — and also a missing,
-    empty or unreadable file, or any other text. The diagnosis is delivered
-    exactly as before.
+The agent wrote `resume` or `hold` until DRE-7793; it now writes one of the
+five classes, and `medic_next_step.py` decides the step. The class, the step
+and the resume step's gate are pinned in
+tests/test_medic_classifies_diagnosis.py; this file keeps the summary note,
+where the steps sit, and the resume step run.
 
-Attempt 2 becomes attempt 3 and never further: the medic of attempt 3
-delivers its diagnosis whatever the verdict says, so the medic cannot loop.
-The `diagnose` job's own `if:` is untouched, so every class and rule it skips
-today is still skipped.
+Attempt 2 becomes attempt 3 and never further: the medic of attempt 3 finds
+the re-run spent, so the medic cannot loop. The `diagnose` job's own `if:` is
+untouched, so every class and rule it skips today is still skipped.
 """
 
 import os
@@ -39,7 +38,7 @@ import yaml
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 sys.path.insert(0, os.path.join(ROOT, "scripts"))
 
-import medic_resume  # noqa: E402
+import medic_resume
 
 MEDIC = os.path.join(ROOT, ".github", "workflows", "medic.yml")
 VERDICT = ".bureau-pipeline/medic-verdict.txt"
@@ -81,73 +80,10 @@ def _runs(condition: str, ctx: dict) -> bool:
         else f"ctx.get({m.group(0)!r})", condition)
     py = py.replace("||", " or ").replace("&&", " and ")
     py = " ".join(py.split())  # a folded `if:` keeps its indented newlines
-    return bool(eval(py, {"ctx": ctx, "always": lambda: True}))  # noqa: S307
+    return bool(eval(py, {"ctx": ctx, "always": lambda: True}))
 
 
-def _resume_ctx(*, attempt=2, retry="true", verdict="resume") -> dict:
-    return {
-        "github.event.workflow_run.run_attempt": attempt,
-        "needs.classify.outputs.retry": retry,
-        "steps.verdict.outputs.verdict": verdict,
-    }
-
-
-# ── 1. the verdict file ─────────────────────────────────────────────────────
-class TheVerdictTest(unittest.TestCase):
-    def _read(self, content):
-        with tempfile.TemporaryDirectory() as td:
-            path = os.path.join(td, "medic-verdict.txt")
-            if content is not None:
-                mode = "wb" if isinstance(content, bytes) else "w"
-                with open(path, mode) as f:
-                    f.write(content)
-            return medic_resume.verdict(path)
-
-    def test_resume_reads_as_resume(self):
-        self.assertEqual("resume", self._read("resume"))
-
-    def test_resume_is_read_trimmed(self):
-        self.assertEqual("resume", self._read("  resume\n"))
-
-    def test_a_missing_file_reads_as_hold(self):
-        self.assertEqual("hold", self._read(None))
-
-    def test_an_empty_file_reads_as_hold(self):
-        self.assertEqual("hold", self._read(""))
-        self.assertEqual("hold", self._read("\n  \n"))
-
-    def test_hold_reads_as_hold(self):
-        self.assertEqual("hold", self._read("hold"))
-
-    def test_any_other_text_reads_as_hold(self):
-        for text in ("Resume", "RESUME", "resume.", "resume please",
-                     "resume\nhold", "yes", "(c) resume", "`resume`"):
-            with self.subTest(text=text):
-                self.assertEqual("hold", self._read(text))
-
-    def test_an_unreadable_file_reads_as_hold(self):
-        self.assertEqual("hold", self._read(b"\xff\xfe resume \xff"))
-        with tempfile.TemporaryDirectory() as td:
-            # A directory where the file should be cannot be read as text.
-            self.assertEqual("hold", medic_resume.verdict(td))
-
-    def test_the_cli_prints_the_verdict(self):
-        with tempfile.TemporaryDirectory() as td:
-            path = os.path.join(td, "medic-verdict.txt")
-            for content, want in (("resume\n", "resume"), ("hold", "hold"), (None, "hold")):
-                if content is None:
-                    os.unlink(path)
-                else:
-                    Path(path).write_text(content, encoding="utf-8")
-                with self.subTest(content=content):
-                    out = subprocess.run(
-                        [sys.executable, os.path.join(ROOT, "scripts", "medic_resume.py"),
-                         "verdict", "--file", path],
-                        capture_output=True, text=True, check=True).stdout
-                    self.assertEqual(want, out.strip())
-
-
-# ── 2. the summary note ─────────────────────────────────────────────────────
+# ── 1. the summary note ─────────────────────────────────────────────────────
 class TheSummaryTest(unittest.TestCase):
     def test_a_resumed_attempt_2_names_attempt_3(self):
         note = medic_resume.summary("the report", failed_attempt=2,
@@ -172,21 +108,31 @@ class TheSummaryTest(unittest.TestCase):
         self.assertIn("attempt 3", note)
         self.assertIn("no report", note)
 
+    def test_the_verdict_reader_is_gone(self):
+        # DRE-7793: `medic_next_step.read_class` reads the verdict file now.
+        self.assertFalse(hasattr(medic_resume, "verdict"))
+        proc = subprocess.run(
+            [sys.executable, os.path.join(ROOT, "scripts", "medic_resume.py"),
+             "verdict", "--file", VERDICT],
+            capture_output=True, text=True, check=False)
+        self.assertNotEqual(0, proc.returncode)
+        self.assertIn("invalid choice", proc.stderr)
 
-# ── 3. the prompt ───────────────────────────────────────────────────────────
+    def test_the_summary_cli_still_works(self):
+        with tempfile.TemporaryDirectory() as td:
+            report = Path(td) / "medic-report.md"
+            report.write_text("Docker Hub timed out.", encoding="utf-8")
+            out = subprocess.run(
+                [sys.executable, os.path.join(ROOT, "scripts", "medic_resume.py"),
+                 "summary", "--report", str(report), "--attempt", "2",
+                 "--run-url", RUN_URL, "--workflow", "Agent Task"],
+                capture_output=True, text=True, check=True).stdout
+        self.assertIn("attempt 3", out)
+        self.assertIn("Docker Hub timed out.", out)
+
+
+# ── 2. the prompt ───────────────────────────────────────────────────────────
 class ThePromptTest(unittest.TestCase):
-    def test_the_prompt_asks_for_the_verdict_file(self):
-        prompt = _prompt()
-        self.assertIn(VERDICT, prompt)
-        self.assertIn("resume", prompt)
-        self.assertIn("hold", prompt)
-
-    def test_resume_is_category_c_and_hold_is_the_rest(self):
-        prompt = " ".join(_prompt().split())
-        self.assertRegex(prompt, r"resume[^.]*\(c\)")
-        self.assertRegex(prompt, r"hold[^.]*\(a\), \(b\) and \(d\)")
-        self.assertIn("any doubt", prompt)
-
     def test_the_prompt_no_longer_rules_out_a_transient_fault(self):
         prompt = _prompt()
         self.assertNotIn("NOT a transient flake", prompt)
@@ -202,18 +148,12 @@ class ThePromptTest(unittest.TestCase):
         self.assertIn(REPORT, prompt)
 
 
-# ── 4. the steps, and where they sit ────────────────────────────────────────
+# ── 3. the steps, and where they sit ────────────────────────────────────────
 class TheStepsTest(unittest.TestCase):
     def test_the_verdict_and_resume_steps_sit_between_agent_and_delivery(self):
         self.assertLess(_index("claude"), _index("verdict"))
         self.assertLess(_index("verdict"), _index("resume"))
         self.assertLess(_index("resume"), _index("deliver"))
-
-    def test_the_verdict_step_reads_the_file_through_the_script(self):
-        run = _step("verdict")["run"]
-        self.assertIn("medic_resume.py verdict", run)
-        self.assertIn(VERDICT, run)
-        self.assertIn("verdict=", run)
 
     def test_the_resume_step_reruns_the_failed_jobs_of_the_same_run(self):
         step = _step("resume")
@@ -232,35 +172,7 @@ class TheStepsTest(unittest.TestCase):
         self.assertNotIn("LINEAR_API_KEY", step.get("env") or {})
 
 
-# ── 5. the conditions, replayed ─────────────────────────────────────────────
-class TheResumeConditionTest(unittest.TestCase):
-    def _cond(self):
-        return _step("resume")["if"]
-
-    def test_it_resumes_attempt_2_on_a_resume_verdict(self):
-        self.assertTrue(_runs(self._cond(), _resume_ctx()))
-
-    def test_an_unread_retry_gate_still_resumes(self):
-        # `retry != 'false'`, exactly as the `retry` job reads it.
-        self.assertTrue(_runs(self._cond(), _resume_ctx(retry="")))
-
-    def test_attempt_1_never_resumes(self):
-        self.assertFalse(_runs(self._cond(), _resume_ctx(attempt=1)))
-
-    def test_attempt_3_never_resumes(self):
-        self.assertFalse(_runs(self._cond(), _resume_ctx(attempt=3)))
-
-    def test_a_retry_gate_refusal_never_resumes(self):
-        self.assertFalse(_runs(self._cond(), _resume_ctx(retry="false")))
-
-    def test_a_hold_verdict_never_resumes(self):
-        self.assertFalse(_runs(self._cond(), _resume_ctx(verdict="hold")))
-
-    def test_no_verdict_never_resumes(self):
-        self.assertFalse(_runs(self._cond(), _resume_ctx(verdict="")))
-        self.assertFalse(_runs(self._cond(), _resume_ctx(verdict=None)))
-
-
+# ── 4. the conditions, replayed ─────────────────────────────────────────────
 class TheDeliverConditionTest(unittest.TestCase):
     def _cond(self):
         return _step("deliver")["if"]
@@ -268,7 +180,7 @@ class TheDeliverConditionTest(unittest.TestCase):
     def test_delivery_is_skipped_after_a_resume(self):
         self.assertFalse(_runs(self._cond(), {"steps.resume.outputs.resumed": "true"}))
 
-    def test_delivery_runs_after_a_hold_verdict(self):
+    def test_delivery_runs_after_any_other_step(self):
         # The resume step was skipped, so it set no output at all.
         self.assertTrue(_runs(self._cond(), {}))
         self.assertTrue(_runs(self._cond(), {"steps.resume.outputs.resumed": ""}))
@@ -298,7 +210,7 @@ class TheDiagnoseGateIsUnchangedTest(unittest.TestCase):
             " ".join(_jobs()["diagnose"]["if"].split()))
 
 
-# ── 6. the steps, run ───────────────────────────────────────────────────────
+# ── 5. the steps, run ───────────────────────────────────────────────────────
 FAKE_GH = """#!/usr/bin/env bash
 echo "gh $*" >> "$CALLS"
 exit "${FAKE_GH_RC:-0}"
@@ -353,16 +265,6 @@ def _run_step(step_id, *, verdict=None, report="the report", gh_rc=0,
 
 
 class TheStepsRunTest(unittest.TestCase):
-    def test_the_verdict_step_outputs_resume(self):
-        proc, outputs, _, _ = _run_step("verdict", verdict="resume\n")
-        self.assertEqual(0, proc.returncode, proc.stderr)
-        self.assertEqual("resume", outputs["verdict"])
-
-    def test_the_verdict_step_outputs_hold_with_no_file(self):
-        proc, outputs, _, _ = _run_step("verdict", verdict=None)
-        self.assertEqual(0, proc.returncode, proc.stderr)
-        self.assertEqual("hold", outputs["verdict"])
-
     def test_a_resume_reruns_the_run_and_writes_the_summary(self):
         proc, outputs, summary, calls = _run_step(
             "resume", report="GitHub's package registry answered 502.")
