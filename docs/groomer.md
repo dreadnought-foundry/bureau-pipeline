@@ -1040,8 +1040,8 @@ batch that was right apart from two rows.
 | `🧺 groom-proposal: <id>` | propose | unchanged |
 | `🧺 groom-approved: <id>` | the CEO (console or by hand) | unchanged |
 | `🧺 groom-declined: <id> — <reason>` | the CEO | reason required |
-| `🧺 groom-excluded: <id> DRE-N[ — <reason>]` | the CEO | per card — **Don't do**: held back from this drain, and never proposed again until `groom-added` names it (DRE-4966) |
-| `🧺 groom-held: <id> DRE-N[ — <reason>]` | the CEO (the console, DRE-4979/DRE-4980) | per card — **Hold**: held back from this drain exactly as an exclusion is; a later proposal may offer it again, ranked after every card never held (DRE-4966) |
+| `🧺 groom-excluded: <id> DRE-N[ — <reason>]` | the CEO | per card — **Don't do**: held back from this drain, and never proposed again until `groom-added` names it (DRE-4966); with the tail `— move to Cancel`, on the next proposal's Cancel list instead (DRE-7826) |
+| `🧺 groom-held: <id> DRE-N[ — <reason>]` | the CEO (the console, DRE-4979/DRE-4980) | per card — **Hold**: held back from this drain exactly as an exclusion is; a later proposal may offer it again, ranked after every card never held (DRE-4966) — or, with the tail `— until DRE-M` or `— until YYYY-MM-DD`, not before that card is Done or that date has come (DRE-7826) |
 | `🧺 groom-added: <id> DRE-N[ — <reason>]` | the CEO | per card |
 | `🧺 groom-rewrite-accepted: <id> DRE-N` | the CEO, typed by hand on the standing card — the console offers no control for it; one that writes the marker is a later card in the console's repository, not in this epic | per card — accepts the draft the pipeline posted on card DRE-N, which the drain writes as its body before moving it to Planning (DRE-6667) |
 | `🧺 groom-drained: <id>` + `moved: n · held back: n · added: n · cancelled: n · refused: n → Planning at <time PT>` + table | the drain | one per drain; `rewritten: n · ` follows `moved: n · ` only on a drain that wrote an accepted draft (DRE-6667) |
@@ -1517,49 +1517,8 @@ card also marks it lower priority… Don't do means never propose it again."
 The drain always honoured an exclusion for the batch it named. Nothing carried
 it forward, so a card the CEO excluded yesterday was offered again this
 morning. Now `propose` takes the newest decision for each card, on **any**
-proposal on **any** standing card (`read_memory`, DRE-7824).
-
-**What it reads, once per run and before the census.** The console's record of
-every groom decision (`bureau_read.groom_removals`, the read door), then the
-whole thread of every card in `groom_memory.standing_cards` — the five cards
-proposals have ever been posted on, and the `--card`/`--post` card when it is
-not one of them, each read once and its console receipts checked against that
-card. `groom_memory.remembered` gives the newest decision per card across the
-door's rows and the threads' markers. Until DRE-7824 only the current card's
-thread was read, which is how DRE-4267, DRE-4271 and DRE-4272 — excluded on
-DRE-4488 on 2026-09-22 — were offered again on DRE-4541. The repo switch still
-reads the current card only. A morning the door cannot be read says so on the
-page, with the door's reason and detail (`The console's record of your
-decisions could not be read this morning: …`), and the decisions written on the
-threads are honored instead; no card is offered because its decision could not
-be read. Every run prints one line in the Groom step's log:
-
-```
-groom-memory: source=<record|fallback> rows=<N> history=<H> thread=<T> fallback=<F> excluded=<E> held=<K> standing=<cards>[ door=<reason> detail=<detail>]
-```
-
-`rows` is the door's rows; `history`, `thread` and `fallback` count the newest
-decisions by the source they came from (`groom_memory.SOURCES`).
-
-- **`groom-excluded` — Don't do** (the door's `not-doing`, and `cancel` until
-  Cancel gets its own list). The card leaves the offer before the census,
-  exactly as a held repo's card does, and is listed under *Your earlier
-  answers* with the reason recorded for it — or "no reason recorded" — and the
-  Pacific date of the decision. `🧺 groom-added: <id> DRE-N` brings it back.
-- **A card brought back** — a `groom-added` marker or the door's `put-back`
-  newer than the removal — is on offer again, and while it is in the lane the
-  page names it in the `Put back on offer by you:` line, with the reason
-  recorded for bringing it back and its date. A `groom-rewrite-accepted`
-  newer than the removal brings it back too, and is named in its own
-  `Back on offer because you accepted its rewrite:` line with its date.
-  Neither line names a card that was never removed: an accepted rewrite or a
-  `groom-added` on such a card leaves it on offer and says nothing.
-- **`groom-held` — Hold**, with or without a condition. The drain leaves it in Intake for the batch it
-  names, exactly as an exclusion. A later proposal may offer it again, but
-  sequences every held card after every card that was never held, whatever
-  their priority or age. The console also lowers the card's Linear priority to
-  Low (DRE-4979).
-- **`groom-added`** after either clears it.
+proposal on **any** standing card, and acts on what it was — see *The memory*
+below for where it is read and the four decisions.
 
 Only a decider's marker counts — a person's, or one the console signed — so the
 proposer cannot take a card off its own offer. A decider's marker that names no
@@ -1567,7 +1526,7 @@ card is listed on the next proposal under *Decisions I could not read*, once:
 a proposal reports what was written since the one before it. A thread with no per-card
 marker proposes exactly what it did before.
 
-Such a marker changes neither list, so the next proposal usually carries the
+When such a marker changes neither list, the next proposal carries the
 **same id** as the one already on the card — and a proposal whose id already
 stands there is normally not posted again. When the proposal has decisions to
 list, it is posted again under that id unless a page with the id already
@@ -1575,6 +1534,93 @@ quotes every one of them. The second page carries the same lists, so an
 approval of the id means the same batch on either page, and the id is not
 retired. The run after that lists nothing, because the second page is now the
 newest proposal, and a repeat id posts nothing as before.
+
+### The memory (DRE-7822, DRE-7824, DRE-7826)
+
+The groomer's memory is the newest decision about each card, whichever
+proposal and whichever standing card it was written on.
+
+**Where it is read.** `read_memory`, once per `propose` run and before the
+census, so a card the memory keeps off the offer is never sent to the model,
+ranked, counted or batched. It reads the console's record of every groom
+decision first (`bureau_read.groom_removals`, the read door), then the whole
+thread of every standing card, each read once and its console receipts checked
+against that card. `groom_memory.remembered` gives the newest decision per card
+across the door's rows and the threads' markers, and `groom_memory.standing`
+says where each one stands this morning — today the Pacific date of the run,
+and the state of every card a hold names, read in **one** Linear request
+(`hold_states`). The repo switch still reads the current card only.
+
+**The standing cards.** `groom_memory.standing_cards(current)` is
+`groom_memory.STANDING_CARDS` — DRE-2840, DRE-3013, DRE-3327, DRE-4488 and
+DRE-4541, every card proposals have ever been posted on — plus the
+`--card`/`--post` card (`GROOM_PROPOSAL_CARD`) when it is not one of them, so a
+new card is read from its first morning and the outgoing one stays read. Until
+DRE-7824 only the current card's thread was read, which is how DRE-4267,
+DRE-4271 and DRE-4272 — excluded on DRE-4488 on 2026-09-22 — were offered
+again on DRE-4541. **At rotation** the pull request that moves the standing
+card to a new one adds it to `config/hand-work-age.json`'s `standing` list, so
+it never alarms, and appends it to `STANDING_CARDS` — never removing one;
+`tests/test_groom_memory.py` holds that same pull request to both.
+
+**The four decisions** (`groom_memory.DECISIONS`, the console's words):
+
+- **`not-doing`** — **Not doing** on the console, `groom-excluded` on a thread.
+  The card leaves the offer before the census, exactly as a held repo's card
+  does, and is listed under *Your earlier answers* with the reason recorded for
+  it — or "no reason recorded" — and the Pacific date of the decision.
+- **`cancel`** — **Move to Cancel** on the console, `groom-excluded: <id> DRE-N
+  — move to Cancel` on a thread. Since DRE-7826 the card goes on the **next
+  proposal's Cancel list**, whatever its place in the order and taking no
+  Planning slot — the one Cancel row not drawn from the morning's twenty,
+  because a person already decided it. Its `source` is `console-record`
+  (`groomer.DEAD_FROM_RECORD`), its reason reads `You moved this card to Cancel
+  on <Pacific date> (proposal <id>)`, and its one proof item is the console's
+  record (`Move to Cancel recorded by <actor> on <Pacific date>, proposal
+  <id>`), so approving that proposal cancels it with that reason written on the
+  card. The ranked read never re-judges it, and the check before posting writes
+  no row for it and never keeps it (`groom_verify.RECORDED_CANCEL_SOURCE`). An
+  epic with an open child is still refused, under *Cancels refused* as
+  proposed by `your Move to Cancel`. Only a card on offer that morning is
+  placed: one that has left the lane, or sits in a held repo, is not shown.
+  Before DRE-7826 a Move to Cancel was read as Don't do and the card stayed in
+  Intake for ever.
+- **`hold`** — **Hold until** on the console, `groom-held` on a thread.
+  - Held until a card, `— until DRE-M`: off both lists until DRE-M is `Done`,
+    and named under *Your earlier answers* with DRE-M's lane
+    (`Held until DRE-M (In Review) — not offered until it is Done: …`). A hold
+    card that is `Canceled` or `Duplicate`, or whose state could not be read,
+    keeps the hold, and the line says why. The first proposal built after
+    DRE-M is `Done` offers the card, sequenced as any card and never ranked
+    last, and says `Back on offer — the hold you set is met: DRE-Y (DRE-M is
+    Done)`.
+  - Held until a date, `— until YYYY-MM-DD`: off both lists until that date in
+    Pacific time — a proposal built at 23:30 PT the day before still holds it
+    — and back on offer, said `(<date> has come)`, on the date itself.
+  - Held with no condition: the drain leaves it in Intake for the batch it
+    names, and a later proposal offers it again sequenced after every card
+    never held, whatever its priority or age. The console also lowers the
+    card's Linear priority to Low (DRE-4979).
+- **`put-back`** — the door's `put-back`, a `groom-added` marker, or a
+  `groom-rewrite-accepted` newer than the removal. The card is on offer again,
+  and while it is in the lane the page names it in the `Put back on offer by
+  you:` line, with the reason recorded and its date — or, for an accepted
+  rewrite, in its own `Back on offer because you accepted its rewrite:` line.
+  Neither line names a card that was never removed.
+
+**The fallback.** A morning the door cannot be read says so on the page, with
+the door's reason and detail (`The console's record of your decisions could
+not be read this morning: …`), and the decisions written on the threads are
+honored instead; no card is offered because its decision could not be read.
+Every run prints one line in the Groom step's log:
+
+```
+groom-memory: source=<record|fallback> rows=<N> history=<H> thread=<T> fallback=<F> excluded=<E> held=<K> standing=<cards>[ door=<reason> detail=<detail>]
+```
+
+`rows` is the door's rows; `history`, `thread` and `fallback` count the newest
+decisions by the source they came from (`groom_memory.SOURCES`); `excluded` is
+the `not-doing` cards and `held` every `hold`, met or not.
 
 ## The next proposal answers your last decline (DRE-3373)
 
