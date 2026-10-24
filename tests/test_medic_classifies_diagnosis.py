@@ -181,7 +181,9 @@ class TheResumeFollowsTheStepTest(unittest.TestCase):
         self.assertEqual(
             "github.event.workflow_run.run_attempt == 2 && "
             "needs.classify.outputs.retry != 'false' && "
-            "steps.verdict.outputs.step == 'requeue-once'",
+            "steps.verdict.outputs.step == 'requeue-once' && "
+            # DRE-7799: a card waiting out a limit is the wait's.
+            "steps.waiting.outputs.waiting != 'true'",
             _flat(self._cond()))
 
     def test_it_resumes_attempt_2_on_requeue_once(self):
