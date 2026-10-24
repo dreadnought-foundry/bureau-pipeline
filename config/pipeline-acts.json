@@ -1778,7 +1778,7 @@
       "file": "scripts/reconcile.py",
       "anchor": "🧹 Auto-advanced {QUEUE_LANE} → Planning",
       "kind": "undeclared-act",
-      "means": "Every blocker of a waiting epic is closed, so the dependent epic advances on its own from Queued to Planning, where the planner is dispatched.",
+      "means": "A waiting epic advances on its own from Queued to Planning, where the planner is dispatched, because no blocker still holds it: each one is closed, or is a built-out epic or a proof of one (DRE-7831).",
       "why": "Act-shaped, and the registry has no row for it. DRE-2825 declared thirteen acts by reading reconcile.py's ten tag constants, the fix loop's three notices and the medic; this receipt was not among them. Giving it a row is a REGISTRY change — a tag, a kind, a state, a next actor, a subscriber, and the reasoning that fixes each — not an emission change, and this card converts what the registry declares. Named here so the debt is countable rather than invisible."
     },
     {

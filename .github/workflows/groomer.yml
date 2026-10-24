@@ -184,7 +184,10 @@ jobs:
     # turns the build red instead of leaving the job killed mid-call.
     # 35 since DRE-3331: the ceiling doubled once the budget learned that the
     # model's thinking is billed against it — the widest call is now 1,660s.
-    timeout-minutes: 35
+    # 45 since DRE-7613: the `targets` step can also wait out Linear's
+    # search-speed refusal, up to `groom_lookups.SEARCH_WAIT_BUDGET_SECONDS`
+    # (600 s) — 1,660 + 300 + 600 = 2,560 s, and the test reads all three.
+    timeout-minutes: 45
     concurrency:
       group: groomer
       cancel-in-progress: false
@@ -344,14 +347,17 @@ jobs:
           INTAKE_HOLD: ${{ inputs.intake_hold }}
           JUDGEMENT: ${{ inputs.judgement }}
           REPLAY: ${{ inputs.replay }}
-          # The read door's settings (DRE-7242), for `targets` ALONE: its
-          # problem search (`groom_lookups.cards`) asks the door before Linear.
-          # Under names no script reads, and handed to the targets command
-          # below as the door's own — so `propose`, in this same step, runs
-          # exactly as before the door was wired. A stub that grants no
-          # `id-token: write` mints no token, and the search falls back to
-          # Linear; it never fails. `DOOR_PIPELINE_REF` lets the client
-          # refuse a token that names another ref than these scripts.
+          # The read door's settings (DRE-7242), under names no script reads
+          # and handed to each command below as the door's own. `targets`
+          # gets all four: its problem search (`groom_lookups.cards`) asks
+          # the door before Linear. `propose` gets every one but the mode
+          # (DRE-7821): the address, audience and ref are what the console's
+          # record of groom decisions is read with, whatever the mode says,
+          # and with no `BUREAU_READ` every board read `propose` makes still
+          # goes to Linear. A stub that grants no `id-token: write` mints no
+          # token, and each read says so; it never fails. `DOOR_PIPELINE_REF`
+          # lets the client refuse a token that names another ref than these
+          # scripts.
           DOOR_READ: ${{ vars.BUREAU_READ || 'off' }}
           DOOR_READ_URL: ${{ vars.BUREAU_READ_URL }}
           DOOR_READ_AUDIENCE: ${{ vars.BUREAU_READ_AUDIENCE }}
@@ -401,7 +407,11 @@ jobs:
               python3 .bureau-pipeline/scripts/groom_replay.py base \
                 --stored "$REPLAY" --out proposal.json | tee proposal.txt
             else
-              python3 .bureau-pipeline/scripts/groomer.py propose \
+              # The address of the door, never its mode (DRE-7821).
+              BUREAU_READ_URL="$DOOR_READ_URL" \
+                BUREAU_READ_AUDIENCE="$DOOR_READ_AUDIENCE" \
+                BUREAU_PIPELINE_REF="$DOOR_PIPELINE_REF" \
+                python3 .bureau-pipeline/scripts/groomer.py propose \
                 "${SHAPING[@]}" "${JUDGE[@]}" "${THREAD[@]}" \
                 --keep-answer judgement-answer.txt \
                 --out proposal.json | tee proposal.txt

@@ -770,13 +770,17 @@ class JudgedReadReachableTest(unittest.TestCase):
     def test_the_job_clock_covers_the_judged_reads_own_ceiling(self):
         """Both numbers are READ — the YAML's and the constant's. A later card
         that raises `OUTPUT_CEILING` turns this red rather than leaving the job
-        killed mid-call."""
+        killed mid-call. Since DRE-7613 the step can also wait out Linear's
+        search-speed refusals, up to `groom_lookups.SEARCH_WAIT_BUDGET_SECONDS`
+        a run, so that budget is read here too."""
         job = self.doc["jobs"]["groom"]
         self.assertGreaterEqual(
             int(job["timeout-minutes"]) * 60,
-            groom_judgement.MAX_WALL_CLOCK_SECONDS + 300,
-            "the Groom job's clock must cover the widest one call plus five "
-            "minutes for the non-model work the step does",
+            groom_judgement.MAX_WALL_CLOCK_SECONDS + 300
+            + groom_lookups.SEARCH_WAIT_BUDGET_SECONDS,
+            "the Groom job's clock must cover the widest one call, five "
+            "minutes for the non-model work the step does, and the waits on "
+            "Linear's search-speed refusal",
         )
 
 

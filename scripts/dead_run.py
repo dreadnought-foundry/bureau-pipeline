@@ -188,6 +188,11 @@ import credential_rotation  # noqa: E402 — after the path insert, by design
 # of the line it writes. Stdlib-only at module level, so no import cycle.
 import stream_watchdog  # noqa: E402 — after the path insert, by design
 
+# The two waits a build death can be (DRE-7795): `KINDS` is the contract a
+# `--wait-kind` is checked against (DRE-7800). Stdlib-only at module level —
+# it imports its own readers inside the functions that need them — so no cycle.
+import vendor_wait  # noqa: E402, RUF100 — after the path insert, by design
+
 # The queue lane (DRE-6745): the park writes `QUEUE_LANE`, the planning exit's
 # destination — the lane `Queued` replaces until DRE-6742 moves the exit, then
 # `Queued` — and never a name of its own. Read where it is written, so a test
@@ -203,6 +208,11 @@ HOLD_LABEL = "needs-human"
 # limit_recovery, and the marker's own paragraph names it. Six hours, because
 # the Claude usage window is five: a reset five hours out is a real wait.
 LIMIT_DEATH_CLOCK_MINUTES = int(os.environ.get("LIMIT_DEATH_CLOCK_MINUTES", "360"))
+# A vendor wait's reset (DRE-7800): a `vendor-transient` marker comes back this
+# many minutes after the run ended, because a 529 clears in seconds and five
+# minutes is one sweep pass. A `rotation` marker's reset is the run's end
+# itself — the renewed token is already in place.
+VENDOR_WAIT_MINUTES = 5
 REQUEUE_CAP = 2  # requeue at most twice (attempts 1,2,3), then hold
 
 # Turn exhaustion's own budget tag and cap (DRE-2312). The string discipline
@@ -662,10 +672,15 @@ def limit_marker(kind: str, stage: str, reset: datetime | None, run_id: str,
         first += f" account={account}"
     if assumed:
         first += " assumed=yes"
-    wall = (
-        "the Claude account's usage limit" if kind == "claude"
-        else "Linear's request budget (the workspace's hourly quota)"
-    )
+    # The two vendor waits (DRE-7800) are named in plain words too: a build
+    # death the reader called a wait is a wall the card never put up.
+    wall = {
+        "claude": "the Claude account's usage limit",
+        vendor_wait.ROTATION: "the access token our own renewal replaced",
+        vendor_wait.VENDOR_TRANSIENT: (
+            "the model service refusing for a moment (a 529 or 5xx)"
+        ),
+    }.get(kind, "Linear's request budget (the workspace's hourly quota)")
     if assumed:
         back = (
             f"The run named no reset time, so the reset is assumed five hours "
@@ -676,9 +691,10 @@ def limit_marker(kind: str, stage: str, reset: datetime | None, run_id: str,
             f"is handed to a person."
         )
     elif reset:
+        over = "the wait is over" if kind in vendor_wait.KINDS else "the window resets"
         back = (
             f"The reconcile sweep re-enters the {stage} stage on its own once "
-            f"the window resets (at {pacific(reset)})."
+            f"{over} (at {pacific(reset)})."
         )
     elif kind == "linear":
         back = (
@@ -757,6 +773,19 @@ class LimitDeath:
     def marker(self) -> str:
         return limit_marker(self.kind, self.stage, self.reset, self.run_id, self.account,
                             reset_assumed=self.reset_assumed)
+
+
+def wait_death(kind: str, run_id: str, end: datetime) -> LimitDeath | None:
+    """A build death `vendor_wait` called a wait, as the `LimitDeath` that
+    fills `decide`'s `limit` (DRE-7800), or None for a kind outside
+    `vendor_wait.KINDS`. `end` is the run's end; a `rotation` comes back at
+    it and a `vendor-transient` VENDOR_WAIT_MINUTES after it."""
+    if kind not in vendor_wait.KINDS:
+        return None
+    reset = end.astimezone(UTC)
+    if kind == vendor_wait.VENDOR_TRANSIENT:
+        reset += timedelta(minutes=VENDOR_WAIT_MINUTES)
+    return LimitDeath(kind=kind, stage="build", reset=reset, run_id=run_id or "unknown")
 
 
 class Decision:
@@ -926,7 +955,9 @@ def decide(
     carrying neither budget tag and no `model-error:` marker, no state move,
     no hold label — the reconcile sweep brings the card back
     (limit_recovery.py) once the reset time has passed or the account has
-    switched.
+    switched. A build death `vendor_wait` called a wait (DRE-7800) arrives
+    here too, as `wait_death()`'s `LimitDeath`: the CLI's `--wait-kind` fills
+    this same parameter, so it is ranked exactly where every limit is.
 
     `split_tried`/`deaths`/`footprint` (DRE-6178): the planner gets a card once
     before the dead-run cap holds it — on the SILENT class only, the one death
@@ -1472,6 +1503,19 @@ def _flag_value(rest: list[str], flag: str) -> str:
     return ""
 
 
+def _run_end(rest: list[str]) -> datetime:
+    """The run's end: `--now`, else the current UTC time — the clock both a
+    `--limit-log` reset and a `--wait-kind` reset count from."""
+    now_raw = _flag_value(rest, "--now")
+    try:
+        now = datetime.fromisoformat(now_raw) if now_raw else datetime.now(UTC)
+    except ValueError:
+        now = datetime.now(UTC)
+    if now.tzinfo is None:
+        now = now.replace(tzinfo=UTC)
+    return now
+
+
 #: The two reasons a park here is stamped with (DRE-6178): the dead-run cap
 #: and the turn cap, the two budgets `decide` reaches "hold" from.
 PARK_REASONS = ("dead-run-cap", "turn-cap-park")
@@ -1548,6 +1592,8 @@ def main(argv: list[str]) -> int:
              [--run-url U]
              [--pre-agent [--failed-step NAME] [--rate-limited]]
              [--credential-expiry [--push-status N] [--artifact NAME]]
+             [--limit-log PATH --workflow NAME --run-id ID [--account L]]
+             [--wait-kind KIND --run-id ID] [--now ISO]
       park <CARD> --reason dead-run-cap|turn-cap-park
       park-unlanded [--run-url U] [--turn-exhaustion]
       turn-noted [--exit NAME] [--execution-file PATH] [--run-url U]
@@ -1589,6 +1635,7 @@ def main(argv: list[str]) -> int:
              "[--failed-step NAME] [--rate-limited] [--credential-expiry] "
              "[--push-status N] [--artifact NAME] [--run-url U] "
              "[--limit-log PATH --workflow NAME --run-id ID [--account L] "
+             "[--now ISO]] [--wait-kind rotation|vendor-transient --run-id ID "
              "[--now ISO]] | "
              "park <CARD> --reason <code> | park-unlanded [--run-url U] [--turn-exhaustion] | "
              "turn-noted [--exit NAME] [--execution-file PATH] [--run-url U]")
@@ -1658,13 +1705,7 @@ def main(argv: list[str]) -> int:
         kind = limit_kind(limit_text)
         stage = limit_stage(_flag_value(rest, "--workflow"), failed_step)
         if kind and stage:
-            now_raw = _flag_value(rest, "--now")
-            try:
-                now = datetime.fromisoformat(now_raw) if now_raw else datetime.now(UTC)
-            except ValueError:
-                now = datetime.now(UTC)
-            if now.tzinfo is None:
-                now = now.replace(tzinfo=UTC)
+            now = _run_end(rest)
             # DRE-5455: a Claude wall that names no reset gets one usage
             # window from the run's own completion time, marked as assumed.
             # A stated reset is never assumed over, and Linear is unchanged.
@@ -1680,6 +1721,24 @@ def main(argv: list[str]) -> int:
                 account=_flag_value(rest, "--account") or None,
                 reset_assumed=reset_assumed,
             )
+    # DRE-7800: a build death `vendor_wait` called a wait fills the same
+    # `limit` — the CLI's second way to, never a second parameter. A wall
+    # `--limit-log` read wins: it names the wall the vendor stated and its own
+    # reset, the fuller account of the same death. A kind outside the
+    # reader's contract is refused out loud and the death decides as without it.
+    wait_kind = _flag_value(rest, "--wait-kind")
+    if wait_kind:
+        wait = wait_death(wait_kind, _flag_value(rest, "--run-id"), _run_end(rest))
+        if wait is None:
+            print(f"dead_run: --wait-kind {wait_kind!r} is not one of "
+                  f"{', '.join(vendor_wait.KINDS)} — the death decides as it "
+                  f"would without it", file=sys.stderr)
+        elif limit is not None:
+            print(f"dead_run: --limit-log read a {limit.kind} wall and --wait-kind "
+                  f"named {wait_kind} — the {limit.kind} marker is written and "
+                  f"the {wait_kind} wait is dropped", file=sys.stderr)
+        else:
+            limit = wait
     turn_facts = ""
     if turn_exhaustion and exec_path:
         import check_agent_result  # local: only this branch needs the loader

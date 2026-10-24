@@ -878,6 +878,11 @@ OBSERVING its earlier cards live is not one epic but two.** The plan is split
 into child epics under the original, which stays as the parent that rolls them
 up — the first child ends at the observation, the second is filed at the same
 gate, blocked on the first, and planned in detail only when the first is Done.
+For the sweep that returns the second to Planning, a first part that is built
+out, with only its proof left open, counts as Done (DRE-7831). The CEO decided
+on 2026-10-13 that an open proof never holds back the next part, so the second
+is planned against what the first built, and its planner reads the proof's
+record as it stands.
 
 The tells below are readable before the plan is written, in the same grammar as
 the size tells above. Any ONE of them means the plan is cut at a seam.
@@ -911,7 +916,7 @@ at an observation: a release, watched, by a person.
 
 **B — the fleet:** DRE-3212, DRE-3216, DRE-3213, DRE-3238, DRE-3214, DRE-3215,
 DRE-3217, DRE-3218, plus the fleet proof. Blocked on A, and planned only when
-A is Done.
+A is Done, or built out with only its proof left open (DRE-7831).
 
 (As planned in August each half also carried a demo card. Both were cancelled
 on 2026-09-12 with the other 23; the shape above is the one to copy.)
@@ -923,7 +928,9 @@ could not finish reading fifteen cards at the old ceiling — the plan was too
 long to be reviewed in one pass, which means nobody read all of it.
 
 **The split as it landed on the board.** DRE-3164 kept seven cards. DRE-3245
-took eight, blocked on it, sitting in the queue until part 1 is Done.
+took eight, blocked on it, sitting in the queue until part 1 is Done. Since
+DRE-7831 the second part would leave the queue once part 1 is built out, with
+only its proof left open.
 
 ### What the planner files instead
 
@@ -936,8 +943,9 @@ shape the classifier stamps for this is `roll-up`.
   statement of its slice. The order between children is `blockedBy` relations:
   the first child ends at the observation, and the second is filed at the same
   time, blocked on the first, and planned in detail only when the first is
-  Done — so its plan is written against the thing that exists rather than the
-  thing that was imagined.
+  Done, or built out with only its proof left open (DRE-7831) — so its plan is
+  written against the thing that exists rather than the thing that was
+  imagined.
 - **Each child is planned and green-lit on its own**, like any epic: its own
   cards, its own proof card, its own trip past both critics to the CEO.
 - **The parent is never approved for building and never builds anything.** It
@@ -949,9 +957,13 @@ The parent's plan for a seam is short: its children in order, and the detail
 belongs in each child's own artifact, written when its turn comes.
 
 **When the epic behind a blocker moves (DRE-6407).** Two rules, one per moment.
-An epic still waiting to be planned is planned only when its blocker is Done,
-proof included — the sweep's auto-advance `waits for Done`, because that plan is
-written against what the proof observed. An epic the CEO has already approved,
+An epic still waiting to be planned is not held by a proof (DRE-7831): the
+sweep returns it to Planning once each blocker is Done, or is an In Progress
+epic that is built out, or is a PROOF card whose epic is Done or built out —
+the planner can still read the blocker's proof record when it plans. Any other
+blocker still `waits for Done`, and the sweep's `epic-gate:` line says
+`released at build-done`, or that a proof of a built-out epic was `released`,
+or why the blocker still holds. An epic the CEO has already approved,
 its cards written, is `released at build-done`: once its blocker has no
 buildable card left (`epic_cap.buildable()` — open, not an epic, not a proof,
 not marked for a person) and no open child epic, even with the blocker's proof

@@ -18,9 +18,9 @@ THE RULE, two of them, one per caller of `reconcile.epic_blockers_unmet`:
      count_rollup_parents=True)` is false. A proof card and a card a person
      builds by hand do not hold.
   2. The auto-advance (`advance_unblocked_epics`) moves a Backlog epic to
-     Planning to be PLANNED (DRE-6653), and the seam rule (DRE-3244) says that plan is
-     written against what the first epic's proof observed. It keeps waiting
-     for Done.
+     Planning to be PLANNED (DRE-6653). It is not held by a proof either
+     (DRE-7831): a built-out In Progress blocker epic counts as cleared, and
+     the planner can still read the blocker's proof record when it plans.
 
 The blocker's children come from ONE single-issue read per distinct In
 Progress blocker per pass, selecting `epic_cap.IN_MOTION_NODE` — never by
@@ -386,7 +386,7 @@ def test_the_pass_record_is_not_widened():
 
 
 # --------------------------------------------------------------------------
-# rule 2: the auto-advance waits for Done — the seam (DRE-3244)
+# rule 2: the auto-advance is not held by a proof (DRE-7831)
 # --------------------------------------------------------------------------
 def _seam(a_state, a_kids):
     b_done = _epic_record(B, kids=(("DRE-701", "Done"), ("DRE-702", "Done")))
@@ -397,10 +397,11 @@ def _seam(a_state, a_kids):
     )
 
 
-def test_the_auto_advance_waits_for_done_whatever_the_blocker_has_left(capsys):
+def test_the_auto_advance_moves_w_when_its_other_blocker_has_only_its_proof_open(capsys):
     """W is a Backlog epic still to be planned, blocked by A (only its proof
-    open) and by B. B closing must not advance W: its plan is written against
-    what A's proof observed."""
+    open) and by B. B closing advances W: A is built out, and an open proof
+    never holds back the next parts (DRE-7831). The hook's receipt names only
+    the blocker that just closed."""
     fake = _seam("In Progress", [_kid("DRE-601", "Done"), _proof("DRE-603")])
     with patch.object(linear_ops, "gql", side_effect=fake.gql), \
             patch.object(linear_ops, "cmd_state") as state, \
@@ -409,15 +410,24 @@ def test_the_auto_advance_waits_for_done_whatever_the_blocker_has_left(capsys):
         assert reconcile._close_epic_if_finished(B) is True
     out = capsys.readouterr().out
     state.assert_called_once_with(B, "Done")
-    advance.assert_not_called()
-    assert all(c.args[0] != W for c in comment.call_args_list)
-    lines = _gate_lines(out)
-    assert any(
-        A in line and "(In Progress)" in line and "**waits for Done**" in line
-        for line in lines
-    ), lines
-    assert fake.blocker_reads == []
-    assert "released at build-done" not in out
+    advance.assert_called_once_with(W, "Planning", reconcile.QUEUE_FROM)
+    lines = [line for line in _gate_lines(out) if W in line]
+    released = [line for line in lines if "released at build-done" in line]
+    assert released and A in released[0], lines
+    assert "DRE-603 PROOF" in released[0], released
+    assert fake.blocker_reads == [A]
+    to_w = [c.args[1] for c in comment.call_args_list if c.args[0] == W]
+    assert len(to_w) == 1, to_w
+    assert to_w[0].startswith(
+        "🧹 Auto-advanced Queued → Planning: blocker epic DRE-700 is Done, and no "
+        "blocker still holds it."
+    ), to_w[0]
+    # The receipt's fixed second paragraph says a person approves the plan
+    # (→ In Progress); the line that names blockers never says it.
+    first = to_w[0].split("\n")[0]
+    assert "In Progress" not in first, to_w[0]
+    assert "every blocker is now closed" not in to_w[0], to_w[0]
+    assert A not in to_w[0], to_w[0]
 
 
 def test_the_auto_advance_moves_w_once_every_blocker_is_done(capsys):

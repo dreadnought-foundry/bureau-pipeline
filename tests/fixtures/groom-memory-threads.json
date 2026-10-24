@@ -1,0 +1,393 @@
+{
+  "_readme": "Every per-card groom marker (groom-excluded, groom-held, groom-added, groom-rewrite-accepted) on the standing cards DRE-4488 and DRE-4541, read from their Linear threads on 2026-10-23 (`linear_ops.py dump-comments <card> --with-authors`) and put in the shape the groomer hands `groom_memory.remembered` (DRE-7822): the first line of each marker split into its proposal id, card and tail. Copied, never edited: tests/test_groom_memory.py reads it to prove that the four cards excluded on DRE-4488 on 2026-09-22 stay excluded when DRE-4541 is read beside it.",
+  "markers": {
+    "DRE-4488": [
+      {
+        "standing_card": "DRE-4488",
+        "created_at": "2026-09-22T02:49:20.635Z",
+        "kind": "excluded",
+        "proposal_id": "50e396c78523",
+        "card": "DRE-4481",
+        "tail": null
+      },
+      {
+        "standing_card": "DRE-4488",
+        "created_at": "2026-09-22T02:49:21.172Z",
+        "kind": "excluded",
+        "proposal_id": "50e396c78523",
+        "card": "DRE-4482",
+        "tail": null
+      },
+      {
+        "standing_card": "DRE-4488",
+        "created_at": "2026-09-22T02:49:23.473Z",
+        "kind": "excluded",
+        "proposal_id": "50e396c78523",
+        "card": "DRE-4267",
+        "tail": null
+      },
+      {
+        "standing_card": "DRE-4488",
+        "created_at": "2026-09-22T02:49:24.293Z",
+        "kind": "excluded",
+        "proposal_id": "50e396c78523",
+        "card": "DRE-4386",
+        "tail": null
+      },
+      {
+        "standing_card": "DRE-4488",
+        "created_at": "2026-09-22T02:49:25.392Z",
+        "kind": "excluded",
+        "proposal_id": "50e396c78523",
+        "card": "DRE-4387",
+        "tail": null
+      },
+      {
+        "standing_card": "DRE-4488",
+        "created_at": "2026-09-22T02:49:26.005Z",
+        "kind": "excluded",
+        "proposal_id": "50e396c78523",
+        "card": "DRE-4271",
+        "tail": null
+      },
+      {
+        "standing_card": "DRE-4488",
+        "created_at": "2026-09-22T02:49:26.582Z",
+        "kind": "excluded",
+        "proposal_id": "50e396c78523",
+        "card": "DRE-4272",
+        "tail": null
+      },
+      {
+        "standing_card": "DRE-4488",
+        "created_at": "2026-09-22T02:49:27.238Z",
+        "kind": "excluded",
+        "proposal_id": "50e396c78523",
+        "card": "DRE-3796",
+        "tail": null
+      },
+      {
+        "standing_card": "DRE-4488",
+        "created_at": "2026-09-22T02:49:27.771Z",
+        "kind": "excluded",
+        "proposal_id": "50e396c78523",
+        "card": "DRE-3800",
+        "tail": null
+      },
+      {
+        "standing_card": "DRE-4488",
+        "created_at": "2026-09-22T02:49:28.314Z",
+        "kind": "excluded",
+        "proposal_id": "50e396c78523",
+        "card": "DRE-3801",
+        "tail": null
+      },
+      {
+        "standing_card": "DRE-4488",
+        "created_at": "2026-09-22T02:49:29.089Z",
+        "kind": "excluded",
+        "proposal_id": "50e396c78523",
+        "card": "DRE-2503",
+        "tail": null
+      },
+      {
+        "standing_card": "DRE-4488",
+        "created_at": "2026-09-22T02:49:29.653Z",
+        "kind": "excluded",
+        "proposal_id": "50e396c78523",
+        "card": "DRE-3526",
+        "tail": null
+      },
+      {
+        "standing_card": "DRE-4488",
+        "created_at": "2026-09-22T02:49:30.417Z",
+        "kind": "excluded",
+        "proposal_id": "50e396c78523",
+        "card": "DRE-4054",
+        "tail": null
+      }
+    ],
+    "DRE-4541": [
+      {
+        "standing_card": "DRE-4541",
+        "created_at": "2026-09-26T14:40:58.804Z",
+        "kind": "excluded",
+        "proposal_id": "b9eecae64787",
+        "card": "DRE-2348",
+        "tail": null
+      },
+      {
+        "standing_card": "DRE-4541",
+        "created_at": "2026-09-26T15:35:03.298Z",
+        "kind": "excluded",
+        "proposal_id": "b9eecae64787",
+        "card": "DRE-2456",
+        "tail": null
+      },
+      {
+        "standing_card": "DRE-4541",
+        "created_at": "2026-09-26T15:35:08.686Z",
+        "kind": "excluded",
+        "proposal_id": "b9eecae64787",
+        "card": "DRE-2457",
+        "tail": null
+      },
+      {
+        "standing_card": "DRE-4541",
+        "created_at": "2026-09-26T15:35:20.157Z",
+        "kind": "excluded",
+        "proposal_id": "b9eecae64787",
+        "card": "DRE-2458",
+        "tail": null
+      },
+      {
+        "standing_card": "DRE-4541",
+        "created_at": "2026-09-26T15:35:28.600Z",
+        "kind": "excluded",
+        "proposal_id": "b9eecae64787",
+        "card": "DRE-2897",
+        "tail": null
+      },
+      {
+        "standing_card": "DRE-4541",
+        "created_at": "2026-09-26T15:35:45.862Z",
+        "kind": "excluded",
+        "proposal_id": "b9eecae64787",
+        "card": "DRE-2957",
+        "tail": null
+      },
+      {
+        "standing_card": "DRE-4541",
+        "created_at": "2026-09-26T15:37:03.475Z",
+        "kind": "excluded",
+        "proposal_id": "b9eecae64787",
+        "card": "DRE-2959",
+        "tail": null
+      },
+      {
+        "standing_card": "DRE-4541",
+        "created_at": "2026-09-26T15:37:20.414Z",
+        "kind": "excluded",
+        "proposal_id": "b9eecae64787",
+        "card": "DRE-2441",
+        "tail": null
+      },
+      {
+        "standing_card": "DRE-4541",
+        "created_at": "2026-09-26T15:37:34.750Z",
+        "kind": "excluded",
+        "proposal_id": "b9eecae64787",
+        "card": "DRE-2382",
+        "tail": null
+      },
+      {
+        "standing_card": "DRE-4541",
+        "created_at": "2026-09-26T15:38:18.318Z",
+        "kind": "excluded",
+        "proposal_id": "b9eecae64787",
+        "card": "DRE-2373",
+        "tail": null
+      },
+      {
+        "standing_card": "DRE-4541",
+        "created_at": "2026-10-05T18:07:31.960Z",
+        "kind": "held",
+        "proposal_id": "d50db9746997",
+        "card": "DRE-4059",
+        "tail": null
+      },
+      {
+        "standing_card": "DRE-4541",
+        "created_at": "2026-10-05T18:08:34.285Z",
+        "kind": "held",
+        "proposal_id": "d50db9746997",
+        "card": "DRE-4874",
+        "tail": null
+      },
+      {
+        "standing_card": "DRE-4541",
+        "created_at": "2026-10-06T15:52:57.647Z",
+        "kind": "held",
+        "proposal_id": "b4f5c71d40eb",
+        "card": "DRE-5726",
+        "tail": null
+      },
+      {
+        "standing_card": "DRE-4541",
+        "created_at": "2026-10-07T15:02:13.555Z",
+        "kind": "held",
+        "proposal_id": "0de3ceaf0f83",
+        "card": "DRE-5483",
+        "tail": null
+      },
+      {
+        "standing_card": "DRE-4541",
+        "created_at": "2026-10-08T18:20:26.116Z",
+        "kind": "excluded",
+        "proposal_id": "29a3110fec31",
+        "card": "DRE-6287",
+        "tail": null
+      },
+      {
+        "standing_card": "DRE-4541",
+        "created_at": "2026-10-08T18:20:28.397Z",
+        "kind": "excluded",
+        "proposal_id": "29a3110fec31",
+        "card": "DRE-5238",
+        "tail": null
+      },
+      {
+        "standing_card": "DRE-4541",
+        "created_at": "2026-10-08T18:20:29.940Z",
+        "kind": "excluded",
+        "proposal_id": "29a3110fec31",
+        "card": "DRE-4837",
+        "tail": null
+      },
+      {
+        "standing_card": "DRE-4541",
+        "created_at": "2026-10-08T18:22:15.521Z",
+        "kind": "held",
+        "proposal_id": "29a3110fec31",
+        "card": "DRE-5199",
+        "tail": null
+      },
+      {
+        "standing_card": "DRE-4541",
+        "created_at": "2026-10-10T17:04:28.594Z",
+        "kind": "excluded",
+        "proposal_id": "a4f198411b02",
+        "card": "DRE-4049",
+        "tail": "Replaced by DRE-5942 (Done 2026-10-06), which re-runs stranded jobs once under the failover order; agent-bureau and portico are no longer on the mini pool, so the old fail-back gap cannot occur for them. Checked 2026-10-10 by the operator session on the CEO's go."
+      },
+      {
+        "standing_card": "DRE-4541",
+        "created_at": "2026-10-10T17:04:29.166Z",
+        "kind": "excluded",
+        "proposal_id": "a4f198411b02",
+        "card": "DRE-4417",
+        "tail": "The cause is gone: these builds run on RunsOn now, not the mini's light tier, and Planning already sent this card back as an incident story with nothing to build. The one leftover (the death receipt reads \"the run did not die\" for a killed run) needs its own small pipeline card. Checked 2026-10-10 by the operator session on the CEO's go."
+      },
+      {
+        "standing_card": "DRE-4541",
+        "created_at": "2026-10-10T17:04:29.642Z",
+        "kind": "excluded",
+        "proposal_id": "a4f198411b02",
+        "card": "DRE-5656",
+        "tail": "The proof record already carries the ship.sh --verify run of 2026-10-02 15:43 PT and criterion 1 reads PASS; the missing piece (the second account's state that day) can no longer be observed. Checked 2026-10-10 by the operator session on the CEO's go."
+      },
+      {
+        "standing_card": "DRE-4541",
+        "created_at": "2026-10-10T17:04:30.138Z",
+        "kind": "excluded",
+        "proposal_id": "a4f198411b02",
+        "card": "DRE-5657",
+        "tail": "DRE-5658 (Done 2026-10-07) made the moderator upload an automated check (upload-to-proof-scratch.spec.ts); only a note in a closed 2026-10-02 record remains. Checked 2026-10-10 by the operator session on the CEO's go."
+      },
+      {
+        "standing_card": "DRE-4541",
+        "created_at": "2026-10-10T17:04:30.640Z",
+        "kind": "held",
+        "proposal_id": "a4f198411b02",
+        "card": "DRE-3602",
+        "tail": "Still real, but DRE-3546 started building in the same file (release_row.py) at 09:43 PT on 2026-10-10. Offer it again once that lands."
+      },
+      {
+        "standing_card": "DRE-4541",
+        "created_at": "2026-10-10T17:04:31.344Z",
+        "kind": "held",
+        "proposal_id": "a4f198411b02",
+        "card": "DRE-4054",
+        "tail": "Still real (20 card reads fetch full descriptions) and it helps the speed target, but open DRE-6057 epics DRE-6061 and DRE-6063 are changing store.py. Offer it again once those land."
+      },
+      {
+        "standing_card": "DRE-4541",
+        "created_at": "2026-10-10T17:04:31.930Z",
+        "kind": "held",
+        "proposal_id": "a4f198411b02",
+        "card": "DRE-3857",
+        "tail": "Still real, but the card carries an undecided question (the console would lose its merged-not-live window) and DRE-5997 is repairing the same release script. Offer it again once DRE-5997 lands and the question is answered."
+      },
+      {
+        "standing_card": "DRE-4541",
+        "created_at": "2026-10-10T17:04:32.394Z",
+        "kind": "held",
+        "proposal_id": "a4f198411b02",
+        "card": "DRE-4072",
+        "tail": "The card describes a header that no longer exists (the tiles are already chips, with three capacity readings beside them) and has three undecided design questions. It needs rewriting before it is planned."
+      },
+      {
+        "standing_card": "DRE-4541",
+        "created_at": "2026-10-10T17:04:32.869Z",
+        "kind": "held",
+        "proposal_id": "a4f198411b02",
+        "card": "DRE-3749",
+        "tail": "A child of epic DRE-2284, which is still in Intake; a child should not go to Planning without its epic. It also predates the 2026-10-08 new-company standard. The decision to make is DRE-2284."
+      },
+      {
+        "standing_card": "DRE-4541",
+        "created_at": "2026-10-10T17:04:33.361Z",
+        "kind": "held",
+        "proposal_id": "a4f198411b02",
+        "card": "DRE-3750",
+        "tail": "A child of epic DRE-2284, which is still in Intake, and it leans on cards since canceled or archived (DRE-3216, DRE-3608, DRE-3725) and on DRE-3717, still in Backlog. It also predates the 2026-10-08 new-company standard. The decision to make is DRE-2284."
+      },
+      {
+        "standing_card": "DRE-4541",
+        "created_at": "2026-10-10T17:04:33.833Z",
+        "kind": "held",
+        "proposal_id": "a4f198411b02",
+        "card": "DRE-3919",
+        "tail": "The epic's plan (flip each portal with the look switch) is moot since DRE-5206 removed the switch. What remains is a small cleanup, and the epic needs rewriting to say so before it is planned."
+      },
+      {
+        "standing_card": "DRE-4541",
+        "created_at": "2026-10-10T17:04:34.301Z",
+        "kind": "held",
+        "proposal_id": "a4f198411b02",
+        "card": "DRE-4206",
+        "tail": "The split is already built (the document route loads on demand in router.tsx). What is left is a drawing that needs the CEO's yes, which is a design task, not a build."
+      },
+      {
+        "standing_card": "DRE-4541",
+        "created_at": "2026-10-10T17:04:34.916Z",
+        "kind": "held",
+        "proposal_id": "a4f198411b02",
+        "card": "DRE-4204",
+        "tail": "One of its items is already gone (DRE-5206 removed the second look) and the rest is not urgent: the bundle is under its limit. It needs trimming before it is planned."
+      },
+      {
+        "standing_card": "DRE-4541",
+        "created_at": "2026-10-10T17:04:35.399Z",
+        "kind": "held",
+        "proposal_id": "a4f198411b02",
+        "card": "DRE-3701",
+        "tail": "The trigger was the Mac mini's shared temp folder; RunsOn and GitHub machines start clean, so it can only recur on mini failover. The workflow gap is still there, at low priority."
+      },
+      {
+        "standing_card": "DRE-4541",
+        "created_at": "2026-10-12T15:08:06.151Z",
+        "kind": "excluded",
+        "proposal_id": "06e997f2ba4c",
+        "card": "DRE-7000",
+        "tail": "move to Cancel"
+      },
+      {
+        "standing_card": "DRE-4541",
+        "created_at": "2026-10-12T15:08:15.867Z",
+        "kind": "excluded",
+        "proposal_id": "06e997f2ba4c",
+        "card": "DRE-3589",
+        "tail": "move to Cancel"
+      },
+      {
+        "standing_card": "DRE-4541",
+        "created_at": "2026-10-13T14:25:31.619Z",
+        "kind": "excluded",
+        "proposal_id": "3381b8d562a8",
+        "card": "DRE-2503",
+        "tail": "Not ready: waits on other work"
+      }
+    ]
+  }
+}

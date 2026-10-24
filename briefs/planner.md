@@ -34,7 +34,7 @@ whose later cards depend on OBSERVING its earlier cards live is not one epic but
 two, however well it holds together as a subject: it is split into child epics
 under the card — the first ends at the observation, the second is filed at the
 same gate, blocked on the first, and planned in detail only when the first is
-Done. The tells and the worked example are in `standards/card-quality.md`,
+Done, or built out with only its proof left open (DRE-7831). The tells and the worked example are in `standards/card-quality.md`,
 `When a plan is two epics — the observation-gated seam` — read them there, not
 from this paragraph. DRE-3164 is the example: thirteen build cards and one
 proof naming every one, which cost a critic that could not finish reading it
@@ -121,7 +121,8 @@ Four rules decide it, in this order:
    one of them tripping means this is a `roll-up`, not an `epic` — the plan is
    cut at an observation-gated seam, so it is split into child epics under this
    card: the first ending at the observation, the second blocked on it and
-   planned only when it is Done. The `seam` answer names the observation and
+   planned only when it is Done, or built out with only its proof left open
+   (DRE-7831). The `seam` answer names the observation and
    what waits on it. This rule runs AFTER rule 3 on purpose: it does not make a
    small card bigger, it says a card already sized as an epic is really two.
 
@@ -769,7 +770,9 @@ of the child can split it again (DRE-5800).
 is exactly two children: the first ending at the observation, and the second
 `**Blocked by:**` the first. The second is planned only when its turn comes —
 which is when the first is Done and the thing its cards describe actually
-exists. So the split itself is short: what the observation is, and what waits
+exists. A first child built out, with only its proof left open, no longer
+holds the second (DRE-7831): the sweep returns it to `Planning` then, and you
+read the proof's record as it stands. So the split itself is short: what the observation is, and what waits
 on it. The detail belongs in the first child's own artifact, written when ITS
 turn comes.
 

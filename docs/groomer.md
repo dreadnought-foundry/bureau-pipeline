@@ -63,10 +63,14 @@ fast path shipped, which the sweep moves straight to Planning (DRE-4150, point
      computes the proposal, reads the card's thread and posts nothing, then
      `groom_verify_agent.py targets`, which reads each Planning and spare
      card's text — this job holds the Linear key — and writes the matrix.
-     `targets` alone is handed the read door's settings (DRE-7242), so its
-     problem search asks the door before Linear; `propose` is not, and runs
-     as before. A stub that grants no `id-token: write` mints no token for
-     the door, and the search falls back to Linear. The step before it runs
+     `targets` is handed the read door's four settings (DRE-7242), so its
+     problem search asks the door before Linear. `propose` is handed the
+     door's address, audience and ref but never `BUREAU_READ` (DRE-7821):
+     enough to read the console's record of groom decisions
+     (`bureau_read.groom_removals()`, asked whatever the mode says), while
+     every board read it makes still goes to Linear. A stub that grants no
+     `id-token: write` mints no token for the door: the search falls back to
+     Linear, and the groom-decisions read is `ReadUnknown` `no-token`. The step before it runs
      the door's identity check (`bureau_read.py check-ref`), as
      `reconcile.yml` does: a `pipeline_ref` other than the ref the stub
      called refuses the run.
@@ -584,6 +588,20 @@ section not at all: the rules place a card by priority and age and have nothing
 labelled to say about it, and that page still renders byte for byte as it did
 before this card.
 
+**A judged Cancel row gets a block too (DRE-7823).** The console finds a
+card's verify verdict in this section and nowhere else, and draws the verdict
+chip on the Planning list and the Cancel list alike. So after every batch
+card's block comes one block per Cancel row the verify agent judged, in Cancel
+list order: `- **Why:** <its Cancel reason>`, then the same `Verified against
+main:` line a batch card gets. A Cancel row nobody judged — one from a
+`Superseded by:` line, the ranked read or the check — gets no block: an
+absence, never an invented verdict. The section renders when the ranked read
+ran or a row on either list was judged, and there is a block to write, so a
+morning with an empty Planning list and a judged Cancel row renders that row's
+block alone. On 2026-10-13 (proposal 3381b8d562a8) DRE-7060 and DRE-4054 were
+judged done-elsewhere on the Cancel list, and the page said so nowhere the
+console reads.
+
 A card on the Cancel list always says what it came from, in its reason:
 `superseded by DRE-N` is a declaration a person wrote on the card, and anything
 else is the evidence the ranked read named — and the reason ends with the
@@ -712,8 +730,9 @@ card excluded without judgement by id with its reason, one line `Verify step: <N
 <S> s wall clock`, and each unverified card by id with its reason, under
 `Not verified — not in the batch, each stays in Intake:`. A Cancel
 row the verify step wrote (`source: verify-agent`) carries its `file:line`
-proof whole in the Reason cell, and a batch card's verdict is under its entry
-in `## Why each card is in the batch`.
+proof whole in the Reason cell, and a batch card's verdict — or a judged
+Cancel row's (DRE-7823) — is under its entry in `## Why each card is in the
+batch`.
 
 **The proof line (DRE-5746).** That verdict is one plain line —
 `Verified against main: **<verdict>** — <summary>; <proof>; <proof>` — and
@@ -859,6 +878,17 @@ characters) and up to `MAX_PR_FILES` = 30 files. `fold` writes them onto
 every row that carries them. A search that fails, or that cannot run (no
 Linear key, an excluded card), writes `searched: false` and the reason. It
 never changes the card's `lookups` block or its lookup state.
+
+Linear can refuse a search with "You're trying to search issues too fast"
+(DRE-7613). On 2026-10-17 that refusal came on the fourth of twenty cards and
+was read as the spent hour, so every later card went unsearched. Now
+`linear_ops` raises it as `LinearSearchTooFast` and does not stop the
+process. The problem search and the newer-cards lookup both wait
+`SEARCH_WAIT_SECONDS` = 60 and ask once more, and the waits in one run total
+at most `SEARCH_WAIT_BUDGET_SECONDS` = 600. A second refusal, or one past
+that budget, leaves that search unanswered with the refusal named in its
+`why`, and the next card is still asked. The Groom job's clock covers the
+600 seconds.
 
 ### Rewrite first (DRE-6666)
 

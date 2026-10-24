@@ -324,9 +324,11 @@ it sends to Planning each child still in the queue that no open sibling blocks,
 where the relay starts that child's planner run, and moves the parent to
 In Progress, where the sweep's ordinary epic close finds it. Meanwhile, a
 child blocked by an open sibling waits in Queued for the sweep's auto-advance
-(DRE-6591): the seam rule plans it only on what that sibling observed, so it
-is carried on to its planner run once every sibling it waits on is Done. A
-sibling already Done, Canceled or Duplicate holds nothing.
+(DRE-6591): the seam rule plans it only on what that sibling built, so it is
+carried on to its planner run once no sibling it waits on still holds it. A
+sibling already Done, Canceled or Duplicate holds nothing, and since DRE-7831
+neither does a sibling built out with only its proof left open: its planner
+reads that proof's record as it plans.
 
 **It is a `progress` act whose tag IS a live key**, and that is the one way it
 differs from the heartbeats above. Nothing is held and nothing is repaired: the
