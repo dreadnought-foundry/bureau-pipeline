@@ -72,7 +72,7 @@ CLASS_OF = {"requeue-once": "transient-infrastructure",
             "fix-path": "bad-code",
             "ask-person": "platform-fault"}
 #: The steps this card adds or gates, in the order the job runs them.
-SIMULATED = ("waiting", "resume", "held", "deliver", "planning", "receipt")
+SIMULATED = ("waiting", "resume", "held", "deliver", "planning", "ask", "receipt")
 
 
 def _text() -> str:
@@ -356,6 +356,7 @@ class TheWaitingCardTest(unittest.TestCase):
                 self.assertFalse(r.ran["resume"])
                 self.assertFalse(r.ran["deliver"])
                 self.assertFalse(r.ran["planning"])
+                self.assertFalse(r.ran["ask"])
                 self.assertFalse(r.ran["receipt"])
 
     def test_the_report_goes_to_the_step_summary_under_a_notice(self):
@@ -391,7 +392,7 @@ class TheWaitingCardTest(unittest.TestCase):
                     self.assertIsNone(limit_recovery.waiting([marker, one]))
 
     def test_the_gate_reads_the_waiting_output(self):
-        for sid in ("resume", "deliver", "planning", "receipt"):
+        for sid in ("resume", "deliver", "planning", "ask", "receipt"):
             with self.subTest(step=sid):
                 self.assertIn("steps.waiting.outputs.waiting != 'true'",
                               _flat(_step(sid)["if"]))
@@ -512,7 +513,12 @@ class TheSendToPlanningTest(unittest.TestCase):
                       run_)
         self.assertIn('linear_ops.py advance "$TARGET" "Planning" "$FROM_LANES"', run_)
         self.assertEqual(1, _text().count('advance "$TARGET" "Planning"'))
-        self.assertEqual(1, _text().count("FROM_LANES="))
+        # The Green Light move (DRE-7794) calls the same command, and no other.
+        assigned = re.findall(r"FROM_LANES=(.*)", _text())
+        self.assertEqual(2, len(assigned))
+        for value in assigned:
+            self.assertEqual("$(python3 .bureau-pipeline/scripts/medic_next_step.py "
+                             "from-lanes) || true", value.strip())
         r = _run_job(step="send-to-planning")
         self.assertEqual(1, len(r.called("medic_next_step.py", "from-lanes")))
 
@@ -625,11 +631,15 @@ class TheOtherTargetsTest(unittest.TestCase):
         self.assertEqual(1, len(r.called("pipeline_notice.py", "raise")))
         self.assertFalse(r.ran["receipt"])
 
-    def test_ask_person_is_delivered_as_today_with_no_receipt(self):
+    def test_ask_person_is_delivered_then_asked_with_one_receipt(self):
+        # DRE-7794: the diagnosis as before, then the question in Green Light
+        # (tests/test_medic_asks_a_person.py), then the one receipt.
         r = _run_job(step="ask-person")
-        self.assertEqual([(CARD, REPORT_TEXT.rstrip("\n"), "run-failure-diagnosed")],
-                         r.comments)
-        self.assertFalse(r.ran["receipt"])
+        self.assertEqual((CARD, REPORT_TEXT.rstrip("\n"), "run-failure-diagnosed"),
+                         r.comments[0])
+        self.assertEqual([None, "medic-next-step"], [act for _, _, act in r.comments[1:]])
+        self.assertTrue(r.ran["ask"])
+        self.assertTrue(r.ran["receipt"])
 
 
 # ── 10. the receipt step, as written ────────────────────────────────────────
@@ -642,7 +652,8 @@ class TheReceiptStepTest(unittest.TestCase):
         self.assertLess(_index("resume"), _index("held"))
         self.assertLess(_index("held"), _index("deliver"))
         self.assertLess(_index("deliver"), _index("planning"))
-        self.assertLess(_index("planning"), _index("receipt"))
+        self.assertLess(_index("planning"), _index("ask"))
+        self.assertLess(_index("ask"), _index("receipt"))
         self.assertLess(_index("receipt"), _index("death"))
 
     def test_the_move_and_the_receipt_open_with_always(self):
@@ -650,16 +661,16 @@ class TheReceiptStepTest(unittest.TestCase):
             with self.subTest(step=sid):
                 self.assertTrue(_flat(_step(sid)["if"]).startswith("always() &&"))
 
-    def test_the_gate_lists_the_three_steps_and_no_other(self):
+    def test_the_gate_lists_the_four_steps_and_no_other(self):
+        # DRE-7794 added `ask-person`, with its park, to the one receipt step.
         cond = _flat(self.step["if"])
-        for step in THREE_STEPS:
+        for step in (*THREE_STEPS, "ask-person"):
             self.assertIn(f"steps.verdict.outputs.step == '{step}'", cond)
-        self.assertNotIn("ask-person", cond)
         self.assertIn("steps.target.outputs.kind == 'card'", cond)
         base = {"steps.target.outputs.kind": "card"}
-        for step in THREE_STEPS:
+        for step in (*THREE_STEPS, "ask-person"):
             self.assertTrue(_runs(cond, {**base, "steps.verdict.outputs.step": step}))
-        for step in ("ask-person", "", None):
+        for step in ("", None):
             self.assertFalse(_runs(cond, {**base, "steps.verdict.outputs.step": step}))
         self.assertFalse(_runs(cond, {"steps.target.outputs.kind": "notice",
                                       "steps.verdict.outputs.step": "fix-path"}))

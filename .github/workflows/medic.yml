@@ -1279,6 +1279,18 @@ jobs:
                - unreadable: any doubt.
                No file, or anything but one of those five words, reads as
                unreadable. The medic re-runs a failed run at most once.
+            7. Write the question a person would be asked about this failure
+               to .bureau-pipeline/medic-question.json, on every diagnosis:
+               one JSON object with four keys, `finding`, `question`,
+               `recommendation` and `why`, each one plain-English line a
+               non-technical reader can answer — no code, no file paths, no
+               commands. `finding` is what failed and why; `question` is the
+               one decision it needs, naming who settles it: for a
+               platform-fault, the operator who fixes the pipeline; otherwise
+               whoever decides the card's next step. `recommendation` is your
+               answer to it, and `why` the reason. It is read only when the
+               diagnosis needs a person, and a line that is not plain is
+               replaced with fixed wording before anyone sees it.
             Do NOT attempt to fix anything — diagnose and report only.
 
       # THE CLASS, THE STEP, AND ONE RESUME (DRE-7526, DRE-7793; weekly report
@@ -1592,6 +1604,72 @@ jobs:
           fi
           echo "moved=$MOVED" >> "$GITHUB_OUTPUT"
 
+      # ASK-PERSON (DRE-7794): a diagnosis only a person can settle — a
+      # `platform-fault`, an `unreadable` one (a diagnosis agent that died or
+      # wrote no report reads `unreadable`), or a step whose fallback applies —
+      # parks the card in Green Light with a stated question, never a bare
+      # comment. The question is the `🙋` receipt line, then the three lines
+      # `medic_next_step.py question` prints (DRE-7792), then the failed run.
+      # The step composes no line of its own: `question` reads the agent's
+      # `.bureau-pipeline/medic-question.json` through
+      # `planning_escalation.refusal`, line by line, and puts the fixed wording
+      # in place of a line it refuses, of a blank one, or of a file that is
+      # missing or unparseable — the agent read untrusted logs and card text,
+      # so its words are never posted unguarded. With no report the Finding
+      # says no diagnosis was written, and the question, which then carries
+      # the failed run, is the card's whole record of the failure.
+      #
+      # The question is posted before the move, and through no act: it asks
+      # rather than announces (`config/pipeline-acts.json`'s `unconverted`
+      # block). The move is `advance` from `medic_next_step.py from-lanes`,
+      # the command the Planning move above calls. A question that could not
+      # be rendered posts nothing, and one that could not be posted moves
+      # nothing — a Green Light row with no question is the failure, and a
+      # `🙋` line with no three lines under it is no question. `moved` is
+      # `true` only when `advance` printed `<card> → Green Light`; the
+      # `receipt` step below reads it and writes ` moved=no` otherwise. `green_light_rows.py check` reads this shell,
+      # where it runs, for the receipt line and the post before the write.
+      #
+      # `always()`: a diagnosis agent that died is the card most in need of
+      # asking about, and a step with no status function is skipped once an
+      # earlier step failed. Never on a waiting card (step `waiting`).
+      - name: Ask a person about the diagnosis
+        id: ask
+        if: >
+          always() &&
+          steps.target.outputs.kind == 'card' &&
+          steps.verdict.outputs.step == 'ask-person' &&
+          steps.waiting.outputs.waiting != 'true'
+        env:
+          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+          TARGET: ${{ steps.target.outputs.target }}
+          RUN_URL: ${{ github.event.workflow_run.html_url }}
+        run: |
+          MOVED=false
+          RENDERED=true
+          {
+            echo "🙋 The medic diagnosed a failure only a person can settle, and asks:"
+            echo ""
+            python3 .bureau-pipeline/scripts/medic_next_step.py question --file .bureau-pipeline/medic-question.json --report .bureau-pipeline/medic-report.md \
+              || RENDERED=false
+            echo ""
+            echo "The failed run: $RUN_URL"
+          } > "$RUNNER_TEMP/medic-ask-comment.md"
+          FROM_LANES=$(python3 .bureau-pipeline/scripts/medic_next_step.py from-lanes) || true
+          if [ "$RENDERED" != true ]; then
+            echo "::warning title=Medic question not rendered::The three lines for ${TARGET} could not be rendered, so no question was posted and the card was not moved to Green Light. Failed run: ${RUN_URL}"
+          elif ! python3 .bureau-pipeline/scripts/linear_ops.py comment "$TARGET" "$(cat "$RUNNER_TEMP/medic-ask-comment.md")"; then
+            echo "::warning title=Medic question not posted::The medic's question could not be posted on ${TARGET}, so the card was not moved to Green Light. Failed run: ${RUN_URL}"
+          elif [ -z "$FROM_LANES" ]; then
+            echo "::warning title=Card not moved to Green Light::The lanes the medic moves a card out of could not be read, so ${TARGET} was not moved. Failed run: ${RUN_URL}"
+          elif OUT=$(python3 .bureau-pipeline/scripts/linear_ops.py advance "$TARGET" "Green Light" "$FROM_LANES"); then
+            printf '%s\n' "$OUT"
+            if printf '%s\n' "$OUT" | grep -qxF "$TARGET → Green Light"; then MOVED=true; fi
+          else
+            echo "::warning title=Card not moved to Green Light::The move of ${TARGET} to Green Light failed. Failed run: ${RUN_URL}"
+          fi
+          echo "moved=$MOVED" >> "$GITHUB_OUTPUT"
+
       # THE MEDIC'S RECEIPT (DRE-7799): one comment, once per diagnose run,
       # beside the diagnosis, saying which step the medic took. It is
       # `medic_next_step.receipt` (DRE-7792), posted under the
@@ -1610,10 +1688,14 @@ jobs:
       # by design: its receipt names the open pull request and the two routes
       # by which the fix loop already reaches a red agent pull request.
       #
-      # Only for a `card` target that is not waiting, and only for the three
-      # steps whose move this card makes; DRE-7794 adds `ask-person` with its
-      # park and reuses this step. `always()`, for the reason the move above
-      # gives. A write that fails warns, as the medic's other notes do.
+      # Only for a `card` target that is not waiting, and for every step: the
+      # three whose move DRE-7799 made, and `ask-person`, whose park in Green
+      # Light is the `ask` step above (DRE-7794) — a move to Green Light that
+      # did not land (`moved` is not `true`) is ` moved=no`. This is the one
+      # receipt for the park too, never a second write: `pipeline_act.py
+      # check` fails the act's anchor found any other number of times.
+      # `always()`, for the reason the move above gives. A write that fails
+      # warns, as the medic's other notes do.
       - name: Write the medic's receipt
         id: receipt
         if: >
@@ -1621,7 +1703,8 @@ jobs:
           steps.target.outputs.kind == 'card' &&
           (steps.verdict.outputs.step == 'requeue-once' ||
            steps.verdict.outputs.step == 'send-to-planning' ||
-           steps.verdict.outputs.step == 'fix-path') &&
+           steps.verdict.outputs.step == 'fix-path' ||
+           steps.verdict.outputs.step == 'ask-person') &&
           steps.waiting.outputs.waiting != 'true'
         env:
           LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
@@ -1632,6 +1715,7 @@ jobs:
           STEP: ${{ steps.verdict.outputs.step }}
           RESUMED: ${{ steps.resume.outputs.resumed }}
           PLANNING_MOVED: ${{ steps.planning.outputs.moved }}
+          ASK_MOVED: ${{ steps.ask.outputs.moved }}
           RUN_URL: ${{ github.event.workflow_run.html_url }}
         run: |
           S=.bureau-pipeline/scripts
@@ -1651,6 +1735,9 @@ jobs:
                 PR_URL=${FIRST#*$'\t'}
               fi
               REASON="the card has an open pull request, ${PR_URL:-which the medic could not read back}, and the fix loop already reaches a red agent pull request two ways: the fix agent (agent-fix.yml) is dispatched when the critic asks for changes or the verifier fails the pull request, and the sweep dispatches a fix for a pull request the critic approved whose checks are red (reconcile.fix_approved_but_red)." ;;
+            ask-person)
+              if [ "$ASK_MOVED" != true ]; then MOVED=no; fi
+              REASON="the question posted just before this receipt asks a person to settle it." ;;
           esac
           NOT_MOVED=()
           if [ "$MOVED" = no ]; then

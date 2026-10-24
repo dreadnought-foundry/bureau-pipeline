@@ -837,6 +837,69 @@ class TestTheProofRunPark:
         assert _named(found, self.UNIT, "agent-escalation"), found
 
 
+@pytest.mark.usefixtures("declared_callers")
+class TestTheMedicPark:
+    """The medic's park (DRE-7794): a diagnosis only a person can settle parks
+    the card in Green Light from the `ask` step of `medic.yml`. It is an
+    `agent-escalation` row like the proof run's, and its gate is read off the
+    step's own shell: the 🙋 question, echoed and posted through
+    `linear_ops.py comment`, before the lane moves."""
+
+    MEDIC = Path(".github") / "workflows" / "medic.yml"
+    UNIT = "medic.yml#Ask a person about the diagnosis"
+    RECEIPT = "🙋 The medic diagnosed a failure only a person can settle"
+    POST = ('python3 .bureau-pipeline/scripts/linear_ops.py comment "$TARGET" '
+            '"$(cat "$RUNNER_TEMP/medic-ask-comment.md")"')
+
+    def test_the_park_is_discovered_and_declared(self):
+        assert self.UNIT in {unit for _, unit in grl.green_light_writes()}
+        records = [r for r in grl.arrivals() if r["where"] == self.UNIT]
+        assert [(r["kind"], r["writer"], r["card"]) for r in records] == [
+            ("agent-escalation", "medic.yml", "DRE-7794")]
+        assert grl.problems() == []
+
+    def test_its_gate_is_the_medic_s_own_receipt(self):
+        assert grl.MEDIC_PARK_STEP == self.UNIT
+        assert grl.AGENT_ESCALATION_STEPS[self.UNIT] == self.RECEIPT
+
+    def test_an_undeclared_park_fails_by_location(self, tmp_path):
+        root = _copy_repo(tmp_path)
+        contract = _contract()
+        _entrance(contract)["arrivals"] = [
+            r for r in _entrance(contract)["arrivals"] if r["where"] != self.UNIT]
+        found = grl.problems(str(root), contract)
+        assert _named(found, self.UNIT, "no arrival on its entrance declares it"), found
+
+    def test_a_reworded_receipt_fails(self, tmp_path):
+        root = _copy_repo(tmp_path)
+        _edit(root / self.MEDIC, self.RECEIPT, "🙋 The medic has a question")
+        found = grl.problems(str(root))
+        assert _named(found, self.UNIT, "agent-escalation"), found
+
+    def test_the_question_posted_after_the_move_fails(self, tmp_path):
+        root = _copy_repo(tmp_path)
+        path = root / self.MEDIC
+        text = path.read_text(encoding="utf-8")
+        assert self.POST in text
+        # The post leaves its place and comes back after the move.
+        text = text.replace(self.POST, "true", 1)
+        move = 'echo "moved=$MOVED" >> "$GITHUB_OUTPUT"'
+        at = text.index(move, text.index(self.UNIT.partition("#")[2]))
+        indent = text[text.rindex("\n", 0, at) + 1:at]
+        text = text[:at] + f"{self.POST}\n{indent}" + text[at:]
+        path.write_text(text, encoding="utf-8")
+        found = grl.problems(str(root))
+        assert _named(found, self.UNIT, "agent-escalation"), found
+
+    def test_another_medic_step_declared_agent_escalation_fails_by_word(self):
+        record = {"kind": "agent-escalation", "writer": "medic.yml",
+                  "where": "medic.yml#Send the card back to Planning",
+                  "evidence": "x", "card": "DRE-0"}
+        found = grl._gate_problems(record, [], str(ROOT), grl.lane_name())
+        assert _named(found, "medic.yml#Send the card back to Planning",
+                      "the only agent-escalation sites are", self.UNIT), found
+
+
 # --------------------------------------------------------------------------- #
 # the records themselves                                                       #
 # --------------------------------------------------------------------------- #
