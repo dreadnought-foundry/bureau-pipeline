@@ -1623,10 +1623,11 @@ jobs:
       # rather than announces (`config/pipeline-acts.json`'s `unconverted`
       # block). The move is `advance` from `medic_next_step.py from-lanes`,
       # the command the Planning move above calls. A question that could not
-      # be posted moves nothing — a Green Light row with no question is the
-      # failure — and `moved` is `true` only when `advance` printed
-      # `<card> → Green Light`; the `receipt` step below reads it and writes
-      # ` moved=no` otherwise. `green_light_rows.py check` reads this shell,
+      # be rendered posts nothing, and one that could not be posted moves
+      # nothing — a Green Light row with no question is the failure, and a
+      # `🙋` line with no three lines under it is no question. `moved` is
+      # `true` only when `advance` printed `<card> → Green Light`; the
+      # `receipt` step below reads it and writes ` moved=no` otherwise. `green_light_rows.py check` reads this shell,
       # where it runs, for the receipt line and the post before the write.
       #
       # `always()`: a diagnosis agent that died is the card most in need of
@@ -1645,16 +1646,19 @@ jobs:
           RUN_URL: ${{ github.event.workflow_run.html_url }}
         run: |
           MOVED=false
+          RENDERED=true
           {
             echo "🙋 The medic diagnosed a failure only a person can settle, and asks:"
             echo ""
             python3 .bureau-pipeline/scripts/medic_next_step.py question --file .bureau-pipeline/medic-question.json --report .bureau-pipeline/medic-report.md \
-              || echo "::warning title=Medic question not rendered::The three lines for ${TARGET} could not be rendered. Failed run: ${RUN_URL}" >&2
+              || RENDERED=false
             echo ""
             echo "The failed run: $RUN_URL"
           } > "$RUNNER_TEMP/medic-ask-comment.md"
           FROM_LANES=$(python3 .bureau-pipeline/scripts/medic_next_step.py from-lanes) || true
-          if ! python3 .bureau-pipeline/scripts/linear_ops.py comment "$TARGET" "$(cat "$RUNNER_TEMP/medic-ask-comment.md")"; then
+          if [ "$RENDERED" != true ]; then
+            echo "::warning title=Medic question not rendered::The three lines for ${TARGET} could not be rendered, so no question was posted and the card was not moved to Green Light. Failed run: ${RUN_URL}"
+          elif ! python3 .bureau-pipeline/scripts/linear_ops.py comment "$TARGET" "$(cat "$RUNNER_TEMP/medic-ask-comment.md")"; then
             echo "::warning title=Medic question not posted::The medic's question could not be posted on ${TARGET}, so the card was not moved to Green Light. Failed run: ${RUN_URL}"
           elif [ -z "$FROM_LANES" ]; then
             echo "::warning title=Card not moved to Green Light::The lanes the medic moves a card out of could not be read, so ${TARGET} was not moved. Failed run: ${RUN_URL}"
