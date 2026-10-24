@@ -709,12 +709,5 @@
       ]
     }
   ],
-  "projects": [
-    {
-      "slug": "agent-bureau-demo",
-      "exceptions": {
-        "advisory": "claude-sonnet-5"
-      }
-    }
-  ]
+  "projects": []
 }
