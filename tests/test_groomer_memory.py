@@ -13,7 +13,9 @@ DRE-7822), and takes the newest decision per card (`groom_memory.remembered`):
   * a `not-doing` or `cancel` keeps the card off the offer until a person
     brings it back, and the page names the reason recorded and its date;
   * a `put-back` — a door row or a `groom-added` marker — brings it back, and
-    the page says so in the `Put back on offer by you:` line;
+    the page says so in the `Put back on offer by you:` line; an accepted
+    rewrite brings it back too, and is said as one in its own line. Neither
+    line names a card that was never removed;
   * a morning the door cannot be read says so on the page, with the door's
     reason, and honors the decisions written on the threads instead;
   * every `propose` run prints one `groom-memory:` line in the Groom step's
@@ -54,6 +56,7 @@ REASONS = [{"key": "already-done", "label": "Already done"},
             "label": "Not ready: waits on other work"}]
 EARLIER_ANSWERS = "## Your earlier answers"
 PUT_BACK = "Put back on offer by you:"
+REWRITTEN_BACK = "Back on offer because you accepted its rewrite:"
 DOOR_DOWN = "The console's record of your decisions could not be read this morning"
 UNREADABLE = "## Decisions I could not read"
 
@@ -274,6 +277,54 @@ def test_a_groom_added_marker_newer_than_the_row_brings_it_back(monkeypatch):
     assert "no reason recorded" in line[0] and "2026-10-21" in line[0]
 
 
+def test_a_rewrite_accepted_on_a_card_never_removed_is_not_put_back(monkeypatch):
+    accepted = said(groomer.REWRITE_ACCEPT_TAG, "DRE-102",
+                    at="2026-10-21T18:00:00Z")
+    after = build(monkeypatch, threads={CURRENT: [accepted]})
+    assert "DRE-102" in planning(after)
+    assert after["put_back"] == {}
+    assert after["rewritten_back"] == {}
+    page = groomer.render_proposal(after)
+    assert not [ln for ln in page.splitlines()
+                if ln.startswith((PUT_BACK, REWRITTEN_BACK))], page
+
+
+def test_a_rewrite_accepted_newer_than_a_removal_brings_it_back_and_says_so(
+        monkeypatch):
+    accepted = said(groomer.REWRITE_ACCEPT_TAG, "DRE-102",
+                    at="2026-10-21T18:00:00Z")
+    after = build(monkeypatch, removals=door([row("DRE-102")]),
+                  threads={CURRENT: [accepted]})
+    assert "DRE-102" in planning(after)
+    assert "excluded_before" not in after
+    assert after["put_back"] == {}
+    assert after["rewritten_back"] == {"DRE-102": {
+        "reason_label": None, "recorded_at": "2026-10-21T18:00:00Z",
+        "source": "thread"}}
+    page = groomer.render_proposal(after)
+    assert not [ln for ln in page.splitlines() if ln.startswith(PUT_BACK)], page
+    line = [ln for ln in page.splitlines() if ln.startswith(REWRITTEN_BACK)]
+    assert len(line) == 1, page
+    assert "DRE-102" in line[0] and "2026-10-21" in line[0], line[0]
+
+
+def test_a_groom_added_on_a_card_never_removed_is_not_put_back(monkeypatch):
+    added = said(groomer.ADD_TAG, "DRE-102", at="2026-10-21T18:00:00Z")
+    after = build(monkeypatch, threads={CURRENT: [added]})
+    assert "DRE-102" in planning(after)
+    assert after["put_back"] == {}
+    assert not [ln for ln in groomer.render_proposal(after).splitlines()
+                if ln.startswith(PUT_BACK)]
+
+
+def test_a_groom_added_after_an_excluded_marker_is_put_back(monkeypatch):
+    thread = [said(groomer.EXCLUDE_TAG, "DRE-102", at="2026-10-20T16:00:00Z"),
+              said(groomer.ADD_TAG, "DRE-102", at="2026-10-21T18:00:00Z")]
+    after = build(monkeypatch, threads={EARLIER: thread})
+    assert "DRE-102" in planning(after)
+    assert list(after["put_back"]) == ["DRE-102"]
+
+
 def test_no_put_back_line_when_no_put_back_card_is_in_the_lane(monkeypatch):
     rows = [row("DRE-999", "put-back", comment="elsewhere")]
     after = build(monkeypatch, removals=door(rows))
@@ -425,7 +476,9 @@ def test_the_new_lines_leave_the_id_alone():
         excluded_reasons={"DRE-102": {"reason_label": "Already done",
                                       "recorded_at": NOW, "source": "fallback"}},
         put_back={"DRE-103": {"reason_label": None, "recorded_at": NOW,
-                              "source": "fallback"}})
+                              "source": "fallback"}},
+        rewritten_back={"DRE-104": {"reason_label": None, "recorded_at": NOW,
+                                    "source": "fallback"}})
     assert said_more["id"] == plain["id"]
     assert groomer.render_proposal(said_more) != groomer.render_proposal(plain)
 
