@@ -67,6 +67,9 @@ CARD = "DRE-3062"  # the card the wiring payload's head branch names
 ENDED = datetime(2026, 10, 24, 17, 5, tzinfo=UTC)
 ORDINARY = "requeue\n\n🪦 dead-run-requeue: the agent step failed"
 GATE = "needs.classify.outputs.limit != 'true'"
+# A comment on the thread that is no marker; it names no model, so no
+# console save reaches it (tests/test_no_test_pins_a_console_choice.py).
+CHATTER = "🔨 build picked up the card"
 
 
 def wait_marker(kind: str, run_id: str = RUN_ID) -> str:
@@ -193,7 +196,7 @@ class TheBuildsWaitIsAWaitTest(unittest.TestCase):
         self.assertIn("limit recovery brings the card back", result["text"].lower())
 
     def test_a_vendor_transient_marker_in_the_snapshot(self):
-        result = run_step(snapshot=["🧠 model-attempt: claude-opus-5-5",
+        result = run_step(snapshot=[CHATTER,
                                     wait_marker("vendor-transient")])
         self.assert_waits(result)
         asked = _calls(result, "medic_next_step.py waiting")
@@ -207,7 +210,7 @@ class TheBuildsWaitIsAWaitTest(unittest.TestCase):
         self.assert_waits(run_step(snapshot=[wait_marker("rotation")]))
 
     def test_the_marker_in_a_dump_comments_array_when_no_snapshot(self):
-        result = run_step(comments=["🧠 model-attempt: claude-opus-5-5",
+        result = run_step(comments=[CHATTER,
                                     wait_marker("vendor-transient")])
         self.assert_waits(result)
         self.assertEqual(1, len(_calls(result, f"dump-comments {CARD}")), result["calls"])
@@ -237,7 +240,7 @@ class EverythingElseRunsAsTodayTest(unittest.TestCase):
         self.assert_today(run_step(snapshot=[marker, recovery_receipt(marker)]))
 
     def test_a_thread_with_no_marker(self):
-        self.assert_today(run_step(snapshot=["🧠 model-attempt: claude-opus-5-5"]))
+        self.assert_today(run_step(snapshot=[CHATTER]))
 
     def test_no_snapshot_and_a_failing_dump_comments(self):
         result = run_step(dump_rc=1)
@@ -259,7 +262,7 @@ class EverythingElseRunsAsTodayTest(unittest.TestCase):
         marker is posted when the thread lacks it, and one read serves both
         questions."""
         decision = "limit\n\n" + wiring.MARKER
-        result = run_step(comments=["🧠 model-attempt: claude-opus-5-5"], decision=decision)
+        result = run_step(comments=[CHATTER], decision=decision)
         self.assertIn("limit=true", result["outputs"])
         self.assertEqual(1, len(_calls(result, "limit_death_record.py post")), result["calls"])
         self.assertEqual(1, len(_calls(result, "dump-comments")), result["calls"])
