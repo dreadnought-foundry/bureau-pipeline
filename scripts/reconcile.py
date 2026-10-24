@@ -120,11 +120,11 @@ open, and one with work left holds as `not built out`
 (`card_relation_blockers`, read by the gate and by its live re-check alike).
 A blocker that is not an epic, or an epic in any other state, holds as before.
 
-The auto-advance is stricter: when a blocker epic reaches Done, every epic
-blocked-by it whose blockers are now ALL Done — built out is not enough, the
-seam rule (DRE-3244) plans against what the blocker's proof observed — is
-auto-advanced out of Queued to Triage
-(which re-triggers the planner). Never to In Progress, so the Green Light
+The auto-advance is not held by a proof either (DRE-7831): when a blocker
+epic reaches Done, every epic blocked-by it that no blocker still holds — each
+one closed, or a built-out In Progress epic, or a PROOF card of a Done or
+built-out epic — is auto-advanced out of Queued to Planning (which dispatches
+the planner, who can still read the blocker's proof record). Never to In Progress, so the Green Light
 human-approval gate is preserved. Both the promotion hold and the advance fail
 SAFE on unreadable relation data (don't promote / don't advance on
 uncertainty).
@@ -1867,6 +1867,16 @@ _epic_record_gaps: dict[str, str] = {}
 _blocker_epics: dict[str, dict] = {}
 _blocker_epic_gaps: dict[str, str] = {}
 
+# A waiting epic's open blockers that are not In Progress epics, each read for
+# its title and parent (DRE-7831), and why one could not be read. Filled and
+# read ONLY through `_blocker_card()`, and reset with the blocker epics.
+_blocker_cards: dict[str, dict] = {}
+_blocker_card_gaps: dict[str, str] = {}
+
+# What the strict epic gate released for each waiting epic it last cleared
+# this pass (DRE-7831), blocker → how the return pass's receipt names it.
+_waiting_releases: dict[str, dict[str, str]] = {}
+
 # This repo's epics the promotion phase read in Backlog, less the ones it
 # closed — the set `return_waiting_epics` is handed (DRE-6653) — and the epics
 # this pass already returned to Planning, so the hook and the pass never move
@@ -1936,7 +1946,8 @@ class BoardIdle(BoardNotRead):
 def reset_sweep_cards() -> None:
     """Drop the sweep's board snapshot — and with it the pass's comment cache
     in linear_ops (DRE-3236), the sweep's open-PR listing (DRE-3435), its epic
-    records (DRE-3642), blocker epics (DRE-6407) and waiting epics (DRE-6653),
+    records (DRE-3642), blocker epics (DRE-6407), blocker cards and what the
+    strict gate released (DRE-7831) and waiting epics (DRE-6653),
     its workflows listing
     (DRE-4378) and its in-flight build runs (DRE-4830). Called once at the top
     of main()."""
@@ -1963,6 +1974,9 @@ def reset_sweep_cards() -> None:
     _epic_record_gaps.clear()
     _blocker_epics.clear()
     _blocker_epic_gaps.clear()
+    _blocker_cards.clear()
+    _blocker_card_gaps.clear()
+    _waiting_releases.clear()
     _backlog_epics.clear()
     _returned_epics.clear()
     _inverse_topup_refused.clear()
@@ -7086,6 +7100,66 @@ def _open_children(blocker: str) -> str:
     return ", ".join(named) or "none"
 
 
+#: The strict gate's read of a waiting epic's open blocker that is not an In
+#: Progress epic (DRE-7831): its title, to tell a PROOF card, and its parent,
+#: the epic that proof confirms. Its own single-issue read, never a widening
+#: of `EPIC_RECORD_GQL` or of `epic_cap.IN_MOTION_NODE`, which epic_cap's paged
+#: board read also selects.
+_BLOCKER_CARD_QUERY = """query($id: String!) { issue(id: $id) {
+         identifier title state { name }
+         parent { identifier state { name } }
+         } }"""
+
+
+def _blocker_card(identifier: str) -> dict | None:
+    """The blocker's title and parent, read once per pass; None when it could
+    not be read, with the reason in `_blocker_card_gaps`. Isolated like
+    `_blocker_epic`: an unreadable blocker holds the epics it blocks, and is
+    never asked for twice in a pass."""
+    if identifier in _blocker_cards:
+        return _blocker_cards[identifier]
+    if identifier in _blocker_card_gaps:
+        return None
+    try:
+        issue = (linear_ops.gql(_BLOCKER_CARD_QUERY, {"id": identifier}) or {}).get("issue")
+    except Exception as e:  # noqa: BLE001 — the reason travels to the epic-gate line
+        _blocker_card_gaps[identifier] = str(e) or type(e).__name__
+        return None
+    if not issue:
+        _blocker_card_gaps[identifier] = "Linear returned no issue for it"
+        return None
+    _blocker_cards[identifier] = issue
+    return issue
+
+
+def _proof_blocker(blocker: str) -> tuple[str | None, str | None]:
+    """`(parent, why)` for a waiting epic's open blocker that is not an In
+    Progress epic (DRE-7831).
+
+    `(parent, None)`: `blocker` is a PROOF card whose epic, `parent`, is Done
+    or built out (`_not_built_out`, the one definition) — released.
+    `(None, why)`: a proof that still holds, or a blocker whose own read
+    failed, and why. `(None, None)`: an ordinary blocker, which waits for Done.
+    """
+    card = _blocker_card(blocker)
+    if card is None:
+        return None, (f"its title and parent could not be read: "
+                      f"{_blocker_card_gaps.get(blocker)}")
+    if not proof_and_demo.is_proof(card.get("title") or ""):
+        return None, None
+    parent = card.get("parent") or {}
+    epic = parent.get("identifier")
+    if not epic:
+        return None, "a proof with no parent epic"
+    state = (parent.get("state") or {}).get("name") or "unknown"
+    if state == "Done":
+        return epic, None
+    why = _not_built_out(epic, state)
+    if why is None:
+        return epic, None
+    return None, f"a proof of {epic} ({state}), which is **not built out**: {why}"
+
+
 def card_relation_blockers(card: dict) -> tuple[dict[str, str | None], dict[str, str]]:
     """The card gate's reading of `card`'s unmet `blockedBy` relations
     (DRE-7774): `(held, released)`.
@@ -7136,7 +7210,7 @@ def epic_blockers_unmet(epic_identifier: str, *, release_at_build_done: bool = T
       * a formal `blocks` relation to something that is not terminal — an
         ordinary, correct dependency. The relation carries its blocker's state
         inline, so a relation blocker needs no extra read to evaluate — except
-        an In Progress one under the promotion gate's rule, below;
+        an unfinished one, under either rule below;
       * a PROSE DEFECT (DRE-2676) — the description declares a dependency the
         board holds no relation for. That is not a dependency, it is a sentence
         that is wrong, and the sweep will not release work under an epic that
@@ -7162,9 +7236,17 @@ def epic_blockers_unmet(epic_identifier: str, *, release_at_build_done: bool = T
         own work, not theirs, and a card that really needs an earlier one
         carries a card-level `blockedBy` relation the card gate still reads;
       * `release_at_build_done=False` — the auto-advance and the return pass
-        (`return_waiting_epics`, DRE-6653). Its dependent is an
-        epic still to be PLANNED, against what the blocker's proof observed
-        (the seam, DRE-3244), so every blocker must be Done, as before.
+        (`return_waiting_epics`, DRE-6653). Its dependent is an epic still to
+        be PLANNED, and it is never held by a proof (DRE-7831, the CEO's
+        decisions of 2026-10-13 and 2026-10-22): the planner can still read
+        the blocker's proof record when it plans. Two blockers count as
+        cleared — an In Progress blocker EPIC that is built out, told from a
+        card by `card_relation_blockers` (the card gate's own reading), and a
+        PROOF card whose parent epic is Done or built out (`_proof_blocker`,
+        one single-issue read per distinct blocker per pass). Every other
+        blocker waits for Done, and the line says `waits for Done`; a proof
+        or epic that still holds is named with its reason. What it released
+        is kept for the return pass's receipt (`_waiting_releases`).
 
     Fails SAFE: if the epic's relation data can't be read, returns True (treat
     as blocked, do not promote).
@@ -7203,13 +7285,52 @@ def epic_blockers_unmet(epic_identifier: str, *, release_at_build_done: bool = T
     if not held:
         return False
     if not release_at_build_done:
-        named = "; ".join(f"{blocker} ({states[blocker]})" for blocker in held)
-        print(
-            f"epic-gate: {epic_identifier} is held by a formal blockedBy "
-            f"relation on {named} — not Done, and this epic **waits for Done** "
-            "(still to be planned)"
-        )
-        return True
+        _waiting_releases.pop(epic_identifier, None)
+        # Rule 1 is the card gate's own reading, so an epic is told from a
+        # card one way: a built-out In Progress epic is `released`.
+        unbuilt, built_out = card_relation_blockers(epic)
+        waits, holds, proofs = [], {}, {}
+        for blocker, why in unbuilt.items():
+            if why is not None:
+                holds[blocker] = f"**not built out**: {why}"
+                continue
+            parent, why = _proof_blocker(blocker)  # rule 2: a proof of a built-out epic
+            if parent is not None:
+                proofs[blocker] = parent
+            elif why is not None:
+                holds[blocker] = why
+            else:
+                waits.append(blocker)
+        if waits:
+            named = "; ".join(f"{blocker} ({states[blocker]})" for blocker in waits)
+            print(
+                f"epic-gate: {epic_identifier} is held by a formal blockedBy "
+                f"relation on {named} — not Done, and this epic **waits for Done** "
+                "(still to be planned)"
+            )
+        for blocker, why in holds.items():
+            print(
+                f"epic-gate: {epic_identifier} is held by a formal blockedBy "
+                f"relation on {blocker} ({states[blocker]}) — {why}"
+            )
+        if waits or holds:
+            return True
+        released: dict[str, str] = {}
+        for blocker, open_children in built_out.items():
+            print(
+                f"epic-gate: {epic_identifier} is **released at build-done**: "
+                f"{blocker} ({states[blocker]}) has no buildable child left — open: "
+                f"{open_children}"
+            )
+            released[blocker] = f"is built out (open: {open_children})"
+        for blocker, parent in sorted(proofs.items()):
+            print(
+                f"epic-gate: {epic_identifier} is **released**: {blocker} is a "
+                f"proof of a built-out epic, {parent}"
+            )
+            released[blocker] = f"is a proof of built-out epic {parent}"
+        _waiting_releases[epic_identifier] = released
+        return False
     # Every blocker is asked, not just the first: each is one read per pass at
     # most, and the log then names every one that holds.
     unbuilt = {blocker: _not_built_out(blocker, states[blocker]) for blocker in held}
@@ -7277,9 +7398,9 @@ def advance_unblocked_epics(done_epic: str) -> None:
     """When epic `done_epic` reaches Done, pull the next epics in the chain into
     the pipeline (DRE-1772, auto-advance).
 
-    For each epic that `done_epic` `blocks` (its forward `relations`): if ALL of
-    that epic's own blockers are now Done AND it is still in Queued, return it
-    to **Planning**, whose arrival dispatches the planner (DRE-6653). Triage
+    For each epic that `done_epic` `blocks` (its forward `relations`): if NO
+    blocker still holds it — each one closed, or a built-out epic or a proof
+    of one (DRE-7831) — AND it is still in Queued, return it to **Planning**, whose arrival dispatches the planner (DRE-6653). Triage
     was the planner's trigger once; it is the broken-card lane now, and the
     relay's dispatch on entering it is refused by the plan gate (DRE-5277).
     Every dependent takes that one path — the wave route that sent some
@@ -7323,15 +7444,19 @@ def advance_unblocked_epics(done_epic: str) -> None:
         if card_state(dep) not in QUEUE_LANES:
             continue  # idempotent: only ever advance a still-Backlog epic
         # The strict rule, asked for by name (DRE-6407): `dep` is still to be
-        # planned, so an In Progress blocker holds it whatever is left to build.
+        # planned, so a blocker holds it until Done — unless it is a built-out
+        # epic or a proof of one, which never hold a waiting epic (DRE-7831).
         if epic_blockers_unmet(dep, release_at_build_done=False):
-            continue  # another blocker epic isn't Done yet — hold
+            continue  # another blocker still holds it
         _return_epic_to_planning(dep, f"blocker epic {done_epic} is Done")
 
 
 def _return_epic_to_planning(dep: str, because: str) -> None:
     """Move waiting epic `dep` Queued → Planning and post the one receipt
     that says so (DRE-6653). `because` names the blocker(s) that released it.
+    The trailing clause says no blocker still holds it, true for both writers
+    whether the other blockers are closed or released: a built-out epic or a
+    proof of one never holds a waiting epic (DRE-7831).
 
     The ONE site for both writers — the hook and the full sweep's pass — on
     purpose: `config/pipeline-acts.json` carries an `unconverted` row anchored
@@ -7351,24 +7476,32 @@ def _return_epic_to_planning(dep: str, because: str) -> None:
     _returned_epics.add(dep)
     linear_ops.cmd_comment(
         dep,
-        f"🧹 Auto-advanced {QUEUE_LANE} → Planning: {because}, and every blocker is "
-        "now closed.\n\nThe epic is back in Planning, and its arrival there "
+        f"🧹 Auto-advanced {QUEUE_LANE} → Planning: {because}, and no blocker still "
+        "holds it.\n\nThe epic is back in Planning, and its arrival there "
         "dispatches the planner; a person still approves the plan (→ In Progress).",
     )
 
 
-def _released_by(states: dict[str, str]) -> str:
-    """The blockers that released a waiting epic, for its receipt's first line."""
-    if len(states) == 1:
-        (blocker, state), = states.items()
-        return f"blocker {blocker} is {state}"
+def _released_by(states: dict[str, str], released: dict[str, str] | None = None) -> str:
+    """The blockers that released a waiting epic, for its receipt's first line.
+
+    A blocker the strict gate released (`released`, DRE-7831) is named as
+    released — built out, or a proof of a built-out epic — never by its
+    state, which would say it is In Progress; a closed one keeps `is <state>`.
+    """
+    released = released or {}
+    if len(states) == 1 or released:
+        return "; ".join(
+            f"blocker {blocker} {released.get(blocker) or f'is {states[blocker]}'}"
+            for blocker in sorted(states)
+        )
     named = ", ".join(f"{blocker} ({states[blocker]})" for blocker in sorted(states))
     return f"blockers {named} are closed"
 
 
 def return_waiting_epics(epics: set[str]) -> None:
-    """Return this repo's Queued epics whose blockers are all terminal to
-    Planning (DRE-6653) — the full sweep's backstop for the auto-advance.
+    """Return this repo's Queued epics no blocker still holds to Planning
+    (DRE-6653) — the full sweep's backstop for the auto-advance.
 
     `advance_unblocked_epics` fires only when the sweep itself closes a
     blocker EPIC. A blocker that is an ordinary card, an epic a person closed
@@ -7387,7 +7520,10 @@ def return_waiting_epics(epics: set[str]) -> None:
         blocks has nothing to wait for, and a roll-up child waiting for its
         parent's activation is the split's to send (DRE-6591);
       * `epic_blockers_unmet(epic, release_at_build_done=False)` is False, the
-        strict rule: every blocker in `prose_blockers.TERMINAL`.
+        strict rule: every blocker in `prose_blockers.TERMINAL`, or a built-out
+        In Progress epic, or a PROOF card of a Done or built-out epic — a
+        waiting epic is never held by a proof (DRE-7831). The receipt names a
+        released blocker as released (`_released_by`), never as In Progress.
 
     Per-epic isolation, as `close_finished_epics` has it (DRE-3148): one epic
     that cannot be read or moved is logged and skipped, and the rest are swept.
@@ -7412,7 +7548,7 @@ def return_waiting_epics(epics: set[str]) -> None:
                 continue  # nothing blocks it: it was never waiting on a blocker
             if epic_blockers_unmet(epic, release_at_build_done=False):
                 continue  # the gate's own `epic-gate:` line says which holds
-            _return_epic_to_planning(epic, _released_by(states))
+            _return_epic_to_planning(epic, _released_by(states, _waiting_releases.get(epic)))
         except Exception as exc:  # noqa: BLE001 — isolate one epic, sweep the rest
             print(
                 f"epic-return: could not return {epic} ({exc}) — skipped this sweep",

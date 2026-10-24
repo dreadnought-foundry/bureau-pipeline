@@ -949,9 +949,13 @@ The parent's plan for a seam is short: its children in order, and the detail
 belongs in each child's own artifact, written when its turn comes.
 
 **When the epic behind a blocker moves (DRE-6407).** Two rules, one per moment.
-An epic still waiting to be planned is planned only when its blocker is Done,
-proof included — the sweep's auto-advance `waits for Done`, because that plan is
-written against what the proof observed. An epic the CEO has already approved,
+An epic still waiting to be planned is not held by a proof (DRE-7831): the
+sweep returns it to Planning once each blocker is Done, or is an In Progress
+epic that is built out, or is a PROOF card whose epic is Done or built out —
+the planner can still read the blocker's proof record when it plans. Any other
+blocker still `waits for Done`, and the sweep's `epic-gate:` line says
+`released at build-done`, or that a proof of a built-out epic was `released`,
+or why the blocker still holds. An epic the CEO has already approved,
 its cards written, is `released at build-done`: once its blocker has no
 buildable card left (`epic_cap.buildable()` — open, not an epic, not a proof,
 not marked for a person) and no open child epic, even with the blocker's proof
