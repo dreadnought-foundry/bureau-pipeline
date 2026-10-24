@@ -190,7 +190,7 @@ class TheBuildsWaitIsAWaitTest(unittest.TestCase):
         self.assertNotIn("limit=false", result["outputs"])
         self.assertEqual([], _calls(result, "dead_run.py"), result["calls"])
         self.assertEqual([], _posts(result), "the build's marker is the only thing written")
-        self.assertIn("limit recovery", result["text"])
+        self.assertIn("limit recovery brings the card back", result["text"].lower())
 
     def test_a_vendor_transient_marker_in_the_snapshot(self):
         result = run_step(snapshot=["🧠 model-attempt: claude-opus-5-5",
