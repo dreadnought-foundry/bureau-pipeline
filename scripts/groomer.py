@@ -2147,6 +2147,12 @@ def _mark(outcome: str, row: dict, verdict, *, withheld: list,
         else:
             withheld.append(identifier)
             reason = WITHHELD_REASON
+    # A batch row the in-flight key placed says so whatever wrote its reason
+    # (DRE-7397): the rules' reason already opens with the mark, and a
+    # model's is prefixed with it, so the page shows why the unit went first.
+    if (outcome == "now" and verdict is not None and row.get("serves")
+            and not row.get("held")):
+        reason = f"in flight — serves {row['serves']} (In Progress) — {reason}"
 
     trigger = None
     # A declined card is out of the batch (DRE-3544) and names NO trigger: it
