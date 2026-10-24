@@ -35,7 +35,7 @@ import vendor_wait  # noqa: E402, RUF100
 RUN = "34990000002"
 NOW = "2026-10-24T18:00:00Z"
 END = datetime(2026, 10, 24, 18, 0, tzinfo=UTC)
-MODEL = "claude-opus-5-5"
+MODEL = "claude-opus-4-8"
 SENTENCE = "waited twice in a row on a vendor or renewal refusal"
 
 
