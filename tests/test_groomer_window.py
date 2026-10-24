@@ -574,6 +574,11 @@ class FakeOps:
     def gql(self, query, variables=None):
         return {"cycles": {"nodes": [dict(c, completedAt=None) for c in CYCLES]}}
 
+    def comment_records(self, identifier, *, whole_thread=False):
+        # Every standing card's thread is read before the census (DRE-7824);
+        # none of them carries a decision here.
+        return []
+
     def __getattr__(self, name):
         import linear_ops
         return getattr(linear_ops, name)
