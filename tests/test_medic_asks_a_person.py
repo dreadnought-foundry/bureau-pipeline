@@ -58,11 +58,21 @@ from test_medic_acts_on_diagnosis import (  # noqa: E402
     RUN_ID,
     RUN_URL,
     STUB_GH,
+    STUB_HEAD,
     STUBS,
     Run,
     _marker,
     _runs,
 )
+
+#: `medic_next_step.py`, the real script — except `question`, which exits
+#: FAKE_QUESTION_RC when it is set: the renderer itself failing.
+STUB_MEDIC_NEXT_STEP = STUB_HEAD + """
+if cmd == "question" and os.environ.get("FAKE_QUESTION_RC"):
+    sys.exit(int(os.environ["FAKE_QUESTION_RC"]))
+real = os.path.join(os.environ["REAL_SCRIPTS"], os.path.basename(__file__))
+sys.exit(subprocess.call([sys.executable, real, *sys.argv[1:]]))
+"""
 
 MEDIC = os.path.join(ROOT, ".github", "workflows", "medic.yml")
 ACTS = os.path.join(ROOT, "config", "pipeline-acts.json")
@@ -146,7 +156,8 @@ SIMULATED = ("waiting", "verdict", "resume", "held", "deliver", "planning", "ask
 def _run_job(*, verdict="platform-fault", agent="success", report=REPORT_TEXT,
              question=PLAIN_QUESTION, thread=None, find_out=f"OPEN\t{PR_URL}",
              find_rc=0, advance="land", state="In Progress", state_rc=0,
-             comment_rc=0, gh_rc=0, attempt=2, thread_dump=None) -> Run:
+             comment_rc=0, gh_rc=0, attempt=2, thread_dump=None,
+             question_rc=None) -> Run:
     ctx = {
         "secrets.LINEAR_API_KEY": "test-linear-key",
         "github.token": "test-token",
@@ -184,7 +195,7 @@ def _run_job(*, verdict="platform-fault", agent="success", report=REPORT_TEXT,
         scripts, bin_ = td / ".bureau-pipeline" / "scripts", td / "bin"
         scripts.mkdir(parents=True)
         bin_.mkdir()
-        for name, body in STUBS.items():
+        for name, body in {**STUBS, "medic_next_step.py": STUB_MEDIC_NEXT_STEP}.items():
             (scripts / name).write_text(body, encoding="utf-8")
             os.chmod(scripts / name, 0o755)
         (bin_ / "gh").write_text(STUB_GH, encoding="utf-8")
@@ -203,7 +214,8 @@ def _run_job(*, verdict="platform-fault", agent="success", report=REPORT_TEXT,
                 "FAKE_DUMP_RC": "0", "FAKE_GH_RC": str(gh_rc), "FAKE_ADVANCE": advance,
                 "FAKE_STATE": state, "FAKE_STATE_RC": str(state_rc),
                 "FAKE_FIND_OUT": find_out, "FAKE_FIND_RC": str(find_rc),
-                "FAKE_COMMENT_RC": str(comment_rc), "FAKE_REPAIR": ""}
+                "FAKE_COMMENT_RC": str(comment_rc), "FAKE_REPAIR": "",
+                "FAKE_QUESTION_RC": str(question_rc or "")}
         for sid in sorted(SIMULATED, key=_index):
             step_ = _step(sid)
             cond = step_.get("if")
@@ -357,6 +369,19 @@ class TheParkTest(unittest.TestCase):
         self.assertEqual([], r.called("linear_ops.py", "advance"))
         self.assertEqual("false", r.ctx["steps.ask.outputs.moved"])
         self.assertRegex(r.log, r"::warning[^\n]*question")
+
+    def test_a_question_that_could_not_be_rendered_posts_nothing_and_moves_nothing(self):
+        # A header with no three lines is a Green Light row with no question.
+        r = _run_job(question_rc=1)
+        self.assertEqual(1, len(r.called("medic_next_step.py", "question")))
+        self.assertEqual([], _questions(r))
+        self.assertEqual([], r.called("linear_ops.py", "advance"))
+        self.assertEqual("false", r.ctx["steps.ask.outputs.moved"])
+        self.assertRegex(r.log, r"::warning[^\n]*question")
+        (receipt,) = r.receipts
+        self.assertTrue(receipt.split("\n", 1)[0].endswith(" moved=no"))
+        self.assertEqual(["run-failure-diagnosed", "medic-next-step"],
+                         [act for _, _, act in r.comments])
 
     def test_a_waiting_card_gets_none_of_the_three(self):
         r = _run_job(thread=["a person speaks", _marker()])
