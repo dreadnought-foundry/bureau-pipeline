@@ -3099,11 +3099,22 @@ def _render_batch_reasons(proposal: dict) -> list:
     The verdict is a plain line after the labelled ones, never a `- **Label:**`
     line: the console reads those against the five DRE-3764 labels and the
     `Why`, and a sixth label is not in the vocabulary it knows.
+
+    A Cancel row the verify agent judged gets a block too (DRE-7823), after
+    every batch card's and in Cancel list order: its Cancel reason as `Why`,
+    then the same verdict line. The console finds a verdict here and nowhere
+    else, and draws it on both lists. A Cancel row nobody judged gets none —
+    an absent block, never an invented verdict — so the section renders when
+    the ranked read ran or a row on either list was judged, and there is a
+    block to write.
     """
     block = proposal.get("judgement") or {}
     batch = sorted(proposal["outcomes"]["now"], key=lambda r: r["position"])
-    verified = any(row.get("verify") for row in batch)
-    if not (block.get("enabled") or verified) or not batch:
+    cancels = [row for row in sorted(proposal["outcomes"].get("dead") or [],
+                                     key=lambda r: r.get("position") or 0)
+               if row.get("verify")]
+    verified = cancels or any(row.get("verify") for row in batch)
+    if not (block.get("enabled") or verified) or not (batch or cancels):
         return []
     w = [BATCH_REASONS_HEADING, ""]
     w.append("The same reasons as the table above, in full — this is what the "
@@ -3118,6 +3129,11 @@ def _render_batch_reasons(proposal: dict) -> list:
                      f"{_line(text)}")
         if row.get("verify"):
             w.append(_verdict_line(row["verify"]))
+        w.append("")
+    for row in cancels:
+        w.append(f"### {row['identifier']}")
+        w.append(f"- **Why:** {_line(row.get('reason'))}")
+        w.append(_verdict_line(row["verify"]))
         w.append("")
     return w
 
@@ -3150,7 +3166,7 @@ def proof_line(item: dict) -> str:
 
 
 def _verdict_line(mark: dict) -> str:
-    """One batch card's verify verdict, with its summary or, when it went
+    """One judged card's verify verdict, with its summary or, when it went
     unverified, the reason — then every proof item, `path:line — quote`
     (DRE-5746), so the CEO reads on the page what the agent read on main.
     All of it is the agent's words about card text and code, so the line is
