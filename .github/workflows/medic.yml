@@ -219,7 +219,9 @@ jobs:
       # DRE-3171: was this a WALL rather than a death — the Claude account's
       # usage limit or Linear's request budget? `true` blocks the retry AND
       # the diagnosis: a rerun walks into the same wall, and the marker the
-      # step wrote already says what a diagnosis would.
+      # step wrote already says what a diagnosis would. Since DRE-7805 it is
+      # also `true` when the build marked its own wait, and it blocks every
+      # job whose card comment would close that marker.
       limit: ${{ steps.limit.outputs.limit }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -356,6 +358,18 @@ jobs:
       # Fail-open to `false`, out loud: every job here `needs: classify`, so
       # this step must never take the whole medic down — a classifier that
       # cannot run leaves the medic exactly as it was before this card.
+      #
+      # THE BUILD'S OWN WAIT IS ASKED FIRST (DRE-7805). A build killed by our
+      # own token renewal or a brief 529/5xx posts its `🪦 limit-death:`
+      # marker itself (DRE-7800) and still ends red, and its log shows neither
+      # a usage limit nor Linear's quota, so the classifier alone would read
+      # an ordinary death: a rerun now, then a diagnosis whose receipt closes
+      # the marker, and limit recovery would never bring the card back. So
+      # the card's thread is read once, before the classifier, and
+      # `medic_next_step.py waiting --run-id` (DRE-7792) asks whether a marker
+      # naming THIS run still stands. `waiting=true` is a limit death, the
+      # marker already written. Anything else — no card, an unreadable thread,
+      # a `waiting` that fails — goes on to the classifier as before.
       - name: Is this a limit death?
         id: limit
         env:
@@ -371,6 +385,40 @@ jobs:
         run: |
           ACCOUNT_FLAGS=()
           if [ -n "${CLAUDE_ACCOUNT:-}" ]; then ACCOUNT_FLAGS=(--account "$CLAUDE_ACCOUNT"); fi
+          # The card's thread, read ONCE for both questions this step asks of
+          # it — the build's own wait marker here, and the marker
+          # de-duplication below — against the card read the retry gate above
+          # already made (Stage 2 fix #23): it leaves that read in
+          # $RUNNER_TEMP, so this costs no second Linear request. The file is
+          # missing only when the gate's read failed open, and then this asks
+          # Linear itself, as it always did.
+          SNAPSHOT="$RUNNER_TEMP/medic-card.json"
+          COMMENTS=""
+          if [ -n "${CARD:-}" ]; then
+            if [ -s "$SNAPSHOT" ]; then
+              COMMENTS=$(cat "$SNAPSHOT")
+              THREAD="$SNAPSHOT"
+            else
+              COMMENTS=$(python3 .bureau-pipeline/scripts/linear_ops.py dump-comments "$CARD" 2>/dev/null) || COMMENTS=""
+              THREAD="$RUNNER_TEMP/medic-thread.json"
+              printf '%s' "$COMMENTS" > "$THREAD" || THREAD=""
+            fi
+            # `waiting` reads either shape off the file itself — the gate's
+            # snapshot object or the bodies array — so the path is handed over
+            # as it is, never reshaped here.
+            if [ -n "$COMMENTS" ] && [ -n "$THREAD" ]; then
+              if WAITING=$(python3 .bureau-pipeline/scripts/medic_next_step.py waiting \
+                   --comments-file "$THREAD" --run-id "$RUN_ID"); then
+                if [ "$WAITING" = "waiting=true" ]; then
+                  echo "limit=true" >> "$GITHUB_OUTPUT"
+                  echo "$CARD already carries this run's own wait marker (run $RUN_ID) — a wait, not a death: no retry, no diagnosis, nothing more written. Limit recovery brings the card back once the wait is over."
+                  exit 0
+                fi
+              else
+                echo "::warning::The medic could not ask whether $CARD already carries run $RUN_ID's own wait marker, so the failed log decides, as it did before DRE-7805."
+              fi
+            fi
+          fi
           FAILED_STEP=$(gh run view "$RUN_ID" --repo "$GITHUB_REPOSITORY" --json jobs \
             --jq '[.jobs[] | select(.conclusion=="failure") | .steps[] | select(.conclusion=="failure") | .name] | first // ""' \
             2>/dev/null) || FAILED_STEP=""
@@ -396,19 +444,8 @@ jobs:
             exit 0
           fi
           # EXACTLY ONE marker per run: a re-run attempt reuses the run id,
-          # and the classify job runs on every failed attempt.
-          #
-          # Against the card read the retry gate above already made (Stage 2
-          # fix #23): it leaves that read in $RUNNER_TEMP, so this check costs
-          # no second Linear request. The file is missing only when the gate's
-          # read failed open, and then this asks Linear itself, as it always
-          # did.
-          SNAPSHOT="$RUNNER_TEMP/medic-card.json"
-          if [ -s "$SNAPSHOT" ]; then
-            COMMENTS=$(cat "$SNAPSHOT")
-          else
-            COMMENTS=$(python3 .bureau-pipeline/scripts/linear_ops.py dump-comments "$CARD" 2>/dev/null) || COMMENTS=""
-          fi
+          # and the classify job runs on every failed attempt. Against the
+          # thread read above, before the classifier.
           if printf '%s' "$COMMENTS" | grep -qE "limit-death:.* run=${RUN_ID}([^0-9]|$)"; then
             echo "$CARD already carries the marker for run $RUN_ID — not posting a second"
             exit 0
@@ -522,6 +559,16 @@ jobs:
   # which is the complaint this card opens with: killed later, with nothing
   # recorded. The rule fires only when the card already carries an earlier
   # stall record, so it still says it once.
+  #
+  # …and NOT while the card waits out a limit (DRE-7805, `limit == 'true'`).
+  # The refusal carries the act trailer, and `limit_recovery.is_receipt`
+  # reads any comment that does as the pipeline superseding the
+  # `🪦 limit-death:` marker, so limit recovery would never bring the card
+  # back. The marker is the only thing a wait leaves on the card;
+  # `backoff` (a `🔌` note) and `environment_hold` (a trailered receipt)
+  # carry the same gate for the same reason, and
+  # tests/test_medic_reads_build_wait.py walks every card writer in this
+  # file to keep it so.
   retry_declined:
     needs: classify
     if: >
@@ -532,7 +579,8 @@ jobs:
       needs.classify.outputs.retry == 'false' &&
       needs.classify.outputs.rule != 'refused-by-design' &&
       needs.classify.outputs.rule != 'superseded-on-default' &&
-      needs.classify.outputs.card != ''
+      needs.classify.outputs.card != '' &&
+      needs.classify.outputs.limit != 'true'
     # The short lane, same as `classify` above (DRE-4276).
     runs-on: ${{ fromJSON(vars.BUREAU_SHORT_RUNS_ON || vars.BUREAU_RUNS_ON || '["ubuntu-latest"]') }}
     timeout-minutes: 5
@@ -673,12 +721,16 @@ jobs:
   # `reviewer_environment.CRITIC_UNAVAILABLE_MARKER` as one could-not-run
   # outcome, and that count is how a second repository's crash is seen at all.
   # The evidence note's first words are that same phrase, byte-identical.
+  #
+  # Not while the card waits out a limit: a `🔌` note closes the marker
+  # (DRE-7805 — see `retry_declined`).
   backoff:
     needs: classify
     if: >
       (github.event.workflow_run.conclusion == 'failure' || github.event.workflow_run.conclusion == 'timed_out') &&
       github.event.workflow_run.run_attempt == 1 &&
-      needs.classify.outputs.infra_crash == 'true'
+      needs.classify.outputs.infra_crash == 'true' &&
+      needs.classify.outputs.limit != 'true'
     # The short lane, same as `classify` above (DRE-4276).
     runs-on: ${{ fromJSON(vars.BUREAU_SHORT_RUNS_ON || vars.BUREAU_RUNS_ON || '["ubuntu-latest"]') }}
     timeout-minutes: 5
@@ -894,12 +946,16 @@ jobs:
   # because all six kinds of Claude-running job die of this and a receipt that
   # always said "reviewer" would misname five of them. No `--repo`/`--pr`: the
   # sha-bound PR counter is the sweep's, and the medic mirrors to the card.
+  #
+  # Not while the card waits out a limit: the hold's trailer closes the
+  # marker (DRE-7805 — see `retry_declined`).
   environment_hold:
     needs: classify
     if: >
       (github.event.workflow_run.conclusion == 'failure' || github.event.workflow_run.conclusion == 'timed_out') &&
       github.event.workflow_run.run_attempt >= 2 &&
-      needs.classify.outputs.class == 'environment_crash'
+      needs.classify.outputs.class == 'environment_crash' &&
+      needs.classify.outputs.limit != 'true'
     # The short lane, same as `classify` above (DRE-4276).
     runs-on: ${{ fromJSON(vars.BUREAU_SHORT_RUNS_ON || vars.BUREAU_RUNS_ON || '["ubuntu-latest"]') }}
     timeout-minutes: 5

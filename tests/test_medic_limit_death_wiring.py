@@ -347,7 +347,9 @@ class NotALimitTest(unittest.TestCase):
         self.assertEqual(0, result["rc"], result["text"])
         self.assertIn("limit=false", result["outputs"])
         self.assertEqual([], _comment_calls(result))
-        self.assertEqual([], [c for c in result["calls"] if "dump-comments" in c])
+        # DRE-7805: the thread is read BEFORE the classifier, to ask whether
+        # the build already marked its own wait — once, and only once.
+        self.assertLessEqual(len([c for c in result["calls"] if "dump-comments" in c]), 1)
 
     def test_a_classifier_that_cannot_run_publishes_false_and_stays_green(self):
         result = run_step(decide_rc=2)
