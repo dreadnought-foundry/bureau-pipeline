@@ -213,6 +213,15 @@ LIMIT_DEATH_CLOCK_MINUTES = int(os.environ.get("LIMIT_DEATH_CLOCK_MINUTES", "360
 # minutes is one sweep pass. A `rotation` marker's reset is the run's end
 # itself — the renewed token is already in place.
 VENDOR_WAIT_MINUTES = 5
+# A wait is bounded (DRE-7801). A wait spends no strike, so without a cap a card
+# that meets the same refusal run after run would wait forever. The bound
+# counts waits IN A ROW, not waits in a day: the thread the report script
+# passes is bare comment bodies with no times on them, so the count is
+# positional — the build wait markers since the newest strike. At this many,
+# the next wait death is a strike again. The dead-run cap still holds the card
+# after its strikes, so a card waits at most (REQUEUE_CAP + 1) * this many
+# times before it is held for a person.
+WAIT_REPEAT_CAP = 2
 REQUEUE_CAP = 2  # requeue at most twice (attempts 1,2,3), then hold
 
 # Turn exhaustion's own budget tag and cap (DRE-2312). The string discipline
@@ -1292,6 +1301,24 @@ def death_lines(comment_bodies) -> list[str]:
     ]
 
 
+def waits_in_a_row(comment_bodies) -> int:
+    """How many build waits (DRE-7800's `rotation` and `vendor-transient`
+    markers) this budget holds since its newest `dead-run-requeue` strike
+    (DRE-7801). A Claude or Linear wall, and a marker from any other stage, is
+    not a wait this cap bounds. Pure, the shape of `split_tried`."""
+    bodies = _since_reset(comment_bodies)
+    for i in range(len(bodies) - 1, -1, -1):
+        if DEAD_TAG in (bodies[i] or ""):
+            bodies = bodies[i + 1:]
+            break
+    count = 0
+    for body in bodies:
+        marker = parse_limit_marker(body)
+        if marker and marker["stage"] == "build" and marker["kind"] in vendor_wait.KINDS:
+            count += 1
+    return count
+
+
 def count_of(comment_bodies, tag: str) -> int:
     """How many of `comment_bodies` spend `tag`'s budget.
 
@@ -1612,7 +1639,9 @@ def main(argv: list[str]) -> int:
     hand-off (DRE-6178): `split_tried` and `death_lines` over it, so the shell
     carries no copy of the rule. No file, or one that cannot be read, passes
     `split_tried=None` and the answer is exactly what it was before the
-    hand-off existed.
+    hand-off existed. With --wait-kind the same thread is read for
+    `waits_in_a_row` (DRE-7801): at WAIT_REPEAT_CAP the wait is dropped and the
+    death decides as without the flag; no thread is zero waits.
 
     A turn-cap "replan" body is completed here, not in decide(): the run's own markers
     and, when the agent wrote one before it died, the hand-back at
@@ -1726,9 +1755,26 @@ def main(argv: list[str]) -> int:
     # `--limit-log` read wins: it names the wall the vendor stated and its own
     # reset, the fuller account of the same death. A kind outside the
     # reader's contract is refused out loud and the death decides as without it.
+    # DRE-7801: a card that has already waited WAIT_REPEAT_CAP times in a row
+    # decides as without the flag too — a strike, with the reason added to its
+    # receipt. No thread, or one that cannot be read, is zero waits: an
+    # unreadable thread never spends a strike on its own.
     wait_kind = _flag_value(rest, "--wait-kind")
+    waited_out = ""
     if wait_kind:
         wait = wait_death(wait_kind, _flag_value(rest, "--run-id"), _run_end(rest))
+        waits = 0
+        if wait is not None and limit is None and comments_path:
+            try:
+                import json as _json
+
+                with open(comments_path) as fh:
+                    bodies = _json.load(fh)
+                waits = waits_in_a_row(bodies) if isinstance(bodies, list) else 0
+            except Exception as exc:  # noqa: BLE001 — an unreadable thread spends no strike
+                print(f"dead_run: could not read the card's thread from "
+                      f"{comments_path} ({exc}) — counting no waits, so this "
+                      f"one waits", file=sys.stderr)
         if wait is None:
             print(f"dead_run: --wait-kind {wait_kind!r} is not one of "
                   f"{', '.join(vendor_wait.KINDS)} — the death decides as it "
@@ -1737,6 +1783,10 @@ def main(argv: list[str]) -> int:
             print(f"dead_run: --limit-log read a {limit.kind} wall and --wait-kind "
                   f"named {wait_kind} — the {limit.kind} marker is written and "
                   f"the {wait_kind} wait is dropped", file=sys.stderr)
+        elif waits >= WAIT_REPEAT_CAP:
+            times = "twice" if WAIT_REPEAT_CAP == 2 else f"{WAIT_REPEAT_CAP} times"
+            waited_out = (f"This card has already waited {times} in a row on a "
+                          f"vendor or renewal refusal, so this death is counted.")
         else:
             limit = wait
     turn_facts = ""
@@ -1807,6 +1857,12 @@ def main(argv: list[str]) -> int:
         deaths=deaths,
     )
     body = d.comments[0]
+    if waited_out:
+        # Its own paragraph under the receipt's first line, so `death_lines`
+        # quotes the strike as it always has and the `model-error:` marker
+        # stays on its own line.
+        first, _, more = body.partition("\n")
+        body = f"{first}\n\n{waited_out}" + (f"\n{more}" if more else "")
     if d.action == "replan" and turn_exhaustion:
         body += replan_evidence(markers, _read_handback(handback_path))
     print(d.action)
