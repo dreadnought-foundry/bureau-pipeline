@@ -61,7 +61,10 @@ set -e
 #      short of green, or the dead-run cap trying the planner once on a run
 #      that left no PR and no blocker note), infra (a run warning, the card
 #      left where it is)
-#      or defer (a receipt only, for a cancelled run).
+#      or defer (a receipt only, for a cancelled run). An api_death asks
+#      `vendor_wait.py kind` first: `rotation` or `vendor-transient` passes
+#      `--wait-kind <kind> --run-id`, and `decide` answers limit, one marker
+#      and no move; any other answer passes `--is-error` and `--error-model`.
 # 5. A turn-cap death that an escalation, a blocker, a rescue delivery or
 #    the unreadable receipt took still gets its tagged receipt from
 #    `dead_run.py turn-noted`, so the turn-cap count sees it.
@@ -268,6 +271,18 @@ set -e
 #   pipefail. A `printf` write that landed after `head` exited died of
 #   SIGPIPE, `set -e` ended the script and no receipt was posted. It struck
 #   at random in the suite-green job and held the stable channel.
+# 2026-10-24, DRE-7802, DRE-7795, DRE-7800, DRE-7801, DRE-7805. An API-error
+#   death that our own token renewal caused, or the model service refusing for
+#   a moment, is a wait, not a strike. The api_death branch asks
+#   `vendor_wait.py kind` before it spends one; on `rotation` or
+#   `vendor-transient` it passes `--wait-kind` and `--run-id`, never with
+#   `--is-error`, so no strike is spent and no model is switched, and `decide`
+#   answers limit through the receipt-only path. `none`, any other word or a
+#   call that fails passes DRE-1354's `--is-error` and `--error-model` as
+#   before. The same `--comments-file` rides both, which DRE-7801's cap on
+#   waits in a row reads. It waited on DRE-7805: the build still ends red, and
+#   the medic had to read the marker as a wait before this switch could turn
+#   on.
 # The agent's three notes sit where the prompt tells it to write them, /tmp.
 # AGENT_NOTES_DIR moves them, and only a test sets it (DRE-6961).
 NOTES_DIR="${AGENT_NOTES_DIR:-/tmp}"
@@ -458,7 +473,13 @@ else
     python3 .bureau-pipeline/scripts/linear_ops.py dump-comments "$CARD" \
       > "$COMMENTS_FILE" || ERR_FLAGS=""
     if [ "$DEATH_CLASS" = "api_death" ]; then
-      ERR_FLAGS="$ERR_FLAGS --is-error --error-model $MODEL_USED"
+      # Our renewal's 401 or the vendor's moment is a wait, not a strike;
+      # any other word, or a call that fails, is today's call (DRE-7802).
+      WAIT_KIND=$(python3 .bureau-pipeline/scripts/vendor_wait.py kind "$EXEC_FILE") || WAIT_KIND=none
+      case "$WAIT_KIND" in
+        rotation|vendor-transient) ERR_FLAGS="$ERR_FLAGS --wait-kind $WAIT_KIND --run-id ${RUN_ID:-unknown}" ;;
+        *) ERR_FLAGS="$ERR_FLAGS --is-error --error-model $MODEL_USED" ;;
+      esac
     fi
   fi
   if [ "$CLAUDE_OUTCOME" = "cancelled" ]; then

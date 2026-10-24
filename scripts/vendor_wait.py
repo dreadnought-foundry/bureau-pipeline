@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Was a build's API-error death a WAIT rather than a strike? (DRE-7795)
 
-Today `report_agent_result.sh` sends every `api_death`
+Before DRE-7802 `report_agent_result.sh` sent every `api_death`
 (`check_agent_result.classify_death`) to `dead_run.py decide --is-error`: one
-of the card's three strikes is spent and a `model-error:` marker switches the
+of the card's three strikes spent and a `model-error:` marker switching the
 model. Two of those deaths are nobody's fault and a fresh run is the remedy:
 
   * `rotation` — our own renewal revoked the run's Claude token under it
@@ -16,8 +16,9 @@ POSITIVELY or not at all, the `death_cause.py` discipline: a kind is returned
 only on a signature that is present, and None — every other death, a record
 it cannot read included — leaves the death decided exactly as today, a strike.
 DRE-7800 turns a kind into a marker instead of a strike, DRE-7801 caps
-repeated waits and DRE-7802 wires the report script to ask; until then nothing
-calls this module and no death changes.
+repeated waits and DRE-7802 wires the report script to ask: its `api_death`
+branch runs the CLI below and passes `--wait-kind` on a kind, today's
+`--is-error` on `none` or a call that fails.
 
 ONE READER OF EACH FACT. The renewal 401 is `credential_rotation.in_execution`,
 the turn-cap veto is `check_agent_result._turn_cap_evidence`, the capacity wall
