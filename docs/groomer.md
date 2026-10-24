@@ -1549,7 +1549,11 @@ decisions by the source they came from (`groom_memory.SOURCES`).
 - **A card brought back** — a `groom-added` marker or the door's `put-back`
   newer than the removal — is on offer again, and while it is in the lane the
   page names it in the `Put back on offer by you:` line, with the reason
-  recorded for bringing it back and its date.
+  recorded for bringing it back and its date. A `groom-rewrite-accepted`
+  newer than the removal brings it back too, and is named in its own
+  `Back on offer because you accepted its rewrite:` line with its date.
+  Neither line names a card that was never removed: an accepted rewrite or a
+  `groom-added` on such a card leaves it on offer and says nothing.
 - **`groom-held` — Hold**, with or without a condition. The drain leaves it in Intake for the batch it
   names, exactly as an exclusion. A later proposal may offer it again, but
   sequences every held card after every card that was never held, whatever

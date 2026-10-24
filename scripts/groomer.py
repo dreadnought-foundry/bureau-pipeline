@@ -533,6 +533,7 @@ MEMORY_TAG = "groom-memory:"
 DOOR_UNREAD = ("The console's record of your decisions could not be read this "
                "morning")
 PUT_BACK_LINE = "Put back on offer by you:"
+REWRITTEN_BACK_LINE = "Back on offer because you accepted its rewrite:"
 # The time a marker takes when no comment at or before it in the thread
 # carried one — the oldest there is, so a stamped decision always outranks it.
 NO_STAMP = "1970-01-01T00:00:00Z"
@@ -1615,7 +1616,7 @@ def propose(cards: list[dict], *, cycles: list[dict], capacity: int = DEFAULT_CA
             verified: dict | None = None,
             readiness: dict | None = None,
             memory: dict | None = None, excluded_reasons=None,
-            put_back=None) -> dict:
+            put_back=None, rewritten_back=None) -> dict:
     """The whole population, sequenced, with one outcome per card.
 
     `judgement` is a `groom_judgement.Judgement` (or a bare
@@ -1643,11 +1644,13 @@ def propose(cards: list[dict], *, cycles: list[dict], capacity: int = DEFAULT_CA
     standing card that names no card (`standing_decisions`, DRE-6642) — said
     on the page under `## Decisions I could not read`, and in no list.
 
-    `memory`, `excluded_reasons` and `put_back` are `read_memory`'s (DRE-7824):
-    which source the memory came from, and the reason and time recorded for
-    each card off the offer and each card brought back. Said on the page, and
-    in neither list, so the id is the same with or without them. None is a
-    proposal built with no memory read, which carries none of the three keys.
+    `memory`, `excluded_reasons`, `put_back` and `rewritten_back` are
+    `read_memory`'s (DRE-7824): which source the memory came from, and the
+    reason and time recorded for each card off the offer, each card a person
+    brought back and each card back because its rewrite was accepted. Said on
+    the page, and in neither list, so the id is the same with or without them.
+    None is a proposal built with no memory read, which carries none of the
+    four keys.
 
     `verified` is `groom_verify.check`'s answer about a first proposal of the
     same lane (`verify_proposal`): `cancel` puts a card on the Cancel list with
@@ -1958,12 +1961,16 @@ def propose(cards: list[dict], *, cycles: list[dict], capacity: int = DEFAULT_CA
     if memory is not None:
         reasons = dict(excluded_reasons or {})
         back = dict(put_back or {})
+        rewritten = dict(rewritten_back or {})
         lane_ids = {c["identifier"] for c in in_lane}
         proposal["memory"] = memory
         proposal["excluded_reasons"] = {c: reasons[c] for c in left_out
                                         if c in reasons}
         proposal["put_back"] = {c: back[c] for c in sorted(back, key=_card_sort_key)
                                 if c in lane_ids}
+        proposal["rewritten_back"] = {
+            c: rewritten[c] for c in sorted(rewritten, key=_card_sort_key)
+            if c in lane_ids}
     # The priorities ranked as Medium, and the ones not read (DRE-5307), off
     # the cards `groom_priority.annotate` marked — absent when there are none,
     # so a morning with neither proposes exactly what it did before.
@@ -3732,16 +3739,18 @@ def _render_earlier(proposal: dict) -> list:
     Since DRE-7824 each card off the offer is named with the reason recorded
     for it and the Pacific date of the decision; a card in the lane a person
     brought back is named in the `Put back on offer by you:` line, with its
-    own reason and date; and a morning the console's record could not be read
+    own reason and date, and one back because its rewrite was accepted in the
+    `Back on offer because you accepted its rewrite:` line; and a morning the console's record could not be read
     says so first, with the door's reason, whether or not anything was left
     out."""
     left_out = proposal.get("excluded_before") or []
     held = proposal.get("held_before") or []
     reasons = proposal.get("excluded_reasons") or {}
     back = proposal.get("put_back") or {}
+    rewritten = proposal.get("rewritten_back") or {}
     memory = proposal.get("memory") or {}
     door = memory.get("door_problem")
-    if not left_out and not held and not back and not door:
+    if not left_out and not held and not back and not rewritten and not door:
         return []
     w = ["## Your earlier answers", ""]
     if door:
@@ -3753,6 +3762,11 @@ def _render_earlier(proposal: dict) -> list:
         w.append(f"{PUT_BACK_LINE} " + "; ".join(
             f"{card} — {_decision_said(entry)}" for card, entry in back.items())
             + ".")
+        w.append("")
+    if rewritten:
+        w.append(f"{REWRITTEN_BACK_LINE} " + "; ".join(
+            f"{card} ({_decision_day(entry)})"
+            for card, entry in rewritten.items()) + ".")
         w.append("")
     if left_out:
         w.append(f"- Not proposed again — you said don't do. `{MARK} {ADD_TAG}: "
@@ -3773,10 +3787,14 @@ def _decision_said(entry: dict) -> str:
     the reason defanged and on one line, or "no reason recorded"."""
     label = _line(defang_reason(entry.get("reason_label"))[0]) \
         if (entry.get("reason_label") or "").strip() else "no reason recorded"
+    return f"{label} ({_decision_day(entry)})"
+
+
+def _decision_day(entry: dict) -> str:
+    """The Pacific date of one remembered decision, or "date not recorded"."""
     stamp = entry.get("recorded_at")
     moment = _moment(stamp) if stamp and stamp != NO_STAMP else None
-    day = dead_run.pacific(moment).split(" ")[0] if moment else "date not recorded"
-    return f"{label} ({day})"
+    return dead_run.pacific(moment).split(" ")[0] if moment else "date not recorded"
 
 
 def _render_unreadable(proposal: dict) -> list:
@@ -5690,6 +5708,7 @@ def _build(args) -> dict:
                    memory=memory["memory"],
                    excluded_reasons=memory["excluded_reasons"],
                    put_back=memory["put_back"],
+                   rewritten_back=memory["rewritten_back"],
                    repo_priority=tuple(p for p in args.priority.split(",") if p),
                    readiness=_readiness(linear_ops, on_offer, judgement))
     if getattr(args, "verify", False):
@@ -5793,7 +5812,10 @@ def read_memory(lops, current: str | None) -> dict:
 
     Returns `records` (the current card's thread, for the repo switch and the
     page's unreadable markers), `excluded`, `held`, `unreadable`,
-    `excluded_reasons`, `put_back`, the proposal's `memory` block and the one
+    `excluded_reasons`, `put_back` (a door `put-back` row or a `groom-added`
+    marker), `rewritten_back` (a `groom-rewrite-accepted` marker) — each
+    naming only a card that was removed before — the proposal's `memory`
+    block and the one
     `groom-memory:` `line`. The counts are the door's rows, and the newest
     decisions by the source they came from.
     """
@@ -5812,6 +5834,23 @@ def read_memory(lops, current: str | None) -> dict:
                for marker in per_card_markers(threads[card], card)]
     decided = groom_memory.remembered(rows, markers, reasons=reasons,
                                       door_problem=door_problem)
+    # A `put-back` is a door row, a `groom-added` or a
+    # `groom-rewrite-accepted`, and the page says only what is true of it: a
+    # card is named as brought back only when it was ever removed, and an
+    # accepted rewrite is said as one — never as "put back by you".
+    kind_of = {(m["standing_card"], m["proposal_id"], m["card"],
+                m["created_at"]): m["kind"] for m in markers}
+    removed = ({r.get("card") for r in rows if r.get("decision") in OFF_THE_OFFER}
+               | {m["card"] for m in markers if m["kind"] == "excluded"})
+
+    def back_by(card: str) -> str | None:
+        d = decided[card]
+        if d["decision"] != "put-back" or card not in removed:
+            return None
+        if d["source"] == "record":
+            return "added"
+        return kind_of.get((d["standing_card"], d["proposal_id"], card,
+                            d["recorded_at"]))
 
     def said(decision: dict) -> dict:
         return {key: decision[key]
@@ -5841,8 +5880,11 @@ def read_memory(lops, current: str | None) -> dict:
             # its newest proposal, exactly as before (DRE-6642).
             "unreadable": standing_decisions(records)["unreadable"],
             "excluded_reasons": {card: said(decided[card]) for card in excluded},
-            "put_back": {card: said(decided[card])
-                         for card in cards("put-back")},
+            "put_back": {card: said(decided[card]) for card in cards("put-back")
+                         if back_by(card) == "added"},
+            "rewritten_back": {card: said(decided[card])
+                               for card in cards("put-back")
+                               if back_by(card) == "rewrite-accepted"},
             "memory": block, "line": line}
 
 
