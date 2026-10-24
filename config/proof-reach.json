@@ -167,6 +167,12 @@
       "printed_by": "scripts/repo_held_epics.py",
       "constant": "LOG_PREFIX",
       "when": "every full sweep pass of a repo held at max_wip 0, and every full pass that is not idle at a cap above 0, since the reconcile wiring card (DRE-7755): one line per approved epic — the notice posted, the notice already standing, nothing waiting on the cap, or a green light or thread unreadable — one per child wearing needs-human with no hold stamp, the one line `no approved epic of <repo> is In Progress` when there is none, and one `lifted <ID>` line per hold the restored cap lifts"
+    },
+    {
+      "tag": "groom-memory:",
+      "printed_by": "scripts/groomer.py",
+      "constant": "MEMORY_TAG",
+      "when": "every groomer propose run since DRE-7824, one line in the Groom step's log"
     }
   ],
   "causes": [

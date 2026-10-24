@@ -15,7 +15,7 @@ it — no Linear, no read door, no clock, no file at run time — and imports
 nothing from `groomer.py`, so the groomer imports it without a cycle. The
 caller hands it the door's rows, every standing card's markers, the reasons
 the door served, today's Pacific date and the states of the cards a hold
-names. Nothing calls it until the groomer-memory card does.
+names. `groomer.read_memory` calls it once per `propose` run (DRE-7824).
 
 ## Every standing card, the current one included
 

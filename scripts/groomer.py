@@ -280,10 +280,12 @@ from datetime import datetime, timezone
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import blocker_prose  # noqa: E402 — ONE anchored blocker-prose grammar (DRE-2922)
+import bureau_read  # noqa: E402 — the console's record of groom decisions (DRE-7821)
 import console_receipt  # noqa: E402 — ONE reader of a console-signed decision (DRE-3754)
 import dead_run  # noqa: E402 — ONE Pacific clock for a time a person reads
 import groom_context  # noqa: E402 — the context pack (DRE-3150)
 import groom_judgement  # noqa: E402 — the one ranked read (DRE-3150)
+import groom_memory  # noqa: E402 — the newest decision per card (DRE-7822)
 import groom_priority  # noqa: E402 — a stale Urgent or High ranks as Medium (DRE-5307)
 import groom_verify  # noqa: E402 — the check before posting (DRE-4966)
 import intake_controls  # noqa: E402 — ONE reading of the operator's Intake switch
@@ -519,6 +521,21 @@ HELD_BACK_TAGS = (EXCLUDE_TAG, HOLD_TAG)
 # Where a per-card marker naming no card is quoted, on the next proposal and in
 # the drain's record (DRE-6642) — said, never dropped.
 UNREADABLE_HEADING = "## Decisions I could not read"
+# Each per-card marker as `groom_memory`'s marker kind (DRE-7824).
+MEMORY_KINDS = {EXCLUDE_TAG: "excluded", HOLD_TAG: "held", ADD_TAG: "added",
+                REWRITE_ACCEPT_TAG: "rewrite-accepted"}
+# The groomer's memory, said once per `propose` run on stderr, in the Groom
+# step's log (DRE-7824): which source it read, how many decisions came from
+# each, and every standing card it read. `config/proof-reach.json` names it,
+# so the proof run may read it.
+MEMORY_TAG = "groom-memory:"
+# The opening of the page's line on a morning the door could not be read.
+DOOR_UNREAD = ("The console's record of your decisions could not be read this "
+               "morning")
+PUT_BACK_LINE = "Put back on offer by you:"
+# The time a marker takes when no comment at or before it in the thread
+# carried one — the oldest there is, so a stamped decision always outranks it.
+NO_STAMP = "1970-01-01T00:00:00Z"
 
 # --- the CEO's repo switch (DRE-3403) ---------------------------------------
 # Beside the decision markers, and deliberately NOT one of them: these are not
@@ -1596,7 +1613,9 @@ def propose(cards: list[dict], *, cycles: list[dict], capacity: int = DEFAULT_CA
             held_repos=(), excluded=(), held_cards=(),
             unreadable_decisions=(),
             verified: dict | None = None,
-            readiness: dict | None = None) -> dict:
+            readiness: dict | None = None,
+            memory: dict | None = None, excluded_reasons=None,
+            put_back=None) -> dict:
     """The whole population, sequenced, with one outcome per card.
 
     `judgement` is a `groom_judgement.Judgement` (or a bare
@@ -1615,7 +1634,7 @@ def propose(cards: list[dict], *, cycles: list[dict], capacity: int = DEFAULT_CA
     still visible as existing, and only the OFFER shrinks.
 
     `excluded` and `held_cards` are the CEO's per-card answers on EARLIER
-    proposals on the standing card (`standing_decisions`, DRE-4966). An
+    proposals on every standing card (`read_memory`, DRE-4966, DRE-7824). An
     excluded card — Don't do — leaves the offer here exactly as a held repo's
     card does. A held card — Hold — stays on offer and is sequenced after
     every card that was never held (`_held_last`).
@@ -1623,6 +1642,12 @@ def propose(cards: list[dict], *, cycles: list[dict], capacity: int = DEFAULT_CA
     `unreadable_decisions` is the first line of each per-card marker on the
     standing card that names no card (`standing_decisions`, DRE-6642) — said
     on the page under `## Decisions I could not read`, and in no list.
+
+    `memory`, `excluded_reasons` and `put_back` are `read_memory`'s (DRE-7824):
+    which source the memory came from, and the reason and time recorded for
+    each card off the offer and each card brought back. Said on the page, and
+    in neither list, so the id is the same with or without them. None is a
+    proposal built with no memory read, which carries none of the three keys.
 
     `verified` is `groom_verify.check`'s answer about a first proposal of the
     same lane (`verify_proposal`): `cancel` puts a card on the Cancel list with
@@ -1927,6 +1952,18 @@ def propose(cards: list[dict], *, cycles: list[dict], capacity: int = DEFAULT_CA
         proposal["held_before"] = sorted(held_cards, key=_card_sort_key)
     if unreadable_decisions:
         proposal["unreadable_decisions"] = list(unreadable_decisions)
+    # What the memory read and why each card is off the offer or back on it
+    # (DRE-7824): the excluded cards this lane holds, and the put-back cards
+    # it holds — a reason for a card nobody would see here is not said.
+    if memory is not None:
+        reasons = dict(excluded_reasons or {})
+        back = dict(put_back or {})
+        lane_ids = {c["identifier"] for c in in_lane}
+        proposal["memory"] = memory
+        proposal["excluded_reasons"] = {c: reasons[c] for c in left_out
+                                        if c in reasons}
+        proposal["put_back"] = {c: back[c] for c in sorted(back, key=_card_sort_key)
+                                if c in lane_ids}
     # The priorities ranked as Medium, and the ones not read (DRE-5307), off
     # the cards `groom_priority.annotate` marked — absent when there are none,
     # so a morning with neither proposes exactly what it did before.
@@ -3690,21 +3727,56 @@ def _render_check(proposal: dict) -> list:
 
 def _render_earlier(proposal: dict) -> list:
     """The CEO's per-card answers on earlier proposals, as they shaped this
-    one (DRE-4966) — or nothing, when there are none."""
+    one (DRE-4966) — or nothing, when there are none.
+
+    Since DRE-7824 each card off the offer is named with the reason recorded
+    for it and the Pacific date of the decision; a card in the lane a person
+    brought back is named in the `Put back on offer by you:` line, with its
+    own reason and date; and a morning the console's record could not be read
+    says so first, with the door's reason, whether or not anything was left
+    out."""
     left_out = proposal.get("excluded_before") or []
     held = proposal.get("held_before") or []
-    if not left_out and not held:
+    reasons = proposal.get("excluded_reasons") or {}
+    back = proposal.get("put_back") or {}
+    memory = proposal.get("memory") or {}
+    door = memory.get("door_problem")
+    if not left_out and not held and not back and not door:
         return []
     w = ["## Your earlier answers", ""]
+    if door:
+        w.append(f"{DOOR_UNREAD}: `{_line(door).replace('`', "'")}`. This "
+                 f"proposal honors the decisions written on the standing cards "
+                 f"instead — {', '.join(memory.get('standing_cards') or [])}.")
+        w.append("")
+    if back:
+        w.append(f"{PUT_BACK_LINE} " + "; ".join(
+            f"{card} — {_decision_said(entry)}" for card, entry in back.items())
+            + ".")
+        w.append("")
     if left_out:
-        w.append(f"- Not proposed again — you said don't do: "
-                 f"{', '.join(left_out)}. `{MARK} {ADD_TAG}: {proposal['id']} "
-                 f"DRE-N` brings one back.")
+        w.append(f"- Not proposed again — you said don't do. `{MARK} {ADD_TAG}: "
+                 f"{proposal['id']} DRE-N` brings one back:")
+        for card in left_out:
+            entry = reasons.get(card)
+            w.append(f"  - {card} — {_decision_said(entry)}" if entry
+                     else f"  - {card}")
     if held:
         w.append(f"- Held on an earlier proposal, so ranked after every card "
                  f"you have not held: {', '.join(held)}.")
     w.append("")
     return w
+
+
+def _decision_said(entry: dict) -> str:
+    """`<reason> (<Pacific date>)` for one remembered decision (DRE-7824) —
+    the reason defanged and on one line, or "no reason recorded"."""
+    label = _line(defang_reason(entry.get("reason_label"))[0]) \
+        if (entry.get("reason_label") or "").strip() else "no reason recorded"
+    stamp = entry.get("recorded_at")
+    moment = _moment(stamp) if stamp and stamp != NO_STAMP else None
+    day = dead_run.pacific(moment).split(" ")[0] if moment else "date not recorded"
+    return f"{label} ({day})"
 
 
 def _render_unreadable(proposal: dict) -> list:
@@ -4127,6 +4199,39 @@ def standing_decisions(records: list[dict]) -> dict:
             "held": sorted((c for c, t in last.items() if t == HOLD_TAG),
                            key=_card_sort_key),
             "unreadable": unreadable}
+
+
+def per_card_markers(records: list[dict], standing_card: str) -> list[dict]:
+    """A vouched thread's per-card markers as `groom_memory`'s marker dicts
+    (DRE-7824): `{"standing_card", "created_at", "kind", "proposal_id",
+    "card", "tail"}`, in thread order.
+
+    Read with the matcher every other reader uses (`decision_match`,
+    `_card_tail`), and only for a record `_decides` accepts — the proposer
+    cannot take a card off its own offer. A marker naming no card is not one
+    here; `standing_decisions` lists it on the page (DRE-6642). A comment with
+    no `created_at` takes the stamp of the newest comment before it that has
+    one, or `NO_STAMP`, so it keeps its place rather than being dropped.
+    """
+    out = []
+    stamp = NO_STAMP
+    for record in records:
+        stamp = record.get("created_at") or stamp
+        if not _decides(record):
+            continue
+        body = record.get("body") or ""
+        for tag in PER_CARD_TAGS:
+            match = decision_match(tag, body)
+            if not match:
+                continue
+            named = _card_tail(match.group(2))
+            if named:
+                out.append({"standing_card": standing_card, "created_at": stamp,
+                            "kind": MEMORY_KINDS[tag],
+                            "proposal_id": match.group(1), "card": named[0],
+                            "tail": named[1]})
+            break
+    return out
 
 
 def _card_tail(tail: str) -> tuple[str, str | None] | None:
@@ -5506,24 +5611,27 @@ def _build(args) -> dict:
         print(f"groomer: {_plural(len(in_queue), 'card')} carrying "
               f"`{QUEUED_LABEL}` left out — already approved and waiting for "
               f"a planner slot", file=sys.stderr)
-    # The standing card's WHOLE thread, read once: the repo switch and the
-    # CEO's per-card answers on every earlier proposal both live there, and
-    # either can be the oldest comment on the card.
+    # The memory, read once and BEFORE the census (DRE-7824): the console's
+    # record and the WHOLE thread of every standing card, the current one
+    # among them — the repo switch and the CEO's per-card answers both live
+    # there, and either can be the oldest comment on the card.
     thread = _thread_card(args)
-    records = (decision_records(linear_ops, thread, whole_thread=True)
-               if thread else [])
-    # The repo switch, read BEFORE the census (DRE-3403). A card the model
-    # never sees cannot be ranked, cannot be given a cycle and cannot fill a
-    # slot in the batch — which is the difference between this and the
-    # work-in-progress cap, that stops builds after classification.
+    memory = read_memory(linear_ops, thread)
+    records = memory["records"]
+    print(memory["line"], file=sys.stderr)
+    # The repo switch, read BEFORE the census (DRE-3403), off the current
+    # standing card only. A card the model never sees cannot be ranked,
+    # cannot be given a cycle and cannot fill a slot in the batch — which is
+    # the difference between this and the work-in-progress cap, that stops
+    # builds after classification.
     holds = read_holds(linear_ops, args, records=records)
-    # Don't do and Hold, from every earlier proposal (DRE-4966). An excluded
-    # card leaves the offer before the census, as a held repo's card does; a
-    # held card stays on offer and is ranked last.
-    standing = standing_decisions(records)
-    excluded = set(standing["excluded"])
-    if standing["unreadable"]:
-        print(f"groomer: {_plural(len(standing['unreadable']), 'decision')} "
+    # Don't do, Cancel and Hold, from every earlier proposal on every standing
+    # card (DRE-4966, DRE-7824). An excluded card leaves the offer before the
+    # census, as a held repo's card does; a held card stays on offer and is
+    # ranked last.
+    excluded = set(memory["excluded"])
+    if memory["unreadable"]:
+        print(f"groomer: {_plural(len(memory['unreadable']), 'decision')} "
               f"on {thread} name no card — listed on this proposal",
               file=sys.stderr)
     on_offer = [c for c in offered(cards, holds)
@@ -5539,7 +5647,7 @@ def _build(args) -> dict:
               f"unread", file=sys.stderr)
     if excluded:
         print(f"groomer: {_plural(len(excluded), 'card')} excluded on an "
-              f"earlier proposal left out — {', '.join(standing['excluded'])}",
+              f"earlier proposal left out — {', '.join(memory['excluded'])}",
               file=sys.stderr)
     if holds:
         print(f"groomer: {_plural(len(holds), 'repo')} switched off — "
@@ -5576,9 +5684,12 @@ def _build(args) -> dict:
     shaping = dict(cycles=cycles, capacity=args.capacity,
                    batch_cycles=args.batch_cycles, lane=args.lane,
                    window_days=args.window_days, judgement=judgement,
-                   held_repos=holds, excluded=standing["excluded"],
-                   held_cards=standing["held"],
-                   unreadable_decisions=standing["unreadable"],
+                   held_repos=holds, excluded=memory["excluded"],
+                   held_cards=memory["held"],
+                   unreadable_decisions=memory["unreadable"],
+                   memory=memory["memory"],
+                   excluded_reasons=memory["excluded_reasons"],
+                   put_back=memory["put_back"],
                    repo_priority=tuple(p for p in args.priority.split(",") if p),
                    readiness=_readiness(linear_ops, on_offer, judgement))
     if getattr(args, "verify", False):
@@ -5661,6 +5772,78 @@ def _thread_card(args) -> str | None:
     """The standing card whose thread `propose` reads: `--post`'s, or
     `--card`'s, which reads the same thread and posts nothing (DRE-4971)."""
     return getattr(args, "post", None) or getattr(args, "card", None)
+
+
+#: The decisions that keep a card off the offer (DRE-7824). The conditions
+#: card after this one gives `cancel` its own list; until then it is a
+#: Don't do, as `groom-excluded: … move to Cancel` always was.
+OFF_THE_OFFER = ("not-doing", "cancel")
+
+
+def read_memory(lops, current: str | None) -> dict:
+    """The groomer's memory, read once per run before the census (DRE-7824).
+
+    The console's record first (`bureau_read.groom_removals`, DRE-7821); a
+    `ReadUnknown` is this morning's `door_problem` — its reason and detail —
+    and every decision is then taken off the threads. Then the WHOLE thread
+    of each card in `groom_memory.standing_cards(current)`, each read once
+    and vouched as itself (`decision_records`), so every console receipt is
+    checked against the card it was written on. `groom_memory.remembered`
+    gives the newest decision per card, whichever card it was written on.
+
+    Returns `records` (the current card's thread, for the repo switch and the
+    page's unreadable markers), `excluded`, `held`, `unreadable`,
+    `excluded_reasons`, `put_back`, the proposal's `memory` block and the one
+    `groom-memory:` `line`. The counts are the door's rows, and the newest
+    decisions by the source they came from.
+    """
+    standing = groom_memory.standing_cards(current)
+    reason = detail = door_problem = None
+    try:
+        answer = bureau_read.groom_removals()
+        rows, reasons = answer["decisions"], answer["reasons"]
+    except bureau_read.ReadUnknown as e:
+        rows, reasons = [], None
+        reason, detail = e.reason, e.detail or ""
+        door_problem = f"{reason}: {detail}" if detail else reason
+    threads = {card: decision_records(lops, card, whole_thread=True)
+               for card in standing}
+    markers = [marker for card in standing
+               for marker in per_card_markers(threads[card], card)]
+    decided = groom_memory.remembered(rows, markers, reasons=reasons,
+                                      door_problem=door_problem)
+
+    def said(decision: dict) -> dict:
+        return {key: decision[key]
+                for key in ("reason_label", "recorded_at", "source")}
+
+    def cards(*kinds: str) -> list[str]:
+        return sorted((card for card, d in decided.items()
+                       if d["decision"] in kinds), key=_card_sort_key)
+
+    excluded, held = cards(*OFF_THE_OFFER), cards("hold")
+    counts = {"rows": len(rows)}
+    for source in ("history", "thread", "fallback"):
+        counts[source] = sum(d["source"] == source for d in decided.values())
+    block = {"source": "fallback" if door_problem else "record",
+             "door_problem": door_problem, "standing_cards": list(standing),
+             "counts": counts}
+    line = (f"{MEMORY_TAG} source={block['source']} rows={counts['rows']} "
+            f"history={counts['history']} thread={counts['thread']} "
+            f"fallback={counts['fallback']} excluded={len(excluded)} "
+            f"held={len(held)} standing={','.join(standing)}")
+    if door_problem:
+        # The detail last: it may hold spaces.
+        line += f" door={reason} detail={' '.join(detail.split())}"
+    records = threads.get(current, []) if current else []
+    return {"records": records, "excluded": excluded, "held": held,
+            # A marker naming no card, off the current card's thread since
+            # its newest proposal, exactly as before (DRE-6642).
+            "unreadable": standing_decisions(records)["unreadable"],
+            "excluded_reasons": {card: said(decided[card]) for card in excluded},
+            "put_back": {card: said(decided[card])
+                         for card in cards("put-back")},
+            "memory": block, "line": line}
 
 
 def read_holds(lops, args, *, records: list[dict] | None = None) -> list[str]:
