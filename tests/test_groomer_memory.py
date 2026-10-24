@@ -230,19 +230,30 @@ def test_a_not_doing_row_from_an_earlier_card_keeps_the_card_off_both_lists(
     assert f"{groomer.ADD_TAG}: {after['id']} DRE-N" in earlier
 
 
-def test_a_cancel_is_off_the_offer_too(monkeypatch):
+def test_a_cancel_is_on_the_cancel_list_not_off_the_offer(monkeypatch):
+    """Since DRE-7826 a Move to Cancel is carried as the decision it is: on
+    the next Cancel list, never a Don't do that keeps the card in Intake."""
     after = build(monkeypatch, removals=door([row("DRE-102", "cancel")]))
-    assert "DRE-102" not in offered_anywhere(after)
-    assert after["excluded_reasons"]["DRE-102"]["reason_label"] is None
-    assert "no reason recorded" in section(groomer.render_proposal(after))
+    assert [r["identifier"] for r in cancel(after)] == ["DRE-102"]
+    assert "DRE-102" not in planning(after)
+    assert "excluded_before" not in after
+    assert after["excluded_reasons"] == {}
 
 
-def test_a_hold_of_any_kind_is_ranked_last(monkeypatch):
+def test_only_a_hold_with_no_condition_is_ranked_last(monkeypatch):
+    """A hold on a card or a date waits for it (DRE-7826): off the offer
+    while the condition is unmet — the card's state unread here."""
+    def unread(*a, **k):
+        raise RuntimeError("linear answered 503")
+
+    monkeypatch.setattr(groomer.linear_ops, "gql", unread)
     rows = [row("DRE-101", "hold", until_card="DRE-9"),
             row("DRE-102", "hold", until_date="2027-01-01", ident=2),
             row("DRE-103", "hold", ident=3)]
     after = build(monkeypatch, removals=door(rows))
-    assert after["held_before"] == ["DRE-101", "DRE-102", "DRE-103"]
+    assert after["held_before"] == ["DRE-103"]
+    assert [h["identifier"] for h in after["held_until"]] == ["DRE-101",
+                                                              "DRE-102"]
     assert planning(after) == ["DRE-104", "DRE-105", "DRE-106"]
 
 
