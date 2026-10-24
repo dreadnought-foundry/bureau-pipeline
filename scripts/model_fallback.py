@@ -367,7 +367,9 @@ _FALLBACK_MODEL_CONFIG = {
         "mobile": "Builds the mobile apps",
         "product-lead": "Decides what to build next and writes the cards",
     },
-    "projects": {},
+    "projects": {
+        "agent-bureau-demo": {"advisory": "claude-sonnet-5"},
+    },
     "retired": ["claude-opus-4-8"],
     "excluded": ["claude-haiku-5-5", "claude-fable-5"],
 }

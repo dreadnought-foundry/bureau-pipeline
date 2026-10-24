@@ -277,7 +277,9 @@ link to work in flight still precedes a High card that has one.
   page names the pair under its collisions, with the epic the held-back card
   serves (`unhonoured_constraints` in the JSON).
 - **The page says so.** A rules-only row placed by this step reads
-  `in flight — serves DRE-N (In Progress)` in its `Why` cell, and the batch
+  `in flight — serves DRE-N (In Progress)` in its `Why` cell, a judged row
+  reads the same mark followed by ` — ` and the model's reason (DRE-7397),
+  and the batch
   paragraph gains one sentence naming the rule — only on a batch the step
   placed a card in, so `--no-judgement` renders byte for byte as before on a
   population with nothing in flight.
@@ -857,6 +859,17 @@ characters) and up to `MAX_PR_FILES` = 30 files. `fold` writes them onto
 every row that carries them. A search that fails, or that cannot run (no
 Linear key, an excluded card), writes `searched: false` and the reason. It
 never changes the card's `lookups` block or its lookup state.
+
+Linear can refuse a search with "You're trying to search issues too fast"
+(DRE-7613). On 2026-10-17 that refusal came on the fourth of twenty cards and
+was read as the spent hour, so every later card went unsearched. Now
+`linear_ops` raises it as `LinearSearchTooFast` and does not stop the
+process. The problem search and the newer-cards lookup both wait
+`SEARCH_WAIT_SECONDS` = 60 and ask once more, and the waits in one run total
+at most `SEARCH_WAIT_BUDGET_SECONDS` = 600. A second refusal, or one past
+that budget, leaves that search unanswered with the refusal named in its
+`why`, and the next card is still asked. The Groom job's clock covers the
+600 seconds.
 
 ### Rewrite first (DRE-6666)
 
