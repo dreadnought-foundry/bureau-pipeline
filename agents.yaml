@@ -120,7 +120,7 @@ agents:
     maxBudget: 12
     tools: [Bash, Edit, Write, Read, Glob, Grep, WebSearch, WebFetch]
     credentials: [ANTHROPIC_API_KEY, CLAUDE_CODE_OAUTH_TOKEN, LINEAR_API_KEY, LINEAR_PLANNER_KEY,
-                  BUREAU_APP_ID_2, BUREAU_APP_ID_3, BUREAU_APP_ID_4]
+                  BUREAU_APP_ID_2, BUREAU_APP_ID_3, BUREAU_APP_ID_4, BUREAU_PLANT_PROBE]
     repoScope: [caller, dreadnought-foundry/bureau-pipeline]
     briefPath: briefs/engineer.md
     workflow: .github/workflows/agent-task.yml
@@ -145,7 +145,7 @@ agents:
     maxBudget: 12
     tools: [Bash, Edit, Write, Read, Glob, Grep, WebSearch, WebFetch]
     credentials: [ANTHROPIC_API_KEY, CLAUDE_CODE_OAUTH_TOKEN, LINEAR_API_KEY, LINEAR_PLANNER_KEY,
-                  BUREAU_APP_ID_2, BUREAU_APP_ID_3, BUREAU_APP_ID_4]
+                  BUREAU_APP_ID_2, BUREAU_APP_ID_3, BUREAU_APP_ID_4, BUREAU_PLANT_PROBE]
     repoScope: [caller, dreadnought-foundry/bureau-pipeline]
     briefPath: briefs/frontend.md
     workflow: .github/workflows/agent-task.yml
@@ -176,7 +176,7 @@ agents:
     maxBudget: 12
     tools: [Bash, Edit, Write, Read, Glob, Grep, WebSearch, WebFetch]
     credentials: [ANTHROPIC_API_KEY, CLAUDE_CODE_OAUTH_TOKEN, LINEAR_API_KEY, LINEAR_PLANNER_KEY,
-                  BUREAU_APP_ID_2, BUREAU_APP_ID_3, BUREAU_APP_ID_4]
+                  BUREAU_APP_ID_2, BUREAU_APP_ID_3, BUREAU_APP_ID_4, BUREAU_PLANT_PROBE]
     repoScope: [caller, dreadnought-foundry/bureau-pipeline]
     briefPath: briefs/database-architect.md
     workflow: .github/workflows/agent-task.yml
@@ -198,7 +198,7 @@ agents:
     maxBudget: 12
     tools: [Bash, Edit, Write, Read, Glob, Grep, WebSearch, WebFetch]
     credentials: [ANTHROPIC_API_KEY, CLAUDE_CODE_OAUTH_TOKEN, LINEAR_API_KEY, LINEAR_PLANNER_KEY,
-                  BUREAU_APP_ID_2, BUREAU_APP_ID_3, BUREAU_APP_ID_4]
+                  BUREAU_APP_ID_2, BUREAU_APP_ID_3, BUREAU_APP_ID_4, BUREAU_PLANT_PROBE]
     repoScope: [caller, dreadnought-foundry/bureau-pipeline]
     briefPath: briefs/devops.md
     workflow: .github/workflows/agent-task.yml
