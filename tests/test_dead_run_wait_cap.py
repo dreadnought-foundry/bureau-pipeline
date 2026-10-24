@@ -203,3 +203,25 @@ def test_split_tried_and_death_lines_read_the_wait_thread_unchanged():
     bodies = [strike, _wait(), _wait(vendor_wait.ROTATION)]
     assert dead_run.split_tried(bodies) is False
     assert dead_run.death_lines(bodies) == [strike.splitlines()[0]]
+
+
+# --------------------------------------------------------------------------
+# a capped wait that is not a strike says nothing was counted
+# --------------------------------------------------------------------------
+@pytest.mark.parametrize("flag", ["--cancelled", "--pre-agent", "--turn-exhaustion"])
+def test_a_capped_wait_that_spends_no_strike_does_not_say_it_was_counted(
+        flag, tmp_path, capsys):
+    """A cancelled run, a pre-agent fault and a turn-cap death spend no
+    dead-run strike, so the receipt must not claim this death was counted."""
+    bodies = [_wait(), _wait(vendor_wait.ROTATION)]
+    thread = _thread(tmp_path, bodies)
+    capped = _decide("0", "--is-error", "--error-model", MODEL, flag,
+                     "--wait-kind", vendor_wait.ROTATION, "--run-id", RUN,
+                     "--now", NOW, "--comments-file", thread, capsys=capsys)
+    without = _decide("0", "--is-error", "--error-model", MODEL, flag,
+                      "--run-id", RUN, "--now", NOW, "--comments-file", thread,
+                      capsys=capsys)
+    assert capped[0] == without[0] != "limit"
+    assert dead_run.DEAD_TAG not in "\n".join(capped)
+    assert SENTENCE not in "\n".join(capped)
+    assert capped == without
