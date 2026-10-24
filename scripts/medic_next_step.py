@@ -39,7 +39,7 @@ lanes a build sits in" and "what is fit to show the CEO" each keep one reader.
         [--resume-spent] [--has-open-pr] [--planning-spent]
     python3 scripts/medic_next_step.py receipt --class bad-card --step send-to-planning \\
         --run-url <failed run url> --report .bureau-pipeline/medic-report.md \\
-        [--reason "…"] [--moved-no --lane <lane>]
+        [--finding "…"] [--reason "…"] [--moved-no --lane <lane>]
     python3 scripts/medic_next_step.py finding --report .bureau-pipeline/medic-report.md
     python3 scripts/medic_next_step.py from-lanes
     python3 scripts/medic_next_step.py waiting --comments-file <path> [--run-id <id>]
@@ -477,6 +477,9 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--step", required=True, choices=STEPS)
     p.add_argument("--run-url", required=True)
     p.add_argument("--report", required=True)
+    # The finding `finding --report` printed (DRE-7799); empty or absent, the
+    # receipt reads it off --report itself.
+    p.add_argument("--finding", default="")
     p.add_argument("--reason", default="")
     p.add_argument("--moved-no", action="store_true")
     p.add_argument("--lane", default=None)
@@ -520,7 +523,8 @@ def main(argv: list[str] | None = None) -> int:
     elif args.cmd == "receipt":
         step = NextStep(args.cls, args.step, args.reason.strip())
         sys.stdout.write(receipt(step, run_url=args.run_url,
-                                 finding=finding(args.report),
+                                 finding=args.finding.strip()
+                                 or finding(args.report),
                                  moved=not args.moved_no, lane=args.lane))
     elif args.cmd == "finding":
         print(finding(args.report))

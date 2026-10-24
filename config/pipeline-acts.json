@@ -539,6 +539,25 @@
       }
     },
     {
+      "name": "medic-next-step",
+      "tag": "medic-next-step",
+      "adopted": true,
+      "kind": "recovery",
+      "means": "The medic diagnosed a workflow that failed twice and took the one step its class owes, beside the diagnosis: it re-ran a passing outside fault once, sent a card that cannot be built as written back to Planning, or left bad code to the fix loop on its open pull request. A first line ending ` moved=no` says the step's move did not land, and names the lane the card was left in.",
+      "state": "unchanged",
+      "next_actor": "reconcile.py",
+      "discharges": null,
+      "subscriber": "reconcile.yml",
+      "cadence_s": null,
+      "cadence_why": "Null, and declared rather than omitted: what follows depends on the step — the failed workflow's own re-run, the planner's run that the move into Planning starts, or the fix loop's run on the open pull request — each timed by its own workflow and its own acts; .github/workflows/medic.yml records the step and nothing speaks on this receipt's behalf.",
+      "why": "DRE-7799, the second half of the medic's next steps (DRE-7792, DRE-7793): 201 diagnosed failures stood 1,688.5 hours in the week ending 2026-10-17 because every diagnosis was a hold. The tag is a live key — `medic_next_step.planning_spent` counts a landed `send-to-planning` receipt, and that count is what stops the medic sending one card to Planning twice — and agent-bureau's weekly report reads the first line, so neither may be reworded. Shipped console-first: DRE-7809 added it to the console's ACTS.",
+      "emits": {
+        "file": ".github/workflows/medic.yml",
+        "anchor": "linear_ops.py comment \"$TARGET\" \"$RECEIPT\" --act=medic-next-step",
+        "note": "The body is `medic_next_step.receipt`, rendered by the script, so the anchor pins the WRITE CALL in the diagnose job's `receipt` step — the one place the receipt is emitted. DRE-7794's park reuses that step rather than adding a second call."
+      }
+    },
+    {
       "name": "retry-declined",
       "tag": "medic-retry-declined",
       "adopted": true,

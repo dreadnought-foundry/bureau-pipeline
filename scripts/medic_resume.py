@@ -16,14 +16,21 @@ outside fault a fresh attempt would clear — owes `requeue-once`.
 
 On `requeue-once` the `diagnose` job re-runs the failed jobs of the same run
 once more, and only on its second attempt (`run_attempt == 2`, in the step's
-own `if:`), so attempt 2 becomes attempt 3 and never further. Nothing is
-posted to the card or the console; `summary()` writes the report into the
-medic run's step summary, naming the attempt the rerun starts. That attempt
-is the failed run's attempt plus one, computed here rather than read back
-from GitHub: the rerun has not begun when the note is written.
+own `if:`), so attempt 2 becomes attempt 3 and never further. `summary()`
+writes the report into the medic run's step summary, naming the attempt the
+rerun starts. That attempt is the failed run's attempt plus one, computed
+here rather than read back from GitHub: the rerun has not begun when the note
+is written. Since DRE-7799 a `card` target also gets the diagnosis and the
+medic's `medic-next-step` receipt on the card; any other target gets nothing
+posted, as before.
+
+A card still waiting out a limit or a vendor refusal is the wait's
+(DRE-7799): the medic posts nothing on it, moves nothing and starts no
+re-run, and `summary(..., waiting=<card>)` is the note it leaves instead.
 
     python3 scripts/medic_resume.py summary --report .bureau-pipeline/medic-report.md \\
-        --attempt 2 --run-url <failed run url> --workflow "<workflow name>"
+        --attempt 2 --run-url <failed run url> --workflow "<workflow name>" \\
+        [--waiting <card>]
 """
 
 from __future__ import annotations
@@ -38,17 +45,29 @@ def resumed_attempt(failed_attempt: int) -> int:
     return failed_attempt + 1
 
 
-def summary(report: str, *, failed_attempt: int, run_url: str, workflow: str) -> str:
+def summary(report: str, *, failed_attempt: int, run_url: str, workflow: str,
+            waiting: str | None = None) -> str:
     """The step-summary note a resume leaves: one line naming the attempt it
-    started, then the diagnosis report whole."""
-    attempt = resumed_attempt(failed_attempt)
-    head = (
-        f"Resumed: the medic re-ran the failed jobs of {workflow} run {run_url} "
-        f"as attempt {attempt}. The diagnosis read the failure as an outside "
-        f"service fault a fresh attempt can clear, so nothing was posted to the "
-        f"card or the console. If attempt {attempt} fails, its diagnosis is "
-        f"delivered as usual."
-    )
+    started, then the diagnosis report whole. With `waiting`, the card whose
+    limit-death marker still stands, the line says the medic left that card
+    alone instead."""
+    if waiting:
+        head = (
+            f"Waiting: {waiting} is waiting out a limit or a vendor refusal — "
+            f"its newest limit-death marker still stands — so the medic posted "
+            f"nothing on it, moved nothing and started no re-run of {workflow} "
+            f"run {run_url}. Limit recovery re-enters the stage that died once "
+            f"the wait is over, and that run's result is the one that counts."
+        )
+    else:
+        attempt = resumed_attempt(failed_attempt)
+        head = (
+            f"Resumed: the medic re-ran the failed jobs of {workflow} run {run_url} "
+            f"as attempt {attempt}. The diagnosis read the failure as an outside "
+            f"service fault a fresh attempt can clear, so the run was re-run "
+            f"rather than held for a person. If attempt {attempt} fails, its "
+            f"diagnosis is delivered as usual."
+        )
     body = report.strip() or "The diagnosis agent wrote no report."
     return f"{head}\n\n{body}\n"
 
@@ -62,6 +81,8 @@ def main(argv: list[str] | None = None) -> int:
                    help="the failed run's attempt")
     s.add_argument("--run-url", required=True)
     s.add_argument("--workflow", required=True)
+    s.add_argument("--waiting", default=None,
+                   help="the card left alone because its wait still stands")
     args = parser.parse_args(argv)
 
     try:
@@ -69,7 +90,8 @@ def main(argv: list[str] | None = None) -> int:
     except (OSError, UnicodeDecodeError):
         report = ""
     sys.stdout.write(summary(report, failed_attempt=args.attempt,
-                             run_url=args.run_url, workflow=args.workflow))
+                             run_url=args.run_url, workflow=args.workflow,
+                             waiting=args.waiting))
     return 0
 
 
