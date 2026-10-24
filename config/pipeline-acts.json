@@ -2225,6 +2225,14 @@
       "why": "A VERDICT, not an act. It is a judgement about the WORK, where an act is something the pipeline did about the work on its own. It has its own writer, its own vocabulary and its own readers, and a second grammar on the same comment would give them two keys to disagree over. A question is the opposite of an act: the pipeline did nothing precisely because it would not guess."
     },
     {
+      "file": ".github/workflows/medic.yml",
+      "anchor": "medic-ask-comment.md",
+      "step": "Ask a person about the diagnosis",
+      "kind": "not-an-act",
+      "means": "The medic's question to a person about a diagnosis only a person can settle (DRE-7794): its 🙋 first line and the three lines console_escalation renders (through medic_next_step.py question), posted before the card moves to Green Light.",
+      "why": "A QUESTION, not an act — it asks rather than announces, the same reason as the proof run's question and the proof cause park. The act for this run is the medic-next-step receipt the receipt step posts straight after it, which carries the trailer and names step=ask-person; a second trailer on the question would give the weekly report two keys for one move. green_light_rows.py finds the question by its 🙋 first line."
+    },
+    {
       "file": ".github/workflows/proof-task.yml",
       "anchor": "🤖 proof run ended with no record",
       "step": "Report proof result to Linear",
