@@ -674,7 +674,7 @@
           "assertion": "lane.writers_exist"
         },
         "evidence": {
-          "text": "The merge commit on the card's own branch. For the daily model adoption's record card, which has no branch, the home's `written_by: daily-adoption` and `written_at`, both named on the card. And for a deferred-release card, the tag its `Released as <tag>` comment names — verified by the train, or cut by hand and containing the commit the card records.",
+          "text": "The merge commit on the card's own branch. For the daily model adoption's record card, which has no branch, the home's `written_by: daily-adoption` and `written_at`, both named on the card. And for a deferred-release card, the verified tag its `Released as <tag>` comment names — or, on a lap that reads the surface current, the tag cut by hand that contains the commit the card records (DRE-7900).",
           "enforced_from": "5",
           "assertion": null,
           "pending": "needs the transition history Phase 5 records"
