@@ -3047,6 +3047,15 @@ jobs:
               --artifact "${{ runner.temp }}/plan-artifact.md" \
               --structural-file "${{ runner.temp }}/plan-structural.txt" \
               --note-file "$NOTE"
+          # A child that needs the CEO — an operator card, or a criterion on a
+          # person's row — not named in a "Step that needs the CEO:" paragraph
+          # (DRE-7523), APPENDED to the same structural file. Its `CEO steps:`
+          # line lands in the note either way.
+          python3 .bureau-pipeline/scripts/plan_ceo_steps.py findings \
+              --artifact "${{ runner.temp }}/plan-artifact.md" \
+              --detail-file "$DETAIL" \
+              --structural-file "${{ runner.temp }}/plan-structural.txt" \
+              --note-file "$NOTE" < "$CHILDREN"
           # The same file the critic is handed, so the list on the epic is
           # byte-for-byte the list the model read.
           python3 .bureau-pipeline/scripts/linear_ops.py comment "$EPIC" \
@@ -3540,6 +3549,13 @@ jobs:
               --artifact "${{ runner.temp }}/plan-artifact.md" \
               --structural-file "${{ runner.temp }}/plan-structural.txt" \
               --note-file "$NOTE"
+          # The CEO-step check against the revision (DRE-7523), appended after
+          # the held-repo check, on the same two board reads.
+          python3 .bureau-pipeline/scripts/plan_ceo_steps.py findings \
+              --artifact "${{ runner.temp }}/plan-artifact.md" \
+              --detail-file "$DETAIL" \
+              --structural-file "${{ runner.temp }}/plan-structural.txt" \
+              --note-file "$NOTE" < "$CHILDREN"
           python3 .bureau-pipeline/scripts/linear_ops.py comment "$EPIC" \
             "$(cat "$NOTE")"
 
@@ -5284,6 +5300,14 @@ jobs:
           python3 .bureau-pipeline/scripts/plan_held_repo.py findings \
               --artifact "${{ runner.temp }}/plan-artifact.md" \
               --note-file "$NOTE"
+          # The CEO-step check (DRE-7523), on the note only, for the same
+          # reason and on the same artifact. A children's detail that could
+          # not be read is read as none: the bodies and labels still come from
+          # the children on stdin.
+          python3 .bureau-pipeline/scripts/plan_ceo_steps.py findings \
+              --artifact "${{ runner.temp }}/plan-artifact.md" \
+              --detail-file "$DETAIL" \
+              --note-file "$NOTE" < "$CHILDREN"
           python3 .bureau-pipeline/scripts/linear_ops.py comment "$EPIC" \
             "$(cat "$NOTE")"
 
