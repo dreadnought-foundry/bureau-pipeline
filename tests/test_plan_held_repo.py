@@ -511,5 +511,16 @@ def test_the_brief_says_where_the_paragraph_goes():
     assert "plan_held_repo.py context" in text
 
 
-def test_the_standard_leaves_every_other_hand_step_to_dre_7523():
-    assert "DRE-7523" in _dre_7521_section()
+def test_the_standard_names_dre_7523_as_the_check_on_every_other_hand_step():
+    text = _dre_7521_section()
+    assert "DRE-7523" in text
+    assert not _loose("a check for those is DRE-7523").search(text)
+
+
+def test_the_brief_says_dre_7523_checks_the_other_steps():
+    text = _planner_section()
+    assert "DRE-7523" in text
+    assert not _loose("nothing checks it yet").search(text)
+    assert _loose("ceo-step:").search(text)
+    assert _loose("by its identifier").search(text)
+    assert _loose("neither an operator card nor carries a person's row").search(text)
