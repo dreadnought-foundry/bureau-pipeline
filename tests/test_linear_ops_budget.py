@@ -258,6 +258,119 @@ def test_the_budget_line_after_a_ratelimit_says_refused_after_n_calls(transport)
     assert "refused after 3 calls" in line
 
 
+# ── DRE-7613: Linear refusing a search for speed is not the hour ────────────
+# Run 39000792176's `targets` step: on the fourth card's problem search Linear
+# answered RATELIMITED with "You're trying to search issues too fast", the
+# stop armed as if the hourly quota were spent — 2,475 were left — and every
+# later card's search was refused without a request. The search-speed refusal
+# is a fact about one kind of request, as the comment cap is (DRE-3343), so it
+# raises its own `LinearRateLimited` and the next request is still sent.
+SEARCH_TOO_FAST_BODY = json.dumps(
+    {
+        "errors": [
+            {
+                "message": "ratelimit exceeded",
+                "extensions": {
+                    "type": "ratelimited",
+                    "code": "RATELIMITED",
+                    "statusCode": 429,
+                    "userError": True,
+                    "userPresentableMessage": (
+                        "You're trying to search issues too fast. Please wait "
+                        "for a while before trying again."
+                    ),
+                    "meta": {"rateLimitResult": {"allowed": False}},
+                },
+            }
+        ]
+    }
+).encode()
+
+
+def _search_too_fast_429():
+    """The wire shape run 39000792176 recorded: HTTP 429, RATELIMITED and the
+    search sentence in the body, 2,475 requests still left in the hour."""
+    return urllib.error.HTTPError(
+        linear_ops.API, 429, "Too Many Requests", _headers(2475),
+        io.BytesIO(SEARCH_TOO_FAST_BODY),
+    )
+
+
+def test_the_search_speed_type_is_a_linear_rate_limited():
+    assert issubclass(linear_ops.LinearSearchTooFast, linear_ops.LinearRateLimited)
+
+
+def test_a_search_refused_for_speed_raises_its_own_type_and_the_next_request_is_sent(
+    transport,
+):
+    t = transport(_search_too_fast_429(), _Resp(headers=_headers(2474)))
+    with pytest.raises(linear_ops.LinearSearchTooFast) as refused:
+        linear_ops.gql(QUERY)
+    assert isinstance(refused.value, linear_ops.LinearRateLimited)
+    assert linear_ops.SEARCH_TOO_FAST_CONDITION in str(refused.value)
+    assert "api.linear.app" in str(refused.value)
+
+    assert linear_ops.gql(QUERY) == {"issues": {"nodes": [{"id": "abc"}]}}
+    assert t.calls == 2, "a search refused for speed must not stop the process"
+    assert "refused after" not in linear_ops.budget_line()
+
+
+def test_a_200_carrying_the_search_speed_refusal_does_not_stop_the_process(
+    transport,
+):
+    t = transport(
+        _Resp(SEARCH_TOO_FAST_BODY, _headers(2475)), _Resp(headers=_headers(2474))
+    )
+    with pytest.raises(linear_ops.LinearSearchTooFast) as refused:
+        linear_ops.gql(QUERY)
+    assert linear_ops.SEARCH_TOO_FAST_CONDITION in str(refused.value)
+
+    assert linear_ops.gql(QUERY) == {"issues": {"nodes": [{"id": "abc"}]}}
+    assert t.calls == 2
+
+
+def test_the_search_sentence_is_read_over_the_full_body(transport):
+    """Behind a long message the sentence sits past `BODY_CHARS`, as the
+    RATELIMITED code itself does — the classification reads the whole body."""
+    body = json.loads(SEARCH_TOO_FAST_BODY)
+    body["errors"][0]["message"] = "ratelimit exceeded " + "x" * linear_ops.BODY_CHARS
+    t = transport(
+        urllib.error.HTTPError(
+            linear_ops.API, 429, "Too Many Requests", _headers(2475),
+            io.BytesIO(json.dumps(body).encode()),
+        ),
+        _Resp(headers=_headers(2474)),
+    )
+    with pytest.raises(linear_ops.LinearSearchTooFast):
+        linear_ops.gql(QUERY)
+    linear_ops.gql(QUERY)
+    assert t.calls == 2
+
+
+def test_every_other_ratelimited_still_arms_the_stop(transport):
+    """A RATELIMITED with no search sentence — Linear rewording it included —
+    is read as the hour, exactly as before."""
+    for shape in (_ratelimited_400(_headers(0)), _Resp(RATELIMIT_BODY, _headers(0))):
+        linear_ops._reset_budget_state()
+        t = transport(shape)
+        with pytest.raises(linear_ops.LinearRateLimited) as first:
+            linear_ops.gql(QUERY)
+        assert not isinstance(first.value, linear_ops.LinearSearchTooFast)
+        with pytest.raises(linear_ops.LinearRateLimited):
+            linear_ops.gql(QUERY)
+        assert t.calls == 1
+
+
+def test_the_search_sentence_without_ratelimited_is_not_a_rate_limit(transport):
+    body = SEARCH_TOO_FAST_BODY.replace(b"RATELIMITED", b"OTHER").replace(
+        b'"ratelimited"', b'"other"')
+    transport(urllib.error.HTTPError(
+        linear_ops.API, 400, "Bad Request", {}, io.BytesIO(body)))
+    with pytest.raises(linear_ops.LinearError) as refused:
+        linear_ops.gql(QUERY)
+    assert not isinstance(refused.value, linear_ops.LinearRateLimited)
+
+
 # ── (c) no headers ──────────────────────────────────────────────────────────
 def test_no_headers_reports_unknown(transport):
     transport(_Resp())

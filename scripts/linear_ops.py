@@ -196,6 +196,17 @@ class LinearRateLimited(LinearError):
     `except LinearError` keeps isolating it exactly as before."""
 
 
+class LinearSearchTooFast(LinearRateLimited):
+    """Linear refused a search as too fast (DRE-7613).
+
+    A `LinearRateLimited` still, so every existing `except LinearRateLimited`
+    catches it as before. Its own type because the hour is NOT spent: on
+    2026-10-17 Linear answered the groom's fourth problem search this way with
+    2,475 of the hour's 2,500 left. Like the comment cap (DRE-3343) it is a
+    fact about one kind of request, so it does not arm the process-wide stop,
+    and a caller that waits may ask again (`groom_lookups`)."""
+
+
 class CommentCapReached(LinearError):
     """This issue holds Linear's maximum of 2,000 comments (DRE-3343).
 
@@ -252,6 +263,34 @@ def rate_limit_condition(body: str) -> str | None:
             f"{quota.group(2).lower()} exhausted"
         )
     return "rate limited: workspace request quota exhausted"
+
+
+# ── The search-speed refusal (DRE-7613) ─────────────────────────────────────
+# Linear refuses a burst of `searchIssues` with the same RATELIMITED code the
+# hourly quota uses, and says which it is only in the presentable message:
+# "You're trying to search issues too fast. Please wait for a while before
+# trying again." Read as the hour, it armed the stop in the groom's `targets`
+# step and every later card went unsearched. The sentence is the whole
+# classification: a RATELIMITED body without it — Linear rewording it included
+# — is the hour, exactly as before.
+_SEARCH_TOO_FAST_MARKER = "search issues too fast"
+
+#: The condition, named once: the groom's `why` for a search left unanswered
+#: carries it.
+SEARCH_TOO_FAST_CONDITION = (
+    "rate limited: Linear refused the search as too fast (search issues too "
+    "fast) — not the hourly quota"
+)
+
+
+def search_too_fast_condition(body: str) -> str | None:
+    """`SEARCH_TOO_FAST_CONDITION` when `body` is a RATELIMITED payload that
+    says searches are too fast, else None. Read over the FULL body, as
+    `rate_limit_condition` is."""
+    text = body or ""
+    if rate_limit_condition(text) is None:
+        return None
+    return SEARCH_TOO_FAST_CONDITION if _SEARCH_TOO_FAST_MARKER in text.lower() else None
 
 
 # ── The comment cap (DRE-3343) ──────────────────────────────────────────────
@@ -612,6 +651,14 @@ def _api_error(code: int | str, body: str) -> LinearError:
     exhaustion, the named condition in front of it so the log says what to do
     instead of `Bad Request`, which reads as a code defect and is not one."""
     detail = f"Linear API returned {code} from {API}"
+    # A search refused as too fast (DRE-7613) is read FIRST, and it does not
+    # arm the stop: the hour is not spent, and the next request is not this
+    # search.
+    speed = search_too_fast_condition(body)
+    if speed:
+        return LinearSearchTooFast(
+            f"{detail}: {speed} — body: {body[:BODY_CHARS]!r}; {_budget_part()}"
+        )
     condition = rate_limit_condition(body)
     if condition:
         _arm_rate_limit_stop(condition)
@@ -1165,6 +1212,10 @@ def gql(query: str, variables: dict | None = None, *, landed=None) -> dict:
     # Stop at the first RATELIMITED (DRE-3202): a rate-limited process asks
     # nothing more. Every further request would spend the quota that proves
     # there is none left, against a window that is the whole fleet's.
+    # Linear's search-speed refusal does NOT arm it (DRE-7613): it raises
+    # `LinearSearchTooFast`, a fact about searching that fast, not about the
+    # hour, so the next request is still sent — every other RATELIMITED arms
+    # it exactly as before.
     if _budget["refused_after"] is not None:
         raise _refusal()
     # A token the console has already said is dead is never sent (review item
@@ -1182,6 +1233,14 @@ def gql(query: str, variables: dict | None = None, *, landed=None) -> dict:
         out = _send(payload, landed)
     if out.get("errors"):
         errors = json.dumps(out["errors"])
+        # The search-speed refusal, same two shapes (DRE-7613): its own type,
+        # and no stop armed.
+        speed = search_too_fast_condition(errors)
+        if speed:
+            raise LinearSearchTooFast(
+                f"linear error from {API}: {speed} — "
+                f"{errors[:BODY_CHARS]}; {_budget_part()}"
+            )
         condition = rate_limit_condition(errors)
         if condition:
             # A quota exhaustion can also arrive as a 200 with an errors
