@@ -3050,7 +3050,7 @@
       "file": "scripts/release_deferral.py",
       "anchor": "f\"Released as {tag}\"",
       "kind": "not-an-act",
-      "means": "The surface cut a verified tag, so the open deferred-release card is closed Done under `Released as <tag>` (DRE-5235).",
+      "means": "The surface cut a verified tag, so the open deferred-release card is closed Done under `Released as <tag>` (DRE-5235) — or a plan lap read the surface current at a newest tag containing the commit the card records, a tag cut by hand, and closes it under the same comment (DRE-7900).",
       "why": "Part of the deferral card's own record, not an act: the release it names already has its own receipt, the train's decision line and record. The comment says why the notice card left Green Light, for the person it was filed for; nothing downstream reads it, and its wording is the card's acceptance criterion, pinned by tests/test_release_deferral.py."
     },
     {

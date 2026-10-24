@@ -1037,7 +1037,7 @@ def test_the_shared_current_code_is_the_trains():
         release_train.surface("console", {"tag_series": ["x-v*"]}))
     decision = release_train.decide(
         release_train.surface("console", {"tag_series": ["x-v*"],
-                                          "script": "s.sh"}),
+                                          "script": "s.sh", "auto": True}),
         datetime(2026, 10, 24, 14, tzinfo=release_train.PT), None, "current",
         True, None)
     assert decision.code == release_deferral.CURRENT_CODE
@@ -1063,8 +1063,9 @@ def test_the_card_and_the_document_say_a_hand_cut_tag_closes_it():
     text = release_deferral.body(CONSOLE_LINE, SHA, CONSOLE_RUN)
     assert "The release train closes this card itself on the next verified tag" in text
     assert "a tag cut by hand" in text
-    rendered = " ".join(release_train.render_markdown().split())
-    section = rendered.split("## A deferral is loud, and owes one card")[1].split("## ")[0]
+    rendered = release_train.render_markdown()
+    section = rendered.split("\n## A deferral is loud, and owes one card\n")[1]
+    section = " ".join(section.split("\n## ")[0].split())
     assert "`current`" in section and "released the deferred commit" in section
     on_disk = (ROOT / "docs" / "release-train.md").read_text(encoding="utf-8")
     assert on_disk == release_train.render_markdown()

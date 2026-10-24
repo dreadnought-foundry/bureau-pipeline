@@ -432,7 +432,7 @@
       "file": "scripts/release_deferral.py",
       "scope": "<module>",
       "anchor": "a person finishes it, nothing builds it",
-      "note": "CARD_LABELS: the deferred-release notice card is created in Green Light already held, with no stamp — a person reads it, and the surface's next verified tag closes it Done (DRE-5235).",
+      "note": "CARD_LABELS: the deferred-release notice card is created in Green Light already held, with no stamp — a person reads it, and the surface's next verified tag closes it Done (DRE-5235), as does a current lap at a tag cut by hand that contains the deferred commit (DRE-7900).",
       "reasons": [
         {
           "reason": "manual",
