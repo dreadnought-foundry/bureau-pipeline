@@ -124,10 +124,10 @@ The auto-advance is not held by a proof either (DRE-7831): when a blocker
 epic reaches Done, every epic blocked-by it that no blocker still holds — each
 one closed, or a built-out In Progress epic, or a PROOF card of a Done or
 built-out epic — is auto-advanced out of Queued to Planning (which dispatches
-the planner, who can still read the blocker's proof record). Never to In Progress, so the Green Light
-human-approval gate is preserved. Both the promotion hold and the advance fail
-SAFE on unreadable relation data (don't promote / don't advance on
-uncertainty).
+the planner, who can still read the blocker's proof record). Never to In
+Progress, so the Green Light human-approval gate is preserved. Both the
+promotion hold and the advance fail SAFE on unreadable relation data (don't
+promote / don't advance on uncertainty).
 
 Env: LINEAR_API_KEY, GH_TOKEN, REPO (owner/name).
 """
@@ -7400,8 +7400,9 @@ def advance_unblocked_epics(done_epic: str) -> None:
 
     For each epic that `done_epic` `blocks` (its forward `relations`): if NO
     blocker still holds it — each one closed, or a built-out epic or a proof
-    of one (DRE-7831) — AND it is still in Queued, return it to **Planning**, whose arrival dispatches the planner (DRE-6653). Triage
-    was the planner's trigger once; it is the broken-card lane now, and the
+    of one (DRE-7831) — AND it is still in Queued, return it to **Planning**,
+    whose arrival dispatches the planner (DRE-6653). Triage was the planner's
+    trigger once; it is the broken-card lane now, and the
     relay's dispatch on entering it is refused by the plan gate (DRE-5277).
     Every dependent takes that one path — the wave route that sent some
     elsewhere is retired (DRE-4700). NEVER to In Progress — the Green Light
