@@ -47,8 +47,10 @@ comment exactly as before — that comment is the chase — and each now hands
 `settle` its late list once per pass, after its loop:
 
 - **`proof-waiting`** — `alarm_held_proofs`, over this repo's `PROOF:` cards
-  the board read carries — In Progress, In Review and Hand-work; Queued is
-  not in that read. `_proof_wait_clock` reads a card's open holds
+  in every lane but Green Light: In Progress, In Review and Hand-work off the
+  board read, and Queued off the read `promote_ready` already makes of that
+  lane — so the pass runs after promotion, and spends no request on Queued.
+  A pass whose Queued read was skipped is incomplete. `_proof_wait_clock` reads a card's open holds
   over its whole thread: the board read's comment window when it is the whole
   thread, at no request, and one paged read when it is not. A window that is
   not the whole thread is never judged on its own, and a read that fails
@@ -58,9 +60,12 @@ comment exactly as before — that comment is the chase — and each now hands
 - **`hand-work-overdue`** — `flag_stranded`, over this repo's Hand-work cards
   that carry the alarm for their current entry. An unreadable entry, an
   alarm that could not be posted, or a `PROOF:` card past the limit whose
-  proof run could not be read leaves the pass incomplete. A `PROOF:` card
-  with a qualifying hold is left to `proof-waiting`, so no card is listed
-  twice.
+  proof run could not be read, or whose holds could not be read, leaves the
+  pass incomplete. A `PROOF:` card with a qualifying hold is left to
+  `proof-waiting`, so no card is listed twice. A card whose hold the sweep
+  stands down for (`held`) is skipped before it is judged, as the watchdog
+  always skipped it — it is already in a person's queue — so it is never
+  listed here and never makes the pass incomplete.
 
 A standing card in `config/hand-work-age.json` and a `hand-built` card are
 listed by neither. An idle pass, a held board read and `promote_only` call

@@ -1905,6 +1905,11 @@ _waiting_releases: dict[str, dict[str, str]] = {}
 _backlog_epics: set[str] = set()
 _returned_epics: set[str] = set()
 
+# The whole Queued read the promotion phase made this pass, kept for the
+# proof-waiting late list (DRE-7965) — None when the lane was not read, which
+# is not the same fact as a lane with nothing in it. Reset with the board.
+_queued_cards: list[dict] | None = None
+
 # The loops across the epic gate and the card gate the promotion pass found
 # (DRE-3539) — what `cycles_line()` counts for the full sweep's summary.
 # Replaced by each pass, reset with the sweep's board.
@@ -1975,11 +1980,12 @@ def reset_sweep_cards() -> None:
     records (DRE-3642), blocker epics (DRE-6407), blocker cards and what the
     strict gate released (DRE-7831) and waiting epics (DRE-6653), the loops
     the promotion pass found (DRE-3539), its workflows listing
-    (DRE-4378) and its in-flight build runs (DRE-4830). Called once at the top
-    of main()."""
-    global _swept_cards, _pr_listing, _workflows_listing
+    (DRE-4378), its in-flight build runs (DRE-4830) and its Queued read
+    (DRE-7965). Called once at the top of main()."""
+    global _swept_cards, _pr_listing, _workflows_listing, _queued_cards
     global _build_runs, _build_runs_unreadable, _build_runs_listed, _linear_lane_cards
     _swept_cards = None
+    _queued_cards = None
     _linear_lane_cards = None
     _fleet_lane_cards.clear()
     _fleet_hold.clear()
@@ -2833,7 +2839,8 @@ PROOF_WAITING_TAG = "proof-waiting"
 HAND_WORK_OVERDUE_TAG = "hand-work-overdue"
 #: The lanes the board read carries beyond `mine`'s (SWEEP_STATES) — Hand-work
 #: — whose `PROOF:` cards `main` also hands `alarm_held_proofs` for its late
-#: list, from the same snapshot (DRE-7965). Its 24-hour alarm keeps `mine`'s.
+#: list, from the same snapshot, beside the Queued cards promotion read
+#: (DRE-7965). Its 24-hour alarm keeps `mine`'s.
 LATE_PROOF_LANES = tuple(lane for lane in WATCHDOG_LANES if lane not in SWEEP_STATES)
 #: Who the window's comments are read as when no read named the key's own
 #: user: `open_holds_at` takes the pipeline's note and a person's alike, so
@@ -2905,7 +2912,8 @@ def _proof_wait_clock(card: dict, *, now: datetime | None = None
     return clock, proof_record._cut(line, 120), read
 
 
-def alarm_held_proofs(cards: list[dict], *, board_read: bool = True) -> None:
+def alarm_held_proofs(cards: list[dict], *, board_read: bool = True,
+                      queued_read: bool = True) -> None:
     """A `PROOF:` card held In Review for the operator gets the Hand-work bound
     and the Hand-work receipt (DRE-6852).
 
@@ -2943,17 +2951,19 @@ def alarm_held_proofs(cards: list[dict], *, board_read: bool = True) -> None:
     The late list (DRE-7965). That alarm is the chase, once per hold; what
     comes after it is `hold_deadline`'s `proof-waiting` due date. `main`
     hands this `mine` plus this repo's `LATE_PROOF_LANES` cards (Hand-work)
-    off the same snapshot, and the alarm above reads only a card in
-    `SWEEP_STATES`, the lanes `mine` carries, so it reaches what it always
-    did. Every `PROOF:` card of this repo in `cards`, in any lane but Green
+    off the same snapshot and its Queued cards off `promote_ready`'s read,
+    and the alarm above reads only a card in `SWEEP_STATES`, the lanes
+    `mine` carries, so it reaches what it always did. Every `PROOF:` card of this repo in `cards`, in any lane but Green
     Light, is judged on `_proof_wait_clock` — the earliest clock among its qualifying
     holds, operator's and event waits alike — and is late when
     `hold_deadline.phase` says so on that clock. A standing card and a
     hand-built card are never listed. After the loop `settle` is called once
     with the late ones: `complete` is false when any card was unjudged —
     `_proof_wait_clock` answered `read=False`, or judging the card raised
-    (recorded in `_write_failures`, and the loop goes on). `board_read=False`
-    — the board read held or idle — calls `settle` not at all.
+    (recorded in `_write_failures`, and the loop goes on) — or when
+    `queued_read=False`: the pass's Queued read was skipped, so a late card
+    there went unjudged. `board_read=False` — the board read held or idle —
+    calls `settle` not at all.
     """
     import proof_dispatch  # noqa: PLC0415 — the return branch's lane
     import proof_record  # noqa: PLC0415 — the one cut a proof line is quoted by
@@ -2966,7 +2976,7 @@ def alarm_held_proofs(cards: list[dict], *, board_read: bool = True) -> None:
     any_held = False
     now = datetime.now(UTC)
     late: list[hold_deadline.LateHold] = []
-    complete = True
+    complete = queued_read
     for card in cards:
         lane = (card.get("state") or {}).get("name")
         if (card_repo(card) != REPO_SLUG
@@ -3129,8 +3139,11 @@ def flag_stranded() -> set[str]:
     `complete` is false when a card was not judged — an unreadable entry, an
     alarm that could not be posted, a `PROOF:` card past the limit whose
     proof run could not be read — or when `_proof_wait_clock` answered
-    `read=False` for a `PROOF:` card it asked about. An idle pass calls
-    `settle` not at all, and a held board never reaches it (`BoardHeld`).
+    `read=False` or raised for a `PROOF:` card it asked about. A card `held`
+    stands the sweep down for is skipped before it is judged, on purpose: it
+    is already in a person's queue, so it is neither listed nor unjudged. An
+    idle pass calls `settle` not at all, and a held board never reaches it
+    (`BoardHeld`).
     """
     flagged: set[str] = set()
     live: frozenset[str] | None = None
@@ -3352,7 +3365,13 @@ def _settle_hand_work(judged: list[tuple[str, str | None, str | None]],
             continue
         card = cards[ident]
         if proof_and_demo.is_proof(card.get("title")):
-            proof_clock, _, read = _proof_wait_clock(card, now=now)
+            try:
+                proof_clock, _, read = _proof_wait_clock(card, now=now)
+            except Exception as e:  # noqa: BLE001 — one unjudged card, never the pass
+                complete = False
+                _write_failures.append(f"{ident} {PROOF_WAITING_TAG} reading: {e}")
+                print(f"ERROR: {PROOF_WAITING_TAG} reading of {ident}: {e}", file=sys.stderr)
+                continue
             complete = complete and read
             if proof_clock is not None or not read:
                 continue  # the proof-waiting clock's, or not judged
@@ -8302,6 +8321,7 @@ def promote_ready(
     Never on a `--promote-only` pass: the activate route runs one right after
     asking the cap itself.
     """
+    global _queued_cards
     # The clock is the pure half (DRE-4207); imported here because this pass is
     # its only caller.
     import promotion_stall  # noqa: PLC0415 — the stall clock's one caller (DRE-4210)
@@ -8377,8 +8397,12 @@ def promote_ready(
     # fix filed today waited behind every older ready card — on 2026-10-09
     # DRE-6560 was the 31st of 31 at a full cap, and the fix the cap was
     # waiting on. A card read with no `priority` sorts among the rest.
+    if candidates is None:
+        # The whole lane, kept for the proof-waiting late list (DRE-7965),
+        # which reads it after this pass at no request of its own.
+        candidates = _queued_cards = backlog_children()
     candidates = sorted(
-        backlog_children() if candidates is None else candidates,
+        candidates,
         key=lambda c: (c.get("priority") != URGENT_PRIORITY,
                        int(c["identifier"].split("-")[1])),
     )
@@ -15719,28 +15743,6 @@ def main(
         # (BoardHeld) and the promotion is not entered at all.
         mine, epics = [], set()
     if not promote_only:
-        # A proof card held In Review for the operator gets the Hand-work bound
-        # (DRE-6852), and so does one held on the CEO's press outside Green
-        # Light, which the return branch never reads (DRE-7741). AFTER `board_read` and over `mine`, so the pass reads only
-        # the cards that read already narrowed to this repo, with their comment
-        # windows, and spends no request: the one shared read stays charged to
-        # `board_read`, and a held or idle read hands it an empty list. Its
-        # late list (DRE-7965) pays one paged read for a `PROOF:` card whose
-        # window is not its whole thread, from the pass's cache when
-        # `flag_stranded` already paid for it.
-        try:
-            with _phase("alarm_held_proofs"):
-                # The late list reads this repo's Hand-work cards too, off the
-                # same snapshot; a board that was not read settles none (DRE-7965).
-                if board_was_read:
-                    alarm_held_proofs(mine + [
-                        c for c in active_cards(LATE_PROOF_LANES)
-                        if card_repo(c) == REPO_SLUG and not automation_card(c)])
-                else:
-                    alarm_held_proofs(mine, board_read=False)
-        except Exception as e:  # noqa: BLE001 — one phase must not stop the sweep
-            _write_failures.append(f"held-proof alarm: {e}")
-            print(f"ERROR: alarm_held_proofs: {e}", file=sys.stderr)
         with _phase("close_finished_epics"):
             close_finished_epics(epics)
         # The epic line (DRE-5152): the label kept honest and the last starts
@@ -15781,6 +15783,8 @@ def main(
     # The WIP base and the nudge list, from the helper limit-recovery counts
     # its room from too (DRE-4934) — so the two cannot disagree. It drops the
     # epics `repo_epics(mine)` found above, the same set on the same cards.
+    # `swept` keeps the board read's own list for the held-proof pass below.
+    swept = mine
     mine = wip_base(mine)
     # On the merge path the candidates are the merged card's own dependents
     # (DRE-3236) — read in one request by identifier, through the same gates.
@@ -15825,6 +15829,40 @@ def main(
                 f"{len(_stale_defects)} unfixed card defect(s) — see ERROR lines above"
             )
         return
+    # A proof card held In Review for the operator gets the Hand-work bound
+    # (DRE-6852), and so does one held on the CEO's press outside Green
+    # Light, which the return branch never reads (DRE-7741). Over `swept`,
+    # the board read's own cards, so the pass reads only the cards that read
+    # already narrowed to this repo, with their comment windows, and spends
+    # no request: the one shared read stays charged to `board_read`, and a
+    # held or idle read hands it an empty list. Its late list (DRE-7965) also
+    # reads this repo's Hand-work cards off the same snapshot, and its Queued
+    # cards off promotion's read — which is why this pass runs AFTER
+    # `promote_ready`, the one read of that lane; a Queued lane that was not
+    # read leaves the list incomplete. It pays one paged read for a `PROOF:`
+    # card whose window is not its whole thread, from the pass's cache when
+    # `flag_stranded` already paid for it. Full sweeps only: the event modes
+    # have returned above.
+    try:
+        with _phase("alarm_held_proofs"):
+            if board_was_read:
+                # Once each: a card promotion moved is in two of these reads.
+                held_cards = list(swept)
+                seen = {c["identifier"] for c in held_cards}
+                for card in [*active_cards(LATE_PROOF_LANES), *(_queued_cards or ())]:
+                    if (card["identifier"] not in seen and card_repo(card) == REPO_SLUG
+                            and not automation_card(card)):
+                        seen.add(card["identifier"])
+                        held_cards.append(card)
+                if _queued_cards is None:
+                    alarm_held_proofs(held_cards, queued_read=False)
+                else:
+                    alarm_held_proofs(held_cards)
+            else:
+                alarm_held_proofs(swept, board_read=False)
+    except Exception as e:  # noqa: BLE001 — one phase must not stop the sweep
+        _write_failures.append(f"held-proof alarm: {e}")
+        print(f"ERROR: alarm_held_proofs: {e}", file=sys.stderr)
     # The auto-advance's backstop (DRE-6653): a Backlog epic whose blockers
     # are all terminal goes back to Planning, whoever closed the blocker. Off
     # the promotion phase's Backlog read, so after it; full sweeps only — the
