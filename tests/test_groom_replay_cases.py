@@ -423,12 +423,15 @@ THREE = [case("DRE-501", at="2026-10-01T00:00:00Z", repo="agent-bureau"),
 
 
 def test_replay_set_goes_through_base_and_its_window_is_the_case_cards(tmp_path, capsys):
-    stored = tmp_path / "tests" / "fixtures" / "replay-set.json"
-    stored.parent.mkdir(parents=True)
+    """Written in the real checkout, as the workflow's `replay` input names it."""
+    name = f"tests/fixtures/groom-replay-cases/.three-{os.getpid()}.json"
+    stored = ROOT / name
     stored.write_text(json.dumps(grc.replay_set(THREE)))
     out = tmp_path / "proposal.json"
-    rc = groom_replay.main(["base", "--stored", "tests/fixtures/replay-set.json",
-                            "--out", str(out)], root=tmp_path)
+    try:
+        rc = groom_replay.main(["base", "--stored", name, "--out", str(out)])
+    finally:
+        stored.unlink()
     assert rc == 0, capsys.readouterr()
     assert "3 cards in the verify window" in capsys.readouterr().out
     proposal = json.loads(out.read_text())
