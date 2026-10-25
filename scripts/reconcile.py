@@ -2833,10 +2833,11 @@ def _held_for_operator(card: dict, *, press_only: bool = False) -> tuple[dict | 
     return None, "", f"its hold waits on an event ({newest}), not the operator"
 
 
-#: The hold kind `_proof_wait_clock` reads, and its late list's tag (DRE-7965).
-PROOF_WAITING_TAG = "proof-waiting"
-#: The Hand-work clock's late list's tag (DRE-7965).
-HAND_WORK_OVERDUE_TAG = "hand-work-overdue"
+#: The hold kind `_proof_wait_clock` reads, and its late list's tag (DRE-7965)
+#: — the key `linear_ops` owns, aliased rather than restated.
+PROOF_WAITING_TAG = linear_ops.PROOF_WAITING_TAG
+#: The Hand-work clock's late list's tag (DRE-7965), as `hold_deadline` owns it.
+HAND_WORK_OVERDUE_TAG = hold_deadline.HAND_WORK_TAG
 #: The lanes the board read carries beyond `mine`'s (SWEEP_STATES) — Hand-work
 #: — whose `PROOF:` cards `main` also hands `alarm_held_proofs` for its late
 #: list, from the same snapshot, beside the Queued cards promotion read
