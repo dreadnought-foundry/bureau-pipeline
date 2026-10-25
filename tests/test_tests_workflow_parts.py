@@ -32,6 +32,7 @@ import ast
 import importlib
 import json
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -133,26 +134,64 @@ def test_no_walk_runs_a_walk(walk):
     assert nested == [], f"{walk}'s inner run collects the walks {nested}"
 
 
-@pytest.mark.parametrize("walk", _walks())
-def test_every_walk_uses_the_one_shared_helper(walk):
-    """The copy, the apply, the regenerate and the inner run live once. A walk
-    that imports `shutil`, `subprocess` or a thread pool of its own is carrying
-    its own copy of them."""
-    tree = ast.parse((ROOT / walk).read_text(encoding="utf-8"))
+#: The two names a walk's shard reaches it by (DRE-7907). Only the helper
+#: reads them; a walk that names one is picking its own cases.
+SHARD_NAMES = ("BUREAU_WALK_SHARD", "BUREAU_WALK_SHARDS")
+
+
+def _helper_problems(walk: str, source: str) -> list[str]:
+    """Every way the walk `source` carries machinery the helper owns."""
+    tree = ast.parse(source)
     imported = set()
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
             imported |= {alias.name for alias in node.names}
         elif isinstance(node, ast.ImportFrom) and node.module:
             imported.add(node.module)
-    assert HELPER in imported, f"{walk} does not use tests/{HELPER}.py"
+    found = []
+    if HELPER not in imported:
+        found.append(f"{walk} does not use tests/{HELPER}.py")
     own = sorted(imported & OWN_COPY_MODULES)
-    assert own == [], f"{walk} carries its own tree-copy or inner-run code: {own}"
+    if own:
+        found.append(f"{walk} carries its own tree-copy or inner-run code: {own}")
     defined = {node.name for node in ast.walk(tree)
                if isinstance(node, ast.FunctionDef)}
-    assert not defined & {"copy_tree", "_run", "save"}, (
-        f"{walk} defines {sorted(defined & {'copy_tree', '_run', 'save'})} — "
-        f"use the helper's")
+    if defined & {"copy_tree", "_run", "save"}:
+        found.append(f"{walk} defines "
+                     f"{sorted(defined & {'copy_tree', '_run', 'save'})} — "
+                     f"use the helper's")
+    named = [name for name in SHARD_NAMES
+             if re.search(rf"\b{name}\b", source)]
+    if named:
+        found.append(f"{walk} names {named} — only tests/{HELPER}.py reads a "
+                     f"walk's shard")
+    picks = [node for node in ast.walk(tree) if isinstance(node, ast.Call)
+             and isinstance(node.func, ast.Attribute) and node.func.attr == "shard"]
+    if not picks:
+        found.append(f"{walk} never asks the helper for its shard "
+                     f"(`walk.shard(...)`), so it runs every case in every "
+                     f"shard")
+    return found
+
+
+@pytest.mark.parametrize("walk", _walks())
+def test_every_walk_uses_the_one_shared_helper(walk):
+    """The copy, the apply, the regenerate, the inner run and the pick of a
+    shard's cases live once. A walk that imports `shutil`, `subprocess` or a
+    thread pool of its own is carrying its own copy of them, and one that
+    names a shard variable is picking its own cases (DRE-7907)."""
+    found = _helper_problems(walk, (ROOT / walk).read_text(encoding="utf-8"))
+    assert found == [], "\n".join(found)
+
+
+@pytest.mark.parametrize("name", SHARD_NAMES)
+def test_a_walk_that_names_a_shard_variable_fails_the_helper_check(name):
+    walk = _walks()[0]
+    source = (ROOT / walk).read_text(encoding="utf-8")
+    assert _helper_problems(walk, source) == []
+    planted = source + f"\nMINE = os.environ.get({name!r})\n"
+    found = _helper_problems(walk, planted)
+    assert len(found) == 1 and name in found[0], found
 
 
 def test_the_helper_leaves_every_walk_out_of_an_inner_run(tmp_path):
@@ -221,11 +260,11 @@ def test_the_walks_run_in_a_job_of_their_own_with_a_declared_clock():
 
 
 def test_the_walks_job_names_no_walk_so_a_new_one_needs_no_workflow_edit():
-    _, job = _walks_job()
-    text = yaml.safe_dump(job)
-    assert "keeps_the_suite_green" not in text, (
-        "the walks' job must find the walks by their name pattern, never list "
-        "them")
+    for _, job in (_walks_job(), _walk_list_job()):
+        text = yaml.safe_dump(job)
+        assert "keeps_the_suite_green" not in text, (
+            "the walks' jobs must find the walks by their name pattern, never "
+            "list them")
 
 
 def test_the_required_check_waits_on_the_walks_and_fails_when_they_fail():
@@ -252,9 +291,13 @@ def test_the_walks_job_starts_from_the_parts_environment():
                     if s.get("name") == "Unit tests")["env"]
     step = next(s for s in job["steps"]
                 if "run-walks" in str(s.get("run", "")))
-    # Plus exactly one name, the walk the matrix entry was handed (DRE-7016),
-    # and it reaches the shell through the environment, never the `run:`.
-    assert step.get("env") == dict(unit_env, WALK="${{ matrix.walk }}"), step.get("env")
+    # Plus exactly three names: the walk the matrix entry was handed
+    # (DRE-7016) and its shard (DRE-7907), and they reach the shell through
+    # the environment, never the `run:`.
+    assert step.get("env") == dict(
+        unit_env, WALK="${{ matrix.walk }}",
+        BUREAU_WALK_SHARD="${{ matrix.shard }}",
+        BUREAU_WALK_SHARDS="${{ matrix.shards }}"), step.get("env")
     assert "${{" not in step["run"], step["run"]
 
 
@@ -353,7 +396,9 @@ def _walk_list_job() -> tuple[str, dict]:
     return found[0]
 
 
-def test_each_walk_runs_in_a_job_of_its_own():
+def test_each_walk_shard_runs_in_a_job_of_its_own():
+    """DRE-7907: one matrix entry per (walk, shard), built from the list job's
+    output, and a red shard names its walk and its shard on the checks."""
     key, job = _walks_job()
     list_key, list_job = _walk_list_job()
     needs = job.get("needs")
@@ -361,23 +406,43 @@ def test_each_walk_runs_in_a_job_of_its_own():
     assert list_key in needs, needs
     strategy = job.get("strategy") or {}
     assert strategy.get("fail-fast") is False, (
-        "one red walk must not cancel the others: a canceled walk hides its "
+        "one red shard must not cancel the others: a canceled shard hides its "
         "own failures behind somebody else's")
     matrix = strategy.get("matrix") or {}
-    assert list(matrix) == ["walk"], matrix
-    assert str(matrix["walk"]).replace(" ", "") == (
+    assert list(matrix) == ["include"], matrix
+    assert str(matrix["include"]).replace(" ", "") == (
         f"${{{{fromJSON(needs.{list_key}.outputs.walks)}}}}"), matrix
-    assert "${{ matrix.walk }}" in job.get("name", ""), job.get("name")
+    name = job.get("name", "")
+    assert "${{ matrix.walk }}" in name, name
+    assert "shard ${{ matrix.shard }} of ${{ matrix.shards }}" in name, name
     outputs = list_job.get("outputs") or {}
     assert "walks" in outputs, outputs
     assert "if" not in list_job, "the walks are listed on every event"
 
 
-def test_each_walk_job_runs_only_the_walk_it_was_handed():
+def test_each_walk_job_runs_only_the_walk_and_the_shard_it_was_handed():
     _, job = _walks_job()
     step = next(s for s in job["steps"] if "run-walks" in str(s.get("run", "")))
-    assert (step.get("env") or {}).get("WALK") == "${{ matrix.walk }}", step.get("env")
+    env = step.get("env") or {}
+    assert env.get("WALK") == "${{ matrix.walk }}", env
+    assert env.get("BUREAU_WALK_SHARD") == "${{ matrix.shard }}", env
+    assert env.get("BUREAU_WALK_SHARDS") == "${{ matrix.shards }}", env
     assert '--only "$WALK"' in step["run"], step["run"]
+    assert "${{" not in step["run"], step["run"]
+
+
+def test_the_shard_names_are_set_in_the_walks_step_and_nowhere_else():
+    """The two names reach a walk from the `walks` step's `env:` alone — no
+    other job, step or line of tests.yml carries either."""
+    text = TESTS_WF.read_text(encoding="utf-8")
+    hits = re.findall(r"^.*\bBUREAU_WALK_SHARDS?\b.*$", text, re.M)
+    assert [h.strip() for h in hits] == [
+        "BUREAU_WALK_SHARD: ${{ matrix.shard }}",
+        "BUREAU_WALK_SHARDS: ${{ matrix.shards }}",
+    ], hits
+    _, job = _walks_job()
+    step = next(s for s in job["steps"] if "run-walks" in str(s.get("run", "")))
+    assert set(SHARD_NAMES) <= set(step.get("env") or {})
 
 
 def test_the_walk_list_reads_the_runner_chain_on_a_short_clock_of_its_own():
@@ -401,33 +466,81 @@ def test_a_list_job_that_failed_leaves_the_walks_skipped_and_that_is_red():
         assert proc.returncode == code, (walks, proc.stdout, proc.stderr)
 
 
-def test_the_walk_clock_is_over_twice_the_slowest_measured_walk():
-    """The cap is a single walk's now, held from the walks' measured seconds
-    in `config/unit-test-durations.json`."""
+def test_the_walk_clock_is_over_twice_the_slowest_projected_shard():
+    """The cap is a single shard's now (DRE-7907), held from each walk's CI
+    seconds in `config/unit-test-durations.json` and its shard count."""
     _, job = _walks_job()
     measured = parts.load_weights(parts.DURATIONS)
-    walks = {rel: measured.get(rel) for rel in parts.walks(ROOT)}
-    assert all(walks.values()), (
-        f"a walk with no measured seconds cannot be held to a clock: {walks}")
-    slowest = max(walks.values())
-    assert int(job["timeout-minutes"]) * 60 >= 2 * slowest, (job["timeout-minutes"], walks)
+    shards = _shard_counts(parts.walk_shards(ROOT))
+    projected = {rel: parts.projected_shard_seconds(
+        measured[rel], len(parts.walk_cases(ROOT, rel)), shards[rel])
+        for rel in parts.walks(ROOT)}
+    slowest = max(projected.values())
+    assert int(job["timeout-minutes"]) * 60 >= 2 * slowest, (
+        job["timeout-minutes"], projected)
 
 
-def test_walks_json_lists_every_walk_and_is_red_with_none(tmp_path):
-    root = _tree(tmp_path / "some", [
-        "tests/test_a.py",
-        "tests/test_one_keeps_the_suite_green.py",
-        "tests/test_two_keeps_the_suite_green.py",
-    ])
+def _walk_source(cases: list[str], marks: Path | None = None) -> str:
+    """A walk with the dict walks' shape: `CASES`, a `results` fixture that
+    runs only the shard's cases through the helper, and one per-case test.
+    Each case it runs leaves a file named for it in `marks`."""
+    return (
+        "import sys\n"
+        "from pathlib import Path\n"
+        "import pytest\n"
+        f"sys.path.insert(0, {str(ROOT / 'tests')!r})\n"
+        "import console_change_walk as walk\n"
+        f"CASES = {dict.fromkeys(cases, 1)!r}\n"
+        "SHARD = walk.shard(walk.case_names(CASES))\n"
+        f"MARKS = {str(marks) if marks else ''!r}\n"
+        "def run_case(name, base):\n"
+        "    if MARKS:\n"
+        "        Path(MARKS, name).write_text('ran')\n"
+        "    return {'ok': True}\n"
+        "@pytest.fixture(scope='module')\n"
+        "def results(tmp_path_factory):\n"
+        "    return walk.run_all(SHARD, run_case, tmp_path_factory.mktemp('w'))\n"
+        "@pytest.mark.parametrize('name', SHARD)\n"
+        "def test_the_case_passes(results, name):\n"
+        "    assert results[name]['ok']\n")
+
+
+def _record(tmp_path: Path, seconds: dict[str, float]) -> Path:
+    path = tmp_path / "durations.json"
+    path.write_text(json.dumps({"method": "planted", "provenance": {},
+                                "seconds": seconds}))
+    return path
+
+
+def _shard_counts(entries: list[dict]) -> dict[str, int]:
+    return {e["walk"]: e["shards"] for e in entries}
+
+
+def test_walks_json_prints_one_entry_per_walk_shard_and_is_red_with_none(tmp_path):
+    """DRE-7907: one object per (walk, shard), each carrying the walk, its
+    shard number and its shard count, and as many entries as the walks'
+    shard counts add up to."""
+    one = "tests/test_one_keeps_the_suite_green.py"
+    two = "tests/test_two_keeps_the_suite_green.py"
+    root = _tree(tmp_path / "some", ["tests/test_a.py"])
+    _tree(root, [one], _walk_source([f"c{i}" for i in range(10)]))
+    _tree(root, [two], _walk_source(["a", "b", "c"]))
+    # Ten cases over an hour need shards; three cases over 20 s fit in one.
+    record = _record(tmp_path, {one: 3600.0, two: 20.0})
     proc = subprocess.run(
-        [sys.executable, str(SCRIPT), "walks", "--json", "--root", str(root)],
+        [sys.executable, str(SCRIPT), "walks", "--json", "--root", str(root),
+         "--record", str(record)],
         capture_output=True, text=True)
     assert proc.returncode == 0, proc.stderr
-    assert json.loads(proc.stdout) == [
-        "tests/test_one_keeps_the_suite_green.py",
-        "tests/test_two_keeps_the_suite_green.py",
-    ]
     assert "\n" not in proc.stdout.strip(), "a job output is one line"
+    entries = json.loads(proc.stdout)
+    counts = _shard_counts(entries)
+    want = parts.shard_count(3600.0, 10)
+    assert counts == {one: want, two: 1} and want > 1, counts
+    assert entries == (
+        [{"walk": one, "shard": n, "shards": want} for n in range(1, want + 1)]
+        + [{"walk": two, "shard": 1, "shards": 1}]), entries
+    assert len(entries) == sum(counts.values())
     none = _tree(tmp_path / "none", ["tests/test_a.py"])
     proc = subprocess.run(
         [sys.executable, str(SCRIPT), "walks", "--json", "--root", str(none)],
@@ -437,11 +550,36 @@ def test_walks_json_lists_every_walk_and_is_red_with_none(tmp_path):
     assert parts.WALK in proc.stderr, "the message names the pattern it looked for"
 
 
-def test_walks_json_on_the_tree_is_the_walks():
+def test_walks_json_on_the_tree_is_every_shard_of_every_walk():
     proc = subprocess.run(
         [sys.executable, str(SCRIPT), "walks", "--json"],
         capture_output=True, text=True, check=True)
-    assert json.loads(proc.stdout) == parts.walks(ROOT)
+    entries = json.loads(proc.stdout)
+    assert entries == parts.walk_shards(ROOT)
+    counts = _shard_counts(entries)
+    assert sorted(counts) == parts.walks(ROOT)
+    assert len(entries) == sum(counts.values())
+    for rel, n in counts.items():
+        assert [e["shard"] for e in entries if e["walk"] == rel] == list(
+            range(1, n + 1)), rel
+
+
+def test_the_walk_list_installs_what_walks_json_needs():
+    """`walks --json` reads each walk's cases, so it imports the walks — and
+    they import PyYAML and pytest. The list job installs them the way the
+    walks' own job does, before it lists."""
+    _, list_job = _walk_list_job()
+    _, job = _walks_job()
+    steps = list_job["steps"]
+    install = next(i for i, s in enumerate(steps)
+                   if "setup-python-cached" in str(s.get("uses", "")))
+    listing = next(i for i, s in enumerate(steps)
+                   if "walks --json" in str(s.get("run", "")))
+    assert install < listing, steps
+    walks_install = next(s for s in job["steps"]
+                         if "setup-python-cached" in str(s.get("uses", "")))
+    assert steps[install] == walks_install, steps[install]
+    assert "python3 scripts/unit_test_parts.py walks --json" in steps[listing]["run"]
 
 
 #: A test body that leaves a mark when pytest collects it, so a test can see
@@ -486,3 +624,170 @@ def test_run_walks_refuses_a_walk_it_cannot_find(tmp_path):
         assert named in proc.stderr, proc.stderr
         assert "running walk" not in proc.stdout, proc.stdout
         assert not (root / "tests" / "test_x.ran").exists(), named
+
+
+# ---------------------------------------------------------------------------
+# 5. Each walk runs across shards (DRE-7907).
+# ---------------------------------------------------------------------------
+# On 2026-10-24 the every-default walk took 60m07s in one job (job
+# 120989216560, run 40133214810), and `unit-result`, and the channel promotion
+# behind it, waited on it. Each walk now runs its cases across as many jobs as
+# its CI seconds need: `walks --json` hands the matrix one entry per (walk,
+# shard), and the helper picks a shard's cases by two names alone.
+
+
+def _helper():
+    return _module(f"tests/{HELPER}.py")
+
+
+def _shard_env(n: int, of: int) -> dict:
+    return {SHARD_NAMES[0]: str(n), SHARD_NAMES[1]: str(of)}
+
+
+def _cover(names: list[str], of: int, pick=None) -> list[str]:
+    """Every problem with `of` shards of `names` taken together: a name no
+    shard picked, a name two did, a name none of them should hold."""
+    pick = pick or _helper().shard
+    picked = [name for n in range(1, of + 1) for name in pick(names, _shard_env(n, of))]
+    found = [f"{name} is in no shard of {of}" for name in names if name not in picked]
+    found += [f"{name} is in {picked.count(name)} shards of {of}"
+              for name in dict.fromkeys(picked) if picked.count(name) > 1]
+    found += [f"{name} is not a case" for name in picked if name not in names]
+    return found
+
+
+@pytest.mark.parametrize("walk", _walks())
+def test_every_walks_shards_pick_every_case_exactly_once(walk):
+    """At the count `walks --json` gives the walk, at a larger planted count,
+    and at one shard more than it has cases."""
+    names = _helper().case_names(_module(walk).CASES)
+    assert names and len(names) == len(set(names)), names
+    assert parts.walk_cases(ROOT, walk) == names
+    of = _shard_counts(parts.walk_shards(ROOT))[walk]
+    for count in (of, of + 3, len(names) + 1):
+        assert _cover(names, count) == [], count
+    assert _helper().shard(names, {}) == names
+
+
+def test_the_cover_check_fails_on_a_case_picked_twice_or_by_no_shard():
+    names = ["a", "b", "c"]
+    assert _cover(names, 2) == []
+    twice = _cover(names, 2, pick=lambda names, env: list(names))
+    assert any("in 2 shards" in p for p in twice), twice
+    none = _cover(names, 2, pick=lambda names, env: [])
+    assert len(none) == 3 and all("in no shard" in p for p in none), none
+    first_only = _cover(names, 2, pick=lambda names, env: names[:1])
+    assert any("b is in no shard" in p for p in first_only), first_only
+
+
+def test_the_shard_is_picked_by_index_modulo_the_count():
+    names = ["a", "b", "c", "d", "e"]
+    shard = _helper().shard
+    assert shard(names, _shard_env(1, 2)) == ["a", "c", "e"]
+    assert shard(names, _shard_env(2, 2)) == ["b", "d"]
+    assert shard(names, _shard_env(2, 3)) == ["b", "e"]
+    assert shard(names, _shard_env(1, 1)) == names
+
+
+@pytest.mark.parametrize("env", [
+    {SHARD_NAMES[0]: "1"},
+    {SHARD_NAMES[1]: "2"},
+    _shard_env(0, 2),
+    _shard_env(3, 2),
+], ids=["shard-alone", "count-alone", "shard-0", "shard-over-count"])
+def test_a_bad_shard_pair_raises(env):
+    with pytest.raises(ValueError):
+        _helper().shard(["a", "b", "c"], env)
+
+
+def test_the_helper_reads_case_names_off_either_shape():
+    helper = _helper()
+    assert helper.case_names({"x": 1, "y": 2}) == ["x", "y"]
+    assert helper.case_names([("x", {}), ("y", {})]) == ["x", "y"]
+
+
+def test_an_inner_run_of_the_helper_sees_no_shard_name(tmp_path, monkeypatch):
+    """A copy never runs a shard of a walk: the names stop at the walk."""
+    for name, value in zip(SHARD_NAMES, ("2", "3")):
+        monkeypatch.setenv(name, value)
+    probe = "import json, os; print(json.dumps([os.environ.get(n) for n in %r]))"
+    proc = _helper().run(tmp_path, "-c", probe % (SHARD_NAMES,))
+    assert proc.returncode == 0, proc.stderr
+    assert json.loads(proc.stdout) == [None, None]
+    assert os.environ[SHARD_NAMES[0]] == "2"
+
+
+def _dict_walks() -> list[str]:
+    return [rel for rel in _walks() if isinstance(_module(rel).CASES, dict)]
+
+
+def _collected_cases(walk: str, env: dict) -> set[str]:
+    """The case names pytest generates per-case tests for in `walk` under
+    `env`, read off `--collect-only`."""
+    proc = subprocess.run(
+        [sys.executable, "-m", "pytest", "--collect-only", "-q",
+         "-p", "no:cacheprovider", walk],
+        capture_output=True, text=True, cwd=ROOT,
+        env={**{k: v for k, v in _env().items() if k not in SHARD_NAMES}, **env})
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    return set(re.findall(r"^\S+::\w+\[(.+)\]$", proc.stdout, re.M))
+
+
+@pytest.mark.parametrize("walk", _dict_walks())
+def test_a_dict_walk_generates_per_case_tests_for_its_shard_alone(walk):
+    names = _helper().case_names(_module(walk).CASES)
+    assert _collected_cases(walk, {}) == set(names)
+    env = _shard_env(2, 3)
+    want = _helper().shard(names, env)
+    assert want and len(want) < len(names)
+    assert _collected_cases(walk, env) == set(want)
+
+
+def test_run_walks_names_the_shard_and_counts_its_cases(tmp_path):
+    """A planted walk with three cases, run as shard n of 3: its `results`
+    fixture runs one case, the line names the walk, the shard and that one
+    case, the step summary carries the same line, and the three shards'
+    counts add up to three."""
+    rel = "tests/test_three_keeps_the_suite_green.py"
+    marks = tmp_path / "marks"
+    root = _tree(tmp_path / "repo", ["tests/test_a.py"])
+    _tree(root, [rel], _walk_source(["a", "b", "c"], marks))
+    counted, ran = 0, []
+    for n in (1, 2, 3):
+        marks.mkdir()
+        summary = tmp_path / f"summary-{n}.md"
+        proc = subprocess.run(
+            [sys.executable, str(SCRIPT), "run-walks", "--root", str(root),
+             "--only", rel],
+            capture_output=True, text=True, cwd=root,
+            env=dict(_env(), GITHUB_STEP_SUMMARY=str(summary), **_shard_env(n, 3)))
+        assert proc.returncode == 0, proc.stdout + proc.stderr
+        lines = [ln for ln in proc.stdout.splitlines() if f"shard {n} of 3" in ln]
+        assert len(lines) == 1 and rel in lines[0], proc.stdout
+        found = re.search(r"(\d+) case\(s\) selected", lines[0])
+        assert found, lines[0]
+        counted += int(found.group(1))
+        assert lines[0] in summary.read_text(), summary.read_text()
+        here = sorted(p.name for p in marks.iterdir())
+        assert len(here) == int(found.group(1)) == 1, here
+        ran += here
+        for p in marks.iterdir():
+            p.unlink()
+        marks.rmdir()
+    assert counted == 3
+    assert sorted(ran) == ["a", "b", "c"]
+
+
+def test_run_walks_with_no_shard_runs_every_case_as_one_shard(tmp_path):
+    rel = "tests/test_three_keeps_the_suite_green.py"
+    marks = tmp_path / "marks"
+    marks.mkdir()
+    root = _tree(tmp_path / "repo", ["tests/test_a.py"])
+    _tree(root, [rel], _walk_source(["a", "b", "c"], marks))
+    proc = subprocess.run(
+        [sys.executable, str(SCRIPT), "run-walks", "--root", str(root), "--only", rel],
+        capture_output=True, text=True, cwd=root,
+        env={k: v for k, v in _env().items() if k not in SHARD_NAMES})
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert f"shard 1 of 1 of walk {rel}: 3 case(s) selected" in proc.stdout
+    assert sorted(p.name for p in marks.iterdir()) == ["a", "b", "c"]

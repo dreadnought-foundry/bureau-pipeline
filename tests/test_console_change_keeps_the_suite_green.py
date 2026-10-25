@@ -462,6 +462,25 @@ def test_the_parts_cover_every_case_exactly_once():
             selected(CASES, env)
 
 
+def test_the_walk_shard_narrows_the_suite_green_part():
+    """DRE-7907: a case is kept when its suite-green part AND its walk shard
+    both pick it, each by its index in the whole `CASES`; neither pair set
+    keeps every case. In CI the two pairs never meet — the shard is the
+    `walks` job's, the part the `suite-green` job's."""
+    names = walk.case_names(CASES)
+    assert len(names) >= 6, names
+    assert kept(CASES, {}) == CASES
+    shard = {walk.SHARD_ENV: "2", walk.SHARDS_ENV: "3"}
+    part = {PART_ENV: "1", OF_ENV: "2"}
+    both = kept(CASES, {**part, **shard})
+    want = set(walk.shard(names, shard)) & {name for name, _ in selected(CASES, part)}
+    assert [name for name, _ in both] == [name for name in names if name in want]
+    assert want and len(want) < len(walk.shard(names, shard))
+    assert [name for name, _ in kept(CASES, shard)] == walk.shard(names, shard)
+    assert kept(CASES, part) == selected(CASES, part)
+    assert SELECTED == kept(CASES, os.environ)
+
+
 def test_the_inner_run_is_the_model_reading_tests_and_no_walk():
     files = suite_files(ROOT)
     every = [path.relative_to(ROOT).as_posix()
