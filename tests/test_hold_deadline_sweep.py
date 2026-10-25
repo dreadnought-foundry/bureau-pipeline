@@ -644,11 +644,11 @@ class TestTheSweep:
     """A whole pass over a board holding nothing late: both sites settle once
     each; an idle, held or promote-only pass settles nothing."""
 
-    def _pass(self, monkeypatch, *, idle=None, held=False, **main_kw):
+    def _pass(self, monkeypatch, *, idle=None, held=False, cards=None, **main_kw):
         import test_sweep_spend_lines as spend
 
         monkeypatch.setattr(reconcile, "sweep_idle", lambda: idle)
-        fake = spend.FakeLinear([_card(nodes=[_hold(CAUSE_NEEDS, 10.0)])])
+        fake = spend.FakeLinear(cards or [_card(nodes=[_hold(CAUSE_NEEDS, 10.0)])])
         settle = mock.Mock(wraps=hold_deadline.settle)
         replace = ()
         if held:
@@ -667,6 +667,28 @@ class TestTheSweep:
         assert all(c.kwargs["complete"] is True for c in settle.call_args_list)
         lines = _deadline_lines(capsys)
         assert len(lines) == 2
+
+    def test_a_proof_card_in_hand_work_is_read_by_the_proof_waiting_list(
+            self, monkeypatch, capsys):
+        """`mine` holds In Progress and In Review only; the board read carries
+        Hand-work too, and a proof's event wait there is listed under
+        `proof-waiting` — never under `hand-work-overdue`, never under neither."""
+        card = _hand_card("DRE-7301", entered=90.0, title="PROOF: the board shows the age",
+                          labels=("repo:portico", NO_CODE),
+                          nodes=[_alarm("DRE-7301", 60.0), _hold(EVENT_NEEDS, 80.0)])
+        settle = self._pass(monkeypatch, cards=[card])
+        lists = {c.args[0]: [h.ident for h in c.args[2]] for c in settle.call_args_list}
+        assert lists == {PROOF_TAG: ["DRE-7301"], HAND_TAG: []}
+
+    def test_the_24_hour_alarm_keeps_todays_lanes(self, monkeypatch, capsys):
+        """A CEO's-press hold on a proof card in Hand-work was never in
+        `mine`, so it was never alarmed: reading Hand-work for the late list
+        posts no new alarm."""
+        card = _hand_card("DRE-7301", entered=2.0, title="PROOF: the board shows the age",
+                          labels=("repo:portico", NO_CODE), nodes=[_hold(CEO_NEEDS, 30.0)])
+        got = _held_pass([card], capsys)
+        got.seams.comment.assert_not_called()
+        assert got.door.resolved == [hold_deadline.notice_key("portico", PROOF_TAG)]
 
     def test_an_idle_pass_settles_nothing(self, monkeypatch, capsys):
         settle = self._pass(monkeypatch, idle="nothing in motion")
