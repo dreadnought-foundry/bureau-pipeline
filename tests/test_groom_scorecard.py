@@ -528,6 +528,19 @@ def test_no_decision_reader_reads_the_scorecard_as_a_decision():
     assert groomer.read_decisions([record])["drained"] == []
 
 
+def test_an_approved_proposal_nobody_drained_is_still_unanswered(monkeypatch,
+                                                                 capsys):
+    """The definition is the card's: a drain, a decline or a per-card
+    decision answers a proposal. An approval the drain never acted on
+    answers nothing, and the comment says it was approved."""
+    pid = "e1e1e1e1e1e1"
+    records = [proposal(pid, ["DRE-1"]), said(groomer.APPROVAL_TAG, pid)]
+    code, ops, out, err = run(monkeypatch, capsys, records,
+                              removals=door(rows=[]))
+    assert "proposals=1 answered=0 proposed=0" in tagged(err)[0]
+    assert f"`{pid}`" in out and "approved, never drained" in out
+
+
 def test_the_comment_says_the_week_in_plain_words():
     body = groom_scorecard.render_comment(score(week_thread()))
     prose = body.split("```json")[0]
