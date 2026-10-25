@@ -10388,6 +10388,12 @@ UNLANDED_MINUTES = int(os.environ.get("UNLANDED_MINUTES", "60"))
 # on it bumps updatedAt.
 HAND_IDLE_MINUTES = int(os.environ.get("HAND_IDLE_MINUTES", "180"))
 UNLANDED_TAG = "unlanded-work-watchdog"
+#: What `_flag_one_unlanded_branch` answers for a branch it could not judge
+#: (DRE-7966): the pass's late list is then incomplete.
+UNLANDED_UNREAD = "unread"
+#: What each half's late hold waits on, in words (DRE-7966).
+UNLANDED_BRANCH_WAITS_ON = "a pull request from {branch}"
+UNLANDED_CARD_WAITS_ON = "a branch and a pull request"
 
 #: REPO's default branch, read at most once per sweep (see default_branch()).
 _default_branch: str | None = None
@@ -10748,6 +10754,24 @@ def flag_unlanded_work() -> None:
     and a card the door could not answer is read from Linear exactly as
     before, when its branch reaches the lane check. In `off` and `shadow`
     nothing changes: one Linear lane read per stale branch, no new line.
+
+    THE LATE LIST (DRE-7966). Those comments are the chase, once each; what
+    comes after them is `hold_deadline`'s `unlanded-work-watchdog` due date.
+    Two clocks: a branch's is its last commit's time, the watchdog's own
+    clock; a no-branch card's is its `🚨 unlanded-work-watchdog no branch:`
+    notice's `createdAt`, never `updatedAt` (any comment moves that). The
+    notice's time is read off a time-bearing read — the board read's comment
+    window when `linear_ops.window_is_partial` calls it whole, and the whole
+    thread (`linear_ops._thread_and_viewer`, the pass's cached thread where a
+    reader already paid for it) when it is partial. The standing cards in
+    `config/hand-work-age.json` are never listed. After both halves `settle`
+    is called once with the late ones, and the pass is incomplete
+    (`complete=False`) when any branch or card was unread: a branch whose
+    `commits/{sha}/pulls` read or compare answered nothing or could not be
+    parsed, whose `card_state` raised, or whose evaluation raised; a card
+    whose whole-thread read raised or whose evaluation raised. An unreadable
+    or rate-limited PR or branch listing (the two returns above) and a held
+    board (`BoardHeld`) call `settle` not at all.
     """
     pr_refs = pr_head_refs()
     if pr_refs is None:
@@ -10761,11 +10785,16 @@ def flag_unlanded_work() -> None:
         branch_card(b["name"]) for b in branches
         if b["name"] not in pr_refs and b.get("sha")
     }))
+    now = datetime.now(UTC)
+    late: list[hold_deadline.LateHold] = []
+    unread: list[str] = []
     from_linear: list[str] = []
     for branch in branches:
         try:
-            _flag_one_unlanded_branch(branch, pr_refs, door_lanes, from_linear)
+            found = _flag_one_unlanded_branch(branch, pr_refs, door_lanes, from_linear,
+                                              now=now)
         except Exception as e:  # noqa: BLE001 — isolate one branch, sweep the rest
+            found = UNLANDED_UNREAD
             _write_failures.append(
                 f"unlanded watchdog on branch {branch.get('name')}: {e}"
             )
@@ -10773,10 +10802,15 @@ def flag_unlanded_work() -> None:
                 f"ERROR: unlanded watchdog on branch {branch.get('name')}: {e}",
                 file=sys.stderr,
             )
+        if isinstance(found, hold_deadline.LateHold):
+            late.append(found)
+        elif found == UNLANDED_UNREAD:
+            unread.append(branch.get("name") or "")
     if bureau_read.mode() == "on":
         print(f"unlanded: card lanes — {len(door_lanes)} from the door in one read, "
               f"{len(from_linear)} read from Linear (the door could not answer them)")
-    _flag_hand_built_idle(branches, pr_refs)
+    _flag_hand_built_idle(branches, pr_refs, late=late, unread=unread, now=now)
+    hold_deadline.settle(UNLANDED_TAG, REPO_SLUG, late, complete=not unread, now=now)
 
 
 def _unlanded_door_lanes(cards: list[str]) -> dict[str, str]:
@@ -10819,22 +10853,39 @@ def _unlanded_door_lanes(cards: list[str]) -> dict[str, str]:
 
 def _flag_one_unlanded_branch(branch: dict, pr_refs: set[str],
                               door_lanes: dict[str, str] | None = None,
-                              from_linear: list[str] | None = None) -> None:
+                              from_linear: list[str] | None = None, *,
+                              now: datetime | None = None
+                              ) -> hold_deadline.LateHold | str | None:
     """Evaluate ONE card branch and report it if no PR was ever opened.
 
     `door_lanes` is `_unlanded_door_lanes`'s answer; a card missing from it is
-    read from Linear and appended to `from_linear`."""
+    read from Linear and appended to `from_linear`.
+
+    Returns what it found (DRE-7966): a `hold_deadline.LateHold` waiting on
+    `a pull request from <branch>` when the branch is late — its clock is the
+    last commit's time, the watchdog's own clock, `due_hours` old at `now` —
+    `UNLANDED_UNREAD` when it could not judge the branch, and None otherwise.
+    It could not judge it when the `commits/{sha}/pulls` read or the compare
+    answered nothing or could not be parsed, or when `card_state` raised; an
+    evaluation that raises is caught by `flag_unlanded_work` and is unread
+    too, so either makes the pass's late list incomplete. The late judgement
+    is made after the lane checks and BEFORE the "already posted" marker
+    check, so a branch notified weeks ago is still judged: the marker skips
+    only the comment. The card half's clock — its notice's `createdAt`, read
+    off the comment window when `linear_ops.window_is_partial` calls it whole
+    and off the whole thread otherwise — and its standing cards, never
+    listed, are `_flag_hand_built_idle`'s."""
     name, sha = branch["name"], branch.get("sha") or ""
     if name in pr_refs or not sha:
-        return  # a PR exists (any state) — every other backstop applies
+        return None  # a PR exists (any state) — every other backstop applies
     pulls = gh("api", f"repos/{REPO}/commits/{sha}/pulls", "--jq", "[.[].number]")
     if not pulls:
-        return  # unreadable — a 403 is not "no PR was ever opened" (DRE-2034)
+        return UNLANDED_UNREAD  # a 403 is not "no PR was ever opened" (DRE-2034)
     try:
         if json.loads(pulls):
-            return  # a PR older than the listing window — confirmed, not guessed
+            return None  # a PR older than the listing window — confirmed, not guessed
     except ValueError:
-        return
+        return UNLANDED_UNREAD
     base = default_branch()
     raw = gh(
         "api", f"repos/{REPO}/compare/{base}...{name}",
@@ -10845,13 +10896,13 @@ def _flag_one_unlanded_branch(branch: dict, pr_refs: set[str],
     except ValueError:
         compared = None
     if not isinstance(compared, dict):
-        return  # unreadable — never alarm on a fabricated empty
+        return UNLANDED_UNREAD  # never alarm on a fabricated empty
     ahead, last = compared.get("ahead") or 0, compared.get("last")
     if ahead < 1 or not last:
-        return  # nothing of its own on this branch — an old or empty ref
+        return None  # nothing of its own on this branch — an old or empty ref
     idle = age_minutes(last)
     if idle < UNLANDED_MINUTES:
-        return  # still moving; the PR may be seconds away
+        return None  # still moving; the PR may be seconds away
     card = branch_card(name)
     state = (door_lanes or {}).get(card)
     if state is None:
@@ -10861,20 +10912,28 @@ def _flag_one_unlanded_branch(branch: dict, pr_refs: set[str],
             state = card_state(card)
         except Exception as e:  # noqa: BLE001 — any Linear/transport error -> defer
             print(f"unlanded: could not read {card}: {e} — deferring to a later sweep")
-            return
+            return UNLANDED_UNREAD
     if state in structural_repair.TERMINAL_STATES:
-        return  # a finished card's leftover branch is route F/I, not this alarm
+        return None  # a finished card's leftover branch is route F/I, not this alarm
     if state in PROMOTED_LANES:
         # DRE-4368: a dead run's card waits here for the resume run that
         # continues THIS branch, so "open a pull request from it" names the
         # wrong action. A Todo card never dispatched at all is flag_stranded's
         # no-run class (it carries no run receipt), not this alarm's.
-        return
+        return None
+    # Judged before the marker check (DRE-7966): the marker skips the comment,
+    # never the late list.
+    started = _moment(last)
+    if started is None or started.tzinfo is None:
+        return UNLANDED_UNREAD  # a time that cannot be read is not a clock
+    found = (hold_deadline.LateHold(card, started, UNLANDED_BRANCH_WAITS_ON.format(branch=name))
+             if hold_deadline.phase(UNLANDED_TAG, started, now or datetime.now(UTC))
+             == hold_deadline.LATE else None)
     # Keyed on the BRANCH, not the card: a card whose first attempt was
     # reported must still speak when a second branch strands the same way.
     marker = f"{UNLANDED_TAG} branch {name}:"
     if any(marker in b for b in linear_ops.comment_bodies(card)):
-        return  # said once, and once is the point
+        return found  # said once, and once is the point
     linear_ops.cmd_comment(card, pipeline_act.receipt("work-never-landed", (
         f"🚨 {marker} the branch `{name}` carries {ahead} commit(s) that are "
         f"not on `{base}`, and no pull request has ever been opened for it — "
@@ -10893,9 +10952,45 @@ def _flag_one_unlanded_branch(branch: dict, pr_refs: set[str],
         f"unlanded: branch {name} has {ahead} commit(s), no PR, idle "
         f"{idle:.0f}m — reported on {card}"
     )
+    return found
 
 
-def _flag_hand_built_idle(branches: list[dict], pr_refs: set[str]) -> None:
+def _no_branch_notice_at(card: dict) -> tuple[datetime | None, bool]:
+    """`(createdAt, read)` of the card's OLDEST `🚨 unlanded-work-watchdog no
+    branch:` notice — None when it carries none — for `_flag_hand_built_idle`'s
+    late list (DRE-7966).
+
+    Off a time-bearing read, because `linear_ops.comment_bodies` carries no
+    time: the board read's own comment window when
+    `linear_ops.window_is_partial` calls it whole, at no request, and the
+    whole thread otherwise (`linear_ops._thread_and_viewer`, served from the
+    pass's cache when a reader already paid for it). A thread read that
+    raises, or a notice whose time cannot be read, answers `read=False`."""
+    ident = card["identifier"]
+    nodes = linear_ops.window_nodes(card.get("comments"))
+    if linear_ops.window_is_partial(card.get("comments")):
+        try:
+            nodes, _ = linear_ops._thread_and_viewer(ident, "body", "createdAt", whole=True)
+        except Exception as e:  # noqa: BLE001 — an unread thread is not an empty one
+            print(f"unlanded: {ident}'s whole thread could not be read ({e}) — its "
+                  f"{UNLANDED_TAG} notice is not timed", file=sys.stderr)
+            return None, False
+    marker = f"🚨 {UNLANDED_TAG} no branch:"
+    read, times = True, []
+    for node in nodes:
+        if marker not in (node.get("body") or ""):
+            continue
+        posted = _moment(node.get("createdAt"))
+        if posted is None or posted.tzinfo is None:
+            read = False
+            continue
+        times.append(posted)
+    return (min(times) if times else None), read
+
+
+def _flag_hand_built_idle(branches: list[dict], pr_refs: set[str], *,
+                          late: list | None = None, unread: list[str] | None = None,
+                          now: datetime | None = None) -> None:
     """The alarm that replaces what HAND_BUILT_LABEL suppresses (DRE-2682).
 
     A hand-built card in a start lane / Hand-work with NO card branch and NO pull
@@ -10915,9 +11010,29 @@ def _flag_hand_built_idle(branches: list[dict], pr_refs: set[str]) -> None:
     words (DRE-6777). It used to say "labelled 'hand-built'" for every card
     `hand_built` answers true for, so an operator step was told it wore the
     one mark only the CEO applies.
+
+    The late list (DRE-7966). A card these rules would report — a person's,
+    not held, this repo's, no branch, no pull request — that carries its
+    notice is late once that notice is `due_hours` old at `now`, and is
+    appended to `late` waiting on `a branch and a pull request`. The clock is
+    the notice's `createdAt`, never `updatedAt`: any comment moves that, and
+    the branch half's clock, the last commit's time, is
+    `_flag_one_unlanded_branch`'s. The time is read off a time-bearing read
+    (`_no_branch_notice_at`): the board read's comment window when
+    `linear_ops.window_is_partial` calls it whole, else the whole thread. The
+    judgement is made BEFORE the `HAND_IDLE_MINUTES` gate on `updatedAt`, which
+    still decides only whether the notice is posted, so a card with an old
+    notice and a fresh comment is still judged. Standing cards in
+    `config/hand-work-age.json` `standing` are never listed. A card whose
+    whole-thread read raised, whose notice's time could not be read, or whose
+    evaluation raised (recorded in `_write_failures`) is appended to `unread`,
+    and that makes the pass incomplete.
     """
     with_branch = {branch_card(b["name"]) for b in branches}
     with_pr = {branch_card(ref) for ref in pr_refs if branch_card(ref)}
+    with open(HAND_WORK_AGE_CONFIG, encoding="utf-8") as fh:
+        standing = {s["card"] for s in json.load(fh)["standing"]}
+    now = now or datetime.now(UTC)
     for card in active_cards(WATCHDOG_LANES):
         ident = card["identifier"]
         try:
@@ -10930,6 +11045,15 @@ def _flag_hand_built_idle(branches: list[dict], pr_refs: set[str]) -> None:
                 continue  # that repo's own sweep sees its own branches
             if ident in with_branch or ident in with_pr:
                 continue  # there IS something to point at
+            if ident not in standing:
+                # Judged before the updatedAt gate (DRE-7966): a fresh comment
+                # holds back the notice, never the late list.
+                noticed, read = _no_branch_notice_at(card)
+                if not read and unread is not None:
+                    unread.append(ident)
+                if (noticed is not None and late is not None and hold_deadline.phase(
+                        UNLANDED_TAG, noticed, now) == hold_deadline.LATE):
+                    late.append(hold_deadline.LateHold(ident, noticed, UNLANDED_CARD_WAITS_ON))
             if age_minutes(card["updatedAt"]) < HAND_IDLE_MINUTES:
                 continue  # a person picked this up recently — not a stall
             marker = f"{UNLANDED_TAG} no branch:"
@@ -10961,6 +11085,8 @@ def _flag_hand_built_idle(branches: list[dict], pr_refs: set[str]) -> None:
                 f"no branch and no PR — reported"
             )
         except Exception as e:  # noqa: BLE001 — isolate one card, sweep the rest
+            if unread is not None:
+                unread.append(ident)
             _write_failures.append(f"unlanded watchdog on {ident}: {e}")
             print(f"ERROR: unlanded watchdog on {ident}: {e}", file=sys.stderr)
 
