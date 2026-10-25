@@ -60,8 +60,7 @@ from zoneinfo import ZoneInfo
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-import epic_cap  # noqa: E402 — ONE rule for "a child the cap would count"
-import mid_epic  # noqa: E402 — ONE rule for "a card is an epic"
+import epic_cap  # noqa: E402 — ONE rule for "a child the cap would count", and for "an epic"
 import prose_blockers  # noqa: E402 — ONE reading of the non-terminal relations
 
 #: What the sweep's line and the epic's comment open with.
@@ -120,12 +119,6 @@ def _parent(card: dict) -> dict:
     return card.get("parent") or {}
 
 
-def _is_epic(card: dict) -> bool:
-    return mid_epic.is_epic(card.get("title") or "",
-                            has_children=bool((card.get("children") or {}).get("nodes")),
-                            shape=card.get("shape"))
-
-
 def _edges(candidates: Iterable[dict], records: dict[str, dict]) -> dict[str, dict[str, Step]]:
     """`{source: {target: step}}` — the three kinds, off data the pass holds."""
     edges: dict[str, dict[str, Step]] = {}
@@ -139,7 +132,7 @@ def _edges(candidates: Iterable[dict], records: dict[str, dict]) -> dict[str, di
 
     for card in candidates:
         ident = card.get("identifier")
-        if not ident or _is_epic(card):
+        if not ident or epic_cap._child_is_epic(card):
             continue  # an epic in Queued is promoted by a person, never held here
         for blocker in prose_blockers.relation_blockers(card):
             add(Step(ident, blocker, CARD_EDGE))
