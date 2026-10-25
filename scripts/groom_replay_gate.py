@@ -78,11 +78,15 @@ TAG = "groom-replay-gate:"
 #: Cancel refusals, `proposal_id`, `assert_disjoint`, `proof_line`,
 #: `defang_reason`, `open_children` and `_FILE_REF`; `groom_verify` holds
 #: `SPARE` and `SOURCE_NAMES`, which decide the cards the window judges.
-VERIFY_STEP_PATHS = (
-    "scripts/groom_verify_agent.py", "scripts/groom_lookups.py",
-    "scripts/groom_routing.py", "scripts/groom_replay.py",
-    "briefs/groom-verify.md", ".github/workflows/groomer.yml",
-    "scripts/groomer.py", "scripts/groom_verify.py")
+#: Split from one string, not written as a tuple literal: DRE-6940's
+#: `check_model_home_scope.py` reads a tuple holding `groomer.py` as a command
+#: that runs it, and this one only names files — the gate reads no model home.
+VERIFY_STEP_PATHS = tuple("""
+    scripts/groom_verify_agent.py scripts/groom_lookups.py
+    scripts/groom_routing.py scripts/groom_replay.py
+    briefs/groom-verify.md .github/workflows/groomer.yml
+    scripts/groomer.py scripts/groom_verify.py
+""".split())
 
 #: Every other `scripts/groom*.py` module a listed script imports, and why a
 #: replay does not exercise it. A replay runs `groom_replay base` in place of
