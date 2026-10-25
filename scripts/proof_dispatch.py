@@ -40,7 +40,10 @@ alarms it for the operator, who gets his answer or re-sorts the hold.
 ## A first run — every condition read, in order; the first that fails is named
 
   1. A `PROOF:` title, a `repo:` label naming this repo, in `Hand-work`.
-  2. Its parent epic is `In Progress`.
+  2. Its parent epic is `In Progress` or `Done` (`EPIC_ACTIVE`). An epic
+     closes on the sweep pass after its last build card is Done, with its
+     proof still open (DRE-7948), so a Done epic's proof is still dispatched
+     — once 3 to 7 hold, as before.
   3. Every `blocks` relation on it is terminal (`prose_blockers`).
   4. It is not held: no `needs-human`, and no `🔬 proof-waiting` hold the
      thread has not discharged — by a later `🔬 proof-observed` line, or, for
@@ -462,7 +465,9 @@ NO_STUB = ("proof-dispatch: no proof-run stub in this repository — nothing "
 FIRST_RUN_LANE = "Hand-work"
 RETURN_LANE = "Green Light"
 RERUN_LANE = "In Review"
-EPIC_ACTIVE = "In Progress"
+#: Condition 2's lanes: an approved epic, or one closed on the pass after its
+#: last build card was Done, its proof the follow-on work (DRE-7948).
+EPIC_ACTIVE = ("In Progress", "Done")
 
 #: The first-run budget, and the run states that leave a card free for it.
 FIRST_RUN_BUDGET = 2
@@ -1126,9 +1131,10 @@ class _Pass:
         epic_state = (parent.get("state") or {}).get("name")
         if not parent:
             raise _condition(2, "epic", "the card has no parent epic")
-        if epic_state != EPIC_ACTIVE:
+        if epic_state not in EPIC_ACTIVE:
             raise _condition(2, "epic", f"its epic {parent.get('identifier')} "
-                                        f"is {epic_state}, not {EPIC_ACTIVE}")
+                                        f"is {epic_state}, not "
+                                        f"{' or '.join(EPIC_ACTIVE)}")
         if prose_blockers.relations_unknown(issue):
             raise _condition(3, "blockers", "its blocking relations could not "
                                             "be read to the end")
