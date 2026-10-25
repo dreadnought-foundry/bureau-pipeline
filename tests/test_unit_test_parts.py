@@ -500,6 +500,13 @@ OLD_CLAUSE_JOIN = r"; (?:and|plus) "
 #: moved to the shared `method` entry and the rest stayed with the walk.
 WALKS_SENTENCE = "; every walk (tests/*_keeps_the_suite_green.py)"
 
+#: The card that re-recorded the walks from CI (DRE-7907): the desk-seconds
+#: walks sentence in `method`, and each desk-measured walk's clause, were
+#: replaced by each walk's slowest CI walk job, its run and job named in its
+#: own `provenance` line, which names this card. What it replaced is owed no
+#: longer; every other clause still is, word for word.
+RECORDED_FROM_CI = "DRE-7907"
+
 #: The longest line the record may hold. The old note's line was 6,888.
 LONGEST_LINE = 1000
 
@@ -567,14 +574,18 @@ def _carry_over(record: dict) -> None:
     missing = [f for f in named if f not in provenance]
     assert missing == [], f"not keyed in `provenance`: {missing}"
     assert "4.28" in walks_sentence and "(DRE-7016)" in walks_sentence
-    # The general clause and the walks multiplier make the shared entry.
+    # The general clause and the walks multiplier make the shared entry —
+    # the multiplier until the walks were re-recorded from CI.
     assert remeasured or general in method, method
-    assert walks_sentence in method, method
+    from_ci = RECORDED_FROM_CI in method
+    assert from_ci or walks_sentence in method, method
     # Every other clause is its files' whole entry; one naming two files is
     # the entry of both.
     for text in texts:
         assert _named_files(text), text
         for f in _named_files(text):
+            if from_ci and parts.is_walk(f) and RECORDED_FROM_CI in provenance[f]:
+                continue
             assert provenance[f] == text, (f, provenance[f], text)
 
 

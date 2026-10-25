@@ -166,6 +166,7 @@ import critic_score  # noqa: E402
 import dead_run  # noqa: E402 — ONE source for the dead-run tags and cap
 import dedupe_dispatch  # noqa: E402 — ONE parse of the `bureau-card:` job name (DRE-4830)
 import dependabot_card  # noqa: E402 — ONE join between a dependabot PR and its card (DRE-3665)
+import dependency_cycle  # noqa: E402 — DRE-3539: the loop across the epic and card gates
 # DRE-3262: ONE grammar for "the rescue could not push and the work is in an
 # artifact" — written by the failing run's last step, read back here.
 import deliver_rescue  # noqa: E402
@@ -381,8 +382,27 @@ MAX_WIP, MAX_WIP_SOURCE = cap_and_source(
 # dragged there from Green Light is unapproved, and counting Todo here would
 # release its verdict-carrying children in the window before the carry.
 # Anything else (Backlog, Planning, Green Light, Todo, Done, …) is not active
-# and its children stay parked.
+# and its children stay parked — save one: a Done epic's follow-on child
+# (`epic_parent_admits`, DRE-7948).
 EPIC_ACTIVE_STATES = ("In Progress",)
+
+#: The one closed lane whose children still move: an epic closes once its
+#: builds are Done, and its proof and person-marked cards carry on under it.
+EPIC_DONE_STATE = "Done"
+
+
+def epic_parent_admits(card: dict, epic_state: str | None) -> bool:
+    """Whether `card`'s epic, in `epic_state`, lets the sweep promote it.
+
+    An active epic admits every child (DRE-1893). A Done epic admits only its
+    follow-on work — `epic_cap.follow_on`: a proof, or a card marked for a
+    person (DRE-7948). The epic closes on the pass after its last build card
+    is Done, and refusing those here would strand them under it. A buildable
+    child of a Done epic is still refused, and every gate after this one reads
+    the card exactly as before."""
+    if epic_state in EPIC_ACTIVE_STATES:
+        return True
+    return epic_state == EPIC_DONE_STATE and epic_cap.follow_on(card)
 
 # Human-hold (DRE-1403). A card whose agent keeps dying with no PR — whether it
 # crashes (counted by agent-task) or HANGS/times out (seen only here) — is
@@ -1884,6 +1904,11 @@ _waiting_releases: dict[str, dict[str, str]] = {}
 _backlog_epics: set[str] = set()
 _returned_epics: set[str] = set()
 
+# The loops across the epic gate and the card gate the promotion pass found
+# (DRE-3539) — what `cycles_line()` counts for the full sweep's summary.
+# Replaced by each pass, reset with the sweep's board.
+_cycles: list = []
+
 # ── The read door's per-pass state (Stage 2 #6a) ────────────────────────────
 # Which cards this pass decided on the DOOR's facts rather than Linear's. Every
 # state write about one of them is from-lane-conditional (item 33), and every
@@ -1947,8 +1972,8 @@ def reset_sweep_cards() -> None:
     """Drop the sweep's board snapshot — and with it the pass's comment cache
     in linear_ops (DRE-3236), the sweep's open-PR listing (DRE-3435), its epic
     records (DRE-3642), blocker epics (DRE-6407), blocker cards and what the
-    strict gate released (DRE-7831) and waiting epics (DRE-6653),
-    its workflows listing
+    strict gate released (DRE-7831) and waiting epics (DRE-6653), the loops
+    the promotion pass found (DRE-3539), its workflows listing
     (DRE-4378) and its in-flight build runs (DRE-4830). Called once at the top
     of main()."""
     global _swept_cards, _pr_listing, _workflows_listing
@@ -1979,6 +2004,7 @@ def reset_sweep_cards() -> None:
     _waiting_releases.clear()
     _backlog_epics.clear()
     _returned_epics.clear()
+    _cycles.clear()
     _inverse_topup_refused.clear()
     linear_ops.reset_pass_cache()
 
@@ -2688,7 +2714,9 @@ def _held_for_operator(card: dict, *, press_only: bool = False) -> tuple[dict | 
     A `🔬 proof-waiting` hold is the operator's when its needs half — the text
     after ` — needs ` — OPENS `proof_cause_park.CAUSE_HOLD_OPENING` (DRE-6837's
     park), `proof_dispatch.OPERATOR_PRESS` (the dispatcher's `_waiting` over
-    a `waiting for the operator's press` row), or any other of
+    a `waiting for the operator's press` row, as it wrote one before
+    DRE-7951 — since then that hold waits for a time and nothing else, and a
+    standing one lifts itself 12 hours after its post), or any other of
     `proof_dispatch.OPERATOR_NEEDS` — the dispatcher's holds for an
     operator's reading once a dispatch or re-run budget is spent or a re-run
     answered nothing (DRE-7739). That tuple is the dispatcher's own
@@ -6778,7 +6806,8 @@ def live_promotion_refusal(card: dict, bodies: list[str]) -> tuple[dict | None, 
     if was.get("identifier") != now.get("identifier"):
         return live, (f"its epic changed since the board was read "
                       f"({was.get('identifier')} → {now.get('identifier')})")
-    if now and ((now.get("state") or {}).get("name")) not in EPIC_ACTIVE_STATES:
+    # The gate's own question (DRE-7948): a Done epic's follow-on child passes.
+    if now and not epic_parent_admits(live, (now.get("state") or {}).get("name")):
         return live, (f"its epic {now.get('identifier')} is "
                       f"{(now.get('state') or {}).get('name')} now, not active")
     if prose_blockers.relations_unknown(live):
@@ -7087,10 +7116,12 @@ def _not_built_out(blocker: str, state: str) -> str | None:
 
 def _open_children(blocker: str) -> str:
     """The children a built-out blocker still has open, each with why it does
-    not hold: a proof, or a person's mark."""
+    not hold: a proof, or a person's mark. Built out, its open children are
+    exactly its `epic_cap.follow_on` ones, and those are the ones named — the
+    epic close names the same (DRE-7948)."""
     named = []
     for child in epic_cap._children(_blocker_epics.get(blocker)):
-        if not epic_cap._is_open(child):
+        if not epic_cap.follow_on(child):
             continue
         labels = {(n.get("name") or "").lower()
                   for n in ((child.get("labels") or {}).get("nodes") or [])}
@@ -8189,13 +8220,15 @@ def promote_ready(
     # On a full sweep the close ran first and every one of them is already in
     # the record, so this line spends nothing at all.
     #
-    # The same read serves the epic's green light below (DRE-3644).
+    # The same read serves the epic's green light below (DRE-3644) — a Done
+    # epic's too, for the follow-on child the parent check admits (DRE-7948).
     gated_epics = {
         (card.get("parent") or {}).get("identifier")
         for card in candidates
         if card_repo(card) == REPO_SLUG
-        and ((card.get("parent") or {}).get("state") or {}).get("name")
-        in EPIC_ACTIVE_STATES
+        and card.get("parent")
+        and epic_parent_admits(
+            card, ((card.get("parent") or {}).get("state") or {}).get("name"))
     }
     epic_records(gated_epics)
     # And the same epics' whole threads, for the second critic's gate below:
@@ -8291,11 +8324,12 @@ def promote_ready(
             stand(card["identifier"], HOLD_LABEL, hold.STAMP_PREFIX)
             continue
         parent = card.get("parent")
-        if parent and parent["state"]["name"] not in EPIC_ACTIVE_STATES:
+        if parent and not epic_parent_admits(card, parent["state"]["name"]):
             # DRE-1893 unchanged: a child must not build while its epic is
             # unapproved, whatever verdict the child itself carries. Said out
             # loud so the sweep log distinguishes this from the parentless
-            # refusal below — different facts, different next actions.
+            # refusal below — different facts, different next actions. A Done
+            # epic's follow-on child goes on to the gates below (DRE-7948).
             print(
                 f"promotion: {card['identifier']}'s epic {parent['identifier']} is "
                 f"not active ({parent['state']['name']}) — skipping"
@@ -8710,9 +8744,11 @@ def promote_ready(
             # "parent epic active" on a card with no parent would be a confident
             # wrong answer about the one thing the reader is asking.
             reason = by_hand_note or (
-                "parent epic active and all blockers Done."
-                if parent
-                else "no parent epic, a FLEET verdict, and all blockers Done."
+                "no parent epic, a FLEET verdict, and all blockers Done."
+                if not parent
+                else "parent epic Done, follow-on work, and all blockers Done."
+                if parent["state"]["name"] == EPIC_DONE_STATE
+                else "parent epic active and all blockers Done."
             )
             if lift_hold:
                 reason += (
@@ -8748,6 +8784,22 @@ def promote_ready(
         f"one-off(s), {by_hand} hand-built (nothing dispatched) "
         f"(WIP {active_count}+{spent}/{MAX_WIP})"
     )
+    # The loop neither gate sees alone (DRE-3539): an epic held behind a
+    # blocker epic that cannot finish because one of its own children is held
+    # behind the first epic's child. Each gate prints a correct "held by" line
+    # and nothing releases — DRE-3420/3421 held ten cards for 38 hours that
+    # way. Pure computation over the candidates and the epic records this pass
+    # already read (`epic_records` answers from its cache), so a pass with no
+    # loop spends nothing. The full sweep alone tells the epics, once per PT
+    # day; nothing here edits a relation — a person or the planner does.
+    _cycles[:] = dependency_cycle.find_cycles(candidates, epic_records(gated_epics))
+    for cycle in _cycles:
+        print(dependency_cycle.line(cycle))
+        if close_epics:
+            date = dependency_cycle.pacific_date(now)
+            for epic in dependency_cycle.epics(cycle):
+                _surface_once(epic, dependency_cycle.notice_tag(date),
+                              dependency_cycle.notice(cycle, date))
     # The stall clock (DRE-4210), the shape `_report_epic_prose_defect` runs on
     # an epic: a clocked refusal two hours old is named on the card ONCE, and
     # its ledger entry and ERROR line recur on every sweep it still stands —
@@ -8784,6 +8836,13 @@ def promote_ready(
             file=sys.stderr,
         )
     return promoted
+
+
+def cycles_line() -> str:
+    """The full sweep's count of the loops its promotion pass found (DRE-3539),
+    printed just before `sweep complete:` on every full sweep — `cycles: 0`
+    included, so a sweep that found no loop says so rather than nothing."""
+    return f"cycles: {len(_cycles)}"
 
 
 def close_finished_epics(epic_identifiers: set[str]) -> set[str]:
@@ -8834,7 +8893,16 @@ def _close_epic_if_finished(epic: str) -> bool:
 
     The test is the same whichever lane the epic sits in, and the lanes it is
     asked about are `EPIC_CLOSE_LANES` — In Progress, In Review and
-    Queued — chosen by the callers of `close_finished_epics` (DRE-6410)."""
+    Queued — chosen by the callers of `close_finished_epics` (DRE-6410).
+
+    One more case, for an In Progress epic alone (DRE-7948): built out — the
+    one definition, `_not_built_out`'s (DRE-6407) — with a child Done, it
+    closes on the same pass, and its open proof and person-marked cards are
+    named on the receipt as follow-on work that carries on by itself. The
+    pass's record carries only the children's states, so that case reads the
+    epic once through `_blocker_epic`, cached for the pass, and only when its
+    children are not all closed, one is Done and none is in the dispatch
+    lane."""
     record = epic_records([epic]).get(epic)
     if record is None:
         # The same skip an unreadable children read has always taken: raised so
@@ -8845,24 +8913,55 @@ def _close_epic_if_finished(epic: str) -> bool:
         )
     kids = (record.get("children") or {}).get("nodes") or []
     states = [(k.get("state") or {}).get("name") for k in kids]
-    if (
-        states
-        and all(s in ("Done", "Canceled", "Duplicate") for s in states)
-        and "Done" in states
-    ):
-        linear_ops.cmd_state(epic, "Done")
-        linear_ops.cmd_comment(
-            epic,
-            f"🏁 Epic complete: all {len(states)} children are closed "
-            f"({states.count('Done')} done). Closed automatically by the reconcile sweep.",
-        )
-        # This epic just shipped — pull the next epics in the dependency
-        # chain into the pipeline (DRE-1772). Merge-time hook; the full
-        # sweep is the backstop: `return_waiting_epics`, its own phase, which
-        # returns a waiting epic however its blocker closed (DRE-6653).
-        advance_unblocked_epics(epic)
-        return True
-    return False
+    if not states or "Done" not in states:
+        return False
+    if all(s in epic_cap.CLOSED_STATES for s in states):
+        receipt = (f"all {len(states)} children are closed "
+                   f"({states.count('Done')} done).")
+    else:
+        follow_on = _built_out_follow_on(epic, record)
+        if follow_on is None:
+            return False
+        receipt = (f"every build card is closed ({states.count('Done')} of "
+                   f"{len(states)} children done), and follow-on work carries "
+                   f"on by itself: {follow_on}.")
+    linear_ops.cmd_state(epic, "Done")
+    linear_ops.cmd_comment(
+        epic,
+        f"🏁 Epic complete: {receipt} Closed automatically by the reconcile sweep.",
+    )
+    # This epic just shipped — pull the next epics in the dependency
+    # chain into the pipeline (DRE-1772). Merge-time hook; the full
+    # sweep is the backstop: `return_waiting_epics`, its own phase, which
+    # returns a waiting epic however its blocker closed (DRE-6653).
+    advance_unblocked_epics(epic)
+    return True
+
+
+def _built_out_follow_on(epic: str, record: dict) -> str | None:
+    """The follow-on work an In Progress `epic` leaves open once it is built
+    out, named the way `_open_children` names it; None when it is not In
+    Progress or not built out (DRE-7948).
+
+    Built out is `_not_built_out`'s answer, never a second definition: no
+    `buildable()` child, no open child epic, the children page read to the
+    end. A state off the record that is not In Progress costs no read, and
+    nor does a child in the dispatch lane: a card there is a build in flight,
+    since a proof or a person's card is never dispatched, so the epic is not
+    built out and every epic mid-build keeps the pass at one read (DRE-3642).
+    A read that fails raises, so the caller's guard says so and the next
+    sweep tries again (DRE-3148)."""
+    state = epic_cap._state(record)
+    if state != epic_cap.IN_PROGRESS:
+        return None
+    if any(epic_cap._state(k) == lane_contract.DISPATCH_LANE
+           for k in epic_cap._children(record)):
+        return None
+    if _blocker_epic(epic) is None:
+        raise LookupError(f"its children could not be read: {_blocker_epic_gaps.get(epic)}")
+    if _not_built_out(epic, state) is not None:
+        return None
+    return _open_children(epic)
 
 
 # ── The epic line: the sweep starts the next waiting epic (DRE-5152) ────────
@@ -15954,6 +16053,7 @@ def main(
             + f" of {linear_ops.COMMENT_CAP} comments — move the receipts "
             "before the line (docs/epic-comment-cap.md)"
         )
+    print(cycles_line())
     print(f"sweep complete: {nudges} nudge(s)")
     _report_degraded()
     if _write_failures or _read_failures or _stale_defects:

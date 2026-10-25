@@ -37,10 +37,19 @@ every pull request paid for it. So `discover` and `list` leave the walks out,
 alone — a walk added later needs no edit here or in `tests.yml`. `run-walks`
 runs each walk on its own and prints how long each took (and writes it to the
 job summary), so the walks' clock is watched rather than discovered at its
-limit. In `tests.yml` each walk has a job of its own (DRE-6935): `walks --json`
-hands the job list to the matrix, and `run-walks --only FILE` runs that one,
-on a clock `tests/test_walks_time_budget.py` holds to each walk's recorded
-seconds (DRE-7016).
+limit. In `tests.yml` each walk had a job of its own (DRE-6935), and now runs
+across SHARDS (DRE-7907): on 2026-10-24 the every-default walk took 60m07s in
+one job, and `unit-result` waited on it. `walks --json` hands the matrix one
+entry per (walk, shard) — `{"walk", "shard", "shards"}` — and `run-walks
+--only FILE` runs that walk with the shard `BUREAU_WALK_SHARD` of
+`BUREAU_WALK_SHARDS` names, whose cases `tests/console_change_walk.py`'s
+`shard` picks, and prints the shard and how many cases it selected. Each
+walk's shard count is the smallest whose largest shard projects at or under
+`WALK_SHARD_TARGET_SECONDS`, from the walk's CI seconds in the durations
+record and its case count (`projected_shard_seconds`), so a walk that gains
+cases gains shards with no edit here or in `tests.yml`;
+`tests/test_walks_time_budget.py` holds every shard to the target and to the
+walks job's clock.
 
 `measure` rebuilds the durations record from pytest `--junit-xml` reports, or
 from the GitHub Actions logs of the parts' `pytest -v` (each result line is
@@ -96,6 +105,7 @@ from __future__ import annotations
 
 import argparse
 import fnmatch
+import importlib.util
 import json
 import os
 import re
@@ -123,6 +133,19 @@ NORECURSE = ("*.egg", ".*", "_darcs", "build", "CVS", "dist", "node_modules",
 
 #: A walk's file name (DRE-6909) — `tests/console_change_walk.py`'s `WALK`.
 WALK = "*_keeps_the_suite_green.py"
+
+#: A walk shard job's fixed cost, in seconds (DRE-7907): set up, checkout,
+#: the cached install, pytest starting and the walk's case-free tests. The
+#: change walk's job 120989216692 (run 40133214810, 2026-10-24) took 0m19s
+#: with no case in it; the other walks' jobs spent 8 to 14 seconds outside
+#: the walk step on the same runs.
+WALK_JOB_FIXED_SECONDS = 19
+
+#: The most a walk shard may project, in seconds (DRE-7907): 15 minutes
+#: halved, because `tests.yml` documents run-to-run spread of up to 2x on
+#: GitHub's 2-core runners, so a shard projected here lands at or under 15
+#: minutes on a slow one.
+WALK_SHARD_TARGET_SECONDS = 450
 
 #: The weight of a file when nothing is measured at all.
 DEFAULT_WEIGHT = 1.0
@@ -158,6 +181,81 @@ def is_walk(rel: str) -> bool:
 def walks(root: Path = ROOT) -> list[str]:
     """The walks, repo-relative, sorted — the walks' job runs these."""
     return _collect(root, (WALK,))
+
+
+def _helper():
+    """`tests/console_change_walk.py`, the walks' one helper. This tree's
+    `scripts` and `tests` go LAST on the path, so a walk under another root
+    finds its own modules first and this tree's where it has none."""
+    for path in (ROOT / "scripts", ROOT / "tests"):
+        if str(path) not in sys.path:
+            sys.path.append(str(path))
+    import console_change_walk
+    return console_change_walk
+
+
+def _load_walk(root: Path, rel: str):
+    """The walk `rel` under `root`, imported as a module of its own."""
+    _helper()
+    name = "walk_" + re.sub(r"\W", "_", f"{root}/{rel}")
+    spec = importlib.util.spec_from_file_location(name, root / rel)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def walk_cases(root: Path, rel: str) -> list[str] | None:
+    """The walk's case names, in order, read off its `CASES` by the helper
+    (`tests/console_change_walk.py`'s `case_names`) — or None when the walk
+    cannot be imported or holds no `CASES`. Whatever cannot be read runs
+    whole, in one shard, and fails there by its own pytest run."""
+    try:
+        return _helper().case_names(_load_walk(root, rel).CASES)
+    except Exception:  # noqa: BLE001 — fail open: the walk's own run reports it
+        return None
+
+
+def _pairs(n: int) -> int:
+    """`n` rounded up to the next multiple of 2: a walk runs its cases two at
+    a time on GitHub's 2-core runners."""
+    return n + n % 2
+
+
+def projected_shard_seconds(seconds: float, cases: int, shards: int) -> float:
+    """The largest shard's projected seconds when a walk recorded at
+    `seconds` for its `cases` runs in `shards` shards: the fixed cost, plus
+    the rest scaled by the largest shard's cases over the walk's, both
+    counts rounded up to pairs."""
+    fixed = WALK_JOB_FIXED_SECONDS
+    if cases < 1:
+        return float(seconds)
+    largest = -(-cases // shards)
+    return fixed + max(seconds - fixed, 0.0) * _pairs(largest) / _pairs(cases)
+
+
+def shard_count(seconds: float | None, cases: int | None) -> int:
+    """The smallest shard count whose largest shard projects at or under
+    `WALK_SHARD_TARGET_SECONDS`. One shard for a walk with no recorded
+    seconds or no readable cases, and one shard a case when nothing fits —
+    `tests/test_walks_time_budget.py` names both."""
+    if not seconds or not cases:
+        return 1
+    for n in range(1, cases + 1):
+        if projected_shard_seconds(seconds, cases, n) <= WALK_SHARD_TARGET_SECONDS:
+            return n
+    return cases
+
+
+def walk_shards(root: Path = ROOT, record: Path = DURATIONS) -> list[dict]:
+    """One entry per (walk, shard), in walk order then shard order: the walk,
+    its shard number and its shard count — the walks job's matrix."""
+    seconds = load_weights(record)
+    out = []
+    for rel in walks(root):
+        names = walk_cases(root, rel)
+        of = shard_count(seconds.get(rel), len(names) if names else None)
+        out += [{"walk": rel, "shard": n, "shards": of} for n in range(1, of + 1)]
+    return out
 
 
 def discover(root: Path = ROOT) -> list[str]:
@@ -495,10 +593,29 @@ def _took(seconds: float) -> str:
     return f"{minutes}m{secs:02d}s"
 
 
+def shard_line(root: Path, rel: str) -> str:
+    """The one line naming the walk, the shard this job runs of it and how
+    many of its cases that shard selected (DRE-7907) — read through the
+    helper, by the same names the walk's own run reads."""
+    helper = _helper()
+    shard = os.environ.get(helper.SHARD_ENV, "1")
+    shards = os.environ.get(helper.SHARDS_ENV, "1")
+    head = f"shard {shard} of {shards} of walk {rel}"
+    names = walk_cases(root, rel)
+    if names is None:
+        return f"{head}: its cases could not be read"
+    try:
+        picked = helper.shard(names)
+    except ValueError as exc:
+        return f"{head}: {exc}"
+    return f"{head}: {len(picked)} case(s) selected of {len(names)}"
+
+
 def run_walks(root: Path, only: str | None = None) -> int:
-    """Every walk, or only the walk `only` names, one pytest run each, timed.
-    1 when a walk failed or there is no walk at all — a pattern that matches
-    nothing is a silent green — and 2 when `only` names no walk."""
+    """Every walk, or only the walk `only` names, one pytest run each, timed,
+    each run as the shard the environment names (every case when it names
+    none). 1 when a walk failed or there is no walk at all — a pattern that
+    matches nothing is a silent green — and 2 when `only` names no walk."""
     found = walks(root)
     if not found:
         print(f"unit_test_parts: no walk ({WALK}) under {root / 'tests'} — "
@@ -510,9 +627,11 @@ def run_walks(root: Path, only: str | None = None) -> int:
                   f"{root / 'tests'} — the walks are {found}", file=sys.stderr)
             return 2
         found = [only]
-    rows = []
+    rows, shards = [], []
     for rel in found:
         print(f"running walk {rel}", flush=True)
+        shards.append(shard_line(root, rel))
+        print(shards[-1], flush=True)
         start = time.monotonic()
         proc = subprocess.run(
             [sys.executable, "-m", "pytest", "-v", "-p", "no:cacheprovider", rel],
@@ -527,8 +646,10 @@ def run_walks(root: Path, only: str | None = None) -> int:
     summary = os.environ.get("GITHUB_STEP_SUMMARY")
     if summary:
         with open(summary, "a", encoding="utf-8") as out:
-            out.write("### Console-change walks\n\n| walk | result | took |\n"
-                      "|---|---|---|\n")
+            out.write("### Console-change walks\n\n")
+            for line in shards:
+                out.write(f"{line}\n\n")
+            out.write("| walk | result | took |\n|---|---|---|\n")
             for rel, verdict, took in rows:
                 out.write(f"| `{rel}` | {verdict} | {_took(took)} |\n")
     return 1 if failed else 0
@@ -552,8 +673,13 @@ def main(argv: list[str] | None = None) -> int:
     p_walks = sub.add_parser("walks", help="print the walks")
     p_walks.add_argument("--root", type=Path, default=ROOT)
     p_walks.add_argument("--json", action="store_true",
-                         help="one JSON list on one line, for a job matrix; "
-                              "no walk is an error")
+                         help="one JSON list on one line, for a job matrix: "
+                              "one object per walk shard, carrying the walk, "
+                              "its shard and its shard count; no walk is an "
+                              "error")
+    p_walks.add_argument("--record", type=Path, default=DURATIONS,
+                         help="the durations record holding each walk's CI "
+                              "seconds (default: this tree's)")
 
     p_run = sub.add_parser("run-walks", help="run every walk, timed")
     p_run.add_argument("--root", type=Path, default=ROOT)
@@ -628,7 +754,7 @@ def main(argv: list[str] | None = None) -> int:
                       f"{args.root / 'tests'} — the walks' jobs would prove "
                       f"nothing", file=sys.stderr)
                 return 1
-            print(json.dumps(found))
+            print(json.dumps(walk_shards(args.root, args.record)))
             return 0
         print("\n".join(found))
         return 0

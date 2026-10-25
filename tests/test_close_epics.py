@@ -550,3 +550,260 @@ def test_the_lane_contract_says_a_finished_epic_leaves_the_queue():
         "An epic here whose children are all closed, with at least one Done, "
         "is closed by the sweep"
     ) in queued["clauses"]["exit"]["text"]
+
+
+# ---------------------------------------------------------------------------
+# DRE-7948: an epic closes on the sweep pass after its last build card is Done.
+# On 2026-10-25, 33 In Progress epics fleet-wide were built out with only
+# proofs or person-marked cards open, and nothing closed them: the close asked
+# for every child closed. DRE-7912 is the replay below — four builds Done and
+# live since 10:38 PM PT on 2026-10-24, DRE-7917 (OPERATOR) in Hand-work and
+# DRE-7919 (PROOF) in Queued. The close now reads the one built-out definition
+# the release gate reads (`_not_built_out`, DRE-6407), off the pass-cached
+# single-issue read `_blocker_epic`, and never off a widened epic record.
+# ---------------------------------------------------------------------------
+import epic_cap  # noqa: E402
+
+BUILT = "DRE-7912"
+BUILDS = ("DRE-7913", "DRE-7914", "DRE-7915", "DRE-7916")
+OPERATOR_CARD, PROOF_CARD = "DRE-7917", "DRE-7919"
+
+
+def _in_motion_kid(identifier, state, *, title="a build card", labels=(), grandkids=0):
+    """One child as `epic_cap.IN_MOTION_NODE` selects it."""
+    return {
+        "identifier": identifier,
+        "title": title,
+        "state": {"name": state},
+        "labels": {"nodes": [{"name": n} for n in labels],
+                   "pageInfo": {"hasNextPage": False}},
+        "children": {"nodes": [{"id": f"g{n}"} for n in range(grandkids)]},
+    }
+
+
+def _dre_7912_kids():
+    return [
+        *(_in_motion_kid(b, "Done", title=f"bureau-pipeline: build {b}") for b in BUILDS),
+        _in_motion_kid(OPERATOR_CARD, "Hand-work",
+                       title="bureau-pipeline: rotate the signing secret",
+                       labels=("operator-step", "no-code")),
+        _in_motion_kid(PROOF_CARD, "Queued",
+                       title="PROOF: DRE-7912 observed live", labels=("no-code",)),
+    ]
+
+
+class BuiltOutLinear:
+    """The two reads the close makes: the pass's batched epic record
+    (`EPIC_RECORD_GQL`, children carrying only their state) and the single-issue
+    read of `epic_cap.IN_MOTION_NODE` (titles and labels), counted."""
+
+    def __init__(self, kids, *, state="In Progress", more=False, identifier=BUILT):
+        self.identifier = identifier
+        self.kids = list(kids)
+        self.state = state
+        self.more = more
+        self.full_reads: list[str] = []
+
+    def record(self):
+        return {
+            "identifier": self.identifier,
+            "description": "**Repo:** bureau-pipeline\nan epic",
+            "state": {"name": self.state},
+            "children": {"nodes": [
+                {"identifier": k["identifier"], "createdAt": "2026-10-24T00:00:00Z",
+                 "state": k["state"]} for k in self.kids]},
+            "history": {"nodes": []},
+            "inverseRelations": {"nodes": []},
+        }
+
+    def gql(self, query, variables=None):
+        v = variables or {}
+        flat = " ".join(query.split())
+        if "$numbers" in query:
+            return {"issues": {"nodes": [self.record()],
+                               "pageInfo": {"hasNextPage": False, "endCursor": None}}}
+        if "issue(id: $id)" in flat and "labels(first: 10)" in flat:
+            self.full_reads.append(v.get("id"))
+            return {"issue": {
+                "identifier": self.identifier, "title": f"[EPIC] {self.identifier}",
+                "priority": 3, "createdAt": "2026-10-20T00:00:00Z",
+                "state": {"name": self.state},
+                "children": {"nodes": list(self.kids),
+                             "pageInfo": {"hasNextPage": self.more}},
+            }}
+        raise reconcile.linear_ops.LinearError(f"BuiltOutLinear: unexpected {flat[:80]}")
+
+
+def _close(fake, epics=(BUILT,), *, passes=1):
+    with patch.object(reconcile.linear_ops, "gql", side_effect=fake.gql), \
+            patch.object(reconcile.linear_ops, "cmd_state") as state, \
+            patch.object(reconcile.linear_ops, "cmd_comment") as comment, \
+            patch.object(reconcile, "advance_unblocked_epics") as advance_chain:
+        closed = set()
+        for _ in range(passes):
+            closed |= reconcile.close_finished_epics(set(epics))
+    return closed, state, comment, advance_chain
+
+
+def test_dre_7912_closes_in_one_pass_and_names_its_follow_on_work():
+    """The replay: four builds Done, the OPERATOR card in Hand-work and the
+    PROOF card in Queued. One pass closes it, the receipt opens as every
+    close's does, and both open cards are named as follow-on work."""
+    fake = BuiltOutLinear(_dre_7912_kids())
+    closed, state, comment, advance_chain = _close(fake)
+    assert closed == {BUILT}
+    state.assert_called_once_with(BUILT, "Done")
+    comment.assert_called_once()
+    epic, body = comment.call_args.args
+    assert epic == BUILT
+    assert body.startswith("🏁 Epic complete:"), body
+    assert "follow-on work carries on by itself:" in body, body
+    tail = body.split("follow-on work carries on by itself:", 1)[1]
+    assert f"{OPERATOR_CARD} operator-step no-code" in tail or (
+        OPERATOR_CARD in tail and "operator-step" in tail), body
+    assert f"{PROOF_CARD} PROOF" in tail, body
+    for build in BUILDS:
+        assert build not in tail, body
+    advance_chain.assert_called_once_with(BUILT)
+
+
+def test_an_open_buildable_child_keeps_the_epic_open():
+    kids = _dre_7912_kids()
+    kids[3] = _in_motion_kid(BUILDS[3], "In Review", title="bureau-pipeline: the last build")
+    closed, state, comment, advance_chain = _close(BuiltOutLinear(kids))
+    assert closed == set()
+    state.assert_not_called()
+    comment.assert_not_called()
+    advance_chain.assert_not_called()
+
+
+def test_a_children_page_not_read_to_the_end_keeps_the_epic_open():
+    """The unread children might be cards left to build."""
+    closed, state, _, _ = _close(BuiltOutLinear(_dre_7912_kids(), more=True))
+    assert closed == set()
+    state.assert_not_called()
+
+
+def test_a_roll_up_with_an_open_child_epic_and_a_proof_stays_open():
+    """Roll-up parents are unchanged: an open child epic is not built out,
+    even when every other child is Done or a proof."""
+    kids = [
+        _in_motion_kid("DRE-7921", "Done", title="[EPIC] slice one", grandkids=1),
+        _in_motion_kid("DRE-7922", "In Progress", title="[EPIC] slice two", grandkids=1),
+        _in_motion_kid("DRE-7923", "Queued", title="PROOF: the roll-up works live"),
+    ]
+    closed, state, _, _ = _close(BuiltOutLinear(kids))
+    assert closed == set()
+    state.assert_not_called()
+
+
+@pytest.mark.parametrize("lane", ["In Review", *lane_contract.QUEUE_LANES])
+def test_the_build_done_close_is_an_in_progress_epics_alone(lane):
+    """Today's rule holds in every close lane; the build-done case is one
+    more, for an In Progress epic, and costs no read anywhere else."""
+    fake = BuiltOutLinear(_dre_7912_kids(), state=lane)
+    closed, state, _, _ = _close(fake)
+    assert closed == set()
+    state.assert_not_called()
+    assert fake.full_reads == []
+
+
+def test_every_child_canceled_and_none_done_still_does_not_close():
+    kids = [_in_motion_kid("DRE-7931", "Canceled"),
+            _in_motion_kid("DRE-7932", "Queued", title="PROOF: nothing shipped")]
+    fake = BuiltOutLinear(kids)
+    closed, state, _, _ = _close(fake)
+    assert closed == set()
+    state.assert_not_called()
+    assert fake.full_reads == [], "no Done child: nothing to read"
+
+
+def test_an_epic_whose_children_are_all_closed_spends_no_read():
+    """Today's close answers off the pass's record alone."""
+    fake = BuiltOutLinear([_in_motion_kid(b, "Done") for b in BUILDS])
+    closed, _, comment, _ = _close(fake)
+    assert closed == {BUILT}
+    assert comment.call_args.args[1].startswith(
+        "🏁 Epic complete: all 4 children are closed (4 done).")
+    assert fake.full_reads == []
+
+
+def test_the_close_reads_each_epic_at_most_once_a_pass():
+    """Two close passes in one sweep over an epic that stays open: one
+    `_blocker_epic` read, and the next pass (after the reset) one more."""
+    kids = _dre_7912_kids()
+    kids[0] = _in_motion_kid(BUILDS[0], "In Review")
+    fake = BuiltOutLinear(kids)
+    _close(fake, passes=2)
+    assert fake.full_reads == [BUILT]
+    reconcile.reset_sweep_cards()
+    _close(fake)
+    assert fake.full_reads == [BUILT, BUILT]
+
+
+@pytest.mark.parametrize("child", [
+    _in_motion_kid(BUILDS[0], lane_contract.DISPATCH_LANE),
+    _in_motion_kid("DRE-7922", lane_contract.DISPATCH_LANE,
+                   title="[EPIC] slice two", grandkids=1),
+])
+def test_a_child_in_the_dispatch_lane_keeps_the_epic_open_for_no_read(child):
+    """A card in the dispatch lane is a build in flight — a proof or a
+    person's card is never dispatched there — so the pass's record alone says
+    the epic is not built out, and the one-read-a-pass contract holds for
+    every epic mid-build (DRE-3642)."""
+    kids = _dre_7912_kids()
+    kids[0] = child
+    fake = BuiltOutLinear(kids)
+    closed, state, _, _ = _close(fake)
+    assert closed == set()
+    state.assert_not_called()
+    assert fake.full_reads == []
+
+
+def test_an_unreadable_full_read_skips_the_epic_out_loud(capsys):
+    fake = BuiltOutLinear(_dre_7912_kids())
+
+    def failing(query, variables=None):
+        if "labels(first: 10)" in query:
+            raise TimeoutError("The read operation timed out")
+        return fake.gql(query, variables)
+
+    with patch.object(reconcile.linear_ops, "gql", side_effect=failing), \
+            patch.object(reconcile.linear_ops, "cmd_state") as state, \
+            patch.object(reconcile, "advance_unblocked_epics"):
+        assert reconcile.close_finished_epics({BUILT}) == set()
+    state.assert_not_called()
+    err = capsys.readouterr().err
+    assert f"epic-close: could not close {BUILT}" in err
+    assert "timed out" in err
+
+
+def test_the_close_reads_follow_on_the_one_complement_of_buildable():
+    """`epic_cap.follow_on` is the complement of `buildable()` among open
+    non-epic children — not a new definition of built out."""
+    kids = {k["identifier"]: k for k in _dre_7912_kids()}
+    assert epic_cap.follow_on(kids[OPERATOR_CARD])
+    assert epic_cap.follow_on(kids[PROOF_CARD])
+    assert not epic_cap.follow_on(kids[BUILDS[0]]), "a Done child is not open"
+    assert not epic_cap.follow_on(_in_motion_kid("DRE-1", "Queued")), "buildable"
+    assert not epic_cap.follow_on(
+        _in_motion_kid("DRE-2", "In Progress", title="[EPIC] child", grandkids=1))
+    for child in [*kids.values(), _in_motion_kid("DRE-1", "Queued"),
+                  _in_motion_kid("DRE-2", "Queued", title="[EPIC] x", grandkids=1)]:
+        open_non_epic = epic_cap._is_open(child) and not epic_cap._child_is_epic(child)
+        assert epic_cap.follow_on(child) == (open_non_epic and not epic_cap.buildable(child))
+
+
+def test_the_lane_contract_states_the_build_done_close():
+    import json
+
+    contract = json.loads(
+        (Path(__file__).resolve().parent.parent / "config" / "lane-contract.json")
+        .read_text(encoding="utf-8"))
+    lanes = {l["name"]: l for l in contract["lanes"]}
+    exit_text = lanes["In Progress"]["clauses"]["exit"]["text"]
+    assert "on the sweep pass after its last build card is Done" in exit_text
+    assert "follow-on work" in exit_text
+    assert "DRE-7948" in exit_text
+    queued = lanes["Queued"]["clauses"]["exit"]["text"]
+    assert "follow-on" in queued and "DRE-7948" in queued

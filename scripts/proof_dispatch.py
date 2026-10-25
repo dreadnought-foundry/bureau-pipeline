@@ -40,7 +40,10 @@ alarms it for the operator, who gets his answer or re-sorts the hold.
 ## A first run — every condition read, in order; the first that fails is named
 
   1. A `PROOF:` title, a `repo:` label naming this repo, in `Hand-work`.
-  2. Its parent epic is `In Progress`.
+  2. Its parent epic is `In Progress` or `Done` (`EPIC_ACTIVE`). An epic
+     closes on the sweep pass after its last build card is Done, with its
+     proof still open (DRE-7948), so a Done epic's proof is still dispatched
+     — once 3 to 7 hold, as before.
   3. Every `blocks` relation on it is terminal (`prose_blockers`).
   4. It is not held: no `needs-human`, and no `🔬 proof-waiting` hold the
      thread has not discharged — by a later `🔬 proof-observed` line, or, for
@@ -113,8 +116,9 @@ its first run read.
 A fourth stop is the rows (DRE-6814). The record is read at the head as the
 gate's trigger reads it, and a row reading `Not observed. waiting for <the
 event>` holds the card the same way, rule 1 below: one `🔬 proof-waiting`
-naming the waiting rows and their events, no dispatch, and the operator's
-`🔬 proof-observed` lets the next pass re-run. It holds beside a row a re-run
+naming the waiting rows, no dispatch, and the hold lifts itself at its time
+(DRE-7951) — or earlier, on the operator's `🔬 proof-observed`, and the next
+pass re-runs. It holds beside a row a re-run
 could answer too: no run before the event can make the record merge, and the
 one re-run after it re-observes every row. With no waiting row the re-run is
 dispatched as before, and a record not read at the head holds nothing — the
@@ -156,14 +160,15 @@ the note; a record not read there is refused. Then, after the stops:
 
   1. A row reading `Not observed. waiting for <the event>`
      (`proof_record.row_waiting`) holds the card on one `🔬 proof-waiting`
-     naming the waiting rows and their events, and nothing is dispatched. The
-     operator's `🔬 proof-observed` discharges it, and the next pass re-runs.
+     naming the waiting rows, and nothing is dispatched. The hold waits for
+     a time and lifts itself (below, DRE-7951); the operator's
+     `🔬 proof-observed` discharges it sooner, and the next pass re-runs.
      The same rule holds a record the critic sent back (DRE-6814), except
      that there an unread record holds nothing. A row waiting on `the
      operator's press` under a criterion still worded with
      `proof_record.CEO_PRESS` has that phrase written
-     `proof_cause_park.PRESS_NAMED` in the hold (DRE-6837), so the hold is
-     the operator's to discharge and never waits on the CEO.
+     `proof_cause_park.PRESS_NAMED` in the hold (DRE-6837), so the hold
+     never waits on the CEO.
   2. A record whose unmet rows ALL carry a cause word
      (`proof_record.all_unmet_caused`, DRE-6607) is never re-run at that head
      (DRE-6610): a re-run would read the same 403, Done card or closed
@@ -299,6 +304,40 @@ above. A lift whose dispatch was not confirmed is still owed a timed re-run
 on the next pass (`_lifted_at`). Timed re-runs have their own two per record
 pull request; after them, one hold for the operator and no further timed re-run.
 
+## Every waiting hold re-checks itself (DRE-7951)
+
+A row nobody stamped — a prose event, or the operator's press — is read as
+stamped `WAITING_RECHECK_HOURS` (12) after the pass that posts the hold, so
+the hold is `— needs not-before=<the latest time>` and nothing else, and the
+line names its lift time in PT. Before this the hold was prose and only a
+person's `🔬 proof-observed` lifted it: DRE-6678's nine rows waited that way
+for "the morning of October 11", alarmed by nothing. `OPERATOR_PRESS` is
+therefore no longer in `OPERATOR_NEEDS`. A prose hold `_waiting` posted
+before this — read as the one naming the record's waiting rows at the head
+(`_hold_times`) — lifts itself `WAITING_RECHECK_HOURS` after its post, under
+the pipeline's own `🔬 proof-observed`, written as `_lift` writes every lift.
+A criterion naming `proof_record.CEO_PRESS` keeps the prose hold, which only
+his answer discharges.
+
+When the rows a lift read were not all stamped in the record at the head, the
+run it starts is a **re-check** — `re-check of the waiting rows at <sha7>`,
+counted `re-check` — which spends neither `RERUN_BUDGET` nor `TIMED_BUDGET`.
+There is one per record head: a head that had its re-check takes the timed
+path once its rows carry stamps, or is held on its rows again. A re-check
+amends the record, so its head moves, and re-checks have their own budget
+across every head: `RECHECK_BUDGET` (3) per record pull request, then one
+hold for the operator (`RECHECK_EXHAUSTED_*`, in `OPERATOR_NEEDS`) and no
+further re-check. That hold is how a press nobody made, or an event that
+never came, reaches the operator's alarm now that the waiting hold itself
+lifts on a clock. The lift and
+the run it starts are decided before the budget's refusal, and the budget's
+own hold is no part of the lift once the record is read, so a spent re-run
+budget never strands a waiting row. Timed re-run 2 of 2 reads
+`last timed re-run after not-before <PT> at <sha7>` (`LAST_TIMED_REASON`):
+the proof brief tells that run a row whose event still has not come is
+`misdescribed`, never waiting again. `TIMED_EXHAUSTED_*` stays, the alarm for
+a run that broke that rule.
+
 A `Green Light` PROOF card is read the same way when its live hold is the
 sweep's review-cap park — `needs-human` with a `🔒 hold: reason=review-cap-spent`
 stamp, read off the lane read's window, the whole thread when the window is
@@ -391,7 +430,7 @@ import os
 import re
 import sys
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Callable
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -462,7 +501,9 @@ NO_STUB = ("proof-dispatch: no proof-run stub in this repository — nothing "
 FIRST_RUN_LANE = "Hand-work"
 RETURN_LANE = "Green Light"
 RERUN_LANE = "In Review"
-EPIC_ACTIVE = "In Progress"
+#: Condition 2's lanes: an approved epic, or one closed on the pass after its
+#: last build card was Done, its proof the follow-on work (DRE-7948).
+EPIC_ACTIVE = ("In Progress", "Done")
 
 #: The first-run budget, and the run states that leave a card free for it.
 FIRST_RUN_BUDGET = 2
@@ -488,11 +529,28 @@ REARM_NOTE_REASON = "re-run after the 🔬 proof-observed of {at}"
 #: opens `re-run`, so it never spends `RERUN_BUDGET`.
 TIMED_REASON = "timed re-run after not-before {at} at {sha7}"
 TIMED_COUNT = "timed re-run {n} of 2"
+#: Timed re-run 2 of 2 says it is the last (DRE-7951): the proof brief tells
+#: that run a row whose event still has not come is `misdescribed`, never
+#: waiting again, so the record closes with a fix card.
+LAST_TIMED_REASON = "last timed re-run after not-before {at} at {sha7}"
+#: The re-run a time lift starts when the waiting rows were not all stamped
+#: in the record at the head (DRE-7951). Its count opens neither `re-run` nor
+#: `timed re-run`, so it spends neither budget; there is one per record head.
+RECHECK_REASON = "re-check of the waiting rows at {sha7}"
+RECHECK_COUNT = "re-check"
+#: How long after the pass that posts it a waiting hold over a row nobody
+#: stamped — a prose event, or the operator's press — lifts itself, and how
+#: long after its post a prose waiting hold already standing does (DRE-7951).
+WAITING_RECHECK_HOURS = 12
 
 #: The re-run budget: per record pull request, apart from the first run's.
 RERUN_BUDGET = 2
 #: The timed re-runs' own budget, per record pull request (DRE-7316).
 TIMED_BUDGET = 2
+#: The re-checks' own budget, per record pull request across every head
+#: (DRE-7951): a re-check amends the record, so its head moves, and one per
+#: head alone would re-check a row whose event is days away twice a day.
+RECHECK_BUDGET = 3
 #: How a spent budget's refusal ends: no re-arm event, no run (DRE-7740).
 NEVER_ANOTHER = "never another without a shipped fix or a new 🔬 proof-observed"
 #: The most fix cards one spent budget reads; with more, the line names them,
@@ -568,6 +626,11 @@ OPEN_HEADS_LIMIT = 100
 TIMED_EXHAUSTED_OBSERVED = "the record still waited after two timed re-runs"
 TIMED_EXHAUSTED_NEEDS = ("an operator reading the record's waiting rows and the "
                          "two timed re-run receipts")
+#: The hold after three re-checks whose rows still waited (DRE-7951) — how a
+#: press nobody made, or an event that never came, reaches the operator.
+RECHECK_EXHAUSTED_OBSERVED = "the record still waited after three re-checks"
+RECHECK_EXHAUSTED_NEEDS = ("an operator reading the record's waiting rows and the "
+                           "three re-check receipts")
 
 #: What the sweep's promotion posts as a card lands in `Hand-work` — the one
 #: time on the lane read that says when the card entered the lane. The receipt
@@ -1056,23 +1119,25 @@ def _pipeline_note(body: str) -> bool:
 OPERATOR_PRESS = "the operator's press"
 
 #: Every `needs` wording this dispatcher defines for a hold, by who it waits
-#: on (DRE-7739). The operator's: the press a waiting row names, and the seven
-#: holds that stop a proof for an operator's reading — the first run's two
+#: on (DRE-7739). The operator's: the eight holds that stop a proof for an
+#: operator's reading — the first run's two
 #: dispatches spent, under either trigger the two re-runs spent or a re-run
 #: that finished and answered nothing, the two timed re-runs spent
-#: (DRE-7316), and rows that read a closed window or a finished run, awaiting
-#: the operator's decision (DRE-7740). An event's: the time-only
+#: (DRE-7316), the three re-checks spent (DRE-7951), and rows that read a
+#: closed window or a finished run, awaiting the operator's decision
+#: (DRE-7740). An event's: the time-only
 #: clause this phase lifts itself (DRE-7228). A waiting row's own event — a
-#: date, a run to come — is the record's wording, not one defined here, and
-#: is an event's unless it opens `OPERATOR_PRESS`. The sweep's held-for-
+#: date, a run to come, the operator's press — is no longer a hold's wording
+#: at all: every waiting hold is time-only and lifts itself (DRE-7951), so
+#: `OPERATOR_PRESS` is in neither tuple. The sweep's held-for-
 #: operator read (`reconcile._held_for_operator`) reads `OPERATOR_NEEDS`
 #: itself, never a copy: before this, seven of eight budget-spent holds were
 #: filed as event waits and never alarmed. A `*_NEEDS` wording in neither
 #: tuple fails `tests/test_hand_work_age.py`, which names it.
-OPERATOR_NEEDS = (OPERATOR_PRESS, EXHAUSTED_NEEDS,
+OPERATOR_NEEDS = (EXHAUSTED_NEEDS,
                   RERUN_EXHAUSTED_NEEDS, RERUN_UNANSWERED_NEEDS,
                   GATE_EXHAUSTED_NEEDS, GATE_UNANSWERED_NEEDS,
-                  TIMED_EXHAUSTED_NEEDS, HISTORY_NEEDS)
+                  TIMED_EXHAUSTED_NEEDS, RECHECK_EXHAUSTED_NEEDS, HISTORY_NEEDS)
 EVENT_NEEDS = (linear_ops.NOT_BEFORE,)
 
 
@@ -1083,6 +1148,28 @@ def _waiting_criterion(criterion: str, event: str) -> str:
     if event.startswith(OPERATOR_PRESS):
         return criterion.replace(CEO_PRESS, proof_cause_park.PRESS_NAMED)
     return criterion
+
+
+def _waiting_rows(unmet: list) -> list:
+    """`(criterion, event, stamp)` for each unmet row waiting on an event, in
+    the record's order; `stamp` is the row's `[not-before=<T>]` or None."""
+    return [(criterion, event, proof_record.row_not_before(result))
+            for criterion, result in unmet
+            if (event := proof_record.row_waiting(result))]
+
+
+def _waiting_observed(waiting: list) -> str:
+    """The observed half of the waiting rows' hold: their criteria."""
+    return "; ".join(proof_record._cut(_waiting_criterion(c, event), 70)
+                     for c, event, _ in waiting)
+
+
+def _not_before(when: datetime) -> str:
+    """`not-before=<T>`, keeping `when`'s own offset, and its seconds only
+    when it has any."""
+    exact = when.second or when.microsecond
+    return (f"{linear_ops.NOT_BEFORE}"
+            f"{when.isoformat(timespec='auto' if exact else 'minutes')}")
 
 
 def park_caused(one: "_Pass", ident: str, text: str, voices: list, lane: str) -> str:
@@ -1126,9 +1213,10 @@ class _Pass:
         epic_state = (parent.get("state") or {}).get("name")
         if not parent:
             raise _condition(2, "epic", "the card has no parent epic")
-        if epic_state != EPIC_ACTIVE:
+        if epic_state not in EPIC_ACTIVE:
             raise _condition(2, "epic", f"its epic {parent.get('identifier')} "
-                                        f"is {epic_state}, not {EPIC_ACTIVE}")
+                                        f"is {epic_state}, not "
+                                        f"{' or '.join(EPIC_ACTIVE)}")
         if prose_blockers.relations_unknown(issue):
             raise _condition(3, "blockers", "its blocking relations could not "
                                             "be read to the end")
@@ -1230,7 +1318,8 @@ class _Pass:
         return reason, FIRST_COUNT.format(n=got.dispatches + 1)
 
     def _lift_or_hold(self, ident: str, holds: list, voices: list,
-                      refuse: Callable = _held_first) -> datetime:
+                      refuse: Callable = _held_first,
+                      times: dict | None = None) -> datetime:
         """Condition 4 over the open holds (DRE-7228): when every one is
         time-only (`proof_record.time_only`) and every time is at or before
         the pass's `now`, one `🔬 proof-observed` lifts them, the card goes
@@ -1238,11 +1327,13 @@ class _Pass:
         is raised, naming the hold that still holds. One note lifts every
         open hold but the CEO's press, so a time hold beside any other is
         never lifted by time. The re-run branch passes its own `refuse`
-        (DRE-7316); the rule is this one."""
-        timed = [(h, proof_record.time_only(h)) for h in holds]
+        (DRE-7316), and `times` for a prose waiting hold it reads as lifting
+        itself (DRE-7951); the rule is this one."""
+        times = times or {}
+        timed = [(h, times.get(h) or proof_record.time_only(h)) for h in holds]
         standing = [(h, t) for h, t in timed if t is None or t > self.now]
         if not standing:
-            self._lift(ident, holds, refuse)
+            self._lift(ident, holds, refuse, times)
             return max(t for _, t in timed)
         untimed = [h for h, t in standing if t is None]
         if untimed:
@@ -1252,12 +1343,16 @@ class _Pass:
         note = f"; {UNCHECKED_NOTE}" if _unchecked_after_hold(voices) else ""
         raise refuse(f"held by {line}{_lifts_at(until)}{note}")
 
-    def _lift(self, ident: str, holds: list, refuse: Callable = _held_first) -> None:
+    def _lift(self, ident: str, holds: list, refuse: Callable = _held_first,
+              times: dict | None = None) -> None:
         """Post the one `🔬 proof-observed` that lifts time-only holds whose
-        times have passed, under the pipeline's key. Not live, `would:` and
-        nothing written; a note not posted is a failure of the pass, and the
-        card is held on it."""
-        clauses = list(dict.fromkeys(proof_record.time_only_clause(h) for h in holds))
+        times have passed, under the pipeline's key — a prose waiting hold
+        read as lifting itself (`times`, DRE-7951) quoted by its time, as a
+        stamped one is. Not live, `would:` and nothing written; a note not
+        posted is a failure of the pass, and the card is held on it."""
+        times = times or {}
+        clauses = list(dict.fromkeys(proof_record.time_only_clause(h)
+                                     or _not_before(times[h]) for h in holds))
         text = (f"{', '.join(clauses)} {'has' if len(clauses) == 1 else 'have'} "
                 f"passed (read at {_pt(self.now)}) — {LIFTED_BY}; "
                 + (LIFTED_ONE if len(clauses) == 1 else LIFTED_MANY))
@@ -1509,30 +1604,37 @@ class _Pass:
         comments, viewer, voices = self._thread(card)
         self._parked_on(card, comments, number, head)
         holds = _open_holds(voices)
-        lifted = None
-        if holds and all(proof_record.time_only(h) is not None for h in holds):
-            # The first run's rule over the FULL open set (DRE-7316), before
-            # any cause hold is dropped: one note would lift that hold too.
-            lifted = self._lift_or_hold(ident, holds, voices, _held_rerun)
-            holds = []
-        every = holds
         lane = (card.get("state") or {}).get("name")
         text = None
-        if holds and lane == RERUN_LANE:
+        if (holds and lane == RERUN_LANE
+                and any(proof_record.time_only(h) is None for h in holds)):
             # A cause hold is a receipt for the operator, never a hold on this
             # reading: under either trigger, once the record at the head is
             # read, it decides (DRE-6837). Unread under the critic's trigger,
-            # every hold stands (DRE-6814).
+            # every hold stands (DRE-6814). The record also says which prose
+            # hold is its waiting rows' own, which lifts itself (DRE-7951).
             text = self._record_at_head(ident, pr, number, head, trigger)
-            if text is not None:
-                # ...and so is the re-run budget's own hold (DRE-7740): the
-                # budget check below decides, and a re-arm event lets it run.
-                holds = _past_budget_hold(_past_cause_hold(holds))
+        times = self._hold_times(holds, voices, text)
+        # The first run's rule over the open set (DRE-7316), before any cause
+        # hold is dropped: one note would lift that hold too. The re-run
+        # budget's own hold is no part of it once the record is read — the
+        # note discharges it at no cost, and the budget check below decides —
+        # so a spent budget never strands a waiting row (DRE-7951).
+        deciding = holds if text is None else _past_budget_hold(holds)
+        lifted = None
+        if deciding and all(h in times for h in deciding):
+            lifted = self._lift_or_hold(ident, deciding, voices, _held_rerun, times)
+            holds = []
+        every = holds
+        if holds and text is not None:
+            # ...and the re-run budget's own hold is read past too (DRE-7740):
+            # the budget check below decides, and a re-arm event lets it run.
+            holds = _past_budget_hold(_past_cause_hold(holds))
         if holds:
             # Name a hold no time lifts: the one that holds the time holds
             # too — a cause hold, when only time holds are left (DRE-7316).
-            untimed = [h for h in holds if proof_record.time_only(h) is None] or [
-                h for h in every if proof_record.time_only(h) is None]
+            untimed = [h for h in holds if h not in times] or [
+                h for h in every if h not in times]
             # A hold on his press outside Green Light is the operator's: the
             # return branch never reads it there (DRE-7741), and the line names it.
             pressed = [h for h in holds if CEO_PRESS in h] if lane != RETURN_LANE else []
@@ -1575,18 +1677,12 @@ class _Pass:
 
         # A re-run the pipeline's own time lift starts — on this pass, or on
         # an earlier one whose dispatch was never confirmed — spends its own
-        # budget and never `RERUN_BUDGET` (DRE-7316).
+        # budget and never `RERUN_BUDGET` (DRE-7316), decided before any
+        # refusal of a spent one (DRE-7951).
         lifted = lifted or _lifted_at(voices)
         if lifted is not None:
-            timed = sum(1 for _, r in since if r.count.startswith("timed re-run"))
-            if timed >= TIMED_BUDGET:
-                self._hold_once(ident, voices, TIMED_EXHAUSTED_OBSERVED,
-                                TIMED_EXHAUSTED_NEEDS)
-                raise _Refused(f"re-run: timed budget — {timed} timed re-runs on "
-                               f"#{number} since it opened and the record still "
-                               "waits; held for an operator, no further timed re-run", "held")
-            return (TIMED_REASON.format(at=_pt(lifted), sha7=head[:7]),
-                    TIMED_COUNT.format(n=timed + 1))
+            return self._after_lift(ident, voices, read, receipts, since,
+                                    number, head, lifted)
         # A spent budget looks for a re-arm event before either refusal that
         # ends it (DRE-7740): with one, neither refuses and one run goes.
         rearm, unarmed = (self._rearm(ident, read, receipts, voices)
@@ -1620,6 +1716,62 @@ class _Pass:
                            f"{unarmed}", "held")
         return (trigger.reason.format(sha7=head[:7]),
                 RERUN_COUNT.format(n=spent + 1))
+
+    def _hold_times(self, holds: list, voices: list, text: str | None) -> dict:
+        """The time each open hold lifts itself at, by its line: a time-only
+        hold's own (DRE-7316), and — with the record read at the head — a
+        prose hold `_waiting` posted for the record's waiting rows before
+        every waiting hold was time-only, `WAITING_RECHECK_HOURS` after it
+        was posted (DRE-7951). A hold naming the CEO's press is never one: a
+        note does not discharge it. Any other hold has no time."""
+        times = {h: t for h in holds if (t := proof_record.time_only(h)) is not None}
+        if text is None:
+            return times
+        waiting = _waiting_rows(proof_record.reading(text).unmet)
+        if not waiting:
+            return times
+        opening = linear_ops.proof_waiting_line(_waiting_observed(waiting), "")
+        for line, at in proof_record.open_holds_at(voices):
+            posted = _when(at)
+            if (line not in times and line.startswith(opening) and posted is not None
+                    and posted.tzinfo is not None and CEO_PRESS not in line):
+                times[line] = posted + timedelta(hours=WAITING_RECHECK_HOURS)
+        return times
+
+    def _after_lift(self, ident: str, voices: list, read, receipts: list,
+                    since: list, number, head: str, lifted: datetime) -> tuple:
+        """The run a time lift starts. Waiting rows the record at the head did
+        not all stamp get a re-check (DRE-7951), once per head and spending
+        neither budget, `RECHECK_BUDGET` per record pull request and then one
+        hold for the operator; a head that had its re-check is held on its
+        rows again. Stamped rows, or a record not read, get a timed re-run on
+        their own budget (DRE-7316), the second of which says it is the last."""
+        waiting = _waiting_rows(read.unmet) if read is not None else []
+        if any(stamp is None for _, _, stamp in waiting):
+            rechecks = sum(1 for _, r in since if r.count == RECHECK_COUNT)
+            if rechecks >= RECHECK_BUDGET:
+                self._hold_once(ident, voices, RECHECK_EXHAUSTED_OBSERVED,
+                                RECHECK_EXHAUSTED_NEEDS)
+                raise _Refused(f"re-run: re-check budget — {rechecks} re-checks on "
+                               f"#{number} since it opened and the record still "
+                               "waits; held for an operator, no further re-check",
+                               "held")
+            reason = RECHECK_REASON.format(sha7=head[:7])
+            if not any(r.count == RECHECK_COUNT and r.reason == reason
+                       for _, r in receipts):
+                return reason, RECHECK_COUNT
+            self._hold_waiting(ident, waiting, head,
+                               f"; {head[:7]} had its one re-check")
+        timed = sum(1 for _, r in since if r.count.startswith("timed re-run"))
+        if timed >= TIMED_BUDGET:
+            self._hold_once(ident, voices, TIMED_EXHAUSTED_OBSERVED,
+                            TIMED_EXHAUSTED_NEEDS)
+            raise _Refused(f"re-run: timed budget — {timed} timed re-runs on "
+                           f"#{number} since it opened and the record still "
+                           "waits; held for an operator, no further timed re-run", "held")
+        template = LAST_TIMED_REASON if timed + 1 >= TIMED_BUDGET else TIMED_REASON
+        return (template.format(at=_pt(lifted), sha7=head[:7]),
+                TIMED_COUNT.format(n=timed + 1))
 
     # -- the re-arm, once the budget is spent (DRE-7740) --------------------- #
 
@@ -1844,35 +1996,38 @@ class _Pass:
         the record merge while it stands — whatever else the record holds.
         Posted once per decline or verdict: a hold posted after it and since
         discharged by the operator's `🔬 proof-observed` leaves the record to
-        a re-run that re-observes every row."""
-        waiting = [(criterion, event, proof_record.row_not_before(result))
-                   for criterion, result in unmet
-                   if (event := proof_record.row_waiting(result))]
+        a re-run that re-observes every row. The hold is read by the rows it
+        names, whatever time it waits for (DRE-7951): a pass that posts none
+        computes none."""
+        waiting = _waiting_rows(unmet)
         if not waiting:
             return
-        observed = "; ".join(proof_record._cut(_waiting_criterion(c, event), 70)
-                             for c, event, _ in waiting)
-        needs = "; ".join(event for _, event, _ in waiting)
-        until = None
-        if all(when is not None for _, _, when in waiting):
-            # Every row stamped (DRE-7316): the hold waits for the latest time
-            # and nothing else, so a pass after it lifts the hold itself. The
-            # time keeps the row's own offset, and its seconds when it has any.
-            latest = max(when for _, _, when in waiting)
-            exact = latest.second or latest.microsecond
-            stamped = (f"{linear_ops.NOT_BEFORE}"
-                       f"{latest.isoformat(timespec='auto' if exact else 'minutes')}")
-            if proof_record.time_only(linear_ops.proof_waiting_line(
-                    observed, stamped)) is not None:
-                needs, until = stamped, latest
-        line = linear_ops.proof_waiting_line(observed, needs)
+        opening = linear_ops.proof_waiting_line(_waiting_observed(waiting), "")
         posted = [_when(v.created_at) for v in voices
-                  if _first_line(v.body).startswith(line)]
+                  if _first_line(v.body).startswith(opening)]
         if any(when is None or when > trigger.at for when in posted):
             return
+        self._hold_waiting(ident, waiting, head)
+
+    def _hold_waiting(self, ident: str, waiting: list, head: str,
+                      why: str = "") -> None:
+        """Post the waiting rows' hold and refuse on it. Every hold waits for
+        a time and nothing else, so a pass after it lifts the hold itself: a
+        stamped row's own time (DRE-7316), and a row nobody stamped — a prose
+        event, or the operator's press — read as stamped
+        `WAITING_RECHECK_HOURS` after this pass (DRE-7951). The hold waits for
+        the latest. A criterion naming the CEO's press keeps the prose hold,
+        which only his answer discharges."""
+        observed = _waiting_observed(waiting)
+        recheck = (self.now + timedelta(hours=WAITING_RECHECK_HOURS)).replace(
+            second=0, microsecond=0)
+        latest = max(stamp or recheck for _, _, stamp in waiting)
+        needs, until = _not_before(latest), latest
+        if proof_record.time_only(linear_ops.proof_waiting_line(observed, needs)) is None:
+            needs, until = "; ".join(event for _, event, _ in waiting), None
         self._hold(ident, observed, needs)
         raise _Refused(f"re-run: {len(waiting)} row(s) of the record at "
-                       f"{head[:7]} wait on an event — held for "
+                       f"{head[:7]} wait on an event{why} — held for "
                        f"{needs}{_lifts_at(until)}", "held")
 
     # -- the dispatch --------------------------------------------------------- #

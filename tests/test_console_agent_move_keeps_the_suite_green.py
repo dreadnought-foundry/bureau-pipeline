@@ -45,7 +45,8 @@ the inner run are `tests/console_change_walk.py`'s, shared by every walk.
 
 The cases run side by side, as many at once as the machine has cores, in the
 walks' own job (`scripts/unit_test_parts.py run-walks`), never in a numbered
-part.
+part. Each job runs one shard of the cases, `SHARD`, which the helper picks
+(DRE-7907); with no shard named, every case.
 
 Run: cd bureau-pipeline && python3 -m pytest tests/test_console_agent_move_keeps_the_suite_green.py -q
 """
@@ -141,6 +142,10 @@ def cases(text: str) -> dict:
 
 CASES = cases(MODELS.read_text())
 
+#: The cases this job's shard runs (DRE-7907) — every case when no shard is
+#: named. The coverage tests read the whole `CASES`.
+SHARD = walk.shard(walk.case_names(CASES))
+
 
 def reset(tree: Path) -> None:
     """Put the copy where the file stood before any save, and regenerate its
@@ -169,7 +174,7 @@ def run_case(name: str, base: Path) -> dict:
 
 @pytest.fixture(scope="module")
 def results(tmp_path_factory) -> dict:
-    return walk.run_all(CASES, run_case, tmp_path_factory.mktemp("dre6889"))
+    return walk.run_all(SHARD, run_case, tmp_path_factory.mktemp("dre6889"))
 
 
 def test_the_suite_covers_the_named_files_and_every_model_session_and_console_test():
@@ -242,7 +247,7 @@ def test_the_added_agent_is_a_name_the_file_does_not_hold():
     assert added not in raw["session_agents"] and added not in raw["about"]
 
 
-@pytest.mark.parametrize("name", list(CASES))
+@pytest.mark.parametrize("name", SHARD)
 def test_the_saved_change_is_in_the_tree(results, name):
     """A save that never landed would leave the suite green for the wrong
     reason."""
@@ -261,7 +266,7 @@ def test_the_saved_change_is_in_the_tree(results, name):
     assert (models.get("projects") or {}) == projects
 
 
-@pytest.mark.parametrize("name", list(CASES))
+@pytest.mark.parametrize("name", SHARD)
 def test_every_test_passes_after_the_save(results, name):
     got = results[name]
     assert got["failed"] == [], "\n".join(got["failed"]) + "\n\n" + got["tail"]
