@@ -186,6 +186,7 @@ import groom_schedule_gate  # noqa: E402 — the standing card's variable name
 import groomer  # noqa: E402
 import head_desync  # noqa: E402 — DRE-6217: a pull request GitHub left behind its branch
 import hold  # noqa: E402 — DRE-6173: ONE writer of the hold's label and its stamp; DRE-6182: its one reader
+import hold_deadline  # noqa: E402 — DRE-7965: the due dates, and the one writer of the late-hold alert
 # DRE-2726: ONE source for the lanes, their order and their stall windows —
 # config/lane-contract.json, the file the harness asserts the live board against
 # and docs/lane-contract.md is rendered from.
@@ -1904,6 +1905,11 @@ _waiting_releases: dict[str, dict[str, str]] = {}
 _backlog_epics: set[str] = set()
 _returned_epics: set[str] = set()
 
+# The whole Queued read the promotion phase made this pass, kept for the
+# proof-waiting late list (DRE-7965) — None when the lane was not read, which
+# is not the same fact as a lane with nothing in it. Reset with the board.
+_queued_cards: list[dict] | None = None
+
 # The loops across the epic gate and the card gate the promotion pass found
 # (DRE-3539) — what `cycles_line()` counts for the full sweep's summary.
 # Replaced by each pass, reset with the sweep's board.
@@ -1974,11 +1980,12 @@ def reset_sweep_cards() -> None:
     records (DRE-3642), blocker epics (DRE-6407), blocker cards and what the
     strict gate released (DRE-7831) and waiting epics (DRE-6653), the loops
     the promotion pass found (DRE-3539), its workflows listing
-    (DRE-4378) and its in-flight build runs (DRE-4830). Called once at the top
-    of main()."""
-    global _swept_cards, _pr_listing, _workflows_listing
+    (DRE-4378), its in-flight build runs (DRE-4830) and its Queued read
+    (DRE-7965). Called once at the top of main()."""
+    global _swept_cards, _pr_listing, _workflows_listing, _queued_cards
     global _build_runs, _build_runs_unreadable, _build_runs_listed, _linear_lane_cards
     _swept_cards = None
+    _queued_cards = None
     _linear_lane_cards = None
     _fleet_lane_cards.clear()
     _fleet_hold.clear()
@@ -2593,7 +2600,7 @@ HAND_WORK_AGE_CONFIG = os.path.join(
     "config", "hand-work-age.json")
 
 
-def _hand_work_age(card: dict, reason: str) -> str:
+def _hand_work_age(card: dict, reason: str, *, judged: list | None = None) -> str:
     """The tail `flag_stranded` appends to a Hand-work card's line, after
     posting the one `hand-work-overdue` alarm the card is owed (DRE-6409).
 
@@ -2620,11 +2627,24 @@ def _hand_work_age(card: dict, reason: str) -> str:
     alarms past the limit. One comment per entry, for the operator: no label,
     no lane move, nothing in Green Light, and only a failed write counts
     against the sweep.
+
+    `judged`, when given, gains one `(ident, entered, alarmed)` for a card
+    this judges (DRE-7965): `entered` the entry's ISO time as read here, and
+    `alarmed` the `createdAt` of the alarm newer than that entry — the one
+    this call posts, at its time — or None. A card it could not judge, by an
+    unreadable entry, an alarm it could not post, or a `PROOF:` card past the
+    limit whose proof run could not be read, gains `(ident, None, None)`. The
+    tail and the comments are the same either way.
     """
     with open(HAND_WORK_AGE_CONFIG, encoding="utf-8") as fh:
         rule = json.load(fh)
     limit = int(rule["hours"])
     ident, lane = card["identifier"], card["state"]["name"]
+
+    def note(entered_at: str | None, alarmed_at: str | None) -> None:
+        if judged is not None:
+            judged.append((ident, entered_at, alarmed_at))
+
     nodes = linear_ops.window_nodes(card.get("comments"))
     at = lambda iso: datetime.fromisoformat(iso.replace("Z", "+00:00"))  # noqa: E731
     marks = {(lbl.get("name") or "").lower()
@@ -2648,6 +2668,7 @@ def _hand_work_age(card: dict, reason: str) -> str:
                 if m.get("to") == lane and m.get("at")]
         entered = max(into, key=at) if into else None
     if not entered:
+        note(None, None)
         return "; entry time could not be read — not judged"
     waited = age_minutes(entered)
     hours = int(waited // 60)
@@ -2658,12 +2679,14 @@ def _hand_work_age(card: dict, reason: str) -> str:
             for name in routing_verdict.verdicts_on(card_comment_bodies(card)))):
         return ""  # no person's card this rule knows — today's line, unjudged
     if waited < limit * 60:
+        note(entered, None)
         due = dead_run.pacific(at(entered) + timedelta(hours=limit))
         return f"; in Hand-work {hours}h of {limit}, alarms at {due}"
     alarmed = [n["createdAt"] for n in nodes
                if (n.get("body") or "").lstrip().startswith("🚨 hand-work-overdue:")
                and n.get("createdAt") and at(n["createdAt"]) > at(entered)]
     if alarmed:
+        note(entered, alarmed[-1])
         return f"; in Hand-work {hours}h, past {limit} — alarmed {_pt(alarmed[-1])}"
     if proof:
         import proof_dispatch  # noqa: PLC0415 — proof_dispatch imports this module
@@ -2678,6 +2701,7 @@ def _hand_work_age(card: dict, reason: str) -> str:
             got = SimpleNamespace(state="unknown", lines=[])
         if got.state not in proof_dispatch.FREE:
             why = "could not be read" if got.state == "unknown" else "is in flight"
+            note(None if got.state == "unknown" else entered, None)
             return f"; in Hand-work {hours}h, past {limit} — no alarm: its proof run {why}"
         kind = f"a PROOF: card whose proof run is not in flight — {'; '.join(got.lines)}."
     else:
@@ -2691,8 +2715,11 @@ def _hand_work_age(card: dict, reason: str) -> str:
     except Exception as e:  # noqa: BLE001 — recorded like every other failed write
         _write_failures.append(f"{ident} hand-work-overdue alarm: {e}")
         print(f"ERROR: hand-work-overdue alarm on {ident}: {e}", file=sys.stderr)
+        note(None, None)
         return f"; in Hand-work {hours}h, past {limit} — the alarm could not be posted"
-    return f"; in Hand-work {hours}h, past {limit} — alarmed {dead_run.pacific(datetime.now(UTC))}"
+    posted = datetime.now(UTC)
+    note(entered, posted.isoformat())
+    return f"; in Hand-work {hours}h, past {limit} — alarmed {dead_run.pacific(posted)}"
 
 
 #: The kind `_held_for_operator` names a hold on the CEO's press by (DRE-7741).
@@ -2808,7 +2835,88 @@ def _held_for_operator(card: dict, *, press_only: bool = False) -> tuple[dict | 
     return None, "", f"its hold waits on an event ({newest}), not the operator"
 
 
-def alarm_held_proofs(cards: list[dict]) -> None:
+#: The hold kind `_proof_wait_clock` reads, and its late list's tag (DRE-7965)
+#: — the key `linear_ops` owns, aliased rather than restated.
+PROOF_WAITING_TAG = linear_ops.PROOF_WAITING_TAG
+#: The Hand-work clock's late list's tag (DRE-7965), as `hold_deadline` owns it.
+HAND_WORK_OVERDUE_TAG = hold_deadline.HAND_WORK_TAG
+#: The lanes the board read carries beyond `mine`'s (SWEEP_STATES) — Hand-work
+#: — whose `PROOF:` cards `main` also hands `alarm_held_proofs` for its late
+#: list, from the same snapshot, beside the Queued cards promotion read
+#: (DRE-7965). Its 24-hour alarm keeps `mine`'s.
+LATE_PROOF_LANES = tuple(lane for lane in WATCHDOG_LANES if lane not in SWEEP_STATES)
+#: Who the window's comments are read as when no read named the key's own
+#: user: `open_holds_at` takes the pipeline's note and a person's alike, so
+#: only a comment with no Linear user — an integration's — discharges nothing.
+_ANY_KEY = "a key that is no comment's author"
+
+
+def _proof_wait_clock(card: dict, *, now: datetime | None = None
+                      ) -> tuple[datetime | None, str, bool]:
+    """`(clock, waits_on, read)` for a `PROOF:` card, on the card alone: the
+    one reading `alarm_held_proofs` and `flag_stranded` share (DRE-7965).
+
+    The holds are the card's open `🔬 proof-waiting` holds with their times,
+    `proof_record.open_holds_at` over `spoken_thread.voices`. A hold qualifies
+    unless it names `proof_record.CEO_PRESS` (his queue, never escalated
+    here) or is time-only (`proof_record.time_only`) with its time still
+    ahead of `now`; an operator's hold and an event wait both do. Its clock
+    is its `createdAt` — for a time-only hold whose time has passed, the
+    LATER of that and its time, because the dispatcher lifts such a hold
+    itself on its next pass (`proof_dispatch._lift_or_hold`): it is late only
+    when it still stands `due_hours` after its time. The card's clock is the
+    EARLIEST qualifying clock, so a re-posted hold never resets it, and
+    `waits_on` is that hold's first line, `proof_record._cut` to 120. With no
+    qualifying hold `clock` is None.
+
+    A window `linear_ops.window_is_partial` calls whole is read at no
+    request. A partial one is never judged on its own: the whole thread is
+    read once (the read `proof_dispatch.LinearReads.thread` makes, served
+    from the pass's cache when a reader already paid for it), and a read that
+    raises answers `read=False` — the card is unjudged, and the pass that
+    asked is not complete. A hold whose time cannot be read is unjudged too:
+    the others still give the clock, and `read` is False. Nothing reads the
+    card's lane or its epic's state.
+    """
+    import proof_record  # noqa: PLC0415 — the hold grammar, spelled once
+
+    now = now or datetime.now(UTC)
+    ident = card["identifier"]
+    nodes, viewer = linear_ops.window_nodes(card.get("comments")), None
+    if linear_ops.window_is_partial(card.get("comments")):
+        try:
+            nodes, viewer = linear_ops._thread_and_viewer(
+                ident, "body", "user", "createdAt", whole=True)
+        except Exception as e:  # noqa: BLE001 — an unread thread is not an empty one
+            print(f"held-proof: {ident}'s whole thread could not be read ({e}) — "
+                  f"its {PROOF_WAITING_TAG} holds are not judged", file=sys.stderr)
+            return None, "", False
+    try:
+        voices = spoken_thread.voices(nodes, viewer or _ANY_KEY, card=ident)
+    except Exception as e:  # noqa: BLE001 — an unread thread is not an empty one
+        print(f"held-proof: {ident}'s thread could not be read for its holds ({e}) — "
+              f"its {PROOF_WAITING_TAG} holds are not judged", file=sys.stderr)
+        return None, "", False
+    read, clocks = True, []
+    for line, created in proof_record.open_holds_at(voices):
+        if proof_record.CEO_PRESS in line:
+            continue
+        posted = _moment(created)
+        if posted is None or posted.tzinfo is None:
+            read = False
+            continue
+        until = proof_record.time_only(line)
+        if until is not None and until > now:
+            continue
+        clocks.append((max(posted, until) if until is not None else posted, line))
+    if not clocks:
+        return None, "", read
+    clock, line = min(clocks, key=lambda held: held[0])
+    return clock, proof_record._cut(line, 120), read
+
+
+def alarm_held_proofs(cards: list[dict], *, board_read: bool = True,
+                      queued_read: bool = True) -> None:
     """A `PROOF:` card held In Review for the operator gets the Hand-work bound
     and the Hand-work receipt (DRE-6852).
 
@@ -2842,6 +2950,23 @@ def alarm_held_proofs(cards: list[dict]) -> None:
 
     One `held-proof:` line per proof card with a hold, and `held-proof: nothing
     held` when no card is held for the operator.
+
+    The late list (DRE-7965). That alarm is the chase, once per hold; what
+    comes after it is `hold_deadline`'s `proof-waiting` due date. `main`
+    hands this `mine` plus this repo's `LATE_PROOF_LANES` cards (Hand-work)
+    off the same snapshot and its Queued cards off `promote_ready`'s read,
+    and the alarm above reads only a card in `SWEEP_STATES`, the lanes
+    `mine` carries, so it reaches what it always did. Every `PROOF:` card of this repo in `cards`, in any lane but Green
+    Light, is judged on `_proof_wait_clock` — the earliest clock among its qualifying
+    holds, operator's and event waits alike — and is late when
+    `hold_deadline.phase` says so on that clock. A standing card and a
+    hand-built card are never listed. After the loop `settle` is called once
+    with the late ones: `complete` is false when any card was unjudged —
+    `_proof_wait_clock` answered `read=False`, or judging the card raised
+    (recorded in `_write_failures`, and the loop goes on) — or when
+    `queued_read=False`: the pass's Queued read was skipped, so a late card
+    there went unjudged. `board_read=False` — the board read held or idle —
+    calls `settle` not at all.
     """
     import proof_dispatch  # noqa: PLC0415 — the return branch's lane
     import proof_record  # noqa: PLC0415 — the one cut a proof line is quoted by
@@ -2852,6 +2977,9 @@ def alarm_held_proofs(cards: list[dict]) -> None:
     standing = {s["card"] for s in rule["standing"]}
     at = lambda iso: datetime.fromisoformat(iso.replace("Z", "+00:00"))  # noqa: E731
     any_held = False
+    now = datetime.now(UTC)
+    late: list[hold_deadline.LateHold] = []
+    complete = queued_read
     for card in cards:
         lane = (card.get("state") or {}).get("name")
         if (card_repo(card) != REPO_SLUG
@@ -2859,6 +2987,21 @@ def alarm_held_proofs(cards: list[dict]) -> None:
                 or not proof_and_demo.is_proof(card.get("title"))):
             continue
         ident = card["identifier"]
+        marks = {(lbl.get("name") or "").lower()
+                 for lbl in (card.get("labels") or {}).get("nodes", [])}
+        if ident not in standing and HAND_BUILT_LABEL.lower() not in marks:
+            try:
+                started, waits_on, read = _proof_wait_clock(card, now=now)
+                complete = complete and read
+                if (started is not None and hold_deadline.phase(
+                        PROOF_WAITING_TAG, started, now) == hold_deadline.LATE):
+                    late.append(hold_deadline.LateHold(ident, started, waits_on))
+            except Exception as e:  # noqa: BLE001 — one unjudged card, never the pass
+                complete = False
+                _write_failures.append(f"{ident} {PROOF_WAITING_TAG} reading: {e}")
+                print(f"ERROR: {PROOF_WAITING_TAG} reading of {ident}: {e}", file=sys.stderr)
+        if lane not in SWEEP_STATES:
+            continue  # read for the late list alone: the alarm keeps `mine`'s lanes
         clock, kind, note = _held_for_operator(card, press_only=lane != REVIEW_LANE)
         if clock is None:
             if note:
@@ -2867,8 +3010,6 @@ def alarm_held_proofs(cards: list[dict]) -> None:
         any_held = True
         held_at = clock["createdAt"]
         hours = int(age_minutes(held_at) // 60)
-        marks = {(lbl.get("name") or "").lower()
-                 for lbl in (card.get("labels") or {}).get("nodes", [])}
         exempt = ("a standing card" if ident in standing
                   else "the CEO's own hand-built card" if HAND_BUILT_LABEL.lower() in marks
                   else "")
@@ -2912,6 +3053,8 @@ def alarm_held_proofs(cards: list[dict]) -> None:
         print(f"{past} — alarmed {dead_run.pacific(datetime.now(UTC))} {said}")
     if not any_held:
         print("held-proof: nothing held")
+    if board_read:
+        hold_deadline.settle(PROOF_WAITING_TAG, REPO_SLUG, late, complete=complete, now=now)
 
 
 def flag_stranded() -> set[str]:
@@ -2986,10 +3129,30 @@ def flag_stranded() -> set[str]:
 
     Returns the identifiers flagged THIS sweep so the caller's nudge loop
     can skip them — their fetched labels predate the hold label.
+
+    The late list (DRE-7965). `_hand_work_age`'s alarm is the chase, once
+    per entry; what comes after it is `hold_deadline`'s `hand-work-overdue`
+    due date. A card of this repo in Hand-work that `_hand_work_age` judges,
+    that carries the alarm for its current entry (one newer than the entry,
+    or the one posted on this pass), is late once its ENTRY — the clock as
+    `_hand_work_age` reads it — is `due_hours` old. A `PROOF:` card that
+    `_proof_wait_clock` gives a clock is left out, late or not: it is judged
+    on the proof-waiting clock only, by `alarm_held_proofs`, so it is never
+    listed twice. After the loop `settle` is called once with the late ones:
+    `complete` is false when a card was not judged — an unreadable entry, an
+    alarm that could not be posted, a `PROOF:` card past the limit whose
+    proof run could not be read — or when `_proof_wait_clock` answered
+    `read=False` or raised for a `PROOF:` card it asked about. A card `held`
+    stands the sweep down for is skipped before it is judged, on purpose: it
+    is already in a person's queue, so it is neither listed nor unjudged. An
+    idle pass calls `settle` not at all, and a held board never reaches it
+    (`BoardHeld`).
     """
     flagged: set[str] = set()
     live: frozenset[str] | None = None
     live_fetched = False  # one canonical-snapshot read per sweep, and only if needed
+    judged: list[tuple[str, str | None, str | None]] = []
+    hand_work: dict[str, dict] = {}
     for card in _watchdog_cards():
         ident, state = card["identifier"], card["state"]["name"]
         if state == "Planning":
@@ -3003,8 +3166,10 @@ def flag_stranded() -> set[str]:
             # names why, never a label the card may not carry (DRE-6424).
             # In Hand-work the card's own repo's sweep keeps time on it
             # instead, and the line says how long it has waited (DRE-6409).
-            aged = (_hand_work_age(card, reason)
-                    if state == "Hand-work" and card_repo(card) == REPO_SLUG else "")
+            aged = ""
+            if state == "Hand-work" and card_repo(card) == REPO_SLUG:
+                hand_work[ident] = card
+                aged = _hand_work_age(card, reason, judged=judged)
             print(
                 f"watchdog: {ident} is {reason} — no "
                 "dispatched run is expected, so a missing run receipt and an "
@@ -3180,7 +3345,42 @@ def flag_stranded() -> set[str]:
                       file=sys.stderr)
         flagged.add(ident)
         print(f"watchdog: {ident} in {state} flagged ({'no-run' if routable else 'no-route'})")
+    if not _idle_pass:
+        _settle_hand_work(judged, hand_work)
     return flagged | flag_stalled_planning()
+
+
+def _settle_hand_work(judged: list[tuple[str, str | None, str | None]],
+                      cards: dict[str, dict]) -> None:
+    """`flag_stranded`'s one `hand-work-overdue` settle, off what
+    `_hand_work_age` judged (DRE-7965; the rule is in `flag_stranded`'s
+    docstring). `cards` maps each judged identifier to its card."""
+    now = datetime.now(UTC)
+    late: list[hold_deadline.LateHold] = []
+    complete = True
+    for ident, entered, alarmed in judged:
+        started = _moment(entered)
+        if started is None:
+            complete = False
+            continue
+        if alarmed is None or hold_deadline.phase(
+                HAND_WORK_OVERDUE_TAG, started, now) != hold_deadline.LATE:
+            continue
+        card = cards[ident]
+        if proof_and_demo.is_proof(card.get("title")):
+            try:
+                proof_clock, _, read = _proof_wait_clock(card, now=now)
+            except Exception as e:  # noqa: BLE001 — one unjudged card, never the pass
+                complete = False
+                _write_failures.append(f"{ident} {PROOF_WAITING_TAG} reading: {e}")
+                print(f"ERROR: {PROOF_WAITING_TAG} reading of {ident}: {e}", file=sys.stderr)
+                continue
+            complete = complete and read
+            if proof_clock is not None or not read:
+                continue  # the proof-waiting clock's, or not judged
+        late.append(hold_deadline.LateHold(
+            ident, started, f"a person, in Hand-work — alarmed {_pt(alarmed)}"))
+    hold_deadline.settle(HAND_WORK_OVERDUE_TAG, REPO_SLUG, late, complete=complete, now=now)
 
 
 def _another_repos_card(card: dict) -> bool:
@@ -8124,6 +8324,7 @@ def promote_ready(
     Never on a `--promote-only` pass: the activate route runs one right after
     asking the cap itself.
     """
+    global _queued_cards
     # The clock is the pure half (DRE-4207); imported here because this pass is
     # its only caller.
     import promotion_stall  # noqa: PLC0415 — the stall clock's one caller (DRE-4210)
@@ -8199,8 +8400,12 @@ def promote_ready(
     # fix filed today waited behind every older ready card — on 2026-10-09
     # DRE-6560 was the 31st of 31 at a full cap, and the fix the cap was
     # waiting on. A card read with no `priority` sorts among the rest.
+    if candidates is None:
+        # The whole lane, kept for the proof-waiting late list (DRE-7965),
+        # which reads it after this pass at no request of its own.
+        candidates = _queued_cards = backlog_children()
     candidates = sorted(
-        backlog_children() if candidates is None else candidates,
+        candidates,
         key=lambda c: (c.get("priority") != URGENT_PRIORITY,
                        int(c["identifier"].split("-")[1])),
     )
@@ -15532,6 +15737,7 @@ def main(
             if card_repo(c) == REPO_SLUG and not automation_card(c)
         ]
         epics = repo_epics(mine)
+    board_was_read = mine is not None
     if mine is None:
         # The read door said Linear is held, and the board was not read
         # (Stage 2 item 34; the phase said so). NOTHING below may decide on an
@@ -15540,18 +15746,6 @@ def main(
         # (BoardHeld) and the promotion is not entered at all.
         mine, epics = [], set()
     if not promote_only:
-        # A proof card held In Review for the operator gets the Hand-work bound
-        # (DRE-6852), and so does one held on the CEO's press outside Green
-        # Light, which the return branch never reads (DRE-7741). AFTER `board_read` and over `mine`, so the pass reads only
-        # the cards that read already narrowed to this repo, with their comment
-        # windows, and spends no request: the one shared read stays charged to
-        # `board_read`, and a held or idle read hands it an empty list.
-        try:
-            with _phase("alarm_held_proofs"):
-                alarm_held_proofs(mine)
-        except Exception as e:  # noqa: BLE001 — one phase must not stop the sweep
-            _write_failures.append(f"held-proof alarm: {e}")
-            print(f"ERROR: alarm_held_proofs: {e}", file=sys.stderr)
         with _phase("close_finished_epics"):
             close_finished_epics(epics)
         # The epic line (DRE-5152): the label kept honest and the last starts
@@ -15592,6 +15786,8 @@ def main(
     # The WIP base and the nudge list, from the helper limit-recovery counts
     # its room from too (DRE-4934) — so the two cannot disagree. It drops the
     # epics `repo_epics(mine)` found above, the same set on the same cards.
+    # `swept` keeps the board read's own list for the held-proof pass below.
+    swept = mine
     mine = wip_base(mine)
     # On the merge path the candidates are the merged card's own dependents
     # (DRE-3236) — read in one request by identifier, through the same gates.
@@ -15636,6 +15832,40 @@ def main(
                 f"{len(_stale_defects)} unfixed card defect(s) — see ERROR lines above"
             )
         return
+    # A proof card held In Review for the operator gets the Hand-work bound
+    # (DRE-6852), and so does one held on the CEO's press outside Green
+    # Light, which the return branch never reads (DRE-7741). Over `swept`,
+    # the board read's own cards, so the pass reads only the cards that read
+    # already narrowed to this repo, with their comment windows, and spends
+    # no request: the one shared read stays charged to `board_read`, and a
+    # held or idle read hands it an empty list. Its late list (DRE-7965) also
+    # reads this repo's Hand-work cards off the same snapshot, and its Queued
+    # cards off promotion's read — which is why this pass runs AFTER
+    # `promote_ready`, the one read of that lane; a Queued lane that was not
+    # read leaves the list incomplete. It pays one paged read for a `PROOF:`
+    # card whose window is not its whole thread, from the pass's cache when
+    # `flag_stranded` already paid for it. Full sweeps only: the event modes
+    # have returned above.
+    try:
+        with _phase("alarm_held_proofs"):
+            if board_was_read:
+                # Once each: a card promotion moved is in two of these reads.
+                held_cards = list(swept)
+                seen = {c["identifier"] for c in held_cards}
+                for card in [*active_cards(LATE_PROOF_LANES), *(_queued_cards or ())]:
+                    if (card["identifier"] not in seen and card_repo(card) == REPO_SLUG
+                            and not automation_card(card)):
+                        seen.add(card["identifier"])
+                        held_cards.append(card)
+                if _queued_cards is None:
+                    alarm_held_proofs(held_cards, queued_read=False)
+                else:
+                    alarm_held_proofs(held_cards)
+            else:
+                alarm_held_proofs(swept, board_read=False)
+    except Exception as e:  # noqa: BLE001 — one phase must not stop the sweep
+        _write_failures.append(f"held-proof alarm: {e}")
+        print(f"ERROR: alarm_held_proofs: {e}", file=sys.stderr)
     # The auto-advance's backstop (DRE-6653): a Backlog epic whose blockers
     # are all terminal goes back to Planning, whoever closed the blocker. Off
     # the promotion phase's Backlog read, so after it; full sweeps only — the

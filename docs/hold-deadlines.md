@@ -10,7 +10,7 @@ still in one week.
 Now one file declares a due date for each. `config/hold-deadlines.json` is
 keyed by the hold's act tag, and `scripts/hold_deadline.py` is its one reader
 and the one writer of the late-hold alert. This page is the human-readable
-version of that file. This card wires nothing into the sweep: the site cards
+version of that file. DRE-7964 wired nothing into the sweep: the site cards
 (DRE-7965, DRE-7966) call the module from the sweep, and DRE-7967 adds the
 `proof-waiting` chase.
 
@@ -34,11 +34,42 @@ either.
 
 | Tag | Clock starts | Chase | Chase after | Due after | Reported by |
 | -- | -- | -- | -- | -- | -- |
-| `proof-waiting` | The time of the card's newest `🔬 proof-waiting` hold that nothing has discharged. | One proof run on a `PROOF:` card in Hand-work whose event hold has stood `chase_after_hours` (DRE-7967). A record In Review waiting on an event is re-checked by the proof dispatcher's own 12-hour re-check instead (DRE-7951, epic DRE-7944), so the one hold is never run twice. | 24 hours | 72 hours | DRE-7965 |
-| `hand-work-overdue` | When the card entered Hand-work, or, for a `PROOF:` card held In Review for the operator, the time of the hold it waits under. | The sweep's own once-only `hand-work-overdue` alarm on the card, for the operator. | 24 hours — equal to `config/hand-work-age.json` `hours`, and checked equal | 72 hours | DRE-7965 |
+| `proof-waiting` | The earliest of the card's open `🔬 proof-waiting` holds that qualify — every one but a hold naming the CEO's press and a time-only hold whose time is still ahead. A time-only hold whose time has passed starts at the later of its post and its time. | One proof run on a `PROOF:` card in Hand-work whose event hold has stood `chase_after_hours` (DRE-7967). A record In Review waiting on an event is re-checked by the proof dispatcher's own 12-hour re-check instead (DRE-7951, epic DRE-7944), so the one hold is never run twice. | 24 hours | 72 hours | DRE-7965 |
+| `hand-work-overdue` | When the card entered Hand-work, as the sweep's Hand-work alarm reads it. A `PROOF:` card with a qualifying `proof-waiting` hold is judged on that hold's clock instead, so it is never listed twice. | The sweep's own once-only `hand-work-overdue` alarm on the card, for the operator. | 24 hours — equal to `config/hand-work-age.json` `hours`, and checked equal | 72 hours | DRE-7965 |
 | `unlanded-work-watchdog` | The newest commit on the branch no pull request has ever been opened for, the time the work-never-landed notice measures its idle minutes from. | None of its own: the sweep's existing work-never-landed notice, on that notice's own clock. | `null` | 24 hours | DRE-7966 |
 
 Each row also carries a `why`, the reason for its numbers.
+
+## Where the sweep reads them (DRE-7965)
+
+Two sites in `scripts/reconcile.py` keep their 24-hour `hand-work-overdue`
+comment exactly as before — that comment is the chase — and each now hands
+`settle` its late list once per pass, after its loop:
+
+- **`proof-waiting`** — `alarm_held_proofs`, over this repo's `PROOF:` cards
+  in every lane but Green Light: In Progress, In Review and Hand-work off the
+  board read, and Queued off the read `promote_ready` already makes of that
+  lane — so the pass runs after promotion, and spends no request on Queued.
+  A pass whose Queued read was skipped is incomplete. `_proof_wait_clock` reads a card's open holds
+  over its whole thread: the board read's comment window when it is the whole
+  thread, at no request, and one paged read when it is not. A window that is
+  not the whole thread is never judged on its own, and a read that fails
+  leaves the card unjudged and the pass incomplete. Event waits count, and
+  are the holds nothing else chases. Nothing reads the card's epic, so a
+  proof under a closed epic is listed like any other.
+- **`hand-work-overdue`** — `flag_stranded`, over this repo's Hand-work cards
+  that carry the alarm for their current entry. An unreadable entry, an
+  alarm that could not be posted, or a `PROOF:` card past the limit whose
+  proof run could not be read, or whose holds could not be read, leaves the
+  pass incomplete. A `PROOF:` card with a qualifying hold is left to
+  `proof-waiting`, so no card is listed twice. A card whose hold the sweep
+  stands down for (`held`) is skipped before it is judged, as the watchdog
+  always skipped it — it is already in a person's queue — so it is never
+  listed here and never makes the pass incomplete.
+
+A standing card in `config/hand-work-age.json` and a `hand-built` card are
+listed by neither. An idle pass, a held board read and `promote_only` call
+`settle` from neither.
 
 ## The alert
 
