@@ -200,6 +200,9 @@ pass that posts the hold, so that hold is time-only too, and a prose waiting
 hold posted before this lifts itself 12 hours after its post. When the rows a
 lift read were not all stamped, the run is a `re-check` — one per record head,
 spending neither budget — and the second timed re-run says it is the last.
+Re-checks have their own three per record pull request, across every head;
+after them, one hold for the operator, which the sweep alarms on, and never a
+fourth.
 
 ## The row whose NUMBERS are data — `🚨 fleet-reviewer-outage` (DRE-3433)
 
@@ -452,7 +455,7 @@ carrying `[not-before=<T>]` (DRE-7316) and a row nobody stamped — a prose
 event, or the operator's press — read as stamped 12 hours after the pass that
 posts the hold (DRE-7951). Once lifted, stamped rows get a timed re-run, and
 rows not all stamped get one `re-check` per record head, which spends neither
-budget. A record the gate declined, or the critic
+budget — three per record pull request, then one hold for the operator. A record the gate declined, or the critic
 sent back, whose unmet rows all carry a cause word (DRE-6607) is never re-run
 at that head, since a re-run would read the same thing: the dispatcher puts it
 to the operator once through `proof_cause_park.park` (DRE-6612) — its hold and
@@ -478,7 +481,7 @@ counts are `dispatch <n> of 2`, `re-run
 answer`, `re-armed` (DRE-7740) — one more run on a spent
 re-run budget, which does not open `re-run` and so spends none of it — and
 `re-check` (DRE-7951), one per record head over waiting rows nobody stamped,
-which spends neither budget. **The tag is a live key**: `proof_run_state.reading`
+which spends neither budget and has its own three per record pull request. **The tag is a live key**: `proof_run_state.reading`
 (DRE-5922) anchors on the newest receipt to read what became of the run, and
 counts the first-run budget off the receipts whose reason opens `first proof
 run` or `second dispatch`.
